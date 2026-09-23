@@ -38,7 +38,7 @@ SESSION_ACTOR_ROUTE="tcp://127.0.0.1:${PORTS[9]}"
 SUPPORT_ACTOR_ROUTE="tcp://127.0.0.1:${PORTS[10]}"
 API_SPOT_ROUTE="tcp://127.0.0.1:${PORTS[11]}"
 
-cmake --build "$BUILD_DIR" --parallel 2 --target sample_cpp_framework_supportchat_api sample_cpp_framework_supportchat_session sample_cpp_framework_supportchat_support sample_cpp_framework_supportchat_client >/dev/null
+cmake --build "$BUILD_DIR" --parallel 4 --target sample_cpp_framework_supportchat_api sample_cpp_framework_supportchat_session sample_cpp_framework_supportchat_support sample_cpp_framework_supportchat_client >/dev/null
 zlink_redis_start_scoped_assign REDIS_CONTAINER_NAME redis_port "zlink-redis-cpp-sample-supportchat" "redis:7-alpine"
 REDIS_ENDPOINT="tcp://127.0.0.1:${redis_port}"
 REDIS_KEY_PREFIX="supportchat:$$:"

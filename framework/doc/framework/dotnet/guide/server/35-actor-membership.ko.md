@@ -97,7 +97,7 @@ handler와 분리해 실행하는 background 작업에서 호출하면 `InvalidO
 않고 성공으로 끝난다 — 기록도 membership도 건드리지 않고 승인·확정·이탈 callback도 실행하지
 않는다.
 
-### 2.3 결과를 받는 자리
+### 2.3 결과를 받는 callback
 
 결과는 Actor의 join 완료 callback(`OnJoinCompletedAsync`)으로 온다. 언어별 표기는 탭의 코드가
 보여 준다.

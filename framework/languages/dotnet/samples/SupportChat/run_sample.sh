@@ -136,7 +136,7 @@ cat >"$CLIENT_CONFIG_FILE" <<EOF
 {"Client":{"LogDirectory":"${SUPPORTCHAT_LOG_DIR}","StreamEndpoint":"${SUPPORTCHAT_STREAM_ENDPOINT}"}}
 EOF
 
-dotnet build "${SCRIPT_DIR}/SupportChat.csproj" --maxcpucount:1
+dotnet build "${SCRIPT_DIR}/SupportChat.csproj" --maxcpucount:4
 
 start_server support "${SCRIPT_DIR}/Server/Support/SupportChat.Server.Support.csproj" --config "${SUPPORT_CONFIG_FILE}"
 wait_port support-mesh "${SUPPORTCHAT_SUPPORT_MESH_ENDPOINT}"

@@ -49,13 +49,24 @@ public sealed class GameSession(IZLinkSessionContext context, ILogger<GameSessio
             return;
 
         // --8<-- [start:session-actor-relay]
-        // Anything without a session handler is forwarded to the player bound to
-        // this connection, which is why authentication has to come first.
-        var bound = Context.Actors.Bound;
-        if (bound.Count != 1)
-            throw new InvalidOperationException("Authenticate before sending player packets.");
+        // A slotted packet uses its dispatch Actor. An unslotted packet can use
+        // the connection only while exactly one Actor is bound.
+        var actor =
+            dispatch.Actor
+            ?? (
+                Context.Actors.Bound.Count switch
+                {
+                    1 => Context.Actors.Bound.Single(),
+                    0 => throw new InvalidOperationException(
+                        "Authenticate an Actor before sending player packets."
+                    ),
+                    _ => throw new InvalidOperationException(
+                        "Select an Actor handle when more than one Actor is bound."
+                    ),
+                }
+            );
 
-        await bound.Single().RelayAsync(payload, cancellationToken);
+        await actor.RelayAsync(payload, cancellationToken);
         // --8<-- [end:session-actor-relay]
     }
 }

@@ -78,7 +78,7 @@ endpoint를 알지 않는다.
 
 Instance Spot의 생성 정책은 [활성화와 수명](34-activation-lifetime.ko.md#1-spot의-종류)이,
 relocation 때 다시 만드는 정책은
-[Relocation](37-relocation.ko.md#3-상태를-담는-시점--factory-등록이-정한다)이 다룬다.
+[Relocation](37-relocation.ko.md#3-상태를-저장하는-시점--factory-등록이-정한다)이 다룬다.
 
 ## 4. 주문 시작 — 첫 요청이 owner를 만든다
 

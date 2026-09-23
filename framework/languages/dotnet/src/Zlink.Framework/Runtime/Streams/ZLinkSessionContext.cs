@@ -161,6 +161,9 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
     internal void SendActorUnbound(ushort slot) =>
         ZLinkStreamControlFrames.SendActorUnbound(_stream, slot);
 
+    internal ValueTask SendActorUnboundAsync(ushort slot) =>
+        ZLinkStreamControlFrames.SendActorUnboundAsync(_stream, slot, CancellationToken.None);
+
     internal async ValueTask<ZLinkOneWaySubmitResult> SubmitAsync(
         Message payload,
         CancellationToken cancellationToken,
@@ -240,6 +243,9 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
                 CorrelationId: header.CorrelationId,
                 SourceRid: RoutingId?.ToString()
             )
+            {
+                StreamSessionId = SessionId,
+            }
         );
     }
 

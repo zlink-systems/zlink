@@ -24,14 +24,13 @@ import systems.zlink.samples.kotlin.supportchat.shared.contracts.EnsureAgentConv
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.EnsureAgentConversationRes
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.EnsureSupportUserActorReq
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.EnsureSupportUserActorRes
-import systems.zlink.samples.kotlin.supportchat.shared.contracts.JoinConversationRes
+import systems.zlink.samples.kotlin.supportchat.shared.contracts.JoinConversationReq
 
 class SupportChatSession(
     private val context: ZLinkSessionContext,
     private val channels: ZLinkClient,
 ) : ZLinkSuspendingSession() {
     private val kotlinChannels = channels.kotlin()
-    private val conversationActors = linkedMapOf<String, ZLinkSessionActor>()
     private var identityActor: ZLinkSessionActor? = null
     private var identityActorId: String = ""
     private var identityDisplayName: String = ""
@@ -54,7 +53,8 @@ class SupportChatSession(
     ) {
         when (dispatch.packetName()) {
             "AuthenticateReq" -> authenticate(payload.decode<AuthenticateReq>())
-            "JoinConversationReq" -> joinConversation(dispatch, payload)
+            "JoinConversationReq" ->
+                joinConversation(dispatch, payload.decode<JoinConversationReq>(), payload)
             else -> relayConversationPacket(dispatch, payload)
         }
     }
@@ -119,17 +119,11 @@ class SupportChatSession(
 
     private suspend fun joinConversation(
         dispatch: ZLinkSessionDispatchContext,
+        request: JoinConversationReq,
         payload: ZLinkMessage,
     ) {
         if (identityRole == SupportChatRoles.Customer) {
             requireIdentityActor().kotlin().relay(dispatch, payload).await()
-            return
-        }
-
-        val conversationId = requireConversationId(dispatch)
-        val existing = conversationActors[conversationId]
-        if (existing != null) {
-            existing.kotlin().relay(dispatch, payload).await()
             return
         }
 
@@ -138,48 +132,39 @@ class SupportChatSession(
             kotlinChannels
                 .requestToChannel<EnsureAgentConversationRes>(
                     SampleNames.SupportChannel,
-                    EnsureAgentConversationReq(identityActorId, identityDisplayName, conversationId),
+                    EnsureAgentConversationReq(
+                        identityActorId,
+                        identityDisplayName,
+                        request.conversationId,
+                    ),
                 )
                 .timeout(SampleTimings.RequestTimeout)
                 .await()
 
-        conversationActors[conversationId] =
-            context.actors().bindOrGetActor(ensured.actor.toActorRef())
+        val actor = context.actors().bindOrGetActor(ensured.actor.toActorRef())
         logger.info(
             "session: agent joined conversation. roster={}, conversation={}",
             identityActorId,
-            conversationId,
+            request.conversationId,
         )
-        context
-            .client()
-            .kotlin()
-            .reply(JoinConversationRes(ensured.scheduled, ensured.state))
-            .await()
+        actor.kotlin().relay(dispatch, payload).await()
         // --8<-- [end:doc-sc-agent-join]
     }
 
-    // --8<-- [start:doc-sc-metadata-relay]
     private suspend fun relayConversationPacket(
         dispatch: ZLinkSessionDispatchContext,
         payload: ZLinkMessage,
     ) {
-        val conversationId = dispatch.metadata()[SampleNames.ConversationIdMetadataKey]
-        val target = conversationId?.let { conversationActors[it] } ?: requireIdentityActor()
+        // --8<-- [start:doc-sc-actor-relay]
+        val target = dispatch.actor() ?: requireIdentityActor()
+        // --8<-- [end:doc-sc-actor-relay]
         target.kotlin().relay(dispatch, payload).await()
     }
-
-    // --8<-- [end:doc-sc-metadata-relay]
 
     private fun requireIdentityActor(): ZLinkSessionActor =
         identityActor
             ?: throw IllegalStateException(
                 "Client must authenticate before sending conversation packets."
-            )
-
-    private fun requireConversationId(dispatch: ZLinkSessionDispatchContext): String =
-        dispatch.metadata()[SampleNames.ConversationIdMetadataKey]
-            ?: throw IllegalStateException(
-                "Conversation packet is missing the ConversationId metadata."
             )
 
     private companion object {

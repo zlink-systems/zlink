@@ -163,7 +163,7 @@ Examples smoke runs this block exactly as written.
 | First request | `curl http://127.0.0.1:5180/players/p1/profile` prints `{"level":1,"nickname":"rookie","playerId":"p1"}` |
 | Spot (Redis) | the request that opens a room prints a room id string (`"9e78fd70-..."`) |
 | Instance Spot | two requests for the same queue id return `waiting` 1, then 2 |
-| STREAM | `tutorial_stream_client` prints the connector and Actor lines `connected: true` ... `pushed: speedy, actor: p1` and exits with 0 |
+| STREAM | `tutorial_stream_client` prints `pushed: speedy, actor: p1`, then the per-handle pushes for p1 and p2, and exits with 0 |
 
 The block below checks this against the processes the [Run](#run) block started: the first
 request's answer and the STREAM client's exit code.
@@ -456,22 +456,31 @@ HTTP/1.1 404 Not Found
 
 ### 11. STREAM and the Session-Actor link
 
-An external client attaches over TCP, linking the connector only.
+An external client attaches over TCP, linking the connector only. This is output from a complete
+server and StreamClient run; the round-trip time varies.
 
 ```console
 $ ./build/tutorial_stream_client
 connected: true
-round trip: 2ms          # STREAM request/reply
+round trip: 0ms
+bound player: p1
 actor bound: p1
-bound player: p1         # the connection is bound to a player
+pushed: speedy, actor: p1
+actor bound: p2
+bound player: p2
 actor handle: p1
-pushed: speedy, actor: p1           # the player pushes over that connection
+actor handle: p2
+received actor id: p1
+received actor id: p2
+pushed: speedy-p1, actor: p1
+pushed: speedy-p2, actor: p2
 ```
 
-`pushed` is the point: the client only sent a nickname change and received a push the player
-sent on its own. In C++ every packet arrives through one `on_packet`, `reply_packet` answers
-requests only (pushes use `bound_session().send(...)`), and the connector is opened with manual
-dispatch so a push arriving before `wait` is queued rather than dropped.
+The first nickname change uses the connector directly while only p1 is bound. After p2 binds,
+each handle addresses and receives for its own Actor; the connector-level receive callback also
+shows each push's Actor ID. In C++ every packet arrives through one `on_packet`, `reply_packet`
+answers requests only (pushes use `bound_session().send(...)`), and the connector uses immediate
+dispatch so receive callbacks run when their pushes arrive.
 
 ### 12. HTTP client
 
@@ -594,7 +603,7 @@ the page together. Marker names match the .NET tutorial.
 | `stream-contracts` · `session-actor-contracts` | `Shared/contracts.hpp` |
 | `session-class` · `session-handler` · `session-actor-bind` · `session-actor-relay` | `Server/sessions/game_session.hpp` |
 | `stream-register` | `Server/main.cpp` |
-| `stream-client` · `session-actor-client` | `StreamClient/main.cpp` |
+| `stream-client` · `session-actor-client` · `single-actor-send` · `actor-handle-events` · `actor-handle-send` · `actor-handle-per-handle-receive` · `actor-id-receive` · `actor-handle-send-call` · `actor-handle-receive` | `StreamClient/main.cpp` |
 | `http-client-create` | `HttpClient/main.cpp` |
 | `http-first-request` | `HttpClient/main.cpp` |
 | `http-request-shaping` | `HttpClient/main.cpp` |

@@ -2,16 +2,18 @@ package systems.zlink.tutorial.streamclient
 
 import java.net.URI
 import java.time.Duration
+import java.util.concurrent.CompletableFuture
 import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import systems.zlink.framework.kotlin.await
 import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.kotlin.request
 import systems.zlink.stream.connector.ZLinkStreamConnectorFactory
 import systems.zlink.stream.connector.ZLinkStreamConnectorOptions
 import systems.zlink.stream.connector.ZLinkStreamDispatchMode
+import systems.zlink.stream.connector.ZLinkStreamMessage
 import systems.zlink.tutorial.shared.Authenticate
 import systems.zlink.tutorial.shared.Authenticated
 import systems.zlink.tutorial.shared.ChangeNickname
@@ -57,37 +59,80 @@ fun main() = runBlocking {
             connector.actorUnbound().collect { actor -> println("actor unbound: ${actor.actorId}") }
         }
     // --8<-- [end:actor-handle-events]
-    // Binds this connection to a player. Until then the server has no player to
-    // forward packets to.
-    val authenticated =
+    // With one Actor bound, the connector can send without an Actor handle.
+    val authenticatedP1 =
         connector.request<Authenticated>(Authenticate("p1")).timeout(Duration.ofSeconds(5)).await()
 
-    println("bound player: ${authenticated.playerId}")
+    println("bound player: ${authenticatedP1.playerId}")
+
+    // --8<-- [start:single-actor-send]
+    val singleChanged = CompletableFuture<ZLinkStreamMessage<NicknameChanged>>()
+    val singleReceive =
+        connector.on<NicknameChanged> { message ->
+            singleChanged.complete(message)
+            CompletableFuture.completedFuture(null)
+        }
+    connector.send(ChangeNickname("speedy")).await()
+    val pushed = singleChanged.await()
+    println("pushed: ${pushed.payload().nickname}, actor: ${pushed.actorId()}")
+    singleReceive.close()
+    // --8<-- [end:single-actor-send]
+
+    // A second Actor on the same connection calls for explicit handles.
+    val authenticatedP2 =
+        connector.request<Authenticated>(Authenticate("p2")).timeout(Duration.ofSeconds(5)).await()
+    println("bound player: ${authenticatedP2.playerId}")
 
     // --8<-- [start:actor-handle-send]
-    val player = requireNotNull(connector.actor(authenticated.playerId))
-    println("actor handle: ${player.actorId}")
+    val playerP1 = requireNotNull(connector.actor(authenticatedP1.playerId))
+    val playerP2 = requireNotNull(connector.actor(authenticatedP2.playerId))
+    println("actor handle: ${playerP1.actorId}")
+    println("actor handle: ${playerP2.actorId}")
     // --8<-- [end:actor-handle-send]
 
-    // Arrange to receive the push before sending, so a fast server cannot answer
-    // before the client is listening.
-    val changed = async {
-        connector.waitFor<NicknameChanged>().timeout(Duration.ofSeconds(5)).await()
-    }
+    // Each callback receives only the push for its handle's Actor.
+    // --8<-- [start:actor-handle-per-handle-receive]
+    val changedP1 = CompletableFuture<ZLinkStreamMessage<NicknameChanged>>()
+    val changedP2 = CompletableFuture<ZLinkStreamMessage<NicknameChanged>>()
+    val receiveP1 =
+        playerP1.on<NicknameChanged> { message ->
+            changedP1.complete(message)
+            CompletableFuture.completedFuture(null)
+        }
+    val receiveP2 =
+        playerP2.on<NicknameChanged> { message ->
+            changedP2.complete(message)
+            CompletableFuture.completedFuture(null)
+        }
+    // --8<-- [end:actor-handle-per-handle-receive]
 
-    // The handle addresses this player directly. Its handler pushes the
-    // result back over the same connection.
+    // --8<-- [start:actor-id-receive]
+    // Connector-level callbacks can distinguish the same pushes by ActorId.
+    val receiveActorIds =
+        connector.on<NicknameChanged> { message ->
+            println("received actor id: ${message.actorId()}")
+            CompletableFuture.completedFuture(null)
+        }
+    // --8<-- [end:actor-id-receive]
+
+    // Each handle sends to its own player over the same connection.
     // --8<-- [start:actor-handle-send-call]
-    player.send(ChangeNickname("speedy")).await()
+    playerP1.send(ChangeNickname("speedy-p1")).await()
+    playerP2.send(ChangeNickname("speedy-p2")).await()
     // --8<-- [end:actor-handle-send-call]
 
     // --8<-- [start:actor-handle-receive]
-    val pushed = changed.await()
-    println("pushed: ${pushed.payload().nickname}, actor: ${pushed.actorId()}")
+    val pushedP1 = changedP1.await()
+    val pushedP2 = changedP2.await()
+    println("pushed: ${pushedP1.payload().nickname}, actor: ${pushedP1.actorId()}")
+    println("pushed: ${pushedP2.payload().nickname}, actor: ${pushedP2.actorId()}")
     // --8<-- [end:actor-handle-receive]
     // --8<-- [end:session-actor-client]
 
-    connector.close().await()
+    receiveP1.close()
+    receiveP2.close()
+    receiveActorIds.close()
     boundNotice.cancelAndJoin()
     unboundNotice.cancelAndJoin()
+    connector.close().await()
 }

@@ -28,14 +28,19 @@ class GameSession implements ZLinkSession {
     if (await this.context.handlers.tryHandle(dispatch, payload)) return;
 
     // --8<-- [start:session-actor-relay]
-    // Anything without a session handler is forwarded to the player bound to
-    // this connection, which is why authentication has to come first.
+    // A packet with an Actor slot selects its binding. A packet without one
+    // can use the connection only when exactly one Actor is bound.
     const bound = this.context.actors.bound;
-    if (bound.length !== 1) {
-      throw new Error('Authenticate before sending player packets.');
+    const actor = dispatch.actor ?? (bound.length === 1 ? bound[0] : undefined);
+    if (!actor) {
+      throw new Error(
+        bound.length === 0
+          ? 'Authenticate an Actor before sending player packets.'
+          : 'Select an Actor handle when more than one Actor is bound.'
+      );
     }
 
-    await bound[0].relay(payload);
+    await actor.relay(dispatch, payload);
     // --8<-- [end:session-actor-relay]
   }
 }

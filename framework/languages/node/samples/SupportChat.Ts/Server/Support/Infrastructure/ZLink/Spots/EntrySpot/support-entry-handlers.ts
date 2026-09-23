@@ -73,17 +73,13 @@ class JoinConversationAtEntryHandler implements ZLinkEntrySpotActorRequestHandle
   async handle(
     _spot: SupportEntrySpot,
     actor: SupportUserActor,
-    context: ZLinkMessageContext,
-    _request: JoinConversationReq
+    _context: ZLinkMessageContext,
+    request: JoinConversationReq
   ): Promise<JoinConversationRes> {
-    const conversationId = context.metadata.find(SampleNames.conversationIdMetadataKey);
-    if (conversationId === undefined || conversationId.length === 0) {
-      throw new Error('Conversation metadata is required for JoinConversationReq.');
-    }
     const identity = requireIdentity(this.directory, actor.actorId);
     return actor.scheduleConversationJoin(
       new JoinSupportConversation(
-        conversationId,
+        request.conversationId,
         identity.participantId,
         identity.role,
         identity.displayName

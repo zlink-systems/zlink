@@ -232,6 +232,24 @@ class actor_gateway_state_t
         std::shared_ptr<bound_session_delivery_fence_t> completion_fence;
     };
 
+    struct bound_session_send_queue_key_t
+    {
+        std::string actor_id;
+        std::string node_rid;
+        std::optional<std::string> session_rid;
+        std::uint64_t binding_generation = 0;
+        std::uint64_t binding_token = 0;
+        bool remote = false;
+
+        bool operator< (const bound_session_send_queue_key_t &other) const
+        {
+            return std::tie (actor_id, node_rid, session_rid, binding_generation, binding_token,
+                             remote)
+                   < std::tie (other.actor_id, other.node_rid, other.session_rid,
+                               other.binding_generation, other.binding_token, other.remote);
+        }
+    };
+
     runtime::offload_executor_t lane_executor;
     mutable runtime::state_lane_t lane{lane_executor};
     std::map<std::string, actor_record_t> actors_by_id;
@@ -242,8 +260,9 @@ class actor_gateway_state_t
     std::vector<relayed_frame_t> bound_session_pushes;
     std::map<std::string, std::deque<pending_session_relay_t>> pending_session_relays;
     std::set<std::string> active_session_relays;
-    std::map<std::string, std::deque<pending_bound_session_send_t>> pending_bound_session_sends;
-    std::set<std::string> active_bound_session_sends;
+    std::map<bound_session_send_queue_key_t, std::deque<pending_bound_session_send_t>>
+      pending_bound_session_sends;
+    std::set<bound_session_send_queue_key_t> active_bound_session_sends;
     std::map<std::string, std::weak_ptr<bound_session_delivery_fence_t>>
       join_completion_delivery_fences;
     std::set<session_relay_completion_fence_t> active_session_relay_completions;
@@ -419,7 +438,8 @@ class actor_gateway_runtime_t
     bool trace_bound_session_send_stage_enabled () const noexcept;
     void trace_bound_session_send_stage (const std::string &actor_id,
                                          std::string_view stage,
-                                         std::string_view result = {}) const;
+                                         std::string_view result,
+                                         const zlink::routing_id_t *session_rid) const;
     void bind_serializers (serializer_registry_t &serializers);
     void set_dispatch (dispatch_options_t options);
 

@@ -196,7 +196,7 @@ Relocate는 spot과 actor의 state를 그대로 유지하면서 다른 node로 �
 고정하며, 실행 중에는 바꾸지 않는다.
 
 policy 종류와 선택 기준은 [Relocation](37-relocation.ko.md#21-factory-등록이-고르는-이동-정책), actor join 호출과
-완료 결과 수신은 [Actor membership](35-actor-membership.ko.md#23-결과를-받는-자리), 무중단 점검·배포로서의
+완료 결과 수신은 [Actor membership](35-actor-membership.ko.md#23-결과를-받는-callback), 무중단 점검·배포로서의
 Host Relocate와 이전 단위 구분은
 [Relocate](12-operations.ko.md#3-relocate--상태를-유지한-채-다른-host로-옮기기)가 다룬다.
 
@@ -288,7 +288,7 @@ edge의 정책은 그 앞단이 소유한다.
   [Channel 메시징](20-channel-messaging.ko.md)
 - Spot 종류·생성 시점·주입 수명: [활성화와 수명](34-activation-lifetime.ko.md)
 - host 수명주기와 운영: [12-operations](12-operations.ko.md)
-- 등록 지점과 계층 구조: [계층 구조와 등록 지점](01-overview.ko.md#32-계층-구조와-등록-지점)
+- 등록 지점과 계층 구조: [계층 구조와 등록 지점](01-overview.ko.md#33-계층-구조와-등록-지점)
 - 전체 interface·attribute·context: [주요 타입 사용 색인](13-interface-catalog.ko.md)
 - 실행 코드로 보고 싶을 때 고를 샘플: [14-samples](14-samples.ko.md)
 

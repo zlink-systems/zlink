@@ -2142,7 +2142,8 @@ void app_t::_apply_zlink_framework ()
                       actor_gateway_runtime.trace_bound_session_send_stage (
                         std::string (actor.actor_id ().value ()), "actor_owner_push_target",
                         "session_rid=" + route->session_rid->to_hex ()
-                          + " binding_generation=" + std::to_string (route->binding_generation));
+                          + " binding_generation=" + std::to_string (route->binding_generation),
+                        &*route->session_rid);
                   }
                   const auto local_actor = detail::actor_ref_access_t::make (
                     node_rid_t::from_string (local.routing_id ().to_string ()),
@@ -2154,11 +2155,11 @@ void app_t::_apply_zlink_framework ()
                    * the per-stage string conversions. */
                   detail::backend::raw_send_stage_trace_t stage_trace;
                   if (actor_gateway_runtime.trace_bound_session_send_stage_enabled ()) {
-                      stage_trace = [actor_gateway_runtime,
+                      stage_trace = [actor_gateway_runtime, session_rid = *route->session_rid,
                                      actor_id = std::string (actor.actor_id ().value ())] (
                                       std::string_view stage, std::string_view result) mutable {
-                          actor_gateway_runtime.trace_bound_session_send_stage (actor_id, stage,
-                                                                                result);
+                          actor_gateway_runtime.trace_bound_session_send_stage (
+                            actor_id, stage, result, &session_rid);
                       };
                   }
                   const auto submitted =
@@ -2336,7 +2337,8 @@ void app_t::_apply_zlink_framework ()
                 actor_gateway_runtime.trace_bound_session_send_stage (
                   bind.actor.actor_id, "bound_session_bind_receive",
                   "new_session_rid=" + session_rid.to_hex ()
-                    + " new_binding_generation=" + std::to_string (bind.binding.generation));
+                    + " new_binding_generation=" + std::to_string (bind.binding.generation),
+                  &session_rid);
                 if (bind.binding.state
                     == runtime::protocol::bound_session_binding_state_t::tombstone) {
                     const auto retired = actor_gateway_runtime.retire_bound_session_route (
@@ -2382,11 +2384,12 @@ void app_t::_apply_zlink_framework ()
                             current_route->authority_owner_generation,
                             current_route->owner_lease_generation,
                             encode_bound_session_frame (stream_runtime, header, payload),
-                            [actor_gateway_runtime,
+                            [actor_gateway_runtime, session_rid = *current_route->session_rid,
                              actor_id = std::string (actor.actor_id ().value ())] (
                               std::string_view stage, std::string_view result) mutable {
                                 actor_gateway_runtime.trace_bound_session_send_stage (
-                                  actor_id, std::string (stage), std::string (result));
+                                  actor_id, std::string (stage), std::string (result),
+                                  &session_rid);
                             });
                         const auto result = one_way_native_submit_result (
                           submitted, "Framework Actor bound Session send");
@@ -2419,14 +2422,16 @@ void app_t::_apply_zlink_framework ()
                   bind.actor.actor_id, "actor_owner_route_publish",
                   "session_rid=" + session_rid.to_hex ()
                     + " binding_generation=" + std::to_string (bind.binding.generation)
-                    + " replaced=" + (change.changed ? "true" : "false"));
+                    + " replaced=" + (change.changed ? "true" : "false"),
+                  &session_rid);
                 if (change.current
                     && change.current->binding_generation != bind.binding.generation) {
                     actor_gateway_runtime.trace_bound_session_send_stage (
                       bind.actor.actor_id, "actor_owner_route_publish_stale_ignored",
                       "session_rid=" + session_rid.to_hex () + " binding_generation="
                         + std::to_string (bind.binding.generation) + " current_binding_generation="
-                        + std::to_string (change.current->binding_generation));
+                        + std::to_string (change.current->binding_generation),
+                      &session_rid);
                 }
                 if (change.changed && change.previous && change.previous->session_rid
                     && change.previous->node_generation != 0
@@ -2450,7 +2455,8 @@ void app_t::_apply_zlink_framework ()
                         actor_gateway_runtime.trace_bound_session_send_stage (
                           send.actor.actor_id, "session_node_receive",
                           "binding_generation="
-                            + std::to_string (send.expected_binding_generation));
+                            + std::to_string (send.expected_binding_generation),
+                          nullptr);
                     }
                     const auto actor = detail::actor_ref_access_t::make (
                       node_rid_t::from_string (
@@ -2490,7 +2496,8 @@ void app_t::_apply_zlink_framework ()
                 if (actor_gateway_runtime.trace_bound_session_send_stage_enabled ()) {
                     actor_gateway_runtime.trace_bound_session_send_stage (
                       send.actor.actor_id, "session_node_receive",
-                      "binding_generation=" + std::to_string (send.expected_binding_generation));
+                      "binding_generation=" + std::to_string (send.expected_binding_generation),
+                      nullptr);
                 }
                 const auto actor = detail::actor_ref_access_t::make (
                   node_rid_t::from_string (

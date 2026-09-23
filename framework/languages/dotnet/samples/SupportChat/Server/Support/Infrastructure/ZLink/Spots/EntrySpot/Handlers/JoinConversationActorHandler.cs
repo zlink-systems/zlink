@@ -23,7 +23,6 @@ internal sealed class JoinConversationActorHandler
     )
     {
         _ = entrySpot;
-        _ = message;
         cancellationToken.ThrowIfCancellationRequested();
         if (!string.Equals(actor.Role, SupportChatRoles.Agent, StringComparison.Ordinal))
         {
@@ -32,21 +31,25 @@ internal sealed class JoinConversationActorHandler
             );
         }
 
-        var conversationId =
-            context.Metadata.Find(SampleNames.ConversationIdMetadataKey)
-            ?? throw new InvalidOperationException(
-                "Conversation Join is missing the ConversationId metadata."
-            );
+        var conversationId = message.ConversationId;
+        if (string.IsNullOrWhiteSpace(conversationId))
+            throw new InvalidOperationException("Conversation join requires a conversationId.");
         actor.TrackDeferredJoin(conversationId, notifyBoundSession: true);
         actor
             .Context.JoinSpot(
                 conversationId,
-                new JoinConversationReq(actor.ParticipantId, actor.Role, actor.DisplayName)
+                new JoinConversationReq(
+                    conversationId,
+                    actor.ParticipantId,
+                    actor.Role,
+                    actor.DisplayName
+                )
             )
             .Defer();
         return ValueTask.FromResult(
             new JoinConversationRes(
                 true,
+                actor.ActorId,
                 new ConversationState(
                     conversationId,
                     string.Empty,

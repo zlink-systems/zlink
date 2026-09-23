@@ -12,15 +12,12 @@ import systems.zlink.samples.supportchat.server.configuration.SampleNames;
 import systems.zlink.samples.supportchat.server.configuration.SampleTimings;
 import systems.zlink.samples.supportchat.shared.contracts.Messages;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 public final class SupportChatSession implements ZLinkSession {
     private final ZLinkSessionContext context;
     private final ZLinkClient channels;
-    private final Map<String, ZLinkSessionActor> conversationActors = new LinkedHashMap<>();
     private ZLinkSessionActor identityActor;
     private String identityActorId = "";
     private String identityDisplayName = "";
@@ -118,51 +115,35 @@ public final class SupportChatSession implements ZLinkSession {
     // --8<-- [start:doc-sc-agent-join]
     private CompletionStage<Void> joinConversation(
             ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
+        Messages.JoinConversationReq request = payload.decode(Messages.JoinConversationReq.class);
+        if (request.conversationId() == null || request.conversationId().isBlank()) {
+            throw new IllegalStateException("Conversation Join is missing conversationId");
+        }
         if (SampleNames.Roles.Customer.equals(identityRole)) {
             return requireIdentityActor().relay(dispatch, payload).thenApply(ignored -> null);
-        }
-        String conversationId = requireConversationId(dispatch);
-        ZLinkSessionActor existing = conversationActors.get(conversationId);
-        if (existing != null) {
-            return existing.relay(dispatch, payload).thenApply(ignored -> null);
         }
         return channels.requestToChannel(
                         SampleNames.SupportChannel,
                         new Messages.EnsureAgentConversationReq(
-                                identityActorId, identityDisplayName, conversationId))
+                                identityActorId, identityDisplayName, request.conversationId()))
                 .timeout(SampleTimings.RequestTimeout)
                 .submit(Messages.EnsureAgentConversationRes.class)
-                .thenCompose(
-                        ensured ->
-                                bindOrGet(ensured.actor().toActorRef())
-                                        .thenAccept(
-                                                actor -> {
-                                                    conversationActors.put(conversationId, actor);
-                                                    context.client()
-                                                            .reply(
-                                                                    new Messages
-                                                                            .JoinConversationRes(
-                                                                            ensured.scheduled(),
-                                                                            ensured.state()))
-                                                            .submit();
-                                                }));
+                .thenCompose(ensured -> bindOrGet(ensured.actor().toActorRef()))
+                .thenCompose(actor -> actor.relay(dispatch, payload));
     }
 
     // --8<-- [end:doc-sc-agent-join]
 
-    // --8<-- [start:doc-sc-metadata-relay]
     private CompletionStage<Void> relayConversationPacket(
             ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
-        String conversationId = dispatch.metadata().get(SampleNames.ConversationIdMetadataKey);
-        ZLinkSessionActor target =
-                conversationId == null ? null : conversationActors.get(conversationId);
+        // --8<-- [start:doc-sc-actor-relay]
+        ZLinkSessionActor target = dispatch.actor();
         if (target == null) {
             target = requireIdentityActor();
         }
+        // --8<-- [end:doc-sc-actor-relay]
         return target.relay(dispatch, payload).thenApply(ignored -> null);
     }
-
-    // --8<-- [end:doc-sc-metadata-relay]
 
     private CompletionStage<ZLinkSessionActor> bindOrGet(ActorRef actorRef) {
         ZLinkSessionActor existing = context.actors().find(actorRef.actorId()).orElse(null);
@@ -177,14 +158,5 @@ public final class SupportChatSession implements ZLinkSession {
                     "Client must authenticate before sending conversation packets");
         }
         return identityActor;
-    }
-
-    private static String requireConversationId(ZLinkSessionDispatchContext dispatch) {
-        String conversationId = dispatch.metadata().get(SampleNames.ConversationIdMetadataKey);
-        if (conversationId == null || conversationId.isBlank()) {
-            throw new IllegalStateException(
-                    "Conversation packet is missing ConversationId metadata");
-        }
-        return conversationId;
     }
 }

@@ -25,7 +25,7 @@
     { "from": "C", "to": "S", "y": 448, "label": "STREAM reconnect", "variant": "default" },
     { "from": "C", "to": "S", "y": 496, "label": "AuthenticateReq(same token)", "variant": "default" },
     { "from": "S", "to": "C", "y": 544, "label": "AuthenticateRes", "variant": "return" },
-    { "from": "C", "to": "S", "y": 592, "label": "JoinConversationReq(metadata ConversationId)", "variant": "default" },
+    { "from": "C", "to": "S", "y": 592, "label": "JoinConversationReq(conversationId)", "variant": "default" },
     { "from": "S", "to": "P", "y": 640, "label": "JoinConversationReq", "variant": "default" },
     { "from": "P", "to": "S", "y": 688, "label": "JoinConversationRes(scheduled=false)", "variant": "return" },
     { "from": "S", "to": "C", "y": 736, "label": "JoinConversationRes(scheduled=false)", "variant": "return" }
@@ -44,7 +44,7 @@
       "title": "reconnect relay 규칙",
       "items": [
         "reconnect는 actor와 Conversation state를 새로 만들지 않는다. scheduled=false로 현재 state를 반환한다. Agent는 roster actor를 다시 bind하고 SetAgentAvailableReq(true)를 보낸 뒤 열려 있던 conversation마다 JoinConversationReq를 보낸다.",
-        "Session은 metadata ConversationId가 agent conversation actor map에 있으면 그 actor로 relay하고, customer의 map miss는 customer identity actor로 relay한다.",
+        "Session은 JoinConversationReq를 binding packet으로 처리한다. 다른 packet은 Actor slot이 있으면 dispatch context에 bound된 Actor로, 없으면 연결의 identity Actor로 relay한다. Agent는 재join의 JoinConversationRes.actorId로 방별 Actor handle을 다시 찾는다.",
         "여러 process의 준비·재연결 검증이 idle deadline보다 오래 걸리면 runner는 일반 typed SendChatMessageReq로 traffic 유효를 갱신할 수 있다 — 이는 heartbeat·keepalive가 아니며 control packet·sleep·log line으로 deadline을 대신 늘리지 않는다. 실제 idle·grace 동작은 별도 bounded wait로 확인한다."
       ]
     }

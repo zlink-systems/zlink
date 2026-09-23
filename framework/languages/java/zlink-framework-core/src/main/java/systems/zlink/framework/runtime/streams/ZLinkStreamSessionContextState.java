@@ -264,23 +264,24 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
         if (tracePoint != null) {
             tracePoint.trace(
                     new ZLinkMessageFlowEvent(
-                            ZLinkMessageFlowOutcome.REPLIED,
-                            ZLinkDispatchErrorSurface.STREAM_SESSION,
-                            ZLinkDispatchMessageKind.REQUEST,
-                            requestHeader.packetName(),
-                            null,
-                            null,
-                            ZLinkStreamCorrelations.forTrace(requestHeader),
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            requestHeader.flowId().orElse(null),
-                            requestHeader.flowOrigin().orElse(null)));
+                                    ZLinkMessageFlowOutcome.REPLIED,
+                                    ZLinkDispatchErrorSurface.STREAM_SESSION,
+                                    ZLinkDispatchMessageKind.REQUEST,
+                                    requestHeader.packetName(),
+                                    null,
+                                    null,
+                                    ZLinkStreamCorrelations.forTrace(requestHeader),
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    requestHeader.flowId().orElse(null),
+                                    requestHeader.flowOrigin().orElse(null))
+                            .withStreamSessionId(routingId.toHex()));
         }
     }
 
@@ -320,23 +321,24 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
         if (tracePoint != null) {
             tracePoint.trace(
                     new ZLinkMessageFlowEvent(
-                            ZLinkMessageFlowOutcome.COMPLETED,
-                            ZLinkDispatchErrorSurface.STREAM_SESSION,
-                            ZLinkDispatchMessageKind.SEND,
-                            header.packetName(),
-                            null,
-                            null,
-                            header.correlationId().orElse(null),
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            header.flowId().orElse(null),
-                            header.flowOrigin().orElse(null)));
+                                    ZLinkMessageFlowOutcome.COMPLETED,
+                                    ZLinkDispatchErrorSurface.STREAM_SESSION,
+                                    ZLinkDispatchMessageKind.SEND,
+                                    header.packetName(),
+                                    null,
+                                    null,
+                                    header.correlationId().orElse(null),
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    header.flowId().orElse(null),
+                                    header.flowOrigin().orElse(null))
+                            .withStreamSessionId(routingId.toHex()));
         }
         result.complete(null);
     }
@@ -395,7 +397,7 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
                     event.withFlow(
                             header.flowId().orElseThrow(), header.flowOrigin().orElseThrow());
         }
-        tracePoint.trace(event);
+        tracePoint.trace(event.withStreamSessionId(routingId.toHex()));
     }
 
     private CompletionStage<Void> sendErrorReply(ZLinkStreamHeader requestHeader, Throwable error) {

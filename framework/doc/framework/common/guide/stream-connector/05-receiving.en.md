@@ -13,8 +13,30 @@ connection itself.
 ## 1. Registering a Handler
 
 A handler receives a **message**, not a payload alone. The message carries the packet name, the
-decoded payload, the metadata, and the flow identifier. Which packets it receives is decided by the
-payload type or by an explicit name.
+decoded payload, and the metadata. Which packets it receives is decided by the payload type or by
+an explicit name.
+
+=== "C++"
+
+    Use `on<T>(handler)` or an overload that takes a name.
+
+=== "C#/.NET"
+
+    Use `On<T>(handler)` or an overload that takes a name.
+
+=== "Java"
+
+    Use `on(Class<T>, handler)` or `on(String, Class<T>, handler)` to give a name.
+
+=== "Kotlin"
+
+    Use `on<T> { }` or `on(name, payloadType, handler)` to give a name.
+
+=== "Node/TypeScript"
+
+    Pass a name or payload type to `on<T>(nameOrType, handler)`.
+
+The example below registers a handler by payload type.
 
 === "C++"
 
@@ -63,9 +85,6 @@ payload type or by an explicit name.
       LeaderboardUpdate
     );
     ```
-
-A handler may send again over the same connector. That send continues the flow of the message
-being handled, so client logs and server traces line up on one flow.
 
 ## 2. Releasing a Registration
 
@@ -177,6 +196,30 @@ To wait for a single packet at a point in a scenario, use a wait surface instead
 handler. It consumes the matching packet and returns that message; a packet that does not match
 stays in the queue for a later handler or wait. Without an explicit timeout, the connector's default
 wait timeout applies.
+
+A packet name can be explicit or derived from the payload type.
+
+=== "C++"
+
+    Use `wait_for<T>()` or `wait_for<T>(name)`.
+
+=== "C#/.NET"
+
+    Use `WaitFor<T>()` or `WaitFor<T>(name)`.
+
+=== "Java"
+
+    Use `waitFor(Class<?>)` or `waitFor(String)`.
+
+=== "Kotlin"
+
+    Use `waitFor<T>()` or `waitFor<T>(name)`.
+
+=== "Node/TypeScript"
+
+    Pass a name or payload type to `waitFor<T>(nameOrType)`.
+
+The example below waits for one packet by payload type.
 
 === "C++"
 
@@ -369,19 +412,57 @@ In a client that works correctly, messages do not accumulate: a handler processe
 surface consumes them. Continued growth means the client is not calling the pump, which is why the
 received count is not a basis for flow control.
 
-## 8. Sending and Receiving with an Actor Handle
+## 8. With Several Actors — Tell Them Apart by Actor Handle
 
-An application with one Actor needs no changes to its existing send and receive code. When the server binds several Actors to one connection, use a handle to choose the Actor for a send and read the received message’s Actor ID to identify its server-side counterpart. When the server binds an Actor to this connection, the bound notice arrives before that Actor's first packet; when the binding ends, the unbound notice arrives after its last packet.
+### 8.1 With One Actor
 
-Register for bound and unbound notices first. The tutorial server then binds `p1`; the client looks up its handle, sends through it, and reads the Actor ID on the returned message.
+When the server binds only one Actor to this connection, keep the send and receive code you have. A
+packet sent from the connector carries no Actor slot, and the server session hands a packet without a
+slot to the one Actor bound to that connection
+([Session and Actor Connection](../server/24-actor-session.en.md#32-forwarding-what-is-left)).
+
+=== "C++"
+
+    ```cpp
+    --8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:single-actor-send"
+    ```
+
+=== "C#/.NET"
+
+    ```csharp
+    --8<-- "framework/languages/dotnet/tutorial/StreamClient/Program.cs:single-actor-send"
+    ```
+
+=== "Java"
+
+    ```java
+    --8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/StreamClientProgram.java:single-actor-send"
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    --8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/StreamClientProgram.kt:single-actor-send"
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
+    --8<-- "framework/languages/node/tutorial/StreamClient/main.ts:single-actor-send"
+    ```
+
+### 8.2 Get Handles from the Bound Notice
+
+When the server binds several Actors to one connection, the connector creates an **Actor handle** for
+each. When the server binds an Actor, the bound notice arrives before that Actor's first packet, and
+when the binding ends, the unbound notice arrives after its last packet. The example below registers
+both notices and finds the handles of the authenticated `p1` and `p2` by Actor ID.
 
 === "C++"
 
     ```cpp
     --8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:actor-handle-events"
     --8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:actor-handle-send"
-    --8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:actor-handle-send-call"
-    --8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:actor-handle-receive"
     ```
 
 === "C#/.NET"
@@ -389,8 +470,6 @@ Register for bound and unbound notices first. The tutorial server then binds `p1
     ```csharp
     --8<-- "framework/languages/dotnet/tutorial/StreamClient/Program.cs:actor-handle-events"
     --8<-- "framework/languages/dotnet/tutorial/StreamClient/Program.cs:actor-handle-send"
-    --8<-- "framework/languages/dotnet/tutorial/StreamClient/Program.cs:actor-handle-send-call"
-    --8<-- "framework/languages/dotnet/tutorial/StreamClient/Program.cs:actor-handle-receive"
     ```
 
 === "Java"
@@ -398,8 +477,6 @@ Register for bound and unbound notices first. The tutorial server then binds `p1
     ```java
     --8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/StreamClientProgram.java:actor-handle-events"
     --8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/StreamClientProgram.java:actor-handle-send"
-    --8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/StreamClientProgram.java:actor-handle-send-call"
-    --8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/StreamClientProgram.java:actor-handle-receive"
     ```
 
 === "Kotlin"
@@ -407,8 +484,6 @@ Register for bound and unbound notices first. The tutorial server then binds `p1
     ```kotlin
     --8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/StreamClientProgram.kt:actor-handle-events"
     --8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/StreamClientProgram.kt:actor-handle-send"
-    --8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/StreamClientProgram.kt:actor-handle-send-call"
-    --8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/StreamClientProgram.kt:actor-handle-receive"
     ```
 
 === "Node/TypeScript"
@@ -416,11 +491,96 @@ Register for bound and unbound notices first. The tutorial server then binds `p1
     ```typescript
     --8<-- "framework/languages/node/tutorial/StreamClient/main.ts:actor-handle-events"
     --8<-- "framework/languages/node/tutorial/StreamClient/main.ts:actor-handle-send"
+    ```
+
+### 8.3 Send Through a Handle and Receive per Handle
+
+A packet sent through a handle carries that Actor's slot, and the server session hands the packet to
+that slot's Actor. A receive handler registered on a handle receives only the messages that Actor sent.
+
+=== "C++"
+
+    ```cpp
+    --8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:actor-handle-per-handle-receive"
+    --8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:actor-handle-send-call"
+    --8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:actor-handle-receive"
+    ```
+
+=== "C#/.NET"
+
+    ```csharp
+    --8<-- "framework/languages/dotnet/tutorial/StreamClient/Program.cs:actor-handle-per-handle-receive"
+    --8<-- "framework/languages/dotnet/tutorial/StreamClient/Program.cs:actor-handle-send-call"
+    --8<-- "framework/languages/dotnet/tutorial/StreamClient/Program.cs:actor-handle-receive"
+    ```
+
+=== "Java"
+
+    ```java
+    --8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/StreamClientProgram.java:actor-handle-per-handle-receive"
+    --8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/StreamClientProgram.java:actor-handle-send-call"
+    --8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/StreamClientProgram.java:actor-handle-receive"
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    --8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/StreamClientProgram.kt:actor-handle-per-handle-receive"
+    --8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/StreamClientProgram.kt:actor-handle-send-call"
+    --8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/StreamClientProgram.kt:actor-handle-receive"
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
+    --8<-- "framework/languages/node/tutorial/StreamClient/main.ts:actor-handle-per-handle-receive"
     --8<-- "framework/languages/node/tutorial/StreamClient/main.ts:actor-handle-send-call"
     --8<-- "framework/languages/node/tutorial/StreamClient/main.ts:actor-handle-receive"
     ```
 
-The output includes `actor handle: p1` and `pushed: speedy, actor: p1`.
+Running it prints `pushed: speedy-p1, actor: p1` and `pushed: speedy-p2, actor: p2`.
+
+### 8.4 Tell Actors Apart by Actor ID at the Connector Level
+
+You can also receive at the connector level without a handle. The message's Actor ID then tells you
+the server-side Actor. A message that arrived without a slot has an empty Actor ID.
+
+=== "C++"
+
+    ```cpp
+    --8<-- "framework/languages/cpp/tutorial/StreamClient/main.cpp:actor-id-receive"
+    ```
+
+=== "C#/.NET"
+
+    ```csharp
+    --8<-- "framework/languages/dotnet/tutorial/StreamClient/Program.cs:actor-id-receive"
+    ```
+
+=== "Java"
+
+    ```java
+    --8<-- "framework/languages/java/tutorial/java/StreamClient/src/main/java/systems/zlink/tutorial/streamclient/StreamClientProgram.java:actor-id-receive"
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    --8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/StreamClientProgram.kt:actor-id-receive"
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
+    --8<-- "framework/languages/node/tutorial/StreamClient/main.ts:actor-id-receive"
+    ```
+
+### 8.5 A Packet Sent to an Unbound Actor
+
+An unbound handle is closed. Sending through a closed handle doesn't send and ends with
+`ValidationFailed` in the connector. If a packet sent just before the unbind reaches the server late,
+the server doesn't hand it to another Actor — a request ends with an `InvalidOperation` error reply,
+and a one-way send is dropped.
 
 ## 9. Next Chapters
 

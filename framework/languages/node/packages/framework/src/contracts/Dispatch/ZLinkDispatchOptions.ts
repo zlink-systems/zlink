@@ -80,6 +80,7 @@ export interface ZLinkRuntimeMessageFlowEvent {
   readonly instanceSpotType?: string;
   readonly activationState?: 'activating' | 'ready' | 'closing';
   readonly actorId?: string;
+  readonly streamSessionId?: string;
   /** Internal service-wire command carried by a RouteMesh control record. */
   readonly commandId?: number;
   readonly messageSize?: number;

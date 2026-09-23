@@ -533,11 +533,13 @@ export class ZLinkStreamSessionRuntime {
           : ZLinkDispatchMessageKind.Send;
       const streamCorr = decodedHeader.correlationId;
       const inboundHeader = decodedHeader;
+      const flowEnabled = this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true;
       await runWithFlow(
         createInboundFlow(
           inboundHeader.flowId,
           inboundHeader.flowOrigin,
-          this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+          flowEnabled,
+          flowEnabled ? this.stream.sessionId : undefined
         ),
         async () => {
           flowIfEnabled(this.options.dispatchErrors?.flow, ZLinkMessageFlowOutcome.Received)?.trace(
@@ -787,7 +789,8 @@ export class ZLinkStreamSessionRuntime {
             : ZLinkDispatchMessageKind.Send,
       packetName: packetName.length === 0 ? undefined : packetName,
       correlationId,
-      sourceRid: this.context.routingId === undefined ? undefined : String(this.context.routingId)
+      sourceRid: this.context.routingId === undefined ? undefined : String(this.context.routingId),
+      streamSessionId: this.stream.sessionId
     });
   }
 
@@ -921,6 +924,7 @@ export class ZLinkStreamSessionRuntime {
       packetName: header.name === '' ? undefined : header.name,
       correlationId: header.correlationId,
       sourceRid: this.context.routingId === undefined ? undefined : String(this.context.routingId),
+      streamSessionId: this.stream.sessionId,
       flowId: flowEnabled ? header.flowId : undefined,
       flowOrigin: flowEnabled ? header.flowOrigin : undefined,
       errorReason: ZLinkDispatchErrorReason.Shutdown

@@ -1737,7 +1737,10 @@ result_t<void> stream_runtime_t::dispatch_packet (packet_stream_session_t &sessi
             inbound_flow_id = std::string (*id);
     }
     auto flow_scope = runtime::flow_context_t::enter (
-      std::move (inbound_flow_id), header.flow_origin (), flow_mode, flow_origin_t::inbound);
+      std::move (inbound_flow_id), header.flow_origin (), flow_mode, flow_origin_t::inbound,
+      flow_mode == message_flow_log_mode_t::off || !stream.routing_id ()
+        ? std::nullopt
+        : std::optional<std::string> (stream.routing_id ()->to_hex ()));
     flow_tracer.trace (message_flow_outcome_t::received, [&] {
         std::optional<std::string> correlation;
         if (auto id = header.correlation_id ()) {
@@ -1847,7 +1850,10 @@ result_t<void> stream_runtime_t::dispatch_packet_async (packet_stream_session_t 
             inbound_flow_id = std::string (*id);
     }
     auto flow_scope = runtime::flow_context_t::enter (
-      std::move (inbound_flow_id), header.flow_origin (), flow_mode, flow_origin_t::inbound);
+      std::move (inbound_flow_id), header.flow_origin (), flow_mode, flow_origin_t::inbound,
+      flow_mode == message_flow_log_mode_t::off || !stream.routing_id ()
+        ? std::nullopt
+        : std::optional<std::string> (stream.routing_id ()->to_hex ()));
     flow_tracer.trace (message_flow_outcome_t::received, [&] {
         std::optional<std::string> correlation;
         if (auto id = header.correlation_id ()) {

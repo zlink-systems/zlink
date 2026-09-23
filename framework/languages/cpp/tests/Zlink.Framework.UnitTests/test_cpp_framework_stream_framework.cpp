@@ -941,6 +941,18 @@ int main ()
 
     zlink::framework::zlink_builder_t zlink;
     zlink.stream ("client-stream").bind ("tcp://0.0.0.0:9200").register_session ("client");
+    std::atomic_bool saw_stream_session_flow{false};
+    zlink::framework::dispatch_options_t flow_options;
+    flow_options.message_flow (zlink::framework::message_flow_log_mode_t::normal);
+    zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
+      flow_options, [&] (const zlink::framework::message_flow_event_t &event) {
+          if (event.surface == zlink::framework::dispatch_error_surface_t::stream_session
+              && event.outcome == zlink::framework::message_flow_outcome_t::received
+              && event.stream_session_id
+              && *event.stream_session_id == zlink::routing_id_t::from ("stream-rid").to_hex ())
+              saw_stream_session_flow.store (true, std::memory_order_release);
+      });
+    zlink::framework::detail::apply_dispatch_options (zlink, flow_options);
     zlink::framework::serializer_registry_t serializers;
     serializers.add<std::string> (
       [] (const std::string &value) {
@@ -1243,6 +1255,8 @@ int main ()
                                   zlink::message_t::from (std::string ("payload")))) {
         return 8;
     }
+    if (!saw_stream_session_flow.load (std::memory_order_acquire))
+        return 229;
     if (!session.last_can_reply || session.last_actor_id
         || session.last_metadata.find ("trace") != "42"
         || session.last_metadata.find ("content_type") != "application/json") {

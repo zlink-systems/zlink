@@ -51,6 +51,30 @@ internal static class ZLinkStreamControlFrames
         SendControl(stream, ActorUnboundName, payload);
     }
 
+    public static async ValueTask SendActorUnboundAsync(
+        IZLinkStream stream,
+        ushort slot,
+        CancellationToken cancellationToken
+    )
+    {
+        if (slot == 0)
+            throw new InvalidOperationException("Actor slot must not be zero.");
+        var payload = new byte[3];
+        payload[0] = 1;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(payload.AsSpan(1, 2), slot);
+        var header = new ZlinkStreamHeader(
+            ZlinkStreamMessageKind.Control,
+            ZlinkStreamCodec.Raw,
+            ZlinkStreamHeaderFlags.None,
+            null,
+            ActorUnboundName,
+            ZlinkStreamMetadata.Empty
+        );
+        await ZLinkStreamFrameWriter
+            .WriteAsync(stream, header, payload, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     public static void Dispatch(
         ZLinkManagedStream stream,
         ZlinkStreamHeader header,

@@ -35,7 +35,7 @@
     { "from": "S", "to": "C", "y": 880, "label": "OpenConversationRes", "variant": "return" },
     { "from": "P", "to": "S", "y": 928, "label": "ConversationAssignedNotify", "variant": "return" },
     { "from": "S", "to": "A", "y": 976, "label": "ConversationAssignedNotify", "variant": "return" },
-    { "from": "A", "to": "S", "y": 1024, "label": "JoinConversationReq(metadata ConversationId)", "variant": "default" },
+    { "from": "A", "to": "S", "y": 1024, "label": "JoinConversationReq(conversationId)", "variant": "default" },
     { "from": "S", "to": "P", "y": 1072, "label": "JoinConversationReq", "variant": "default" },
     { "from": "P", "to": "S", "y": 1120, "label": "JoinConversationRes(scheduled=true)", "variant": "return" },
     { "from": "S", "to": "A", "y": 1168, "label": "JoinConversationRes(scheduled=true)", "variant": "return" },
@@ -49,7 +49,7 @@
       "title": "join 완료 판정",
       "items": [
         "scheduled=true는 join 예약을 의미하며 membership commit 완료가 아니다. 양쪽 client가 Active 상태의 ParticipantJoinedNotify를 확인해야 agent join을 완료로 판정한다.",
-        "JoinConversationReq의 ConversationId는 stream metadata 필수 값이며 payload에 route를 넣지 않는다. participantId·role·displayName은 actor join에 필요한 값이다."
+        "JoinConversationReq는 Actor slot 없는 Session binding packet이며 conversationId를 payload로 보낸다. JoinConversationRes.actorId로 방별 Actor handle을 찾는다. participantId·role·displayName은 actor join에 필요한 값이다."
       ]
     },
     {

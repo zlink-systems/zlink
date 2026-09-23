@@ -90,20 +90,6 @@ struct connector_options_t
     /// either mode.
     dispatch_mode_t dispatch_mode = dispatch_mode_t::manual;
 
-    /// Diagnostics level for connector frames (message-flow-tracing §4).
-    ///
-    /// The default errors keeps the current wire behavior. off applies the
-    /// flow-correlation §4 omission rules: outbound frames are sent without
-    /// flow_id/flow_origin, inbound flow fields are not validated as flow
-    /// values (structural length checks stay), and trace-only work is skipped.
-    /// correlation_id is protocol information and is unaffected by this level.
-    /// This is only the initial value used at create(). To read or change the
-    /// level afterward without recreating the connector, use
-    /// connector_t::diagnostics_level() / connector_t::set_diagnostics_level()
-    /// (stream-connector §13); the change applies starting with the next
-    /// processing point and does not affect frames already encoded/decoded.
-    diagnostics_level_t diagnostics_level = diagnostics_level_t::errors;
-
     /// Default compression preference for connector calls that opt into compression.
     compression_t compression = compression_t::lz4;
 

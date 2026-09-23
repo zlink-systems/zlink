@@ -90,7 +90,7 @@ lifecycle of Actors arriving and leaving.
 
 This code shows that the Entry Spot provides the lifecycle callbacks needed to admit and destroy Actors.
 
-### 3.1 What an Entry Spot Does Not Hold
+### 3.1 No Per-Actor State in the Entry Spot
 
 **Keep no per-Actor state in an Entry Spot.** An Actor's state belongs to the Actor, and the Entry
 Spot provides only handlers and membership callbacks. There is one Entry Spot per Object Server, so

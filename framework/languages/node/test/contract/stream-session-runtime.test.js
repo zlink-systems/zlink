@@ -26,6 +26,7 @@ const {
   ZLinkDispatchErrorReporter
 } = require('../../packages/framework/dist/runtime/channels/dispatch-error-reporter');
 const streamProtocol = require('../../packages/framework/dist/runtime/streams/protocol');
+const flowContext = require('../../packages/framework/dist/runtime/diagnostics/flow-context');
 const backend = require('../../packages/framework/dist/runtime/backend');
 const nodeMonitorBackend = require('../../packages/framework/dist/runtime/backend/node/node-monitor-backend-adapter');
 
@@ -71,6 +72,7 @@ test('STREAM runtime registers its monitor handler once across repeated starts',
 test('ConnectionReady before the first packet keeps the native routing id for replies', async () => {
   const socket = new FakeStreamSocket();
   const routingId = zlink.RoutingId.from(2);
+  const flowRecords = [];
   let monitorHandler;
   const bindingRuntime = new framework.ZLinkStreamBindingRuntime({
     messageFactory: {
@@ -82,6 +84,20 @@ test('ConnectionReady before the first packet keeps the native routing id for re
     const runtime = createStreamRuntime({
       socket,
       bindingRuntime,
+      dispatchErrors: {
+        flow: {
+          flowCreationEnabled: () => true,
+          begin: () => ({
+            trace(event) {
+              flowRecords.push({
+                ...event,
+                sessionId: flowContext.currentFlowContext()?.streamSessionId
+              });
+            }
+          })
+        },
+        report() {}
+      },
       monitor: { onEvent(handler) { monitorHandler = handler; } },
       headerDecoder: (header) => protocolCodecs.ZlinkStreamHeaderCodec.decode(header.data()),
       sessionFactory(context) {
@@ -112,6 +128,14 @@ test('ConnectionReady before the first packet keeps the native routing id for re
   const runtime = await replied;
   assert.equal(socket.sent.length, 1);
   assert.equal(socket.sent[0].routingId, routingId);
+  assert.equal(
+    flowRecords.find((event) => event.outcome === 'received')?.sessionId,
+    routingId.toHex()
+  );
+  assert.equal(
+    flowRecords.find((event) => event.outcome === 'replied')?.streamSessionId,
+    routingId.toHex()
+  );
   await runtime.dispose();
 });
 

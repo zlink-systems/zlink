@@ -5,8 +5,8 @@ using Zlink.Framework.Contracts.Streams;
 namespace Tutorial.Server.Sessions;
 
 // --8<-- [start:session-actor-bind]
-// Ties this connection to one player. After this, packets without a session
-// handler reach that player, and the player can push to this connection.
+// Binds each authenticated player to this connection. The packet's Actor slot
+// then selects which player receives a packet without a session handler.
 public sealed class AuthenticateHandler(IZLinkActorManager players)
     : IZLinkSessionPacketHandler<IZLinkSessionContext, Authenticate>
 {

@@ -43,7 +43,7 @@ class JoinConversationAtSpotHandler implements ZLinkSpotRequestHandler<
     request: JoinConversationAtSpotReq,
     _context: ZLinkMessageContext
   ): Promise<JoinConversationRes> {
-    return { scheduled: false, state: spot.join(request.actorId) };
+    return { scheduled: false, actorId: request.actorId, state: spot.join(request.actorId) };
   }
 }
 

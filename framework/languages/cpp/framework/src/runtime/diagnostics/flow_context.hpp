@@ -33,6 +33,7 @@ struct flow_value_t
     std::string flow_id;
     flow_origin_t origin = flow_origin_t::inbound;
     message_flow_log_mode_t diagnostics_mode = message_flow_log_mode_t::off;
+    std::optional<std::string> stream_session_id;
 };
 
 /* Ambient flow of the framework-invoked callback currently running on this
@@ -78,7 +79,8 @@ class flow_context_t
     static scope_t enter (const std::optional<std::string> &flow_id,
                           std::optional<flow_origin_t> origin,
                           message_flow_log_mode_t diagnostics_mode,
-                          flow_origin_t default_origin)
+                          flow_origin_t default_origin,
+                          std::optional<std::string> stream_session_id)
     {
         // Flow fields are observation-only.  At Off the processing point must
         // neither validate nor install inbound flow state (spec 27 §4).
@@ -94,15 +96,18 @@ class flow_context_t
                 throw framework_exception_t (framework_error_kind_t::protocol_error,
                                              "flow id must be UUIDv7");
             }
-            return scope_t (flow_value_t{*flow_id, *origin, diagnostics_mode});
+            return scope_t (
+              flow_value_t{*flow_id, *origin, diagnostics_mode, std::move (stream_session_id)});
         }
-        return scope_t (flow_value_t{flow_id_t::create (), default_origin, diagnostics_mode});
+        return scope_t (flow_value_t{flow_id_t::create (), default_origin, diagnostics_mode,
+                                     std::move (stream_session_id)});
     }
 
     static scope_t enter (std::optional<std::string> &&flow_id,
                           std::optional<flow_origin_t> origin,
                           message_flow_log_mode_t diagnostics_mode,
-                          flow_origin_t default_origin)
+                          flow_origin_t default_origin,
+                          std::optional<std::string> stream_session_id)
     {
         if (diagnostics_mode == message_flow_log_mode_t::off)
             return scope_t (std::nullopt);
@@ -115,9 +120,11 @@ class flow_context_t
                 throw framework_exception_t (framework_error_kind_t::protocol_error,
                                              "flow id must be UUIDv7");
             }
-            return scope_t (flow_value_t{std::move (*flow_id), *origin, diagnostics_mode});
+            return scope_t (flow_value_t{std::move (*flow_id), *origin, diagnostics_mode,
+                                         std::move (stream_session_id)});
         }
-        return scope_t (flow_value_t{flow_id_t::create (), default_origin, diagnostics_mode});
+        return scope_t (flow_value_t{flow_id_t::create (), default_origin, diagnostics_mode,
+                                     std::move (stream_session_id)});
     }
 
     static scope_t enter_current_or_create (flow_origin_t origin,
@@ -129,7 +136,7 @@ class flow_context_t
         if (value) {
             return scope_t (*value);
         }
-        return scope_t (flow_value_t{flow_id_t::create (), origin, diagnostics_mode});
+        return scope_t (flow_value_t{flow_id_t::create (), origin, diagnostics_mode, std::nullopt});
     }
 
   private:

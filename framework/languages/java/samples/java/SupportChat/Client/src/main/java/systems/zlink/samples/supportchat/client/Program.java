@@ -3,6 +3,7 @@ package systems.zlink.samples.supportchat.client;
 import systems.zlink.samples.supportchat.server.configuration.SampleNames;
 import systems.zlink.samples.supportchat.server.configuration.SampleTimings;
 import systems.zlink.samples.supportchat.shared.contracts.Messages;
+import systems.zlink.stream.connector.ZLinkStreamActor;
 import systems.zlink.stream.connector.ZLinkStreamAssert;
 import systems.zlink.stream.connector.ZLinkStreamConnector;
 import systems.zlink.stream.connector.ZLinkStreamConnectorFactory;
@@ -104,8 +105,8 @@ final class SupportChatClientScenario {
         ensure(SampleNames.Statuses.WaitingForAgent.equals(opened1.state().status()));
         ensure(join(assigned1).payload().conversationId().equals(conversation1));
 
-        ConversationClient agentRoom1 = new ConversationClient(agent, conversation1);
-        ConversationClient customerRoom1 = new ConversationClient(customer1, conversation1);
+        ConversationClient agentRoom1 = new ConversationClient(agent, conversation1, true);
+        ConversationClient customerRoom1 = new ConversationClient(customer1, conversation1, false);
         CompletionStage<ZLinkStreamMessage<Messages.ParticipantJoinedNotify>> joined1 =
                 waitFor(customer1, Messages.ParticipantJoinedNotify.class);
         Messages.JoinConversationRes agentJoined1 = agentRoom1.join();
@@ -121,7 +122,9 @@ final class SupportChatClientScenario {
         CompletionStage<ZLinkStreamMessage<Messages.ChatMessageNotify>> reply1 =
                 waitFor(agent, Messages.ChatMessageNotify.class);
         ensure(customerRoom1.sendChat("Payment keeps failing.").message().messageSeq() == 2);
-        ensure(join(reply1).payload().message().messageSeq() == 2);
+        ZLinkStreamMessage<Messages.ChatMessageNotify> reply1Push = join(reply1);
+        ensure(reply1Push.payload().message().messageSeq() == 2);
+        ensure(agentRoom1.actorId().equals(reply1Push.actorId()));
 
         connectAndAuthenticate(customer2, "customer-2", SampleNames.Roles.Customer);
         CompletionStage<ZLinkStreamMessage<Messages.ConversationAssignedNotify>> assigned2 =
@@ -136,8 +139,8 @@ final class SupportChatClientScenario {
         ensure(SampleNames.Statuses.WaitingForAgent.equals(opened2.state().status()));
         ensure(join(assigned2).payload().conversationId().equals(conversation2));
 
-        ConversationClient agentRoom2 = new ConversationClient(agent, conversation2);
-        ConversationClient customerRoom2 = new ConversationClient(customer2, conversation2);
+        ConversationClient agentRoom2 = new ConversationClient(agent, conversation2, true);
+        ConversationClient customerRoom2 = new ConversationClient(customer2, conversation2, false);
         CompletionStage<ZLinkStreamMessage<Messages.ParticipantJoinedNotify>> joined2 =
                 waitFor(customer2, Messages.ParticipantJoinedNotify.class);
         Messages.JoinConversationRes agentJoined2 = agentRoom2.join();
@@ -148,6 +151,13 @@ final class SupportChatClientScenario {
                 waitFor(customer2, Messages.ChatMessageNotify.class);
         ensure(agentRoom2.sendChat("Let me check your account.").message().messageSeq() == 1);
         ensure(join(greeting2).payload().conversationId().equals(conversation2));
+        CompletionStage<ZLinkStreamMessage<Messages.ChatMessageNotify>> reply2 =
+                waitFor(agent, Messages.ChatMessageNotify.class);
+        ensure(customerRoom2.sendChat("I still cannot log in.").message().messageSeq() == 2);
+        ZLinkStreamMessage<Messages.ChatMessageNotify> reply2Push = join(reply2);
+        ensure(reply2Push.payload().conversationId().equals(conversation2));
+        ensure(agentRoom2.actorId().equals(reply2Push.actorId()));
+        ensure(!agentRoom1.actorId().equals(agentRoom2.actorId()));
 
         CompletionStage<ZLinkStreamMessage<Messages.TypingChangedNotify>> typing1 =
                 waitFor(customer1, Messages.TypingChangedNotify.class);
@@ -158,7 +168,7 @@ final class SupportChatClientScenario {
 
         close(customer1);
         connectAndAuthenticate(reconnectingCustomer, "customer-1", SampleNames.Roles.Customer);
-        customerRoom1 = new ConversationClient(reconnectingCustomer, conversation1);
+        customerRoom1 = new ConversationClient(reconnectingCustomer, conversation1, false);
         Messages.JoinConversationRes customerRejoined = customerRoom1.join();
         ensure(!customerRejoined.scheduled());
         Messages.ConversationState customerRejoin = customerRejoined.state();
@@ -168,8 +178,8 @@ final class SupportChatClientScenario {
         close(agent);
         connectAndAuthenticate(reconnectingAgent, "agent-1", SampleNames.Roles.Agent);
         ensure(setAvailability(reconnectingAgent, true).isAvailable());
-        agentRoom1 = new ConversationClient(reconnectingAgent, conversation1);
-        agentRoom2 = new ConversationClient(reconnectingAgent, conversation2);
+        agentRoom1 = new ConversationClient(reconnectingAgent, conversation1, true);
+        agentRoom2 = new ConversationClient(reconnectingAgent, conversation2, true);
         Messages.JoinConversationRes agentRejoined1 = agentRoom1.join();
         Messages.JoinConversationRes agentRejoined2 = agentRoom2.join();
         ensure(!agentRejoined1.scheduled());
@@ -328,41 +338,60 @@ final class SupportChatClientScenario {
     private static final class ConversationClient {
         private final ZLinkStreamConnector connector;
         private final String conversationId;
+        private final boolean agent;
+        private ZLinkStreamActor actor;
 
-        private ConversationClient(ZLinkStreamConnector connector, String conversationId) {
+        private ConversationClient(
+                ZLinkStreamConnector connector, String conversationId, boolean agent) {
             this.connector = connector;
             this.conversationId = conversationId;
+            this.agent = agent;
         }
 
         private Messages.JoinConversationRes join() {
-            return SupportChatClientScenario.join(
-                    connector
-                            .request(new Messages.JoinConversationReq())
-                            .metadata(SampleNames.ConversationIdMetadataKey, conversationId)
-                            .submit(Messages.JoinConversationRes.class));
+            Messages.JoinConversationRes joined =
+                    SupportChatClientScenario.join(
+                            connector
+                                    .request(
+                                            new Messages.JoinConversationReq(
+                                                    conversationId, "", "", ""))
+                                    .submit(Messages.JoinConversationRes.class));
+            if (agent) {
+                actor = connector.actor(joined.actorId()).orElseThrow();
+            }
+            return joined;
+        }
+
+        private String actorId() {
+            return actor.actorId();
         }
 
         private Messages.SendChatMessageRes sendChat(String text) {
             return SupportChatClientScenario.join(
-                    connector
-                            .request(new Messages.SendChatMessageReq(text))
-                            .metadata(SampleNames.ConversationIdMetadataKey, conversationId)
-                            .submit(Messages.SendChatMessageRes.class));
+                    agent
+                            ? actor.request(new Messages.SendChatMessageReq(text))
+                                    .submit(Messages.SendChatMessageRes.class)
+                            : connector
+                                    .request(new Messages.SendChatMessageReq(text))
+                                    .submit(Messages.SendChatMessageRes.class));
         }
 
         private void sendTyping(boolean typing) {
-            connector
-                    .send(new Messages.SetTypingMsg(typing))
-                    .metadata(SampleNames.ConversationIdMetadataKey, conversationId)
-                    .submit();
+            if (agent) {
+                actor.send(new Messages.SetTypingMsg(typing)).submit();
+            } else {
+                connector.send(new Messages.SetTypingMsg(typing)).submit();
+            }
         }
 
         private Messages.CloseConversationRes close(String reason) {
             return SupportChatClientScenario.join(
-                    connector
-                            .request(new Messages.CloseConversationReq(reason))
-                            .metadata(SampleNames.ConversationIdMetadataKey, conversationId)
-                            .submit(Messages.CloseConversationRes.class));
+                    agent
+                            ? actor.request(new Messages.CloseConversationReq(reason))
+                                    .submit(Messages.CloseConversationRes.class)
+                            : connector
+                                    .request(new Messages.CloseConversationReq(reason))
+                                    .submit(Messages.CloseConversationRes.class));
         }
     }
 }

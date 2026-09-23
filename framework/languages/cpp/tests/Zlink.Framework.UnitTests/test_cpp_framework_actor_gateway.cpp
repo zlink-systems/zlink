@@ -301,6 +301,55 @@ int replaced_session_find_is_exact_and_disconnects_once ()
     return disconnected == 1 ? 0 : 4;
 }
 
+int bound_actors_are_current_ordered_snapshot ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    auto state = std::make_shared<actor_gateway_state_t> ();
+    actor_gateway_runtime_t gateway (state);
+    auto manager = gateway.manager ();
+    if (!manager.bound ().empty ())
+        return 1;
+
+    zlink_builder_t builder;
+    builder.stream ("bound-snapshot").bind ("tcp://127.0.0.1:0");
+    auto runtime = stream_runtime_t::from (builder);
+    auto stream = runtime.open_session ("bound-snapshot");
+    const auto session_id = stream.session_id ();
+    runtime.attach_transport_writer (stream, [] (const stream_header_t &, const zlink::message_t &,
+                                                 std::optional<std::chrono::milliseconds>) {
+        return task_t<void> (result_t<void>::success ());
+    });
+    session_actor_manager_access_t::attach (manager, std::move (stream));
+    session_actor_manager_access_t::bind_native (manager, [] (actor_ref_t, std::uint64_t) {
+        return task_t<void> (result_t<void>::success ());
+    });
+
+    const auto first = test_actor_ref ("actor-node", "player", "z-bound-first", 1);
+    const auto second = test_actor_ref ("actor-node", "player", "a-bound-second", 1);
+    if (!manager.bind (first).async ().result () || manager.bound ().size () != 1
+        || manager.bound ().front ().actor_id () != "z-bound-first")
+        return 2;
+    if (!manager.bind (second).async ().result ())
+        return 3;
+    const auto snapshot = manager.bound ();
+    if (snapshot.size () != 2 || snapshot[0].actor_id () != "z-bound-first"
+        || snapshot[1].actor_id () != "a-bound-second")
+        return 4;
+
+    const auto first_token =
+      state->sync ([&] { return state->actors_by_id.at ("z-bound-first").binding_token; });
+    gateway.unbind_session_stream ("z-bound-first", session_id, first_token);
+    const auto after_unbind = manager.bound ();
+    if (after_unbind.size () != 1 || after_unbind[0].actor_id () != "a-bound-second"
+        || manager.find ("z-bound-first"))
+        return 5;
+    if (snapshot.size () != 2 || snapshot[0].actor_id () != "z-bound-first")
+        return 6;
+    return 0;
+}
+
 int bind_or_get_reuses_same_physical_session_generation ()
 {
     using namespace zlink::framework;
@@ -1409,6 +1458,23 @@ int bound_session_push_detaches_before_direct_sink_entry ()
     state->serializers = &serializers;
     actor_gateway_runtime_t gateway (state);
     const auto actor = test_actor_ref ("actor-owner", "player", "detached-bound-session", 7);
+    std::atomic_bool saw_fifo_session{false};
+    std::atomic_bool saw_completion_session{false};
+    dispatch_options_t trace_options;
+    trace_options.message_flow (message_flow_log_mode_t::detailed);
+    dispatch_options_access_t::set_observer_for_tests (
+      trace_options, [&] (const message_flow_event_t &event) {
+          if (event.surface != dispatch_error_surface_t::stream_session
+              || event.stream_session_id
+                   != std::optional<std::string> (
+                     zlink::routing_id_t::from ("session-rid").to_hex ()))
+              return;
+          if (event.detail_stage == std::optional<std::string> ("fifo_accepted"))
+              saw_fifo_session.store (true, std::memory_order_release);
+          if (event.detail_stage == std::optional<std::string> ("detached_delivery_complete"))
+              saw_completion_session.store (true, std::memory_order_release);
+      });
+    gateway.set_dispatch (std::move (trace_options));
 
     std::mutex gate_mutex;
     std::condition_variable gate_changed;
@@ -1475,7 +1541,136 @@ int bound_session_push_detaches_before_direct_sink_entry ()
             return 6;
         }
     }
+    if (!saw_fifo_session.load (std::memory_order_acquire)
+        || !saw_completion_session.load (std::memory_order_acquire))
+        return 8;
     return 0;
+}
+
+int admitted_bound_session_delivery_keeps_original_session_after_rebind ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    actor_gateway_runtime_t gateway;
+    const auto actor = test_actor_ref ("actor-owner", "player", "admitted-rebind", 7);
+    const auto owner = zlink::routing_id_t::from ("session-owner");
+    const auto original_rid = zlink::routing_id_t::from ("original-session");
+    const auto replacement_rid = zlink::routing_id_t::from ("replacement-session");
+    std::vector<message_flow_event_t> events;
+    auto live_mode =
+      std::make_shared<std::atomic<message_flow_log_mode_t>> (message_flow_log_mode_t::detailed);
+    dispatch_options_t trace_options;
+    trace_options.message_flow (message_flow_log_mode_t::detailed);
+    dispatch_options_access_t::set_live_mode (trace_options, live_mode);
+    dispatch_options_access_t::set_observer_for_tests (
+      trace_options, [&] (const message_flow_event_t &event) { events.push_back (event); });
+    gateway.set_dispatch (std::move (trace_options));
+
+    const auto original_route =
+      actor_bound_session_route_t{owner, original_rid, 7, 11, 13, 17, 19, 0, 0};
+    auto replacement_route =
+      actor_bound_session_route_t{owner, replacement_rid, 7, 11, 13, 17, 23, 0, 0};
+    if (!gateway.replace_session_route (
+          actor,
+          [] (std::string, stream_codec_t, const zlink::message_t &) {
+              return task_t<void> (result_t<void>::success ());
+          },
+          original_route))
+        return 1;
+    auto admitted = gateway.admit_bound_session_delivery (actor, 19);
+    if (!admitted)
+        return 2;
+    if (!gateway.replace_session_route (
+          actor,
+          [] (std::string, stream_codec_t, const zlink::message_t &) {
+              return task_t<void> (result_t<void>::success ());
+          },
+          replacement_route))
+        return 3;
+    if (!(*admitted) ("push", stream_codec_t::message_pack, zlink::message_t::from ("body")))
+        return 4;
+    const auto original_hex = original_rid.to_hex ();
+    const auto completion = std::find_if (events.begin (), events.end (), [&] (const auto &event) {
+        return event.detail_stage
+                 == std::optional<std::string> ("session_node_stream_write_terminal")
+               && event.detail_result == std::optional<std::string> ("ok");
+    });
+    if (completion == events.end () || completion->stream_session_id != original_hex)
+        return 5;
+
+    replacement_route.session_rid = zlink::routing_id_t::from ("failed-session");
+    replacement_route.binding_generation = 29;
+    if (!gateway.replace_session_route (
+          actor,
+          [] (std::string, stream_codec_t, const zlink::message_t &) {
+              return task_t<void> (
+                result_t<void>::failure (framework_error_kind_t::unavailable, "sink failure"));
+          },
+          replacement_route))
+        return 6;
+    admitted = gateway.admit_bound_session_delivery (actor, 29);
+    if (!admitted)
+        return 7;
+    replacement_route.session_rid = zlink::routing_id_t::from ("later-session");
+    replacement_route.binding_generation = 31;
+    if (!gateway.replace_session_route (
+          actor,
+          [] (std::string, stream_codec_t, const zlink::message_t &) {
+              return task_t<void> (result_t<void>::success ());
+          },
+          replacement_route))
+        return 8;
+    if ((*admitted) ("push", stream_codec_t::message_pack, zlink::message_t::from ("body")))
+        return 9;
+    const auto failed_hex = zlink::routing_id_t::from ("failed-session").to_hex ();
+    const auto failure = std::find_if (events.begin (), events.end (), [&] (const auto &event) {
+        return event.detail_stage == std::optional<std::string> ("detached_delivery")
+               && event.detail_result
+               && event.detail_result->starts_with ("session_node_stream_write_terminal failed")
+               && event.outcome == message_flow_outcome_t::dropped;
+    });
+    if (failure == events.end () || failure->stream_session_id != failed_hex)
+        return 10;
+    const auto failure_stage =
+      std::find_if (events.begin (), events.end (), [&] (const auto &event) {
+          return event.detail_stage
+                   == std::optional<std::string> ("session_node_stream_write_terminal")
+                 && event.outcome == message_flow_outcome_t::admitted && event.detail_result
+                 && event.detail_result->starts_with ("failed");
+      });
+    if (failure_stage == events.end () || failure_stage->stream_session_id != failed_hex)
+        return 11;
+
+    live_mode->store (message_flow_log_mode_t::off, std::memory_order_relaxed);
+    const auto event_count_before_off = events.size ();
+    admitted = gateway.admit_bound_session_delivery (actor, 31);
+    if (!admitted || events.size () != event_count_before_off)
+        return 12;
+    replacement_route.session_rid = zlink::routing_id_t::from ("newest-session");
+    replacement_route.binding_generation = 37;
+    if (!gateway.replace_session_route (
+          actor,
+          [] (std::string, stream_codec_t, const zlink::message_t &) {
+              return task_t<void> (result_t<void>::success ());
+          },
+          replacement_route))
+        return 13;
+    live_mode->store (message_flow_log_mode_t::detailed, std::memory_order_relaxed);
+    if (!(*admitted) ("push", stream_codec_t::message_pack, zlink::message_t::from ("body")))
+        return 14;
+    const auto switched_completion = std::find_if (
+      events.begin () + static_cast<std::ptrdiff_t> (event_count_before_off), events.end (),
+      [&] (const auto &event) {
+          return event.detail_stage
+                   == std::optional<std::string> ("session_node_stream_write_terminal")
+                 && event.detail_result == std::optional<std::string> ("ok");
+      });
+    return switched_completion != events.end ()
+               && switched_completion->stream_session_id
+                    == zlink::routing_id_t::from ("later-session").to_hex ()
+             ? 0
+             : 15;
 }
 
 int bound_session_transition_is_atomic_and_idempotent ()
@@ -5292,6 +5487,11 @@ int main (int argc, char **argv)
         detached != 0) {
         return 220 + detached;
     }
+    if (const auto admitted =
+          admitted_bound_session_delivery_keeps_original_session_after_rebind ();
+        admitted != 0) {
+        return 225 + admitted;
+    }
     if (const auto fence = rebound_session_keeps_prior_ingress_exact_fence (); fence != 0) {
         return 210 + fence;
     }
@@ -5416,6 +5616,9 @@ int main (int argc, char **argv)
     if (const auto replaced = replaced_session_find_is_exact_and_disconnects_once ();
         replaced != 0) {
         return 10 + replaced;
+    }
+    if (const auto bound = bound_actors_are_current_ordered_snapshot (); bound != 0) {
+        return 10 + bound;
     }
     if (const auto idempotent = bind_or_get_reuses_same_physical_session_generation ();
         idempotent != 0) {

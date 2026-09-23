@@ -311,13 +311,22 @@ dotnet run --project StreamClient/StreamClient.csproj
 connected: True
 round trip: 33ms          # STREAM request/reply
 actor bound: p1
-bound player: p1          # 연결을 player에 묶는다
+bound player: p1          # 연결에 Actor가 하나인 상태
+pushed: speedy, actor: p1 # connector에서 handle 없이 전송·수신
+actor bound: p2
+bound player: p2          # 같은 연결에 두 번째 캐릭터를 묶는다
 actor handle: p1
-pushed: speedy, actor: p1            # player가 그 연결로 밀어 준다
+actor handle: p2
+received actor id: p1
+received actor id: p2
+pushed: speedy-p1, actor: p1
+pushed: speedy-p2, actor: p2
 ```
 
-`pushed`는 client가 nickname 변경 요청의 응답이 아닌 **player가 연결로 보낸 알림**을 받았음을
-나타낸다.
+`pushed`는 nickname 변경 요청의 응답이 아닌 **각 player가 같은 연결로 보낸 알림**이다.
+첫 요청은 Actor가 하나라 connector에서 handle 없이 보낸다. 둘을 묶은 뒤에는 Actor handle로
+대상을 지정하고 handle별 수신 callback으로 알림을 받는다. connector 수신 callback에서도
+`ActorId`를 읽어 같은 알림의 발신 Actor를 구분할 수 있다.
 
 ### 9. HTTP client
 
@@ -467,6 +476,9 @@ curl http://127.0.0.1:5080/status
 | `session-actor-bind` | `Server/Sessions/AuthenticateHandler.cs` |
 | `session-actor-relay` | `Server/Sessions/GameSession.cs` |
 | `session-actor-client` | `StreamClient/Program.cs` |
+| `single-actor-send` | `StreamClient/Program.cs` |
+| `actor-id-receive` | `StreamClient/Program.cs` |
+| `actor-handle-per-handle-receive` | `StreamClient/Program.cs` |
 | `http-client-create` | `HttpClient/Program.cs` |
 | `http-first-request` | `HttpClient/Program.cs` |
 | `http-request-shaping` | `HttpClient/Program.cs` |

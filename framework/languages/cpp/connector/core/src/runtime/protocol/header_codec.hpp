@@ -22,9 +22,6 @@ struct stream_header_t
     std::string name;
     metadata_t metadata;
     std::string correlation_id;
-    /* Optional pair (flow-correlation §3.2): both present or both absent. */
-    std::string flow_id;
-    std::optional<flow_origin_t> flow_origin;
     std::optional<std::uint16_t> actor_slot;
 };
 
@@ -63,26 +60,19 @@ class session_closing_codec_t
     static result_t<session_closing_t> decode (const std::vector<std::uint8_t> &payload);
 };
 
-/* flow_id wire form: lowercase hyphenated UUIDv7, 36 ASCII bytes. */
+/* The wire marker and flow field width remain for structural decoding. */
 class flow_id_codec_t
 {
   public:
     static constexpr std::uint8_t format_marker = 0xF2;
     static constexpr std::size_t encoded_length = 36;
-
-    static std::string create ();
-    static bool is_valid (std::string_view value) noexcept;
 };
 
 class header_codec_t
 {
   public:
     result_t<std::vector<std::uint8_t>> encode (const stream_header_t &header) const;
-    /* validate_flow=false (diagnostics level Off, flow-correlation §4): the
-     * flow fields keep their structural length checks but are not validated
-     * as flow values and must not be consumed as flow context. */
-    result_t<stream_header_t> decode (const std::vector<std::uint8_t> &bytes,
-                                      bool validate_flow = true) const;
+    result_t<stream_header_t> decode (const std::vector<std::uint8_t> &bytes) const;
 };
 
 } // namespace zlink::stream_connector::detail

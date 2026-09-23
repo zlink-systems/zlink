@@ -20,5 +20,6 @@ internal sealed record ZLinkDispatchFailure(
     string? InstanceSpotType = null,
     string? ActivationState = null,
     string? FlowId = null,
-    ZLinkFlowOrigin? FlowOrigin = null
+    ZLinkFlowOrigin? FlowOrigin = null,
+    string? StreamSessionId = null
 );

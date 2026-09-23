@@ -28,7 +28,7 @@ public final class ZLinkFlowContext {
     }
 
     public static State create(ZLinkFlowOrigin origin) {
-        return new State(uuidV7(), origin);
+        return new State(uuidV7(), origin, null);
     }
 
     public static Scope enter(State state) {
@@ -162,7 +162,7 @@ public final class ZLinkFlowContext {
         return new UUID(msb, lsb).toString();
     }
 
-    public record State(String flowId, ZLinkFlowOrigin origin) {
+    public record State(String flowId, ZLinkFlowOrigin origin, String streamSessionId) {
         public State {
             if (flowId == null || origin == null) {
                 throw new IllegalArgumentException("flow id and origin are required");

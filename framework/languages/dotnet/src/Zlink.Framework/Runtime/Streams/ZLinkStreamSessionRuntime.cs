@@ -603,6 +603,9 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                         decoded.Name,
                         CorrelationId: decoded.CorrelationId
                     )
+                    {
+                        StreamSessionId = Stream.SessionId,
+                    }
                 );
 
             var dispatch = _context.EnterDispatch(decoded);
@@ -674,6 +677,9 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                             decoded.Name,
                             CorrelationId: decoded.CorrelationId
                         )
+                        {
+                            StreamSessionId = Stream.SessionId,
+                        }
                     );
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }

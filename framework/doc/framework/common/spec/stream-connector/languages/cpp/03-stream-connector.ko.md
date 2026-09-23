@@ -436,6 +436,8 @@ Unreal plugin, Godot GDExtension, Axmol adapter는 `connector_t`를 private 구�
 - 요청 hook(공통 스펙 §5.7)은 Unreal `OnRequestSending`·`OnReplyReceived` delegate, Godot·Axmol
   `on_request_sending`·`on_reply_received` callback이며 해제 handle을 반환한다. reply hook도 다른 결과와 같이
   main thread에서 전달한다.
+- 어댑터의 callback·delegate 또는 요청 hook이 예외를 던지면 어댑터 경계에서 엔진 오류 로그로 기록하고, 그 예외로
+  요청 결과나 다른 callback의 전달을 바꾸지 않는다.
 
 ## 8. 검증
 

@@ -26,14 +26,11 @@ public final class ConversationNotificationPublisher {
     public void publish(
             Conversation.Change change,
             Map<String, SupportUserActor> participants,
-            SupportActorDirectory directory,
             AgentAssignmentService assignment) {
         for (Conversation.Event event : change.events()) {
             Messages.ConversationState state = ConversationContracts.state(event.state());
             switch (event.kind()) {
                 case ParticipantJoined -> {
-                    SupportUserActor roster = directory.require(event.actorId());
-                    participants.put(event.actorId(), roster);
                     publishExcept(
                             participants,
                             event.actorId(),

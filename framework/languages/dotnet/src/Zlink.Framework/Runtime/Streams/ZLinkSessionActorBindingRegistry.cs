@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Diagnostics;
+using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Streams;
 
@@ -85,7 +86,11 @@ internal sealed class ZLinkSessionActorBindingRegistry(ZLinkFrameworkRuntime run
             replaced =>
             {
                 foreach (var previous in replaced)
-                    previous.Context.SendActorUnbound(previous.ActorRef.Slot);
+                    ZLinkUnawaitedSubmit.Observe(
+                        previous.Context.SendActorUnboundAsync(previous.ActorRef.Slot),
+                        "retired actor unbound",
+                        runtime.ErrorSink
+                    );
                 context.SendActorBound(actorRef);
             }
         );
@@ -185,6 +190,7 @@ internal sealed class ZLinkSessionActorBindingRegistry(ZLinkFrameworkRuntime run
                             ZLinkDispatchErrorAction.Drop,
                             null,
                             ActorId: actor.ActorId,
+                            StreamSessionId: context.SessionId,
                             Exception: failure
                         )
                     );

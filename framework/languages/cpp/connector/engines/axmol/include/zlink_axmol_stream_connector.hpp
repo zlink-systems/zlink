@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -38,6 +39,33 @@ struct send_options_t
 {
     std::map<std::string, std::string> metadata;
     bool compress = false;
+};
+
+struct request_sending_context_t
+{
+    std::string request_packet_name;
+    std::optional<std::string> actor_id;
+    void set_metadata (std::string key, std::string value);
+    const std::map<std::string, std::string> &metadata_values () const { return _metadata; }
+
+  private:
+    std::map<std::string, std::string> _metadata;
+};
+
+struct error_t
+{
+    error_code_t code;
+    std::string message;
+};
+
+struct reply_received_context_t
+{
+    std::string request_packet_name;
+    std::optional<std::string> actor_id;
+    bool succeeded = false;
+    std::optional<packet_t> reply;
+    std::optional<error_t> error;
+    std::chrono::milliseconds elapsed{0};
 };
 
 struct request_result_t
@@ -91,6 +119,9 @@ class stream_connector_t
 
     connection_state_t state () const;
     void on_connection_state_changed (std::function<void (connection_state_t)> callback);
+    subscription_t on_request_sending (std::function<void (request_sending_context_t &)> callback);
+    subscription_t
+    on_reply_received (std::function<void (const reply_received_context_t &)> callback);
 
   private:
     class runtime_t;

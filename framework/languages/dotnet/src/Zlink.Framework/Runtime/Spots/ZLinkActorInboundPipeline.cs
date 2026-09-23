@@ -13,6 +13,7 @@ internal interface IZLinkActorInboundEndpoint
         ZLinkActorRuntimeState state,
         ZlinkStreamHeader header,
         Message body,
+        RoutingId sourceSessionRid,
         bool relocationReplay,
         CancellationToken cancellationToken
     );
@@ -22,6 +23,7 @@ internal interface IZLinkActorInboundEndpoint
         ZLinkActorRuntimeState state,
         ZlinkStreamHeader header,
         Message body,
+        RoutingId sourceSessionRid,
         bool relocationReplay,
         CancellationToken cancellationToken
     );
@@ -725,7 +727,10 @@ internal sealed class ZLinkActorInboundPipeline(
                             ZLinkDispatchErrorReason.InvalidFrame,
                             ZLinkDispatchErrorAction.Drop,
                             null,
-                            ActorId: actor.Context.ActorId
+                            ActorId: actor.Context.ActorId,
+                            StreamSessionId: frame.SourceSessionRid.IsEmpty
+                                ? null
+                                : frame.SourceSessionRid.ToHex()
                         )
                     );
                 acknowledgeHandledFrame?.Invoke();
@@ -784,6 +789,7 @@ internal sealed class ZLinkActorInboundPipeline(
                         state,
                         frame.Header,
                         frame.Body,
+                        frame.SourceSessionRid,
                         relocationReplay: relocationReplay
                             ?? (
                                 acknowledgeHandledFrame is not null
@@ -897,6 +903,7 @@ internal sealed class ZLinkActorInboundPipeline(
                     state,
                     frame.Header,
                     frame.Body,
+                    frame.SourceSessionRid,
                     relocationReplay: relocationReplay
                         ?? (
                             acknowledgeHandledFrame is not null
@@ -979,6 +986,7 @@ internal sealed class ZLinkEntrySpotActorInboundEndpoint(ZLinkFrameworkRuntime r
         ZLinkActorRuntimeState state,
         ZlinkStreamHeader header,
         Message body,
+        RoutingId sourceSessionRid,
         bool relocationReplay,
         CancellationToken cancellationToken
     )
@@ -989,7 +997,8 @@ internal sealed class ZLinkEntrySpotActorInboundEndpoint(ZLinkFrameworkRuntime r
             header,
             body,
             relocationReplay,
-            cancellationToken
+            cancellationToken,
+            sourceSessionRid
         );
     }
 
@@ -998,6 +1007,7 @@ internal sealed class ZLinkEntrySpotActorInboundEndpoint(ZLinkFrameworkRuntime r
         ZLinkActorRuntimeState state,
         ZlinkStreamHeader header,
         Message body,
+        RoutingId sourceSessionRid,
         bool relocationReplay,
         CancellationToken cancellationToken
     )
@@ -1014,7 +1024,8 @@ internal sealed class ZLinkEntrySpotActorInboundEndpoint(ZLinkFrameworkRuntime r
                     header,
                     body,
                     relocationReplay,
-                    cancellationToken
+                    cancellationToken,
+                    sourceSessionRid
                 )
                 .ConfigureAwait(false);
 
@@ -1026,7 +1037,8 @@ internal sealed class ZLinkEntrySpotActorInboundEndpoint(ZLinkFrameworkRuntime r
                 body,
                 callerOwnsDispatchTurn: false,
                 relocationReplay,
-                cancellationToken
+                cancellationToken,
+                sourceSessionRid
             )
             .ConfigureAwait(false);
         ZLinkFrameworkDebugLog.SpotDiscovery(
@@ -1043,7 +1055,8 @@ internal sealed class ZLinkEntrySpotActorInboundEndpoint(ZLinkFrameworkRuntime r
                     header,
                     body,
                     relocationReplay,
-                    cancellationToken
+                    cancellationToken,
+                    sourceSessionRid
                 )
                 .ConfigureAwait(false);
     }
@@ -1076,11 +1089,19 @@ internal sealed class ZLinkUserSpotActorInboundEndpoint(
         ZLinkActorRuntimeState state,
         ZlinkStreamHeader header,
         Message body,
+        RoutingId sourceSessionRid,
         bool relocationReplay,
         CancellationToken cancellationToken
     )
     {
-        return dispatcher.DispatchAsync(actor, state, header, body, cancellationToken);
+        return dispatcher.DispatchAsync(
+            actor,
+            state,
+            header,
+            body,
+            cancellationToken,
+            sourceSessionRid
+        );
     }
 
     public ValueTask<ZLinkActorReply?> DispatchForReplyAsync(
@@ -1088,10 +1109,18 @@ internal sealed class ZLinkUserSpotActorInboundEndpoint(
         ZLinkActorRuntimeState state,
         ZlinkStreamHeader header,
         Message body,
+        RoutingId sourceSessionRid,
         bool relocationReplay,
         CancellationToken cancellationToken
     )
     {
-        return dispatcher.DispatchForReplyAsync(actor, state, header, body, cancellationToken);
+        return dispatcher.DispatchForReplyAsync(
+            actor,
+            state,
+            header,
+            body,
+            cancellationToken,
+            sourceSessionRid
+        );
     }
 }

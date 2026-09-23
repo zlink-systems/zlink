@@ -11,7 +11,8 @@ internal readonly struct ZLinkDispatchFlowScope(
     string? topic = null,
     string? sourceRid = null,
     string? spotId = null,
-    string? actorId = null
+    string? actorId = null,
+    string? streamSessionId = null
 )
 {
     // The request owns the flow observed at its dispatch boundary. Application
@@ -231,7 +232,8 @@ internal readonly struct ZLinkDispatchFlowScope(
                 CorrelationId: correlationId,
                 Exception: exception,
                 FlowId: capturedFlow?.FlowId,
-                FlowOrigin: capturedFlow?.Origin
+                FlowOrigin: capturedFlow?.Origin,
+                StreamSessionId: streamSessionId
             )
         );
     }
@@ -253,6 +255,7 @@ internal readonly struct ZLinkDispatchFlowScope(
         {
             FlowId = capturedFlow?.FlowId ?? string.Empty,
             FlowOrigin = capturedFlow?.Origin,
+            StreamSessionId = streamSessionId,
         };
     }
 }

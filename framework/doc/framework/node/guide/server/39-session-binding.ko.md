@@ -10,7 +10,7 @@ title: "Session 묶음의 동작 원리 · Node/TypeScript"
 # Session 묶음의 동작 원리
 
 <!-- framework-adapter-nav:start -->
-[가이드 홈](README.ko.md) | [이전: STREAM의 동작 원리](38-stream-boundary.ko.md) | [다음: 17. ZLink의 적용 범위 — 내부 서비스 통신과 실시간 상태 서버](17-alternative.ko.md)
+[가이드 홈](README.ko.md) | [이전: STREAM의 동작 원리](38-stream-boundary.ko.md) | [다음: 12. 운영 — 런타임 메트릭 · graceful drain · readiness](12-operations.ko.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
@@ -26,9 +26,9 @@ title: "Session 묶음의 동작 원리 · Node/TypeScript"
 [Session과 Actor 연결](24-actor-session.ko.md)은 연결 하나를 Actor 하나에 묶고 알림을 받기까지
 다뤘다. 이 장은 그 묶음이 지키는 규칙을 다룬다.
 
-## 1. 묶을 수 있는 개수 — session은 여럿, Actor는 하나
+## 1. 묶을 수 있는 개수 — session 하나에 Actor 여럿, Actor 하나에 session 하나
 
-<iframe class="zlink-diagram" src="/common/diagrams/39-binding-shape.html" title="session은 여럿을 묶고, Actor는 하나에만 묶인다" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/39-binding-shape.html" title="session 하나는 Actor 여럿을 묶고, Actor 하나는 session 하나에만 묶인다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/39-binding-shape.html" target="_blank">↗ 크게 보기</a></p>
 
 **session 하나는 여러 Actor를 동시에 묶을 수 있다.** 한 연결이 플레이어 Actor와 파티 Actor를
@@ -37,8 +37,10 @@ title: "Session 묶음의 동작 원리 · Node/TypeScript"
 **반대로 Actor 하나는 동시에 session 하나에만 묶인다.** 새 묶음이 확정되면 이전 묶음은 무효가
 되고, 그쪽으로 온 늦은 message는 거부된다.
 
-여러 Actor를 묶은 session에서 넘길 대상을 고르는 것은 application의 몫이다. application이 정한
-규약으로 actor id를 골라 찾기 호출에 넘긴다 — **Framework는 임의의 Actor를 고르지 않는다.**
+여러 Actor를 묶은 session에서는 packet마다 대상 Actor가 정해진다. client가 Actor handle로 보내면
+packet에 그 Actor의 slot이 실리고, session은 dispatch context의 Actor로 넘긴다
+([Session과 Actor 연결 §3.2](24-actor-session.ko.md#32-남은-packet을-넘기기)). **Framework는 임의의
+Actor를 고르지 않는다** — 현재 binding이 아닌 slot의 packet은 session에 넘기지 않고 거부한다.
 
 묶는 호출은 중복 묶기를 오류로 처리한다. 인증 재전송처럼 이미 묶여 있을 수 있는 흐름에서는
 찾거나 묶는 호출을 사용한다.

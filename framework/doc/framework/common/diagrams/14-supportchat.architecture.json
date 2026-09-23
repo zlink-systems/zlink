@@ -34,6 +34,7 @@
       "items": [
         "상담원 client ↔ session은 stream 연결 하나 (양방향)",
         "그 session에 roster actor(Entry Spot) + 대화별 conversation actor를 함께 bind (점선)",
+        "상담원은 JoinConversationRes.actorId로 찾은 방별 Actor handle로 보낸다. Session은 Actor slot이 있으면 bound된 Actor로, 없으면 identity Actor로 relay한다",
         "roster·conversation·고객 노드는 원본에서 원(circle) actor — 여기선 박스로 그린다"
       ]
     },

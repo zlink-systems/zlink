@@ -1,7 +1,6 @@
 # Kotlin Tutorial
 
-기능별 가이드가 코드를 읽어 가는 프로그램이다. 지금은 **Channel 메시징과 id로 부르는 Spot
-하나**까지 담았다. Actor·STREAM은 아직 없다.
+기능별 가이드가 코드를 읽어 가는 프로그램이다. Channel, Spot, Actor와 STREAM을 담았다.
 
 Kotlin source는 이 Gradle project의 language subdirectory에 있다. [`../../quickstart/`](../../quickstart/)도
 같은 방식으로 language subproject를 나눈다.
@@ -546,13 +545,22 @@ $ kotlin/StreamClient/build/install/StreamClient/bin/StreamClient
 connected: true
 round trip: 339ms        # STREAM request/reply
 actor bound: p1
-bound player: p1         # 연결을 player에 묶는다
+bound player: p1         # 연결에 Actor가 하나인 상태
+pushed: speedy, actor: p1 # connector에서 handle 없이 전송·수신
+actor bound: p2
+bound player: p2
 actor handle: p1
-pushed: speedy, actor: p1           # player가 그 연결로 밀어 준다
+actor handle: p2
+received actor id: p1
+received actor id: p2
+pushed: speedy-p1, actor: p1
+pushed: speedy-p2, actor: p2
 ```
 
-`pushed`가 핵심이다. client는 nickname 변경만 보냈고, 응답이 아니라 **player가 스스로 민
-알림**을 받았다.
+`pushed`는 nickname 변경 요청의 응답이 아닌 **player가 같은 연결로 보낸 알림**이다.
+Actor가 하나 연결된 동안 connector에서 handle 없이 전송한다. 두 Actor가 연결되면 각
+handle로 전송하며, handle별 callback으로 알림을 받는다. connector 수준 callback도
+메시지의 Actor ID로 발신 Actor를 구분한다.
 
 Kotlin 쪽에서 알아 둘 것은 다음과 같다.
 
@@ -562,7 +570,8 @@ Kotlin 쪽에서 알아 둘 것은 다음과 같다.
   타입 인자를 묶지 않기 때문이다. channel handler의 handler group 우회가 여기서는 필요 없다.
 - **`packetName()`을 직접 적는다.** Java의 session handler는 `messageType()` 하나로 끝난다.
 - **`StreamClient`는 Kotlin wrapper를 사용한다.** `actorBound()`와 `actorUnbound()`를
-  coroutine에서 수집하고, Actor handle의 `send(...).await()`로 메시지를 보낸다.
+  coroutine에서 수집한다. Actor가 하나일 때는 connector의 `send(...).await()`로 전송하고,
+  둘일 때는 각 Actor handle의 `send(...).await()`와 typed `on`을 사용한다.
 
 ### 13. HTTP 표면 운영 기능
 
@@ -718,7 +727,7 @@ framework-json codec(`ZLinkFrameworkJsonProfile`)은 `Long`을 십진 JSON 문�
 | `session-class` · `session-actor-relay` | `Server/.../sessions/GameSession.kt` |
 | `session-handler` · `session-actor-bind` | `Server/.../sessions/SessionHandlers.kt` |
 | `stream-register` | `Server/.../ServerApplication.kt` |
-| `stream-client` · `session-actor-client` | `StreamClient/.../StreamClientProgram.kt` |
+| `stream-client` · `session-actor-client` · `single-actor-send` · `actor-id-receive` · `actor-handle-events` · `actor-handle-send` · `actor-handle-per-handle-receive` · `actor-handle-send-call` · `actor-handle-receive` | `StreamClient/.../StreamClientProgram.kt` |
 | `http-client-create` | `HttpClient/.../HttpClientProgram.kt` |
 | `http-first-request` | `HttpClient/.../HttpClientProgram.kt` |
 | `http-request-shaping` | `HttpClient/.../HttpClientProgram.kt` |
