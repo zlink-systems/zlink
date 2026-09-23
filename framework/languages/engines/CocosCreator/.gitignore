@@ -1,0 +1,8 @@
+/node_modules/
+/.creator/
+/library/
+/local/
+/temp/
+/build/
+/profiles/
+/Validation/dist/

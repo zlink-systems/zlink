@@ -4,13 +4,7 @@
 
 ---
 
-엔진 어댑터는 core connector를 private 구현으로 소유하고, 각 엔진의 타입과 thread 규칙에 맞는 표면만 노출한다. core의 `result_t<T>`, `connector_t` 같은 타입은 어댑터 public header에 드러나지 않는다.
-
-**공통 원칙:**
-- callback은 반드시 engine main thread에서 실행한다.
-- core callback을 adapter queue에 넣고, engine Tick/Update/`Dispatch()`에서 꺼내 delegate로 전달한다.
-- 예외와 coroutine에 의존하지 않는다.
-- core private header(`connector/core/src/runtime/`)를 include하지 않는다.
+엔진 어댑터는 core connector를 private 구현으로 소유하고, 각 엔진의 타입과 thread 규칙에 맞는 표면만 노출한다. core의 `result_t<T>`, `connector_t` 같은 타입은 어댑터 public header에 드러나지 않는다. Main thread 전달, 이름별 구독, 요청 완료의 packet 이름은 [C++ 계약 §7](../../../common/spec/stream-connector/languages/cpp/03-stream-connector.ko.md#7-엔진-어댑터)을 따른다.
 
 ---
 
@@ -48,6 +42,7 @@ class AMyGameMode : public AGameModeBase
         Connector->OnPacketReceived.AddDynamic(this, &AMyGameMode::HandlePacket);
         Connector->OnRequestCompleted.AddDynamic(this, &AMyGameMode::HandleReply);
         Connector->Connect(TEXT("tcp://game.example.com:7000"));
+        Connector->Subscribe(TEXT("chat.notify"));
     }
 
     void Tick(float DeltaSeconds) override
@@ -65,11 +60,9 @@ class AMyGameMode : public AGameModeBase
 
 ### Blueprint에서 사용
 
-`Connect`, `Close`, `SendJson`, `RequestJson`, `Dispatch`는 모두 `BlueprintCallable`이다. `OnPacketReceived`, `OnRequestCompleted`는 `BlueprintAssignable` delegate다.
+`Connect`, `Close`, `SendJson`, `RequestJson`, `Subscribe`, `Dispatch`는 모두 `BlueprintCallable`이다. `OnPacketReceived`, `OnRequestCompleted`는 `BlueprintAssignable` delegate다.
 
-### Thread 규칙
-
-core callback이 어느 thread에서 오든 `UObject`를 직접 건드리지 않는다. 어댑터가 adapter queue에 넣고 `Dispatch()` 또는 Game Thread 예약 경로에서 delegate를 broadcast한다. PIE 종료, map unload, game instance shutdown에서 `Close()`가 자동 호출된다.
+PIE 종료, map unload, game instance shutdown에서 `Close()`가 자동 호출된다.
 
 ### Automation Test 실행
 
@@ -89,34 +82,22 @@ GDExtension source package로 배포한다. Godot project의 `addons/zlink_strea
 
 `.gdextension` 파일이 빌드된 shared library를 등록한다.
 
-### 기본 사용법 (GDScript)
+### 기본 사용법 (C++)
 
-```gdscript
-extends Node
+```cpp
+#include "zlink_godot_stream_connector.hpp"
 
-var connector: ZLinkStreamConnector
+zlink::godot_stream_connector::stream_connector_t connector;
+void start()
+{
+    connector.on_packet([](const zlink::godot_stream_connector::packet_t& packet) {
+        // packet.name과 packet.payload를 처리한다.
+    });
+    connector.connect("tcp://game.example.com:7000");
+    connector.subscribe("chat.notify");
+}
 
-func _ready():
-    connector = ZLinkStreamConnector.new()
-    connector.packet_received.connect(_on_packet)
-    connector.connect_to_server("tcp://game.example.com:7000")
-
-func _process(_delta):
-    connector.dispatch()
-
-func _on_packet(packet_name: StringName, payload: String):
-    # Godot main thread에서 실행됨
-    pass
-```
-
-### Thread 규칙
-
-signal은 Godot main thread에서만 emit한다. 어댑터가 core callback을 adapter queue에 넣고 `dispatch()` 또는 main thread update에서 signal을 emit한다.
-
-### Headless 테스트
-
-```bash
-godot --headless --path TestProject --script res://run_tests.gd
+void frame() { connector.dispatch(); } // Godot main thread에서 호출한다.
 ```
 
 ---
@@ -137,26 +118,18 @@ target_link_libraries(${APP_NAME} PRIVATE zlink_axmol_connector)
 ```cpp
 #include "zlink_axmol_stream_connector.hpp"
 
-class GameScene : public ax::Scene
+zlink::axmol_stream_connector::stream_connector_t connector;
+void start()
 {
-    ZLinkAxmolStreamConnector* _connector;
+    connector.on_packet([](const zlink::axmol_stream_connector::packet_t& packet) {
+        // packet.name과 packet.payload를 처리한다.
+    });
+    connector.connect("tcp://game.example.com:7000");
+    connector.subscribe("chat.notify");
+}
 
-    bool init() override
-    {
-        _connector = ZLinkAxmolStreamConnector::create();
-        _connector->setPacketCallback([this](const std::string& name, const std::string& json) {
-            // Axmol main thread에서 실행됨
-        });
-        _connector->connect("tcp://game.example.com:7000");
-        this->schedule([this](float) { _connector->dispatch(); }, "update");
-        return true;
-    }
-};
+void frame() { connector.dispatch(); } // Axmol main thread에서 호출한다.
 ```
-
-### Thread 규칙
-
-core background callback은 `ax::Scheduler::runOnAxmolThread`를 통해 Axmol main thread로 전달된 뒤 user callback을 실행한다.
 
 ---
 
@@ -164,10 +137,11 @@ core background callback은 `ax::Scheduler::runOnAxmolThread`를 통해 Axmol ma
 
 | 동작 | Unreal | Godot | Axmol |
 |------|--------|-------|-------|
-| 연결 | `Connect(Endpoint)` | `connect_to_server(url)` | `connect(endpoint)` |
+| 연결 | `Connect(Endpoint)` | `connect(endpoint)` | `connect(endpoint)` |
 | 종료 | `Close()` | `close()` | `close()` |
-| 단방향 송신 | `SendJson(Name, Json)` | `send_json(name, json)` | `sendJson(name, json)` |
-| 요청/응답 | `RequestJson(Name, Json, Timeout)` | `request_json(name, json, timeout)` | `requestJson(name, json, timeout)` |
-| dispatch | `Dispatch()` (Tick에서 호출) | `dispatch()` (`_process`에서 호출) | `dispatch()` (schedule에서 호출) |
-| push 수신 | `OnPacketReceived` delegate | `packet_received` signal | packet callback |
-| 상태 변경 | `OnConnectionStateChanged` delegate | `connection_state_changed` signal | state callback |
+| 단방향 송신 | `SendJson(Name, Json)` | `send_json(name, json)` | `send_json(name, json)` |
+| 요청/응답 | `RequestJson(Name, Json, Timeout)` | `request_json(name, json, timeout)` | `request_json(name, json, timeout)` |
+| push 구독 | `Subscribe(PacketName)` | `subscribe(packet_name)` | `subscribe(packet_name)` |
+| dispatch | `Dispatch()` (Tick에서 호출) | `dispatch()` (프레임에서 호출) | `dispatch()` (프레임에서 호출) |
+| push 수신 | `OnPacketReceived` delegate | `on_packet` callback | `on_packet` callback |
+| 상태 변경 | `OnConnectionStateChanged` delegate | `on_connection_state_changed` callback | `on_connection_state_changed` callback |

@@ -1,0 +1,6 @@
+{
+  "extends": "./.creator/tsconfig.json",
+  "compilerOptions": {
+    "strict": true
+  }
+}

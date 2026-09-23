@@ -520,7 +520,26 @@ frame's encode or decode between two levels. `options()` reflects the
 level `diagnostics_level()` would return at the time of the call, not
 necessarily the value passed at `create()`.
 
-## 7. Verification
+## 7. Engine adapters
+
+The Unreal plugin, the Godot GDExtension and the Axmol adapter own a `connector_t` as a private
+implementation and expose a surface shaped for the engine's types and thread rules. All three follow
+these three rules.
+
+- **Callbacks and delegates run only on the engine main thread.** The adapter queues core
+  callbacks and delivers them from the `dispatch` the engine calls every frame or through the main
+  thread dispatcher the application registered (Godot `set_main_thread_dispatcher`, Axmol
+  `set_axmol_thread_dispatcher`).
+- **Pushes are subscribed by packet name.** Like the core `on`, each adapter has a subscribe call that
+  takes a name (Unreal `Subscribe(PacketName)`, Godot and Axmol `subscribe(packet_name)`). Only pushes of a subscribed name reach the adapter's receive surface
+  (Unreal `OnPacketReceived`, the Godot and Axmol `on_packet` callback), together with
+  the packet name.
+- **A request completion carries the request's packet name.** A Response frame has no packet name
+  ([common spec §4.2](../../32-stream-connector.en.md#42-header)), so the adapter attaches the name
+  it requested with to the completion surface (Unreal `OnRequestCompleted`, the Godot and Axmol
+  `on_request_completed` callback).
+
+## 8. Verification
 
 `test_cpp_stream_connector` verifies the C++ connector's public
 behavior. The existence of the per-language contract document and the

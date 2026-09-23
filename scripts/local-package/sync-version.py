@@ -174,6 +174,26 @@ def node_internal_dependency_pattern() -> str:
 # patterns identify fields within each listed file; synchronization never scans
 # directories to discover additional targets.
 FRAMEWORK_SCALAR_FIELDS = (
+    # Godot's stream connector pin follows the .NET Framework release lane.
+    FrameworkField(
+        "framework/languages/engines/Godot/csharp/EngineLobby.csproj",
+        "dotnet",
+        "Godot Engine Lobby Zlink.Stream.Connector",
+        rf'(<PackageReference Include="Zlink\.Stream\.Connector" Version=")(?P<version>{SEMVER})("\s*/>)',
+    ),
+    FrameworkField(
+        "framework/languages/engines/Godot/csharp/Validation/EngineLobbyValidation.csproj",
+        "dotnet",
+        "Godot validation Zlink.Stream.Connector",
+        rf'(<PackageReference Include="Zlink\.Stream\.Connector" Version=")(?P<version>{SEMVER})("\s*/>)',
+    ),
+    # Cocos Creator's connector dependency follows the Node Framework release lane.
+    FrameworkField(
+        "framework/languages/engines/CocosCreator/package.json",
+        "node",
+        "Cocos Creator @zlink-systems/stream-connector",
+        rf'("@zlink-systems/stream-connector"\s*:\s*")(?P<version>{SEMVER})(")',
+    ),
     FrameworkField(
         "framework/languages/cpp/CMakeLists.txt",
         "cpp",

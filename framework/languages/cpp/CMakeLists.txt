@@ -2608,6 +2608,21 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     PROPERTIES
       RESOURCE_LOCK zlink_cpp_heavy_runtime)
 
+  add_zlink_connector_test(
+    test_unreal_adapter_push
+    connector/engines/unreal/tests/test_unreal_stream_connector.cpp
+    "connector-unreal-contract;connector-unreal-smoke"
+    integration)
+  target_link_libraries(test_unreal_adapter_push PRIVATE
+    zlink_unreal_stream_connector)
+
+  if(ZLINK_STREAM_CONNECTOR_BUILD_GODOT)
+    add_subdirectory(connector/engines/godot/tests)
+  endif()
+  if(ZLINK_STREAM_CONNECTOR_BUILD_AXMOL)
+    add_subdirectory(connector/engines/axmol/tests)
+  endif()
+
   set(ZLINK_UNREAL_PACKAGE_CONFIGURATION "${CMAKE_BUILD_TYPE}")
   if(NOT ZLINK_UNREAL_PACKAGE_CONFIGURATION)
     set(ZLINK_UNREAL_PACKAGE_CONFIGURATION Release)

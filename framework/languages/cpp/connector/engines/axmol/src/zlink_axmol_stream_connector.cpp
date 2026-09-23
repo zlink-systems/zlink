@@ -36,6 +36,12 @@ class stream_connector_t::runtime_t
     std::function<void (const packet_t &)> request_callback;
     std::function<void (connection_state_t)> state_callback;
     std::function<void (std::function<void ()>)> axmol_thread_dispatcher;
+    struct subscription_entry_t
+    {
+        std::string name;
+        zlink::stream_connector::subscription_t handle;
+    };
+    std::vector<subscription_entry_t> subscriptions;
     std::mutex pending_callbacks_mutex;
     std::deque<std::function<void ()>> pending_callbacks;
 
@@ -80,6 +86,26 @@ class stream_connector_t::runtime_t
         post_to_axmol_thread (
           [callback = request_callback, packet = std::move (packet)] { callback (packet); });
     }
+
+    void register_subscription (subscription_entry_t &entry, std::weak_ptr<runtime_t> weak_owner)
+    {
+        entry.handle = connector.on<zlink::stream_connector::packet_t> (
+          entry.name,
+          [weak_owner] (
+            const zlink::stream_connector::message_t<zlink::stream_connector::packet_t> &message) {
+              if (auto owner = weak_owner.lock ()) {
+                  if (owner->packet_callback) {
+                      auto packet = to_axmol_packet (message.packet_name, message.payload.payload);
+                      packet.compressed = message.payload.compressed;
+                      packet.metadata = message.metadata.values;
+                      owner->post_to_axmol_thread (
+                        [callback = owner->packet_callback, packet = std::move (packet)] {
+                            callback (packet);
+                        });
+                  }
+              }
+          });
+    }
 };
 
 stream_connector_t::stream_connector_t () : _runtime (std::make_shared<runtime_t> ())
@@ -96,10 +122,16 @@ stream_connector_t &stream_connector_t::operator= (stream_connector_t &&) noexce
 
 void stream_connector_t::connect (std::string endpoint)
 {
+    for (auto &entry : _runtime->subscriptions) {
+        entry.handle.unsubscribe ();
+    }
     zlink::stream_connector::connector_options_t options;
     options.endpoint = std::move (endpoint);
     _runtime->connector =
       zlink::stream_connector::connector_factory_t::create (std::move (options));
+    for (auto &entry : _runtime->subscriptions) {
+        _runtime->register_subscription (entry, _runtime);
+    }
     _runtime->current_state = connection_state_t::connecting;
     _runtime->emit_state (_runtime->current_state);
     const auto connected = _runtime->connector.connect ();
@@ -110,9 +142,18 @@ void stream_connector_t::connect (std::string endpoint)
 
 void stream_connector_t::close ()
 {
+    _runtime->subscriptions.clear ();
     _runtime->connector.close ();
     _runtime->current_state = connection_state_t::closed;
     _runtime->emit_state (_runtime->current_state);
+}
+
+void stream_connector_t::subscribe (std::string packet_name)
+{
+    _runtime->subscriptions.push_back ({std::move (packet_name), {}});
+    if (_runtime->current_state == connection_state_t::connected) {
+        _runtime->register_subscription (_runtime->subscriptions.back (), _runtime);
+    }
 }
 
 void stream_connector_t::send_json (std::string packet_name, std::string json_payload)

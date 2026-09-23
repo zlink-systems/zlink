@@ -51,6 +51,7 @@ class stream_connector_t
     void send_json (std::string packet_name, std::string json_payload);
     void send_json (std::string packet_name, std::string json_payload, send_options_t options);
     void request_json (std::string packet_name, std::string json_payload, double timeout_seconds);
+    void subscribe (std::string packet_name);
     void dispatch ();
     void set_axmol_thread_dispatcher (std::function<void (std::function<void ()>)> dispatcher);
 

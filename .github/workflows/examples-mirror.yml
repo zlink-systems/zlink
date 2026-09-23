@@ -167,6 +167,21 @@ jobs:
              && { ${all_engine_targets} || [ "${release_lane}" = cpp ]; }; then
             append_target unreal
           fi
+          if [ -d framework/languages/engines/Godot ] \
+             && released dotnet "${dotnet_version}" \
+             && { ${all_engine_targets} || [ "${release_lane}" = dotnet ]; }; then
+            append_target godot
+          fi
+          if [ -d framework/languages/engines/Axmol ] \
+             && released cpp "${cpp_version}" \
+             && { ${all_engine_targets} || [ "${release_lane}" = cpp ]; }; then
+            append_target axmol
+          fi
+          if [ -d framework/languages/engines/CocosCreator ] \
+             && released node "${node_version}" \
+             && { ${all_engine_targets} || [ "${release_lane}" = node ]; }; then
+            append_target cocos-creator
+          fi
           if [ "${ref}" != main ]; then
             version="${ref##*/v}"
             if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -198,7 +213,19 @@ jobs:
               {id:"unreal", mirror:"zlink-systems/zlink-unreal-examples",
                tree:".artifacts/examples/zlink-unreal-examples",
                source_path:"framework/languages/engines/Unreal",
-               secret:"EXAMPLES_MIRROR_KEY_UNREAL"}
+               secret:"EXAMPLES_MIRROR_KEY_UNREAL"},
+              {id:"godot", mirror:"zlink-systems/zlink-godot-examples",
+               tree:".artifacts/examples/zlink-godot-examples",
+               source_path:"framework/languages/engines/Godot",
+               secret:"EXAMPLES_MIRROR_KEY_GODOT"},
+              {id:"axmol", mirror:"zlink-systems/zlink-axmol-examples",
+               tree:".artifacts/examples/zlink-axmol-examples",
+               source_path:"framework/languages/engines/Axmol",
+               secret:"EXAMPLES_MIRROR_KEY_AXMOL"},
+              {id:"cocos-creator", mirror:"zlink-systems/zlink-cocos-creator-examples",
+               tree:".artifacts/examples/zlink-cocos-creator-examples",
+               source_path:"framework/languages/engines/CocosCreator",
+               secret:"EXAMPLES_MIRROR_KEY_COCOS_CREATOR"}
             ] | map(select(.id as $id | $enabled | index($id)))
           ')"
           echo "ref=${ref}, version=${version:-none}, languages=${languages}, target_ids=${target_ids}, targets=${targets}"
@@ -258,6 +285,9 @@ jobs:
           EXAMPLES_MIRROR_KEY_ENGINE_SERVER: ${{ secrets.EXAMPLES_MIRROR_KEY_ENGINE_SERVER }}
           EXAMPLES_MIRROR_KEY_UNITY: ${{ secrets.EXAMPLES_MIRROR_KEY_UNITY }}
           EXAMPLES_MIRROR_KEY_UNREAL: ${{ secrets.EXAMPLES_MIRROR_KEY_UNREAL }}
+          EXAMPLES_MIRROR_KEY_GODOT: ${{ secrets.EXAMPLES_MIRROR_KEY_GODOT }}
+          EXAMPLES_MIRROR_KEY_AXMOL: ${{ secrets.EXAMPLES_MIRROR_KEY_AXMOL }}
+          EXAMPLES_MIRROR_KEY_COCOS_CREATOR: ${{ secrets.EXAMPLES_MIRROR_KEY_COCOS_CREATOR }}
         run: |
           set -euo pipefail
           name="${{ matrix.target.secret }}"
