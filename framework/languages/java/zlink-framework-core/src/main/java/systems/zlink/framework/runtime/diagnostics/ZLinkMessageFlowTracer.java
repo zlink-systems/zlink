@@ -128,11 +128,15 @@ public final class ZLinkMessageFlowTracer {
     }
 
     private static ZLinkMessageFlowEvent attachAmbientFlow(ZLinkMessageFlowEvent event) {
-        if (event.flowId() != null) {
+        ZLinkFlowContext.State state = ZLinkFlowContext.current();
+        if (state == null) {
             return event;
         }
-        ZLinkFlowContext.State state = ZLinkFlowContext.current();
-        return state == null ? event : event.withFlow(state.flowId(), state.origin());
+        ZLinkMessageFlowEvent traced =
+                event.flowId() == null ? event.withFlow(state.flowId(), state.origin()) : event;
+        return traced.streamSessionId() == null && state.streamSessionId() != null
+                ? traced.withStreamSessionId(state.streamSessionId())
+                : traced;
     }
 
     public long tracedCount() {

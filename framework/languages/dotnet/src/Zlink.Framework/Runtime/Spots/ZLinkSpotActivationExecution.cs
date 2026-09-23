@@ -661,7 +661,8 @@ internal abstract partial class ZLinkSpotActivation
         ZlinkStreamHeader header,
         Message body,
         ZLinkSpotRelocationReplayAdmission? replayAdmission,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        RoutingId? sourceSessionRid
     )
     {
         var validatedReplay = ValidateRelocationReplayAdmission(runtimeState, replayAdmission);
@@ -672,7 +673,8 @@ internal abstract partial class ZLinkSpotActivation
             body,
             validatedReplay?.Seal.QueueSeal,
             validatedReplay?.QueueReservation,
-            cancellationToken
+            cancellationToken,
+            sourceSessionRid
         );
     }
 
@@ -688,7 +690,8 @@ internal abstract partial class ZLinkSpotActivation
         ZlinkStreamHeader header,
         Message body,
         ZLinkSpotRelocationReplayAdmission? replayAdmission,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        RoutingId? sourceSessionRid
     )
     {
         var validatedReplay = ValidateRelocationReplayAdmission(runtimeState, replayAdmission);
@@ -699,7 +702,8 @@ internal abstract partial class ZLinkSpotActivation
             body,
             validatedReplay?.Seal.QueueSeal,
             validatedReplay?.QueueReservation,
-            cancellationToken
+            cancellationToken,
+            sourceSessionRid
         );
     }
 

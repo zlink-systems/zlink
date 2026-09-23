@@ -57,7 +57,8 @@ export class ZLinkSpotRoutedBoundSessionDispatch {
         createInboundFlow(
           boundSessionSend.flowId ?? boundSessionSend.envelope?.header.flowId,
           boundSessionSend.flowOrigin ?? boundSessionSend.envelope?.header.flowOrigin,
-          this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+          this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
+          undefined
         ),
         () =>
           this.options.routedBoundSessionReceiver?.(

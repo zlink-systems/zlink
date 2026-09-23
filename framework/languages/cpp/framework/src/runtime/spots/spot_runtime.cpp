@@ -12041,7 +12041,8 @@ spot_node_runtime_t::dispatch_instance_activation (const spot_id_t &spot_id,
      * creates a new inbound flow only when the source did not carry one. */
     const auto diagnostics_mode = detail::message_flow_tracer_t (_state->dispatch).mode ();
     auto flow_scope = runtime::flow_context_t::enter (std::move (flow_id), flow_origin,
-                                                      diagnostics_mode, flow_origin_t::inbound);
+                                                      diagnostics_mode, flow_origin_t::inbound,
+                                                      std::nullopt);
     auto context = find_context (spot_id);
     const auto context_state = context ? context->_state : nullptr;
     const auto materialized =
@@ -13457,9 +13458,12 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
          * the envelope has been decoded. Re-enter the wire flow here so the
          * remote Spot handler observes the same flow as the originating
          * STREAM/session request. */
+        const auto flow_mode = detail::message_flow_tracer_t (_state->dispatch).mode ();
         auto flow_scope = runtime::flow_context_t::enter (
-          header.value ().flow_id, header.value ().flow_origin,
-          detail::message_flow_tracer_t (_state->dispatch).mode (), flow_origin_t::inbound);
+          header.value ().flow_id, header.value ().flow_origin, flow_mode, flow_origin_t::inbound,
+          flow_mode != message_flow_log_mode_t::off && record.source_session_rid
+            ? std::optional<std::string> (record.source_session_rid->to_hex ())
+            : std::nullopt);
 
         auto &actor_gateway = services.get_required<actor_gateway_runtime_t> ();
         spot_route_internal_dispatcher_t dispatcher (*this, actor_gateway, *route_client,
@@ -14460,7 +14464,8 @@ spot_node_runtime_t::dispatch_subscription (const spot_context_t &context,
     }
     const auto diagnostics_mode = detail::message_flow_tracer_t (_state->dispatch).mode ();
     auto flow_scope = runtime::flow_context_t::enter (std::move (flow_id), flow_origin,
-                                                      diagnostics_mode, flow_origin_t::inbound);
+                                                      diagnostics_mode, flow_origin_t::inbound,
+                                                      std::nullopt);
     const auto &message = body;
     bool handler_found = false;
     for (const auto &descriptor : context._state->handlers) {

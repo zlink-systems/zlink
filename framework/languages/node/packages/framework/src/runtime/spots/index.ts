@@ -1600,7 +1600,8 @@ export class DefaultZLinkSpotManager {
     const inboundFlow = createInboundFlow(
       envelope.header.flowId,
       envelope.header.flowOrigin,
-      this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+      this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
+      undefined
     );
     await runWithFlow(inboundFlow, async () => {
       const request = record.operationKind === OperationKind.InstanceSpotRequest;

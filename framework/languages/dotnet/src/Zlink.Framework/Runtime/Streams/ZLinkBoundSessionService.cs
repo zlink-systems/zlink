@@ -63,7 +63,7 @@ internal sealed class ZLinkBoundSessionService(ZLinkFrameworkRuntime runtime)
     {
         using var operation = runtime.EnterOperation();
         cancellationToken.ThrowIfCancellationRequested();
-        _ = ResolveSessionRoute(actorId);
+        var route = ResolveSessionRoute(actorId);
         using var flow = ZLinkFlowContext.EnterCurrentOrCreate(
             ZLinkFlowOrigin.Application,
             runtime.Flow.CaptureEnabled
@@ -79,11 +79,11 @@ internal sealed class ZLinkBoundSessionService(ZLinkFrameworkRuntime runtime)
             if (
                 ZLinkBoundSessionDispatchScope.TryDefer(
                     actorId,
-                    ct => SubmitDeferredFrameAsync(actorId, frame, ct)
+                    ct => SubmitDeferredFrameAsync(actorId, route, frame, ct)
                 )
             )
             {
-                TraceSent(actorId, packetName, frame);
+                TraceSent(actorId, packetName, frame, route.SessionRid);
                 return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Submitted);
             }
         }
@@ -93,20 +93,21 @@ internal sealed class ZLinkBoundSessionService(ZLinkFrameworkRuntime runtime)
             return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Backpressured);
         }
 
-        var result = await SubmitFrameAsync(actorId, frame, cancellationToken)
+        var result = await SubmitFrameAsync(actorId, route, frame, cancellationToken)
             .ConfigureAwait(false);
         if (result.Status == ZLinkOneWaySubmitStatus.Submitted)
-            TraceSent(actorId, packetName, frame);
+            TraceSent(actorId, packetName, frame, route.SessionRid);
         return result;
     }
 
     private async ValueTask SubmitDeferredFrameAsync(
         string actorId,
+        ZLinkActorBoundSession route,
         byte[] frame,
         CancellationToken cancellationToken
     )
     {
-        var result = await SubmitFrameAsync(actorId, frame, cancellationToken)
+        var result = await SubmitFrameAsync(actorId, route, frame, cancellationToken)
             .ConfigureAwait(false);
         //  SkippedNotBound is the designed stale-binding drop: the session
         //  was replaced while the frame sat in the deferred queue, so there
@@ -122,7 +123,7 @@ internal sealed class ZLinkBoundSessionService(ZLinkFrameworkRuntime runtime)
             );
     }
 
-    private void TraceSent(string actorId, string? packetName, byte[] frame)
+    private void TraceSent(string actorId, string? packetName, byte[] frame, RoutingId sessionRid)
     {
         if (!runtime.Flow.Enabled(ZLinkMessageFlowOutcome.Sent))
             return;
@@ -139,16 +140,19 @@ internal sealed class ZLinkBoundSessionService(ZLinkFrameworkRuntime runtime)
                 CorrelationId: header.CorrelationId,
                 ActorId: actorId
             )
+            {
+                StreamSessionId = sessionRid.ToHex(),
+            }
         );
     }
 
     private async ValueTask<ZLinkOneWaySubmitResult> SubmitFrameAsync(
         string actorId,
+        ZLinkActorBoundSession route,
         byte[] frame,
         CancellationToken cancellationToken
     )
     {
-        var route = ResolveSessionRoute(actorId);
         using var message = Message.From(frame);
         using var terminal = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,

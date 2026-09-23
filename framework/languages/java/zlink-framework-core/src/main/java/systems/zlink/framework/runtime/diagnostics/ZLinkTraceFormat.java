@@ -24,6 +24,7 @@ final class ZLinkTraceFormat {
         append(builder, "instance_type", flow.instanceSpotType());
         append(builder, "activation_state", token(flow.activationState()));
         append(builder, "actor", flow.actorId());
+        append(builder, "session", flow.streamSessionId());
         append(builder, "corr", flow.correlationId());
         append(builder, "flow", flow.flowId());
         append(builder, "origin", token(flow.flowOrigin()));

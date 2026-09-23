@@ -1086,7 +1086,8 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                     inbound.message.correlation_id = request_envelope.correlation_id;
                 detail::message_flow_tracer_t flow (_channel_runtime.dispatch_options_ref ());
                 auto flow_scope = runtime::flow_context_t::enter (
-                  payload.flow_id, payload.flow_origin, flow.mode (), flow_origin_t::inbound);
+                  payload.flow_id, payload.flow_origin, flow.mode (), flow_origin_t::inbound,
+                  std::nullopt);
                 flow.trace (message_flow_outcome_t::received, [&] {
                     return message_flow_event_t{message_flow_outcome_t::received,
                                                 dispatch_error_surface_t::channel,

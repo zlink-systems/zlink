@@ -12,7 +12,8 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         Message payload,
         ZLinkSpotExecutionRelocationSeal? relocationSeal,
         ZLinkSpotRelocationActorQueueReservation? queueReservation,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        RoutingId? sourceSessionRid
     )
     {
         var ownedPayload = payload.Copy();
@@ -24,7 +25,8 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
                 actor,
                 runtimeState,
                 header,
-                ownedPayload
+                ownedPayload,
+                sourceSessionRid
             );
             var execution =
                 queueReservation is not null
@@ -63,7 +65,8 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         Message payload,
         ZLinkSpotExecutionRelocationSeal? relocationSeal,
         ZLinkSpotRelocationActorQueueReservation? queueReservation,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        RoutingId? sourceSessionRid
     )
     {
         var ownedPayload = payload.Copy();
@@ -79,7 +82,8 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
                 actor,
                 runtimeState,
                 header,
-                ownedPayload
+                ownedPayload,
+                sourceSessionRid
             );
             var execution =
                 queueReservation is not null
@@ -141,7 +145,8 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
                 state.RuntimeState,
                 state.Header,
                 currentPayload,
-                cancellationToken
+                cancellationToken,
+                state.SourceSessionRid
             )
             .ConfigureAwait(false);
     }
@@ -160,7 +165,8 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
                 state.RuntimeState,
                 state.Header,
                 currentPayload,
-                cancellationToken
+                cancellationToken,
+                state.SourceSessionRid
             )
             .ConfigureAwait(false);
     }
@@ -170,7 +176,8 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         IZLinkActor actor,
         ZLinkActorRuntimeState runtimeState,
         ZlinkStreamHeader header,
-        Message payload
+        Message payload,
+        RoutingId? sourceSessionRid
     )
     {
         public ZLinkSpotActorPacketDispatcher Dispatcher { get; } = dispatcher;
@@ -182,6 +189,8 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         public ZlinkStreamHeader Header { get; } = header;
 
         public Message Payload { get; } = payload;
+
+        public RoutingId? SourceSessionRid { get; } = sourceSessionRid;
     }
 
     private sealed class ActorReplyDispatchState(
@@ -189,7 +198,8 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         IZLinkActor actor,
         ZLinkActorRuntimeState runtimeState,
         ZlinkStreamHeader header,
-        Message payload
+        Message payload,
+        RoutingId? sourceSessionRid
     )
     {
         public ZLinkSpotActorPacketDispatcher Dispatcher { get; } = dispatcher;
@@ -201,6 +211,8 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         public ZlinkStreamHeader Header { get; } = header;
 
         public Message Payload { get; } = payload;
+
+        public RoutingId? SourceSessionRid { get; } = sourceSessionRid;
 
         public ZLinkActorReply? Reply { get; set; }
     }

@@ -32,7 +32,8 @@ public record ZLinkMessageFlowEvent(
         String errorCauseMessage,
         String flowId,
         ZLinkFlowOrigin flowOrigin,
-        Long sourceMeshGeneration) {
+        Long sourceMeshGeneration,
+        String streamSessionId) {
 
     public ZLinkMessageFlowEvent {
         if (eventId == null || outcome == null || surface == null || messageKind == null) {
@@ -111,6 +112,7 @@ public record ZLinkMessageFlowEvent(
                 null,
                 null,
                 null,
+                null,
                 null);
     }
 
@@ -162,6 +164,7 @@ public record ZLinkMessageFlowEvent(
                 null,
                 flowId,
                 flowOrigin,
+                null,
                 null);
     }
 
@@ -242,6 +245,7 @@ public record ZLinkMessageFlowEvent(
                 null,
                 null,
                 null,
+                null,
                 null);
     }
 
@@ -251,6 +255,40 @@ public record ZLinkMessageFlowEvent(
 
     public ZLinkMessageFlowEvent withOutcome(ZLinkMessageFlowResult result) {
         return copy(result, flowId, flowOrigin);
+    }
+
+    public ZLinkMessageFlowEvent withStreamSessionId(String id) {
+        return new ZLinkMessageFlowEvent(
+                eventId,
+                phase,
+                outcome,
+                surface,
+                messageKind,
+                packetName,
+                channelName,
+                channelRouteKind,
+                meshName,
+                topic,
+                correlationId,
+                sourceRid,
+                targetRid,
+                serverRid,
+                spotId,
+                instanceSpotType,
+                activationState,
+                actorId,
+                messageSize,
+                durationSeconds,
+                errorReason,
+                errorAction,
+                errorType,
+                errorMessage,
+                errorCauseType,
+                errorCauseMessage,
+                flowId,
+                flowOrigin,
+                sourceMeshGeneration,
+                id);
     }
 
     private ZLinkMessageFlowEvent copy(
@@ -284,7 +322,8 @@ public record ZLinkMessageFlowEvent(
                 errorCauseMessage,
                 id,
                 origin,
-                sourceMeshGeneration);
+                sourceMeshGeneration,
+                streamSessionId);
     }
 
     private static ZLinkMessageFlowResult defaultOutcome(ZLinkMessageFlowOutcome phase) {

@@ -4154,7 +4154,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZlinkStreamHeader header,
         Message payload,
         bool relocationReplay,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken,
+        RoutingId? sourceSessionRid
     )
     {
         return _actorSessionManager.SubmitActorAsync(
@@ -4163,7 +4164,8 @@ internal sealed partial class ZLinkFrameworkRuntime
             header,
             payload,
             relocationReplay,
-            cancellationToken
+            cancellationToken,
+            sourceSessionRid
         );
     }
 
@@ -4438,7 +4440,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZlinkStreamHeader header,
         Message payload,
         bool relocationReplay,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken,
+        RoutingId? sourceSessionRid
     )
     {
         return _actorSessionManager.SubmitActorForReplyAsync(
@@ -4447,7 +4450,8 @@ internal sealed partial class ZLinkFrameworkRuntime
             header,
             payload,
             relocationReplay,
-            cancellationToken
+            cancellationToken,
+            sourceSessionRid
         );
     }
 

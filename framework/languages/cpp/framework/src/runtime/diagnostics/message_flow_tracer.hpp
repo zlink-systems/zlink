@@ -253,6 +253,11 @@ class message_flow_tracer_t
      * did not carry it (flow-correlation §8: both or neither). */
     static void stamp_flow (message_flow_event_t &event)
     {
+        if (!event.stream_session_id) {
+            if (const auto &flow = runtime::flow_context_t::current ();
+                flow && flow->stream_session_id)
+                event.stream_session_id = *flow->stream_session_id;
+        }
         if (event.flow_id.has_value () != event.flow_origin.has_value ()) {
             event.flow_id.reset ();
             event.flow_origin.reset ();
@@ -390,6 +395,9 @@ class message_flow_tracer_t
             }
             if (event.actor_id) {
                 add ("actor", *event.actor_id);
+            }
+            if (event.stream_session_id) {
+                add ("session", *event.stream_session_id);
             }
             if (event.instance_spot_type) {
                 add ("instance_type", *event.instance_spot_type);
