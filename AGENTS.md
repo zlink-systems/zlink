@@ -11,6 +11,8 @@
   작업 단위는 Issue 브랜치(`<area>/<issue번호>-<slug>`)와 worktree이며, main은 PR로만 바뀐다
   (`doc/principal/dev/development-workflow.ko.md`). 간단한 작업은 worktree 없이 main에서 한다 — 무엇이
   간단한 작업인지는 그 문서 §6이 정한다.
+- **작업 중에 드러난 결함·누락은 새 Issue를 만들지 않고 그 작업의 Issue·PR 안에서 처리한다.** 여러 언어에 걸친
+  결함도 Issue 하나에서 함께 고친다. 새 Issue는 이번 릴리스에서 다루지 않고 넘기는 일에만 연다.
 - 작업 상태가 바뀔 때마다(시작, 리뷰 대기, 머지, 보류) [Project 보드](https://github.com/users/zlink-systems/projects/1/views/10)의
   상태를 바로 갱신한다. 새 Issue는 만들 때 보드에 올린다.
 - worktree 위치와 정리 절차는 [`doc/principal/dev/worktree-setup.ko.md`](./doc/principal/dev/worktree-setup.ko.md)를 따른다.
