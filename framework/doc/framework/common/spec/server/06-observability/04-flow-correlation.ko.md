@@ -71,7 +71,9 @@ flow 정보는 protocol error다.
 | 잘못된 값이 들어온 위치 | Framework가 완료하는 방법 |
 |---|---|
 | Framework message envelope | 해당 operation을 `ProtocolError`로 완료한다. |
-| STREAM frame | Connection을 `ProtocolError`로 종료한다. |
+| 서버가 받은 STREAM frame | Connection을 `ProtocolError`로 종료한다. |
+
+Client connector가 받은 STREAM frame의 flow 필드는 [Stream Connector §5.5](../stream-connector/32-stream-connector.ko.md#55-flow)가 정한다.
 
 ## 4. Flow를 만드는 시점
 

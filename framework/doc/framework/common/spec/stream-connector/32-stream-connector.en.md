@@ -316,8 +316,8 @@ The user API doesn't handle raw header bytes.
 - If the caller specifies a name **per operation**, that takes the
   highest priority.
 - **Every surface that takes a name offers both forms: the caller names it, or it is decided
-  from the payload type.** This covers receive registration, send, request and the test wait
-  surfaces (§10.1.1), at the connector level and the Actor handle (§5.6) level alike. Neither
+  from the payload type.** This covers receive registration, send and request at the connector level and the Actor
+  handle (§5.6) level, and the test wait surfaces (§10.1.1) at the connector level. Neither
   form is offered alone.
 - If auxiliary information is needed, it's added as a metadata
   key-value.
@@ -464,9 +464,9 @@ identifier into the payload for that.
 ### 5.7 Request Hooks
 
 An application registers two hooks that add common handling (common metadata, logging) to every
-request. They are registered like receive handlers (§5): registration returns a release handle,
-several hooks run in registration order, and they run in the same execution context as other
-callbacks (§7). Both hooks apply to every request at the connector level and at the Actor handle
+request. They are registered like receive handlers (§5): registration returns a release handle, and several hooks run in registration order. **The request sending hook runs synchronously on
+the thread that calls the request, before the frame is built** — it does not follow the dispatch
+mode (§7). The reply received hook follows the dispatch mode like any other callback (§7). Both hooks apply to every request at the connector level and at the Actor handle
 (§5.6) level. They do not apply to sends or received pushes.
 
 | Hook | When it runs | What it receives |
@@ -993,6 +993,6 @@ test name differs, the meaning must be the same.
 | **Actor language projection** | **The .NET typed extensions, the Java named typed overload, the C++ templates and subscriptions, the TypeScript Disposable, and the Unity WebGL JSON boundary round trip are observable on the public surface (§5.6, language documents)** |
 | **No flow sent** | **Outbound frames carry no flow field and no flag `0x10`, inbound flow fields are dropped after the structural check, and a one-way `Send` has no correlation id (§5.5)** |
 | **Request hooks** | **The request sending hook runs just before sending, in registration order, for both connector and Actor handle requests, and the metadata it adds is in the frame; the reply received hook runs once per success, failure, timeout and connection end and cannot change the outcome; a hook failure does not change the request result (§5.7)** |
-| **Both name forms** | **Receive registration, send, request and the wait surfaces offer the named form and the type form at the connector and Actor handle levels, and both reach the same packet name (§5)** |
+| **Both name forms** | **Receive registration, send and request at the connector and Actor handle levels, and the wait surfaces at the connector level, offer the named form and the type form, and both reach the same packet name (§5)** |
 | **Handlers and close** | **Push, error, disconnect, connection state, Actor bound and Actor unbound handlers and request callbacks all follow the registration order, callback failure and no-waiting rules, and the connector does not wait for a handler that never finishes. `close` returns after it has run the connection state handlers and the disconnect handlers. Disconnecting after the reconnect attempts are used up and on a transport error runs them in the same order and does not wait (§7)** |
 | **Close reason read surface** | **Code that did not receive the event reads the same value. A failed first connect still leaves a reason, and reconnecting does not clear it (§6.2)** |

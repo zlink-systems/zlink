@@ -276,8 +276,8 @@ payload를 기준으로 하므로 압축을 요청한 송신은 압축 결과를
   이름보다 우선한다.
 - operation마다 **호출자가 명시한 이름**이 있으면 그쪽이 가장 우선이다.
 - **이름을 받는 모든 표면은 호출자가 이름을 명시하는 형태와 payload 타입에서 이름을 정하는 형태를 함께 둔다.**
-  수신 등록, send, request와 테스트 대기 표면(§10.1.1)이 해당하며, connector 수준과 Actor handle(§5.6) 수준에
-  똑같이 적용한다. 둘 중 하나만 두지 않는다.
+  수신 등록, send, request는 connector 수준과 Actor handle(§5.6) 수준에, 테스트 대기 표면(§10.1.1)은 connector
+  수준에 해당한다. 둘 중 하나만 두지 않는다.
 - 부가 정보가 필요하면 metadata key-value로 덧붙인다.
 - **임의 header bytes를 다루는 API를 공개 표면에 두지 않는다.**
 
@@ -396,8 +396,9 @@ application이 payload에 식별자를 넣어 구분하지 않는다.
 ### 5.7 요청 hook
 
 Application은 모든 요청에 공통 처리(공통 metadata, 로깅)를 붙이는 hook 둘을 등록한다. 등록 형태는 수신
-등록(§5)과 같다 — 등록하면 해제 handle을 돌려주고, 여러 hook은 등록 순서로 실행하며, 실행 문맥은 다른
-callback과 같다(§7). 두 hook은 connector 수준과 Actor handle(§5.6) 수준의 모든 request에 적용한다.
+등록(§5)과 같다 — 등록하면 해제 handle을 돌려주고, 여러 hook은 등록 순서로 실행한다. **request sending hook은 request를 호출한 스레드에서
+frame을 만들기 전에 동기로 실행한다** — dispatch mode(§7)를 따르지 않는다. reply received hook은 다른 callback과
+같이 dispatch mode를 따른다(§7). 두 hook은 connector 수준과 Actor handle(§5.6) 수준의 모든 request에 적용한다.
 Send와 push 수신에는 적용하지 않는다.
 
 | hook | 호출 시점 | 받는 값 |
@@ -832,7 +833,7 @@ Unity WebGL UPM package는 새 wire runtime을 만들지 않는다. npm package 
 | **Actor 언어 투영** | **.NET typed 확장, Java named typed overload, C++ template과 subscription, TypeScript Disposable, Unity WebGL JSON 경계 왕복을 public 표면으로 관찰한다(§5.6, 언어 문서)** |
 | **flow 비전송** | **outbound frame에 flow 필드와 flag `0x10`이 없고, inbound flow 필드는 구조 검사 뒤 버려지며, one-way `Send`에 correlation id가 없다(§5.5)** |
 | **요청 hook** | **request sending hook이 connector·Actor handle request 모두에서 전송 직전에 등록 순서로 실행되고 추가한 metadata가 frame에 실리며, reply received hook이 성공·실패·timeout·연결 종료마다 한 번 실행되고 결과를 바꾸지 못하며, hook 실패가 request 결과를 바꾸지 않는다(§5.7)** |
-| **이름 두 형태** | **수신 등록·send·request·대기 표면이 connector·Actor handle 수준에서 이름 명시 형태와 타입 형태를 모두 제공하고 같은 packet 이름에 닿는다(§5)** |
+| **이름 두 형태** | **수신 등록·send·request는 connector·Actor handle 수준에서, 대기 표면은 connector 수준에서 이름 명시 형태와 타입 형태를 모두 제공하고 같은 packet 이름에 닿는다(§5)** |
 | **handler와 종료** | **push·error·끊김·연결 상태·Actor bound·Actor unbound handler와 request callback 모두 등록 순서·callback 실패·완료를 기다리지 않는 규칙을 따르며, 끝나지 않는 handler가 있어도 connector가 그 완료를 기다리지 않는다. `close`는 연결 상태 handler와 끊김 handler를 실행한 뒤 돌아온다. 재연결 소진과 transport 오류로 끊길 때도 같은 순서로 실행하고 기다리지 않는다(§7)** |
 | **종료 사유 읽기** | **끊긴 뒤 이벤트를 받지 않은 코드도 같은 값을 읽는다. 첫 connect 실패에도 사유가 남고, 재연결해도 지워지지 않는다(§6.2)** |
 
