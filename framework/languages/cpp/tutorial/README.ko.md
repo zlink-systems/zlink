@@ -667,7 +667,7 @@ Server와 Client를 실행한 상태에서 다음 명령으로 실행한다.
 first request: p1 rookie
 request shaping: status 200 weight 2
 json body: player 200 room fbf674c7-9328-4624-a74a-7bccdab703f6 chat 202
-response kinds: typed 200 raw application/json fetch anonymous
+response kinds: typed 200 raw application/json fetch speedy-p2
 compressed response: 200 encoding-removed true
 redirect: 200 p1
 basic auth: without 401 with 200

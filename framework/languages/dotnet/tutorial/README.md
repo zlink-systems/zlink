@@ -212,7 +212,7 @@ The recorded output is:
 first request: p1 rookie
 request shaping: status 200 weight 2
 json body: player 200 room 4400f753-2bf4-45dc-aa7e-84714c27822e chat 202
-response kinds: typed 200 raw application/json; charset=utf-8 fetch anonymous
+response kinds: typed 200 raw application/json; charset=utf-8 fetch speedy-p2
 compressed response: 200 encoding-removed True
 redirect: 200 p1
 basic auth: without 401 with 200

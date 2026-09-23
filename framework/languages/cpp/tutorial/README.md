@@ -506,7 +506,7 @@ The output below is from one run; the room id and download byte count vary per r
 first request: p1 rookie
 request shaping: status 200 weight 2
 json body: player 200 room fbf674c7-9328-4624-a74a-7bccdab703f6 chat 202
-response kinds: typed 200 raw application/json fetch anonymous
+response kinds: typed 200 raw application/json fetch speedy-p2
 compressed response: 200 encoding-removed true
 redirect: 200 p1
 basic auth: without 401 with 200

@@ -108,7 +108,7 @@ kotlin/HttpClient/build/install/HttpClient/bin/HttpClient
 first request: p1 rookie
 request shaping: status 200 weight 2
 json body: player 200 room 47e7f688-6185-41b9-8e16-c22ef0dcd075 chat 202
-response kinds: typed 200 raw application/json fetch anonymous
+response kinds: typed 200 raw application/json fetch speedy-p2
 compressed response: 200 encoding-removed true
 redirect: 200 p1
 basic auth: without 401 with 200
