@@ -383,8 +383,7 @@ int main ()
     const zlink::framework::detail::ambient_context_hooks_t test_ambient_hooks{
       &capture_test_ambient, &enter_test_ambient};
     zlink::framework::runtime::configure_handler_coroutine_executor (1);
-    zlink::framework::detail::ambient_context_hooks.store (&test_ambient_hooks,
-                                                           std::memory_order_release);
+    zlink::framework::detail::set_ambient_context_hooks (&test_ambient_hooks);
     native_await_ambient_value = 42;
     auto native_state = std::make_shared<native_async_state_t> ();
     auto serial_turn = std::make_shared<test_serial_turn_t> ();
@@ -410,7 +409,7 @@ int main ()
         || serial_turn->released ()) {
         return 17;
     }
-    zlink::framework::detail::ambient_context_hooks.store (nullptr, std::memory_order_release);
+    zlink::framework::detail::set_ambient_context_hooks (nullptr);
 
     auto unowned_native_state = std::make_shared<native_async_state_t> ();
     std::atomic<bool> resumed_inside_completion{true};

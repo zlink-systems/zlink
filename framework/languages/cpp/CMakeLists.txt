@@ -223,16 +223,6 @@ if(WIN32 AND EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}")
     VERBATIM)
 endif()
 
-add_library(zlink_framework_provider_abstractions INTERFACE)
-add_library(zlink::framework_provider_abstractions ALIAS
-  zlink_framework_provider_abstractions)
-set_target_properties(zlink_framework_provider_abstractions PROPERTIES
-  EXPORT_NAME framework_provider_abstractions)
-target_compile_features(zlink_framework_provider_abstractions INTERFACE cxx_std_20)
-target_include_directories(zlink_framework_provider_abstractions INTERFACE
-  $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/framework/include>
-  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-
 set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
   framework/src/runtime/backend/raw_dealer_port.cpp
   framework/src/runtime/backend/raw_route_port.cpp
@@ -348,6 +338,18 @@ function(zlink_framework_cpp_configure_shared_library target_name)
       "-Wl,-exported_symbols_list,${_zlink_apple_exports}")
   endif()
 endfunction()
+
+add_library(zlink_framework_provider_abstractions ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
+  framework/src/runtime/dispatch/provider_task_context.cpp)
+add_library(zlink::framework_provider_abstractions ALIAS
+  zlink_framework_provider_abstractions)
+set_target_properties(zlink_framework_provider_abstractions PROPERTIES
+  EXPORT_NAME framework_provider_abstractions)
+zlink_framework_cpp_configure_shared_library(zlink_framework_provider_abstractions)
+target_compile_features(zlink_framework_provider_abstractions PUBLIC cxx_std_20)
+target_include_directories(zlink_framework_provider_abstractions PUBLIC
+  $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/framework/include>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 
 function(zlink_framework_cpp_configure_m6_objects target_name)
   target_compile_features(${target_name} PUBLIC cxx_std_20)
@@ -469,7 +471,7 @@ target_include_directories(zlink_framework PUBLIC
 target_include_directories(zlink_framework PRIVATE
   ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
   ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
-target_link_libraries(zlink_framework PUBLIC zlink::cpp)
+target_link_libraries(zlink_framework PUBLIC zlink::cpp zlink::framework_provider_abstractions)
 if(ZLINK_FRAMEWORK_CPP_SHARED)
   # C++ exports metrics through runtime.status(), not an OpenTelemetry provider API.
   # Adding a provider-injection boundary would therefore be a spec change.
@@ -881,7 +883,8 @@ target_include_directories(zlink_framework_locations_redis PUBLIC
   $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/connector/core/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(zlink_framework_locations_redis PUBLIC
-  zlink::framework_provider_abstractions)
+  zlink::framework_provider_abstractions
+  zlink::framework)
 if(TARGET redis++::redis++)
   target_link_libraries(zlink_framework_locations_redis PRIVATE
     redis++::redis++)
@@ -1463,6 +1466,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ZLINK_ACTOR_JOIN_REPLY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/actor-join-reply-v1.json")
   target_link_libraries(test_cpp_framework_service_wire_codec PRIVATE
     zlink::cpp
+    zlink::framework_provider_abstractions
     nlohmann_json::nlohmann_json
     opentelemetry-cpp::api
     Threads::Threads)
@@ -2170,6 +2174,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_sync_submit PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
+    test_cpp_framework_shared_serial_turn
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_shared_serial_turn.cpp
+    "framework-unit;framework-regression;execution;actor-join")
+  target_link_libraries(test_cpp_framework_shared_serial_turn PRIVATE GTest::gtest_main)
+  add_zlink_framework_test(
     test_cpp_framework_serializer_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_serializer_registry.cpp
     "framework-unit;serializer")
@@ -2448,6 +2457,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     target_link_libraries(test_cpp_framework_locations_redis PRIVATE
       zlink::framework_locations_redis
       GTest::gtest_main)
+    if(TARGET redis++::redis++)
+      target_link_libraries(test_cpp_framework_locations_redis PRIVATE redis++::redis++)
+    else()
+      target_link_libraries(test_cpp_framework_locations_redis PRIVATE redis++::redis++_static)
+    endif()
     zlink_framework_cpp_add_test(
       NAME test_cpp_framework_locations_redis
       COMMAND test_cpp_framework_locations_redis
@@ -2505,6 +2519,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector.cpp
     "connector-unit;connector-integration;connector-e2e;connector-contract;connector-protocol;connector-transport;connector-typed;connector-coroutine;connector-dispatch;connector-timeout"
     contract)
+  if(WIN32)
+    add_zlink_connector_test(
+      test_cpp_stream_connector_process_exit
+      tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_process_exit.cpp
+      "connector-unit;connector-regression"
+      contract)
+    target_link_libraries(test_cpp_stream_connector_process_exit PRIVATE ws2_32)
+  endif()
   # These tests each create a high-thread-count local runtime.  Serialise the
   # pair so CTest does not exercise their process-level resource usage as if it
   # were a product concurrency contract.

@@ -93,19 +93,22 @@ bool &shared_runtime_started ()
     return started;
 }
 
-class shared_operation_runner_t
+class shared_operation_runner_t : public std::enable_shared_from_this<shared_operation_runner_t>
 {
   public:
-    explicit shared_operation_runner_t (std::size_t worker_count, bool runtime_runner = false)
+    explicit shared_operation_runner_t (
+      std::shared_ptr<shared_operation_runner_t> context_dependency = {}) :
+        _context_dependency (std::move (context_dependency))
     {
-        if (runtime_runner) {
-            std::lock_guard<std::mutex> lock (shared_runtime_config_mutex ());
-            worker_count = shared_runtime_worker_count ();
-            shared_runtime_started () = true;
-        }
+    }
+
+    void start (std::size_t worker_count)
+    {
+        auto self = shared_from_this ();
         for (auto index = 0u; index < worker_count; ++index) {
-            _workers.emplace_back ([this] {
-                _io_context.run ();
+            _workers.emplace_back ([self] {
+                auto *runner = self.get ();
+                runner->_io_context.run ();
 #ifdef ZLINK_STREAM_CONNECTOR_WITH_OPENSSL
                 OPENSSL_thread_stop ();
 #endif
@@ -115,13 +118,21 @@ class shared_operation_runner_t
 
     ~shared_operation_runner_t ()
     {
-        _work.reset ();
-        _io_context.stop ();
         for (auto &worker : _workers) {
             if (worker.joinable ()) {
-                worker.join ();
+                if (worker.get_id () == std::this_thread::get_id ()) {
+                    worker.detach ();
+                } else {
+                    worker.join ();
+                }
             }
         }
+    }
+
+    void stop ()
+    {
+        _work.reset ();
+        _io_context.stop ();
     }
 
     void post (std::function<void ()> operation)
@@ -161,47 +172,66 @@ class shared_operation_runner_t
     boost::asio::io_context &io_context () noexcept { return _io_context; }
 
   private:
+    std::shared_ptr<shared_operation_runner_t> _context_dependency;
     boost::asio::io_context _io_context;
     boost::asio::executor_work_guard<boost::asio::io_context::executor_type> _work{
       boost::asio::make_work_guard (_io_context)};
     std::vector<std::thread> _workers;
 };
 
-shared_operation_runner_t &shared_operation_runner ()
+std::weak_ptr<shared_runtime_t> &shared_runtime_weak ()
 {
-    static shared_operation_runner_t runner (4, true);
-    return runner;
-}
-
-shared_operation_runner_t &shared_callback_runner ()
-{
-    static shared_operation_runner_t runner (4);
-    return runner;
-}
-
-shared_operation_runner_t &shared_connect_runner ()
-{
-    static shared_operation_runner_t runner (4);
-    return runner;
+    static std::weak_ptr<shared_runtime_t> runtime;
+    return runtime;
 }
 
 } // namespace
 
-boost::asio::io_context &shared_io_context ()
+class shared_runtime_t
 {
-    /* connector_state_t owns strands that reference both shared contexts.
-     * Initialize the callback runner first so its io_context and strand
-     * service outlive the operation runner's pending handlers during static
-     * teardown. Without this ordering, a handler released while the
-     * operation runner is shutting down can destroy a delivery strand after
-     * its callback io_context has already destroyed the strand service. */
-    (void) shared_callback_runner ();
-    return shared_operation_runner ().io_context ();
+  public:
+    explicit shared_runtime_t (std::size_t worker_count)
+    {
+        callback = std::make_shared<shared_operation_runner_t> ();
+        operation = std::make_shared<shared_operation_runner_t> (callback);
+        connect = std::make_shared<shared_operation_runner_t> ();
+        callback->start (4);
+        operation->start (worker_count);
+        connect->start (4);
+    }
+
+    ~shared_runtime_t ()
+    {
+        operation->stop ();
+        connect->stop ();
+        callback->stop ();
+    }
+
+    std::shared_ptr<shared_operation_runner_t> callback;
+    std::shared_ptr<shared_operation_runner_t> operation;
+    std::shared_ptr<shared_operation_runner_t> connect;
+};
+
+std::shared_ptr<shared_runtime_t> acquire_shared_runtime ()
+{
+    std::lock_guard<std::mutex> lock (shared_runtime_config_mutex ());
+    auto runtime = shared_runtime_weak ().lock ();
+    if (!runtime) {
+        runtime = std::make_shared<shared_runtime_t> (shared_runtime_worker_count ());
+        shared_runtime_weak () = runtime;
+        shared_runtime_started () = true;
+    }
+    return runtime;
 }
 
-boost::asio::io_context &shared_callback_io_context ()
+connector_state_t::connector_state_t (connector_options_t options) :
+    connector_id (next_connector_id.fetch_add (1, std::memory_order_relaxed)),
+    options (std::move (options)),
+    runtime (acquire_shared_runtime ()),
+    io_context (runtime->operation->io_context ()),
+    write_strand (boost::asio::make_strand (io_context)),
+    delivery_strand (boost::asio::make_strand (runtime->callback->io_context ()))
 {
-    return shared_callback_runner ().io_context ();
 }
 
 bool configure_shared_runtime_worker_count (std::size_t worker_count)
@@ -429,13 +459,14 @@ void schedule_delivery (std::shared_ptr<connector_state_t> state, std::function<
         // are frequently invoked from the connector's own read pump; running user
         // callbacks inline there lets a slow or blocking callback starve the pump
         // (and deadlock when the callback waits on a later inbound frame).
-        boost::asio::post (state->delivery_strand, [callback = std::move (callback)] () mutable {
-            try {
-                callback ();
-            }
-            catch (...) {
-            }
-        });
+        boost::asio::post (state->delivery_strand,
+                           [state, callback = std::move (callback)] () mutable {
+                               try {
+                                   callback ();
+                               }
+                               catch (...) {
+                               }
+                           });
         return;
     }
     std::lock_guard<std::mutex> lock (state->delivery_mutex);
@@ -692,20 +723,24 @@ void schedule_lifecycle_delivery (std::shared_ptr<connector_state_t> state,
     schedule_delivery (std::move (state), std::move (callback));
 }
 
-void post_runtime_operation (std::function<void ()> operation)
+void post_runtime_operation (const std::shared_ptr<connector_state_t> &state,
+                             std::function<void ()> operation)
 {
-    shared_operation_runner ().post (std::move (operation));
+    state->runtime->operation->post (std::move (operation));
 }
 
-void post_connect_operation (std::function<void ()> operation)
+void post_connect_operation (const std::shared_ptr<connector_state_t> &state,
+                             std::function<void ()> operation)
 {
-    shared_connect_runner ().post (std::move (operation));
+    state->runtime->connect->post (std::move (operation));
 }
 
 std::shared_ptr<boost::asio::steady_timer>
-post_runtime_operation_after (std::chrono::milliseconds delay, std::function<void ()> operation)
+post_runtime_operation_after (const std::shared_ptr<connector_state_t> &state,
+                              std::chrono::milliseconds delay,
+                              std::function<void ()> operation)
 {
-    return shared_operation_runner ().post_after (delay, std::move (operation));
+    return state->runtime->operation->post_after (delay, std::move (operation));
 }
 
 void connector_runtime_t::receive_packet (packet_t packet)
@@ -806,6 +841,8 @@ namespace zlink::stream_connector
 
 namespace
 {
+
+result_t<void> close_state (std::shared_ptr<detail::connector_state_t> state);
 
 /* Default typed codec (stream-connector §5.4): the payload types already
  * serialize themselves to JSON, so this codec names the wire codec and leaves
@@ -924,6 +961,13 @@ connector_t::connector_t (connector_options_t options) :
     _state (std::make_shared<detail::connector_state_t> (std::move (options))), _codecs (_state)
 {
     auto state = detail::state_from (_state);
+    _external_owner = std::shared_ptr<void> (state.get (), [state] (void *) {
+        detail::post_connect_operation (state, [state] {
+            (void) close_state (state);
+            std::lock_guard<std::mutex> lock (state->delivery_mutex);
+            state->delivery_queue.clear ();
+        });
+    });
     /* Only the built-in default is dropped here. A codec the caller installed
      * on a configuration whose compression is off stays as written, so
      * connect() rejects the pair instead of quietly dropping one of them
@@ -1190,10 +1234,11 @@ connect_transport (const std::shared_ptr<detail::connector_state_t> &state,
         std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
         state->connect_control = control;
     }
-    auto timeout_timer = detail::post_runtime_operation_after (timeout, [operation, control] {
-        control->cancel ();
-        operation->complete (boost::asio::error::timed_out, nullptr);
-    });
+    auto timeout_timer =
+      detail::post_runtime_operation_after (state, timeout, [operation, control] {
+          control->cancel ();
+          operation->complete (boost::asio::error::timed_out, nullptr);
+      });
     auto completion =
       [operation] (boost::system::error_code error,
                    std::unique_ptr<detail::stream_connection_t> connection) mutable {
@@ -1277,8 +1322,7 @@ connect_transport (const std::shared_ptr<detail::connector_state_t> &state,
 
 void schedule_start_read_loop (std::shared_ptr<detail::connector_state_t> state)
 {
-    detail::post_runtime_operation (
-      [state = std::move (state)] { detail::start_read_loop (state); });
+    detail::post_runtime_operation (state, [state] { detail::start_read_loop (state); });
 }
 
 result_t<void> connect_state (std::shared_ptr<detail::connector_state_t> state,
@@ -1405,8 +1449,8 @@ void detail::schedule_reconnect (std::shared_ptr<detail::connector_state_t> stat
     detail::change_state (state, connection_state_t::reconnecting);
     /* §6: the first wait after a drop is also randomized. */
     auto timer = detail::post_runtime_operation_after (
-      detail::jittered_delay (state->options.reconnect.initial_delay), [state] {
-          detail::post_connect_operation ([state] {
+      state, detail::jittered_delay (state->options.reconnect.initial_delay), [state] {
+          detail::post_connect_operation (state, [state] {
               if (state->close_requested.load ()) {
                   std::lock_guard<std::mutex> lock (state->lifecycle_mutex);
                   state->reconnect_scheduled = false;
@@ -1433,15 +1477,16 @@ result_t<void> connector_t::connect ()
 void connector_t::connect (std::function<void (result_t<void>)> callback)
 {
     auto state = detail::state_from (_state);
-    detail::post_connect_operation ([state, callback = std::move (callback)] () mutable {
-        auto result = connect_state (state);
-        detail::schedule_delivery (
-          state, [callback = std::move (callback), result = std::move (result)] () mutable {
-              if (callback) {
-                  callback (std::move (result));
-              }
-          });
-    });
+    detail::post_connect_operation (
+      state, [state, owner = _external_owner, callback = std::move (callback)] () mutable {
+          auto result = connect_state (state);
+          detail::schedule_delivery (
+            state, [callback = std::move (callback), result = std::move (result)] () mutable {
+                if (callback) {
+                    callback (std::move (result));
+                }
+            });
+      });
 }
 
 namespace
@@ -1580,7 +1625,7 @@ result_t<void> connector_t::close ()
 void connector_t::close (std::function<void (result_t<void>)> callback)
 {
     auto state = detail::state_from (_state);
-    detail::post_runtime_operation ([state, callback = std::move (callback)] () mutable {
+    detail::post_runtime_operation (state, [state, callback = std::move (callback)] () mutable {
         auto result = close_state (state);
         detail::schedule_delivery (
           state, [callback = std::move (callback), result = std::move (result)] () mutable {

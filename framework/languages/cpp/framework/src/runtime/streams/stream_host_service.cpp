@@ -2079,6 +2079,9 @@ class stream_host_service_t::listener_t
         const auto retire_connection =
           "connection_id=" + connection.connection_id
           + " connection_generation=" + std::to_string (connection.connection_generation);
+        std::vector<std::pair<runtime::stateful::stream_binding_t, task_t<void>>>
+          remote_retirements;
+        remote_retirements.reserve (bindings.size ());
         for (const auto &binding : bindings) {
             try {
                 if (!_mesh_node->native_node ().sessions ().is_current_for_connection (connection,
@@ -2102,9 +2105,29 @@ class stream_host_service_t::listener_t
                     if (!retired)
                         continue;
                 } else {
-                    co_await _mesh_node->retire_application_actor_session (
-                      binding, session_rid, std::chrono::seconds (5));
+                    remote_retirements.emplace_back (
+                      binding, _mesh_node->retire_application_actor_session (
+                                 binding, session_rid, std::chrono::seconds (5)));
+                    continue;
                 }
+                actor_gateway.trace_bound_session_send_stage (
+                  binding.actor.key, "session_owner_route_tombstone",
+                  retire_connection + " session_rid=" + session_rid.to_hex ()
+                    + " binding_generation=" + std::to_string (binding.binding_generation),
+                  &session_rid);
+            }
+            catch (const std::exception &error) {
+                actor_gateway.trace_bound_session_send_stage (
+                  binding.actor.key, "session_owner_route_tombstone_failed",
+                  retire_connection + " session_rid=" + session_rid.to_hex ()
+                    + " binding_generation=" + std::to_string (binding.binding_generation)
+                    + " error=" + error.what (),
+                  &session_rid);
+            }
+        }
+        for (auto &[binding, retirement] : remote_retirements) {
+            try {
+                co_await retirement;
                 actor_gateway.trace_bound_session_send_stage (
                   binding.actor.key, "session_owner_route_tombstone",
                   retire_connection + " session_rid=" + session_rid.to_hex ()

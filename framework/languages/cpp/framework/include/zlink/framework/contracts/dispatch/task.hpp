@@ -4,7 +4,6 @@
 #include <zlink/framework/contracts/errors/result.hpp>
 #include <zlink/framework/detail/runtime/dispatch/application_job_context.hpp>
 
-#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <coroutine>
@@ -39,19 +38,8 @@ struct serial_resume_failure_t
     std::string message;
 };
 
-inline thread_local std::optional<serial_resume_failure_t> serial_resume_failure;
-
-inline void set_serial_resume_failure (framework_error_kind_t kind, std::string message)
-{
-    serial_resume_failure = serial_resume_failure_t{kind, std::move (message)};
-}
-
-inline std::optional<serial_resume_failure_t> take_serial_resume_failure ()
-{
-    auto failure = std::move (serial_resume_failure);
-    serial_resume_failure.reset ();
-    return failure;
-}
+void set_serial_resume_failure (framework_error_kind_t kind, std::string message);
+std::optional<serial_resume_failure_t> take_serial_resume_failure ();
 
 class deferred_barrier_t
 {
@@ -87,23 +75,18 @@ class serial_turn_t
     virtual void cancel_deferred () noexcept = 0;
 };
 
-inline thread_local std::shared_ptr<serial_turn_t> current_serial_turn_handle;
-
-inline std::shared_ptr<serial_turn_t> capture_current_serial_turn ()
-{
-    return current_serial_turn_handle;
-}
+std::shared_ptr<serial_turn_t> capture_current_serial_turn ();
+std::shared_ptr<serial_turn_t> exchange_current_serial_turn (std::shared_ptr<serial_turn_t> turn);
 
 class serial_turn_scope_t
 {
   public:
     explicit serial_turn_scope_t (std::shared_ptr<serial_turn_t> turn) :
-        _previous (std::move (current_serial_turn_handle))
+        _previous (exchange_current_serial_turn (std::move (turn)))
     {
-        current_serial_turn_handle = std::move (turn);
     }
 
-    ~serial_turn_scope_t () { current_serial_turn_handle = std::move (_previous); }
+    ~serial_turn_scope_t () { (void) exchange_current_serial_turn (std::move (_previous)); }
 
     serial_turn_scope_t (const serial_turn_scope_t &) = delete;
     serial_turn_scope_t &operator= (const serial_turn_scope_t &) = delete;
@@ -163,23 +146,17 @@ inline result_t<void> defer_current_serial_turn (std::function<void ()> work,
 
 template <typename T> task_t<T> unsupported_yield_task ();
 
-/* Ambient dispatch-context propagation across coroutine suspension
- * (flow-correlation MFLOW-EXT-014). The runtime installs the hooks once; a
- * continuation or callback re-enters the context captured at registration
- * and the guard ends with the resume call, so a finished continuation never
- * leaks its context into unrelated work. Without hooks only the atomic hook
- * pointer and application job TLS pointer are accessed. Both functions publish through a single atomic
- * table pointer so a concurrent task can never observe a half-installed
- * pair; installation runs from a dynamic initializer while other
- * initializers may already schedule tasks. An atomic plain pointer is
- * lock-free on every supported platform. */
+/* 코루틴 일시 중단 중 실행 문맥 전달(flow-correlation MFLOW-EXT-014).
+ * Framework 라이브러리가 hook 쌍을 원자적으로 등록한다. 재개 범위가 끝나면
+ * 이전 문맥을 복원하며, hook이 없으면 application job 문맥만 전달한다. */
 struct ambient_context_hooks_t
 {
     std::shared_ptr<void> (*capture) ();
     std::shared_ptr<void> (*enter) (const std::shared_ptr<void> &);
 };
 
-inline std::atomic<const ambient_context_hooks_t *> ambient_context_hooks{nullptr};
+const ambient_context_hooks_t *current_ambient_context_hooks () noexcept;
+void set_ambient_context_hooks (const ambient_context_hooks_t *hooks) noexcept;
 
 struct ambient_context_snapshot_t
 {
@@ -214,13 +191,13 @@ class ambient_context_scope_t
 
 inline ambient_context_snapshot_t capture_ambient_context ()
 {
-    const auto *hooks = ambient_context_hooks.load (std::memory_order_acquire);
+    const auto *hooks = current_ambient_context_hooks ();
     return {hooks != nullptr ? hooks->capture () : nullptr, application_job_context_t::current ()};
 }
 
 inline ambient_context_scope_t enter_ambient_context (const ambient_context_snapshot_t &snapshot)
 {
-    const auto *hooks = ambient_context_hooks.load (std::memory_order_acquire);
+    const auto *hooks = current_ambient_context_hooks ();
     return {hooks != nullptr && snapshot.state ? hooks->enter (snapshot.state) : nullptr,
             snapshot.application_job};
 }

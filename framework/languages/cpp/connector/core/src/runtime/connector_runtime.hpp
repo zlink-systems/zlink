@@ -33,8 +33,7 @@ class actor_access_t
     static std::uint16_t slot (const std::shared_ptr<actor_t> &actor);
 };
 
-boost::asio::io_context &shared_io_context ();
-boost::asio::io_context &shared_callback_io_context ();
+class shared_runtime_t;
 bool configure_shared_runtime_worker_count (std::size_t worker_count);
 
 struct pending_send_t
@@ -116,14 +115,7 @@ struct pending_wait_t
 class connector_state_t : public std::enable_shared_from_this<connector_state_t>
 {
   public:
-    explicit connector_state_t (connector_options_t options) :
-        connector_id (next_connector_id.fetch_add (1, std::memory_order_relaxed)),
-        options (std::move (options)),
-        io_context (shared_io_context ()),
-        write_strand (boost::asio::make_strand (io_context)),
-        delivery_strand (boost::asio::make_strand (shared_callback_io_context ()))
-    {
-    }
+    explicit connector_state_t (connector_options_t options);
 
     inline static std::atomic_uint64_t next_connector_id{1};
     std::uint64_t connector_id = 0;
@@ -209,6 +201,7 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
     std::chrono::steady_clock::time_point last_inbound_received{};
     std::uint64_t heartbeat_generation = 0;
     std::shared_ptr<boost::asio::steady_timer> heartbeat_timer;
+    std::shared_ptr<shared_runtime_t> runtime;
     boost::asio::io_context &io_context;
     boost::asio::strand<boost::asio::io_context::executor_type> write_strand;
     boost::asio::strand<boost::asio::io_context::executor_type> delivery_strand;
@@ -290,10 +283,14 @@ std::chrono::milliseconds jittered_delay (std::chrono::milliseconds base);
 std::optional<transport_t> transport_from_scheme (const std::string &endpoint);
 result_t<transport_t> resolve_transport (const connector_options_t &options);
 result_t<transport_t> validate_options (const connector_options_t &options);
-void post_runtime_operation (std::function<void ()> operation);
-void post_connect_operation (std::function<void ()> operation);
+void post_runtime_operation (const std::shared_ptr<connector_state_t> &state,
+                             std::function<void ()> operation);
+void post_connect_operation (const std::shared_ptr<connector_state_t> &state,
+                             std::function<void ()> operation);
 std::shared_ptr<boost::asio::steady_timer>
-post_runtime_operation_after (std::chrono::milliseconds delay, std::function<void ()> operation);
+post_runtime_operation_after (const std::shared_ptr<connector_state_t> &state,
+                              std::chrono::milliseconds delay,
+                              std::function<void ()> operation);
 void change_state (std::shared_ptr<connector_state_t> state,
                    connection_state_t next,
                    std::optional<error_t> error = std::nullopt);

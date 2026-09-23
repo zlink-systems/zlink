@@ -8,7 +8,6 @@
 #include <zlink/Contracts/Messaging/operation_contracts.hpp>
 
 #include "runtime/connector_runtime.hpp"
-#include "runtime/protocol/compression/lz4_compression_codec.hpp"
 #include "runtime/protocol/framing/frame_codec.hpp"
 #include "runtime/protocol/framing.hpp"
 #include "runtime/protocol/header_codec.hpp"
@@ -817,8 +816,8 @@ std::optional<server_frame_t> try_read_server_frame (std::string &buffer)
        & static_cast<std::uint8_t> (zlink::stream_connector::header_flags_t::payload_compressed))
       != 0;
     if (compressed) {
-        payload = zlink::stream_connector::detail::lz4_compression_codec_t{}
-                    .decompress (zlink::message_t::from (payload), 64 * 1024)
+        payload = zlink::stream_connector::lz4_compression_codec ()
+                    ->decompress (zlink::message_t::from (payload), 64 * 1024)
                     .to_string ();
     }
     return server_frame_t{decoded.value (), std::move (payload), compressed};
@@ -889,8 +888,8 @@ zlink::message_t make_server_frame (zlink::stream_connector::message_kind_t kind
     zlink::stream_connector::connector_options_t options;
     options.compression = zlink::stream_connector::compression_t::lz4;
     if (compressed) {
-        payload = zlink::stream_connector::detail::lz4_compression_codec_t{}
-                    .compress (zlink::message_t::from (payload))
+        payload = zlink::stream_connector::lz4_compression_codec ()
+                    ->compress (zlink::message_t::from (payload))
                     .to_string ();
     }
     std::vector<std::uint8_t> payload_bytes (payload.begin (), payload.end ());
@@ -1498,14 +1497,14 @@ int main ()
     }
 
     {
-        zlink::stream_connector::detail::lz4_compression_codec_t lz4;
-        if (!lz4.available ()) {
+        const auto lz4 = zlink::stream_connector::lz4_compression_codec ();
+        if (!lz4) {
             return 19;
         }
         const auto source =
           zlink::message_t::from (std::string ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
-        const auto compressed = lz4.compress (source);
-        const auto restored = lz4.decompress (compressed, source.size ());
+        const auto compressed = lz4->compress (source);
+        const auto restored = lz4->decompress (compressed, source.size ());
         if (restored.to_string () != source.to_string ()
             || compressed.to_string () == source.to_string ()) {
             return 20;
@@ -1518,7 +1517,7 @@ int main ()
           static_cast<char> (0x0f), static_cast<char> (0x00), static_cast<char> (0x01)};
         bool oversized_rejected = false;
         try {
-            (void) lz4.decompress (zlink::message_t::from (oversized_declared_size), 1024);
+            (void) lz4->decompress (zlink::message_t::from (oversized_declared_size), 1024);
         }
         catch (const std::runtime_error &) {
             oversized_rejected = true;

@@ -304,6 +304,7 @@ class connector_t
                                            std::function<void (const packet_t &)> handler);
 
     std::shared_ptr<void> _state;
+    std::shared_ptr<void> _external_owner;
     codec_registry_t _codecs;
 };
 

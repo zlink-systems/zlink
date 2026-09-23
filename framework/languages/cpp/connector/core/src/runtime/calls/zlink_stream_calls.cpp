@@ -931,7 +931,7 @@ void schedule_heartbeat_maintenance (const std::shared_ptr<connector_state_t> &s
                                      std::uint64_t generation)
 {
     auto timer = post_runtime_operation_after (
-      heartbeat_maintenance_delay (state->options.heartbeat),
+      state, heartbeat_maintenance_delay (state->options.heartbeat),
       [state, generation] { run_heartbeat_maintenance (state, generation); });
     std::lock_guard<std::mutex> lock (state->transport_mutex);
     if (generation != state->heartbeat_generation || state->close_requested.load ()
@@ -1756,7 +1756,7 @@ void submit_request_async (std::shared_ptr<void> state_handle,
             request_packet_name = packet.name;
             trace_request ("submit", seq, request_packet_name, "mode=async");
             auto timeout_timer =
-              post_runtime_operation_after (timeout, [state, seq, request_packet_name] {
+              post_runtime_operation_after (state, timeout, [state, seq, request_packet_name] {
                   trace_request ("request-timeout", seq, request_packet_name);
                   complete_pending_request (
                     state, seq,
@@ -2196,7 +2196,7 @@ void submit_wait_async (std::shared_ptr<void> state_handle,
         return;
     }
 
-    auto timeout_timer = post_runtime_operation_after (timeout, [state, wait_id] {
+    auto timeout_timer = post_runtime_operation_after (state, timeout, [state, wait_id] {
         std::function<void (result_t<packet_t>)> callback;
         {
             std::lock_guard<std::mutex> lock (state->transport_mutex);
