@@ -1880,6 +1880,60 @@ test('a Ready Instance terminal forgets its route after local close releases aut
   runtime.close();
 });
 
+test('Instance Close removes a stale Ready target without removing a newer generation', () => {
+  const raw = {
+    topology: { peer: () => undefined },
+    observePeerConnectionIntentRemoved: () => () => {},
+    setServiceIngress() {},
+    sendService: () => true
+  } as unknown as RawServiceMeshRuntime;
+  const runtime = new ServiceStatefulRuntime(raw, 'node-b', 3n);
+  const route: ServiceInstanceRouteFence = {
+    targetNodeRid: 'node-b',
+    targetNodeGeneration: 3n,
+    targetSpotId: 'tenant:closed-after-terminal',
+    objectGeneration: 8n,
+    ownerId: 'node-b',
+    authorityOwnerGeneration: 4n,
+    leaseGeneration: 1n,
+    storeVersion: 'store-v8'
+  };
+  const closed = runtime as ServiceStatefulRuntime & {
+    completeClosedInstance(spotId: string, objectGeneration: bigint): void;
+  };
+  runtime.activateInstanceSpot(route.targetSpotId, 'TenantWorker', 8n, 4n);
+  runtime.registerInstanceIntent('TenantWorker', route);
+  assert.deepEqual(runtime.instanceSpotApplicationTarget(route.targetSpotId), {
+    stableType: 'TenantWorker',
+    objectGeneration: 8n
+  });
+
+  closed.completeClosedInstance(route.targetSpotId, 8n);
+  assert.equal(runtime.instanceSpotApplicationTarget(route.targetSpotId), undefined);
+  assert.equal(runtime.registry.spot(route.targetSpotId), undefined);
+
+  const successor = { ...route, objectGeneration: 9n, storeVersion: 'store-v9' };
+  runtime.activateInstanceSpot(route.targetSpotId, 'TenantWorker', 9n, 4n);
+  runtime.registerInstanceIntent('TenantWorker', successor);
+  closed.completeClosedInstance(route.targetSpotId, 8n);
+  assert.equal(runtime.instanceSpotApplicationTarget(route.targetSpotId)?.objectGeneration, 9n);
+  runtime.close();
+});
+
+test('Instance Close without an intent or generation leaves stateful cleanup empty', () => {
+  const raw = {
+    topology: { peer: () => undefined },
+    observePeerConnectionIntentRemoved: () => () => {},
+    setServiceIngress() {},
+    sendService: () => true
+  } as unknown as RawServiceMeshRuntime;
+  const runtime = new ServiceStatefulRuntime(raw, 'node-b', 3n);
+  assert.doesNotThrow(() =>
+    runtime.completeClosedInstance('tenant:untracked', undefined as unknown as bigint)
+  );
+  runtime.close();
+});
+
 test('direct Spot ingress accepts a prior incarnation route for the current Ready object', async () => {
   let ingress:
     | ((
@@ -4088,6 +4142,42 @@ test('direct Spot route rematerializes an Instance Spot before dispatch', async 
   assert.deepEqual(events, ['configure', 'initialize', 'handle:8']);
 });
 
+test('Instance Close prevents a waiting materialization of the closed generation', async () => {
+  class TenantInstance implements ZLinkInstanceSpot {
+    declare readonly context: ZLinkInstanceSpotContext;
+  }
+  let ready = true;
+  let releaseStarted!: () => void;
+  const releasing = new Promise<void>((resolve) => (releaseStarted = resolve));
+  let finishRelease!: () => void;
+  const releaseFinished = new Promise<void>((resolve) => (finishRelease = resolve));
+  const manager = new DefaultZLinkSpotManager({
+    spotFactories: [],
+    instanceSpotFactories: new Map([['mesh-a', new Map([['TenantWorker', TenantInstance]])]]),
+    instanceSpotApplicationTargetProvider: () =>
+      ready ? { stableType: 'TenantWorker', objectGeneration: 8n } : undefined,
+    beginInstanceClosingAuthority: async () => ({ restoreReady: async () => undefined }),
+    releaseInstanceAuthority: async () => {
+      releaseStarted();
+      await releaseFinished;
+      ready = false;
+    }
+  });
+  await manager.materializeInstance('mesh-a', 'TenantWorker', 'tenant:closed-race', 8n);
+  const closing = manager.close('mesh-a', 'tenant:closed-race');
+  await releasing;
+  const rematerializing = manager.materializeInstance(
+    'mesh-a',
+    'TenantWorker',
+    'tenant:closed-race',
+    8n
+  );
+  finishRelease();
+  await closing;
+  await assert.rejects(rematerializing, /no longer has its Ready/);
+  assert.equal(manager.relocationActivations('mesh-a').length, 0);
+});
+
 test('Instance Spot activation dispatch rematerializes a missing application before the handler turn', async () => {
   const events: string[] = [];
   class FirstMessageHandler implements ZLinkSpotPacketHandler<
@@ -6006,6 +6096,16 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     await authorityRoutes.stop();
     backend.close();
   }
+});
+
+test('closed raw backend accepts a completed Instance Close notification', () => {
+  const backend = new ZLinkNodeRawMeshBackend(
+    'm6b-mesh',
+    'm6b-node',
+    new ZLinkNodeRawBindingPort()
+  );
+  backend.close();
+  assert.doesNotThrow(() => backend.completeClosedInstance('tenant:closed', 8n));
 });
 
 test('public SpotId call reaches production host Missing Instance placement without raw runtime access', async () => {

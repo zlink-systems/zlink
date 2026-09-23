@@ -540,6 +540,7 @@ export class DefaultZLinkSpotManager {
     objectGeneration: bigint,
     signal?: AbortSignal
   ): Promise<void> {
+    const readyTarget = this.options.instanceSpotApplicationTargetProvider?.(meshName, spotId);
     const existing = this.pendingInstanceMaterializations.get(
       instanceMaterializationKey(meshName, spotId, objectGeneration)
     );
@@ -549,7 +550,14 @@ export class DefaultZLinkSpotManager {
     }
     const release = await this.acquireInstanceActivation(meshName, signal);
     try {
-      await this.materializeInstanceCore(meshName, instanceType, spotId, objectGeneration, signal);
+      await this.materializeInstanceCore(
+        meshName,
+        instanceType,
+        spotId,
+        objectGeneration,
+        readyTarget?.objectGeneration === objectGeneration,
+        signal
+      );
     } finally {
       release();
     }
@@ -560,6 +568,7 @@ export class DefaultZLinkSpotManager {
     instanceType: string,
     spotId: RoutingId,
     objectGeneration: bigint,
+    requiresReadyTarget: boolean,
     signal?: AbortSignal
   ): Promise<void> {
     const factory = this.requireInstanceFactory(meshName, instanceType);
@@ -567,6 +576,16 @@ export class DefaultZLinkSpotManager {
     const materializationKey = instanceMaterializationKey(meshName, spotId, objectGeneration);
     const materializationPrefix = instanceMaterializationPrefix(meshName, spotId);
     for (;;) {
+      if (
+        requiresReadyTarget &&
+        this.options.instanceSpotApplicationTargetProvider?.(meshName, spotId)?.objectGeneration !==
+          objectGeneration
+      ) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.SpotGenerationStale,
+          `Instance Spot '${String(spotId)}' no longer has its Ready application target.`
+        );
+      }
       // A close seals admission before cleanup removes the activation. An
       // explicit Instance intent arriving at that boundary must wait for the
       // old resources to be released before materializing the replacement.

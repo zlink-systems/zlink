@@ -1062,6 +1062,10 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     );
   }
 
+  completeClosedInstance(spotId: string, objectGeneration: bigint): void {
+    this.stateful?.completeClosedInstance(spotId, objectGeneration);
+  }
+
   rememberSpotRoute(
     route: ServiceDirectSpotRouteFence,
     expectedCurrentRoute?: ServiceDirectSpotRouteFence | null
