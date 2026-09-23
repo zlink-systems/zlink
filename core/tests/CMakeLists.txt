@@ -1130,7 +1130,7 @@ if(UNIX)
   add_executable(hotpath_bench perf/hotpath_bench.cpp)
   target_link_libraries(
     hotpath_bench
-    libzlink-static ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
+    libzlink ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
   find_path(
     VALGRIND_INCLUDE_DIR
     valgrind/callgrind.h

@@ -195,15 +195,10 @@ if (NOT MSVC)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-tautological-constant-compare")
   endif()
 
-  # Thread-local storage in a shared library defaults to the general-dynamic
-  # model, so every access goes through a __tls_get_addr call. On the STREAM
-  # hot path that was 31.9 calls per message (3.4 % of all instructions).
-  # initial-exec resolves each access to a thread-pointer offset instead.
-  # The whole library needs 312 bytes of TLS (readelf -lW libzlink.so, PT_TLS
-  # memsz 0x138), and glibc reserves 1664 bytes of static TLS surplus for
-  # dlopened objects (measured on glibc 2.39: a module with 1664 bytes of
-  # initial-exec TLS still dlopens, 1792 does not), so the bindings that dlopen
-  # libzlink (python, node, java, dotnet) keep ample headroom.
+  # initial-exec avoids the 31.9 __tls_get_addr calls per STREAM message
+  # measured with the default shared-library TLS model. A late dlopen needs
+  # static TLS for the library and its dependencies, so large per-thread
+  # WebSocket secure PRNG storage is allocated outside the ELF TLS segment.
   check_cxx_compiler_flag("-ftls-model=initial-exec" CXX_HAS_TLS_MODEL_FLAG)
   if(CXX_HAS_TLS_MODEL_FLAG)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ftls-model=initial-exec")
@@ -1708,16 +1703,9 @@ if(ZLINK_BUILD_TESTS AND (NOT BUILD_SHARED OR NOT BUILD_STATIC))
     FATAL_ERROR
       "Core tests require BUILD_SHARED=ON and BUILD_STATIC=ON. Interface tests "
       "link the shared library, unit tests use non-IPO implementation objects, "
-      "and the hotpath benchmark retains the production static library. "
+      "and the hotpath benchmark links the production shared library. "
       "Enable both library targets, or disable tests with BUILD_TESTS=OFF and "
       "ZLINK_BUILD_TESTS=OFF.")
-endif()
-
-if(ZLINK_BUILD_TESTS)
-  add_compile_definitions(ZLINK_BUILD_TESTS=1)
-  foreach(target ${build_targets})
-    target_compile_definitions(${target} PRIVATE ZLINK_BUILD_TESTS=1)
-  endforeach()
 endif()
 
 if(ZLINK_BUILD_TESTS)
