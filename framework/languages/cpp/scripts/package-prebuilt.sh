@@ -152,6 +152,31 @@ class ZlinkBootstrap(ConanFile):
         for requirement in ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS:
             self.requires(requirement, transitive_headers=True, transitive_libs=True)
 ''', encoding='utf-8', newline='\n')
+# The archive ships these packages for consumers' own direct use (the Framework
+# configs' nlohmann_json, the samples' Boost.Asio and Bingo's Protobuf schema);
+# every other third-party library is embedded privately in the shared libraries.
+consumer = pathlib.Path(sys.argv[2]).parent / "consumer"
+consumer.mkdir(exist_ok=True)
+(consumer / "conanfile.py").write_text(f'''from conan import ConanFile
+import sys
+
+sys.path.insert(0, {str(recipe.parent)!r})
+from conanfile import ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS, ZlinkFrameworkConan
+
+CONSUMER_PACKAGES = ("nlohmann_json", "boost", "protobuf")
+
+class ZlinkConsumer(ConanFile):
+    name = "zlink-consumer"
+    version = "0"
+    settings = "os", "arch", "compiler", "build_type"
+    default_options = {{key: value for key, value in ZlinkFrameworkConan.default_options.items() if "/" in key}}
+    generators = "CMakeDeps"
+
+    def requirements(self):
+        for requirement in ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS:
+            if requirement.split("/")[0] in CONSUMER_PACKAGES:
+                self.requires(requirement)
+''', encoding='utf-8', newline='\n')
 PY
 
 compiler_args=()
@@ -316,9 +341,11 @@ then
   echo "run '$0 --update-lock --platform $platform' on $platform and commit both platform pin files" >&2
   exit 1
 fi
-# The shared Framework and staged Core configs retain their public compile/link
-# contracts for nlohmann_json and OpenSSL. Stage those development inputs so
-# consumers need only this archive on CMAKE_PREFIX_PATH.
+# Core's staged config resolves OpenSSL with CMake's FindOpenSSL module, so
+# OpenSSL is staged at the prefix root. The consumer packages are a Conan
+# deployment with relocatable CMakeDeps configs under <prefix>/cmake, a
+# location find_package searches for every CMAKE_PREFIX_PATH entry. Consumers
+# need only this archive on CMAKE_PREFIX_PATH.
 conan_package_folder() {
   local package_name="$1"
   local package_reference
@@ -344,22 +371,31 @@ PY
   package_folder_raw="$(conan cache path "$package_reference")"
   normalize_path "$package_folder_raw"
 }
-nlohmann_package_folder="$(conan_package_folder nlohmann_json)"
 openssl_package_folder="$(conan_package_folder openssl)"
-mkdir -p "$prefix/include" "$prefix/lib/cmake/nlohmann_json"
-cp -aL "$nlohmann_package_folder/include/." "$prefix/include/"
+mkdir -p "$prefix/include" "$prefix/lib"
 cp -aL "$openssl_package_folder/include/." "$prefix/include/"
 cp -aL "$openssl_package_folder/lib/." "$prefix/lib/"
-cat >"$prefix/lib/cmake/nlohmann_json/nlohmann_jsonConfig.cmake" <<'CMAKE'
-get_filename_component(_nlohmann_json_prefix
-  "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
-if(NOT TARGET nlohmann_json::nlohmann_json)
-  add_library(nlohmann_json::nlohmann_json INTERFACE IMPORTED)
-  set_target_properties(nlohmann_json::nlohmann_json PROPERTIES
-    INTERFACE_INCLUDE_DIRECTORIES "${_nlohmann_json_prefix}/include")
+conan install "$conan_dir/consumer" \
+  "--profile:host=$conan_profile" \
+  "--profile:build=$conan_profile" \
+  "--lockfile=$candidate_lockfile" \
+  --build=never \
+  --deployer=full_deploy \
+  --output-folder "$prefix/cmake"
+find "$prefix/cmake" -maxdepth 1 -type f \( -name '*.sh' -o -name '*.bat' -o -name '*.ps1' \) -delete
+# The recipe's protobuf::protoc searches PATH first, which suits a Conan build
+# environment but not a shipped prefix: the archive's protoc is the one that
+# matches its libprotobuf.
+for protoc_target in "$prefix"/cmake/full_deploy/host/protobuf/*/*/*/lib/cmake/protobuf/protobuf-conan-protoc-target.cmake; do
+  [[ -f "$protoc_target" ]] || { echo "missing deployed protobuf protoc target" >&2; exit 1; }
+  cat >"$protoc_target" <<'CMAKE'
+if(NOT TARGET protobuf::protoc)
+  add_executable(protobuf::protoc IMPORTED)
+  set_property(TARGET protobuf::protoc PROPERTY IMPORTED_LOCATION
+    "${CMAKE_CURRENT_LIST_DIR}/../../../bin/protoc${CMAKE_EXECUTABLE_SUFFIX}")
 endif()
-unset(_nlohmann_json_prefix)
 CMAKE
+done
 
 # Preserve the Core archive's relative library symlinks as part of its runtime
 # closure. Core release packaging owns making those links relocatable.
@@ -381,14 +417,14 @@ cmake -S "$source_dir" -B "$build_dir" -G Ninja \
   -DZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS=OFF \
   -DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=OFF \
   -DZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=OFF \
-  -DZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT=OFF \
+  -DZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT=ON \
   -DZLINK_STREAM_CONNECTOR_BUILD_UNREAL=OFF \
   -DZLINK_STREAM_CONNECTOR_BUILD_GODOT=OFF \
   -DZLINK_STREAM_CONNECTOR_BUILD_AXMOL=OFF
 cmake --build "$build_dir" --parallel 8
 cmake --install "$build_dir"
 
-libraries=(zlink_framework zlink_http_client zlink_stream_connector)
+libraries=(zlink_framework zlink_framework_locations_redis zlink_http_client zlink_stream_connector)
 case "$platform" in
   linux-*)
     for library in "${libraries[@]}"; do
@@ -398,7 +434,7 @@ case "$platform" in
       grep -Eq ' (_ZN5zlink|_ZTVN5zlink|_ZTIN5zlink|_ZTSN5zlink)' <<<"$exports" || {
         echo "no zlink C++ exports found in $library" >&2; exit 1;
       }
-      if grep -Eq ' (_ZN5boost|_ZN6google8protobuf|_ZN4absl|_ZN13opentelemetry)' <<<"$exports"; then
+      if grep -Eq ' (_ZN5boost|_ZN6google8protobuf|_ZN4absl|_ZN13opentelemetry|_ZN2sw5redis|redis[A-Z]|uv_[a-z])' <<<"$exports"; then
         echo "third-party dynamic export found in $library" >&2; exit 1
       fi
       "$python_command" "$source_dir/scripts/verify-apple-exports.py" \
@@ -450,7 +486,7 @@ case "$platform" in
       }
     }
     for library in "${libraries[@]}"; do
-      binary="$(find "$prefix/lib" -maxdepth 1 -type f -name "lib${library}*.dylib" | head -n1)"
+      binary="$(find "$prefix/lib" -maxdepth 1 -type f -name "lib${library}.*dylib" | head -n1)"
       [[ -n "$binary" ]] || { echo "missing shared library: lib${library}.dylib" >&2; exit 1; }
       install_name="$(otool -D "$binary" | tail -n +2 | head -n1)"
       verify_macos_relative_reference "$binary" "install name" "$install_name"
@@ -458,7 +494,7 @@ case "$platform" in
       grep -Eq ' (__ZN5zlink|__ZTVN5zlink|__ZTIN5zlink|__ZTSN5zlink)' <<<"$exports" || {
         echo "no zlink C++ exports found in $library" >&2; exit 1;
       }
-      if grep -Eq ' (__ZN5boost|__ZN6google8protobuf|__ZN4absl|__ZN13opentelemetry)' <<<"$exports"; then
+      if grep -Eq ' (__ZN5boost|__ZN6google8protobuf|__ZN4absl|__ZN13opentelemetry|__ZN2sw5redis|_redis[A-Z]|_uv_[a-z])' <<<"$exports"; then
         echo "third-party dynamic export found in $library" >&2; exit 1
       fi
     done
@@ -479,7 +515,8 @@ case "$platform" in
       [[ -f "$binary" ]] || { echo "missing shared library: $binary" >&2; exit 1; }
       exports="$(MSYS2_ARG_CONV_EXCL=/EXPORTS dumpbin /EXPORTS "$(cygpath -w "$binary")")"
       grep -Eq '\?[^ ]*@zlink@@' <<<"$exports" || { echo "no zlink C++ exports found in $library" >&2; exit 1; }
-      if grep -Eiq 'boost|protobuf|absl|opentelemetry' <<<"$exports"; then
+      if grep -Eiq 'boost|protobuf|absl|opentelemetry|@sw@@' <<<"$exports" ||
+        grep -Eq '(^|[^A-Za-z0-9_])(redis[A-Z]|uv_[a-z])' <<<"$exports"; then
         echo "third-party dynamic export found in $library" >&2; exit 1
       fi
     done
@@ -507,6 +544,26 @@ case "$platform" in
     done < <(find "$prefix/bin" -maxdepth 1 -type f -iname '*.dll' -print)
     ;;
 esac
+
+# The Framework configs' consumer dependencies are exactly zlink, zlink_cpp,
+# Threads and nlohmann_json (plus each other), and no exported target links a
+# third-party library the shared libraries embed.
+for config in "$prefix"/lib/cmake/zlink_framework*/*Config.cmake \
+    "$prefix"/lib/cmake/zlink_http_client_cpp/*Config.cmake \
+    "$prefix"/lib/cmake/zlink_stream_connector_cpp/*Config.cmake; do
+  while IFS= read -r dependency; do
+    case "$dependency" in
+      zlink|zlink_cpp|Threads|nlohmann_json|zlink_framework_cpp|zlink_http_client_cpp|zlink_stream_connector_cpp) ;;
+      *) echo "unexpected consumer dependency $dependency in $(basename "$config")" >&2; exit 1 ;;
+    esac
+  done < <(sed -n 's/^[[:space:]]*find_dependency(\([^ )]*\).*/\1/p' "$config")
+done
+embedded_target_pattern='(redis\+\+|hiredis|libuv|opentelemetry-cpp|lz4|Boost|absl)::'
+if grep -Eq "$embedded_target_pattern" "$prefix"/lib/cmake/zlink_*/*Targets*.cmake; then
+  grep -En "$embedded_target_pattern" "$prefix"/lib/cmake/zlink_*/*Targets*.cmake >&2
+  echo "an exported Framework target links an embedded third-party library" >&2
+  exit 1
+fi
 
 archive="$output_dir/zlink-framework-cpp-$version-$platform.tar.gz"
 source_date_epoch="${SOURCE_DATE_EPOCH:-0}"

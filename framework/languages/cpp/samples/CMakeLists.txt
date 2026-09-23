@@ -12,6 +12,7 @@ project(ZlinkSamplesCpp LANGUAGES C CXX)
 set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
 find_package(zlink CONFIG REQUIRED)
 find_package(zlink_framework CONFIG REQUIRED)
+find_package(Boost CONFIG REQUIRED)
 set(ZLINK_FRAMEWORK_CPP_SAMPLES_PACKAGE_MODE ON)
 message(STATUS "Zlink sample package mode: ${ZLINK_FRAMEWORK_CPP_SAMPLES_PACKAGE_MODE}")
 
