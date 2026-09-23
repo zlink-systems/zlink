@@ -502,8 +502,11 @@ npm start
 ```
 connected: true
 round trip: 6ms          # STREAM request/reply
+actor bound: p1
 bound player: p1         # 연결을 player에 묶는다
-pushed: speedy           # player가 그 연결로 밀어 준다
+actor handle: p1
+pushed: speedy, actor: p1           # player가 그 연결로 밀어 준다
+actor unbound: p1
 ```
 
 `pushed`는 client가 nickname 변경 요청의 응답이 아닌 **player가 연결로 보낸 알림**을 받았음을 나타낸다.

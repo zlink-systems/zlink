@@ -41,6 +41,14 @@ async function main(): Promise<void> {
   // --8<-- [end:stream-client]
 
   // --8<-- [start:session-actor-client]
+  // --8<-- [start:actor-handle-events]
+  const boundNotice = connector.onActorBound((actor) => {
+    console.log(`actor bound: ${actor.actorId}`);
+  });
+  const unboundNotice = connector.onActorUnbound((actor) => {
+    console.log(`actor unbound: ${actor.actorId}`);
+  });
+  // --8<-- [end:actor-handle-events]
   // Binds this connection to a player. Until then the server has no player to
   // forward packets to.
   const authenticated = await connector
@@ -50,6 +58,12 @@ async function main(): Promise<void> {
 
   console.log(`bound player: ${authenticated.playerId}`);
 
+  // --8<-- [start:actor-handle-send]
+  const player = connector.actor(authenticated.playerId);
+  if (!player) throw new Error('Player Actor was not bound');
+  console.log(`actor handle: ${player.actorId}`);
+  // --8<-- [end:actor-handle-send]
+
   // Arrange to receive the push before sending, so a fast server cannot answer
   // before the client is listening.
   const changed = connector
@@ -57,15 +71,21 @@ async function main(): Promise<void> {
     .timeout(5_000)
     .submit();
 
-  // No session handler matches this packet, so the session relays it to the
-  // bound player, whose handler pushes the result back over this same
-  // connection.
-  await connector.send(new ChangeNickname('speedy')).submit();
+  // The handle addresses this player directly. Its handler pushes the result
+  // back over the same connection.
+  // --8<-- [start:actor-handle-send-call]
+  await player.send(new ChangeNickname('speedy')).submit();
+  // --8<-- [end:actor-handle-send-call]
 
-  console.log(`pushed: ${(await changed).payload.nickname}`);
+  // --8<-- [start:actor-handle-receive]
+  const pushed = await changed;
+  console.log(`pushed: ${pushed.payload.nickname}, actor: ${pushed.actorId}`);
+  // --8<-- [end:actor-handle-receive]
   // --8<-- [end:session-actor-client]
 
   await connector.close();
+  boundNotice.dispose();
+  unboundNotice.dispose();
 }
 
 main().catch((error: unknown) => {
