@@ -1931,22 +1931,17 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
               location_options_at_startup.session_relocation_seal_timeout);
             node->configure_actor_route_resolver (
               [&actor_resolver] (const actor_ref_t &actor) -> std::optional<spot_address_t> {
-                  try {
-                      const auto resolved =
-                        actor_resolver
-                          .resolve_actor_address (std::string (actor.actor_id ().value ()))
-                          .result ();
-                      if (!resolved || !resolved.value ())
-                          return std::nullopt;
-                      const auto &address = *resolved.value ();
-                      if (address.authority_owner_generation == 0
-                          || address.owner.lease_generation <= 0)
-                          return std::nullopt;
-                      return address;
-                  }
-                  catch (...) {
+                  const auto resolved =
+                    actor_resolver.resolve_actor_address (std::string (actor.actor_id ().value ()))
+                      .result ()
+                      .value ();
+                  if (!resolved)
                       return std::nullopt;
-                  }
+                  const auto &address = *resolved;
+                  if (address.authority_owner_generation == 0
+                      || address.owner.lease_generation <= 0)
+                      return std::nullopt;
+                  return address;
               },
               [&actor_resolver] (const protocol::actor_route_fence_t &source) {
                   const auto expected =
