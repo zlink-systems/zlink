@@ -2,6 +2,8 @@
 
 #include <zlink/locations/redis.hpp>
 
+#include <sw/redis++/redis++.h>
+
 #include <gtest/gtest.h>
 
 namespace

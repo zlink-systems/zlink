@@ -21,6 +21,25 @@
 #define BlueprintType
 #define BlueprintCallable
 #define BlueprintAssignable
+#define BlueprintReadOnly
+#define DECLARE_DYNAMIC_DELEGATE_OneParam(Name, ParamType, ParamName)                              \
+    class Name                                                                                     \
+    {                                                                                              \
+      public:                                                                                      \
+        template <typename CallbackT> void BindLambda (CallbackT callback)                         \
+        {                                                                                          \
+            Function = callback;                                                                   \
+        }                                                                                          \
+        void ExecuteIfBound (ParamType value) const                                                \
+        {                                                                                          \
+            if (Function) {                                                                        \
+                Function (value);                                                                  \
+            }                                                                                      \
+        }                                                                                          \
+                                                                                                   \
+      private:                                                                                     \
+        std::function<void (ParamType)> Function;                                                  \
+    }
 #define DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(Name, ParamType, ParamName)                    \
     class Name                                                                                     \
     {                                                                                              \
@@ -75,6 +94,8 @@ using FName = std::string;
 using uint8 = std::uint8_t;
 template <typename T> using TArray = std::vector<T>;
 template <typename K, typename V> using TMap = std::map<K, V>;
+template <typename Signature> using TFunction = std::function<Signature>;
+using int32 = std::int32_t;
 #endif
 
 #if __has_include("CoreMinimal.h")
@@ -126,18 +147,35 @@ struct FZLinkStreamSendOptions
     bool bCompress = false;
 };
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam (FZLinkStreamPacketReceived,
-                                             FZLinkStreamPacket,
-                                             Packet);
+USTRUCT (BlueprintType)
+struct FZLinkStreamSubscriptionHandle
+{
+    GENERATED_BODY ()
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam (FZLinkStreamRequestCompleted,
-                                             FZLinkStreamPacket,
-                                             Packet);
+    UPROPERTY (BlueprintReadOnly, Category = "ZLink")
+    int32 Id = 0;
+};
 
-DECLARE_MULTICAST_DELEGATE_OneParam (FZLinkStreamPacketReceivedNative, const FZLinkStreamPacket &);
+USTRUCT (BlueprintType)
+struct FZLinkStreamRequestResult
+{
+    GENERATED_BODY ()
 
-DECLARE_MULTICAST_DELEGATE_OneParam (FZLinkStreamRequestCompletedNative,
-                                     const FZLinkStreamPacket &);
+    UPROPERTY (BlueprintReadOnly, Category = "ZLink")
+    bool bSuccess = false;
+
+    UPROPERTY (BlueprintReadOnly, Category = "ZLink")
+    FZLinkStreamPacket Packet;
+
+    UPROPERTY (BlueprintReadOnly, Category = "ZLink")
+    int32 ErrorCode = 0;
+
+    UPROPERTY (BlueprintReadOnly, Category = "ZLink")
+    FString ErrorMessage;
+};
+
+DECLARE_DYNAMIC_DELEGATE_OneParam (FZLinkStreamPacketDelegate, FZLinkStreamPacket, Packet);
+DECLARE_DYNAMIC_DELEGATE_OneParam (FZLinkStreamRequestDelegate, FZLinkStreamRequestResult, Result);
 
 namespace UE::ZLinkStreamConnector::Private
 {
@@ -160,7 +198,13 @@ class UZLinkStreamConnector : public UObject
     void Close ();
 
     UFUNCTION (BlueprintCallable, Category = "ZLink")
-    void Subscribe (FName PacketName);
+    FZLinkStreamSubscriptionHandle On (FName PacketName, FZLinkStreamPacketDelegate Delegate);
+
+    FZLinkStreamSubscriptionHandle On (FName PacketName,
+                                       TFunction<void (const FZLinkStreamPacket &)> Callback);
+
+    UFUNCTION (BlueprintCallable, Category = "ZLink")
+    void Unsubscribe (FZLinkStreamSubscriptionHandle Handle);
 
     UFUNCTION (BlueprintCallable, Category = "ZLink")
     void SendJson (FName PacketName, const FString &JsonPayload);
@@ -171,13 +215,28 @@ class UZLinkStreamConnector : public UObject
                               const FZLinkStreamSendOptions &Options);
 
     UFUNCTION (BlueprintCallable, Category = "ZLink")
-    void RequestJson (FName PacketName, const FString &JsonPayload, float TimeoutSeconds);
+    void RequestJson (FName PacketName,
+                      const FString &JsonPayload,
+                      float TimeoutSeconds,
+                      FZLinkStreamRequestDelegate OnCompleted);
+
+    void RequestJson (FName PacketName,
+                      const FString &JsonPayload,
+                      float TimeoutSeconds,
+                      TFunction<void (const FZLinkStreamRequestResult &)> OnCompleted);
 
     UFUNCTION (BlueprintCallable, Category = "ZLink")
     void RequestJsonWithOptions (FName PacketName,
                                  const FString &JsonPayload,
                                  float TimeoutSeconds,
-                                 const FZLinkStreamSendOptions &Options);
+                                 const FZLinkStreamSendOptions &Options,
+                                 FZLinkStreamRequestDelegate OnCompleted);
+
+    void RequestJsonWithOptions (FName PacketName,
+                                 const FString &JsonPayload,
+                                 float TimeoutSeconds,
+                                 const FZLinkStreamSendOptions &Options,
+                                 TFunction<void (const FZLinkStreamRequestResult &)> OnCompleted);
 
     UFUNCTION (BlueprintCallable, Category = "ZLink")
     void Dispatch ();
@@ -200,15 +259,6 @@ class UZLinkStreamConnector : public UObject
 
     UPROPERTY (BlueprintAssignable, Category = "ZLink")
     FZLinkStreamConnectionStateChanged OnConnectionStateChanged;
-
-    UPROPERTY (BlueprintAssignable, Category = "ZLink")
-    FZLinkStreamPacketReceived OnPacketReceived;
-
-    UPROPERTY (BlueprintAssignable, Category = "ZLink")
-    FZLinkStreamRequestCompleted OnRequestCompleted;
-
-    FZLinkStreamPacketReceivedNative OnPacketReceivedNative;
-    FZLinkStreamRequestCompletedNative OnRequestCompletedNative;
 
   private:
     std::unique_ptr<UE::ZLinkStreamConnector::Private::FZLinkStreamConnectorRuntime> _runtime;

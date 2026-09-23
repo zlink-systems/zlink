@@ -77,41 +77,74 @@ int main ()
           .message (frame (zlink::stream_connector::message_kind_t::response,
                            *request.value ().request_seq, "", "{}"))
           .submit ();
+        zlink::received_t ignored;
+        server.recv (ignored);
         incoming.close ();
     });
 
     UZLinkStreamConnector connector;
     std::vector<std::string> pushed_names;
-    std::vector<std::string> request_names;
-    connector.OnPacketReceivedNative.AddLambda (
-      [&] (const FZLinkStreamPacket &packet) { pushed_names.push_back (packet.PacketName); });
-    connector.OnRequestCompletedNative.AddLambda (
-      [&] (const FZLinkStreamPacket &packet) { request_names.push_back (packet.PacketName); });
-    connector.Subscribe ("chat.notify");
+    std::vector<std::string> other_names;
+    std::vector<FZLinkStreamRequestResult> replies;
+    std::vector<FZLinkStreamRequestResult> failures;
+    FZLinkStreamSubscriptionHandle push_handle;
+    push_handle = connector.On ("chat.notify", [&] (const FZLinkStreamPacket &packet) {
+        pushed_names.push_back (packet.PacketName);
+        connector.Unsubscribe (push_handle);
+    });
+    auto other_handle = connector.On ("other.notify", [&] (const FZLinkStreamPacket &packet) {
+        other_names.push_back (packet.PacketName);
+    });
     connector.Connect (server.options ().last_endpoint ());
     if (!connector.IsConnected ()) {
         sender.join ();
         std::cerr << "connect failed\n";
         return 1;
     }
-    connector.RequestJson ("chat.request", "{}", 2.0f);
+    connector.RequestJson (
+      "chat.request", "{}", 2.0f,
+      [&] (const FZLinkStreamRequestResult &result) { replies.push_back (result); });
+    connector.RequestJson (
+      "chat.failure", "{}", 0.01f,
+      [&] (const FZLinkStreamRequestResult &result) { failures.push_back (result); });
     sender.join ();
-    if (!pushed_names.empty () || !request_names.empty ()) {
+    connector.Unsubscribe (other_handle);
+    if (!pushed_names.empty () || !replies.empty () || !failures.empty ()) {
         std::cerr << "callback ran before dispatch\n";
         return 2;
     }
-    for (int i = 0; i < 100 && (pushed_names.empty () || request_names.empty ()); ++i) {
+    for (int i = 0; i < 300 && (pushed_names.empty () || replies.empty () || failures.empty ());
+         ++i) {
         connector.Dispatch ();
         std::this_thread::sleep_for (std::chrono::milliseconds (1));
     }
     connector.Close ();
-    if (pushed_names != std::vector<std::string>{"chat.notify"}) {
-        std::cerr << "subscribed push missing or unsubscribed push delivered\n";
+    if (pushed_names != std::vector<std::string>{"chat.notify"} || !other_names.empty ()) {
+        std::cerr << "named push routing failed\n";
         return 3;
     }
-    if (request_names != std::vector<std::string>{"chat.request"}) {
-        std::cerr << "request completion lost request name\n";
+    if (replies.size () != 1 || !replies.front ().bSuccess
+        || replies.front ().Packet.Payload != std::vector<std::uint8_t>{'{', '}'}) {
+        std::cerr << "request reply callback failed: count=" << replies.size ();
+        if (!replies.empty ()) {
+            std::cerr << " success=" << replies.front ().bSuccess
+                      << " name=" << replies.front ().Packet.PacketName
+                      << " payload-size=" << replies.front ().Packet.Payload.size ()
+                      << " error=" << replies.front ().ErrorMessage;
+        }
+        std::cerr << '\n';
         return 4;
+    }
+    if (failures.size () != 1 || failures.front ().bSuccess
+        || failures.front ().ErrorMessage.empty ()) {
+        std::cerr << "request failure callback failed: count=" << failures.size ();
+        if (!failures.empty ()) {
+            std::cerr << " success=" << failures.front ().bSuccess
+                      << " code=" << failures.front ().ErrorCode
+                      << " error=" << failures.front ().ErrorMessage;
+        }
+        std::cerr << '\n';
+        return 5;
     }
     return 0;
 }
