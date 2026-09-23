@@ -127,11 +127,14 @@ jobs:
       - name: Export the examples trees at this ref
         run: python3 scripts/tutorial/export_examples.py .artifacts/examples "${{ needs.resolve.outputs.ref }}"
 
-      - name: Stage Axmol's public connector header for its source check
+      - name: Stage Axmol's public connector headers for its source check
         run: |
-          mkdir -p .artifacts/examples/cpp/connector/engines/axmol/include
+          mkdir -p .artifacts/examples/cpp/connector/engines/axmol/include \
+            .artifacts/examples/cpp/connector/core/include/zlink/stream_connector/contracts
           cp framework/languages/cpp/connector/engines/axmol/include/zlink_axmol_stream_connector.hpp \
             .artifacts/examples/cpp/connector/engines/axmol/include/
+          cp framework/languages/cpp/connector/core/include/zlink/stream_connector/contracts/zlink_stream_enums.hpp \
+            .artifacts/examples/cpp/connector/core/include/zlink/stream_connector/contracts/
 
       - name: Verify language and engine trees and no repo-only file leaked in
         run: |
@@ -693,7 +696,8 @@ jobs:
         run: |
           g++-13 -std=c++20 -Wall -Wextra -Werror -fsyntax-only \
             -I Validation -I Source \
-            -I ../../cpp/connector/engines/axmol/include \
+            -I ../cpp/connector/engines/axmol/include \
+            -I ../cpp/connector/core/include \
             Validation/ProtocolCompileCheck.cpp
 
   java-linux:
