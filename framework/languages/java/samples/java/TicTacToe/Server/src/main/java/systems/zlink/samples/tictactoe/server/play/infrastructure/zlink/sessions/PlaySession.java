@@ -35,10 +35,12 @@ public final class PlaySession implements ZLinkSession {
 
     @Override
     public CompletionStage<Void> onDisconnected() {
+        // --8<-- [start:session-disconnect-notify]
         return CompletableFuture.allOf(
                 context.actors().bound().stream()
                         .map(actor -> actor.notifyDisconnected().toCompletableFuture())
                         .toArray(CompletableFuture[]::new));
+        // --8<-- [end:session-disconnect-notify]
     }
 
     @Override

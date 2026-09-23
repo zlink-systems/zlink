@@ -103,6 +103,7 @@ class DeliveryDispatchClientScenario {
                     .within(Duration.ofSeconds(1))
                     .await()
             }
+        // --8<-- [start:doc-e2e-sequence]
         val statuses =
             async(start = CoroutineStart.UNDISPATCHED) {
                 customer
@@ -123,6 +124,7 @@ class DeliveryDispatchClientScenario {
                     }
                     .await()
             }
+        // --8<-- [end:doc-e2e-sequence]
 
         val subscribed =
             customer.request(SubscribeDeliveryReq(deliveryId)).awaitReply<SubscribeDeliveryRes>()

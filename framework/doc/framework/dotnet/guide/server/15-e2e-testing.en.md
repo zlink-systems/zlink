@@ -35,16 +35,7 @@ open a socket, assemble frames, and wait for a response for every scenario. ZLin
 that work. **The client library your real users use is itself the verification tool.** An
 E2E test comes down to just this much code.
 
-```csharp
-// A real connection
-await client.Connect.Async(ct);
-// A real request
-var auth = await client.Request(new AuthenticateReq(actorId))
-    .Async<AuthenticateRes>(ct);
-// Confirms a real push arrived
-var push = await other.WaitFor<PlayerJoinedNotify>().Async(ct);
-ZlinkStreamAssert.Ensure(push.Payload.ActorId == auth.Player.ActorId, "join push actor mismatch.");
-```
+--8<-- "framework/languages/dotnet/samples/TicTacToe/Client/TicTacToeClientScenario.cs:doc-e2e-connect-request"
 
 Because **the connector itself provides the wait functions verification needs**, like
 `WaitFor`, you don't implement a separate test harness. Every sample in this repository is
@@ -68,29 +59,7 @@ The two libraries used for verification don't overlap in role.
 Most scenarios chain the two together — create a target over HTTP, then connect to STREAM
 using the endpoint returned in that response.
 
-```csharp
-using Zlink.HttpClient;
-using Systems.Zlink.Stream.Connector.Contracts;
-
-// Step 1 -- create a room through the gateway API.
-using var api = ZLinkHttpClient.Create(options.ApiUrl.ToString())
-    .Timeout(options.HttpTimeout)
-    .Build();
-var room = await api.Post("/games")
-    .Body(new CreateGameHttpReq(options.GameName))
-    // Fetch returns the deserialized body as-is.
-    .Fetch<CreateGameHttpRes>(ct);
-
-// Step 2 -- open a real-time connection to the endpoint the response gave us.
-await using var client = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-{
-    Endpoint = new Uri(room.PlayEndpoints[0]),
-    ConnectTimeout = options.StreamTimeout,
-    RequestTimeout = options.StreamTimeout,
-    // Console scenarios use the automatic pump.
-    DispatchMode = ZlinkStreamDispatchMode.Immediate
-});
-```
+--8<-- "framework/languages/dotnet/samples/TicTacToe/Client/TicTacToeClientScenario.cs:doc-e2e-create-room"
 
 When `DispatchMode` is `Immediate`, the connector handles receiving on its own, so the
 scenario code never runs a separate pump. Environments that must pump manually to match a
@@ -127,91 +96,42 @@ failure the scenario ends with an exception carrying that message.
 Specify a condition with `Where(...)` to **wait for the first message matching that
 condition.** Other, nonmatching pushes may arrive without affecting the scenario.
 
-```csharp
-var joined = await client1.WaitFor<PlayerJoinedNotify>()
-    .Where(message => message.Payload.ActorId == options.OActorId)
-    .Async(ct);
-ZlinkStreamAssert.Ensure(joined.Payload.Mark == TicTacToeMarks.O, "joined mark mismatch.");
-```
+--8<-- "framework/languages/dotnet/samples/TicTacToe/Client/TicTacToeClientScenario.cs:doc-e2e-wait-filter"
 
 ### 3.2 Confirming a Push Doesn't Arrive
 
 You can't confirm something never arrives without an observation window, so `Within(...)`
 must be specified. Omitting it is an error.
 
-```csharp
-// The player who just joined shouldn't receive their own join notification.
-await client2.ExpectNone<PlayerJoinedNotify>()
-    .Within(TimeSpan.FromMilliseconds(250))
-    .Async(ct);
-```
+--8<-- "framework/languages/dotnet/samples/TicTacToe/Client/TicTacToeClientScenario.cs:doc-e2e-expect-none"
 
 ### 3.3 Confirming Push Order
 
 In a flow where state changes in stages, the contract isn't whether something arrives but
 its **order.**
 
-```csharp
-var statusSequence = await customer.WaitForSequence<DeliveryStatusNotify>()
-    .Expect(message => message.Payload is { DeliveryId: var id, Status: DeliveryStatus.Assigned }
-                       && id == deliveryId)
-    .Expect(message => message.Payload is { DeliveryId: var id, Status: DeliveryStatus.Accepted }
-                       && id == deliveryId)
-    .Expect(message => message.Payload is { DeliveryId: var id, Status: DeliveryStatus.PickedUp }
-                       && id == deliveryId)
-    .Expect(message => message.Payload is { DeliveryId: var id, Status: DeliveryStatus.Delivered }
-                       && id == deliveryId)
-    .Timeout(customer.Options.WaitTimeout)
-    .Async(ct);
-```
+--8<-- "framework/languages/dotnet/samples/DeliveryDispatch/Client/DeliveryDispatchClientScenario.cs:doc-e2e-sequence"
 
 ### 3.4 Confirming a Request Fails
 
 Whether a request with no permission or an out-of-order request **gets rejected** is also
 part of the contract. Verifying only the success path leaves this path unverified.
 
-```csharp
-// Can't open a conversation before authenticating.
-await ZlinkStreamAssert.ExpectFailureAsync(
-    async ct => _ = await agent.Request(new OpenConversationReq("unauthenticated"))
-        .Async<OpenConversationRes>(ct),
-    nameof(ZlinkStreamErrorCode.RemoteError));
-```
+--8<-- "framework/languages/dotnet/samples/SupportChat/Client/SupportChatClientScenario.cs:doc-e2e-failure"
 
 ## 4. How to Handle Waiting for a Message
 
 Most E2E flakiness has the same cause. **You act first, then start waiting**, and miss a
 push that arrived in between.
 
-Reverse the order. Register the wait first, then run the action that triggers that push.
-
-```csharp
-// Register the wait first -- don't await it yet.
-var statusSequenceTask = customer.WaitForSequence<DeliveryStatusNotify>()
-    .Expect(message => message.Payload is { DeliveryId: var id, Status: DeliveryStatus.Assigned }
-                       && id == deliveryId)
-    .Timeout(customer.Options.WaitTimeout)
-    .Async(ct).AsTask();
-
-// Then run the action that triggers the push.
-var created = await http.Post("/deliveries")
-    .Body(new CreateDeliveryReq(deliveryId, "customer-1", "Kitchen 12", "Customer Lobby"))
-    .Fetch<CreateDeliveryRes>(ct);
-
-// Receive the result last.
-var statusSequence = await statusSequenceTask;
-```
+Reverse the order. Register the wait first, then run the action that triggers that push. The
+`WaitForSequence` registration in [Confirming Push Order](#33-confirming-push-order) is
+exactly this order — the wait is built first, and the request is sent afterward.
 
 If multiple clients need to confirm the same event, register a wait for each and receive
 them together with `Task.WhenAll`.
 
-```csharp
-// Bingo -- once both players have joined the room starts, and both clients get the same push.
-var client1StartedTask = client1.WaitFor<BingoGameStartedNotify>().Async(ct).AsTask();
-var client2StartedTask = client2.WaitFor<BingoGameStartedNotify>().Async(ct).AsTask();
-
-await Task.WhenAll(client1StartedTask, client2StartedTask);
-```
+--8<-- "framework/languages/dotnet/samples/Bingo/Client/BingoClientScenario.cs:doc-e2e-multi-wait"
 
 Don't use `Sleep` to line up timing. Express every wait through the timeout on
 `WaitFor`/`ExpectNone`/`WaitForSequence`. `Sleep` fails on slow hardware and wastes time on
@@ -223,69 +143,7 @@ The `TicTacToe` sample is the shortest. Create a room over HTTP → both players
 authenticate → confirm the join push → make a move → confirm the opponent observes that
 move, in that order.
 
-```csharp
-public async ValueTask RunAsync(TicTacToeClientOptions options, CancellationToken ct = default)
-{
-    // 1. Create a room through the gateway API and get the endpoint to connect to.
-    using var api = ZLinkHttpClient.Create(options.ApiUrl.ToString())
-        .Timeout(options.HttpTimeout)
-        .Build();
-    var room = await api.Post("/games")
-        .Body(new CreateGameHttpReq(options.GameName))
-        .Fetch<CreateGameHttpRes>(ct);
-    ZlinkStreamAssert.Ensure(room.PlayEndpoints.Count >= 2, "play endpoints are missing.");
-
-    // 2. Connect the two players to different Play nodes -- this verifies routing between nodes.
-    await using var client1 = CreateStreamClient(room.PlayEndpoints[0], options, "host", logger);
-    await using var client2 = CreateStreamClient(room.PlayEndpoints[1], options, "guest", logger);
-
-    // 3. Whoever connects first authenticates and enters the empty room.
-    await client1.Connect.Async(ct);
-    var auth1 = await client1.Request(new AuthenticateReq(options.XActorId)).Async<AuthenticateRes>(ct);
-    ZlinkStreamAssert.Ensure(auth1.Player.ActorId == options.XActorId, "player x actor id mismatch.");
-
-    // Register wait -> send -> receive (see §3)
-    var join1 = await JoinGameAsync(client1, room.RoomId, ct);
-    ZlinkStreamAssert.Ensure(join1.State.Status == TicTacToeGameStatuses.WaitingForPlayers,
-        "room should wait for the second player.");
-
-    // Being alone in the room, their own join notification shouldn't come back to them.
-    await client1.ExpectNone<PlayerJoinedNotify>()
-        .Within(TimeSpan.FromMilliseconds(250))
-        .Async(ct);
-
-    // 4. Once the second player joins, the room starts and a push reaches the first player.
-    await client2.Connect.Async(ct);
-    await client2.Request(new AuthenticateReq(options.OActorId)).Async<AuthenticateRes>(ct);
-
-    var join2 = await JoinGameAsync(client2, room.RoomId, ct);
-    ZlinkStreamAssert.Ensure(join2.State.Status == TicTacToeGameStatuses.InProgress,
-        "room should start with two players.");
-
-    var sawJoin = await client1.WaitFor<PlayerJoinedNotify>()
-        .Where(message => message.Payload.ActorId == options.OActorId)
-        .Async(ct);
-    ZlinkStreamAssert.Ensure(sawJoin.Payload.Mark == TicTacToeMarks.O, "second player should take O.");
-
-    // 5. Making a move -- the response and the push delivered to the opponent should point to the same state.
-    var move = await client1.Request(new PlaceMarkReq(0)).Async<PlaceMarkRes>(ct);
-    ZlinkStreamAssert.Ensure(move.State.Board == "X........", "board state mismatch after the first move.");
-
-    var sawMove = await client2.WaitFor<GameStateNotify>()
-        .Where(message => message.Payload.State.LastMoveCell == 0)
-        .Async(ct);
-    ZlinkStreamAssert.Ensure(sawMove.Payload.State.Board == move.State.Board, "board state mismatch.");
-}
-
-// The join completion arrives as a client push -- register the wait before the one-way send.
-private static async ValueTask<JoinGameNotify> JoinGameAsync(
-    IZlinkStreamConnector connector, string roomId, CancellationToken ct)
-{
-    var completion = connector.WaitFor<JoinGameNotify>().Async(ct);
-    await connector.Send(new JoinGameMsg(roomId)).Async(ct);
-    return (await completion).Payload;
-}
-```
+--8<-- "framework/languages/dotnet/samples/TicTacToe/Client/TicTacToeClientScenario.cs:doc-e2e-scenario"
 
 **Choose verification points by this rule.** Don't just check a request's own response —
 also check *whether another client observes the same fact.* Making **the result that
@@ -303,11 +161,7 @@ client can't confirm.
 - **Two connected to different nodes** — whether routing and location resolution between
   nodes actually work
 
-```csharp
-await using var client1  = CreateStreamClient(room.PlayEndpoints[0], options, "host", logger);
-await using var client2  = CreateStreamClient(room.PlayEndpoints[1], options, "guest", logger);
-await using var observer = CreateStreamClient(room.PlayEndpoints[1], options, "observer", logger);
-```
+--8<-- "framework/languages/dotnet/samples/TicTacToe/Client/TicTacToeClientScenario.cs:doc-e2e-multi-client"
 
 The `Bingo` sample uses this composition as-is — it brings together two players and one
 spectator, and even confirms the win notification is delivered only to the spectator.

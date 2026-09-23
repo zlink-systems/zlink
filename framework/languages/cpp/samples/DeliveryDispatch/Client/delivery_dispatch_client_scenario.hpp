@@ -116,6 +116,7 @@ class delivery_dispatch_client_scenario_t
         ensure (subscribed && subscribed.value ().delivery_id == delivery_id,
                 "delivery-success subscription failed");
         auto offer = wait_offer (courier, delivery_id, "courier-a");
+        // --8<-- [start:doc-e2e-sequence]
         auto statuses = customer.wait_for_sequence<delivery_status_notify_t> ()
                           .expect ([delivery_id] (const delivery_status_message_t &message) {
                               const auto &payload = message.payload;
@@ -139,6 +140,7 @@ class delivery_dispatch_client_scenario_t
                           })
                           .timeout (std::chrono::seconds (12))
                           .async ();
+        // --8<-- [end:doc-e2e-sequence]
 
         auto created_future = std::async (std::launch::async, [&http, delivery_id] {
             return http.post ("/deliveries")

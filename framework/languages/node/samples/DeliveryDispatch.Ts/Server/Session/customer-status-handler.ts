@@ -19,6 +19,7 @@ class CustomerStatusHandler {
     message: DeliveryStatusUpdatedMsg
   ): Promise<void> {
     if (!actor.accepts(message.deliveryId)) return;
+    // --8<-- [start:doc-dd-bound-session-push]
     await actor.context.boundSession
       .send(
         new DeliveryStatusNotify(
@@ -29,6 +30,7 @@ class CustomerStatusHandler {
         )
       )
       .submit();
+    // --8<-- [end:doc-dd-bound-session-push]
     if (message.status === 'Delivered') {
       console.log(
         `deliverydispatch-customer pushed status=Delivered delivery=${message.deliveryId}`

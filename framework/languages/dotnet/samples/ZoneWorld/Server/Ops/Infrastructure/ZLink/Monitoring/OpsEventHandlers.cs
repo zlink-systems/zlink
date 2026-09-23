@@ -22,10 +22,19 @@ internal sealed class SocketEventHandler(
     ILogger<SocketEventHandler> logger
 ) : BackgroundService
 {
-    // --8<-- [start:doc-zw-observe-peers]
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var previous = new HashSet<string>(StringComparer.Ordinal);
+        // --8<-- [start:doc-zw-snapshot-peers]
+        var initial = runtime.GetStatus(ZoneWorldNames.MeshName);
+        var initialReady = initial
+            .Peers.Where(static peer => peer.State == ZLinkPeerState.Ready)
+            .Select(static peer => peer.NodeRid.ToString())
+            .ToHashSet(StringComparer.Ordinal);
+        await nodes.ApplyLiveRoutingIdsAsync(initialReady, stoppingToken);
+        // --8<-- [end:doc-zw-snapshot-peers]
+
+        // --8<-- [start:doc-zw-observe-peers]
+        var previous = initialReady;
         await foreach (
             var status in runtime
                 .ObserveAsync(ZoneWorldNames.MeshName, stoppingToken)
@@ -43,9 +52,8 @@ internal sealed class SocketEventHandler(
                 await ApplyAsync(rid, false, stoppingToken);
             previous = current;
         }
+        // --8<-- [end:doc-zw-observe-peers]
     }
-
-    // --8<-- [end:doc-zw-observe-peers]
 
     private async Task ApplyAsync(string rid, bool connected, CancellationToken cancellationToken)
     {

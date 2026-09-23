@@ -140,11 +140,13 @@ class customer_entry_spot_t : public entry_spot_t<customer_actor_t>
             std::cerr << ignored_line;
             return;
         }
+        // --8<-- [start:doc-dd-bound-session-push]
         actor.context ()
           .bound_session ()
           .send (delivery_status_notify_t{
             status.delivery_id, status.status, status.courier_id, status.occurred_at_unix_ms})
           .async ();
+        // --8<-- [end:doc-dd-bound-session-push]
         if (status.status == delivery_status_t::delivered) {
             const std::string delivered_line = std::format (
               "deliverydispatch-customer pushed status=Delivered delivery={}\n",

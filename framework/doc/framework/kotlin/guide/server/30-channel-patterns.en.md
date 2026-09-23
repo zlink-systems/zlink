@@ -219,9 +219,8 @@ Ahead of maintenance or a rolling restart, you sometimes want a node **to stop a
 requests** without taking it down. Change its weight to `0`. **This is the one value you can
 change while running.** Inject the RouteMesh runtime options and name the ChannelName.
 
-```kotlin
---8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/AdminEndpoints.kt:weight-runtime"
-```
+The language-specific executable code is the runtime-weight example in
+[Options](16-options.en.md).
 
 - `Weight = 0` does **not close** the serving socket. Requests already received are handled and
   answered to the end, and other nodes drop this node only as a target for new requests. Its
@@ -247,12 +246,10 @@ ChannelName with `Server()`. The registration code is the same regardless of the
 **Nothing changes on the calling side either, if you use a Location Store.** The Store holds the
 new provider's registration, so the candidate set grows on its own.
 
-In an arrangement that writes addresses directly, register every provider endpoint. Below is the
-code that connects to two handling nodes.
-
-```kotlin
---8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/api/ApiServer.kt:doc-manual-peer-connect"
-```
+In an arrangement that writes addresses directly, register every provider endpoint. The
+registration code takes the same shape as the manual connection shown in
+[RouteMesh — Many Channels Share One Connection](#21-routemesh--many-channels-share-one-connection);
+only the number of endpoints to connect grows.
 
 In that case, every time you add a provider you have to change the caller's configuration and
 restart it. That is why an arrangement whose node count changes uses a Location Store.
@@ -331,7 +328,7 @@ backpressure then waits the publish, and the publish ends with an error if the q
 before its deadline.
 
 ```kotlin
-options.addFanoutChannel("events").enablePublisher("tcp://*:7400").setNoDrop(true)
+--8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/ClientApplication.kt:fanout-publish-register"
 ```
 
 NoDrop is available only on a channel with the publisher capability. Logical Multicast provides no
@@ -352,7 +349,7 @@ A classic fanout subscriber registers each topic it receives with `subscribe(top
 published to a matching topic travel to that subscriber.
 
 ```kotlin
-options.addFanoutChannel("events").enableSubscriber().subscribe("order.created")
+--8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:fanout-subscribe"
 ```
 
 The publish context received by a handler also holds the arriving topic, so one handler can
@@ -462,11 +459,9 @@ target list. When the store recovers, the list is reconciled against the latest 
 
 ### 6.4 Manual and Automatic
 
-A manual connection is configured in the MeshNode's peer list.
-
-```kotlin
---8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/api/ApiServer.kt:doc-manual-peer-connect"
-```
+A manual connection is configured in the MeshNode's peer list, the same way as the connection
+code shown in
+[RouteMesh — Many Channels Share One Connection](#21-routemesh--many-channels-share-one-connection).
 
 The endpoint argument is a startup setting. It is not a handle that controls a running socket
 after the host starts. The one value that can change while running is the weight in

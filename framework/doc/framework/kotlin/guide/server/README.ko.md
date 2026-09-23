@@ -123,7 +123,7 @@ endpoint와 실시간 연결이 함께 동작한다.
 
 | 순서 | 문서 | 내용 |
 |----|------|------|
-| 1 | [개요](01-overview.ko.md) | 무엇을 푸는가, 기존 방식과 무엇이 달라지는가 |
+| 1 | [개요](01-overview.ko.md) | 핵심 표면, 계층 구조, topology를 빠르게 파악하기 |
 | 2 | [퀵스타트](../../quickstart.ko.md) | 설치, 두 process가 서로 호출하는 최소 project, 첫 실행 점검 |
 | 3 | [핵심 개념](03-concepts.ko.md) | channel·Spot·Actor·session이 각각 무엇인가 |
 | 4 | [Channel 메시징](20-channel-messaging.ko.md) | 이름으로 부르는 경로 — 등록과 호출 |
@@ -143,7 +143,7 @@ endpoint와 실시간 연결이 함께 동작한다.
 | 18 | [Handler와 메시지 처리](31-handler-dispatch.ko.md) | 등록 변형, filter, codec, handler 종류 |
 | 19 | [STREAM의 동작 원리](38-stream-boundary.ko.md) | 등록 검증, 오류 귀속, 응답 token, 실행 방식 |
 | 20 | [Session 묶음의 동작 원리](39-session-binding.ko.md) | 묶는 개수, 경로 갱신, 끊김 통지, 실패 |
-| 21 | [ZLink를 어디에 쓰나](17-alternative.ko.md) | 사용처, 문제 신호, 기술 선택 경계, 라이선스 |
+| 21 | [ZLink를 어디에 쓰나](17-alternative.ko.md) | 사용처, 대안 비교, 기술 선택 경계, 라이선스 |
 | 22 | [운영과 lifecycle](12-operations.ko.md) | 런타임 메트릭, relocate, drain, readiness 연결 |
 | 23 | [Options](16-options.ko.md) | 옵션 목록, 기본값과 바꾸는 시점 |
 | 24 | [샘플 고르기](14-samples.ko.md) | 어떤 샘플을 먼저 볼지 고르고 실행하는 방법 |

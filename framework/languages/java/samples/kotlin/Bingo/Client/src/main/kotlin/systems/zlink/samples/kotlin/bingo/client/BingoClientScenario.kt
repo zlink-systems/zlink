@@ -73,6 +73,7 @@ class BingoClientScenario {
                 .waitFor<PlayerJoinedNotify>()
                 .where { message -> message.payload().actorId == "player-2" }
                 .let { wait -> async(start = CoroutineStart.UNDISPATCHED) { wait.await() } }
+        // --8<-- [start:doc-e2e-multi-wait]
         val client1Started =
             async(start = CoroutineStart.UNDISPATCHED) {
                 client1.waitFor<BingoGameStartedNotify>().await()
@@ -81,6 +82,7 @@ class BingoClientScenario {
             async(start = CoroutineStart.UNDISPATCHED) {
                 client2.waitFor<BingoGameStartedNotify>().await()
             }
+        // --8<-- [end:doc-e2e-multi-wait]
 
         val client2Auth = client2.request(AuthenticateReq("player-2")).awaitReply<AuthenticateRes>()
         ensure(client2Auth.actorId == "player-2")

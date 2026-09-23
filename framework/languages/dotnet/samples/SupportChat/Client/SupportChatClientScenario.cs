@@ -26,6 +26,7 @@ internal sealed class SupportChatClientScenario
     )
     {
         await agent.Connect.Async(cancellationToken);
+        // --8<-- [start:doc-e2e-failure]
         await ZlinkStreamAssert.ExpectFailureAsync(
             async ct =>
                 _ = await agent
@@ -33,6 +34,7 @@ internal sealed class SupportChatClientScenario
                     .Async<OpenConversationRes>(ct),
             nameof(ZlinkStreamErrorCode.RemoteError)
         );
+        // --8<-- [end:doc-e2e-failure]
         await ZlinkStreamAssert.ExpectFailureAsync(
             async ct =>
                 _ = await agent

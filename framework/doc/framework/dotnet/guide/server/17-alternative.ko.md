@@ -125,7 +125,7 @@ framework가 없다. 우연이 아니라 이유가 있다.
   가깝다 — 매칭 요청 → room·접속 정보 응답 → 이미 준비된 room spot에 접속.
 - **④ actor 서비스** — **Instance Spot**이 엔티티 ID로 cold activation되어, 여러 유저가
   동시에 건드리는 엔티티 상태를 Redis 분산 락 없이 직렬로 처리한다.
-  [길드 서비스 예시](#22-하나의-엔티티에-대한-동시-접근)에서 이어진다.
+  [주문 서비스 예시](#22-주문-하나에-대한-동시-접근)에서 이어진다.
 
 위 "기존 방식" 그림과 같은 자리에서, ZLink로는 각 방식이 이렇게 구성된다.
 
@@ -176,31 +176,17 @@ application 코드는 바뀌지 않는다 — 이 backend 경계는
 <iframe class="zlink-diagram" src="/common/diagrams/overview-stack.html" title="ZLink 계층 관계 — 다중 언어를 위한 얇은 3계층" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/overview-stack.html" target="_blank">↗ 크게 보기</a></p>
 
-**코드로 보면.** room 하나를 선언하고, 그 room의 진행 로직을 사용한다.
+**코드로 보면.** 먼저 room Spot factory를 등록한다.
 
 ```csharp
-// 등록 — room mesh 하나와 room 타입
-var node = options.AddRouteMesh("game.room");
-node.Listen("tcp://0.0.0.0:9001");
-// mesh는 최소 1개 logical membership을 갖는다
-node.Channel("game.room").Server();
-node.Objects().Server().AddSpotFactory<BingoRoomSpot>("room", factory => factory.RecreateOnRelocation());
+--8<-- "framework/languages/dotnet/samples/Bingo/Server/Play/PlayServerHostFactory.cs:doc-bingo-play-register"
 ```
 
+room에 플레이어가 들어오면 Spot의 진행 로직이 channel을 통해 플레이어 기록을 조회한다.
+외부 호출 뒤에는 새 Spot turn이 시작되므로, 샘플은 이어서 membership을 다시 확인한다.
+
 ```csharp
-// bingo room의 진행 코드 — 이 안에서 동시성은 존재하지 않는다.
-public sealed class MarkNumberHandler
-    : IZLinkSpotRequestHandler<BingoRoomSpot, MarkNumber, MarkResult>
-{
-    public ValueTask<MarkResult> HandleAsync(
-        BingoRoomSpot room, MarkNumber request, CancellationToken ct)
-    {
-        // lock 없음
-        room.Board.Mark(request.Number);
-        room.LastActivity = DateTimeOffset.UtcNow;
-        return ValueTask.FromResult(new MarkResult(room.Board.HasBingo()));
-    }
-}
+--8<-- "framework/languages/dotnet/samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/BingoRoom.cs:doc-bingo-room-join"
 ```
 
 여러 플레이어가 동시에 요청을 보내고 timer가 도는 room인데 `lock`도,
@@ -212,55 +198,38 @@ public sealed class MarkNumberHandler
 실행되는 근거 샘플: [TicTacToe](../../../common/sample/tictactoe/README.ko.md) ·
 [Bingo](../../../common/sample/bingo/README.ko.md) · [GameQuest](../../../common/sample/event/gamequest.ko.md)
 
-### 2.2 하나의 엔티티에 대한 동시 접근
+### 2.2 주문 하나에 대한 동시 접근
 
-**왜 어려운가.** 길드처럼 **서로 다른 여러 유저가 같은 엔티티를 동시에 수정**해야
-하는 경우가 있다. 두 유저가 동시에 가입을 신청해 정원을 넘기거나, 두 기부가 동시에
-반영돼 하나가 유실되는 것처럼, stateless API 서버 여러 대가 같은 row를 동시에
-수정하면 race condition이 생긴다.
+**왜 어려운가.** 결제·취소·배송 시작처럼 **서로 다른 요청이 같은 주문을 동시에
+수정**할 수 있다. stateless API 서버 여러 대가 같은 주문 row를 읽고-고치고-저장하면
+상태 전이가 뒤집히거나 한 변경이 유실된다.
 
-- **동시 수정이 충돌한다.** 여러 API 인스턴스가 같은 길드 row를 동시에
-  읽고-고치고-사용하면 lost update가 생긴다.
-- **직렬화 장치를 직접 만들어야 한다.** Redis 분산 락이나 DB row lock으로 길드
-  단위 critical section을 만들어야 한다.
-- **락 자체가 새 실패 모드다.** 락 획득 실패·타임아웃·데드락·락 만료 후 stale
-  write 처리가 application의 책임으로 남는다.
+- **동시 수정이 충돌한다.** 여러 API 인스턴스의 load-modify-store가 겹치면 lost
+  update가 생긴다.
+- **직렬화 장치를 직접 만들어야 한다.** Redis 분산 락이나 DB row lock으로 주문 단위
+  critical section을 만들어야 한다.
+- **락 자체가 새 실패 모드다.** 락 획득 실패·타임아웃·데드락·락 만료 후 stale write
+  처리가 application의 책임으로 남는다.
 
 **ZLink가 제공하는 것.** 락을 직접 구성하는 대신 그 엔티티를 직렬 실행 단위로 만든다.
 
 | 직접 갖추던 것 | ZLink 기능 | 자세히 |
 | --- | --- | --- |
-| 길드 id별 Redis 분산 락 | **Instance Spot** — 길드 id로 cold activation되는 spot 하나가 그 길드의 모든 요청을 직렬 처리 | [Spot](21-spot.ko.md) |
+| 주문 id별 Redis 분산 락 | **Instance Spot** — 주문 id로 cold activation되는 `OrderWorkflowSpot` 하나가 그 주문의 모든 요청을 직렬 처리 | [Spot](21-spot.ko.md) |
 | 락 획득·해제·타임아웃 처리 | **직렬 실행** — 락 개념 자체가 없어지고, 항상 spot queue 순서대로 처리된다 | [실행 모델](32-execution-model.ko.md) |
-| 길드 spot을 찾는 서버 간 호출·LB | **channel name + location store** | [Channel 메시징](20-channel-messaging.ko.md)·[Location](25-location.ko.md) |
-| 새 길드의 사전 프로비저닝 | 첫 요청이 오면 그 자리에서 cold activation — 별도 준비 불필요 | |
+| 주문 owner를 찾는 서버 간 호출·LB | **channel name + location store** | [Channel 메시징](20-channel-messaging.ko.md)·[Location](25-location.ko.md) |
+| 새 주문의 사전 프로비저닝 | 첫 요청이 오면 그 자리에서 cold activation — 별도 준비 불필요 | |
 
-**기존 방식** — 락 획득·해제가 매 요청마다 왕복한다.
-
-<iframe class="zlink-diagram" src="/common/diagrams/01-guild-existing.html" title="길드 상태 변경 — 기존 방식" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/01-guild-existing.html" target="_blank">↗ 크게 보기</a></p>
-
-**ZLink 방식** — 락이 사라지고, 길드 id가 곧 그 요청이 도착할 spot 주소가 된다.
-
-<iframe class="zlink-diagram" src="/common/diagrams/01-guild-zlink.html" title="길드 상태 변경 — ZLink 방식" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/01-guild-zlink.html" target="_blank">↗ 크게 보기</a></p>
-
-같은 길드로 온 요청은 항상 같은 GuildSpot의 queue를 통과하므로, 두 번째 요청은 첫
-번째가 끝난 뒤에야 처리된다 — 락을 잡고 있는 시간만큼 다른 요청이 막히는 게 아니라,
-동시에 두 요청이 같은 상태를 만질 수 없다.
+ShoppingMall에서는 `OrderId`가 곧 owner Spot의 주소다. 같은 주문으로 온 요청은 항상
+같은 `OrderWorkflowSpot` queue를 통과하므로 두 번째 요청은 첫 번째가 끝난 뒤에 처리된다.
 
 **코드로 보면.** 락 획득·해제가 있던 자리에 한 호출이 남는다.
 
 ```csharp
-// 길드 가입 신청 — 길드 id로 바로 요청한다. 사전 락도, 사전 생성도 없다.
-await spots.RequestToSpot(guildId, new JoinGuildReq(userId))
-    .InstanceSpot("guild")
-    .InMesh("social")
-    .Async<JoinGuildRes>(ct);
+--8<-- "framework/languages/dotnet/samples/ShoppingMall/Server/CommerceApi/Infrastructure/ZLink/ZLinkOrderWorkflowRouter.cs:doc-sm-api-request"
 ```
 
-이 시나리오는 아직 실행 가능한 기준 샘플이 없다 — 위 코드는 GameQuest의
-`PlayerQuestSpot` 등록·호출 방식과 같은 API 표면을 길드에 적용한 것이다.
+실행되는 근거 샘플: [ShoppingMall](../../../common/sample/event/shoppingmall.ko.md)
 
 ### 2.3 기존 웹 서비스의 실시간 기능 추가
 
@@ -309,24 +278,14 @@ sticky LB · pub/sub 브로커 · 분산 락 — 이 인프라 구성 요소가 
 **Instance Spot**이, 실시간 연결은 shell 서버 대신 **Session 서버**(STREAM)가, 서버 간
 전달은 **runtime 직접 연결**이 맡는다. 새로 두는 인프라는 **location store 하나**뿐이다.
 
-**코드로 보면.** 분산 락과 sticky 라우팅이 있던 자리에 다음 코드가 남는다.
+**코드로 보면.** DeliveryDispatch의 상태 push 경로는 customer actor에 bound된 session으로
+알림을 보낸다. application이 sticky routing 테이블을 조회하지 않는다.
 
 ```csharp
-// HTTP handler 안 — 주문 이벤트를 그 주문의 workflow Spot으로.
-// 첫 요청이 OrderId 기준 spot을 cold-activate하고, 이후 요청은 이미 만들어진
-// 같은 spot에 도착해 항상 한 곳에서 순서대로 처리된다(분산 락 없음).
-// request는 이미 StartOrderWorkflowReq 바디다.
-await spots.RequestToSpot(request.OrderId, request)
-    .InstanceSpot("order-workflow")
-    .InMesh("commerce")
-    .Async<StartOrderWorkflowRes>(ct);
-
-// actor handler 안 — 재접속해도 같은 actor로 이어진 client에 push(sticky LB 없음).
-await actor.Context.BoundSession.Send(new OrderStatusChanged(orderId, status)).Async(ct);
+--8<-- "framework/languages/dotnet/samples/DeliveryDispatch/Server/CustomerGateway/CustomerActor.cs:doc-dd-bound-session-push"
 ```
 
-실행되는 근거 샘플: [SupportChat](../../../common/sample/supportchat/README.ko.md) ·
-[DeliveryDispatch](../../../common/sample/deliverydispatch/README.ko.md)
+실행되는 근거 샘플: [DeliveryDispatch](../../../common/sample/deliverydispatch/README.ko.md)
 
 ### 2.4 이벤트 중심 업무 처리 단순화
 
@@ -410,16 +369,7 @@ ZLink가 줄이는 것은 "엔티티 단위 순서 처리"만을 위해 log 파�
 **코드로 보면.** partition 소비자 자리에 owner Spot handler가 온다.
 
 ```csharp
-// 같은 OrderId의 처리는 항상 이 Spot 안에서 순서대로 실행된다 —
-// partition도, offset도, 분산 락도, 멱등성 재시도 정책도 직접 갖추지 않는다.
-public sealed class StartOrderWorkflowHandler :
-    IZLinkSpotRequestHandler<OrderWorkflowSpot, StartOrderWorkflowReq, StartOrderWorkflowRes>
-{
-    public ValueTask<StartOrderWorkflowRes> HandleAsync(
-        OrderWorkflowSpot spot, StartOrderWorkflowReq request, CancellationToken ct)
-        // spot 상태에 lock 없이 접근
-        => spot.StartOrderWorkflowAsync(request, ct);
-}
+--8<-- "framework/languages/dotnet/samples/ShoppingMall/Server/OrderWorkflow/Infrastructure/ZLink/Spots/OrderWorkflowSpot/OrderWorkflowSpot.cs:doc-sm-spot-start"
 ```
 
 실행되는 근거 샘플: [ShoppingMall](../../../common/sample/event/shoppingmall.ko.md) — 실시간 push
@@ -467,6 +417,41 @@ channel/spot 계약으로 메시징할 수 있다.
     같은 channel·packet 계약을 언어별 binding이 자기 언어로 구현한다. 이 가이드의 예제는
     언어 탭으로 나뉘며, 어느 탭을 보든 같은 계약을 설명한다. 호출 계약이 binding 구현 언어와
     무관하다는 것이 ZLink의 설계 목표다.
+
+### 3.2 기존 방식 대비 체감 난이도
+
+같은 "서버 간 요청/응답"을 붙이는 코드량 차이다.
+
+**raw 바인딩으로 직접 (개념적)** — 실행되는 코드가 아니라 직접 구성해야 할 작업
+목록이다. 지원 언어에서 같은 목록을 사용하므로 언어 탭으로 나누지 않는다.
+
+```text
+위치 저장소 조회, endpoint 연결, 재연결 관리,
+correlation id 매칭, 직렬화, 수신 루프 ... 수십 줄의 연결·설정 코드
+```
+
+**ZLink Framework** — 아래는 tutorial의 실제 "profile" channel 코드다. 대상이 가격 조회가
+아니라 플레이어 프로필 조회로 바뀐 것 말고는 같은 모양이다. 먼저 서버가 요청을 받는
+handler다.
+
+```csharp
+--8<-- "framework/languages/dotnet/tutorial/Server/Channel/GetPlayerProfileHandler.cs:channel-request-handler"
+```
+
+이 handler를 mesh와 channel에 등록한다.
+
+```csharp
+--8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"
+--8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:channel-register"
+```
+
+클라이언트는 이 channel을 이렇게 호출한다.
+
+```csharp
+--8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:channel-request-call"
+```
+
+연결·설정 코드가 사라지고 남는 것은 handler와 channel 등록 몇 줄이다.
 
 ## 4. ZLink 후보가 되는 증상
 

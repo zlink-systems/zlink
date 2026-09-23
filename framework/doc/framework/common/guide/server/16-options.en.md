@@ -24,60 +24,31 @@ set it.
 === "C++"
 
     ```cpp
-    app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-        options.configure_network ().set_bind_host ("0.0.0.0");   // root option
-        auto mesh = options.add_route_mesh ("play");              // node builder
-        mesh.listen ("tcp://0.0.0.0:5555").set_placement_weight (100);
-        mesh.channel_name ("room").server ();
-    });
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
     ```
 
 === "C#/.NET"
 
     ```csharp
-    builder.Services.AddZLinkFramework(options =>
-    {
-        options.ConfigureNetwork().BindHost = "0.0.0.0";   // root option
-        var mesh = options.AddRouteMesh("play")            // node builder
-            .Listen("tcp://0.0.0.0:5555")
-            .SetPlacementWeight(100);
-        mesh.Channel("room").Server();
-    });
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"
     ```
 
 === "Java"
 
     ```java
-    ZLinkFrameworkConfigurer configurer = options -> {
-        options.configureNetwork().setBindHost("0.0.0.0");         // root option
-        ZLinkMeshNodeBuilder mesh = options.addRouteMesh("play");  // node builder
-        mesh.listen("tcp://0.0.0.0:5555").setPlacementWeight(100);
-        mesh.channelName("room").server();
-    };
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:mesh-register"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    val configurer = ZLinkFrameworkConfigurer { options ->
-        options.configureNetwork().setBindHost("0.0.0.0")   // root option
-        options.routeMesh("play") {                         // node builder
-            listen("tcp://0.0.0.0:5555")
-            setPlacementWeight(100)
-            channelName("room") { server() }
-        }
-    }
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    const builder = zlinkFramework();
-    builder.configureNetwork().bindHost = '0.0.0.0';   // root option
-    const mesh = builder.addRouteMesh('play')          // node builder
-      .listen('tcp://0.0.0.0:5555')
-      .setPlacementWeight(100);
-    mesh.channel('room').server();
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
     ```
 
 There is no surface that calls a builder again after the host has started. An invalid
@@ -246,36 +217,31 @@ host starts.
 === "C++"
 
     ```cpp
-    runtime_options.placement_weight (0);
-    runtime_options.channel ("room").weight (0);
+    --8<-- "framework/languages/cpp/tutorial/Server/ops/channel_weight_handler.hpp:weight-runtime"
     ```
 
 === "C#/.NET"
 
     ```csharp
-    runtime.Mesh("play").PlacementWeight = 0;
-    runtime.Channel("room").Weight = 0;
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:weight-runtime"
     ```
 
 === "Java"
 
     ```java
-    runtimeOptions.mesh("play").setPlacementWeight(0);
-    runtimeOptions.channel("room").weight(0);
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:weight-runtime"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    runtimeOptions.mesh("play").setPlacementWeight(0)
-    runtimeOptions.channel("room").weight(0)
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/AdminEndpoints.kt:weight-runtime"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    runtimeOptions.mesh('play').placementWeight = 0;
-    runtimeOptions.channel('room').weight = 0;
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:weight-runtime"
     ```
 
 Both values range over `0..10000` and default to 100. Setting `0` **stops new assignments only**

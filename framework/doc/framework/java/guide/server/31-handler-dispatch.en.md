@@ -240,54 +240,6 @@ it touches state directly, with no lock.
 --8<-- "framework/languages/java/samples/java/TicTacToe/Server/src/main/java/systems/zlink/samples/tictactoe/server/play/infrastructure/zlink/spots/tictactoegamespot/handlers/PlayActorPlaceMarkHandler.java:doc-actor-packet-handler"
 ```
 
-The four branches in their minimal form look like this.
-
-```java
-// A packet addressed to the Spot -- the first argument is the target Spot instance.
-public final class ChatHandler implements ZLinkSpotPacketHandler<GameRoom, Chat> {
-    @Override
-    public CompletionStage<Void> handle(GameRoom spot, Chat message) {
-        // Touches Spot state directly. No lock needed.
-        spot.appendChat(message.text());
-        return CompletableFuture.completedFuture(null);
-    }
-}
-
-// A request addressed to the Spot -- the return value is the reply.
-public final class GetRoomStateHandler
-    implements ZLinkSpotRequestHandler<GameRoom, GetRoomState, RoomState> {
-    @Override
-    public CompletionStage<RoomState> handle(GameRoom spot, GetRoomState request) {
-        return CompletableFuture.completedFuture(spot.snapshot());
-    }
-}
-
-// A subscription event -- arrives on the topic in @ZLinkSpotSubscription.
-public final class ScoreHandler
-    implements ZLinkSpotSubscriptionHandler<GameRoom, ScoreChanged> {
-    @Override
-    public CompletionStage<Void> handle(GameRoom spot, ScoreChanged event) {
-        spot.applyScore(event);
-        return CompletableFuture.completedFuture(null);
-    }
-}
-
-// A packet addressed to a member Actor -- receives the Spot and the Actor together.
-public final class PlaceMarkHandler
-    implements ZLinkSpotActorSendHandler<GameRoom, PlayerActor, PlaceMark> {
-    @Override
-    public CompletionStage<Void> handle(
-        GameRoom spot,
-        // The Actor that received this message.
-        PlayerActor actor,
-        ZLinkMessageContext messageContext,
-        PlaceMark message) {
-        spot.place(actor.actorId(), message.cell());
-        return CompletableFuture.completedFuture(null);
-    }
-}
-```
-
 An Actor request handler takes the same arguments; the only difference is that its return
 value is the reply.
 
@@ -295,43 +247,7 @@ Register handlers in `configure()` and perform initialization and cleanup in lif
 callbacks.
 
 ```java
-public final class GameRoom implements ZLinkSpot {
-    private final ZLinkSpotContext context;
-
-    @Override
-    public ZLinkSpotContext context() {
-        return context;
-    }
-
-    @Override
-    public void configure() {
-        // Registers the Spot send handler.
-        context.handlers().addHandler(ChatHandler.class);
-        // The subscription topic is set by @ZLinkSpotSubscription on ScoreHandler.
-        context.handlers().addHandler(ScoreHandler.class);
-    }
-
-    @Override
-    public CompletionStage<ZLinkSpotCreateResponse> onCreate(ZLinkMessage request) {
-        CreateGame create = request.decode(CreateGame.class);
-        boolean known = "ranked".equals(create.mode()) || "casual".equals(create.mode());
-        return CompletableFuture.completedFuture(known
-            ? ZLinkSpotCreateResponse.accept(new GameCreated(create.mode()))
-            : ZLinkSpotCreateResponse.reject(new InvalidMode(create.mode())));
-    }
-
-    @Override
-    public CompletionStage<Void> onInitialize() {
-        // Finishes whatever's needed after creation is approved, before receiving messages.
-        return CompletableFuture.completedFuture(null);
-    }
-
-    @Override
-    public CompletionStage<Void> onClosing(ZLinkSpotClosingContext closing) {
-        // Cleans up application resources by the deadline.
-        return CompletableFuture.completedFuture(null);
-    }
-}
+--8<-- "framework/languages/java/samples/java/GameQuest/Server/QuestMission/src/main/java/systems/zlink/samples/gamequest/server/questmission/spots/PlayerQuestSpot.java:doc-gq-spot-init"
 ```
 
 `onClosing`'s reason distinguishes explicit close, host shutdown, and relocation out. The

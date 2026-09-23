@@ -30,6 +30,7 @@ class TicTacToeClientScenario {
     signal?: AbortSignal,
     lifecycleCompletionPath?: string
   ): Promise<void> {
+    // --8<-- [start:doc-e2e-create-room]
     const api = BrowserHttpClientFactory.create(apiHttpEndpoint).build();
     let game: CreateGameHttpRes;
     try {
@@ -41,6 +42,7 @@ class TicTacToeClientScenario {
     } finally {
       await api.close();
     }
+    // --8<-- [end:doc-e2e-create-room]
 
     connector.zlinkStreamAssert.ensure(
       game.gameName === 'match-ready',
@@ -86,17 +88,21 @@ class TicTacToeClientScenario {
       'Sample scenario assertion failed.'
     );
 
+    // --8<-- [start:doc-e2e-multi-client]
     const client1 = createPlayerClient(hostPlayEndpoint);
     const client2 = createPlayerClient(observerPlayEndpoint);
     const observer = createPlayerClient(observerPlayEndpoint);
+    // --8<-- [end:doc-e2e-multi-client]
     let reconnectedClient1: ZlinkStreamConnector | undefined;
 
     try {
       // 2. Host, guest, and observer connect directly to Play stream endpoints from the API response.
+      // --8<-- [start:doc-e2e-connect-request]
       await client1.connect(signal);
       const client1Auth = await client1
         .request(authenticateReq('player-x'))
         .submit<AuthenticateRes>(signal);
+      // --8<-- [end:doc-e2e-connect-request]
       connector.zlinkStreamAssert.ensure(
         client1Auth.player.actorId === 'player-x',
         'Sample scenario assertion failed.'
@@ -166,6 +172,8 @@ class TicTacToeClientScenario {
       console.log(`observer-subscription=verified subscribed=${observerSubscription.subscribed}`);
 
       // 3. Host joins by explicit RoomId
+      // --8<-- [start:doc-e2e-scenario]
+      // --8<-- [start:doc-e2e-wait-filter]
       const client1JoinedState = client1
         .waitFor<JoinGameNotify>(PacketNames.joinGameNotify)
         .where(
@@ -174,16 +182,22 @@ class TicTacToeClientScenario {
             message.payload.state.xActorId === client1Auth.player.actorId
         )
         .submit(signal);
+      // --8<-- [end:doc-e2e-wait-filter]
+      // --8<-- [start:doc-e2e-expect-none]
       const client1SelfJoin = client1
         .expectNone<PlayerJoinedNotify>(PacketNames.playerJoinedNotify)
         .within(250)
         .run(signal);
+      // --8<-- [end:doc-e2e-expect-none]
+      // --8<-- [start:doc-e2e-wait-before-send]
       await client1.send(new JoinGameMsg(game.roomId)).packetName(PacketNames.joinGameMsg).submit();
       const [client1State] = await Promise.all([client1JoinedState, client1SelfJoin]);
+      // --8<-- [end:doc-e2e-wait-before-send]
       connector.zlinkStreamAssert.ensure(
         client1State.payload.state.status === GameStatus.WaitingForPlayers,
         'Sample scenario assertion failed.'
       );
+      // --8<-- [end:doc-e2e-scenario]
       connector.zlinkStreamAssert.ensure(
         client1State.payload.state.xActorId === client1Auth.player.actorId,
         'Sample scenario assertion failed.'

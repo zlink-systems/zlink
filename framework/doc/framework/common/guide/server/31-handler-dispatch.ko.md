@@ -356,15 +356,15 @@ serializer는 하나만 두고, 타입 조건을 받는 serializer는 서로 겹
 
     | 받는 것 | 구현할 interface | 등록 |
     | --- | --- | --- |
-    | Spot 앞 one-way packet | `ZLinkSpotPacketHandler<TSpot, TMessage>` | `addHandler<THandler>()` |
-    | Spot 앞 request | `ZLinkSpotRequestHandler<TSpot, TRequest, TReply>` | `addHandler<THandler>()` |
-    | Logical Multicast 구독 이벤트 | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | handler에 `@ZLinkSpotSubscription(topic)` + `addHandler<THandler>()` |
-    | timer tick | `ZLinkSpotTimerHandler<TSpot>` | `context.addTimer<THandler>(name, period, options)`([Timer와 worker](36-timer-worker.ko.md)) |
-    | member Actor 앞 one-way packet | `ZLinkSpotActorSendHandler<TSpot, TActor, TMessage>` | handler에 `@ZLinkSpotActorSend` + `addHandler<THandler>()` |
-    | member Actor 앞 request | `ZLinkSpotActorRequestHandler<TSpot, TActor, TRequest, TReply>` | handler에 `@ZLinkSpotActorRequest` + `addHandler<THandler>()` |
+    | Spot 앞 one-way packet | `ZLinkSpotPacketHandler<TSpot, TMessage>` | `addHandler(THandler::class.java)` |
+    | Spot 앞 request | `ZLinkSpotRequestHandler<TSpot, TRequest, TReply>` | `addHandler(THandler::class.java)` |
+    | Logical Multicast 구독 이벤트 | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | handler에 `@ZLinkSpotSubscription(topic)` + `addHandler(THandler::class.java)` |
+    | timer tick | `ZLinkSpotTimerHandler<TSpot>` | `context.addTimer(name, period, THandler::class.java, options)`([Timer와 worker](36-timer-worker.ko.md)) |
+    | member Actor 앞 one-way packet | `ZLinkSpotActorSendHandler<TSpot, TActor, TMessage>` | handler에 `@ZLinkSpotActorSend` + `addHandler(THandler::class.java)` |
+    | member Actor 앞 request | `ZLinkSpotActorRequestHandler<TSpot, TActor, TRequest, TReply>` | handler에 `@ZLinkSpotActorRequest` + `addHandler(THandler::class.java)` |
 
-    **reified `addHandler<THandler>()`로 등록한다.** 무엇을 받는 handler인지는 구현한 interface와
-    annotation이 정한다.
+    **Java 표면을 그대로 사용한다.** 등록 method는 `addHandler` 하나이고, 무엇을 받는
+    handler인지는 구현한 interface와 annotation이 정한다.
 
 === "Node/TypeScript"
 
@@ -414,231 +414,6 @@ handler는 대상 Spot instance를 첫 인자로 받는다. Spot 안에서 실�
     --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/Handlers/play-actor-place-mark-handler.ts:doc-actor-packet-handler"
     ```
 
-최소 형태로 보면 이렇다.
-
-=== "C#/.NET"
-
-    ```csharp
-    // Spot 앞 packet — 첫 인자가 대상 Spot instance다.
-    public sealed class ChatHandler : IZLinkSpotPacketHandler<GameRoom, Chat>
-    {
-        public ValueTask HandleAsync(
-            GameRoom spot,
-            Chat message,
-            CancellationToken cancellationToken)
-        {
-            // Spot 상태를 직접 만진다. 락은 필요 없다.
-            spot.AppendChat(message.Text);
-            return ValueTask.CompletedTask;
-        }
-    }
-
-    // Spot 앞 request — 반환값이 reply다.
-    public sealed class GetRoomStateHandler
-        : IZLinkSpotRequestHandler<GameRoom, GetRoomState, RoomState>
-    {
-        public ValueTask<RoomState> HandleAsync(
-            GameRoom spot,
-            GetRoomState request,
-            CancellationToken cancellationToken)
-            => ValueTask.FromResult(spot.Snapshot());
-    }
-
-    // 구독 이벤트 — AddSubscribe로 등록한 channel·topic으로 들어온다.
-    public sealed class ScoreHandler : IZLinkSpotSubscriptionHandler<GameRoom, ScoreChanged>
-    {
-        public ValueTask HandleAsync(
-            GameRoom spot,
-            ScoreChanged @event,
-            CancellationToken cancellationToken)
-        {
-            spot.ApplyScore(@event);
-            return ValueTask.CompletedTask;
-        }
-    }
-
-    // member Actor 앞 packet — Spot과 Actor를 함께 받는다.
-    public sealed class PlaceMarkHandler
-        : IZLinkSpotActorSendHandler<GameRoom, PlayerActor, PlaceMark>
-    {
-        public ValueTask HandleAsync(
-            GameRoom spot,
-            // 이 메시지를 받은 Actor다.
-            PlayerActor actor,
-            IZLinkMessageContext messageContext,
-            PlaceMark message,
-            CancellationToken cancellationToken)
-        {
-            spot.Place(actor.ActorId, message.Cell);
-            return ValueTask.CompletedTask;
-        }
-    }
-    ```
-
-=== "C++"
-
-    ```cpp
-    // C++은 handler class 대신 Spot member 함수를 등록한다. 첫 인자가 대상 Spot이다.
-    class game_room_t : public spot_t<player_actor_t>
-    {
-      public:
-        // Spot 앞 packet.
-        task_t<void> chat (const chat_t &message)
-        {
-            // Spot 상태를 직접 만진다. 락은 필요 없다.
-            append_chat (message.text);
-            co_return;
-        }
-
-        // Spot 앞 request — 반환값이 reply다.
-        room_state_t get_room_state (const get_room_state_t &) { return snapshot (); }
-
-        // 구독 이벤트 — add_subscribe로 등록한 channel·topic으로 들어온다.
-        task_t<void> score (const score_changed_t &event)
-        {
-            apply_score (event);
-            co_return;
-        }
-
-        // member Actor 앞 packet — Spot과 Actor를 함께 받는다.
-        // 이 메시지를 받은 Actor다.
-        task_t<void> place_mark (player_actor_t &actor,
-                                 message_context_t &,
-                                 const place_mark_t &message)
-        {
-            place (actor.actor_id, message.cell);
-            co_return;
-        }
-    };
-    ```
-
-=== "Java"
-
-    ```java
-    // Spot 앞 packet — 첫 인자가 대상 Spot instance다.
-    public final class ChatHandler implements ZLinkSpotPacketHandler<GameRoom, Chat> {
-        @Override
-        public CompletionStage<Void> handle(GameRoom spot, Chat message) {
-            // Spot 상태를 직접 만진다. 락은 필요 없다.
-            spot.appendChat(message.text());
-            return CompletableFuture.completedFuture(null);
-        }
-    }
-
-    // Spot 앞 request — 반환값이 reply다.
-    public final class GetRoomStateHandler
-        implements ZLinkSpotRequestHandler<GameRoom, GetRoomState, RoomState> {
-        @Override
-        public CompletionStage<RoomState> handle(GameRoom spot, GetRoomState request) {
-            return CompletableFuture.completedFuture(spot.snapshot());
-        }
-    }
-
-    // 구독 이벤트 — @ZLinkSpotSubscription의 topic으로 들어온다.
-    public final class ScoreHandler
-        implements ZLinkSpotSubscriptionHandler<GameRoom, ScoreChanged> {
-        @Override
-        public CompletionStage<Void> handle(GameRoom spot, ScoreChanged event) {
-            spot.applyScore(event);
-            return CompletableFuture.completedFuture(null);
-        }
-    }
-
-    // member Actor 앞 packet — Spot과 Actor를 함께 받는다.
-    public final class PlaceMarkHandler
-        implements ZLinkSpotActorSendHandler<GameRoom, PlayerActor, PlaceMark> {
-        @Override
-        public CompletionStage<Void> handle(
-            GameRoom spot,
-            // 이 메시지를 받은 Actor다.
-            PlayerActor actor,
-            ZLinkMessageContext messageContext,
-            PlaceMark message) {
-            spot.place(actor.actorId(), message.cell());
-            return CompletableFuture.completedFuture(null);
-        }
-    }
-    ```
-
-=== "Kotlin"
-
-    ```kotlin
-    // Spot 앞 packet — 첫 인자가 대상 Spot instance다.
-    class ChatHandler : ZLinkSpotPacketHandler<GameRoom, Chat> {
-        override suspend fun handle(spot: GameRoom, message: Chat) {
-            // Spot 상태를 직접 만진다. 락은 필요 없다.
-            spot.appendChat(message.text)
-        }
-    }
-
-    // Spot 앞 request — 반환값이 reply다.
-    class GetRoomStateHandler : ZLinkSpotRequestHandler<GameRoom, GetRoomState, RoomState> {
-        override suspend fun handle(spot: GameRoom, request: GetRoomState): RoomState = spot.snapshot()
-    }
-
-    // 구독 이벤트 — @ZLinkSpotSubscription의 topic으로 들어온다.
-    class ScoreHandler : ZLinkSpotSubscriptionHandler<GameRoom, ScoreChanged> {
-        override suspend fun handle(spot: GameRoom, event: ScoreChanged) {
-            spot.applyScore(event)
-        }
-    }
-
-    // member Actor 앞 packet — Spot과 Actor를 함께 받는다.
-    class PlaceMarkHandler : ZLinkSpotActorSendHandler<GameRoom, PlayerActor, PlaceMark> {
-        override suspend fun handle(
-            spot: GameRoom,
-            // 이 메시지를 받은 Actor다.
-            actor: PlayerActor,
-            messageContext: ZLinkMessageContext,
-            message: PlaceMark,
-        ) {
-            spot.place(actor.actorId(), message.cell)
-        }
-    }
-    ```
-
-=== "Node/TypeScript"
-
-    ```typescript
-    // Spot 앞 packet — 첫 인자가 대상 Spot instance다.
-    export class ChatHandler implements ZLinkSpotPacketHandler<GameRoom, Chat> {
-      async handle(spot: GameRoom, message: Chat): Promise<void> {
-        // Spot 상태를 직접 만진다. 락은 필요 없다.
-        spot.appendChat(message.text);
-      }
-    }
-
-    // Spot 앞 request — 반환값이 reply다.
-    export class GetRoomStateHandler
-      implements ZLinkSpotRequestHandler<GameRoom, GetRoomState, RoomState> {
-      async handle(spot: GameRoom, request: GetRoomState): Promise<RoomState> {
-        return spot.snapshot();
-      }
-    }
-
-    // 구독 이벤트 — addSubscribe로 등록한 channel·topic으로 들어온다.
-    export class ScoreHandler implements ZLinkSpotSubscriptionHandler<GameRoom, ScoreChanged> {
-      async handle(spot: GameRoom, event: ScoreChanged): Promise<void> {
-        spot.applyScore(event);
-      }
-    }
-
-    // member Actor 앞 packet — Spot과 Actor를 함께 받는다.
-    export class PlaceMarkHandler
-      implements ZLinkSpotActorSendHandler<GameRoom, PlayerActor, PlaceMark> {
-      async handle(
-        spot: GameRoom,
-        // 이 메시지를 받은 Actor다.
-        actor: PlayerActor,
-        messageContext: ZLinkMessageContext,
-        message: PlaceMark
-      ): Promise<void> {
-        spot.place(actor.actorId, message.cell);
-      }
-    }
-    ```
-
-
 Actor 앞 request는 actor request handler이며
 같은 인자에 반환값이 reply라는 점만 다르다.
 
@@ -647,193 +422,31 @@ Actor 앞 request는 actor request handler이며
 === "C#/.NET"
 
     ```csharp
-    public sealed class GameRoom(IZLinkSpotContext context) : IZLinkSpot
-    {
-        public IZLinkSpotContext Context { get; } = context;
-
-        public void Configure()
-        {
-            // Spot send handler를 등록한다.
-            Context.Handlers.AddPacket<ChatHandler>();
-            Context.Handlers.AddSubscribe<ScoreHandler>(
-                "game-events",
-                // Logical Multicast 구독을 등록한다.
-                "score.changed");
-        }
-
-        public ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(
-            ZLinkMessage request,
-            CancellationToken cancellationToken)
-        {
-            var create = request.Decode<CreateGame>();
-            return ValueTask.FromResult(
-                create.Mode is "ranked" or "casual"
-                    ? ZLinkSpotCreateResponse.Accept(new GameCreated(create.Mode))
-                    : ZLinkSpotCreateResponse.Reject(new InvalidMode(create.Mode)));
-        }
-
-        public ValueTask OnInitializeAsync(CancellationToken cancellationToken)
-        {
-            // 생성 승인 뒤 메시지를 받기 전에 필요한 준비를 끝낸다.
-            return ValueTask.CompletedTask;
-        }
-
-        public ValueTask OnClosingAsync(
-            ZLinkSpotClosingContext closing,
-            CancellationToken cleanupCancellationToken)
-        {
-            // Deadline까지 application resource를 정리한다.
-            return ValueTask.CompletedTask;
-        }
-    }
+    --8<-- "framework/languages/dotnet/samples/GameQuest/Server/QuestMission/Infrastructure/ZLink/Spots/PlayerQuestSpot/PlayerQuestSpot.cs:doc-gq-spot-init"
     ```
 
 === "C++"
 
     ```cpp
-    class game_room_t : public spot_t<player_actor_t>
-    {
-      public:
-        spot_context_t &context () noexcept override { return _context; }
-
-        void configure () override
-        {
-            // Spot send handler를 등록한다.
-            _context.handlers ().add_handler<&game_room_t::chat> ();
-            _context.handlers ().add_subscribe<&game_room_t::score> (
-              // Logical Multicast 구독을 등록한다.
-              "game-events", "score.changed");
-        }
-
-        task_t<spot_create_response_t> on_create (const message_t &request) override
-        {
-            const auto create = request.decode<create_game_t> ();
-            co_return (create.mode == "ranked" || create.mode == "casual")
-                      ? spot_create_response_t::accept (game_created_t{create.mode})
-                      : spot_create_response_t::reject (invalid_mode_t{create.mode});
-        }
-
-        task_t<void> on_initialize () override
-        {
-            // 생성 승인 뒤 메시지를 받기 전에 필요한 준비를 끝낸다.
-            co_return;
-        }
-
-        task_t<void> on_closing (const spot_closing_context_t &) override
-        {
-            // Deadline까지 application resource를 정리한다.
-            co_return;
-        }
-
-      private:
-        spot_context_t _context;
-    };
+    --8<-- "framework/languages/cpp/samples/GameQuest/Server/QuestMission/main.cpp:doc-gq-spot-init"
     ```
 
 === "Java"
 
     ```java
-    public final class GameRoom implements ZLinkSpot {
-        private final ZLinkSpotContext context;
-
-        @Override
-        public ZLinkSpotContext context() {
-            return context;
-        }
-
-        @Override
-        public void configure() {
-            // Spot send handler를 등록한다.
-            context.handlers().addHandler(ChatHandler.class);
-            // 구독 topic은 ScoreHandler에 붙인 @ZLinkSpotSubscription이 정한다.
-            context.handlers().addHandler(ScoreHandler.class);
-        }
-
-        @Override
-        public CompletionStage<ZLinkSpotCreateResponse> onCreate(ZLinkMessage request) {
-            CreateGame create = request.decode(CreateGame.class);
-            boolean known = "ranked".equals(create.mode()) || "casual".equals(create.mode());
-            return CompletableFuture.completedFuture(known
-                ? ZLinkSpotCreateResponse.accept(new GameCreated(create.mode()))
-                : ZLinkSpotCreateResponse.reject(new InvalidMode(create.mode())));
-        }
-
-        @Override
-        public CompletionStage<Void> onInitialize() {
-            // 생성 승인 뒤 메시지를 받기 전에 필요한 준비를 끝낸다.
-            return CompletableFuture.completedFuture(null);
-        }
-
-        @Override
-        public CompletionStage<Void> onClosing(ZLinkSpotClosingContext closing) {
-            // Deadline까지 application resource를 정리한다.
-            return CompletableFuture.completedFuture(null);
-        }
-    }
+    --8<-- "framework/languages/java/samples/java/GameQuest/Server/QuestMission/src/main/java/systems/zlink/samples/gamequest/server/questmission/spots/PlayerQuestSpot.java:doc-gq-spot-init"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    class GameRoom(private val spotContext: ZLinkSpotContext) : ZLinkSpot {
-
-        override fun context(): ZLinkSpotContext = spotContext
-
-        override fun configure() {
-            // Spot send handler를 등록한다.
-            spotContext.handlers().addHandler<ChatHandler>()
-            // 구독 topic은 ScoreHandler에 붙인 @ZLinkSpotSubscription이 정한다.
-            spotContext.handlers().addHandler<ScoreHandler>()
-        }
-
-        override suspend fun onCreate(request: ZLinkMessage): ZLinkSpotCreateResponse {
-            val create = request.decode(CreateGame::class.java)
-            return if (create.mode in setOf("ranked", "casual"))
-                ZLinkSpotCreateResponse.accept(GameCreated(create.mode))
-            else ZLinkSpotCreateResponse.reject(InvalidMode(create.mode))
-        }
-
-        override suspend fun onInitialize() {
-            // 생성 승인 뒤 메시지를 받기 전에 필요한 준비를 끝낸다.
-        }
-
-        override suspend fun onClosing(closing: ZLinkSpotClosingContext) {
-            // Deadline까지 application resource를 정리한다.
-        }
-    }
+    --8<-- "framework/languages/java/samples/kotlin/GameQuest/Server/QuestMission/src/main/kotlin/systems/zlink/samples/kotlin/gamequest/server/questmission/Program.kt:doc-gq-spot-init"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    export class GameRoom implements ZLinkSpot {
-      readonly context!: ZLinkSpotContext;
-
-      configure(): void {
-        // Spot send handler를 등록한다.
-        this.context.handlers.addPacket(ChatHandler);
-        this.context.handlers.addSubscribe(
-          ScoreHandler,
-          'game-events',
-          // Logical Multicast 구독을 등록한다.
-          'score.changed');
-      }
-
-      async onCreate(request: ZLinkMessage): Promise<ZLinkSpotCreateResponse> {
-        const create = request.decode<CreateGame>(Object as never);
-        return create.mode === 'ranked' || create.mode === 'casual'
-          ? ZLinkSpotCreateResponse.accept(gameCreated(create.mode))
-          : ZLinkSpotCreateResponse.reject(invalidMode(create.mode));
-      }
-
-      async onInitialize(): Promise<void> {
-        // 생성 승인 뒤 메시지를 받기 전에 필요한 준비를 끝낸다.
-      }
-
-      async onClosing(closing: ZLinkSpotClosingContext): Promise<void> {
-        // Deadline까지 application resource를 정리한다.
-      }
-    }
+    --8<-- "framework/languages/node/samples/GameQuest.Ts/Server/QuestMission/Infrastructure/ZLink/Spots/PlayerQuestSpot/player-quest-spot.ts:doc-gq-spot-init"
     ```
 
 

@@ -94,6 +94,7 @@ builder.Services.AddZLinkFramework(options =>
     options
         .AddFanoutChannel("broadcast")
         .EnableSubscriber()
+        .Subscribe(nameof(MaintenanceNotice))
         .AddHandler<MaintenanceNoticeSubscriber, MaintenanceNotice>();
     // --8<-- [end:fanout-subscribe]
 

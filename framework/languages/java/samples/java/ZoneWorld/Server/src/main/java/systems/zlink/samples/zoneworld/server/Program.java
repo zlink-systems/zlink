@@ -149,7 +149,9 @@ public final class Program {
             options.addLocationStore(locations);
             options.addRelocationStore(relocationStore);
             options.addHandlersFromPackageOf(Program.class);
+            // --8<-- [start:doc-monitoring-flow]
             options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+            // --8<-- [end:doc-monitoring-flow]
 
             // A zone node names its application identity in the routing id prefix; the
             // framework appends a per-process UUID, so a replacement started for the same

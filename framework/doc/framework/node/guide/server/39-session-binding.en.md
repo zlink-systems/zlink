@@ -91,7 +91,7 @@ does not run the Spot's disconnect callback twice. Call the Actor directly only 
 is still up but the application protocol treats it as disconnected.
 
 ```typescript
-await actor.notifyDisconnected();
+--8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Play/Infrastructure/ZLink/Sessions/play-session.ts:session-disconnect-notify"
 ```
 
 ## 4. When a Bind Fails or Becomes Void

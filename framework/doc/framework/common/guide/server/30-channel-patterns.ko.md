@@ -242,35 +242,7 @@ ClientServer를 사용한다.
 있다. weight를 `0`으로 바꾸면 된다. **실행 중에 바꿀 수 있는 값은 이것 하나다.** RouteMesh
 runtime 옵션을 주입받아 ChannelName으로 지정한다.
 
-=== "C#/.NET"
-
-    ```csharp
-    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:weight-runtime"
-    ```
-
-=== "C++"
-
-    ```cpp
-    --8<-- "framework/languages/cpp/tutorial/Server/ops/channel_weight_handler.hpp:weight-runtime"
-    ```
-
-=== "Java"
-
-    ```java
-    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:weight-runtime"
-    ```
-
-=== "Kotlin"
-
-    ```kotlin
-    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/AdminEndpoints.kt:weight-runtime"
-    ```
-
-=== "Node/TypeScript"
-
-    ```typescript
-    --8<-- "framework/languages/node/tutorial/Server/main.ts:weight-runtime"
-    ```
+언어별 실행 코드는 [Options](16-options.ko.md)의 runtime weight 예제를 따른다.
 
 - `Weight = 0`은 serving socket을 **닫지 않는다.** 이미 들어온 요청은 끝까지 처리하고 응답하며,
   다른 node가 이 node를 새 요청 대상에서만 뺀다. Location Store의 등록 정보도 그대로 남는다.
@@ -292,38 +264,9 @@ runtime 옵션을 주입받아 ChannelName으로 지정한다.
 **호출하는 쪽은 Location Store를 사용하면 역시 바꿀 것이 없다.** Store가 새 provider의 등록 정보를
 갖고 있으므로 후보가 저절로 늘어난다.
 
-주소를 직접 적는 구성이라면 provider endpoint를 모두 등록한다. 아래는 처리 node 두 대에
-연결하는 코드다.
-
-=== "C#/.NET"
-
-    ```csharp
-    --8<-- "framework/languages/dotnet/samples/TicTacToe/Server/Api/ApiServer.cs:doc-manual-peer-connect"
-    ```
-
-=== "C++"
-
-    ```cpp
-    --8<-- "framework/languages/cpp/samples/TicTacToe/Server/Api/api_server_host_factory.hpp:doc-manual-peer-connect"
-    ```
-
-=== "Java"
-
-    ```java
-    --8<-- "framework/languages/java/samples/java/TicTacToe/Server/src/main/java/systems/zlink/samples/tictactoe/server/api/ApiServer.java:doc-manual-peer-connect"
-    ```
-
-=== "Kotlin"
-
-    ```kotlin
-    --8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/api/ApiServer.kt:doc-manual-peer-connect"
-    ```
-
-=== "Node/TypeScript"
-
-    ```typescript
-    --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Api/tictactoe-api-module.ts:doc-manual-peer-connect"
-    ```
+주소를 직접 적는 구성이라면 provider endpoint를 모두 등록한다. 등록하는 코드 형태는
+[RouteMesh — 연결 하나를 여러 channel이 공유한다](#21-routemesh--연결-하나를-여러-channel이-공유한다)에서
+본 수동 연결과 같으며, 연결할 endpoint만 여러 개로 늘어난다.
 
 이 경우 provider를 늘릴 때마다 호출하는 쪽 설정을 고치고 다시 시작해야 한다. 그래서 node 수가
 변하는 구성에는 Location Store를 사용한다.
@@ -450,41 +393,31 @@ fanout channel은 그 자체로 독립된 PUB/SUB 소켓 쌍을 연다. Spot이�
 === "C#/.NET"
 
     ```csharp
-    options.AddFanoutChannel("events")
-        .EnablePublisher("tcp://*:7400")
-        .SetNoDrop(true);
+    --8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:fanout-publish-register"
     ```
 
 === "C++"
 
     ```cpp
-    options.add_fanout_channel ("events")
-      .enable_publisher ("tcp://*:7400")
-      .set_no_drop (true);
+    --8<-- "framework/languages/cpp/tutorial/Client/main.cpp:fanout-publish-register"
     ```
 
 === "Java"
 
     ```java
-    options.addFanoutChannel("events")
-        .enablePublisher("tcp://*:7400")
-        .setNoDrop(true);
+    --8<-- "framework/languages/java/tutorial/java/Client/src/main/java/systems/zlink/tutorial/client/ClientApplication.java:fanout-publish-register"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    options.addFanoutChannel("events")
-        .enablePublisher("tcp://*:7400")
-        .setNoDrop(true)
+    --8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/ClientApplication.kt:fanout-publish-register"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    builder.addFanoutChannel('events')
-      .enablePublisher('tcp://*:7400')
-      .setNoDrop(true);
+    --8<-- "framework/languages/node/tutorial/Client/main.ts:fanout-publish-register"
     ```
 
 NoDrop은 publisher capability가 있는 channel에서만 설정한다. Logical Multicast도 저장·재전송·ack는 제공하지 않는다.
@@ -504,41 +437,31 @@ Classic fanout subscriber는 받을 topic을 `subscribe(topic)`으로 등록한�
 === "C#/.NET"
 
     ```csharp
-    options.AddFanoutChannel("events")
-        .EnableSubscriber()
-        .Subscribe("order.created");
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:fanout-subscribe"
     ```
 
 === "C++"
 
     ```cpp
-    options.add_fanout_channel ("events")
-      .enable_subscriber ()
-      .subscribe ("order.created");
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:fanout-subscribe"
     ```
 
 === "Java"
 
     ```java
-    options.addFanoutChannel("events")
-        .enableSubscriber()
-        .subscribe("order.created");
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:fanout-subscribe"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    options.addFanoutChannel("events")
-        .enableSubscriber()
-        .subscribe("order.created")
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:fanout-subscribe"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    builder.addFanoutChannel('events')
-      .enableSubscriber()
-      .subscribe('order.created');
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:fanout-subscribe"
     ```
 
 handler가 함께 받는 publish context에는 도착한 topic도 들어 있으므로, 하나의 handler가 여러 topic을 등록해 나누어 처리할 수도 있다.
@@ -641,37 +564,9 @@ Store 장애에 대비한 유예 시간이 있다. 그것은 마지막으로 완
 
 ### 6.4 manual과 automatic
 
-수동 연결은 MeshNode의 peer 목록에 설정한다.
-
-=== "C#/.NET"
-
-    ```csharp
-    --8<-- "framework/languages/dotnet/samples/TicTacToe/Server/Api/ApiServer.cs:doc-manual-peer-connect"
-    ```
-
-=== "C++"
-
-    ```cpp
-    --8<-- "framework/languages/cpp/samples/TicTacToe/Server/Api/api_server_host_factory.hpp:doc-manual-peer-connect"
-    ```
-
-=== "Java"
-
-    ```java
-    --8<-- "framework/languages/java/samples/java/TicTacToe/Server/src/main/java/systems/zlink/samples/tictactoe/server/api/ApiServer.java:doc-manual-peer-connect"
-    ```
-
-=== "Kotlin"
-
-    ```kotlin
-    --8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/api/ApiServer.kt:doc-manual-peer-connect"
-    ```
-
-=== "Node/TypeScript"
-
-    ```typescript
-    --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Api/tictactoe-api-module.ts:doc-manual-peer-connect"
-    ```
+수동 연결은 MeshNode의 peer 목록에 설정한다. 설정하는 코드는
+[RouteMesh — 연결 하나를 여러 channel이 공유한다](#21-routemesh--연결-하나를-여러-channel이-공유한다)에서
+본 수동 연결과 같다.
 
 endpoint 인자는 startup 설정이다. host 시작 뒤 실행 중인 socket을 직접 제어하는 handle이 아니다.
 실행 중에 바꿀 수 있는 값은 [실행 중에 새 요청만 멈추기](#43-실행-중에-새-요청만-멈추기)의 weight뿐이다.

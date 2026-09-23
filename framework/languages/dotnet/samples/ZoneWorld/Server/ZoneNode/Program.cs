@@ -76,7 +76,9 @@ builder.Services.AddZLinkFramework(options =>
         // Normal records the required key transitions. The runner redirects this process's
         // output to its per-run log file, so the flow evidence remains available without
         // relying on a console scroll.
+        // --8<-- [start:doc-monitoring-flow]
         .Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+        // --8<-- [end:doc-monitoring-flow]
     options.AddHandlersFromAssemblyOf(typeof(ZoneSpot));
 
     // The node that hosts no zone registers the broadcast subscriber and nothing else — no

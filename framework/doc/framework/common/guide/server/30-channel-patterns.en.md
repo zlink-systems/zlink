@@ -253,35 +253,8 @@ Ahead of maintenance or a rolling restart, you sometimes want a node **to stop a
 requests** without taking it down. Change its weight to `0`. **This is the one value you can
 change while running.** Inject the RouteMesh runtime options and name the ChannelName.
 
-=== "C#/.NET"
-
-    ```csharp
-    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:weight-runtime"
-    ```
-
-=== "C++"
-
-    ```cpp
-    --8<-- "framework/languages/cpp/tutorial/Server/ops/channel_weight_handler.hpp:weight-runtime"
-    ```
-
-=== "Java"
-
-    ```java
-    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:weight-runtime"
-    ```
-
-=== "Kotlin"
-
-    ```kotlin
-    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/AdminEndpoints.kt:weight-runtime"
-    ```
-
-=== "Node/TypeScript"
-
-    ```typescript
-    --8<-- "framework/languages/node/tutorial/Server/main.ts:weight-runtime"
-    ```
+The language-specific executable code is the runtime-weight example in
+[Options](16-options.en.md).
 
 - `Weight = 0` does **not close** the serving socket. Requests already received are handled and
   answered to the end, and other nodes drop this node only as a target for new requests. Its
@@ -307,38 +280,10 @@ ChannelName with `Server()`. The registration code is the same regardless of the
 **Nothing changes on the calling side either, if you use a Location Store.** The Store holds the
 new provider's registration, so the candidate set grows on its own.
 
-In an arrangement that writes addresses directly, register every provider endpoint. Below is the
-code that connects to two handling nodes.
-
-=== "C#/.NET"
-
-    ```csharp
-    --8<-- "framework/languages/dotnet/samples/TicTacToe/Server/Api/ApiServer.cs:doc-manual-peer-connect"
-    ```
-
-=== "C++"
-
-    ```cpp
-    --8<-- "framework/languages/cpp/samples/TicTacToe/Server/Api/api_server_host_factory.hpp:doc-manual-peer-connect"
-    ```
-
-=== "Java"
-
-    ```java
-    --8<-- "framework/languages/java/samples/java/TicTacToe/Server/src/main/java/systems/zlink/samples/tictactoe/server/api/ApiServer.java:doc-manual-peer-connect"
-    ```
-
-=== "Kotlin"
-
-    ```kotlin
-    --8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/api/ApiServer.kt:doc-manual-peer-connect"
-    ```
-
-=== "Node/TypeScript"
-
-    ```typescript
-    --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Api/tictactoe-api-module.ts:doc-manual-peer-connect"
-    ```
+In an arrangement that writes addresses directly, register every provider endpoint. The
+registration code takes the same shape as the manual connection shown in
+[RouteMesh — Many Channels Share One Connection](#21-routemesh--many-channels-share-one-connection);
+only the number of endpoints to connect grows.
 
 In that case, every time you add a provider you have to change the caller's configuration and
 restart it. That is why an arrangement whose node count changes uses a Location Store.
@@ -471,31 +416,31 @@ before its deadline.
 === "C#/.NET"
 
     ```csharp
-    options.AddFanoutChannel("events").EnablePublisher("tcp://*:7400").SetNoDrop(true);
+    --8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:fanout-publish-register"
     ```
 
 === "C++"
 
     ```cpp
-    options.add_fanout_channel ("events").enable_publisher ("tcp://*:7400").set_no_drop (true);
+    --8<-- "framework/languages/cpp/tutorial/Client/main.cpp:fanout-publish-register"
     ```
 
 === "Java"
 
     ```java
-    options.addFanoutChannel("events").enablePublisher("tcp://*:7400").setNoDrop(true);
+    --8<-- "framework/languages/java/tutorial/java/Client/src/main/java/systems/zlink/tutorial/client/ClientApplication.java:fanout-publish-register"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    options.addFanoutChannel("events").enablePublisher("tcp://*:7400").setNoDrop(true)
+    --8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/ClientApplication.kt:fanout-publish-register"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    builder.addFanoutChannel('events').enablePublisher('tcp://*:7400').setNoDrop(true);
+    --8<-- "framework/languages/node/tutorial/Client/main.ts:fanout-publish-register"
     ```
 
 NoDrop is available only on a channel with the publisher capability. Logical Multicast provides no
@@ -518,31 +463,31 @@ published to a matching topic travel to that subscriber.
 === "C#/.NET"
 
     ```csharp
-    options.AddFanoutChannel("events").EnableSubscriber().Subscribe("order.created");
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:fanout-subscribe"
     ```
 
 === "C++"
 
     ```cpp
-    options.add_fanout_channel ("events").enable_subscriber ().subscribe ("order.created");
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:fanout-subscribe"
     ```
 
 === "Java"
 
     ```java
-    options.addFanoutChannel("events").enableSubscriber().subscribe("order.created");
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:fanout-subscribe"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    options.addFanoutChannel("events").enableSubscriber().subscribe("order.created")
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:fanout-subscribe"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    builder.addFanoutChannel('events').enableSubscriber().subscribe('order.created');
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:fanout-subscribe"
     ```
 
 The publish context received by a handler also holds the arriving topic, so one handler can
@@ -652,37 +597,9 @@ target list. When the store recovers, the list is reconciled against the latest 
 
 ### 6.4 Manual and Automatic
 
-A manual connection is configured in the MeshNode's peer list.
-
-=== "C#/.NET"
-
-    ```csharp
-    --8<-- "framework/languages/dotnet/samples/TicTacToe/Server/Api/ApiServer.cs:doc-manual-peer-connect"
-    ```
-
-=== "C++"
-
-    ```cpp
-    --8<-- "framework/languages/cpp/samples/TicTacToe/Server/Api/api_server_host_factory.hpp:doc-manual-peer-connect"
-    ```
-
-=== "Java"
-
-    ```java
-    --8<-- "framework/languages/java/samples/java/TicTacToe/Server/src/main/java/systems/zlink/samples/tictactoe/server/api/ApiServer.java:doc-manual-peer-connect"
-    ```
-
-=== "Kotlin"
-
-    ```kotlin
-    --8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/api/ApiServer.kt:doc-manual-peer-connect"
-    ```
-
-=== "Node/TypeScript"
-
-    ```typescript
-    --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Api/tictactoe-api-module.ts:doc-manual-peer-connect"
-    ```
+A manual connection is configured in the MeshNode's peer list, the same way as the connection
+code shown in
+[RouteMesh — Many Channels Share One Connection](#21-routemesh--many-channels-share-one-connection).
 
 The endpoint argument is a startup setting. It is not a handle that controls a running socket
 after the host starts. The one value that can change while running is the weight in
