@@ -125,7 +125,7 @@ framework가 없다. 우연이 아니라 이유가 있다.
   가깝다 — 매칭 요청 → room·접속 정보 응답 → 이미 준비된 room spot에 접속.
 - **④ actor 서비스** — **Instance Spot**이 엔티티 ID로 cold activation되어, 여러 유저가
   동시에 건드리는 엔티티 상태를 Redis 분산 락 없이 직렬로 처리한다.
-  [길드 서비스 예시](#22-하나의-엔티티에-대한-동시-접근)에서 이어진다.
+  [주문 서비스 예시](#22-주문-하나에-대한-동시-접근)에서 이어진다.
 
 위 "기존 방식" 그림과 같은 자리에서, ZLink로는 각 방식이 이렇게 구성된다.
 
@@ -285,8 +285,7 @@ sticky LB · pub/sub 브로커 · 분산 락 — 이 인프라 구성 요소가 
 --8<-- "framework/languages/cpp/samples/DeliveryDispatch/Server/CustomerGateway/main.cpp:doc-dd-bound-session-push"
 ```
 
-실행되는 근거 샘플: [SupportChat](../../../common/sample/supportchat/README.ko.md) ·
-[DeliveryDispatch](../../../common/sample/deliverydispatch/README.ko.md)
+실행되는 근거 샘플: [DeliveryDispatch](../../../common/sample/deliverydispatch/README.ko.md)
 
 ### 2.4 이벤트 중심 업무 처리 단순화
 
@@ -431,14 +430,24 @@ channel/spot 계약으로 메시징할 수 있다.
 correlation id 매칭, 직렬화, 수신 루프 ... 수십 줄의 연결·설정 코드
 ```
 
-**ZLink Framework** — 아래는 tutorial의 실제 "profile" channel 코드다(handler
-등록, 서버 등록, 클라이언트 호출). 대상이 가격 조회가 아니라 플레이어 프로필
-조회로 바뀐 것 말고는 같은 모양이다.
+**ZLink Framework** — 아래는 tutorial의 실제 "profile" channel 코드다. 대상이 가격 조회가
+아니라 플레이어 프로필 조회로 바뀐 것 말고는 같은 모양이다. 먼저 서버가 요청을 받는
+handler다.
 
 ```cpp
 --8<-- "framework/languages/cpp/tutorial/Server/channel/get_player_profile_handler.hpp:channel-request-handler"
+```
+
+이 handler를 mesh와 channel에 등록한다.
+
+```cpp
 --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
 --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:channel-register"
+```
+
+클라이언트는 이 channel을 이렇게 호출한다.
+
+```cpp
 --8<-- "framework/languages/cpp/tutorial/Client/main.cpp:channel-request-call"
 ```
 

@@ -101,13 +101,28 @@ The point where the application meets this stack is **one registration spot.** T
 you declare the location store, MeshNode, fanout, and STREAM node. The blocks below splice
 together the tutorial's real registration code as-is — the mesh, channel, and fanout names
 are the tutorial's own `"game"`/`"profile"`/`"broadcast"`, not `"services"`/`"orders"`/
-`"events"`.
+`"events"`. First, register the location store.
 
 ```typescript
 --8<-- "framework/languages/node/tutorial/Server/main.ts:location-store"
+```
+
+Next, register the mesh and the channel.
+
+```typescript
 --8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
 --8<-- "framework/languages/node/tutorial/Server/main.ts:channel-register"
+```
+
+Then subscribe to the fanout.
+
+```typescript
 --8<-- "framework/languages/node/tutorial/Server/main.ts:fanout-subscribe"
+```
+
+Finally, register the STREAM node.
+
+```typescript
 --8<-- "framework/languages/node/tutorial/Server/main.ts:stream-register"
 ```
 

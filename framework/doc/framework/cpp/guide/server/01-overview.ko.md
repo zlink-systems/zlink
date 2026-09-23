@@ -95,12 +95,28 @@ application이 이 스택과 만나는 지점은 **등록 코드 한 곳**이다
 store, MeshNode, fanout과 STREAM node를 선언한다. 아래는 tutorial의 실제 등록
 코드를 그대로 이어 붙인 것이다 — mesh·channel·fanout 이름은 `"services"`·
 `"orders"`·`"events"`가 아니라 tutorial의 `"game"`·`"profile"`·`"broadcast"`다.
+먼저 location store를 등록한다.
 
 ```cpp
 --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:location-store"
+```
+
+다음으로 mesh와 channel을 등록한다.
+
+```cpp
 --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
 --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:channel-register"
+```
+
+그다음 fanout을 구독한다.
+
+```cpp
 --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:fanout-subscribe"
+```
+
+마지막으로 STREAM node를 등록한다.
+
+```cpp
 --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:stream-register"
 ```
 

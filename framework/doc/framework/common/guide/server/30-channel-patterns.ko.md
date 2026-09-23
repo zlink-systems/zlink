@@ -264,38 +264,9 @@ runtime 옵션을 주입받아 ChannelName으로 지정한다.
 **호출하는 쪽은 Location Store를 사용하면 역시 바꿀 것이 없다.** Store가 새 provider의 등록 정보를
 갖고 있으므로 후보가 저절로 늘어난다.
 
-주소를 직접 적는 구성이라면 provider endpoint를 모두 등록한다. 아래는 처리 node 두 대에
-연결하는 코드다.
-
-=== "C#/.NET"
-
-    ```csharp
-    --8<-- "framework/languages/dotnet/samples/TicTacToe/Server/Api/ApiServer.cs:doc-manual-peer-connect"
-    ```
-
-=== "C++"
-
-    ```cpp
-    --8<-- "framework/languages/cpp/samples/TicTacToe/Server/Api/api_server_host_factory.hpp:doc-manual-peer-connect"
-    ```
-
-=== "Java"
-
-    ```java
-    --8<-- "framework/languages/java/samples/java/TicTacToe/Server/src/main/java/systems/zlink/samples/tictactoe/server/api/ApiServer.java:doc-manual-peer-connect"
-    ```
-
-=== "Kotlin"
-
-    ```kotlin
-    --8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/api/ApiServer.kt:doc-manual-peer-connect"
-    ```
-
-=== "Node/TypeScript"
-
-    ```typescript
-    --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Api/tictactoe-api-module.ts:doc-manual-peer-connect"
-    ```
+주소를 직접 적는 구성이라면 provider endpoint를 모두 등록한다. 등록하는 코드 형태는
+[RouteMesh — 연결 하나를 여러 channel이 공유한다](#21-routemesh--연결-하나를-여러-channel이-공유한다)에서
+본 수동 연결과 같으며, 연결할 endpoint만 여러 개로 늘어난다.
 
 이 경우 provider를 늘릴 때마다 호출하는 쪽 설정을 고치고 다시 시작해야 한다. 그래서 node 수가
 변하는 구성에는 Location Store를 사용한다.
@@ -593,37 +564,9 @@ Store 장애에 대비한 유예 시간이 있다. 그것은 마지막으로 완
 
 ### 6.4 manual과 automatic
 
-수동 연결은 MeshNode의 peer 목록에 설정한다.
-
-=== "C#/.NET"
-
-    ```csharp
-    --8<-- "framework/languages/dotnet/samples/TicTacToe/Server/Api/ApiServer.cs:doc-manual-peer-connect"
-    ```
-
-=== "C++"
-
-    ```cpp
-    --8<-- "framework/languages/cpp/samples/TicTacToe/Server/Api/api_server_host_factory.hpp:doc-manual-peer-connect"
-    ```
-
-=== "Java"
-
-    ```java
-    --8<-- "framework/languages/java/samples/java/TicTacToe/Server/src/main/java/systems/zlink/samples/tictactoe/server/api/ApiServer.java:doc-manual-peer-connect"
-    ```
-
-=== "Kotlin"
-
-    ```kotlin
-    --8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/api/ApiServer.kt:doc-manual-peer-connect"
-    ```
-
-=== "Node/TypeScript"
-
-    ```typescript
-    --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Api/tictactoe-api-module.ts:doc-manual-peer-connect"
-    ```
+수동 연결은 MeshNode의 peer 목록에 설정한다. 설정하는 코드는
+[RouteMesh — 연결 하나를 여러 channel이 공유한다](#21-routemesh--연결-하나를-여러-channel이-공유한다)에서
+본 수동 연결과 같다.
 
 endpoint 인자는 startup 설정이다. host 시작 뒤 실행 중인 socket을 직접 제어하는 handle이 아니다.
 실행 중에 바꿀 수 있는 값은 [실행 중에 새 요청만 멈추기](#43-실행-중에-새-요청만-멈추기)의 weight뿐이다.

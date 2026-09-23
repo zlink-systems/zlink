@@ -280,38 +280,10 @@ ChannelName with `Server()`. The registration code is the same regardless of the
 **Nothing changes on the calling side either, if you use a Location Store.** The Store holds the
 new provider's registration, so the candidate set grows on its own.
 
-In an arrangement that writes addresses directly, register every provider endpoint. Below is the
-code that connects to two handling nodes.
-
-=== "C#/.NET"
-
-    ```csharp
-    --8<-- "framework/languages/dotnet/samples/TicTacToe/Server/Api/ApiServer.cs:doc-manual-peer-connect"
-    ```
-
-=== "C++"
-
-    ```cpp
-    --8<-- "framework/languages/cpp/samples/TicTacToe/Server/Api/api_server_host_factory.hpp:doc-manual-peer-connect"
-    ```
-
-=== "Java"
-
-    ```java
-    --8<-- "framework/languages/java/samples/java/TicTacToe/Server/src/main/java/systems/zlink/samples/tictactoe/server/api/ApiServer.java:doc-manual-peer-connect"
-    ```
-
-=== "Kotlin"
-
-    ```kotlin
-    --8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/api/ApiServer.kt:doc-manual-peer-connect"
-    ```
-
-=== "Node/TypeScript"
-
-    ```typescript
-    --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Api/tictactoe-api-module.ts:doc-manual-peer-connect"
-    ```
+In an arrangement that writes addresses directly, register every provider endpoint. The
+registration code takes the same shape as the manual connection shown in
+[RouteMesh — Many Channels Share One Connection](#21-routemesh--many-channels-share-one-connection);
+only the number of endpoints to connect grows.
 
 In that case, every time you add a provider you have to change the caller's configuration and
 restart it. That is why an arrangement whose node count changes uses a Location Store.
@@ -625,37 +597,9 @@ target list. When the store recovers, the list is reconciled against the latest 
 
 ### 6.4 Manual and Automatic
 
-A manual connection is configured in the MeshNode's peer list.
-
-=== "C#/.NET"
-
-    ```csharp
-    --8<-- "framework/languages/dotnet/samples/TicTacToe/Server/Api/ApiServer.cs:doc-manual-peer-connect"
-    ```
-
-=== "C++"
-
-    ```cpp
-    --8<-- "framework/languages/cpp/samples/TicTacToe/Server/Api/api_server_host_factory.hpp:doc-manual-peer-connect"
-    ```
-
-=== "Java"
-
-    ```java
-    --8<-- "framework/languages/java/samples/java/TicTacToe/Server/src/main/java/systems/zlink/samples/tictactoe/server/api/ApiServer.java:doc-manual-peer-connect"
-    ```
-
-=== "Kotlin"
-
-    ```kotlin
-    --8<-- "framework/languages/java/samples/kotlin/TicTacToe/Server/src/main/kotlin/systems/zlink/samples/kotlin/tictactoe/server/api/ApiServer.kt:doc-manual-peer-connect"
-    ```
-
-=== "Node/TypeScript"
-
-    ```typescript
-    --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Api/tictactoe-api-module.ts:doc-manual-peer-connect"
-    ```
+A manual connection is configured in the MeshNode's peer list, the same way as the connection
+code shown in
+[RouteMesh — Many Channels Share One Connection](#21-routemesh--many-channels-share-one-connection).
 
 The endpoint argument is a startup setting. It is not a handle that controls a running socket
 after the host starts. The one value that can change while running is the weight in

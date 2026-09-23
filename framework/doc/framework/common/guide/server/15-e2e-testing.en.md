@@ -220,28 +220,9 @@ part of the contract. Verifying only the success path leaves this path unverifie
 Most E2E flakiness has the same cause. **You act first, then start waiting**, and miss a
 push that arrived in between.
 
-Reverse the order. Register the wait first, then run the action that triggers that push.
-
-=== "C#/.NET"
-
-    --8<-- "framework/languages/dotnet/samples/DeliveryDispatch/Client/DeliveryDispatchClientScenario.cs:doc-e2e-sequence"
-
-=== "C++"
-
-    --8<-- "framework/languages/cpp/samples/DeliveryDispatch/Client/delivery_dispatch_client_scenario.hpp:doc-e2e-sequence"
-
-=== "Java"
-
-    --8<-- "framework/languages/java/samples/java/DeliveryDispatch/Client/src/main/java/systems/zlink/samples/deliverydispatch/client/DeliveryDispatchClientScenario.java:doc-e2e-sequence"
-
-=== "Kotlin"
-
-    --8<-- "framework/languages/java/samples/kotlin/DeliveryDispatch/Client/src/main/kotlin/systems/zlink/samples/kotlin/deliverydispatch/client/Program.kt:doc-e2e-sequence"
-
-=== "Node/TypeScript"
-
-    --8<-- "framework/languages/node/samples/DeliveryDispatch.Ts/Client/deliverydispatch-client-scenario.ts:doc-e2e-sequence"
-
+Reverse the order. Register the wait first, then run the action that triggers that push. The
+`WaitForSequence` registration in [Confirming Push Order](#33-confirming-push-order) is
+exactly this order — the wait is built first, and the request is sent afterward.
 
 If multiple clients need to confirm the same event, register a wait for each and receive
 them together with `Task.WhenAll`.

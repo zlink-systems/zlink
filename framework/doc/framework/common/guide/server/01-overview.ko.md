@@ -187,54 +187,136 @@ application이 이 스택과 만나는 지점은 **등록 코드 한 곳**이다
 store, MeshNode, fanout과 STREAM node를 선언한다. 아래는 tutorial의 실제 등록
 코드를 그대로 이어 붙인 것이다 — mesh·channel·fanout 이름은 `"services"`·
 `"orders"`·`"events"`가 아니라 tutorial의 `"game"`·`"profile"`·`"broadcast"`다.
+먼저 location store를 등록한다.
 
 === "C#/.NET"
 
     ```csharp
     --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:location-store"
-    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"
-    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:channel-register"
-    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:fanout-subscribe"
-    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:stream-register"
     ```
 
 === "C++"
 
     ```cpp
     --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:location-store"
-    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
-    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:channel-register"
-    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:fanout-subscribe"
-    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:stream-register"
     ```
 
 === "Java"
 
     ```java
     --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:location-store"
-    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:mesh-register"
-    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:channel-register"
-    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:fanout-subscribe"
-    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:stream-register"
     ```
 
 === "Kotlin"
 
     ```kotlin
     --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:location-store"
-    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
-    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:channel-register"
-    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:fanout-subscribe"
-    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:stream-register"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
     --8<-- "framework/languages/node/tutorial/Server/main.ts:location-store"
+    ```
+
+다음으로 mesh와 channel을 등록한다.
+
+=== "C#/.NET"
+
+    ```csharp
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:channel-register"
+    ```
+
+=== "C++"
+
+    ```cpp
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:channel-register"
+    ```
+
+=== "Java"
+
+    ```java
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:mesh-register"
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:channel-register"
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:channel-register"
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
     --8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
     --8<-- "framework/languages/node/tutorial/Server/main.ts:channel-register"
+    ```
+
+그다음 fanout을 구독한다.
+
+=== "C#/.NET"
+
+    ```csharp
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:fanout-subscribe"
+    ```
+
+=== "C++"
+
+    ```cpp
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:fanout-subscribe"
+    ```
+
+=== "Java"
+
+    ```java
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:fanout-subscribe"
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:fanout-subscribe"
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
     --8<-- "framework/languages/node/tutorial/Server/main.ts:fanout-subscribe"
+    ```
+
+마지막으로 STREAM node를 등록한다.
+
+=== "C#/.NET"
+
+    ```csharp
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:stream-register"
+    ```
+
+=== "C++"
+
+    ```cpp
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:stream-register"
+    ```
+
+=== "Java"
+
+    ```java
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:stream-register"
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:stream-register"
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
     --8<-- "framework/languages/node/tutorial/Server/main.ts:stream-register"
     ```
 

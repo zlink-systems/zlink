@@ -101,13 +101,28 @@ The point where the application meets this stack is **one registration spot.** T
 you declare the location store, MeshNode, fanout, and STREAM node. The blocks below splice
 together the tutorial's real registration code as-is — the mesh, channel, and fanout names
 are the tutorial's own `"game"`/`"profile"`/`"broadcast"`, not `"services"`/`"orders"`/
-`"events"`.
+`"events"`. First, register the location store.
 
 ```cpp
 --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:location-store"
+```
+
+Next, register the mesh and the channel.
+
+```cpp
 --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
 --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:channel-register"
+```
+
+Then subscribe to the fanout.
+
+```cpp
 --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:fanout-subscribe"
+```
+
+Finally, register the STREAM node.
+
+```cpp
 --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:stream-register"
 ```
 

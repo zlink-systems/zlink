@@ -101,13 +101,28 @@ The point where the application meets this stack is **one registration spot.** T
 you declare the location store, MeshNode, fanout, and STREAM node. The blocks below splice
 together the tutorial's real registration code as-is — the mesh, channel, and fanout names
 are the tutorial's own `"game"`/`"profile"`/`"broadcast"`, not `"services"`/`"orders"`/
-`"events"`.
+`"events"`. First, register the location store.
 
 ```kotlin
 --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:location-store"
+```
+
+Next, register the mesh and the channel.
+
+```kotlin
 --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
 --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:channel-register"
+```
+
+Then subscribe to the fanout.
+
+```kotlin
 --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:fanout-subscribe"
+```
+
+Finally, register the STREAM node.
+
+```kotlin
 --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:stream-register"
 ```
 

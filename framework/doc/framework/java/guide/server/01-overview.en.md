@@ -101,13 +101,28 @@ The point where the application meets this stack is **one registration spot.** T
 you declare the location store, MeshNode, fanout, and STREAM node. The blocks below splice
 together the tutorial's real registration code as-is — the mesh, channel, and fanout names
 are the tutorial's own `"game"`/`"profile"`/`"broadcast"`, not `"services"`/`"orders"`/
-`"events"`.
+`"events"`. First, register the location store.
 
 ```java
 --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:location-store"
+```
+
+Next, register the mesh and the channel.
+
+```java
 --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:mesh-register"
 --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:channel-register"
+```
+
+Then subscribe to the fanout.
+
+```java
 --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:fanout-subscribe"
+```
+
+Finally, register the STREAM node.
+
+```java
 --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:stream-register"
 ```
 

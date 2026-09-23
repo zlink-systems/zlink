@@ -216,27 +216,8 @@ E2E는 대부분 같은 원인으로 간헐 실패한다. **행동을 먼저 하
 시작하여**, 그 사이에 도착한 push를 받지 못하는 것이다.
 
 순서를 반대로 둔다. 대기를 먼저 등록하고, 그다음에 그 push를 유발하는 행동을 실행한다.
-
-=== "C#/.NET"
-
-    --8<-- "framework/languages/dotnet/samples/DeliveryDispatch/Client/DeliveryDispatchClientScenario.cs:doc-e2e-sequence"
-
-=== "C++"
-
-    --8<-- "framework/languages/cpp/samples/DeliveryDispatch/Client/delivery_dispatch_client_scenario.hpp:doc-e2e-sequence"
-
-=== "Java"
-
-    --8<-- "framework/languages/java/samples/java/DeliveryDispatch/Client/src/main/java/systems/zlink/samples/deliverydispatch/client/DeliveryDispatchClientScenario.java:doc-e2e-sequence"
-
-=== "Kotlin"
-
-    --8<-- "framework/languages/java/samples/kotlin/DeliveryDispatch/Client/src/main/kotlin/systems/zlink/samples/kotlin/deliverydispatch/client/Program.kt:doc-e2e-sequence"
-
-=== "Node/TypeScript"
-
-    --8<-- "framework/languages/node/samples/DeliveryDispatch.Ts/Client/deliverydispatch-client-scenario.ts:doc-e2e-sequence"
-
+[push 순서 확인](#33-push-순서-확인)에서 본 `WaitForSequence` 등록이 바로 이 순서다 —
+대기를 먼저 만들어 두고, 그 뒤에 요청을 보낸다.
 
 여러 client가 같은 사건을 확인해야 한다면 각각 등록해 두고 `Task.WhenAll`로 함께 받는다.
 

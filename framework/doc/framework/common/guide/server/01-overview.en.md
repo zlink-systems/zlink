@@ -201,55 +201,136 @@ The point where the application meets this stack is **one registration spot.** T
 you declare the location store, MeshNode, fanout, and STREAM node. The blocks below splice
 together the tutorial's real registration code as-is — the mesh, channel, and fanout names
 are the tutorial's own `"game"`/`"profile"`/`"broadcast"`, not `"services"`/`"orders"`/
-`"events"`.
+`"events"`. First, register the location store.
 
 === "C#/.NET"
 
     ```csharp
     --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:location-store"
-    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"
-    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:channel-register"
-    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:fanout-subscribe"
-    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:stream-register"
     ```
 
 === "C++"
 
     ```cpp
     --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:location-store"
-    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
-    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:channel-register"
-    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:fanout-subscribe"
-    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:stream-register"
     ```
 
 === "Java"
 
     ```java
     --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:location-store"
-    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:mesh-register"
-    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:channel-register"
-    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:fanout-subscribe"
-    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:stream-register"
     ```
 
 === "Kotlin"
 
     ```kotlin
     --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:location-store"
-    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
-    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:channel-register"
-    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:fanout-subscribe"
-    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:stream-register"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
     --8<-- "framework/languages/node/tutorial/Server/main.ts:location-store"
+    ```
+
+Next, register the mesh and the channel.
+
+=== "C#/.NET"
+
+    ```csharp
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:channel-register"
+    ```
+
+=== "C++"
+
+    ```cpp
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:channel-register"
+    ```
+
+=== "Java"
+
+    ```java
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:mesh-register"
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:channel-register"
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:channel-register"
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
     --8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
     --8<-- "framework/languages/node/tutorial/Server/main.ts:channel-register"
+    ```
+
+Then subscribe to the fanout.
+
+=== "C#/.NET"
+
+    ```csharp
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:fanout-subscribe"
+    ```
+
+=== "C++"
+
+    ```cpp
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:fanout-subscribe"
+    ```
+
+=== "Java"
+
+    ```java
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:fanout-subscribe"
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:fanout-subscribe"
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
     --8<-- "framework/languages/node/tutorial/Server/main.ts:fanout-subscribe"
+    ```
+
+Finally, register the STREAM node.
+
+=== "C#/.NET"
+
+    ```csharp
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:stream-register"
+    ```
+
+=== "C++"
+
+    ```cpp
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:stream-register"
+    ```
+
+=== "Java"
+
+    ```java
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:stream-register"
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:stream-register"
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
     --8<-- "framework/languages/node/tutorial/Server/main.ts:stream-register"
     ```
 

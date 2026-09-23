@@ -124,9 +124,9 @@ part of the contract. Verifying only the success path leaves this path unverifie
 Most E2E flakiness has the same cause. **You act first, then start waiting**, and miss a
 push that arrived in between.
 
-Reverse the order. Register the wait first, then run the action that triggers that push.
-
---8<-- "framework/languages/java/samples/kotlin/DeliveryDispatch/Client/src/main/kotlin/systems/zlink/samples/kotlin/deliverydispatch/client/Program.kt:doc-e2e-sequence"
+Reverse the order. Register the wait first, then run the action that triggers that push. The
+`waitForSequence` registration in [Confirming Push Order](#33-confirming-push-order) is
+exactly this order — the wait is built first, and the request is sent afterward.
 
 If multiple clients need to confirm the same event, register a wait for each and receive
 them together with `Task.WhenAll`.

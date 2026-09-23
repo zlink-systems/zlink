@@ -139,7 +139,7 @@ There's no need to rebuild from the socket for each one.
 - **④ Actor service** — an **Instance Spot** is cold-activated by entity ID and serially
   processes the state of an entity that several users access at the same time, with no Redis
   distributed lock. Continued in the
-  [guild service example](#22-concurrent-access-to-one-entity).
+  [order service example](#22-concurrent-access-to-one-order).
 
 Where the "existing approaches" diagram above split into four, here's how each approach
 assembles with ZLink, in the same spots.
@@ -312,8 +312,7 @@ bound to the customer Actor. The app does not query a sticky-routing table.
 --8<-- "framework/languages/node/samples/DeliveryDispatch.Ts/Server/Session/customer-status-handler.ts:doc-dd-bound-session-push"
 ```
 
-Runnable reference samples: [SupportChat](../../../common/sample/supportchat/README.en.md) ·
-[DeliveryDispatch](../../../common/sample/deliverydispatch/README.en.md)
+Runnable reference samples: [DeliveryDispatch](../../../common/sample/deliverydispatch/README.en.md)
 
 ### 2.4 Simplifying Event-Driven Business Processing
 
@@ -475,14 +474,24 @@ Location-store lookup, connecting the endpoint, reconnect management,
 correlation id matching, serialization, receive loop ... dozens of lines of connection/setup code
 ```
 
-**ZLink Framework** — the blocks below are the tutorial's real "profile" channel code
-(handler registration, server registration, client call). The only difference from a price
-lookup is that the target is a player profile lookup instead.
+**ZLink Framework** — the blocks below are the tutorial's real "profile" channel code. The
+only difference from a price lookup is that the target is a player profile lookup instead.
+First, the handler that receives the request on the server.
 
 ```typescript
 --8<-- "framework/languages/node/tutorial/Server/Channel/get-player-profile-handler.ts:channel-request-handler"
+```
+
+This handler is registered on the mesh and the channel.
+
+```typescript
 --8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
 --8<-- "framework/languages/node/tutorial/Server/main.ts:channel-register"
+```
+
+The client calls this channel like this.
+
+```typescript
 --8<-- "framework/languages/node/tutorial/Client/main.ts:channel-request-call"
 ```
 
@@ -523,7 +532,8 @@ responsibility.
 
 ## 6. Reference — Comparison with the gRPC/Service-Mesh Stack
 
-To see why "internal services calling each other often" in §1 makes ZLink a candidate,
+To see why "internal services calling each other often" in
+[Where It's Used, at a Glance](#1-where-its-used-at-a-glance) makes ZLink a candidate,
 compare it with the gRPC stack.
 
 ### 6.1 The Limits of gRPC Alone
@@ -609,10 +619,11 @@ keep the existing mesh/LB alongside it.
 
 ## 7. Reference — Comparison with Distributed Actor Frameworks (Orleans/Akka)
 
-Microsoft Orleans and Akka are representative frameworks used for the ④ stateful-actor
-pattern in `01. Overview` §2. Because ZLink's Spot/actor offers the same
-primitives (mailbox serialization + location transparency), the candidates overlap for this
-workload.
+Microsoft Orleans and Akka are representative frameworks actually used for the ④
+stateful-actor approach in
+[Building a Real-Time Game Server](#21-building-a-real-time-game-server). Because ZLink's
+Spot/actor offers the same primitives (mailbox serialization + location transparency), the
+candidates overlap for this workload.
 
 ### 7.1 The Limits of Orleans/Akka Alone
 
@@ -658,7 +669,7 @@ differences in the availability of this kind of pre-built tooling.
 | Create a missing Actor or use an existing one | ✅ | ✅ `getOrCreate` coordinates concurrent creation of the same ActorId |
 | Waking a dormant actor at a scheduled time (reminder) | ✅ One API call (Orleans Reminder) | ❌ No dedicated API — compose with a distributed scheduler (② below) |
 | Distributed transactions | Orleans has experimental support | ❌ None (the app composes a saga) — this is an inherent protocol challenge that can't be worked around with existing primitives |
-| License | Orleans MIT / Akka BSL (a paid trigger based on annual revenue) | framework is FSL-1.1-ALv2, core/binding are MPL-2.0 — no revenue-based paid trigger (§7) |
+| License | Orleans MIT / Akka BSL (a paid trigger based on annual revenue) | framework is FSL-1.1-ALv2, core/binding are MPL-2.0 — no revenue-based paid trigger |
 | Time proven in production | 10+ years (Halo, Microsoft 365, Skype) | Short — this project itself is still in progress |
 
 ① **Actor state persistence** — lifecycle hooks like `onCreate`/`onClosing` are provided,
