@@ -53,17 +53,22 @@ routing ID이며, session callback까지 그대로 전달된다.
 전달되는 packet은 없다.
 
 처리 queue에 자리가 없으면 Framework는 다음 packet을 꺼내지 않는다. 꺼내지 않은 packet은 Core의
-수신 buffer에 남고, buffer가 한도(HWM)에 이르면 client의 송신이 멈춘다. 자리가 나면 멈췄던
-packet이 순서대로 다시 흐른다. queue 자리는 host 전체가 함께 쓰므로 한 연결이 아니라 host의
-모든 연결에 같이 적용된다. 한도와 상태 전이는 [Backpressure](33-backpressure.ko.md)가 다룬다.
+수신 buffer에 남고, buffer가 한도(HWM)에 이르면 Core가 그 연결의 socket에서 더 읽지 않는다. 그러면
+TCP 흐름 제어로 client 쪽 socket의 송신 buffer가 차고 client의 송신이 늦어진다. 자리가 나면 멈췄던
+packet이 순서대로 다시 흐른다. queue 자리는 host 전체가 함께 쓰므로 한 연결이 아니라 host의 모든
+연결에 같이 적용된다. 한도와 상태 전이는 [Backpressure](33-backpressure.ko.md)가 다룬다.
 
 ### 2.2 서버 → client
 
-서버가 session으로 보내는 응답과 push에도 backpressure가 걸린다. 단위는 **연결 하나**다.
-client가 읽지 않아 그 연결의 송신 buffer가 한도(HWM)에 이르면 그 연결로 보내는 send가 자리가 날
+서버가 session으로 보내는 응답과 push는 **연결마다** Core 송신 buffer에 쌓인다. 그 연결로 실제로
+내보내는 속도보다 보내는 속도가 빨라 buffer가 한도(HWM)에 이르면 그 연결로 보내는 send가 자리가 날
 때까지 기다린다. 다른 연결로 보내는 send는 영향을 받지 않는다. 기다리다 deadline이 지나면 send는
-`DeadlineExceeded`로 끝나며, Framework는 같은 내용을 다시 보내지 않는다. 받는 쪽 크기 상한(§4)은 이
-방향에 적용하지 않는다.
+`DeadlineExceeded`로 끝나며, Framework는 같은 내용을 다시 보내지 않는다.
+
+client connector는 실행 환경의 socket을 그대로 쓰고 받은 것을 한도 없이 계속 읽으므로, client
+application의 처리가 느린 것은 서버의 송신을 막지 않는다. 그 message는 client 쪽 수신 queue에
+쌓인다. 서버의 송신이 기다리는 것은 네트워크가 느리거나 client가 socket을 읽지 못할 때다. 받는
+쪽 크기 상한(§4)은 이 방향에 적용하지 않는다.
 
 ## 3. 응답 token의 수명
 

@@ -55,18 +55,24 @@ callback unchanged.
 dropped or delivered twice.
 
 When the processing queue has no free slot, the framework doesn't take the next packet. A packet not
-taken stays in Core's receive buffer, and when that buffer reaches its limit (HWM) the client's send
-stops. When a slot frees up, the held packets flow again in order. The queue slots are shared by the
-whole host, so this applies to every connection on the host, not just one. Limits and state
-transitions are covered in [Backpressure](33-backpressure.en.md).
+taken stays in Core's receive buffer, and when that buffer reaches its limit (HWM), Core stops reading
+from that connection's socket. TCP flow control then fills the send buffer of the client's socket and
+the client's sends slow down. When a slot frees up, the held packets flow again in order. The queue
+slots are shared by the whole host, so this applies to every connection on the host, not just one.
+Limits and state transitions are covered in [Backpressure](33-backpressure.en.md).
 
 ### 2.2 Server → Client
 
-Replies and pushes the server sends to a session are subject to backpressure too, per **connection**.
-When the client doesn't read and that connection's send buffer reaches its limit (HWM), a send to that
-connection waits until space frees up. Sends to other connections aren't affected. If the deadline
-passes while waiting, the send ends with `DeadlineExceeded`, and the framework doesn't resend the same
-content. The receive size limit (§4) doesn't apply in this direction.
+Replies and pushes the server sends to a session queue up in Core's send buffer **per connection**.
+When the server sends faster than that connection actually drains and the buffer reaches its limit
+(HWM), a send to that connection waits until space frees up. Sends to other connections aren't
+affected. If the deadline passes while waiting, the send ends with `DeadlineExceeded`, and the
+framework doesn't resend the same content.
+
+The client connector uses the runtime's own socket and keeps reading whatever arrives without a limit,
+so slow processing in the client application doesn't hold back the server's sends; those messages
+pile up in the client's receive queue. The server's send waits when the network is slow or the client
+can't read its socket. The receive size limit (§4) doesn't apply in this direction.
 
 ## 3. The Lifetime of a Reply Token
 
