@@ -485,7 +485,7 @@ requesting take the same shape as in the other connectors: a push is received by
 name together with a callback, and a request receives its reply at the call. All three follow these two
 rules.
 
-- **Callbacks and delegates run only on the engine main thread.** The adapter queues core
+- **Callbacks and delegates run only on the engine main thread (the request sending hook runs in the request call context per Common Spec §5.7).** The adapter queues core
   callbacks and delivers them from the `dispatch` the engine calls every frame or through the main
   thread dispatcher the application registered (Godot `set_main_thread_dispatcher`, Axmol
   `set_axmol_thread_dispatcher`).

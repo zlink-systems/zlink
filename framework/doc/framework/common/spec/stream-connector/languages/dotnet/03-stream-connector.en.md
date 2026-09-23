@@ -228,7 +228,7 @@ public sealed class ZlinkStreamReplyReceivedContext
 
 ## 5. Typed Surface
 
-The two name forms of Common Spec §5 appear as an overload that takes a packet name and one that doesn't, on the typed `On`/`Send`/`Request` of the connector and Actor handle and on the connector's `WaitFor`/`ExpectNone`/`WaitForSequence`.
+The two name forms of Common Spec §5 appear as an overload that takes a packet name and one that doesn't, on the typed `On` of the connector and Actor handle and on the connector's `WaitFor`/`ExpectNone`/`WaitForSequence`. Typed `Send`/`Request` name the packet explicitly through the returned builder's `PacketName(string)`.
 
 `ZlinkStreamTypedConnectorExtensions` provides `Send<TPayload>`,
 `Request<TPayload>`, `On<TPayload>`, `WaitFor<TPayload>`,

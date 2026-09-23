@@ -205,7 +205,7 @@ public sealed class ZlinkStreamReplyReceivedContext
 
 ## 5. Typed 표면
 
-공통 스펙 §5의 이름 두 형태는 connector와 Actor handle의 typed `On`·`Send`·`Request`, connector의 `WaitFor`·`ExpectNone`·`WaitForSequence`에서 packet 이름을 받는 overload와 받지 않는 overload로 나타난다.
+공통 스펙 §5의 이름 두 형태는 connector와 Actor handle의 typed `On`, connector의 `WaitFor`·`ExpectNone`·`WaitForSequence`에서 packet 이름을 받는 overload와 받지 않는 overload로 나타난다. typed `Send`·`Request`는 반환된 builder의 `PacketName(string)`으로 이름을 명시한다.
 
 `ZlinkStreamTypedConnectorExtensions`가 `Send<TPayload>`, `Request<TPayload>`, `On<TPayload>`,
 `WaitFor<TPayload>`, `ExpectNone<TPayload>`, `WaitForSequence<TPayload>`를 제공하고, 각각 typed
