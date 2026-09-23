@@ -4,6 +4,7 @@
 #include <zlink/stream_connector/codecs/auto_codec.hpp>
 
 #include <chrono>
+#include <future>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -47,7 +48,7 @@ int main ()
         options.connect_timeout = std::chrono::seconds (5);
         options.request_timeout = std::chrono::seconds (5);
         options.wait_timeout = std::chrono::seconds (5);
-        options.dispatch_mode = sc::dispatch_mode_t::manual;
+        options.dispatch_mode = sc::dispatch_mode_t::immediate;
 
         auto connector = sc::connector_factory_t::create (options);
         connector.codecs ().enable_codec (sc::codec_t::json).use_default_codec (sc::codec_t::json);
@@ -74,34 +75,75 @@ int main ()
             std::cout << "actor unbound: " << actor->actor_id () << std::endl;
         });
         // --8<-- [end:actor-handle-events]
-        // Binds this connection to a player. Until then the server has no player
-        // to forward packets to.
+        // With one Actor bound, the connector can send without an Actor handle.
         const auto authenticated = value_of (
           connector.request (authenticate_t{"p1"}).submit<authenticated_t> (), "authenticate");
-
-        require (connector.dispatch (), "dispatch bound notice");
         std::cout << "bound player: " << authenticated.player_id << std::endl;
+
+        // --8<-- [start:single-actor-send]
+        std::promise<sc::message_t<nickname_changed_t>> single_changed;
+        auto single_received = single_changed.get_future ();
+        {
+            auto single_notice = connector.on<nickname_changed_t> (
+              [&] (const auto &changed) { single_changed.set_value (changed); });
+            connector.send (change_nickname_t{"speedy"}).submit ();
+            if (single_received.wait_for (options.wait_timeout) != std::future_status::ready)
+                throw std::runtime_error ("NicknameChanged was not received for p1");
+            const auto pushed = single_received.get ();
+            std::cout << "pushed: " << pushed.payload.nickname
+                      << ", actor: " << pushed.actor_id.value_or ("none") << std::endl;
+        }
+        // --8<-- [end:single-actor-send]
+
+        // A second Actor on the same connection calls for explicit handles.
+        const auto authenticated2 = value_of (
+          connector.request (authenticate_t{"p2"}).submit<authenticated_t> (), "authenticate");
+        std::cout << "bound player: " << authenticated2.player_id << std::endl;
 
         // --8<-- [start:actor-handle-send]
         auto player = connector.actor (authenticated.player_id);
-        if (!player)
+        auto player2 = connector.actor (authenticated2.player_id);
+        if (!player || !player2)
             throw std::runtime_error ("Player Actor was not bound");
         std::cout << "actor handle: " << player->actor_id () << std::endl;
+        std::cout << "actor handle: " << player2->actor_id () << std::endl;
         // --8<-- [end:actor-handle-send]
 
-        // The handle addresses this player directly. Its handler pushes the
-        // result back over the same connection. In manual dispatch mode, a push
-        // that lands before the wait starts remains queued for the wait.
+        // --8<-- [start:actor-handle-per-handle-receive]
+        std::promise<sc::message_t<nickname_changed_t>> changed1;
+        std::promise<sc::message_t<nickname_changed_t>> changed2;
+        auto received1 = changed1.get_future ();
+        auto received2 = changed2.get_future ();
+        auto player_notice = player->on<nickname_changed_t> (
+          [&] (const auto &changed) { changed1.set_value (changed); });
+        auto player2_notice = player2->on<nickname_changed_t> (
+          [&] (const auto &changed) { changed2.set_value (changed); });
+        // --8<-- [end:actor-handle-per-handle-receive]
+
+        // --8<-- [start:actor-id-receive]
+        // Connector-level callbacks can distinguish the same pushes by ActorId.
+        auto actor_id_notice = connector.on<nickname_changed_t> ([] (const auto &message) {
+            std::cout << "received actor id: " << message.actor_id.value_or ("none") << std::endl;
+        });
+        // --8<-- [end:actor-id-receive]
+
+        // Each handle addresses its own player on the shared connection.
         // --8<-- [start:actor-handle-send-call]
-        player->send (change_nickname_t{"speedy"}).submit ();
+        player->send (change_nickname_t{"speedy-p1"}).submit ();
+        player2->send (change_nickname_t{"speedy-p2"}).submit ();
         // --8<-- [end:actor-handle-send-call]
 
-        const auto changed = value_of (connector.wait_for<nickname_changed_t> ().submit (),
-                                       "nickname push");
-
         // --8<-- [start:actor-handle-receive]
-        std::cout << "pushed: " << changed.payload.nickname
-                  << ", actor: " << changed.actor_id.value_or ("none") << std::endl;
+        if (received1.wait_for (options.wait_timeout) != std::future_status::ready)
+            throw std::runtime_error ("NicknameChanged was not received for p1");
+        if (received2.wait_for (options.wait_timeout) != std::future_status::ready)
+            throw std::runtime_error ("NicknameChanged was not received for p2");
+        const auto pushed1 = received1.get ();
+        const auto pushed2 = received2.get ();
+        std::cout << "pushed: " << pushed1.payload.nickname
+                  << ", actor: " << pushed1.actor_id.value_or ("none") << std::endl;
+        std::cout << "pushed: " << pushed2.payload.nickname
+                  << ", actor: " << pushed2.actor_id.value_or ("none") << std::endl;
         // --8<-- [end:actor-handle-receive]
         // --8<-- [end:session-actor-client]
 

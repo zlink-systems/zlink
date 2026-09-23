@@ -917,6 +917,7 @@ class session_actor_manager_t
             return detail::result_access_t::failure<session_actor_t> (error);
         }
     }
+    std::vector<session_actor_t> bound () const;
     std::optional<session_actor_t> find (std::string actor_id) const;
     result_t<session_actor_t> get_or_create (std::string actor_type, std::string actor_id);
     result_t<session_actor_t>

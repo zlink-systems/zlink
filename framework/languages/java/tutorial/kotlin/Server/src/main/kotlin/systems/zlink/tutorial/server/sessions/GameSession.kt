@@ -41,12 +41,20 @@ class GameSession(
         if (handlers.tryHandle(context, dispatch, payload).await()) return
 
         // --8<-- [start:session-actor-relay]
-        // Anything without a session handler is forwarded to the player bound to
-        // this connection, which is why authentication has to come first.
-        val bound = context.actors().bound()
-        check(bound.size == 1) { "Authenticate before sending player packets." }
+        // A slotted packet uses its dispatch Actor. An unslotted packet can use
+        // the connection only while exactly one Actor is bound.
+        val player =
+            dispatch.actor()
+                ?: run {
+                    val bound = context.actors().bound()
+                    when (bound.size) {
+                        1 -> bound[0]
+                        0 -> error("Authenticate an Actor before sending player packets.")
+                        else -> error("Select an Actor handle when more than one Actor is bound.")
+                    }
+                }
 
-        bound[0].kotlin().relay(dispatch, payload).await()
+        player.kotlin().relay(dispatch, payload).await()
         // --8<-- [end:session-actor-relay]
     }
 }

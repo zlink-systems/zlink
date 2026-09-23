@@ -150,20 +150,59 @@ In a client that works correctly, messages do not accumulate: a handler processe
 surface consumes them. Continued growth means the client is not calling the pump, which is why the
 received count is not a basis for flow control.
 
-## 8. Sending and Receiving with an Actor Handle
+## 8. With Several Actors — Tell Them Apart by Actor Handle
 
-An application with one Actor needs no changes to its existing send and receive code. When the server binds several Actors to one connection, use a handle to choose the Actor for a send and read the received message’s Actor ID to identify its server-side counterpart. When the server binds an Actor to this connection, the bound notice arrives before that Actor's first packet; when the binding ends, the unbound notice arrives after its last packet.
+### 8.1 With One Actor
 
-Register for bound and unbound notices first. The tutorial server then binds `p1`; the client looks up its handle, sends through it, and reads the Actor ID on the returned message.
+When the server binds only one Actor to this connection, keep the send and receive code you have. A
+packet sent from the connector carries no Actor slot, and the server session hands a packet without a
+slot to the one Actor bound to that connection
+([Session and Actor Connection](../server/24-actor-session.en.md#32-forwarding-what-is-left)).
+
+```kotlin
+--8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/StreamClientProgram.kt:single-actor-send"
+```
+
+### 8.2 Get Handles from the Bound Notice
+
+When the server binds several Actors to one connection, the connector creates an **Actor handle** for
+each. When the server binds an Actor, the bound notice arrives before that Actor's first packet, and
+when the binding ends, the unbound notice arrives after its last packet. The example below registers
+both notices and finds the handles of the authenticated `p1` and `p2` by Actor ID.
 
 ```kotlin
 --8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/StreamClientProgram.kt:actor-handle-events"
 --8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/StreamClientProgram.kt:actor-handle-send"
+```
+
+### 8.3 Send Through a Handle and Receive per Handle
+
+A packet sent through a handle carries that Actor's slot, and the server session hands the packet to
+that slot's Actor. A receive handler registered on a handle receives only the messages that Actor sent.
+
+```kotlin
+--8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/StreamClientProgram.kt:actor-handle-per-handle-receive"
 --8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/StreamClientProgram.kt:actor-handle-send-call"
 --8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/StreamClientProgram.kt:actor-handle-receive"
 ```
 
-The output includes `actor handle: p1` and `pushed: speedy, actor: p1`.
+Running it prints `pushed: speedy-p1, actor: p1` and `pushed: speedy-p2, actor: p2`.
+
+### 8.4 Tell Actors Apart by Actor ID at the Connector Level
+
+You can also receive at the connector level without a handle. The message's Actor ID then tells you
+the server-side Actor. A message that arrived without a slot has an empty Actor ID.
+
+```kotlin
+--8<-- "framework/languages/java/tutorial/kotlin/StreamClient/src/main/kotlin/systems/zlink/tutorial/streamclient/StreamClientProgram.kt:actor-id-receive"
+```
+
+### 8.5 A Packet Sent to an Unbound Actor
+
+An unbound handle is closed. Sending through a closed handle doesn't send and ends with
+`validationFailed` in the connector. If a packet sent just before the unbind reaches the server late,
+the server doesn't hand it to another Actor — a request ends with an `InvalidOperation` error reply,
+and a one-way send is dropped.
 
 ## 9. Next Chapters
 

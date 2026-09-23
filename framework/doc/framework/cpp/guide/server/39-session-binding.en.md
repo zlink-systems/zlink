@@ -37,9 +37,11 @@ party Actor together.
 **One Actor, in return, is bound to exactly one session at a time.** When a new binding is
 committed, the previous one becomes void and a late message arriving on it is refused.
 
-Choosing which Actor to relay to on a session with several bindings is the application's part. The
-application picks the actor id by its own protocol and passes it to the lookup call — **the
-framework does not pick an arbitrary Actor.**
+On a session with several bindings, each packet names its target Actor. When the client sends through
+an Actor handle, the packet carries that Actor's slot and the session hands it to the dispatch
+context's Actor ([Session and Actor Connection §3.2](24-actor-session.en.md#32-forwarding-what-is-left)).
+**The framework does not pick an arbitrary Actor** — a packet with a slot that is not a current
+binding isn't handed to the session; it is refused.
 
 The binding call treats a duplicate bind as an error. A flow that may already be bound, such as a
 resent authentication, uses the find-or-bind call instead.

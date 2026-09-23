@@ -12,8 +12,8 @@ import java.time.Duration;
 import java.util.concurrent.CompletionStage;
 
 // --8<-- [start:session-actor-bind]
-// Ties this connection to one player. After this, packets without a session
-// handler reach that player, and the player can push to this connection.
+// Binds each authenticated player to this connection. The packet's Actor slot
+// chooses which player receives a later packet, and each can push to the client.
 public final class AuthenticateHandler
         implements ZLinkTypedSessionPacketHandler<ZLinkSessionContext, Contracts.Authenticate> {
 

@@ -68,8 +68,12 @@ When the client names its id, the Actor for that id is found or created and boun
 
 ### 3.2 Forwarding What Is Left
 
-Packets the session did not handle are sent to the bound Actor. Before the bind there is nowhere
-to send them, which is where **authentication first** is enforced.
+Packets the session did not handle are sent to the bound Actor. The dispatch context's Actor names
+the target for each packet — a packet the client sent through an Actor handle points at that Actor. A
+packet sent without an Actor handle has no Actor, so when one Actor is bound to this connection it goes
+to that Actor. With no bound Actor there is nowhere to send it, which is where **authentication first**
+is enforced. The client side of telling Actors apart is covered in
+[Receiving Packets §8](../stream-connector/05-receiving.en.md#8-with-several-actors--tell-them-apart-by-actor-handle).
 
 ```typescript
 --8<-- "framework/languages/node/tutorial/Server/Sessions/game-session.ts:session-actor-relay"
