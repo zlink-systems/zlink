@@ -423,7 +423,22 @@ encode·decode된 frame에는 소급 적용하지 않는다. 각 처리 지점�
 나뉘는 일은 없다. `options()`가 보여주는 diagnostics_level도 호출 시점에 `diagnostics_level()`이
 반환할 값과 같으며, `create()`에 전달한 값과 다를 수 있다.
 
-## 7. 검증
+## 7. 엔진 어댑터
+
+Unreal plugin, Godot GDExtension, Axmol adapter는 `connector_t`를 private 구현으로 소유하고 엔진의
+타입과 thread 규칙에 맞춘 표면을 노출한다. 세 어댑터는 다음 세 규칙을 따른다.
+
+- **callback과 delegate는 engine main thread에서만 실행한다.** 어댑터는 core callback을 자기 queue에
+  넣고, engine이 frame마다 부르는 `dispatch`에서 꺼내 전달한다.
+- **push는 packet 이름으로 구독한다.** core의 `on`처럼 어댑터도 이름을 받는 구독 호출을 둔다(Unreal
+  `Subscribe(PacketName)`, Godot·Axmol `subscribe(packet_name)`). 구독한 이름의
+  push만 어댑터의 수신 창구(Unreal `OnPacketReceived`, Godot·Axmol `on_packet` callback)로
+  packet 이름과 함께 전달한다.
+- **요청 완료는 그 요청의 packet 이름을 싣는다.** Response frame에는 packet 이름이 없으므로([공통 스펙
+  §4.2](../../32-stream-connector.ko.md#42-header)) 어댑터는 요청할 때의 이름을 완료 창구(Unreal
+  `OnRequestCompleted`, Godot·Axmol `on_request_completed` callback)에 붙여 전달한다.
+
+## 8. 검증
 
 C++ connector의 공개 동작은 `test_cpp_stream_connector`가 검증한다. 언어별 계약 문서의 존재와
 테스트 helper 인터페이스는 `test_cpp_framework_target_contract`의 `TH-CP-01` 게이트가 검증한다.
