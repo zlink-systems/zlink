@@ -502,7 +502,9 @@ implementation and expose a surface shaped for the engine's types and thread rul
 these three rules.
 
 - **Callbacks and delegates run only on the engine main thread.** The adapter queues core
-  callbacks and delivers them from the `dispatch` the engine calls every frame.
+  callbacks and delivers them from the `dispatch` the engine calls every frame or through the main
+  thread dispatcher the application registered (Godot `set_main_thread_dispatcher`, Axmol
+  `set_axmol_thread_dispatcher`).
 - **Pushes are subscribed by packet name.** Like the core `on`, each adapter has a subscribe call that
   takes a name (Unreal `Subscribe(PacketName)`, Godot and Axmol `subscribe(packet_name)`). Only pushes of a subscribed name reach the adapter's receive surface
   (Unreal `OnPacketReceived`, the Godot and Axmol `on_packet` callback), together with
