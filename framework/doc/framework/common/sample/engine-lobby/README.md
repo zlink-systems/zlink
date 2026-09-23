@@ -159,14 +159,14 @@ each Actor in the current participant snapshot.
 
 Shared sources live under `framework/languages/engines/`.
 
-| Path | Content | Build targets | Connector | Pump location | Mirror repository |
-|---|---|---|---|---|---|
-| `Server/` | .NET host, shared message declarations, session/Actor/Entry Spot implementation, probe, and runner | .NET 8 | — | — | `zlink-engine-server` |
-| `Unity/` | Unity 6 LTS project with the shared `ZLinkClient` MonoBehaviour and UI | native player, WebGL | native: `Zlink.Stream.Connector` NuGet, WebGL: `com.zlink.stream-connector.webgl` UPM | `Update()` | `zlink-unity-examples` |
-| `Unreal/` | Unreal Engine 5 C++ project with a connector-owning Actor and on-screen status UI | Unreal Engine 5 project | the C++ connector's `ZLinkStreamConnector` plugin | `Tick()` | `zlink-unreal-examples` |
-| `Godot/` | Godot 4 .NET project with a connector-owning Control node and status label | Godot 4 .NET project | `Zlink.Stream.Connector` NuGet | `_Process()` | `zlink-godot-examples` |
-| `Axmol/` | Axmol 2.3 C++ project with a connector-owning Scene and status label | Axmol native C++ project | the C++ connector's Axmol adapter | scheduler update | `zlink-axmol-examples` |
-| `CocosCreator/` | Cocos Creator 3.8 web TypeScript project with a Component and Label | web | `@zlink-systems/stream-connector` (browser WebSocket) | `update()` | `zlink-cocos-creator-examples` |
+| Path | Content | Build targets | Client flow | Connector | Pump location | Mirror repository |
+|---|---|---|---|---|---|---|
+| `Server/` | .NET host, shared message declarations, session/Actor/Entry Spot implementation, probe, and runner | .NET 8 | — | — | — | `zlink-engine-server` |
+| `Unity/` | Unity 6 LTS project with the shared `ZLinkClient` MonoBehaviour and UI | Unity Editor, native player, WebGL | join, chat, notification | native: `Zlink.Stream.Connector` NuGet, WebGL: `com.zlink.stream-connector.webgl` UPM | `Update()` | `zlink-unity-examples` |
+| `Unreal/` | Unreal Engine 5 C++ project with a connector-owning Actor and on-screen status UI | Unreal Editor project build | ping, join, chat, notification | the C++ connector's `ZLinkStreamConnector` plugin | `Tick()` | `zlink-unreal-examples` |
+| `Godot/` | Godot 4 .NET project with a connector-owning Control node and status label | Godot 4 .NET project | ping, join, chat, notification | `Zlink.Stream.Connector` NuGet | `_Process()` | `zlink-godot-examples` |
+| `Axmol/` | Axmol 2.3 C++ project with a connector-owning Scene and status label | Axmol native C++ project | ping, join, chat, notification | the C++ connector's Axmol adapter | scheduler update | `zlink-axmol-examples` |
+| `CocosCreator/` | Cocos Creator 3.8 web TypeScript project with a Component and Label | web | ping, join, chat, notification | `@zlink-systems/stream-connector` (browser WebSocket) | `update()` | `zlink-cocos-creator-examples` |
 
 The server uses only public `Zlink.Framework` package surfaces. The Unity project excludes the native
 assembly from WebGL so the two connector implementations never compile into one target.
@@ -212,8 +212,8 @@ same connector contract with a C# probe and needs no engine installation.
 - The Linux lane runs install, build, run, verify, and stop. The Windows lane checks install and
   build only; the Linux lane owns Redis-backed run/verify.
 - Each engine client in the [implementation structure](#8-implementation-structure) table compiles for
-  the table's build targets and, through the connector and pump location in that table, performs connect, pump,
-  join, chat, and notification display for the same packet contract. Unity compiles its
+  the table's build targets and, through the connector and pump location in that table, connects, pumps, and performs
+  its row's client flow for the same packet contract. Unity compiles its
   native and WebGL targets from the same `ZLinkClient` source.
 - The exporter maps each path in the [implementation structure](#8-implementation-structure) table to
   the root tree of that row's mirror repository.

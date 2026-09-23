@@ -157,14 +157,14 @@ sequenceDiagram
 
 공통 source는 `framework/languages/engines/` 아래에 둔다.
 
-| 경로 | 내용 | build 대상 | connector | pump 위치 | 미러 저장소 |
-|---|---|---|---|---|---|
-| `Server/` | .NET host, shared message declaration, session·Actor·Entry Spot 구현, probe와 runner | .NET 8 | — | — | `zlink-engine-server` |
-| `Unity/` | Unity 6 LTS project, 공통 `ZLinkClient` MonoBehaviour와 UI | native player, WebGL | native: `Zlink.Stream.Connector` NuGet, WebGL: `com.zlink.stream-connector.webgl` UPM | `Update()` | `zlink-unity-examples` |
-| `Unreal/` | Unreal Engine 5 C++ project, connector를 소유하는 Actor와 on-screen status UI | Unreal Engine 5 project | C++ connector의 `ZLinkStreamConnector` plugin | `Tick()` | `zlink-unreal-examples` |
-| `Godot/` | Godot 4 .NET project, connector를 소유하는 Control node와 status label | Godot 4 .NET project | `Zlink.Stream.Connector` NuGet | `_Process()` | `zlink-godot-examples` |
-| `Axmol/` | Axmol 2.3 C++ project, connector를 소유하는 Scene과 status label | Axmol native C++ project | C++ connector의 Axmol adapter | scheduler update | `zlink-axmol-examples` |
-| `CocosCreator/` | Cocos Creator 3.8 web TypeScript project, Component와 Label | web | `@zlink-systems/stream-connector`(브라우저 WebSocket) | `update()` | `zlink-cocos-creator-examples` |
+| 경로 | 내용 | build 대상 | client 흐름 | connector | pump 위치 | 미러 저장소 |
+|---|---|---|---|---|---|---|
+| `Server/` | .NET host, shared message declaration, session·Actor·Entry Spot 구현, probe와 runner | .NET 8 | — | — | — | `zlink-engine-server` |
+| `Unity/` | Unity 6 LTS project, 공통 `ZLinkClient` MonoBehaviour와 UI | Unity Editor, native player, WebGL | join, chat, notification | native: `Zlink.Stream.Connector` NuGet, WebGL: `com.zlink.stream-connector.webgl` UPM | `Update()` | `zlink-unity-examples` |
+| `Unreal/` | Unreal Engine 5 C++ project, connector를 소유하는 Actor와 on-screen status UI | Unreal Editor project build | ping, join, chat, notification | C++ connector의 `ZLinkStreamConnector` plugin | `Tick()` | `zlink-unreal-examples` |
+| `Godot/` | Godot 4 .NET project, connector를 소유하는 Control node와 status label | Godot 4 .NET project | ping, join, chat, notification | `Zlink.Stream.Connector` NuGet | `_Process()` | `zlink-godot-examples` |
+| `Axmol/` | Axmol 2.3 C++ project, connector를 소유하는 Scene과 status label | Axmol native C++ project | ping, join, chat, notification | C++ connector의 Axmol adapter | scheduler update | `zlink-axmol-examples` |
+| `CocosCreator/` | Cocos Creator 3.8 web TypeScript project, Component와 Label | web | ping, join, chat, notification | `@zlink-systems/stream-connector`(브라우저 WebSocket) | `update()` | `zlink-cocos-creator-examples` |
 
 Server는 public `Zlink.Framework` package surface만 사용한다. Unity project는 native와 WebGL 두
 connector 구현이 한 target에 함께 들어오지 않도록 native assembly를 WebGL에서 제외한다.
@@ -208,6 +208,6 @@ Linux lane은 install, build, run, verify, stop을 실행한다. Windows lane은
 - Linux lane은 install, build, run, verify, stop을 실행한다. Windows lane은 install과 build만
   확인하며 Redis 기반 run/verify는 Linux lane이 소유한다.
 - [구현 구조](#8-구현-구조) 표의 각 engine client가 표의 build 대상으로 compile되고, 표의 connector와 pump 위치로
-  같은 packet contract의 connect, pump, join, chat과 notification 표시를 수행한다. Unity는
+  connect와 pump를 하고 그 행의 client 흐름을 같은 packet contract로 수행한다. Unity는
   native와 WebGL target을 같은 `ZLinkClient` source로 각각 compile한다.
 - Exporter가 [구현 구조](#8-구현-구조) 표의 각 경로를 그 행의 미러 저장소 root tree로 내보낸다.
