@@ -39,7 +39,7 @@ callback. After that, one packet is handled in this order.
 2. Only after securing the slot does it take one packet from Core.
 3. It decodes the header and puts the packet name, metadata, request information, and **the packet's
    Actor** into the dispatch context. The packet's Actor is present only when the client sent through
-   an Actor handle — [How Session Binding Works](39-session-binding.en.md) covers this.
+   an Actor handle and that slot is a current binding — [How Session Binding Works](39-session-binding.en.md) covers this.
 4. It passes the dispatch context and the not-yet-converted payload to the session callback. Inside
    the session callback, the payload is read as the type you want through the common decode surface.
 
@@ -51,8 +51,9 @@ callback unchanged.
 
 ### 2.1 Client → Server
 
-**One connection's packets reach the session callback once each, in arrival order.** No packet is
-dropped or delivered twice.
+**While the processing queue is full, complete packets aren't dropped but stay in Core, and once
+processing resumes they reach the session callback once each, in per-connection order.** A packet with
+bad or incomplete framing isn't passed to the callback; the connection is closed.
 
 When the processing queue has no free slot, the framework doesn't take the next packet. A packet not
 taken stays in Core's receive buffer, and when that buffer reaches its limit (HWM), Core stops reading
@@ -70,8 +71,9 @@ affected. If the deadline passes while waiting, the send ends with `DeadlineExce
 framework doesn't resend the same content.
 
 The client connector uses the runtime's own socket and keeps reading whatever arrives without a limit,
-so slow processing in the client application doesn't hold back the server's sends; those messages
-pile up in the client's receive queue. The server's send waits when the network is slow or the client
+so slow processing in the client application doesn't hold back the server's sends. Pushes (`Send`)
+pile up in the client's unbounded receive queue, while replies and error replies skip that queue and
+complete the waiting request. The server's send waits when the network is slow or the client
 can't read its socket. The receive size limit (§4) doesn't apply in this direction.
 
 ## 3. The Lifetime of a Reply Token
@@ -81,7 +83,7 @@ for the current request and can be submitted once. Even if sending fails through
 cancellation, the same token can't be used again.
 
 A reply carries the request's sequence back unchanged, and the client uses that sequence to find the
-request it was waiting on. The type the reply is read as is the type the client named when it made
+request it was waiting on. A reply carries no packet name. The type the reply is read as is the type the client named when it made
 the request. An error reply comes back under the same sequence.
 
 When the server sends first to a client that has no pending request, it uses a send (push), not a
@@ -89,7 +91,8 @@ reply.
 
 ## 4. Size Limit on Received Messages
 
-The limit for one message a client sends (header plus payload) is 64 KiB by default. It doesn't apply
+The limit for one message a client sends (header plus payload, excluding the 6-byte length prefix) is
+64 KiB by default. It doesn't apply
 to messages the server sends. A message over the limit reaches the session callback not even in part;
 the server records `EMSGSIZE` and closes the connection. The client receives no error code and sees
 only the connection close. Setting it to `0` removes the framework limit.
@@ -125,7 +128,7 @@ starts**.
 | The node name is empty |
 | The same node name was registered twice |
 | There is no bind endpoint |
-| The same session type was registered twice |
+| The same session type was registered on more than one node of a host |
 | More than one session was registered on one node |
 | TLS is on but the certificate path is empty |
 | TLS is on but the key path is empty |

@@ -19,7 +19,7 @@ client가 연결하면 Framework가 그 연결의 session을 만들고 연결 ca
 1. Framework가 host의 처리 queue에 자리를 하나 확보한다.
 2. 자리를 확보한 뒤에만 Core에서 packet 한 건을 꺼낸다.
 3. header를 풀어 packet 이름, metadata, 요청 정보와 **packet의 상대 Actor**를 dispatch context에
-   담는다. 상대 Actor는 client가 Actor handle로 보냈을 때만 있다 —
+   담는다. 상대 Actor는 client가 Actor handle로 보냈고 그 slot이 현재 binding일 때만 있다 —
    [Session 묶음의 동작 원리](39-session-binding.ko.md)가 다룬다.
 4. session callback에 dispatch context와 아직 변환하지 않은 payload를 넘긴다. payload는
    session callback 안에서 공통 decode 표면으로 원하는 타입으로 읽는다.
@@ -31,8 +31,9 @@ routing ID이며, session callback까지 그대로 전달된다.
 
 ### 2.1 client → 서버
 
-**한 연결의 packet은 도착한 순서대로 한 번씩 session callback에 닿는다.** 버려지거나 두 번
-전달되는 packet은 없다.
+**처리 queue가 가득 찬 동안 완성된 packet은 버리지 않고 Core에 남겨 두며, 처리가 재개되면 연결별
+순서대로 한 번씩 session callback에 전달한다.** framing이 잘못되거나 완성되지 않은 packet은 callback에
+넣지 않고 연결을 닫는다.
 
 처리 queue에 자리가 없으면 Framework는 다음 packet을 꺼내지 않는다. 꺼내지 않은 packet은 Core의
 수신 buffer에 남고, buffer가 한도(HWM)에 이르면 Core가 그 연결의 socket에서 더 읽지 않는다. 그러면
@@ -48,8 +49,8 @@ packet이 순서대로 다시 흐른다. queue 자리는 host 전체가 함께 �
 `DeadlineExceeded`로 끝나며, Framework는 같은 내용을 다시 보내지 않는다.
 
 client connector는 실행 환경의 socket을 그대로 쓰고 받은 것을 한도 없이 계속 읽으므로, client
-application의 처리가 느린 것은 서버의 송신을 막지 않는다. 그 message는 client 쪽 수신 queue에
-쌓인다. 서버의 송신이 기다리는 것은 네트워크가 느리거나 client가 socket을 읽지 못할 때다. 받는
+application의 처리가 느린 것은 서버의 송신을 막지 않는다. push(`Send`)는 client 쪽의 한도 없는 수신
+queue에 쌓이고, 응답과 오류 응답은 그 queue를 거치지 않고 기다리던 요청을 완료한다. 서버의 송신이 기다리는 것은 네트워크가 느리거나 client가 socket을 읽지 못할 때다. 받는
 쪽 크기 상한(§4)은 이 방향에 적용하지 않는다.
 
 ## 3. 응답 token의 수명
@@ -58,7 +59,8 @@ application의 처리가 느린 것은 서버의 송신을 막지 않는다. 그
 요청에서만 유효하고 한 번 제출할 수 있다. timeout이나 취소로 전송이 실패해도 같은 token을 다시
 사용할 수 없다.
 
-응답은 요청의 sequence를 그대로 싣고 돌아가며, client는 이 sequence로 기다리던 요청을 찾는다.
+응답은 요청의 sequence를 그대로 싣고 돌아가며, client는 이 sequence로 기다리던 요청을 찾는다. 응답에는
+packet 이름이 실리지 않는다.
 응답을 어떤 타입으로 읽을지는 client가 요청할 때 지정한 타입이 정한다. 오류 응답도 같은
 sequence로 돌아간다.
 
@@ -66,7 +68,7 @@ sequence로 돌아간다.
 
 ## 4. 받는 message의 크기 상한
 
-client가 보내는 message 하나(header와 payload 합)의 상한은 기본 64 KiB다. 서버가 보내는
+client가 보내는 message 하나(6-byte 길이 prefix를 뺀 header와 payload 합)의 상한은 기본 64 KiB다. 서버가 보내는
 message에는 적용하지 않는다. 상한을 넘은 message는 session callback에 일부도 전달하지 않고,
 서버에 `EMSGSIZE`를 기록한 뒤 연결을 끊는다. client는 오류 코드를 받지 않고 연결 종료만 본다.
 `0`으로 설정하면 Framework 상한을 두지 않는다.
@@ -100,7 +102,7 @@ stream node 등록은 node 이름, bind endpoint와 session type으로 정한다
 | node 이름이 비어 있다 |
 | 같은 node 이름을 두 번 등록했다 |
 | bind endpoint가 없다 |
-| 같은 session type을 중복 등록했다 |
+| 같은 session type을 한 host의 둘 이상의 node에 등록했다 |
 | 한 node에 session을 둘 이상 등록했다 |
 | TLS를 켰는데 인증서 경로가 비어 있다 |
 | TLS를 켰는데 key 경로가 비어 있다 |
