@@ -178,6 +178,29 @@ int main ()
         }
     }
 
+    // A STREAM flow's session identity is stamped on every record in its scope.
+    {
+        const auto absent = capture_logs ([] {
+            const auto opts = options_with_mode (message_flow_log_mode_t::normal);
+            auto event = flow_event (message_flow_outcome_t::received);
+            event.surface = dispatch_error_surface_t::stream_session;
+            message_flow_tracer_t (opts).trace (std::move (event));
+        });
+        if (contains (absent, "session="))
+            return 60;
+        const auto out = capture_logs ([] {
+            const auto opts = options_with_mode (message_flow_log_mode_t::normal);
+            auto scope = zlink::framework::runtime::flow_context_t::enter (
+              std::optional<std::string>{}, std::nullopt, message_flow_log_mode_t::normal,
+              flow_origin_t::inbound, std::string ("session-42"));
+            auto event = flow_event (message_flow_outcome_t::received);
+            event.surface = dispatch_error_surface_t::stream_session;
+            message_flow_tracer_t (opts).trace (std::move (event));
+        });
+        if (!contains (out, "session=session-42"))
+            return 61;
+    }
+
     // detailed appends the message size...
     {
         const auto out = capture_logs ([] {
@@ -208,14 +231,16 @@ int main ()
         zlink::framework::detail::actor_gateway_runtime_t gateway;
         gateway.set_dispatch (options_with_mode (message_flow_log_mode_t::normal));
         const auto normal = capture_logs ([&] {
-            gateway.trace_bound_session_send_stage ("player-1", "router_admission_wait", "pending");
+            gateway.trace_bound_session_send_stage ("player-1", "router_admission_wait", "pending",
+                                                    nullptr);
         });
         if (!normal.empty ())
             return 33;
 
         gateway.set_dispatch (options_with_mode (message_flow_log_mode_t::detailed));
         const auto detailed = capture_logs ([&] {
-            gateway.trace_bound_session_send_stage ("player-1", "router_admission_wait", "pending");
+            gateway.trace_bound_session_send_stage ("player-1", "router_admission_wait", "pending",
+                                                    nullptr);
         });
         if (!contains (detailed, "phase=admitted") || !contains (detailed, "actor=player-1")
             || !contains (detailed, "stage=router_admission_wait")

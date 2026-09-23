@@ -156,7 +156,8 @@ export class ZLinkSpotRoutePacketDispatch {
           createInboundFlow(
             envelope.header.flowId,
             envelope.header.flowOrigin,
-            this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+            this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
+            undefined
           ),
           () =>
             this.options.serial.execute(

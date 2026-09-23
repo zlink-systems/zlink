@@ -237,6 +237,9 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
                 CorrelationId: header.CorrelationId,
                 SourceRid: RoutingId?.ToString()
             )
+            {
+                StreamSessionId = SessionId,
+            }
         );
     }
 

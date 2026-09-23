@@ -92,7 +92,7 @@ route_packet_dispatcher_t::dispatch (const route_received_packet_t &received,
 {
     auto flow_scope = runtime::flow_context_t::enter (
       header.flow_id, header.flow_origin, message_flow_tracer_t (_dispatch_options).mode (),
-      flow_origin_t::inbound);
+      flow_origin_t::inbound, std::nullopt);
     trace_flow (message_flow_outcome_t::received,
                 header.kind == runtime::messaging::message_kind_t::request
                   ? dispatch_message_kind_t::request

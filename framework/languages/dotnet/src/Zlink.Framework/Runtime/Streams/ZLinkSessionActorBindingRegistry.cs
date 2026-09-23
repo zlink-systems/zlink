@@ -185,6 +185,7 @@ internal sealed class ZLinkSessionActorBindingRegistry(ZLinkFrameworkRuntime run
                             ZLinkDispatchErrorAction.Drop,
                             null,
                             ActorId: actor.ActorId,
+                            StreamSessionId: context.SessionId,
                             Exception: failure
                         )
                     );

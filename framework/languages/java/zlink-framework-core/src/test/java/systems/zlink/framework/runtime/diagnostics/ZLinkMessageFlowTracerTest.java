@@ -337,7 +337,8 @@ class ZLinkMessageFlowTracerTest {
                         null,
                         null,
                         null,
-                        17L);
+                        17L,
+                        null);
 
         String line = ZLinkTraceFormat.flowLine(event, 42L);
         assertTrue(line.startsWith("zlink flow: event_id=zlink.message_flow"));
@@ -411,6 +412,7 @@ class ZLinkMessageFlowTracerTest {
                                 null,
                                 null,
                                 ZLinkChannelRouteKind.CLIENT_SERVER,
+                                null,
                                 null,
                                 null,
                                 null,
