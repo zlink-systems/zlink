@@ -84,6 +84,10 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             new List<Action<ZlinkStreamActor>>();
         private readonly List<Action<ZlinkStreamActor>> _actorUnboundHandlers =
             new List<Action<ZlinkStreamActor>>();
+        private readonly List<Action<ZlinkStreamRequestSendingContext>> _requestSendingHandlers =
+            new List<Action<ZlinkStreamRequestSendingContext>>();
+        private readonly List<Action<ZlinkStreamReplyReceivedContext>> _replyReceivedHandlers =
+            new List<Action<ZlinkStreamReplyReceivedContext>>();
 
         private readonly int _handle;
         private int _nextCallId = 1;
@@ -141,8 +145,6 @@ namespace Systems.Zlink.Stream.Connector.Runtime
 
         public ZlinkStreamConnectorOptions Options { get; }
 
-        public ZlinkStreamDiagnosticsLevel DiagnosticsLevel => Options.DiagnosticsLevel;
-
         public IReadOnlyList<ZlinkStreamActor> Actors => new List<ZlinkStreamActor>(_actorOrder);
 
         public ZlinkStreamActor Actor(string actorId)
@@ -157,7 +159,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             if (handler is null)
                 throw new ArgumentNullException(nameof(handler));
             _actorBoundHandlers.Add(handler);
-            return new ActorHandlerRegistration(_actorBoundHandlers, handler);
+            return new HookRegistration<ZlinkStreamActor>(_actorBoundHandlers, handler);
         }
 
         public IDisposable OnActorUnbound(Action<ZlinkStreamActor> handler)
@@ -165,7 +167,29 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             if (handler is null)
                 throw new ArgumentNullException(nameof(handler));
             _actorUnboundHandlers.Add(handler);
-            return new ActorHandlerRegistration(_actorUnboundHandlers, handler);
+            return new HookRegistration<ZlinkStreamActor>(_actorUnboundHandlers, handler);
+        }
+
+        public IDisposable OnRequestSending(Action<ZlinkStreamRequestSendingContext> handler)
+        {
+            if (handler is null)
+                throw new ArgumentNullException(nameof(handler));
+            _requestSendingHandlers.Add(handler);
+            return new HookRegistration<ZlinkStreamRequestSendingContext>(
+                _requestSendingHandlers,
+                handler
+            );
+        }
+
+        public IDisposable OnReplyReceived(Action<ZlinkStreamReplyReceivedContext> handler)
+        {
+            if (handler is null)
+                throw new ArgumentNullException(nameof(handler));
+            _replyReceivedHandlers.Add(handler);
+            return new HookRegistration<ZlinkStreamReplyReceivedContext>(
+                _replyReceivedHandlers,
+                handler
+            );
         }
 
         /// <summary>Callbacks waiting for the next <see cref="Dispatch" />.</summary>
@@ -178,20 +202,6 @@ namespace Systems.Zlink.Stream.Connector.Runtime
         public IZlinkStreamLifecycleCall Dispatch { get; }
 
         internal ZlinkStreamCloseReason? CloseReason => _closeReason;
-
-        public void SetDiagnosticsLevel(ZlinkStreamDiagnosticsLevel level)
-        {
-            ThrowIfDisposed();
-            if (ZlinkStreamInterop.SetDiagnosticsLevel(_handle, (int)level) == 0)
-                throw CreateFailure();
-            Options.SetDiagnosticsLevelLive(level);
-        }
-
-        public Task SetDiagnosticsLevelAsync(ZlinkStreamDiagnosticsLevel level)
-        {
-            SetDiagnosticsLevel(level);
-            return Task.CompletedTask;
-        }
 
         public int ReceivedCount(string name)
         {
@@ -390,10 +400,18 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             ZlinkStreamActor actor = null
         )
         {
+            var name =
+                packetName
+                ?? (
+                    payload.MessageType is null
+                        ? null
+                        : Options.NameResolver.Resolve(payload.MessageType)
+                );
+            if (string.IsNullOrEmpty(name))
+                throw Error(ZlinkStreamErrorCode.ValidationFailed, "Send packet name is required.");
             var call = new ZlinkStreamJson.Writer().StartObject();
             call.Number("codec", (int)payload.Codec);
-            if (packetName != null)
-                call.String("packetName", packetName);
+            call.String("packetName", name);
             WriteMetadata(call, metadata);
             call.Bool("compress", compress);
             if (actor != null)
@@ -457,6 +475,13 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             );
             // Spec 32 section 7: request callbacks run on Dispatch, like push handlers.
             pending.Callback = callback;
+            if (pending.Error != null)
+                DispatchOrQueue(
+                    DispatchItem.ForRequestResult(
+                        callback,
+                        ZlinkStreamResult<ZlinkStreamEncodedPayload>.Failure(pending.Error)
+                    )
+                );
             _ = DriveQuietlyAsync(callId, pending);
         }
 
@@ -471,11 +496,35 @@ namespace Systems.Zlink.Stream.Connector.Runtime
         )
         {
             ThrowIfDisposed();
+            var name =
+                packetName
+                ?? (
+                    payload.MessageType is null
+                        ? null
+                        : Options.NameResolver.Resolve(payload.MessageType)
+                );
+            if (string.IsNullOrEmpty(name))
+                throw Error(
+                    ZlinkStreamErrorCode.ValidationFailed,
+                    "Request packet name is required."
+                );
+            var elapsed = Stopwatch.StartNew();
+            var context = new ZlinkStreamRequestSendingContext(name, actor?.ActorId, metadata);
+            foreach (var handler in _requestSendingHandlers.ToArray())
+            {
+                try
+                {
+                    handler(context);
+                }
+                catch (Exception exception)
+                {
+                    ReportHookFailure(exception);
+                }
+            }
             var call = new ZlinkStreamJson.Writer().StartObject();
             call.Number("codec", (int)payload.Codec);
-            if (packetName != null)
-                call.String("packetName", packetName);
-            WriteMetadata(call, metadata);
+            call.String("packetName", name);
+            WriteMetadata(call, context.Metadata);
             call.Bool("compress", compress);
             call.Number("timeoutMs", (timeout ?? Options.RequestTimeout).TotalMilliseconds);
             if (actor != null)
@@ -484,15 +533,30 @@ namespace Systems.Zlink.Stream.Connector.Runtime
                 call.String("actorId", actor.ActorId);
             }
             call.EndObject();
-
             var callId = NextCallId();
             pending = RegisterPending(callId);
-            var json = call.ToString();
-            InvokeWithPayload(
-                payload,
-                (pointer, length) =>
-                    ZlinkStreamInterop.Request(_handle, callId, json, pointer, length)
-            );
+            try
+            {
+                var json = call.ToString();
+                InvokeWithPayload(
+                    payload,
+                    (pointer, length) =>
+                        ZlinkStreamInterop.Request(_handle, callId, json, pointer, length)
+                );
+            }
+            catch (Exception exception)
+            {
+                var error = exception is ZlinkStreamException streamException
+                    ? streamException.Error
+                    : new ZlinkStreamError(
+                        ZlinkStreamErrorCode.SendFailed,
+                        exception.Message,
+                        exception
+                    );
+                pending.Fail(error);
+                elapsed.Stop();
+                RouteLocalReplyFailure(name, actor?.ActorId, error, elapsed.Elapsed);
+            }
             return callId;
         }
 
@@ -642,6 +706,9 @@ namespace Systems.Zlink.Stream.Connector.Runtime
                 case ZlinkStreamInterop.EventActorUnbound:
                     RouteActorUnbound(inbound.Text);
                     break;
+                case ZlinkStreamInterop.EventReplyReceived:
+                    RouteReplyReceived(inbound);
+                    break;
             }
         }
 
@@ -690,6 +757,91 @@ namespace Systems.Zlink.Stream.Connector.Runtime
                     )
                 );
             }
+        }
+
+        private void RouteReplyReceived(ZlinkStreamInboundEvent inbound)
+        {
+            var node = ZlinkStreamJson.Parse(inbound.Text);
+            var succeeded = node.Member("succeeded")?.Flag == true;
+            var reply = succeeded
+                ? new ZlinkStreamMessage<ZlinkStreamEncodedPayload>(
+                    node.TextOf("name") ?? string.Empty,
+                    ReadMetadata(node.Member("metadata")),
+                    new ZlinkStreamEncodedPayload(
+                        (ZlinkStreamCodec)inbound.Value,
+                        inbound.Bytes ?? ReadOnlyMemory<byte>.Empty
+                    ),
+                    node.TextOf("actorId")
+                )
+                : null;
+            var errorNode = node.Member("error");
+            var error =
+                succeeded || errorNode is null
+                    ? null
+                    : new ZlinkStreamError(
+                        ParseErrorCode(errorNode.TextOf("code")),
+                        errorNode.TextOf("message") ?? string.Empty
+                    );
+            var context = new ZlinkStreamReplyReceivedContext(
+                node.TextOf("requestPacketName"),
+                node.TextOf("actorId"),
+                reply,
+                error,
+                TimeSpan.FromMilliseconds(node.Member("elapsed")?.Number ?? 0)
+            );
+            foreach (var handler in _replyReceivedHandlers.ToArray())
+            {
+                DispatchOrQueue(
+                    DispatchItem.ForCallback(() =>
+                    {
+                        try
+                        {
+                            handler(context);
+                        }
+                        catch (Exception exception)
+                        {
+                            ReportHookFailure(exception);
+                        }
+                    })
+                );
+            }
+        }
+
+        private void RouteLocalReplyFailure(
+            string name,
+            string actorId,
+            ZlinkStreamError error,
+            TimeSpan elapsed
+        )
+        {
+            var context = new ZlinkStreamReplyReceivedContext(name, actorId, null, error, elapsed);
+            foreach (var handler in _replyReceivedHandlers.ToArray())
+                DispatchOrQueue(
+                    DispatchItem.ForCallback(() =>
+                    {
+                        try
+                        {
+                            handler(context);
+                        }
+                        catch (Exception exception)
+                        {
+                            ReportHookFailure(exception);
+                        }
+                    })
+                );
+        }
+
+        private void ReportHookFailure(Exception exception)
+        {
+            DispatchOrQueue(
+                DispatchItem.ForError(
+                    new ZlinkStreamError(
+                        ZlinkStreamErrorCode.UserCallbackFailed,
+                        "Request hook failed.",
+                        exception
+                    )
+                )
+            );
         }
 
         private void RouteMessage(ZlinkStreamInboundEvent inbound)
@@ -1178,24 +1330,8 @@ namespace Systems.Zlink.Stream.Connector.Runtime
                 "compression",
                 options.Compression == ZlinkStreamCompression.None ? "none" : "lz4"
             );
-            writer.String("diagnosticsLevel", DiagnosticsName(options.DiagnosticsLevel));
             writer.EndObject();
             return writer.ToString();
-        }
-
-        private static string DiagnosticsName(ZlinkStreamDiagnosticsLevel level)
-        {
-            switch (level)
-            {
-                case ZlinkStreamDiagnosticsLevel.Off:
-                    return "off";
-                case ZlinkStreamDiagnosticsLevel.Normal:
-                    return "normal";
-                case ZlinkStreamDiagnosticsLevel.Detailed:
-                    return "detailed";
-                default:
-                    return "errors";
-            }
         }
 
         private static ZlinkStreamException CreateFailure()
@@ -1248,15 +1384,12 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             }
         }
 
-        private sealed class ActorHandlerRegistration : IDisposable
+        private sealed class HookRegistration<TContext> : IDisposable
         {
-            private readonly List<Action<ZlinkStreamActor>> _handlers;
-            private readonly Action<ZlinkStreamActor> _handler;
+            private readonly List<Action<TContext>> _handlers;
+            private readonly Action<TContext> _handler;
 
-            internal ActorHandlerRegistration(
-                List<Action<ZlinkStreamActor>> handlers,
-                Action<ZlinkStreamActor> handler
-            )
+            internal HookRegistration(List<Action<TContext>> handlers, Action<TContext> handler)
             {
                 _handlers = handlers;
                 _handler = handler;
@@ -1387,17 +1520,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
 
             public static DispatchItem ForCallback(Action callback)
             {
-                return new DispatchItem(
-                    6,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    default,
-                    callback
-                );
+                return new DispatchItem(6, null, null, null, null, null, null, default, callback);
             }
 
             public async ValueTask InvokeAsync(

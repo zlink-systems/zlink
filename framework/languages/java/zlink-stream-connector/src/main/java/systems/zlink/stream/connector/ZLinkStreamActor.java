@@ -11,7 +11,11 @@ public interface ZLinkStreamActor {
 
     ZLinkTypedStreamSendCall send(Object payload);
 
+    ZLinkTypedStreamSendCall send(String name, Object payload);
+
     ZLinkTypedStreamRequestCall request(Object payload);
+
+    ZLinkTypedStreamRequestCall request(String name, Object payload);
 
     AutoCloseable on(String name, ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload> handler);
 

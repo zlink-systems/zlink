@@ -28,19 +28,6 @@ public enum ZlinkStreamDispatchMode
     Immediate,
 }
 
-/// <summary>
-///     Diagnostics level of the connector. Mirrors the server-side message-flow
-///     tracing levels: <see cref="Off" /> disables every trace-only operation,
-///     including outbound flow_id/flow_origin stamping and inbound flow capture.
-/// </summary>
-public enum ZlinkStreamDiagnosticsLevel
-{
-    Off = 0,
-    Errors = 1,
-    Normal = 2,
-    Detailed = 3,
-}
-
 public enum ZlinkStreamMessageKind : byte
 {
     Send = 1,
@@ -75,22 +62,6 @@ public enum ZlinkStreamConnectionState
     Reconnecting,
     Disconnected,
     Closed,
-}
-
-/// <summary>
-///     Origin of the flow a received message belongs to (stream-connector .NET spec §11).
-/// </summary>
-/// <remarks>
-///     The <c>flow_origin</c> wire values are 1..4 while these ordinals are 0..3. The
-///     header codec converts between the two explicitly; never cast this enum to an
-///     integer to obtain a wire value.
-/// </remarks>
-public enum ZlinkStreamFlowOrigin
-{
-    Inbound,
-    Timer,
-    Application,
-    Lifecycle,
 }
 
 public enum ZlinkStreamCloseReason

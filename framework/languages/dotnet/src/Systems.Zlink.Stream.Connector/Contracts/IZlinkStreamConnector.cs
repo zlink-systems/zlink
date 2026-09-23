@@ -35,53 +35,8 @@ public interface IZlinkStreamConnector : IAsyncDisposable
     /// </remarks>
     ZlinkStreamCloseReason? CloseReason { get; }
 
-    /// <summary>
-    ///     Gets the options used by this connector. <see cref="ZlinkStreamConnectorOptions.DiagnosticsLevel" />
-    ///     on this instance always reflects the level most recently applied through
-    ///     <see cref="SetDiagnosticsLevel" />.
-    /// </summary>
+    /// <summary>Gets the options used by this connector.</summary>
     ZlinkStreamConnectorOptions Options { get; }
-
-    /// <summary>
-    ///     Gets the connector's current diagnostics level.
-    /// </summary>
-    /// <remarks>
-    ///     Equivalent to reading <see cref="ZlinkStreamConnectorOptions.DiagnosticsLevel" /> off
-    ///     <see cref="Options" />. The connector never re-derives this value mid-processing:
-    ///     each processing point (building an outbound frame, dispatching an inbound one)
-    ///     reads it exactly once at the start of that operation.
-    /// </remarks>
-    ZlinkStreamDiagnosticsLevel DiagnosticsLevel { get; }
-
-    /// <summary>
-    ///     Atomically changes the connector's diagnostics level while it keeps running,
-    ///     without recreating the connector.
-    /// </summary>
-    /// <remarks>
-    ///     The change applies to processing points that start after this call returns;
-    ///     frames already built or already being dispatched are not revisited
-    ///     (stream-connector spec §13, following server spec §26 §4.1). Request
-    ///     correlation ids are kept at every level regardless of this setting. The level
-    ///     is stored on <see cref="Options" />, so connectors that were constructed from
-    ///     the same <see cref="ZlinkStreamConnectorOptions" /> instance share it.
-    /// </remarks>
-    /// <exception cref="ZlinkStreamException">
-    ///     <paramref name="level" /> is not one of the defined <see cref="ZlinkStreamDiagnosticsLevel" /> values.
-    /// </exception>
-    /// <exception cref="ObjectDisposedException">The connector has already been disposed.</exception>
-    /// <remarks>
-    ///     This surface writes the value and returns; it never blocks on an asynchronous
-    ///     counterpart, so calling it inside a receive callback creates no cycle in which the
-    ///     call waits on its own completion (stream-connector spec §13, .NET spec §12).
-    /// </remarks>
-    void SetDiagnosticsLevel(ZlinkStreamDiagnosticsLevel level);
-
-    /// <summary>
-    ///     Asynchronous counterpart of <see cref="SetDiagnosticsLevel" />, provided for the
-    ///     .NET idiom. Both surfaces change the same value; this one does not replace the
-    ///     synchronous surface.
-    /// </summary>
-    Task SetDiagnosticsLevelAsync(ZlinkStreamDiagnosticsLevel level);
 
     /// <summary>
     ///     Gets the number of messages waiting for manual dispatch.
@@ -139,6 +94,12 @@ public interface IZlinkStreamConnector : IAsyncDisposable
     /// </remarks>
     IDisposable OnConnectionStateChanged(
         Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask> handler
+    );
+
+    IDisposable OnRequestSending(Action<ZlinkStreamRequestSendingContext> handler);
+
+    IDisposable OnReplyReceived(
+        Func<ZlinkStreamReplyReceivedContext, CancellationToken, ValueTask> handler
     );
 
     /// <summary>

@@ -5,9 +5,7 @@ import java.time.Duration
 import java.util.WeakHashMap
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
-import kotlin.coroutines.CoroutineContext
 import kotlin.reflect.KClass
-import kotlinx.coroutines.ThreadContextElement
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -25,18 +23,17 @@ import systems.zlink.stream.connector.ZLinkStreamConnectionState
 import systems.zlink.stream.connector.ZLinkStreamConnectionStateHandler
 import systems.zlink.stream.connector.ZLinkStreamConnector
 import systems.zlink.stream.connector.ZLinkStreamConnectorOptions
-import systems.zlink.stream.connector.ZLinkStreamDiagnosticsLevel
 import systems.zlink.stream.connector.ZLinkStreamDisconnectedHandler
 import systems.zlink.stream.connector.ZLinkStreamEncodedPayload
 import systems.zlink.stream.connector.ZLinkStreamError
 import systems.zlink.stream.connector.ZLinkStreamErrorHandler
 import systems.zlink.stream.connector.ZLinkStreamExpectNoneCall
-import systems.zlink.stream.connector.ZLinkStreamFlow
-import systems.zlink.stream.connector.ZLinkStreamFlowScope
 import systems.zlink.stream.connector.ZLinkStreamLifecycleCall
 import systems.zlink.stream.connector.ZLinkStreamMessage
 import systems.zlink.stream.connector.ZLinkStreamMessageHandler
+import systems.zlink.stream.connector.ZLinkStreamReplyReceivedContext
 import systems.zlink.stream.connector.ZLinkStreamRequestCall
+import systems.zlink.stream.connector.ZLinkStreamRequestSendingHandler
 import systems.zlink.stream.connector.ZLinkStreamSendCall
 import systems.zlink.stream.connector.ZLinkStreamSequenceCall
 import systems.zlink.stream.connector.ZLinkStreamWaitCall
@@ -82,7 +79,6 @@ private fun ZLinkStreamConnectorOptions.copyStreamCompression(
         codec,
         nameResolver(),
         typedCodec(),
-        diagnosticsLevel(),
     )
 
 class ZLinkKotlinStreamConnector(@PublishedApi internal val inner: ZLinkStreamConnector) {
@@ -112,23 +108,6 @@ class ZLinkKotlinStreamConnector(@PublishedApi internal val inner: ZLinkStreamCo
      */
     fun closeReason(): ZLinkStreamCloseReason? = inner.closeReason().orElse(null)
 
-    //  Runtime-mutable diagnostics level (server spec 26 §4.1 / common
-    //  connector spec §13). `inner.diagnosticsLevel()` / `setDiagnosticsLevel`
-    //  do not follow the `getX`/`setX` naming Kotlin needs to synthesize a
-    //  property automatically, so this wrapper exposes the pair explicitly.
-    var diagnosticsLevel: ZLinkStreamDiagnosticsLevel
-        get() = inner.diagnosticsLevel()
-        set(value) = inner.setDiagnosticsLevel(value)
-
-    /**
-     * The suspending pair of the [diagnosticsLevel] setter (common connector spec 32 13). It
-     * changes the same value; the property setter stays the synchronous surface and does not wait
-     * for this one.
-     */
-    suspend fun setDiagnosticsLevel(level: ZLinkStreamDiagnosticsLevel) {
-        inner.setDiagnosticsLevelAsync(level).await()
-    }
-
     val pendingDispatchCount: Int
         get() = inner.pendingDispatchCount()
 
@@ -142,8 +121,17 @@ class ZLinkKotlinStreamConnector(@PublishedApi internal val inner: ZLinkStreamCo
     inline fun <reified TPayload> on(handler: ZLinkStreamMessageHandler<TPayload>): AutoCloseable =
         inner.on(TPayload::class.java, handler)
 
+    fun <TPayload : Any> on(
+        name: String,
+        payloadType: KClass<TPayload>,
+        handler: ZLinkStreamMessageHandler<TPayload>,
+    ): AutoCloseable = inner.on(name, payloadType.java, handler)
+
     fun onErrorReceived(handler: ZLinkStreamErrorHandler): AutoCloseable =
         inner.onErrorReceived(handler)
+
+    fun onRequestSending(handler: ZLinkStreamRequestSendingHandler): AutoCloseable =
+        inner.onRequestSending(handler)
 
     fun onDisconnected(handler: ZLinkStreamDisconnectedHandler): AutoCloseable =
         inner.onDisconnected(handler)
@@ -209,7 +197,44 @@ class ZLinkKotlinStreamConnector(@PublishedApi internal val inner: ZLinkStreamCo
     fun messages(packetName: String): Flow<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> =
         inner.messages(packetName)
 
+    inline fun <reified TPayload> messages(): Flow<ZLinkStreamMessage<TPayload>> = callbackFlow {
+        val registration =
+            inner.on(TPayload::class.java) { message ->
+                if (trySend(message).isFailure) {
+                    (message.payload() as? ZLinkStreamEncodedPayload)?.payload()?.close()
+                }
+                CompletableFuture.completedFuture(null)
+            }
+        awaitClose { registration.close() }
+    }
+
+    fun <TPayload : Any> messages(
+        packetName: String,
+        payloadType: KClass<TPayload>,
+    ): Flow<ZLinkStreamMessage<TPayload>> = callbackFlow {
+        val registration =
+            inner.on(packetName, payloadType.java) { message ->
+                if (trySend(message).isFailure) {
+                    (message.payload() as? ZLinkStreamEncodedPayload)?.payload()?.close()
+                }
+                CompletableFuture.completedFuture(null)
+            }
+        awaitClose { registration.close() }
+    }
+
     fun errors(): Flow<ZLinkStreamError> = inner.errors()
+
+    fun repliesReceived(): Flow<ZLinkStreamReplyReceivedContext> =
+        callbackFlow {
+                val registration =
+                    inner.onReplyReceived { context ->
+                        if (trySend(context).isFailure) {
+                            context.reply()?.payload()?.payload()?.close()
+                        }
+                    }
+                awaitClose { registration.close() }
+            }
+            .buffer(Channel.UNLIMITED)
 
     fun actors(): List<ZLinkKotlinStreamActor> = inner.actors().map(::wrapActor)
 
@@ -239,7 +264,8 @@ class ZLinkKotlinStreamConnector(@PublishedApi internal val inner: ZLinkStreamCo
             .buffer(Channel.UNLIMITED)
 }
 
-class ZLinkKotlinStreamActor internal constructor(private val inner: ZLinkStreamActor) {
+class ZLinkKotlinStreamActor
+internal constructor(@PublishedApi internal val inner: ZLinkStreamActor) {
     val actorId: String
         get() = inner.actorId()
 
@@ -253,6 +279,20 @@ class ZLinkKotlinStreamActor internal constructor(private val inner: ZLinkStream
 
     fun request(payload: ZLinkStreamEncodedPayload): ZLinkKotlinRawRequestCall =
         ZLinkKotlinRawRequestCall(inner.request(payload))
+
+    fun on(
+        name: String,
+        handler: ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>,
+    ): AutoCloseable = inner.on(name, handler)
+
+    inline fun <reified TPayload> on(handler: ZLinkStreamMessageHandler<TPayload>): AutoCloseable =
+        inner.on(TPayload::class.java, handler)
+
+    fun <TPayload : Any> on(
+        name: String,
+        payloadType: KClass<TPayload>,
+        handler: ZLinkStreamMessageHandler<TPayload>,
+    ): AutoCloseable = inner.on(name, payloadType.java, handler)
 
     fun <TReply : Any> request(
         payload: Any,
@@ -271,6 +311,31 @@ class ZLinkKotlinStreamActor internal constructor(private val inner: ZLinkStream
                 }
             awaitClose { registration.close() }
         }
+
+    inline fun <reified TPayload> messages(): Flow<ZLinkStreamMessage<TPayload>> = callbackFlow {
+        val registration =
+            inner.on(TPayload::class.java) { message ->
+                if (trySend(message).isFailure) {
+                    (message.payload() as? ZLinkStreamEncodedPayload)?.payload()?.close()
+                }
+                CompletableFuture.completedFuture(null)
+            }
+        awaitClose { registration.close() }
+    }
+
+    fun <TPayload : Any> messages(
+        packetName: String,
+        payloadType: KClass<TPayload>,
+    ): Flow<ZLinkStreamMessage<TPayload>> = callbackFlow {
+        val registration =
+            inner.on(packetName, payloadType.java) { message ->
+                if (trySend(message).isFailure) {
+                    (message.payload() as? ZLinkStreamEncodedPayload)?.payload()?.close()
+                }
+                CompletableFuture.completedFuture(null)
+            }
+        awaitClose { registration.close() }
+    }
 }
 
 inline fun <reified TReply : Any> ZLinkKotlinStreamActor.request(
@@ -409,43 +474,6 @@ object ZLinkKotlinStreamAssert {
     }
 }
 
-/**
- * Carries the connector's flow context across suspension points.
- *
- * The connector keeps the current flow in a thread local (Java spec 03 7.1). A coroutine can resume
- * on a different thread than the one that suspended it, so without a [ThreadContextElement] an
- * outbound call made after a suspension point loses the inbound flow and starts a new `APPLICATION`
- * one. This element installs the captured flow on whatever thread the continuation resumes on and
- * restores that thread's previous flow when it suspends again.
- */
-class ZLinkStreamFlowContextElement(private val flow: ZLinkStreamFlow?) :
-    ThreadContextElement<ZLinkStreamFlowScope>, CoroutineContext.Element {
-    companion object Key : CoroutineContext.Key<ZLinkStreamFlowContextElement>
-
-    override val key: CoroutineContext.Key<ZLinkStreamFlowContextElement>
-        get() = Key
-
-    override fun updateThreadContext(context: CoroutineContext): ZLinkStreamFlowScope =
-        ZLinkStreamFlowScope.enter(flow)
-
-    override fun restoreThreadContext(context: CoroutineContext, oldState: ZLinkStreamFlowScope) {
-        oldState.close()
-    }
-}
-
-/**
- * The flow the calling thread currently runs under, or `null` outside an inbound handler. Pair it
- * with [ZLinkStreamFlowContextElement] to keep that flow across suspension points.
- */
-fun currentZLinkStreamFlow(): ZLinkStreamFlow? = ZLinkStreamFlowScope.current()
-
-/**
- * Runs [block] with [flow] installed as the connector flow for every thread the coroutine resumes
- * on.
- */
-suspend fun <T> withZLinkStreamFlow(flow: ZLinkStreamFlow?, block: suspend () -> T): T =
-    kotlinx.coroutines.withContext(ZLinkStreamFlowContextElement(flow)) { block() }
-
 fun ZLinkStreamConnector.messages(
     packetName: String
 ): Flow<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> = callbackFlow {
@@ -460,20 +488,6 @@ fun ZLinkStreamConnector.messages(
             CompletableFuture.completedFuture(null)
         }
     awaitClose { registration.close() }
-}
-
-/**
- * Collects a push stream with each message's own flow installed while [action] runs. An outbound
- * call [action] makes then continues that flow instead of starting a new `APPLICATION` one, and it
- * keeps doing so across [action]'s own suspension points.
- *
- * The flow is installed around [action] rather than around the emission, because changing the
- * coroutine context between a flow's emitter and its collector is not allowed.
- */
-suspend fun <TPayload> Flow<ZLinkStreamMessage<TPayload>>.collectInStreamFlow(
-    action: suspend (ZLinkStreamMessage<TPayload>) -> Unit
-) {
-    collect { message -> withZLinkStreamFlow(message) { action(message) } }
 }
 
 fun ZLinkStreamConnector.errors(): Flow<ZLinkStreamError> = callbackFlow {

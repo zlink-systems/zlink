@@ -68,13 +68,6 @@ public interface ZLinkStreamConnector {
     // The last close reason. Empty when it has never disconnected (see "Session close reason").
     Optional<ZLinkStreamCloseReason> closeReason();
 
-    // Runtime read/write of the diagnostics level (§4.1, server spec 26 §4.1).
-    // Changes the level without recreating the connector. options().diagnosticsLevel()
-    // always agrees with this value.
-    ZLinkStreamDiagnosticsLevel diagnosticsLevel();
-    void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level);
-    CompletionStage<Void> setDiagnosticsLevelAsync(ZLinkStreamDiagnosticsLevel level);
-
     int pendingDispatchCount();
     int receivedCount(String name);
 
@@ -88,7 +81,9 @@ public interface ZLinkStreamConnector {
     ZLinkStreamSendCall send(ZLinkStreamEncodedPayload payload);
     ZLinkStreamRequestCall request(ZLinkStreamEncodedPayload payload);
     ZLinkTypedStreamSendCall send(Object payload);
+    ZLinkTypedStreamSendCall send(String name, Object payload);
     ZLinkTypedStreamRequestCall request(Object payload);
+    ZLinkTypedStreamRequestCall request(String name, Object payload);
     ZLinkStreamWaitCall waitFor(String name);
     ZLinkStreamWaitCall waitFor(Class<?> payloadType);
     ZLinkStreamExpectNoneCall expectNone(String name);
@@ -106,6 +101,8 @@ public interface ZLinkStreamConnector {
         String name,
         Class<TPayload> payloadType,
         ZLinkStreamMessageHandler<TPayload> handler);
+    AutoCloseable onRequestSending(ZLinkStreamRequestSendingHandler handler);
+    AutoCloseable onReplyReceived(ZLinkStreamReplyReceivedHandler handler);
     AutoCloseable onErrorReceived(ZLinkStreamErrorHandler handler);
     AutoCloseable onDisconnected(ZLinkStreamDisconnectedHandler handler);
     AutoCloseable onConnectionStateChanged(ZLinkStreamConnectionStateHandler handler);
@@ -124,7 +121,9 @@ public interface ZLinkStreamActor {
     ZLinkStreamSendCall send(ZLinkStreamEncodedPayload payload);      // carries this Actor's slot
     ZLinkStreamRequestCall request(ZLinkStreamEncodedPayload payload);
     ZLinkTypedStreamSendCall send(Object payload);
+    ZLinkTypedStreamSendCall send(String name, Object payload);
     ZLinkTypedStreamRequestCall request(Object payload);
+    ZLinkTypedStreamRequestCall request(String name, Object payload);
     AutoCloseable on(String name, ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload> handler); // only messages whose counterpart is this Actor
     <TPayload> AutoCloseable on(Class<TPayload> payloadType, ZLinkStreamMessageHandler<TPayload> handler);
     <TPayload> AutoCloseable on(
@@ -221,8 +220,7 @@ public record ZLinkStreamConnectorOptions(
     ZLinkStreamCompression compression,
     ZLinkStreamCompressionCodec compressionCodec,
     ZLinkStreamPacketNameResolver nameResolver, // the name resolver injection point of common spec §5.4
-    ZLinkStreamTypedCodec typedCodec,           // the typed payload codec injection point of common spec §5.4
-    ZLinkStreamDiagnosticsLevel diagnosticsLevel) { // default ERRORS (§4.1)
+    ZLinkStreamTypedCodec typedCodec) { // typed payload codec injection point from common spec §5.4
 
     // The named constant expressing the unlimited reconnect common spec §6 requires.
     public static final int UNLIMITED_RECONNECT_ATTEMPTS = -1;
@@ -237,56 +235,6 @@ instance and fails with a `ZLinkStreamException` (§11). A single value
 out of range carries `VALIDATION_FAILED`, and a mismatch between
 options carries `CONFIGURATION_ERROR`. `maxReconnectAttempts` must be
 `UNLIMITED_RECONNECT_ATTEMPTS` or positive.
-
-### 4.1 Diagnostics Level
-
-The contract is owned by [Common spec §13](../../32-stream-connector.en.md#13-diagnostics-level).
-The Java surface is:
-
-```java
-public enum ZLinkStreamDiagnosticsLevel { OFF, ERRORS, NORMAL, DETAILED }
-
-// record component. The compact constructor normalizes null to ERRORS. This is only
-// the construction-time initial value.
-public ZLinkStreamDiagnosticsLevel diagnosticsLevel();
-public ZLinkStreamConnectorOptions withDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level);
-```
-
-At `OFF`, outbound frames create no flow pair (0x10 not set), and inbound flow fields keep
-only the structural length check — value validation and handler delivery are skipped. The
-request correlation is kept regardless of the level.
-
-**Runtime change.** Per the rule required by
-[Common spec §13](../../32-stream-connector.en.md#13-diagnostics-level), which follows
-[server spec 26 §4.1](../../../server/06-observability/03-message-flow-tracing.en.md#5-changing-the-record-level-at-runtime-and-the-cost-rule),
-`ZLinkStreamConnectorOptions.diagnosticsLevel()` is only the construction-time initial
-value; the connector itself owns a runtime read/write API.
-
-```java
-// Declared on ZLinkStreamConnector (§3). The application reads and changes the level
-// without recreating the connector.
-ZLinkStreamDiagnosticsLevel diagnosticsLevel();
-void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level);      // changes the value without waiting
-CompletionStage<Void> setDiagnosticsLevelAsync(ZLinkStreamDiagnosticsLevel level);
-```
-
-`setDiagnosticsLevelAsync` is the async pair returning the same
-`CompletionStage` every other operation's terminal returns, and it does
-not replace the synchronous surface common spec §13 requires. The
-synchronous surface does not wait for the async pair to complete, so
-calling it inside a dispatch callback never makes that call wait on its
-own completion.
-
-Internally, the current level is held in an atomic cell (`AtomicReference`).
-`options().diagnosticsLevel()` always agrees with the cell's current value. Each
-processing point (one outbound submit, one inbound frame dispatch) reads the cell
-**exactly once** when it starts processing, and uses that single value consistently
-throughout that processing (header encode/decode, whether the flow pair is attached or
-validated, the flow fields delivered to a handler). The cell is never re-read mid-processing,
-so a level change landing in the middle of one processing does not desynchronize that
-processing — it runs to completion using the value it read at the start. A change applies
-starting with processing points that begin after the change; frames already built are never
-retroactively changed.
 
 `skipServerCertificateValidation` is used only for a test's self-signed
 certificate. The production default is `false`. Setting this value to
@@ -319,32 +267,13 @@ public record ZLinkStreamEncodedPayload(
     ZLinkStreamCodec codec) {
 }
 
-public enum ZLinkFlowOrigin {
-    INBOUND,
-    TIMER,
-    APPLICATION,
-    LIFECYCLE
-}
-
-public interface ZLinkStreamFlow {
-    String flowId();
-    ZLinkFlowOrigin flowOrigin();
-}
-
 public record ZLinkStreamMessage<TPayload>(
     String packetName,
     TPayload payload,
     Map<String, String> metadata,
-    String flowId,                // null when the diagnostics level is OFF (§4.1)
-    ZLinkFlowOrigin flowOrigin,
-    String actorId) implements ZLinkStreamFlow { // the counterpart bound Actor; null for a frame without a slot (common spec §5.6)
+    String actorId) { // the counterpart bound Actor; null for a frame without a slot (common spec §5.6)
 }
 ```
-
-`flowId` and `flowOrigin` are the received-flow exposure
-[Common Spec §5.5](../../32-stream-connector.en.md#55-flow-exposure-and-propagation)
-requires. Since the JVM provides an ambient execution context, a send
-call carries no argument stating the flow (§7.1).
 
 The **means of attaching a packet name to a type** that
 [Common Spec §5](../../32-stream-connector.en.md#5-packet-model)
@@ -427,22 +356,30 @@ returned `CompletionStage` completes with a timeout failure. Even if
 the removed request's response arrives late, that stage isn't
 completed again.
 
-### 7.1 Flow Correlation
 
-An outbound operation the Connector starts generates a UUIDv7
-`flow_id` once. The connector runtime sets the current flow context for
-the inbound handler's execution scope. A related outbound started from
-that handler reuses the same `flowId` and `flowOrigin` with no separate
-public argument, and restores the previous context at the handler's
-terminal completion. The flow isn't propagated to an unrelated next
-callback or a separate executor the Framework doesn't manage, and an
-outbound started there starts a new flow with `APPLICATION` origin.
+### 7.1 Request Hooks
 
-The current flow isn't guessed from a connector instance's mutable
-field or thread ID. The wire format and async context boundary is
-owned by
-[Stream Connector §4.2](../../32-stream-connector.en.md#42-header) and
-[Flow Correlation §6](../../../server/06-observability/04-flow-correlation.en.md#6-async-work-and-execution-context).
+The two hooks in [Common Spec §5.7](../../32-stream-connector.en.md#57-request-hooks)
+are registered on the connector as
+`AutoCloseable onRequestSending(ZLinkStreamRequestSendingHandler)` and
+`AutoCloseable onReplyReceived(ZLinkStreamReplyReceivedHandler)` and removed through the
+returned value's `close()`.
+
+```java
+public interface ZLinkStreamRequestSendingHandler {
+    void handle(ZLinkStreamRequestSendingContext context);
+}
+public interface ZLinkStreamReplyReceivedHandler {
+    void handle(ZLinkStreamReplyReceivedContext context);
+}
+```
+
+`ZLinkStreamRequestSendingContext` exposes `requestPacketName()`, nullable
+`actorId()`, and `setMetadata(String key, String value)`. The reply context exposes
+read-only `requestPacketName()`, nullable `actorId()`, `succeeded()`,
+`reply()` on success, `error()` on failure, and `elapsed()`.
+Common Spec §5.7 and §7 govern metadata validation and hook failures.
+
 
 ### 7.2 Test Wait Surface
 
@@ -661,6 +598,9 @@ fun ZLinkStreamConnectorOptions.withStreamCompression(
 fun ZLinkStreamConnectorOptions.withoutStreamCompression(): ZLinkStreamConnectorOptions
 
 class ZLinkKotlinStreamConnector {
+    fun on(name: String, handler: ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>): AutoCloseable
+    inline fun <reified TPayload> on(handler: ZLinkStreamMessageHandler<TPayload>): AutoCloseable
+    fun <TPayload : Any> on(name: String, payloadType: KClass<TPayload>, handler: ZLinkStreamMessageHandler<TPayload>): AutoCloseable
     fun receivedCount(name: String): Int
     fun connect(): ZLinkKotlinLifecycleCall
     fun close(): ZLinkKotlinLifecycleCall
@@ -682,6 +622,10 @@ class ZLinkKotlinStreamConnector {
     fun <TPayload> waitForSequence(): ZLinkStreamTypedSequenceCall<TPayload>
     fun <TPayload> waitForSequence(name: String): ZLinkStreamTypedSequenceCall<TPayload>
     fun messages(packetName: String): Flow<ZLinkStreamMessage<ZLinkStreamEncodedPayload>>
+    inline fun <reified TPayload> messages(): Flow<ZLinkStreamMessage<TPayload>>
+    fun <TPayload : Any> messages(packetName: String, payloadType: KClass<TPayload>): Flow<ZLinkStreamMessage<TPayload>>
+    fun onRequestSending(handler: ZLinkStreamRequestSendingHandler): AutoCloseable
+    fun repliesReceived(): Flow<ZLinkStreamReplyReceivedContext>
     fun errors(): Flow<ZLinkStreamError>
     fun actors(): List<ZLinkKotlinStreamActor>
     fun actor(actorId: String): ZLinkKotlinStreamActor?
@@ -690,6 +634,9 @@ class ZLinkKotlinStreamConnector {
 }
 
 class ZLinkKotlinStreamActor {
+    fun on(name: String, handler: ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>): AutoCloseable
+    inline fun <reified TPayload> on(handler: ZLinkStreamMessageHandler<TPayload>): AutoCloseable
+    fun <TPayload : Any> on(name: String, payloadType: KClass<TPayload>, handler: ZLinkStreamMessageHandler<TPayload>): AutoCloseable
     val actorId: String
     val isBound: Boolean
     fun send(payload: ZLinkStreamEncodedPayload): ZLinkKotlinSendCall
@@ -700,6 +647,8 @@ class ZLinkKotlinStreamActor {
         replyType: KClass<TReply>,
     ): ZLinkKotlinRequestCall<TReply>
     fun messages(packetName: String): Flow<ZLinkStreamMessage<ZLinkStreamEncodedPayload>>
+    inline fun <reified TPayload> messages(): Flow<ZLinkStreamMessage<TPayload>>
+    fun <TPayload : Any> messages(packetName: String, payloadType: KClass<TPayload>): Flow<ZLinkStreamMessage<TPayload>>
 }
 
 inline fun <reified TReply : Any> ZLinkKotlinStreamActor.request(
@@ -712,6 +661,7 @@ class ZLinkKotlinLifecycleCall {
 }
 
 class ZLinkKotlinSendCall {
+    fun packetName(name: String): ZLinkKotlinSendCall
     suspend fun await(): Unit
 }
 
@@ -769,13 +719,19 @@ demand a name, the three surfaces are called differently inside one test.
 The Kotlin wrapper must not build a different state transition or
 buffering policy from the Java connector. The extension copying options
 **must preserve every option value currently defined.**
-Every surface that returns a `Flow` wraps the corresponding Java registration with `callbackFlow`:
+A `Flow` surface for a dispatch-mode callback wraps the corresponding Java registration with `callbackFlow`:
 the connector's `messages(...)`, `errors()`, `actorBound()` and `actorUnbound()` wrap `on(...)`,
 `onErrorReceived(...)`, `onActorBound(...)` and `onActorUnbound(...)`, and an Actor's `messages(...)`
 wraps that Actor handle's `ZLinkStreamActor.on(...)`. So in
 manual [dispatch mode](../../../server/00-foundation/02-glossary.en.md#dispatch-mode), just
 like Java, the Kotlin wrapper's `dispatch().await()` must be called for
 the collector to receive a message or error event.
+
+The reply-received hook follows §7 dispatch mode, so Kotlin projects it as
+`repliesReceived(): Flow`. Under §5.7, request sending runs synchronously on the
+request-calling thread before frame construction, so Kotlin registers it as
+`onRequestSending(handler: ZLinkStreamRequestSendingHandler): AutoCloseable`.
+The handler mutates metadata synchronously and has no result or cancellation parameter.
 
 ## 13. Verification Standard
 
@@ -795,6 +751,9 @@ The Java connector has the tests below as a separate suite.
 - JSON, MessagePack, Protobuf codec smoke
 - Typed helper packet name resolver and codec selection
 - Typed request/reply decode
+- Request hook order, metadata, failure outcome, and callback error
+- Structural inbound flow check with value discarded; outbound flag 0x10 unset
+- Both packet-name forms on connector and Actor surfaces
 - Kotlin coroutine/Flow wrapper smoke
 
 ---

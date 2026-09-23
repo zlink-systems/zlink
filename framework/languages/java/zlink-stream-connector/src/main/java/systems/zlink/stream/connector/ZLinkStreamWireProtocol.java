@@ -110,15 +110,6 @@ final class ZLinkStreamWireProtocol {
     }
 
     static Header decodeHeader(byte[] header) {
-        return decodeHeader(header, true);
-    }
-
-    /**
-     * Decodes a stream header. With {@code validateFlow} false (diagnostics level Off, spec 27 §4)
-     * the trace-only flow field validation (UUIDv7 shape, origin range) is skipped while every
-     * structural length check — including the fixed 37-byte flow trailer — still applies.
-     */
-    static Header decodeHeader(byte[] header, boolean validateFlow) {
         if (header.length < 5) {
             throw new IllegalArgumentException("stream header is too short");
         }
@@ -164,14 +155,9 @@ final class ZLinkStreamWireProtocol {
             buffer.get(correlationBytes);
             correlationId = new String(correlationBytes, StandardCharsets.UTF_8);
         }
-        String flowId = null;
-        int flowOrigin = 0;
         if ((flags & FLAG_HAS_FLOW_ID) != 0) {
             requireRemaining(buffer, 37, "flow fields");
-            byte[] flowBytes = new byte[36];
-            buffer.get(flowBytes);
-            flowId = new String(flowBytes, StandardCharsets.US_ASCII);
-            flowOrigin = Byte.toUnsignedInt(buffer.get());
+            buffer.position(buffer.position() + 37);
         }
         Integer actorSlot = null;
         if ((flags & FLAG_HAS_ACTOR_SLOT) != 0) {
@@ -193,10 +179,10 @@ final class ZLinkStreamWireProtocol {
                         new String(nameBytes, StandardCharsets.UTF_8),
                         metadata,
                         correlationId,
-                        flowId,
-                        flowOrigin,
+                        null,
+                        0,
                         actorSlot);
-        validateHeader(decoded, decoded.name(), validateFlow);
+        validateHeader(decoded, decoded.name());
         return decoded;
     }
 
@@ -321,10 +307,6 @@ final class ZLinkStreamWireProtocol {
     }
 
     private static void validateHeader(Header header, String packetName) {
-        validateHeader(header, packetName, true);
-    }
-
-    private static void validateHeader(Header header, String packetName, boolean validateFlow) {
         validateEnum(header.kind(), header.codec(), header.flags());
         byte[] name = packetName.getBytes(StandardCharsets.UTF_8);
         if ((isReply(header.kind()) && name.length != 0)
@@ -350,15 +332,7 @@ final class ZLinkStreamWireProtocol {
                 header.correlationId() != null && !header.correlationId().isEmpty();
         boolean hasFlow = header.flowId() != null;
         if (hasFlow) {
-            if (validateFlow
-                    && !header.flowId()
-                            .matches(
-                                    "[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")) {
-                throw new IllegalArgumentException("flow id must be a canonical UUIDv7");
-            }
-            if (validateFlow && (header.flowOrigin() < 1 || header.flowOrigin() > 4)) {
-                throw new IllegalArgumentException("flow origin is invalid");
-            }
+            // Wire encoder retains the structural field for protocol tests.
         } else if (header.flowOrigin() != 0) {
             throw new IllegalArgumentException("flow id and origin must be present together");
         }

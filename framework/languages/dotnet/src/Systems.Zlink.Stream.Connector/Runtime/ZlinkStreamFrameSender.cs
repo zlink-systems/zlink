@@ -33,9 +33,7 @@ internal sealed class ZlinkStreamFrameSender(
 
         ZlinkStreamFrameCodec.ValidateSendPayload(payloadBytes.Length, options.MaxSendPayloadSize);
 
-        // Correlation ids are protocol information linking a request with its terminal
-        // reply, so requests carry one at every diagnostics level. One-way sends have
-        // no reply and therefore never carry a correlation id (flow-correlation spec §2).
+        // Correlation ids link requests with their terminal replies.
         Span<char> correlationId = stackalloc char[16];
         var correlationLength = 0;
         if (kind == ZlinkStreamMessageKind.Request)
@@ -43,20 +41,6 @@ internal sealed class ZlinkStreamFrameSender(
             ZlinkStreamCorrelation
                 .NextValue()
                 .TryFormat(correlationId, out correlationLength, "x");
-
-        // Flow fields are trace-only: at Off nothing is created or attached and the
-        // ambient flow context is not even read.
-        string? flowId = null;
-        ZlinkStreamFlowOrigin? flowOrigin = null;
-        if (
-            kind != ZlinkStreamMessageKind.Control
-            && options.DiagnosticsLevel != ZlinkStreamDiagnosticsLevel.Off
-        )
-        {
-            var flow = ZlinkStreamFlowContext.Current;
-            flowId = flow?.FlowId ?? ZlinkStreamFlowId.Create();
-            flowOrigin = flow?.Origin ?? ZlinkStreamFlowOrigin.Application;
-        }
 
         var header = new ZlinkStreamHeader(
             kind,
@@ -66,8 +50,8 @@ internal sealed class ZlinkStreamFrameSender(
             name,
             metadata,
             null,
-            flowId,
-            flowOrigin,
+            null,
+            null,
             actorSlot
         );
         return new ZlinkStreamOutboundFrame(

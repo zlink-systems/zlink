@@ -23,8 +23,7 @@ public record ZLinkStreamConnectorOptions(
         ZLinkStreamCompression compression,
         ZLinkStreamCompressionCodec compressionCodec,
         ZLinkStreamPacketNameResolver nameResolver,
-        ZLinkStreamTypedCodec typedCodec,
-        ZLinkStreamDiagnosticsLevel diagnosticsLevel) {
+        ZLinkStreamTypedCodec typedCodec) {
     public static final int UNLIMITED_RECONNECT_ATTEMPTS = -1;
 
     public static ZLinkStreamConnectorOptions createDefault(URI endpoint) {
@@ -48,7 +47,6 @@ public record ZLinkStreamConnectorOptions(
                 ZLinkStreamCompression.LZ4,
                 null,
                 ZLinkStreamPacketNameResolver.defaultResolver(),
-                null,
                 null);
     }
 
@@ -72,54 +70,6 @@ public record ZLinkStreamConnectorOptions(
         if (typedCodec == null) {
             typedCodec = ZLinkStreamJson.codec();
         }
-        if (diagnosticsLevel == null) {
-            diagnosticsLevel = ZLinkStreamDiagnosticsLevel.ERRORS;
-        }
-    }
-
-    public ZLinkStreamConnectorOptions(
-            URI endpoint,
-            ZLinkStreamDispatchMode dispatchMode,
-            Duration requestTimeout,
-            Duration waitTimeout,
-            int maxReconnectAttempts,
-            Duration connectTimeout,
-            int maxSendPayloadSize,
-            int maxReceivePayloadSize,
-            boolean heartbeatEnabled,
-            Duration heartbeatInterval,
-            Duration heartbeatTimeout,
-            boolean reconnectEnabled,
-            Duration reconnectInitialDelay,
-            Duration reconnectMaxDelay,
-            double reconnectBackoffFactor,
-            boolean skipServerCertificateValidation,
-            ZLinkStreamCompression compression,
-            ZLinkStreamCompressionCodec compressionCodec,
-            ZLinkStreamPacketNameResolver nameResolver,
-            ZLinkStreamTypedCodec typedCodec) {
-        this(
-                endpoint,
-                dispatchMode,
-                requestTimeout,
-                waitTimeout,
-                maxReconnectAttempts,
-                connectTimeout,
-                maxSendPayloadSize,
-                maxReceivePayloadSize,
-                heartbeatEnabled,
-                heartbeatInterval,
-                heartbeatTimeout,
-                reconnectEnabled,
-                reconnectInitialDelay,
-                reconnectMaxDelay,
-                reconnectBackoffFactor,
-                skipServerCertificateValidation,
-                compression,
-                compressionCodec,
-                nameResolver,
-                typedCodec,
-                null);
     }
 
     public ZLinkStreamConnectorOptions(
@@ -147,7 +97,6 @@ public record ZLinkStreamConnectorOptions(
                 ZLinkStreamCompression.LZ4,
                 null,
                 ZLinkStreamPacketNameResolver.defaultResolver(),
-                null,
                 null);
     }
 
@@ -185,7 +134,6 @@ public record ZLinkStreamConnectorOptions(
                 ZLinkStreamCompression.LZ4,
                 null,
                 ZLinkStreamPacketNameResolver.defaultResolver(),
-                null,
                 null);
     }
 
@@ -224,7 +172,6 @@ public record ZLinkStreamConnectorOptions(
                 ZLinkStreamCompression.LZ4,
                 null,
                 ZLinkStreamPacketNameResolver.defaultResolver(),
-                null,
                 null);
     }
 
@@ -263,8 +210,7 @@ public record ZLinkStreamConnectorOptions(
                 ZLinkStreamCompression.LZ4,
                 null,
                 ZLinkStreamPacketNameResolver.defaultResolver(),
-                typedCodec,
-                null);
+                typedCodec);
     }
 
     public ZLinkStreamConnectorOptions(
@@ -303,32 +249,6 @@ public record ZLinkStreamConnectorOptions(
                 ZLinkStreamCompression.LZ4,
                 null,
                 nameResolver,
-                null,
                 null);
-    }
-
-    public ZLinkStreamConnectorOptions withDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level) {
-        return new ZLinkStreamConnectorOptions(
-                endpoint,
-                dispatchMode,
-                requestTimeout,
-                waitTimeout,
-                maxReconnectAttempts,
-                connectTimeout,
-                maxSendPayloadSize,
-                maxReceivePayloadSize,
-                heartbeatEnabled,
-                heartbeatInterval,
-                heartbeatTimeout,
-                reconnectEnabled,
-                reconnectInitialDelay,
-                reconnectMaxDelay,
-                reconnectBackoffFactor,
-                skipServerCertificateValidation,
-                compression,
-                compressionCodec,
-                nameResolver,
-                typedCodec,
-                level);
     }
 }

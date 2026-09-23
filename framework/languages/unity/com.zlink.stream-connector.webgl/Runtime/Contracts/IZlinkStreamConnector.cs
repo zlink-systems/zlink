@@ -10,9 +10,7 @@ namespace Systems.Zlink.Stream.Connector.Contracts
     ///     Represents a client-side stream connection to a ZLink stream endpoint.
     /// </summary>
     /// <remarks>
-    ///     Identical to the native .NET interface of the same name, minus
-    ///     <c>SetDiagnosticsLevelAsync</c>; see the package README for the full list of
-    ///     differences. <see cref="On" /> is the normal callback path for long-lived push
+    ///     <see cref="On" /> is the normal callback path for long-lived push
     ///     handling. <see cref="WaitFor" /> is a deterministic wait path for samples,
     ///     command-line flows, and e2e scenario tests.
     /// </remarks>
@@ -27,9 +25,6 @@ namespace Systems.Zlink.Stream.Connector.Contracts
         /// <summary>Gets the options used by this connector.</summary>
         ZlinkStreamConnectorOptions Options { get; }
 
-        /// <summary>Gets the connector's current diagnostics level.</summary>
-        ZlinkStreamDiagnosticsLevel DiagnosticsLevel { get; }
-
         /// <summary>Gets a snapshot of the Actors currently bound to this connection.</summary>
         IReadOnlyList<ZlinkStreamActor> Actors { get; }
 
@@ -42,16 +37,9 @@ namespace Systems.Zlink.Stream.Connector.Contracts
         /// <summary>Registers a callback for Actor unbind notifications.</summary>
         IDisposable OnActorUnbound(Action<ZlinkStreamActor> handler);
 
-        /// <summary>
-        ///     Changes the connector's diagnostics level while it keeps running.
-        /// </summary>
-        /// <exception cref="ZlinkStreamException">
-        ///     <paramref name="level" /> is not one of the defined values.
-        /// </exception>
-        void SetDiagnosticsLevel(ZlinkStreamDiagnosticsLevel level);
+        IDisposable OnRequestSending(Action<ZlinkStreamRequestSendingContext> handler);
 
-        /// <summary>Changes the connector's diagnostics level asynchronously.</summary>
-        Task SetDiagnosticsLevelAsync(ZlinkStreamDiagnosticsLevel level);
+        IDisposable OnReplyReceived(Action<ZlinkStreamReplyReceivedContext> handler);
 
         /// <summary>Gets the number of messages waiting for manual dispatch.</summary>
         int PendingDispatchCount { get; }

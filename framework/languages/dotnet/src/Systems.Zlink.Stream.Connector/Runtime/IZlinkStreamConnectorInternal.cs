@@ -22,6 +22,7 @@ internal interface IZlinkStreamConnectorInternal : IZlinkStreamConnector
         bool compress,
         TimeSpan timeout,
         ushort? actorSlot,
+        string? actorId,
         CancellationToken cancellationToken
     );
 
@@ -32,6 +33,7 @@ internal interface IZlinkStreamConnectorInternal : IZlinkStreamConnector
         bool compress,
         TimeSpan timeout,
         ushort? actorSlot,
+        string? actorId,
         Action<ZlinkStreamResult> callback
     );
 
@@ -42,6 +44,7 @@ internal interface IZlinkStreamConnectorInternal : IZlinkStreamConnector
         bool compress,
         TimeSpan timeout,
         ushort? actorSlot,
+        string? actorId,
         Action<ZlinkStreamResult<ZlinkStreamEncodedPayload>> callback
     );
 

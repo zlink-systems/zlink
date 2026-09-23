@@ -2,8 +2,6 @@ namespace Systems.Zlink.Stream.Connector.Contracts;
 
 public sealed class ZlinkStreamConnectorOptions
 {
-    private int _diagnosticsLevel = (int)ZlinkStreamDiagnosticsLevel.Errors;
-
     public required Uri Endpoint { get; init; }
 
     public ZlinkStreamTransport? Transport { get; init; }
@@ -29,41 +27,6 @@ public sealed class ZlinkStreamConnectorOptions
     public ZlinkStreamDispatchMode DispatchMode { get; init; } = ZlinkStreamDispatchMode.Manual;
 
     public ZlinkStreamCompression Compression { get; init; } = ZlinkStreamCompression.Lz4;
-
-    /// <summary>
-    ///     Diagnostics level applied for the connector lifetime. The default,
-    ///     <see cref="ZlinkStreamDiagnosticsLevel.Errors" />, keeps the current wire
-    ///     behavior (outbound frames carry flow_id/flow_origin). At
-    ///     <see cref="ZlinkStreamDiagnosticsLevel.Off" /> the connector neither creates
-    ///     nor attaches flow fields on outbound frames, skips inbound flow validation
-    ///     and flow-context installation (structural length checks remain), and performs
-    ///     no other trace-only work. Correlation ids for requests are protocol
-    ///     information and are kept at every level.
-    /// </summary>
-    /// <remarks>
-    ///     Backed by an atomic cell so the level can change while the connector is
-    ///     running (see <see cref="IZlinkStreamConnector.SetDiagnosticsLevel" />).
-    ///     Every read observes the most recently written value; nothing in this type
-    ///     caches it across a single processing point on its own, so callers that must
-    ///     act consistently within one operation should read it once and reuse that
-    ///     value.
-    /// </remarks>
-    public ZlinkStreamDiagnosticsLevel DiagnosticsLevel
-    {
-        get => (ZlinkStreamDiagnosticsLevel)Volatile.Read(ref _diagnosticsLevel);
-        init => _diagnosticsLevel = (int)value;
-    }
-
-    /// <summary>
-    ///     Atomically updates <see cref="DiagnosticsLevel" /> for the connector that
-    ///     owns this options instance. Internal because live updates must go through
-    ///     <see cref="IZlinkStreamConnector.SetDiagnosticsLevel" />, which validates the
-    ///     new value first.
-    /// </summary>
-    internal void SetDiagnosticsLevelLive(ZlinkStreamDiagnosticsLevel level)
-    {
-        Volatile.Write(ref _diagnosticsLevel, (int)level);
-    }
 
     /// <summary>
     ///     Optional compression codec for frames marked with <see cref="ZlinkStreamHeaderFlags.PayloadCompressed" />.

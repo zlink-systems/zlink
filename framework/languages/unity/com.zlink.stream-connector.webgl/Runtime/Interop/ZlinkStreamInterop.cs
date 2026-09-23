@@ -58,6 +58,7 @@ namespace Systems.Zlink.Stream.Connector.Runtime
         public const int EventStateChanged = 5;
         public const int EventActorBound = 6;
         public const int EventActorUnbound = 7;
+        public const int EventReplyReceived = 8;
 
         /// <summary>
         ///     Signature of the JavaScript to C# event sink. Marshalled as a function
@@ -143,12 +144,6 @@ namespace Systems.Zlink.Stream.Connector.Runtime
 
         [DllImport("__Internal", EntryPoint = "ZlinkStreamGetPendingDispatchCount")]
         public static extern int GetPendingDispatchCount(int handle);
-
-        [DllImport("__Internal", EntryPoint = "ZlinkStreamGetDiagnosticsLevel")]
-        public static extern int GetDiagnosticsLevel(int handle);
-
-        [DllImport("__Internal", EntryPoint = "ZlinkStreamSetDiagnosticsLevel")]
-        public static extern int SetDiagnosticsLevel(int handle, int level);
 #else
         // The assembly definition limits this package to the WebGL player, so these
         // bodies exist only to keep the file readable in an IDE that ignores the
@@ -256,16 +251,6 @@ namespace Systems.Zlink.Stream.Connector.Runtime
         }
 
         public static int GetPendingDispatchCount(int handle)
-        {
-            throw new PlatformNotSupportedException(NotWebGl);
-        }
-
-        public static int GetDiagnosticsLevel(int handle)
-        {
-            throw new PlatformNotSupportedException(NotWebGl);
-        }
-
-        public static int SetDiagnosticsLevel(int handle, int level)
         {
             throw new PlatformNotSupportedException(NotWebGl);
         }

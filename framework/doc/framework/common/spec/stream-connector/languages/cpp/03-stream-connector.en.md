@@ -62,6 +62,7 @@ std::optional<stream_close_reason_t> close_reason() const;
 connector_options_t options() const;
 std::size_t pending_dispatch_count() const;
 std::size_t received_count(std::string_view packet_name) const; // the received count per packet name.
+template <typename TMessage> std::size_t received_count() const; // derives the name from the type.
 
 result_t<void> connect();                                  // waits for the connection result in the current call.
 void connect(std::function<void(result_t<void>)> callback); // receives the connection result as a callback.
@@ -79,26 +80,14 @@ A received message is a `message_t<TPayload>`. The `on<T>` handler and
 the `wait_for` family handle this type.
 
 ```cpp
-enum class flow_origin_t : std::uint8_t {
-    inbound = 1, timer = 2, application = 3, lifecycle = 4
-};
-
 template <typename TPayload>
 struct message_t {
     std::string packet_name;
     TPayload payload;                          // the payload decoded with the typed codec
     metadata_t metadata;
-    std::string flow_id;                       // empty when the diagnostics level is off (§6)
-    std::optional<flow_origin_t> flow_origin;  // an empty value under the same condition
     std::optional<std::string> actor_id;       // the counterpart bound Actor; empty for a frame without a slot (common spec §5.6)
 };
 ```
-
-`flow_id` and `flow_origin` are the received-flow exposure
-[Common Spec §5.5](../../32-stream-connector.en.md#55-flow-exposure-and-propagation)
-requires. The C++ runtime holds the current flow in the context where it
-runs a handler, so a send call carries no argument stating the flow
-(§5.1).
 
 A push callback is registered with `on<T>(...)`. In
 `dispatch_mode_t::manual`, `dispatch()` runs the callback, and in
@@ -131,6 +120,23 @@ subscription_t on_connection_state_changed(
 // The Actor handles bound right now (common spec §5.6). The application never creates one.
 std::vector<std::shared_ptr<actor_t>> actors() const;
 std::shared_ptr<actor_t> actor(std::string_view actor_id) const;   // nullptr when there is none
+struct request_sending_context_t {
+    const std::string request_packet_name;
+    const std::optional<std::string> actor_id;
+    void set_metadata(std::string key, std::string value);
+};
+struct reply_received_context_t {
+    std::string request_packet_name;
+    std::optional<std::string> actor_id;
+    bool succeeded;
+    std::optional<packet_t> reply;
+    std::optional<error_t> error;
+    std::chrono::milliseconds elapsed;
+};
+subscription_t on_request_sending(
+    std::function<void(request_sending_context_t&)> callback);
+subscription_t on_reply_received(
+    std::function<void(const reply_received_context_t&)> callback);
 subscription_t on_actor_bound(std::function<void(const std::shared_ptr<actor_t>&)> callback);
 subscription_t on_actor_unbound(std::function<void(const std::shared_ptr<actor_t>&)> callback);
 ```
@@ -401,15 +407,11 @@ used, the receiver reads which of the 13 codes in common spec §9 it is.
 Error kind and meaning is owned by the
 [common spec](../../32-stream-connector.en.md).
 
-### 5.1 Flow Correlation
+### 5.1 Request Hooks
 
-An outbound operation the Connector starts generates a UUIDv7
-`flow_id` once, with no separate public option. A follow-up operation
-started from an inbound callback reuses the current inbound flow, and
-once the callback ends, the connector runtime cleans up the current
-flow context. The wire format and async context boundary is owned by
-[Common Stream Connector §4.2](../../32-stream-connector.en.md) and
-[Flow Correlation §6](../../../server/06-observability/04-flow-correlation.en.md#6-async-work-and-execution-context).
+`on_request_sending`/`on_reply_received` are the two hooks of
+[Common Spec §5.7](../../32-stream-connector.en.md#57-request-hooks) and return `subscription_t`. A hook
+failure is reported through `on_error`.
 
 ## 6. Options
 
@@ -459,7 +461,6 @@ struct connector_options_t {
     std::shared_ptr<const compression_codec_t> compression_codec;
     std::shared_ptr<const typed_codec_t> typed_codec;         // the codec injection point of common spec §5.4; the default JSON codec if empty
     std::shared_ptr<const packet_name_resolver_t> name_resolver; // the name resolver injection point of common spec §5.4; §3's default rule if empty
-    diagnostics_level_t diagnostics_level = diagnostics_level_t::errors;
 };
 
 class packet_name_resolver_t {
@@ -468,11 +469,6 @@ public:
     virtual std::string resolve(std::string_view type_name) const = 0;
 };
 
-// The contract is owned by common spec §13. Default errors. At off, outbound frames
-// create no flow pair (0x10 not set), and inbound flow fields keep only the structural
-// length check — value validation is skipped. The request correlation is kept
-// regardless of the level.
-enum class diagnostics_level_t { off, errors, normal, detailed };
 ```
 
 `options()` returns a copy of the configuration the
@@ -480,45 +476,6 @@ enum class diagnostics_level_t { off, errors, normal, detailed };
 getter shows must be the value the actual connect, request, wait,
 queue, TLS, and compression paths use — a configuration value not
 reflected in behavior isn't exposed.
-
-`connector_options_t::diagnostics_level` is only the level `create()`
-starts with. Common spec §13 makes the connector a client connector
-under [flow correlation §4](../../../server/06-observability/04-flow-correlation.en.md#4-when-a-flow-is-created),
-so runtime level changes follow
-[message-flow-tracing §4.1](../../../server/06-observability/03-message-flow-tracing.en.md#5-changing-the-record-level-at-runtime-and-the-cost-rule)
-as-is: the application reads and changes the level without recreating
-the connector, using two methods on `connector_t`:
-
-```cpp
-class connector_t {
-public:
-    // ...
-    diagnostics_level_t diagnostics_level() const;
-    void set_diagnostics_level(diagnostics_level_t level); // changes the value without waiting
-    void set_diagnostics_level_async(                      // the async pair changing the same value
-      diagnostics_level_t level,
-      std::function<void(result_t<void>)> callback);
-};
-```
-
-`set_diagnostics_level_async` is the async pair shaped like the callback
-completion path the connector core puts on `connect`/`close`, and it
-does not replace the synchronous surface
-[Common Spec §13](../../32-stream-connector.en.md#13-diagnostics-level)
-requires. The synchronous surface does not wait for the async pair to
-complete, so calling it inside a receive callback never makes that call
-wait on its own completion.
-
-`diagnostics_level()` returns the level currently in effect.
-`set_diagnostics_level(level)` changes it starting with the next
-processing point (one outbound frame encode, one inbound frame
-decode); frames already encoded or decoded before the call keep their
-original level — nothing is applied retroactively. Each processing
-point reads the level exactly once and uses that single value for the
-whole operation, so a level change mid-processing can never split one
-frame's encode or decode between two levels. `options()` reflects the
-level `diagnostics_level()` would return at the time of the call, not
-necessarily the value passed at `create()`.
 
 ## 7. Engine adapters
 
@@ -528,7 +485,7 @@ requesting take the same shape as in the other connectors: a push is received by
 name together with a callback, and a request receives its reply at the call. All three follow these two
 rules.
 
-- **Callbacks and delegates run only on the engine main thread.** The adapter queues core
+- **Callbacks and delegates run only on the engine main thread (the request sending hook runs in the request call context per Common Spec §5.7).** The adapter queues core
   callbacks and delivers them from the `dispatch` the engine calls every frame or through the main
   thread dispatcher the application registered (Godot `set_main_thread_dispatcher`, Axmol
   `set_axmol_thread_dispatcher`).
@@ -538,6 +495,11 @@ rules.
   handle that releases it. A request takes its completion callback at the call and delivers that
   request's reply or failure to it (Unreal `RequestJson(..., OnCompleted)`, Godot and Axmol
   `request_json(..., callback)`).
+
+- Adapters exchange JSON text and have no payload type, so the packet name is always explicit.
+- Request hooks (Common Spec §5.7) are Unreal `OnRequestSending`/`OnReplyReceived` delegates and
+  Godot/Axmol `on_request_sending`/`on_reply_received` callbacks, each returning a release handle. The
+  reply hook is delivered on the main thread like other results.
 
 ## 8. Verification
 

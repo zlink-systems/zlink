@@ -193,7 +193,13 @@ internal sealed class ZlinkStreamActor(
         new ZlinkStreamSendBuilder(connector, ResolveName(payload), payload, CurrentSlot);
 
     public IZlinkStreamRequestCall Request(ZlinkStreamEncodedPayload payload) =>
-        new ZlinkStreamRequestBuilder(connector, ResolveName(payload), payload, CurrentSlot);
+        new ZlinkStreamRequestBuilder(
+            connector,
+            ResolveName(payload),
+            payload,
+            CurrentSlot,
+            ActorId
+        );
 
     public IDisposable On(
         string name,

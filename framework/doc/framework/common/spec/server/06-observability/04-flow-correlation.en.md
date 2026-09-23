@@ -81,7 +81,9 @@ error.
 | Where the invalid value arrives | How the framework completes it |
 |---|---|
 | Framework message envelope | Completes that operation with `ProtocolError`. |
-| STREAM frame | Terminates the connection with `ProtocolError`. |
+| STREAM frame received by the server | Terminates the connection with `ProtocolError`. |
+
+The flow fields of a STREAM frame received by a client connector are governed by [Stream Connector §5.5](../../stream-connector/32-stream-connector.en.md#55-flow).
 
 ## 4. When A Flow Is Created
 
@@ -103,8 +105,9 @@ running it changes is a
 If the diagnostics level is `Off`, every observation-only flow-handling
 step is skipped. A new `flow_id` isn't built, and an inbound message's
 flow field isn't turned into flow context or copied to the next message.
-The two fields also aren't added to an outbound envelope. An outbound
-request the client connector starts follows the same rule.
+The two fields also aren't added to an outbound envelope. A client connector
+creates no flow; the server starts a STREAM client's flow at STREAM ingress
+([Stream connector §5.5](../../stream-connector/32-stream-connector.en.md#55-flow)).
 
 `correlation_id` is protocol information linking a request and terminal
 reply. Even if the diagnostics level is `Off`, it's built per request and

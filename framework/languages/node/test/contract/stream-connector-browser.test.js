@@ -153,42 +153,18 @@ test('browser close waits for the WebSocket close event', async () => {
   }
 });
 
-test('explicit browser flow propagation does not leak into unrelated outbound work', async () => {
-  const originalCrypto = globalThis.crypto;
-  globalThis.crypto = crypto.webcrypto;
+test('browser connector never emits flow fields', async () => {
   const connection = new MemoryConnection();
-  try {
-    const instance = browserEntry.zlinkStreamConnectorFactory.create({
-      endpoint: 'ws://browser.example.test/stream',
-      transportFactory: { connect: async () => connection },
-      heartbeat: { enabled: false }
-    });
-    await instance.connect();
-    const inboundFlow = {
-      flowId: '018f0f7c-7b4d-7abc-8def-0123456789ab',
-      flowOrigin: 'Inbound'
-    };
-    instance.send({ codec: browserEntry.ZlinkStreamCodec.Raw, payload: new Uint8Array([1]) })
-      .packetName('Related')
-      .flowFrom(inboundFlow)
-      .submit();
-    instance.send({ codec: browserEntry.ZlinkStreamCodec.Raw, payload: new Uint8Array([2]) })
-      .packetName('Unrelated')
-      .submit();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    const headers = connection.frames.map((frame) => protocolCodecs.ZlinkStreamHeaderCodec.decode(
-      protocolCodecs.ZlinkStreamFrameCodec.decode(frame).header
-    ));
-    assert.equal(headers[0].flowId, inboundFlow.flowId);
-    assert.equal(headers[0].flowOrigin, inboundFlow.flowOrigin);
-    assert.notEqual(headers[1].flowId, inboundFlow.flowId);
-    assert.equal(headers[1].flowOrigin, 'Application');
-    await instance.close();
-  } finally {
-    if (originalCrypto === undefined) delete globalThis.crypto;
-    else globalThis.crypto = originalCrypto;
-  }
+  const instance = browserEntry.zlinkStreamConnectorFactory.create({
+    endpoint: 'ws://browser.example.test/stream',
+    transportFactory: { connect: async () => connection },
+    heartbeat: { enabled: false }
+  });
+  await instance.connect();
+  await instance.send({ codec: browserEntry.ZlinkStreamCodec.Raw, payload: new Uint8Array([1]) }).packetName('NoFlow').submit();
+  const header = protocolCodecs.ZlinkStreamHeaderCodec.decode(protocolCodecs.ZlinkStreamFrameCodec.decode(connection.frames[0]).header);
+  assert.equal(header.flags & browserEntry.ZlinkStreamHeaderFlags.HasFlowId, 0);
+  await instance.close();
 });
 
 test('package root creates a browser bundle without Node-only modules or Buffer', () => {

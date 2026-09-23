@@ -2,7 +2,6 @@ import {
   RequiredZlinkStreamConnectorOptions,
   ZlinkStreamCompression,
   ZlinkStreamConnectorOptions,
-  ZlinkStreamDiagnosticsLevel,
   ZlinkStreamDispatchMode,
   ZlinkStreamErrorCode,
   ZlinkStreamHeartbeatOptions,
@@ -11,13 +10,6 @@ import {
 } from '../Contracts';
 import { connectorError } from './ZlinkStreamSupport';
 import { inferTransport } from './Transport/ZlinkStreamEndpoint';
-
-const validDiagnosticsLevels: ReadonlySet<ZlinkStreamDiagnosticsLevel> = new Set([
-  ZlinkStreamDiagnosticsLevel.Off,
-  ZlinkStreamDiagnosticsLevel.Errors,
-  ZlinkStreamDiagnosticsLevel.Normal,
-  ZlinkStreamDiagnosticsLevel.Detailed
-]);
 
 export function normalizeOptions(
   options: ZlinkStreamConnectorOptions,
@@ -41,7 +33,6 @@ export function normalizeOptions(
   validatePositive(options.maxReceivePayloadSize ?? 64 * 1024, 'MaxReceivePayloadSize');
   validateHeartbeat(options.heartbeat);
   validateReconnect(options.reconnect);
-  validateDiagnosticsLevel(options.diagnosticsLevel);
 
   return {
     endpoint,
@@ -68,10 +59,7 @@ export function normalizeOptions(
     compressionCodec: resolveCompressionCodec(options),
     nameResolver: options.nameResolver ?? defaultPacketNameResolver,
     transportFactory: options.transportFactory ?? defaultTransportFactory,
-    codec: options.codec,
-    // Spec 26 §4: the default diagnostics level is Errors, which preserves
-    // the connector's established wire behavior.
-    diagnosticsLevel: options.diagnosticsLevel ?? ZlinkStreamDiagnosticsLevel.Errors
+    codec: options.codec
   };
 }
 
@@ -110,12 +98,6 @@ function resolveCompressionCodec(options: ZlinkStreamConnectorOptions) {
     return undefined;
   }
   return options.compressionCodec;
-}
-
-export function validateDiagnosticsLevel(level: ZlinkStreamDiagnosticsLevel | undefined): void {
-  if (level !== undefined && !validDiagnosticsLevels.has(level)) {
-    throw connectorError(ZlinkStreamErrorCode.ConfigurationError, 'DiagnosticsLevel is invalid.');
-  }
 }
 
 function validatePositive(value: number, name: string): void {

@@ -196,4 +196,13 @@ final class ZLinkStreamCallPayload {
                 payload.metadata(),
                 payload.codec());
     }
+
+    static ZLinkStreamEncodedPayload encodeTyped(
+            ZLinkStreamConnector connector, Object payload, String explicitName) {
+        String name =
+                explicitName == null
+                        ? connector.options().nameResolver().resolve(payload.getClass())
+                        : explicitName;
+        return connector.options().typedCodec().encode(name, payload);
+    }
 }

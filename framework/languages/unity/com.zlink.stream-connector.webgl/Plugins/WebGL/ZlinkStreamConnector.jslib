@@ -255,13 +255,6 @@ mergeInto(LibraryManager.library, {
 
   ZlinkStreamGetPendingDispatchCount: function (handle) {
     return ZlinkStreamWebGlRuntime.pendingDispatchCount(handle);
-  },
-
-  ZlinkStreamGetDiagnosticsLevel: function (handle) {
-    return ZlinkStreamWebGlRuntime.diagnosticsLevel(handle);
-  },
-
-  ZlinkStreamSetDiagnosticsLevel: function (handle, level) {
-    return ZlinkStreamWebGlRuntime.setDiagnosticsLevel(handle, level);
   }
+
 });
