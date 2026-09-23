@@ -33,6 +33,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public final class TicTacToeClientScenario {
     public void run(TicTacToeClientOptions options) throws Exception {
+        // --8<-- [start:doc-e2e-create-room]
         CreateGameHttpRes game;
         try (ZLinkHttpClient api = ZLinkHttpClient.create(options.apiUrl()).build()) {
             game =
@@ -43,14 +44,18 @@ public final class TicTacToeClientScenario {
                             .join()
                             .body();
         }
+        // --8<-- [end:doc-e2e-create-room]
         ensure(game.playEndpoints().size() >= 2);
+        // --8<-- [start:doc-e2e-multi-client]
         ZLinkStreamConnector host = playerConnector(game.playEndpoints().get(0), "host");
         ZLinkStreamConnector guest = playerConnector(game.playEndpoints().get(1), "guest");
         ZLinkStreamConnector observer = playerConnector(game.playEndpoints().get(1), "observer");
+        // --8<-- [end:doc-e2e-multi-client]
         ZLinkStreamConnector reconnectedHost = null;
         boolean hostClosed = false;
 
         try {
+            // --8<-- [start:doc-e2e-connect-request]
             host.connect().submit().toCompletableFuture().join();
             guest.connect().submit().toCompletableFuture().join();
             observer.connect().submit().toCompletableFuture().join();
@@ -67,6 +72,7 @@ public final class TicTacToeClientScenario {
                             .join();
             ensure(options.xActorId().equals(hostAuth.player().actorId()));
             ensure(hostAuth.player().wins() == 99);
+            // --8<-- [end:doc-e2e-connect-request]
 
             AuthenticateRes guestAuth =
                     guest.request(new AuthenticateReq(options.oActorId()))
@@ -110,14 +116,19 @@ public final class TicTacToeClientScenario {
                         return CompletableFuture.completedFuture(null);
                     });
 
+            // --8<-- [start:doc-e2e-scenario]
+            // --8<-- [start:doc-e2e-wait-before-send]
             var hostJoinCompletion =
                     host.waitFor(JoinGameNotify.class).submit(JoinGameNotify.class);
             host.send(new JoinGameMsg(game.roomId())).submit().toCompletableFuture().join();
             JoinGameNotify hostJoin = hostJoinCompletion.toCompletableFuture().join().payload();
+            // --8<-- [end:doc-e2e-wait-before-send]
             ensure(hostJoin.state().roomId().equals(game.roomId()));
             ensure("WaitingForPlayers".equals(hostJoin.state().status()));
             ensure(options.xActorId().equals(hostJoin.state().xActorId()));
+            // --8<-- [end:doc-e2e-scenario]
 
+            // --8<-- [start:doc-e2e-wait-filter]
             var hostSawGuestJoin =
                     host.waitFor(PlayerJoinedNotify.class)
                             .where(
@@ -125,6 +136,7 @@ public final class TicTacToeClientScenario {
                                     message ->
                                             options.oActorId().equals(message.payload().actorId()))
                             .submit(PlayerJoinedNotify.class);
+            // --8<-- [end:doc-e2e-wait-filter]
             var hostSawGameStart =
                     host.waitFor(GameStateNotify.class)
                             .where(

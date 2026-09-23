@@ -35,20 +35,25 @@ import systems.zlink.stream.connector.ZLinkStreamJson
 
 class TicTacToeClientScenario {
     suspend fun run(options: TicTacToeClientOptions) = coroutineScope {
+        // --8<-- [start:doc-e2e-create-room]
         val game =
             zlinkHttpClient(options.apiUrl).use { api ->
                 api.post("/games")
                     .body(CreateGameHttpReq(options.gameName))
                     .fetch<CreateGameHttpRes>()
             }
+        // --8<-- [end:doc-e2e-create-room]
         ensure(game.playEndpoints.size >= 2)
+        // --8<-- [start:doc-e2e-multi-client]
         val hostStream = playerConnector(game.playEndpoints[0])
         val guestStream = playerConnector(game.playEndpoints[1])
         val observerStream = playerConnector(game.playEndpoints[1])
+        // --8<-- [end:doc-e2e-multi-client]
         var reconnectedHostStream: ZLinkKotlinStreamConnector? = null
         var hostClosed = false
 
         try {
+            // --8<-- [start:doc-e2e-connect-request]
             hostStream.connect().await()
             guestStream.connect().await()
             observerStream.connect().await()
@@ -67,6 +72,7 @@ class TicTacToeClientScenario {
             ensure(xAuthentication.player.displayName.isNotBlank())
             ensure(xAuthentication.player.level >= game.requiredLevel)
             ensure(xAuthentication.player.wins == 99)
+            // --8<-- [end:doc-e2e-connect-request]
 
             val oAuthentication =
                 guestStream.request(AuthenticateReq(options.oActorId)).awaitReply<AuthenticateRes>()
@@ -86,6 +92,7 @@ class TicTacToeClientScenario {
             ensure(subscription.subscribed)
             println("observer-subscription=verified subscribed=${subscription.subscribed}")
 
+            // --8<-- [start:doc-e2e-expect-none]
             val hostNoSelfJoin =
                 async(start = CoroutineStart.UNDISPATCHED) {
                     hostStream
@@ -93,23 +100,30 @@ class TicTacToeClientScenario {
                         .within(Duration.ofMillis(400))
                         .await()
                 }
+            // --8<-- [end:doc-e2e-expect-none]
+            // --8<-- [start:doc-e2e-scenario]
             val xJoinWait =
                 hostStream
                     .waitFor<JoinGameNotify>()
                     .where { message -> message.payload().state.roomId == game.roomId }
                     .let { wait -> async(start = CoroutineStart.UNDISPATCHED) { wait.await() } }
+            // --8<-- [start:doc-e2e-wait-before-send]
             hostStream.send(JoinGameMsg(game.roomId)).await()
             val xJoin = xJoinWait.await().payload()
+            // --8<-- [end:doc-e2e-wait-before-send]
             ensure(xJoin.state.roomId == game.roomId)
             ensure(xJoin.state.status == "WaitingForPlayers")
             ensure(xJoin.state.xActorId == options.xActorId)
             hostNoSelfJoin.await()
+            // --8<-- [end:doc-e2e-scenario]
 
+            // --8<-- [start:doc-e2e-wait-filter]
             val hostSawGuestJoin =
                 hostStream
                     .waitFor<PlayerJoinedNotify>()
                     .where { message -> message.payload().actorId == options.oActorId }
                     .let { wait -> async { wait.await() } }
+            // --8<-- [end:doc-e2e-wait-filter]
             val hostSawGameStart =
                 hostStream
                     .waitFor<GameStateNotify>()

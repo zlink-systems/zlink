@@ -817,5 +817,4 @@ mirror repository에 포함되지 않는다). 읽은 자리는
 | 내용 | 문서 표기 |
 |---|---|
 | `ZLinkRouteClient`에 `sendToSpot`/`requestToSpot`이 있다 | Node interface 명세 02장 §4가 둘을 `ZLinkRouteClient`에 싣고 인자를 `spotId: SpotId`로 적는다. 공개 계약 `contracts/Channels/RouteCalls.ts`의 `ZLinkRouteClient`에는 둘이 없고(`ZLinkSpotClient` 쪽에 있다), 구현 `DefaultZLinkRouteClient`에는 있으나 인자가 `SpotHandle`이다 |
-| NestJS builder의 Fanout 구독 topic 지정 | 02장 §1의 `ZLinkFanoutChannelBuilder`에는 `subscribe(topic)`·`connect(endpoint)`·`subscriberConnections()`가 있다. `@zlink-systems/nestjs`의 `ZLinkNestFanoutChannelBuilder`에는 셋 다 없고 `enableSubscriber(endpoint?)`만 있다. topic을 하나도 등록하지 않으면 빈 prefix로 전체를 구독한다 |
 | `@zlink-systems/zlink@1.2.0`의 prebuild 범위(framework 0.18.1부터 1.2.1로 해결) | 패키지의 `files`는 `prebuilds/win32-*/*.dll`과 `prebuilds/darwin-*/*.dylib`를 싣도록 적혀 있었다. 1.2.0의 npm tarball에는 `prebuilds/linux-x64/`만 들어 있어 Windows·macOS에서 `npm install`이 source build로 넘어갔다(#656). 1.2.1은 `prebuilds/win32-x64/`를 추가로 담고, `@zlink-systems/framework`는 0.18.1부터 그 버전을 고정한다 — `darwin-*`는 여전히 없다 |

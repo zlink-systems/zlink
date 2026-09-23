@@ -101,9 +101,9 @@ operation의 HWM 대기를 처리한다. Framework는 기다리는 operation을 
   → 보내는 쪽 송신 queue도 못 비워 send가 기다림
 ```
 
-조절할 수 있는 두 상한은 [영향을 주는 옵션](#4-영향을-주는-옵션)에 있다. 관찰할 수 있는 것은 `send`가
+조절할 수 있는 두 상한은 [영향을 주는 옵션](#5-영향을-주는-옵션)에 있다. 관찰할 수 있는 것은 `send`가
 기다리다가 deadline에서 끝난다는 사실뿐이며, timeout만으로 어디에서 막혔는지는 알 수 없으므로
-[정체 발생 확인 방법](#5-정체-발생-확인-방법)에서 양쪽 상태를 함께 확인한다. Framework는 message를
+[정체 발생 확인 방법](#6-정체-발생-확인-방법)에서 양쪽 상태를 함께 확인한다. Framework는 message를
 버리지도, 재시도하지도, 다른 대상으로 바꾸지도 않는다.
 
 ### 3.3 Reply 연결이 포화를 우회하는 경로
@@ -140,9 +140,7 @@ reply가 Application 연결의 message를 앞지를 수 있으므로, handler는
 send는 응답을 기다리지 않지만, 기다려야 하는 대상이 하나 있다 — **보낼 자리**다.
 
 ```csharp
-await client.SendToChannel("orders", new CancelOrder("order-1042")).Async(ct);
-// 이 await가 끝났다는 것은 "내 runtime이 제출을 받아들였다"까지다.
-// 상대가 받았거나 handler가 끝났다는 뜻이 아니다.
+--8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:channel-send-call"
 ```
 
 Framework는 binding operation 하나만 시작한다. 자리가 없으면 Core가 그 같은 operation의 HWM
@@ -153,19 +151,7 @@ Framework는 binding operation 하나만 시작한다. 자리가 없으면 Core�
 operation으로 재시도할지, 버릴지, 사용자에게 실패를 알릴지는 application이 정한다.
 
 ```csharp
-try
-{
-    await client.SendToChannel("orders", command).Async(ct);
-}
-catch (ZLinkFrameworkException ex)
-    when (ex.Kind == ZLinkFrameworkErrorKind.DeadlineExceeded)
-{
-    // 이 operation이 DeadlineExceeded로 끝났다는 것만 확실하다. 상대 상태는 알 수 없다.
-    // CanSafelyRetry는 command 중복을 허용하는지 확인하는 application 소유 predicate다.
-    if (!CanSafelyRetry(command))
-        throw;
-    _pending.Enqueue(command);
-}
+--8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:channel-request-call"
 ```
 
 다시 보내도 되는지는 application이 업무 규칙에 따라 판단한다. **같은 명령이 두 번 도착해도
@@ -198,18 +184,7 @@ request는 보낼 자리와 상대의 reply를 모두 기다리므로, 정체가
 유한한 timeout을 반드시 지정한다.**
 
 ```csharp
-public async ValueTask<PlaceOrderReply> HandleAsync(
-    PlaceOrder request, IZLinkMessageContext context, CancellationToken ct)
-{
-    // handler가 reply를 기다리는 동안 이 handler의 실행 자리는 계속 점유된다.
-    // 양쪽 node의 처리가 동시에 지연되면 유한한 timeout이 회복을 시작하는 유일한 지점이다.
-    var reserved = await _client
-        .RequestToChannel("inventory", new ReserveStock(request.Sku, request.Quantity))
-        .Timeout(TimeSpan.FromSeconds(3))
-        .Async<StockReserved>(ct);
-
-    return new PlaceOrderReply(request.OrderId, reserved.ReservationId);
-}
+--8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"
 ```
 
 timeout은 backpressure를 조절하는 수단이 아니라 **더 기다리지 않는 경계**다. 호출자가
@@ -348,8 +323,7 @@ STREAM에는 이 pressure 상태를 적용하지 않는다.
 ## 6. 정체 발생 확인 방법
 
 ```csharp
-options.ConfigureDispatch().Diagnostics
-    .SetLevel(ZLinkDiagnosticsLevel.Errors); // 기본값 — error와 backpressure를 기록한다.
+--8<-- "framework/languages/dotnet/samples/ZoneWorld/Server/ZoneNode/Program.cs:doc-monitoring-flow"
 ```
 
 message flow 기록에 `backpressured`가 남았다면 보낼 자리를 기다리는 일이 실제로 일어났다는

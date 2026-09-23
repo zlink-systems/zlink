@@ -165,9 +165,7 @@ never infers ordering from arrival order.
 slot to send into.**
 
 ```typescript
-await client.sendToChannel('orders', cancelOrder('order-1042')).submit();
-// This await finishing means only "my runtime accepted the submission."
-// It doesn't mean the peer received it or the handler finished.
+--8<-- "framework/languages/node/tutorial/Client/main.ts:channel-send-call"
 ```
 
 The framework starts one binding operation. If there is no room, Core owns the HWM wait and
@@ -180,16 +178,7 @@ whether to start a new operation, drop it, or tell the user it failed is up to t
 application.
 
 ```typescript
-try {
-  await client.sendToChannel('orders', command).submit();
-} catch (ex) {
-  if (!(ex instanceof ZLinkFrameworkException)) throw ex;
-  if (ex.kind !== ZLinkFrameworkErrorKind.DeadlineExceeded) throw ex;
-  // Only this operation's DeadlineExceeded terminal is certain. The peer's state is unknown.
-  // canSafelyRetry is an application-owned predicate that checks whether the command tolerates duplication.
-  if (!canSafelyRetry(command)) throw ex;
-  pending.push(command);
-}
+--8<-- "framework/languages/node/tutorial/Client/main.ts:channel-request-call"
 ```
 
 Whether it's OK to resend is judged by the application's business rules. Retry is safe
@@ -223,16 +212,7 @@ stretch, `timeout(...)` is the real ceiling. In particular, **always give a fini
 to a flow that sends another request from inside a handler.**
 
 ```typescript
-async handle(request: PlaceOrder, context: ZLinkMessageContext): Promise<PlaceOrderReply> {
-  // While the handler waits for the reply, this handler's execution slot stays occupied.
-  // If both nodes' processing is delayed at the same time, a finite timeout is the only place recovery starts.
-  const reserved = await this.client
-    .requestToChannel('inventory', reserveStock(request.sku, request.quantity))
-    .timeout(3000)
-    .submit<StockReserved>();
-
-  return placeOrderReply(request.orderId, reserved.reservationId);
-}
+--8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
 ```
 
 A timeout isn't a knob to tune backpressure — it's **the boundary where you stop waiting.**
@@ -387,9 +367,7 @@ Terminal reply/error completion identifiable before receive does not use this pe
 ## 6. How to Confirm Congestion Is Happening
 
 ```typescript
-// Node sets the level as a message flow log mode.
-// Default — records errors and backpressure.
-builder.configureDispatch().messageFlow("errors");
+--8<-- "framework/languages/node/samples/ZoneWorld/Server/ZoneNode/zone-node-module.ts:doc-monitoring-flow"
 ```
 
 If `backpressured` shows up in the message flow record, it means waiting for a send slot

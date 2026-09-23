@@ -34,13 +34,7 @@ handler 단위 테스트를 아무리 촘촘히 작성해도 확인되지 않는
 사용자가 사용할 client library가 그대로 검증 도구**이기 때문이다. E2E 테스트는 다음
 코드만으로 끝난다.
 
-```csharp
-await client.Connect.Async(ct);                                    // 실제 연결
-var auth = await client.Request(new AuthenticateReq(actorId))      // 실제 request
-    .Async<AuthenticateRes>(ct);
-var push = await other.WaitFor<PlayerJoinedNotify>().Async(ct);    // 실제 push 도착 확인
-ZlinkStreamAssert.Ensure(push.Payload.ActorId == auth.Player.ActorId, "join push actor mismatch.");
-```
+--8<-- "framework/languages/dotnet/samples/TicTacToe/Client/TicTacToeClientScenario.cs:doc-e2e-connect-request"
 
 `WaitFor`처럼 검증에 필요한 대기 함수를 connector가 직접 제공하므로 **별도 테스트
 하네스를 구현하지 않는다.** 저장소의 샘플이 모두 이 방식으로 검증된다.
@@ -62,29 +56,7 @@ ZlinkStreamAssert.Ensure(push.Payload.ActorId == auth.Player.ActorId, "join push
 대부분의 시나리오는 둘을 이어서 사용한다. HTTP로 대상을 만들고, 그 응답에 담겨 온
 endpoint로 STREAM에 접속하는 순서다.
 
-```csharp
-using Zlink.HttpClient;
-using Systems.Zlink.Stream.Connector.Contracts;
-
-// 1단계 — 관문 API로 방을 만든다.
-using var api = ZLinkHttpClient.Create(options.ApiUrl.ToString())
-    .Timeout(options.HttpTimeout)
-    .Build();
-var room = await api.Post("/games")
-    .Body(new CreateGameHttpReq(options.GameName))
-    // Fetch는 역직렬화된 본문을 그대로 돌려준다.
-    .Fetch<CreateGameHttpRes>(ct);
-
-// 2단계 — 응답이 알려 준 endpoint로 실시간 연결을 연다.
-await using var client = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-{
-    Endpoint = new Uri(room.PlayEndpoints[0]),
-    ConnectTimeout = options.StreamTimeout,
-    RequestTimeout = options.StreamTimeout,
-    // console 시나리오는 자동 펌프를 사용한다.
-    DispatchMode = ZlinkStreamDispatchMode.Immediate
-});
-```
+--8<-- "framework/languages/dotnet/samples/TicTacToe/Client/TicTacToeClientScenario.cs:doc-e2e-create-room"
 
 `DispatchMode`가 `Immediate`이면 connector가 수신을 자체적으로 처리하므로 시나리오
 코드에서 별도로 펌프를 실행하지 않는다. 게임 엔진처럼 프레임 루프에 맞춰 직접 펌프해야 하는 환경은
@@ -120,55 +92,27 @@ connector가 제공하는 검증 함수로 대부분의 시나리오를 표현�
 `Where(...)`로 조건을 지정하면 **조건에 맞는 첫 message까지 기다린다.** 관심 대상이 아닌
 push가 섞여 들어와도 시나리오가 영향을 받지 않는다.
 
-```csharp
-var joined = await client1.WaitFor<PlayerJoinedNotify>()
-    .Where(message => message.Payload.ActorId == options.OActorId)
-    .Async(ct);
-ZlinkStreamAssert.Ensure(joined.Payload.Mark == TicTacToeMarks.O, "joined mark mismatch.");
-```
+--8<-- "framework/languages/dotnet/samples/TicTacToe/Client/TicTacToeClientScenario.cs:doc-e2e-wait-filter"
 
 ### 3.2 push 미도착 확인
 
 도착하지 않는다는 사실은 관찰 구간 없이 확정할 수 없으므로 `Within(...)`으로 구간을 반드시
 지정한다. 지정하지 않으면 오류다.
 
-```csharp
-// 방금 들어온 본인에게는 자기 입장 알림이 가지 않아야 한다.
-await client2.ExpectNone<PlayerJoinedNotify>()
-    .Within(TimeSpan.FromMilliseconds(250))
-    .Async(ct);
-```
+--8<-- "framework/languages/dotnet/samples/TicTacToe/Client/TicTacToeClientScenario.cs:doc-e2e-expect-none"
 
 ### 3.3 push 순서 확인
 
 상태가 단계적으로 바뀌는 흐름에서는 도착 여부가 아니라 **순서**가 계약이다.
 
-```csharp
-var statusSequence = await customer.WaitForSequence<DeliveryStatusNotify>()
-    .Expect(message => message.Payload is { DeliveryId: var id, Status: DeliveryStatus.Assigned }
-                       && id == deliveryId)
-    .Expect(message => message.Payload is { DeliveryId: var id, Status: DeliveryStatus.Accepted }
-                       && id == deliveryId)
-    .Expect(message => message.Payload is { DeliveryId: var id, Status: DeliveryStatus.PickedUp }
-                       && id == deliveryId)
-    .Expect(message => message.Payload is { DeliveryId: var id, Status: DeliveryStatus.Delivered }
-                       && id == deliveryId)
-    .Timeout(customer.Options.WaitTimeout)
-    .Async(ct);
-```
+--8<-- "framework/languages/dotnet/samples/DeliveryDispatch/Client/DeliveryDispatchClientScenario.cs:doc-e2e-sequence"
 
 ### 3.4 요청 실패 확인
 
 권한이 없거나 순서가 맞지 않는 요청이 **거절되는지**도 계약이다. 성공 경로만 검증하면 이
 경로가 검증되지 않은 채 남는다.
 
-```csharp
-// 인증 전에는 대화를 열 수 없어야 한다.
-await ZlinkStreamAssert.ExpectFailureAsync(
-    async ct => _ = await agent.Request(new OpenConversationReq("unauthenticated"))
-        .Async<OpenConversationRes>(ct),
-    nameof(ZlinkStreamErrorCode.RemoteError));
-```
+--8<-- "framework/languages/dotnet/samples/SupportChat/Client/SupportChatClientScenario.cs:doc-e2e-failure"
 
 ## 4. 메시지 대기 처리 방법
 
@@ -176,33 +120,12 @@ E2E는 대부분 같은 원인으로 간헐 실패한다. **행동을 먼저 하
 시작하여**, 그 사이에 도착한 push를 받지 못하는 것이다.
 
 순서를 반대로 둔다. 대기를 먼저 등록하고, 그다음에 그 push를 유발하는 행동을 실행한다.
-
-```csharp
-// 대기를 먼저 등록한다 — 아직 await하지 않는다.
-var statusSequenceTask = customer.WaitForSequence<DeliveryStatusNotify>()
-    .Expect(message => message.Payload is { DeliveryId: var id, Status: DeliveryStatus.Assigned }
-                       && id == deliveryId)
-    .Timeout(customer.Options.WaitTimeout)
-    .Async(ct).AsTask();
-
-// 그다음에 push를 유발하는 행동을 실행한다.
-var created = await http.Post("/deliveries")
-    .Body(new CreateDeliveryReq(deliveryId, "customer-1", "Kitchen 12", "Customer Lobby"))
-    .Fetch<CreateDeliveryRes>(ct);
-
-// 마지막에 결과를 받는다.
-var statusSequence = await statusSequenceTask;
-```
+[push 순서 확인](#33-push-순서-확인)에서 본 `WaitForSequence` 등록이 바로 이 순서다 —
+대기를 먼저 만들어 두고, 그 뒤에 요청을 보낸다.
 
 여러 client가 같은 사건을 확인해야 한다면 각각 등록해 두고 `Task.WhenAll`로 함께 받는다.
 
-```csharp
-// Bingo — 두 player가 모두 입장하면 방이 시작되고, 두 client가 같은 push를 받는다.
-var client1StartedTask = client1.WaitFor<BingoGameStartedNotify>().Async(ct).AsTask();
-var client2StartedTask = client2.WaitFor<BingoGameStartedNotify>().Async(ct).AsTask();
-
-await Task.WhenAll(client1StartedTask, client2StartedTask);
-```
+--8<-- "framework/languages/dotnet/samples/Bingo/Client/BingoClientScenario.cs:doc-e2e-multi-wait"
 
 `Sleep`으로 시점을 맞추지 않는다. 대기는 전부 `WaitFor`·`ExpectNone`·`WaitForSequence`의
 timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 장비에서는 시간을 낭비한다.
@@ -212,69 +135,7 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
 `TicTacToe` 샘플이 가장 짧다. HTTP로 방을 만들고 → 두 player가 접속·인증하고 → 입장 push를
 확인하고 → 수를 두고 → 상대가 그 수를 관찰하는지 확인하는 순서다.
 
-```csharp
-public async ValueTask RunAsync(TicTacToeClientOptions options, CancellationToken ct = default)
-{
-    // 1. 관문 API로 방을 만들고 접속할 endpoint를 받는다.
-    using var api = ZLinkHttpClient.Create(options.ApiUrl.ToString())
-        .Timeout(options.HttpTimeout)
-        .Build();
-    var room = await api.Post("/games")
-        .Body(new CreateGameHttpReq(options.GameName))
-        .Fetch<CreateGameHttpRes>(ct);
-    ZlinkStreamAssert.Ensure(room.PlayEndpoints.Count >= 2, "play endpoints are missing.");
-
-    // 2. player 둘을 서로 다른 Play node에 연결한다 — node 사이 라우팅이 여기서 검증된다.
-    await using var client1 = CreateStreamClient(room.PlayEndpoints[0], options, "host", logger);
-    await using var client2 = CreateStreamClient(room.PlayEndpoints[1], options, "guest", logger);
-
-    // 3. 먼저 접속한 쪽이 인증하고 빈 방에 들어간다.
-    await client1.Connect.Async(ct);
-    var auth1 = await client1.Request(new AuthenticateReq(options.XActorId)).Async<AuthenticateRes>(ct);
-    ZlinkStreamAssert.Ensure(auth1.Player.ActorId == options.XActorId, "player x actor id mismatch.");
-
-    // 대기 등록 → send → 수신(§3)
-    var join1 = await JoinGameAsync(client1, room.RoomId, ct);
-    ZlinkStreamAssert.Ensure(join1.State.Status == TicTacToeGameStatuses.WaitingForPlayers,
-        "room should wait for the second player.");
-
-    // 혼자 들어왔을 때 자기 입장 알림이 자기에게 오면 안 된다.
-    await client1.ExpectNone<PlayerJoinedNotify>()
-        .Within(TimeSpan.FromMilliseconds(250))
-        .Async(ct);
-
-    // 4. 두 번째 player가 입장하면 방이 시작되고, 먼저 입장한 쪽에 push가 전달된다.
-    await client2.Connect.Async(ct);
-    await client2.Request(new AuthenticateReq(options.OActorId)).Async<AuthenticateRes>(ct);
-
-    var join2 = await JoinGameAsync(client2, room.RoomId, ct);
-    ZlinkStreamAssert.Ensure(join2.State.Status == TicTacToeGameStatuses.InProgress,
-        "room should start with two players.");
-
-    var sawJoin = await client1.WaitFor<PlayerJoinedNotify>()
-        .Where(message => message.Payload.ActorId == options.OActorId)
-        .Async(ct);
-    ZlinkStreamAssert.Ensure(sawJoin.Payload.Mark == TicTacToeMarks.O, "second player should take O.");
-
-    // 5. 수를 두면 응답과 상대에게 전달된 push가 같은 상태를 가리켜야 한다.
-    var move = await client1.Request(new PlaceMarkReq(0)).Async<PlaceMarkRes>(ct);
-    ZlinkStreamAssert.Ensure(move.State.Board == "X........", "board state mismatch after the first move.");
-
-    var sawMove = await client2.WaitFor<GameStateNotify>()
-        .Where(message => message.Payload.State.LastMoveCell == 0)
-        .Async(ct);
-    ZlinkStreamAssert.Ensure(sawMove.Payload.State.Board == move.State.Board, "board state mismatch.");
-}
-
-// join 완료 알림은 client push로 온다 — 대기를 먼저 등록하고 one-way send한다.
-private static async ValueTask<JoinGameNotify> JoinGameAsync(
-    IZlinkStreamConnector connector, string roomId, CancellationToken ct)
-{
-    var completion = connector.WaitFor<JoinGameNotify>().Async(ct);
-    await connector.Send(new JoinGameMsg(roomId)).Async(ct);
-    return (await completion).Payload;
-}
-```
+--8<-- "framework/languages/dotnet/samples/TicTacToe/Client/TicTacToeClientScenario.cs:doc-e2e-scenario"
 
 **검증 지점은 다음 기준으로 고른다.** 요청의 응답만 확인하지 않고 *다른 client가 같은
 사실을 관찰하는지*까지 확인한다. 서버 내부 상태가 아니라 **사용자에게 실제로 도달하는
@@ -290,11 +151,7 @@ private static async ValueTask<JoinGameNotify> JoinGameAsync(
   전달되지 않는지
 - **서로 다른 node에 연결한 둘** — node 사이 라우팅과 위치 해석이 실제로 동작하는지
 
-```csharp
-await using var client1  = CreateStreamClient(room.PlayEndpoints[0], options, "host", logger);
-await using var client2  = CreateStreamClient(room.PlayEndpoints[1], options, "guest", logger);
-await using var observer = CreateStreamClient(room.PlayEndpoints[1], options, "observer", logger);
-```
+--8<-- "framework/languages/dotnet/samples/TicTacToe/Client/TicTacToeClientScenario.cs:doc-e2e-multi-client"
 
 `Bingo` 샘플이 이 구성을 그대로 사용한다 — player 둘과 관전자 하나를 함께 두고, 승리
 알림이 관전자에게만 전달되는 것까지 확인한다.

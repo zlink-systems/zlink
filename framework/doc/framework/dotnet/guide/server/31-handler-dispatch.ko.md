@@ -222,110 +222,13 @@ handler는 대상 Spot instance를 첫 인자로 받는다. Spot 안에서 실�
 --8<-- "framework/languages/dotnet/samples/TicTacToe/Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/Handlers/PlayActorPlaceMarkHandler.cs:doc-actor-packet-handler"
 ```
 
-최소 형태로 보면 이렇다.
-
-```csharp
-// Spot 앞 packet — 첫 인자가 대상 Spot instance다.
-public sealed class ChatHandler : IZLinkSpotPacketHandler<GameRoom, Chat>
-{
-    public ValueTask HandleAsync(
-        GameRoom spot,
-        Chat message,
-        CancellationToken cancellationToken)
-    {
-        // Spot 상태를 직접 만진다. 락은 필요 없다.
-        spot.AppendChat(message.Text);
-        return ValueTask.CompletedTask;
-    }
-}
-
-// Spot 앞 request — 반환값이 reply다.
-public sealed class GetRoomStateHandler
-    : IZLinkSpotRequestHandler<GameRoom, GetRoomState, RoomState>
-{
-    public ValueTask<RoomState> HandleAsync(
-        GameRoom spot,
-        GetRoomState request,
-        CancellationToken cancellationToken)
-        => ValueTask.FromResult(spot.Snapshot());
-}
-
-// 구독 이벤트 — AddSubscribe로 등록한 channel·topic으로 들어온다.
-public sealed class ScoreHandler : IZLinkSpotSubscriptionHandler<GameRoom, ScoreChanged>
-{
-    public ValueTask HandleAsync(
-        GameRoom spot,
-        ScoreChanged @event,
-        CancellationToken cancellationToken)
-    {
-        spot.ApplyScore(@event);
-        return ValueTask.CompletedTask;
-    }
-}
-
-// member Actor 앞 packet — Spot과 Actor를 함께 받는다.
-public sealed class PlaceMarkHandler
-    : IZLinkSpotActorSendHandler<GameRoom, PlayerActor, PlaceMark>
-{
-    public ValueTask HandleAsync(
-        GameRoom spot,
-        // 이 메시지를 받은 Actor다.
-        PlayerActor actor,
-        IZLinkMessageContext messageContext,
-        PlaceMark message,
-        CancellationToken cancellationToken)
-    {
-        spot.Place(actor.ActorId, message.Cell);
-        return ValueTask.CompletedTask;
-    }
-}
-```
-
 Actor 앞 request는 actor request handler이며
 같은 인자에 반환값이 reply라는 점만 다르다.
 
 `Configure()`에서 handler를 등록하고 lifecycle callback에서 초기화와 정리를 수행한다.
 
 ```csharp
-public sealed class GameRoom(IZLinkSpotContext context) : IZLinkSpot
-{
-    public IZLinkSpotContext Context { get; } = context;
-
-    public void Configure()
-    {
-        // Spot send handler를 등록한다.
-        Context.Handlers.AddPacket<ChatHandler>();
-        Context.Handlers.AddSubscribe<ScoreHandler>(
-            "game-events",
-            // Logical Multicast 구독을 등록한다.
-            "score.changed");
-    }
-
-    public ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(
-        ZLinkMessage request,
-        CancellationToken cancellationToken)
-    {
-        var create = request.Decode<CreateGame>();
-        return ValueTask.FromResult(
-            create.Mode is "ranked" or "casual"
-                ? ZLinkSpotCreateResponse.Accept(new GameCreated(create.Mode))
-                : ZLinkSpotCreateResponse.Reject(new InvalidMode(create.Mode)));
-    }
-
-    public ValueTask OnInitializeAsync(CancellationToken cancellationToken)
-    {
-        // 생성 승인 뒤 메시지를 받기 전에 필요한 준비를 끝낸다.
-        return ValueTask.CompletedTask;
-    }
-
-    public ValueTask OnClosingAsync(
-        ZLinkSpotClosingContext closing,
-        CancellationToken cleanupCancellationToken)
-    {
-        // Deadline까지 application resource를 정리한다.
-        return ValueTask.CompletedTask;
-    }
-}
+--8<-- "framework/languages/dotnet/samples/GameQuest/Server/QuestMission/Infrastructure/ZLink/Spots/PlayerQuestSpot/PlayerQuestSpot.cs:doc-gq-spot-init"
 ```
 
 `OnClosingAsync`의 reason은 explicit close, host shutdown, relocation out을 구분한다.

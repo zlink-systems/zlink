@@ -149,42 +149,31 @@ slot to send into.**
 === "C#/.NET"
 
     ```csharp
-    await client.SendToChannel("orders", new CancelOrder("order-1042")).Async(ct);
-    // This await finishing means only "my runtime accepted the submission."
-    // It doesn't mean the peer received it or the handler finished.
+    --8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:channel-send-call"
     ```
 
 === "C++"
 
     ```cpp
-    co_await client.send_to_channel ("orders", cancel_order_t{"order-1042"}).async ();
-    // This co_await finishing means only "my runtime accepted the submission."
-    // It doesn't mean the peer received it or the handler finished.
+    --8<-- "framework/languages/cpp/tutorial/Client/main.cpp:channel-send-call"
     ```
 
 === "Java"
 
     ```java
-    client.sendToChannel("orders", new CancelOrder("order-1042")).submit().toCompletableFuture().join();
-    // This completion means only "my runtime accepted the submission."
-    // It doesn't mean the peer received it or the handler finished.
+    --8<-- "framework/languages/java/tutorial/java/Client/src/main/java/systems/zlink/tutorial/client/ClientApplication.java:channel-send-call"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    val kotlinClient = client.kotlin()
-    kotlinClient.sendToChannel("orders", CancelOrder("order-1042")).await()
-    // This await finishing means only "my runtime accepted the submission."
-    // It doesn't mean the peer received it or the handler finished.
+    --8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/PlayerEndpoints.kt:channel-send-call"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    await client.sendToChannel('orders', cancelOrder('order-1042')).submit();
-    // This await finishing means only "my runtime accepted the submission."
-    // It doesn't mean the peer received it or the handler finished.
+    --8<-- "framework/languages/node/tutorial/Client/main.ts:channel-send-call"
     ```
 
 
@@ -200,83 +189,31 @@ application.
 === "C#/.NET"
 
     ```csharp
-    try
-    {
-        await client.SendToChannel("orders", command).Async(ct);
-    }
-    catch (ZLinkFrameworkException ex)
-        when (ex.Kind == ZLinkFrameworkErrorKind.DeadlineExceeded)
-    {
-        // Only this operation's DeadlineExceeded terminal is certain. The peer's state is unknown.
-        // CanSafelyRetry is an application-owned predicate that checks whether the command tolerates duplication.
-        if (!CanSafelyRetry(command))
-            throw;
-        _pending.Enqueue(command);
-    }
+    --8<-- "framework/languages/dotnet/tutorial/Client/Program.cs:channel-request-call"
     ```
 
 === "C++"
 
     ```cpp
-    try {
-        co_await client.send_to_channel ("orders", command).async ();
-    } catch (const framework_exception_t &ex) {
-        if (ex.kind () != framework_error_kind_t::deadline_exceeded)
-            throw;
-        // Only this operation's DeadlineExceeded terminal is certain. The peer's state is unknown.
-        // can_safely_retry is an application-owned predicate that checks whether the command tolerates duplication.
-        if (!can_safely_retry (command))
-            throw;
-        _pending.push_back (command);
-    }
+    --8<-- "framework/languages/cpp/tutorial/Client/main.cpp:channel-request-call"
     ```
 
 === "Java"
 
     ```java
-    try {
-        client.sendToChannel("orders", command).submit().toCompletableFuture().join();
-    } catch (ZLinkFrameworkException ex) {
-        if (ex.kind() != ZLinkFrameworkErrorKind.DeadlineExceeded) {
-            throw ex;
-        }
-        // Only this operation's DeadlineExceeded terminal is certain. The peer's state is unknown.
-        // canSafelyRetry is an application-owned predicate that checks whether the command tolerates duplication.
-        if (!canSafelyRetry(command)) {
-            throw ex;
-        }
-        pending.add(command);
-    }
+    --8<-- "framework/languages/java/tutorial/java/Client/src/main/java/systems/zlink/tutorial/client/ClientApplication.java:channel-request-call"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    val kotlinClient = client.kotlin()
-    try {
-        kotlinClient.sendToChannel("orders", command).await()
-    } catch (ex: ZLinkFrameworkException) {
-        if (ex.kind() != ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED) throw ex
-        // Only this operation's DeadlineExceeded terminal is certain. The peer's state is unknown.
-        // canSafelyRetry is an application-owned predicate that checks whether the command tolerates duplication.
-        if (!canSafelyRetry(command)) throw ex
-        pending += command
-    }
+    --8<-- "framework/languages/java/tutorial/kotlin/Client/src/main/kotlin/systems/zlink/tutorial/client/PlayerEndpoints.kt:channel-request-call"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    try {
-      await client.sendToChannel('orders', command).submit();
-    } catch (ex) {
-      if (!(ex instanceof ZLinkFrameworkException)) throw ex;
-      if (ex.kind !== ZLinkFrameworkErrorKind.DeadlineExceeded) throw ex;
-      // Only this operation's DeadlineExceeded terminal is certain. The peer's state is unknown.
-      // canSafelyRetry is an application-owned predicate that checks whether the command tolerates duplication.
-      if (!canSafelyRetry(command)) throw ex;
-      pending.push(command);
-    }
+    --8<-- "framework/languages/node/tutorial/Client/main.ts:channel-request-call"
     ```
 
 
@@ -313,79 +250,31 @@ to a flow that sends another request from inside a handler.**
 === "C#/.NET"
 
     ```csharp
-    public async ValueTask<PlaceOrderReply> HandleAsync(
-        PlaceOrder request, IZLinkMessageContext context, CancellationToken ct)
-    {
-        // While the handler waits for the reply, this handler's execution slot stays occupied.
-        // If both nodes' processing is delayed at the same time, a finite timeout is the only place recovery starts.
-        var reserved = await _client
-            .RequestToChannel("inventory", new ReserveStock(request.Sku, request.Quantity))
-            .Timeout(TimeSpan.FromSeconds(3))
-            .Async<StockReserved>(ct);
-
-        return new PlaceOrderReply(request.OrderId, reserved.ReservationId);
-    }
+    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:mesh-register"
     ```
 
 === "C++"
 
     ```cpp
-    task_t<place_order_reply_t> handle (const place_order_t &request)
-    {
-        // While the handler waits for the reply, this handler's execution slot stays occupied.
-        // If both nodes' processing is delayed at the same time, a finite timeout is the only place recovery starts.
-        auto reserved = co_await _client
-                          .request_to_channel ("inventory",
-                                               reserve_stock_t{request.sku, request.quantity})
-                          .timeout (std::chrono::seconds (3))
-                          .async<stock_reserved_t> ();
-
-        co_return place_order_reply_t{request.order_id, reserved.reservation_id};
-    }
+    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:mesh-register"
     ```
 
 === "Java"
 
     ```java
-    public CompletionStage<PlaceOrderReply> handle(PlaceOrder request, ZLinkMessageContext context) {
-        // While the handler waits for the reply, this handler's execution slot stays occupied.
-        // If both nodes' processing is delayed at the same time, a finite timeout is the only place recovery starts.
-        return client
-            .requestToChannel("inventory", new ReserveStock(request.sku(), request.quantity()))
-            .timeout(Duration.ofSeconds(3))
-            .submit(StockReserved.class)
-            .thenApply(reserved -> new PlaceOrderReply(request.orderId(), reserved.reservationId()));
-    }
+    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:mesh-register"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    suspend fun handle(request: PlaceOrder, context: ZLinkMessageContext): PlaceOrderReply {
-        // While the handler waits for the reply, this handler's execution slot stays occupied.
-        // If both nodes' processing is delayed at the same time, a finite timeout is the only place recovery starts.
-        val reserved = client.kotlin()
-            .requestToChannel<StockReserved>("inventory", ReserveStock(request.sku, request.quantity))
-            .timeout(Duration.ofSeconds(3))
-            .await()
-
-        return PlaceOrderReply(request.orderId, reserved.reservationId)
-    }
+    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:mesh-register"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    async handle(request: PlaceOrder, context: ZLinkMessageContext): Promise<PlaceOrderReply> {
-      // While the handler waits for the reply, this handler's execution slot stays occupied.
-      // If both nodes' processing is delayed at the same time, a finite timeout is the only place recovery starts.
-      const reserved = await this.client
-        .requestToChannel('inventory', reserveStock(request.sku, request.quantity))
-        .timeout(3000)
-        .submit<StockReserved>();
-
-      return placeOrderReply(request.orderId, reserved.reservationId);
-    }
+    --8<-- "framework/languages/node/tutorial/Server/main.ts:mesh-register"
     ```
 
 
@@ -543,41 +432,31 @@ Terminal reply/error completion identifiable before receive does not use this pe
 === "C#/.NET"
 
     ```csharp
-    options.ConfigureDispatch().Diagnostics
-        // Default — records errors and backpressure.
-        .SetLevel(ZLinkDiagnosticsLevel.Errors);
+    --8<-- "framework/languages/dotnet/samples/ZoneWorld/Server/ZoneNode/Program.cs:doc-monitoring-flow"
     ```
 
 === "C++"
 
     ```cpp
-    // C++ sets the level as a message flow log mode.
-    // Default — records errors and backpressure.
-    options.configure_dispatch ().message_flow (message_flow_log_mode_t::errors);
+    --8<-- "framework/languages/cpp/samples/TicTacToe/Server/Play/play_server_host_factory.hpp:doc-monitoring-flow"
     ```
 
 === "Java"
 
     ```java
-    // Java sets the level as a message flow log mode.
-    // Default — records errors and backpressure.
-    options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.ERRORS);
+    --8<-- "framework/languages/java/samples/java/ZoneWorld/Server/src/main/java/systems/zlink/samples/zoneworld/server/Program.java:doc-monitoring-flow"
     ```
 
 === "Kotlin"
 
     ```kotlin
-    // Kotlin uses the Java surface as-is.
-    // Default — records errors and backpressure.
-    options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.ERRORS)
+    --8<-- "framework/languages/java/samples/kotlin/ZoneWorld/Server/src/main/kotlin/systems/zlink/samples/kotlin/zoneworld/server/Program.kt:doc-monitoring-flow"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    // Node sets the level as a message flow log mode.
-    // Default — records errors and backpressure.
-    builder.configureDispatch().messageFlow("errors");
+    --8<-- "framework/languages/node/samples/ZoneWorld/Server/ZoneNode/zone-node-module.ts:doc-monitoring-flow"
     ```
 
 

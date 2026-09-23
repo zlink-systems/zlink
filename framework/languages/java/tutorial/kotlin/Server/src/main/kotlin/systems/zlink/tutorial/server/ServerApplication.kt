@@ -133,6 +133,7 @@ class ServerApplication {
         options
             .addFanoutChannel("broadcast")
             .connect("tcp://127.0.0.1:7612")
+            .subscribe(MaintenanceNotice::class.java.simpleName)
             .addPublishHandler<MaintenanceNoticeSubscriber, MaintenanceNotice>()
         // --8<-- [end:fanout-subscribe]
 

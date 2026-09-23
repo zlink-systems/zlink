@@ -215,8 +215,10 @@ final class SupportChatClientScenario {
                 SampleNames.Statuses.Closed.equals(
                         customerRoom2.close("resolved").state().status()));
         ensure(join(closedAgent2).payload().conversationId().equals(conversation2));
+        // --8<-- [start:doc-e2e-failure]
         ConversationClient closedRoom2 = customerRoom2;
         ZLinkStreamAssert.expectFailure(() -> closedRoom2.close("again"), null);
+        // --8<-- [end:doc-e2e-failure]
 
         ensure(
                 SampleNames.Statuses.WaitingForClose.equals(

@@ -65,11 +65,14 @@ public final class DeliveryDispatchClientScenario {
                                 Messages.OfferDeliveryNotify.class,
                                 message -> message.payload().deliveryId().equals(deliveryId))
                         .submit(Messages.OfferDeliveryNotify.class);
+        // --8<-- [start:doc-e2e-expect-none]
         CompletionStage<Void> noOtherCourierOffer =
                 otherCourier
                         .expectNone(Messages.OfferDeliveryNotify.class)
                         .within(Duration.ofSeconds(1))
                         .submit();
+        // --8<-- [end:doc-e2e-expect-none]
+        // --8<-- [start:doc-e2e-sequence]
         CompletionStage<List<ZLinkStreamMessage<Messages.DeliveryStatusNotify>>> statuses =
                 customer.waitForSequence(Messages.DeliveryStatusNotify.class)
                         .expect(
@@ -86,6 +89,7 @@ public final class DeliveryDispatchClientScenario {
                                                 message,
                                                 deliveryId,
                                                 Messages.DeliveryStatus.Accepted))
+                        // --8<-- [end:doc-e2e-sequence]
                         .expect(
                                 Messages.DeliveryStatusNotify.class,
                                 message ->

@@ -55,7 +55,10 @@ builder.Services.AddZLinkFramework(options =>
     // --8<-- [start:fanout-publish-register]
     // The publisher keeps no subscriber list. Subscribers may come and go with
     // no change here.
-    options.AddFanoutChannel("broadcast").EnablePublisher("tcp://127.0.0.1:7212");
+    options
+        .AddFanoutChannel("broadcast")
+        .EnablePublisher("tcp://127.0.0.1:7212")
+        .SetNoDrop(true);
     // --8<-- [end:fanout-publish-register]
 
     // --8<-- [start:spot-client-register]

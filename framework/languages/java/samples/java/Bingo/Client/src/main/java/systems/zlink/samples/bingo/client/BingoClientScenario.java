@@ -73,12 +73,14 @@ public final class BingoClientScenario {
         var client1SawClient2Join =
                 client1.waitFor(SampleNames.PlayerJoinedPacket)
                         .submit(Messages.PlayerJoinedNotify.class);
+        // --8<-- [start:doc-e2e-multi-wait]
         var client1Started =
                 client1.waitFor(SampleNames.GameStartedPacket)
                         .submit(Messages.BingoGameStartedNotify.class);
         var client2Started =
                 client2.waitFor(SampleNames.GameStartedPacket)
                         .submit(Messages.BingoGameStartedNotify.class);
+        // --8<-- [end:doc-e2e-multi-wait]
 
         Messages.AuthenticateRes client2Auth =
                 client2.request(BingoMessages.authenticateReq("player-2"))

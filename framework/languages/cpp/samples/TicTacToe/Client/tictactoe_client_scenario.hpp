@@ -45,6 +45,7 @@ class tictactoe_client_scenario_t
     bool run (const tictactoe_client_options_t &options)
     {
         try {
+            // --8<-- [start:doc-e2e-create-room]
             const auto create_game_request = create_game_http_req_t{options.game_name};
             auto room = zlink::http_client::client_t::create (options.api_http_endpoint)
                           .post ("/games")
@@ -53,6 +54,7 @@ class tictactoe_client_scenario_t
                           .submit<create_game_http_res_t> ()
                           .value ()
                           .body;
+            // --8<-- [end:doc-e2e-create-room]
             if (room.play_endpoints.size () < 2) {
                 throw std::runtime_error ("API must return at least two Play endpoints.");
             }
@@ -88,6 +90,7 @@ class tictactoe_client_scenario_t
             auto guest_connector_options = connector_options;
             guest_connector_options.endpoint = guest_endpoint;
 
+            // --8<-- [start:doc-e2e-multi-client]
             auto core_client1 = zlink::stream_connector::connector_factory_t::create (
               connector_options);
             use_json_codec (core_client1);
@@ -103,6 +106,7 @@ class tictactoe_client_scenario_t
             auto client1 = zlink::stream_e2e_client::use (core_client1);
             auto client2 = zlink::stream_e2e_client::use (core_client2);
             auto observer = zlink::stream_e2e_client::use (core_observer);
+            // --8<-- [end:doc-e2e-multi-client]
             auto reconnected_client = zlink::stream_e2e_client::use (core_reconnected_client);
             return run_game (client1, client2, observer, reconnected_client, room, options);
         }
@@ -140,6 +144,7 @@ class tictactoe_client_scenario_t
             ensure (room.required_level == 3);
             ensure (room.game_name == options.game_name);
 
+            // --8<-- [start:doc-e2e-connect-request]
             trace ("connect client1");
             co_await client1.connect ().async ();
             trace ("connect client2");
@@ -151,7 +156,8 @@ class tictactoe_client_scenario_t
             trace ("authenticate client1");
             const auto client1_auth_request = authenticate_req_t{options.x_actor_id};
             auto client1_auth = co_await client1.request (client1_auth_request)
-                                  .async<authenticate_res_t> ();
+                                   .async<authenticate_res_t> ();
+            // --8<-- [end:doc-e2e-connect-request]
             ensure (client1_auth.player.actor_id == options.x_actor_id);
             ensure (client1_auth.player.display_name == options.x_actor_id);
             ensure (client1_auth.player.level >= room.required_level);
@@ -181,24 +187,32 @@ class tictactoe_client_scenario_t
             ensure (observe.subscribed);
             std::cout << "observer-subscription=verified subscribed=true\n";
 
+            // --8<-- [start:doc-e2e-scenario]
             trace ("join client1");
             const auto client1_join_request = join_game_msg_t{room.room_id};
+            // --8<-- [start:doc-e2e-wait-before-send]
             auto client1_join_completion = client1.wait_for<join_game_notify_t> ().async ();
             client1.send (client1_join_request).submit ();
             auto client1_join = co_await client1_join_completion;
+            // --8<-- [end:doc-e2e-wait-before-send]
             ensure (client1_join.payload.state.room_id == room.room_id);
             ensure (client1_join.payload.state.x_actor_id == options.x_actor_id);
             ensure (!client1_join.payload.state.o_actor_id);
             ensure (client1_join.payload.state.status == tictactoe_status_t::waiting_for_players);
             ensure (client1_join.payload.state.next_turn == tictactoe_marks_t::x);
+            // --8<-- [start:doc-e2e-expect-none]
             co_await client1.expect_none<player_joined_notify_t> ()
               .within (std::chrono::milliseconds (25))
               .async ();
+            // --8<-- [end:doc-e2e-expect-none]
+            // --8<-- [end:doc-e2e-scenario]
 
+            // --8<-- [start:doc-e2e-wait-filter]
             auto client1_wait_client2_join = client1.wait_for<player_joined_notify_t> ()
                                                .where (&player_joined_notify_t::actor_id,
                                                        client2_auth.player.actor_id)
                                                .async ();
+            // --8<-- [end:doc-e2e-wait-filter]
             auto client1_wait_game_start = client1.wait_for<game_state_notify_t> ()
                                              .where (
                                                [&options] (const game_state_message_t &message) {
