@@ -111,6 +111,9 @@ kill_node() {
   local name=$1 sig=${2:-KILL} pid
   pid=${node_pid[$name]:-}; [[ -n "$pid" ]] || return 0
   kill -"$sig" "$pid" 2>/dev/null || true
+  if [[ "$sig" == TERM ]]; then
+    zlink_sample_wait_node_shutdown "$name" "$pid" "$LOG_DIR"
+  fi
   wait "$pid" 2>/dev/null || true
   forget_pid "$pid"; unset "node_pid[$name]"
   if [[ "$sig" != KILL ]]; then

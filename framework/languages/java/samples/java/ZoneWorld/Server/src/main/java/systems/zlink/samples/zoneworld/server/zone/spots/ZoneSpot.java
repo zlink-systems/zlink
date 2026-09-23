@@ -186,31 +186,38 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
                 .removeIf(
                         entry ->
                                 tick - entry.getValue().tick() > ZoneWorldSpec.BORDER_EXPIRY_TICKS);
-        publishBorders();
-        List<Messages.PlayerView> players = statePlayers();
-        CompletionStage<Void> sends = CompletableFuture.completedFuture(null);
-        for (PlayerActor actor : List.copyOf(residents.values())) {
-            if (!actor.isBot()) {
-                sends =
-                        sends.thenCompose(
-                                ignored ->
-                                        actorClient
-                                                .sendToActor(
-                                                        actor.actorId(),
-                                                        new Messages.DeliverZoneStateMsg(
-                                                                context.spotId(), tick, players))
-                                                .submit());
-            }
-        }
-        return sends.exceptionally(
-                error -> {
-                    System.out.println(
-                            "zone tick delivery error zone="
-                                    + context.spotId()
-                                    + " detail="
-                                    + error.getMessage());
-                    return null;
-                });
+        return publishBorders()
+                .thenCompose(
+                        ignored -> {
+                            List<Messages.PlayerView> players = statePlayers();
+                            CompletionStage<Void> sends = CompletableFuture.completedFuture(null);
+                            for (PlayerActor actor : List.copyOf(residents.values())) {
+                                if (!actor.isBot()) {
+                                    sends =
+                                            sends.thenCompose(
+                                                    sent ->
+                                                            actorClient
+                                                                    .sendToActor(
+                                                                            actor.actorId(),
+                                                                            new Messages
+                                                                                    .DeliverZoneStateMsg(
+                                                                                    context
+                                                                                            .spotId(),
+                                                                                    tick,
+                                                                                    players))
+                                                                    .submit());
+                                }
+                            }
+                            return sends.exceptionally(
+                                    error -> {
+                                        System.out.println(
+                                                "zone tick delivery error zone="
+                                                        + context.spotId()
+                                                        + " detail="
+                                                        + error.getMessage());
+                                        return null;
+                                    });
+                        });
     }
 
     public CompletionStage<Void> botTick() {
@@ -374,8 +381,9 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
                 .toList();
     }
 
-    private void publishBorders() {
+    private CompletionStage<Void> publishBorders() {
         // --8<-- [start:doc-zw-border-publish]
+        CompletionStage<Void> published = CompletableFuture.completedFuture(null);
         for (String target : ZoneWorldSpec.adjacentZones(context.spotId())) {
             List<Messages.PlayerView> border =
                     residents.values().stream()
@@ -396,13 +404,20 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
                                             Messages.PlayerView::playerId,
                                             ZoneWorldSpec.UTF8_ORDER))
                             .toList();
-            context.outbound()
-                    .publish(
-                            ZoneWorldNames.ZONE_CHANNEL,
-                            ZoneWorldNames.borderTopic(context.spotId(), target),
-                            new Messages.ZoneBorderEvent(context.spotId(), target, tick, border))
-                    .submit();
+            Messages.ZoneBorderEvent event =
+                    new Messages.ZoneBorderEvent(context.spotId(), target, tick, border);
+            published =
+                    published.thenCompose(
+                            ignored ->
+                                    context.outbound()
+                                            .publish(
+                                                    ZoneWorldNames.ZONE_CHANNEL,
+                                                    ZoneWorldNames.borderTopic(
+                                                            context.spotId(), target),
+                                                    event)
+                                            .submit());
         }
+        return published;
         // --8<-- [end:doc-zw-border-publish]
     }
 
