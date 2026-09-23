@@ -11,6 +11,8 @@
   작업 단위는 Issue 브랜치(`<area>/<issue번호>-<slug>`)와 worktree이며, main은 PR로만 바뀐다
   (`doc/principal/dev/development-workflow.ko.md`). 간단한 작업은 worktree 없이 main에서 한다 — 무엇이
   간단한 작업인지는 그 문서 §6이 정한다.
+- 작업 상태가 바뀔 때마다(시작, 리뷰 대기, 머지, 보류) [Project 보드](https://github.com/users/zlink-systems/projects/1/views/10)의
+  상태를 바로 갱신한다. 새 Issue는 만들 때 보드에 올린다.
 - worktree는 Windows에서는 `D:\worktree\<이름>`, WSL에서는 `/home/hep7/worktree/<이름>` 아래에 만든다.
   WSL 검증 사본(rsync 복사본)도 같은 WSL 디렉터리 아래에 두고, 작업이 끝나면 지운다 — 흩어진 사본이
   쌓여 WSL 디스크 이미지가 D:를 가득 채운 적이 있다(2026-09-23).
