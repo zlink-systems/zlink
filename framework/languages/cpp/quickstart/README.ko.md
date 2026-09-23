@@ -7,8 +7,7 @@ server endpoint를 직접 지정한다. 사이트의 `framework/doc/framework/cp
 이 파일에서 코드 블록을 읽는다.
 
 이 디렉터리는 `zlink-cpp-examples` 저장소의 `quickstart/`다. 설치는 `tutorial/`·`samples/`와
-같다: `bootstrap.cmake` 하나, GitHub Release의 Core prebuilt, binding·framework 소스 아카이브,
-그리고 Conan.
+같다: `bootstrap.cmake` 하나와 GitHub Release의 플랫폼별 framework prebuilt 하나만 쓴다.
 
 | | 목적 |
 |---|---|
@@ -24,14 +23,13 @@ tutorial과 같지만 Docker는 필요 없다(이 프로젝트는 Redis를 쓰�
 
 | 도구 | Windows | Linux / WSL |
 |---|---|---|
-| C++20 컴파일러 | Visual Studio 2022 17.4 이상 또는 Visual Studio 2026, **C++를 사용한 데스크톱 개발** 워크로드. 2026-09 현재 2026의 msvc 195에는 ConanCenter 바이너리가 없어 첫 bootstrap이 서드파티 library를 source에서 빌드하므로 약 20분 걸린다. 2022는 바이너리를 내려받아 약 7분 걸린다 | GCC 13 이상 |
+| C++20 컴파일러 | Visual Studio 2022 17.4 이상 또는 Visual Studio 2026, **C++를 사용한 데스크톱 개발** 워크로드 | GCC 13 이상 |
 | CMake | 3.24 이상 | 3.24 이상 |
 | Ninja | 필요 없음 | 권장. 없으면 Makefile을 쓴다 |
-| Conan 2 | `pipx install conan` 뒤 `pipx ensurepath`를 실행하고 새 terminal을 연다. `py -m pip install --user conan`을 썼으면 Python `Scripts` directory를 PATH에 넣는다. `conan --version`으로 확인한다 | `pipx install conan` 뒤 `pipx ensurepath`를 실행하고 새 terminal을 연다. `python3 -m pip install --user conan`을 썼으면 Python user `bin` directory를 PATH에 넣는다. `conan --version`으로 확인한다 |
 
-Conan은 ConanCenter의 서드파티 바이너리를 받는다. Visual Studio 2022에서는 **첫 bootstrap에 약 7분**,
-2026의 msvc 195처럼 바이너리가 없는 toolset에서는 서드파티를 source에서 빌드하므로 **약 20분** 걸린다.
-`tutorial/`이나 `samples/`에서 bootstrap을 이미 실행했으면 다시 빌드하지 말고 해당 tree를 재사용한다:
+이 밖에는 zlink 저장소, package manager, Node.js, 시스템 Boost가 필요 없다. `bootstrap.cmake`는
+공개 prefix를 내려받아 푼다. `tutorial/`이나 `samples/`에서 bootstrap을 이미 실행했으면 같은
+아카이브를 다시 내려받고 풀지 않도록 해당 tree를 재사용한다:
 `cmake -DZLINK_ROOT=../tutorial/.zlink -P bootstrap.cmake`.
 
 ## 내려받기와 설치
@@ -39,12 +37,11 @@ Conan은 ConanCenter의 서드파티 바이너리를 받는다. Visual Studio 20
 [`zlink-cpp-examples`](https://github.com/zlink-systems/zlink-cpp-examples) 저장소를 clone한다.
 아래 명령은 모두 그 저장소의 `quickstart/` 안에서 실행한다.
 
-설치는 [빌드](#빌드) 블록 첫 줄의 `bootstrap.cmake`로 처리한다. 이 script는 GitHub
-Release에서 이 플랫폼의 Core prebuilt, C++ binding 소스, framework 소스를 받아 binding과
-framework를 빌드해 `.zlink/install/`에 설치하고, 이 project를 `build/`에 구성한다. framework
-버전만 script에 적혀 있고 Core·binding·서드파티 버전은 framework 아카이브가 정한다. 기본은
-Conan이고 vcpkg fallback은 `-DZLINK_PACKAGE_MANAGER=vcpkg`로 고른다. 두 번째 실행부터는 받은
-파일과 빌드 결과를 그대로 사용한다. 처음부터 다시 설치하려면 `.zlink/`와 `build/`를 지운다.
+설치는 [빌드](#빌드) 블록 첫 줄의 `bootstrap.cmake`로 처리한다. 이 script는 GitHub Release에서
+이 플랫폼의 framework prebuilt를 받아 단일 consumer prefix를 `.zlink/install/`에 풀고, 이 project를
+`build/`에 구성한다. 아카이브에는 Core, C++ binding, framework library, `nlohmann_json`이 들어 있어
+사용자 환경에서 package manager를 실행하지 않는다. 두 번째 실행부터는 받은 아카이브와 푼
+prefix를 그대로 사용한다. 처음부터 다시 설치하려면 `.zlink/`와 `build/`를 지운다.
 
 ## 빌드
 
@@ -151,13 +148,12 @@ IDE가 같은 `build/`를 이어서 쓴다. 이 파일은 bootstrap이 매번 �
 
 ## 문제 해결
 
-설치 단계의 증상(Conan 없음, 지원하지 않는 컴파일러 설정, download 실패, 컴파일러 없음,
-`RuntimeLibrary` 불일치, `STATUS_DLL_NOT_FOUND`)은 tutorial과 같으므로 해당 README를 참조한다. 이
+설치 단계의 증상(download 실패, 컴파일러 없음, `RuntimeLibrary` 불일치,
+`STATUS_DLL_NOT_FOUND`)은 tutorial과 같으므로 해당 README를 참조한다. 이
 프로젝트에서만 발생하는 증상은 다음과 같다.
 
 | 증상 | 원인과 조치 |
 |---|---|
-| `bootstrap: could not find Conan` | `pipx install conan` 뒤 `pipx ensurepath`를 실행하고 새 terminal을 연다. `pip --user` 설치라면 Python `Scripts`/user `bin` directory를 PATH에 넣고 `conan --version`으로 확인한다 |
 | `bind: Address already in use` / `Only one usage of each socket address` | 7301·7302·5083을 다른 process가 사용 중이다 — 이전 실행의 `quickstart_server`·`quickstart_client`가 아직 실행 중일 수 있다 |
 | `curl: (7) Failed to connect to 127.0.0.1 port 5083` | client가 아직 뜨지 않았거나 죽었다. `client.log`를 본다 |
 | 호출이 대상 없음으로 끝난다 | server가 안 떠 있거나, client의 `peer_connections().connect(...)`가 server의 `listen(...)`과 다른 endpoint를 적었다 |

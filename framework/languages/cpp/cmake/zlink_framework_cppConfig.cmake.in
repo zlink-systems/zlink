@@ -32,23 +32,7 @@ if(@ZLINK_FRAMEWORK_CPP_SHARED@)
     message(STATUS
       "zlink_framework_cpp: codec_protobuf is unavailable; install libprotobuf-dev or add its prefix to CMAKE_PREFIX_PATH.")
   endif()
-
-  find_package(redis++ CONFIG QUIET)
-  find_package(libuv CONFIG QUIET)
-  set(_zlink_framework_cpp_redis_target "@ZLINK_FRAMEWORK_REDIS_EXPORT_REDIS_TARGET@")
-  set(_zlink_framework_cpp_libuv_target "@ZLINK_FRAMEWORK_REDIS_EXPORT_LIBUV_TARGET@")
-  if(_zlink_framework_cpp_redis_target
-      AND _zlink_framework_cpp_libuv_target
-      AND TARGET "${_zlink_framework_cpp_redis_target}"
-      AND TARGET "${_zlink_framework_cpp_libuv_target}")
-    include("${CMAKE_CURRENT_LIST_DIR}/zlink_framework_cppLocationsRedisTargets.cmake")
-  else()
-    message(STATUS
-      "zlink_framework_cpp: locations_redis is unavailable; install redis++ and libuv development files or add their prefixes to CMAKE_PREFIX_PATH.")
-  endif()
-  unset(_zlink_framework_cpp_redis_target)
-  unset(_zlink_framework_cpp_libuv_target)
 else()
   include("${CMAKE_CURRENT_LIST_DIR}/zlink_framework_cppCodecProtobufTargets.cmake")
-  include("${CMAKE_CURRENT_LIST_DIR}/zlink_framework_cppLocationsRedisTargets.cmake")
 endif()
+include("${CMAKE_CURRENT_LIST_DIR}/zlink_framework_cppLocationsRedisTargets.cmake")

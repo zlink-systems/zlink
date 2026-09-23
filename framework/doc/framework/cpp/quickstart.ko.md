@@ -35,7 +35,7 @@ recipe를 함께 담고 있으므로 설치 경로는 셋이다. **끝까지 검
 
 | 경로 | 지금 상태 |
 |---|---|
-| GitHub Release | Core prebuilt 하나와 source archive 둘을 차례로 설치한다. Windows·Linux에서 끝까지 확인했다 |
+| GitHub Release | 이 플랫폼의 framework prebuilt 하나를 받아 푼다. Core·C++ binding·framework library·`nlohmann_json`이 한 prefix에 들어 있다 |
 | vcpkg overlay port | 릴리스마다 `sync-recipes`가 갱신한다. 이 문서의 검증 범위 밖이다 |
 | Conan recipe | 릴리스마다 `sync-recipes`가 갱신한다. 이 문서의 검증 범위 밖이다 |
 
@@ -141,9 +141,9 @@ HTTP handler는 경로 파라미터를 인자로 받지 않는다. `http_request
 
 ## 6. 실행
 
-`bootstrap.cmake`가 §1의 설치를 대신하고 이 project를 `build/`에 구성한다. 첫 실행은 vcpkg가
-서드파티를 빌드하므로 20분 정도 걸리고, `tutorial/`을 먼저 bootstrap했으면
-`cmake -DZLINK_ROOT=../tutorial/.zlink -P bootstrap.cmake`로 그 결과를 재사용한다.
+`bootstrap.cmake`가 §1의 설치를 대신하고 이 project를 `build/`에 구성한다. 이 플랫폼의
+framework prebuilt를 받아 `.zlink/install/`에 풀 뿐 아무것도 빌드하지 않는다. `tutorial/`을 먼저
+bootstrap했으면 `cmake -DZLINK_ROOT=../tutorial/.zlink -P bootstrap.cmake`로 그 prefix를 재사용한다.
 
 ```bash
 cd zlink-cpp-examples/quickstart
@@ -163,14 +163,13 @@ install prefix>`로 구성한다. 응답은 `"hello, world"`, 상태 코드 200�
 ## 7. IDE에서 열기
 
 CMake project이므로 IDE는 `CMakeLists.txt`와 preset을 그대로 읽는다. `bootstrap.cmake`는 이
-폴더를 구성한 인자(Conan toolchain, framework install prefix, 컴파일 flag, generator)를 그대로
+폴더를 구성한 인자(framework install prefix, C++ 표준, generator)를 그대로
 `CMakeUserPresets.json`의 preset **`zlink`**로 남기므로, **§6의 `cmake -P bootstrap.cmake`를 한 번
 실행한 뒤 폴더를 열고 그 preset을 고르면** 끝이다. 환경 변수는 필요 없다. preset은 §6과 같은
 `build/`에 구성하므로 터미널에서 빌드한 결과를 IDE가 이어서 쓴다. `CMakeUserPresets.json`은
-bootstrap이 매번 다시 쓰고 git이 무시하므로 손으로 고치지 않는다 — 값을 바꿔야 하면 bootstrap의
-옵션(`-DZLINK_PACKAGE_MANAGER=vcpkg` 등)으로 바꾸고 다시 실행한다. Windows preset은 Release
-하나다 — framework가 static library라 Release로 지은 것에 Debug consumer를 링크할 수 없고,
-`/Od`라 디버깅에는 지장이 없다.
+bootstrap이 매번 다시 쓰고 git이 무시하므로 손으로 고치지 않는다 — 값을 바꿔야 하면 bootstrap을
+다시 실행한다. Windows preset은 Release 하나다 — prebuilt가 Release로 빌드되어 있어 Debug
+consumer를 링크할 수 없다.
 
 ### 7.1 Visual Studio 2022 · 2026
 
@@ -210,7 +209,7 @@ JetBrains IDE(Rider의 C++ 지원, CLion)도 폴더를 열면 CMake project로 �
 
 | 증상 | 확인할 항목 |
 | --- | --- |
-| `find_package`가 실패한다 | `cmake -P bootstrap.cmake`가 `bootstrap done`으로 끝났는지, `.zlink/install/lib/cmake/zlink_framework/`가 있는지 확인한다. 직접 설치했다면 `CMAKE_PREFIX_PATH`가 framework install prefix를 가리키는지 확인한다 |
+| `find_package`가 실패한다 | `cmake -P bootstrap.cmake`가 `bootstrap complete`로 끝났는지, `.zlink/install/lib/cmake/zlink_framework/`가 있는지 확인한다. 직접 설치했다면 `CMAKE_PREFIX_PATH`가 framework install prefix를 가리키는지 확인한다 |
 | server가 location store를 요구한다 | `set_object_role`을 `none`으로 지정했는지 확인한다 |
 | startup이 실패한다 | 두 process의 mesh 이름이 같은지, `routing_id`를 지정했는지 확인한다 |
 | 메시지가 직렬화되지 않는다 | 메시지 타입에 `NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE`를 붙였는지 확인한다 |

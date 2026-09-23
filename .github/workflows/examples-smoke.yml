@@ -869,23 +869,9 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y g++-13 cmake ninja-build git pkg-config curl pipx
+          sudo apt-get install -y g++-13 cmake ninja-build git pkg-config curl
           echo "CC=gcc-13" >> "$GITHUB_ENV"
           echo "CXX=g++-13" >> "$GITHUB_ENV"
-          pipx install conan==2.32.0
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      # bootstrap.cmake resolves the third-party libraries through Conan
-      # (ConanCenter prebuilt binaries, #854). The key hashes the exported
-      # tutorial's bootstrap.cmake, which pins the framework version whose
-      # conanfile.py owns the dependency list.
-      - name: Restore the Conan package cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.conan2/p
-          key: conan-${{ runner.os }}-${{ hashFiles('examples/zlink-cpp-examples/tutorial/bootstrap.cmake') }}
-          restore-keys: conan-${{ runner.os }}-
-
       - name: Tutorial install (README's own 내려받기와 설치/linux block)
         working-directory: examples/zlink-cpp-examples/tutorial
         run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" linux
@@ -918,10 +904,8 @@ jobs:
         working-directory: examples/zlink-cpp-examples/tutorial
         run: bash ../../run_readme_step.sh README.ko.md 종료 linux
 
-      # The quickstart README's own build block bootstraps into its own .zlink/;
-      # here the tutorial's tree is reused through the documented ZLINK_ROOT
-      # option (README «Prerequisites») so the framework is not built a second
-      # time. Run and verify are the README's blocks verbatim.
+      # Reuse the tutorial's downloaded framework prefix for quickstart. Run
+      # and verify are the README's blocks verbatim.
       - name: Quickstart build (README's ZLINK_ROOT reuse of the tutorial's .zlink)
         working-directory: examples/zlink-cpp-examples/quickstart
         run: |
