@@ -425,20 +425,29 @@ cmake --build "$build_dir" --parallel 8
 cmake --install "$build_dir"
 
 libraries=(zlink_framework zlink_framework_locations_redis zlink_http_client zlink_stream_connector)
+# Check defined exports, not imports from other shipped libraries. A zlink type
+# can also appear in a C++ template instantiation outside the zlink namespace.
+verify_framework_exports() {
+  local library="$1"
+  local exports="$2"
+  local zlink_symbol_pattern="$3"
+  local unexpected
+  grep -Eq "$zlink_symbol_pattern" <<<"$exports" || {
+    echo "no zlink C++ exports found in $library" >&2; exit 1;
+  }
+  unexpected="$(grep -Evm1 "$zlink_symbol_pattern" <<<"$exports" || true)"
+  [[ -z "$unexpected" ]] || {
+    echo "non-zlink dynamic export found in $library: $unexpected" >&2; exit 1;
+  }
+}
 case "$platform" in
   linux-*)
     for library in "${libraries[@]}"; do
       binary="$prefix/lib/lib${library}.so"
       [[ -f "$binary" ]] || { echo "missing shared library: $binary" >&2; exit 1; }
-      exports="$(nm -D --defined-only "$binary")"
-      grep -Eq ' (_ZN5zlink|_ZTVN5zlink|_ZTIN5zlink|_ZTSN5zlink)' <<<"$exports" || {
-        echo "no zlink C++ exports found in $library" >&2; exit 1;
-      }
-      if grep -Eq ' (_ZN5boost|_ZN6google8protobuf|_ZN4absl|_ZN13opentelemetry|_ZN2sw5redis|redis[A-Z]|uv_[a-z])' <<<"$exports"; then
-        echo "third-party dynamic export found in $library" >&2; exit 1
-      fi
-      "$python_command" "$source_dir/scripts/verify-apple-exports.py" \
-        "$source_dir/cmake/zlink-framework-shared-symbols.map" "$binary"
+      exports="$(nm -D --defined-only --format=posix "$binary" | awk '{print $1}')"
+      verify_framework_exports "$library" "$exports" '^_Z.*5zlink'
+      "$python_command" "$source_dir/scripts/verify-apple-exports.py"         "$source_dir/cmake/zlink-framework-shared-symbols.map" "$binary"
     done
     ;;
   macos-arm64)
@@ -490,13 +499,8 @@ case "$platform" in
       [[ -n "$binary" ]] || { echo "missing shared library: lib${library}.dylib" >&2; exit 1; }
       install_name="$(otool -D "$binary" | tail -n +2 | head -n1)"
       verify_macos_relative_reference "$binary" "install name" "$install_name"
-      exports="$(nm -gU "$binary")"
-      grep -Eq ' (__ZN5zlink|__ZTVN5zlink|__ZTIN5zlink|__ZTSN5zlink)' <<<"$exports" || {
-        echo "no zlink C++ exports found in $library" >&2; exit 1;
-      }
-      if grep -Eq ' (__ZN5boost|__ZN6google8protobuf|__ZN4absl|__ZN13opentelemetry|__ZN2sw5redis|_redis[A-Z]|_uv_[a-z])' <<<"$exports"; then
-        echo "third-party dynamic export found in $library" >&2; exit 1
-      fi
+      exports="$(nm -gU "$binary" | awk '{print $NF}')"
+      verify_framework_exports "$library" "$exports" '^__Z.*5zlink'
     done
     while IFS= read -r binary; do
       install_name="$(otool -D "$binary" | tail -n +2 | head -n1)"
@@ -513,12 +517,9 @@ case "$platform" in
     for library in "${libraries[@]}"; do
       binary="$prefix/bin/${library}.dll"
       [[ -f "$binary" ]] || { echo "missing shared library: $binary" >&2; exit 1; }
-      exports="$(MSYS2_ARG_CONV_EXCL=/EXPORTS dumpbin /EXPORTS "$(cygpath -w "$binary")")"
-      grep -Eq '\?[^ ]*@zlink@@' <<<"$exports" || { echo "no zlink C++ exports found in $library" >&2; exit 1; }
-      if grep -Eiq 'boost|protobuf|absl|opentelemetry|@sw@@' <<<"$exports" ||
-        grep -Eq '(^|[^A-Za-z0-9_])(redis[A-Z]|uv_[a-z])' <<<"$exports"; then
-        echo "third-party dynamic export found in $library" >&2; exit 1
-      fi
+      exports="$(MSYS2_ARG_CONV_EXCL=/EXPORTS dumpbin /EXPORTS "$(cygpath -w "$binary")" |
+        awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9A-Fa-f]+$/ && $3 ~ /^[0-9A-Fa-f]+$/ {print $4}')"
+      verify_framework_exports "$library" "$exports" '^\?[^ ]*@zlink@@'
     done
     while IFS= read -r binary; do
       while IFS= read -r dependency; do
