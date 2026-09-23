@@ -241,6 +241,7 @@ IDE가 같은 `build/`를 이어서 쓴다. 이 파일은 bootstrap이 매번 �
 | `docker: error during connect` / `Cannot connect to the Docker daemon` | Docker Desktop이 실행 중이 아니다. 시작한 뒤 `docker run ...`을 다시 실행한다 |
 | `docker: Error response from daemon: ... port is already allocated` / `Bind for 127.0.0.1:6379 failed` | 6379를 다른 Redis가 쓰고 있다. 아래와 같이 이 tutorial의 키를 삭제한 뒤 사용하거나, 6379에서 새 Redis를 실행한다 |
 | Server 로그에 `Location Store` 연결 실패 | Redis가 없다. Channel 단계까지는 그대로 돌지만 Spot·Actor·Location 단계는 실패한다 |
+| 강제 종료 후 Server가 시작하지 못한다 | 이전 owner lease는 최대 15초 동안 유효할 수 있다([owner lease TTL 기본값](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md#L670-L674)). 만료될 때까지 기다린 뒤 Server를 다시 실행한다. 시작에 실패한 process는 자동으로 재시도하지 않는다. 즉시 다시 시작하려면 이전 tutorial process를 종료하고 아래 명령으로 이 tutorial의 키를 삭제한다 |
 | `bind: Address already in use` / `Only one usage of each socket address` | 위 표의 port를 다른 process가 사용 중이다. 이전 실행의 `tutorial_server`·`tutorial_client`가 아직 실행 중인지 확인한다 |
 | `curl: (7) Failed to connect to 127.0.0.1 port 5180` | Client가 아직 뜨지 않았거나 죽었다. Client의 stderr를 본다 |
 

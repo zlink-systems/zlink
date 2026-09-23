@@ -243,6 +243,7 @@ file every time; it is not edited by hand.
 | `docker: error during connect` / `Cannot connect to the Docker daemon` | Docker Desktop is not running. Start it and repeat `docker run ...` |
 | `docker: Error response from daemon: ... port is already allocated` / `Bind for 127.0.0.1:6379 failed` | Another Redis owns 6379. Clear this tutorial's keys as shown below before reusing it, or start with a fresh Redis on 6379 |
 | Server log reports a `Location Store` connection failure | No Redis. The Channel steps still work; the Spot, Actor and Location steps fail |
+| Server fails to start after a forced stop | The previous owner lease can remain valid for up to 15 seconds ([default owner lease TTL](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md#L670-L674)). Wait for it to expire, then start the Server again; a failed start does not retry. To restart immediately, stop earlier tutorial processes and clear this tutorial's keys with the command below |
 | `bind: Address already in use` / `Only one usage of each socket address` | Another process holds a port from the table above. Check for a `tutorial_server` or `tutorial_client` left from an earlier run |
 | `curl: (7) Failed to connect to 127.0.0.1 port 5180` | The Client is not up yet, or died. Read the Client's stderr |
 

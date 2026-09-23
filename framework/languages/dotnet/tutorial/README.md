@@ -175,10 +175,13 @@ order. Stop with the IDE's Stop button.
   Stop.
 - **`dotnet` reports no compatible SDK** -- install the .NET 8.0 (or newer)
   SDK.
-- **RID registration is rejected with `RejectedConflict`** -- an earlier
-  run's stale keys are still in the same Redis. Stop the Server and Client,
-  clear only this tutorial's `zlink-tutorial:*` keys, then restart them.
-  Leave other keys in that Redis intact:
+- **RID registration is rejected with `RejectedConflict` after a forced stop.**
+  The previous owner lease can remain valid for up to 15 seconds
+  ([default owner lease TTL](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md#L670-L674)).
+  Wait for it to expire, then start the Server again; a failed start does not
+  retry. To restart immediately, stop earlier tutorial processes and clear
+  only this tutorial's `zlink-tutorial:*` keys with the command below. Leave
+  other keys in that Redis intact:
 
   ```bash
   redis-cli --scan --pattern 'zlink-tutorial:*' | xargs -r redis-cli del

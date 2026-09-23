@@ -290,6 +290,64 @@ test('redis Location Store persists and validates a 10,100-participant inventory
   }
 });
 
+test('redis-backed descriptor NewClaim reports an active owner conflict', async (t) => {
+  const fixture = await redisFixture(t);
+  if (fixture === undefined) return;
+  const prefix = testPrefix('descriptor-claim-conflict');
+  const provider = new redisLocations.ZLinkRedisLocationStore({
+    url: fixture.url,
+    keyPrefix: prefix
+  });
+  const repository = new frameworkInternal.ZLinkLocationStoreRepository(provider);
+
+  try {
+    const first = await repository.claimOwnerLease('first-owner', 15_000);
+    const second = await repository.claimOwnerLease('second-owner', 15_000);
+    assert.equal(first.kind, 'claimed');
+    assert.equal(second.kind, 'claimed');
+    const descriptor = aggregateDescriptor({
+      meshName: 'game',
+      nodeRid: 'game-server-1',
+      nodeLifecycleGeneration: 1n,
+      owner: first.token
+    }, 1);
+    assert.equal(
+      (await repository.updateMeshNode(
+        descriptor,
+        frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+      )).status,
+      frameworkInternal.ZLinkLocationWriteStatus.Stored
+    );
+    const replacement = {
+      ...descriptor,
+      lifecycleGeneration: 2n,
+      descriptorRevision: 1n,
+      ownerId: second.token.ownerId,
+      leaseGeneration: second.token.leaseGeneration
+    };
+    assert.equal(
+      (await repository.updateMeshNode(
+        replacement,
+        frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+      )).status,
+      frameworkInternal.ZLinkLocationWriteStatus.RejectedConflict
+    );
+    assert.equal((await repository.listMeshNodes('game')).items[0].ownerId, first.token.ownerId);
+    assert.equal(await repository.releaseOwnerLease(first.token), 'released');
+    assert.equal(
+      (await repository.updateMeshNode(
+        replacement,
+        frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+      )).status,
+      frameworkInternal.ZLinkLocationWriteStatus.Stored
+    );
+  } finally {
+    await provider.dispose();
+    await cleanup(fixture.client, prefix);
+    await fixture.client.quit();
+  }
+});
+
 test('redis-backed aggregate prepare commit and abort converge across repository instances', async (t) => {
   const fixture = await redisFixture(t);
   if (fixture === undefined) return;

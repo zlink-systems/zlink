@@ -241,6 +241,14 @@ test('in-memory exact MeshNode descriptor and Actor transfer stores enforce thei
 
   const otherLease = await store.claimOwnerLease('mesh-owner-b', 30_000);
   assert.equal(otherLease.kind, 'claimed');
+  const conflictingRidClaim = await store.updateMeshNode({
+    ...descriptor,
+    lifecycleGeneration: 8n,
+    descriptorRevision: 1n,
+    ownerId: 'mesh-owner-b',
+    leaseGeneration: otherLease.token.leaseGeneration
+  }, locationWrites.ZLinkLocationWriteIntent.NewClaim);
+  assert.equal(conflictingRidClaim.status, locationWrites.ZLinkLocationWriteStatus.RejectedConflict);
   const conflictingEntryIdentity = await store.updateMeshNode({
     ...descriptor,
     rid: rid('game-b'),

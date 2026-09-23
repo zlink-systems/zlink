@@ -162,9 +162,11 @@ Rider 또는 Visual Studio 2022·2026에서 `Tutorial.sln`을 연다. `Server`�
   그런 다음 Server와 Client를 다시 실행한다. 기존 Redis를 사용했다면 "종료" 절의
   `docker rm` 명령은 실행하지 않는다.
 - **`dotnet`이 호환되는 SDK가 없다고 한다** — .NET 8.0 이상 SDK를 설치한다.
-- **RID 등록이 `RejectedConflict`로 거부된다** — 이전 실행이 남긴 오래된 키가 같은
-  Redis에 남아 있을 때 나타난다. Server와 Client를 종료한 뒤 이 tutorial의
-  `zlink-tutorial:*` 키만 지우고 다시 실행한다. 같은 Redis의 다른 키는 지우지 않는다.
+- **강제 종료 후 RID 등록이 `RejectedConflict`로 거부된다.** 이전 owner lease는 최대
+  15초 동안 유효할 수 있다([owner lease TTL 기본값](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md#L670-L674)).
+  만료될 때까지 기다린 뒤 Server를 다시 실행한다. 시작에 실패한 process는 자동으로
+  재시도하지 않는다. 즉시 다시 시작하려면 이전 tutorial process를 종료하고 아래 명령으로
+  이 tutorial의 `zlink-tutorial:*` 키만 삭제한다. 같은 Redis의 다른 키는 지우지 않는다.
 
   ```bash
   redis-cli --scan --pattern 'zlink-tutorial:*' | xargs -r redis-cli del
