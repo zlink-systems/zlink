@@ -35,20 +35,42 @@ public partial class ZlinkStreamConnector
     public ZlinkStreamActor? Actor(string actorId);
     public IDisposable OnActorBound(Action<ZlinkStreamActor> handler);
     public IDisposable OnActorUnbound(Action<ZlinkStreamActor> handler);
+    public IDisposable OnRequestSending(Action<ZlinkStreamRequestSendingContext> handler);
+    public IDisposable OnReplyReceived(Action<ZlinkStreamReplyReceivedContext> handler);
 }
 
 public sealed class ZlinkStreamActor
 {
     public string ActorId { get; }
     public bool IsBound { get; }
-    public ZlinkStreamSendCall Send(object payload);
-    public ZlinkStreamRequestCall Request(object payload);
+    public IZlinkStreamSendCall Send(object payload);
+    public IZlinkStreamRequestCall Request(object payload);
+    public IZlinkStreamSendCall Send(object payload, string name);
+    public IZlinkStreamRequestCall Request(object payload, string name);
     public IDisposable On<TPayload>(string name, Action<ZlinkStreamMessage<TPayload>> handler);
+    public IDisposable On<TPayload>(Action<ZlinkStreamMessage<TPayload>> handler);
+}
+
+public sealed class ZlinkStreamRequestSendingContext
+{
+    public string RequestPacketName { get; }
+    public string ActorId { get; } // null when no Actor handle was used
+    public void SetMetadata(string key, string value);
+}
+
+public sealed class ZlinkStreamReplyReceivedContext
+{
+    public string RequestPacketName { get; }
+    public string ActorId { get; } // null when no Actor handle was used
+    public bool Succeeded { get; }
+    public ZlinkStreamMessage<ZlinkStreamEncodedPayload> Reply { get; } // null on failure
+    public ZlinkStreamError Error { get; } // null on success
+    public TimeSpan Elapsed { get; }
 }
 ```
 
-jslib JSON 경계는 `actorId`와 bound·unbound lifecycle event만 전달한다. `actor_slot`은 TypeScript
-wire runtime 안에 남으며 public C# 값으로 노출하지 않는다.
+jslib JSON 경계는 `actorId`, bound·unbound lifecycle event, 요청 hook의 metadata와 결과를 전달한다. `actor_slot`은 TypeScript
+wire runtime 안에 남으며 public C# 값으로 노출하지 않는다. Connector의 타입 기반 `Send<T>`·`Request<T>`와 `On<T>`·`WaitFor<T>`·`ExpectNone<T>`·`WaitForSequence<T>`는 typed extension으로 제공한다. Actor의 기본 `Send`·`Request`도 payload 타입에서 이름을 정하며, 명시 이름은 두 인자 overload 또는 builder의 `PacketName`으로 지정한다.
 
 ## 2. 진입점(entrypoint)
 
@@ -85,25 +107,17 @@ TypeScript connector가 사용할 수 있는 transport는 **`ws`와 `wss`뿐**�
 package root가 노출하는 public 타입은 다음과 같다.
 
 ```ts
-interface ZlinkStreamFlow {
-  readonly flowId: string;
-  readonly flowOrigin: ZlinkFlowOrigin;
-}
-
 interface ZlinkStreamConnector {
   readonly isConnected: boolean;
   readonly state: ZlinkStreamConnectionState;
   readonly closeReason?: ZlinkStreamCloseReason;
   readonly options: RequiredZlinkStreamConnectorOptions;
   readonly pendingDispatchCount: number;
-  readonly diagnosticsLevel: ZlinkStreamDiagnosticsLevel;
 
   connect(signal?: AbortSignal): Promise<void>;
   close(signal?: AbortSignal): Promise<void>;
   dispatch(signal?: AbortSignal): Promise<void>;
   receivedCount(name: string): number;                                  // packet 이름별 수신 개수(§5)
-  setDiagnosticsLevel(level: ZlinkStreamDiagnosticsLevel): void;        // 기다리지 않고 값을 바꾼다
-  setDiagnosticsLevelAsync(level: ZlinkStreamDiagnosticsLevel): Promise<void>; // 같은 값을 바꾸는 비동기 짝
 
   send(payload: unknown, messageType?: Function): ZlinkStreamSendCall;
   request(payload: unknown, messageType?: Function): ZlinkStreamRequestCall;
@@ -112,9 +126,14 @@ interface ZlinkStreamConnector {
   expectNone<TPayload = ZlinkStreamEncodedPayload>(nameOrType: string | Function): ZlinkStreamExpectNoneCall<TPayload>;
   waitForSequence<TPayload = ZlinkStreamEncodedPayload>(nameOrType: string | Function): ZlinkStreamSequenceCall<TPayload>;
   on<TPayload = ZlinkStreamEncodedPayload>(
-    name: string,
+    nameOrType: string | Function,
     handler: (message: ZlinkStreamMessage<TPayload>, signal?: AbortSignal) => Promise<void> | void,
     messageType?: Function
+  ): Disposable;
+
+  onRequestSending(handler: (context: ZlinkStreamRequestSendingContext) => void): Disposable;
+  onReplyReceived(
+    handler: (context: ZlinkStreamReplyReceivedContext, signal?: AbortSignal) => Promise<void> | void
   ): Disposable;
 
   onErrorReceived(handler: (error: ZlinkStreamError, signal?: AbortSignal) => Promise<void> | void): Disposable;
@@ -136,7 +155,7 @@ interface ZlinkStreamActor {
   send(payload: unknown, messageType?: Function): ZlinkStreamSendCall;       // 이 Actor의 slot을 싣는다
   request(payload: unknown, messageType?: Function): ZlinkStreamRequestCall;
   on<TPayload = ZlinkStreamEncodedPayload>(
-    name: string,
+    nameOrType: string | Function,
     handler: (message: ZlinkStreamMessage<TPayload>, signal?: AbortSignal) => Promise<void> | void,
     messageType?: Function
   ): Disposable;                                // 이 Actor가 상대인 message만
@@ -147,7 +166,6 @@ interface ZlinkStreamSendCall {
   metadata(key: string, value: string): ZlinkStreamSendCall;
   metadata(metadata: ZlinkStreamMetadata): ZlinkStreamSendCall;
   compress(): ZlinkStreamSendCall;
-  flowFrom(flow: ZlinkStreamFlow): ZlinkStreamSendCall;
   submit(): Promise<void>;
 }
 
@@ -157,7 +175,6 @@ interface ZlinkStreamRequestCall {
   metadata(metadata: ZlinkStreamMetadata): ZlinkStreamRequestCall;
   timeout(timeoutMs: number): ZlinkStreamRequestCall;
   compress(): ZlinkStreamRequestCall;
-  flowFrom(flow: ZlinkStreamFlow): ZlinkStreamRequestCall;
   submit<TReply = unknown>(signal?: AbortSignal): Promise<TReply>;
   submitEncoded(signal?: AbortSignal): Promise<ZlinkStreamEncodedPayload>;
   submit(callback: (result: ZlinkStreamResultOf<ZlinkStreamEncodedPayload>) => void): void;
@@ -197,11 +214,26 @@ interface ZlinkStreamEncodedPayload {
   readonly messageType?: Function;
 }
 
-interface ZlinkStreamMessage<TPayload = unknown> extends ZlinkStreamFlow {
+interface ZlinkStreamMessage<TPayload = unknown> {
   readonly name: string;
   readonly metadata: ZlinkStreamMetadata;
   readonly payload: TPayload;
   readonly actorId?: string;                   // 상대 bound Actor. slot 없는 frame은 undefined(공통 스펙 §5.6)
+}
+
+interface ZlinkStreamRequestSendingContext {
+  readonly requestPacketName: string;
+  readonly actorId?: string;
+  setMetadata(key: string, value: string): void;
+}
+
+interface ZlinkStreamReplyReceivedContext {
+  readonly requestPacketName: string;
+  readonly actorId?: string;
+  readonly succeeded: boolean;
+  readonly reply?: ZlinkStreamMessage<ZlinkStreamEncodedPayload>;
+  readonly error?: ZlinkStreamError;
+  readonly elapsed: number; // milliseconds
 }
 
 interface ZlinkStreamError {
@@ -243,7 +275,6 @@ enum ZlinkStreamErrorCode {
   RemoteError = 'remoteError'
 }
 
-type ZlinkFlowOrigin = 'Inbound' | 'Timer' | 'Application' | 'Lifecycle';
 type ZlinkStreamCloseReason =
   | 'ClientClose' | 'IdleTimeout' | 'HeartbeatTimeout'
   | 'ServerDrain' | 'ProtocolError' | 'TransportError';
@@ -297,23 +328,6 @@ interface ZlinkStreamConnectorOptions {
   readonly compression?: ZlinkStreamCompression;
   readonly compressionCodec?: ZlinkStreamCompressionCodec;
   readonly nameResolver?: ZlinkStreamPacketNameResolver; // 공통 스펙 §5.4의 name resolver 주입점
-  readonly diagnosticsLevel?: ZlinkStreamDiagnosticsLevel; // 생성 시점 초기값, 기본 Errors
-}
-
-// 계약은 공통 스펙 §13이 소유한다. 기본값 Errors, 미지 값은 구성 오류.
-// Off: outbound frame flow pair 미생성(0x10 미설정), inbound flow 값 검증·전달 생략
-// (구조 길이 검사 유지, ZlinkStreamMessage.flowId/flowOrigin은 undefined).
-// 실행 중 read/write는 connector의 `diagnosticsLevel` getter와 `setDiagnosticsLevel(level)`가
-// 제공하며, `setDiagnosticsLevelAsync(level)`가 같은 값을 바꾸는 비동기 짝이다. 동기 표면은
-// 비동기 짝의 완료를 기다리지 않는다(공통 스펙 §13, 서버 스펙 26 §4.1). 미지 값은
-// `setDiagnosticsLevel`도 생성 시점과 같은 ConfigurationError로 거부하며, 이전 값을
-// 그대로 유지한다. 변경은 그 뒤의 처리 지점부터 적용되고 이미 만들어진 frame에는
-// 소급 적용하지 않는다. `options.diagnosticsLevel`은 항상 현재 유효 level과 일치한다.
-enum ZlinkStreamDiagnosticsLevel {
-  Off = 'off',
-  Errors = 'errors',
-  Normal = 'normal',
-  Detailed = 'detailed',
 }
 
 interface ZlinkStreamHeartbeatOptions {
@@ -364,7 +378,6 @@ interface RequiredZlinkStreamConnectorOptions {
   readonly nameResolver: ZlinkStreamPacketNameResolver;
   readonly transportFactory: ZlinkStreamTransportFactory;
   readonly codec?: ZlinkStreamPayloadCodec;
-  readonly diagnosticsLevel: ZlinkStreamDiagnosticsLevel;
 }
 ```
 
@@ -383,18 +396,8 @@ connector 생성은 `zlinkStreamConnectorFactory.create(options)`를 사용한�
   `packetName(...)`·`metadata(...)`·`timeout(...)`·`compress()`를 붙인 뒤 `submit()`으로 제출한다.
   `send`의 `submit()`은 응답을 기다리지 않으며 전송 결과나 admission status 없이 비동기 완료와 실패만
   전달한다.
-- 수신 message는 `flowId`와 `flowOrigin`을 노출한다([공통 스펙 §5.5](../../32-stream-connector.ko.md#55-flow-노출과-전파)).
-  `diagnosticsLevel`이 `Off`이면 두 값이 `undefined`다.
-- inbound handler가 시작한 관련 outbound에는 `flowFrom(message)`를 호출한다. 이 메서드는 message의
-  `flowId`와 `flowOrigin`을 한 쌍으로 복사한다. 호출하지 않은 outbound는 `origin=application`인 새
-  flow를 시작한다. 자세한 비동기 문맥 경계는 [flow correlation §6](../../../server/06-observability/04-flow-correlation.ko.md#6-async-작업과-execution-context)를
-  따른다.
-- **`flowFrom(message)`로 flow를 명시해 전달하는 것은 브라우저 JavaScript의 환경 제약이다.**
-  브라우저에는 `AsyncLocalStorage`에 해당하는 ambient 실행 문맥이 없어 connector가 handler 실행
-  문맥에 현재 flow를 보관할 수 없다([공통 스펙 §2.2](../../32-stream-connector.ko.md#22-환경-제약이-계약에-미치는-영향),
-  [§5.5](../../32-stream-connector.ko.md#55-flow-노출과-전파)). 명시 전달과 ambient 전파는 호출
-  방식이 다를 뿐 만들어진 frame의 flow 값은 같다. connector의 변경 가능한 field나 module 전역
-  변수로 현재 flow를 추정하지 않는다.
+- connector는 flow를 만들거나 노출하지 않는다([공통 스펙 §5.5](../../32-stream-connector.ko.md#55-flow)).
+- `onRequestSending`·`onReplyReceived`는 [공통 스펙 §5.7](../../32-stream-connector.ko.md#57-요청-hook)의 두 hook이다. `elapsed`의 단위는 밀리초다.
 
 option의 기본값은 [공통 스펙 §6.1](../../32-stream-connector.ko.md)이 소유한다. TypeScript는 이를
 `ZlinkStreamConnectorOptions`의 필드로 표현하며, 해석된 전체 값을 `RequiredZlinkStreamConnectorOptions`로
