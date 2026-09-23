@@ -49,16 +49,13 @@ routing, reconnect, and correlation.
 > layer sits identically on Spring (Java/Kotlin) and NestJS (Node) too, and because the call
 > contract is a language-neutral wire protocol (ZMP) + codec + logical channel/packet,
 > services implemented in different languages call each other over the same channel (e.g., a
-> room server in C++, an API server in .NET/Java). This guide is `.NET`-based and treats the
-> `.NET` implementation as the reference implementation. The detailed cross-language model is
-> covered by [17-alternative §2.1](17-alternative.en.md).
+> room server in C++, an API server in .NET/Java). Each language guide describes the same public
+> contract, and its examples use that language’s actual API.
 
-## 2. Make the Adoption Decision in the Scope Chapter
+## 2. Adoption Decision
 
-[Where ZLink Applies](17-alternative.en.md) owns the use cases, comparisons with gRPC,
-service meshes, Orleans, and Akka, and the boundaries where ZLink should not be adopted.
-This overview avoids repeating that technology choice and focuses on the surface and
-structure you need after making it.
+See [Where ZLink Applies](17-alternative.en.md) for use cases and technology selection criteria.
+This chapter describes ZLink’s main surfaces and structure.
 ## 3. Surface and Structure
 
 ### 3.1 The Call Unit — MeshName and ChannelName
@@ -81,21 +78,15 @@ The framework handles what you'd otherwise have written by hand to build one ser
 | Managing server addresses, deciding connections | Tracks the currently active endpoint through the location store |
 | Configuration, logging, monitoring | Integrated with Spring configuration/logging/lifecycle |
 
-### 3.2 Technology Choice and Comparisons
-
-Compare the existing approach, alternatives, tradeoffs, and adoption signals in
-[Where ZLink Applies](17-alternative.en.md).
-### 3.3 Layering and Registration Points
+### 3.2 Layering and Registration Points
 
 <iframe class="zlink-diagram" src="/common/diagrams/01-layers-en.html" title="Layer structure — ZLink on the host, business logic on top" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-layers-en.html" target="_blank">↗ View larger</a></p>
 
-Put the host framework you already use (ASP.NET Core · Spring Boot · NestJS · C++ host) at
-the bottom and register the ZLink Framework into it with `AddZLinkFramework` — the opposite
-of bringing in a new engine and moving to a separate ecosystem; all of this runs inside the
-framework you already use. On top of that, the only code you write is the **business logic**
-(Spot · Actor · handler), and the Framework exposes its own functionality through the
-**DI · hosted service · handler · attribute** model.
+Register ZLink Framework with the existing host framework (ASP.NET Core · Spring Boot ·
+NestJS · C++ host) to run without a separate runtime. The application places its
+**business logic** (Spot · Actor · handler) above it. The Framework provides its features
+through **DI · hosted service · handler · attribute**.
 
 The point where the application meets this stack is **one registration spot.** This is where
 you declare the location store, MeshNode, fanout, and STREAM node. The blocks below splice
