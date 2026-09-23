@@ -115,10 +115,11 @@ jobs:
     needs: resolve
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout at the resolved ref
+      #  The export tool comes from this workflow's ref; the exported tree comes from the resolved ref.
+      - name: Checkout this workflow's ref with history
         uses: actions/checkout@v5
         with:
-          ref: ${{ needs.resolve.outputs.ref }}
+          fetch-depth: 0
 
       - uses: actions/setup-python@v6
         with:

@@ -263,16 +263,19 @@ jobs:
       matrix:
         target: ${{ fromJSON(needs.resolve.outputs.targets) }}
     steps:
+      #  The export tool comes from this workflow's ref; the exported tree comes from the ref being
+      #  mirrored. On a tag release they are the same commit; a dispatch from main re-exports a tag
+      #  with the current tool.
       - uses: actions/checkout@v5
         with:
-          ref: ${{ needs.resolve.outputs.ref }}
+          fetch-depth: 0
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.x'
 
       - name: Export the tree at the ref
-        run: python3 scripts/tutorial/export_examples.py .artifacts/examples HEAD
+        run: python3 scripts/tutorial/export_examples.py .artifacts/examples "${{ needs.resolve.outputs.ref }}"
 
       # One write-only deploy key per configured mirror target.
       - name: Load the mirror's deploy key
