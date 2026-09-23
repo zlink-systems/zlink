@@ -545,36 +545,36 @@ const char *stream_kind_name (stream_message_kind_t kind)
     return "unknown";
 }
 
-/* The stream error payload uses the stable public framework error name. */
+/* The stream error payload uses the canonical framework wire error name. */
 const char *stream_error_code (framework_error_kind_t kind)
 {
     switch (kind) {
         case framework_error_kind_t::not_found:
-            return "NotFound";
+            return "not_found";
         case framework_error_kind_t::already_exists:
-            return "AlreadyExists";
+            return "already_exists";
         case framework_error_kind_t::type_mismatch:
-            return "TypeMismatch";
+            return "type_mismatch";
         case framework_error_kind_t::not_configured:
-            return "NotConfigured";
+            return "not_configured";
         case framework_error_kind_t::rejected:
-            return "Rejected";
+            return "rejected";
         case framework_error_kind_t::unavailable:
-            return "Unavailable";
+            return "unavailable";
         case framework_error_kind_t::deadline_exceeded:
-            return "DeadlineExceeded";
+            return "deadline_exceeded";
         case framework_error_kind_t::shutting_down:
-            return "ShuttingDown";
+            return "shutting_down";
         case framework_error_kind_t::protocol_error:
-            return "ProtocolError";
+            return "protocol_error";
         case framework_error_kind_t::invalid_operation:
-            return "InvalidOperation";
+            return "invalid_operation";
         case framework_error_kind_t::data_lost:
-            return "DataLost";
+            return "data_lost";
         case framework_error_kind_t::internal_failure:
-            return "InternalFailure";
+            return "internal_failure";
     }
-    return "InternalFailure";
+    return "internal_failure";
 }
 
 zlink::message_t stream_error_payload (const result_t<void> &error)

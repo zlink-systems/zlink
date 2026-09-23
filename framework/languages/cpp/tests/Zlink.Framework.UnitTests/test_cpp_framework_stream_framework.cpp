@@ -942,10 +942,12 @@ int main ()
     zlink::framework::zlink_builder_t zlink;
     zlink.stream ("client-stream").bind ("tcp://0.0.0.0:9200").register_session ("client");
     std::atomic_bool saw_stream_session_flow{false};
+    std::vector<zlink::framework::message_flow_event_t> stream_flow_events;
     zlink::framework::dispatch_options_t flow_options;
     flow_options.message_flow (zlink::framework::message_flow_log_mode_t::normal);
     zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
       flow_options, [&] (const zlink::framework::message_flow_event_t &event) {
+          stream_flow_events.push_back (event);
           if (event.surface == zlink::framework::dispatch_error_surface_t::stream_session
               && event.outcome == zlink::framework::message_flow_outcome_t::received
               && event.stream_session_id
@@ -967,13 +969,6 @@ int main ()
         || snapshots[0].packet_session_name != "client")
         return 1;
 
-    std::vector<zlink::framework::message_flow_event_t> stream_flow_events;
-    zlink::framework::dispatch_options_t stream_dispatch_options;
-    stream_dispatch_options.message_flow (zlink::framework::message_flow_log_mode_t::errors);
-    zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
-      stream_dispatch_options,
-      [&stream_flow_events] (const auto &event) { stream_flow_events.push_back (event); });
-    zlink::framework::detail::apply_dispatch_options (zlink, stream_dispatch_options);
     auto runtime = zlink::framework::detail::stream_runtime_t::from (zlink);
     zlink::framework::detail::stream_metadata_t metadata;
     metadata.with ("trace", "42").with ("content_type", "application/json");
@@ -2109,7 +2104,7 @@ int main ()
                                              + stale_payload_size);
     if (!stale_reply_header || stale_reply_header.value ().kind () != stream_message_kind_t::error
         || stale_reply_header.value ().request_seq () != 91
-        || stale_reply_payload.find ("\"code\":\"InvalidOperation\"") == std::string::npos) {
+        || stale_reply_payload.find ("\"code\":\"invalid_operation\"") == std::string::npos) {
         transport_host.stop ();
         return 328;
     }

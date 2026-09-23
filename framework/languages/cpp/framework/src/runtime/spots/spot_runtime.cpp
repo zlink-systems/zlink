@@ -12040,9 +12040,8 @@ spot_node_runtime_t::dispatch_instance_activation (const spot_id_t &spot_id,
      * carries the framework-owned flow pair when tracing is enabled; a target
      * creates a new inbound flow only when the source did not carry one. */
     const auto diagnostics_mode = detail::message_flow_tracer_t (_state->dispatch).mode ();
-    auto flow_scope = runtime::flow_context_t::enter (std::move (flow_id), flow_origin,
-                                                      diagnostics_mode, flow_origin_t::inbound,
-                                                      std::nullopt);
+    auto flow_scope = runtime::flow_context_t::enter (
+      std::move (flow_id), flow_origin, diagnostics_mode, flow_origin_t::inbound, std::nullopt);
     auto context = find_context (spot_id);
     const auto context_state = context ? context->_state : nullptr;
     const auto materialized =
@@ -14463,9 +14462,8 @@ spot_node_runtime_t::dispatch_subscription (const spot_context_t &context,
         return result_t<void>::success ();
     }
     const auto diagnostics_mode = detail::message_flow_tracer_t (_state->dispatch).mode ();
-    auto flow_scope = runtime::flow_context_t::enter (std::move (flow_id), flow_origin,
-                                                      diagnostics_mode, flow_origin_t::inbound,
-                                                      std::nullopt);
+    auto flow_scope = runtime::flow_context_t::enter (
+      std::move (flow_id), flow_origin, diagnostics_mode, flow_origin_t::inbound, std::nullopt);
     const auto &message = body;
     bool handler_found = false;
     for (const auto &descriptor : context._state->handlers) {

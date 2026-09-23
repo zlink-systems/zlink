@@ -1046,29 +1046,27 @@ int main ()
             }
         }
         {
-            auto scope = rt::flow_context_t::enter (created, zlink::framework::flow_origin_t::timer,
-                                                    zlink::framework::message_flow_log_mode_t::off,
-                                                    zlink::framework::flow_origin_t::inbound,
-                                                    std::nullopt);
+            auto scope =
+              rt::flow_context_t::enter (created, zlink::framework::flow_origin_t::timer,
+                                         zlink::framework::message_flow_log_mode_t::off,
+                                         zlink::framework::flow_origin_t::inbound, std::nullopt);
             if (rt::flow_context_t::current ()) {
                 return 47;
             }
         }
         {
-            auto scope = rt::flow_context_t::enter (std::nullopt, std::nullopt,
-                                                    zlink::framework::message_flow_log_mode_t::off,
-                                                    zlink::framework::flow_origin_t::inbound,
-                                                    std::nullopt);
+            auto scope = rt::flow_context_t::enter (
+              std::nullopt, std::nullopt, zlink::framework::message_flow_log_mode_t::off,
+              zlink::framework::flow_origin_t::inbound, std::nullopt);
             if (rt::flow_context_t::current ()) {
                 return 48;
             }
         }
         {
             const std::optional<std::string> malformed_flow{"not-a-uuid"};
-            auto scope = rt::flow_context_t::enter (malformed_flow, std::nullopt,
-                                                    zlink::framework::message_flow_log_mode_t::off,
-                                                    zlink::framework::flow_origin_t::inbound,
-                                                    std::nullopt);
+            auto scope = rt::flow_context_t::enter (
+              malformed_flow, std::nullopt, zlink::framework::message_flow_log_mode_t::off,
+              zlink::framework::flow_origin_t::inbound, std::nullopt);
             if (rt::flow_context_t::current ()) {
                 return 160;
             }
@@ -1078,11 +1076,10 @@ int main ()
          * flow data from a tracing-on sender cannot fail a frame at Off. */
         {
             auto stamped_message = [&] {
-                auto scope =
-                  rt::flow_context_t::enter (created, zlink::framework::flow_origin_t::inbound,
-                                             zlink::framework::message_flow_log_mode_t::normal,
-                                             zlink::framework::flow_origin_t::inbound,
-                                             std::nullopt);
+                auto scope = rt::flow_context_t::enter (
+                  created, zlink::framework::flow_origin_t::inbound,
+                  zlink::framework::message_flow_log_mode_t::normal,
+                  zlink::framework::flow_origin_t::inbound, std::nullopt);
                 return codec.encode_header (header);
             }();
             const auto off_decoded = codec.decode_header (stamped_message, false);
@@ -1104,11 +1101,10 @@ int main ()
             }
         }
         {
-            auto outer =
-              rt::flow_context_t::enter (created, zlink::framework::flow_origin_t::application,
-                                         zlink::framework::message_flow_log_mode_t::normal,
-                                         zlink::framework::flow_origin_t::application,
-                                         std::nullopt);
+            auto outer = rt::flow_context_t::enter (
+              created, zlink::framework::flow_origin_t::application,
+              zlink::framework::message_flow_log_mode_t::normal,
+              zlink::framework::flow_origin_t::application, std::nullopt);
             {
                 auto off = rt::flow_context_t::enter_current_or_create (
                   zlink::framework::flow_origin_t::application,
@@ -1149,11 +1145,10 @@ int main ()
             std::string observed_in_callback;
             bool leaked_on_completer = false;
             {
-                auto scope =
-                  rt::flow_context_t::enter (created, zlink::framework::flow_origin_t::inbound,
-                                             zlink::framework::message_flow_log_mode_t::normal,
-                                             zlink::framework::flow_origin_t::inbound,
-                                             std::nullopt);
+                auto scope = rt::flow_context_t::enter (
+                  created, zlink::framework::flow_origin_t::inbound,
+                  zlink::framework::message_flow_log_mode_t::normal,
+                  zlink::framework::flow_origin_t::inbound, std::nullopt);
                 auto task = source.task ();
                 zlink::framework::detail::observe_task_completion (
                   task, [&observed_in_callback] (const zlink::framework::result_t<int> &) {

@@ -2454,8 +2454,7 @@ void app_t::_apply_zlink_framework ()
                     if (actor_gateway_runtime.trace_bound_session_send_stage_enabled ()) {
                         actor_gateway_runtime.trace_bound_session_send_stage (
                           send.actor.actor_id, "session_node_receive",
-                          "binding_generation="
-                            + std::to_string (send.expected_binding_generation),
+                          "binding_generation=" + std::to_string (send.expected_binding_generation),
                           nullptr);
                     }
                     const auto actor = detail::actor_ref_access_t::make (
