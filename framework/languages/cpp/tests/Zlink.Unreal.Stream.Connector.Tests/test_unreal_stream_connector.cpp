@@ -39,6 +39,21 @@ int main ()
         return 2;
     }
 
+    int reconnect_failures = 0;
+    auto reply_hook =
+      connector.OnReplyReceived ([&] (const FZLinkStreamReplyReceivedContext &context) {
+          if (context.RequestPacketName == "chat.reconnect" && !context.bSucceeded
+              && context.bHasError) {
+              ++reconnect_failures;
+          }
+      });
+    connector.RequestJson ("chat.reconnect", "{}", 0.01f);
+    connector.Connect ("tcp://127.0.0.1:9403");
+    connector.Dispatch ();
+    if (reconnect_failures != 1) {
+        return 8;
+    }
+
     connector.ShutdownForPie ();
     connector.Dispatch ();
     if (connector.IsConnected () || connector.LastState () != EZLinkStreamConnectionState::Closed) {

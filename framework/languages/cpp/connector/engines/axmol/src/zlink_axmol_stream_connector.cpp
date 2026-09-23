@@ -5,6 +5,7 @@
 #include <zlink/stream_connector.hpp>
 
 #include <deque>
+#include <algorithm>
 #include <chrono>
 #include <memory>
 #include <mutex>
@@ -25,7 +26,48 @@ packet_t to_axmol_packet (std::string name, const zlink::message_t &payload)
     return packet;
 }
 
+packet_t to_axmol_packet (const zlink::stream_connector::packet_t &source)
+{
+    auto packet = to_axmol_packet (source.name, source.payload);
+    packet.metadata = source.metadata.values;
+    packet.compressed = source.compressed;
+    return packet;
+}
+
 } // namespace
+
+void request_sending_context_t::set_metadata (std::string key, std::string value)
+{
+    _metadata[std::move (key)] = std::move (value);
+}
+
+subscription_t::subscription_t (std::function<void ()> release) : _release (std::move (release))
+{
+}
+
+subscription_t::subscription_t (subscription_t &&other) noexcept :
+    _release (std::move (other._release))
+{
+    other._release = {};
+}
+
+subscription_t &subscription_t::operator= (subscription_t &&other) noexcept
+{
+    if (this != &other) {
+        unsubscribe ();
+        _release = std::move (other._release);
+        other._release = {};
+    }
+    return *this;
+}
+
+void subscription_t::unsubscribe ()
+{
+    if (_release) {
+        auto release = std::move (_release);
+        release ();
+    }
+}
 
 class stream_connector_t::runtime_t
 {
@@ -42,6 +84,15 @@ class stream_connector_t::runtime_t
         zlink::stream_connector::subscription_t handle;
     };
     std::vector<subscription_entry_t> subscriptions;
+    template <typename Callback> struct hook_entry_t
+    {
+        Callback callback;
+        zlink::stream_connector::subscription_t handle;
+    };
+    using sending_entry_t = hook_entry_t<std::function<void (request_sending_context_t &)>>;
+    using reply_entry_t = hook_entry_t<std::function<void (const reply_received_context_t &)>>;
+    std::vector<std::shared_ptr<sending_entry_t>> sending_hooks;
+    std::vector<std::shared_ptr<reply_entry_t>> reply_hooks;
     std::mutex pending_callbacks_mutex;
     std::deque<std::function<void ()>> pending_callbacks;
 
@@ -106,6 +157,48 @@ class stream_connector_t::runtime_t
               }
           });
     }
+
+    void register_sending_hook (const std::shared_ptr<sending_entry_t> &entry)
+    {
+        entry->handle = connector.on_request_sending (
+          [weak_entry = std::weak_ptr<sending_entry_t> (entry)] (
+            zlink::stream_connector::request_sending_context_t &source) {
+              if (auto registered = weak_entry.lock ()) {
+                  request_sending_context_t context{source.request_packet_name, source.actor_id};
+                  registered->callback (context);
+                  for (const auto &[key, value] : context.metadata_values ()) {
+                      source.set_metadata (key, value);
+                  }
+              }
+          });
+    }
+
+    void register_reply_hook (const std::shared_ptr<reply_entry_t> &entry,
+                              std::weak_ptr<runtime_t> weak_owner)
+    {
+        entry->handle = connector.on_reply_received (
+          [weak_owner, weak_entry = std::weak_ptr<reply_entry_t> (entry)] (
+            const zlink::stream_connector::reply_received_context_t &source) {
+              if (auto owner = weak_owner.lock ()) {
+                  reply_received_context_t context;
+                  context.request_packet_name = source.request_packet_name;
+                  context.actor_id = source.actor_id;
+                  context.succeeded = source.succeeded;
+                  context.elapsed = source.elapsed;
+                  if (source.reply) {
+                      context.reply = to_axmol_packet (*source.reply);
+                  }
+                  if (source.error) {
+                      context.error = error_t{source.error->code, source.error->message};
+                  }
+                  owner->post_to_axmol_thread ([weak_entry, context = std::move (context)] {
+                      if (auto registered = weak_entry.lock ()) {
+                          registered->callback (context);
+                      }
+                  });
+              }
+          });
+    }
 };
 
 stream_connector_t::stream_connector_t () : _runtime (std::make_shared<runtime_t> ())
@@ -125,12 +218,28 @@ void stream_connector_t::connect (std::string endpoint)
     for (auto &entry : _runtime->subscriptions) {
         entry.handle.unsubscribe ();
     }
+    _runtime->connector.close ();
+    while (_runtime->connector.pending_dispatch_count () != 0) {
+        _runtime->connector.dispatch ();
+    }
+    for (const auto &entry : _runtime->sending_hooks) {
+        entry->handle.unsubscribe ();
+    }
+    for (const auto &entry : _runtime->reply_hooks) {
+        entry->handle.unsubscribe ();
+    }
     zlink::stream_connector::connector_options_t options;
     options.endpoint = std::move (endpoint);
     _runtime->connector =
       zlink::stream_connector::connector_factory_t::create (std::move (options));
     for (auto &entry : _runtime->subscriptions) {
         _runtime->register_subscription (entry, _runtime);
+    }
+    for (const auto &entry : _runtime->sending_hooks) {
+        _runtime->register_sending_hook (entry);
+    }
+    for (const auto &entry : _runtime->reply_hooks) {
+        _runtime->register_reply_hook (entry, _runtime);
     }
     _runtime->current_state = connection_state_t::connecting;
     _runtime->emit_state (_runtime->current_state);
@@ -235,6 +344,48 @@ void stream_connector_t::on_connection_state_changed (
   std::function<void (connection_state_t)> callback)
 {
     _runtime->state_callback = std::move (callback);
+}
+
+subscription_t
+stream_connector_t::on_request_sending (std::function<void (request_sending_context_t &)> callback)
+{
+    auto entry = std::make_shared<runtime_t::sending_entry_t> ();
+    entry->callback = std::move (callback);
+    _runtime->sending_hooks.push_back (entry);
+    if (_runtime->current_state == connection_state_t::connected) {
+        _runtime->register_sending_hook (entry);
+    }
+    return subscription_t ([owner = std::weak_ptr<runtime_t> (_runtime),
+                            weak_entry = std::weak_ptr<runtime_t::sending_entry_t> (entry)] {
+        if (auto runtime = owner.lock ()) {
+            if (auto registered = weak_entry.lock ()) {
+                registered->handle.unsubscribe ();
+                auto &hooks = runtime->sending_hooks;
+                hooks.erase (std::remove (hooks.begin (), hooks.end (), registered), hooks.end ());
+            }
+        }
+    });
+}
+
+subscription_t stream_connector_t::on_reply_received (
+  std::function<void (const reply_received_context_t &)> callback)
+{
+    auto entry = std::make_shared<runtime_t::reply_entry_t> ();
+    entry->callback = std::move (callback);
+    _runtime->reply_hooks.push_back (entry);
+    if (_runtime->current_state == connection_state_t::connected) {
+        _runtime->register_reply_hook (entry, _runtime);
+    }
+    return subscription_t ([owner = std::weak_ptr<runtime_t> (_runtime),
+                            weak_entry = std::weak_ptr<runtime_t::reply_entry_t> (entry)] {
+        if (auto runtime = owner.lock ()) {
+            if (auto registered = weak_entry.lock ()) {
+                registered->handle.unsubscribe ();
+                auto &hooks = runtime->reply_hooks;
+                hooks.erase (std::remove (hooks.begin (), hooks.end (), registered), hooks.end ());
+            }
+        }
+    });
 }
 
 } // namespace zlink::axmol_stream_connector

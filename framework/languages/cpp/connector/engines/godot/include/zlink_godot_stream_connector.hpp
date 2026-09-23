@@ -2,11 +2,15 @@
 #pragma once
 
 #include <cstdint>
+#include <chrono>
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
+
+#include <zlink/stream_connector/contracts/zlink_stream_enums.hpp>
 
 namespace zlink::godot_stream_connector
 {
@@ -35,6 +39,57 @@ struct send_options_t
     bool compress = false;
 };
 
+class request_sending_context_t
+{
+  public:
+    std::string request_packet_name;
+    std::optional<std::string> actor_id;
+
+    void set_metadata (std::string key, std::string value);
+
+  private:
+    friend class stream_connector_t;
+    request_sending_context_t (std::string name,
+                               std::optional<std::string> actor,
+                               std::function<void (std::string, std::string)> setter);
+    std::function<void (std::string, std::string)> _setter;
+};
+
+struct error_t
+{
+    zlink::stream_connector::error_code_t code;
+    std::string message;
+};
+
+struct reply_received_context_t
+{
+    std::string request_packet_name;
+    std::optional<std::string> actor_id;
+    bool succeeded = false;
+    std::optional<packet_t> reply;
+    std::optional<error_t> error;
+    std::chrono::milliseconds elapsed{0};
+};
+
+class subscription_t
+{
+  public:
+    subscription_t () = default;
+    ~subscription_t ();
+    subscription_t (subscription_t &&) noexcept;
+    subscription_t &operator= (subscription_t &&) noexcept;
+    subscription_t (const subscription_t &) = delete;
+    subscription_t &operator= (const subscription_t &) = delete;
+
+    void unsubscribe ();
+    bool active () const noexcept;
+
+  private:
+    friend class stream_connector_t;
+    explicit subscription_t (std::function<void ()> release);
+    std::function<void ()> _release;
+};
+
 class stream_connector_t
 {
   public:
@@ -59,6 +114,9 @@ class stream_connector_t
     void on_packet (std::function<void (const packet_t &)> callback);
     void on_request_completed (std::function<void (const packet_t &)> callback);
     void on_connection_state_changed (std::function<void (connection_state_t)> callback);
+    subscription_t on_request_sending (std::function<void (request_sending_context_t &)> callback);
+    subscription_t
+    on_reply_received (std::function<void (const reply_received_context_t &)> callback);
 
   private:
     class runtime_t;

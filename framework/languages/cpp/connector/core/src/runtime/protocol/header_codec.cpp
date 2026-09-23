@@ -4,10 +4,7 @@
 
 #include "runtime/protocol/metadata_codec.hpp"
 
-#include <array>
-#include <chrono>
 #include <limits>
-#include <random>
 
 namespace zlink::stream_connector::detail
 {
@@ -15,12 +12,14 @@ namespace zlink::stream_connector::detail
 namespace
 {
 
+constexpr auto flow_field_flag = static_cast<header_flags_t> (0x10);
+
 constexpr std::uint8_t known_flags =
   static_cast<std::uint8_t> (header_flags_t::has_request_seq)
   | static_cast<std::uint8_t> (header_flags_t::has_metadata)
   | static_cast<std::uint8_t> (header_flags_t::payload_compressed)
   | static_cast<std::uint8_t> (header_flags_t::has_correlation_id)
-  | static_cast<std::uint8_t> (header_flags_t::has_flow_id)
+  | static_cast<std::uint8_t> (flow_field_flag)
   | static_cast<std::uint8_t> (header_flags_t::has_actor_slot);
 
 bool has_flag (header_flags_t flags, header_flags_t flag)
@@ -94,7 +93,7 @@ bool is_defined (codec_t codec)
     return false;
 }
 
-result_t<void> validate_header (const stream_header_t &header, bool validate_flow = true)
+result_t<void> validate_header (const stream_header_t &header)
 {
     if (!is_defined (header.kind) || !is_defined (header.codec)
         || (static_cast<std::uint8_t> (header.flags) & ~known_flags) != 0) {
@@ -145,30 +144,6 @@ result_t<void> validate_header (const stream_header_t &header, bool validate_flo
         return result_t<void>::failure (error_code_t::validation_failed,
                                         "Request sequence must not be zero.");
     }
-    if (!validate_flow) {
-        /* Diagnostics level Off (flow-correlation §4): the structural length
-         * checks above stay, but the flow fields are not read as flow values. */
-        return result_t<void>::success ();
-    }
-    const auto has_flow = !header.flow_id.empty ();
-    if (has_flow != header.flow_origin.has_value ()) {
-        return result_t<void>::failure (error_code_t::validation_failed,
-                                        "Flow id and flow origin must be present together.");
-    }
-    if (has_flow && !flow_id_codec_t::is_valid (header.flow_id)) {
-        return result_t<void>::failure (error_code_t::validation_failed, "Flow id must be UUIDv7.");
-    }
-    if (header.flow_origin) {
-        const auto raw_origin = static_cast<std::uint8_t> (*header.flow_origin);
-        if (raw_origin < 1 || raw_origin > 4) {
-            return result_t<void>::failure (error_code_t::validation_failed,
-                                            "Flow origin is invalid.");
-        }
-        if (header.kind == message_kind_t::control) {
-            return result_t<void>::failure (error_code_t::validation_failed,
-                                            "Control packet must not carry flow fields.");
-        }
-    }
     return result_t<void>::success ();
 }
 
@@ -197,11 +172,7 @@ result_t<std::vector<std::uint8_t>> header_codec_t::encode (const stream_header_
     } else {
         clear_flag (header.flags, header_flags_t::has_correlation_id);
     }
-    if (!header.flow_id.empty ()) {
-        set_flag (header.flags, header_flags_t::has_flow_id);
-    } else {
-        clear_flag (header.flags, header_flags_t::has_flow_id);
-    }
+    clear_flag (header.flags, flow_field_flag);
     if (header.actor_slot) {
         set_flag (header.flags, header_flags_t::has_actor_slot);
     } else {
@@ -227,8 +198,7 @@ result_t<std::vector<std::uint8_t>> header_codec_t::encode (const stream_header_
 
     std::vector<std::uint8_t> bytes;
     bytes.reserve (4 + (header.request_seq ? 8 : 0) + 1 + header.name.size ()
-                   + (metadata.value ().empty () ? 0 : 2 + metadata.value ().size ())
-                   + (header.flow_id.empty () ? 0 : flow_id_codec_t::encoded_length + 1));
+                   + (metadata.value ().empty () ? 0 : 2 + metadata.value ().size ()));
     bytes.push_back (flow_id_codec_t::format_marker);
     bytes.push_back (static_cast<std::uint8_t> (header.kind));
     bytes.push_back (static_cast<std::uint8_t> (header.codec));
@@ -246,18 +216,13 @@ result_t<std::vector<std::uint8_t>> header_codec_t::encode (const stream_header_
         bytes.push_back (static_cast<std::uint8_t> (header.correlation_id.size ()));
         bytes.insert (bytes.end (), header.correlation_id.begin (), header.correlation_id.end ());
     }
-    if (!header.flow_id.empty ()) {
-        bytes.insert (bytes.end (), header.flow_id.begin (), header.flow_id.end ());
-        bytes.push_back (static_cast<std::uint8_t> (*header.flow_origin));
-    }
     if (header.actor_slot) {
         write_u16 (bytes, *header.actor_slot);
     }
     return result_t<std::vector<std::uint8_t>>::success (std::move (bytes));
 }
 
-result_t<stream_header_t> header_codec_t::decode (const std::vector<std::uint8_t> &bytes,
-                                                  bool validate_flow) const
+result_t<stream_header_t> header_codec_t::decode (const std::vector<std::uint8_t> &bytes) const
 {
     if (bytes.size () < 5) {
         return result_t<stream_header_t>::failure (error_code_t::frame_decode_failed,
@@ -329,16 +294,13 @@ result_t<stream_header_t> header_codec_t::decode (const std::vector<std::uint8_t
                        bytes.begin () + static_cast<std::ptrdiff_t> (offset + correlation_size));
         offset += correlation_size;
     }
-    if (has_flag (header.flags, header_flags_t::has_flow_id)) {
+    if (has_flag (header.flags, flow_field_flag)) {
         if (bytes.size () - offset < flow_id_codec_t::encoded_length + 1) {
             return result_t<stream_header_t>::failure (error_code_t::frame_decode_failed,
                                                        "Helper header flow fields are incomplete.");
         }
-        header.flow_id = std::string (
-          bytes.begin () + static_cast<std::ptrdiff_t> (offset),
-          bytes.begin () + static_cast<std::ptrdiff_t> (offset + flow_id_codec_t::encoded_length));
         offset += flow_id_codec_t::encoded_length;
-        header.flow_origin = static_cast<flow_origin_t> (bytes[offset++]);
+        ++offset;
     }
     if (has_flag (header.flags, header_flags_t::has_actor_slot)) {
         if (bytes.size () - offset < 2) {
@@ -351,7 +313,7 @@ result_t<stream_header_t> header_codec_t::decode (const std::vector<std::uint8_t
         return result_t<stream_header_t>::failure (error_code_t::frame_decode_failed,
                                                    "Helper header contains trailing bytes.");
     }
-    if (auto validation = validate_header (header, validate_flow); !validation) {
+    if (auto validation = validate_header (header); !validation) {
         return result_t<stream_header_t>::failure (validation.error ()->code,
                                                    validation.error ()->message);
     }
@@ -469,65 +431,6 @@ session_closing_codec_t::decode (const std::vector<std::uint8_t> &payload)
     }
     return result_t<session_closing_t>::success (
       session_closing_t{static_cast<close_reason_t> (payload[1]), std::move (diagnostic)});
-}
-
-std::string flow_id_codec_t::create ()
-{
-    thread_local std::mt19937_64 engine{std::random_device{}()};
-    std::array<std::uint8_t, 16> raw{};
-    const auto high = engine ();
-    const auto low = engine ();
-    for (int i = 0; i < 8; ++i) {
-        raw[static_cast<std::size_t> (i)] = static_cast<std::uint8_t> (high >> (56 - i * 8));
-        raw[static_cast<std::size_t> (8 + i)] = static_cast<std::uint8_t> (low >> (56 - i * 8));
-    }
-    const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds> (
-                                std::chrono::system_clock::now ().time_since_epoch ())
-                                .count ();
-    raw[0] = static_cast<std::uint8_t> (milliseconds >> 40);
-    raw[1] = static_cast<std::uint8_t> (milliseconds >> 32);
-    raw[2] = static_cast<std::uint8_t> (milliseconds >> 24);
-    raw[3] = static_cast<std::uint8_t> (milliseconds >> 16);
-    raw[4] = static_cast<std::uint8_t> (milliseconds >> 8);
-    raw[5] = static_cast<std::uint8_t> (milliseconds);
-    raw[6] = static_cast<std::uint8_t> ((raw[6] & 0x0F) | 0x70);
-    raw[8] = static_cast<std::uint8_t> ((raw[8] & 0x3F) | 0x80);
-
-    static constexpr char digits[] = "0123456789abcdef";
-    std::string value;
-    value.reserve (encoded_length);
-    for (std::size_t i = 0; i < raw.size (); ++i) {
-        if (i == 4 || i == 6 || i == 8 || i == 10) {
-            value.push_back ('-');
-        }
-        value.push_back (digits[raw[i] >> 4]);
-        value.push_back (digits[raw[i] & 0x0F]);
-    }
-    return value;
-}
-
-bool flow_id_codec_t::is_valid (std::string_view value) noexcept
-{
-    if (value.size () != encoded_length) {
-        return false;
-    }
-    for (std::size_t i = 0; i < value.size (); ++i) {
-        const char c = value[i];
-        if (i == 8 || i == 13 || i == 18 || i == 23) {
-            if (c != '-') {
-                return false;
-            }
-            continue;
-        }
-        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
-            return false;
-        }
-    }
-    if (value[14] != '7') {
-        return false;
-    }
-    const char variant = value[19];
-    return variant == '8' || variant == '9' || variant == 'a' || variant == 'b';
 }
 
 } // namespace zlink::stream_connector::detail

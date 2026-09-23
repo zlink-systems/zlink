@@ -773,8 +773,9 @@ if(ZLINK_STREAM_CONNECTOR_BUILD_GODOT)
   target_compile_features(zlink_godot_stream_connector PUBLIC cxx_std_20)
   target_include_directories(zlink_godot_stream_connector PUBLIC
     $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/connector/engines/godot/include>)
+  target_link_libraries(zlink_godot_stream_connector PUBLIC
+    zlink::stream_connector)
   target_link_libraries(zlink_godot_stream_connector PRIVATE
-    zlink::stream_connector
     zlink::stream_connector_codecs)
 endif()
 
@@ -784,8 +785,9 @@ if(ZLINK_STREAM_CONNECTOR_BUILD_AXMOL)
   target_compile_features(zlink_axmol_stream_connector PUBLIC cxx_std_20)
   target_include_directories(zlink_axmol_stream_connector PUBLIC
     $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/connector/engines/axmol/include>)
+  target_link_libraries(zlink_axmol_stream_connector PUBLIC
+    zlink::stream_connector)
   target_link_libraries(zlink_axmol_stream_connector PRIVATE
-    zlink::stream_connector
     zlink::stream_connector_codecs)
 endif()
 
