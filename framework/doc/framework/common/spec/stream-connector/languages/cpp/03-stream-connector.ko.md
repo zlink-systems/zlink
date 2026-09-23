@@ -457,7 +457,7 @@ Unreal plugin, Godot GDExtension, Axmol adapter는 `connector_t`를 private 구�
 - **callback과 delegate는 engine main thread에서만 실행한다.** 어댑터는 core callback을 자기 queue에
   넣고, engine이 frame마다 부르는 `dispatch` 또는 application이 등록한 main thread dispatcher(Godot
   `set_main_thread_dispatcher`, Axmol `set_axmol_thread_dispatcher`)로 전달한다.
-- **engine에는 coroutine이 없으므로 결과는 호출마다 받는 callback으로 전달한다.** push는 core의 `on`처럼
+- **결과는 호출마다 받는 callback으로 전달한다.** push는 core의 `on`처럼
   packet 이름과 callback을 한 번에 등록하고(Unreal `On(PacketName, Delegate)`, Godot·Axmol
   `on(packet_name, callback)`), 등록은 해제 handle을 돌려준다. 요청은 호출할 때 완료 callback을 함께 받아
   그 요청의 응답 또는 실패를 그 callback으로 전달한다(Unreal `RequestJson(..., OnCompleted)`, Godot·Axmol
