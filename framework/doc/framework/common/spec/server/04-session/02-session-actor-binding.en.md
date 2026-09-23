@@ -163,10 +163,11 @@ A STREAM packet is first dispatched to the session's typed handler
 registry. The framework resolves the packet's `actor_slot`
 ([Stream Connector common spec §4.2](../../stream-connector/32-stream-connector.en.md#42-header))
 against the current bindings and puts that Actor into the dispatch context —
-no slot, or a slot that is not a current binding, means no Actor. This
-resolution is the same for `Send` and `Request`: a slot that arrives late,
-after the unbind, also reaches the session handler with no Actor, and the
-framework neither relays on its behalf nor synthesizes an `Error` reply. A
+no slot means no Actor. **A packet carrying a slot that is not a current
+binding (one that arrives late, after the unbind) is not delivered to the
+session handler.** A `Request` ends with an `Error` reply on the same sequence
+(code `InvalidOperation`), and a `Send` is dropped and recorded in diagnostics.
+So no Actor in the session handler always means no slot. A
 request's `Response` and `Error` are results the session handler produced, and
 when the handler produces no terminal reply the existing request timeout rule
 applies. The session callback relays to that Actor or chooses another
@@ -905,9 +906,9 @@ here.
   Actor slot.
 - The dispatch context of a packet with an `actor_slot` points at that
   binding's Actor.
-- A `Send` and a `Request` that arrive with a slot that is not a current
-  binding both reach the session handler with no Actor, and the framework
-  synthesizes no reply.
+- A packet that arrives with a slot that is not a current binding doesn't
+  reach the session handler. A `Request` ends with `Error` (`InvalidOperation`)
+  on the same sequence, and a `Send` is recorded in diagnostics.
 - Binding two Actors gives them different slots, binding the same current
   binding again keeps the slot and sends no second announcement, a retired
   slot is never reused, and a new bind on a session that has issued up to
