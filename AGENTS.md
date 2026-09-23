@@ -16,6 +16,7 @@
 - worktree는 Windows에서는 `D:\worktree\<이름>`, WSL에서는 `/home/hep7/worktree/<이름>` 아래에 만든다.
   WSL 검증 사본(rsync 복사본)도 같은 WSL 디렉터리 아래에 두고, 작업이 끝나면 지운다 — 흩어진 사본이
   쌓여 WSL 디스크 이미지가 D:를 가득 채운 적이 있다(2026-09-23).
+- 머지되거나 다른 브랜치에 합쳐져 끝난 worktree는 바로 지운다(`git worktree remove`, WSL 사본 포함).
 - 변경이 있는 worktree에서는 먼저 범위를 보고하며, 승인 없이 branch 전환, `reset`, `restore`,
   강제 checkout 또는 삭제를 하지 않는다.
 - 기존 변경과 untracked 파일은 사용자 작업이다. 요청 범위 밖의 변경을 수정하거나 정리하지 않는다.

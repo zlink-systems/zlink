@@ -10,7 +10,7 @@ title: "Error Handling · Kotlin"
 # Error Handling
 
 <!-- framework-adapter-nav:start -->
-[Contents](README.en.md) | [Previous: Connection Lifecycle](06-lifecycle.en.md)
+[Contents](README.en.md) | [Previous: Connection Lifecycle](06-lifecycle.en.md) | [Next: Game Engine Integration](12-engine-integration.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

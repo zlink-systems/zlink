@@ -11,8 +11,8 @@ or Akka/Orleans, ZLink is a candidate to take their place.
 
 It applies when "where the service is", "where the client is connected" and "how to serialize a
 state unit such as a room, a zone or a symbol" keep coming up as recurring problems. Where
-[Overview](01-overview.en.md) covered why they are needed, this chapter checks that judgement at
-the level of choosing a technology.
+[Overview](01-overview.en.md) describes the main surfaces and structure. This chapter explains
+when those use cases fit ZLink.
 
 ## 1. Where It's Used, at a Glance
 
@@ -92,11 +92,11 @@ them, a team picks its genre's pattern and rebuilds that structure from the sock
   this approach uses. The detailed comparison is covered in
   [Comparison with distributed actor frameworks](#7-reference--comparison-with-distributed-actor-frameworks-orleansakka).
 
-**What ZLink provides.** A feature answers each difficulty, one by one.
+**ZLink features.** The table maps each problem to a feature and its detailed explanation.
 
 | Difficulty | ZLink feature | Details |
 | --- | --- | --- |
-| Building a genre's topology from raw sockets | **Declare topology by combining channels** — 1:N request/response, fan-out, a node-addressed route mesh, a room-scoped spot mesh, all composed in a few lines of registration; the location store keeps connections up automatically | [Layering and registration points](01-overview.en.md#33-layering-and-registration-points) · [Channel Messaging](20-channel-messaging.en.md) · [Spot](21-spot.en.md) · [Location](25-location.en.md) |
+| Building a genre's topology from raw sockets | **Declare topology by combining channels** — 1:N request/response, fan-out, a node-addressed route mesh, a room-scoped spot mesh, all composed in a few lines of registration; the location store keeps connections up automatically | [Layering and registration points](01-overview.en.md#32-layering-and-registration-points) · [Channel Messaging](20-channel-messaging.en.md) · [Spot](21-spot.en.md) · [Location](25-location.en.md) |
 | Locks/contention on in-memory state | **SPOT serial execution** — every message for one room enters its Spot queue and runs in order. Locks disappear from business logic | The code below · [Spot](21-spot.en.md) |
 | Implementing socket framing/session lifetime directly | **STREAM** — the framework owns connection lifetime, framing, and packet codec (TCP/TLS/WS/WSS) | [09](23-stream.en.md) |
 | Tracking a reconnected user's location | **Actor binding** — a new connection after reconnect picks up the same actor | [08](24-actor-session.en.md) |
@@ -105,16 +105,15 @@ them, a team picks its genre's pattern and rebuilds that structure from the sock
 The patterns above all become combinations on **the same declarative model.**
 There's no need to rebuild from the socket for each one.
 
-- **① Zone-sharding** — set up a zone with `AddRouteMesh` + a node-addressed route mesh. A
+- **① Zone-sharding** — set up a zone by registering a node-addressed route mesh. A
   player crossing a boundary is handed off by **cross-node actor relocation**
   ([Relocation](37-relocation.en.md)) instead. [ZoneWorld](../../../common/sample/zoneworld/README.en.md)
   is exactly this approach.
-- **② Lobby + room** — entry/matching is the Entry Spot, and a room is a room spot created
-  with `GetOrCreate`. [Bingo](../../../common/sample/bingo/README.en.md) is exactly this
+- **② Lobby + room** — entry/matching is the Entry Spot, and a room is a room spot created on demand. [Bingo](../../../common/sample/bingo/README.en.md) is exactly this
   approach.
 - **③ Matchmaker + dedicated** — matching is implemented as a channel handler (HTTP, etc.).
   **Instead of spinning up a new process per match**, the client connects over STREAM to the
-  room spot that was `GetOrCreate`d as the matching result.
+  room spot created earlier as the matching result.
   [TicTacToe](../../../common/sample/tictactoe/README.en.md) is closest to this flow —
   matching request → room/connection info response → connect to the already-prepared room
   spot.
@@ -162,15 +161,8 @@ framework you already use.**
   them directly with a channel handler and spot. There's less pre-built for you, but the
   ownership and freedom over the logic stay with the app.
 
-Instead of rebuilding for each language, ZLink puts the hard runtime in a single **native
-Core (C API)** and wraps it in per-language layers. Per-language **`bindings`** connect that
-C API to each language's socket API, and on top a per-language **ZLink Framework** provides
-surfaces like RouteMesh · SPOT · actor · STREAM. The reason for this thin 3-layer split is
-**multi-language support** — implement the Core once and swap only the language surface, and
-C++, .NET, the JVM, and Node share the same core. `bindings` and the Core are the framework's
-internal implementation, not exposed on the public API, and application code doesn't change
-even if they're replaced later — this backend boundary is explained separately by
-[internals/backend-dependency-policy](../../internals/backend-dependency-policy.en.md).
+The Core, binding, and Framework layers and their roles are described in
+[Core Concepts](03-concepts.en.md#9-what-the-framework-owns-and-what-it-doesnt).
 
 <iframe class="zlink-diagram" src="/common/diagrams/overview-stack-en.html" title="ZLink internal layers — a thin 3-layer stack for multi-language" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/overview-stack-en.html" target="_blank">↗ View larger</a></p>

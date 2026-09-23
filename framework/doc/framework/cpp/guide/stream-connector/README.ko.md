@@ -16,6 +16,7 @@ Godot · Cocos)과 데스크톱·서버 애플리케이션, 그리고 e2e 시험
 | 9 | [엔진 어댑터](09-engine-adapters.ko.md) | Unreal · Godot · Cocos 어댑터 |
 | 10 | [배포](10-packaging.ko.md) | 빌드 구성과 배포 산출물 |
 | 11 | [성능](11-performance.ko.md) | 측정 지점과 조정할 수 있는 값 |
+| 12 | [게임 엔진 통합](12-engine-integration.ko.md) | 엔진별 connector 선택과 Engine Lobby sample |
 
 파일 번호는 언어에 상관없이 같은 장을 가리키는 식별자다. 1~7장은 다섯 언어가 공유한다.
 

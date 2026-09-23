@@ -12,6 +12,7 @@ and test tools.
 | 5 | [Receiving Packets](05-receiving.en.md) | Registering and unregistering, dispatch mode, the receive queue and its count |
 | 6 | [Connection Lifecycle](06-lifecycle.en.md) | Connection state, reconnecting, heartbeat, the close reason |
 | 7 | [Error Handling](07-error-handling.en.md) | The closed set of error codes and how each language delivers them |
+| 8 | [Game Engine Integration](12-engine-integration.en.md) | Connector choice by engine and the Engine Lobby sample |
 
 The file number identifies the same chapter in every language. Chapters 1 to 7 are
 shared across all five.

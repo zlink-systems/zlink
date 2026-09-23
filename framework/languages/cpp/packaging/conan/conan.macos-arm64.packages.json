@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "packages": [
+    {
+      "ref": "abseil/20250127.0#e0dcc4b8a367edb49b062cb07ed8e9e6",
+      "package_id": "461f120128f0af7aba967bf3e9e4aaa5892a82b3"
+    },
+    {
+      "ref": "boost/1.85.0#3ef9643dcf9d8bee3f925bceb080395d",
+      "package_id": "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+    },
+    {
+      "ref": "hiredis/1.3.0#e39b0954c9bf2bac589b762bba5c5dce",
+      "package_id": "a348043a983e9bb2910e396d3ea0d4695fb2ca11"
+    },
+    {
+      "ref": "libcurl/8.22.0#3599f8564660d38f96af52da40795734",
+      "package_id": "c2af002283d791477748d4bb9f263f03377eca00"
+    },
+    {
+      "ref": "libuv/1.51.0#ea781dcacf58c65462ab0d3d75e9b002",
+      "package_id": "ca639360bb681229d056d23829e74b0c62d596de"
+    },
+    {
+      "ref": "lz4/1.9.4#a2f02ad3908618757c68d3618256a196",
+      "package_id": "ca639360bb681229d056d23829e74b0c62d596de"
+    },
+    {
+      "ref": "nlohmann_json/3.11.3#45828be26eb619a2e04ca517bb7b828d",
+      "package_id": "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+    },
+    {
+      "ref": "openssl/3.6.4#bc460bf37686ccae86a15bfdce71be11",
+      "package_id": "fbf6fadfdd9cc8f14c1f3e38b61c6b4e811106b1"
+    },
+    {
+      "ref": "opentelemetry-cpp/1.26.0#a671ccb304bb7ba023e64be6cb19e9e4",
+      "package_id": "5f5476362db5814b9de6b29fc268012974c6d5e6"
+    },
+    {
+      "ref": "protobuf/5.27.0#99c5d5f87d1eea580a2234238020821b",
+      "package_id": "1440ae5ba0035f0c75461dc1bd4293a9938b6248"
+    },
+    {
+      "ref": "redis-plus-plus/1.3.15#465ec9e6b105587ae51e826d08dffa62",
+      "package_id": "9e18b42fbb1bf8a876249ec77430f1bcd6b62ffb"
+    },
+    {
+      "ref": "zlib/1.3.2#1cb806da49011867778ffb6ac7190fcb",
+      "package_id": "ca639360bb681229d056d23829e74b0c62d596de"
+    }
+  ]
+}

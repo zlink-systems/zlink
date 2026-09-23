@@ -137,6 +137,7 @@ plugins:
 
             # 최상위
             Install: 설치
+            Game engines: 게임 엔진
 
             # 언어 안 구획
             Getting started: 시작
@@ -174,6 +175,7 @@ exclude_docs: |
 nav:
   - Home: index.md
   - Install: install.md
+  - Game engines: dotnet/guide/stream-connector/12-engine-integration.md
   - C++:
       - Guide home: cpp/guide/server/README.md
       - Getting started:
@@ -231,6 +233,7 @@ nav:
           - Engine adapters: cpp/guide/stream-connector/09-engine-adapters.md
           - Packaging: cpp/guide/stream-connector/10-packaging.md
           - Performance testing: cpp/guide/stream-connector/11-performance.md
+          - Game engine integration: cpp/guide/stream-connector/12-engine-integration.md
       - HTTP client:
           - Contents: cpp/guide/http-client/README.md
           - Overview: cpp/guide/http-client/01-overview.md
@@ -306,6 +309,7 @@ nav:
           - Error handling: dotnet/guide/stream-connector/07-error-handling.md
           - Unity (Native Build): dotnet/guide/stream-connector/08-unity.md
           - Godot C#: dotnet/guide/stream-connector/09-godot-csharp.md
+          - Game engine integration: dotnet/guide/stream-connector/12-engine-integration.md
       - HTTP client:
           - Contents: dotnet/guide/http-client/README.md
           - Overview: dotnet/guide/http-client/01-overview.md
@@ -378,6 +382,7 @@ nav:
           - Receiving: java/guide/stream-connector/05-receiving.md
           - Lifecycle: java/guide/stream-connector/06-lifecycle.md
           - Error handling: java/guide/stream-connector/07-error-handling.md
+          - Game engine integration: java/guide/stream-connector/12-engine-integration.md
       - HTTP client:
           - Contents: java/guide/http-client/README.md
           - Overview: java/guide/http-client/01-overview.md
@@ -450,6 +455,7 @@ nav:
           - Receiving: kotlin/guide/stream-connector/05-receiving.md
           - Lifecycle: kotlin/guide/stream-connector/06-lifecycle.md
           - Error handling: kotlin/guide/stream-connector/07-error-handling.md
+          - Game engine integration: kotlin/guide/stream-connector/12-engine-integration.md
       - HTTP client:
           - Contents: kotlin/guide/http-client/README.md
           - Overview: kotlin/guide/http-client/01-overview.md
@@ -525,6 +531,7 @@ nav:
           - Error handling: node/guide/stream-connector/07-error-handling.md
           - Browser: node/guide/stream-connector/08-browser.md
           - Unity WebGL: node/guide/stream-connector/09-unity-webgl.md
+          - Game engine integration: node/guide/stream-connector/12-engine-integration.md
       - HTTP client:
           - Contents: node/guide/http-client/README.md
           - Overview: node/guide/http-client/01-overview.md

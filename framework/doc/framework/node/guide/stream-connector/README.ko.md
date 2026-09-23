@@ -15,6 +15,7 @@ Unity WebGL과 Godot Web 빌드가 이 connector를 사용한다. Node.js는 이
 | 7 | [오류 처리](07-error-handling.ko.md) | 닫힌 오류 코드 집합과 언어별 전달 방식 |
 | 8 | [브라우저](08-browser.ko.md) | 브라우저에서의 사용과 WebSocket 제약 |
 | 9 | [Unity WebGL](09-unity-webgl.ko.md) | Unity WebGL 빌드에서의 사용 |
+| 10 | [게임 엔진 통합](12-engine-integration.ko.md) | 엔진별 connector 선택과 Engine Lobby sample |
 
 파일 번호는 언어에 상관없이 같은 장을 가리키는 식별자다. 1~7장은 다섯 언어가 공유한다.
 
