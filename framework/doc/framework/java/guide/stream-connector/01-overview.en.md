@@ -132,3 +132,4 @@ and use the `.NET` connector as it is.
 - Install and exchange the first packet — [Installation and the First Connection](02-getting-started.en.md)
 - Defaults and when they are validated — [Connector Options](03-connector-options.en.md)
 - Connection state and reconnection — [Connection Lifecycle](06-lifecycle.en.md)
+- Integration by engine and build target — [Game Engine Integration](12-engine-integration.en.md)
