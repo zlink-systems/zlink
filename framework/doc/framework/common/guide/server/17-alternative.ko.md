@@ -86,7 +86,7 @@ framework가 없다. 우연이 아니라 이유가 있다.
 
 | 어려움 | ZLink 기능 | 자세히 |
 | --- | --- | --- |
-| 장르별 토폴로지를 소켓부터 직접 만듦 | **channel 조합으로 토폴로지 선언** — 1:N 요청/응답, fan-out, node 지목 route mesh, room 단위 spot mesh를 등록 몇 줄로 조합, 연결은 location store가 자동 유지 | [계층 구조와 등록 지점](01-overview.ko.md#33-계층-구조와-등록-지점) · [Channel 메시징](20-channel-messaging.ko.md) · [Spot](21-spot.ko.md) · [Location](25-location.ko.md) |
+| 장르별 토폴로지를 소켓부터 직접 만듦 | **channel 조합으로 토폴로지 선언** — 1:N 요청/응답, fan-out, node 지목 route mesh, room 단위 spot mesh를 등록 몇 줄로 조합, 연결은 location store가 자동 유지 | [계층 구조와 등록 지점](01-overview.ko.md#32-계층-구조와-등록-지점) · [Channel 메시징](20-channel-messaging.ko.md) · [Spot](21-spot.ko.md) · [Location](25-location.ko.md) |
 | in-memory 상태의 lock·경합 | **SPOT 직렬 실행** — 한 room의 모든 message가 Spot queue에 들어가 순서대로 실행된다. lock이 업무 로직에서 사라진다 | 아래 코드 · [Spot](21-spot.ko.md) |
 | 소켓 framing·세션 수명 직접 구현 | **STREAM** — 연결 수명·framing·packet codec을 framework가 소유(TCP/TLS/WS/WSS) | [STREAM](23-stream.ko.md) |
 | 재접속 유저 위치 추적 | **actor binding** — 재접속한 새 연결이 같은 actor로 이어진다 | [Session과 Actor 연결](24-actor-session.ko.md) |
@@ -777,8 +777,8 @@ Orleans·Akka는 **actor primitive 하나에** 깊이 집중한다. 그런데 �
 client 연결·서비스 메시징·actor 상태를 한 framework가 함께 제공한다.
 다만 이 그림에 나타나지 않는 차이가 있다 — Orleans/Akka가 오랜 기간에 걸쳐 미리
 구현해 둔 persistence connector·reminder scheduler 같은 부가 도구까지 하나로 내려오는
-것은 아니다. 아래 표에서 어디까지가 원시 기능 차이고 어디부터가 이런 미리 구현된
-도구의 유무에서 비롯된 차이를 나눠서 본다.
+것은 아니다. 아래 표는 원시 기능의 차이와 미리 구현된 도구의 유무에서 비롯된 차이를
+나눠서 보여 준다.
 
 ### 7.3 기능 비교 — 유리한 점과 불리한 점
 

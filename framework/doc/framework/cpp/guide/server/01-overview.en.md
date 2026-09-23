@@ -78,7 +78,7 @@ The framework handles what you'd otherwise have written by hand to build one ser
 | Managing server addresses, deciding connections | Tracks the currently active endpoint through the location store |
 | Configuration, logging, monitoring | The framework's built-in config/logging/hosted service |
 
-### 3.2 Layering and Registration Points {#33-layering-and-registration-points}
+### 3.2 Layering and Registration Points
 
 <iframe class="zlink-diagram" src="/common/diagrams/01-layers-en.html" title="Layer structure — ZLink on the host, business logic on top" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-layers-en.html" target="_blank">↗ View larger</a></p>

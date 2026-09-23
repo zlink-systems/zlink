@@ -75,7 +75,7 @@ application에서는 "`services` mesh의 `orders` channel로 요청을 보낸다
 | 서버 주소 관리·연결 결정 | location store를 통해 현재 활성 endpoint 추적 |
 | 설정·로그·모니터링 | NestJS 설정·logging·수명주기와 통합 |
 
-### 3.2 계층 구조와 등록 지점 {#33-계층-구조와-등록-지점}
+### 3.2 계층 구조와 등록 지점
 
 <iframe class="zlink-diagram" src="/common/diagrams/01-layers.html" title="계층 구조 — host 위에 ZLink, 그 위에 비즈니스 로직" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-layers.html" target="_blank">↗ 크게 보기</a></p>
