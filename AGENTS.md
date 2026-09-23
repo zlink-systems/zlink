@@ -203,8 +203,9 @@ sub-agent는 codex에 이슈가 있을 때 쓴다 — 쿼터 소진, 콘텐츠 �
 - 완료 보고에는 결과, 변경 파일, 실행한 test와 남은 실패만 적는다. 진행 이력을 반복하지 않는다.
 - Runtime 변경의 완료 보고에는 소유 계층·spec 조항·교차언어 대조 결과·변경 분류(A/B/C/D)를 한 줄씩
   함께 적는다. 이 네 줄이 없거나 분류가 C/D인 변경은 감독이 커밋하지 않는다.
-- 사용자와의 한국어 기술 설명은
-  [`doc/principal/documentation/documentation-principles.ko.md`](./doc/principal/documentation/documentation-principles.ko.md)를 따른다.
+- **글의 문체는 [`documentation-principles.ko.md`](./doc/principal/documentation/documentation-principles.ko.md) 원칙 7을 따른다.**
+  문서뿐 아니라 이슈·PR·커밋 본문, 코드 주석, 리뷰 코멘트, 완료 보고, 사용자에게 보내는 답변까지 적용 대상이며
+  (원칙 7.11), sub-agent도 같다 — 브리프에 이 링크를 넣는다. 비유·구어 표현의 판정과 바꿔 쓴 예는 원칙 7.7의 표가 소유한다.
 
 ### 4.1 간헐 실패 디버깅 (message tracking·file log)
 
