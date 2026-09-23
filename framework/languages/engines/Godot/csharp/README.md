@@ -12,7 +12,7 @@ Packet names and JSON fields follow the [shared Engine Lobby contract](https://g
 
 - Godot 4.4.1 .NET edition
 - .NET 8 SDK and `Godot.NET.Sdk` 4.4.1
-- `Zlink.Stream.Connector` 0.22.0
+- `Zlink.Stream.Connector`: the `PackageReference` in [`EngineLobby.csproj`](EngineLobby.csproj) owns the version.
 
 `EngineLobby.csproj` restores both NuGet packages. Godot Web export is outside the scope of this
 .NET project.
@@ -30,16 +30,26 @@ dotnet build EngineLobby.csproj -c Release
 dotnet build Validation/EngineLobbyValidation.csproj -c Release
 ```
 
-## Run the scene
+## Run and verify the scene
 
-1. Start the shared `zlink-engine-server` sample and read its `stream.port`. In the monorepo,
-   run `./run_sample.sh build` and `./run_sample.sh run` from `../../Server`.
-2. Open `project.godot` in the Godot 4.4.1 .NET editor and build the C# project.
-3. Set the root node's `Endpoint` in `EngineLobby.tscn` to
-   `ws://127.0.0.1:<stream.port>`, then run the scene.
-4. Confirm that the label changes from `joined as godot-player (...)` to
-   `godot-player: hello from Godot`. `_Process` calls `Dispatch.Async()` for the notification.
-5. If you used the monorepo server, run `./run_sample.sh stop` from `../../Server`.
+1. Install, build, and start the server using the README in the separate [zlink-engine-server repository](https://github.com/zlink-systems/zlink-engine-server/blob/main/README.md). Read `.run/stream.port` there.
+2. Set the root node's `Endpoint` in `EngineLobby.tscn` to `ws://127.0.0.1:<stream.port>`. The default is `ws://127.0.0.1:22700`.
+3. Build the project in the Godot 4.4.1 .NET editor, then run the scene. These Linux commands perform the same editor build and scene run without a display. Set `GODOT` to the Godot 4.4.1 .NET executable path.
+
+```bash
+"$GODOT" --headless --path . --build-solutions --quit-after 120
+"$GODOT" --headless --path . --quit-after 600
+```
+
+On Windows, set `$godot` to the Godot 4.4.1 .NET `_console.exe` path and run these PowerShell commands. Output is written to `godot-csharp.log` and `godot-csharp.err.log`.
+
+```powershell
+$godot = 'C:\path\to\Godot_v4.4.1-stable_mono_win64_console.exe'
+Start-Process $godot -ArgumentList @('--headless','--path',(Get-Location).Path,'--build-solutions','--quit-after','120') -Wait -WindowStyle Hidden -RedirectStandardOutput godot-build.log -RedirectStandardError godot-build.err.log
+Start-Process $godot -ArgumentList @('--headless','--path',(Get-Location).Path,'--quit-after','600') -Wait -WindowStyle Hidden -RedirectStandardOutput godot-csharp.log -RedirectStandardError godot-csharp.err.log
+```
+
+Check Godot output for `JoinRes name=godot-player` (the client checks the Ping reply before it joins) and `ChatNotify name=godot-player text=hello from Godot`. The label also changes from `joined as godot-player (...)` to `godot-player: hello from Godot`. Check for a new `client connected:` line in the server log during the scene run. Stop the server using its README after verification.
 
 ## Headless connector validation
 
@@ -53,9 +63,3 @@ dotnet run --project Validation/EngineLobbyValidation.csproj -c Release -- \
 
 Success prints `godot-engine-lobby-validation=ok`. This check does not run the Godot scene tree,
 load the C# assembly in the editor, or verify the rendered label.
-
-## Validation on this machine
-
-The Godot C# project and headless validation project built in WSL. Two clients connected to the
-shared .NET server and verified Ping, Join, and `ChatNotify` payloads. The Godot editor is not
-installed here, so the scene and label were not run.

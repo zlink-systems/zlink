@@ -2,54 +2,121 @@
 
 # ZLink Engine Lobby Godot C++ sample
 
-This Godot 4.4 GDExtension scene uses the existing C++ Godot stream connector adapter. Its
-`EngineLobbyNode` calls `dispatch()` in `_process`, so callbacks update the `Status` label on the
-Godot main thread. The intended flow is `PingReq` → `PingRes` → `JoinReq` → `JoinRes` → `ChatMsg` →
-`ChatNotify`. Packet names and JSON fields follow the [shared Engine Lobby contract](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/engine-lobby/README.md).
-The node registers a `ChatNotify` callback with `on` before connecting and keeps its subscription handle.
+This Godot 4.4.1 GDExtension scene uses the public C++ Godot stream connector adapter.
+`EngineLobbyNode` calls `dispatch()` from `_process`, so callbacks run on the Godot main thread.
+Messages follow `PingReq` → `PingRes` → `JoinReq` → `JoinRes` → `ChatMsg` → `ChatNotify`.
+Packet and JSON fields follow the [shared Engine Lobby contract](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/engine-lobby/README.md).
 
-## Dependencies and build
+## Dependencies and installation
 
-- Godot 4.4 editor and matching `godot-cpp` 4.4 source and headers
-- C++20 compiler, CMake, and the C++ connector's package dependencies
-- This monorepo checkout, including `framework/languages/cpp`
+- Godot 4.4.1, matching `godot-cpp`, a C++20 compiler, and CMake 3.24 or later
+- Linux: GCC 13 or later, with Ninja or Make
+- Windows: Visual Studio 2022 C++ workload and PowerShell 7
 
-Build from Linux with the same Godot minor version for the editor and `godot-cpp`:
+This repository contains the Godot project. The platform prebuilt from the C++ framework
+[v0.23.0 release](https://github.com/zlink-systems/zlink/releases/tag/framework-cpp%2Fv0.23.0)
+includes Core, the C++ binding, the stream connector, and their CMake packages. Build only
+the existing Godot adapter from that release's source archive against the prebuilt. A monorepo
+checkout and a separate package manager are unnecessary.
+
+Run these commands from `cpp/` in this repository.
+
+**Linux · WSL — bash**
 
 ```bash
-cmake -S . -B build \
-  -DGODOT_CPP_ROOT=/path/to/godot-cpp \
-  -DZLINK_FRAMEWORK_CPP_ROOT=/path/to/zlink/framework/languages/cpp \
-  -DZLINK_FRAMEWORK_CPP_BUILD_TESTS=OFF \
-  -DZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=OFF
+mkdir -p .zlink
+touch .zlink/.gdignore
+base=https://github.com/zlink-systems/zlink/releases/download/framework-cpp/v0.23.0
+for asset in zlink-framework-cpp-0.23.0-linux-x64.tar.gz zlink-framework-cpp-0.23.0.tar.gz; do
+  curl -fL "$base/$asset" -o ".zlink/$asset"
+  curl -fL "$base/$asset.sha256" -o ".zlink/$asset.sha256"
+  (cd .zlink && sha256sum -c "$asset.sha256")
+  tar -xzf ".zlink/$asset" -C .zlink
+done
+git clone --branch godot-4.4.1-stable --depth 1 https://github.com/godotengine/godot-cpp.git .zlink/godot-cpp
+```
+
+**Windows — PowerShell 7**
+
+```powershell
+New-Item -ItemType Directory -Force .zlink | Out-Null
+New-Item -ItemType File -Force .zlink/.gdignore | Out-Null
+$base = 'https://github.com/zlink-systems/zlink/releases/download/framework-cpp/v0.23.0'
+foreach ($asset in @('zlink-framework-cpp-0.23.0-windows-x64.tar.gz', 'zlink-framework-cpp-0.23.0.tar.gz')) {
+  curl.exe -fL "$base/$asset" -o ".zlink/$asset"
+  curl.exe -fL "$base/$asset.sha256" -o ".zlink/$asset.sha256"
+  $expected = ((Get-Content ".zlink/$asset.sha256" -Raw).Trim() -split '\s+')[0]
+  if ((Get-FileHash ".zlink/$asset" -Algorithm SHA256).Hash -ine $expected) { throw "SHA256 mismatch: $asset" }
+  tar -xzf ".zlink/$asset" -C .zlink
+}
+git clone --branch godot-4.4.1-stable --depth 1 https://github.com/godotengine/godot-cpp.git .zlink/godot-cpp
+```
+
+## Build
+
+**Linux · WSL — bash**
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH="$PWD/.zlink/zlink-framework-cpp-0.23.0-linux-x64" \
+  -DGODOT_CPP_ROOT="$PWD/.zlink/godot-cpp" \
+  -DZLINK_FRAMEWORK_CPP_SOURCE_ROOT="$PWD/.zlink/zlink-framework-cpp-0.23.0"
 cmake --build build --target engine_lobby_godot -j8
 ```
 
-The resulting shared library goes into `bin/`, where `engine_lobby.gdextension` loads it. This
-project currently declares a Linux x86_64 library; other platforms need a matching library entry
-and build. The C++ connector is linked from source in the same build, including its WebSocket
-transport.
+**Windows — PowerShell 7**
 
-## Run
+```powershell
+cmake -S . -B build `
+  "-DCMAKE_PREFIX_PATH=$PWD/.zlink/zlink-framework-cpp-0.23.0-windows-x64" `
+  "-DGODOT_CPP_ROOT=$PWD/.zlink/godot-cpp" `
+  "-DZLINK_FRAMEWORK_CPP_SOURCE_ROOT=$PWD/.zlink/zlink-framework-cpp-0.23.0"
+cmake --build build --config Release --target engine_lobby_godot --parallel 8
+```
 
-1. Start [`../../Server`](../../Server) and read `.run/stream.port`. Its `run_sample.sh` provisions
-   Redis when Docker is available.
-2. Open `project.godot` in Godot 4.4. Set the `EngineLobbyNode` `endpoint` to
-   `ws://127.0.0.1:<stream.port>` if the assigned port differs from 22700.
-3. Run the scene. The label should change from a joined status to
-   `godot-player: hello from Godot C++`.
-4. Stop the server with `./run_sample.sh stop` if you started it through that runner.
+The GDExtension library and Windows runtime DLLs are placed in `bin/`.
+`engine_lobby.gdextension` loads the platform library.
 
-## Current validation and blockers
+## Run and verify
 
-The C++ node and GDExtension registration translation units compile with GCC 13 against the real
-Godot adapter header and a thin stand-in for Godot C++ headers. A deliberately misspelled
-`dispatch()` call fails that compile check. Godot, `godot-cpp`, and a runnable GDExtension are not
-installed here, so an editor build, scene run, and rendered label were not verified.
+1. Clone the separate [`zlink-engine-server` repository](https://github.com/zlink-systems/zlink-engine-server)
+   and start the server using its [README](https://github.com/zlink-systems/zlink-engine-server/blob/main/README.md).
+   Read its `.run/stream.port`.
+2. If the port differs from 22700, set the `EngineLobbyNode` `endpoint` in `EngineLobby.tscn`
+   to `ws://127.0.0.1:<stream.port>`.
+3. Import the project once in Godot 4.4.1 and run the scene. Check the `Status` label and
+   these Godot output lines. On Linux, set `GODOT` to the absolute path of the downloaded
+   Godot 4.4.1 executable.
 
-The node registers `ChatNotify` before connecting. Each `request_json` call supplies its own
-completion callback, which receives either a reply or an error code and message.
+**Linux · WSL — bash**
 
-The C# variant under [`../csharp`](../csharp) did run against the real shared server in WSL: two
-clients verified Ping, Join, and both ChatNotify payloads. A connection to an unused port failed as
-expected. This check does not exercise the C++ adapter or the Godot scene.
+```bash
+GODOT=/path/to/Godot_v4.4.1-stable_mono_linux.x86_64
+"$GODOT" --headless --editor --path . --quit-after 120
+"$GODOT" --headless --path . --quit-after 600
+```
+
+**Windows — PowerShell 7**
+
+```powershell
+$godot = 'C:\path\to\Godot_v4.4.1-stable_mono_win64_console.exe'
+$import = Start-Process -FilePath $godot -ArgumentList @('--headless', '--editor', '--path', '.', '--quit-after', '120') -WorkingDirectory $PWD -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput 'godot-import.log' -RedirectStandardError 'godot-import.err.log'
+if ($import.ExitCode -ne 0) { throw "Godot import failed: $($import.ExitCode)" }
+$scene = Start-Process -FilePath $godot -ArgumentList @('--headless', '--path', '.', '--quit-after', '600') -WorkingDirectory $PWD -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput 'godot-scene.log' -RedirectStandardError 'godot-scene.err.log'
+if ($scene.ExitCode -ne 0) { throw "Godot scene failed: $($scene.ExitCode)" }
+Get-Content godot-scene.log
+```
+
+```text
+PingRes sentAtUnixMs=1000
+JoinRes name=godot-player actorId=<server-assigned-id>
+ChatNotify godot-player: hello from Godot C++
+```
+
+If the Godot output contains `Engine Lobby failed:`, inspect that error. The server log must
+also show a new `client connected: <sessionId>` line while the scene runs.
+Stop the server using its own README instructions.
+
+The current published Linux prebuilt `libzlink.so.0` uses initial-exec TLS. Godot 4.4.1 .NET
+reports `libstdc++.so.6: cannot allocate memory in static TLS block` when loading the
+GDExtension. Communication from the Linux scene is therefore not yet verified.

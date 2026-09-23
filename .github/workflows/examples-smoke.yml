@@ -651,14 +651,87 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '8.0.x'
-      - name: Restore (Godot README)
-        working-directory: examples/zlink-godot-examples/csharp
-        run: dotnet restore EngineLobby.csproj
-      - name: Build both projects (Godot README)
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+      - name: Install Engine Lobby server (README)
+        working-directory: examples/zlink-engine-server
+        run: bash ../run_readme_step.sh README.ko.md "내려받기와 설치" linux
+      - name: Build Engine Lobby server (README)
+        working-directory: examples/zlink-engine-server
+        run: bash ../run_readme_step.sh README.ko.md 빌드 linux
+      - name: Inspect Docker before starting Engine Lobby server
+        run: docker ps
+      - name: Start Engine Lobby server (README)
+        working-directory: examples/zlink-engine-server
+        run: bash ../run_readme_step.sh README.ko.md 실행 linux
+      - name: Download and verify Godot 4.4.1 .NET
+        run: |
+          set -euo pipefail
+          archive=Godot_v4.4.1-stable_mono_linux_x86_64.zip
+          curl -fL --output "${archive}" \
+            "https://github.com/godotengine/godot-builds/releases/download/4.4.1-stable/${archive}"
+          echo "53508edb91e0674a5072cbcc438d5523697a54f434154637aecf7a6fa6c84ee1f93578ce263ddc951d5be73e70e031ff52ae2bf03f3716a44245fd56710543e9  ${archive}" \
+            | sha512sum --check
+          unzip -q "${archive}" -d godot
+      - name: Build Godot C# scene (README)
         working-directory: examples/zlink-godot-examples/csharp
         run: |
+          set -euo pipefail
+          dotnet restore EngineLobby.csproj
           dotnet build EngineLobby.csproj -c Release
           dotnet build Validation/EngineLobbyValidation.csproj -c Release
+          "${GITHUB_WORKSPACE}/godot/Godot_v4.4.1-stable_mono_linux_x86_64/Godot_v4.4.1-stable_mono_linux.x86_64" \
+            --headless --path . --build-solutions --quit-after 120 > godot-build.log 2>&1
+          if grep -Eq 'ERROR|Error|error:' godot-build.log; then
+            grep -m 5 -E 'ERROR|Error|error:' godot-build.log
+            exit 1
+          fi
+      - name: Run Godot C# scene against Engine Lobby server
+        working-directory: examples/zlink-godot-examples/csharp
+        run: |
+          set -euo pipefail
+          port="$(cat ../../zlink-engine-server/.run/stream.port)"
+          python3 - "${port}" <<'PY'
+          from pathlib import Path
+          import sys
+
+          scene = Path("EngineLobby.tscn")
+          source = scene.read_text()
+          marker = 'script = ExtResource("1_client")\n'
+          assert source.count(marker) == 1
+          scene.write_text(source.replace(marker, marker + f'Endpoint = "ws://127.0.0.1:{sys.argv[1]}"\n'))
+          PY
+          server_log=../../zlink-engine-server/.run/server.log
+          server_lines_before="$(wc -l < "${server_log}")"
+          "${GITHUB_WORKSPACE}/godot/Godot_v4.4.1-stable_mono_linux_x86_64/Godot_v4.4.1-stable_mono_linux.x86_64" \
+            --headless --path . --quit-after 600 > godot-csharp.log 2>&1
+          if grep -m 5 -Ei 'ERROR:|Exception|Engine Lobby .*failed|connection (error|failed)' godot-csharp.log; then
+            exit 1
+          fi
+          grep -m 1 -E 'JoinRes name=godot-player actorId=.+$' godot-csharp.log
+          grep -F 'ChatNotify name=godot-player text=hello from Godot' godot-csharp.log
+          # This job starts one server, then only the Godot scene connects after this baseline.
+          tail -n "+$((server_lines_before + 1))" "${server_log}" \
+            | grep -m 1 'client connected:'
+      - name: Godot and server logs on failure
+        if: failure()
+        run: |
+          for file in examples/zlink-godot-examples/csharp/godot-build.log \
+            examples/zlink-godot-examples/csharp/godot-csharp.log \
+            examples/zlink-engine-server/.run/server.log \
+            examples/zlink-engine-server/.run/server.err.log; do
+            if [ -f "${file}" ]; then
+              echo "::group::${file}"
+              grep -m 5 -Ei 'error|FAIL' "${file}" || true
+              tail -n 20 "${file}"
+              echo '::endgroup::'
+            fi
+          done
+      - name: Stop Engine Lobby server and Redis
+        if: always()
+        working-directory: examples/zlink-engine-server
+        run: bash ../run_readme_step.sh README.ko.md 종료 linux
 
   cocos-creator-linux:
     name: Cocos Creator / ubuntu-24.04 (no checkout)

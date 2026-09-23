@@ -2,52 +2,119 @@
 
 # ZLink Engine Lobby Godot C++ 샘플
 
-Godot 4.4 GDExtension scene이 기존 C++ Godot stream connector adapter를 사용한다.
-`EngineLobbyNode`는 `_process`에서 `dispatch()`를 호출하므로 callback이 Godot main thread에서
-`Status` Label을 갱신한다. 의도한 흐름은 `PingReq` → `PingRes` → `JoinReq` → `JoinRes` →
-`ChatMsg` → `ChatNotify`다. Packet 이름과 JSON field는 [Engine Lobby 공통 계약](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/engine-lobby/README.ko.md)을 따른다.
-Node는 연결 전에 `on`으로 `ChatNotify` callback을 등록하고 subscription handle을 보관한다.
+Godot 4.4.1 GDExtension scene은 공개 C++ Godot stream connector adapter를 사용한다.
+`EngineLobbyNode`는 `_process`에서 `dispatch()`를 호출해 Godot main thread에서 callback을 처리한다.
+메시지는 `PingReq` → `PingRes` → `JoinReq` → `JoinRes` → `ChatMsg` → `ChatNotify` 순서로 교환한다.
+Packet과 JSON field는 [Engine Lobby 공통 계약](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/sample/engine-lobby/README.ko.md)을 따른다.
 
-## 의존성과 빌드
+## 의존성과 설치
 
-- Godot 4.4 editor 및 같은 버전의 `godot-cpp` 4.4 source와 header
-- C++20 compiler, CMake 및 C++ connector의 package 의존성
-- `framework/languages/cpp`를 포함하는 이 monorepo checkout
+- Godot 4.4.1, 같은 버전의 `godot-cpp`, C++20 compiler, CMake 3.24 이상
+- Linux: GCC 13 이상과 Ninja 또는 Make
+- Windows: Visual Studio 2022 C++ workload와 PowerShell 7
 
-Linux에서 editor와 `godot-cpp`의 minor version을 맞춰 빌드한다.
+이 저장소는 Godot project만 포함한다. [C++ framework v0.23.0 release](https://github.com/zlink-systems/zlink/releases/tag/framework-cpp%2Fv0.23.0)의
+플랫폼별 prebuilt에는 Core, C++ binding, stream connector와 CMake package가 포함된다.
+같은 release의 source archive에 있는 기존 Godot adapter만 prebuilt에 연결해 빌드한다.
+Monorepo checkout이나 별도 package manager는 필요하지 않다.
+
+다음 명령은 이 저장소의 `cpp/`에서 실행한다.
+
+**Linux · WSL — bash**
 
 ```bash
-cmake -S . -B build \
-  -DGODOT_CPP_ROOT=/path/to/godot-cpp \
-  -DZLINK_FRAMEWORK_CPP_ROOT=/path/to/zlink/framework/languages/cpp \
-  -DZLINK_FRAMEWORK_CPP_BUILD_TESTS=OFF \
-  -DZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=OFF
+mkdir -p .zlink
+touch .zlink/.gdignore
+base=https://github.com/zlink-systems/zlink/releases/download/framework-cpp/v0.23.0
+for asset in zlink-framework-cpp-0.23.0-linux-x64.tar.gz zlink-framework-cpp-0.23.0.tar.gz; do
+  curl -fL "$base/$asset" -o ".zlink/$asset"
+  curl -fL "$base/$asset.sha256" -o ".zlink/$asset.sha256"
+  (cd .zlink && sha256sum -c "$asset.sha256")
+  tar -xzf ".zlink/$asset" -C .zlink
+done
+git clone --branch godot-4.4.1-stable --depth 1 https://github.com/godotengine/godot-cpp.git .zlink/godot-cpp
+```
+
+**Windows — PowerShell 7**
+
+```powershell
+New-Item -ItemType Directory -Force .zlink | Out-Null
+New-Item -ItemType File -Force .zlink/.gdignore | Out-Null
+$base = 'https://github.com/zlink-systems/zlink/releases/download/framework-cpp/v0.23.0'
+foreach ($asset in @('zlink-framework-cpp-0.23.0-windows-x64.tar.gz', 'zlink-framework-cpp-0.23.0.tar.gz')) {
+  curl.exe -fL "$base/$asset" -o ".zlink/$asset"
+  curl.exe -fL "$base/$asset.sha256" -o ".zlink/$asset.sha256"
+  $expected = ((Get-Content ".zlink/$asset.sha256" -Raw).Trim() -split '\s+')[0]
+  if ((Get-FileHash ".zlink/$asset" -Algorithm SHA256).Hash -ine $expected) { throw "SHA256 mismatch: $asset" }
+  tar -xzf ".zlink/$asset" -C .zlink
+}
+git clone --branch godot-4.4.1-stable --depth 1 https://github.com/godotengine/godot-cpp.git .zlink/godot-cpp
+```
+
+## 빌드
+
+**Linux · WSL — bash**
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH="$PWD/.zlink/zlink-framework-cpp-0.23.0-linux-x64" \
+  -DGODOT_CPP_ROOT="$PWD/.zlink/godot-cpp" \
+  -DZLINK_FRAMEWORK_CPP_SOURCE_ROOT="$PWD/.zlink/zlink-framework-cpp-0.23.0"
 cmake --build build --target engine_lobby_godot -j8
 ```
 
-생성된 공유 library는 `bin/`에 놓이고 `engine_lobby.gdextension`이 로드한다. 현재 project는
-Linux x86_64 library를 선언한다. 다른 platform에는 대응하는 library 항목과 빌드가 필요하다.
-C++ connector와 WebSocket transport는 같은 빌드에서 source로 link한다.
+**Windows — PowerShell 7**
 
-## 실행
+```powershell
+cmake -S . -B build `
+  "-DCMAKE_PREFIX_PATH=$PWD/.zlink/zlink-framework-cpp-0.23.0-windows-x64" `
+  "-DGODOT_CPP_ROOT=$PWD/.zlink/godot-cpp" `
+  "-DZLINK_FRAMEWORK_CPP_SOURCE_ROOT=$PWD/.zlink/zlink-framework-cpp-0.23.0"
+cmake --build build --config Release --target engine_lobby_godot --parallel 8
+```
 
-1. [`../../Server`](../../Server)를 실행하고 `.run/stream.port`를 읽는다. Docker가 있으면
-   `run_sample.sh`가 Redis를 준비한다.
-2. Godot 4.4에서 `project.godot`를 연다. 할당된 port가 22700과 다르면 `EngineLobbyNode`의
-   `endpoint`를 `ws://127.0.0.1:<stream.port>`로 바꾼다.
-3. Label이 joined 상태에서 `godot-player: hello from Godot C++`로 바뀌는지 확인한다.
-4. runner로 시작한 server는 `./run_sample.sh stop`으로 종료한다.
+GDExtension library와 Windows runtime DLL은 `bin/`에 생성된다.
+`engine_lobby.gdextension`이 플랫폼별 library를 로드한다.
 
-## 현재 검증 범위와 차단 요인
+## 실행과 확인
 
-C++ node와 GDExtension 등록 translation unit은 실제 Godot adapter header와 Godot C++ API의
-얇은 대역을 사용해 GCC 13에서 compile했다. `dispatch()` 철자를 일부러 잘못 쓰면 이 검사가
-실패한다. 이 머신에는 Godot와 `godot-cpp`가 없어 editor build, scene 실행, 실제 Label 갱신은
-확인하지 못했다.
+1. 별도의 [`zlink-engine-server` 저장소](https://github.com/zlink-systems/zlink-engine-server)를 clone하고
+   해당 저장소의 [README.ko.md](https://github.com/zlink-systems/zlink-engine-server/blob/main/README.ko.md)에
+   따라 server를 시작한다. `.run/stream.port` 값을 확인한다.
+2. Port가 기본값 22700과 다르면 `EngineLobby.tscn`의 `EngineLobbyNode` `endpoint`를
+   `ws://127.0.0.1:<stream.port>`로 설정한다.
+3. Godot 4.4.1로 project를 한 번 import하고 scene을 실행한다. `Status` Label과 Godot 출력의
+   다음 항목을 확인한다. Linux에서는 `GODOT`에 내려받은 Godot 4.4.1 실행 파일의 절대 경로를 지정한다.
 
-Node는 연결 전에 `ChatNotify`를 등록한다. 각 `request_json` 호출은 자체 완료 callback을
-전달하고, callback은 응답 또는 오류 코드와 메시지를 받는다.
+**Linux · WSL — bash**
 
-[`../csharp`](../csharp)의 C# variant는 WSL의 실제 공용 server에 연결해 두 client의 Ping,
-Join, 양쪽 ChatNotify payload를 확인했다. 사용하지 않는 port에 연결한 검사는 예상대로
-실패했다. 이 검증은 C++ adapter나 Godot scene 실행을 포함하지 않는다.
+```bash
+GODOT=/path/to/Godot_v4.4.1-stable_mono_linux.x86_64
+"$GODOT" --headless --editor --path . --quit-after 120
+"$GODOT" --headless --path . --quit-after 600
+```
+
+**Windows — PowerShell 7**
+
+```powershell
+$godot = 'C:\path\to\Godot_v4.4.1-stable_mono_win64_console.exe'
+$import = Start-Process -FilePath $godot -ArgumentList @('--headless', '--editor', '--path', '.', '--quit-after', '120') -WorkingDirectory $PWD -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput 'godot-import.log' -RedirectStandardError 'godot-import.err.log'
+if ($import.ExitCode -ne 0) { throw "Godot import failed: $($import.ExitCode)" }
+$scene = Start-Process -FilePath $godot -ArgumentList @('--headless', '--path', '.', '--quit-after', '600') -WorkingDirectory $PWD -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput 'godot-scene.log' -RedirectStandardError 'godot-scene.err.log'
+if ($scene.ExitCode -ne 0) { throw "Godot scene failed: $($scene.ExitCode)" }
+Get-Content godot-scene.log
+```
+
+```text
+PingRes sentAtUnixMs=1000
+JoinRes name=godot-player actorId=<server-assigned-id>
+ChatNotify godot-player: hello from Godot C++
+```
+
+Godot 출력에 `Engine Lobby failed:`가 있으면 해당 오류를 확인한다. Server 로그에 scene 실행
+중 새로운 `client connected: <sessionId>` 행이 있어야 한다.
+Server는 해당 저장소 README의 stop 절차로 종료한다.
+
+현재 공개 Linux prebuilt의 `libzlink.so.0`은 initial-exec TLS를 사용한다. Godot 4.4.1 .NET의
+GDExtension 로드 시 `libstdc++.so.6: cannot allocate memory in static TLS block` 오류가
+재현된다. 따라서 위 Linux scene 실행의 통신은 아직 확인되지 않았다.
