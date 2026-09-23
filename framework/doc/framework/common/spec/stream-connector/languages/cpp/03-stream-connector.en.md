@@ -523,21 +523,21 @@ necessarily the value passed at `create()`.
 ## 7. Engine adapters
 
 The Unreal plugin, the Godot GDExtension and the Axmol adapter own a `connector_t` as a private
-implementation and expose a surface shaped for the engine's types and thread rules. All three follow
-these three rules.
+implementation and expose a surface shaped for the engine's types and thread rules. Receiving and
+requesting take the same shape as in the other connectors: a push is received by registering a packet
+name together with a callback, and a request receives its reply at the call. All three follow these two
+rules.
 
 - **Callbacks and delegates run only on the engine main thread.** The adapter queues core
   callbacks and delivers them from the `dispatch` the engine calls every frame or through the main
   thread dispatcher the application registered (Godot `set_main_thread_dispatcher`, Axmol
   `set_axmol_thread_dispatcher`).
-- **Pushes are subscribed by packet name.** Like the core `on`, each adapter has a subscribe call that
-  takes a name (Unreal `Subscribe(PacketName)`, Godot and Axmol `subscribe(packet_name)`). Only pushes of a subscribed name reach the adapter's receive surface
-  (Unreal `OnPacketReceived`, the Godot and Axmol `on_packet` callback), together with
-  the packet name.
-- **A request completion carries the request's packet name.** A Response frame has no packet name
-  ([common spec §4.2](../../32-stream-connector.en.md#42-header)), so the adapter attaches the name
-  it requested with to the completion surface (Unreal `OnRequestCompleted`, the Godot and Axmol
-  `on_request_completed` callback).
+- **Engines have no coroutines, so results arrive through a callback given per call.** A push is
+  registered like the core `on`, with the packet name and the callback together (Unreal
+  `On(PacketName, Delegate)`, Godot and Axmol `on(packet_name, callback)`), and the registration returns a
+  handle that releases it. A request takes its completion callback at the call and delivers that
+  request's reply or failure to it (Unreal `RequestJson(..., OnCompleted)`, Godot and Axmol
+  `request_json(..., callback)`).
 
 ## 8. Verification
 
