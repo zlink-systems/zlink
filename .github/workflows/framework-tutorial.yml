@@ -11,60 +11,9 @@ name: Framework Tutorial
 # tutorial의 bootstrap이 만든 `.zlink/`를 `ZLINK_ROOT`로 재사용해 framework를 두 번 짓지 않는다.
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/framework-tutorial.yml"
-      - "framework/languages/dotnet/tutorial/**"
-      - "framework/languages/java/tutorial/**"
-      - "framework/languages/node/tutorial/**"
-      - "framework/languages/cpp/tutorial/**"
-      - "framework/languages/dotnet/quickstart/**"
-      - "framework/languages/java/quickstart/**"
-      - "framework/languages/node/quickstart/**"
-      - "framework/languages/cpp/quickstart/**"
-      - "!framework/languages/dotnet/tutorial/Directory.Packages.props"
-      - "!framework/languages/dotnet/quickstart/Directory.Packages.props"
-      - "!framework/languages/java/tutorial/gradle/libs.versions.toml"
-      - "!framework/languages/java/quickstart/gradle/libs.versions.toml"
-      - "!framework/languages/node/tutorial/package.json"
-      - "!framework/languages/node/tutorial/package-lock.json"
-      - "!framework/languages/node/tutorial/HttpClient/package.json"
-      - "!framework/languages/node/tutorial/HttpClient/package-lock.json"
-      - "!framework/languages/node/tutorial/StreamClient/package.json"
-      - "!framework/languages/node/tutorial/StreamClient/package-lock.json"
-      - "!framework/languages/node/quickstart/package.json"
-      - "!framework/languages/node/quickstart/package-lock.json"
-      - "!framework/languages/cpp/tutorial/bootstrap.cmake"
-      - "!framework/languages/cpp/quickstart/bootstrap.cmake"
-  pull_request:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/framework-tutorial.yml"
-      - "framework/languages/dotnet/tutorial/**"
-      - "framework/languages/java/tutorial/**"
-      - "framework/languages/node/tutorial/**"
-      - "framework/languages/cpp/tutorial/**"
-      - "framework/languages/dotnet/quickstart/**"
-      - "framework/languages/java/quickstart/**"
-      - "framework/languages/node/quickstart/**"
-      - "framework/languages/cpp/quickstart/**"
-      - "!framework/languages/dotnet/tutorial/Directory.Packages.props"
-      - "!framework/languages/dotnet/quickstart/Directory.Packages.props"
-      - "!framework/languages/java/tutorial/gradle/libs.versions.toml"
-      - "!framework/languages/java/quickstart/gradle/libs.versions.toml"
-      - "!framework/languages/node/tutorial/package.json"
-      - "!framework/languages/node/tutorial/package-lock.json"
-      - "!framework/languages/node/tutorial/HttpClient/package.json"
-      - "!framework/languages/node/tutorial/HttpClient/package-lock.json"
-      - "!framework/languages/node/tutorial/StreamClient/package.json"
-      - "!framework/languages/node/tutorial/StreamClient/package-lock.json"
-      - "!framework/languages/node/quickstart/package.json"
-      - "!framework/languages/node/quickstart/package-lock.json"
-      - "!framework/languages/cpp/tutorial/bootstrap.cmake"
-      - "!framework/languages/cpp/quickstart/bootstrap.cmake"
+  # Not on push or pull_request (#997): the tutorials build against the published packages, so a
+  # change that uses an unpublished API fails here until its release. The release workflow calls
+  # this after publishing each language; run it by hand for anything else.
   workflow_dispatch:
   workflow_call:
     inputs:

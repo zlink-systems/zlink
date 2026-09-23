@@ -16,12 +16,9 @@ name: Mirror examples repositories
 #   mirrors that tree and tags it `vA.B.C`. A tag push itself does not run
 #   this workflow: at tag time the packages are not on the registry yet, so
 #   the smoke would fail for every language and nothing would be pushed (#884);
-# - a push to `main` that touches an examples path mirrors the tree as a plain
-#   commit — but only for a language whose `framework/languages/<lang>/VERSION`
-#   is already tagged. Between the version-bump PR and the tag, main's pins
-#   name unpublished packages, so that language is skipped (the release run
-#   mirrors it). The trees reference published packages only, so anything
-#   else on main builds for a reader today.
+# - a push to `main` does not run this workflow (#997): between releases main's examples use
+#   APIs that are not published yet, so the smoke against published packages fails and nothing is
+#   pushed. A manual dispatch with ref=main mirrors main when its examples build on published packages.
 #
 # The tree is built by scripts/tutorial/export_examples.py at the tag and
 # verified first by examples-smoke.yml in jobs that never checkout the
@@ -43,18 +40,6 @@ on:
         description: 'The one language whose packages the caller has published and verified'
         required: true
         type: string
-  push:
-    branches: [main]
-    paths:
-      - 'framework/languages/*/quickstart/**'
-      - 'framework/languages/*/tutorial/**'
-      - 'framework/languages/*/samples/**'
-      - 'framework/languages/engines/**'
-      - 'scripts/tutorial/export_examples.py'
-      - '.gitignore'
-      - '.gitattributes'
-      - '.github/workflows/examples-mirror.yml'
-      - '.github/workflows/examples-smoke.yml'
   workflow_dispatch:
     inputs:
       ref:
