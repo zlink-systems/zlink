@@ -57,8 +57,7 @@ dotnet add package Zlink.Framework.AspNetCore
 
 라이선스는 계층마다 다르다 — core·binding은
 MPL-2.0, framework는 FSL-1.1-ALv2, `Zlink.HttpClient`는 Apache-2.0이다. 서비스를 만들어
-파는 데 드는 비용은 없다
-([ZLink의 적용 범위](guide/server/17-alternative.ko.md#8-라이선스--사용하는-데-드는-비용)).
+파는 데 드는 비용은 없다.
 
 ## 2. 공유 계약
 

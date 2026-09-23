@@ -96,8 +96,7 @@ routing, reconnect, and correlation.
 > contract is a language-neutral wire protocol (ZMP) + codec + logical channel/packet,
 > services implemented in different languages call each other over the same channel (e.g., a
 > room server in C++, an API server in .NET/Java). This guide is `.NET`-based and treats the
-> `.NET` implementation as the reference implementation. The detailed cross-language model is
-> covered by [17-alternative §2.1](17-alternative.en.md).
+> `.NET` implementation as the reference implementation.
 
 ## 2. Situations Where You Need It
 
@@ -156,8 +155,7 @@ them, a team picks its genre's pattern and rebuilds that structure from the sock
   actor isn't one user, it's a general-purpose concurrency unit used anywhere, and ZLink
   splits this into Spot (an execution-isolation unit) and Actor (a domain entity). What's
   closer to Orleans's virtual actor/grain isn't ZLink's Actor — it's the **Instance Spot**
-  this approach uses. The detailed comparison is covered in
-  [Chapter 17 §6](17-alternative.en.md).
+  this approach uses.
 
 **What ZLink provides.** A feature answers each difficulty, one by one.
 
@@ -204,8 +202,7 @@ means no new runtime to learn.
 
 > A Twitch-scale FPS's **ultra-low-latency snapshot netcode** uses unreliable transport that
 > tolerates loss. STREAM provides TCP, TLS, and WebSocket transports. Even for that kind of game, though,
-> matching/lobby/meta/social are handled just fine today by these four approaches. Exactly
-> where the line falls is covered in [Chapter 17](17-alternative.en.md) §4.
+> matching/lobby/meta/social are handled just fine today by these four approaches.
 
 **How is this different from a game server engine or service?** Alternatives to building
 everything yourself include engines and managed services. Comparing what each provides by
@@ -583,7 +580,7 @@ gone in the after picture.
 **What stays, stays.** Client HTTP ingress is still stateless, so an L7 LB/Ingress
 distributes to API servers as usual (gray), and order state is still stored in the DB.
 Unlike gRPC, this HTTP ingress path also doesn't **additionally** require an L7 distribution
-device (the reason is covered in [Chapter 17 §5.1](17-alternative.en.md)).
+device.
 
 **What ZLink provides.** Solving "gather the same key in one place, in order" with **owner
 routing** instead of a log means most of the pieces above simply never need to be assembled.
@@ -602,7 +599,7 @@ event stream, and Redis stays as cache/persistence support. What ZLink cuts is t
 
 **The boundary stays where it is.** Where a durable log is genuinely needed — event replay,
 long-term retention, broad fan-out to independent systems — Kafka is the right fit and stays
-exactly there ([Chapter 17 §4](17-alternative.en.md)). What ZLink cuts is the case where a
+exactly there. What ZLink cuts is the case where a
 log pipeline was assembled **only** for entity-scoped ordered processing. If order and
 consistency were the entire goal, owner routing achieves that goal directly, with no
 pipeline.
@@ -1146,7 +1143,6 @@ transport implementation to the application
     - [37-relocation](37-relocation.en.md) — Relocation
     - [38-stream-boundary](38-stream-boundary.en.md) — How STREAM works
     - [39-session-binding](39-session-binding.en.md) — How session binding works
-    - [17-alternative](17-alternative.en.md) — Where ZLink fits — use cases and the boundaries of the choice
 
     **Operations and verification**
 
@@ -1185,7 +1181,6 @@ transport implementation to the application
     - [37-relocation](37-relocation.en.md) — Relocation
     - [38-stream-boundary](38-stream-boundary.en.md) — How STREAM works
     - [39-session-binding](39-session-binding.en.md) — How session binding works
-    - [17-alternative](17-alternative.en.md) — Where ZLink fits — use cases and the boundaries of the choice
 
     **Operations and verification**
 
@@ -1224,7 +1219,6 @@ transport implementation to the application
     - [37-relocation](37-relocation.en.md) — Relocation
     - [38-stream-boundary](38-stream-boundary.en.md) — How STREAM works
     - [39-session-binding](39-session-binding.en.md) — How session binding works
-    - [17-alternative](17-alternative.en.md) — Where ZLink fits — use cases and the boundaries of the choice
 
     **Operations and verification**
 
@@ -1263,7 +1257,6 @@ transport implementation to the application
     - [37-relocation](37-relocation.en.md) — Relocation
     - [38-stream-boundary](38-stream-boundary.en.md) — How STREAM works
     - [39-session-binding](39-session-binding.en.md) — How session binding works
-    - [17-alternative](17-alternative.en.md) — Where ZLink fits — use cases and the boundaries of the choice
 
     **Operations and verification**
 
@@ -1301,7 +1294,6 @@ transport implementation to the application
     - [37-relocation](37-relocation.en.md) — Relocation
     - [38-stream-boundary](38-stream-boundary.en.md) — How STREAM works
     - [39-session-binding](39-session-binding.en.md) — How session binding works
-    - [17-alternative](17-alternative.en.md) — Where ZLink fits — use cases and the boundaries of the choice
 
     **Operations and verification**
 

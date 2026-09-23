@@ -10,7 +10,7 @@ title: "12. Operations — Runtime Metrics · Graceful Drain · Readiness · Kot
 # 12. Operations — Runtime Metrics · Graceful Drain · Readiness
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](README.en.md) | [Previous: 17. Where ZLink Applies — Internal Service Communication and Real-Time State Servers](17-alternative.en.md) | [Next: Options and Defaults](16-options.en.md)
+[Guide Home](README.en.md) | [Previous: How Session Binding Works](39-session-binding.en.md) | [Next: Options and Defaults](16-options.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->

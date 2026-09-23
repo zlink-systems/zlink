@@ -47,7 +47,7 @@ correlation은 framework가 처리한다.
 > protocol(ZMP) + codec + 논리 channel/packet이라 서로 다른 언어로 구현된 서비스가
 > 같은 channel 위에서 상호 호출한다(예: room 서버 C++, API 서버 .NET·Java). 이
 > 가이드는 `.NET` 기준이며 `.NET` 구현을 reference implementation(기준 구현)으로
-> 삼는다. cross-language 모델은 [ZLink를 사용하는 상황](17-alternative.ko.md#2-zlink를-사용하는-상황)에서 다룬다.
+> 삼는다.
 
 ## 2. 사용이 필요한 상황
 
@@ -100,8 +100,7 @@ correlation은 framework가 처리한다.
   Orleans·Akka다. **개념 차이 하나** — Akka의 actor는 사용자 하나가 아니라 어디에나
   쓰는 범용 동시성 단위이고, ZLink는 이걸 Spot(실행 격리 단위)과 Actor(도메인
   엔티티)로 나눴다. Orleans의 virtual actor·grain에 더 가까운 건 ZLink Actor가
-  아니라 이 방식이 쓰는 **Instance Spot**이다. 세부 비교는
-  [17장 §6](17-alternative.ko.md)에서 다룬다.
+  아니라 이 방식이 쓰는 **Instance Spot**이다.
 
 **ZLink가 제공하는 것.** 어려움 하나하나에 기능이 대응한다.
 
@@ -142,8 +141,7 @@ RouteMesh·Spot·Instance Spot 조합으로 구현한다. 방식이 바뀌어도
 
 > 트위치 FPS의 **초저지연 snapshot netcode**는 유실을 허용하는 비신뢰 전송을 쓴다.
 > STREAM은 TCP, TLS, WebSocket 기반 transport를 제공한다. 다만 그런 게임에서도 매칭·로비·메타·
-> 소셜은 지금 이 네 방식으로 충분히 처리된다. 어디까지 되고 안 되는지는
-> [17장](17-alternative.ko.md) §4에서 다룬다.
+> 소셜은 지금 이 네 방식으로 충분히 처리된다.
 
 **게임 서버 엔진·서비스와는 어떻게 다른가.** 직접 만들지 않는 길로는 엔진과
 관리형 서비스가 있다. 이들이 제공하는 것을 영역별로 놓고 보면 ZLink의 자리가
@@ -369,8 +367,7 @@ channel name으로 부르고 location store가 현재 사용 가능한 peer를 �
 
 **남는 것은 남는다.** 클라이언트 HTTP 진입은 여전히 stateless라 L7 LB/Ingress가 평소처럼
 API 서버에 분배하고(회색), 주문 상태는 여전히 DB에 저장한다. gRPC와 달리 이 HTTP 진입
-경로에 L7 분배 장치를 **추가로** 요구하지도 않는다(그 이유는
-[17장 §5.1](17-alternative.ko.md)이 다룬다).
+경로에 L7 분배 장치를 **추가로** 요구하지도 않는다.
 
 **ZLink가 제공하는 것.** "같은 key를 한 곳에 모아 순서대로"를 log가 아니라 **owner
 routing**으로 풀면, 위 항목의 대부분은 직접 구성할 필요 자체가 사라진다.
@@ -388,7 +385,7 @@ routing**으로 풀면, 위 항목의 대부분은 직접 구성할 필요 자�
 **연결·라우팅·상태 관리의 복잡도**다.
 
 **경계는 그대로다.** durable log가 진짜 필요한 요구 — 이벤트 replay, 장기 보존, 독립
-시스템들로의 광범위 fan-out — 는 Kafka가 맞고 그대로 남긴다([17장 §4](17-alternative.ko.md)).
+시스템들로의 광범위 fan-out — 는 Kafka가 맞고 그대로 남긴다.
 ZLink가 줄이는 것은 "엔티티 단위 순서 처리"만을 위해 log 파이프라인을 직접 구성하던
 경우다. 순서와 정합성이 목적의 전부였다면, owner routing이 그 목적을 파이프라인 없이
 직접 달성한다.
@@ -601,7 +598,6 @@ location store 모델로 공개 기능을 사용한다. runtime 내부 구조를
 - [37-relocation](37-relocation.ko.md) — Relocation
 - [38-stream-boundary](38-stream-boundary.ko.md) — STREAM의 동작 원리
 - [39-session-binding](39-session-binding.ko.md) — Session 묶음의 동작 원리
-- [17-alternative](17-alternative.ko.md) — ZLink를 어디에 사용하나 — 사용처와 기술 선택 경계
 
 **운영과 확인**
 

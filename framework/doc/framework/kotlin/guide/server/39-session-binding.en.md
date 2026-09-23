@@ -10,7 +10,7 @@ title: "How Session Binding Works · Kotlin"
 # How Session Binding Works
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](README.en.md) | [Previous: How STREAM Works](38-stream-boundary.en.md) | [Next: 17. Where ZLink Applies — Internal Service Communication and Real-Time State Servers](17-alternative.en.md)
+[Guide Home](README.en.md) | [Previous: How STREAM Works](38-stream-boundary.en.md) | [Next: 12. Operations — Runtime Metrics · Graceful Drain · Readiness](12-operations.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
