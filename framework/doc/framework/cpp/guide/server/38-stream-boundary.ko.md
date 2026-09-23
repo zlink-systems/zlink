@@ -20,19 +20,83 @@ title: "STREAM의 동작 원리 · C++"
 
 !!! info "이 장을 읽고 나면"
 
-    stream node 등록이 언제 거부되는지, 오류가 어디로 가는지, 응답 하나가 어떻게
-    짝지어지는지 알 수 있다.
+    연결 하나에서 packet이 session callback에 닿기까지의 순서, 처리가 밀릴 때 일어나는 일,
+    응답이 요청과 짝지어지는 방식, 오류와 연결 종료가 어디로 가는지 알 수 있다.
 
-[STREAM](23-stream.ko.md)은 연결을 받아 packet 하나에 답하기까지를 다뤘다. 이 장은 그 경계에서
-Framework가 정해 둔 것을 다룬다 — 시작할 때 막는 조건, 오류의 귀속, 응답 token의 수명, 그리고
-접속하는 쪽이 고르는 실행 방식이다.
+[STREAM](23-stream.ko.md)은 연결을 받아 packet 하나에 답하기까지를 다뤘다. 이 장은 그 사이에서
+Framework가 하는 일을 순서대로 설명한다.
 
-## 1. 등록을 시작 전에 막는 조건
+## 1. 연결 하나가 지나는 순서
 
-등록은 node 이름과 bind endpoint와 session type으로 정한다. **그중 bind endpoint는 반드시
-지정한다.** 선언에 표시를 달아 stream node가 자동으로 등록되는 표면은 없다.
+<iframe class="zlink-diagram" src="/common/diagrams/38-stream-dispatch.html" title="연결 하나가 지나는 자리" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/38-stream-dispatch.html" target="_blank">↗ 크게 보기</a></p>
 
-다음 조건은 첫 연결까지 미루지 않고 **host가 시작하기 전에** 설정 오류로 막는다.
+client가 연결하면 Framework가 그 연결의 session을 만들고 연결 callback을 실행한다. 그 뒤 packet
+하나는 다음 순서로 처리된다.
+
+1. Framework가 host의 처리 queue에 자리를 하나 확보한다.
+2. 자리를 확보한 뒤에만 Core에서 packet 한 건을 꺼낸다.
+3. header를 풀어 packet 이름, metadata, 요청 정보와 **packet의 상대 Actor**를 dispatch context에
+   담는다. 상대 Actor는 client가 Actor handle로 보냈을 때만 있다 —
+   [Session 묶음의 동작 원리](39-session-binding.ko.md)가 다룬다.
+4. session callback에 dispatch context와 아직 변환하지 않은 payload를 넘긴다. payload는
+   session callback 안에서 공통 decode 표면으로 원하는 타입으로 읽는다.
+
+연결이 끊기면 연결 해제 callback을 실행한다. 연결을 구분하는 값은 Core가 연결마다 붙인
+routing ID이며, session callback까지 그대로 전달된다.
+
+## 2. 처리가 밀릴 때 — 순서와 backpressure
+
+**한 연결의 packet은 도착한 순서대로 한 번씩 session callback에 닿는다.** 버려지거나 두 번
+전달되는 packet은 없다.
+
+처리 queue에 자리가 없으면 Framework는 다음 packet을 꺼내지 않는다. 꺼내지 않은 packet은 Core의
+수신 buffer에 남고, buffer가 한도(HWM)에 이르면 client의 송신이 멈춘다. 자리가 나면 멈췄던
+packet이 순서대로 다시 흐른다. queue 자리는 host 전체가 함께 쓰므로 한 연결이 아니라 host의
+모든 연결에 같이 적용된다. 한도와 상태 전이는 [Backpressure](33-backpressure.ko.md)가 다룬다.
+
+## 3. 응답 token의 수명
+
+요청에 답할 때는 지금 dispatch의 **한 번만 사용하는 응답 token**을 사용한다. 그 token은 지금
+요청에서만 유효하고 한 번 제출할 수 있다. timeout이나 취소로 전송이 실패해도 같은 token을 다시
+사용할 수 없다.
+
+응답은 요청의 sequence를 그대로 싣고 돌아가며, client는 이 sequence로 기다리던 요청을 찾는다.
+응답을 어떤 타입으로 읽을지는 client가 요청할 때 지정한 타입이 정한다. 오류 응답도 같은
+sequence로 돌아간다.
+
+기다리는 요청이 없는 client에게 서버가 먼저 보낼 때는 응답이 아니라 보내기(push)를 사용한다.
+
+## 4. 받는 message의 크기 상한
+
+client가 보내는 message 하나(header와 payload 합)의 상한은 기본 64 KiB다. 서버가 보내는
+message에는 적용하지 않는다. 상한을 넘은 message는 session callback에 일부도 전달하지 않고,
+서버에 `EMSGSIZE`를 기록한 뒤 연결을 끊는다. client는 오류 코드를 받지 않고 연결 종료만 본다.
+`0`으로 설정하면 Framework 상한을 두지 않는다.
+
+## 5. 오류가 가는 곳
+
+**session 오류 callback은 그 session에 귀속되는 transport 오류만 받는다.** 나머지는 다음
+경로로 간다.
+
+| 오류 | 어디로 가나 |
+| --- | --- |
+| 그 session의 transport 오류 | session 오류 callback |
+| handshake 실패 | runtime 관측. session이 만들어지기 전이라 부를 대상이 없다 |
+| socket·node 단위 오류 | runtime 관측. session 하나의 오류로 확정할 수 없다 |
+| application handler 예외 | handler 예외 처리 경로 |
+
+## 6. 연결을 닫을 때
+
+연결을 닫기 시작하면 Framework는 그 연결에서 새 packet을 받지 않고, 진행 중인 읽기와 쓰기를
+끝내거나 취소한 뒤 TCP·TLS·WebSocket 자원을 정리한다. 정리 뒤에 늦게 도착한 transport 완료는
+이미 정리된 자원을 쓰지 않는다. 그 연결에 묶였던 Actor가 어떻게 되는지는
+[Session 묶음의 동작 원리](39-session-binding.ko.md#3-연결이-끊길-때의-통지)가 다룬다.
+
+## 7. 시작 전에 막는 설정
+
+stream node 등록은 node 이름, bind endpoint와 session type으로 정한다. 다음 설정 오류는 첫
+연결까지 미루지 않고 **host가 시작하기 전에** 막는다.
 
 | 조건 |
 | --- |
@@ -44,67 +108,17 @@ Framework가 정해 둔 것을 다룬다 — 시작할 때 막는 조건, 오류
 | TLS를 켰는데 인증서 경로가 비어 있다 |
 | TLS를 켰는데 key 경로가 비어 있다 |
 | TLS server를 설정하지 않고 client 인증서를 요구했다 |
+| message 크기 상한이 음수다 |
 
 TLS를 켜면 인증서와 key 경로를 함께 지정한다. client 인증서 요구는 기본이 꺼짐이고, 켜면
 검증에 실패한 연결은 **session을 만들기 전에** 거부한다.
 
-## 2. 오류가 가는 곳
-
-<iframe class="zlink-diagram" src="/common/diagrams/38-stream-dispatch.html" title="연결 하나가 지나는 자리" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/38-stream-dispatch.html" target="_blank">↗ 크게 보기</a></p>
-
-**session 오류 callback은 그 session에 귀속되는 transport 오류만 받는다.** 나머지는 다음
-경로로 간다.
-
-| 오류 | 어디로 가나 |
-| --- | --- |
-| 그 session의 transport 오류 | session 오류 callback |
-| handshake 실패 | runtime 관측. session이 만들어지기 전이라 부를 대상이 없다 |
-| socket·node 단위 오류 | runtime 관측. session 하나의 오류로 확정할 수 없다 |
-| application handler 예외 | handler 예외 처리 경로. **session 오류 callback이 아니다** |
-
-**handler filter는 session dispatch에 적용되지 않는다.** 다른 dispatch에 등록한 filter가 있어도
-session callback 앞에서는 실행되지 않는다 —
-[Handler와 메시지 처리](31-handler-dispatch.ko.md#2-filter--공통-처리를-한곳에-모은다)가 filter의
-범위를 다룬다. 인증처럼 session 경로에서 걸러야 하는 일은 session의 handler 등록으로 처리한다.
-
-**받기 loop를 직접 도는 표면은 없다.** Framework가 packet을 queue에 넣은 뒤 session callback을
-실행하며, 그 경계에서 dispatch·주입·기록을 일관되게 적용한다. loop·취소·backpressure를
-application이 직접 구현하지 않게 하려는 설계다 — [Backpressure](33-backpressure.ko.md)가 그 뒤를 다룬다.
-
-## 3. 응답 token의 수명
-
-요청에 답할 때는 지금 dispatch의 **한 번만 사용하는 응답 token**을 사용한다. 그 token은 지금 요청에서만
-유효하고 한 번 제출할 수 있다. timeout이나 취소로 전송이 실패해도 같은 token을 다시 사용할 수 없다.
-
-**응답에는 packet 이름이 실리지 않는다.** 접속한 쪽은 요청 sequence만으로 기다리던 요청을 찾고,
-응답을 어떤 타입으로 읽을지는 **호출할 때 지정한 타입**이 정한다. 이름으로 고르지 않으므로 응답
-쪽에 packet 이름을 붙이는 표면도 없다. 오류 응답도 같은 sequence로 돌아온다.
-
-기다리는 요청이 없는 상대에게 서버가 먼저 보낼 때는 응답이 아니라 보내기를 사용한다.
-
-## 4. 접속하는 쪽이 고르는 실행 방식
-
-즉시 방식은 connector의 worker에서 callback을 실행하므로 실행 위치를 가리지 않는 client에
-맞는다. game loop나 UI thread처럼 실행 위치가 정해진 client는 수동 방식을 골라, application이
-호출하는 그 시점에 자기 loop 안에서 밀린 것을 처리한다.
-
-### 4.1 관측 비용을 끄는 값
-
-connector는 server runtime과 같은 진단 수준 옵션을 받는다. 기본값은 오류만 남기는
-단계이고, 가장 낮은 단계로 낮추면 connector가 나가는 frame에 흐름 식별자를 만들거나 붙이지
-않아 관측 전용 비용이 사라진다.
-
-요청과 응답을 짝짓는 데 사용하는 값은 진단이 아니라 protocol 정보이므로 가장 낮은 단계에서도 그대로
-동작한다.
-
-## 5. 관련 문서
+## 8. 관련 문서
 
 - 연결을 받아 답하기까지 — [STREAM](23-stream.ko.md)
 - 연결 하나를 Actor에 묶기 — [Session과 Actor 연결](24-actor-session.ko.md)
-- 묶음의 규칙 — [Session 묶음의 동작 원리](39-session-binding.ko.md)
-- filter가 적용되는 범위 — [Handler와 메시지 처리](31-handler-dispatch.ko.md)
-- client가 설치할 package — [설치](../../../install.ko.md)
+- 묶음의 규칙과 Actor별 packet 구분 — [Session 묶음의 동작 원리](39-session-binding.ko.md)
+- 처리 queue와 한도 — [Backpressure](33-backpressure.ko.md)
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
