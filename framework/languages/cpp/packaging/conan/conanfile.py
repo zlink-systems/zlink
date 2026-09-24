@@ -32,7 +32,7 @@ ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS = (
 
 class ZlinkFrameworkConan(ConanFile):
     name = "zlink-framework"
-    version = "0.24.0"
+    version = "0.24.1"
     package_type = "static-library"
     license = "FSL-1.1-ALv2"
     homepage = "https://github.com/zlink-systems/zlink"
@@ -54,7 +54,7 @@ class ZlinkFrameworkConan(ConanFile):
         cmake_layout(self)
 
     def requirements(self):
-        self.requires("zlink-cpp/1.6.0", transitive_headers=True,
+        self.requires("zlink-cpp/1.7.0", transitive_headers=True,
                       transitive_libs=True)
         for dependency in ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS:
             self.requires(dependency, transitive_headers=True, transitive_libs=True)

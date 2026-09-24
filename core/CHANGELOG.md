@@ -12,6 +12,23 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-09-24
+
+The public C API and ABI are unchanged from 1.6.0
+(`LIBZLINK_ABI_SOVERSION=0`).
+
+### Fixed
+
+- `libzlink` no longer references libstdc++ TLS with the `initial-exec`
+  model. Core mutex and condition variable completion replace
+  `std::promise` completion, so the first Godot editor import of a C++
+  GDExtension on Linux can load the library (#1041).
+
+### Build and tests
+
+- CTest checks that `libzlink` has no `initial-exec` libstdc++ TLS
+  references (#1041).
+
 ## [1.6.0] - 2026-09-24
 
 The public C API and ABI are unchanged from 1.5.0
