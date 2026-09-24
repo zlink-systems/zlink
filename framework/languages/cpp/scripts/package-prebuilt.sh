@@ -452,6 +452,15 @@ case "$platform" in
       verify_framework_exports "$library" "$exports" '^_Z.*5zlink'
       "$python_command" "$source_dir/scripts/verify-apple-exports.py"         "$source_dir/cmake/zlink-framework-shared-symbols.map" "$binary"
     done
+    core_needed="$(readelf -d "$prefix/lib/libzlink_framework.so" |
+      sed -n 's/.*Shared library: \[\(libzlink[.]so[^]]*\)\].*/\1/p' | head -n1)"
+    [[ -n "$core_needed" ]] || {
+      echo "Framework shared library has no Core runtime dependency" >&2; exit 1;
+    }
+    [[ -e "$prefix/lib/$core_needed" ]] || {
+      echo "unresolved dependency in clean prefix: libzlink_framework.so -> $core_needed" >&2
+      exit 1
+    }
     ;;
   macos-arm64)
     verify_macos_relative_reference() {

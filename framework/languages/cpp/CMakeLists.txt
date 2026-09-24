@@ -48,6 +48,8 @@ option(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS "Build isolated C++ service fo
 option(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES "Build C++ framework samples (opt-in; samples/sample-build-common.sh enables it for each samples/<Sample>/run_sample.sh)" OFF)
 option(ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE "Build the C++ cross-language e2e host" ON)
 option(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK "Build and install C++ framework and HTTP client package artifacts" ON)
+option(ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES
+  "Stage Core and the C++ binding in a standalone Framework install" ON)
 if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
   find_package(opentelemetry-cpp CONFIG REQUIRED COMPONENTS api)
 endif()
@@ -986,6 +988,90 @@ if(ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT)
     zlink_stream_e2e_client
     EXPORT zlink_stream_connector_cppTargets
     COMPONENT StreamConnector)
+endif()
+if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK
+    AND ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES
+    AND NOT ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE)
+  # The server Framework targets still use zlink::cpp. Preserve each dependency
+  # config's original depth so its generated imported paths resolve in the archive.
+  function(zlink_framework_cpp_stage_dependency_config found_dir)
+    get_filename_component(_parent "${found_dir}" DIRECTORY)
+    get_filename_component(_parent_name "${_parent}" NAME)
+    if(_parent_name STREQUAL "cmake")
+      get_filename_component(_grandparent "${_parent}" DIRECTORY)
+      get_filename_component(_grandparent_name "${_grandparent}" NAME)
+      set(_destination "${_grandparent_name}/cmake")
+    else()
+      set(_destination "${_parent_name}")
+    endif()
+    install(DIRECTORY "${found_dir}"
+      DESTINATION "${_destination}" COMPONENT Framework)
+  endfunction()
+
+  function(zlink_framework_cpp_stage_debug_counterparts prefix found_files)
+    foreach(_file IN LISTS found_files)
+      file(RELATIVE_PATH _relative "${prefix}" "${_file}")
+      set(_debug_file "${prefix}/debug/${_relative}")
+      if(EXISTS "${_debug_file}")
+        get_filename_component(_relative_dir "${_relative}" DIRECTORY)
+        install(FILES "${_debug_file}"
+          DESTINATION "debug/${_relative_dir}" COMPONENT Framework)
+      endif()
+    endforeach()
+  endfunction()
+
+  install(DIRECTORY "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/include/"
+    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/include/"
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    COMPONENT Framework FILES_MATCHING PATTERN "*.hpp" PATTERN "*.h")
+  file(GLOB _binding_libraries
+    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/libzlink_cpp.a"
+    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/zlink_cpp.lib"
+    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/libzlink_cpp.lib"
+    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/libzlink_cpp.dll.a")
+  if(WIN32)
+    file(GLOB _binding_import_libraries
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/*.lib"
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/*.dll.a")
+    list(APPEND _binding_libraries ${_binding_import_libraries})
+    list(REMOVE_DUPLICATES _binding_libraries)
+  endif()
+  if(NOT _binding_libraries)
+    message(FATAL_ERROR "The installed zlink_cpp package has no link library")
+  endif()
+  install(FILES ${_binding_libraries}
+    DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT Framework)
+  zlink_framework_cpp_stage_debug_counterparts(
+    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}" "${_binding_libraries}")
+  if(NOT zlink_cpp_DIR OR NOT zlink_DIR)
+    message(FATAL_ERROR "The Framework archive needs findable zlink_cpp and zlink configs")
+  endif()
+  zlink_framework_cpp_stage_dependency_config("${zlink_cpp_DIR}")
+  zlink_framework_cpp_stage_dependency_config("${zlink_DIR}")
+
+  if(WIN32)
+    install(DIRECTORY "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/bin/"
+      DESTINATION ${CMAKE_INSTALL_BINDIR}
+      COMPONENT Framework FILES_MATCHING PATTERN "*.dll")
+    file(GLOB _core_libraries
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/*.lib"
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/bin/*.lib")
+  elseif(APPLE)
+    file(GLOB _core_libraries
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/libzlink*.dylib"
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/libzlink.a")
+  else()
+    file(GLOB _core_libraries
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/libzlink.so*"
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/libzlink.a")
+  endif()
+  if(NOT _core_libraries)
+    message(FATAL_ERROR "The installed Core package has no link library")
+  endif()
+  install(FILES ${_core_libraries}
+    DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT Framework)
+  zlink_framework_cpp_stage_debug_counterparts(
+    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}" "${_core_libraries}")
 endif()
 if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
   install(DIRECTORY common/include/
