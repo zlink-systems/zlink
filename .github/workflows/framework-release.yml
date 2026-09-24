@@ -499,7 +499,7 @@ jobs:
           archive="dist/framework-cpp/zlink-framework-cpp-${{ needs.resolve.outputs.cpp_version }}.tar.gz"
           tar -C "${RUNNER_TEMP}" -czf "${archive}" \
             "zlink-framework-cpp-${{ needs.resolve.outputs.cpp_version }}"
-          sha256sum "${archive}" >"${archive}.sha256"
+          (cd "$(dirname "${archive}")" && sha256sum "$(basename "${archive}")" >"$(basename "${archive}").sha256")
           sha512sum "${archive}"
 
       - uses: actions/upload-artifact@v6
