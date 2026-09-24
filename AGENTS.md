@@ -189,6 +189,20 @@ sub-agent는 codex에 이슈가 있을 때 쓴다 — 쿼터 소진, 콘텐츠 �
   [`doc/principal/dev/posddd.ko.md`](./doc/principal/dev/posddd.ko.md)와
   [`doc/principal/dev/zlink-system-design-principles.ko.md`](./doc/principal/dev/zlink-system-design-principles.ko.md)는
   요청과 무관하게 runtime 변경 시 항상 적용한다.
+- **리팩토링은 변경의 일부다(필수).** 별도 리팩토링 이슈로 미루지 않는다. 기준은 성능, POSDDD,
+  불필요한 코드(호출되지 않는 코드, 같은 의미의 helper·DTO·adapter 중복, 쓰이지 않는 옵션·분기) 세 가지다.
+  - **PR마다:** 건드린 모듈과 그 호출 경로를 세 기준으로 점검하고, 발견은 같은 PR에서 고친다.
+    범위를 크게 넘는 발견은 `file:line`과 함께 그 릴리스 마일스톤의 이슈에 적는다.
+  - **릴리스 전:** 그 릴리스에서 바뀐 모듈 전체를 한 번 더 점검한다. 발견이 0이 된 뒤 태그한다.
+  - **스펙 gap을 만들지 않는다.** 리팩토링은 스펙이 정한 동작을 바꾸지 않는다. 스펙에 없는 동작이
+    필요해 보이면 멈추고 보고한다([5.1](#51-스펙-개정-절차)).
+  - **Execution gate를 우회하는 동기화를 남기지 않는다.**
+    [`02-handler-turn-and-execution-gate.ko.md`](./framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md)가
+    기준이다. 다음 세 가지를 찾아, gate 하나가 결정하도록 고친다.
+    - gate가 이미 직렬화하는 상태를 lock·별도 queue·대기로 다시 보호하는 코드
+    - 같은 실행 권한을 플래그·상태·generation 같은 두 번째 수단으로 판정하는 코드
+    - handler turn 안에서 infrastructure 진행을 기다리는 코드
+  - 완료 보고에 점검 결과(발견 수, 고친 항목, 넘긴 항목)를 한 줄로 적는다.
 
 ## 4. 검증과 완료 보고
 
