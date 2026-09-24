@@ -1089,8 +1089,6 @@ int recv_router_record (const socket_handle_t &handle_,
             std::lock_guard<std::mutex> lock (state->mutex);
             if (state->closing)
                 publish_error = ETERM;
-            else if (!source_pipe->is_lifecycle_active ())
-                publish_error = ECONNABORTED;
             else {
                 router_reply_target_t target;
                 target.pipe = source_pipe;

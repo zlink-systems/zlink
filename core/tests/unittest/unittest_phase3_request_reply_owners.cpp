@@ -140,6 +140,20 @@ void request_source_consume_barrier_hook (void *userdata_)
       static_cast<one_shot_barrier_t *> (userdata_));
 }
 
+struct receive_source_disconnect_t
+{
+    zlink::pipe_t *pipe;
+    bool invoked;
+};
+
+void disconnect_source_after_receive (void *userdata_)
+{
+    receive_source_disconnect_t *const disconnect =
+      static_cast<receive_source_disconnect_t *> (userdata_);
+    disconnect->pipe->terminate (false);
+    disconnect->invoked = true;
+}
+
 struct option_on_free_probe_t
 {
     explicit option_on_free_probe_t (void *socket_) :
@@ -746,6 +760,42 @@ void test_router_reply_whole_record_runtime_failure_retains_token ()
     zlink_completion_close (&completion);
 
     pair.cores[0]->release_completion_poller (&pair);
+    test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router);
+}
+
+void test_router_request_receive_survives_source_disconnect ()
+{
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_NOT_NULL (dealer);
+    TEST_ASSERT_NOT_NULL (router);
+    set_routing_id_text (dealer, "receive-disconnect-dealer");
+    set_routing_id_text (router, "receive-disconnect-router");
+    contract_socket_pair_t pair (dealer, router);
+
+    (void) send_public_request (dealer, "request-before-disconnect");
+    contract_socket_pair_t::pump_owner (as_socket (router));
+    receive_source_disconnect_t disconnect = {pair.application[1], false};
+    as_socket (router)->test_set_receive_record_hooks (disconnect_source_after_receive, NULL,
+                                                       &disconnect);
+
+    const zlink_routing_id_t *source_rid = NULL;
+    zlink_reply_token_t reply_token = 0;
+    zlink_msg_t part;
+    size_t part_count = 0;
+    const zlink_recv_result_t result = zlink_router_recv (
+      router, &source_rid, &reply_token, &part, 1, &part_count, ZLINK_RECV_FLAGS_DONTWAIT);
+    as_socket (router)->test_set_receive_record_hooks (NULL, NULL, NULL);
+
+    TEST_ASSERT_TRUE (disconnect.invoked);
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, result);
+    TEST_ASSERT_NOT_NULL (source_rid);
+    TEST_ASSERT_NOT_EQUAL (0, reply_token);
+    TEST_ASSERT_EQUAL_UINT64 (1, part_count);
+    TEST_ASSERT_EQUAL_STRING ("request-before-disconnect", part_string (&part).c_str ());
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
+
     test_context_socket_close_zero_linger (dealer);
     test_context_socket_close_zero_linger (router);
 }
@@ -2197,6 +2247,8 @@ int main ()
         RUN_TEST (test_logical_rid_revoke_returns_checked_out_reply_capacity_once);
     if (should_run_phase3_request_test ("test_router_reply_whole_record_runtime_failure_retains_token"))
         RUN_TEST (test_router_reply_whole_record_runtime_failure_retains_token);
+    if (should_run_phase3_request_test ("test_router_request_receive_survives_source_disconnect"))
+        RUN_TEST (test_router_request_receive_survives_source_disconnect);
     if (should_run_phase3_request_test ("test_blocking_request_success_releases_source_after_physical_scope"))
         RUN_TEST (test_blocking_request_success_releases_source_after_physical_scope);
     if (should_run_phase3_request_test ("test_late_zero_copy_reply_release_reenters_unregistered_none_pull"))
