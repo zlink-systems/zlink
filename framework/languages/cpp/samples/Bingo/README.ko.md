@@ -68,16 +68,16 @@ count가 같아 추가 `on_leave_actor`가 없음을 확인하고, destroy 뒤 a
 Client 실행 파일은 framework app을 만들지 않는다. Client는 stream connector만 사용하며,
 접속 endpoint는 검증된 `--stream-endpoint` CLI option으로 받는다.
 
-Linux 또는 WSL에서는 아래 script 를 실행한다.
+Linux 또는 WSL에서는 이 샘플 디렉터리에서 아래 script 를 실행한다.
 
 ```bash
-./framework/languages/cpp/samples/Bingo/run_sample.sh
+./run_sample.sh
 ```
 
 Windows PowerShell에서는 아래 script 를 실행한다.
 
 ```powershell
-.\framework\languages\cpp\samples\Bingo\run_sample.ps1
+.\run_sample.ps1
 ```
 
 script 는 CTest sample parity와 actor lifecycle runtime gate를 먼저 실행한다. 그 다음

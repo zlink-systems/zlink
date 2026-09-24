@@ -5,10 +5,10 @@ ZoneNode 두 process 사이의 relocation, 인접 zone Logical Multicast, Ops fa
 검증한다. Application은 좌표와 zone 규칙을 소유하고, actor owner와 transport RID는 Framework가
 결정한다.
 
-Linux 또는 WSL에서 다음 명령을 실행한다.
+Linux 또는 WSL에서는 이 샘플 디렉터리에서 다음 명령을 실행한다.
 
 ```bash
-./framework/languages/cpp/samples/ZoneWorld/run_sample.sh
+./run_sample.sh
 ```
 
 runner는 전용 Redis container와 실행별 key prefix를 만들고 ZoneNode 두 개, Ops, Gateway와

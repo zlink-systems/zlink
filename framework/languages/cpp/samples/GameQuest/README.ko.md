@@ -11,8 +11,10 @@ runner는 Redis location store를 공유 location store로 사용한다. 별도 
 
 ## 실행
 
+이 샘플 디렉터리에서 실행한다.
+
 ```bash
-./framework/languages/cpp/samples/GameQuest/run_sample.sh
+./run_sample.sh
 ```
 
 runner는 실행에 필요한 Redis endpoint와 실행별 key prefix를 준비하고, server role이 준비된 뒤 client

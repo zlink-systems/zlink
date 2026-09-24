@@ -240,8 +240,8 @@ channel.
 
 ## Project Layout
 
-Open `framework/languages/java` in IntelliJ IDEA to load the framework and all
-sample modules through the included `zlink-framework-java-samples` Gradle
+In a source repository, open `framework/languages/java` in IntelliJ IDEA to load the
+framework and all sample modules through the included `zlink-framework-java-samples` Gradle
 build. Opening this `samples/` directory directly loads only the sample build.
 
 Individual sample directories use `standalone.settings.gradle.kts` for their

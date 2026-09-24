@@ -30,16 +30,16 @@ and `Notify` for server push packets.
 TicTacToe uses JSON payloads for STREAM, channel, actor, and room Spot
 messages.
 
-The sample is grouped by its own solution:
+From this sample directory, build its solution:
 
 ```bash
-dotnet build framework/languages/dotnet/samples/TicTacToe/TicTacToe.sln
+dotnet build TicTacToe.sln
 ```
 
 Run the sample smoke path:
 
 ```bash
-framework/languages/dotnet/samples/TicTacToe/run_sample.sh
+./run_sample.sh
 ```
 
 The standalone client lives in [`Client`](Client). Use it when you want to
@@ -53,16 +53,8 @@ server and client use the same protocol contract. The reusable client flow lives
 in [`Client`](Client); the sample runner starts the server roles and then
 runs that client as the self-check.
 
-The API and Play roles use separate executable projects. Each process receives
-only its role-specific configuration file:
-
-```bash
-dotnet run --project framework/languages/dotnet/samples/TicTacToe/Server/Play -- --config ./appsettings.play-a.json
-dotnet run --project framework/languages/dotnet/samples/TicTacToe/Server/Play -- --config ./appsettings.play-b.json
-dotnet run --project framework/languages/dotnet/samples/TicTacToe/Server/Api -- --config ./appsettings.api-a.json
-dotnet run --project framework/languages/dotnet/samples/TicTacToe/Server/Api -- --config ./appsettings.api-b.json
-dotnet run --project framework/languages/dotnet/samples/TicTacToe/Client
-```
+The API and Play roles use separate executable projects. The sample runner creates
+the role-specific configuration files, starts the servers, and runs the client.
 
 Each role reads `Sample` settings from the config file through
 `Microsoft.Extensions.Configuration`. The runner writes temporary role-specific

@@ -7,8 +7,10 @@
 
 ## 실행
 
+이 샘플 디렉터리에서 실행한다.
+
 ```bash
-ZLINK_CPP_BUILD_DIR=build-redis-vcpkg ./framework/languages/cpp/samples/ShoppingMall/run_sample.sh
+./run_sample.sh
 ```
 
 ## 구성

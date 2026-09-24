@@ -215,7 +215,7 @@ PUB/SUB channel을 쓴다.
 
 ## Project Layout
 
-`framework/languages/java`를 IntelliJ IDEA로 열면 framework와 포함된
+소스 저장소에서는 `framework/languages/java`를 IntelliJ IDEA로 열면 framework와 포함된
 `zlink-framework-java-samples` Gradle build를 통해 모든 sample module을 함께 읽는다. 이
 `samples/` 디렉터리를 바로 열면 sample 빌드만 읽는다.
 

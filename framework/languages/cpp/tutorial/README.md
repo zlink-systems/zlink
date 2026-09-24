@@ -109,11 +109,12 @@ foreach ($i in 1..60) { $answer = curl.exe -s http://127.0.0.1:5180/players/p1/p
 if ($LASTEXITCODE -ne 0) { throw 'tutorial-http did not come up' }
 ```
 
-In PowerShell `curl` is an alias of `Invoke-WebRequest`, so use `curl.exe` and escape the double
-quotes of a JSON body as `\"`. The request that opens a room, for example:
+In PowerShell `curl` is an alias of `Invoke-WebRequest`, so use `curl.exe`.
+Enclose the JSON body in single quotes without escaping its double quotes.
+The request that opens a room, for example:
 
 ```powershell
-curl.exe -X POST http://127.0.0.1:5180/rooms -H 'Content-Type: application/json' -d '{\"title\":\"lobby\"}'
+curl.exe -X POST http://127.0.0.1:5180/rooms -H 'Content-Type: application/json' -d '{"title":"lobby"}'
 ```
 
 ```bash

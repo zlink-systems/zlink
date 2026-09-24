@@ -65,16 +65,16 @@ Client 실행 파일은 framework app을 만들지 않는다. Client는 API HTTP
 받고, Play stream endpoint는 `POST /games` 응답에서 받아 connector를 만든다. API HTTP endpoint는
 검증된 `--api-http-endpoint` CLI option으로 받는다.
 
-Linux 또는 WSL에서는 아래 script 를 실행한다.
+Linux 또는 WSL에서는 이 샘플 디렉터리에서 아래 script 를 실행한다.
 
 ```bash
-./framework/languages/cpp/samples/TicTacToe/run_sample.sh
+./run_sample.sh
 ```
 
 Windows PowerShell에서는 아래 script 를 실행한다.
 
 ```powershell
-.\framework\languages\cpp\samples\TicTacToe\run_sample.ps1
+.\run_sample.ps1
 ```
 
 script 는 CTest sample parity와 actor lifecycle runtime gate를 먼저 실행한다. 그 뒤 Play 서버 두 개와

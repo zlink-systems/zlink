@@ -33,22 +33,22 @@ own project file. The root `Bingo.csproj` is the aggregate build entry point for
 IDEs and CLI builds. `Bingo.sln` keeps the same layout: `Shared`, `Client`,
 `Server/Configuration`, and `Server/<role>`.
 
-Build the whole sample with:
+From this sample directory, build the whole sample with:
 
 ```bash
-dotnet build "framework/languages/dotnet/samples/Bingo/Bingo.csproj"
+dotnet build Bingo.csproj
 ```
 
 Run it with:
 
 ```bash
-framework/languages/dotnet/samples/Bingo/run_sample.sh
+./run_sample.sh
 ```
 
 On Windows PowerShell:
 
 ```powershell
-.\framework\languages\dotnet\samples\Bingo\run_sample.ps1
+.\run_sample.ps1
 ```
 
 The script starts two Api servers, one Matchmaking server, two Play servers,

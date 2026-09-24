@@ -70,16 +70,18 @@ Actor type을 제공할 때도 호출자가 물리 node 정보를 관리하지 �
 
 ## 실행
 
+이 샘플 디렉터리에서 실행한다.
+
 Linux:
 
 ```bash
-./framework/languages/dotnet/samples/DeliveryDispatch/run_sample.sh
+./run_sample.sh
 ```
 
 PowerShell:
 
 ```powershell
-./framework/languages/dotnet/samples/DeliveryDispatch/run_sample.ps1
+./run_sample.ps1
 ```
 
 `run_sample.sh`와 `run_sample.ps1`은 실행마다 전용 Docker Redis 컨테이너를
