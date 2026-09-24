@@ -1058,7 +1058,8 @@ if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK
       "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/bin/*.lib")
   elseif(APPLE)
     file(GLOB _core_libraries
-      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/libzlink*.dylib"
+      # Core's macOS archive carries its OpenSSL dylibs next to libzlink (@loader_path).
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/*.dylib"
       "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/libzlink.a")
   else()
     file(GLOB _core_libraries
