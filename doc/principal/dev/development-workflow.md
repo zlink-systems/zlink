@@ -15,7 +15,7 @@ Issue ──> branch + worktree ──> work (person or codex job) ──> PR �
   └── grouped by Milestone (release) and Project (board)          └── the last PR's "Closes #N" closes the Issue
 ```
 
-`main` changes **only through PRs**. Every exception is listed in §6 (other sections only point there).
+`main` changes **only through PRs**, including edits that touch only documents. Everything that bypasses a PR is listed in §6 (other sections only point there).
 One branch = one Issue = one worktree. One Issue may have several PRs (§5).
 
 ## 2. Registering work — GitHub Issues
@@ -189,29 +189,22 @@ Three rules apply to all of them.
   today and will be set by job name once the Issue #16 PR CI exists (only aggregate jobs that treat
   "skipped" as passing become required, so PRs outside the path filters never wait forever).
 - Merge with `gh pr merge --merge` (merge commit). `done` deletes the remote branch and removes the worktree afterwards.
-- main protection: PR required, force-pushes and deletion forbidden. Direct pushes by admins (the
-  user, the supervisor) are used only for §6 (`enforce_admins` off).
+- main protection: PR required, force-pushes and deletion forbidden. Admins (the user, the supervisor)
+  do not push to main directly (`enforce_admins` is off only for the §6 tag pushes).
 
-## 6. Exceptions — direct commits to main (the only list)
+## 6. Exceptions — what bypasses a PR (the only list)
 
-1. **Document edits and simple work**: changes that touch only documents and no code, tests, build, CI or
-   `scripts/**` (guides, tutorial and sample READMEs, record and guidance documents, agent rule documents),
-   and one or two lines of configuration. Specs and internal design documents are committed after the approval
-   in `AGENTS.md` §5 and the sol review in §5.1. Work in the main worktree without creating a separate worktree
-   and commit with an explicit pathspec (`git commit -- <paths>`). Code that changes behaviour and changes across
-   modules go through a PR.
-2. Release workflow dispatches and tag pushes (tags are not PR material).
-3. **A fix that blocks a release in flight** (a workflow check, a version field — something that only
-   matters for that release) may land directly with the user's approval and gets an Issue afterwards for
-   the record (the 0.11.0 cases: the `release-dotnet.yml` check, the HttpClient version, the Node `repository` field).
+Every commit reaches main through a PR: document-only edits, agent rule documents, one or two lines of
+configuration, and fixes that block a release in flight alike. Simple work may skip the separate worktree but
+still uses a branch and a PR. The only thing that bypasses a PR is not a commit:
 
-Everything else (production code, tests, bench runners and aggregator, CI, `scripts/**`) goes through a PR.
+1. Release workflow dispatches and tag pushes (tags are not PR material).
 
 ## 7. Relation to releases
 
 - Releases start from a tag as in `CONTRIBUTING.md` §8 and `doc/building/release-pipeline.md`. The
   tagged commit is a main commit that satisfies the §3 milestone condition (`work.sh status --milestone`).
-- Fixes discovered during a release follow §6-3.
+- Fixes discovered during a release also go through a PR.
 
 ## 8. First application (2026-09-10) — the manual procedure until `work.sh` exists
 

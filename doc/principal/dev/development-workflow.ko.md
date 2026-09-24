@@ -15,7 +15,7 @@ Issue ──> 브랜치 + worktree ──> 작업(사람 또는 codex job) ─�
   └── Milestone(릴리스)·Project(보드)로 묶어서 본다              └── 마지막 PR의 "Closes #N"이 Issue를 닫는다
 ```
 
-`main`은 **PR로만** 바뀐다. 예외는 §6에 모두 적는다(다른 절은 §6을 가리키기만 한다).
+`main`은 **PR로만** 바뀐다. 문서만 바꾸는 수정도 같다. PR을 거치지 않는 것은 §6에 모두 적는다(다른 절은 §6을 가리키기만 한다).
 브랜치 하나 = Issue 하나 = worktree 하나. Issue 하나에 PR이 여럿일 수 있다(§5).
 
 ## 2. 작업 등록 — GitHub Issue
@@ -150,27 +150,22 @@ dirty 트리·공유 범위·정리 규칙은 [`worktree-setup.ko.md` §3](./wor
   적고 넘어간다. job 전체를 면제하지 않는다. 필수 status check는 지금 비어 있고, Issue #16의 PR CI가
   갖춰진 뒤 job 이름 기준으로 지정한다(paths 밖 PR이 대기 상태에 빠지지 않게 "skipped도 통과"인 집계 job만 필수로 둔다).
 - merge 방식: `gh pr merge --merge`(merge commit). merge 뒤 원격 브랜치 삭제와 worktree 제거는 `done`이 한다.
-- main 보호: PR 필수, force-push·삭제 금지. 관리자(사용자·감독자)의 직접 push는 §6에만 쓴다
-  (`enforce_admins` off).
+- main 보호: PR 필수, force-push·삭제 금지. 관리자(사용자·감독자) 권한으로 main에 직접 push하지 않는다
+  (`enforce_admins` off는 §6의 태그 push를 위한 것이다).
 
-## 6. 예외 — main 직접 커밋을 허용하는 것 (유일한 목록)
+## 6. 예외 — PR을 거치지 않는 것 (유일한 목록)
 
-1. **문서 수정과 간단한 작업**: 코드·테스트·빌드·CI·`scripts/**`를 건드리지 않고 문서만 바꾸는 수정(가이드,
-   튜토리얼·샘플 README, 기록·안내 문서, 에이전트 규칙 문서)과 설정 값 한두 줄. 스펙·내부 설계 문서는
-   `AGENTS.md` §5의 승인과 §5.1의 sol 리뷰를 거친 뒤 커밋한다. 별도 worktree를 만들지 않고 main worktree에서
-   작업해 `git commit -- <경로>`로 파일을 지정해 커밋한다. 동작을 바꾸는 코드와 여러 모듈에 걸친 수정은 PR이다.
-2. 릴리스 워크플로우 dispatch와 태그 push(태그는 PR 대상이 아니다).
-3. **진행 중인 릴리스를 막는 수정**(워크플로우 검사·버전 필드처럼 그 릴리스에서만 문제가 되는 것)은
-   사용자 승인 아래 직접 커밋할 수 있고, 사후에 Issue를 만들어 기록한다(0.11.0의 사례: `release-dotnet.yml`
-   검사, HttpClient 버전, Node `repository` 필드).
+모든 커밋은 PR로 main에 들어간다. 문서만 바꾸는 수정, 에이전트 규칙 문서, 설정 값 한두 줄, 진행 중인
+릴리스를 막는 수정도 같다. 간단한 작업은 별도 worktree 없이 해도 되지만 브랜치와 PR은 거친다.
+PR을 거치지 않는 것은 커밋이 아닌 다음 하나뿐이다.
 
-그 밖의 모든 것(운영 코드, 테스트, 벤치 runner·집계기, CI, `scripts/**`)은 PR이다.
+1. 릴리스 워크플로우 dispatch와 태그 push(태그는 PR 대상이 아니다).
 
 ## 7. 릴리스와의 관계
 
 - 릴리스는 `CONTRIBUTING.ko.md` §8과 `doc/building/release-pipeline.ko.md`대로 태그로 시작한다. 태그 대상
   커밋은 §3의 milestone 조건을 만족하는 main 커밋이다(`work.sh status --milestone`).
-- 릴리스 중 드러난 수정은 §6-3에 따른다.
+- 릴리스 중 드러난 수정도 PR로 넣는다.
 
 ## 8. 첫 적용 (2026-09-10) — `work.sh`가 생기기 전의 수동 절차
 

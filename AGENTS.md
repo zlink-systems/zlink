@@ -9,8 +9,8 @@
 - 작업 전에 `git branch --show-current`를 확인하고, 사용자가 지정한 branch에서만 수정, commit과
   push를 수행한다. 어느 branch인지 분명하지 않으면 먼저 묻는다.
   작업 단위는 Issue 브랜치(`<area>/<issue번호>-<slug>`)와 worktree이며, main은 PR로 바뀐다
-  (`doc/principal/dev/development-workflow.ko.md`). 문서만 바꾸는 수정과 간단한 작업은 worktree 없이
-  main에서 직접 커밋한다 — 범위는 그 문서 §6이 정한다.
+  (`doc/principal/dev/development-workflow.ko.md`). 문서만 바꾸는 수정과 간단한 작업도 PR로 넣는다 —
+  간단한 작업은 별도 worktree를 생략할 수 있다.
 - **작업 중에 드러난 결함·누락은 새 Issue를 만들지 않고 그 작업의 Issue·PR 안에서 처리한다.** 여러 언어에 걸친
   결함도 Issue 하나에서 함께 고친다. 새 Issue는 이번 릴리스에서 다루지 않고 넘기는 일에만 연다.
 - 작업 상태가 바뀔 때마다(시작, 리뷰 대기, 머지, 보류) [Project 보드](https://github.com/users/zlink-systems/projects/1/views/10)의
@@ -47,7 +47,7 @@
 
 **감독자가 직접 하는 일은 넷이다: 감독, 리뷰, 스펙 작성, 자잘한 작업.** 리뷰는 코드와 가이드의 diff를
 감독자가 직접 읽고 판정하는 것이며, sub-agent 리뷰와 검사 통과는 판정의 입력일 뿐이다. 스펙은 감독자가
-쓰고 sol 리뷰를 거친다([5.1](#51-스펙-개정-절차)). 자잘한 작업은 main에서 한다([1](#1-작업-시작과-변경-보호)) — 다만 간단해도 시간이 걸리는 작업은
+쓰고 sol 리뷰를 거친다([5.1](#51-스펙-개정-절차)). 자잘한 작업은 worktree 없이 브랜치와 PR로 한다([1](#1-작업-시작과-변경-보호)) — 다만 간단해도 시간이 걸리는 작업은
 `luna`나 `sonnet`에게 맡긴다.
 그 밖의 구현·조사·검증 실행은 sub-agent에게 맡긴다.
 
