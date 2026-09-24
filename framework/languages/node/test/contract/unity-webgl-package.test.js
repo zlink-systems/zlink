@@ -53,6 +53,7 @@ test('the UPM package has the layout Unity requires', () => {
   // Unity links .jslib with --js-library and .jspre with --pre-js. A plain .js file
   // under Plugins/WebGL is not linked into the build at all.
   for (const file of fs.readdirSync(path.join(packageRoot, 'Plugins/WebGL'))) {
+    if (file.endsWith('.meta')) continue;
     assert.match(file, /\.(jslib|jspre)$/, `${file} would not be linked into a WebGL build`);
   }
 });

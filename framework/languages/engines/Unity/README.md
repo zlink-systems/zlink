@@ -76,15 +76,17 @@ boundaries read by the engine integration guide.
 
 ## Unity 6000.0.83f1 verification
 
-The licensed Editor imports the project after correcting the NuGetForUnity UPM ID. Native player
-compilation remains blocked: `Zlink.Stream.Connector` 0.23.0 contains only a `net8.0` assembly,
-which Unity Mono rejects with CS1705 (`System.Runtime` 8.0.0.0 versus 4.1.2.0).
+The licensed Editor compiled with Windows and WebGL build targets using a locally restored
+`netstandard2.1` native connector DLL. The native DLL was enabled for the Editor and Windows
+and excluded from WebGL. The Windows Mono player built in batch mode and completed the server
+lobby flow: `JoinRes` and `ChatNotify` both reported `actorId=00000003`, and the server recorded
+the client connection.
 
-The WebGL UPM package now contains stable `.meta` files for its assets. Its assembly definition
-includes the Editor so that Unity resolves the sample component while building the scene. The
-project also declares Unity's JSON serialization module. Using the local UPM source, the WebGL
-player built in batch mode and
-completed the lobby flow in headless Chromium against the engine server: `JoinRes` reported
-`actorId=00000005 name=unity-player`, and `ChatNotify` reported
-`actorId=00000005 name=unity-player text=hello from Unity`. The server recorded the connection.
-The pinned Git package version has not been updated with these changes.
+The WebGL UPM package contains stable `.meta` files. Its assembly definition includes WebGL only;
+the Editor resolves the sample component through the native DLL even with the WebGL build target.
+The project also declares Unity's JSON serialization module. Using the local UPM source, the
+WebGL player built in batch mode and completed the lobby flow in headless Chromium. `JoinRes`
+reported `actorId=00000003 name=unity-player`; `ChatNotify` reported
+`actorId=00000003 name=unity-player text=hello from Unity`. The server recorded the connection.
+These checks used local connector artifacts; the manifest's pinned Git version and the published
+NuGet package have not been verified with these changes.
