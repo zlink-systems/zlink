@@ -12,7 +12,11 @@ import {
   unlockFeatureReq
 } from '../Shared/Contracts/messages';
 import type { BrowserHttpClient } from './browser-client-runtime';
-import { zlinkStreamAssert } from '@zlink-systems/stream-connector';
+import {
+  ZlinkStreamErrorCode,
+  ZlinkStreamException,
+  zlinkStreamAssert
+} from '@zlink-systems/stream-connector';
 import type { ZlinkStreamConnector } from '@zlink-systems/stream-connector';
 import type {
   CompleteMissionRes,
@@ -199,8 +203,27 @@ class GameQuestClientScenario {
       .fetch<{ accepted: boolean }>();
     zlinkStreamAssert.ensure(closeOwner.accepted, 'Sample scenario assertion failed.');
 
-    // Close is one-way. Sync observes the completed owner lifecycle before
-    // the next one-way action may start a new Instance activation.
+    // Close is one-way. A request resolved to the retired owner ends with a stale terminal.
+    let staleOwner = false;
+    try {
+      await apiBReconnectStream
+        .request(syncQuestProgressReq('player-alice'), Object)
+        .packetName(PacketNames.syncQuestProgressReq)
+        .submit<SyncQuestProgressRes>(signal);
+    } catch (error) {
+      if (
+        !(error instanceof ZlinkStreamException) ||
+        error.error.code !== ZlinkStreamErrorCode.RemoteError
+      ) {
+        throw error;
+      }
+      staleOwner = true;
+    }
+    zlinkStreamAssert.ensure(
+      staleOwner,
+      'Retired owner request did not end with a stale terminal.'
+    );
+
     const closeSync = await apiBReconnectStream
       .request(syncQuestProgressReq('player-alice'), Object)
       .packetName(PacketNames.syncQuestProgressReq)

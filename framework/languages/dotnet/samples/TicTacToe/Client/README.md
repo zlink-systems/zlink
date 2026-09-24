@@ -2,16 +2,16 @@
 
 This is the standalone sample client for `TicTacToe`.
 
-Start the two Play roles and two API roles first:
+From this Client directory, run the complete scenario:
 
 ```bash
-framework/languages/dotnet/samples/TicTacToe/run_sample.sh
+../run_sample.sh
 ```
 
 On Windows PowerShell:
 
 ```powershell
-.\framework\languages\dotnet\samples\TicTacToe\run_sample.ps1
+..\run_sample.ps1
 ```
 
 The runner starts `play-a`, `play-b`, `api-a`, and `api-b`, waits for their
@@ -21,13 +21,13 @@ framework selects its Play owner. To run the client against already running
 roles:
 
 ```bash
-dotnet run --project framework/languages/dotnet/samples/TicTacToe/Client
+dotnet run --project .
 ```
 
 Options:
 
 ```bash
-dotnet run --project framework/languages/dotnet/samples/TicTacToe/Client -- \
+dotnet run --project . -- \
   --api-url http://127.0.0.1:18080 \
   --game-name tictactoe-game \
   --x-actor-id player-x \

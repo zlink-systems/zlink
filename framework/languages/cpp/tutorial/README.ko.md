@@ -108,11 +108,12 @@ foreach ($i in 1..60) { $answer = curl.exe -s http://127.0.0.1:5180/players/p1/p
 if ($LASTEXITCODE -ne 0) { throw 'tutorial-http did not come up' }
 ```
 
-PowerShell의 `curl`은 `Invoke-WebRequest`의 별칭이므로 `curl.exe`를 쓰고, JSON 본문의
-큰따옴표는 `\"`로 escape한다. 예를 들어 방을 여는 요청은 다음과 같다.
+PowerShell의 `curl`은 `Invoke-WebRequest`의 별칭이므로 `curl.exe`를 쓴다.
+JSON 본문은 작은따옴표로 감싸고, 내부 큰따옴표를 escape하지 않는다.
+예를 들어 방을 여는 요청은 다음과 같다.
 
 ```powershell
-curl.exe -X POST http://127.0.0.1:5180/rooms -H 'Content-Type: application/json' -d '{\"title\":\"lobby\"}'
+curl.exe -X POST http://127.0.0.1:5180/rooms -H 'Content-Type: application/json' -d '{"title":"lobby"}'
 ```
 
 ```bash
