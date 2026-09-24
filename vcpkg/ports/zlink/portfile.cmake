@@ -3,8 +3,8 @@
 # Core release tag instead of compiling Core here -- it was the longest step of
 # the three-port build. zlink-cpp and zlink-framework do put C++ types on their
 # boundary and keep building from source.
-set(ZLINK_RELEASE_TAG "core/v1.5.0")
-set(ZLINK_RELEASE_VERSION "1.5.0")
+set(ZLINK_RELEASE_TAG "core/v1.6.0")
+set(ZLINK_RELEASE_VERSION "1.6.0")
 
 # Which prebuilt archive fits this triplet, and why not when none does. The
 # archives are built by the Core release workflow for these four targets only.
@@ -36,22 +36,22 @@ if(NOT VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")
 elseif(VCPKG_TARGET_IS_LINUX)
     if(VCPKG_TARGET_ARCHITECTURE STREQUAL "x64")
         set(ZLINK_ARCHIVE_PLATFORM "linux-x64")
-        set(ZLINK_ARCHIVE_SHA512 "507b700c3fe8f5e008f277f5010fb310299ad175652276443e9b9c5a9a976c7fa0b81fc5de1143adc854fbda34443f15f7ca56e57a9b66b22a0c120c8e42e60e")
+        set(ZLINK_ARCHIVE_SHA512 "7e9fd50eeb53aabc2c4a506a361b0218299a8ed480065942926ea20fea755ba3492efcc2963da334520bb4080901562688e3ba263fab72e4bbcd9ecdec66eca6")
     elseif(VCPKG_TARGET_ARCHITECTURE STREQUAL "arm64")
         set(ZLINK_ARCHIVE_PLATFORM "linux-arm64")
-        set(ZLINK_ARCHIVE_SHA512 "6732e6344fe6ac03b1d4d4da042e19e6e083ef392aefb08376eb7144532a8722863a1230d00c3bb4de403db2d2f172dcf256059087c8bdc5a417d5e31360d5d4")
+        set(ZLINK_ARCHIVE_SHA512 "75601047b2abcdc431325937783ae1a39b5bfe392a511b214e3480a2044a543f9c9af4952a89426644be1fe9e65ceb484519cc87636723916c436b66f8956aea")
     endif()
 elseif(VCPKG_TARGET_IS_OSX)
     if(VCPKG_TARGET_ARCHITECTURE STREQUAL "arm64")
         set(ZLINK_ARCHIVE_PLATFORM "macos-arm64")
-        set(ZLINK_ARCHIVE_SHA512 "28552edeac1896261c18b6aca7737ba02be5b3e8e91f06b61b7bdafd3590d601bc3adfe203ebd4b2f0a6ff089aee2795d4350ceff9719215faff9329cfd98dd0")
+        set(ZLINK_ARCHIVE_SHA512 "7e5268879a662fbc3fb07656b96e9c92b43b9c716c6ae98e12ab6a1d5087d19cc0a0989dd38a95091a8bc126435f4f63082d7b289dbaabd693aa135e0d959637")
     endif()
 elseif(VCPKG_TARGET_IS_WINDOWS AND NOT VCPKG_TARGET_IS_MINGW AND NOT VCPKG_TARGET_IS_UWP)
     # zlink.dll in the Windows archive is an MSVC v143 build against the
     # dynamic CRT, so a triplet on the static CRT would mix runtimes.
     if(VCPKG_TARGET_ARCHITECTURE STREQUAL "x64" AND VCPKG_CRT_LINKAGE STREQUAL "dynamic")
         set(ZLINK_ARCHIVE_PLATFORM "windows-x64")
-        set(ZLINK_ARCHIVE_SHA512 "789372e972cc7b954ba5ecae523845a6f85c1b6ea33d62a48010900908143aeda3f981c0d10b53f54a49438666bf15f4b1fffb829f80014fb058835b772f632b")
+        set(ZLINK_ARCHIVE_SHA512 "9aa5254dadc8a58b2febf71862ddcca1bb184cbbfd8e644e8b3c9d0faa9d3290bbf01365e64ec054d60e22d7a299a6151aa4185256cc8ecede4f4fd9cf76363b")
     elseif(VCPKG_TARGET_ARCHITECTURE STREQUAL "x64")
         set(ZLINK_NO_ARCHIVE_REASON "zlink.dll in the prebuilt Core archive needs the dynamic CRT, and this triplet asks for CRT ${VCPKG_CRT_LINKAGE}")
     endif()
@@ -170,7 +170,7 @@ else()
         OUT_SOURCE_PATH SOURCE_PATH
         REPO zlink-systems/zlink
         REF "${ZLINK_RELEASE_TAG}"
-        SHA512 e6c2e35c56e9ec9c87fa7244a82f03a84c4bec7043e4eb5a4f278f184e87595bca49bad15ff64a2263cf02cf2d2d2b30d55b3adce7018a6975ad98d44626a8fe
+        SHA512 3e15953e1cdde734855a4db899ec1f7e4f2335034bc0e894eabde75565799cf8dc53855a33b79ff03c67cb259b84a7015bf84a8a181cb75aabfd8087796f5f65
         HEAD_REF main
     )
 
