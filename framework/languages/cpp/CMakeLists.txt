@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(zlink_framework_cpp VERSION 0.23.0 LANGUAGES C CXX)
+project(zlink_framework_cpp VERSION 0.24.0 LANGUAGES C CXX)
 
 # IDE project trees (Visual Studio, Xcode): group targets into solution
 # folders via the FOLDER target property instead of leaving them flat.

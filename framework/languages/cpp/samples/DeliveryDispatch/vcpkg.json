@@ -1,6 +1,6 @@
 {
   "name": "zlink-sample-deliverydispatch",
-  "version-string": "0.23.0",
+  "version-string": "0.24.0",
   "dependencies": [
     "zlink",
     "zlink-framework"

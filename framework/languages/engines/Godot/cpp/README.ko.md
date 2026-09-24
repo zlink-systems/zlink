@@ -13,7 +13,7 @@ Packet과 JSON field는 [Engine Lobby 공통 계약](https://github.com/zlink-sy
 - Linux: GCC 13 이상과 Ninja 또는 Make
 - Windows: Visual Studio 2022 C++ workload와 PowerShell 7
 
-이 저장소는 Godot project만 포함한다. [C++ framework v0.23.0 release](https://github.com/zlink-systems/zlink/releases/tag/framework-cpp%2Fv0.23.0)의
+이 저장소는 Godot project만 포함한다. [C++ framework v0.24.0 release](https://github.com/zlink-systems/zlink/releases/tag/framework-cpp%2Fv0.24.0)의
 플랫폼별 prebuilt에는 Core, C++ binding, stream connector와 CMake package가 포함된다.
 같은 release의 source archive에 있는 기존 Godot adapter만 prebuilt에 연결해 빌드한다.
 Monorepo checkout이나 별도 package manager는 필요하지 않다.
@@ -25,8 +25,8 @@ Monorepo checkout이나 별도 package manager는 필요하지 않다.
 ```bash
 mkdir -p .zlink
 touch .zlink/.gdignore
-base=https://github.com/zlink-systems/zlink/releases/download/framework-cpp/v0.23.0
-for asset in zlink-framework-cpp-0.23.0-linux-x64.tar.gz zlink-framework-cpp-0.23.0.tar.gz; do
+base=https://github.com/zlink-systems/zlink/releases/download/framework-cpp/v0.24.0
+for asset in zlink-framework-cpp-0.24.0-linux-x64.tar.gz zlink-framework-cpp-0.24.0.tar.gz; do
   curl -fL "$base/$asset" -o ".zlink/$asset"
   curl -fL "$base/$asset.sha256" -o ".zlink/$asset.sha256"
   (cd .zlink && sha256sum -c "$asset.sha256")
@@ -40,8 +40,8 @@ git clone --branch godot-4.4.1-stable --depth 1 https://github.com/godotengine/g
 ```powershell
 New-Item -ItemType Directory -Force .zlink | Out-Null
 New-Item -ItemType File -Force .zlink/.gdignore | Out-Null
-$base = 'https://github.com/zlink-systems/zlink/releases/download/framework-cpp/v0.23.0'
-foreach ($asset in @('zlink-framework-cpp-0.23.0-windows-x64.tar.gz', 'zlink-framework-cpp-0.23.0.tar.gz')) {
+$base = 'https://github.com/zlink-systems/zlink/releases/download/framework-cpp/v0.24.0'
+foreach ($asset in @('zlink-framework-cpp-0.24.0-windows-x64.tar.gz', 'zlink-framework-cpp-0.24.0.tar.gz')) {
   curl.exe -fL "$base/$asset" -o ".zlink/$asset"
   curl.exe -fL "$base/$asset.sha256" -o ".zlink/$asset.sha256"
   $expected = ((Get-Content ".zlink/$asset.sha256" -Raw).Trim() -split '\s+')[0]
@@ -57,9 +57,9 @@ git clone --branch godot-4.4.1-stable --depth 1 https://github.com/godotengine/g
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_PREFIX_PATH="$PWD/.zlink/zlink-framework-cpp-0.23.0-linux-x64" \
+  -DCMAKE_PREFIX_PATH="$PWD/.zlink/zlink-framework-cpp-0.24.0-linux-x64" \
   -DGODOT_CPP_ROOT="$PWD/.zlink/godot-cpp" \
-  -DZLINK_FRAMEWORK_CPP_SOURCE_ROOT="$PWD/.zlink/zlink-framework-cpp-0.23.0"
+  -DZLINK_FRAMEWORK_CPP_SOURCE_ROOT="$PWD/.zlink/zlink-framework-cpp-0.24.0"
 cmake --build build --target engine_lobby_godot -j8
 ```
 
@@ -67,9 +67,9 @@ cmake --build build --target engine_lobby_godot -j8
 
 ```powershell
 cmake -S . -B build `
-  "-DCMAKE_PREFIX_PATH=$PWD/.zlink/zlink-framework-cpp-0.23.0-windows-x64" `
+  "-DCMAKE_PREFIX_PATH=$PWD/.zlink/zlink-framework-cpp-0.24.0-windows-x64" `
   "-DGODOT_CPP_ROOT=$PWD/.zlink/godot-cpp" `
-  "-DZLINK_FRAMEWORK_CPP_SOURCE_ROOT=$PWD/.zlink/zlink-framework-cpp-0.23.0"
+  "-DZLINK_FRAMEWORK_CPP_SOURCE_ROOT=$PWD/.zlink/zlink-framework-cpp-0.24.0"
 cmake --build build --config Release --target engine_lobby_godot --parallel 8
 ```
 

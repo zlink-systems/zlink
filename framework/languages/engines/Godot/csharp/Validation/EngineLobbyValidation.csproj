@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Zlink.Stream.Connector" Version="0.23.0" />
+    <PackageReference Include="Zlink.Stream.Connector" Version="0.24.0" />
     <Compile Include="../Contracts.cs" Link="Contracts.cs" />
     <Compile Include="../EngineLobbyClient.cs" Link="EngineLobbyClient.cs" />
   </ItemGroup>
