@@ -4,7 +4,6 @@
 #define __ZLINK_COMMAND_HPP_INCLUDED__
 
 #include <string>
-#include <future>
 #include "utils/stdint.hpp"
 #include "core/endpoint.hpp"
 #include "platform.hpp"
@@ -17,6 +16,7 @@ struct i_engine;
 class pipe_t;
 class socket_base_t;
 class session_base_t;
+struct release_endpoint_completion_t;
 
 //  This structure defines the commands that can be sent between threads.
 
@@ -60,7 +60,7 @@ struct command_t
         // Completes when the listener has released its bound OS endpoint.
         struct
         {
-            std::promise<void> *completion;
+            release_endpoint_completion_t *completion;
         } release_endpoint;
 
         //  Sent to I/O thread to let it know that it should
