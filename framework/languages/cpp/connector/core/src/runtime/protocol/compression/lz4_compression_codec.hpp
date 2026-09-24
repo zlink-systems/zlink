@@ -12,9 +12,9 @@ class lz4_compression_codec_t final : public zlink::stream_connector::compressio
 {
   public:
     static bool available () noexcept;
-    zlink::message_t compress (const zlink::message_t &payload) const override;
-    zlink::message_t decompress (const zlink::message_t &payload,
-                                 std::size_t max_decompressed_size) const override;
+    std::vector<std::uint8_t> compress (const std::vector<std::uint8_t> &payload) const override;
+    std::vector<std::uint8_t> decompress (const std::vector<std::uint8_t> &payload,
+                                          std::size_t max_decompressed_size) const override;
 };
 
 } // namespace zlink::stream_connector::detail

@@ -321,14 +321,13 @@ class serializer_registry_t
                     return serializer_t<T> (
                       [] (const T &value) {
                           return encoded_payload_t::from_text (
-                            codecs::json::detail::dump_profile (nlohmann::json (value)));
+                            zlink::detail::json_profile::dump (nlohmann::json (value)));
                       },
                       [] (const encoded_payload_t &payload) {
                           const auto bytes = payload.bytes ();
                           const auto *begin = reinterpret_cast<const char *> (bytes.data ());
                           const auto *end = begin == nullptr ? begin : begin + bytes.size ();
-                          return codecs::json::detail::parse_profile (begin, end)
-                            .template get<T> ();
+                          return zlink::detail::json_profile::parse (begin, end).template get<T> ();
                       },
                       "application/json");
                 } else {

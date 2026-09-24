@@ -146,7 +146,7 @@ result_t<void> validate_packet_limits (const connector_state_t &state, const pac
 result_t<std::string> decode_remote_error_message (const packet_t &packet)
 {
     try {
-        const auto payload = nlohmann::json::parse (packet.payload.to_string ());
+        const auto payload = nlohmann::json::parse (packet.payload.begin (), packet.payload.end ());
         if (!payload.is_object () || !payload.contains ("code") || !payload["code"].is_string ()
             || !payload.contains ("message") || !payload["message"].is_string ()) {
             return result_t<std::string>::failure (
@@ -159,16 +159,6 @@ result_t<std::string> decode_remote_error_message (const packet_t &packet)
         return result_t<std::string>::failure (error_code_t::frame_decode_failed,
                                                "Remote error payload must be a JSON object.");
     }
-}
-
-std::vector<std::uint8_t> message_to_bytes (const zlink::message_t &message)
-{
-    return message.to_bytes ();
-}
-
-zlink::message_t message_from_bytes (const std::vector<std::uint8_t> &bytes)
-{
-    return zlink::message_t::from (bytes);
 }
 
 bool has_flag (header_flags_t flags, header_flags_t flag) noexcept
@@ -189,7 +179,7 @@ result_t<dispatch_envelope_t> decode_packet (connector_state_t &state,
                                              const stream_header_t &header,
                                              std::vector<std::uint8_t> payload_bytes)
 {
-    auto payload = message_from_bytes (payload_bytes);
+    auto payload = std::move (payload_bytes);
     state.last_inbound_received = steady_clock_t::now ();
     const bool compressed = has_flag (header.flags, header_flags_t::payload_compressed);
     if (compressed) {
@@ -227,7 +217,7 @@ result_t<dispatch_envelope_t> decode_packet (connector_state_t &state,
         /* graceful-drain-handoff §7.1: store the close reason before the
          * server closes the connection; malformed controls close as a
          * protocol error. */
-        auto closing = session_closing_codec_t::decode (message_to_bytes (payload));
+        auto closing = session_closing_codec_t::decode (payload);
         if (!closing) {
             state.pending_close_reason = close_reason_t::protocol_error;
             return result_t<dispatch_envelope_t>::failure (
@@ -238,7 +228,7 @@ result_t<dispatch_envelope_t> decode_packet (connector_state_t &state,
     }
     if (header.kind == message_kind_t::control
         && header.name == actor_binding_control_codec_t::bound_name) {
-        auto bound = actor_binding_control_codec_t::decode_bound (message_to_bytes (payload));
+        auto bound = actor_binding_control_codec_t::decode_bound (payload);
         if (!bound)
             return result_t<dispatch_envelope_t>::failure (bound.error ()->code,
                                                            bound.error ()->message);
@@ -285,7 +275,7 @@ result_t<dispatch_envelope_t> decode_packet (connector_state_t &state,
     }
     if (header.kind == message_kind_t::control
         && header.name == actor_binding_control_codec_t::unbound_name) {
-        auto slot = actor_binding_control_codec_t::decode_unbound (message_to_bytes (payload));
+        auto slot = actor_binding_control_codec_t::decode_unbound (payload);
         if (!slot)
             return result_t<dispatch_envelope_t>::failure (slot.error ()->code,
                                                            slot.error ()->message);
@@ -455,8 +445,8 @@ encode_packet_frame (connector_state_t &state,
         return result_t<std::vector<std::uint8_t>>::failure (header.error ()->code,
                                                              header.error ()->message);
     }
-    const zlink::message_t *payload_message = &packet.payload;
-    std::optional<zlink::message_t> compressed_payload;
+    const std::vector<std::uint8_t> *payload_message = &packet.payload;
+    std::optional<std::vector<std::uint8_t>> compressed_payload;
     if (packet.compressed) {
         if (!state.compression_codec) {
             return result_t<std::vector<std::uint8_t>>::failure (
@@ -472,8 +462,7 @@ encode_packet_frame (connector_state_t &state,
                                                                  ex.what ());
         }
     }
-    auto payload = message_to_bytes (*payload_message);
-    auto frame = frame_codec_t::encode (header.value (), payload, state.options);
+    auto frame = frame_codec_t::encode (header.value (), *payload_message, state.options);
     if (!frame) {
         return result_t<std::vector<std::uint8_t>>::failure (frame.error ()->code,
                                                              frame.error ()->message);
@@ -556,7 +545,7 @@ result_t<void> send_due_pong (connector_state_t &state)
     packet_t pong;
     pong.name = "$zlink.heartbeat.pong";
     pong.codec = codec_t::raw;
-    pong.payload = zlink::message_t::from (std::string{});
+    pong.payload.clear ();
     return write_packet_frame (state, message_kind_t::control, pong, std::nullopt);
 }
 
@@ -902,7 +891,7 @@ void run_heartbeat_maintenance (std::shared_ptr<connector_state_t> state, std::u
             packet_t heartbeat;
             heartbeat.name = "$zlink.heartbeat.ping";
             heartbeat.codec = codec_t::raw;
-            heartbeat.payload = zlink::message_t::from (std::string{});
+            heartbeat.payload.clear ();
             auto encoded =
               encode_packet_frame (*state, message_kind_t::control, heartbeat, std::nullopt);
             if (encoded) {
@@ -959,7 +948,7 @@ void queue_due_pong (const std::shared_ptr<connector_state_t> &state)
     packet_t pong;
     pong.name = "$zlink.heartbeat.pong";
     pong.codec = codec_t::raw;
-    pong.payload = zlink::message_t::from (std::string{});
+    pong.payload.clear ();
     auto encoded = encode_packet_frame (*state, message_kind_t::control, pong, std::nullopt);
     if (!encoded) {
         std::lock_guard<std::mutex> lock (state->transport_mutex);

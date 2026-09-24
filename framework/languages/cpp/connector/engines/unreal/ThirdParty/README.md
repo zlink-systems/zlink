@@ -16,23 +16,21 @@ cmake \
 
 The build must use `ZLINK_STREAM_CONNECTOR_BUILD_UNREAL=ON`. The script installs
 only the `StreamConnector` CMake component and stages the Unreal adapter, C++
-binding, Core runtime and Core CMake package, optional OpenSSL/LZ4 libraries, and
+connector, optional OpenSSL/LZ4 libraries, and
 a relative `zlink-unreal-package.manifest`. The manifest records the producer platform,
 architecture, configuration, compiler, and C++ standard. Unreal Build Tool reads
 the manifest and validates the target metadata and every path before adding it to
 the module. A project can use another package location by setting
 `ZLINK_UNREAL_THIRDPARTY_ROOT` to the directory containing the manifest.
 
-The generated CMake export uses package-relative dependency paths. On Windows,
-the package contains both the Core DLL and its import library, so a clean consumer
-does not use an absolute path into the producer's build tree.
+The generated CMake export uses package-relative dependency paths. The connector
+package does not require the Core DLL or binding library.
 
 Before running Unreal Build Tool, set `ZLINK_UNREAL_COMPILER_ID` and
 `ZLINK_UNREAL_COMPILER_VERSION` to the actual Unreal target toolchain values. They
 must match the manifest; the module requires both values and rejects a package
 built with a different compiler or CRT. System libraries are selected from the
-staged target platform and the Core package export, rather than from the host
-that runs the packaging script.
+staged target platform rather than from the host that runs the packaging script.
 
 The generated package is a build artifact. Keep its headers and libraries out
 of source control; only this layout and the package script belong in the

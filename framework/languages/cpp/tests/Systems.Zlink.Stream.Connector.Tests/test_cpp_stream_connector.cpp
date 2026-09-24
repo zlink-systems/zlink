@@ -72,6 +72,16 @@ namespace
 
 using packet_message_t = zlink::stream_connector::message_t<zlink::stream_connector::packet_t>;
 
+std::vector<std::uint8_t> as_bytes (std::string_view text)
+{
+    return {text.begin (), text.end ()};
+}
+
+std::string as_string (const std::vector<std::uint8_t> &bytes)
+{
+    return {bytes.begin (), bytes.end ()};
+}
+
 struct simple_named_t
 {
     static constexpr const char *packet_name = "simple_named_t";
@@ -119,9 +129,15 @@ class counting_typed_codec_t final : public zlink::stream_connector::typed_codec
         return zlink::stream_connector::codec_t::json;
     }
 
-    zlink::message_t encode (const zlink::message_t &payload) const override { return payload; }
+    std::vector<std::uint8_t> encode (const std::vector<std::uint8_t> &payload) const override
+    {
+        return payload;
+    }
 
-    zlink::message_t decode (const zlink::message_t &payload) const override { return payload; }
+    std::vector<std::uint8_t> decode (const std::vector<std::uint8_t> &payload) const override
+    {
+        return payload;
+    }
 };
 
 class prefixing_name_resolver_t final : public zlink::stream_connector::packet_name_resolver_t
@@ -145,19 +161,20 @@ class prefix_compression_codec_t final : public zlink::stream_connector::compres
   public:
     explicit prefix_compression_codec_t (std::string prefix) : _prefix (std::move (prefix)) {}
 
-    zlink::message_t compress (const zlink::message_t &payload) const override
+    std::vector<std::uint8_t> compress (const std::vector<std::uint8_t> &payload) const override
     {
-        return zlink::message_t::from (_prefix + ":" + payload.to_string ());
+        return as_bytes (_prefix + ":" + as_string (payload));
     }
 
-    zlink::message_t decompress (const zlink::message_t &payload, std::size_t) const override
+    std::vector<std::uint8_t> decompress (const std::vector<std::uint8_t> &payload,
+                                          std::size_t) const override
     {
-        const auto value = payload.to_string ();
+        const auto value = as_string (payload);
         const auto marker = _prefix + ":";
         if (value.rfind (marker, 0) != 0) {
             throw std::runtime_error ("unexpected compression marker");
         }
-        return zlink::message_t::from (value.substr (marker.size ()));
+        return as_bytes (value.substr (marker.size ()));
     }
 
   private:
@@ -405,12 +422,15 @@ class early_reply_connection_t final : public zlink::stream_connector::detail::s
 class oversized_compression_codec_t final : public zlink::stream_connector::compression_codec_t
 {
   public:
-    zlink::message_t compress (const zlink::message_t &payload) const override { return payload; }
-
-    zlink::message_t decompress (const zlink::message_t &,
-                                 std::size_t max_decompressed_size) const override
+    std::vector<std::uint8_t> compress (const std::vector<std::uint8_t> &payload) const override
     {
-        return zlink::message_t::from (std::string (max_decompressed_size + 1, 'x'));
+        return payload;
+    }
+
+    std::vector<std::uint8_t> decompress (const std::vector<std::uint8_t> &,
+                                          std::size_t max_decompressed_size) const override
+    {
+        return as_bytes (std::string (max_decompressed_size + 1, 'x'));
     }
 };
 
@@ -561,14 +581,15 @@ void from_json (const nlohmann::json &json, auto_payload_t &payload)
     payload.text = json.at ("text").get<std::string> ();
 }
 
-zlink::message_t to_stream_payload (const auto_payload_t &payload)
+std::vector<std::uint8_t> to_stream_payload (const auto_payload_t &payload)
 {
-    return zlink::message_t::from_json (payload);
+    return as_bytes (zlink::detail::json_profile::dump (nlohmann::json (payload)));
 }
 
-void from_stream_payload (const zlink::message_t &payload, auto_payload_t &message)
+void from_stream_payload (const std::vector<std::uint8_t> &payload, auto_payload_t &message)
 {
-    message = payload.parse_json<auto_payload_t> ();
+    message =
+      zlink::detail::json_profile::parse (payload.begin (), payload.end ()).get<auto_payload_t> ();
 }
 
 zlink::stream_e2e_client::task_t<void>
@@ -816,9 +837,8 @@ std::optional<server_frame_t> try_read_server_frame (std::string &buffer)
        & static_cast<std::uint8_t> (zlink::stream_connector::header_flags_t::payload_compressed))
       != 0;
     if (compressed) {
-        payload = zlink::stream_connector::lz4_compression_codec ()
-                    ->decompress (zlink::message_t::from (payload), 64 * 1024)
-                    .to_string ();
+        payload = as_string (zlink::stream_connector::lz4_compression_codec ()->decompress (
+          as_bytes (payload), 64 * 1024));
     }
     return server_frame_t{decoded.value (), std::move (payload), compressed};
 }
@@ -888,9 +908,8 @@ zlink::message_t make_server_frame (zlink::stream_connector::message_kind_t kind
     zlink::stream_connector::connector_options_t options;
     options.compression = zlink::stream_connector::compression_t::lz4;
     if (compressed) {
-        payload = zlink::stream_connector::lz4_compression_codec ()
-                    ->compress (zlink::message_t::from (payload))
-                    .to_string ();
+        payload = as_string (
+          zlink::stream_connector::lz4_compression_codec ()->compress (as_bytes (payload)));
     }
     std::vector<std::uint8_t> payload_bytes (payload.begin (), payload.end ());
     options.max_send_payload_size = std::max (options.max_send_payload_size, payload_bytes.size ());
@@ -1142,7 +1161,7 @@ int main ()
         auto connection = std::make_shared<async_write_connection_t> ();
         state->connection = connection;
         const auto submitted = zlink::stream_connector::detail::submit_send (
-          state, packet_t{.name = "no.flow.send", .payload = zlink::message_t::from ("payload")});
+          state, packet_t{.name = "no.flow.send", .payload = as_bytes ("payload")});
         if (!submitted || !wait_for_written_frame (connection)) {
             return 211;
         }
@@ -1158,7 +1177,7 @@ int main ()
         connection = std::make_shared<async_write_connection_t> ();
         state->connection = connection;
         zlink::stream_connector::detail::submit_request_async (
-          state, packet_t{.name = "no.flow.request", .payload = zlink::message_t::from ("payload")},
+          state, packet_t{.name = "no.flow.request", .payload = as_bytes ("payload")},
           std::chrono::milliseconds (50),
           [] (zlink::stream_connector::result_t<zlink::stream_connector::detail::request_reply_t>) {
           },
@@ -1300,9 +1319,8 @@ int main ()
             return connection->write_count () == 1;
         }();
         const auto submitted = zlink::stream_connector::detail::submit_send (
-          state, zlink::stream_connector::packet_t{
-                   .name = "serialized.after.request",
-                   .payload = zlink::message_t::from (std::string ("second"))});
+          state, zlink::stream_connector::packet_t{.name = "serialized.after.request",
+                                                   .payload = as_bytes (std::string ("second"))});
         if (!first_started || !submitted || connection->direct_write_count () != 0
             || connection->overlapped () || connection->write_count () != 1) {
             return 240;
@@ -1502,11 +1520,10 @@ int main ()
             return 19;
         }
         const auto source =
-          zlink::message_t::from (std::string ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+          as_bytes (std::string ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
         const auto compressed = lz4->compress (source);
         const auto restored = lz4->decompress (compressed, source.size ());
-        if (restored.to_string () != source.to_string ()
-            || compressed.to_string () == source.to_string ()) {
+        if (restored != source || compressed == source) {
             return 20;
         }
         /* LZ4 pickle frame (the cross-language wire): header 0xC0 = 4-byte
@@ -1517,7 +1534,7 @@ int main ()
           static_cast<char> (0x0f), static_cast<char> (0x00), static_cast<char> (0x01)};
         bool oversized_rejected = false;
         try {
-            (void) lz4->decompress (zlink::message_t::from (oversized_declared_size), 1024);
+            (void) lz4->decompress (as_bytes (oversized_declared_size), 1024);
         }
         catch (const std::runtime_error &) {
             oversized_rejected = true;
@@ -2445,7 +2462,7 @@ int main ()
                                         {},
                                         zlink::stream_connector::codec_t::raw,
                                         false,
-                                        zlink::message_t::from (std::string ("unexpected"))});
+                                        as_bytes (std::string ("unexpected"))});
     auto unexpected =
       connector.expect_none ("test.unexpected").within (std::chrono::milliseconds (5)).submit ();
     if (unexpected
@@ -2458,36 +2475,35 @@ int main ()
                                             {},
                                             zlink::stream_connector::codec_t::raw,
                                             false,
-                                            zlink::message_t::from (std::string (payload))});
+                                            as_bytes (std::string (payload))});
     }
     auto sequence = connector.wait_for_sequence ("test.sequence")
                       .expect ([] (const packet_message_t &message) {
                           const auto &packet = message.payload;
-                          return packet.payload.to_string () == "first";
+                          return as_string (packet.payload) == "first";
                       })
                       .expect ([] (const packet_message_t &message) {
                           const auto &packet = message.payload;
-                          return packet.payload.to_string () == "second";
+                          return as_string (packet.payload) == "second";
                       })
                       .expect ([] (const packet_message_t &message) {
                           const auto &packet = message.payload;
-                          return packet.payload.to_string () == "third";
+                          return as_string (packet.payload) == "third";
                       })
                       .timeout (std::chrono::milliseconds (20))
                       .submit ();
     if (!sequence || sequence.value ().size () != 3) {
         return 195;
     }
-    runtime.receive_packet (
-      zlink::stream_connector::packet_t{"test.out-of-order",
-                                        {},
-                                        zlink::stream_connector::codec_t::raw,
-                                        false,
-                                        zlink::message_t::from (std::string ("second"))});
+    runtime.receive_packet (zlink::stream_connector::packet_t{"test.out-of-order",
+                                                              {},
+                                                              zlink::stream_connector::codec_t::raw,
+                                                              false,
+                                                              as_bytes (std::string ("second"))});
     auto out_of_order = connector.wait_for_sequence ("test.out-of-order")
                           .expect ([] (const packet_message_t &message) {
                               const auto &packet = message.payload;
-                              return packet.payload.to_string () == "first";
+                              return as_string (packet.payload) == "first";
                           })
                           .timeout (std::chrono::milliseconds (20))
                           .submit ();
@@ -2549,7 +2565,7 @@ int main ()
                                                {},
                                                zlink::stream_connector::codec_t::raw,
                                                false,
-                                               zlink::message_t::from (std::string (128, 'a'))})
+                                               as_bytes (std::string (128, 'a'))})
       .compress ()
       .submit ();
     const auto compressible_large_send_deadline =
@@ -2565,7 +2581,7 @@ int main ()
                                                    {},
                                                    zlink::stream_connector::codec_t::raw,
                                                    false,
-                                                   zlink::message_t::from (std::string ("ok"))})
+                                                   as_bytes (std::string ("ok"))})
           .submit ();
     }
     {
@@ -2614,8 +2630,7 @@ int main ()
         std::atomic<bool> async_send_seen{false};
         zlink::stream_connector::detail::submit_send_async (
           async_send_state,
-          zlink::stream_connector::packet_t{.name = "async.send",
-                                            .payload = zlink::message_t::from ("payload")},
+          zlink::stream_connector::packet_t{.name = "async.send", .payload = as_bytes ("payload")},
           [&] (zlink::stream_connector::result_t<void> result) {
               async_send_seen = static_cast<bool> (result);
           });
@@ -2635,7 +2650,7 @@ int main ()
         zlink::stream_connector::detail::submit_send_async (
           async_write_failure_state,
           zlink::stream_connector::packet_t{.name = "async.write.fail",
-                                            .payload = zlink::message_t::from ("payload")},
+                                            .payload = as_bytes ("payload")},
           [&] (zlink::stream_connector::result_t<void> result) {
               async_write_failure_seen =
                 !result
@@ -2655,7 +2670,7 @@ int main ()
         zlink::stream_connector::detail::submit_send_async (
           async_closed_state,
           zlink::stream_connector::packet_t{.name = "async.closed",
-                                            .payload = zlink::message_t::from ("payload")},
+                                            .payload = as_bytes ("payload")},
           [&] (zlink::stream_connector::result_t<void> result) {
               async_closed_seen =
                 !result
@@ -2671,7 +2686,7 @@ int main ()
         zlink::stream_connector::detail::submit_send_async (
           async_disconnected_state,
           zlink::stream_connector::packet_t{.name = "async.disconnected",
-                                            .payload = zlink::message_t::from ("payload")},
+                                            .payload = as_bytes ("payload")},
           [&] (zlink::stream_connector::result_t<void> result) {
               async_disconnected_seen =
                 !result
@@ -2690,7 +2705,7 @@ int main ()
         zlink::stream_connector::detail::submit_send_async (
           async_validation_state,
           zlink::stream_connector::packet_t{.name = "async.validation",
-                                            .payload = zlink::message_t::from ("too-large")},
+                                            .payload = as_bytes ("too-large")},
           [&] (zlink::stream_connector::result_t<void> result) {
               /* stream-connector 32 §4.7/§9: over the send payload bound is a
                * pre-write validation failure, not the receive-side
@@ -2751,7 +2766,7 @@ int main ()
         zlink::stream_connector::detail::submit_request_async (
           async_validation_state,
           zlink::stream_connector::packet_t{.name = "validation.request",
-                                            .payload = zlink::message_t::from ("too-large")},
+                                            .payload = as_bytes ("too-large")},
           std::chrono::milliseconds (1),
           [&] (zlink::stream_connector::result_t<zlink::stream_connector::detail::request_reply_t>
                  result) {
@@ -2775,7 +2790,7 @@ int main ()
         zlink::stream_connector::detail::submit_request_async (
           async_request_write_failure_state,
           zlink::stream_connector::packet_t{.name = "write.failure.request",
-                                            .payload = zlink::message_t::from ("payload")},
+                                            .payload = as_bytes ("payload")},
           std::chrono::milliseconds (1),
           [&] (zlink::stream_connector::result_t<zlink::stream_connector::detail::request_reply_t>
                  result) {
@@ -2807,13 +2822,13 @@ int main ()
         zlink::stream_connector::detail::submit_request_async (
           early_reply_state,
           zlink::stream_connector::packet_t{.name = "early.reply.request",
-                                            .payload = zlink::message_t::from ("payload")},
+                                            .payload = as_bytes ("payload")},
           std::chrono::milliseconds (25),
           [&] (zlink::stream_connector::result_t<zlink::stream_connector::detail::request_reply_t>
                  result) {
               ++early_reply_callback_count;
               early_reply_seen =
-                result && result.value ().packet.payload.to_string () == "early-reply";
+                result && as_string (result.value ().packet.payload) == "early-reply";
           });
         if (!eventually ([&] {
                 return !early_reply_connection->written.empty ()
@@ -2847,12 +2862,12 @@ int main ()
         zlink::stream_connector::detail::submit_request_async (
           mismatched_reply_state,
           zlink::stream_connector::packet_t{.name = "expected.reply",
-                                            .payload = zlink::message_t::from ("payload")},
+                                            .payload = as_bytes ("payload")},
           std::chrono::milliseconds (25),
           [&] (zlink::stream_connector::result_t<zlink::stream_connector::detail::request_reply_t>
                  result) {
               mismatched_reply_completed =
-                result && result.value ().packet.payload.to_string () == "payload";
+                result && as_string (result.value ().packet.payload) == "payload";
           });
         if (!eventually ([&] {
                 return mismatched_reply_completed.load ()
@@ -2877,7 +2892,7 @@ int main ()
         zlink::stream_connector::detail::submit_request_async (
           invalid_error_state,
           zlink::stream_connector::packet_t{.name = "invalid.error.request",
-                                            .payload = zlink::message_t::from ("payload")},
+                                            .payload = as_bytes ("payload")},
           std::chrono::milliseconds (25),
           [&] (zlink::stream_connector::result_t<zlink::stream_connector::detail::request_reply_t>
                  result) {
@@ -2917,18 +2932,18 @@ int main ()
                [&] (zlink::stream_connector::result_t<zlink::stream_connector::packet_t> result) {
                    ++interleaved_wait_callback_count;
                    interleaved_push_seen =
-                     result && result.value ().payload.to_string () == "push-payload";
+                     result && as_string (result.value ().payload) == "push-payload";
                }});
         std::atomic<bool> interleaved_reply_seen{false};
         zlink::stream_connector::detail::submit_request_async (
           interleaved_state,
           zlink::stream_connector::packet_t{.name = "interleaved.request",
-                                            .payload = zlink::message_t::from ("payload")},
+                                            .payload = as_bytes ("payload")},
           std::chrono::milliseconds (25),
           [&] (zlink::stream_connector::result_t<zlink::stream_connector::detail::request_reply_t>
                  result) {
               interleaved_reply_seen =
-                result && result.value ().packet.payload.to_string () == "reply-payload";
+                result && as_string (result.value ().packet.payload) == "reply-payload";
           });
         if (!eventually ([&] {
                 return !interleaved_connection->written.empty ()
@@ -2949,7 +2964,7 @@ int main ()
 
         async_send_state->dispatch_queue.push_back (
           {zlink::stream_connector::packet_t{.name = "queued.receive",
-                                             .payload = zlink::message_t::from ("queued")},
+                                             .payload = as_bytes ("queued")},
            std::nullopt});
         const auto receive_queued = zlink::stream_connector::detail::receive_next (
           async_send_state, std::chrono::milliseconds (1));
@@ -2980,13 +2995,12 @@ int main ()
         }
 
         async_send_state->dispatch_queue.push_back (
-          {zlink::stream_connector::packet_t{.name = "queued.wait",
-                                             .payload = zlink::message_t::from ("queued")},
+          {zlink::stream_connector::packet_t{.name = "queued.wait", .payload = as_bytes ("queued")},
            std::nullopt});
         const auto wait_matched = zlink::stream_connector::detail::wait_for_packet (
           async_send_state, "queued.wait",
           [] (const zlink::stream_connector::packet_t &packet) {
-              return packet.payload.to_string () == "queued";
+              return as_string (packet.payload) == "queued";
           },
           std::chrono::milliseconds (1));
         const auto wait_closed = zlink::stream_connector::detail::wait_for_packet (
@@ -3031,7 +3045,7 @@ int main ()
     auto compressed_subscription = connector.on<zlink::stream_connector::packet_t> (
       "server.compressed", [&] (const packet_message_t &message) {
           const auto &packet = message.payload;
-          if (packet.compressed && packet.payload.to_string () == "server-payload") {
+          if (packet.compressed && as_string (packet.payload) == "server-payload") {
               ++compressed_dispatch_count;
           }
       });
@@ -3136,9 +3150,9 @@ int main ()
       receive_connector.wait_for ("server.receive.two", std::chrono::milliseconds (100));
     receive_server_thread.join ();
     if (!received_first || !received_second || received_first.value ().name != "server.receive.one"
-        || received_first.value ().payload.to_string () != "one"
+        || as_string (received_first.value ().payload) != "one"
         || received_second.value ().name != "server.receive.two"
-        || received_second.value ().payload.to_string () != "two"
+        || as_string (received_second.value ().payload) != "two"
         || receive_connector.pending_dispatch_count () != 0) {
         return 58;
     }
@@ -3149,7 +3163,7 @@ int main ()
                                                {},
                                                zlink::stream_connector::codec_t::raw,
                                                false,
-                                               zlink::message_t::from (std::string (17, 'x'))})
+                                               as_bytes (std::string (17, 'x'))})
       .submit ();
 
     zlink::stream_connector::metadata_t oversized_metadata;
@@ -3157,23 +3171,22 @@ int main ()
     connector
       .send (zlink::stream_connector::packet_t{"oversized.metadata", std::move (oversized_metadata),
                                                zlink::stream_connector::codec_t::raw, false,
-                                               zlink::message_t::from (std::string ("ok"))})
+                                               as_bytes (std::string ("ok"))})
       .submit ();
 
     int manual_dispatch_count = 0;
     auto push_subscription = connector.on<zlink::stream_connector::packet_t> (
       "server.push", [&] (const packet_message_t &message) {
           const auto &packet = message.payload;
-          if (packet.payload.to_string () == "payload") {
+          if (as_string (packet.payload) == "payload") {
               ++manual_dispatch_count;
           }
       });
-    runtime.receive_packet (
-      zlink::stream_connector::packet_t{"server.push",
-                                        {},
-                                        zlink::stream_connector::codec_t::raw,
-                                        false,
-                                        zlink::message_t::from (std::string ("payload"))});
+    runtime.receive_packet (zlink::stream_connector::packet_t{"server.push",
+                                                              {},
+                                                              zlink::stream_connector::codec_t::raw,
+                                                              false,
+                                                              as_bytes (std::string ("payload"))});
     if (manual_dispatch_count != 0 || connector.pending_dispatch_count () != 1) {
         return 7;
     }
@@ -3189,12 +3202,12 @@ int main ()
                                         {},
                                         zlink::stream_connector::codec_t::raw,
                                         false,
-                                        zlink::message_t::from (std::string ("immediate"))});
+                                        as_bytes (std::string ("immediate"))});
     connector.wait_for<zlink::stream_connector::packet_t> ("server.wait.immediate")
       .timeout (std::chrono::milliseconds (100))
       .submit ([&] (zlink::stream_connector::result_t<packet_message_t> result) {
           immediate_wait_callback_seen =
-            result && result.value ().payload.payload.to_string () == "immediate";
+            result && as_string (result.value ().payload.payload) == "immediate";
           immediate_wait_callback_latch.signal ();
       });
     dispatch_until (connector, immediate_wait_callback_latch, std::chrono::milliseconds (100));
@@ -3208,7 +3221,7 @@ int main ()
       .timeout (std::chrono::milliseconds (100))
       .submit ([&] (zlink::stream_connector::result_t<packet_message_t> result) {
           pending_wait_callback_seen =
-            result && result.value ().payload.payload.to_string () == "wait-callback";
+            result && as_string (result.value ().payload.payload) == "wait-callback";
           pending_wait_latch.signal ();
       });
     runtime.receive_packet (
@@ -3216,7 +3229,7 @@ int main ()
                                         {},
                                         zlink::stream_connector::codec_t::raw,
                                         false,
-                                        zlink::message_t::from (std::string ("wait-callback"))});
+                                        as_bytes (std::string ("wait-callback"))});
     dispatch_until (connector, pending_wait_latch, std::chrono::milliseconds (100));
     if (!pending_wait_callback_seen) {
         return 83;
@@ -3255,7 +3268,7 @@ int main ()
                                         {},
                                         zlink::stream_connector::codec_t::json,
                                         false,
-                                        zlink::message_t::from (std::string ("{not-json"))});
+                                        as_bytes (std::string ("{not-json"))});
     bool typed_wait_decode_failed = false;
     try {
         (void) invalid_typed_wait.get ();
@@ -3270,6 +3283,34 @@ int main ()
     if (!typed_wait_decode_failed) {
         immediate.close ();
         return 203;
+    }
+    const auto valid_json = as_bytes (R"({"text":"accepted"})");
+    const auto decoded_json =
+      zlink::stream_connector::detail::decode_typed_message<auto_payload_t> (
+        zlink::stream_connector::codec_t::json, valid_json);
+    if (!decoded_json || decoded_json.value ().text != "accepted") {
+        immediate.close ();
+        return 340;
+    }
+    const auto duplicate_json = as_bytes (R"({"text":"first","text":"second"})");
+    const auto duplicate_result =
+      zlink::stream_connector::detail::decode_typed_message<auto_payload_t> (
+        zlink::stream_connector::codec_t::json, duplicate_json);
+    if (duplicate_result
+        || duplicate_result.error_code ()
+             != zlink::stream_connector::error_code_t::frame_decode_failed) {
+        immediate.close ();
+        return 341;
+    }
+    const std::vector<std::uint8_t> bom_json{
+      0xef, 0xbb, 0xbf, '{', '}',
+    };
+    const auto bom_result = zlink::stream_connector::detail::decode_typed_message<auto_payload_t> (
+      zlink::stream_connector::codec_t::json, bom_json);
+    if (bom_result
+        || bom_result.error_code () != zlink::stream_connector::error_code_t::frame_decode_failed) {
+        immediate.close ();
+        return 342;
     }
     auto immediate_coroutine = zlink::stream_e2e_client::use (immediate);
     auto immediate_none = immediate_coroutine.expect_none ("server.none.coroutine")
@@ -3287,7 +3328,7 @@ int main ()
                                         {},
                                         zlink::stream_connector::codec_t::raw,
                                         false,
-                                        zlink::message_t::from (std::string ("payload"))});
+                                        as_bytes (std::string ("payload"))});
     if (immediate_count != 1 || immediate.pending_dispatch_count () != 0) {
         return 10;
     }
@@ -3432,12 +3473,12 @@ int main ()
           }
       });
     zlink::stream_connector::detail::connector_runtime_t::from (auto_connector)
-      .receive_packet (zlink::stream_connector::packet_t{
-        auto_payload_t::packet_name,
-        {},
-        zlink::stream_connector::codec_t::json,
-        false,
-        zlink::message_t::from_json (auto_payload_t{"callback"})});
+      .receive_packet (
+        zlink::stream_connector::packet_t{auto_payload_t::packet_name,
+                                          {},
+                                          zlink::stream_connector::codec_t::json,
+                                          false,
+                                          to_stream_payload (auto_payload_t{"callback"})});
     if (auto_connector.received_count<auto_payload_t> () != 1
         || auto_connector.received_count<auto_payload_t> ()
              != auto_connector.received_count (auto_payload_t::packet_name)) {
@@ -3451,12 +3492,12 @@ int main ()
         return 34;
     }
     zlink::stream_connector::detail::connector_runtime_t::from (auto_connector)
-      .receive_packet (zlink::stream_connector::packet_t{
-        auto_payload_t::packet_name,
-        {},
-        zlink::stream_connector::codec_t::json,
-        false,
-        zlink::message_t::from_json (auto_payload_t{"typed-wait"})});
+      .receive_packet (
+        zlink::stream_connector::packet_t{auto_payload_t::packet_name,
+                                          {},
+                                          zlink::stream_connector::codec_t::json,
+                                          false,
+                                          to_stream_payload (auto_payload_t{"typed-wait"})});
     auto auto_typed_wait = auto_connector.wait_for<auto_payload_t> ().submit ();
     if (!auto_typed_wait || auto_typed_wait.value ().payload.text != "typed-wait") {
         return 78;
@@ -3467,14 +3508,14 @@ int main ()
         {},
         zlink::stream_connector::codec_t::json,
         false,
-        zlink::message_t::from_json (auto_payload_t{"typed-filter-skipped"})});
+        to_stream_payload (auto_payload_t{"typed-filter-skipped"})});
     zlink::stream_connector::detail::connector_runtime_t::from (auto_connector)
-      .receive_packet (zlink::stream_connector::packet_t{
-        auto_payload_t::packet_name,
-        {},
-        zlink::stream_connector::codec_t::json,
-        false,
-        zlink::message_t::from_json (auto_payload_t{"typed-filtered"})});
+      .receive_packet (
+        zlink::stream_connector::packet_t{auto_payload_t::packet_name,
+                                          {},
+                                          zlink::stream_connector::codec_t::json,
+                                          false,
+                                          to_stream_payload (auto_payload_t{"typed-filtered"})});
     auto auto_filtered_wait =
       auto_connector.wait_for<auto_payload_t> ()
         .where ([] (const zlink::stream_connector::message_t<auto_payload_t> &message) {
@@ -3490,14 +3531,14 @@ int main ()
         {},
         zlink::stream_connector::codec_t::json,
         false,
-        zlink::message_t::from_json (auto_payload_t{"member-filter-skipped"})});
+        to_stream_payload (auto_payload_t{"member-filter-skipped"})});
     zlink::stream_connector::detail::connector_runtime_t::from (auto_connector)
-      .receive_packet (zlink::stream_connector::packet_t{
-        auto_payload_t::packet_name,
-        {},
-        zlink::stream_connector::codec_t::json,
-        false,
-        zlink::message_t::from_json (auto_payload_t{"member-filtered"})});
+      .receive_packet (
+        zlink::stream_connector::packet_t{auto_payload_t::packet_name,
+                                          {},
+                                          zlink::stream_connector::codec_t::json,
+                                          false,
+                                          to_stream_payload (auto_payload_t{"member-filtered"})});
     auto auto_member_filtered_wait =
       auto_connector.wait_for<auto_payload_t> ()
         .where (&auto_payload_t::text, std::string ("member-filtered"))
@@ -3705,7 +3746,7 @@ int main ()
               || !ctx.succeeded || !ctx.reply || ctx.error || ctx.elapsed.count () < 0
               || !ctx.reply->name.empty ()
               || ctx.reply->codec != zlink::stream_connector::codec_t::raw
-              || ctx.reply->payload.to_string () != "ok"
+              || as_string (ctx.reply->payload) != "ok"
               || ctx.reply->metadata.values.find ("reply-tag") == ctx.reply->metadata.values.end ()
               || ctx.reply->metadata.values.at ("reply-tag") != "present") {
               request_hook_order.push_back ("invalid-reply-context");
@@ -3896,7 +3937,7 @@ int main ()
     async_pump_connector.wait_for<zlink::stream_connector::packet_t> ("async.pump.push")
       .timeout (std::chrono::milliseconds (100))
       .submit ([&] (zlink::stream_connector::result_t<packet_message_t> result) {
-          async_pump_wait_seen = result && result.value ().payload.payload.to_string () == "push";
+          async_pump_wait_seen = result && as_string (result.value ().payload.payload) == "push";
           async_pump_wait_latch.signal ();
       });
     auto async_pump_reply = async_pump_connector.request (login_request_t{})
@@ -4061,7 +4102,7 @@ int main ()
       partial_connector.wait_for ("server.partial", std::chrono::milliseconds (100));
     partial_server_thread.join ();
     if (!partial_packet || !partial_write_seen || partial_packet.value ().name != "server.partial"
-        || partial_packet.value ().payload.to_string () != "split") {
+        || as_string (partial_packet.value ().payload) != "split") {
         return 66;
     }
     partial_connector.close ();
@@ -4099,7 +4140,7 @@ int main ()
       large_receive_connector.wait_for ("server.large", std::chrono::milliseconds (100));
     large_receive_server_thread.join ();
     if (!large_received || large_received.value ().name != "server.large"
-        || large_received.value ().payload.to_string ().size () != large_receive_payload.size ()) {
+        || as_string (large_received.value ().payload).size () != large_receive_payload.size ()) {
         return 72;
     }
     large_receive_connector.close ();
@@ -4894,12 +4935,12 @@ int main ()
             auto count_subscription = count_connector.on<zlink::stream_connector::packet_t> (
               "count.push", [&] (const packet_message_t &) { ++dispatched; });
             for (int index = 0; index < 3; ++index) {
-                count_runtime.receive_packet (zlink::stream_connector::packet_t{
-                  "count.push",
-                  {},
-                  zlink::stream_connector::codec_t::raw,
-                  false,
-                  zlink::message_t::from (std::string ("payload"))});
+                count_runtime.receive_packet (
+                  zlink::stream_connector::packet_t{"count.push",
+                                                    {},
+                                                    zlink::stream_connector::codec_t::raw,
+                                                    false,
+                                                    as_bytes (std::string ("payload"))});
             }
             if (count_connector.received_count ("count.push") != 3
                 || count_connector.received_count ("count.other") != 0) {
@@ -4959,7 +5000,7 @@ int main ()
                                             {},
                                             zlink::stream_connector::codec_t::raw,
                                             false,
-                                            zlink::message_t::from (std::string ("payload"))});
+                                            as_bytes (std::string ("payload"))});
         while (subscription_connector.pending_dispatch_count () != 0) {
             if (!subscription_connector.dispatch ()) {
                 return 239;
@@ -4974,7 +5015,7 @@ int main ()
                                             {},
                                             zlink::stream_connector::codec_t::raw,
                                             false,
-                                            zlink::message_t::from (std::string ("payload"))});
+                                            as_bytes (std::string ("payload"))});
         while (subscription_connector.pending_dispatch_count () != 0) {
             if (!subscription_connector.dispatch ()) {
                 return 241;
@@ -5028,7 +5069,7 @@ int main ()
                                              {},
                                              zlink::stream_connector::codec_t::raw,
                                              false,
-                                             zlink::message_t::from (std::string (payload))});
+                                             as_bytes (std::string (payload))});
         };
 
         /* The synchronous wait scans the queue with the caller's predicate. */
@@ -5052,10 +5093,10 @@ int main ()
                      * queue while it runs, exactly as dispatch() does. */
                     (void) reentrant.pending_dispatch_count ();
                     ++reentrant_calls_returned;
-                    return message.payload.payload.to_string () == "second";
+                    return as_string (message.payload.payload) == "second";
                 })
                 .submit ();
-            if (!matched || matched.value ().payload.payload.to_string () != "second") {
+            if (!matched || as_string (matched.value ().payload.payload) != "second") {
                 return 250;
             }
             /* Both queued packets were offered, and the one the predicate
@@ -5067,7 +5108,7 @@ int main ()
             auto leftover =
               reentrant.wait_for<packet_t> ("reentrant.wait", std::chrono::milliseconds (500))
                 .submit ();
-            if (!leftover || leftover.value ().payload.payload.to_string () != "first"
+            if (!leftover || as_string (leftover.value ().payload.payload) != "first"
                 || reentrant.pending_dispatch_count () != 0) {
                 return 252;
             }
@@ -5090,12 +5131,12 @@ int main ()
               .where ([&] (const packet_message_t &message) {
                   ++predicate_calls;
                   (void) registered.pending_dispatch_count ();
-                  return message.payload.payload.to_string () == "wanted";
+                  return as_string (message.payload.payload) == "wanted";
               })
               .submit ([&registered_promise] (
                          zlink::stream_connector::result_t<packet_message_t> result) mutable {
-                  registered_promise.set_value (
-                    result ? result.value ().payload.payload.to_string () : std::string ("<none>"));
+                  registered_promise.set_value (result ? as_string (result.value ().payload.payload)
+                                                       : std::string ("<none>"));
               });
             push (registered_runtime, "registered.wait", "unwanted");
             push (registered_runtime, "registered.wait", "wanted");
@@ -5294,16 +5335,15 @@ int main ()
                                       && !ctx.error;
           });
         actor_packets_allowed.signal ();
-        auto actor_request_result =
-          actor_handle
-            ->request (packet_t{.name = "actor.hook.request",
-                                .payload = zlink::message_t::from ("actor-request")})
-            .timeout (std::chrono::seconds (1))
-            .submit<zlink::message_t> ();
+        auto actor_request_result = actor_handle
+                                      ->request (packet_t{.name = "actor.hook.request",
+                                                          .payload = as_bytes ("actor-request")})
+                                      .timeout (std::chrono::seconds (1))
+                                      .submit<std::vector<std::uint8_t>> ();
         while (actor_connector.pending_dispatch_count () != 0) {
             (void) actor_connector.dispatch ();
         }
-        if (!actor_request_result || actor_request_result.value ().to_string () != "actor-reply"
+        if (!actor_request_result || as_string (actor_request_result.value ()) != "actor-reply"
             || !actor_sending_hook_seen || !actor_reply_hook_seen
             || !actor_hook_metadata_seen.load ()) {
             actor_server_release.signal ();
@@ -5353,8 +5393,7 @@ int main ()
         std::optional<zlink::stream_connector::error_code_t> closed_actor_error;
         auto closed_actor_error_subscription = actor_connector.on_error (
           [&] (const zlink::stream_connector::error_t &error) { closed_actor_error = error.code; });
-        actor_handle
-          ->send (packet_t{.name = "closed.actor", .payload = zlink::message_t::from ("payload")})
+        actor_handle->send (packet_t{.name = "closed.actor", .payload = as_bytes ("payload")})
           .submit ();
         while (actor_connector.pending_dispatch_count () != 0) {
             if (!actor_connector.dispatch ()) {

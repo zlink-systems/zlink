@@ -1,15 +1,5 @@
 @PACKAGE_INIT@
 include(CMakeFindDependencyMacro)
-# See zlink_framework_cppConfig.cmake.in for why this does not hardcode a
-# "../zlink"/"../zlink_cpp" sibling path: the staged configs may sit at a
-# different relative depth (vcpkg's "share/<name>" vs. a from-source
-# install's "lib/cmake/<name>"), and find_dependency's normal CONFIG-mode
-# search already handles either.
-if(@ZLINK_FRAMEWORK_CPP_SHARED@)
-  set(zlink_cpp_DIR "${PACKAGE_PREFIX_DIR}/lib/cmake/zlink_cpp")
-endif()
-find_dependency(zlink @ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION@ EXACT CONFIG)
-find_dependency(zlink_cpp @ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION@ EXACT CONFIG)
 find_dependency(Threads)
 find_dependency(nlohmann_json)
 # Static dependency input: @ZLINK_STREAM_CONNECTOR_EXPORT_OPENSSL_DEPENDENCY@

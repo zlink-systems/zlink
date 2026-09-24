@@ -34,16 +34,9 @@ class ZlinkStreamConnectorConan(ConanFile):
         )
         folders = [
             "framework/languages/cpp/cmake",
+            "framework/languages/cpp/common",
             "framework/languages/cpp/connector",
-            "framework/languages/cpp/extensions",
-            "framework/languages/cpp/framework",
-            "framework/languages/cpp/http-client",
-            "bindings/cpp/cmake",
-            "bindings/cpp/include",
-            "bindings/cpp/native",
-            "bindings/cpp/src",
-            "core/external/boost",
-            "core/include",
+            "framework/runtime/protocol/generated/cpp",
         ]
         copy(
             self,
@@ -51,13 +44,16 @@ class ZlinkStreamConnectorConan(ConanFile):
             src=os.path.join(repo_root, "framework/languages/cpp"),
             dst=os.path.join(self.export_sources_folder, "framework/languages/cpp"),
         )
+        copy(self, "LICENSE", src=repo_root, dst=self.export_sources_folder)
         copy(
             self,
-            "CMakeLists.txt",
-            src=os.path.join(repo_root, "bindings/cpp"),
-            dst=os.path.join(self.export_sources_folder, "bindings/cpp"),
+            "json_stream_connector.hpp",
+            src=os.path.join(repo_root, "framework/languages/cpp/framework/include/zlink/framework/codecs"),
+            dst=os.path.join(
+                self.export_sources_folder,
+                "framework/languages/cpp/framework/include/zlink/framework/codecs",
+            ),
         )
-        copy(self, "LICENSE", src=repo_root, dst=self.export_sources_folder)
         for folder in folders:
             copy(
                 self,
@@ -69,8 +65,11 @@ class ZlinkStreamConnectorConan(ConanFile):
     def generate(self):
         tc = CMakeToolchain(self)
         tc.variables["ZLINK_FRAMEWORK_CPP_BUILD_TESTS"] = False
+        tc.variables["ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS"] = False
         tc.variables["ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES"] = False
+        tc.variables["ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE"] = False
         tc.variables["ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK"] = False
+        tc.variables["ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST"] = True
         tc.variables["ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT"] = False
         tc.variables["ZLINK_STREAM_CONNECTOR_BUILD_UNREAL"] = False
         tc.variables["ZLINK_STREAM_CONNECTOR_BUILD_GODOT"] = False
@@ -78,9 +77,17 @@ class ZlinkStreamConnectorConan(ConanFile):
         tc.variables["ZLINK_STREAM_CONNECTOR_WITH_LZ4"] = bool(self.options.with_lz4)
         tc.variables["ZLINK_STREAM_CONNECTOR_WITH_TLS"] = bool(self.options.with_tls)
         tc.variables["ZLINK_STREAM_CONNECTOR_WITH_WEBSOCKET"] = bool(self.options.with_websocket)
-        tc.variables["BUILD_SHARED_LIBS"] = bool(self.options.shared)
+        tc.variables["ZLINK_FRAMEWORK_CPP_SHARED"] = bool(self.options.shared)
         tc.generate()
         CMakeDeps(self).generate()
+
+    def requirements(self):
+        self.requires("boost/1.85.0")
+        self.requires("nlohmann_json/3.11.3")
+        if self.options.with_tls:
+            self.requires("openssl/[>=3.0 <4]")
+        if self.options.with_lz4:
+            self.requires("lz4/1.9.4")
 
     def build(self):
         cmake = CMake(self)
@@ -88,7 +95,7 @@ class ZlinkStreamConnectorConan(ConanFile):
         cmake.build(target="zlink_stream_connector")
 
     def package(self):
-        CMake(self).install()
+        CMake(self).install(component="StreamConnector")
 
     def package_info(self):
         self.cpp_info.set_property("cmake_file_name", "zlink_stream_connector_cpp")

@@ -23,16 +23,20 @@ bool lz4_compression_codec_t::available () noexcept
 #endif
 }
 
-zlink::message_t lz4_compression_codec_t::compress (const zlink::message_t &payload) const
+std::vector<std::uint8_t>
+lz4_compression_codec_t::compress (const std::vector<std::uint8_t> &payload) const
 {
-    return zlink::message_t::from (zlink::detail::lz4_pickle::pickle (payload.bytes ()));
+    const auto bytes = zlink::detail::lz4_pickle::pickle (std::as_bytes (std::span (payload)));
+    return {bytes.begin (), bytes.end ()};
 }
 
-zlink::message_t lz4_compression_codec_t::decompress (const zlink::message_t &payload,
-                                                      std::size_t max_decompressed_size) const
+std::vector<std::uint8_t>
+lz4_compression_codec_t::decompress (const std::vector<std::uint8_t> &payload,
+                                     std::size_t max_decompressed_size) const
 {
-    return zlink::message_t::from (
-      zlink::detail::lz4_pickle::unpickle (payload.bytes (), max_decompressed_size));
+    const auto bytes = zlink::detail::lz4_pickle::unpickle (std::as_bytes (std::span (payload)),
+                                                            max_decompressed_size);
+    return {bytes.begin (), bytes.end ()};
 }
 
 } // namespace zlink::stream_connector::detail

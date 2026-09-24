@@ -536,8 +536,8 @@ void close_bound_actors (const std::shared_ptr<connector_state_t> &state)
     }
 }
 
-zlink::message_t encode_typed_payload (const std::shared_ptr<void> &state_handle,
-                                       const zlink::message_t &payload)
+std::vector<std::uint8_t> encode_typed_payload (const std::shared_ptr<void> &state_handle,
+                                                const std::vector<std::uint8_t> &payload)
 {
     if (!state_handle) {
         return payload;
@@ -549,8 +549,8 @@ zlink::message_t encode_typed_payload (const std::shared_ptr<void> &state_handle
     return state->options.typed_codec->encode (payload);
 }
 
-zlink::message_t decode_typed_payload (const std::shared_ptr<void> &state_handle,
-                                       const packet_t &packet)
+std::vector<std::uint8_t> decode_typed_payload (const std::shared_ptr<void> &state_handle,
+                                                const packet_t &packet)
 {
     if (!state_handle) {
         return packet.payload;
@@ -562,9 +562,9 @@ zlink::message_t decode_typed_payload (const std::shared_ptr<void> &state_handle
     return state->options.typed_codec->decode (packet.payload);
 }
 
-zlink::message_t decode_typed_reply (const std::shared_ptr<void> &state_handle,
-                                     codec_t,
-                                     const zlink::message_t &payload)
+std::vector<std::uint8_t> decode_typed_reply (const std::shared_ptr<void> &state_handle,
+                                              codec_t,
+                                              const std::vector<std::uint8_t> &payload)
 {
     if (!state_handle) {
         return payload;
@@ -851,8 +851,14 @@ class json_typed_codec_t final : public typed_codec_t
 {
   public:
     codec_t codec_id () const noexcept override { return codec_t::json; }
-    zlink::message_t encode (const zlink::message_t &payload) const override { return payload; }
-    zlink::message_t decode (const zlink::message_t &payload) const override { return payload; }
+    std::vector<std::uint8_t> encode (const std::vector<std::uint8_t> &payload) const override
+    {
+        return payload;
+    }
+    std::vector<std::uint8_t> decode (const std::vector<std::uint8_t> &payload) const override
+    {
+        return payload;
+    }
 };
 
 } // namespace
@@ -1768,7 +1774,7 @@ packet_t connector_t::make_packet (std::type_index type, std::string packet_name
     packet.name = detail::packet_name_resolver_t{}.resolve (type, std::move (packet_name));
     const auto state = detail::state_from (_state);
     packet.codec = state->default_codec;
-    packet.payload = zlink::message_t::from (std::string ("{}"));
+    packet.payload = {'{', '}'};
     return packet;
 }
 

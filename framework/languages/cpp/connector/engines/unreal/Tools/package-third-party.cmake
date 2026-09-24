@@ -68,8 +68,7 @@ endif()
 
 function(zlink_unreal_require_artifact pattern output_variable)
   file(GLOB candidates LIST_DIRECTORIES FALSE
-    "${ZLINK_UNREAL_OUTPUT_DIR}/lib/${pattern}"
-    "${ZLINK_UNREAL_OUTPUT_DIR}/bin/${pattern}")
+    "${ZLINK_UNREAL_OUTPUT_DIR}/lib/${pattern}")
   list(SORT candidates)
   if(NOT candidates)
     message(FATAL_ERROR
@@ -166,44 +165,31 @@ set(ZLINK_UNREAL_MANIFEST_SYSTEM_LIBRARIES)
 
 foreach(native_target IN ITEMS
     "*zlink_unreal_stream_connector*"
-    "*zlink_stream_connector*"
-    "*zlink_cpp*")
+    "*zlink_stream_connector*")
   zlink_unreal_require_artifact("${native_target}" native_artifact)
   zlink_unreal_append_unique(ZLINK_UNREAL_MANIFEST_LIBRARIES "${native_artifact}")
 endforeach()
 
-# The Core shared library is both a link input for the static bindings and a
-# staged runtime dependency. Windows uses its import library from lib/ and DLL
-# from bin/; Unix uses the shared object directly.
-file(GLOB core_link_artifacts LIST_DIRECTORIES FALSE
-  "${ZLINK_UNREAL_OUTPUT_DIR}/lib/*zlink.so*"
-  "${ZLINK_UNREAL_OUTPUT_DIR}/lib/*zlink.dylib*"
-  "${ZLINK_UNREAL_OUTPUT_DIR}/lib/*zlink*.lib"
-  "${ZLINK_UNREAL_OUTPUT_DIR}/lib/*zlink*.dll.a")
-file(GLOB core_runtime_artifacts LIST_DIRECTORIES FALSE
-  "${ZLINK_UNREAL_OUTPUT_DIR}/lib/*zlink.so*"
-  "${ZLINK_UNREAL_OUTPUT_DIR}/lib/*zlink.dylib*"
-  "${ZLINK_UNREAL_OUTPUT_DIR}/bin/*zlink*.dll")
-foreach(native_artifact IN LISTS core_link_artifacts)
-  if(NOT IS_SYMLINK "${native_artifact}")
-    file(RELATIVE_PATH relative_path "${ZLINK_UNREAL_OUTPUT_DIR}" "${native_artifact}")
-    zlink_unreal_append_unique(ZLINK_UNREAL_MANIFEST_LIBRARIES "${relative_path}")
-  endif()
-endforeach()
-foreach(native_artifact IN LISTS core_runtime_artifacts)
-  if(NOT IS_SYMLINK "${native_artifact}")
-    file(RELATIVE_PATH relative_path "${ZLINK_UNREAL_OUTPUT_DIR}" "${native_artifact}")
+file(GLOB connector_runtime_artifacts LIST_DIRECTORIES FALSE
+  "${ZLINK_UNREAL_OUTPUT_DIR}/lib/*zlink_stream_connector*.so*"
+  "${ZLINK_UNREAL_OUTPUT_DIR}/lib/*zlink_stream_connector*.dylib*"
+  "${ZLINK_UNREAL_OUTPUT_DIR}/bin/*zlink_stream_connector*.dll")
+foreach(runtime_artifact IN LISTS connector_runtime_artifacts)
+  if(NOT IS_SYMLINK "${runtime_artifact}")
+    file(RELATIVE_PATH relative_path "${ZLINK_UNREAL_OUTPUT_DIR}" "${runtime_artifact}")
     zlink_unreal_append_unique(ZLINK_UNREAL_MANIFEST_RUNTIMES "${relative_path}")
   endif()
 endforeach()
-if(NOT ZLINK_UNREAL_MANIFEST_RUNTIMES)
-  message(FATAL_ERROR "The Unreal package has no staged Core runtime")
-endif()
 
 # Static OpenSSL and LZ4 builds are common in vcpkg-based configurations. Copy
 # the exact libraries selected by the CMake cache so the Unreal module does not
 # depend on an absolute path into the producer's build tree.
-foreach(cache_key IN ITEMS OPENSSL_SSL_LIBRARY OPENSSL_CRYPTO_LIBRARY ZLINK_LZ4_LIBRARY)
+set(ZLINK_UNREAL_DEPENDENCY_CACHE_KEYS ZLINK_LZ4_LIBRARY)
+zlink_unreal_cache_value("ZLINK_STREAM_CONNECTOR_WITH_TLS" connector_tls_enabled)
+if(connector_tls_enabled)
+  list(APPEND ZLINK_UNREAL_DEPENDENCY_CACHE_KEYS OPENSSL_SSL_LIBRARY OPENSSL_CRYPTO_LIBRARY)
+endif()
+foreach(cache_key IN LISTS ZLINK_UNREAL_DEPENDENCY_CACHE_KEYS)
   zlink_unreal_cache_value("${cache_key}" dependency_path)
   if(dependency_path AND EXISTS "${dependency_path}")
     file(REAL_PATH "${dependency_path}" resolved_dependency_path)
@@ -235,7 +221,7 @@ endforeach()
 # Copy shared OpenSSL runtime files when the selected import/library files are
 # dynamic. Static dependencies remain link-only entries in the manifest.
 zlink_unreal_cache_value("OPENSSL_ROOT_DIR" openssl_root)
-if(openssl_root AND EXISTS "${openssl_root}")
+if(connector_tls_enabled AND openssl_root AND EXISTS "${openssl_root}")
   file(GLOB openssl_runtime_files LIST_DIRECTORIES FALSE
     "${openssl_root}/bin/*ssl*.dll"
     "${openssl_root}/bin/*crypto*.dll"
@@ -250,37 +236,6 @@ if(openssl_root AND EXISTS "${openssl_root}")
   endforeach()
 endif()
 
-function(zlink_unreal_append_core_system_libraries output_variable)
-  set(system_libraries "${${output_variable}}")
-  zlink_unreal_cache_value(
-    "ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX" core_prefix)
-  if(core_prefix)
-    file(GLOB core_export_files LIST_DIRECTORIES FALSE
-      "${core_prefix}/lib/cmake/zlink/zlinkTargets.cmake")
-    foreach(core_export_file IN LISTS core_export_files)
-      file(STRINGS "${core_export_file}" core_export_lines)
-      foreach(core_export_line IN LISTS core_export_lines)
-        if(core_export_line MATCHES
-            "INTERFACE_LINK_LIBRARIES \"([^\"]+)\"")
-          set(core_dependencies "${CMAKE_MATCH_1}")
-          foreach(core_dependency IN LISTS core_dependencies)
-            set(system_name "")
-            if(core_dependency MATCHES "^-l(.+)$")
-              set(system_name "${CMAKE_MATCH_1}")
-            elseif(core_dependency MATCHES "^[A-Za-z0-9_.+-]+$")
-              set(system_name "${core_dependency}")
-            endif()
-            if(system_name)
-              zlink_unreal_append_unique(system_libraries "${system_name}")
-            endif()
-          endforeach()
-        endif()
-      endforeach()
-    endforeach()
-  endif()
-  set(${output_variable} "${system_libraries}" PARENT_SCOPE)
-endfunction()
-
 # Select dependencies for the staged target, not for the host running this
 # script. This matters for a Windows or macOS cross-build packaged on Linux.
 if(ZLINK_UNREAL_PLATFORM STREQUAL windows)
@@ -289,16 +244,12 @@ if(ZLINK_UNREAL_PLATFORM STREQUAL windows)
 elseif(ZLINK_UNREAL_PLATFORM STREQUAL darwin)
   list(APPEND ZLINK_UNREAL_MANIFEST_SYSTEM_LIBRARIES c++)
 elseif(ZLINK_UNREAL_PLATFORM STREQUAL linux)
-  # These are the common system libraries used by the connector link graph.
-  # Optional Core libraries such as libbsd are appended only when the Core
-  # package export says that the configured target uses them.
   list(APPEND ZLINK_UNREAL_MANIFEST_SYSTEM_LIBRARIES
     pthread dl m z)
 else()
   message(FATAL_ERROR
     "Unsupported Unreal package target platform: ${ZLINK_UNREAL_PLATFORM}")
 endif()
-zlink_unreal_append_core_system_libraries(ZLINK_UNREAL_MANIFEST_SYSTEM_LIBRARIES)
 list(REMOVE_DUPLICATES ZLINK_UNREAL_MANIFEST_SYSTEM_LIBRARIES)
 
 set(manifest_path "${ZLINK_UNREAL_OUTPUT_DIR}/zlink-unreal-package.manifest")
@@ -327,10 +278,17 @@ if(NOT EXISTS "${ZLINK_UNREAL_OUTPUT_DIR}/include")
 endif()
 file(GLOB unrelated_framework_artifacts LIST_DIRECTORIES FALSE
   "${ZLINK_UNREAL_OUTPUT_DIR}/lib/*zlink_framework*"
-  "${ZLINK_UNREAL_OUTPUT_DIR}/lib/*zlink_http_client*")
+  "${ZLINK_UNREAL_OUTPUT_DIR}/lib/*zlink_http_client*"
+  "${ZLINK_UNREAL_OUTPUT_DIR}/lib/*zlink_cpp*"
+  "${ZLINK_UNREAL_OUTPUT_DIR}/lib/libzlink.so*"
+  "${ZLINK_UNREAL_OUTPUT_DIR}/lib/libzlink.dylib*"
+  "${ZLINK_UNREAL_OUTPUT_DIR}/lib/libzlink.a"
+  "${ZLINK_UNREAL_OUTPUT_DIR}/lib/libzlink.dll.a"
+  "${ZLINK_UNREAL_OUTPUT_DIR}/lib/zlink.lib"
+  "${ZLINK_UNREAL_OUTPUT_DIR}/bin/zlink.dll")
 if(unrelated_framework_artifacts)
   message(FATAL_ERROR
-    "The connector-only Unreal package contains unrelated framework artifacts")
+    "The connector-only Unreal package contains server framework, binding or Core artifacts")
 endif()
 foreach(staged_file IN LISTS ZLINK_UNREAL_MANIFEST_LIBRARIES ZLINK_UNREAL_MANIFEST_RUNTIMES)
   if(NOT EXISTS "${ZLINK_UNREAL_OUTPUT_DIR}/${staged_file}")
