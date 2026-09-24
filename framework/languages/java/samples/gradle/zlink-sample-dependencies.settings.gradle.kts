@@ -13,7 +13,7 @@ val packageMode = providers.gradleProperty("zlink.samples.packageMode")
     .orElse(frameworkRoot == null)
     .get()
 val frameworkVersionDefault = if (packageMode) {
-    providers.provider { "0.24.1" }
+    providers.provider { "0.25.0" }
 } else {
     val localFrameworkRoot = checkNotNull(frameworkRoot) {
         "Developer mode requires the zlink Java framework source above the samples directory. " +
