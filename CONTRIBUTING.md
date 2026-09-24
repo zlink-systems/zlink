@@ -166,7 +166,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 
 - **Workflow (from 2026-09-10)**: every piece of work is a GitHub Issue; each Issue gets a branch
   `<area>/<issue-number>-<slug>` plus a worktree and lands on main through a PR. main changes only
-  through PRs (exceptions: plans and decision records that do not affect code, release tags).
+  through PRs (exceptions: edits that touch only documents, release tags).
   Milestones are releases, the Project board is status. Owned by
   [`doc/principal/dev/development-workflow.md`](doc/principal/dev/development-workflow.md).
 - Branches, commits, pushes and merges happen only on an explicit request, and the working

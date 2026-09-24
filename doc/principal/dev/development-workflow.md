@@ -194,16 +194,18 @@ Three rules apply to all of them.
 
 ## 6. Exceptions — direct commits to main (the only list)
 
-1. **Simple work**: small changes that need no new verification — wording and typos in record and
-   guidance documents, agent rule documents (`AGENTS.md` and the like), one or two lines of configuration.
-   Work in the main worktree without creating a separate worktree and commit with an explicit pathspec
-   (`git commit -- <paths>`). Code that changes behaviour, specs and changes across modules go through a PR.
+1. **Document edits and simple work**: changes that touch only documents and no code, tests, build, CI or
+   `scripts/**` (guides, tutorial and sample READMEs, record and guidance documents, agent rule documents),
+   and one or two lines of configuration. Specs and internal design documents are committed after the approval
+   in `AGENTS.md` §5 and the sol review in §5.1. Work in the main worktree without creating a separate worktree
+   and commit with an explicit pathspec (`git commit -- <paths>`). Code that changes behaviour and changes across
+   modules go through a PR.
 2. Release workflow dispatches and tag pushes (tags are not PR material).
 3. **A fix that blocks a release in flight** (a workflow check, a version field — something that only
    matters for that release) may land directly with the user's approval and gets an Issue afterwards for
    the record (the 0.11.0 cases: the `release-dotnet.yml` check, the HttpClient version, the Node `repository` field).
 
-Everything else (production code, tests, bench runners and aggregator, specs and guides, CI, `scripts/**`) goes through a PR.
+Everything else (production code, tests, bench runners and aggregator, CI, `scripts/**`) goes through a PR.
 
 ## 7. Relation to releases
 

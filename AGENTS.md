@@ -8,9 +8,9 @@
 
 - 작업 전에 `git branch --show-current`를 확인하고, 사용자가 지정한 branch에서만 수정, commit과
   push를 수행한다. 어느 branch인지 분명하지 않으면 먼저 묻는다.
-  작업 단위는 Issue 브랜치(`<area>/<issue번호>-<slug>`)와 worktree이며, main은 PR로만 바뀐다
-  (`doc/principal/dev/development-workflow.ko.md`). 간단한 작업은 worktree 없이 main에서 한다 — 무엇이
-  간단한 작업인지는 그 문서 §6이 정한다.
+  작업 단위는 Issue 브랜치(`<area>/<issue번호>-<slug>`)와 worktree이며, main은 PR로 바뀐다
+  (`doc/principal/dev/development-workflow.ko.md`). 문서만 바꾸는 수정과 간단한 작업은 worktree 없이
+  main에서 직접 커밋한다 — 범위는 그 문서 §6이 정한다.
 - **작업 중에 드러난 결함·누락은 새 Issue를 만들지 않고 그 작업의 Issue·PR 안에서 처리한다.** 여러 언어에 걸친
   결함도 Issue 하나에서 함께 고친다. 새 Issue는 이번 릴리스에서 다루지 않고 넘기는 일에만 연다.
 - 작업 상태가 바뀔 때마다(시작, 리뷰 대기, 머지, 보류) [Project 보드](https://github.com/users/zlink-systems/projects/1/views/10)의

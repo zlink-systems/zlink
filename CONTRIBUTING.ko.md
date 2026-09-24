@@ -165,7 +165,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 
 - **작업 진행 방식(2026-09-10부터)**: 모든 작업은 GitHub Issue로 등록하고, Issue마다 브랜치
   `<area>/<issue번호>-<slug>` + worktree에서 작업한 뒤 PR로 main에 넣는다. main은 PR로만 바뀐다
-  (예외: 계획·결정 기록 등 코드에 영향 없는 문서, 릴리스 태그). Milestone은 릴리스, Project 보드는
+  (예외: 문서만 바꾸는 수정, 릴리스 태그). Milestone은 릴리스, Project 보드는
   진행 상태. 상세는 [`doc/principal/dev/development-workflow.ko.md`](doc/principal/dev/development-workflow.ko.md)가
   소유한다.
 - 브랜치·commit·push·merge는 사용자가 명시적으로 요청할 때만 하고, 작업 branch는 Issue 브랜치
