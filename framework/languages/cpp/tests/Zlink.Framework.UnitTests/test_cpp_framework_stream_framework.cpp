@@ -1948,13 +1948,13 @@ int main ()
         transport_host.stop ();
         return 36;
     }
-    auto connector_reply =
-      connector
-        .request (zlink::stream_connector::packet_t{
-          .name = "connector-probe", .payload = zlink::message_t::from ("connector-payload")})
-        .timeout (std::chrono::seconds (2))
-        .submit<zlink::message_t> ();
-    if (!connector_reply || connector_reply.value ().to_string () != "connector-payload"
+    const auto connector_payload = zlink::message_t::from ("connector-payload").to_bytes ();
+    auto connector_reply = connector
+                             .request (zlink::stream_connector::packet_t{
+                               .name = "connector-probe", .payload = connector_payload})
+                             .timeout (std::chrono::seconds (2))
+                             .submit<std::vector<std::uint8_t>> ();
+    if (!connector_reply || connector_reply.value () != connector_payload
         || !transport_session.wait_packets (1) || !connector.close ()
         || !transport_session.wait_disconnected (3)) {
         transport_host.stop ();
@@ -2271,15 +2271,17 @@ int main ()
         core_mesh->stop ();
         return 292;
     }
-    std::optional<zlink::stream_connector::result_t<zlink::message_t>> shutdown_request_result;
+    std::optional<zlink::stream_connector::result_t<std::vector<std::uint8_t>>>
+      shutdown_request_result;
     std::thread shutdown_request_thread ([&] {
-        shutdown_request_result = core_connector
-                                    .request (zlink::stream_connector::packet_t{
-                                      .name = "shutdown.blocked",
-                                      .codec = zlink::stream_connector::codec_t::raw,
-                                      .payload = zlink::message_t::from ("shutdown-payload")})
-                                    .timeout (std::chrono::seconds (3))
-                                    .submit<zlink::message_t> ();
+        shutdown_request_result =
+          core_connector
+            .request (zlink::stream_connector::packet_t{
+              .name = "shutdown.blocked",
+              .codec = zlink::stream_connector::codec_t::raw,
+              .payload = zlink::message_t::from ("shutdown-payload").to_bytes ()})
+            .timeout (std::chrono::seconds (3))
+            .submit<std::vector<std::uint8_t>> ();
     });
     if (!shutdown_session_control->wait_packet_entered ()) {
         (void) core_connector.close ();

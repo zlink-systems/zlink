@@ -216,7 +216,7 @@ zlink::message_t make_server_frame (zlink::stream_connector::message_kind_t kind
     return zlink::message_t::from (std::string (frame.value ().begin (), frame.value ().end ()));
 }
 
-zlink::stream_e2e_client::task_t<zlink::message_t>
+zlink::stream_e2e_client::task_t<std::vector<std::uint8_t>>
 run_request (zlink::stream_e2e_client::coroutine_connector_t &client,
              std::size_t payload_bytes,
              std::chrono::milliseconds timeout)
@@ -224,9 +224,10 @@ run_request (zlink::stream_e2e_client::coroutine_connector_t &client,
     zlink::stream_connector::packet_t packet;
     packet.name = "connector.perf.request";
     packet.codec = zlink::stream_connector::codec_t::raw;
-    packet.payload = zlink::message_t::from (std::string (payload_bytes, 'r'));
-    auto reply =
-      co_await client.request (std::move (packet)).timeout (timeout).async<zlink::message_t> ();
+    packet.payload.assign (payload_bytes, static_cast<std::uint8_t> ('r'));
+    auto reply = co_await client.request (std::move (packet))
+                   .timeout (timeout)
+                   .async<std::vector<std::uint8_t>> ();
     co_return reply;
 }
 
