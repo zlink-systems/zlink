@@ -3,7 +3,6 @@
   "rootNamespace": "Systems.Zlink.Stream.Connector",
   "references": [],
   "includePlatforms": [
-    "Editor",
     "WebGL"
   ],
   "excludePlatforms": [],

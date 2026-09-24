@@ -2907,13 +2907,19 @@ var ZlinkStreamConnectorBundle = (() => {
       return subscription(() => this.stateHandlers.delete(handler));
     }
     async publishError(error, signal) {
-      await this.publish(Array.from(this.errorHandlers).map((handler) => () => handler(error, signal)));
+      await this.publish(
+        Array.from(this.errorHandlers).map((handler) => () => handler(error, signal))
+      );
     }
     async publishDisconnected(signal) {
-      await this.publish(Array.from(this.disconnectedHandlers).map((handler) => () => handler(signal)));
+      await this.publish(
+        Array.from(this.disconnectedHandlers).map((handler) => () => handler(signal))
+      );
     }
     async publishStateChanged(change, signal) {
-      await this.publish(Array.from(this.stateHandlers).map((handler) => () => handler(change, signal)));
+      await this.publish(
+        Array.from(this.stateHandlers).map((handler) => () => handler(change, signal))
+      );
     }
     async publish(handlers) {
       await Promise.allSettled(handlers.map(async (handler) => handler()));

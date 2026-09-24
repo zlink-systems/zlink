@@ -72,16 +72,16 @@ Unity 2021.3이지만, 저장소의 실제 WebGL adapter 검증 project도 6000.
 
 ## Unity 6000.0.83f1 검증 결과
 
-License가 있는 Editor에서 NuGetForUnity UPM ID를 수정한 project를 가져왔다. Native player
-compile은 완료되지 않았다. `Zlink.Stream.Connector` 0.23.0에는 `net8.0` assembly만 있으며,
-Unity Mono가 `System.Runtime` 8.0.0.0과 4.1.2.0의 차이로 CS1705를 보고한다.
+License가 있는 Editor에서 로컬에 복원된 `netstandard2.1` native connector DLL을 사용해
+Windows와 WebGL build target의 compile을 확인했다. Native DLL은 Editor와 Windows에 포함하고
+WebGL에서는 제외했다. Windows Mono player를 batch mode에서 빌드하고 실행했다. `JoinRes`와
+`ChatNotify`가 모두 `actorId=00000003`을 보고했고 server에 client 연결이 기록됐다.
 
-WebGL UPM package의 자산에 안정적인 `.meta` 파일을 추가했다. Assembly definition에 Editor를
-포함하여 Unity가 scene을 빌드할 때 sample component를 식별하도록 했다. Project manifest에도
-Unity JSON serialization module을 명시했다. 로컬 UPM source를 사용한 WebGL player는
-batch mode에서 빌드됐고,
-headless Chromium에서 engine server와 lobby flow를 완료했다. `JoinRes`는
-`actorId=00000005 name=unity-player`를, `ChatNotify`는
-`actorId=00000005 name=unity-player text=hello from Unity`를 보고했다. Server에도 client
-연결이 기록됐다.
-Manifest에 고정된 Git package version에는 이 변경이 아직 반영되지 않았다.
+WebGL UPM package의 자산에는 안정적인 `.meta` 파일이 있다. Assembly definition은 WebGL만
+포함하며, Editor는 WebGL build target을 선택한 경우에도 native DLL로 sample component를
+식별한다. Project manifest에는 Unity JSON serialization module도 명시했다. 로컬 UPM source로
+빌드한 WebGL player는 headless Chromium에서 lobby flow를 완료했다. `JoinRes`는
+`actorId=00000003 name=unity-player`를, `ChatNotify`는
+`actorId=00000003 name=unity-player text=hello from Unity`를 보고했고 server에도 연결이
+기록됐다. 이 검증은 로컬 connector 산출물을 사용했다. Manifest에 고정된 Git version과 게시된
+NuGet package에는 동일한 검증을 수행하지 않았다.
