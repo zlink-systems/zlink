@@ -1,7 +1,7 @@
 // GENERATED FILE - DO NOT EDIT.
 // Produced by framework/languages/node/scripts/sync-unity-webgl-package.mjs from
 // @zlink-systems/stream-connector (package root, IIFE build).
-// Package version: 0.23.0
+// Package version: 0.25.0
 //
 // This is the same TypeScript connector the npm package root ships. The UPM
 // adapter adds no wire runtime of its own (stream-connector spec 32 section 11).
