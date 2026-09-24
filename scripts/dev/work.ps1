@@ -278,7 +278,7 @@ function Finish-Work([string[]]$Values) {
     $issue = Read-Issue $number
     if ($issue.state -eq 'OPEN') {
         Invoke-Change gh @('issue','close',$number,'--comment',"PR #$prNumber ($($pr.url)) was merged; closing this issue.") | Out-Host
-    } elseif ($issue.state -eq 'CLOSED') { Write-Host "Issue #$number는 이미 닫혔습니다." }
+    } elseif ($issue.state -eq 'CLOSED') { Write-Host "Issue #${number}는 이미 닫혔습니다." }
     else { throw "Issue #$number 상태를 확인할 수 없습니다: $($issue.state)" }
     $wslCopies = @(Invoke-Tool wsl @('-d','Ubuntu-24.04','--','bash','-lc',"find /home/hep7/worktree -mindepth 1 -maxdepth 1 -type d -name 'zlink-$number*' -print 2>/dev/null" ) -AllowFailure)
     if ($script:ToolExitCode -eq 0) {
