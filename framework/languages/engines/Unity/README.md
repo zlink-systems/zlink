@@ -17,10 +17,10 @@ the sample and its verification target one editor version.
 `Packages/manifest.json` pins these packages:
 
 - NuGetForUnity `v4.5.0`
-- `com.zlink.stream-connector.webgl` at `framework-node/v0.24.0`
+- `com.zlink.stream-connector.webgl` at `framework-node/v0.24.1`
 - Unity UI `2.0.0`
 
-`Assets/packages.config` declares `Zlink.Stream.Connector` `0.24.0` for the Editor and native
+`Assets/packages.config` declares `Zlink.Stream.Connector` `0.24.1` for the Editor and native
 desktop/mobile/console players. If the first open reports compile errors before that package is
 present, choose **Ignore**, not Safe Mode, and run **NuGet → Restore Packages**.
 
