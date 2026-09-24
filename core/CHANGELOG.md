@@ -12,6 +12,18 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-09-24
+
+The public C API and ABI are unchanged from 1.5.0
+(`LIBZLINK_ABI_SOVERSION=0`).
+
+### Fixed
+
+- ROUTER no longer rejects reply-token publication with `ECONNABORTED`
+  (`INTERNAL_ERROR 206`) when the source pipe disconnects after a complete
+  REQUEST has been received. Physical disconnection does not invalidate the
+  reply token (#1051).
+
 ## [1.5.0] - 2026-09-24
 
 The public C API and ABI are unchanged from 1.4.0
