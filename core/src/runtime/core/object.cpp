@@ -7,10 +7,37 @@
 #include "core/object.hpp"
 #include "core/ctx.hpp"
 #include "utils/err.hpp"
+#include "utils/condition_variable.hpp"
 #include "core/pipe.hpp"
 #include "core/io_thread.hpp"
 #include "core/session_base.hpp"
 #include "sockets/common/socket_base.hpp"
+
+namespace zlink
+{
+struct release_endpoint_completion_t
+{
+    release_endpoint_completion_t () : released (false) {}
+
+    void complete ()
+    {
+        scoped_lock_t lock (sync);
+        released = true;
+        cv.broadcast ();
+    }
+
+    void wait ()
+    {
+        scoped_lock_t lock (sync);
+        while (!released)
+            cv.wait (&sync, -1);
+    }
+
+    mutex_t sync;
+    condition_variable_t cv;
+    bool released;
+};
+}
 
 namespace
 {
@@ -165,7 +192,7 @@ void zlink::object_t::process_command (const command_t &cmd_)
         case command_t::release_endpoint:
             process_release_endpoint ();
             process_seqnum ();
-            cmd_.args.release_endpoint.completion->set_value ();
+            cmd_.args.release_endpoint.completion->complete ();
             break;
 
         case command_t::term_endpoint:
@@ -486,15 +513,14 @@ void zlink::object_t::release_endpoint (own_t *destination_)
 {
     // The listener keeps its I/O-thread ownership. Wait only for endpoint
     // release, independently of accepted sessions and their linger policy.
-    std::promise<void> completion;
-    std::future<void> released = completion.get_future ();
+    release_endpoint_completion_t completion;
     destination_->inc_seqnum ();
     command_t cmd;
     cmd.destination = destination_;
     cmd.type = command_t::release_endpoint;
     cmd.args.release_endpoint.completion = &completion;
     send_command (cmd);
-    released.wait ();
+    completion.wait ();
 }
 
 void zlink::object_t::send_term_endpoint (own_t *destination_, std::string *endpoint_)

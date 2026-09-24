@@ -1098,6 +1098,25 @@ zlink_warn_unregistered_tests(
 # Public surface contract gate: header closure and dynamic exports must
 # match the formal 10.0.0 spec exactly (see core/tests/contract/).
 find_package(Python3 COMPONENTS Interpreter)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  if(NOT Python3_Interpreter_FOUND)
+    message(FATAL_ERROR "Python3 is required for the Linux Core TLS relocation test")
+  endif()
+  find_program(READELF_EXECUTABLE readelf)
+  if(NOT READELF_EXECUTABLE)
+    message(FATAL_ERROR "readelf is required for the Linux Core TLS relocation test")
+  endif()
+  add_test(
+    NAME core_external_ie_tls
+    COMMAND
+      ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/contract/check_external_ie_tls.py
+      $<TARGET_FILE:libzlink>
+      ${READELF_EXECUTABLE})
+  set_tests_properties(core_external_ie_tls PROPERTIES
+    TIMEOUT 30
+    LABELS "unittest")
+endif()
 if(Python3_Interpreter_FOUND)
   if(MSVC)
     set(public_surface_export_tool "${CMAKE_LINKER}")
