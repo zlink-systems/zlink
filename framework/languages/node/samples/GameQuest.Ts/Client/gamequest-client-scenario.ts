@@ -203,13 +203,17 @@ class GameQuestClientScenario {
       .fetch<{ accepted: boolean }>();
     zlinkStreamAssert.ensure(closeOwner.accepted, 'Sample scenario assertion failed.');
 
-    // Close is one-way. A request resolved to the retired owner ends with a stale terminal.
-    let staleOwner = false;
-    try {
-      await apiBReconnectStream
+    // Close is one-way (Spot addressing §5). A sync that still resolves the retired owner ends
+    // with a stale terminal; the Framework does not resubmit it, so the next sync reaches the
+    // next owner. A sync that arrives after the close completed reaches the next owner directly.
+    const syncAfterClose = () =>
+      apiBReconnectStream
         .request(syncQuestProgressReq('player-alice'), Object)
         .packetName(PacketNames.syncQuestProgressReq)
         .submit<SyncQuestProgressRes>(signal);
+    let closeSync: SyncQuestProgressRes;
+    try {
+      closeSync = await syncAfterClose();
     } catch (error) {
       if (
         !(error instanceof ZlinkStreamException) ||
@@ -217,17 +221,8 @@ class GameQuestClientScenario {
       ) {
         throw error;
       }
-      staleOwner = true;
+      closeSync = await syncAfterClose();
     }
-    zlinkStreamAssert.ensure(
-      staleOwner,
-      'Retired owner request did not end with a stale terminal.'
-    );
-
-    const closeSync = await apiBReconnectStream
-      .request(syncQuestProgressReq('player-alice'), Object)
-      .packetName(PacketNames.syncQuestProgressReq)
-      .submit<SyncQuestProgressRes>(signal);
     const afterCloseFirstHunt = requireQuest(closeSync.updatedQuests, QuestIds.FirstHunt);
     zlinkStreamAssert.ensure(
       afterCloseFirstHunt.currentCount >= beforeDeactivate.currentCount,

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(zlink_framework_cpp VERSION 0.24.1 LANGUAGES C CXX)
+project(zlink_framework_cpp VERSION 0.25.0 LANGUAGES C CXX)
 
 # IDE project trees (Visual Studio, Xcode): group targets into solution
 # folders via the FOLDER target property instead of leaving them flat.
@@ -68,6 +68,8 @@ set(ZLINK_FRAMEWORK_CPP_COVERAGE_THRESHOLD 80 CACHE STRING
   "Minimum C++ framework runtime line coverage percentage")
 
 set(ZLINK_FRAMEWORK_CPP_DIR "${CMAKE_CURRENT_LIST_DIR}")
+# framework/include headers include <zlink/json_profile.hpp>; every target built here sees it.
+include_directories(${ZLINK_FRAMEWORK_CPP_DIR}/common/include)
 set(ZLINK_FRAMEWORK_CPP_REPO_ROOT "${ZLINK_FRAMEWORK_CPP_DIR}/../../.." CACHE PATH
   "Path to the zlink repository root")
 # Release staging places the shared runtime inputs next to this CMake project.
@@ -343,7 +345,6 @@ function(zlink_framework_cpp_configure_m6_objects target_name)
   target_compile_features(${target_name} PUBLIC cxx_std_20)
   target_include_directories(${target_name} PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
-    ${ZLINK_FRAMEWORK_CPP_DIR}/common/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(${target_name} PRIVATE
@@ -2497,6 +2498,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/connector/core/src)
   zlink_framework_cpp_add_boost_headers(connector_perf_client)
   target_link_libraries(connector_perf_client PRIVATE
+    zlink::cpp
     zlink::stream_e2e_client)
   add_custom_target(connector_perf_smoke
     DEPENDS connector_perf_client)
