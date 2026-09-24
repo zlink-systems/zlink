@@ -100,7 +100,8 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
 
     public IDisposable OnErrorReceived(Func<ZlinkStreamError, CancellationToken, ValueTask> handler)
     {
-        ArgumentNullException.ThrowIfNull(handler);
+        if (handler is null)
+            throw new ArgumentNullException(nameof(handler));
         ThrowIfDisposed();
         return _callbacks.AddErrorReceived(handler);
     }
@@ -109,7 +110,8 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         Func<ZlinkStreamDisconnected, CancellationToken, ValueTask> handler
     )
     {
-        ArgumentNullException.ThrowIfNull(handler);
+        if (handler is null)
+            throw new ArgumentNullException(nameof(handler));
         ThrowIfDisposed();
         return _callbacks.AddDisconnected(handler);
     }
@@ -118,7 +120,8 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask> handler
     )
     {
-        ArgumentNullException.ThrowIfNull(handler);
+        if (handler is null)
+            throw new ArgumentNullException(nameof(handler));
         ThrowIfDisposed();
         return _callbacks.AddConnectionStateChanged(handler);
     }
@@ -157,14 +160,16 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
 
     public IDisposable OnActorBound(Func<IZlinkStreamActor, CancellationToken, ValueTask> handler)
     {
-        ArgumentNullException.ThrowIfNull(handler);
+        if (handler is null)
+            throw new ArgumentNullException(nameof(handler));
         ThrowIfDisposed();
         return _actors.OnBound(handler);
     }
 
     public IDisposable OnActorUnbound(Func<IZlinkStreamActor, CancellationToken, ValueTask> handler)
     {
-        ArgumentNullException.ThrowIfNull(handler);
+        if (handler is null)
+            throw new ArgumentNullException(nameof(handler));
         ThrowIfDisposed();
         return _actors.OnUnbound(handler);
     }
@@ -197,7 +202,8 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, CancellationToken, ValueTask> handler
     )
     {
-        ArgumentNullException.ThrowIfNull(handler);
+        if (handler is null)
+            throw new ArgumentNullException(nameof(handler));
         ThrowIfClosed();
         ValidateName(name);
 
@@ -392,13 +398,13 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             );
 
         Task finalizationTask;
-        TaskCompletionSource? startFinalization = null;
+        TaskCompletionSource<bool>? startFinalization = null;
         lock (_disposeGate)
         {
             if (_finalizationTask is null)
             {
                 Volatile.Write(ref _disposed, 1);
-                startFinalization = new TaskCompletionSource(
+                startFinalization = new TaskCompletionSource<bool>(
                     TaskCreationOptions.RunContinuationsAsynchronously
                 );
                 _finalizationTask = FinalizeAfterStartAsync(startFinalization.Task);
@@ -407,7 +413,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             finalizationTask = _finalizationTask;
         }
 
-        startFinalization?.TrySetResult();
+        startFinalization?.TrySetResult(true);
         return new ValueTask(finalizationTask);
     }
 
@@ -425,7 +431,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         }
         finally
         {
-            await _lifetimeCts.CancelAsync().ConfigureAwait(false);
+            _lifetimeCts.Cancel();
             await _taskRunner.StopAndDrainAsync().ConfigureAwait(false);
             _callbacks.Complete();
             _sendGate.Dispose();
@@ -496,7 +502,9 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
                         false,
                         null,
                         error,
-                        Stopwatch.GetElapsedTime(started)
+                        TimeSpan.FromSeconds(
+                            (Stopwatch.GetTimestamp() - started) / (double)Stopwatch.Frequency
+                        )
                     ),
                     CancellationToken.None
                 )
@@ -518,7 +526,9 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
                         )
                         : null,
                     result.Error,
-                    Stopwatch.GetElapsedTime(started)
+                    TimeSpan.FromSeconds(
+                        (Stopwatch.GetTimestamp() - started) / (double)Stopwatch.Frequency
+                    )
                 ),
                 CancellationToken.None
             )

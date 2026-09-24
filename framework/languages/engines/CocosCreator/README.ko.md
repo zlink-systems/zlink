@@ -48,10 +48,9 @@ Docker와 .NET 8 SDK가 필요하다.
 ## Scene 실행
 
 1. Cocos Creator 3.8에서 이 디렉터리를 project로 연다.
-2. 새 2D scene을 만들어 Canvas 아래에 Label을 놓는다.
-3. 빈 Node에 `EngineLobbyBehaviour`를 붙이고 Label을 **Status Label**에 연결한다.
-4. **Endpoint**를 `ws://127.0.0.1:<stream.port>`로 지정하고 browser preview를 실행한다.
-5. Label이 `joined as cocos-player (...)`를 거쳐 `cocos-player: hello from Cocos Creator`로
+2. `assets/EngineLobby.scene`을 연다. Canvas에 연결된 `EngineLobbyBehaviour`가 상태 Label을 생성한다.
+3. Canvas component의 **Endpoint**를 `ws://127.0.0.1:<stream.port>`로 지정하고 browser preview를 실행한다.
+4. Label이 `joined as cocos-player (...)`를 거쳐 `cocos-player: hello from Cocos Creator`로
    바뀌는지 확인한다. Server 종료는 Server README의 stop 명령을 사용한다.
 
 Browser에서 server가 다른 host에 있으면 endpoint를 browser에서 접근할 수 있는 주소로 바꾼다.
@@ -69,9 +68,13 @@ ENGINE_LOBBY_ENDPOINT="ws://127.0.0.1:<stream.port>" npm run probe
 Probe는 Alice와 Bob의 서로 다른 `actorId`, Ping/Join reply, 두 client의 동일한
 `ChatNotify(actorId, name, text)`를 확인한 뒤 `cocos-engine-lobby-probe=ok`를 출력한다.
 
-## 이 머신에서 확인한 범위
+## Cocos Creator 3.8.8 검증 결과
 
-WSL에서 `npm run typecheck`, .NET server build, 전용 Redis process와 server를 사용한
-`npm run probe`가 통과했다. Docker 연동이 없어 Server의 Docker runner는 실행하지 못했다.
-Cocos Creator Editor가 없어 project import, scene 구성, web build와 browser player 실행은
-검증하지 못했다.
+포함된 scene을 로컬에서 다시 빌드한 connector에 연결해 Cocos Creator 3.8.8 CLI로
+web-desktop에 빌드했다. 종료 코드 36은
+[공식 CLI 문서](https://docs.cocos.com/creator/3.8/manual/zh/editor/publish/publish-in-command-line.html)에
+정의된 빌드 성공 코드다. Headless Chromium에서 `JoinRes`를 수신하고 `ChatNotify` handler가
+`{"actorId":"00000004","name":"cocos-player","text":"hello from Cocos Creator"}`를
+출력했다. Server에도 client 연결이 기록됐다. Connector는 Cocos 빌드 변환 환경에서도
+`Array.from(...)`으로 iterable callback 집합의 snapshot을 생성한다.
+게시된 `0.23.0` package에는 이 수정이 아직 반영되지 않았다.

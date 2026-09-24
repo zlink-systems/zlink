@@ -16,7 +16,8 @@ public static class ZlinkStreamJsonCodec
 
     public static void Configure(JsonSerializerOptions options)
     {
-        ArgumentNullException.ThrowIfNull(options);
+        if (options is null)
+            throw new ArgumentNullException(nameof(options));
         SerializerOptions = options;
     }
 }
@@ -54,7 +55,8 @@ public static class ZlinkStreamTypedConnectorExtensions
         TPayload payload
     )
     {
-        ArgumentNullException.ThrowIfNull(actor);
+        if (actor is null)
+            throw new ArgumentNullException(nameof(actor));
         var codec = ((IZlinkStreamActorRuntime)actor).Options.PayloadCodec;
         return new ZlinkStreamTypedSendBuilder(actor.Send(EncodePayload(codec, payload)));
     }
@@ -64,7 +66,8 @@ public static class ZlinkStreamTypedConnectorExtensions
         TPayload payload
     )
     {
-        ArgumentNullException.ThrowIfNull(actor);
+        if (actor is null)
+            throw new ArgumentNullException(nameof(actor));
         var codec = ((IZlinkStreamActorRuntime)actor).Options.PayloadCodec;
         return new ZlinkStreamTypedRequestBuilder(
             actor.Request(EncodePayload(codec, payload)),
@@ -77,8 +80,10 @@ public static class ZlinkStreamTypedConnectorExtensions
         Func<ZlinkStreamMessage<TPayload>, CancellationToken, ValueTask> handler
     )
     {
-        ArgumentNullException.ThrowIfNull(actor);
-        ArgumentNullException.ThrowIfNull(handler);
+        if (actor is null)
+            throw new ArgumentNullException(nameof(actor));
+        if (handler is null)
+            throw new ArgumentNullException(nameof(handler));
         var options = ((IZlinkStreamActorRuntime)actor).Options;
         return actor.On(options.NameResolver.Resolve(typeof(TPayload)), handler);
     }
@@ -89,8 +94,10 @@ public static class ZlinkStreamTypedConnectorExtensions
         Func<ZlinkStreamMessage<TPayload>, CancellationToken, ValueTask> handler
     )
     {
-        ArgumentNullException.ThrowIfNull(actor);
-        ArgumentNullException.ThrowIfNull(handler);
+        if (actor is null)
+            throw new ArgumentNullException(nameof(actor));
+        if (handler is null)
+            throw new ArgumentNullException(nameof(handler));
         var options = ((IZlinkStreamActorRuntime)actor).Options;
         return actor.On(
             name,
@@ -112,7 +119,8 @@ public static class ZlinkStreamTypedConnectorExtensions
         TPayload payload
     )
     {
-        ArgumentNullException.ThrowIfNull(connector);
+        if (connector is null)
+            throw new ArgumentNullException(nameof(connector));
         return new ZlinkStreamTypedSendBuilder(
             connector.Send(EncodePayload(connector.Options.PayloadCodec, payload))
         );
@@ -123,7 +131,8 @@ public static class ZlinkStreamTypedConnectorExtensions
         TPayload payload
     )
     {
-        ArgumentNullException.ThrowIfNull(connector);
+        if (connector is null)
+            throw new ArgumentNullException(nameof(connector));
         return new ZlinkStreamTypedRequestBuilder(
             connector.Request(EncodePayload(connector.Options.PayloadCodec, payload)),
             connector.Options.PayloadCodec
@@ -151,7 +160,8 @@ public static class ZlinkStreamTypedConnectorExtensions
         Func<ZlinkStreamMessage<TPayload>, CancellationToken, ValueTask> handler
     )
     {
-        ArgumentNullException.ThrowIfNull(connector);
+        if (connector is null)
+            throw new ArgumentNullException(nameof(connector));
         return connector.On(connector.Options.NameResolver.Resolve(typeof(TPayload)), handler);
     }
 
@@ -161,8 +171,10 @@ public static class ZlinkStreamTypedConnectorExtensions
         Func<ZlinkStreamMessage<TPayload>, CancellationToken, ValueTask> handler
     )
     {
-        ArgumentNullException.ThrowIfNull(connector);
-        ArgumentNullException.ThrowIfNull(handler);
+        if (connector is null)
+            throw new ArgumentNullException(nameof(connector));
+        if (handler is null)
+            throw new ArgumentNullException(nameof(handler));
         return connector.On(
             name,
             (message, cancellationToken) =>
@@ -189,7 +201,8 @@ public static class ZlinkStreamTypedConnectorExtensions
         string name
     )
     {
-        ArgumentNullException.ThrowIfNull(connector);
+        if (connector is null)
+            throw new ArgumentNullException(nameof(connector));
         return new ZlinkStreamTypedWaitBuilder<TPayload>(
             connector.WaitFor(name),
             connector.Options.PayloadCodec
@@ -200,7 +213,8 @@ public static class ZlinkStreamTypedConnectorExtensions
         this IZlinkStreamConnector connector
     )
     {
-        ArgumentNullException.ThrowIfNull(connector);
+        if (connector is null)
+            throw new ArgumentNullException(nameof(connector));
         return connector.WaitFor<TPayload>(
             connector.Options.NameResolver.Resolve(typeof(TPayload))
         );
@@ -211,7 +225,8 @@ public static class ZlinkStreamTypedConnectorExtensions
         string name
     )
     {
-        ArgumentNullException.ThrowIfNull(connector);
+        if (connector is null)
+            throw new ArgumentNullException(nameof(connector));
         return new ZlinkStreamTypedExpectNoneBuilder<TPayload>(connector.ExpectNone(name));
     }
 
@@ -219,7 +234,8 @@ public static class ZlinkStreamTypedConnectorExtensions
         this IZlinkStreamConnector connector
     )
     {
-        ArgumentNullException.ThrowIfNull(connector);
+        if (connector is null)
+            throw new ArgumentNullException(nameof(connector));
         return connector.ExpectNone<TPayload>(
             connector.Options.NameResolver.Resolve(typeof(TPayload))
         );
@@ -230,7 +246,8 @@ public static class ZlinkStreamTypedConnectorExtensions
         string name
     )
     {
-        ArgumentNullException.ThrowIfNull(connector);
+        if (connector is null)
+            throw new ArgumentNullException(nameof(connector));
         return new ZlinkStreamTypedSequenceBuilder<TPayload>(
             connector.WaitForSequence(name),
             connector.Options.PayloadCodec
@@ -241,7 +258,8 @@ public static class ZlinkStreamTypedConnectorExtensions
         this IZlinkStreamConnector connector
     )
     {
-        ArgumentNullException.ThrowIfNull(connector);
+        if (connector is null)
+            throw new ArgumentNullException(nameof(connector));
         return connector.WaitForSequence<TPayload>(
             connector.Options.NameResolver.Resolve(typeof(TPayload))
         );
@@ -302,7 +320,8 @@ public sealed class ZlinkStreamTypedSequenceBuilder<TPayload>
         Func<ZlinkStreamMessage<TPayload>, bool> predicate
     )
     {
-        ArgumentNullException.ThrowIfNull(predicate);
+        if (predicate is null)
+            throw new ArgumentNullException(nameof(predicate));
         _inner.Expect(message => predicate(Decode(message)));
         return this;
     }
@@ -364,7 +383,8 @@ public sealed class ZlinkStreamTypedWaitBuilder<TPayload>
         Func<ZlinkStreamMessage<TPayload>, bool> predicate
     )
     {
-        ArgumentNullException.ThrowIfNull(predicate);
+        if (predicate is null)
+            throw new ArgumentNullException(nameof(predicate));
         _inner.Where(message => predicate(Decode(message)));
         return this;
     }
@@ -487,7 +507,8 @@ public sealed class ZlinkStreamTypedRequestBuilder
 
     public void Submit<TReply>(Action<ZlinkStreamResult<TReply>> callback)
     {
-        ArgumentNullException.ThrowIfNull(callback);
+        if (callback is null)
+            throw new ArgumentNullException(nameof(callback));
         _inner.Submit(result =>
         {
             if (!result.IsSuccess)

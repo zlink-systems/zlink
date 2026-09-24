@@ -53,8 +53,10 @@ internal static class ZlinkStreamTransportFactory
         try
         {
             tcp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
-            await tcp.ConnectAsync(options.Endpoint.Host, options.Endpoint.Port, cancellationToken)
-                .ConfigureAwait(false);
+            using (cancellationToken.Register(tcp.Dispose))
+                await tcp.ConnectAsync(options.Endpoint.Host, options.Endpoint.Port)
+                    .WaitAsync(cancellationToken)
+                    .ConfigureAwait(false);
             System.IO.Stream stream = tcp.GetStream();
             if (transport == ZlinkStreamTransport.Tls)
             {

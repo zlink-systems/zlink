@@ -26,7 +26,8 @@ public static class ZlinkStreamAssert
         string? errorKind = null
     )
     {
-        ArgumentNullException.ThrowIfNull(action);
+        if (action is null)
+            throw new ArgumentNullException(nameof(action));
 
         try
         {
@@ -54,7 +55,8 @@ public static class ZlinkStreamAssert
     /// </summary>
     public static async ValueTask ExpectTimeoutAsync(Func<CancellationToken, ValueTask> action)
     {
-        ArgumentNullException.ThrowIfNull(action);
+        if (action is null)
+            throw new ArgumentNullException(nameof(action));
 
         try
         {

@@ -211,7 +211,8 @@ internal sealed class ZlinkStreamConnectorCallbacks(
         bool reportErrors = true
     )
     {
-        ArgumentNullException.ThrowIfNull(callback);
+        if (callback is null)
+            throw new ArgumentNullException(nameof(callback));
 
         if (dispatchMode == ZlinkStreamDispatchMode.Immediate)
         {
@@ -274,7 +275,7 @@ internal sealed class ZlinkStreamConnectorCallbacks(
                 completion = _ =>
                 {
                     callback(reply.Error is { } error ? failure(error) : success(reply.Payload!));
-                    return ValueTask.CompletedTask;
+                    return default(ValueTask);
                 };
             }
             catch (ZlinkStreamException ex)
@@ -282,7 +283,7 @@ internal sealed class ZlinkStreamConnectorCallbacks(
                 completion = _ =>
                 {
                     callback(failure(ex.Error));
-                    return ValueTask.CompletedTask;
+                    return default(ValueTask);
                 };
             }
             catch (Exception ex)
@@ -291,7 +292,7 @@ internal sealed class ZlinkStreamConnectorCallbacks(
                 completion = _ =>
                 {
                     callback(failure(error));
-                    return ValueTask.CompletedTask;
+                    return default(ValueTask);
                 };
             }
 
@@ -445,7 +446,7 @@ internal sealed class ZlinkStreamConnectorCallbacks(
         bool isAdmitted
     )
     {
-        private readonly TaskCompletionSource _admission = new(
+        private readonly TaskCompletionSource<bool> _admission = new(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
 
@@ -459,10 +460,10 @@ internal sealed class ZlinkStreamConnectorCallbacks(
         internal void Admit()
         {
             IsAdmitted = true;
-            _admission.TrySetResult();
+            _admission.TrySetResult(true);
         }
 
-        internal void StopWaiting() => _admission.TrySetResult();
+        internal void StopWaiting() => _admission.TrySetResult(true);
     }
 }
 
@@ -483,7 +484,8 @@ internal sealed class ZlinkStreamHandlerList<THandler>
 
     public IDisposable Add(THandler handler)
     {
-        ArgumentNullException.ThrowIfNull(handler);
+        if (handler is null)
+            throw new ArgumentNullException(nameof(handler));
         var registration = new Registration(handler);
 
         lock (_gate)

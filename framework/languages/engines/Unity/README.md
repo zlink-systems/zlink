@@ -74,9 +74,17 @@ boundaries read by the engine integration guide.
 5. Confirm that `ChatNotify` replaces the UI text. This result covers the IL2CPP reverse callback,
    UPM import, jslib linkage, and main-thread pump together.
 
-## Not verified on this machine
+## Unity 6000.0.83f1 verification
 
-This workspace has no Unity Editor or license. Only project sources, package pins, the scene
-reference, snippet markers, and the documented native/WebGL platform split were checked here.
-Editor compilation, a native player build, and the WebGL IL2CPP build require a licensed Unity
-runner.
+The licensed Editor imports the project after correcting the NuGetForUnity UPM ID. Native player
+compilation remains blocked: `Zlink.Stream.Connector` 0.23.0 contains only a `net8.0` assembly,
+which Unity Mono rejects with CS1705 (`System.Runtime` 8.0.0.0 versus 4.1.2.0).
+
+The WebGL UPM package now contains stable `.meta` files for its assets. Its assembly definition
+includes the Editor so that Unity resolves the sample component while building the scene. The
+project also declares Unity's JSON serialization module. Using the local UPM source, the WebGL
+player built in batch mode and
+completed the lobby flow in headless Chromium against the engine server: `JoinRes` reported
+`actorId=00000005 name=unity-player`, and `ChatNotify` reported
+`actorId=00000005 name=unity-player text=hello from Unity`. The server recorded the connection.
+The pinned Git package version has not been updated with these changes.

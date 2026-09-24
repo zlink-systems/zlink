@@ -188,7 +188,7 @@ export class ZlinkStreamReceivedMessages {
     if (this.observers.size === 0) {
       return;
     }
-    const abandoned = [...this.observers.values()].flatMap((set) => [...set]);
+    const abandoned = Array.from(this.observers.values()).flatMap((set) => Array.from(set));
     this.observers.clear();
     for (const registration of abandoned) {
       registration.onConnectionEnded();
@@ -197,7 +197,7 @@ export class ZlinkStreamReceivedMessages {
 
   enqueue(message: ZlinkStreamMessage<ZlinkStreamEncodedPayload>, signal?: AbortSignal): void {
     this.receivedCounts.set(message.name, (this.receivedCounts.get(message.name) ?? 0) + 1);
-    for (const registration of [...(this.observers.get(message.name) ?? [])]) {
+    for (const registration of Array.from(this.observers.get(message.name) ?? [])) {
       if (registration.consume(message)) {
         return;
       }
@@ -278,7 +278,7 @@ export class ZlinkStreamReceivedMessages {
           continue;
         }
         const { message, signal } = queued;
-        const handlers = [...this.handlers.get(message.name)!];
+        const handlers = Array.from(this.handlers.get(message.name)!);
         for (const handler of handlers) {
           try {
             await handler(message, signal);

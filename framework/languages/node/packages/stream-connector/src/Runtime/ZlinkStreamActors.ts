@@ -97,7 +97,7 @@ export class ZlinkStreamActors {
   ) {}
 
   get snapshot(): readonly ZlinkStreamActor[] {
-    return Object.freeze([...this.bySlot.values()]);
+    return Object.freeze(Array.from(this.bySlot.values()));
   }
 
   find(actorId: string): ZlinkStreamActor | undefined {
@@ -202,7 +202,7 @@ export class ZlinkStreamActors {
     signal?: AbortSignal
   ): void {
     this.receivedMessages.enqueueCallback(() => {
-      for (const handler of [...handlers]) {
+      for (const handler of Array.from(handlers)) {
         this.invoke(handler, actor, signal);
       }
     });

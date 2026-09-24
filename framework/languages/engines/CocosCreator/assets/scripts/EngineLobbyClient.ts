@@ -24,6 +24,7 @@ interface JoinRes {
 export class EngineLobbyClient {
   private readonly connector: ZlinkStreamConnector;
   private readonly chatSubscription: Disposable;
+  private readonly errorSubscription: Disposable;
 
   constructor(
     endpoint: string,
@@ -38,7 +39,11 @@ export class EngineLobbyClient {
       reconnect: { enabled: false }
     });
     this.chatSubscription = this.connector.on<ChatNotify>('ChatNotify', (message) => {
+      console.log('Engine Lobby ChatNotify:', JSON.stringify(message.payload));
       onChat(message.payload);
+    });
+    this.errorSubscription = this.connector.onErrorReceived((error) => {
+      console.error('Engine Lobby connector error:', error);
     });
   }
 
@@ -72,6 +77,7 @@ export class EngineLobbyClient {
 
   async close(): Promise<void> {
     this.chatSubscription.dispose();
+    this.errorSubscription.dispose();
     await this.connector.close();
   }
 }

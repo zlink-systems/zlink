@@ -20,7 +20,9 @@ internal sealed class ZlinkStreamReceivedMessages
     > _messages = new(StringComparer.Ordinal);
 
     private readonly Dictionary<string, int> _counts = new(StringComparer.Ordinal);
-    private TaskCompletionSource _arrived = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private TaskCompletionSource<bool> _arrived = new(
+        TaskCreationOptions.RunContinuationsAsynchronously
+    );
 
     /// <summary>
     ///     Advances on every change to the history. A wait picks its message from a copy
@@ -87,7 +89,7 @@ internal sealed class ZlinkStreamReceivedMessages
     /// </remarks>
     public void ResetForConnection(long connectionGeneration)
     {
-        TaskCompletionSource arrived;
+        TaskCompletionSource<bool> arrived;
         lock (_gate)
         {
             if (connectionGeneration <= _establishedGeneration)
@@ -99,10 +101,12 @@ internal sealed class ZlinkStreamReceivedMessages
             _messages.Clear();
             _version++;
             arrived = _arrived;
-            _arrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _arrived = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
         }
 
-        arrived.TrySetResult();
+        arrived.TrySetResult(true);
     }
 
     /// <summary>
@@ -120,7 +124,7 @@ internal sealed class ZlinkStreamReceivedMessages
     /// </remarks>
     public void ConnectionEnded()
     {
-        TaskCompletionSource arrived;
+        TaskCompletionSource<bool> arrived;
         lock (_gate)
         {
             if (_connectionGeneration == 0)
@@ -128,15 +132,17 @@ internal sealed class ZlinkStreamReceivedMessages
 
             _connectionGeneration = 0;
             arrived = _arrived;
-            _arrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _arrived = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
         }
 
-        arrived.TrySetResult();
+        arrived.TrySetResult(true);
     }
 
     public void Record(ZlinkStreamMessage<ZlinkStreamEncodedPayload> message)
     {
-        TaskCompletionSource arrived;
+        TaskCompletionSource<bool> arrived;
         lock (_gate)
         {
             if (!_messages.TryGetValue(message.Name, out var messages))
@@ -148,10 +154,12 @@ internal sealed class ZlinkStreamReceivedMessages
             messages.Add(message);
             _version++;
             arrived = _arrived;
-            _arrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _arrived = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
         }
 
-        arrived.TrySetResult();
+        arrived.TrySetResult(true);
     }
 
     /// <summary>
@@ -241,7 +249,7 @@ internal sealed class ZlinkStreamReceivedMessages
         while (true)
         {
             long observedVersion;
-            TaskCompletionSource arrived;
+            TaskCompletionSource<bool> arrived;
             ZlinkStreamMessage<ZlinkStreamEncodedPayload>[] candidates;
             lock (_gate)
             {

@@ -6,8 +6,11 @@ entry [Content_Types].xml
 entry _rels/.rels
 entry lib/net8.0/Systems.Zlink.Stream.Connector.dll
 entry lib/net8.0/Systems.Zlink.Stream.Connector.xml
+entry lib/netstandard2.1/Systems.Zlink.Stream.Connector.dll
+entry lib/netstandard2.1/Systems.Zlink.Stream.Connector.xml
 entry package/services/metadata/core-properties/{CORE_PROPERTIES}.psmdcp
-content-sha256 lib/net8.0/Systems.Zlink.Stream.Connector.xml=f4f3daf8a5f7f6987d7f2ddd926c725c3b92f2c90cbbbbce90a7bae2af04d22a
+content-sha256 lib/net8.0/Systems.Zlink.Stream.Connector.xml=af28880dd09ab404a750637e59b82bd3a54f248363c82352daafa257ac8d148c
+content-sha256 lib/netstandard2.1/Systems.Zlink.Stream.Connector.xml=af28880dd09ab404a750637e59b82bd3a54f248363c82352daafa257ac8d148c
 metadata authors=zlink
 metadata description=ZLink STREAM client connector for .NET.
 metadata id=Zlink.Stream.Connector
@@ -17,5 +20,9 @@ metadata projectUrl=https://github.com/zlink-systems/zlink
 metadata readme=README.md
 metadata version={VERSION}
 metadata repository commit={COMMIT} type=git url=https://github.com/zlink-systems/zlink
+dependency-group targetFramework=.NETStandard2.1
+dependency targetFramework=.NETStandard2.1 exclude=Build,Analyzers id=K4os.Compression.LZ4 version=1.3.8
+dependency targetFramework=.NETStandard2.1 exclude=Build,Analyzers id=System.Text.Json version=8.0.5
+dependency targetFramework=.NETStandard2.1 exclude=Build,Analyzers id=System.Threading.Channels version=8.0.0
 dependency-group targetFramework=net8.0
 dependency targetFramework=net8.0 exclude=Build,Analyzers id=K4os.Compression.LZ4 version=1.3.8

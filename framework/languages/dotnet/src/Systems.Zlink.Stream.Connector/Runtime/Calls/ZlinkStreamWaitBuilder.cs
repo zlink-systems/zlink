@@ -22,7 +22,8 @@ internal sealed class ZlinkStreamWaitBuilder : IZlinkStreamWaitCall
         Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool> predicate
     )
     {
-        ArgumentNullException.ThrowIfNull(predicate);
+        if (predicate is null)
+            throw new ArgumentNullException(nameof(predicate));
         var previous = _predicate;
         _predicate = previous is null
             ? predicate

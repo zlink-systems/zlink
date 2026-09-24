@@ -1835,7 +1835,7 @@ var ZlinkStreamConnectorBundle = (() => {
       if (this.observers.size === 0) {
         return;
       }
-      const abandoned = [...this.observers.values()].flatMap((set) => [...set]);
+      const abandoned = Array.from(this.observers.values()).flatMap((set) => Array.from(set));
       this.observers.clear();
       for (const registration of abandoned) {
         registration.onConnectionEnded();
@@ -1844,7 +1844,7 @@ var ZlinkStreamConnectorBundle = (() => {
     enqueue(message, signal) {
       var _a, _b;
       this.receivedCounts.set(message.name, ((_a = this.receivedCounts.get(message.name)) != null ? _a : 0) + 1);
-      for (const registration of [...(_b = this.observers.get(message.name)) != null ? _b : []]) {
+      for (const registration of Array.from((_b = this.observers.get(message.name)) != null ? _b : [])) {
         if (registration.consume(message)) {
           return;
         }
@@ -1916,7 +1916,7 @@ var ZlinkStreamConnectorBundle = (() => {
             continue;
           }
           const { message, signal } = queued;
-          const handlers = [...this.handlers.get(message.name)];
+          const handlers = Array.from(this.handlers.get(message.name));
           for (const handler of handlers) {
             try {
               await handler(message, signal);
@@ -2006,7 +2006,7 @@ var ZlinkStreamConnectorBundle = (() => {
     async drain(signal) {
       while (this.pendingWrites.size > 0) {
         throwIfAborted(signal);
-        await Promise.allSettled([...this.pendingWrites]);
+        await Promise.allSettled(Array.from(this.pendingWrites));
       }
     }
     async write(connection, frame, signal) {
@@ -2091,7 +2091,7 @@ var ZlinkStreamConnectorBundle = (() => {
       __publicField(this, "unboundHandlers", /* @__PURE__ */ new Set());
     }
     get snapshot() {
-      return Object.freeze([...this.bySlot.values()]);
+      return Object.freeze(Array.from(this.bySlot.values()));
     }
     find(actorId) {
       return this.byId.get(actorId);
@@ -2179,7 +2179,7 @@ var ZlinkStreamConnectorBundle = (() => {
     }
     queue(handlers, actor, signal) {
       this.receivedMessages.enqueueCallback(() => {
-        for (const handler of [...handlers]) {
+        for (const handler of Array.from(handlers)) {
           this.invoke(handler, actor, signal);
         }
       });
@@ -2907,13 +2907,13 @@ var ZlinkStreamConnectorBundle = (() => {
       return subscription(() => this.stateHandlers.delete(handler));
     }
     async publishError(error, signal) {
-      await this.publish([...this.errorHandlers].map((handler) => () => handler(error, signal)));
+      await this.publish(Array.from(this.errorHandlers).map((handler) => () => handler(error, signal)));
     }
     async publishDisconnected(signal) {
-      await this.publish([...this.disconnectedHandlers].map((handler) => () => handler(signal)));
+      await this.publish(Array.from(this.disconnectedHandlers).map((handler) => () => handler(signal)));
     }
     async publishStateChanged(change, signal) {
-      await this.publish([...this.stateHandlers].map((handler) => () => handler(change, signal)));
+      await this.publish(Array.from(this.stateHandlers).map((handler) => () => handler(change, signal)));
     }
     async publish(handlers) {
       await Promise.allSettled(handlers.map(async (handler) => handler()));
@@ -3448,7 +3448,7 @@ var ZlinkStreamConnectorBundle = (() => {
       let pending;
       try {
         throwIfAborted(signal);
-        for (const handler of [...this.requestSendingHandlers]) {
+        for (const handler of Array.from(this.requestSendingHandlers)) {
           try {
             handler(sendingContext);
           } catch (cause) {
@@ -3506,7 +3506,7 @@ var ZlinkStreamConnectorBundle = (() => {
     publishReplyReceived(context, signal) {
       if (this.replyReceivedHandlers.size === 0) return;
       this.receivedMessages.enqueueCallback(async () => {
-        for (const handler of [...this.replyReceivedHandlers]) {
+        for (const handler of Array.from(this.replyReceivedHandlers)) {
           try {
             await handler(context, signal);
           } catch (cause) {

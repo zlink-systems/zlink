@@ -59,6 +59,23 @@ export function renderBundle(source) {
 }
 
 export function syncUnityWebglPackage({ check = false } = {}) {
+  const directories = [unityPackageRoot];
+  const missingMeta = [];
+  while (directories.length > 0) {
+    const directory = directories.pop();
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (entry.name.endsWith('.meta')) continue;
+      const asset = path.join(directory, entry.name);
+      if (!fs.existsSync(`${asset}.meta`)) {
+        missingMeta.push(path.relative(unityPackageRoot, asset));
+      }
+      if (entry.isDirectory()) directories.push(asset);
+    }
+  }
+  if (missingMeta.length > 0) {
+    throw new Error(`Unity UPM assets are missing .meta files: ${missingMeta.join(', ')}`);
+  }
+
   if (!fs.existsSync(bundleSource)) {
     throw new Error(
       `Browser IIFE bundle is missing: ${bundleSource}. Run \`npm run build:browser\` first.`

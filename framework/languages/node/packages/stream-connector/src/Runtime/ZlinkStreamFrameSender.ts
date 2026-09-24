@@ -52,7 +52,7 @@ export class ZlinkStreamFrameSender {
   async drain(signal?: AbortSignal): Promise<void> {
     while (this.pendingWrites.size > 0) {
       throwIfAborted(signal);
-      await Promise.allSettled([...this.pendingWrites]);
+      await Promise.allSettled(Array.from(this.pendingWrites));
     }
   }
 

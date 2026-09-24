@@ -149,7 +149,7 @@ internal sealed class ZlinkStreamConnectorLifecycle(
     {
         var isReentrant = IsReentrantCallback;
         Task closeTask;
-        TaskCompletionSource? startClose = null;
+        TaskCompletionSource<bool>? startClose = null;
         lock (_gate)
         {
             if (_closeTask is null)
@@ -166,7 +166,7 @@ internal sealed class ZlinkStreamConnectorLifecycle(
                     _lastCloseReason = ZlinkStreamCloseReason.ClientClose;
                 var change = SetStateLocked(ZlinkStreamConnectionState.Closed, null);
 
-                startClose = new TaskCompletionSource(
+                startClose = new TaskCompletionSource<bool>(
                     TaskCreationOptions.RunContinuationsAsynchronously
                 );
                 _closeTask = RunFullCloseAsync(
@@ -181,7 +181,7 @@ internal sealed class ZlinkStreamConnectorLifecycle(
             closeTask = _closeTask;
         }
 
-        startClose?.TrySetResult();
+        startClose?.TrySetResult(true);
         if (!isReentrant)
             await closeTask.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -733,17 +733,17 @@ internal sealed class ZlinkStreamConnectorLifecycle(
     )
     {
         if (change is null)
-            return ValueTask.CompletedTask;
+            return default(ValueTask);
 
         var notification = callbacks.NotifyConnectionStateChangedAsync(change, cancellationToken);
         if (notification.IsCompleted)
         {
             notification.GetAwaiter().GetResult();
-            return ValueTask.CompletedTask;
+            return default(ValueTask);
         }
 
         ObserveBackgroundTask(notification.AsTask());
-        return ValueTask.CompletedTask;
+        return default(ValueTask);
     }
 
     private IDisposable EnterWorker(ZlinkStreamLifecycleWorkKind workKind) =>
@@ -773,10 +773,12 @@ internal sealed class ZlinkStreamConnectorLifecycle(
 
     private ActiveConnectStart CreateActiveConnectTask(Func<Task> run)
     {
-        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         Task? activeTask = null;
         activeTask = RunActiveConnectTaskAsync(started.Task, run, () => activeTask);
-        return new ActiveConnectStart(activeTask, () => started.TrySetResult());
+        return new ActiveConnectStart(activeTask, () => started.TrySetResult(true));
     }
 
     private async Task RunActiveConnectTaskAsync(
@@ -881,7 +883,11 @@ internal sealed class ZlinkStreamConnectorLifecycle(
     ///     <paramref name="baseDelay" /> (stream-connector spec §6).
     /// </summary>
     private static TimeSpan ApplyReconnectJitter(TimeSpan baseDelay) =>
-        ScaleReconnectDelay(baseDelay, Random.Shared.NextDouble());
+        ScaleReconnectDelay(
+            baseDelay,
+            System.Security.Cryptography.RandomNumberGenerator.GetInt32(int.MaxValue)
+                / (double)int.MaxValue
+        );
 
     /// <summary>
     ///     Pure jitter arithmetic, separated from the random source so a test can drive it

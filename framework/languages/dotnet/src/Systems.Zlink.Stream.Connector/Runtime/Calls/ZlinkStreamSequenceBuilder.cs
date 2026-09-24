@@ -20,7 +20,8 @@ internal sealed class ZlinkStreamSequenceBuilder : IZlinkStreamSequenceCall
         Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool> predicate
     )
     {
-        ArgumentNullException.ThrowIfNull(predicate);
+        if (predicate is null)
+            throw new ArgumentNullException(nameof(predicate));
         _expectations.Add(predicate);
         return this;
     }
