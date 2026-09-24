@@ -1,6 +1,6 @@
 # Current public asset is incomplete. Replace this checksum after publishing
 # the complete bindings/cpp source unit (including the root LICENSE).
 sources:
-  "1.4.0":
-    url: "https://github.com/zlink-systems/zlink/releases/download/cpp/v1.4.0/zlink-cpp-1.4.0.tar.gz"
+  "1.5.0":
+    url: "https://github.com/zlink-systems/zlink/releases/download/cpp/v1.5.0/zlink-cpp-1.5.0.tar.gz"
     sha256: "a2d196a8c67223201b063aaef87f31b3a20460803fd5429d3d232e70d3b70d78"

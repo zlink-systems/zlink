@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@zlink-systems/zlink": "1.4.0"
+    "@zlink-systems/zlink": "1.5.0"
   }
 }

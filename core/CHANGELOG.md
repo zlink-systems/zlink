@@ -12,6 +12,22 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-24
+
+The public C API and ABI are unchanged from 1.4.0
+(`LIBZLINK_ABI_SOVERSION=0`).
+
+### Fixed
+
+- `libzlink` can be loaded with `dlopen()` by hosts with limited static TLS
+  surplus. The Beast WebSocket secure PRNG uses a per-thread heap object
+  instead of a 112-byte `thread_local` object (#1041).
+
+### Build and tests
+
+- The hotpath benchmark links the shared library, and `ZLINK_BUILD_TESTS` is
+  defined only for test targets (#1041).
+
 ## [1.4.0] - 2026-09-23
 
 The public C API and ABI are unchanged from 1.3.0
