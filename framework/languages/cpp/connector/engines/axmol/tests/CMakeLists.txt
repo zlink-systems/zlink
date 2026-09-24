@@ -5,6 +5,7 @@ target_include_directories(zlink_axmol_stream_connector_test_app PRIVATE
   ${CMAKE_CURRENT_LIST_DIR}/../include)
 target_link_libraries(zlink_axmol_stream_connector_test_app PRIVATE
   zlink_axmol_stream_connector
+  zlink::cpp
   nlohmann_json::nlohmann_json)
 zlink_framework_cpp_add_test(
   NAME test_axmol_stream_connector

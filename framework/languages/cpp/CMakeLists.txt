@@ -41,34 +41,18 @@ include(GNUInstallDirs)
 include(FetchContent)
 include(CMakePackageConfigHelpers)
 find_package(Threads REQUIRED)
-find_package(opentelemetry-cpp CONFIG REQUIRED COMPONENTS api)
 
 option(ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE "Build bindings/cpp from the workspace (explicit opt-in)" OFF)
-# The StreamConnector component is a standalone package: by default it
-# stages a private copy of the binding and Core package (headers, link
-# libraries, CMake configs) into its own install tree so a consumer who
-# installs *only* that component -- without the binding or Core installed
-# anywhere else on their CMAKE_PREFIX_PATH -- can still find_package() it.
-# That copy is redundant, and actively harmful, whenever the consumer's
-# build already has the binding and Core installed in the SAME prefix tree
-# this package installs into (e.g. a vcpkg triplet install, where zlink and
-# zlink-cpp are declared dependencies and are already sitting in
-# ${CURRENT_INSTALLED_DIR} before this package's own install step runs):
-# every one of those dependencies' installed headers -- not just the
-# binding's -- lives under that shared prefix's single "include/" tree, so
-# re-staging "the include directory" re-stages all of them, and vcpkg's
-# install step then refuses the package outright, reporting a file
-# conflict with whichever dependency happens to be listed first. Turn this
-# off wherever the binding and Core are already guaranteed to be
-# findable alongside this package.
-option(ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES
-  "Stage a private copy of the binding and Core package into the StreamConnector install tree for standalone consumption" ON)
-
 option(ZLINK_FRAMEWORK_CPP_BUILD_TESTS "Build C++ framework tests" ON)
 option(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS "Build isolated C++ service foundation tests" ON)
 option(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES "Build C++ framework samples (opt-in; samples/sample-build-common.sh enables it for each samples/<Sample>/run_sample.sh)" OFF)
 option(ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE "Build the C++ cross-language e2e host" ON)
-option(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK "Install C++ framework and HTTP client package artifacts" ON)
+option(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK "Build and install C++ framework and HTTP client package artifacts" ON)
+option(ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES
+  "Stage Core and the C++ binding in a standalone Framework install" ON)
+if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
+  find_package(opentelemetry-cpp CONFIG REQUIRED COMPONENTS api)
+endif()
 option(ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT "Build Stream Connector e2e client helpers" ON)
 option(ZLINK_STREAM_CONNECTOR_BUILD_UNREAL "Build Unreal Stream Connector source adapter" ON)
 option(ZLINK_STREAM_CONNECTOR_BUILD_GODOT "Build Godot Stream Connector source adapter" ON)
@@ -135,6 +119,7 @@ set(ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX "${_zlink_default_cpp_prefix}" CA
   "Local zlink_cpp package install prefix (empty: wherever find_package locates it)")
 set(ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX "${_zlink_default_core_prefix}" CACHE PATH
   "Local zlink Core package install prefix used by zlink_cpp (empty: wherever find_package locates it)")
+if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
 if(NOT TARGET zlink::cpp)
   foreach(_zlink_prefix IN ITEMS
       "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}"
@@ -221,6 +206,8 @@ if(WIN32 AND EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}")
       "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_STAGE_DIR}"
     COMMENT "Staging the Core runtime next to the build tree executables"
     VERBATIM)
+endif()
+
 endif()
 
 set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
@@ -339,6 +326,7 @@ function(zlink_framework_cpp_configure_shared_library target_name)
   endif()
 endfunction()
 
+if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
 add_library(zlink_framework_provider_abstractions ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   framework/src/runtime/dispatch/provider_task_context.cpp)
 add_library(zlink::framework_provider_abstractions ALIAS
@@ -355,6 +343,7 @@ function(zlink_framework_cpp_configure_m6_objects target_name)
   target_compile_features(${target_name} PUBLIC cxx_std_20)
   target_include_directories(${target_name} PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
+    ${ZLINK_FRAMEWORK_CPP_DIR}/common/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(${target_name} PRIVATE
@@ -467,6 +456,7 @@ if(MSVC)
 endif()
 target_include_directories(zlink_framework PUBLIC
   $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/framework/include>
+  $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/common/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_include_directories(zlink_framework PRIVATE
   ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
@@ -482,6 +472,8 @@ endif()
 if(WIN32)
   target_link_libraries(zlink_framework PUBLIC bcrypt)
 endif()
+endif()
+
 set(ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR "" CACHE PATH
   "Boost include directory used by the C++ framework and stream connector")
 if(NOT ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST AND NOT ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR
@@ -524,6 +516,7 @@ function(zlink_framework_cpp_add_asio_system_libraries target_name)
   endif()
 endfunction()
 
+if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
 zlink_framework_cpp_add_boost_headers(zlink_framework)
 # The M6 objects are linked into zlink_framework, so they must see the same
 # Boost headers as the rest of its translation units.
@@ -531,6 +524,8 @@ zlink_framework_cpp_add_boost_headers(zlink_framework_m6a_objects)
 zlink_framework_cpp_add_boost_headers(zlink_framework_m6b_objects)
 zlink_framework_cpp_add_boost_headers(zlink_framework_m6c_objects)
 zlink_framework_cpp_add_asio_system_libraries(zlink_framework)
+endif()
+
 find_package(nlohmann_json QUIET)
 if(NOT nlohmann_json_FOUND)
   FetchContent_Declare(
@@ -539,6 +534,8 @@ if(NOT nlohmann_json_FOUND)
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
   FetchContent_MakeAvailable(nlohmann_json)
 endif()
+find_package(OpenSSL QUIET)
+if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
 # These object libraries compile Framework headers before they are consumed by
 # zlink_framework, so they need the JSON include usage requirement directly.
 foreach(M6ObjectTarget IN ITEMS
@@ -547,7 +544,6 @@ foreach(M6ObjectTarget IN ITEMS
     zlink_framework_m6c_objects)
   target_link_libraries(${M6ObjectTarget} PRIVATE nlohmann_json::nlohmann_json)
 endforeach()
-find_package(OpenSSL QUIET)
 target_link_libraries(zlink_framework PUBLIC nlohmann_json::nlohmann_json)
 if(OpenSSL_FOUND)
   target_compile_definitions(zlink_framework PRIVATE
@@ -556,6 +552,9 @@ if(OpenSSL_FOUND)
   target_link_libraries(zlink_framework PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 endif()
 
+endif()
+
+if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
 add_library(zlink_http_client ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   http-client/src/client.cpp
   http-client/src/runtime/compression.cpp
@@ -654,6 +653,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   endif()
 endif()
 
+endif()
+
 add_library(zlink_stream_connector ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   connector/core/src/runtime/calls/zlink_stream_calls.cpp
   connector/core/src/runtime/connector_runtime.cpp
@@ -674,12 +675,12 @@ target_compile_features(zlink_stream_connector PUBLIC cxx_std_20)
 zlink_framework_cpp_configure_msvc_target(zlink_stream_connector)
 target_include_directories(zlink_stream_connector PUBLIC
   $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/connector/core/include>
+  $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/common/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_include_directories(zlink_stream_connector PRIVATE
   ${ZLINK_FRAMEWORK_CPP_DIR}/connector/core/src)
 zlink_framework_cpp_add_boost_headers(zlink_stream_connector)
 zlink_framework_cpp_add_asio_system_libraries(zlink_stream_connector)
-target_link_libraries(zlink_stream_connector PUBLIC zlink::cpp)
 target_link_libraries(zlink_stream_connector PRIVATE Threads::Threads nlohmann_json::nlohmann_json)
 if(ZLINK_STREAM_CONNECTOR_WITH_TLS AND OpenSSL_FOUND)
   target_compile_definitions(zlink_stream_connector PRIVATE
@@ -696,19 +697,22 @@ if(ZLINK_STREAM_CONNECTOR_WITH_WEBSOCKET)
   target_compile_definitions(zlink_stream_connector PRIVATE
     ZLINK_STREAM_CONNECTOR_WITH_WEBSOCKET)
 endif()
-if(ZLINK_STREAM_CONNECTOR_WITH_LZ4 OR ZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4)
+if(ZLINK_STREAM_CONNECTOR_WITH_LZ4
+    OR (ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK AND ZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4))
   find_package(lz4 REQUIRED)
   if(ZLINK_STREAM_CONNECTOR_WITH_LZ4)
     target_link_libraries(zlink_stream_connector PRIVATE lz4::lz4)
     set(ZLINK_STREAM_CONNECTOR_EXPORT_LZ4_DEPENDENCY "find_dependency(lz4)")
   endif()
-  if(ZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4)
+  if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK AND ZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4)
     target_link_libraries(zlink_framework PRIVATE lz4::lz4)
     set(ZLINK_FRAMEWORK_EXPORT_LZ4_DEPENDENCY "find_dependency(lz4)")
   endif()
 endif()
-target_compile_definitions(zlink_framework PRIVATE
-  $<$<BOOL:${ZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4}>:ZLINK_FRAMEWORK_STREAM_WITH_LZ4>)
+if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
+  target_compile_definitions(zlink_framework PRIVATE
+    $<$<BOOL:${ZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4}>:ZLINK_FRAMEWORK_STREAM_WITH_LZ4>)
+endif()
 target_compile_definitions(zlink_stream_connector PRIVATE
   $<$<BOOL:${ZLINK_STREAM_CONNECTOR_WITH_LZ4}>:ZLINK_STREAM_CONNECTOR_WITH_LZ4>)
 
@@ -719,6 +723,7 @@ set_target_properties(zlink_stream_connector_codecs PROPERTIES
 target_compile_features(zlink_stream_connector_codecs INTERFACE cxx_std_20)
 target_include_directories(zlink_stream_connector_codecs INTERFACE
   $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/framework/include>
+  $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/common/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(zlink_stream_connector_codecs INTERFACE
   zlink::stream_connector
@@ -803,8 +808,10 @@ function(zlink_enable_coverage target_name)
   endif()
 endfunction()
 
-zlink_enable_coverage(zlink_framework)
-zlink_enable_coverage(zlink_http_client)
+if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
+  zlink_enable_coverage(zlink_framework)
+  zlink_enable_coverage(zlink_http_client)
+endif()
 zlink_enable_coverage(zlink_stream_connector)
 if(TARGET zlink_unreal_stream_connector)
   zlink_enable_coverage(zlink_unreal_stream_connector)
@@ -816,6 +823,7 @@ if(TARGET zlink_axmol_stream_connector)
   zlink_enable_coverage(zlink_axmol_stream_connector)
 endif()
 
+if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
 function(add_zlink_framework_codec_extension target_name alias_name include_dir)
   add_library(${target_name} INTERFACE)
   add_library(${alias_name} ALIAS ${target_name})
@@ -927,6 +935,8 @@ elseif(TARGET libuv::uv)
     "find_dependency(libuv CONFIG)\n")
 endif()
 
+endif()
+
 set(ZLINK_FRAMEWORK_CPP_PACKAGE_DEPENDENCY_PREFIX_PATH
   ${CMAKE_PREFIX_PATH})
 # Every dependency the installed package config resolves with
@@ -979,121 +989,96 @@ if(ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT)
     EXPORT zlink_stream_connector_cppTargets
     COMPONENT StreamConnector)
 endif()
-# A found package's generated <Name>Targets.cmake computes its own
-# IMPORTED_LOCATION by walking a *fixed number* of parent directories up
-# from wherever the file is actually loaded from (see the generated
-# get_filename_component(_IMPORT_PREFIX ... PATH) chain) -- it does not
-# record its original prefix. That hop count is baked in at the depth the
-# package was originally installed at: two hops for a from-source/archive
-# install's "<prefix>/lib/cmake/<name>" (three path segments), one hop for
-# a vcpkg install's "<prefix>/share/<name>" after vcpkg_cmake_config_fixup
-# relocates it there (two path segments). Copying the directory to a
-# destination of a *different* depth silently breaks that arithmetic
-# without any configure-time error -- the resulting IMPORTED_LOCATION just
-# points at a path that does not exist (observed: an extra "lib" or
-# "debug/lib" segment). So the destination here must mirror the exact
-# depth (and names) <name>_DIR was actually found at, not a fixed
-# "lib/cmake/<name>".
-function(zlink_framework_cpp_stage_dependency_cmake_config found_dir)
-  get_filename_component(_zlink_fw_cfg_parent "${found_dir}" DIRECTORY)
-  get_filename_component(_zlink_fw_cfg_parent_name "${_zlink_fw_cfg_parent}" NAME)
-  if(_zlink_fw_cfg_parent_name STREQUAL "cmake")
-    # "<prefix>/<libdir>/cmake/<name>" (e.g. from-source/archive installs).
-    get_filename_component(_zlink_fw_cfg_grandparent "${_zlink_fw_cfg_parent}" DIRECTORY)
-    get_filename_component(_zlink_fw_cfg_grandparent_name "${_zlink_fw_cfg_grandparent}" NAME)
-    install(DIRECTORY "${found_dir}"
-      DESTINATION "${_zlink_fw_cfg_grandparent_name}/cmake"
-      COMPONENT StreamConnector)
-  else()
-    # "<prefix>/<libdir-or-share>/<name>" (e.g. vcpkg_cmake_config_fixup).
-    install(DIRECTORY "${found_dir}"
-      DESTINATION "${_zlink_fw_cfg_parent_name}"
-      COMPONENT StreamConnector)
-  endif()
-endfunction()
-# vcpkg's default triplet is dual-configuration: alongside the release tree
-# it installs at "<prefix>/<libdir>/...", it builds and installs a second,
-# parallel debug tree at "<prefix>/debug/<libdir>/...". The <name>Targets.cmake
-# staged verbatim by zlink_framework_cpp_stage_dependency_cmake_config above
-# is the very same config vcpkg generates, and vcpkg's generated config
-# unconditionally declares an IMPORTED_LOCATION_DEBUG next to
-# IMPORTED_LOCATION_RELEASE -- observed for both zlink (Core) and zlink_cpp:
-# "${_IMPORT_PREFIX}/debug/lib/libzlink.a" and
-# "${_IMPORT_PREFIX}/debug/lib/libzlink_cpp.a". Staging only the release
-# binary leaves that promise broken -- the same installed/config-promises
-# mismatch #384 fixed for the single-configuration case, just for the debug
-# configuration instead. A from-source/archive install never has a
-# "debug/" tree (one configuration is built and installed at a time), so
-# this must not hardcode "debug/lib" as something that always exists: it
-# mirrors whatever relative path the caller's own glob already found under
-# the dependency's prefix, checks for a "debug/" counterpart at that same
-# relative path, and quietly does nothing when there is none.
-function(zlink_framework_cpp_stage_debug_counterparts prefix found_files)
-  foreach(_zlink_fw_bin ${found_files})
-    file(RELATIVE_PATH _zlink_fw_bin_rel "${prefix}" "${_zlink_fw_bin}")
-    set(_zlink_fw_bin_debug "${prefix}/debug/${_zlink_fw_bin_rel}")
-    if(EXISTS "${_zlink_fw_bin_debug}")
-      get_filename_component(_zlink_fw_bin_rel_dir "${_zlink_fw_bin_rel}" DIRECTORY)
-      install(FILES "${_zlink_fw_bin_debug}"
-        DESTINATION "debug/${_zlink_fw_bin_rel_dir}"
-        COMPONENT StreamConnector)
+if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK
+    AND ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES
+    AND NOT ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE)
+  # The server Framework targets still use zlink::cpp. Preserve each dependency
+  # config's original depth so its generated imported paths resolve in the archive.
+  function(zlink_framework_cpp_stage_dependency_config found_dir)
+    get_filename_component(_parent "${found_dir}" DIRECTORY)
+    get_filename_component(_parent_name "${_parent}" NAME)
+    if(_parent_name STREQUAL "cmake")
+      get_filename_component(_grandparent "${_parent}" DIRECTORY)
+      get_filename_component(_grandparent_name "${_grandparent}" NAME)
+      set(_destination "${_grandparent_name}/cmake")
+    else()
+      set(_destination "${_parent_name}")
     endif()
-  endforeach()
-endfunction()
-# The stream connector and Unreal adapter are standalone packages: stage the
-# exact binding and Core package that their relative config imports reference.
-if(TARGET zlink_stream_connector AND NOT ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE
-    AND ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES)
+    install(DIRECTORY "${found_dir}"
+      DESTINATION "${_destination}" COMPONENT Framework)
+  endfunction()
+
+  function(zlink_framework_cpp_stage_debug_counterparts prefix found_files)
+    foreach(_file IN LISTS found_files)
+      file(RELATIVE_PATH _relative "${prefix}" "${_file}")
+      set(_debug_file "${prefix}/debug/${_relative}")
+      if(EXISTS "${_debug_file}")
+        get_filename_component(_relative_dir "${_relative}" DIRECTORY)
+        install(FILES "${_debug_file}"
+          DESTINATION "debug/${_relative_dir}" COMPONENT Framework)
+      endif()
+    endforeach()
+  endfunction()
+
   install(DIRECTORY "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/include/"
+    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/include/"
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-    COMPONENT StreamConnector
-    FILES_MATCHING PATTERN "*.hpp" PATTERN "*.h")
-  file(GLOB ZLINK_FRAMEWORK_CPP_BINDING_LIBRARIES
+    COMPONENT Framework FILES_MATCHING PATTERN "*.hpp" PATTERN "*.h")
+  file(GLOB _binding_libraries
     "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/libzlink_cpp.a"
     "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/zlink_cpp.lib"
     "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/libzlink_cpp.lib"
     "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/libzlink_cpp.dll.a")
-  if(NOT ZLINK_FRAMEWORK_CPP_BINDING_LIBRARIES)
-    message(FATAL_ERROR
-      "The installed zlink_cpp package has no link library under "
-      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib")
-  endif()
-  install(FILES ${ZLINK_FRAMEWORK_CPP_BINDING_LIBRARIES}
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    COMPONENT StreamConnector)
-  zlink_framework_cpp_stage_debug_counterparts(
-    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}" "${ZLINK_FRAMEWORK_CPP_BINDING_LIBRARIES}")
-  # zlink_cpp_DIR/zlink_DIR come from the find_package(zlink_cpp ...)/nested
-  # find_dependency(zlink ...) calls above: that is the same config-mode
-  # search CMake itself uses, so it resolves wherever each package's config
-  # actually landed, whatever the layout.
-  if(NOT zlink_cpp_DIR)
-    message(FATAL_ERROR
-      "The installed zlink_cpp package has no findable CMake config "
-      "(find_package(zlink_cpp CONFIG) did not set zlink_cpp_DIR)")
-  endif()
-  zlink_framework_cpp_stage_dependency_cmake_config("${zlink_cpp_DIR}")
-  if(NOT zlink_DIR)
-    message(FATAL_ERROR
-      "The installed Core package has no findable CMake config "
-      "(find_package(zlink CONFIG), pulled in transitively by zlink_cpp's "
-      "own find_dependency(zlink ...), did not set zlink_DIR)")
-  endif()
-  zlink_framework_cpp_stage_dependency_cmake_config("${zlink_DIR}")
   if(WIN32)
-    file(GLOB ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES
+    file(GLOB _binding_import_libraries
       "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/*.lib"
       "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/*.dll.a")
-    if(ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES)
-      install(FILES ${ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES}
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT StreamConnector)
-      zlink_framework_cpp_stage_debug_counterparts(
-        "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}" "${ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES}")
-    endif()
+    list(APPEND _binding_libraries ${_binding_import_libraries})
+    list(REMOVE_DUPLICATES _binding_libraries)
   endif()
+  if(NOT _binding_libraries)
+    message(FATAL_ERROR "The installed zlink_cpp package has no link library")
+  endif()
+  install(FILES ${_binding_libraries}
+    DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT Framework)
+  zlink_framework_cpp_stage_debug_counterparts(
+    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}" "${_binding_libraries}")
+  if(NOT zlink_cpp_DIR OR NOT zlink_DIR)
+    message(FATAL_ERROR "The Framework archive needs findable zlink_cpp and zlink configs")
+  endif()
+  zlink_framework_cpp_stage_dependency_config("${zlink_cpp_DIR}")
+  zlink_framework_cpp_stage_dependency_config("${zlink_DIR}")
+
+  if(WIN32)
+    install(DIRECTORY "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/bin/"
+      DESTINATION ${CMAKE_INSTALL_BINDIR}
+      COMPONENT Framework FILES_MATCHING PATTERN "*.dll")
+    file(GLOB _core_libraries
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/*.lib"
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/bin/*.lib")
+  elseif(APPLE)
+    file(GLOB _core_libraries
+      # Core's macOS archive carries its OpenSSL dylibs next to libzlink (@loader_path).
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/*.dylib"
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/libzlink.a")
+  else()
+    file(GLOB _core_libraries
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/libzlink.so*"
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/libzlink.a")
+  endif()
+  if(NOT _core_libraries)
+    message(FATAL_ERROR "The installed Core package has no link library")
+  endif()
+  install(FILES ${_core_libraries}
+    DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT Framework)
+  zlink_framework_cpp_stage_debug_counterparts(
+    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}" "${_core_libraries}")
 endif()
 if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
+  install(DIRECTORY common/include/
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    COMPONENT Framework
+    FILES_MATCHING PATTERN "*.hpp")
   install(DIRECTORY framework/include/
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     COMPONENT Framework
@@ -1121,6 +1106,19 @@ install(DIRECTORY connector/core/include/
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
   COMPONENT StreamConnector
   FILES_MATCHING PATTERN "*.hpp")
+install(DIRECTORY common/include/
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+  COMPONENT StreamConnector
+  FILES_MATCHING PATTERN "*.hpp")
+install(FILES
+  framework/include/zlink/framework/codecs/json_stream_connector.hpp
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/zlink/framework/codecs
+  COMPONENT StreamConnector)
+if(ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT)
+  install(FILES framework/include/zlink/framework/codecs/json_stream_e2e_client.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/zlink/framework/codecs
+    COMPONENT StreamConnector)
+endif()
 if(ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT)
   install(DIRECTORY connector/e2e-client/include/
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
@@ -1136,105 +1134,6 @@ if(TARGET zlink_unreal_stream_connector)
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ZLinkStreamConnector
     COMPONENT StreamConnector
     FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp")
-endif()
-# The copied Core CMake config (zlinkTargets*.cmake, staged above by
-# zlink_framework_cpp_stage_dependency_cmake_config) unconditionally
-# declares an imported target for whichever of the shared/static runtime
-# Core actually produced -- libzlink (shared) or libzlink-static. Gating
-# this whole block on the *shared* runtime's existence alone means a
-# static-only Core build (e.g. vcpkg's default Linux triplet, which forces
-# VCPKG_LIBRARY_LINKAGE=static and so never produces libzlink.so at all)
-# skips staging entirely and find_package(zlink_framework CONFIG) then
-# fails downstream with "... references the file .../libzlink.a but this
-# file does not exist." The gate must trigger on either artifact existing.
-# This block only exists to back the promise of the Core config copied
-# above, so it is gated by the same ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES
-# switch: when that staging is off, no copied config was installed to make
-# a promise in the first place, and re-staging Core's own already-installed
-# runtime file here would conflict with it exactly like the headers did.
-if(ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES
-    AND ((ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME AND EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}")
-      OR (ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_RUNTIME AND EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_RUNTIME}")))
-  if(WIN32)
-    if(EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}")
-      if(ZLINK_FRAMEWORK_CPP_SHARED)
-        install(DIRECTORY "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/bin/"
-          DESTINATION ${CMAKE_INSTALL_BINDIR}
-          COMPONENT StreamConnector
-          FILES_MATCHING PATTERN "*.dll")
-      else()
-        install(FILES "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}"
-          DESTINATION ${CMAKE_INSTALL_BINDIR}
-          COMPONENT StreamConnector)
-      endif()
-      zlink_framework_cpp_stage_debug_counterparts(
-        "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}" "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}")
-    endif()
-    file(GLOB ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES
-      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/*.lib"
-      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/bin/*.lib")
-    if(ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES)
-      install(FILES ${ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES}
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT StreamConnector)
-      zlink_framework_cpp_stage_debug_counterparts(
-        "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}" "${ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES}")
-    endif()
-  elseif(UNIX AND NOT APPLE)
-    # Copy whatever Core actually built: the shared runtime, the static
-    # archive, or both. The glob yields nothing for a pattern that has no
-    # match, so this stays correct for every Core build configuration
-    # (BUILD_SHARED/BUILD_STATIC in any combination).
-    file(GLOB ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_FILES
-      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/libzlink.so*"
-      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/libzlink.a")
-    if(NOT ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_FILES)
-      message(FATAL_ERROR
-        "Neither libzlink.so nor libzlink.a found under "
-        "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib")
-    endif()
-    install(FILES ${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_FILES}
-      DESTINATION ${CMAKE_INSTALL_LIBDIR}
-      COMPONENT StreamConnector)
-    # vcpkg's default triplet installs a parallel debug tree
-    # ("<prefix>/debug/lib/libzlink.a") next to the release one staged just
-    # above; the copied zlinkTargets.cmake declares IMPORTED_LOCATION_DEBUG
-    # for it unconditionally (see zlink_framework_cpp_stage_debug_counterparts).
-    zlink_framework_cpp_stage_debug_counterparts(
-      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}" "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_FILES}")
-  else()
-    if(ZLINK_FRAMEWORK_CPP_SHARED)
-      file(GLOB ZLINK_FRAMEWORK_CPP_NATIVE_DYLIBS
-        "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/*.dylib")
-      if(ZLINK_FRAMEWORK_CPP_NATIVE_DYLIBS)
-        install(FILES ${ZLINK_FRAMEWORK_CPP_NATIVE_DYLIBS}
-          DESTINATION ${CMAKE_INSTALL_LIBDIR}
-          COMPONENT StreamConnector)
-        zlink_framework_cpp_stage_debug_counterparts(
-          "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}" "${ZLINK_FRAMEWORK_CPP_NATIVE_DYLIBS}")
-      endif()
-    elseif(EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}")
-      install(FILES "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}"
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT StreamConnector)
-      zlink_framework_cpp_stage_debug_counterparts(
-        "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}" "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}")
-    endif()
-    # Same promise/installed-files mismatch as the Linux branch above: the
-    # copied Core config can declare libzlink-static even though this
-    # install rule only ever staged the shared framework. Copy the static
-    # archive too when Core produced one -- and it may be the only artifact
-    # Core produced at all.
-    file(GLOB ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_LIBRARIES
-      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/libzlink.a")
-    if(ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_LIBRARIES)
-      install(FILES ${ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_LIBRARIES}
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT StreamConnector)
-      zlink_framework_cpp_stage_debug_counterparts(
-        "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}" "${ZLINK_FRAMEWORK_CPP_NATIVE_STATIC_LIBRARIES}")
-    endif()
-  endif()
 endif()
 if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
   install(EXPORT zlink_framework_cppTargets
@@ -1359,7 +1258,10 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   enable_testing()
 endif()
 
-include(${CMAKE_CURRENT_LIST_DIR}/tests/Zlink.Framework.ContractTests/release_test_labels.cmake)
+if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS OR ZLINK_FRAMEWORK_CPP_BUILD_TESTS
+    OR ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES)
+  include(${CMAKE_CURRENT_LIST_DIR}/tests/Zlink.Framework.ContractTests/release_test_labels.cmake)
+endif()
 
 function(zlink_framework_cpp_add_test)
   set(one_value_args NAME LABELS TIER TIMEOUT)
@@ -2519,6 +2421,22 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector.cpp
     "connector-unit;connector-integration;connector-e2e;connector-contract;connector-protocol;connector-transport;connector-typed;connector-coroutine;connector-dispatch;connector-timeout"
     contract)
+  add_executable(test_cpp_stream_connector_no_exceptions
+    tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_no_exceptions.cpp)
+  target_compile_features(test_cpp_stream_connector_no_exceptions PRIVATE cxx_std_20)
+  target_link_libraries(test_cpp_stream_connector_no_exceptions PRIVATE
+    zlink::stream_connector_codecs)
+  if(MSVC)
+    target_compile_options(test_cpp_stream_connector_no_exceptions PRIVATE /EHs-c- /D_HAS_EXCEPTIONS=0)
+  else()
+    target_compile_options(test_cpp_stream_connector_no_exceptions PRIVATE -fno-exceptions)
+  endif()
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_stream_connector_no_exceptions
+    COMMAND test_cpp_stream_connector_no_exceptions
+    LABELS "connector-unit;connector-contract"
+    TIER unit
+    TIMEOUT 30)
   if(WIN32)
     add_zlink_connector_test(
       test_cpp_stream_connector_process_exit
@@ -2533,6 +2451,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   set_tests_properties(test_cpp_stream_connector PROPERTIES
     RESOURCE_LOCK zlink_cpp_heavy_runtime)
   target_link_libraries(test_cpp_stream_connector PRIVATE
+    zlink::cpp
     zlink::stream_connector_codecs
     zlink::stream_e2e_client)
   if(ZLINK_HTTP_CLIENT_TEST_WITH_OPENSSL)
@@ -2637,7 +2556,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "connector-unreal-contract;connector-unreal-smoke"
     integration)
   target_link_libraries(test_unreal_adapter_push PRIVATE
-    zlink_unreal_stream_connector)
+    zlink_unreal_stream_connector
+    zlink::cpp)
 
   if(ZLINK_STREAM_CONNECTOR_BUILD_GODOT)
     add_subdirectory(connector/engines/godot/tests)

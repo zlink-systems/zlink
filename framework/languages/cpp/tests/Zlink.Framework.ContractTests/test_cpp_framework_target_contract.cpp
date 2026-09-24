@@ -93,6 +93,8 @@ int main ()
     const auto cmake = read_text_file (root / "CMakeLists.txt");
     const auto redis_hpp = read_text_file (
       root / "extensions/framework-locations-redis/include/zlink/locations/redis.hpp");
+    const auto redis_cpp =
+      read_text_file (root / "extensions/framework-locations-redis/src/redis.cpp");
     const auto spot_runtime =
       read_text_file (root / "framework/src/runtime/spots/spot_runtime.cpp");
     const auto spot_runtime_header =
@@ -182,6 +184,8 @@ int main ()
       read_text_file (include_root / "zlink/framework/contracts/codecs/serializer.hpp");
     const auto framework_json_header =
       read_text_file (include_root / "zlink/framework/codecs/json.hpp");
+    const auto json_profile_header =
+      read_text_file (root / "common/include/zlink/json_profile.hpp");
     const auto raw_fanout_owner =
       read_text_file (root / "framework/src/runtime/fanout/raw_fanout_owner.cpp");
     const auto raw_mesh_node_owner =
@@ -497,10 +501,13 @@ int main ()
     for (const std::string required :
          {"framework-json-v1 rejects a UTF-8 BOM", "framework-json-v1 rejects duplicate properties",
           "framework-json-v1 rejects non-finite numbers"}) {
-        gate.require (framework_json_header.find (required) != std::string::npos, "CPP-WIRE-003",
+        gate.require (json_profile_header.find (required) != std::string::npos, "CPP-WIRE-003",
                       "framework-json-v1 validation is missing: " + required);
     }
-    for (const std::string required : {"detail::dump_profile", "detail::parse_profile"}) {
+    gate.require (framework_json_header.find ("<zlink/json_profile.hpp>") != std::string::npos,
+                  "CPP-WIRE-003", "server JSON codec does not use the shared profile");
+    for (const std::string required :
+         {"zlink::detail::json_profile::dump", "zlink::detail::json_profile::parse"}) {
         gate.require (serializer_header.find (required) != std::string::npos, "CPP-WIRE-003",
                       "default typed serializer bypasses the JSON profile: " + required);
     }
@@ -816,8 +823,8 @@ int main ()
      * IMP-CP-38 — the public Redis provider implements the opaque atomic Store
      * SPI. Owner leases and other domain repositories remain Framework-private.
      */
-    gate.require (redis_hpp.find ("store_version_condition_t") != std::string::npos
-                    && redis_hpp.find ("write_script") != std::string::npos
+    gate.require (redis_cpp.find ("store_version_condition_t") != std::string::npos
+                    && redis_cpp.find ("write_script") != std::string::npos
                     && redis_hpp.find ("redis_location_repository_t") == std::string::npos,
                   "IMP-CP-38",
                   "Redis location provider does not preserve the opaque atomic Store boundary");
@@ -826,8 +833,8 @@ int main ()
      * IMP-CP-36 — Store scan keeps the first-page snapshot and reports an
      * expired opaque cursor instead of exposing a provider-specific cursor.
      */
-    gate.require (redis_hpp.find ("_scan_snapshots") != std::string::npos
-                    && redis_hpp.find ("store_scan_expired_t") != std::string::npos,
+    gate.require (redis_cpp.find ("_scan_snapshots") != std::string::npos
+                    && redis_cpp.find ("store_scan_expired_t") != std::string::npos,
                   "IMP-CP-36", "Redis opaque Store scan does not preserve snapshot cursor state");
     gate.require (redis_hpp.find ("parse_scan_state") == std::string::npos
                     && redis_hpp.find ("parse_offset") == std::string::npos,
@@ -1188,7 +1195,7 @@ int main ()
     /* CPP-OWN-004 — the default JSON serializer writes and reads the encoded
      * payload directly instead of round-tripping through a binding message. */
     gate.require (
-      serializer_header.find ("codecs::json::detail::dump_profile (") != std::string::npos
+      serializer_header.find ("zlink::detail::json_profile::dump (") != std::string::npos
         && serializer_header.find ("nlohmann::json (value)") != std::string::npos
         && serializer_header.find ("payload.to_raw ().template parse_json") == std::string::npos
         && serializer_header.find ("zlink::message_t::from_json (value)") == std::string::npos,

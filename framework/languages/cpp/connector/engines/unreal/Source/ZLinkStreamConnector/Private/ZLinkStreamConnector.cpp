@@ -68,6 +68,7 @@ void LogCallbackException (const char *Message)
 
 template <typename Callback> void InvokeCallback (Callback &&Call)
 {
+#if ZLINK_STREAM_CONNECTOR_HAS_EXCEPTIONS
     try {
         Call ();
     }
@@ -77,6 +78,9 @@ template <typename Callback> void InvokeCallback (Callback &&Call)
     catch (...) {
         LogCallbackException ("unknown exception");
     }
+#else
+    Call ();
+#endif
 }
 
 std::string to_utf8 (const FString &value)
@@ -122,9 +126,10 @@ zlink::stream_connector::metadata_t to_metadata (const TMap<FString, FString> &m
     return converted;
 }
 
-zlink::message_t to_payload (const FString &json)
+std::vector<std::uint8_t> to_payload (const FString &json)
 {
-    return zlink::message_t::from (to_utf8 (json));
+    const auto bytes = to_utf8 (json);
+    return {bytes.begin (), bytes.end ()};
 }
 
 EZLinkStreamConnectionState to_unreal_state (zlink::stream_connector::connection_state_t state)
@@ -343,8 +348,9 @@ class FZLinkStreamConnectorRuntime
         }
         auto pending = Pending;
         auto completion = std::make_shared<request_callback_t> (std::move (Callback));
-        request.submit<zlink::message_t> (
-          [pending, completion] (zlink::stream_connector::result_t<zlink::message_t> result) {
+        request.submit<std::vector<std::uint8_t>> (
+          [pending,
+           completion] (zlink::stream_connector::result_t<std::vector<std::uint8_t>> result) {
               FZLinkStreamRequestResult completed;
               completed.bSuccess = static_cast<bool> (result);
               if (result) {
@@ -576,10 +582,12 @@ class FZLinkStreamConnectorRuntime
 #else
         converted.PacketName = packet.name;
 #endif
-        const auto payload = packet.payload.to_string ();
+        const auto &payload = packet.payload;
 #if __has_include("CoreMinimal.h")
-        converted.Payload.Append (reinterpret_cast<const uint8 *> (payload.data ()),
-                                  static_cast<int32> (payload.size ()));
+        if (!payload.empty ()) {
+            converted.Payload.Append (reinterpret_cast<const uint8 *> (payload.data ()),
+                                      static_cast<int32> (payload.size ()));
+        }
 #else
         converted.Payload.assign (payload.begin (), payload.end ());
 #endif

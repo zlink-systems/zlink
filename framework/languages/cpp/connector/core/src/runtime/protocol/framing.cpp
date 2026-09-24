@@ -20,11 +20,6 @@ namespace zlink::stream_connector::detail
 namespace
 {
 
-zlink::message_t message_from_bytes (const std::vector<std::uint8_t> &bytes)
-{
-    return zlink::message_t::from (bytes);
-}
-
 bool has_flag (header_flags_t flags, header_flags_t flag) noexcept
 {
     return (static_cast<std::uint8_t> (flags) & static_cast<std::uint8_t> (flag)) != 0;

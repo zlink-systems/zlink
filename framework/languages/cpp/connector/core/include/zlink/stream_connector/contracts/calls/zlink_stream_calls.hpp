@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
-#include <zlink/Contracts/Messaging/message.hpp>
 #include <zlink/stream_connector/contracts/result.hpp>
 #include <zlink/stream_connector/contracts/stream_payload.hpp>
 #include <zlink/stream_connector/contracts/zlink_stream_connector_options.hpp>
@@ -41,12 +40,13 @@ struct request_reply_t
 
 /* Applies the connector's typed codec (stream-connector §5.4) to a received
  * payload before the payload type decodes it. */
-zlink::message_t encode_typed_payload (const std::shared_ptr<void> &state,
-                                       const zlink::message_t &payload);
-zlink::message_t decode_typed_payload (const std::shared_ptr<void> &state, const packet_t &packet);
-zlink::message_t decode_typed_reply (const std::shared_ptr<void> &state,
-                                     codec_t codec,
-                                     const zlink::message_t &payload);
+std::vector<std::uint8_t> encode_typed_payload (const std::shared_ptr<void> &state,
+                                                const std::vector<std::uint8_t> &payload);
+std::vector<std::uint8_t> decode_typed_payload (const std::shared_ptr<void> &state,
+                                                const packet_t &packet);
+std::vector<std::uint8_t> decode_typed_reply (const std::shared_ptr<void> &state,
+                                              codec_t codec,
+                                              const std::vector<std::uint8_t> &payload);
 
 /* Rebuilds the received message from the packet the connector queued
  * (stream-connector §5.5): the wait surfaces hand the caller a message, not a
@@ -287,7 +287,7 @@ class request_call_t
                   _result.error_code ().value_or (error_code_t::disconnected),
                   _result.error () ? _result.error ()->message : "request failed");
             }
-            if constexpr (std::is_same_v<T, zlink::message_t>) {
+            if constexpr (std::is_same_v<T, std::vector<std::uint8_t>>) {
                 return result_t<T>::success (_result.value ().packet.payload);
             } else {
                 return detail::decode_typed_message<T> (

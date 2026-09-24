@@ -1,12 +1,13 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
-#include <zlink/Contracts/Messaging/message.hpp>
 #include <zlink/stream_connector/contracts/zlink_stream_enums.hpp>
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace zlink::stream_connector
 {
@@ -27,10 +28,10 @@ class typed_codec_t
     virtual codec_t codec_id () const noexcept = 0;
 
     /// Transforms a serialized typed payload into its wire form.
-    virtual zlink::message_t encode (const zlink::message_t &payload) const = 0;
+    virtual std::vector<std::uint8_t> encode (const std::vector<std::uint8_t> &payload) const = 0;
 
     /// Transforms a wire payload back into the serialized typed form.
-    virtual zlink::message_t decode (const zlink::message_t &payload) const = 0;
+    virtual std::vector<std::uint8_t> decode (const std::vector<std::uint8_t> &payload) const = 0;
 };
 
 /// Default typed codec: JSON, with the payload already in its wire form.

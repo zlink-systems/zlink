@@ -769,34 +769,40 @@ void from_json (const nlohmann::json &json, named_reply_t &value)
     value.value = json.value ("value", 0);
 }
 
-zlink::message_t to_stream_payload (const named_request_t &value)
+std::vector<std::uint8_t> to_stream_payload (const named_request_t &value)
 {
-    return zlink::message_t::from_json (value);
+    const auto text = zlink::detail::json_profile::dump (nlohmann::json (value));
+    return {text.begin (), text.end ()};
 }
 
-void from_stream_payload (const zlink::message_t &message, named_request_t &value)
+void from_stream_payload (const std::vector<std::uint8_t> &message, named_request_t &value)
 {
-    value = message.parse_json<named_request_t> ();
+    value =
+      zlink::detail::json_profile::parse (message.begin (), message.end ()).get<named_request_t> ();
 }
 
-zlink::message_t to_stream_payload (const named_context_request_t &value)
+std::vector<std::uint8_t> to_stream_payload (const named_context_request_t &value)
 {
-    return zlink::message_t::from_json (value);
+    const auto text = zlink::detail::json_profile::dump (nlohmann::json (value));
+    return {text.begin (), text.end ()};
 }
 
-void from_stream_payload (const zlink::message_t &message, named_context_request_t &value)
+void from_stream_payload (const std::vector<std::uint8_t> &message, named_context_request_t &value)
 {
-    value = message.parse_json<named_context_request_t> ();
+    value = zlink::detail::json_profile::parse (message.begin (), message.end ())
+              .get<named_context_request_t> ();
 }
 
-zlink::message_t to_stream_payload (const named_reply_t &value)
+std::vector<std::uint8_t> to_stream_payload (const named_reply_t &value)
 {
-    return zlink::message_t::from_json (value);
+    const auto text = zlink::detail::json_profile::dump (nlohmann::json (value));
+    return {text.begin (), text.end ()};
 }
 
-void from_stream_payload (const zlink::message_t &message, named_reply_t &value)
+void from_stream_payload (const std::vector<std::uint8_t> &message, named_reply_t &value)
 {
-    value = message.parse_json<named_reply_t> ();
+    value =
+      zlink::detail::json_profile::parse (message.begin (), message.end ()).get<named_reply_t> ();
 }
 
 struct named_send_handler_t

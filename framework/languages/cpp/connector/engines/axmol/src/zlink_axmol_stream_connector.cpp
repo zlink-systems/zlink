@@ -9,6 +9,7 @@
 #endif
 
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <deque>
 #include <exception>
@@ -16,6 +17,7 @@
 #include <memory>
 #include <mutex>
 #include <utility>
+#include <vector>
 
 namespace zlink::axmol_stream_connector
 {
@@ -23,12 +25,11 @@ namespace zlink::axmol_stream_connector
 namespace
 {
 
-packet_t to_axmol_packet (std::string name, const zlink::message_t &payload)
+packet_t to_axmol_packet (std::string name, const std::vector<std::uint8_t> &payload)
 {
     packet_t packet;
     packet.name = std::move (name);
-    const auto bytes = payload.to_string ();
-    packet.payload.assign (bytes.begin (), bytes.end ());
+    packet.payload = payload;
     return packet;
 }
 
@@ -51,6 +52,7 @@ void log_callback_error (const char *message)
 
 template <typename Callback> void invoke_callback (Callback &&callback)
 {
+#if ZLINK_STREAM_CONNECTOR_HAS_EXCEPTIONS
     try {
         callback ();
     }
@@ -60,6 +62,9 @@ template <typename Callback> void invoke_callback (Callback &&callback)
     catch (...) {
         log_callback_error ("unknown exception");
     }
+#else
+    callback ();
+#endif
 }
 
 } // namespace
@@ -325,7 +330,7 @@ void stream_connector_t::send_json (std::string packet_name,
     zlink::stream_connector::packet_t packet;
     packet.name = std::move (packet_name);
     packet.codec = zlink::stream_connector::codec_t::json;
-    packet.payload = zlink::message_t::from (std::move (json_payload));
+    packet.payload.assign (json_payload.begin (), json_payload.end ());
     for (auto &entry : options.metadata) {
         packet.metadata.with (std::move (entry.first), std::move (entry.second));
     }
@@ -344,12 +349,12 @@ void stream_connector_t::request_json (std::string packet_name,
     zlink::stream_connector::packet_t packet;
     packet.name = std::move (packet_name);
     packet.codec = zlink::stream_connector::codec_t::json;
-    packet.payload = zlink::message_t::from (std::move (json_payload));
+    packet.payload.assign (json_payload.begin (), json_payload.end ());
     auto request = _runtime->connector.request (std::move (packet));
     request.timeout (std::chrono::milliseconds (static_cast<int> (timeout_seconds * 1000.0)));
-    request.submit<zlink::message_t> (
+    request.submit<std::vector<std::uint8_t>> (
       [runtime = std::weak_ptr<runtime_t> (_runtime), callback = std::move (callback)] (
-        zlink::stream_connector::result_t<zlink::message_t> result) mutable {
+        zlink::stream_connector::result_t<std::vector<std::uint8_t>> result) mutable {
           if (auto owner = runtime.lock ()) {
               request_result_t completion;
               if (result) {

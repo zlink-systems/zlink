@@ -10,11 +10,11 @@
 #ifdef ZLINK_STREAM_CONNECTOR_WITH_OPENSSL
 #include <boost/asio/ssl/host_name_verification.hpp>
 #include <boost/asio/ssl/stream.hpp>
+#include <boost/beast/ssl.hpp>
 #include <openssl/ssl.h>
 #endif
 #include <boost/beast/core/buffers_to_string.hpp>
 #include <boost/beast/core/flat_buffer.hpp>
-#include <boost/beast/ssl.hpp>
 #include <boost/beast/websocket.hpp>
 
 #include <algorithm>

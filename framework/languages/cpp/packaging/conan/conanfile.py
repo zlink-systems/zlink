@@ -84,22 +84,14 @@ class ZlinkFrameworkConan(ConanFile):
         tc.variables["CMAKE_INSTALL_LIBDIR"] = "lib"
         tc.variables["ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST"] = True
         tc.variables["ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK"] = True
+        tc.variables["ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES"] = False
         for suffix in ("TESTS", "FOUNDATION_TESTS", "SAMPLES", "E2E", "CROSS_LANGUAGE"):
             tc.variables["ZLINK_FRAMEWORK_CPP_BUILD_" + suffix] = False
         tc.variables["ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT"] = True
         for engine in ("UNREAL", "GODOT", "AXMOL"):
             tc.variables["ZLINK_STREAM_CONNECTOR_BUILD_" + engine] = False
-        # CMakeLists.txt's stream-connector staging step does not rely on the
-        # find_package(zlink_cpp CONFIG) result alone: it separately globs the
-        # binding's and Core's link libraries out of
-        # ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX / _CORE_PREFIX, two CACHE
-        # PATH variables that otherwise default to a workspace-relative
-        # ".artifacts/wsl/install/..." layout meant for the local-package
-        # workflow. Under Conan there is no such workspace tree next to the
-        # extracted source archive, so that glob finds nothing and CMake dies
-        # with "has no link library" at configure time. Point both prefixes at
-        # the actual Conan package folders so the existing override mechanism
-        # picks them up.
+        # Conan supplies Core and the binding as dependencies. Their package
+        # folders still identify the exact inputs used by the Framework build.
         zlink_cpp_dep = self.dependencies["zlink-cpp"]
         tc.variables["ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX"] = \
             zlink_cpp_dep.package_folder.replace("\\", "/")

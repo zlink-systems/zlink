@@ -114,7 +114,3 @@ ChatNotify godot-player: hello from Godot C++
 Godot 출력에 `Engine Lobby failed:`가 있으면 해당 오류를 확인한다. Server 로그에 scene 실행
 중 새로운 `client connected: <sessionId>` 행이 있어야 한다.
 Server는 해당 저장소 README의 stop 절차로 종료한다.
-
-현재 공개 Linux prebuilt의 `libzlink.so.0`은 initial-exec TLS를 사용한다. Godot 4.4.1 .NET의
-GDExtension 로드 시 `libstdc++.so.6: cannot allocate memory in static TLS block` 오류가
-재현된다. 따라서 위 Linux scene 실행의 통신은 아직 확인되지 않았다.

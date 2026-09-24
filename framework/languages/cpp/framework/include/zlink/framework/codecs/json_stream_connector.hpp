@@ -1,14 +1,16 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
-#include <zlink/framework/codecs/json.hpp>
+#include <zlink/json_profile.hpp>
 #include <zlink/stream_connector/contracts/connector.hpp>
 #include <zlink/stream_connector/contracts/stream_payload.hpp>
 
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace zlink::stream_connector::codecs
 {
@@ -17,17 +19,32 @@ template <typename T> struct codec_traits
 {
     static constexpr codec_t codec = codec_t::json;
 
-    static zlink::message_t encode (const T &value) { return zlink::message_t::from_json (value); }
-
-    static T decode (const zlink::message_t &message) { return message.parse_json<T> (); }
-
-    static T decode_message_pack (const zlink::message_t &message)
+    static std::vector<std::uint8_t> encode (const T &value)
     {
-        return nlohmann::json::from_msgpack (message.to_bytes ()).template get<T> ();
+        const auto text = zlink::detail::json_profile::dump (nlohmann::json (value));
+        return {text.begin (), text.end ()};
+    }
+
+    static T decode (const std::vector<std::uint8_t> &payload)
+    {
+#if ZLINK_STREAM_CONNECTOR_HAS_EXCEPTIONS
+        return zlink::detail::json_profile::parse (payload.begin (), payload.end ())
+          .template get<T> ();
+#else
+        const auto parsed =
+          zlink::detail::json_profile::try_parse (payload.begin (), payload.end ());
+        return parsed ? parsed->template get<T> () : T{};
+#endif
+    }
+
+    static T decode_message_pack (const std::vector<std::uint8_t> &payload)
+    {
+        return nlohmann::json::from_msgpack (payload).template get<T> ();
     }
 };
 
-template <typename T> void decode_payload (codec_t codec, const zlink::message_t &payload, T &value)
+template <typename T>
+void decode_payload (codec_t codec, const std::vector<std::uint8_t> &payload, T &value)
 {
     switch (codec) {
         case codec_t::json:
@@ -79,18 +96,18 @@ template <typename T>
 namespace zlink::stream_connector
 {
 
-template <typename T> zlink::message_t to_stream_payload (const T &value)
+template <typename T> std::vector<std::uint8_t> to_stream_payload (const T &value)
 {
     return codecs::codec_traits<T>::encode (value);
 }
 
 template <typename T>
-void from_stream_payload (codec_t codec, const zlink::message_t &payload, T &value)
+void from_stream_payload (codec_t codec, const std::vector<std::uint8_t> &payload, T &value)
 {
     codecs::decode_payload (codec, payload, value);
 }
 
-template <typename T> void from_stream_payload (const zlink::message_t &payload, T &value)
+template <typename T> void from_stream_payload (const std::vector<std::uint8_t> &payload, T &value)
 {
     value = codecs::codec_traits<T>::decode (payload);
 }

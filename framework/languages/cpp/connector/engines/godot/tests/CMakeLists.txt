@@ -3,7 +3,8 @@ target_compile_features(test_godot_stream_connector PRIVATE cxx_std_20)
 target_link_libraries(test_godot_stream_connector PRIVATE
   zlink_godot_stream_connector
   zlink::stream_connector
-  zlink::stream_connector_codecs)
+  zlink::stream_connector_codecs
+  zlink::cpp)
 zlink_framework_cpp_add_test(
   NAME test_godot_stream_connector
   COMMAND bash

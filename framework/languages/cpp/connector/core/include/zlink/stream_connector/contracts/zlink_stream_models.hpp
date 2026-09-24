@@ -1,14 +1,15 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
-#include <zlink/Contracts/Messaging/message.hpp>
 #include <zlink/stream_connector/contracts/zlink_stream_enums.hpp>
 
 #include <chrono>
+#include <cstdint>
 #include <map>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace zlink::stream_connector
 {
@@ -36,7 +37,7 @@ struct packet_t
     metadata_t metadata;
     codec_t codec = codec_t::raw;
     bool compressed = false;
-    zlink::message_t payload;
+    std::vector<std::uint8_t> payload;
     std::optional<std::string> actor_id;
 };
 

@@ -12,6 +12,7 @@
 #include <string>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace zlink::framework_codecs
 {
@@ -158,27 +159,27 @@ struct codec_traits<T>
 {
     static constexpr codec_t codec = codec_t::protobuf;
 
-    static zlink::message_t encode (const T &value)
+    static std::vector<std::uint8_t> encode (const T &value)
     {
         std::string bytes;
         if (!value.SerializeToString (&bytes)) {
             throw std::runtime_error ("protobuf codec failed to serialize "
                                       + std::string (value.GetTypeName ()));
         }
-        return zlink::message_t::from (bytes);
+        return {bytes.begin (), bytes.end ()};
     }
 
-    static T decode (const zlink::message_t &payload)
+    static T decode (const std::vector<std::uint8_t> &payload)
     {
         T value;
-        if (!value.ParseFromString (payload.to_string ())) {
+        if (!value.ParseFromString (std::string (payload.begin (), payload.end ()))) {
             throw std::runtime_error ("protobuf codec failed to parse "
                                       + std::string (value.GetTypeName ()));
         }
         return value;
     }
 
-    static T decode_message_pack (const zlink::message_t &)
+    static T decode_message_pack (const std::vector<std::uint8_t> &)
     {
         throw std::runtime_error ("protobuf payload cannot be decoded as MessagePack");
     }
