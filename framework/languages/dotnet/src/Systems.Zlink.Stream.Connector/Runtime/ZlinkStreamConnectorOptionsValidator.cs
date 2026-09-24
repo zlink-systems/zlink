@@ -20,7 +20,10 @@ internal static class ZlinkStreamConnectorOptionsValidator
         // Endpoint scheme and transport agreement, plus unsupported schemes.
         ZlinkStreamTransportFactory.ValidateTransport(options);
 
-        if (options.Transport is { } transport && !Enum.IsDefined(transport))
+        if (
+            options.Transport is { } transport
+            && !Enum.IsDefined(typeof(ZlinkStreamTransport), transport)
+        )
             throw Validation("Transport is invalid.");
 
         if (options.NameResolver is null)
@@ -45,7 +48,7 @@ internal static class ZlinkStreamConnectorOptionsValidator
             throw Validation("MaxReceivePayloadSize must be positive.");
         if (options.MaxPendingDispatchCallbacks <= 0)
             throw Validation("MaxPendingDispatchCallbacks must be positive.");
-        if (!Enum.IsDefined(options.DispatchMode))
+        if (!Enum.IsDefined(typeof(ZlinkStreamDispatchMode), options.DispatchMode))
             throw Validation("DispatchMode is invalid.");
 
         ValidateCompression(options);
@@ -79,7 +82,7 @@ internal static class ZlinkStreamConnectorOptionsValidator
 
     private static void ValidateCompression(ZlinkStreamConnectorOptions options)
     {
-        if (!Enum.IsDefined(options.Compression))
+        if (!Enum.IsDefined(typeof(ZlinkStreamCompression), options.Compression))
             throw Validation("Compression is invalid.");
 
         // A codec paired with compression turned off is two options disagreeing, which

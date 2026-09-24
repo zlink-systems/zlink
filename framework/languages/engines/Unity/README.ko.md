@@ -70,8 +70,18 @@ Unity 2021.3이지만, 저장소의 실제 WebGL adapter 검증 project도 6000.
 5. UI text가 `ChatNotify` 값으로 바뀌는지 확인한다. 이 결과는 IL2CPP reverse callback,
    UPM import, jslib 연결과 main-thread pump를 함께 검증한다.
 
-## 이 머신에서 확인하지 못한 것
+## Unity 6000.0.83f1 검증 결과
 
-이 workspace에는 Unity Editor와 license가 없다. 따라서 project source, package pin, scene reference,
-snippet marker와 native/WebGL platform 분리 절차만 정적으로 확인했다. Editor compile, native player
-build와 WebGL IL2CPP build는 Unity license가 있는 runner에서 실행해야 한다.
+License가 있는 Editor에서 NuGetForUnity UPM ID를 수정한 project를 가져왔다. Native player
+compile은 완료되지 않았다. `Zlink.Stream.Connector` 0.23.0에는 `net8.0` assembly만 있으며,
+Unity Mono가 `System.Runtime` 8.0.0.0과 4.1.2.0의 차이로 CS1705를 보고한다.
+
+WebGL UPM package의 자산에 안정적인 `.meta` 파일을 추가했다. Assembly definition에 Editor를
+포함하여 Unity가 scene을 빌드할 때 sample component를 식별하도록 했다. Project manifest에도
+Unity JSON serialization module을 명시했다. 로컬 UPM source를 사용한 WebGL player는
+batch mode에서 빌드됐고,
+headless Chromium에서 engine server와 lobby flow를 완료했다. `JoinRes`는
+`actorId=00000005 name=unity-player`를, `ChatNotify`는
+`actorId=00000005 name=unity-player text=hello from Unity`를 보고했다. Server에도 client
+연결이 기록됐다.
+Manifest에 고정된 Git package version에는 이 변경이 아직 반영되지 않았다.

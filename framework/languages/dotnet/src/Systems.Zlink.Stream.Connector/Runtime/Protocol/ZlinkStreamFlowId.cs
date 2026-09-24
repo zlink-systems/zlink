@@ -22,7 +22,19 @@ internal static class ZlinkStreamFlowId
         bytes[6] = (byte)((bytes[6] & 0x0F) | 0x70);
         bytes[8] = (byte)((bytes[8] & 0x3F) | 0x80);
 
-        return new Guid(bytes, bigEndian: true).ToString("D");
+        return new Guid(
+            (bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3],
+            (short)((bytes[4] << 8) | bytes[5]),
+            (short)((bytes[6] << 8) | bytes[7]),
+            bytes[8],
+            bytes[9],
+            bytes[10],
+            bytes[11],
+            bytes[12],
+            bytes[13],
+            bytes[14],
+            bytes[15]
+        ).ToString("D");
     }
 
     public static bool IsValid(string? value)

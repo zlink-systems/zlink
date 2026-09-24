@@ -508,7 +508,7 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     let pending: ReturnType<ZlinkStreamPendingRequests['create']> | undefined;
     try {
       throwIfAborted(signal);
-      for (const handler of [...this.requestSendingHandlers]) {
+      for (const handler of Array.from(this.requestSendingHandlers)) {
         try {
           handler(sendingContext);
         } catch (cause) {
@@ -570,7 +570,7 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
   ): void {
     if (this.replyReceivedHandlers.size === 0) return;
     this.receivedMessages.enqueueCallback(async () => {
-      for (const handler of [...this.replyReceivedHandlers]) {
+      for (const handler of Array.from(this.replyReceivedHandlers)) {
         try {
           await handler(context, signal);
         } catch (cause) {

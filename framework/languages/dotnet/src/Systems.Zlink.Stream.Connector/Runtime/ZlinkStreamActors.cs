@@ -29,7 +29,8 @@ internal sealed class ZlinkStreamActors(
 
     internal IZlinkStreamActor? Find(string actorId)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        if (string.IsNullOrWhiteSpace(actorId))
+            throw new ArgumentException("Actor ID is required.", nameof(actorId));
         lock (_gate)
             return _byId.GetValueOrDefault(actorId);
     }
@@ -206,7 +207,8 @@ internal sealed class ZlinkStreamActor(
         Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, CancellationToken, ValueTask> handler
     )
     {
-        ArgumentNullException.ThrowIfNull(handler);
+        if (handler is null)
+            throw new ArgumentNullException(nameof(handler));
         ZlinkStreamConnector.ValidateName(name);
         return _handlers.Add(name, handler);
     }

@@ -401,13 +401,13 @@ internal sealed class ZlinkStreamHeaderCodec
         ZlinkStreamHeaderFlags flags
     )
     {
-        if (!Enum.IsDefined(kind))
+        if (!Enum.IsDefined(typeof(ZlinkStreamMessageKind), kind))
             throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.FrameDecodeFailed,
                 "Unknown stream message kind."
             );
 
-        if (!Enum.IsDefined(codec))
+        if (!Enum.IsDefined(typeof(ZlinkStreamCodec), codec))
             throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.FrameDecodeFailed,
                 "Unknown stream codec."

@@ -74,7 +74,8 @@ internal sealed class ZlinkStreamRequestBuilder : IZlinkStreamRequestCall
 
     public void Submit(Action<ZlinkStreamResult> callback)
     {
-        ArgumentNullException.ThrowIfNull(callback);
+        if (callback is null)
+            throw new ArgumentNullException(nameof(callback));
         _state.EnsureNotExecuted();
         _connector.RequestEncoded(
             _state.ResolveMessageName(),
@@ -90,7 +91,8 @@ internal sealed class ZlinkStreamRequestBuilder : IZlinkStreamRequestCall
 
     public void Submit(Action<ZlinkStreamResult<ZlinkStreamEncodedPayload>> callback)
     {
-        ArgumentNullException.ThrowIfNull(callback);
+        if (callback is null)
+            throw new ArgumentNullException(nameof(callback));
         _state.EnsureNotExecuted();
         _connector.RequestEncoded(
             _state.ResolveMessageName(),

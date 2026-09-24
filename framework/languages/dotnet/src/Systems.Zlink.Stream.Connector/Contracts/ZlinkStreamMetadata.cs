@@ -26,7 +26,8 @@ public sealed class ZlinkStreamMetadata
     public ZlinkStreamMetadata With(string key, string value)
     {
         ValidateKey(key);
-        ArgumentNullException.ThrowIfNull(value);
+        if (value is null)
+            throw new ArgumentNullException(nameof(value));
 
         var copy = new Dictionary<string, string>(Values, StringComparer.Ordinal) { [key] = value };
         return new ZlinkStreamMetadata(copy);
@@ -34,13 +35,15 @@ public sealed class ZlinkStreamMetadata
 
     public ZlinkStreamMetadata WithMany(IEnumerable<KeyValuePair<string, string>> values)
     {
-        ArgumentNullException.ThrowIfNull(values);
+        if (values is null)
+            throw new ArgumentNullException(nameof(values));
 
         var copy = new Dictionary<string, string>(Values, StringComparer.Ordinal);
         foreach (var (key, value) in values)
         {
             ValidateKey(key);
-            ArgumentNullException.ThrowIfNull(value);
+            if (value is null)
+                throw new ArgumentNullException(nameof(value));
             copy[key] = value;
         }
 

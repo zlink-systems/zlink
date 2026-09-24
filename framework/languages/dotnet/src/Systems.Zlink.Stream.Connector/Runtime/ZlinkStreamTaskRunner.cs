@@ -8,17 +8,20 @@ internal sealed class ZlinkStreamTaskRunner(CancellationToken shutdownToken)
 
     public Task Run(Func<CancellationToken, ValueTask> callback)
     {
-        ArgumentNullException.ThrowIfNull(callback);
+        if (callback is null)
+            throw new ArgumentNullException(nameof(callback));
         return Start(callback);
     }
 
     public void RunDetached(Func<CancellationToken, ValueTask> callback)
     {
-        ArgumentNullException.ThrowIfNull(callback);
+        if (callback is null)
+            throw new ArgumentNullException(nameof(callback));
         Task task;
         lock (_gate)
         {
-            ObjectDisposedException.ThrowIf(!_accepting, this);
+            if (!_accepting)
+                throw new ObjectDisposedException(nameof(ZlinkStreamTaskRunner));
             task = Start(callback);
             _tasks.Add(task);
         }

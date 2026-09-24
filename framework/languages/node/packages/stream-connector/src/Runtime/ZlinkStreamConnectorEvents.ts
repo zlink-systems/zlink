@@ -33,18 +33,18 @@ export class ZlinkStreamConnectorEvents {
   }
 
   async publishError(error: ZlinkStreamError, signal?: AbortSignal): Promise<void> {
-    await this.publish([...this.errorHandlers].map((handler) => () => handler(error, signal)));
+    await this.publish(Array.from(this.errorHandlers).map((handler) => () => handler(error, signal)));
   }
 
   async publishDisconnected(signal?: AbortSignal): Promise<void> {
-    await this.publish([...this.disconnectedHandlers].map((handler) => () => handler(signal)));
+    await this.publish(Array.from(this.disconnectedHandlers).map((handler) => () => handler(signal)));
   }
 
   async publishStateChanged(
     change: ZlinkStreamConnectionStateChanged,
     signal?: AbortSignal
   ): Promise<void> {
-    await this.publish([...this.stateHandlers].map((handler) => () => handler(change, signal)));
+    await this.publish(Array.from(this.stateHandlers).map((handler) => () => handler(change, signal)));
   }
 
   private async publish(handlers: readonly (() => Promise<void> | void)[]): Promise<void> {

@@ -72,7 +72,7 @@ internal sealed class ZlinkStreamOneWaySubmitQueue
                 "Connector is not accepting outbound frames."
             );
 
-        var completion = new TaskCompletionSource(
+        var completion = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         if (!_queue.Writer.TryWrite(new SubmitItem(frame, completion, cancellationToken)))
@@ -110,7 +110,7 @@ internal sealed class ZlinkStreamOneWaySubmitQueue
                 // Once a frame starts writing, connector lifetime owns the write.
                 // Caller cancellation must not interrupt a partially written frame.
                 await _sendAsync(item.Frame, cancellationToken).ConfigureAwait(false);
-                item.Completion?.TrySetResult();
+                item.Completion?.TrySetResult(true);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -142,7 +142,7 @@ internal sealed class ZlinkStreamOneWaySubmitQueue
 
     private sealed record SubmitItem(
         ZlinkStreamOutboundFrame Frame,
-        TaskCompletionSource? Completion,
+        TaskCompletionSource<bool>? Completion,
         CancellationToken CancellationToken
     );
 }

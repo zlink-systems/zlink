@@ -63,6 +63,10 @@ namespace EngineLobby
                     (message, cancellationToken) =>
                     {
                         _statusText.text = $"{message.Payload.name}: {message.Payload.text}";
+                        Debug.Log(
+                            $"Engine Lobby ChatNotify: actorId={message.Payload.actorId} "
+                                + $"name={message.Payload.name} text={message.Payload.text}"
+                        );
                         return default;
                     }
                 );
@@ -76,6 +80,7 @@ namespace EngineLobby
                 // --8<-- [start:send]
                 var joined = await _connector.Request(new JoinReq(playerName)).Async<JoinRes>();
                 _statusText.text = $"joined as {joined.name} ({joined.actorId})";
+                Debug.Log($"Engine Lobby JoinRes: actorId={joined.actorId} name={joined.name}");
                 await _connector.Send(new ChatMsg(firstChat)).Async();
                 // --8<-- [end:send]
             }

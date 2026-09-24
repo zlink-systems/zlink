@@ -122,11 +122,28 @@ for index in "${!PACKAGE_IDS[@]}"; do
   assembly_name="${ASSEMBLY_NAMES[$index]}"
   package="$PACKAGE_DIR/$package_id.$VERSION.nupkg"
   [[ -f "$package" ]] || { echo "Missing package: $package" >&2; exit 1; }
-  mapfile -t package_assemblies < <(unzip -Z1 "$package" | grep -E '^lib/net8\.0/[^/]+\.dll$' | sort)
-  expected_assembly="lib/net8.0/$assembly_name.dll"
-  if [[ "${#package_assemblies[@]}" -ne 1 || "${package_assemblies[0]:-}" != "$expected_assembly" ]]; then
+  project_path="$DOTNET_ROOT/${PROJECTS[$index]}"
+  declared_frameworks="$(dotnet msbuild "$project_path" \
+    -nologo -getProperty:TargetFrameworks -property:Configuration=Release)"
+  if [[ -z "$declared_frameworks" ]]; then
+    declared_frameworks="$(dotnet msbuild "$project_path" \
+      -nologo -getProperty:TargetFramework -property:Configuration=Release)"
+  fi
+  [[ -n "$declared_frameworks" ]] || {
+    echo "Project declares no target framework: $project_path" >&2
+    exit 1
+  }
+  IFS=';' read -r -a target_frameworks <<< "$declared_frameworks"
+  expected_assemblies=()
+  for framework in "${target_frameworks[@]}"; do
+    expected_assemblies+=("lib/$framework/$assembly_name.dll")
+  done
+  mapfile -t expected_assemblies < <(printf '%s\n' "${expected_assemblies[@]}" | sort)
+  mapfile -t package_assemblies < <(unzip -Z1 "$package" | grep -E '^lib/[^/]+/[^/]+\.dll$' | sort)
+  if [[ "$(printf '%s\n' "${package_assemblies[@]}")" != \
+        "$(printf '%s\n' "${expected_assemblies[@]}")" ]]; then
     printf 'Package assembly manifest differs for %s. Expected %s, found: %s\n' \
-      "$package_id" "$expected_assembly" "${package_assemblies[*]:-<none>}" >&2
+      "$package_id" "${expected_assemblies[*]:-<none>}" "${package_assemblies[*]:-<none>}" >&2
     exit 1
   fi
   nuspec="$(unzip -p "$package" '*.nuspec')"
@@ -139,7 +156,7 @@ for index in "${!PACKAGE_IDS[@]}"; do
     exit 1
   }
   printf 'package=%s sha256=%s assembly=%s\n' \
-    "$package_id" "$(sha256sum "$package" | cut -d' ' -f1)" "$expected_assembly"
+    "$package_id" "$(sha256sum "$package" | cut -d' ' -f1)" "${expected_assemblies[*]}"
 done
 
 cp "$SCRIPT_DIR/PackageContractSnapshot.cs" "$INSPECTOR_DIR/PackageContractSnapshot.cs"

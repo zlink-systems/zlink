@@ -21,6 +21,7 @@ export class EngineLobbyBehaviour extends Component {
   private dispatching = false;
 
   start(): void {
+    if (this.statusLabel === null) this.statusLabel = this.node.addComponent(Label);
     this.setStatus('Engine Lobby: connecting');
     this.client = new EngineLobbyClient(
       this.endpoint,
@@ -56,5 +57,6 @@ export class EngineLobbyBehaviour extends Component {
 
   private setStatus(status: string): void {
     if (this.statusLabel !== null) this.statusLabel.string = status;
+    console.log(`Engine Lobby: ${status}`);
   }
 }

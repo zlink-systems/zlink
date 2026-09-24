@@ -50,10 +50,9 @@ readiness. Docker and the .NET 8 SDK are required.
 ## Run the scene
 
 1. Open this directory as a project in Cocos Creator 3.8.
-2. Create a 2D scene with a Label under its Canvas.
-3. Attach `EngineLobbyBehaviour` to an empty Node and assign the Label to **Status Label**.
-4. Set **Endpoint** to `ws://127.0.0.1:<stream.port>` and start the browser preview.
-5. Confirm the Label changes from `joined as cocos-player (...)` to
+2. Open `assets/EngineLobby.scene`. Its Canvas has `EngineLobbyBehaviour`, which creates the status Label.
+3. Set **Endpoint** to `ws://127.0.0.1:<stream.port>` on the Canvas component and start the browser preview.
+4. Confirm the Label changes from `joined as cocos-player (...)` to
    `cocos-player: hello from Cocos Creator`. Use the Server README stop command afterward.
 
 If the server runs on another host, use an address the browser can reach. Use a `wss://` endpoint
@@ -72,9 +71,13 @@ The probe checks the distinct Alice and Bob `actorId` values, Ping/Join replies,
 `ChatNotify(actorId, name, text)` values on both clients. Success prints
 `cocos-engine-lobby-probe=ok`.
 
-## Verified on this machine
+## Cocos Creator 3.8.8 verification
 
-`npm run typecheck`, the .NET server build, and `npm run probe` with a dedicated Redis process and
-server passed in WSL. The Server Docker runner could not run because Docker integration was not
-available. Cocos Creator Editor was not installed, so project import, scene setup, web build, and
-browser player execution remain unverified.
+The Cocos Creator 3.8.8 CLI built the included scene against the locally rebuilt connector for
+web-desktop and exited with code 36,
+which the [official CLI documentation](https://docs.cocos.com/creator/3.8/manual/zh/editor/publish/publish-in-command-line.html)
+defines as a successful build. In headless Chromium, the player received `JoinRes` and invoked
+the `ChatNotify` handler with `{"actorId":"00000004","name":"cocos-player","text":"hello from Cocos Creator"}`.
+The server recorded the client connection. The connector now uses `Array.from(...)` when taking
+snapshots of iterable callback collections, including under the Cocos build transformation.
+The published `0.23.0` package has not been updated with this correction.
