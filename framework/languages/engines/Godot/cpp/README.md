@@ -116,7 +116,3 @@ ChatNotify godot-player: hello from Godot C++
 If the Godot output contains `Engine Lobby failed:`, inspect that error. The server log must
 also show a new `client connected: <sessionId>` line while the scene runs.
 Stop the server using its own README instructions.
-
-The current published Linux prebuilt `libzlink.so.0` uses initial-exec TLS. Godot 4.4.1 .NET
-reports `libstdc++.so.6: cannot allocate memory in static TLS block` when loading the
-GDExtension. Communication from the Linux scene is therefore not yet verified.
