@@ -160,14 +160,10 @@ struct listener_status_t {
 };
 ```
 
-`framework_runtime_t::listener_status(...)` returns the current
-advertised endpoint after the named local listener has completed its
-bind. If the listener is unknown or has not completed binding, it
-throws `framework_exception_t` with
-`framework_error_kind_t::not_configured`. A listener configured with
-port `0` therefore reports the non-zero port selected by the operating
-system. The endpoint uses the listener's `AdvertiseHost` when one is
-configured; otherwise it uses the confirmed bind host.
+`framework_runtime_t::listener_status(...)` is the C++ projection of the
+[common listener status query](../../../02-channel-transport/04-network-listener-identity.en.md#31-listener-state-the-publisher-checks).
+When the query ends with a configuration error, it throws
+`framework_exception_t` with `framework_error_kind_t::not_configured`.
 
 The `name` is the configured MeshName, ChannelName, or StreamNodeName.
 For a classic fanout publisher it is the ChannelName. The caller uses

@@ -150,11 +150,9 @@ struct listener_status_t {
 };
 ```
 
-`framework_runtime_t::listener_status(...)`는 이름이 지정된 local listener가 bind를 완료한 뒤의
-현재 advertised endpoint를 반환한다. Listener를 찾을 수 없거나 bind가 끝나지 않았으면
-`framework_error_kind_t::not_configured`인 `framework_exception_t`를 던진다. Port `0`으로
-설정한 listener는 OS가 선택한 0이 아닌 실제 port를 반환한다. `AdvertiseHost`를 설정한 경우
-그 host를 사용하고, 설정하지 않으면 확인한 bind host를 사용한다.
+`framework_runtime_t::listener_status(...)`는 [공통 listener 상태 조회](../../../02-channel-transport/04-network-listener-identity.ko.md#31-publisher가-확인하는-listener-상태)의
+C++ 투영이다. 조회가 configuration error로 끝나면 `framework_error_kind_t::not_configured`인
+`framework_exception_t`를 던진다.
 
 `name`은 설정한 MeshName, ChannelName 또는 StreamNodeName이다. Classic fanout publisher에서는
 ChannelName을 사용한다. 호출자는 반환된 값을 관찰과 readiness 확인에 사용하며 다른 listener의
