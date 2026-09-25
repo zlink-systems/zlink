@@ -1,7 +1,5 @@
 using System.Collections;
 using System.Diagnostics;
-using System.Net;
-using System.Net.Sockets;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Zlink.Framework.AspNetCore;
@@ -17,7 +15,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task GlobalClientServerMetadataFailureDisposesEachSendPartOnce()
     {
-        await using var client = CreateClient(ReservePort());
+        await using var client = CreateClient("tcp://127.0.0.1:0");
         var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         var parts = new SingleAccessMessageParts();
         try
@@ -42,7 +40,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task GlobalClientServerMetadataFailureDisposesEachRequestPartOnce()
     {
-        await using var client = CreateClient(ReservePort());
+        await using var client = CreateClient("tcp://127.0.0.1:0");
         var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         var parts = new SingleAccessMessageParts();
         try
@@ -68,7 +66,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task UnknownRouteChannelLookupDisposesSendPartsBeforeThrowing()
     {
-        await using var client = CreateClient(ReservePort());
+        await using var client = CreateClient("tcp://127.0.0.1:0");
         var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         await runtime.StartAsync(CancellationToken.None);
         var parts = new SingleAccessMessageParts();
@@ -95,7 +93,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task ServerOnlyClientServerChannelRejectsSendAndRequestAsNotConfigured()
     {
-        await using var server = CreateServer(ReservePort());
+        await using var server = CreateServer(0);
         var runtime = server.GetRequiredService<ZLinkFrameworkRuntime>();
         await runtime.StartAsync(CancellationToken.None);
         try
@@ -191,7 +189,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task ClientRoleWithoutReadyTargetUsesAdmissionDeadlineNotConfigurationError()
     {
-        await using var client = CreateClient(ReservePort());
+        await using var client = CreateClient("tcp://127.0.0.1:0");
         var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         await runtime.StartAsync(CancellationToken.None);
         try
@@ -216,7 +214,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task CurrentSpotClientServerMetadataFailureUsesGlobalSendOwnership()
     {
-        await using var client = CreateClient(ReservePort());
+        await using var client = CreateClient("tcp://127.0.0.1:0");
         var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         await runtime.StartAsync(CancellationToken.None);
         var activation = new MetadataFailureSpotActivation();
@@ -246,7 +244,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task CurrentSpotClientServerMetadataFailureUsesGlobalRequestOwnership()
     {
-        await using var client = CreateClient(ReservePort());
+        await using var client = CreateClient("tcp://127.0.0.1:0");
         var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         await runtime.StartAsync(CancellationToken.None);
         var activation = new MetadataFailureSpotActivation();
@@ -277,16 +275,19 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task ManualClient_RequestUsesDedicatedDealerAndServerRouter()
     {
-        var port = ReservePort();
-        await using var server = CreateServer(port);
-        await using var client = CreateClient(port);
+        await using var server = CreateServer(0);
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
-        var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         Exception? runtimeFailure = null;
         serverRuntime.ErrorSink.UnhandledCallbackException += exception =>
             runtimeFailure = exception;
 
         await serverRuntime.StartAsync(CancellationToken.None);
+        var serverState = await serverRuntime.EnsureStartedStateAsync(CancellationToken.None);
+        var endpoint = (
+            await GetServerBundle(serverState, "work").ClientServerServer!.ReadAsync()
+        ).AdvertisedEndpoint;
+        await using var client = CreateClient(endpoint);
+        var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         await clientRuntime.StartAsync(CancellationToken.None);
         try
         {
@@ -297,7 +298,6 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 TimeSpan.FromSeconds(10)
             );
             Assert.True(clientTransport.ReadyCount == 1, clientTransport.AdmissionDiagnostics);
-            var serverState = await serverRuntime.EnsureStartedStateAsync(CancellationToken.None);
             var serverIdentity = GetServerBundle(serverState, "work").ClientServerServer!;
             try
             {
@@ -355,13 +355,16 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task NegotiatedBoundRejectsOversizedSendAndRequestBeforeServerDispatch()
     {
-        var port = ReservePort();
-        await using var server = CreateServer(port, maximumMessageBytes: 512);
-        await using var client = CreateClient(port, maximumMessageBytes: 4096);
+        await using var server = CreateServer(0, maximumMessageBytes: 512);
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
-        var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
 
         await serverRuntime.StartAsync(CancellationToken.None);
+        var serverState = await serverRuntime.EnsureStartedStateAsync(CancellationToken.None);
+        var endpoint = (
+            await GetServerBundle(serverState, "work").ClientServerServer!.ReadAsync()
+        ).AdvertisedEndpoint;
+        await using var client = CreateClient(endpoint, maximumMessageBytes: 4096);
+        var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         await clientRuntime.StartAsync(CancellationToken.None);
         try
         {
@@ -417,19 +420,22 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             is { } level
             ? Enum.Parse<ZLinkDiagnosticsLevel>(level)
             : ZLinkDiagnosticsLevel.Normal;
-        var port = ReservePort();
-        await using var server = CreateLargeReplyServer(port, maximumMessageBytes: 512);
-        await using var client = CreateClient(port, maximumMessageBytes: 4096);
+        await using var server = CreateLargeReplyServer(0, maximumMessageBytes: 512);
         server
             .GetRequiredService<ZLinkFrameworkRegistration>()
             .DispatchOptions.Diagnostics.SetLevel(diagnosticsLevel);
+        var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
+
+        await serverRuntime.StartAsync(CancellationToken.None);
+        var serverState = await serverRuntime.EnsureStartedStateAsync(CancellationToken.None);
+        var endpoint = (
+            await GetServerBundle(serverState, "work").ClientServerServer!.ReadAsync()
+        ).AdvertisedEndpoint;
+        await using var client = CreateClient(endpoint, maximumMessageBytes: 4096);
         client
             .GetRequiredService<ZLinkFrameworkRegistration>()
             .DispatchOptions.Diagnostics.SetLevel(diagnosticsLevel);
-        var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
         var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
-
-        await serverRuntime.StartAsync(CancellationToken.None);
         await clientRuntime.StartAsync(CancellationToken.None);
         try
         {
@@ -468,7 +474,6 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         // Spec 27 §5: the ClientServer handler context preserves the caller's
         // flow pair, so downstream calls and the ambient-encoded reply reuse it.
         const string flowId = "0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d";
-        var port = ReservePort();
         var services = new ServiceCollection();
         var probe = new FlowProbe();
         services.AddSingleton(probe);
@@ -477,15 +482,19 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             options
                 .AddClientServerChannel("work")
                 .Server()
-                .Listen(port)
+                .Listen(0)
                 .AddRequestHandler<FlowEchoHandler, FlowEchoRequest, EchoReply>();
         });
         await using var server = services.BuildServiceProvider();
-        await using var client = CreateClient(port);
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
-        var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
 
         await serverRuntime.StartAsync(CancellationToken.None);
+        var serverState = await serverRuntime.EnsureStartedStateAsync(CancellationToken.None);
+        var endpoint = (
+            await GetServerBundle(serverState, "work").ClientServerServer!.ReadAsync()
+        ).AdvertisedEndpoint;
+        await using var client = CreateClient(endpoint);
+        var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         await clientRuntime.StartAsync(CancellationToken.None);
         try
         {
@@ -531,14 +540,17 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task BlockingRequestHandler_DoesNotBlockClientServerLivenessControl()
     {
-        var port = ReservePort();
-        await using var server = CreateBlockingServer(port);
-        await using var client = CreateClient(port);
+        await using var server = CreateBlockingServer(0);
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
-        var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         var blocking = server.GetRequiredService<BlockingRequestProbe>();
 
         await serverRuntime.StartAsync(CancellationToken.None);
+        var serverState = await serverRuntime.EnsureStartedStateAsync(CancellationToken.None);
+        var endpoint = (
+            await GetServerBundle(serverState, "work").ClientServerServer!.ReadAsync()
+        ).AdvertisedEndpoint;
+        await using var client = CreateClient(endpoint);
+        var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         await clientRuntime.StartAsync(CancellationToken.None);
         try
         {
@@ -548,7 +560,6 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 () => clientTransport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5)
             );
-            var serverState = await serverRuntime.EnsureStartedStateAsync(CancellationToken.None);
             var serverIdentity = GetServerBundle(serverState, "work").ClientServerServer!;
             var request = client
                 .GetRequiredService<IZLinkRouteClient>()
@@ -580,17 +591,20 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task CancellationIgnoringRequestHandler_DoesNotBlockRuntimeStopOrReplyLate()
     {
-        var port = ReservePort();
-        await using var server = CreateBlockingServer(port);
-        await using var client = CreateClient(port);
+        await using var server = CreateBlockingServer(0);
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
-        var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         var blocking = server.GetRequiredService<BlockingRequestProbe>();
         Exception? runtimeFailure = null;
         serverRuntime.ErrorSink.UnhandledCallbackException += exception =>
             runtimeFailure = exception;
 
         await serverRuntime.StartAsync(CancellationToken.None);
+        var serverState = await serverRuntime.EnsureStartedStateAsync(CancellationToken.None);
+        var endpoint = (
+            await GetServerBundle(serverState, "work").ClientServerServer!.ReadAsync()
+        ).AdvertisedEndpoint;
+        await using var client = CreateClient(endpoint);
+        var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         await clientRuntime.StartAsync(CancellationToken.None);
         try
         {
@@ -628,13 +642,16 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task ServerPushedDrainingUpdate_RemovesManualClientFromReadySet()
     {
-        var port = ReservePort();
-        await using var server = CreateServer(port, maximumMessageBytes: 4096);
-        await using var client = CreateClient(port, maximumMessageBytes: 512);
+        await using var server = CreateServer(0, maximumMessageBytes: 4096);
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
-        var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
 
         await serverRuntime.StartAsync(CancellationToken.None);
+        var serverState = await serverRuntime.EnsureStartedStateAsync(CancellationToken.None);
+        var endpoint = (
+            await GetServerBundle(serverState, "work").ClientServerServer!.ReadAsync()
+        ).AdvertisedEndpoint;
+        await using var client = CreateClient(endpoint, maximumMessageBytes: 512);
+        var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         await clientRuntime.StartAsync(CancellationToken.None);
         try
         {
@@ -644,7 +661,6 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 () => transport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5)
             );
-            var serverState = await serverRuntime.EnsureStartedStateAsync(CancellationToken.None);
             await GetServerBundle(serverState, "work").ClientServerServer!.MarkDrainingAsync();
             await WaitUntilAsync(
                 transport,
@@ -747,7 +763,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task ClientOnlyTopologyWithoutReadyTargetIsDegraded()
     {
-        await using var provider = CreateClient(ReservePort());
+        await using var provider = CreateClient("tcp://127.0.0.1:0");
         var hosted = provider
             .GetServices<IHostedService>()
             .Single(static service => service is ZLinkFrameworkHostedService);
@@ -1191,8 +1207,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     {
         var locationProvider = new ZLinkInMemoryProviderLocationStore();
         var store = new ZLinkProviderLocationRepository(locationProvider);
-        var port = ReservePort();
-        await using var server = CreateAutomaticServer(locationProvider, "restart", port: port);
+        await using var server = CreateAutomaticServer(locationProvider, "restart");
         await using var client = CreateAutomaticClient(locationProvider);
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
         var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
@@ -1216,6 +1231,10 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             var first = Assert.Single(
                 (await store.ListClientServersAsync("work", new ZLinkPageRequest(16))).Items
             );
+            server
+                .GetRequiredService<ZLinkFrameworkRegistration>()
+                .Channels["work"]
+                .Server!.ListenPort = new Uri(first.Endpoint).Port;
             var clientTransport = clientRuntime.GetClientServerClientRuntime("work");
             await WaitUntilAsync(
                 clientTransport,
@@ -1683,13 +1702,13 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         // decode-side normalization existed, this made the client set
         // _rejected = true forever (a hard connection failure, not a silent
         // no-op).
-        var port = ReservePort();
-        var endpoint = $"tcp://127.0.0.1:{port}";
         using var context = Systems.Zlink.Zlink.CreateContext();
         using var router = CreateClientServerRouter(context);
         var serverRid = RoutingId.From("notation-server");
         router.SetRoutingId(serverRid);
-        router.Bind(endpoint);
+        router.Bind("tcp://127.0.0.1:0");
+        var endpoint = router.Options.LastEndpoint;
+        var port = new Uri(endpoint).Port;
 
         var locationProvider = new ZLinkInMemoryProviderLocationStore();
         await using var client = CreateAutomaticClient(locationProvider);
@@ -1925,12 +1944,11 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task RequestedLivenessProbe_RepliesAndProcessesFollowingUpdate()
     {
-        var port = ReservePort();
-        var endpoint = $"tcp://127.0.0.1:{port}";
         using var context = Systems.Zlink.Zlink.CreateContext();
         using var router = CreateClientServerRouter(context);
-        router.Bind(endpoint);
-        await using var client = CreateClient(port);
+        router.Bind("tcp://127.0.0.1:0");
+        var endpoint = router.Options.LastEndpoint;
+        await using var client = CreateClient(endpoint);
         var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         await runtime.StartAsync(CancellationToken.None);
         try
@@ -1990,13 +2008,12 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task LivenessWithoutAcks_ProbesEveryFiveSecondsAndExpiresAtFifteenSeconds()
     {
-        var port = ReservePort();
-        var endpoint = $"tcp://127.0.0.1:{port}";
         var time = new ControllableTimeProvider();
         using var context = Systems.Zlink.Zlink.CreateContext();
         using var router = CreateClientServerRouter(context);
-        router.Bind(endpoint);
-        await using var client = CreateClient(port, timeProvider: time);
+        router.Bind("tcp://127.0.0.1:0");
+        var endpoint = router.Options.LastEndpoint;
+        await using var client = CreateClient(endpoint, timeProvider: time);
         var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         await runtime.StartAsync(CancellationToken.None);
         try
@@ -2071,13 +2088,12 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task LivenessDelayedAcks_DoNotShiftTheFiveSecondProbeCadence()
     {
-        var port = ReservePort();
-        var endpoint = $"tcp://127.0.0.1:{port}";
         var time = new ControllableTimeProvider();
         using var context = Systems.Zlink.Zlink.CreateContext();
         using var router = CreateClientServerRouter(context);
-        router.Bind(endpoint);
-        await using var client = CreateClient(port, timeProvider: time);
+        router.Bind("tcp://127.0.0.1:0");
+        var endpoint = router.Options.LastEndpoint;
+        await using var client = CreateClient(endpoint, timeProvider: time);
         var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         await runtime.StartAsync(CancellationToken.None);
         try
@@ -2220,12 +2236,11 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task AdmissionTimeout_RetriesOnSamePhysicalConnectionAndBecomesReady()
     {
-        var port = ReservePort();
-        var endpoint = $"tcp://127.0.0.1:{port}";
         using var context = Systems.Zlink.Zlink.CreateContext();
         using var router = CreateClientServerRouter(context);
-        router.Bind(endpoint);
-        await using var client = CreateClient(port);
+        router.Bind("tcp://127.0.0.1:0");
+        var endpoint = router.Options.LastEndpoint;
+        await using var client = CreateClient(endpoint);
         var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         await runtime.StartAsync(CancellationToken.None);
         try
@@ -2283,12 +2298,11 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task RemoteDisconnect_ReadmitsTheExistingClientConnection()
     {
-        var port = ReservePort();
-        var endpoint = $"tcp://127.0.0.1:{port}";
         using var context = Systems.Zlink.Zlink.CreateContext();
         using var router = CreateClientServerRouter(context);
-        router.Bind(endpoint);
-        await using var client = CreateClient(port);
+        router.Bind("tcp://127.0.0.1:0");
+        var endpoint = router.Options.LastEndpoint;
+        await using var client = CreateClient(endpoint);
         var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         await runtime.StartAsync(CancellationToken.None);
         try
@@ -2341,12 +2355,11 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task MalformedPushedControl_ReconnectsAndReadmits()
     {
-        var port = ReservePort();
-        var endpoint = $"tcp://127.0.0.1:{port}";
         using var context = Systems.Zlink.Zlink.CreateContext();
         using var router = CreateClientServerRouter(context);
-        router.Bind(endpoint);
-        await using var client = CreateClient(port);
+        router.Bind("tcp://127.0.0.1:0");
+        var endpoint = router.Options.LastEndpoint;
+        await using var client = CreateClient(endpoint);
         var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         await runtime.StartAsync(CancellationToken.None);
         try
@@ -2444,16 +2457,19 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task MalformedReservedControlFrame_DoesNotReachApplicationHandler()
     {
-        var port = ReservePort();
-        await using var server = CreateServer(port);
+        await using var server = CreateServer(0);
         var runtime = server.GetRequiredService<ZLinkFrameworkRuntime>();
         await runtime.StartAsync(CancellationToken.None);
+        var serverState = await runtime.EnsureStartedStateAsync(CancellationToken.None);
+        var endpoint = (
+            await GetServerBundle(serverState, "work").ClientServerServer!.ReadAsync()
+        ).AdvertisedEndpoint;
         try
         {
             using var context = Systems.Zlink.Zlink.CreateContext();
             using var dealer = context.CreateDealerSocket();
             dealer.SetRoutingId(RoutingId.From("malformed-client"));
-            dealer.Connect($"tcp://127.0.0.1:{port}");
+            dealer.Connect(endpoint);
             await Task.Delay(100);
             var malformed = Message.From(new byte[] { 0x5a, 0x4d, 0x01, 0xff, 0x00 });
             await dealer.Send().Message(malformed).Async(CancellationToken.None).Admitted;
@@ -2530,7 +2546,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     }
 
     private static ServiceProvider CreateClient(
-        int port,
+        string endpoint,
         long maximumMessageBytes = 16L * 1024L * 1024L,
         TimeProvider? timeProvider = null
     )
@@ -2538,7 +2554,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
         {
-            options.AddClientServerChannel("work").Client().Connect($"tcp://127.0.0.1:{port}");
+            options.AddClientServerChannel("work").Client().Connect(endpoint);
         });
         var provider = services.BuildServiceProvider();
         var registration = provider.GetRequiredService<ZLinkFrameworkRegistration>();
@@ -2650,13 +2666,6 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             ZLinkStoreScanRequest request,
             CancellationToken cancellationToken = default
         ) => inner.ScanAsync(request, cancellationToken);
-    }
-
-    private static int ReservePort()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
     private sealed class SingleAccessMessageParts : IReadOnlyList<Message>

@@ -25,6 +25,7 @@
     </ItemGroup>
 
     <ItemGroup>
+        <FrameworkReference Include="Microsoft.AspNetCore.App" />
         <ProjectReference Include="../../src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj"/>
         <ProjectReference Include="../../src/Zlink.Framework.Contracts/Zlink.Framework.Contracts.csproj"/>
         <ProjectReference Include="../../src/Zlink.Framework.Codecs.MessagePack/Zlink.Framework.Codecs.MessagePack.csproj"/>

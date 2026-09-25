@@ -1357,7 +1357,6 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
     [Fact]
     public async Task Host_Stop_With_All_Channel_Kinds_And_An_Actor_Without_Relocation_Target_Is_Stopped()
     {
-        var streamPort = FindFreeTcpPort();
         var sessionProbe = new DrainSessionProbe();
         var trace = new RelocationBehaviorTrace();
         var builder = Host.CreateApplicationBuilder();
@@ -1367,9 +1366,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         builder.Services.AddZLinkFramework(options =>
         {
             options.AddLocationStore(new ZLinkInMemoryProviderLocationStore());
-            var mesh = options
-                .AddRouteMesh("shutdown-mesh")
-                .Listen($"tcp://127.0.0.1:{FindFreeTcpPort()}");
+            var mesh = options.AddRouteMesh("shutdown-mesh").Listen("tcp://127.0.0.1:0");
             mesh.Channel("mesh-work")
                 .Server()
                 .AddRequestHandler<
@@ -1401,11 +1398,20 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
                 .AddHandler<TestPublishHandler, TestPublishedEvent>();
             options
                 .AddStreamNode("shutdown-stream")
-                .Bind($"tcp://127.0.0.1:{streamPort}")
+                .Bind("tcp://127.0.0.1:0")
                 .AddSession<DrainSession>();
         });
         using var host = builder.Build();
         await host.StartAsync();
+        var streamEndpoint = Assert.IsType<string>(
+            (
+                await host
+                    .Services.GetRequiredService<ZLinkFrameworkRuntime>()
+                    .GetStartedStateForRoutingAsync(CancellationToken.None)
+            )
+                .StreamNodes.Values.Single(node => node.NodeName == "shutdown-stream")
+                .BoundEndpoint
+        );
         var routes = host.Services.GetRequiredService<IZLinkRouteClient>();
         var reply = await routes
             .RequestToChannel("client-server-work", new TestChannelRequest("active"))
@@ -1430,7 +1436,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         await using var connector = ZlinkStreamConnectorFactory.Create(
             new ZlinkStreamConnectorOptions
             {
-                Endpoint = new Uri($"tcp://127.0.0.1:{streamPort}"),
+                Endpoint = new Uri(streamEndpoint),
                 DispatchMode = ZlinkStreamDispatchMode.Immediate,
                 Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
                 Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
@@ -1493,7 +1499,6 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
     [Fact]
     public async Task Framework_Drain_Sends_ServerDrain_Before_Orderly_Stream_Close()
     {
-        var port = FindFreeTcpPort();
         var sessionProbe = new DrainSessionProbe();
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddSingleton(sessionProbe);
@@ -1501,11 +1506,20 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         {
             options
                 .AddStreamNode("drain-stream")
-                .Bind($"tcp://127.0.0.1:{port}")
+                .Bind("tcp://127.0.0.1:0")
                 .AddSession<DrainSession>();
         });
         using var host = builder.Build();
         await host.StartAsync();
+        var endpoint = Assert.IsType<string>(
+            (
+                await host
+                    .Services.GetRequiredService<ZLinkFrameworkRuntime>()
+                    .GetStartedStateForRoutingAsync(CancellationToken.None)
+            )
+                .StreamNodes.Values.Single()
+                .BoundEndpoint
+        );
 
         var disconnected = new TaskCompletionSource<ZlinkStreamCloseReason>(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -1513,7 +1527,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         await using var connector = ZlinkStreamConnectorFactory.Create(
             new ZlinkStreamConnectorOptions
             {
-                Endpoint = new Uri($"tcp://127.0.0.1:{port}"),
+                Endpoint = new Uri(endpoint),
                 DispatchMode = ZlinkStreamDispatchMode.Immediate,
                 Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
                 Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
@@ -1549,7 +1563,6 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         int sessionCount
     )
     {
-        var port = FindFreeTcpPort();
         var probe = new ShutdownSealSessionProbe(sessionCount);
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddSingleton(probe);
@@ -1557,19 +1570,28 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         {
             options
                 .AddStreamNode("shutdown-seal-stream")
-                .Bind($"tcp://127.0.0.1:{port}")
+                .Bind("tcp://127.0.0.1:0")
                 .AddSession<ShutdownSealSession>();
         });
         using var host = builder.Build();
         await host.StartAsync();
+        var endpoint = Assert.IsType<string>(
+            (
+                await host
+                    .Services.GetRequiredService<ZLinkFrameworkRuntime>()
+                    .GetStartedStateForRoutingAsync(CancellationToken.None)
+            )
+                .StreamNodes.Values.Single()
+                .BoundEndpoint
+        );
 
         var connectors = Enumerable
             .Range(0, sessionCount)
-            .Select(_ => CreateDrainConnector(port))
+            .Select(_ => CreateDrainConnector(endpoint))
             .ToArray();
         var lateConnectors = Enumerable
             .Range(0, sessionCount)
-            .Select(_ => CreateDrainConnector(port))
+            .Select(_ => CreateDrainConnector(endpoint))
             .ToArray();
         var release = false;
         var lateDisposed = false;
@@ -1637,17 +1659,25 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
     [Fact]
     public async Task New_Stream_Session_After_Drain_Is_Rejected_With_ServerDrain()
     {
-        var port = FindFreeTcpPort();
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddZLinkFramework(options =>
         {
             options
                 .AddStreamNode("drain-stream")
-                .Bind($"tcp://127.0.0.1:{port}")
+                .Bind("tcp://127.0.0.1:0")
                 .AddSession<DrainSession>();
         });
         using var host = builder.Build();
         await host.StartAsync();
+        var endpoint = Assert.IsType<string>(
+            (
+                await host
+                    .Services.GetRequiredService<ZLinkFrameworkRuntime>()
+                    .GetStartedStateForRoutingAsync(CancellationToken.None)
+            )
+                .StreamNodes.Values.Single()
+                .BoundEndpoint
+        );
 
         var result = await host
             .Services.GetRequiredService<IZLinkFrameworkRuntime>()
@@ -1660,7 +1690,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         await using var connector = ZlinkStreamConnectorFactory.Create(
             new ZlinkStreamConnectorOptions
             {
-                Endpoint = new Uri($"tcp://127.0.0.1:{port}"),
+                Endpoint = new Uri(endpoint),
                 DispatchMode = ZlinkStreamDispatchMode.Immediate,
                 Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
                 Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
@@ -1935,20 +1965,6 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         ) => throw new InvalidOperationException("The readiness check must not start termination.");
     }
 
-    private static int FindFreeTcpPort()
-    {
-        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
-        listener.Start();
-        try
-        {
-            return ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
-        }
-        finally
-        {
-            listener.Stop();
-        }
-    }
-
     private sealed class DrainSessionProbe
     {
         public TaskCompletionSource Connected { get; } =
@@ -1958,12 +1974,12 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
     private sealed record DrainProbeMessage(string Value);
 
     private static Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamConnector CreateDrainConnector(
-        int port
+        string endpoint
     ) =>
         ZlinkStreamConnectorFactory.Create(
             new ZlinkStreamConnectorOptions
             {
-                Endpoint = new Uri($"tcp://127.0.0.1:{port}"),
+                Endpoint = new Uri(endpoint),
                 DispatchMode = ZlinkStreamDispatchMode.Immediate,
                 Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
                 Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },

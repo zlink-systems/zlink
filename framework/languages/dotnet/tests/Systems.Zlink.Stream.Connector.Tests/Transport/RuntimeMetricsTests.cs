@@ -4,6 +4,9 @@ using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Net.WebSockets;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime;
 using Xunit;
@@ -162,23 +165,37 @@ public sealed partial class StreamConnectorTests
             await connector.Connect.Async();
         await successServer;
 
-        using var webSocketListener = new HttpListener();
-        var webSocketPort = GetFreeTcpPort();
-        webSocketListener.Prefixes.Add($"http://127.0.0.1:{webSocketPort}/metrics/");
-        webSocketListener.Start();
-        var webSocketServer = Task.Run(async () =>
-        {
-            var context = await webSocketListener.GetContextAsync();
-            var accepted = await context.AcceptWebSocketAsync(null);
-            using var webSocket = accepted.WebSocket;
-            var close = await webSocket.ReceiveAsync(new byte[1], CancellationToken.None);
-            Assert.Equal(WebSocketMessageType.Close, close.MessageType);
-            await webSocket.CloseOutputAsync(
-                WebSocketCloseStatus.NormalClosure,
-                "closed",
-                CancellationToken.None
-            );
-        });
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        await using var app = builder.Build();
+        app.UseWebSockets();
+        var webSocketServer = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        app.Map(
+            "/metrics",
+            async (HttpContext context) =>
+            {
+                try
+                {
+                    using var webSocket = await context.WebSockets.AcceptWebSocketAsync();
+                    var close = await webSocket.ReceiveAsync(new byte[1], CancellationToken.None);
+                    Assert.Equal(WebSocketMessageType.Close, close.MessageType);
+                    await webSocket.CloseOutputAsync(
+                        WebSocketCloseStatus.NormalClosure,
+                        "closed",
+                        CancellationToken.None
+                    );
+                    webSocketServer.TrySetResult();
+                }
+                catch (Exception exception)
+                {
+                    webSocketServer.TrySetException(exception);
+                }
+            }
+        );
+        await app.StartAsync();
+        var webSocketPort = new Uri(app.Urls.Single()).Port;
         var webSocketOptions = new ZlinkStreamConnectorOptions
         {
             Endpoint = new Uri($"ws://127.0.0.1:{webSocketPort}/metrics/"),
@@ -190,7 +207,7 @@ public sealed partial class StreamConnectorTests
             CancellationToken.None
         );
         await webSocketConnection.CloseAsync(CancellationToken.None);
-        await webSocketServer;
+        await webSocketServer.Task;
 
         using var failureListener = new TcpListener(IPAddress.Loopback, 0);
         failureListener.Start();

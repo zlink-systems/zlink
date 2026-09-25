@@ -1,7 +1,5 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Net;
-using System.Net.Sockets;
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.AspNetCore;
@@ -123,19 +121,25 @@ public sealed class ChannelOutboundTerminalTests
     [Fact]
     public async Task ClientServerOutboundEmitsSentOnceAndOneRequestTerminal()
     {
-        var port = ReservePort();
         var activities = CaptureActivities(out var listener);
         using (listener)
         {
-            await using var server = CreateTerminalServer(port);
-            await using var client = CreateTerminalClient(port);
+            await using var server = CreateTerminalServer(0);
             var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
+            await serverRuntime.StartAsync(CancellationToken.None);
+            var serverState = await serverRuntime.GetStartedStateForRoutingAsync(
+                CancellationToken.None
+            );
+            var endpoint = (
+                await serverState
+                    .ClientServerServerBundles.Values.Single()
+                    .ClientServerServer!.ReadAsync()
+            ).AdvertisedEndpoint;
+            await using var client = CreateTerminalClient(endpoint);
             var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
             client
                 .GetRequiredService<ZLinkFrameworkRegistration>()
                 .DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
-
-            await serverRuntime.StartAsync(CancellationToken.None);
             await clientRuntime.StartAsync(CancellationToken.None);
             try
             {
@@ -207,13 +211,20 @@ public sealed class ChannelOutboundTerminalTests
     [Fact]
     public async Task MalformedClientServerEnvelopeRecordsInvalidFrameDispatchError()
     {
-        var port = ReservePort();
         var activities = CaptureActivities(out var listener);
         using (listener)
         {
-            await using var server = CreateTerminalServer(port, "mal-work");
+            await using var server = CreateTerminalServer(0, "mal-work");
             var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
             await serverRuntime.StartAsync(CancellationToken.None);
+            var serverState = await serverRuntime.GetStartedStateForRoutingAsync(
+                CancellationToken.None
+            );
+            var endpoint = (
+                await serverState
+                    .ClientServerServerBundles.Values.Single()
+                    .ClientServerServer!.ReadAsync()
+            ).AdvertisedEndpoint;
             try
             {
                 await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -222,7 +233,7 @@ public sealed class ChannelOutboundTerminalTests
                 var completionEvents = new PollEvent[1];
                 completionPoller.Add(dealer, PollEventFlags.PollCompletion, 1);
                 dealer.SetRoutingId(RoutingId.From("mal-client"));
-                dealer.Connect($"tcp://127.0.0.1:{port}");
+                dealer.Connect(endpoint);
 
                 //  The raw dealer may not have finished connecting yet; retry the
                 //  admission hello until the transport accepts it.
@@ -422,21 +433,14 @@ public sealed class ChannelOutboundTerminalTests
         return services.BuildServiceProvider();
     }
 
-    private static ServiceProvider CreateTerminalClient(int port)
+    private static ServiceProvider CreateTerminalClient(string endpoint)
     {
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
         {
-            options.AddClientServerChannel("term-work").Client().Connect($"tcp://127.0.0.1:{port}");
+            options.AddClientServerChannel("term-work").Client().Connect(endpoint);
         });
         return services.BuildServiceProvider();
-    }
-
-    private static int ReservePort()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
