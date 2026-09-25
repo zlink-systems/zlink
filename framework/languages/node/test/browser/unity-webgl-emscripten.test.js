@@ -20,7 +20,6 @@ const assert = require('node:assert/strict');
 const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const http = require('node:http');
-const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { after, before, describe, it } = require('node:test');
@@ -146,8 +145,8 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
   });
 
   it('drives a real STREAM server through the linked boundary', async () => {
-    const port = await freePort();
-    streamServer = await startStreamServer(`ws://127.0.0.1:${port}`);
+    streamServer = await startStreamServer('ws://127.0.0.1:0');
+    const endpoint = streamServer.endpoint;
     const report = await page.evaluate(async (endpoint) => {
       const zl = window.zl;
       const steps = {};
@@ -186,7 +185,7 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
       steps.stateChanges = zl.stateLog();
       steps.snapshot = zl.snapshot();
       return steps;
-    }, `ws://127.0.0.1:${port}`);
+    }, endpoint);
 
     // Spec 32 sections 2.2 and 6.1: manual dispatch is the game-engine default and
     // the connector starts in Created with Errors diagnostics.
@@ -227,8 +226,8 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
   });
 
   it('refuses a nested pump and never delivers an event twice', async () => {
-    const port = await freePort();
-    streamServer = await startStreamServer(`ws://127.0.0.1:${port}`);
+    streamServer = await startStreamServer('ws://127.0.0.1:0');
+    const endpoint = streamServer.endpoint;
     const report = await page.evaluate(async (endpoint) => {
       const zl = window.zl;
       zl.create({ ...window.connectorOptions, endpoint });
@@ -249,7 +248,7 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
       zl.raw.setNestedPump(0);
       zl.raw.destroy();
       return { snapshot, log };
-    }, `ws://127.0.0.1:${port}`);
+    }, endpoint);
 
     assert.ok(report.snapshot.nestedPumpCalls > 0, 'the sink ran at least once');
     assert.equal(
@@ -269,8 +268,8 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
   });
 
   it('frees every boundary buffer it allocates', async () => {
-    const port = await freePort();
-    streamServer = await startStreamServer(`ws://127.0.0.1:${port}`);
+    streamServer = await startStreamServer('ws://127.0.0.1:0');
+    const endpoint = streamServer.endpoint;
     const rounds = 60;
     const report = await page.evaluate(async ([endpoint, iterations]) => {
       const zl = window.zl;
@@ -294,7 +293,7 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
       zl.raw.destroy();
       const afterDestroy = { heapInUse: zl.raw.heapInUse(), liveAllocs: zl.raw.liveAllocs() };
       return { baseline, settled, afterDestroy, sinkCalls: zl.raw.sinkCalls(), violations: zl.raw.violations() };
-    }, [`ws://127.0.0.1:${port}`, rounds]);
+    }, [endpoint, rounds]);
 
     process.stdout.write(
       `# leak check: ${rounds} round trips, ${report.sinkCalls} sink calls, ` +
@@ -330,8 +329,8 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
         flag.startsWith('-sEXPORTED_FUNCTIONS')),
       'this build must not export the allocator'
     );
-    const port = await freePort();
-    streamServer = await startStreamServer(`ws://127.0.0.1:${port}`);
+    streamServer = await startStreamServer('ws://127.0.0.1:0');
+    const endpoint = streamServer.endpoint;
     const other = await context.newPage();
     try {
       await other.goto(`${staticServer.url}/no-allocator/`);
@@ -358,7 +357,7 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
         steps.snapshot = zl.snapshot();
         zl.raw.destroy();
         return steps;
-      }, `ws://127.0.0.1:${port}`);
+      }, endpoint);
 
       assert.equal(JSON.parse(report.rejected).code, 'configurationError', 'TakeLastError must allocate');
       assert.equal(JSON.parse(report.reply).value, 'no-allocator-export');
@@ -377,8 +376,8 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
   // waiting for events that had stopped coming. The fault is injected from the page
   // so the path is exercised without the adapter having to be broken.
   it('reports a pump failure to the managed side instead of going quiet', async () => {
-    const port = await freePort();
-    streamServer = await startStreamServer(`ws://127.0.0.1:${port}`);
+    streamServer = await startStreamServer('ws://127.0.0.1:0');
+    const endpoint = streamServer.endpoint;
     const report = await page.evaluate(async (endpoint) => {
       const zl = window.zl;
       zl.create({ ...window.connectorOptions, endpoint });
@@ -398,7 +397,7 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
       await zl.close(10000);
       zl.raw.destroy();
       return { result, after, recovered };
-    }, `ws://127.0.0.1:${port}`);
+    }, endpoint);
 
     assert.equal(report.result, -2, 'a failed pump must not look like a count');
     assert.equal(report.after.failures, 1);
@@ -534,34 +533,27 @@ function startStreamServer(endpoint) {
     stdio: ['ignore', 'pipe', 'pipe']
   });
   let output = '';
-  child.stdout.on('data', (chunk) => { output += chunk; });
+  let stdout = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk; output += chunk; });
   child.stderr.on('data', (chunk) => { output += chunk; });
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`Stream server start timeout: ${output}`)), 15_000);
     const check = () => {
-      if (!output.includes('"event":"ready"')) return;
+      const readyLine = stdout.split('\n').slice(0, -1)
+        .find((line) => line.includes('"event":"ready"'));
+      if (readyLine === undefined) return;
       clearTimeout(timer);
       child.stdout.off('data', check);
       child.capturedOutput = () => output;
+      child.endpoint = JSON.parse(readyLine).endpoint;
       resolve(child);
     };
     child.stdout.on('data', check);
     child.once('exit', (code) => {
-      if (!output.includes('"event":"ready"')) {
+      if (!stdout.includes('"event":"ready"')) {
         clearTimeout(timer);
         reject(new Error(`Stream server exited ${code}: ${output}`));
       }
-    });
-  });
-}
-
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address();
-      server.close(() => resolve(port));
     });
   });
 }

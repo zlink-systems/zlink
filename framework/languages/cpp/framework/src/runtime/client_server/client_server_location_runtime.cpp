@@ -560,9 +560,6 @@ void client_server_location_runtime_t::start ()
 void client_server_location_runtime_t::start_server (
   const channel_snapshot_t &channel, const std::optional<location_owner_token_t> &publication_owner)
 {
-    if (channel.server.bind_endpoints.size () != 1) {
-        throw std::invalid_argument ("ClientServer server requires one bind endpoint");
-    }
     protocol::client_server_server_admission_t admission;
     admission.channel_name = channel.name;
     admission.server_routing_id = server_routing_id (channel);
@@ -571,7 +568,8 @@ void client_server_location_runtime_t::start_server (
     admission.state = mesh::service_node_state_t::preparing;
     admission.security_identity = std::string (default_security_identity);
     admission.effective_max_message_bytes = effective_max_message_bytes (channel.server);
-    admission.advertised_endpoint = channel.server.bind_endpoints.front ();
+    admission.advertised_endpoint =
+      zlink::framework::detail::client_server_bind_endpoint (channel.server);
 
     const auto advertise = _advertise_hosts.find (channel.name);
     raw_client_server_server_options_t options{admission,

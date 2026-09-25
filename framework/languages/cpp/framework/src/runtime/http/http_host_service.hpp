@@ -6,6 +6,7 @@
 #include <zlink/framework/contracts/http/http.hpp>
 
 #include "runtime/host/hosted_service_lifecycle.hpp"
+#include "runtime/diagnostics/listener_status_registry.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -20,7 +21,8 @@ class http_host_service_t final : public hosted_service_t, public hosted_service
   public:
     http_host_service_t (http_options_snapshot_t options,
                          health_builder_t &health,
-                         std::size_t handler_worker_count);
+                         std::size_t handler_worker_count,
+                         std::shared_ptr<listener_status_registry_t> listener_statuses);
     ~http_host_service_t () override;
 
     task_t<void> start (service_provider_t &services) override;
@@ -34,6 +36,7 @@ class http_host_service_t final : public hosted_service_t, public hosted_service
     http_options_snapshot_t _options;
     health_builder_t *_health;
     std::size_t _handler_worker_count;
+    std::shared_ptr<listener_status_registry_t> _listener_statuses;
     std::atomic_bool _stop{true};
     std::vector<std::unique_ptr<listener_t>> _listeners;
 };

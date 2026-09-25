@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace zlink::framework
 {
@@ -31,6 +32,14 @@ struct listener_status_t
     std::chrono::system_clock::time_point observed_at{};
 
     friend bool operator== (const listener_status_t &, const listener_status_t &) = default;
+};
+
+struct http_listener_status_t
+{
+    std::string configured_endpoint;
+    std::string bound_url;
+
+    friend bool operator== (const http_listener_status_t &, const http_listener_status_t &) = default;
 };
 
 struct observation_loss_t
@@ -144,6 +153,7 @@ class framework_runtime_t
     virtual framework_runtime_status_t status () const = 0;
     virtual void reset_capacity_metrics () = 0;
     virtual listener_status_t listener_status (listener_kind_t kind, std::string name) const = 0;
+    virtual std::vector<http_listener_status_t> http_listener_statuses () const = 0;
     virtual std::unique_ptr<runtime_observation_t> observe (
       std::size_t capacity,
       std::function<void (const observed_status_t<framework_runtime_status_t> &)> observer) = 0;

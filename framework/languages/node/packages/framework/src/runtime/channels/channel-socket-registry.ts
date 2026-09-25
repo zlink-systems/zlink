@@ -344,6 +344,13 @@ export class ZLinkChannelSocketRegistry {
     };
   }
 
+  clientServerListenerEndpoint(channelName: string): string | undefined {
+    const boundEndpoint = this.channelRouters.get(channelName)?.lastEndpoint;
+    return boundEndpoint === undefined || boundEndpoint.length === 0
+      ? undefined
+      : this.clientServerServerIdentity(channelName).endpoint;
+  }
+
   clientServerServerSocket(channelName: string): ZLinkBackendRouterSocket {
     return this.channelRouter(channelName);
   }

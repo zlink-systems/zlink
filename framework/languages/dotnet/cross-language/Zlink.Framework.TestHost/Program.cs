@@ -35,7 +35,8 @@ internal sealed class Program
             provider.GetRequiredService<IHostApplicationLifetime>(),
             readyFilePath,
             options.StopFilePath,
-            options.Mode
+            options,
+            provider
         ));
 
         using var host = builder.Build();

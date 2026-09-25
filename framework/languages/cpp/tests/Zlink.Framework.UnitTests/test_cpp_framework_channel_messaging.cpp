@@ -5,7 +5,6 @@
 #include <zlink/codecs/protobuf.hpp>
 
 #include "../support/read_text_file.hpp"
-#include "loopback_tcp_endpoint.hpp"
 #include "test_completion_poller_driver.hpp"
 
 #include "runtime/channels/channel_packet_dispatcher.hpp"
@@ -25,6 +24,7 @@
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
+#include "runtime/diagnostics/listener_status_registry.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/mesh/mesh_record_dispatcher.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
@@ -1839,12 +1839,40 @@ int main ()
         return 245;
     }
 
+    {
+        // Direct-mode ClientServer listener: wildcard bind, advertised host + bound port.
+        zlink::framework::zlink_builder_t advertised_builder;
+        const auto advertised_listeners =
+          std::make_shared<zlink::framework::runtime::listener_status_registry_t> ();
+        advertised_builder.channel ("hosted-advertised").enable_server ().bind ("tcp://0.0.0.0:0");
+        auto advertised_runtime =
+          zlink::framework::detail::channel_runtime_t::from (advertised_builder.message_bus ());
+        advertised_runtime.bind_core_context (framework_core_context);
+        advertised_runtime.bind_serializers (serializers);
+        zlink::framework::runtime::channel_host_service_t advertised_service (
+          advertised_builder.message_bus (), advertised_runtime.channel_snapshots (), handlers,
+          serializers, {{"hosted-advertised", "cs.example.internal"}}, {}, advertised_listeners);
+        advertised_service.start (provider);
+        const auto advertised_endpoint =
+          advertised_listeners
+            ->find (zlink::framework::listener_kind_t::client_server, "hosted-advertised")
+            .value ()
+            .endpoint;
+        advertised_service.stop ();
+        const std::string advertised_prefix = "tcp://cs.example.internal:";
+        if (advertised_endpoint.rfind (advertised_prefix, 0) != 0
+            || advertised_endpoint.size () == advertised_prefix.size ()
+            || advertised_endpoint.substr (advertised_prefix.size ()) == "0") {
+            return 414;
+        }
+    }
+
     zlink::framework::zlink_builder_t hosted_builder;
-    const auto hosted_endpoint = zlink::framework::tests::reserve_loopback_tcp_endpoint ();
+    const auto hosted_listeners =
+      std::make_shared<zlink::framework::runtime::listener_status_registry_t> ();
     const auto hosted_server_rid = zlink::routing_id_t::from (std::string ("hosted-server"));
     auto hosted_channel = hosted_builder.channel ("hosted");
-    hosted_channel.enable_server ().set_routing_id (hosted_server_rid).bind (hosted_endpoint);
-    hosted_channel.enable_client ().connect (hosted_endpoint);
+    hosted_channel.enable_server ().set_routing_id (hosted_server_rid).bind ("tcp://127.0.0.1:0");
     auto hosted_runtime =
       zlink::framework::detail::channel_runtime_t::from (hosted_builder.message_bus ());
     hosted_runtime.bind_core_context (framework_core_context);
@@ -1853,8 +1881,13 @@ int main ()
       hosted_builder.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (hosted_builder.message_bus ())
         .channel_snapshots (),
-      handlers, serializers);
+      handlers, serializers, {}, {}, hosted_listeners);
     hosted_service.start (provider);
+    const auto hosted_endpoint =
+      hosted_listeners->find (zlink::framework::listener_kind_t::client_server, "hosted")
+        .value ()
+        .endpoint;
+    hosted_channel.enable_client ().connect (hosted_endpoint);
     auto hosted_reply = hosted_builder.request_client ("hosted")
                           .request (request_t{28})
                           .timeout (std::chrono::milliseconds (2000))
@@ -1952,10 +1985,8 @@ int main ()
     }
     hosted_service.stop ();
 
-    const auto manual_hosted_endpoint = zlink::framework::tests::reserve_loopback_tcp_endpoint ();
-
     zlink::framework::zlink_builder_t manual_server_builder;
-    manual_server_builder.channel ("hosted-manual").enable_server ().bind (manual_hosted_endpoint);
+    manual_server_builder.channel ("hosted-manual").enable_server ().bind ("tcp://127.0.0.1:0");
     auto manual_server_runtime =
       zlink::framework::detail::channel_runtime_t::from (manual_server_builder.message_bus ());
     manual_server_runtime.bind_core_context (framework_core_context);
@@ -1964,8 +1995,12 @@ int main ()
       manual_server_builder.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (manual_server_builder.message_bus ())
         .channel_snapshots (),
-      handlers, serializers);
+      handlers, serializers, {}, {}, hosted_listeners);
     manual_hosted_service.start (provider);
+    const auto manual_hosted_endpoint =
+      hosted_listeners->find (zlink::framework::listener_kind_t::client_server, "hosted-manual")
+        .value ()
+        .endpoint;
 
     zlink::framework::zlink_builder_t manual_client_builder;
     manual_client_builder.channel ("hosted-manual")
@@ -2024,10 +2059,8 @@ int main ()
     }
 
     zlink::framework::zlink_builder_t nested_hosted_builder;
-    const auto nested_hosted_endpoint = zlink::framework::tests::reserve_loopback_tcp_endpoint ();
     auto nested_hosted_channel = nested_hosted_builder.channel ("hosted-nested");
-    nested_hosted_channel.enable_server ().bind (nested_hosted_endpoint);
-    nested_hosted_channel.enable_client ().connect (nested_hosted_endpoint);
+    nested_hosted_channel.enable_server ().bind ("tcp://127.0.0.1:0");
     auto nested_hosted_runtime =
       zlink::framework::detail::channel_runtime_t::from (nested_hosted_builder.message_bus ());
     nested_hosted_runtime.bind_core_context (framework_core_context);
@@ -2045,8 +2078,13 @@ int main ()
       nested_hosted_builder.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (nested_hosted_builder.message_bus ())
         .channel_snapshots (),
-      nested_handlers, serializers);
+      nested_handlers, serializers, {}, {}, hosted_listeners);
     nested_hosted_service.start (nested_provider);
+    const auto nested_hosted_endpoint =
+      hosted_listeners->find (zlink::framework::listener_kind_t::client_server, "hosted-nested")
+        .value ()
+        .endpoint;
+    nested_hosted_channel.enable_client ().connect (nested_hosted_endpoint);
     auto nested_hosted_reply = nested_hosted_builder.request_client ("hosted-nested")
                                  .request (request_t{50})
                                  .timeout (std::chrono::milliseconds (2000))
@@ -2058,10 +2096,8 @@ int main ()
     }
 
     zlink::framework::zlink_builder_t scoped_hosted_builder;
-    const auto scoped_hosted_endpoint = zlink::framework::tests::reserve_loopback_tcp_endpoint ();
     auto scoped_hosted_channel = scoped_hosted_builder.channel ("hosted-scoped");
-    scoped_hosted_channel.enable_server ().bind (scoped_hosted_endpoint);
-    scoped_hosted_channel.enable_client ().connect (scoped_hosted_endpoint);
+    scoped_hosted_channel.enable_server ().bind ("tcp://127.0.0.1:0");
     auto scoped_hosted_runtime =
       zlink::framework::detail::channel_runtime_t::from (scoped_hosted_builder.message_bus ());
     scoped_hosted_runtime.bind_core_context (framework_core_context);
@@ -2080,8 +2116,13 @@ int main ()
       scoped_hosted_builder.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (scoped_hosted_builder.message_bus ())
         .channel_snapshots (),
-      scoped_handlers, serializers);
+      scoped_handlers, serializers, {}, {}, hosted_listeners);
     scoped_hosted_service.start (scoped_provider);
+    const auto scoped_hosted_endpoint =
+      hosted_listeners->find (zlink::framework::listener_kind_t::client_server, "hosted-scoped")
+        .value ()
+        .endpoint;
+    scoped_hosted_channel.enable_client ().connect (scoped_hosted_endpoint);
     auto scoped_hosted_reply = scoped_hosted_builder.request_client ("hosted-scoped")
                                  .request (request_t{40})
                                  .timeout (std::chrono::milliseconds (2000))

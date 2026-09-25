@@ -118,18 +118,10 @@ export class ZLinkChannelRuntimeManager {
     return { descriptors: this.sockets.fanoutActiveTargets(channelName) };
   }
 
-  getFanoutListenerStatus(channelName: string) {
-    const endpoint = this.sockets.fanoutPublisherEndpoint(channelName);
-    if (endpoint === undefined) {
-      throw new ZLinkConfigurationException(
-        `Fanout publisher '${channelName}' has not reported a bound listener.`
-      );
-    }
-    return {
-      channelName,
-      endpoint,
-      observedAt: new Date()
-    };
+  listenerEndpoint(kind: 'clientServer' | 'fanout', name: string): string | undefined {
+    return kind === 'clientServer'
+      ? this.sockets.clientServerListenerEndpoint(name)
+      : this.sockets.fanoutPublisherEndpoint(name);
   }
 
   observeClientServerTopology(channelName: string, changed: () => void): () => void {

@@ -875,7 +875,8 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
             coordinator,
             new ZLinkFrameworkHostLifecycleState(),
             static (_, _, _) => ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
-            static _ => ValueTask.FromResult(true)
+            static _ => ValueTask.FromResult(true),
+            static (_, _) => throw new NotSupportedException()
         );
         var started = Stopwatch.GetTimestamp();
 
@@ -933,7 +934,8 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
             coordinator,
             new ZLinkFrameworkHostLifecycleState(),
             static (_, _, _) => ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
-            static _ => ValueTask.FromResult(true)
+            static _ => ValueTask.FromResult(true),
+            static (_, _) => throw new NotSupportedException()
         );
         var started = Stopwatch.GetTimestamp();
 
@@ -1931,6 +1933,9 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
 
     private sealed class MutableFrameworkRuntime : IZLinkFrameworkRuntime
     {
+        public ZLinkListenerStatus GetListenerStatus(ZLinkListenerKind kind, string name) =>
+            throw new InvalidOperationException("The readiness check must not query listeners.");
+
         public bool IsReady { get; set; } = true;
 
         public ZLinkFrameworkRuntimeStatus Status =>

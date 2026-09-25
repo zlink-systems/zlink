@@ -666,12 +666,17 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
 
     /**
      * Returns the endpoint the current local listener provides to remote processes. The query only
-     * succeeds after the selected listener has completed its bind operation.
+     * succeeds after the selected listener has completed its bind operation and before the runtime
+     * begins to close.
      */
     public ZLinkListenerStatus listenerStatus(ZLinkListenerKind kind, String name) {
         Objects.requireNonNull(kind, "kind");
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("name is required");
+        }
+        if (closeGate.closing()) {
+            throw new ZLinkConfigurationException(
+                    "listener is not bound because the framework runtime is closed: " + name);
         }
         String endpoint =
                 switch (kind) {

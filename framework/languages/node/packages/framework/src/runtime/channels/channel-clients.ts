@@ -138,17 +138,6 @@ export class DefaultZLinkFanoutClient implements ZLinkFanoutClient {
     );
   }
 
-  getListenerStatus(channelName: string): import('../../contracts').ZLinkFanoutListenerStatus {
-    this.requirePublisherChannel(channelName);
-    const status = this.requireTransport().getFanoutListenerStatus?.(channelName);
-    if (status === undefined) {
-      throw new ZLinkConfigurationException(
-        `Fanout publisher '${channelName}' has not reported a bound listener.`
-      );
-    }
-    return status;
-  }
-
   private requirePublisherChannel(channelName: string): void {
     if (!this.registration.fanoutPublishers.has(channelName)) {
       throw new ZLinkConfigurationException(

@@ -82,7 +82,60 @@ public sealed class ListenerIdentityAndNodeDirectTests
         });
         using var host = builder.Build();
 
+        var runtime = host.Services.GetRequiredService<IZLinkFrameworkRuntime>();
+        var listeners = new (ZLinkListenerKind Kind, string Name)[]
+        {
+            (ZLinkListenerKind.RouteMesh, "listener-mesh"),
+            (ZLinkListenerKind.ClientServer, "listener-client-server"),
+            (ZLinkListenerKind.Fanout, "listener-fanout"),
+            (ZLinkListenerKind.Stream, "listener-stream"),
+        };
+        foreach (var (kind, name) in listeners)
+            Assert.Equal(
+                ZLinkFrameworkErrorKind.NotConfigured,
+                Assert
+                    .Throws<ZLinkFrameworkException>(() => runtime.GetListenerStatus(kind, name))
+                    .Kind
+            );
+
         await host.StartAsync();
+        foreach (var (kind, name) in listeners)
+        {
+            var status = runtime.GetListenerStatus(kind, name);
+            Assert.Equal(kind, status.Kind);
+            Assert.Equal(name, status.Name);
+            Assert.Equal("127.0.0.1", new Uri(status.Endpoint).Host);
+            Assert.InRange(new Uri(status.Endpoint).Port, 1, 65535);
+            Assert.InRange(
+                status.ObservedAt,
+                DateTimeOffset.UtcNow.AddMinutes(-1),
+                DateTimeOffset.UtcNow
+            );
+            Assert.Equal(
+                ZLinkFrameworkErrorKind.NotConfigured,
+                Assert
+                    .Throws<ZLinkFrameworkException>(() =>
+                        runtime.GetListenerStatus(kind, "unknown-listener")
+                    )
+                    .Kind
+            );
+        }
+        Assert.Equal(
+            ZLinkFrameworkErrorKind.NotConfigured,
+            Assert
+                .Throws<ZLinkFrameworkException>(() =>
+                    runtime.GetListenerStatus((ZLinkListenerKind)int.MaxValue, "listener-mesh")
+                )
+                .Kind
+        );
+        Assert.Equal(
+            ZLinkFrameworkErrorKind.NotConfigured,
+            Assert
+                .Throws<ZLinkFrameworkException>(() =>
+                    runtime.GetListenerStatus(ZLinkListenerKind.RouteMesh, "")
+                )
+                .Kind
+        );
         await host.StopAsync();
     }
 
