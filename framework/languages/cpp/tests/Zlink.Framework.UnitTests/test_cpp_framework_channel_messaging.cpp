@@ -1839,6 +1839,34 @@ int main ()
         return 245;
     }
 
+    {
+        // Direct-mode ClientServer listener: wildcard bind, advertised host + bound port.
+        zlink::framework::zlink_builder_t advertised_builder;
+        const auto advertised_listeners =
+          std::make_shared<zlink::framework::runtime::listener_status_registry_t> ();
+        advertised_builder.channel ("hosted-advertised").enable_server ().bind ("tcp://0.0.0.0:0");
+        auto advertised_runtime =
+          zlink::framework::detail::channel_runtime_t::from (advertised_builder.message_bus ());
+        advertised_runtime.bind_core_context (framework_core_context);
+        advertised_runtime.bind_serializers (serializers);
+        zlink::framework::runtime::channel_host_service_t advertised_service (
+          advertised_builder.message_bus (), advertised_runtime.channel_snapshots (), handlers,
+          serializers, {{"hosted-advertised", "cs.example.internal"}}, {}, advertised_listeners);
+        advertised_service.start (provider);
+        const auto advertised_endpoint =
+          advertised_listeners
+            ->find (zlink::framework::listener_kind_t::client_server, "hosted-advertised")
+            .value ()
+            .endpoint;
+        advertised_service.stop ();
+        const std::string advertised_prefix = "tcp://cs.example.internal:";
+        if (advertised_endpoint.rfind (advertised_prefix, 0) != 0
+            || advertised_endpoint.size () == advertised_prefix.size ()
+            || advertised_endpoint.substr (advertised_prefix.size ()) == "0") {
+            return 414;
+        }
+    }
+
     zlink::framework::zlink_builder_t hosted_builder;
     const auto hosted_listeners =
       std::make_shared<zlink::framework::runtime::listener_status_registry_t> ();
@@ -1853,7 +1881,7 @@ int main ()
       hosted_builder.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (hosted_builder.message_bus ())
         .channel_snapshots (),
-      handlers, serializers, {}, hosted_listeners);
+      handlers, serializers, {}, {}, hosted_listeners);
     hosted_service.start (provider);
     const auto hosted_endpoint =
       hosted_listeners->find (zlink::framework::listener_kind_t::client_server, "hosted")
@@ -1967,7 +1995,7 @@ int main ()
       manual_server_builder.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (manual_server_builder.message_bus ())
         .channel_snapshots (),
-      handlers, serializers, {}, hosted_listeners);
+      handlers, serializers, {}, {}, hosted_listeners);
     manual_hosted_service.start (provider);
     const auto manual_hosted_endpoint =
       hosted_listeners->find (zlink::framework::listener_kind_t::client_server, "hosted-manual")
@@ -2050,7 +2078,7 @@ int main ()
       nested_hosted_builder.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (nested_hosted_builder.message_bus ())
         .channel_snapshots (),
-      nested_handlers, serializers, {}, hosted_listeners);
+      nested_handlers, serializers, {}, {}, hosted_listeners);
     nested_hosted_service.start (nested_provider);
     const auto nested_hosted_endpoint =
       hosted_listeners->find (zlink::framework::listener_kind_t::client_server, "hosted-nested")
@@ -2088,7 +2116,7 @@ int main ()
       scoped_hosted_builder.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (scoped_hosted_builder.message_bus ())
         .channel_snapshots (),
-      scoped_handlers, serializers, {}, hosted_listeners);
+      scoped_handlers, serializers, {}, {}, hosted_listeners);
     scoped_hosted_service.start (scoped_provider);
     const auto scoped_hosted_endpoint =
       hosted_listeners->find (zlink::framework::listener_kind_t::client_server, "hosted-scoped")

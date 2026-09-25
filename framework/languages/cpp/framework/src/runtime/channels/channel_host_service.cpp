@@ -48,7 +48,8 @@ class channel_host_service_t::server_loop_t
   public:
     server_loop_t (message_bus_t bus,
                    std::string channel_name,
-                   std::vector<std::string> endpoints,
+                   std::string endpoint,
+                   std::optional<std::string> advertise_host,
                    std::optional<zlink::routing_id_t> routing_id,
                    channel_capability_snapshot_t capability,
                    service_provider_t &services,
@@ -60,7 +61,6 @@ class channel_host_service_t::server_loop_t
                    std::shared_ptr<listener_status_registry_t> listener_statuses) :
         _runtime (detail::channel_runtime_t::from (bus)),
         _channel_name (std::move (channel_name)),
-        _endpoints (std::move (endpoints)),
         _capability (std::move (capability)),
         _services (&services),
         _serializers (&serializers),
@@ -81,9 +81,7 @@ class channel_host_service_t::server_loop_t
           | zlink::monitor_event::closed | zlink::monitor_event::handshake_failed_no_detail
           | zlink::monitor_event::handshake_failed_protocol
           | zlink::monitor_event::handshake_failed_auth);
-        for (const auto &endpoint : _endpoints) {
-            _router->bind (endpoint);
-        }
+        _router->bind (endpoint);
         const auto hardware_workers =
           static_cast<std::size_t> (std::max (1u, std::thread::hardware_concurrency ()));
         const auto max_handler_workers =
@@ -96,7 +94,7 @@ class channel_host_service_t::server_loop_t
             _listener_statuses->update (
               listener_kind_t::client_server, _channel_name,
               transport::advertised_tcp_endpoint (_router->options ().last_endpoint (),
-                                                  std::nullopt, "ClientServer"));
+                                                  std::move (advertise_host), "ClientServer"));
     }
 
     ~server_loop_t () { stop (); }
@@ -361,7 +359,6 @@ class channel_host_service_t::server_loop_t
 
     detail::channel_runtime_t _runtime;
     std::string _channel_name;
-    std::vector<std::string> _endpoints;
     channel_capability_snapshot_t _capability;
     service_provider_t *_services;
     serializer_registry_t *_serializers;
@@ -555,10 +552,12 @@ channel_host_service_t::channel_host_service_t (
   std::vector<channel_snapshot_t> channels,
   handler_registry_t &handlers,
   serializer_registry_t &serializers,
+  std::map<std::string, std::string> advertise_hosts,
   std::shared_ptr<application_job_queue_t> application_jobs,
   std::shared_ptr<listener_status_registry_t> listener_statuses) :
     _bus (std::move (bus)),
     _channels (std::move (channels)),
+    _advertise_hosts (std::move (advertise_hosts)),
     _handlers (&handlers),
     _serializers (&serializers),
     _core_context (detail::channel_runtime_t::from (_bus).core_context ()),
@@ -586,10 +585,14 @@ task_t<void> channel_host_service_t::start (service_provider_t &services)
             || channel.server.bind_endpoints.empty ()) {
             continue;
         }
+        const auto advertise_host = _advertise_hosts.find (channel.name);
         auto loop = std::make_unique<server_loop_t> (
-          _bus, channel.name, channel.server.bind_endpoints, channel.server.routing_id,
-          channel.server, services, *_serializers, *_handlers, _stop, _core_context,
-          _application_jobs, _listener_statuses);
+          _bus, channel.name, detail::client_server_bind_endpoint (channel.server),
+          advertise_host == _advertise_hosts.end ()
+            ? std::nullopt
+            : std::optional<std::string> (advertise_host->second),
+          channel.server.routing_id, channel.server, services, *_serializers, *_handlers, _stop,
+          _core_context, _application_jobs, _listener_statuses);
         auto *raw = loop.get ();
         _loops.push_back (std::move (loop));
         _threads.emplace_back ([raw] { raw->run (); });

@@ -8,7 +8,9 @@
 #include "runtime/diagnostics/listener_status_registry.hpp"
 
 #include <atomic>
+#include <map>
 #include <memory>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -27,6 +29,7 @@ class channel_host_service_t final : public hosted_service_t
                             std::vector<channel_snapshot_t> channels,
                             handler_registry_t &handlers,
                             serializer_registry_t &serializers,
+                            std::map<std::string, std::string> advertise_hosts,
                             std::shared_ptr<application_job_queue_t> application_jobs = {},
                             std::shared_ptr<listener_status_registry_t> listener_statuses = {});
     ~channel_host_service_t () override;
@@ -41,6 +44,7 @@ class channel_host_service_t final : public hosted_service_t
 
     message_bus_t _bus;
     std::vector<channel_snapshot_t> _channels;
+    std::map<std::string, std::string> _advertise_hosts;
     handler_registry_t *_handlers;
     serializer_registry_t *_serializers;
     std::shared_ptr<zlink::context_t> _core_context;
