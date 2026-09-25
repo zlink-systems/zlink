@@ -98,7 +98,7 @@ public interface ZLinkInstanceSpotContext {
  ZLinkSpotOutbound outbound();
  <T> ZLinkWorkerCall<T> runCpuWorker(ZLinkWorkerTask<T> work);
  <T> ZLinkWorkerCall<T> runIoWorker(ZLinkIoWorkerTask<T> work);
- CompletionStage<Boolean> close();
+ void close();
  CompletionStage<ZLinkTimer> addTimer(
  String name,
  Duration period,
@@ -124,7 +124,7 @@ public interface ZLinkSpotContext {
  <T> ZLinkWorkerCall<T> runIoWorker(ZLinkIoWorkerTask<T> work);
  ZLinkSpotRelocationReadyCall relocationReady();
  CompletionStage<Void> leaveActor(ZLinkActor actor);
- CompletionStage<Boolean> close();
+ void close();
  CompletionStage<ZLinkTimer> addTimer(
  String name,
  Duration period,
@@ -291,8 +291,8 @@ Only the currently running timer callback finishes on the source, and the
 restored tick isn't submitted to the application handler before target
 Ready.
 
-A User Spot's `close()` returns `false` if there's active Actor
-membership. It doesn't change Spot state, admission, or authority, and
+The manager's User Spot `close(spotRef)` returns `false` if there's
+active Actor membership. It doesn't change Spot state, admission, or authority, and
 doesn't call `onClosing` or automatically leave/destroy an Actor. The
 caller explicitly leaves or destroys the Actor and then closes again. It
 also returns `false` when the Spot is missing from the manager, so the
@@ -300,8 +300,8 @@ caller doesn't distinguish the two cases without a prior read. Host
 `Shutdown` performs Spot cleanup after finishing the Actor barrier. The
 manager's `find` and `close` also only target User Spot. The public
 surface for an Instance Spot to end its own lifecycle is
-`ZLinkInstanceSpotContext.close()`, and the close contract inside this
-context is kept.
+`ZLinkInstanceSpotContext.close()`, a request that returns no result
+([Spot address messaging §7](../../../03-spot-actor/06-spot-address-messaging.en.md#7-close-and-the-generation-boundary)).
 
 In the following example, `spotClient` is a `ZLinkSpotOutbound`, and
 `cartId` is the global SpotId to call. Since Instance intent is
@@ -419,7 +419,7 @@ public interface systems.zlink.framework.spots.ZLinkInstanceSpotContext {
  public abstract systems.zlink.framework.spots.ZLinkSpotOutbound outbound();
  public default <T> systems.zlink.framework.spots.ZLinkWorkerCall<T> runCpuWorker(systems.zlink.framework.spots.ZLinkWorkerTask<T>);
  public default <T> systems.zlink.framework.spots.ZLinkWorkerCall<T> runIoWorker(systems.zlink.framework.spots.ZLinkIoWorkerTask<T>);
- public abstract java.util.concurrent.CompletionStage<java.lang.Boolean> close();
+ public abstract void close();
  public abstract java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkTimer> addTimer(java.lang.String, java.time.Duration, java.lang.Class<?>, systems.zlink.framework.spots.ZLinkTimerOptions);
 }
 public interface systems.zlink.framework.spots.ZLinkInstanceSpotHandlerRegistry {
@@ -515,7 +515,7 @@ public interface systems.zlink.framework.spots.ZLinkSpotContext {
  public default <T> systems.zlink.framework.spots.ZLinkWorkerCall<T> runCpuWorker(systems.zlink.framework.spots.ZLinkWorkerTask<T>);
  public default <T> systems.zlink.framework.spots.ZLinkWorkerCall<T> runIoWorker(systems.zlink.framework.spots.ZLinkIoWorkerTask<T>);
  public abstract java.util.concurrent.CompletionStage<java.lang.Void> leaveActor(systems.zlink.framework.actors.ZLinkActor);
- public abstract java.util.concurrent.CompletionStage<java.lang.Boolean> close();
+ public abstract void close();
  public abstract java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkTimer> addTimer(java.lang.String, java.time.Duration, java.lang.Class<?>, systems.zlink.framework.spots.ZLinkTimerOptions);
 }
 public final class systems.zlink.framework.spots.ZLinkSpotCreateResult extends java.lang.Record {

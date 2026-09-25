@@ -476,8 +476,8 @@ Store는 같은 Redis deployment를 사용하거나 물리적으로 분리할 �
 ## Relocation 전송 설정
 
 `relocation_cutover_wait_timeout`은 startup-only 양수 millisecond duration이며 기본값은 1,000 ms다.
-Target이 relay 수신 준비 reply 뒤 cutover를 기다리는 시간이며, source가 boundary batch 재전송
-사본을 유지하는 시간과 같다. 0, 음수, 무한대와 표현 범위 초과는 socket bind 전에
+Relay 수신 준비 reply 뒤 cutover 도착을 관찰하는 Warning 임계값이다. Source 사본 유지와
+authority CAS 조건은 [공통 relocation §4.4](../../../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)를 따른다. 0, 음수, 무한대와 표현 범위 초과는 socket bind 전에
 configuration error다.
 
 `relocation_payload_chunk_limit_bytes`는 relocation payload를 나눈 encoded chunk 하나의 크기

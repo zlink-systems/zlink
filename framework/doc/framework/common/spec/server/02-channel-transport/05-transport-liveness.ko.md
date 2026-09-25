@@ -255,13 +255,9 @@ Remote endpoint와 identity를 찾도록 Store에 게시하는 정보를
 
 Connection replacement는 현재 descriptor가 제시한 node RID, security identity와
 lifecycle generation을 admission fence로 사용한다. 완전한 descriptor 기대값이 있으면
-generation이 0인 endpoint-only manual intent가 이 검사를 완화하지 못한다. 기존
-connection은 endpoint 단위로 종료를 요청한 뒤, 그 endpoint의 현재 physical connection에
-대한 close snapshot 또는 disconnect event를 관찰했을 때만 교체한다. 호출이 성공했다는
-사실만으로 physical close가 완료된 것으로 판정하지 않는다. 같은 endpoint에 대한 새
-connection은 close 관찰 뒤에 만든다. Monitor event의 `connection_id`는 진단과 correlation에만
-사용하며 physical pair를 식별하는 fence, send·reply target 또는 reconnect 조건으로 사용하지
-않는다. Physical pipe의 선택과 교체는 Core가 소유한다. Framework는 RID별 선택 route를
+generation이 0인 endpoint-only manual intent가 이 검사를 완화하지 못한다. Monitor event의 `connection_id`는 진단과 correlation에만 사용하며 physical pair의
+fence, send·reply target 또는 reconnect 조건으로 사용하지 않는다. Physical pipe의 선택과
+교체는 [Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.ko.md#101-선택-route-관찰)이 소유한다. Framework는 RID별 선택 route를
 [Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.ko.md#101-선택-route-관찰)의 snapshot과 `ZLINK_POLLROUTE`로 관찰하고, 그 route의 논리
 admission을 descriptor의 RID·security identity·lifecycle generation으로 판정한다. Monitor event의
 순서로 선택 route를 재구성하지 않는다.
@@ -291,7 +287,9 @@ Request와 reply를 같은 호출로 연결하는 식별 정보를
 Framework는 connection loss 뒤 request와 one-way message를 다른 peer나 owner에게 자동
 제출하지 않는다.
 
-Reconnect는 기존 configuration 또는 현재 discovery descriptor를 사용한다.
+같은 endpoint의 transport reconnect는 [Core socket `zlink_connect`](../../../../../../../core/doc/spec/core/socket/README.ko.md#zlink_connect)가
+소유한다. Framework는 기존 configuration 또는 현재 discovery descriptor intent를 유지하고
+Core의 선택 route 준비 뒤 service handshake와 identity를 다시 확인한다.
 
 - RouteMesh와 ClientServer는 service handshake와 identity 확인을 다시 수행한다.
 - Server membership 없는 RouteMesh Object Client pair의 `NotRequired` admission은 같은
@@ -319,7 +317,7 @@ Runtime이 stateful workload를 옮기는 `Relocate`나 `Shutdown`이 새 applic
 막은 뒤에도, 이미 수락한 reply·relocation·STREAM 처리에 필요한 connection은 deadline까지
 유지할 수 있다. 이 connection을 새 target 선택에는 포함하지 않는다.
 
-종료할 때는 connection을 닫기 전에 liveness timer, reconnect timer, transport monitor
+종료할 때는 connection을 닫기 전에 liveness timer, transport monitor
 subscription과 pending callback을 끝낸다.
 
 ## 8. Liveness 판정은 authority를 바꾸지 않는다
@@ -414,7 +412,7 @@ handler에 도달하는 값, connection·runtime snapshot이 보여주는 상태
   만들지 않는다.
 - Reply, timeout, cancellation, disconnect와 shutdown이 경쟁해도 request 결과를 한 번만
   완료한다. 다른 peer나 owner에 자동 재제출하지 않는다.
-- `Relocate`·`Shutdown` 뒤 liveness·reconnect timer, subscription과 callback이 남지 않는다.
+- `Relocate`·`Shutdown` 뒤 liveness timer, subscription과 callback이 남지 않는다.
 - C++·.NET·JVM·Node.js가 같은 고정 시간과 관찰 결과를 제공한다.
 
 ---

@@ -422,8 +422,9 @@ is as follows.
 4. The framework restores the first record to the head of the local queue, then opens the
    activation barrier.
 
-A node that loses the race takes the winner's result as is. It neither runs the factory
-separately nor re-sends the message.
+A receiver that loses the first-message `Reserve` does not use the winner's result or
+forward its admitted operation. It completes that operation under
+[Spot address messaging §4.2](../03-spot-actor/06-spot-address-messaging.en.md#42-when-several-nodes-receive-the-first-message-at-once).
 
 ### `ActorRef` and `SpotRef` — A Snapshot of Where It Was
 

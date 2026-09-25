@@ -701,8 +701,7 @@ ActorId isn't used as a metric label.
   atomically, so messages aren't duplicated or dropped.
 - If Relocation Restore explicitly fails before relay-ready is accepted, the
   target temporary queue is discarded without running and the source-owned
-  original is restored. Afterward, source isn't restored regardless of
-  cutover-submit result.
+  original is restored. Afterward, source resumption and target staging cleanup follow authority settlement in [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
 - Even after receiving multiple Restores with the same `RelocationId`,
   target attempt, and owner generation, the temporary queue and application
   instance are created only once. A previous attempt's temporary queue isn't

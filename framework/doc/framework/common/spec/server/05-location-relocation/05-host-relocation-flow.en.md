@@ -212,7 +212,7 @@ where it's ready to accept new application work is called
 | 0 | `Preparing` | Proceeds with registration, bind, descriptor verification, and recovery; doesn't accept application messages. |
 | 1 | `Serving` | The host is ready and accepts new application work. |
 | 2 | `Relocating` | Excluded from new placement and selection, but local units not yet sealed keep processing messages and timers. |
-| 3 | `Relocated` | Every stateful object has been detached from source dispatch. Host and infrastructure connections are kept. |
+| 3 | `Relocated` | Target authority commit is confirmed for every unit and source dispatch is detached. Host and infrastructure connections are kept. |
 | 4 | `Draining` | `Shutdown` has closed new admission and is cleaning up already-accepted work and resources. |
 | 5 | `Stopped` | Application resource, infrastructure resource, and listener cleanup are finished. |
 | 6 | `Error` | Can't serve due to a startup or runtime error. |
@@ -231,20 +231,19 @@ stateDiagram-v2
     Serving --> Draining: Shutdown seals admission
     Serving --> Error: runtime error
     Relocating --> Serving: source processing restored after Blocked
-    Relocating --> Relocated: every relocation unit detached
+    Relocating --> Relocated: every target authority commit confirmed
+    Relocating --> Error: source fence wins for a unit after another unit committed
     Relocating --> Draining: Shutdown requested
     Relocated --> Draining: Shutdown requested
     Error --> Draining: bounded cleanup starts
     Draining --> Stopped: resource cleanup complete
 ```
 
-For each unit, only an explicit failure before its relay-ready reply reaches the accepted
-state may clean tentative work and restore source processing. Even when another unit has
-crossed that boundary, the host may restore source workload that hasn't crossed it and
-return to `Serving`. A unit across the boundary never returns to source regardless of its
-cutover-submit result; it continues through target cutover receipt (including a
-retransmission after connection re-establishment) or the cutover-wait fallback.
-Returning to `Serving` doesn't mean every unit rolled back to the source.
+Source processing for each unit resumes after an explicit failure before relay-ready or
+a successful source `Preserve` fence under [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
+A unit with confirmed target commit does not return to source. If every unit remains or
+returns to source, the host returns to `Serving`; if another unit already committed to
+target, the host transitions to `Error`.
 
 Relocation outcome is fixed to the following values. Among the reasons in the table,
 [`DeadlineExceeded`](../00-foundation/02-glossary.en.md#deadlineexceeded) means the call ended
@@ -253,7 +252,7 @@ cancelled.
 
 | Value | Outcome | Allowed reason | Meaning |
 |---:|---|---|---|
-| 0 | `Relocated` | `None` | Every stateful object has been detached from source dispatch. |
+| 0 | `Relocated` | `None` | Target authority CAS succeeded for every unit. |
 | 1 | `Blocked` | `TargetUnavailable`, `StoreUnavailable`, `RelocationDisabled`, `StateIncompatible`, `DeadlineExceeded`, `RelocationFailed`, `RuntimeNotReady`, `ManualTopologyUnsupported`, `ShutdownRequested`, `OperationInProgress` | Relocation couldn't start, or the whole workload move didn't finish. |
 
 The wire values are `Relocated=0`, `Blocked=1`. Reason is `None=0`,
@@ -352,6 +351,10 @@ sequenceDiagram
     Source->>Target: [request] prepare temporary queue, Restore, and relay for every unit
     Target-->>Source: [reply] relay reception ready for every unit
     Source->>Target: [send] ingress-hold relay and cutover for every unit
+    Target->>Store: [request] target authority CAS for each unit after relay verification
+    Store-->>Target: [reply] all target authorities committed
+    Source->>Store: [request] confirm every target owner
+    Store-->>Source: [reply] every target owner confirmed
     Source->>Store: [request] transition source host to Relocated
     Store-->>Source: [reply] Relocated state fixed
     Source-->>App: [reply] host relocation result Relocated
@@ -360,11 +363,9 @@ sequenceDiagram
     Source-->>App: [reply] shutdown result Stopped or ForceStopped
 ```
 
-`Relocated` is the source-side result that every unit's cutover submit attempt reached a
-success or failure terminal; it doesn't mean the source awaited a target-CAS completion
-reply. `Relocated` keeps descriptor, connection, listener, and infrastructure resources.
-This diagram shows the normal flow when a target is ready. Without a target, the
-deadline rule from the previous section returns `Blocked/TargetUnavailable`.
+`Relocated` means target authority succeeded as defined by [§13](#13-relocate-completion-and-failure).
+Descriptor, connection, listener, and infrastructure resources remain. Without a target, the
+preceding deadline rule returns `Blocked/TargetUnavailable`.
 
 Automatic ClientServer clients and fanout subscribers build new connections using the
 replacement descriptor and reflect the source's state in selection. An existing
@@ -461,10 +462,7 @@ observed in that deployment as input, not a formula.
 
 This batch order isn't an Application Job Queue capacity chunk. Each target's
 pre-dispatch temporary queue and saved work form an ordered durable backlog owned by a
-retained-byte owner; ordinary staging ingress uses a shared reservation for receive and
-returns it at durable handoff. After target-only CAS and required lifecycle work make
-dispatch runnable, backlog handler turns acquire live queued-job permits one at a time in
-order. So a compatible target whose job limit is smaller than an aggregate backlog
+retained-byte owner; permit handoff for staging ingress and runnable callbacks follows [Application job queue §3](../01-execution/04-application-job-queue-and-backpressure.en.md#3-ordinary-ingress-permit-order). So a compatible target whose job limit is smaller than an aggregate backlog
 executes it progressively instead of failing the aggregate as a capacity blocker or
 leaving members at the source.
 
@@ -532,8 +530,8 @@ correctness condition** — it shares the same number as
 [Complete Actor And Spot Relocation Flow's `RelocationCutoverWaitTimeout` (default
 1,000 ms)](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover) but is a
 different value: this 1 second is an observation-only target used solely as a warning
-threshold, while `RelocationCutoverWaitTimeout` is the protocol fallback deadline after
-which, once the cutover wait ends, the target moves on to CAS and queue opening.
+threshold, while `RelocationCutoverWaitTimeout` is the cutover-wait Warning threshold. The conditions for CAS
+and queue opening are owned by [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
 Exceeding it doesn't cancel the relocation or roll back to the source. The Framework
 keeps the same operation going until the one-way cutover submit reaches a terminal result, and records
 a warning and the `zlink.relocation.interruption` histogram. Source application close
@@ -543,10 +541,7 @@ and traces.
 
 Once the host operation deadline ends, no new unit relocation is started. A unit already
 started performs a safe abort only when target explicitly fails before sending its
-relay-ready reply. If the reply result is indeterminate, target may have started the
-cutover-wait fallback, so source dispatch doesn't reopen. A unit that attempted cutover
-also doesn't roll back to source, and its target continues the owner transition until
-the Restore validity deadline. If source doesn't attempt every unit's cutover, the host
+relay-ready reply. If the reply result is indeterminate, target's complete-relay verification may still be pending, so source dispatch doesn't reopen. After relay-ready, neither a cutover-submit result nor an earlier read naming source reopens source dispatch. A confirmed source `Preserve` fence under [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover) returns retained work to source dispatch; confirmed target commit does not. If source doesn't attempt every unit's cutover, the host
 doesn't become `Relocated`; success or failure of an attempted submit isn't a completion
 condition.
 
@@ -570,7 +565,7 @@ what values it changes together, and which callbacks it calls or doesn't call, i
 |---|---|
 | Application | Calls the host's `Relocate`. Only a `SpotWide` User Spot that chose `ApplicationSignaled` signals a safe move moment via `RelocationReady().Defer()`. |
 | Source runtime | Finishes currently running work and stops application dispatch. Fixes application state and the not-yet-executed queue/timers as a payload in source memory and sends it directly to the target, and relays to the target only messages that arrive at the old address after capture. It doesn't change the Location Store. |
-| Target runtime | Assembles the received chunks and verifies the checksum, then creates an Actor or Spot using the same ID and restores state and existing work. After receiving the relay cutover boundary, or reaching the cutover-wait fallback after relay-ready, it CASes the Location Store from source to target and opens the queue only if that succeeds. |
+| Target runtime | Assembles the received chunks and verifies the checksum, then creates an Actor or Spot using the same ID and restores state and existing work. After verifying the complete relay and cutover under [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover), it CASes the Location Store from source to target and opens the queue only if that succeeds. |
 | Location Store | Records which node currently processes an Actor or Spot. When multiple values must change together, changes all or none. |
 | Relocation Store | Holds no handoff payload. Its only remaining responsibilities are recording when an Instance Spot is newly created by its first message and recording the terminal result of a pending request completing after relocation. |
 
@@ -588,8 +583,7 @@ What the target factory does, per policy, is as follows.
 
 The Framework doesn't add a separate state contract ID or generic state type.
 
-One relocation unit's temporary queue has no bound on record count or stored size, and
-the Framework doesn't create an additional temporary queue for the same object.
+Accepted-record permit handoff in a relocation unit follows [Application job queue §3](../01-execution/04-application-job-queue-and-backpressure.en.md#3-ordinary-ingress-permit-order). The Framework creates no additional temporary queue for the same object.
 
 ## 10. Differences by Unit Kind
 
@@ -714,19 +708,17 @@ the temporary queue, and restores source messages and timers to the original que
 target doesn't create a request terminal result or run a one-way message from the
 temporary queue.
 
-After the relay-ready reply is accepted, source dispatch doesn't reopen while the
-Location Store still points to source, even if cutover hasn't been sent yet or its
-submit fails. The target continues CAS after receiving cutover (including a
-retransmission after connection re-establishment) or through the cutover-wait fallback.
-If target CAS ultimately fails, the target removes its object and queue, the Session
-cleans up under its own seal timeout, and the source's Message Follow also ends after
+After relay-ready acceptance, neither a cutover-submit result nor an earlier Store
+read naming source reopens source dispatch. A winning source `Preserve` fence resumes
+retained work under [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). The target continues toward CAS only after verifying the complete relay and cutover under
+[common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
+If authority is confirmed as source or a different `RelocationId`, the target removes its
+object and queue, and the Session cleans up under its own seal timeout, and the source's Message Follow also ends after
 its defined duration.
 
 Once the Location Store records the target as the current processing node, it isn't
 rolled back to the source. If the target runtime is still running, a failed stage can be
-retried. Location Store update retries until Restore validity expires; if target
-ownership isn't confirmed by then, the prepared Actor or Spot and queue are removed and
-the Session route isn't updated. If the source or target process terminates, a different
+retried. The same-target exception and staging terminals after Restore expiry follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). If the source or target process terminates, a different
 runtime doesn't take over this relocation. If the target terminates after commit, it
 isn't rolled back to the source — that object is left unavailable. Automatic recovery
 afterward isn't part of the contract. The source sends one-way cutover, waits for no
@@ -747,7 +739,7 @@ the source temporarily holds new messages during a move is called
 
 | Resource | Move rule |
 |---|---|
-| A message arriving after new work is blocked | The source holds arriving messages with no bound on record count or stored size. If the owner change succeeds, the message is delivered to the target with its operation identity and ObjectGeneration preserved. On an explicit cancellation before the relay-ready reply is accepted, it's restored to the source queue in arrival order; afterward it isn't restored to source. |
+| A message arriving after new work is blocked | The source retains it under [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover); permit handoff follows Application job queue §3. Target commit delivers it with original operation identity and ObjectGeneration; winning source `Preserve` returns it to the source queue in order. |
 | `SpotWide`/Instance Spot timer | The runtime handle and continuation aren't moved. Logical registration, next fire time, and pending tick are moved, and the target automatically restores them in queue order. The application doesn't duplicate-capture a timer or re-register it in restore. |
 | Entry/`PerActor` Actor timer | Moves with the Actor queue to the Actor owner. Spot-level application timers aren't moved — a schedule that must be kept is managed in the application's external state. |
 | A session connected to an Actor | The physical STREAM connection is kept. The specific seal/route-transition order and timeouts are summarized by [04 §7](04-relocation-flow.en.md#7-session-during-actor-relocation) and owned by [Session and Actor Binding "8"](../04-session/02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation). |
@@ -765,41 +757,24 @@ a late `Close` is a moving result and isn't automatically resubmitted.
 
 ## 13. Relocate Completion and Failure
 
-Once every unit is detached from source dispatch and the one-way cutover submit attempt
-for each target that sent a relay-ready reply reaches a success or failure terminal, the
-host transitions to `Relocated` and returns `Relocated/None`. This result is not
-confirmation that target Location Store CAS completed. Descriptor publication, the owner lease,
-listener, peer connection, and raw transport resources aren't cleaned up at this point.
+Only after every unit is detached from source dispatch and target Location Store authority
+CAS succeeds for every unit does the host transition to `Relocated` and return
+`Relocated/None`. The source's cutover submit terminal is not evidence of target success.
+Without waiting for a separate target reply, the source confirms the authoritative owner
+result under [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received).
+Descriptor, owner lease, listener, and transport resources remain.
 
 | Completion point | Observer | Meaning |
 |---|---|---|
-| Restore and relay-ready reply | Source unit | The target temporary queue and Restore are ready, and the source is still the owner. |
-| One-way cutover submit terminal | Source unit | Source attempted cutover once after pre-boundary relay and obtained a success or failure terminal. Neither result confirms target CAS. |
-| `Relocated/None` reply | Source host and caller | Every source unit dispatch has ended and every cutover submit attempt reached a terminal result. Submit success isn't a completion condition. |
-| Successful Location Store CAS | Target unit | The target is the owner and may open the transferred existing queue and the relay queue in order. |
-| Applied Session route update | Session owner | Owned by [04 §7](04-relocation-flow.en.md#7-session-during-actor-relocation) and [Session and Actor Binding "8"](../04-session/02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation). |
+| Restore and relay-ready reply | Source unit | Target staging is ready; the source is still owner. |
+| One-way cutover submit terminal | Source unit | Only the submit result is settled; target authority is not yet known. |
+| Successful Location Store CAS | Target unit | Target is owner and can open the verified relay and existing queue ([common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover)). |
+| `Relocated/None` reply | Source host and caller | Target authority succeeded for every unit. |
+| Applied Session route update | Session owner | Owned by [Session–Actor binding §8](../04-session/02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation). |
 
-The target sends neither a cutover reply nor a Session route-update reply. The source
-host doesn't create an acknowledgement journal or numeric high-water to wait for target
-CAS or Session route application.
-
-Because cutover can be lost to a connection failure, the source keeps a copy of each
-unit's pre-boundary relay batch and cutover for the same duration as the cutover wait
-time (`RelocationCutoverWaitTimeout`) after the first cutover submit terminal. That
-duration is the unit's cutover retransmission window. If the connection to the target is
-re-established within the window, the source resends the batch and cutover over the new
-connection, and the target discards its partially received pre-boundary relay span and
-atomically replaces it with the whole retransmitted batch — a full replacement, not
-per-message deduplication or partial merging, so the span's order is fixed by batch
-order. Retransmission resends one batch; it's not a per-message ACK or journal. The copy
-is source-memory retention that occupies no pipe, and when the window ends the source
-cleans it up exactly once and never retransmits afterward. The retransmission window
-changes none of the completion points in the table above — the host still transitions to
-`Relocated` at the first cutover submit terminal, and retransmission is a recovery
-action after it. Once the source process has been cleaned up or terminated,
-retransmission is impossible and the target proceeds through the cutover-wait fallback.
-The per-unit retransmission and replacement rules are owned by
-[Complete Actor And Spot Relocation Flow](04-relocation-flow.en.md).
+The source creates no acknowledgement journal or numeric high-water to await target CAS.
+[Common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover) owns
+pre-boundary batch retention, retransmission, and terminals for undelivered operations.
 
 The result when an operation doesn't satisfy its completion condition by the deadline is
 called [`DeadlineExceeded`](../00-foundation/02-glossary.en.md#deadlineexceeded).
@@ -812,18 +787,17 @@ called [`DeadlineExceeded`](../00-foundation/02-glossary.en.md#deadlineexceeded)
 | After target selection, the transferred state schema/type adapter is incompatible, or `Capture` and `Restore` both fail across every allowed retry. | `Blocked/StateIncompatible` |
 | Before relay-ready reply acceptance, the Framework cancels a callback due to the deadline or work exceeds the deadline. | `Blocked/DeadlineExceeded` |
 | Target explicitly rejects Restore before relay-ready reply, so the source queue can be restored. | Restores source workload that hasn't attempted cutover and returns `Blocked/RelocationFailed` |
+| Target commit remains unconfirmed at Restore expiry after relay-ready. | The source settles authority with the `Preserve` fence in [Location runtime §6.1 and §10](01-location-runtime.en.md#61-read-and-cas). If every unit's source fence wins, the host returns to `Serving` with `Blocked/RelocationFailed`; if every target commit is confirmed, it returns `Relocated/None`; if units committed on both sides, it ends in `Error` with `Blocked/RelocationFailed`. An indeterminate fence retains the work under the existing Store-failure policy while the source lease is valid. |
+| The source owner lease expires before `Preserve` succeeds. | The unit fails under the expired-owner terminal in [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover); the host enters `Error` and returns `Blocked/RelocationFailed` with source owner lease expiry as the cause. Target staging follows [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). |
 
-An explicit failure before relay-ready is accepted cleans temporary records and lets
-that source authority and queue accept new work again. A unit that crossed this boundary
-doesn't roll back to source regardless of cutover-submit success or failure. Only source
-workload that hasn't crossed the boundary may be reprocessed before the host transitions
-to `Serving`.
+An explicit failure before relay-ready or a later successful source `Preserve` fence
+resumes that unit's source authority and queue. A unit with confirmed target commit does
+not return to source. The host result follows the settled per-unit authority in the table.
 
-A target CAS, queue opening, or Session route-update failure after relay-ready is
-accepted is not a Host result delivered synchronously to source. The target retries CAS
-until the Restore validity deadline. If it cannot confirm target ownership, it removes
-the prepared unit and records an Error log. It doesn't change an already returned
-`Relocated` result or reopen source dispatch.
+At Restore expiry, an unconfirmed target commit is settled by the source `Preserve`
+fence under [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received).
+An indeterminate Store response keeps the prepared unit and retained accepted work while the source lease is valid. Expiry follows the expired-owner row above. The host result follows the table above. A Session route-update failure
+follows the Session seal-timeout result and does not revert confirmed target authority.
 
 If the directly transferred payload's checksum differs from the assembly result, the
 target doesn't restore from a partial assembly and answers with an explicit failure
@@ -885,7 +859,7 @@ directly from `Serving` doesn't move objects.
 While `Relocated`, the source retains Message Follow routes and the descriptors, peer
 connections, and listeners required to forward sends and requests that still arrive at
 the old address, and also keeps each unit's cutover retransmission copy until its
-retransmission window (§13) ends. A deployment that needs the full configured
+authority settlement and retransmission-copy cleanup end (common relocation §4.4). A deployment that needs the full configured
 `MessageFollowDuration` calls `Shutdown` after that period. Calling `Shutdown` earlier
 removes the remaining Message Follow routes and retransmission copies with the source
 transport.
@@ -893,7 +867,7 @@ transport.
 For a relocation operation it started, the source runtime publishes `SafeToShutdown` —
 the observation value saying it's safe to shut down — into its own runtime status after
 every unit has reached the moment its Message Follow route may be removed (S4, §8) and
-every unit's retransmission window (§13) has ended. Both conditions are events happening
+every unit's authority settlement and retransmission-copy cleanup have ended. Both conditions are events happening
 on the source, so no other node's clock is needed for this judgment. The value is not a
 completion ACK sent by the target or anyone else — the source publishes it and other
 parties observe it; the specific status surface is owned by
@@ -977,7 +951,7 @@ interval metrics (source stop S0→S1, target resume S2→S3, route convergence 
 fixed by §8. The status surface of the `SafeToShutdown` observation value (§14) is owned
 by [Runtime monitoring](../06-observability/01-runtime-monitoring.en.md); the
 interval-metric instruments and the `cutover_timeout` counter, which counts cutover-wait
-fallbacks, are owned by
+Warnings, are owned by
 [Runtime metrics](../06-observability/02-runtime-metrics.en.md).
 
 The global string address for finding a Spot system-wide is called a
@@ -1061,10 +1035,8 @@ this section covers only items observable at the host level. Each item maps to o
 - When the in-flight payload budget is full, a new unit waits before the source
   admission seal, and the waiting Actor/Spot keeps processing messages meanwhile. The
   coordinator doesn't set a separate cap on concurrent unit count.
-- If the connection is re-established within the retransmission window, the source resends
-  the pre-boundary relay batch and cutover, the target replaces partially received staging
-  with the complete retransmitted batch, and once the window ends, the copy is cleaned up
-  exactly once and no further retransmission occurs.
+- Reconnection retransmission, partial-staging replacement, and copy cleanup follow
+  [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
 
 **Metrics and SafeToShutdown**
 
@@ -1072,15 +1044,14 @@ this section covers only items observable at the host level. Each item maps to o
   (S1→S4) are measured on the clock of the node where each point happens, and no metric
   directly subtracts timestamps of different nodes.
 - `SafeToShutdown` isn't published before every unit reaches S4 and every unit's
-  retransmission window ends, and neither judgment uses another node's clock.
+  authority settlement and retransmission-copy cleanup end, and neither judgment uses another node's clock.
 - `Shutdown` before publication is also allowed, and its result matches §14's route and
   copy cleanup.
 
 **Failure and cleanup**
 
-- Only on an explicit abort before relay-ready is accepted is the target temporary
-  queue discarded without running and the source's original work restored to the queue. After
-  that boundary, source isn't restored regardless of cutover-submit result.
+- The target discards staged work after explicit abort before relay-ready or a winning
+  source `Preserve` fence under [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). The source resumes its retained work after that fence.
 - A request's terminal result isn't duplicated across two runtimes.
 - If the same target runtime fails after owner commit, it doesn't roll back to the
   source or automatically pick a different target.

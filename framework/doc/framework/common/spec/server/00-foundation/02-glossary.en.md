@@ -779,7 +779,7 @@ deferred Join barrier instead.
 | .NET notation | No public type |
 | Public composition | Keeps the message payload, original operation identity, `ObjectGeneration`, and the framework metadata needed for queue ordering. Internal storage format isn't disclosed. |
 | Creation/management | The source runtime holds messages arriving after the relocation seal. It does not reuse the ordinary application lane's count and byte reservations as a relocation-specific ceiling. Separate limits set by transport, deadline, and cancellation still apply. |
-| Lifetime | On an explicit abort before relay-ready is accepted, restored to the source queue in original order. After that boundary, source isn't restored regardless of cutover-submit result; target handoff or Message Follow owns it until removal. |
+| Lifetime | An explicit abort before relay-ready or a successful source `Preserve` fence returns it to the source queue in order. Target commit gives ownership to target handoff and Message Follow; an indeterminate result retains it under [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). |
 
 <a id="reply-correlation"></a>
 ### Reply Correlation
@@ -808,8 +808,8 @@ currently pending request. It's only treated as that request's result if the val
 match; if no pending request matches, it's judged a late-arriving reply and
 discarded.
 
-This information is kept even when the target has to newly prepare the Spot or
-forward the request to the current owner. A downstream request the handler starts
+The target keeps this information when preparing a new Spot or returning the terminal result
+defined by [Spot address messaging §4.2](../03-spot-actor/06-spot-address-messaging.en.md#42-when-several-nodes-receive-the-first-message-at-once). A downstream request the handler starts
 separately uses a value different from the original request's.
 
 The full generation/propagation contract follows [Flow correlation](../06-observability/04-flow-correlation.en.md).
@@ -1497,21 +1497,11 @@ still starts and completes as its chunks flow in order.
 <a id="cutover-retransmission-window"></a>
 ### Cutover Retransmission Window
 
-The period after the cutover submit terminal during which the source keeps a copy
-of the pre-boundary relay batch and the cutover, and retransmits them on a new
-connection if the connection dropped and the cutover was lost. The target discards
-the partially received pre-boundary relay segment and atomically replaces it with
-the whole retransmitted batch. The window's length equals the server setting
-`RelocationCutoverWaitTimeout` (default 1,000 ms).
-
-| Item | Content |
-|---|---|
-| Shape | A framework-managed source-local period. No independent public type. |
-| Public composition | Its length is the single value equal to `RelocationCutoverWaitTimeout`. |
-| Creation/management | The source runtime starts it at the cutover submit terminal; the kept copy is framework memory that doesn't occupy the pipe, so it isn't counted against the in-flight payload budget. |
-| Delivery | Retransmission resends one batch; it isn't a per-message journal or ACK. |
-| Lifetime | Starts at the cutover submit terminal; when the window ends, the copy is cleaned up exactly once. Once the source is already cleaned up or terminated, retransmission is impossible. |
-| Application authority | The application doesn't observe or change the window. An orchestrator uses [SafeToShutdown](#safe-to-shutdown) to confirm the shutdown-safe point, which includes the window's end. |
+The period during which the source retains the pre-boundary relay batch and cutover copy
+and can retransmit the same batch after a connection failure. Under
+[common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover),
+the source keeps the copy until target commit, source `Preserve` settlement, or the source-lease-expiry terminal.
+Neither the cutover-wait Warning nor Restore expiry alone ends this period.
 
 <a id="safe-to-shutdown"></a>
 ### SafeToShutdown

@@ -731,7 +731,7 @@ byte 상한이 없다. `Defer()`를 호출한 뒤 seal하기 전에 도착한 me
 | .NET 표기 | Public type 없음 |
 | 공개 구성 | Message payload와 original operation identity, `ObjectGeneration`과 queue ordering에 필요한 Framework metadata를 유지한다. 내부 storage 형식은 공개하지 않는다. |
 | 생성·관리 | Source runtime이 relocation seal 뒤 도착한 message를 보관한다. 일반 application lane의 count·byte reservation을 relocation 전용 상한으로 다시 적용하지 않는다. Transport, deadline과 cancellation이 정하는 별도 제한은 그대로 적용한다. |
-| 수명 | Relay-ready reply가 accepted 상태가 되기 전 명시적 abort에서는 source queue로 원래 순서에 맞춰 되돌린다. 그 뒤에는 cutover submit 결과와 관계없이 source를 복원하지 않고 target handoff 또는 Message Follow가 소유한 뒤 제거한다. |
+| 수명 | Relay-ready 전 명시적 abort 또는 source `Preserve` fence 성공에는 원래 순서로 source queue에 되돌린다. Target commit이면 target handoff와 Message Follow가 소유한다. 불확정이면 보관한다([공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)). |
 
 <a id="reply-correlation"></a>
 ### Reply correlation
@@ -758,8 +758,8 @@ Client는 reply가 도착하면 `correlation_id`를 현재 대기 중인 request
 비교한다. 값이 일치할 때만 해당 request의 결과로 처리하며, 일치하는 request가
 없으면 늦게 도착한 reply로 판단하여 폐기한다.
 
-Target이 Spot을 새로 준비하거나 current owner로 request를 전달해도 이 정보를
-유지한다. Handler가 별도로 시작한 downstream request에는 원래 request와 다른 값을
+Target이 Spot을 새로 준비하거나 [Spot 주소 메시징 §4.2](../03-spot-actor/06-spot-address-messaging.ko.md#42-여러-node가-동시에-첫-message를-받는-경우)의
+terminal 결과를 반환할 때도 이 정보를 유지한다. Handler가 별도로 시작한 downstream request에는 원래 request와 다른 값을
 사용한다.
 
 전체 생성·전파 계약은 [Flow correlation](../06-observability/04-flow-correlation.ko.md)을 따른다.
@@ -1421,20 +1421,10 @@ payload도 chunk가 순서대로 흘러가며 시작하고 완료할 수 있다.
 <a id="cutover-retransmission-window"></a>
 ### 재전송 창 (Cutover retransmission window)
 
-Cutover submit terminal 뒤에도 source가 boundary 전 relay batch와 cutover의 사본을
-유지하고, connection이 끊겨 cutover가 유실된 경우 새 connection으로 재전송하는
-기간이다. Target은 부분 수신한 boundary 전 relay 구간을 폐기하고 재전송 batch
-전체로 원자적으로 교체한다. 창의 길이는 server 설정
-`RelocationCutoverWaitTimeout`(기본 1,000 ms)과 같다.
-
-| 항목 | 내용 |
-|---|---|
-| 형태 | Framework가 관리하는 source-local 기간. 독립 public type은 없다. |
-| 공개 구성 | 길이는 `RelocationCutoverWaitTimeout`과 같은 값 하나다. |
-| 생성·관리 | Source runtime이 cutover submit terminal에서 시작하며, 유지하는 사본은 pipe를 점유하지 않는 Framework memory이므로 in-flight payload 예산에 계상하지 않는다. |
-| 전달 | 재전송은 batch 하나를 다시 보내는 것이며 message별 journal이나 ACK가 아니다. |
-| 수명 | Cutover submit terminal에서 시작해 창이 끝나면 사본을 정확히 한 번 정리한다. Source가 이미 정리되거나 종료된 뒤에는 재전송이 불가능하다. |
-| Application 권한 | Application은 창을 관찰하거나 바꾸지 않는다. Orchestrator는 [SafeToShutdown](#safe-to-shutdown)으로 창 종료를 포함한 종료 가능 시점을 확인한다. |
+Source가 boundary 전 relay batch와 cutover 사본을 보관하고, connection 장애 뒤 같은
+batch를 재전송할 수 있는 기간이다. Source는 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의
+target commit, source `Preserve` fence 또는 source lease 만료 terminal까지 사본을 유지한다. Cutover 대기
+Warning과 Restore deadline만으로 이 기간을 끝내지 않는다.
 
 <a id="safe-to-shutdown"></a>
 ### SafeToShutdown

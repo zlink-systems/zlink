@@ -286,14 +286,9 @@ confirmed.
 
 Connection replacement uses the node RID, security identity, and lifecycle generation
 supplied by the current descriptor as the admission fence. Once these descriptor expectations
-form a complete set, an endpoint-only manual intent with generation 0 cannot weaken this check. The
-existing connection requests termination at the endpoint level and is replaced only after
-the close snapshot or disconnect event of that endpoint's current physical connection has
-been observed. A successful call alone is not proof that the physical close has completed. A
-new connection for the same endpoint is created only after the close has been observed. The
-`connection_id` of a monitor event is used only for diagnostics and correlation, never as a
-fence identifying a physical pair, as a send/reply target, or as a reconnect condition. Core
-owns the selection and replacement of physical pipes. The framework observes the selected route
+form a complete set, an endpoint-only manual intent with generation 0 cannot weaken this check. The `connection_id` of a monitor event is used only for diagnostics and correlation,
+never as a physical-pair fence, send/reply target, or reconnect condition. Core owns physical
+pipe selection and replacement ([Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.en.md#101-observing-the-selected-route)). The framework observes the selected route
 per RID through the snapshot and `ZLINK_POLLROUTE` of [Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.en.md#101-observing-the-selected-route), and decides the
 logical admission of that route from the descriptor's RID, security identity, and lifecycle
 generation. It does not reconstruct the selected route from the order of monitor events.
@@ -323,7 +318,10 @@ complete a request's final result exactly once.
 The framework doesn't automatically resubmit a request or one-way message to a different peer
 or owner after a connection loss.
 
-A reconnect uses the existing configuration or the current discovery descriptor.
+[Core socket `zlink_connect`](../../../../../../../core/doc/spec/core/socket/README.en.md#zlink_connect)
+owns transport reconnection to the same endpoint. The framework retains existing configuration
+or current discovery descriptor intent and repeats service handshake and identity verification
+after Core reports a selected route ready.
 
 - RouteMesh and ClientServer redo the service handshake and identity verification.
 - A RouteMesh Object Client pair's `NotRequired` admission with no Server membership doesn't
@@ -352,7 +350,7 @@ Even after a runtime's `Relocate`, which moves stateful workload, or `Shutdown` 
 application work, a connection needed for already-accepted reply/relocation/STREAM processing
 can be kept up to the deadline. This connection isn't included in new target selection.
 
-When terminating, the liveness timer, reconnect timer, transport monitor subscription, and
+When terminating, the liveness timer, transport monitor subscription, and
 pending callback are finished before the connection is closed.
 
 ## 8. A Liveness Determination Does Not Change Authority
@@ -454,7 +452,7 @@ contract test.
 - Even if reply, timeout, cancellation, disconnect, and shutdown race, the request result
   completes exactly once. The request is not automatically resubmitted to a different peer or
   owner.
-- No liveness/reconnect timer, subscription, or callback remains after `Relocate`/`Shutdown`.
+- No liveness timer, subscription, or callback remains after `Relocate`/`Shutdown`.
 - C++/.NET/JVM/Node.js provide the same fixed times and observed results.
 
 ---

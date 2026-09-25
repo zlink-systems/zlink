@@ -217,8 +217,8 @@ RootLocationOptions {
     // The cap limiting the same sum for the whole source node instead of one peer connection.
     // Default 0 (not applied). When positive, chunk submission must satisfy both the peer budget and this budget.
     RelocationNodeInFlightPayloadBudget: bytes = 0,
-    // How long the target waits for cutover after sending the relay-ready reply,
-    // and also how long the source keeps the boundary batch and cutover copy for retransmission. Default 1,000 ms.
+    // Cutover-wait Warning threshold after the relay-ready reply. Default 1,000 ms.
+    // Copy lifetime follows relocation §4.4.
     RelocationCutoverWaitTimeout: duration = 1000_ms,
 }
 ```
@@ -227,7 +227,7 @@ The sums for the two budgets are based not on encoded payload bytes but on the a
 charge (including the per-frame metadata charge) of chunks Core is still accounting. All
 four settings can be changed per deployment, and the runtime doesn't adjust them
 automatically by observing round-trip time or load. The behavioral contract for chunk
-splitting and negotiation, budget accounting and waiting, and the cutover fallback and
+splitting and negotiation, budget accounting and waiting, and the cutover-wait Warning and
 retransmission window is owned by
 [Complete Actor And Spot Relocation Flow](../05-location-relocation/04-relocation-flow.en.md).
 
@@ -390,9 +390,9 @@ The manual peer API provides two intents.
 
 Runtime control provides adding a connect intent, releasing an intent by endpoint, and
 querying the current intent list. Manual peer also verifies the same MeshName, RID,
-generation, immutable ChannelName set, and security identity. Transport reconnection to the
-same endpoint is managed by the framework service runtime using the binding's raw socket
-reconnect contract. The application doesn't configure the reconnect loop, pipe identity, or
+generation, immutable ChannelName set, and security identity. [Core socket `zlink_connect`](../../../../../../../core/doc/spec/core/socket/README.en.md#zlink_connect)
+owns transport reconnection to the same endpoint. The framework service runtime manages peer
+intent and service handshake. The application doesn't configure the reconnect loop, pipe identity, or
 transport backoff.
 
 ## 6. Messaging API Family
@@ -892,8 +892,8 @@ with creation. The sequence is as follows.
    root/cursor, restores the first record to the local queue head, and then opens the
    barrier.
 
-A runtime that loses the race doesn't create a local Spot instance, and the source doesn't
-resend the same message after `Ready`. This sequence doesn't split the public call into
+[Spot address messaging §4.2](../03-spot-actor/06-spot-address-messaging.en.md#42-when-several-nodes-receive-the-first-message-at-once)
+defines the losing runtime's result. The source does not resend the same message after `Ready`. This sequence doesn't split the public call into
 check and create, and doesn't expose the target node to the application.
 
 The recovery pointer is only removed via a Preserve CAS after durably recording the first

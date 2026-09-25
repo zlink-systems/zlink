@@ -193,16 +193,15 @@ RootLocationOptions {
     // 같은 합계를 peer 연결 하나가 아니라 source 노드 전체에 대해 제한하는 상한이다.
     // 기본 0(미적용). 양수이면 chunk 제출은 peer 예산과 이 예산을 모두 만족해야 한다.
     RelocationNodeInFlightPayloadBudget: bytes = 0,
-    // Target이 relay 수신 준비 reply를 보낸 뒤 cutover를 기다리는 시간이며,
-    // source가 재전송을 위해 boundary batch와 cutover 사본을 유지하는 시간이기도 하다. 기본 1,000 ms.
+    // Relay 수신 준비 reply 뒤 cutover 대기 Warning 시한. 기본 1,000 ms.
+    // 사본 수명은 relocation §4.4를 따른다.
     RelocationCutoverWaitTimeout: duration = 1000_ms,
 }
 ```
 
 두 예산의 합계는 encoded payload byte가 아니라 Core가 아직 계상 중인 chunk의 accounted
 charge(frame별 metadata charge 포함) 기준이다. 네 설정 모두 배치별로 변경할 수 있고, runtime이 왕복
-시간이나 부하를 관찰해 자동으로 조정하지 않는다. Chunk 분할·협상, 예산 계상과 대기, cutover
-fallback과 재전송 창의 동작 계약은
+시간이나 부하를 관찰해 자동으로 조정하지 않는다. Chunk 분할·협상, 예산 계상과 대기, cutover 대기 Warning과 재전송 창의 동작 계약은
 [Actor와 Spot relocation 전체 흐름](../05-location-relocation/04-relocation-flow.ko.md)이 소유한다.
 
 ## 4. RouteMesh 등록
@@ -341,8 +340,8 @@ Manual peer API는 두 가지 intent를 제공한다.
 
 Runtime control은 connect intent 추가, endpoint 기준 intent 해제와 현재 intent 목록 조회를 제공한다.
 Manual peer도 같은 MeshName, RID, generation, immutable ChannelName set과 security identity를 검증한다.
-같은 endpoint의 transport 재접속은 Framework service runtime이 binding의 raw socket reconnect 계약을
-사용해 관리한다. Application은 reconnect loop, pipe identity와 transport backoff를 구성하지 않는다.
+같은 endpoint의 transport 재접속은 [Core socket `zlink_connect`](../../../../../../../core/doc/spec/core/socket/README.ko.md#zlink_connect)가
+소유한다. Framework service runtime은 peer intent와 service handshake를 관리한다. Application은 reconnect loop, pipe identity와 transport backoff를 구성하지 않는다.
 
 ## 6. 메시징 API family
 
@@ -776,8 +775,8 @@ eligible target으로 전송한다. Source는 owner claim이나 reservation을 �
 5. Handler barrier를 유지한 상태에서 recovery root·cursor를 포함한 `Ready`를 commit하고, 첫 record를
    local queue head로 복원한 뒤 barrier를 연다.
 
-경쟁에서 진 runtime은 local Spot instance를 만들지 않으며 source는 `Ready` 뒤 같은 message를 다시
-전송하지 않는다. 이 순서는 public call을 check와 create로 나누거나 application에 target node를 노출하지
+경쟁에서 진 runtime의 결과는 [Spot 주소 메시징 §4.2](../03-spot-actor/06-spot-address-messaging.ko.md#42-여러-node가-동시에-첫-message를-받는-경우)가
+정한다. Source는 `Ready` 뒤 같은 message를 다시 전송하지 않는다. 이 순서는 public call을 check와 create로 나누거나 application에 target node를 노출하지
 않는다.
 
 Recovery pointer는 첫 handler terminal completion을 durable하게 기록하고 cursor를 inbox sequence까지 갱신한 뒤에만

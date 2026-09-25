@@ -370,8 +370,8 @@ Node handler가 Spot의 mailbox를 대신 읽어 처리하지 않는다. Spot의
 3. 복구에 필요한 recovery root와 cursor를 함께 담아 location `Ready`를 commit한다.
 4. Framework가 최초 record를 local queue 맨 앞으로 되돌린 뒤 activation barrier를 연다.
 
-같은 Spot을 만들려다 진 node는 이긴 node가 낸 결과를 그대로 받는다. factory를 따로 실행하거나
-message를 다시 보내지 않는다.
+최초 message의 `Reserve`에서 진 receiver는 이긴 node의 결과를 사용하거나 수락한 operation을
+전달하지 않는다. 그 operation은 [Spot 주소 메시징 §4.2](../03-spot-actor/06-spot-address-messaging.ko.md#42-여러-node가-동시에-첫-message를-받는-경우)에 따라 끝낸다.
 
 ### `ActorRef`와 `SpotRef` — 조회 시점의 위치 사진
 

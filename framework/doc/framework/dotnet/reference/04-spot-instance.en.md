@@ -318,7 +318,7 @@ Entry Spot.
 
 ```csharp
 await Context.LeaveActorAsync(actor, ct);       // User Spot: removes only the member Actor
-bool closed = await Context.CloseAsync(ct);     // User·Instance Spot: closes this Spot itself
+Context.Close();                                // User·Instance Spot: registers a close request
 await entryContext.DestroyActorAsync(actor, ct); // Entry Spot: destroys the Actor entirely
 ```
 
@@ -326,10 +326,9 @@ await entryContext.DestroyActorAsync(actor, ct); // Entry Spot: destroys the Act
 (`LeaveActorAsync`/`DestroyActorAsync`) and a `CancellationToken`.
 
 **Completion.** `LeaveActorAsync` (`IZLinkSpotContext` only) releases only the member Actor
-membership and does not destroy the Actor itself. `CloseAsync`
-(`IZLinkSpotContext`/`IZLinkInstanceSpotContext`) uses the same completion kinds as the
-manager's `CloseAsync(spotRef)` (the earlier entry in this category), targeting this Spot
-itself. `DestroyActorAsync` (`IZLinkEntrySpotContext` only) destroys the Actor entirely —
+membership and does not destroy the Actor itself. `Close()` (`IZLinkSpotContext`/`IZLinkInstanceSpotContext`) registers a no-result request
+([common Spot messaging §7](../../common/spec/server/03-spot-actor/06-spot-address-messaging.en.md#7-close-and-the-generation-boundary)).
+Only manager `CloseAsync(spotRef)` returns a result. `DestroyActorAsync` (`IZLinkEntrySpotContext` only) destroys the Actor entirely —
 unlike `LeaveActorAsync`, it does not just release membership, it removes the Actor itself.
 
 **When to use it.** Use `LeaveActorAsync` to remove a member Actor from this Spot without

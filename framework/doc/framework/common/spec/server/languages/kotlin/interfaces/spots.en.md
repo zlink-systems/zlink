@@ -408,9 +408,8 @@ return a dedicated wrapper that preserves fluent options and single-use
 state, and doesn't expose the Java call, `CompletionStage`, or
 `Class<T>` to the application. `close(SpotRef)` handles Missing as
 `false`, a generation mismatch as `InvalidOperation`, and a sealed
-handoff window as `Unavailable`, only targeting User Spot. An Instance
-Spot's self-close uses Java's `ZLinkInstanceSpotContext.close()`
-unchanged.
+handoff window as `Unavailable`, only targeting User Spot. An Instance Spot's self-close registers a no-result request through Java's
+`ZLinkInstanceSpotContext.close()` and follows [Spot address messaging §7](../../../03-spot-actor/06-spot-address-messaging.en.md#7-close-and-the-generation-boundary).
 
 The maintenance target restores the Actor adapter and queue/timer,
 commits Location authority/membership, and then starts Actor message

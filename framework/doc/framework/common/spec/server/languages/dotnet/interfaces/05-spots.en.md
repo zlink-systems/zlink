@@ -190,16 +190,14 @@ public interface IZLinkSpotContext : IZLinkSpotCommonContext
  IZLinkActor actor,
  CancellationToken cancellationToken = default);
 
- ValueTask<bool> CloseAsync(
- CancellationToken cancellationToken = default);
+ void Close();
 }
 
 public interface IZLinkInstanceSpotContext : IZLinkSpotCommonContext
 {
  IZLinkInstanceSpotHandlerRegistry Handlers { get; }
 
- ValueTask<bool> CloseAsync(
- CancellationToken cancellationToken = default);
+ void Close();
 }
 
 public interface IZLinkEntrySpot
@@ -678,8 +676,9 @@ get-or-create, resolve, and close. The manager doesn't have an
 argument to select Spot kind or an Instance Spot create/get-or-create
 overload. Instance Spot's creation path is the one explicit
 `InstanceSpot(...)` opt-in on the Spot-dedicated message call. It leaves
-`IZLinkInstanceSpotContext.CloseAsync()` for an Instance Spot
-implementation to close its own lifecycle.
+`IZLinkInstanceSpotContext.Close()` for an Instance Spot implementation to
+request the end of its own lifecycle
+([Spot address messaging §7](../../../03-spot-actor/06-spot-address-messaging.en.md#7-close-and-the-generation-boundary)).
 
 User Spot Create and GetOrCreate calls are single-use. Setting the same
 option twice is `InvalidOperation`, and calling terminal `Async(...)`

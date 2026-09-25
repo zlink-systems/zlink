@@ -519,8 +519,8 @@ before socket bind.
 ## Relocation Transfer Options
 
 `relocation_cutover_wait_timeout` is a startup-only positive millisecond duration with a
-1,000 ms default. It is the time the target waits for cutover after the relay-ready reply,
-and it equals the time the source keeps the boundary batch retransmission copy. Zero,
+1,000 ms default. It is the Warning threshold for cutover arrival after the relay-ready reply. Source
+copy retention and authority CAS follow [common relocation §4.4](../../../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). Zero,
 negative, infinite, or out-of-range values are configuration errors before socket bind.
 
 `relocation_payload_chunk_limit_bytes` is the size cap of one encoded chunk that a

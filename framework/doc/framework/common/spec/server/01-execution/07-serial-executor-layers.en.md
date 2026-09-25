@@ -290,11 +290,13 @@ ZLinkExecutionLanePolicy {
 enqueue(work)                    // application lane
 enqueueWithPayloadBytes(work, n) // application lane; reserved at the actual n payload bytes
 enqueueLifecycle(work)           // lifecycle lane; overtakes queued application work
-enqueueBarrierNext(work)         // right after the current turn, ahead of queued application work
 isCurrent()                      // does the calling thread hold this queue's turn
 awaitQuiescence()                // wait until all queued work has finished
 close()                          // accept no new submissions; finish what was already accepted
 ```
+
+A barrier is submitted to the lifecycle lane through `enqueueLifecycle`. Lane FIFO and
+priority follow [Execution gate §7](02-handler-turn-and-execution-gate.en.md#7-lane-separation-and-priority-implementation).
 
 ### 6.3 Atomic Scope of Sequence-Number Issuance and Insertion
 

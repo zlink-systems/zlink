@@ -77,7 +77,8 @@ call의 결과를 바꾸지 않는다. Framework는 이 실패를 metric, log와
 `ErrorKind` 중 하나로 한 번만 완료한다.
 
 - 대상이나 handler가 없으면 `NotFound`다.
-- Route, connection 또는 current owner를 사용할 수 없으면 `Unavailable`이다.
+- Route, connection 또는 current owner를 사용할 수 없으면 `Unavailable`이다. 최초 message의
+  `Reserve`에서 진 경우에도 선택된 receiver가 그 operation을 수락할 수 없으므로 `Unavailable`이다.
 - Reply를 deadline 안에 받지 못하면 `DeadlineExceeded`다.
 - Wire, payload 또는 reply type을 처리할 수 없으면 `ProtocolError`다.
 - Runtime이 종료 중이면 `ShuttingDown`이다.

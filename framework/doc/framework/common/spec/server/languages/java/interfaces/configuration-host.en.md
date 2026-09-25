@@ -853,7 +853,6 @@ transport negotiated is a startup configuration error before socket bind.
 `relocationInFlightPayloadBudgetBytes` caps the sum of relocation chunk bytes concurrently
 in flight per peer connection, defaulting to 16 MiB; `0` disables the budget.
 `relocationNodeInFlightPayloadBudgetBytes` applies the same accounting rule to the
-node-wide sum and defaults to `0`, meaning not applied. `relocationCutoverWaitTimeout`
-is both the time the target waits for cutover and the time the source keeps its
-boundary batch copy for retransmission, defaulting to one second. All four values are
+node-wide sum and defaults to `0`, meaning not applied. `relocationCutoverWaitTimeout` is the cutover-wait Warning threshold, defaulting to
+one second. Source copy retention and authority CAS follow [common relocation §4.4](../../../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). All four values are
 startup-only, and negative values are a configuration error before socket bind.

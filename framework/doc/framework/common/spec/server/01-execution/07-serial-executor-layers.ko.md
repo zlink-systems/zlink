@@ -282,11 +282,13 @@ ZLinkExecutionLanePolicy {
 enqueue(작업)                    // application lane
 enqueueWithPayloadBytes(작업, n) // application lane. 실제 payload n byte로 예약한다
 enqueueLifecycle(작업)           // lifecycle lane. 대기 중인 application 작업을 앞지른다
-enqueueBarrierNext(작업)         // 현재 turn 직후, 줄 서 있는 application 작업보다 먼저
 isCurrent()                      // 호출한 thread가 이 queue의 turn을 점유하고 있는가
 awaitQuiescence()                // 줄 선 작업이 모두 끝날 때까지 기다린다
 close()                          // 새 제출을 받지 않고 이미 받은 작업을 끝낸다
 ```
+
+Barrier는 `enqueueLifecycle`로 lifecycle lane에 제출한다. Lane의 FIFO와 우선순위는
+[Execution gate §7](02-handler-turn-and-execution-gate.ko.md#7-lane-분리와-우선순위-구현)을 따른다.
 
 ### 6.3 순서 발급과 삽입의 원자적 범위
 

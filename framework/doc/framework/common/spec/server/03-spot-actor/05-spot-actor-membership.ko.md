@@ -465,7 +465,7 @@ Actor handler가 `JoinSpot(...)` 또는 `JoinEntrySpot(...)`을 호출한 뒤 �
    보낸다. 이후 도착한 message는 boundary 뒤 구간에 넣으므로 mailbox가 비기를 기다리지 않는다.
    Target은 Actor Restore 뒤 cutover를 받으면 membership, owner,
    capacity와 generation을 `LocationStore`에서 한 번에 CAS한다. 이 CAS는 target만 수행한다.
-   Relay 준비 reply 뒤 cutover 대기 시간(`RelocationCutoverWaitTimeout`, 기본 1,000ms) 동안 cutover와 재전송이 모두 오지 않아도 Warning을 기록하고 CAS를 진행한다.
+   Cutover 검증과 CAS 조건은 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)를 따른다.
    성공하면 target이 새 owner가 되고, 실패하면 target queue를 열지 않는다.
 7. CAS 뒤 저장된 기존 Actor 작업, boundary 전 relay와 나머지 temporary 작업을 실제 Actor
    queue에 순서대로 넣고 regular route로 전환하되 dispatch는 닫아 둔다. 그다음 Target Spot의
@@ -500,8 +500,7 @@ abort·정리한 뒤 새 identity의 준비를 만든다 — 나중 attempt가 �
 상한이 없으므로 어느 배치에서도 보장되는 32 KiB의 보수 chunk 크기(chunk 하나의 encoded
 크기)로 전송한다.
 
-**Relay-ready reply가 accepted 상태가 되기 전의 명시적 실패만 target staging을 폐기하고 source를
-복원하며, accepted 뒤에는 cutover submit 결과와 관계없이 source를 복원하지 않는다.** Target
+Relay-ready 뒤 target staging 폐기와 source 재개는 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 authority 판정을 따른다. Target
 commit(Location Store CAS)이 성공한 뒤부터는 이동이 확정된 것으로 보고, 실패해도 이미 이동한
 상태를 되돌리지 않기 때문이다. 이 불변조건은 Actor Join, User Spot aggregate relocation(§6)과 §7 실패 처리
 범위에 공통으로 적용되며, 아래 세 곳은 모두 이 조항을 가리킨다.
@@ -540,11 +539,8 @@ sequenceDiagram
         TargetRuntime-->>SourceRuntime: [reply] Actor Restore·relay 수신 준비 완료 · source owner 유지
         SourceRuntime->>TargetRuntime: [send/request relay] ingress hold
         TargetRuntime->>TargetTemp: [local] boundary 전 relay 구간에 message 추가
-        alt cutover가 대기 시간 안에 도착
-            SourceRuntime->>TargetRuntime: [send] cutover · boundary 전 relay 전송 완료
-        else 대기 시간 동안 cutover 없음
-            TargetRuntime->>TargetRuntime: [local] cutover_timeout Warning · fallback 진행
-        end
+        SourceRuntime->>TargetRuntime: [send] cutover · boundary 전 relay 전송 완료
+        TargetRuntime->>TargetRuntime: [local] 완전한 relay와 cutover 확인
         TargetRuntime->>LocationStore: [request] source fence가 같으면 membership·owner를 target으로 CAS
         LocationStore-->>TargetRuntime: [reply] target membership·owner CAS 성공
         TargetRuntime->>TargetQueue: [local] saved work·boundary 전 relay·나머지 temporary 순서로 병합
@@ -580,8 +576,7 @@ Relay-ready reply가 accepted 상태가 되기 전 reject, timeout 또는 `Captu
 staging 사본이므로 temporary queue에서 실행하거나 terminal 결과를 만들지 않고 폐기한다. Source가
 ingress hold의 request와 one-way message를 원래 Actor queue에 도착 순서대로 되돌린다. Queue가
 비면 해당 temporary queue 등록을 제거한다. 이때 source owner, state와 membership을 그대로 유지한다.
-Relay-ready 뒤 timeout, aggregate commit conflict 또는 cutover submit failure는 source rollback
-조건이 아니다. 같은 target process가 실행
+Relay-ready 뒤 cutover submit 결과나 source를 가리키는 이전 read만으로 source dispatch를 열지 않는다. [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 source `Preserve` fence가 확인되면 보관 작업을 source에서 재개하고, target commit이 확인되면 source로 되돌리지 않는다. 같은 target process가 실행
 중이면 확정된 위치정보와 source가 memory에 유지한 payload의 재전송으로 deadline 안에서
 다시 시도할 수 있다. Target
 process가 종료되면 다른 runtime이 자동 복구하지 않는다.
@@ -760,9 +755,7 @@ lifecycle callback만 target admission 전에 끝낸다.
 
 Commit 전 새 inventory tree와 target staging은 resolver에 보이지 않는다. **Participant
 하나라도 relay-ready reply가 accepted 상태가 되기 전에 실패하면 target staging을 폐기하고
-aggregate 전체 source 상태를 유지하며, 그 뒤에는 [§4.2가 정의하는 규칙](#42-다른-node의-spot으로-actor를-join하는-순서)에
-따라 cutover submit 결과와 관계없이 일부 participant도 source로 되돌리지 않고 같은 aggregate
-identity와 inventory root를 유지한다.** 같은 target process가 실행 중일
+aggregate 전체 source 상태를 유지하며, 그 뒤의 authority 판정은 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)를 따른다. 같은 aggregate identity와 inventory root를 유지하고 participant별로 source 복원을 결정하지 않는다.** 같은 target process가 실행 중일
 때만 aggregate 전체를 계속 처리하며, process가 종료되면 다른 runtime이 이어받지 않는다.
 
 `PerActor` User Spot은 aggregate owner 변경을 사용하지 않는다. Framework는 target에
@@ -798,12 +791,7 @@ application은 다음 round나 match를 여기서 시작할 수 있다.
 **Relay-ready reply가 accepted 상태가 되기 전 명시적 failure는 `Aborted` CAS, route와 source
 location snapshot 취소 확인, relocation reservation·target staging 정리와 source 상태 복원을
 끝낸 뒤 source admission을 다시 연다. 이 경계 뒤에는 cutover submit 성공·실패와 관계없이
-source를 복원하지 않는다** — [§4.2](#42-다른-node의-spot으로-actor를-join하는-순서)가 정의하는
-공통 규칙이며 Actor Join, User Spot aggregate relocation(§7) 모두에 적용된다. Cutover 뒤
-Location Store 변경 결과를 받지 못하면 target은 성공이나 실패를 추측하지 않고 같은 authority를
-다시 읽는다. Target이 owner가 아니면 Restore 유효시간까지 같은 fence로 다시 시도한다. 그 안에
-owner 변경을 확인하지 못하면 `location_update_failed`를 기록하고 target Actor 또는 Spot과
-temporary queue를 제거하며 Session route update를 보내지 않는다.
+source 재개는 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 `Preserve` fence를 따른다** — 공통 authority 규칙이며 Actor Join, User Spot aggregate relocation(§7) 모두에 적용된다. Cutover 뒤 Location Store 변경 결과가 불명확하면 [Location runtime §10](../05-location-relocation/01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)의 같은 `RelocationId` authority read로 결과를 확정한다. Restore 만료 뒤 같은 target의 CAS 예외와 staging terminal은 [Location runtime §10](../05-location-relocation/01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다.
 
 `Capture`가 실패하면 Restore 요청을 보내지 않고 source를 유지한다. `Restore`가
 실패하면 target staging instance와 temporary queue를 폐기한다. 같은 source와 target process가
@@ -864,7 +852,7 @@ Session owner 쪽 검증·처리 절차를 소유한다 — 이 문서는 그 �
 - Terminal record가 original deadline 뒤 5분 동안 같은 operation의 replay를 허용하고,
   TTL 뒤 Ready authority가 없으면 새 reservation으로 다시 생성할 수 있다.
 - Target User Spot의 `OnActorJoin`이 `Capture`보다 먼저 실행되고 relay-ready reply가 accepted되기
-  전 명시 failure가 source 전체를 유지한다. 그 뒤에는 source를 복원하지 않는다.
+  전 명시 failure가 source 전체를 유지한다. 그 뒤 source 재개는 공통 relocation §4.4의 `Preserve` fence를 따른다.
 - Actor join은 execution mode와 관계없이 `Yield`를 제공하지 않는다.
 - `Defer()`가 target 조회나 Store I/O 없이 현재 handler에 Join 등록과 비활성 barrier만 남기고,
   handler의 마지막 continuation이 정상 종료한 뒤 실행한다.
@@ -911,8 +899,7 @@ Session owner 쪽 검증·처리 절차를 소유한다 — 이 문서는 그 �
 - `Restore` 재시도의 payload 원본이 저장소가 아니라 source memory 재전송이다.
 - 저장한 기존 Actor 작업을 실제 Actor queue에 먼저 넣고 temporary queue의 작업을 그 뒤에
   옮긴 다음 기존 dispatch 경로로 atomic하게 전환한다.
-- Relay-ready reply가 accepted 상태가 되기 전 abort에서만 target temporary queue를 실행하지 않고
-  폐기하며 source 원본만 다시 처리한다.
+- Relay-ready 전 abort 또는 그 뒤 source `Preserve` fence 성공은 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)에 따라 target staging을 폐기하고 source 작업을 재개한다. Source lease 만료 terminal도 같은 절을 따른다.
 - `RelocationId`, target attempt와 owner generation이 같은 중복 Restore는 작업을 다시
   시작하지 않고 기존 temporary queue와 진행 상태를 사용한다.
 - membership commit 뒤 `OnJoinedActor`, one-way `OnLeaveActor`, completion callback 순서를

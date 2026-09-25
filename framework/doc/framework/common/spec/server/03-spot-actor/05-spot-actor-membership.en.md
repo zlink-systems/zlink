@@ -565,10 +565,7 @@ the following order after the handler ends normally.
    one-way on that connection. Later arrivals enter the post-boundary
    span, so mailbox drain isn't required. After Actor Restore, target runs
    the target CAS membership, owner, capacity, and generation together in
-   `LocationStore`. It does so on cutover, or, when neither the cutover
-   nor a retransmission arrives within the cutover wait time
-   (`RelocationCutoverWaitTimeout`, default 1,000ms) from the relay-ready
-   reply, while recording a Warning. Only target performs this CAS. On
+   `LocationStore`. Cutover verification and CAS conditions follow [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). Only target performs this CAS. On
    success target becomes owner; on failure the target queue doesn't open.
 7. After CAS, saved Actor work, pre-boundary relay, and remaining
    temporary work enter the real Actor queue in order, then the regular
@@ -610,9 +607,8 @@ preparation on the Restore request, and since there's no negotiated chunk
 limit, it transfers with a conservative chunk size of 32 KiB (the encoded
 size of one chunk) guaranteed in any deployment.
 
-**Only an explicit failure before the relay-ready reply is accepted discards the
-target staging and restores the source; after it is accepted, the source isn't
-restored regardless of the cutover-submit result.** This is
+After relay-ready, target staging cleanup and source resumption follow authority
+settlement in [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). This is
 because, once target commit (the Location Store CAS) succeeds, the move is
 considered confirmed, and an already-moved state isn't rolled back even on
 failure. This invariant applies in common to Actor Join, User Spot
@@ -654,11 +650,8 @@ sequenceDiagram
         TargetRuntime-->>SourceRuntime: [reply] Actor Restore and relay-reception ready · source still owner
         SourceRuntime->>TargetRuntime: [send/request relay] ingress hold
         TargetRuntime->>TargetTemp: [local] add message to the pre-boundary relay span
-        alt cutover arrives within the wait time
-            SourceRuntime->>TargetRuntime: [send] cutover · pre-boundary relay sent
-        else no cutover within the wait time after relay-ready reply
-            TargetRuntime->>TargetRuntime: [local] cutover_timeout Warning · proceed by fallback
-        end
+        SourceRuntime->>TargetRuntime: [send] cutover · pre-boundary relay sent
+        TargetRuntime->>TargetRuntime: [local] verify the complete relay and cutover
         TargetRuntime->>LocationStore: [request] CAS membership/owner if source fence still matches
         LocationStore-->>TargetRuntime: [reply] target membership/owner CAS succeeds
         TargetRuntime->>TargetQueue: [local] merge saved work, pre-boundary relay, remaining temporary work
@@ -699,9 +692,7 @@ discarded from the temporary queue without running or creating a terminal
 result. The source restores the ingress hold's requests and one-way
 messages to the original Actor queue in arrival order. Once the queue is
 empty, that temporary queue registration is removed. Source owner, state,
-and membership are kept unchanged throughout. A timeout, aggregate commit
-conflict, or cutover-submit failure after relay-ready doesn't roll back to
-source. If the same target process is running, it can retry within the
+and membership are kept unchanged throughout. After relay-ready, neither a cutover-submit result nor an earlier read naming source reopens source dispatch. A confirmed source `Preserve` fence under [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover) returns retained work to source dispatch; confirmed target commit does not. If the same target process is running, it can retry within the
 deadline using the confirmed location information and a resend of the
 payload the source keeps in memory. If the target process terminates, a
 different runtime doesn't automatically recover it.
@@ -927,10 +918,7 @@ target admission.
 Before commit, the new inventory tree and target staging aren't visible
 to the resolver. **If even one participant fails before relay-ready is
 accepted, target staging is discarded and the whole aggregate's source
-state is kept. Afterward, per [the rule §4.2 defines](#42-the-order-for-joining-an-actor-to-a-spot-on-a-different-node),
-it doesn't roll back just some participants to the source regardless of
-cutover-submit result — it keeps the same aggregate identity and
-inventory root.** Only while the same target process is running is the
+state is kept. Afterward, authority settlement follows [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). It keeps the same aggregate identity and inventory root; source resumption is decided for the aggregate, not individual participants.** Only while the same target process is running is the
 whole aggregate continued; if the process terminates, a different runtime
 doesn't take over.
 
@@ -974,16 +962,10 @@ callback can start the next round or match here.
 `Aborted` CAS, confirms route and source location snapshot cancellation,
 cleans up the relocation reservation and target staging, and restores
 source state before reopening source admission. After that boundary,
-source isn't restored regardless of cutover-submit result** — this is the
-common rule
-[§4.2](#42-the-order-for-joining-an-actor-to-a-spot-on-a-different-node)
-defines, and it applies to both Actor Join and User Spot aggregate
-relocation (§7). After cutover, if a Location Store change result isn't
-received, target doesn't guess; it re-reads the same authority. If the
-target isn't owner, it retries with the same fence until Restore
-validity expires. Failure to confirm owner transition by then records
-`location_update_failed`, removes the target Actor or Spot and temporary
-queue, and sends no Session route update.
+source resumption follows the `Preserve` fence in [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover)** — this is the
+common authority rule, and it applies to both Actor Join and User Spot aggregate
+relocation (§7). After cutover, an indeterminate Location Store result is settled by the authority
+read for the same `RelocationId` under [Location runtime §10](../05-location-relocation/01-location-runtime.en.md#10-when-a-store-response-isnt-received). The same-target CAS exception and staging terminals after Restore expiry follow [Location runtime §10](../05-location-relocation/01-location-runtime.en.md#10-when-a-store-response-isnt-received).
 
 If `Capture` fails, no Restore request is sent and the source is kept. If
 `Restore` fails, the target staging instance and temporary queue are
@@ -1062,7 +1044,7 @@ The Session route contract is defined by
   TTL, it can be re-created via a new reservation.
 - The target User Spot's `OnActorJoin` runs before `Capture`, and an
   explicit failure before the relay-ready reply is accepted keeps the
-  whole source. Source isn't restored afterward.
+  whole source. Later source resumption follows common relocation §4.4's `Preserve` fence.
 - Actor join doesn't provide `Yield`, regardless of execution mode.
 - `Defer()` leaves only Join registration and an inactive barrier on the
   current handler, without a target lookup or Store I/O, and runs once
@@ -1126,8 +1108,7 @@ The Session route contract is defined by
 - Saved existing Actor work is put into the real Actor queue first, then
   the temporary queue's work moves in behind it, and then the framework
   atomically switches to the existing dispatch path.
-- Only on an abort before relay-ready is accepted is the target temporary
-  queue discarded without running and the source original reprocessed.
+- An abort before relay-ready or a later successful source `Preserve` fence discards target staging and resumes source work under [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). The source-lease-expiry terminal also follows that section.
 - A duplicate Restore with the same `RelocationId`, target attempt, and
   owner generation doesn't restart the work — it uses the existing
   temporary queue and progress state.

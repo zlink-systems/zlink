@@ -450,8 +450,8 @@ with a 3,000 default. Zero, negative, `NaN`, infinity, non-integer, or a value o
 safe-integer range is a configuration error before socket bind.
 
 `relocationCutoverWaitTimeoutMs(value)` is a startup-only positive finite millisecond value
-with a 1,000 default. It is the time the target waits for cutover after the relay-ready
-reply, and it equals the time the source keeps the boundary batch retransmission copy.
+with a 1,000 default. It is the Warning threshold for cutover arrival after the relay-ready reply. Source
+copy retention and authority CAS follow [common relocation §4.4](../../../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
 Zero, negative, `NaN`, infinity, non-integer, or a value outside the safe-integer range is
 a configuration error before socket bind.
 

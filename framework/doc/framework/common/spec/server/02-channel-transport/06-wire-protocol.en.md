@@ -363,18 +363,10 @@ applies only a record matching the retired identity. When the previous session i
 
 ### Physical Connection Replacement
 
-Admission of a [Descriptor](../00-foundation/02-glossary.en.md#descriptor) — the registration
-information a remote runtime publishes so its endpoint, identity, membership, weight, and
-status can be discovered — and physical transport replacement use the same fence.
-Once descriptor expectations are complete, an endpoint-only manual intent with
-generation 0 cannot overwrite them. The runtime requests
-termination of the current physical connection at the endpoint level, and does
-not create a new connection for the same endpoint before observing that
-endpoint's close snapshot or disconnect event. A successful call does not
-replace observation of the physical close. The `connection_id` of a monitor
-event is for diagnostics and correlation only and is never used as a fence.
-[Transport liveness §5](05-transport-liveness.en.md#5-ready-and-failure-determination) defines how
-the selected route is determined and how records from a previous connection are handled.
+Admission of a [Descriptor](../00-foundation/02-glossary.en.md#descriptor) supplies the expected RID,
+security identity, and lifecycle generation for service admission. [Transport liveness §5](05-transport-liveness.en.md#5-ready-and-failure-determination)
+owns descriptor intent and admission; [Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.en.md#101-observing-the-selected-route)
+owns physical pipe selection and replacement.
 
 ### ClientServer Direction
 
@@ -691,10 +683,7 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
   decoding completes. If any of them disagrees it is an explicit failure; the target never
   attempts a partial-assembly restore and never retries transparently. On
   failure the target sends command 53, `relocationFailed`, as a reply to the matching
-  Prepare, after cleaning its own partial chunks and prepared resources. Only receipt of
-  this explicit failure — never a dropped or indeterminate connection — causes the source
-  to restore the captured payload from source memory and finish the operation as a
-  failure; an indeterminate outcome is not reversible from the source's perspective.
+  Prepare, after cleaning its own partial chunks and prepared resources. Receipt of this explicit failure can restore the captured payload immediately. After relay-ready, neither a cutover-submit result nor an earlier read naming source reopens source dispatch. A confirmed source `Preserve` fence under [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover) returns retained work to source dispatch; confirmed target commit does not.
 - Command 31, `relocationData`, carries only post-capture ingress-hold application records
   on the same ordered connection. It never carries saved queue work or timers, which
   travel only in command 52 chunks. It contains no saved queue prefix or timers and
@@ -704,14 +693,7 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
   `boundaryChecksumCrc32c`, describing the precise relayed-record batch the boundary closes
   over. Target sends no response. Reserved IDs 32, 35, and 41 are neither sent nor
   accepted.
-- If the source observes that a previously sent cutover did not reach the target
-  (connection loss) and the source instance is still live, it opens a new connection and
-  retransmits the full pending batch plus a fresh cutover — never only the tail — and the
-  target replaces any partial staged batch wholesale rather than appending. The
-  retransmission window equals `RelocationCutoverWaitTimeout` (default 1,000 ms,
-  configurable). After the window elapses, the existing CAS fallback in the next
-  subsection applies with only a Warning and a counter increment, and no further blind
-  retry.
+- Core reconnects same-endpoint transport under [Transport liveness §6](05-transport-liveness.en.md#6-connection-loss-and-reconnect). After Core exposes its selected route, Framework repeats service handshake and identity admission. Source batch retransmission and target partial-staging replacement then follow [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
 - The source stores application state, queue work not yet executed before relocation,
   and timer information for direct transfer. Native timer handles and callback
   continuations aren't encoded.
@@ -752,11 +734,8 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
 
 ### Target CAS and Retained Store Roles
 
-- After chunk assembly and temporary queue registration finish, receipt of cutover starts
-  the target CAS of Location Store owner and membership from source to target. If cutover
-  doesn't arrive within `RelocationCutoverWaitTimeout` (default 1,000 ms) after the
-  Restore-ready reply, the target records a `cutover_timeout` Warning and starts the same
-  CAS. Only the target performs this CAS.
+- The fields of the cutover control are defined above. Target completeness verification
+  and authority CAS conditions follow [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). `RelocationCutoverWaitTimeout` is a Warning threshold only.
 - Neither the source nor the Session owner changes the Location Store based on a timeout,
   local mirror, or Session route result.
 - The Relocation Store no longer holds the Actor/Spot relocation payload — the direct
@@ -766,15 +745,8 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
   relocation-scoped pending-request terminal record; those two paths keep using the
   store's own `relocation-manifest-v1`/`relocation-root-pointer` formats and CAS
   discipline, unchanged by this section.
-- If CAS fails, the target doesn't open its queue and retries the same CAS until the
-  Restore operation's validity deadline (an absolute deadline on the target, unrelated to
-  Relocation Store retention). After an indeterminate response, it first reads the Store
-  to determine whether the target itself is already owner. A different valid owner or
-  generation makes the relocation stale immediately.
-- If the target owner isn't confirmed before that deadline expires, the target records
-  a `location_update_failed` Error and removes the prepared Actor or Spot, temporary
-  queue, and relocation state. It doesn't update the Session route. A late Store response
-  cannot reactivate the terminal `RelocationId`.
+- Target CAS errors and indeterminate responses converge by the same-`RelocationId`
+  authority read under [Location runtime §10](../05-location-relocation/01-location-runtime.en.md#10-when-a-store-response-isnt-received). The same-target CAS exception and staging terminals after Restore expiry follow [Location runtime §10](../05-location-relocation/01-location-runtime.en.md#10-when-a-store-response-isnt-received).
 - After successful CAS, the move isn't rolled back to the source.
 
 ## 10. Relocation, Actor Membership, and Ready
@@ -787,7 +759,7 @@ repeated control messages for the same relocation and isn't exposed to the appli
 ### Authority and Target-Only CAS
 
 Before CAS, the source is owner. The target has only a prepared instance after Restore
-while waiting for cutover or the 1,000 ms fallback, and doesn't run application messages. The target
+while waiting for complete-relay and cutover verification in [Relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover), and doesn't run application messages. The target
 becomes owner when the target-only CAS succeeds. The Actor or Spot's
 `ObjectGeneration` stays the same while owner generation increases.
 
@@ -815,10 +787,10 @@ arriving at the old address to the target.
 
 After the cutover submission reaches a success or failure terminal, the source
 doesn't wait for a target completion response. Only an explicit target failure before relay-ready is
-accepted aborts and restores source queue and Session seal. A later submit failure doesn't
-restore source. A late or duplicate cutover only records a `late_cutover` Warning and doesn't mutate state
-again. When the 1,000 ms fallback opens the queue, the contract doesn't guarantee that
-late relay runs before new direct target messages.
+accepted aborts and restores source queue and Session seal. A later submit result alone does not restore source; a winning source `Preserve`
+fence follows [Relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). A late or duplicate cutover only records a `late_cutover` Warning and doesn't mutate state
+again. [Relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover)
+owns the relay-completeness condition before target queue opening.
 
 ### Session Route
 
@@ -839,8 +811,8 @@ late relay runs before new direct target messages.
 - A late command 44 or an identical duplicate after timeout only records a Warning and doesn't
   change route, seal, or authority again.
 - If target explicitly fails before relay-ready is accepted, only the matching seal is
-  released and held Session messages are submitted to the source route. A later failure,
-  including cutover-submit failure, doesn't reopen source route.
+  released and held Session messages are submitted to the source route. Later source-route resumption follows the source `Preserve` fence in
+  [Session-Actor Binding §8.1](../04-session/02-session-actor-binding.en.md#81-seal-held-messages-and-route-switchover).
 
 [Session-Actor Binding §8.1](../04-session/02-session-actor-binding.en.md#81-seal-held-messages-and-route-switchover)
 governs validation by the transport, target, and Session owner and defines their boundaries.

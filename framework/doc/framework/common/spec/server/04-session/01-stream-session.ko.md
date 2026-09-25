@@ -178,11 +178,10 @@ header 값을 dispatch context 안에 보존하므로 application이 header 객�
 
 ### 4.1 Transport 종료 경계
 
-Physical stream을 닫기 시작하면 Framework는 새 packet admission을 막고, 진행 중인 read와
-write operation을 소유한 transport 실행 문맥에서 완료하거나 취소한다. TCP, TLS 또는 WebSocket
-socket·stream·session resource를 파괴하기 전에 이 completion 또는 cancellation이 관찰되어야
-한다. 늦게 도착한 transport callback은 이미 정리된 resource를 참조하지 않으며, 하나의
-operation을 두 번 완료하거나 다음 operation을 중복 시작하지 않는다.
+Physical stream 종료를 시작하면 Framework는 새 packet admission을 막고 packet pull을
+멈춘다. 이미 Core에 수락된 read·write operation의 완료와 native resource 정리는
+[Core socket `zlink_close`](../../../../../../../core/doc/spec/core/socket/README.ko.md#zlink_close)가 소유한다.
+Framework는 Core의 close 결과를 관찰한 뒤 Session callback과 managed resource를 정리한다.
 
 ## 5. Reply 상관관계
 

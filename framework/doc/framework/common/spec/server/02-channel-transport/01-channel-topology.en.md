@@ -517,10 +517,10 @@ security identity, isn't used for a descriptor-backed connection. If no descript
 available, the manual connection follows only the registered endpoint and the
 handshake result; it doesn't claim descriptor-backed placement. An Object-enabled
 MeshNode registers the endpoint-only intent even when the descriptor isn't available
-yet. If a matching descriptor appears later in the Location Store, the host and Spot
-runtimes may replace that intent with the descriptor values. The replacement passes
-the endpoint, RID, positive lifecycle generation, and security identity together, and
-doesn't install the new intent until liveness has closed the previous endpoint intent.
+yet. When a matching descriptor appears later in the Location Store, or its endpoint or
+identity values change, the host and Spot runtimes replace the intent with the complete
+descriptor values: endpoint, RID, positive lifecycle generation, and security identity. Service admission follows
+[Transport liveness §5](05-transport-liveness.en.md#5-ready-and-failure-determination).
 While the descriptor is absent, this path also makes no placement-owner claim.
 
 Even for Automatic, if connection contention or a stale discovery snapshot produces two pipes
