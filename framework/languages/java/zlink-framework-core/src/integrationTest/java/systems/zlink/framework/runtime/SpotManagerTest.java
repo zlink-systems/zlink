@@ -349,8 +349,8 @@ final class SpotManagerTest {
                 assertFalse(record.contains(" phase="));
                 assertFalse(record.contains(" source_rid="));
                 assertFalse(record.contains(" packet="));
-                assertFalse(record.contains("error_type="));
-                assertFalse(record.contains("error_message="));
+                assertTrue(record.contains("error_type="));
+                assertTrue(record.contains("error_message="));
             }
         } finally {
             logger.removeHandler(handler);

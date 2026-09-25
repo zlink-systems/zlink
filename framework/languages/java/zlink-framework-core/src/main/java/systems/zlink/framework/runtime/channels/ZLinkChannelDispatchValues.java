@@ -1,7 +1,6 @@
 package systems.zlink.framework.runtime.channels;
 
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkHandlerDispatchKind;
 import systems.zlink.framework.ZLinkHandlerFilterContext;
 import systems.zlink.framework.ZLinkMessageContext;
@@ -11,20 +10,6 @@ import systems.zlink.framework.channels.ZLinkRouteMessageContext;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-
-/**
- * Parsed inbound channel packet. {@code header} is the decoded shared cross-language envelope
- * header when the message arrived as an envelope, or {@code null} for legacy raw-parts frames.
- */
-record ParsedPacket(
-        String packetName,
-        Message payload,
-        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header) {
-
-    ParsedPacket(String packetName, Message payload) {
-        this(packetName, payload, null);
-    }
-}
 
 final class DefaultHandlerFilterContext implements ZLinkHandlerFilterContext {
     private final ZLinkMessageContext message;

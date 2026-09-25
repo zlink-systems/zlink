@@ -136,8 +136,7 @@ final class StreamSessionTest {
 
             client.getOutputStream().write(frame(requestHeader(11L, "MustFail"), bytes("bad")));
             client.getOutputStream().flush();
-            assertErrorReply(
-                    client.getInputStream(), 11L, "IllegalStateException", "public failure");
+            assertErrorReply(client.getInputStream(), 11L, "internal_failure", "public failure");
 
             client.getOutputStream().write(frame(requestHeader(12L, "Ping"), bytes("again")));
             client.getOutputStream().flush();
@@ -180,6 +179,7 @@ final class StreamSessionTest {
 
             client.getOutputStream().write(frame(requestHeader(1L, "Bind"), bytes("\"player-1\"")));
             client.getOutputStream().flush();
+            assertBoundControl(client.getInputStream(), "player-1");
             assertReply(client.getInputStream(), 1L, "\"bound\"");
 
             client.getOutputStream()
@@ -547,6 +547,22 @@ final class StreamSessionTest {
         assertEquals(0xF2, Byte.toUnsignedInt(header[0]));
         assertEquals(requestSeq, ByteBuffer.wrap(header, 4, Long.BYTES).getLong());
         assertEquals(expectedBody, new String(body, StandardCharsets.UTF_8));
+    }
+
+    private static void assertBoundControl(InputStream input, String actorId) throws Exception {
+        byte[] prefix = readExact(input, 6);
+        ByteBuffer sizes = ByteBuffer.wrap(prefix);
+        byte[] headerBytes = readExact(input, Short.toUnsignedInt(sizes.getShort()));
+        byte[] body = readExact(input, sizes.getInt());
+        ZLinkStreamHeader header = ZLinkStreamHeaderCodec.decodeOrPlain(headerBytes);
+        assertEquals(ZLinkStreamMessageKind.CONTROL, header.kind());
+        assertEquals("$zlink.actor.bound", header.packetName());
+        ByteBuffer payload = ByteBuffer.wrap(body);
+        assertEquals(1, Byte.toUnsignedInt(payload.get()));
+        assertTrue(Short.toUnsignedInt(payload.getShort()) > 0);
+        int idLength = Byte.toUnsignedInt(payload.get());
+        assertEquals(idLength, payload.remaining());
+        assertEquals(actorId, new String(body, 4, idLength, StandardCharsets.UTF_8));
     }
 
     private static void assertErrorReply(

@@ -14,6 +14,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessage
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 
 import java.util.List;
@@ -113,12 +114,9 @@ final class ZLinkChannelRouteDispatcher {
             if (dispatchBridgePacket(channelName, received)) {
                 return;
             }
-            ParsedPacket packet;
+            ZLinkChannelEnvelope.DispatchPacket packet;
             try {
-                packet =
-                        envelope == null
-                                ? parsePacket(received.parts())
-                                : parsePacket(received.parts(), envelope);
+                packet = ZLinkChannelEnvelope.decodeDispatchPacket(received.parts(), envelope);
             } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
                 //  A JSON-object first frame that is not a valid shared
                 //  envelope is a protocol error (C++ decode parity).
@@ -286,7 +284,7 @@ final class ZLinkChannelRouteDispatcher {
             ZLinkBackendRouterSocket router,
             ZLinkBackendReceived received,
             RoutingId source,
-            ParsedPacket packet) {
+            ZLinkChannelEnvelope.DispatchPacket packet) {
         ZLinkChannelRuntime.RouteInternalRequestHandler handler =
                 registry.internalRequest(packet.packetName());
         if (handler == null) {
@@ -326,7 +324,7 @@ final class ZLinkChannelRouteDispatcher {
             ZLinkBackendReceived received,
             RoutingId source,
             long requestSeq,
-            ParsedPacket packet,
+            ZLinkChannelEnvelope.DispatchPacket packet,
             ChannelRouteRequestHandlerRegistration registration,
             String contentType) {
         Message payload = Message.from(packet.payload());
@@ -448,7 +446,10 @@ final class ZLinkChannelRouteDispatcher {
     }
 
     private void dispatchSend(
-            String channelName, RoutingId source, ParsedPacket packet, String contentType) {
+            String channelName,
+            RoutingId source,
+            ZLinkChannelEnvelope.DispatchPacket packet,
+            String contentType) {
         ChannelRouteSendHandlerRegistration registration =
                 registry.routeSendHandler(channelName, packet.packetName());
         if (registration == null) {
@@ -568,29 +569,6 @@ final class ZLinkChannelRouteDispatcher {
                             null,
                             null));
         }
-    }
-
-    /**
-     * Parses an inbound route mesh message. A shared cross-language envelope yields the header's
-     * messageName and body; legacy raw parts keep the packet-name/payload frames. A JSON-object
-     * first frame that is not a valid envelope throws {@code PROTOCOL_ERROR}.
-     */
-    private static ParsedPacket parsePacket(List<Message> parts) {
-        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header =
-                systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.decodeDispatchHeader(
-                        parts, false);
-        return parsePacket(parts, header);
-    }
-
-    private static ParsedPacket parsePacket(
-            List<Message> parts,
-            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header) {
-        if (header != null) {
-            return new ParsedPacket(header.messageName(), parts.get(1), header);
-        }
-        return parts.size() >= 2
-                ? new ParsedPacket(parts.get(0).toUtf8String(), parts.get(1))
-                : new ParsedPacket("", parts.get(0));
     }
 
     private static boolean isProbeFrame(List<Message> parts) {
