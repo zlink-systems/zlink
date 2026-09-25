@@ -27,8 +27,6 @@ option(ZLINK_STREAM_CONNECTOR_WITH_WEBSOCKET "Enable Stream Connector WebSocket 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   include("${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-project-defaults.cmake")
   find_package(OpenSSL QUIET)
-endif()
-if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   include("${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-boost.cmake")
   include("${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-shared-library.cmake")
   function(zlink_framework_cpp_configure_msvc_target target_name)
