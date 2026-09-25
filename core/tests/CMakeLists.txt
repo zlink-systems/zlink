@@ -138,6 +138,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_xpub_nodrop
   ${INTEGRATION_TEST_ROOT}/test_timer_poller
   ${INTEGRATION_TEST_ROOT}/test_polling_contract
+  ${INTEGRATION_TEST_ROOT}/test_poller_ctx_shutdown_contract
   ${INTEGRATION_TEST_ROOT}/test_close_completion_poller_release
   ${INTEGRATION_TEST_ROOT}/test_disconnect_progress
   ${INTEGRATION_TEST_ROOT}/test_phase3_completion_contract
@@ -1030,6 +1031,9 @@ endif()
 
 if(TARGET test_router_selected_route_contract)
   set_tests_properties(test_router_selected_route_contract PROPERTIES LABELS "contract")
+endif()
+if(TARGET test_poller_ctx_shutdown_contract)
+  set_tests_properties(test_poller_ctx_shutdown_contract PROPERTIES LABELS "contract")
 endif()
 
 if(TARGET unittest_router_receive_queue)
