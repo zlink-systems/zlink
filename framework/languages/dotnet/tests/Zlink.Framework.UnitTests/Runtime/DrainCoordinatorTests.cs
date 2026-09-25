@@ -1931,6 +1931,9 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
 
     private sealed class MutableFrameworkRuntime : IZLinkFrameworkRuntime
     {
+        public ZLinkListenerStatus GetListenerStatus(ZLinkListenerKind kind, string name) =>
+            throw new InvalidOperationException("The readiness check must not query listeners.");
+
         public bool IsReady { get; set; } = true;
 
         public ZLinkFrameworkRuntimeStatus Status =>

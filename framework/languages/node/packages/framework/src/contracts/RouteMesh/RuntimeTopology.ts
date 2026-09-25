@@ -142,10 +142,20 @@ export interface ZLinkHostCapacityStatus {
 
 export interface ZLinkFrameworkRuntime {
   readonly status: ZLinkFrameworkRuntimeStatus;
+  getListenerStatus(kind: ZLinkListenerKind, name: string): ZLinkListenerStatus;
   observe(signal?: AbortSignal): AsyncIterable<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>>;
   resetCapacityMetrics(): void;
   relocate(options: ZLinkFrameworkRelocationOptions): Promise<ZLinkFrameworkRelocationResult>;
   shutdown(options?: ZLinkFrameworkLifecycleOptions): Promise<ZLinkFrameworkTerminationResult>;
+}
+
+export type ZLinkListenerKind = 'routeMesh' | 'clientServer' | 'fanout' | 'stream';
+
+export interface ZLinkListenerStatus {
+  readonly kind: ZLinkListenerKind;
+  readonly name: string;
+  readonly endpoint: string;
+  readonly observedAt: Date;
 }
 
 export type ZLinkClientServerRole = 'client' | 'server' | 'clientAndServer';

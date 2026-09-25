@@ -29,6 +29,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
     private readonly Func<ZLinkHostCapacityStatus?> _capacitySnapshot;
     private readonly Func<bool> _safeToShutdownSnapshot;
     private readonly Action? _resetCapacityMetrics;
+    private readonly Func<ZLinkListenerKind, string, ZLinkListenerStatus>? _listenerStatus;
     private readonly ILogger<ZLinkFrameworkMaintenanceRuntime>? _logger;
     private readonly ZLinkStateLane _lane = new();
     private readonly List<ZLinkObservationQueue<ZLinkFrameworkRuntimeStatus>> _observers = [];
@@ -61,7 +62,8 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
         Action? resetCapacityMetrics = null,
         ILogger<ZLinkFrameworkMaintenanceRuntime>? logger = null,
         Func<bool>? safeToShutdownSnapshot = null,
-        Action<Action>? subscribeSafeToShutdownChanged = null
+        Action<Action>? subscribeSafeToShutdownChanged = null,
+        Func<ZLinkListenerKind, string, ZLinkListenerStatus>? listenerStatus = null
     )
     {
         _lifecycle = lifecycle;
@@ -73,6 +75,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
         _capacitySnapshot = capacitySnapshot ?? (() => null);
         _safeToShutdownSnapshot = safeToShutdownSnapshot ?? (() => true);
         _resetCapacityMetrics = resetCapacityMetrics;
+        _listenerStatus = listenerStatus;
         _logger = logger;
         _metricRegistration = ZLinkRuntimeMetrics.RegisterHostState(() =>
             HostStateMetricValue(_hostLifecycle.State)
@@ -98,6 +101,15 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
             subscribeSafeToShutdownChanged(OnSafeToShutdownChanged);
         }
     }
+
+    public ZLinkListenerStatus GetListenerStatus(ZLinkListenerKind kind, string name) =>
+        (
+            _listenerStatus
+            ?? throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotConfigured,
+                "Listener status is not configured."
+            )
+        )(kind, name);
 
     public ZLinkFrameworkRuntimeStatus Status
     {

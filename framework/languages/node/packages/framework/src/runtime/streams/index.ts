@@ -203,6 +203,10 @@ export class ZLinkStreamRuntimeManager {
       new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
   }
 
+  listenerEndpoint(name: string): string | undefined {
+    return this.nodes.get(name)?.advertisedEndpoint;
+  }
+
   start(): void {
     if (this.options.registration.streamNodes.size === 0) {
       return;

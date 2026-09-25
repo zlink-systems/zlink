@@ -170,7 +170,11 @@ internal static class ZLinkFrameworkServiceRegistrar
                     provider.GetRequiredService<ZLinkFrameworkRuntime>().SafeToShutdown,
                 subscribeSafeToShutdownChanged: handler =>
                     provider.GetRequiredService<ZLinkFrameworkRuntime>().SafeToShutdownChanged +=
-                        handler
+                        handler,
+                listenerStatus: (kind, name) =>
+                    provider
+                        .GetRequiredService<ZLinkFrameworkRuntime>()
+                        .GetListenerStatus(kind, name)
             )
         );
         services.TryAddSingleton<IZLinkFrameworkRuntime>(static provider =>

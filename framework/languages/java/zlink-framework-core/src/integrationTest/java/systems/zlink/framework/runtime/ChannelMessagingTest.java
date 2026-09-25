@@ -444,7 +444,6 @@ final class ChannelMessagingTest {
                     + " diagnostics")
     void manualClientServer_payloadDecodeFailureRepliesErrorAndRecordsDiagnostics()
             throws Exception {
-        String endpoint = tcpEndpoint();
         CopyOnWriteArrayList<String> logMessages = new CopyOnWriteArrayList<>();
         Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
         Handler logHandler =
@@ -465,8 +464,7 @@ final class ChannelMessagingTest {
 
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         {
-            var channel = listenClientServer(options, "profile", endpoint);
-            options.addClientServerChannel("profile").client().connect(endpoint);
+            var channel = listenClientServer(options, "profile", "tcp://127.0.0.1:0");
             channel.addRequestHandler(EchoHandler.class, EchoRequest.class, String.class);
             channel.addRequestHandler(DecodeProbeHandler.class, DecodePayload.class, String.class);
         }
@@ -475,58 +473,67 @@ final class ChannelMessagingTest {
         ZLinkJavaBackendAdapterFactory backendFactory = new ZLinkJavaBackendAdapterFactory();
         try (ZLinkFrameworkRuntime runtime =
                 RuntimeTestSupport.startFramework(options, backendFactory)) {
-            String before =
-                    runtime.client()
-                            .requestToChannel("profile", new EchoRequest("before-decode-error"))
-                            .submit(String.class)
-                            .toCompletableFuture()
-                            .join();
-            assertEquals("before-decode-error", before);
+            String endpoint =
+                    runtime.listenerStatus(ZLinkListenerKind.CLIENT_SERVER, "profile").endpoint();
+            DefaultZLinkFrameworkOptions clientOptions = new DefaultZLinkFrameworkOptions();
+            clientOptions.addClientServerChannel("profile").client().connect(endpoint);
+            try (ZLinkFrameworkRuntime client =
+                    RuntimeTestSupport.startFramework(
+                            clientOptions, new ZLinkJavaBackendAdapterFactory())) {
+                String before =
+                        client.client()
+                                .requestToChannel("profile", new EchoRequest("before-decode-error"))
+                                .submit(String.class)
+                                .toCompletableFuture()
+                                .join();
+                assertEquals("before-decode-error", before);
 
-            var channelAdapter =
-                    backendFactory.createChannelAdapter(
-                            new ZLinkBackendAdapterOptions(Duration.ofSeconds(1)));
-            try (var rawContext = channelAdapter.createContext();
-                    var rawDealer = channelAdapter.createDealerSocket(rawContext)) {
-                rawDealer.connect(endpoint);
-                Thread.sleep(100);
-                List<Message> malformedParts =
-                        List.of(Message.from("DecodeReq"), Message.from("{"));
-                try {
-                    try (ZLinkBackendReceived reply =
-                            rawDealer
-                                    .request(malformedParts, Duration.ofSeconds(2))
-                                    .toCompletableFuture()
-                                    .get(2, TimeUnit.SECONDS)) {
-                        assertTrue(ZLinkFrameworkErrorReply.isReply(reply.parts()));
-                        assertTrue(
-                                ZLinkFrameworkErrorReply.message(reply.parts())
-                                        .contains("PayloadDecodeFailed"));
+                var channelAdapter =
+                        backendFactory.createChannelAdapter(
+                                new ZLinkBackendAdapterOptions(Duration.ofSeconds(1)));
+                try (var rawContext = channelAdapter.createContext();
+                        var rawDealer = channelAdapter.createDealerSocket(rawContext)) {
+                    rawDealer.connect(endpoint);
+                    Thread.sleep(100);
+                    List<Message> malformedParts =
+                            List.of(Message.from("DecodeReq"), Message.from("{"));
+                    try {
+                        try (ZLinkBackendReceived reply =
+                                rawDealer
+                                        .request(malformedParts, Duration.ofSeconds(2))
+                                        .toCompletableFuture()
+                                        .get(2, TimeUnit.SECONDS)) {
+                            assertTrue(ZLinkFrameworkErrorReply.isReply(reply.parts()));
+                            assertTrue(
+                                    ZLinkFrameworkErrorReply.message(reply.parts())
+                                            .contains("PayloadDecodeFailed"));
+                        }
+                    } finally {
+                        malformedParts.forEach(Message::close);
                     }
-                } finally {
-                    malformedParts.forEach(Message::close);
                 }
+
+                assertEquals(0, DecodeProbeHandler.invocations.get());
+                assertTrue(
+                        logMessages.stream()
+                                .anyMatch(
+                                        message ->
+                                                message.contains("reason=decode_error")
+                                                        && message.contains("action=reply_error")
+                                                        && message.contains("packet=DecodeReq")
+                                                        && message.contains("channel=profile")),
+                        "dispatch error log marker was not written");
+
+                String after =
+                        client.client()
+                                .requestToChannel(
+                                        "profile", new DecodePayload("after-decode-error"))
+                                .submit(String.class)
+                                .toCompletableFuture()
+                                .join();
+                assertEquals("decode:after-decode-error", after);
+                assertEquals(1, DecodeProbeHandler.invocations.get());
             }
-
-            assertEquals(0, DecodeProbeHandler.invocations.get());
-            assertTrue(
-                    logMessages.stream()
-                            .anyMatch(
-                                    message ->
-                                            message.contains("reason=decode_error")
-                                                    && message.contains("action=reply_error")
-                                                    && message.contains("packet=DecodeReq")
-                                                    && message.contains("channel=profile")),
-                    "dispatch error log marker was not written");
-
-            String after =
-                    runtime.client()
-                            .requestToChannel("profile", new DecodePayload("after-decode-error"))
-                            .submit(String.class)
-                            .toCompletableFuture()
-                            .join();
-            assertEquals("decode:after-decode-error", after);
-            assertEquals(1, DecodeProbeHandler.invocations.get());
         } finally {
             logger.removeHandler(logHandler);
             DecodeProbeHandler.invocations.set(0);
@@ -538,7 +545,6 @@ final class ChannelMessagingTest {
             "DERR-007 manual client-server handler exception replies error and records diagnostics")
     void manualClientServer_handlerExceptionRepliesErrorAndRecordsDiagnostics()
             throws InterruptedException {
-        String endpoint = tcpEndpoint();
         CopyOnWriteArrayList<String> logMessages = new CopyOnWriteArrayList<>();
         Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
         Handler logHandler =
@@ -558,8 +564,7 @@ final class ChannelMessagingTest {
 
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         {
-            var channel = listenClientServer(options, "profile", endpoint);
-            options.addClientServerChannel("profile").client().connect(endpoint);
+            var channel = listenClientServer(options, "profile", "tcp://127.0.0.1:0");
             channel.addRequestHandler(EchoHandler.class, EchoRequest.class, String.class);
             channel.addRequestHandler(
                     ThrowingRequestHandler.class, ThrowRequest.class, String.class);
@@ -568,43 +573,53 @@ final class ChannelMessagingTest {
 
         try (ZLinkFrameworkRuntime runtime =
                 RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {
-            String before =
-                    runtime.client()
-                            .requestToChannel("profile", new EchoRequest("before-handler-error"))
-                            .submit(String.class)
-                            .toCompletableFuture()
-                            .join();
-            assertEquals("before-handler-error", before);
+            String endpoint =
+                    runtime.listenerStatus(ZLinkListenerKind.CLIENT_SERVER, "profile").endpoint();
+            DefaultZLinkFrameworkOptions clientOptions = new DefaultZLinkFrameworkOptions();
+            clientOptions.addClientServerChannel("profile").client().connect(endpoint);
+            try (ZLinkFrameworkRuntime client =
+                    RuntimeTestSupport.startFramework(
+                            clientOptions, new ZLinkJavaBackendAdapterFactory())) {
+                String before =
+                        client.client()
+                                .requestToChannel(
+                                        "profile", new EchoRequest("before-handler-error"))
+                                .submit(String.class)
+                                .toCompletableFuture()
+                                .join();
+                assertEquals("before-handler-error", before);
 
-            CompletionException failure =
-                    assertThrows(
-                            CompletionException.class,
-                            () ->
-                                    runtime.client()
-                                            .requestToChannel("profile", new ThrowRequest("boom"))
-                                            .submit(String.class)
-                                            .toCompletableFuture()
-                                            .join());
-            assertTrue(failure.getCause() instanceof ZLinkFrameworkException);
-            assertTrue(failure.getCause().getMessage().contains("DERR-007 handler exception"));
+                CompletionException failure =
+                        assertThrows(
+                                CompletionException.class,
+                                () ->
+                                        client.client()
+                                                .requestToChannel(
+                                                        "profile", new ThrowRequest("boom"))
+                                                .submit(String.class)
+                                                .toCompletableFuture()
+                                                .join());
+                assertTrue(failure.getCause() instanceof ZLinkFrameworkException);
+                assertTrue(failure.getCause().getMessage().contains("DERR-007 handler exception"));
 
-            assertTrue(
-                    logMessages.stream()
-                            .anyMatch(
-                                    message ->
-                                            message.contains("reason=handler_exception")
-                                                    && message.contains("action=reply_error")
-                                                    && message.contains("packet=ThrowReq")
-                                                    && message.contains("channel=profile")),
-                    "dispatch error log marker was not written");
+                assertTrue(
+                        logMessages.stream()
+                                .anyMatch(
+                                        message ->
+                                                message.contains("reason=handler_exception")
+                                                        && message.contains("action=reply_error")
+                                                        && message.contains("packet=ThrowReq")
+                                                        && message.contains("channel=profile")),
+                        "dispatch error log marker was not written");
 
-            String after =
-                    runtime.client()
-                            .requestToChannel("profile", new EchoRequest("after-handler-error"))
-                            .submit(String.class)
-                            .toCompletableFuture()
-                            .join();
-            assertEquals("after-handler-error", after);
+                String after =
+                        client.client()
+                                .requestToChannel("profile", new EchoRequest("after-handler-error"))
+                                .submit(String.class)
+                                .toCompletableFuture()
+                                .join();
+                assertEquals("after-handler-error", after);
+            }
         } finally {
             logger.removeHandler(logHandler);
         }
@@ -613,7 +628,6 @@ final class ChannelMessagingTest {
     @Test
     @DisplayName("DERR-009 application logger provider writes dispatch errors to a file")
     void manualClientServer_applicationLoggerWritesDispatchErrorsToFile() throws Exception {
-        String endpoint = tcpEndpoint();
         Path logPath = Files.createTempFile("zlink-java-derr-009-", ".log");
         Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
         FileHandler fileHandler = new FileHandler(logPath.toString(), false);
@@ -622,8 +636,7 @@ final class ChannelMessagingTest {
 
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         {
-            var channel = listenClientServer(options, "profile", endpoint);
-            options.addClientServerChannel("profile").client().connect(endpoint);
+            var channel = listenClientServer(options, "profile", "tcp://127.0.0.1:0");
             channel.addRequestHandler(EchoHandler.class, EchoRequest.class, String.class);
             channel.addRequestHandler(DecodeProbeHandler.class, DecodePayload.class, String.class);
             channel.addRequestHandler(
@@ -635,75 +648,84 @@ final class ChannelMessagingTest {
         DecodeProbeHandler.invocations.set(0);
         try (ZLinkFrameworkRuntime runtime =
                 RuntimeTestSupport.startFramework(options, backendFactory)) {
-            String before =
-                    runtime.client()
-                            .requestToChannel("profile", new EchoRequest("before-file-log"))
-                            .submit(String.class)
-                            .toCompletableFuture()
-                            .join();
-            assertEquals("before-file-log", before);
+            String endpoint =
+                    runtime.listenerStatus(ZLinkListenerKind.CLIENT_SERVER, "profile").endpoint();
+            DefaultZLinkFrameworkOptions clientOptions = new DefaultZLinkFrameworkOptions();
+            clientOptions.addClientServerChannel("profile").client().connect(endpoint);
+            try (ZLinkFrameworkRuntime client =
+                    RuntimeTestSupport.startFramework(
+                            clientOptions, new ZLinkJavaBackendAdapterFactory())) {
+                String before =
+                        client.client()
+                                .requestToChannel("profile", new EchoRequest("before-file-log"))
+                                .submit(String.class)
+                                .toCompletableFuture()
+                                .join();
+                assertEquals("before-file-log", before);
 
-            CompletionException missing =
-                    assertThrows(
-                            CompletionException.class,
-                            () ->
-                                    runtime.client()
-                                            .requestToChannel(
-                                                    "profile", new MissingRequest("missing"))
-                                            .submit(String.class)
-                                            .toCompletableFuture()
-                                            .join());
-            assertTrue(missing.getCause() instanceof ZLinkFrameworkException);
+                CompletionException missing =
+                        assertThrows(
+                                CompletionException.class,
+                                () ->
+                                        client.client()
+                                                .requestToChannel(
+                                                        "profile", new MissingRequest("missing"))
+                                                .submit(String.class)
+                                                .toCompletableFuture()
+                                                .join());
+                assertTrue(missing.getCause() instanceof ZLinkFrameworkException);
 
-            var channelAdapter =
-                    backendFactory.createChannelAdapter(
-                            new ZLinkBackendAdapterOptions(Duration.ofSeconds(1)));
-            try (var rawContext = channelAdapter.createContext();
-                    var rawDealer = channelAdapter.createDealerSocket(rawContext)) {
-                rawDealer.connect(endpoint);
-                Thread.sleep(100);
-                List<Message> malformedParts =
-                        List.of(Message.from("DecodeReq"), Message.from("{"));
-                try {
-                    try (ZLinkBackendReceived reply =
-                            rawDealer
-                                    .request(malformedParts, Duration.ofSeconds(2))
-                                    .toCompletableFuture()
-                                    .get(2, TimeUnit.SECONDS)) {
-                        assertTrue(ZLinkFrameworkErrorReply.isReply(reply.parts()));
-                        assertTrue(
-                                ZLinkFrameworkErrorReply.message(reply.parts())
-                                        .contains("PayloadDecodeFailed"));
+                var channelAdapter =
+                        backendFactory.createChannelAdapter(
+                                new ZLinkBackendAdapterOptions(Duration.ofSeconds(1)));
+                try (var rawContext = channelAdapter.createContext();
+                        var rawDealer = channelAdapter.createDealerSocket(rawContext)) {
+                    rawDealer.connect(endpoint);
+                    Thread.sleep(100);
+                    List<Message> malformedParts =
+                            List.of(Message.from("DecodeReq"), Message.from("{"));
+                    try {
+                        try (ZLinkBackendReceived reply =
+                                rawDealer
+                                        .request(malformedParts, Duration.ofSeconds(2))
+                                        .toCompletableFuture()
+                                        .get(2, TimeUnit.SECONDS)) {
+                            assertTrue(ZLinkFrameworkErrorReply.isReply(reply.parts()));
+                            assertTrue(
+                                    ZLinkFrameworkErrorReply.message(reply.parts())
+                                            .contains("PayloadDecodeFailed"));
+                        }
+                    } finally {
+                        malformedParts.forEach(Message::close);
                     }
-                } finally {
-                    malformedParts.forEach(Message::close);
                 }
+
+                CompletionException thrown =
+                        assertThrows(
+                                CompletionException.class,
+                                () ->
+                                        client.client()
+                                                .requestToChannel(
+                                                        "profile", new ThrowRequest("boom"))
+                                                .submit(String.class)
+                                                .toCompletableFuture()
+                                                .join());
+                assertTrue(thrown.getCause() instanceof ZLinkFrameworkException);
+
+                fileHandler.flush();
+                String logText = waitForFileLog(logPath, "outcome=failed", 3);
+                assertTrue(logText.contains("surface=channel"));
+                assertTrue(logText.contains("kind=request"));
+                assertTrue(logText.contains("reason=no_handler"));
+                assertTrue(logText.contains("reason=decode_error"));
+                assertTrue(logText.contains("reason=handler_exception"));
+                assertTrue(logText.contains("action=reply_error"));
+                assertTrue(logText.contains("packet=MissingReq"));
+                assertTrue(logText.contains("packet=DecodeReq"));
+                assertTrue(logText.contains("packet=ThrowReq"));
+                assertTrue(logText.contains("channel=profile"));
+                assertTrue(logText.contains("flow="));
             }
-
-            CompletionException thrown =
-                    assertThrows(
-                            CompletionException.class,
-                            () ->
-                                    runtime.client()
-                                            .requestToChannel("profile", new ThrowRequest("boom"))
-                                            .submit(String.class)
-                                            .toCompletableFuture()
-                                            .join());
-            assertTrue(thrown.getCause() instanceof ZLinkFrameworkException);
-
-            fileHandler.flush();
-            String logText = waitForFileLog(logPath, "outcome=failed", 3);
-            assertTrue(logText.contains("surface=channel"));
-            assertTrue(logText.contains("kind=request"));
-            assertTrue(logText.contains("reason=no_handler"));
-            assertTrue(logText.contains("reason=decode_error"));
-            assertTrue(logText.contains("reason=handler_exception"));
-            assertTrue(logText.contains("action=reply_error"));
-            assertTrue(logText.contains("packet=MissingReq"));
-            assertTrue(logText.contains("packet=DecodeReq"));
-            assertTrue(logText.contains("packet=ThrowReq"));
-            assertTrue(logText.contains("channel=profile"));
-            assertTrue(logText.contains("flow="));
         } finally {
             DecodeProbeHandler.invocations.set(0);
             logger.removeHandler(fileHandler);
