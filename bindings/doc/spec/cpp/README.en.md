@@ -347,13 +347,13 @@ artifact. The finished binding therefore keeps the following build rules.
 - Send's blocking `submit()` uses Core `NONE` admission, while `async()` waits for a Core
   `DONTWAIT` completion. Socket `SNDTIMEO` bounds the blocking admission wait. The binding does not
   create a payload retransmission queue.
-- The C++ binding adds no lock or gate of its own to an outbound path. It
-  materializes every builder part in one native array and calls the Core
-  whole-message API once. Core atomically submits the array as one record and
-  consumes every slot, while the binding's separate native view preserves the
-  public C++ message. Core handles independent concurrent submits; the binding
-  does not serialize, wait, or retry. Core's lifecycle gate likewise owns races between close and an
-  in-flight submit.
+- The C++ binding adds no lock to an outbound path. It materializes every
+  builder part in one native array and calls the Core whole-message API once.
+  Core atomically submits the array as one record and consumes every slot,
+  while the binding's separate native view preserves the public C++ message.
+  Core handles independent concurrent submits; the binding does not serialize,
+  wait, or retry. Races between close and an in-flight submit follow the
+  [common lifecycle rule](../async-execution-model.en.md#4-pollers-and-completion-drain).
 - Request provides blocking `submit()` and `async()` and retains the builder's reply timeout. It captures
   the target when the operation is created and does not use physical connection identity as a public target.
 - The request timeout is Core-owned (`ZLINK_REQUEST_TIMED_OUT`); the builder's
