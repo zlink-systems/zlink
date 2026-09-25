@@ -162,7 +162,8 @@ creation authority, the message can be delivered once to a
 [Ready](../00-foundation/02-glossary.en.md#ready) owner that can currently accept the
 request. In this case the original `correlation_id` is kept. If tracing
 is on, `flow_id` and `flow_origin` are also kept. Once the target queue
-accepts the message, the framework doesn't automatically resend it.
+accepts the message, resubmission follows
+[Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 
 ## 6. Async Work and Execution Context
 

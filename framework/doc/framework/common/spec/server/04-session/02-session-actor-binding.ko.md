@@ -282,8 +282,7 @@ Bind가 성공하면 session owner는 검증된 Actor route를 binding에 저장
 disconnect 통지와 Actor에서 session으로 보내는 push는 이 binding 정보를 사용하며
 message를 보낼 때마다 Location Store를 다시 조회하지 않는다. 저장한 route가 더 이상
 유효하지 않으면 active Message Follow route로 정확히 한 번 전달하거나 `Unavailable`로
-끝낸다. Location Store에서 새 `ActorRef`를 찾아 같은 message를 다른 owner에게 자동으로
-다시 보내지 않는다.
+끝낸다. 같은 message의 재제출 경계는 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
 
 저장한 route는 current owner lease와 local admission deadline 안에서만 유효하다.
 Location Store가 일시적으로 사용할 수 없더라도 이 lease나 deadline을 연장하지 않는다.
@@ -496,31 +495,7 @@ Session route
 조건을 사용하지 않는다. Seal 중 도착한 message는 aggregate가 보관하지만 개별 message
 크기, transport, deadline과 cancellation 제한은 그대로 적용한다.
 
-```mermaid
-sequenceDiagram
-    participant C as Relocation coordinator
-    participant S as Session owner
-    participant A as Source runtime
-    participant B as Target runtime
-    participant L as Location Store
-
-    C->>S: [request] command 42 · 해당 binding route 고정과 이후 message 보관
-    S-->>C: [reply] command 43 · 해당 binding seal 설치 완료
-    A->>B: [request] temporary queue 설치·Restore 후 dispatch 없이 relay 준비
-    B-->>A: [reply] temporary queue·Restore 준비 완료 · source owner 유지
-    A->>B: [send/request relay] capture 뒤 ingress hold
-    A->>B: [send] cutover · boundary 전 relay 전송 완료
-    B->>B: [local] 완전한 relay와 cutover 확인
-    B->>L: [request] source fence가 같으면 owner를 target으로 CAS
-    L-->>B: [reply] target owner CAS 결과
-    B->>B: [local] queue 병합 · regular route 전환 · lifecycle 완료 · dispatch 개방
-    B->>S: [send] command 44 · target route 적용·held 제출·seal 해제
-    alt SessionRelocationSealTimeout 안에 해당 update 처리
-        S->>S: [local] route 전환 · held Session message 제출 · seal 해제
-    else seal timeout
-        S->>S: [local] physical Session 종료와 binding·held·seal 정리
-    end
-```
+Restore·relay·cutover·CAS와 queue 병합의 순서는 [공통 relocation §4](../05-location-relocation/04-relocation-flow.ko.md#4-정상-처리-순서)를 따른다. 이 절의 Session seal·route 전환은 위 검증 값과 아래 timeout 규칙을 따른다.
 
 Session owner는 seal 설치 시점부터 설정 가능한 `SessionRelocationSealTimeout`을
 적용한다. 기본값은 3,000 ms이며 server 설정으로 바꿀 수 있고, seal 설치부터 해당
@@ -658,9 +633,8 @@ execution gate의 분리, [Handler turn과 execution gate](../01-execution/02-ha
 
 Request reply·error는 original STREAM correlation을 terminal-once로 완료한다. Request를
 target Actor route에 제출한 뒤 timeout, cancellation 또는 route failure가 발생하면
-target이 이미 업무를 실행했는지 확정하지 못할 수 있다. Framework는 이런 실패 뒤 다른
-Actor, 새 owner 또는 다른 [MeshNode](../00-foundation/02-glossary.ko.md#meshnode)를 선택해 같은
-request를 자동으로 다시 보내지 않는다. Session이 닫힌 뒤 늦게 도착한 reply도 새
+target이 이미 업무를 실행했는지 확정하지 못할 수 있다. 이런 실패 뒤 request의 재제출 경계는
+[Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다. Session이 닫힌 뒤 늦게 도착한 reply도 새
 session이나 새 binding의 reply로 사용하지 않는다. 서로 다른 session의 request가 같은
 업무 결과를 공유하는 것을 막기 위한 경계다.
 

@@ -518,11 +518,10 @@ existing-only operation, targeting only an already-existing Ready Spot.
   current Ready Spot at the moment the target queue accepts it processes
   the message.**
 - **If the resolved owner no longer owns that SpotId, the current operation
-  ends with a stale-route error.** The framework doesn't automatically
-  resend the same operation after finding a fresh owner.
-- **After a timeout, cancellation, disconnect, or a failure whose execution
-  status is unclear, it isn't automatically resubmitted to a different
-  owner.**
+  ends with a stale-route error.** The resubmission boundary is defined by
+  [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
+- **Resubmission after timeout, cancellation, or disconnect follows
+  [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).**
 
 A one-way call only waits up to local outbound admission. Even if cold
 activation is needed, it doesn't wait for application handler execution.
@@ -535,38 +534,10 @@ the current owner.
 
 ## 6. Route Cache Figures and Message Follow
 
-`RouteCacheMaxAge` defaults to 15 seconds and `MessageFollowDuration`
-defaults to 30 seconds. Setting either to 0 turns off cache or
-[Message Follow](../00-foundation/02-glossary.en.md#message-follow) respectively —
-Message Follow being the behavior that, after an Actor/Spot relocates to another MeshNode,
-still delivers a message that arrived at the previous owner on to the new owner. If both
-values are positive, cache max age must be at
-least 5 seconds shorter than Message Follow duration. A runtime change only
-applies to new cache entries and new relocations. The positive Ready cache
-is only used within the current owner lease's local admission deadline and
-this `RouteCacheMaxAge`.
-
-After a relocation commit, the source only uses the committed
-source→target Message Follow route to deliver a message arriving on the
-previous physical route to the current owner. During Message Follow, it
-doesn't read the Store or run an application handler. The Message Follow
-route verifies that Spot ID,
-[ObjectGeneration](../00-foundation/02-glossary.en.md#objectgeneration), source and
-target AuthorityOwnerGeneration, and owner fence all match. Target owner generation
-increases per hop, up to 8 hops.
-
-One Message Follow route's queue has no bound on either message count or
-stored size, and it respects the negotiated message bound. Message
-Follow preserves the original operation ID, generation, payload, and reply
-route. A missing or expired route, or a loop, ends with `Unavailable`; a generation
-mismatch is `InvalidOperation`. A failed application operation isn't
-resubmitted to an owner found in the Store — only the next call performs a
-fresh resolve.
-
-This generation check confirms the relocation route belongs to the same
-incarnation. Spot direct send/request's target is `SpotId`, and an
-`ObjectGeneration` mismatch doesn't reject running the current Ready
-Spot's handler.
+The cache and Message Follow defaults, duration, validation, and delivery outcomes are
+defined by [Location runtime §7.3](../05-location-relocation/01-location-runtime.en.md#73-delivering-a-message-arriving-at-a-previous-owner-to-the-new-owner).
+The resubmission boundary for a failed application operation is defined by
+[Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 
 ### 6.1 Route Installation for SpotWide and PerActor
 
@@ -618,7 +589,7 @@ wins first, the registered context request is not run and its result is recorded
 diagnostics. A pending request remains until it runs or its superseding-seal result is
 recorded.
 
-Manager `Close` returns its result to its caller. Context `Close` returns no result;
+Manager `Close` returns its result to its caller. A Manager `Close` that ends with a moving result is not automatically resubmitted to a new owner. Context `Close` returns no result;
 `false`, failure, joined, and unrun requests are each recorded in diagnostics.
 `OnClosing(ExplicitClose)` indicates cleanup started, not that authority release completed.
 
@@ -713,9 +684,9 @@ authority commit, and admission order are set by
   `PerActor`, only the Actor queue and Actor timer move with the Actor —
   a Spot-level application timer doesn't move.
 
-The original send/request isn't automatically resubmitted as a new
-operation to the maintenance target, but the source ingress hold after
-seal is relayed via the committed Message Follow route.
+The resubmission boundary for the original send/request is defined by
+[Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
+After seal, the source ingress hold is relayed via the committed Message Follow route.
 
 ## 9. Failure and Observability
 

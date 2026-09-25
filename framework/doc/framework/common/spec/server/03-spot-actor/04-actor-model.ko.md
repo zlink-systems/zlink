@@ -83,14 +83,10 @@ Actor를 bind할 수 있다.
 
 ## 3. Actor queue
 
-모든 Actor application payload는 target Actor의 application queue에 직접 제출한다.
-Actor가 Entry Spot이나 user Spot에 있거나 remote MeshNode에 있어도 같은 규칙을
-적용한다.
-
-- 같은 Actor queue가 수락한 payload는 Actor turn에서 순서대로 처리한다.
-- Actor send/request, [STREAM session](../00-foundation/02-glossary.ko.md#stream-session) relay와 Actor 사이의 호출은 모두 같은 Actor
-  queue로 들어간다.
-- Actor payload를 Spot application queue에 넣거나 Spot callback으로 변환하지 않는다.
+Actor payload의 queue와 실행 gate는
+[실행 계약 §2](../01-execution/02-handler-turn-and-execution-gate.ko.md#execution-gate)가 정의한다.
+Actor send/request, [STREAM session](../00-foundation/02-glossary.ko.md#stream-session) relay와 Actor 사이의
+호출은 이 Actor queue를 사용한다.
 
 Gate·turn·Yield·Actor claim은
 [실행 계약 §2·§3](../01-execution/02-handler-turn-and-execution-gate.ko.md#execution-gate)이 소유한다.
@@ -199,15 +195,7 @@ Actor가 소유한 상태를 바꾸는 lifecycle 작업도 Actor의 전용 queue
 실행한다. Actor와 Spot 양쪽 상태를 함께 바꾸는 순서와 오래된 owner의 변경을
 거부하는 규칙은 [Spot과 Actor membership](05-spot-actor-membership.ko.md)이 정의한다.
 
-Lifecycle queue와 application payload queue가 함께 실행 가능하면 **lifecycle queue를
-먼저 실행한다.** Join이 끝나기 전에 그 Actor 앞으로 온 payload를 실행하거나, leave가
-확정된 뒤에 payload를 실행하는 것을 막기 위해서다. 이 우선순위는 두 queue 사이에만
-적용하며 각 queue 안의 수락 순서는 바꾸지 않는다.
-
-이 우선순위는 절대 우선순위가 아니다. 서로 다른 실행 객체 사이의 점유 상한, 같은 실행 객체의
-두 lane 사이의 lifecycle 연속 실행 상한과 [양보 부채](../00-foundation/02-glossary.ko.md#yield-debt)는
-[실행 계약 §7](../01-execution/02-handler-turn-and-execution-gate.ko.md#execution-lanes)이 소유한다.
-이 절은 두 queue 사이의 우선순위만 정한다.
+Actor의 lifecycle 작업과 application payload 작업 사이의 lane 우선순위와 수락 순서는 [실행 계약 §7](../01-execution/02-handler-turn-and-execution-gate.ko.md#execution-lanes)이 정한다.
 
 ## 5. Actor 메시징
 
@@ -238,10 +226,8 @@ Caller는 다음 값을 Actor message target으로 지정하지 않는다.
 - Resolve 뒤 같은 owner에서 Actor가 destroy되고 같은 `ActorId`로 다시 만들어졌다면,
   target queue가 수락하는 시점의 current Ready Actor가 message를 처리한다.
 - 찾은 owner가 더 이상 해당 ActorId를 소유하지 않으면 현재 operation은 stale route
-  오류로 끝낸다. Framework는 Location Store에서 새 owner를 찾아 같은 operation을 자동으로
-  다시 보내지 않는다.
-- Request timeout이나 실행 여부를 알 수 없는 실패가 발생해도 Framework가 자동으로
-  재전송하지 않는다.
+  오류로 끝낸다. 재제출 경계는 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
+- Request timeout이나 실행 여부를 알 수 없는 실패 뒤 재제출은 같은 [§5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)를 따른다.
 - Actor direct messaging은 session binding을 만들거나 바꾸지 않는다.
 
 ### 5.2 Handler 선택
@@ -558,9 +544,8 @@ control transaction은 deadline까지 진행한다.
 [membership §2](05-spot-actor-membership.ko.md#2-object를-하나만-생성하도록-확정하는-과정)가 소유한다.
 
 - **Replay의 주체는 그 operation을 시작한 Framework runtime이고, 대상은 `OperationId`를 가진 durable
-  lifecycle operation뿐이다.** Application request는 [§5.1](#51-route-cache와-generation)대로 자동
-  재전송하지 않는다 — 실행 여부를 알 수 없는 request가 두 owner에서 중복 실행되는 것을 막기
-  위해서다. Core socket 계약의 "Caller는 handover 뒤 다시 보낸다"는 application request에서는
+  lifecycle operation뿐이다.** Application request의 재제출 경계는
+  [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다. Core socket 계약의 "Caller는 handover 뒤 다시 보낸다"는 application request에서는
   application, durable operation에서는 Framework를 뜻한다.
 - **Replay 조건은 terminal envelope를 받지 못한 typed transient transport 실패(route 부재, handover에
   따른 1회 timeout, reply 유실, 단절)뿐이다.** Protocol error, encode·configuration 실패, typed
@@ -644,7 +629,7 @@ Gate·Yield·Actor claim과 self-request의 관찰은
 - `Rejected`·`Failed` 뒤에는 `Find`가 Actor를 찾지 못하고 reserved capacity가 반환된다.
 - Durable lifecycle operation(Actor create·join, session bind)은 route 부재·handover에 따른 1회
   timeout·reply 유실 뒤에도 같은 `OperationId`로 이어져 deadline 안에 원래 terminal을 받고,
-  application request는 같은 상황에서 자동으로 다시 보내지지 않는다.
+  application request의 재제출은 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)를 따른다.
 - Durable operation이 deadline까지 한 번도 admission되지 못하면 `Unavailable`, admission된 뒤 reply
   없이 deadline이 지나면 `DeadlineExceeded`로 끝나며, protocol error·encode 실패 같은 typed
   non-transient 실패는 그 실패로 즉시 끝난다.

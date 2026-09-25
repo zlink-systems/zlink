@@ -457,21 +457,9 @@ Actor handler가 `JoinSpot(...)` 또는 `JoinEntrySpot(...)`을 호출한 뒤 �
    이후 같은 Actor로 들어오는 message는 application instance를 찾지 않고 temporary queue에
    넣는다. Target은 조립한 payload의 checksum을 확인한 뒤 Actor를 만들고 application
    state와 기존 queue를 복원하지만 아직 application 작업을 실행하지 않는다.
-5. Source seal 뒤에 도착한 message는 source runtime의 `ingress hold`에 보관한다. 이
-   hold에는 relocation 자체가 정하는 record 수나 byte 상한이 없다. Target이 temporary queue와
-   Restore 준비 완료를 알리면 source runtime은 hold의 message를 같은 ordered TCP connection으로
-   relay한다. Target dispatcher는 이 message를 temporary queue group의 boundary 전 relay 구간에 넣는다.
-6. Source는 relay lane의 현재 prefix를 보낸 뒤 같은 connection에 cutover를 one-way로
-   보낸다. 이후 도착한 message는 boundary 뒤 구간에 넣으므로 mailbox가 비기를 기다리지 않는다.
-   Target은 Actor Restore 뒤 cutover를 받으면 membership, owner,
-   capacity와 generation을 `LocationStore`에서 한 번에 CAS한다. 이 CAS는 target만 수행한다.
-   Cutover 검증과 CAS 조건은 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)를 따른다.
-   성공하면 target이 새 owner가 되고, 실패하면 target queue를 열지 않는다.
-7. CAS 뒤 저장된 기존 Actor 작업, boundary 전 relay와 나머지 temporary 작업을 실제 Actor
-   queue에 순서대로 넣고 regular route로 전환하되 dispatch는 닫아 둔다. 그다음 Target Spot의
-   `OnJoinedActor`를 호출하고 source Spot에는 `OnLeaveActor`를 one-way로 보낸 뒤 Actor의 Join
-   completion callback을 끝낸다. 이 lifecycle 뒤 dispatch를 연다. Target은 source에 완료 reply를
-   보내지 않는다.
+5. Source의 ingress hold와 boundary 전 relay는 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 순서를 따른다. Target은 Join 승인 또는 Restore 요청 때 등록한 temporary queue를 사용한다.
+6. Cutover 검증 뒤 target의 owner·membership·capacity·generation CAS는 [공통 relocation §4.4–§4.5](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)를 따른다. Join membership 변경은 이 CAS에 포함한다.
+7. CAS 뒤 queue 병합과 regular route 전환은 [공통 relocation §4.6](../05-location-relocation/04-relocation-flow.ko.md#46-target은-기존-작업부터-점진적으로-queue를-연다)을 따른다. Target Spot의 `OnJoinedActor`를 호출하고 source Spot에 `OnLeaveActor`를 one-way로 보낸 뒤 Actor의 Join completion callback을 끝내고 dispatch를 연다.
 8. Actor가 Session에 bind되어 있으면 target runtime이 CAS와 queue 개방 뒤 Session owner에 target
    route 적용과 seal 해제를 one-way로 알린다. Session owner는 기본 3,000ms의
    `SessionRelocationSealTimeout` 안에 그 update를 받으면 route를 바꾸고 held message를 제출한
@@ -897,13 +885,10 @@ Session owner 쪽 검증·처리 절차를 소유한다 — 이 문서는 그 �
 - 승인 reply가 target의 유효 수신 chunk 상한을 실어 보내고, 승인 왕복이 없는
   `JoinEntrySpot`은 32 KiB의 보수 chunk 크기를 사용한다.
 - `Restore` 재시도의 payload 원본이 저장소가 아니라 source memory 재전송이다.
-- 저장한 기존 Actor 작업을 실제 Actor queue에 먼저 넣고 temporary queue의 작업을 그 뒤에
-  옮긴 다음 기존 dispatch 경로로 atomic하게 전환한다.
-- Relay-ready 전 abort 또는 그 뒤 source `Preserve` fence 성공은 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)에 따라 target staging을 폐기하고 source 작업을 재개한다. Source lease 만료 terminal도 같은 절을 따른다.
+- Queue 병합과 source 복구 결과는 [공통 relocation §4.4–§4.6](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)을 따른다.
 - `RelocationId`, target attempt와 owner generation이 같은 중복 Restore는 작업을 다시
   시작하지 않고 기존 temporary queue와 진행 상태를 사용한다.
-- membership commit 뒤 `OnJoinedActor`, one-way `OnLeaveActor`, completion callback 순서를
-  지키고 completion callback 뒤에 일반 message를 실행한다.
+- Join callback과 dispatch 순서는 [§4.2](#42-다른-node의-spot으로-actor를-join하는-순서)를 따른다.
 - `PreserveStateWith`는 handler 종료 경계의 application state와 Framework queue·timer를
   복원하고, `RecreateOnRelocation`은 application state 없이 Framework queue·timer만 복원한다.
 - User Spot과 member Actor는 target이 실행하는 Location Store conditional batch CAS 한 번으로

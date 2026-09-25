@@ -148,7 +148,7 @@ reply가 존재하지 않는 경로(승인 왕복이 없는 `JoinEntrySpot` 등)
 
 Capture로 확정한 기존 queue prefix와 timer를 source는 relay lane에 다시 넣지 않는다. 이
 saved-work reference를 relay가 다시 만들거나 target이 saved-work record와 relay record를
-중복 제거하면 안 된다. Relay-ready 전에는 target의 명시적 실패 reply로 source가 memory payload를 원래 queue 순서로 복원한다. Relay-ready 뒤 source 재개는 [§4.4](#44-ordered-relay와-one-way-cutover)의 authority 판정을 따른다.
+중복 제거하면 안 된다. Relay-ready 전에는 target의 명시적 실패 reply로 source가 memory payload를 원래 queue 순서로 복원하며 Location Store를 다시 읽지 않는다. Relay-ready 뒤 source 재개는 [§4.4](#44-ordered-relay와-one-way-cutover)의 authority 판정을 따른다.
 
 Source mailbox나 이전 route로 새 message가 계속 도착할 수 있으므로 queue가 비기를 기다리지
 않는다. Restore 요청을 보낸 뒤 target이 relay 수신 준비를 알릴 때까지 새 message를 source
@@ -268,11 +268,7 @@ Message Follow와 route cache는 이 CAS를 대신 실행하지 않는다.
 membership을 모두 바꾼다. 조건 하나라도 다르면 아무 값도 변경하지 않고 target queue도 열지
 않는다.
 
-Store가 일시적인 오류를 반환하거나 응답이 불확정이면 target은 같은 expected source fence와
-`RelocationId`로 다시 시도한다. Retry deadline은 별도 timeout을 만들지 않고 Restore operation이
-가진 absolute deadline을 그대로 사용한다. 다시 시도할 때 deadline을 다시 시작하거나 연장하지
-않는다. 응답을 받지 못한 경우에는 Store를 다시 읽어 그 target이 owner로 이미 기록됐는지
-먼저 확인한다.
+Target CAS의 재제출, deadline과 응답 불확정 판정은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)이 정한다.
 
 Restore 만료 뒤 source `Preserve`와 source lease 만료 뒤 같은 target의 예외는 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)이 소유한다. Target commit이 확인되면 queue를 열고, source fence가 이기면 staging을 정리한다. 불확정 상태의 보관·terminal은 [§4.4](#44-ordered-relay와-one-way-cutover)와 §10을 따른다. Commit 확인 전에는 Session route update를 보내지 않는다.
 
@@ -346,7 +342,7 @@ sequenceDiagram
     A->>B: [send] cutover · record 수와 checksum 포함
     B->>B: [local] boundary 전 relay batch 전체와 확인 값 대조
     loop target이 owner로 기록됐는지 확인 또는 Restore 유효시간 만료까지
-        B->>L: [request] 같은 source fence와 RelocationId로 CAS 또는 결과 확인
+        B->>L: [request] Location runtime §10에 따른 CAS 또는 authority 확인
         L-->>B: [reply] success · retryable failure · current owner
     end
     opt Restore 유효시간에 target authority가 아직 확인되지 않음
@@ -543,7 +539,7 @@ Session owner가 검증하는 값, seal과 route 전환의 정확한 시점·tim
 | Relay 수신 준비 reply 뒤 target CAS가 조건 불일치로 실패 | `Preserve` fence로 확정한 source owner 또는 다른 authority | Source fence가 이겼으면 target staging을 정리하고 source가 보관 작업을 재개한다(§4.4). |
 | Target이 CAS 응답을 받지 못함 | Store를 다시 읽어 확인한 owner 또는 UNKNOWN | Restore 만료 뒤 source fence와 target의 예외적 CAS 제출은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. Target commit 확인 전에는 queue를 열지 않는다. |
 | Restore 유효시간에 authority가 불확정 | Settlement 대기 | Source fence와 source lease 만료 뒤 target 진행은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. Dispatch는 target commit 확인 전까지 닫는다. |
-| Connection이 끊겨 cutover가 유실됨, source process는 실행 중 | Target 진행 결과에 따름 | Source는 새 connection으로 boundary 전 batch 전체와 cutover를 재전송한다. Target은 부분 수신 구간을 재전송 batch 전체로 교체하고 확인 값이 일치하면 CAS를 진행한다. |
+| Connection이 끊겨 cutover가 유실됨, source process는 실행 중 | [§4.4](#44-ordered-relay와-one-way-cutover)의 cutover 재전송 결과 | Whole-batch 재전송과 교체는 [§4.4](#44-ordered-relay와-one-way-cutover)를 따른다. |
 | Relay 준비 reply 뒤 cutover 대기 Warning 시한 동안 cutover와 재전송이 모두 오지 않음 | Source authority 유지, dispatch 봉인 | Target은 Warning을 기록한다. Source `Preserve` fence가 성공하면 target staging을 정리하고 source가 보관 작업을 처리한다(§4.4). |
 | CAS 성공 뒤 target process 종료 | Target authority를 유지하지만 object는 unavailable | Source로 rollback하거나 다른 target에서 자동 재개하지 않는다. |
 | `SessionRelocationSealTimeout` 안에 route update가 없음 | Target owner, Session connection 종료 | Session owner는 physical connection을 종료하고 binding, held message와 seal을 정리한다. 늦은 update는 Warning만 기록하고 무시한다. |

@@ -555,24 +555,9 @@ the following order after the handler ends normally.
    instance. After verifying the assembled payload's checksum, the target
    creates the Actor and restores application state and the existing
    queue, but doesn't run application work yet.
-5. A message arriving after the source seal is held in the source
-   runtime's `ingress hold`. The hold has no record-count or byte bound
-   defined specifically for relocation. Once target reports the temporary
-   queue and Restore ready, source relays the hold over the same ordered
-   TCP connection. The target dispatcher puts it in the temporary queue
-   group's pre-boundary relay span.
-6. After sending the relay lane's current prefix, source sends cutover
-   one-way on that connection. Later arrivals enter the post-boundary
-   span, so mailbox drain isn't required. After Actor Restore, target runs
-   the target CAS membership, owner, capacity, and generation together in
-   `LocationStore`. Cutover verification and CAS conditions follow [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). Only target performs this CAS. On
-   success target becomes owner; on failure the target queue doesn't open.
-7. After CAS, saved Actor work, pre-boundary relay, and remaining
-   temporary work enter the real Actor queue in order, then the regular
-   route is installed while dispatch stays closed. It calls the target
-   Spot's `OnJoinedActor`, sends the source Spot `OnLeaveActor` one-way,
-   and finishes the Actor's Join completion callback. Dispatch opens after
-   this lifecycle. Target sends no completion reply to source.
+5. Source ingress hold and pre-boundary relay follow the order in [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). Target uses the temporary queue registered during Join approval or the Restore request.
+6. After cutover verification, the target's owner, membership, capacity, and generation CAS follows [common relocation §4.4–§4.5](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). This CAS includes the Join membership change.
+7. Queue merge and regular-route transition after CAS follow [common relocation §4.6](../05-location-relocation/04-relocation-flow.en.md#46-target-opens-the-queue-progressively-starting-with-existing-work). Target calls the target Spot's `OnJoinedActor`, sends the source Spot `OnLeaveActor` one-way, finishes the Actor's Join completion callback, then opens dispatch.
 8. For a bound Actor, after CAS and queue opening target runtime sends
    Session owner a one-way target-route update. On that update, within
    the default 3,000ms `SessionRelocationSealTimeout`, Session owner
@@ -1105,16 +1090,11 @@ The Session route contract is defined by
   conservative 32 KiB chunk size.
 - A `Restore` retry's payload origin is a resend from source memory, not
   a store.
-- Saved existing Actor work is put into the real Actor queue first, then
-  the temporary queue's work moves in behind it, and then the framework
-  atomically switches to the existing dispatch path.
-- An abort before relay-ready or a later successful source `Preserve` fence discards target staging and resumes source work under [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). The source-lease-expiry terminal also follows that section.
+- Queue merge and source recovery follow [common relocation §4.4–§4.6](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
 - A duplicate Restore with the same `RelocationId`, target attempt, and
   owner generation doesn't restart the work — it uses the existing
   temporary queue and progress state.
-- After the membership commit, the order of `OnJoinedActor`, one-way
-  `OnLeaveActor`, and completion callback is kept, and regular messages
-  run after the completion callback.
+- Join callback and dispatch order follow [§4.2](#42-the-order-for-joining-an-actor-to-a-spot-on-a-different-node).
 - `PreserveStateWith` restores application state at the handler-end
   boundary along with framework queue/timer; `RecreateOnRelocation`
   restores only framework queue/timer, without application state.

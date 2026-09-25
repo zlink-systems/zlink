@@ -51,10 +51,7 @@ generation과 owner 자격도 함께 확인한다.
 
 | 확인한 경계 | Framework의 처리 |
 |---|---|
-| Framework가 target을 선택하며 아직 어느 target도 operation을 수락하지 않음 | 같은 operation의 deadline 안에서 다른 eligible target을 선택할 수 있다. |
-| Caller가 node RID, global object ID 또는 Session binding을 지정함 | 지정한 logical identity를 유지한다. 다른 logical target으로 바꾸지 않는다. |
-| Operation이 target queue에 수락됨 | 같은 operation을 다른 target에서 다시 실행하지 않는다. |
-| Transport 수락 여부를 확인할 수 없음 | 중복 가능성이 있으므로 다른 peer에 자동 재제출하지 않는다. |
+| Target 선택·logical identity·재제출 경계 | [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)를 따른다. |
 | Operation이 terminal 결과에 도달함 | Reply, failure, timeout, cancellation 또는 shutdown 가운데 먼저 확정된 결과 하나만 반환한다. |
 
 Application은 실패 뒤 새 operation을 시작할 수 있다. 새 operation이 앞선 작업과 같은 변경을
@@ -119,13 +116,9 @@ Actor와 Spot message는 Location Store에서 확인한 현재 `Ready` owner를 
 만료되거나 owner lease가 무효가 되면 다음 새 operation이 현재 owner를 다시 조회한다. 실패한
 operation 자체는 새 owner에게 자동으로 제출하지 않는다.
 
-계획된 relocation으로 owner가 바뀐 직후에는 이전 owner가 이미 받은 message를 commit된
-target으로 전달할 수 있다. 이 동작을 [Message Follow](../00-foundation/02-glossary.ko.md#message-follow)라고
-한다. 이 전달 경로의 유지 시간을 정하는
-[MessageFollowDuration](../00-foundation/02-glossary.ko.md#message-follow-duration)의 기본값은 30초이며
-0이면 사용하지 않는다. Message Follow는 이미 commit된 이동 경로를 따를 뿐 owner process
-장애 뒤 새 owner를 선택하지 않으므로 failover가 아니다. 자세한 route와 cache 규칙은
-[Spot·Actor routing](../03-spot-actor/08-routing.ko.md)이 정의한다.
+계획된 relocation 뒤 이전 owner에 도착한 message의 Message Follow 경로와 기간은
+[Location runtime §7.3](01-location-runtime.ko.md#73-이전-owner로-도착한-message를-새-owner에게-전달한다)가 정의한다.
+이 경로는 owner process 장애 뒤 새 owner를 선택하는 failover가 아니다.
 
 현재 `Ready` Actor 또는 Spot의 owner process가 종료되면 Framework는 다른 node에 같은 object를
 자동 복원하지 않는다. Location Store에 기록된 owner를 임의로 바꾸거나 같은 global ID의 새
@@ -273,11 +266,8 @@ binding 상태)만으로 다음을 확인한다. 각 항목은 test 하나로 �
 Spot 하나의 global ID를 지정해 해당 Spot에 send 또는 request를 전달하는 방식을
 [Spot direct](../00-foundation/02-glossary.ko.md#spot-direct)라고 한다.
 
-- Channel select-one은 target이 operation을 수락하기 전까지만 다른 eligible server를 선택한다.
-- Node direct, Actor·Spot direct와 Session binding operation은 지정한 logical identity를 다른
-  target으로 바꾸지 않는다.
-- Transport 수락 여부가 불분명하거나 operation이 이미 수락된 뒤에는 다른 peer에 자동
-  재제출하지 않는다.
+- Channel select-one, direct call과 Session binding의 target 확정·재제출 경계는
+  [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
 - Peer 하나의 liveness failure가 다른 ready peer와 host state를 `Error`로 바꾸지 않는다.
 - Reconnect는 handshake와 identity 검증을 다시 수행하고 이전 connection의 reply route,
   Session binding과 ready 상태를 재사용하지 않는다.

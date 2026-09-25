@@ -55,10 +55,7 @@ owner eligibility recorded in the [Location Store](../00-foundation/02-glossary.
 
 | Confirmed boundary | Framework handling |
 |---|---|
-| The Framework is selecting a target and no target has accepted the operation yet | Can select a different eligible target within the same operation's deadline. |
-| The caller specified a node RID, global object ID, or Session binding | Keeps the specified logical identity. Doesn't switch to a different logical target. |
-| The operation was accepted by the target queue | Doesn't re-run the same operation on a different target. |
-| Whether transport accepted the operation can't be confirmed | Since duplication is possible, doesn't automatically resubmit to a different peer. |
+| Target selection, logical identity, and resubmission boundary | Follow [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification). |
 | The operation reached a terminal result | Returns only whichever of reply, failure, timeout, cancellation, or shutdown was confirmed first. |
 
 The application can start a new operation after a failure. If the new operation requests the same
@@ -129,14 +126,10 @@ Actor and Spot messages use the current `Ready` owner confirmed in the Location 
 cache expires or the owner lease becomes invalid, the next new operation re-queries the current
 owner. The failed operation itself isn't automatically submitted to the new owner.
 
-Right after the owner changes via a planned relocation, the previous owner can deliver a message
-it already received to the committed target. This action is called
-[Message Follow](../00-foundation/02-glossary.en.md#message-follow). The default for
-[MessageFollowDuration](../00-foundation/02-glossary.en.md#message-follow-duration), which sets how long this
-delivery path is kept, is 30 seconds; `0` means it's unused. Message Follow isn't failover, since
-it only follows an already-committed move path — it doesn't select a new owner after an owner
-process failure. The detailed route and cache rules are defined by
-[Spot/Actor Routing](../03-spot-actor/08-routing.en.md).
+The Message Follow route and duration for a message arriving at a previous owner after a
+planned relocation are defined by
+[Location runtime §7.3](01-location-runtime.en.md#73-delivering-a-message-arriving-at-a-previous-owner-to-the-new-owner).
+This route does not select a new owner after owner process failure and is not failover.
 
 If the owner process of the current `Ready` Actor or Spot terminates, the Framework doesn't
 automatically restore the same object on a different node. It doesn't arbitrarily change the
@@ -296,12 +289,9 @@ to one test.
 Delivering a send or request to one Spot by specifying its global ID is called
 [Spot direct](../00-foundation/02-glossary.en.md#spot-direct).
 
-- Channel select-one only selects a different eligible server until the target accepts the
-  operation.
-- Node direct, Actor/Spot direct, and Session binding operations don't switch the specified
-  logical identity to a different target.
-- If transport acceptance is unclear, or the operation was already accepted, it isn't
-  automatically resubmitted to a different peer.
+- The target commitment and resubmission boundaries for Channel select-one, direct calls,
+  and Session binding are defined by
+  [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 - One peer's liveness failure doesn't put a different ready peer or the host state into `Error`.
 - A reconnect redoes the handshake and identity verification, and doesn't reuse a previous
   connection's reply route, Session binding, or ready state.

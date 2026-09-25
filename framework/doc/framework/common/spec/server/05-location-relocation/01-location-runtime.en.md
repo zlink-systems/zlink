@@ -941,10 +941,9 @@ exists before creation.
 
 The Location Store handles the `Ready` change and final-result recording in one step. On
 conflict, the stored result is re-read. **Cancellation, timeout, or response loss alone
-isn't judged as creation failure.** The current record is re-read to confirm the result,
-and the original request isn't automatically resubmitted to a different owner. Remote
+isn't judged as creation failure.** The current record and stored result for the same `OperationId` are re-read to confirm the result; the original Create or GetOrCreate request is not submitted to another owner. Remote
 creation only completes once it receives command 20's `Existing | Created | Rejected`,
-the correct ref, and an optional application reply.
+the correct ref, and an optional application reply. After Create or GetOrCreate receives a `Rejected` terminal, the same operation is not resubmitted to another owner.
 
 ### 7.1 First-Creating an Instance Spot on the Node That Received the Message
 
@@ -1046,20 +1045,26 @@ The Framework can briefly cache a `Ready` location. The cache stores ID,
 generation, and route. `RouteCacheMaxAge` defaults to 15 seconds and can't exceed the
 last time the owner can accept new work. `Missing`, `Creating`, and Store errors aren't
 cached. It's removed immediately on confirming a higher `StoreVersion` or owner lease
-expiry.
+expiry. A runtime change to `RouteCacheMaxAge` applies only to new cache entries and does not extend an existing entry’s lifetime.
 
 A message arriving at the previous owner right after a move can be delivered to the new
 owner. This feature is called Message Follow, and its period, `MessageFollowDuration`,
 defaults to 30 seconds. A value of 0 disables caching or delivery, respectively. Using both
 features, the cache retention time must be at least 5 seconds shorter than the delivery
-period. An invalid configuration is a configuration error.
+period. An invalid configuration is a configuration error. The Message Follow duration starts
+at relocation commit. The previous owner keeps the new owner's `ActorRef` or Spot location
+and the expiration time, and removes the route after expiration.
 
-**The previous owner only uses the source→target information recorded when the move
-completed — it doesn't re-read the Store.** The new owner's `AuthorityOwnerGeneration`
-must be greater than the previous value, and forwarding continues for at most 8 hops.
-There's no cap on the amount retainable per move. The existing operation ID,
-`ObjectGeneration`, payload, and reply route are kept unchanged. A cycle is
-`Unavailable`, and a generation mismatch is `InvalidOperation`.
+**The previous owner uses only a committed source→target Message Follow route; it does not
+re-read the Store or run an application handler.** The route verifies the global object ID,
+`ObjectGeneration`, source and target `AuthorityOwnerGeneration`, and owner fence. Owner
+generation must increase per hop, and forwarding continues for at most 8 hops. One route's
+queue has no bound on message count or stored size, but each message respects the negotiated
+message bound. The original operation ID, `ObjectGeneration`, payload, and reply route are
+preserved. An absent or expired route or a loop is `Unavailable`; a generation mismatch is
+`InvalidOperation`. The Message Follow route rejects packets and replies from a previous `ObjectGeneration`. This generation check confirms a move of the same incarnation rather than
+restricting a regular message's target. A runtime change to `MessageFollowDuration` applies to
+new relocations.
 
 ### 7.4 Querying the Current Location from Operational Tools
 
@@ -1428,6 +1433,8 @@ source doesn't update the Location Store on the target's behalf. The return valu
 and input limits of provider functions are defined by
 [Location Store](02-location-store-redis.en.md) and
 [Relocation Store](03-relocation-store-redis.en.md).
+
+On a transient error or indeterminate response, the target resubmits CAS with the same expected source fence and `RelocationId`. It creates no separate timeout and does not restart or extend the Restore absolute deadline.
 
 Restore expiry ends ordinary new target CAS submissions and starts source settlement with the `Preserve` fence in §6.1. This section owns the same-target exception after source lease expiry. The source conditions `Preserve` on the `StoreVersion` expected
 by the target's `NewOwner` CAS. A confirmed source `Preserve` success proves the target's

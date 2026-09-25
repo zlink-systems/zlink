@@ -18,24 +18,23 @@ Location Store가 global Spot이나 Actor를
 
 | 모델 | 대상 선택 | 호출자가 관찰하는 완료 |
 |---|---|---|
-| node direct send | Caller가 같은 [MeshName](02-glossary.ko.md#meshname) — 하나의 [RouteMesh](02-glossary.ko.md#routemesh) 물리 연결 그룹을 식별하는 이름 — 에 속한 RID 하나를 직접 지정한다. | Source-local queue가 message를 수락하면 반환 데이터 없이 완료한다. |
+| node direct send | Caller가 같은 [MeshName](02-glossary.ko.md#meshname) — 하나의 [RouteMesh](02-glossary.ko.md#routemesh) 물리 연결 그룹을 식별하는 이름 — 에 속한 RID 하나를 직접 지정한다. | [Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)의 one-way 완료 경계를 따른다 |
 | [node direct](02-glossary.ko.md#node-direct) request | Caller가 같은 MeshName에 속한 RID 하나를 직접 지정한다. | Reply, timeout 또는 route 오류 가운데 하나로 완료한다. |
-| channel send | Framework가 [ChannelName](02-glossary.ko.md#channelname) — message를 보낼 Channel 범위를 식별하는 이름 — 에 등록된 [RouteMesh](02-glossary.ko.md#routemesh) — 여러 MeshNode가 참여해 node와 Channel message를 주고받는 범위 — 또는 ClientServer 송신 경로에서 ready target 하나를 선택한다. | 선택한 송신 경로의 source-local queue가 수락하면 반환 데이터 없이 완료한다. |
+| channel send | Framework가 [ChannelName](02-glossary.ko.md#channelname) — message를 보낼 Channel 범위를 식별하는 이름 — 에 등록된 [RouteMesh](02-glossary.ko.md#routemesh) — 여러 MeshNode가 참여해 node와 Channel message를 주고받는 범위 — 또는 ClientServer 송신 경로에서 ready target 하나를 선택한다. | [Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)의 one-way 완료 경계를 따른다 |
 | channel request | Framework가 `ChannelName`에 등록된 RouteMesh 또는 ClientServer 송신 경로에서 [ready target](02-glossary.ko.md#ready-target) 하나를 선택한다. | Reply, timeout 또는 route 오류 가운데 하나로 완료한다. |
 | Logical Multicast | Framework가 `ChannelName`의 remote member와 local Spot 중에서 조건에 맞는 대상을 선택한다. | publish transaction을 시작하면 반환 데이터 없이 완료한다. Target별 제출과 handler 완료를 기다리지 않는다. |
-| Spot message | Caller가 global [Spot ID](02-glossary.ko.md#spot-id) — Spot을 식별하는 전역 논리 주소 — 를 지정하고 Framework가 current [Ready](02-glossary.ko.md#ready) — Spot이 message를 받을 수 있는 상태 — [authority](02-glossary.ko.md#authority)의 [owner](02-glossary.ko.md#owner)를 찾는다. | Send는 source-local queue 수락 뒤 반환 데이터 없이, request는 reply 결과로 완료한다. |
-| Actor message | Caller가 global Actor ID를 지정하고 Framework가 current [Ready](02-glossary.ko.md#ready) authority의 owner를 찾는다. | Send는 source-local queue 수락 뒤 반환 데이터 없이, request는 reply 결과로 완료한다. |
+| Spot message | Caller가 global [Spot ID](02-glossary.ko.md#spot-id) — Spot을 식별하는 전역 논리 주소 — 를 지정하고 Framework가 current [Ready](02-glossary.ko.md#ready) — Spot이 message를 받을 수 있는 상태 — [authority](02-glossary.ko.md#authority)의 [owner](02-glossary.ko.md#owner)를 찾는다. | [Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)의 one-way 완료 경계를 따른다; request는 reply 결과로 완료한다 |
+| Actor message | Caller가 global Actor ID를 지정하고 Framework가 current [Ready](02-glossary.ko.md#ready) authority의 owner를 찾는다. | [Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)의 one-way 완료 경계를 따른다; request는 reply 결과로 완료한다 |
 | Object create·get-or-create | Caller가 global ID와 stable type을 지정하고 필요하면 placement intent를 추가한다. | 생성한 object를 가리키는 `ActorRef`·`SpotRef` 또는 typed creation 오류를 반환한다. |
-| classic fanout | Framework가 준비되고 topic이 일치하는 subscriber 집합을 대상으로 사용한다. | Local publisher queue가 수락하면 반환 데이터 없이 완료한다. |
-| STREAM | Caller가 session RID로 식별되는 연결을 사용한다. | One-way packet은 local queue 수락 뒤 반환 데이터 없이 완료하고 request는 reply를 반환한다. |
+| classic fanout | Framework가 준비되고 topic이 일치하는 subscriber 집합을 대상으로 사용한다. | [Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)의 one-way 완료 경계를 따른다 |
+| STREAM | Caller가 session RID로 식별되는 연결을 사용한다. | [Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)의 one-way 완료 경계를 따른다; request는 reply 결과로 완료한다 |
 
 Channel operation에서 Framework가 조건에 맞는 target 하나를 고르는 방식을 `select-one`이라
 한다.
 
-이 표의 "완료"는 각 상호작용 *모델*의 완료 경계다. 메시지 *종류*(Send·Request·Logical
-Multicast·[Classic fanout](02-glossary.ko.md#classic-fanout) publish·STREAM send/request)와 그 완료 조건의 요약은
-[메시지 모델 「2. 메시지 종류와 완료」](05-message-model.ko.md#2-메시지-종류와-완료)가
-정의한다.
+이 표의 one-way 완료 경계는
+[Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)가 정의한다.
+메시지 종류는 [메시지 모델 §2](05-message-model.ko.md#2-메시지-종류와-완료)가 정의한다.
 
 ## 2. 상호작용을 시작하는 public interface
 
@@ -121,7 +120,7 @@ public interface IZLinkSessionClient
 }
 ```
 
-`Send...` call은 `Async()`로 local outbound admission까지 기다리고 결과값 없이 완료한다.
+`Send...` call은 `Async()`를 사용하며 one-way 완료 경계는 [Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)가 정의한다.
 `Request...` call은 `Async<TReply>()`로 reply를 기다린다. `Yield<TReply>()`가 선언된 언어에서도
 이 operation은 `SpotWide` User Spot 또는 Instance Spot의 shared turn에서만 사용할 수 있다.
 
@@ -152,24 +151,19 @@ flowchart LR
 
 - **Node direct는 infrastructure와 명시적 owner routing에 사용한다.** Target RID가 현재 Mesh
   member가 아니면 `NotFound`, member이지만 pipe가 준비되지 않았으면 send readiness 한계까지
-  기다린 뒤 `Unavailable`로 끝난다. Node direct operation은 실패한 request를 다른 node에
-  자동으로 다시 보내지 않는다.
+  기다린 뒤 `Unavailable`로 끝난다. Node direct request의 재제출 경계는
+  [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
 - **Global Spot·Actor message는 cached Ready route와 committed
   [Message Follow](02-glossary.ko.md#message-follow) — relocation된 뒤에도 이전 owner node로
   도착한 message를 새 owner에게 대신 전달하는 동작 — route만 사용한다.** Message
   Follow 제한 안에서 current owner로 relay할 수 없으면 `Unavailable`로
   끝내며 source가 Store를 읽어 다른 owner에게 같은 operation을 다시 제출하지 않는다.
-- **Channel operation은 ChannelName으로 process-local 송신 경로를 먼저 결정한다.** RouteMesh
-  경로는 호출 순간의 ready member 가운데 weight가 0보다 큰 하나를 고르고, ClientServer 경로는
-  ready server 가운데 하나를 고른다. 선택과 submit 사이에 application callback을 두지 않는다.
-- **[Weight](02-glossary.ko.md#weight) 0은 새 channel 선택에서 제외하며, RouteMesh에서는
-  Logical Multicast remote target에서도 제외한다.** RID direct와 이미 제출한 operation에는
-  영향을 주지 않는다.
-- **Select-one은 첫 binding operation을 시작하기 직전에 같은
-  [ChannelName](02-glossary.ko.md#channelname)의 현재 eligible member 하나를 선택한다.**
-  Binding operation이 시작되면 선택한 target이 확정되고 Core가 HWM 재시도와 completion을
-  소유한다. Framework는 capacity를 이유로 target을 다시 선택하거나 operation을 다시 실행하지
-  않는다. Direct call은 이 선택 규칙을 사용하지 않는다.
+- Channel operation의 process-local 송신 경로와 select-one 선택·submit 순서는 [Channel messaging §3](../02-channel-transport/02-channel-messaging.ko.md#3-target을-선택하는-방법--channelname-select-one-선택-순서가중-라운드로빈)이 정한다.
+- ChannelName의 weight `0` 선택 규칙은 [Channel messaging §3](../02-channel-transport/02-channel-messaging.ko.md#3-target을-선택하는-방법--channelname-select-one-선택-순서가중-라운드로빈)이 정한다.
+  Logical Multicast의 remote target은 [Spot messaging](../03-spot-actor/02-spot-messaging.ko.md)이 정한다.
+- **Select-one의 target 확정과 HWM 재시도 경계는
+  [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.**
+  Direct call은 select-one을 사용하지 않는다.
 - **Node direct는 RID, Spot·Actor는 global ID, session은 binding token을 유지하며 물리 peer
   lifecycle generation을 public target identity로 노출하지 않는다.**
 - **같은 ChannelName을 여러 물리 송신 경로에 등록할 수 없다.** 그래서 호출자는 MeshName이나
@@ -203,37 +197,29 @@ sequenceDiagram
     else send timeout까지 admission 실패
         Src-->>App: DeadlineExceeded로 완료 (전송 자체가 실패)
     end
-    Note over Src,Tgt: 어느 경로로 끝나도 Framework가 같은 request를<br/>자동으로 다시 제출하지 않는다
+    Note over Src,Tgt: request 재제출 경계는 Submit과 완료 §5가 정의한다
 ```
 
-- **`send`는 비동기 submit 하나만 제공하며, 즉시 한 번만 시도하는 동기 terminator는 제공하지
-  않는다.** 반환은 destination handler가 실행되었다는 확인이 아니라 Framework가 message를
-  local outbound queue에 받아들였는지를 나타낸다.
+- **`send`는 비동기 submit 하나만 제공한다.** One-way 완료 경계와 terminator 종류는
+  [Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)가 정의한다.
 - **Queue가 일시적으로 가득 차면 유한한 send timeout까지 admission을 기다린다.** 이미 수락한
   뒤 발생한 one-way 오류는 application이 구성한 standard logger·telemetry provider와
   monitoring으로 보고한다. Framework 전용 runtime error sink는 제공하지 않는다.
 - **Global Spot·Actor send도 같은 비동기 terminator를 사용한다.** Source는 current Ready
-  authority가 무엇인지 찾고 local outbound admission으로 submit을 완료한다. Cache hit도 같은
-  public 의미를 유지하므로 cache 상태에 따라 동기 submit을 제공하거나 caller에게 owner
-  node와 generation을 요구하지 않는다.
+  authority가 무엇인지 찾는다. 완료 경계는 [Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)가 정의한다. Cache hit도 같은 public 의미를 유지하므로 cache 상태에 따라 동기 submit을 제공하거나 caller에게 owner
+  node와 generation을 요구하지 않는다. 완료 경계는 [Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)가 정의한다.
 - **Message call은 Missing object의 creation intent를 기본적으로 만들지 않는다.** Spot 전용
   fluent call에서 Instance intent를 명시한 경우에만 실행 중인 Instance Spot이 없을 때 새
   Spot을 만들고 최초 message를 처리할 수 있게 준비한다. 이 과정을
   [cold activation](02-glossary.ko.md#cold-activation)이라 한다. 시작 method는 계속 global
   [Spot ID](02-glossary.ko.md#spot-id)만 받으며 optional [stable type](02-glossary.ko.md#stable-type)과 initial Mesh는 fluent
   call의 cold activation option이다.
-- **유효한 one-way call은 송신 측 queue의 수락 경계인 [source-local admission](02-glossary.ko.md#source-local-admission)이 성공하면 결과값 없이 완료한다.**
-  - Send timeout까지 capacity를 확보하지 못하면 operation에 허용된 deadline까지 완료 조건을
-    만족하지 못했을 때 발생하는 [`DeadlineExceeded`](02-glossary.ko.md#deadlineexceeded)로
-    완료한다.
-  - target·route 부재와 runtime shutdown은 operation-specific exception으로 완료한다.
-  - 잘못된 argument·handle·state와 중복 submit도 local exceptional completion이다.
-  - Cancellation은 언어별 cancelled awaitable로 표현한다.
-  - 어느 terminal 완료 뒤에도 Framework가 operation을 자동으로 다시 제출하지 않는다.
+- **One-way 완료 경계·오류와 재제출 경계는
+  [Submit과 완료 §4·§5](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)가 정의한다.**
 - **`request`는 선택한 송신 경로에 reply correlation을 만들고 terminal 결과를 정확히 한 번
   전달한다.** request timeout은 reply를 기다리는 시간이고, 전송 단계의 backpressure는 send
-  timeout이 담당한다. route 오류나 timeout으로 끝난 request를 Framework가 자동 재전송하지
-  않는다. 언어별 transport 오류는 이 문서의 닫힌 Framework 결과 가운데 하나로 변환하며
+  timeout이 담당한다. route 오류·timeout 뒤 재제출 경계는
+  [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다. 언어별 transport 오류는 이 문서의 닫힌 Framework 결과 가운데 하나로 변환하며
   transport 전용 결과를 public call에 노출하지 않는다.
 - **Spot에서 시작한 request는 원래 activation과 generation을 completion record에 보존한다.**
   reply를 새 application message로 다시 dispatch하지 않는다. 다른 RouteMesh 또는 ClientServer
@@ -577,8 +563,7 @@ Shutdown의 host [admission seal](02-glossary.ko.md#admission-seal)과 Relocate�
 
 **완료**
 
-- node direct send·channel send·Spot/Actor send·STREAM one-way packet은 source-local queue가
-  수락하면 반환 데이터 없이 완료한다.
+- node direct·channel·Spot/Actor·STREAM one-way 완료는 [Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)를 확인한다.
 - node direct request·channel request·Spot/Actor request·STREAM request는 reply, timeout 또는
   route 오류 가운데 하나로 완료한다.
 - Object create·get-or-create는 생성한 object를 가리키는 `ActorRef`·`SpotRef` 또는 typed creation 오류를 반환한다.
@@ -590,7 +575,7 @@ Shutdown의 host [admission seal](02-glossary.ko.md#admission-seal)과 Relocate�
 **실패**
 
 - Queue가 가득 차 send timeout까지 admission을 마치지 못하면 `DeadlineExceeded`로 끝난다.
-- Route 오류나 timeout으로 끝난 request를 Framework가 자동으로 다시 제출하지 않는다.
+- Route 오류·timeout 뒤 request 재제출은 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)를 확인한다.
 - 같은 reply token으로 reply를 두 번 제출하면 두 번째 호출은 local exceptional completion으로
   끝난다.
 - Reply route를 복원할 수 있는 request는 구조화된 error reply로 완료하고, 복원할 수 없는

@@ -137,8 +137,8 @@ identity나 local sequence가 다르지만 `flow_id`는 같다.
 Instance Spot을 처음 선택한 target이 생성 권한을 얻지 못하면 현재 요청을 받을 수
 있는 [Ready](../00-foundation/02-glossary.ko.md#ready) owner로 message를 한 번 전달할 수 있다. 이때
 원래 `correlation_id`를 유지한다. Tracing이 켜져 있으면 `flow_id`와
-`flow_origin`도 유지한다. Target queue가 message를 수락한 뒤에는 Framework가
-자동으로 다시 전송하지 않는다.
+`flow_origin`도 유지한다. Target queue 수락 뒤 재제출 경계는
+[Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
 
 ## 6. Async 작업과 execution context
 

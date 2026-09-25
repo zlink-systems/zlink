@@ -57,8 +57,8 @@ Outbound queue 수락, route resolve 또는 remote reply를 기다리는 중에 
 
 ## 4. Send 완료와 실패
 
-`Send`는 source runtime의 outbound queue가 message를 수락하면 결과값 없이 완료된다. 이
-시점은 target handler가 message를 처리했다는 뜻이 아니다.
+`Send`의 정상 완료 경계는
+[Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)가 정의한다.
 
 | 완료 전에 확인한 조건 | 결과 |
 |---|---|
@@ -69,7 +69,7 @@ Outbound queue 수락, route resolve 또는 remote reply를 기다리는 중에 
 
 `Send`가 완료된 뒤 target activation, admission 또는 handler 실행이 실패해도 이미 완료된
 call의 결과를 바꾸지 않는다. Framework는 이 실패를 metric, log와 message-flow trace로
-기록하며 같은 message를 다른 target에 자동으로 제출하지 않는다.
+기록한다. 재제출 경계는 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
 
 ## 5. Request 완료와 실패
 
@@ -138,9 +138,8 @@ Application이 새 operation을 시작하려면 다음을 직접 확인한다.
 2. Operation이 idempotent한지, 또는 idempotency key로 중복 영향을 막는지 확인한다.
 3. 필요한 경우 업무 상태를 다시 조회한 뒤 새 operation을 시작한다.
 
-하나의 binding operation 안에서 Core가 소유하는 HWM 재시도는 Application retry가 아니다.
-Framework는 send-ready waiter를 두지 않고 같은 operation을 다른 logical target에 자동
-제출하지 않는다.
+Binding operation의 HWM 재시도와 Framework 재제출 경계는
+[Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
 
 ## 8. Application job queue 포화
 
@@ -166,7 +165,7 @@ wait다.
 
 **Send 완료 경계**
 
-- `Send`는 source outbound queue 수락 시 완료되고, 이후 remote 실패로 결과가 바뀌지 않는다.
+- `Send` 완료 경계와 remote 실패 뒤 결과는 [Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)를 확인한다.
 
 **Request 완료 경계**
 

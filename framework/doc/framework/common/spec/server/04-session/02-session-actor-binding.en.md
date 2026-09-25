@@ -336,8 +336,8 @@ the binding. Afterward, relay, disconnect notifications, and pushes from
 Actor to session use this binding information, and the Location Store isn't
 queried again on every message send. If the stored route is no longer
 valid, it either delivers exactly once via the active Message Follow route,
-or ends with `Unavailable`. It doesn't automatically find a new `ActorRef`
-from the Location Store and resend the same message to a different owner.
+or ends with `Unavailable`. The resubmission boundary for the same message is defined by
+[Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 
 The stored route is only valid within the current owner lease and local
 admission deadline. Even if the Location Store is temporarily unavailable,
@@ -599,31 +599,7 @@ message arriving during the seal is held by the aggregate, but the per-
 message size, transport, deadline, and cancellation limits still apply
 unchanged.
 
-```mermaid
-sequenceDiagram
-    participant C as Relocation coordinator
-    participant S as Session owner
-    participant A as Source runtime
-    participant B as Target runtime
-    participant L as Location Store
-
-    C->>S: [request] command 42 · freeze that binding route and hold later messages
-    S-->>C: [reply] command 43 · that binding's seal installed
-    A->>B: [request] install temporary queue, Restore, prepare relay without dispatch
-    B-->>A: [reply] temporary queue/Restore ready · source still owner
-    A->>B: [send/request relay] post-capture ingress hold
-    A->>B: [send] cutover · pre-boundary relay sent
-    B->>B: [local] verify complete relay and cutover
-    B->>L: [request] CAS owner to target if source fence still matches
-    L-->>B: [reply] target owner CAS result
-    B->>B: [local] merge queue · switch regular route · finish lifecycle · open dispatch
-    B->>S: [send] command 44 · apply target route, submit held, release seal
-    alt that update arrives within SessionRelocationSealTimeout
-        S->>S: [local] switch route · submit held Session messages · release seal
-    else seal timeout
-        S->>S: [local] close physical Session and clean binding/held/seal state
-    end
-```
+The Restore, relay, cutover, CAS, and queue-merge order follows [common relocation §4](../05-location-relocation/04-relocation-flow.en.md#4-normal-processing-order). The Session seal and route transition here follow the validation values above and timeout rule below.
 
 The Session owner applies a configurable `SessionRelocationSealTimeout`
 from the moment the seal is installed. Its default is 3,000 ms and can be
@@ -805,10 +781,8 @@ gate, and the ready-set management, defined by
 A request reply/error completes the original STREAM correlation
 terminal-once. If a timeout, cancellation, or route failure happens after a
 request is submitted to the target Actor route, whether the target already
-ran the work may be undetermined. After such a failure, the framework
-doesn't automatically resend the same request by picking a different
-Actor, a new owner, or a different
-[MeshNode](../00-foundation/02-glossary.en.md#meshnode). A reply arriving late after the
+ran the work may be undetermined. The resubmission boundary for the request after such a failure is defined by
+[Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification). A reply arriving late after the
 session has closed isn't used as a reply for a new session or a new
 binding either. This is a boundary preventing requests from different
 sessions from sharing the same business result.

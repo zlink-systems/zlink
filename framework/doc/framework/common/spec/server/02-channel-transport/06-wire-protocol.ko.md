@@ -286,15 +286,8 @@ relay 시점의 queue count·byte, 원래 operation ID와 원래 reply route ID�
 
 #### 통지 중복 억제
 
-Relay에 성공한 runtime은 source runtime에 `messageFollow`를 보낼 수 있다. Source runtime은 현재 cache
-항목이 source route와 동일한 route fence를 가리킬 때만 그 항목을 무효화한다. 이미 더 새로운
-route가 있으면 지우지 않는다. 통지가 유실되어도 cache lifetime이 지난 stale route는 반드시 만료된다.
-
-보내는 쪽의 전용 suppression registry는 source와 target의 route fence 전체를 key로 사용한다.
-상태는 `idle → inFlight → sentUntilExpiry`로 전이하며, 전송 실패 때만 `inFlight → idle`로 전이한다.
-Route cache 만료·교체가 marker도 함께 지운다. Registry는 원래 operation의 payload, reply route와
-terminal completion을 소유하지 않는다. 자세한 상태 흐름은
-[45. target 선택과 route cache](../03-spot-actor/08-routing.ko.md#2-global-id로-spotactor에-보내는-방법)가 설명한다.
+`messageFollow` 통지의 route cache 무효화와 중복 억제 규칙은
+[Routing §2.5](../03-spot-actor/08-routing.ko.md#25-이전-owner-route에-도착한-message)가 정한다.
 
 ### 3.2 Bound session 교체 notification
 
@@ -341,22 +334,8 @@ physical pipe 선택·교체는 [Core ROUTER §10.1](../../../../../../../core/d
 
 ### Probe와 Ack 주기
 
-```mermaid
-sequenceDiagram
-    participant A as Node A
-    participant B as Node B
-
-    Note over A,B: Admission 성공 — peer timeout deadline 시작
-    A->>B: livenessProbe(id) — 5초마다, outstanding 없으면 새 non-zero id
-    B->>A: livenessAck(id)
-    Note over A: id가 current outstanding과 일치하는 첫 Ack만<br/>15초 deadline 재시작, outstanding 해제
-```
-
-- Probe 주기(5초), deadline(15초), outstanding ID 하나·같은 ID 재전송, 현재 ID의 첫 ACK만 deadline 갱신,
-  즉시 not-ready 전환 조건 등 **시간·판정 규칙은 [Transport liveness §3·§10](05-transport-liveness.ko.md#3-routemesh와-clientserver)이
-  소유한다.** 이 절은 command schema와 그 record가 타는 connection epoch만 정의한다.
-- Probe, ACK와 timer는 infrastructure reserve에서 처리하며 application queue나 handler에 전달하지 않는다.
-- **admitted된 양쪽 peer가 모두 probe한다.** 5초 probe 의무는 양방향이며, 어느 쪽이 먼저 연결했는지와 무관하게 connection이 admitted되는 순간 시작한다. peer의 probe에 ACK만 응답하고 자신의 probe는 절대 originate하지 않는 node는 비준수다 — 상대는 그 node를 live로 판정하지만 그 node는 역방향을 확인하지 않는다. 다이어그램은 간결성을 위해 한 방향만 보이나, admitted된 각 peer는 상대를 향해 full probe/ACK cycle을 돌린다.
+Probe 주기와 ACK 판정은 [Transport liveness §3](05-transport-liveness.ko.md#3-routemesh와-clientserver)이 정한다.
+Probe, ACK와 timer는 infrastructure reserve에서 처리하며 application queue나 handler에 전달하지 않는다.
 - **probe와 ACK는 admitted 물리 connection의 현재 epoch를 타며, 그 epoch는 connection lifetime 동안 안정적이다.** `livenessProbe`와 그 `livenessAck`은 admission이 확립한 peer identity와 connection generation으로 보낸다(`scope: admitted-physical-connection-lifetime`). 이미 live 물리 connection에서 admitted된 peer에 대한 중복 re-dial이나 반복 `hello`/`admit`은 idempotent다 — admitted connection을 무효화하지도, connection generation을 회전시키지도 않는다. superseded되었거나 아직 전달되지 않은 generation(상대의 live pipe가 인식하지 못하는 값)으로 stamp된 probe·ACK를 보내는 것은 결함이며, 상대는 이를 "다른 connection의 ACK"로 조용히 버리고 어느 쪽 deadline도 갱신되지 않는다. 새 connection generation은 Core의 선택 route가 새 route generation으로 바뀔 때만([Transport liveness §5](05-transport-liveness.ko.md#5-ready와-장애-판정)) 발급하며, 변경 없는 descriptor로 이미 admitted된 peer의 매 inbound admission record마다 발급하지 않는다.
 
 ### Classic fanout beacon

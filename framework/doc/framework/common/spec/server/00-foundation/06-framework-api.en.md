@@ -261,13 +261,7 @@ same MeshNode. A `ChannelName` call doesn't create a separate socket. Once the h
 MeshName, [routing ID](02-glossary.en.md#routing-id), endpoint, and the membership set can't
 be changed.
 
-The location option `RouteCacheMaxAge` defaults to 15 seconds and `MessageFollowDuration`
-defaults to 30 seconds. Setting both to 0 turns off route cache and Message Follow. If
-positive, cache age must be at least 5 seconds smaller than the period during which Message
-Follow stays valid, [Message Follow duration](02-glossary.en.md#message-follow-duration). A
-runtime value change applies starting from new cache entries and new relocations. A stale
-route past the Message Follow duration fails with a stale-location error, and Framework
-doesn't automatically resend it.
+[Location runtime §7.3](../05-location-relocation/01-location-runtime.en.md#73-delivering-a-message-arriving-at-a-previous-owner-to-the-new-owner) defines the location-option settings and the `Unavailable` result for an absent or expired Message Follow route; [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification) defines resubmission.
 
 The RouteMesh Channel builder distinguishes `Client` and `Server` roles. `Client` registers
 ChannelName as that MeshNode's outbound send path but doesn't advertise it to peers as
@@ -343,7 +337,7 @@ isn't exposed externally.
 RouteMesh Channel Server, ClientServer Server, and node-wide placement weight all use the
 integer range `0..10000` with a default of `100`. A negative value or a value greater than
 `10000` is a configuration error, both at startup configuration and at runtime change.
-Weighted selection computes the candidate weight sum using at least a 64-bit integer.
+ChannelName weighted selection follows [Channel Messaging §3](../02-channel-transport/02-channel-messaging.en.md#3-how-to-select-a-target--channelname-select-one-selection-order-weighted-round-robin).
 Logical Multicast includes an eligible remote member exactly once regardless of the
 magnitude of its positive weight, and excludes members with weight `0`.
 
@@ -441,8 +435,8 @@ directly.
 
 A per-operation call object provides only the settings valid for that capability.
 
-- one-way send and session Actor relay asynchronously wait for source-local admission and
-  don't return a normal-completion value.
+- The async completion boundary for one-way send and session Actor relay is defined by
+  [Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary).
 - request provides metadata, reply timeout, cancellation, and a typed reply.
 - Logical Multicast publish uses metadata, ChannelName,
   [topic](02-glossary.en.md#topic), and a single async submit.
@@ -1041,16 +1035,13 @@ Framework converts target-selection and transport-admission results into the fol
 common results. A Node direct call keeps a Node RID; a Spot/Actor message keeps a global ID;
 a session binding keeps the object generation it was bound to, and a binding token. Physical peer
 lifecycle generation isn't a public commitment.
-A RouteMesh/ClientServer select-one ChannelName picks one current eligible member
-immediately before starting the first binding operation. It may pick another eligible
-member only while checking route eligibility or source-local admission before a binding
-operation starts. After that boundary, Core owns HWM retry and completion; Framework doesn't
-reselect for capacity or resubmit the same binding operation.
+The RouteMesh/ClientServer select-one target commitment and HWM retry boundary are defined by
+[Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 
 | Observed condition | Framework result |
 |---|---|
-| The source outbound admission of that operation family accepted the operation | one-way send/publish completes normally with no return value; request transitions to pending completion |
-| A regular one-way's first submit | the binding's per-operation completion awaitable completes with Core's HWM-retry result. Framework doesn't wait for a separate readiness callback or retry; if the deadline ends first, it completes with a `DeadlineExceeded` exception |
+| The source outbound admission of that operation family accepted the operation | One-way completion follows [Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary); request transitions to pending completion |
+| A regular one-way's first submit | Follows the HWM retry and completion boundary in [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification) |
 | Submission to some targets fails after Logical Multicast has started | already-accepted targets are kept. Per-target failures aren't turned into a public result or publish-only monitoring, and the whole operation isn't rolled back or automatically retried |
 | A known direct target's route isn't ready | `Unavailable` |
 | No Actor/Spot authority, or no Node/Channel send path | `NotFound` |
@@ -1068,13 +1059,8 @@ completes via the send-rate-limiting flow control that caps a send queue,
 reused. If two
 calls race on the same token, only one starts transport admission.
 A direct pending one-way operation keeps a Node RID, global Spot/Actor ID, or session
-[binding token](02-glossary.en.md#binding-token). Once the binding operation starts, its
-target selection is fixed and Core owns that operation's HWM retry. A later detach or
-timeout is terminal; Framework doesn't re-query the current route or replay to another
-logical target.
-A [Select-one](02-glossary.en.md#select-one) ChannelName follows the binding-operation-start
-boundary above. A later new operation can select from the then-eligible members, but an
-operation that has started isn't replayed to a different target.
+[binding token](02-glossary.en.md#binding-token). The binding operation's target commitment, HWM retry, and resubmission boundary are defined by
+[Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 
 Missing/route/incarnation-mismatch results for a global object message are distinguished as
 follows.
@@ -1101,7 +1087,7 @@ The failure conditions of Create/GetOrCreate map to error kinds as follows.
 
 If the
 application creation callback normally declines, it completes as a typed `Rejected` result,
-not an exception. It isn't automatically resubmitted to a different owner.
+not an exception. Resubmission of the same creation operation after `Rejected` follows [Location runtime §7](../05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot).
 
 This request failure completes exactly once with that error kind, regardless of when it's
 detected. A one-way send can only return an exceptional completion of the kinds above when
@@ -1109,13 +1095,14 @@ the failure is confirmed before the source's local outbound admission. Once the 
 accepts the record and completes with no return data, a remote activation or admission
 failure confirmed afterward doesn't change the already-completed call. This failure is
 observed via drop metrics and structured message-flow records, and doesn't build an error
-reply or replay to a different owner.
+reply. The resubmission boundary is defined by
+[Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 
 After request admission, exactly one of a typed reply, typed Framework error, timeout,
 cancellation, shutdown, or protocol error becomes the terminal result. A generation
 conflict is a Spot/Actor stale result; target busy and insufficient capacity are admission
-errors. Framework doesn't automatically resubmit to a different logical owner because
-of this result. Caller cancellation is a waiter result, and a transport completion arriving
+errors. The resubmission boundary after this result is defined by
+[Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification). Caller cancellation is a waiter result, and a transport completion arriving
 after cancellation cleans up correlation but doesn't create a second terminal result.
 
 ## 21. Dispatch Failure Action Owner

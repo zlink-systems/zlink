@@ -94,7 +94,8 @@ generation이 바뀌면 새 intent로 다시 확인할 수 있다. Public monito
 `not_required`로 표시한다. 연결이 필요한데 ready connection이 없는 `not_connected`와
 구분하며, `not_required`는 probe·deadline과 liveness·health failure 집계에서 제외한다.
 
-Framework는 application message가 없어도 5초마다 다음 순서로 연결을 확인한다.
+Framework는 admitted된 양쪽 peer에서 application message가 없어도 5초마다 다음 순서로 연결을 확인한다.
+연결을 시작한 쪽과 관계없이 각 peer는 admission 직후 상대에게 probe를 보내고 받은 probe에 ACK를 반환한다.
 
 RouteMesh는 ROUTER-ROUTER Application·[Completion connection](../00-foundation/02-glossary.ko.md#completion-connection)을 사용하고 ClientServer는
 DEALER-ROUTER single Application connection을 사용한다. Liveness probe와 ACK는 두 topology 모두
@@ -281,11 +282,11 @@ Request와 reply를 같은 호출로 연결하는 식별 정보를
 | Connection을 잃은 시점 | Request 처리 |
 |---|---|
 | Transport가 request를 수락하기 전 | Route-not-connected로 끝낸다. |
-| Transport 수락 여부를 알 수 없음 | 다른 peer에 자동 재제출하지 않는다. |
+| Transport 수락 여부를 알 수 없음 | [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)의 재제출 경계를 따른다. |
 | 이미 수락됨 | Reply, request timeout, cancellation, `Shutdown` 또는 route failure 중 하나로 한 번만 끝낸다. |
 
-Framework는 connection loss 뒤 request와 one-way message를 다른 peer나 owner에게 자동
-제출하지 않는다.
+Connection loss 뒤 request와 one-way message의 재제출 경계는
+[Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
 
 같은 endpoint의 transport reconnect는 [Core socket `zlink_connect`](../../../../../../../core/doc/spec/core/socket/README.ko.md#zlink_connect)가
 소유한다. Framework는 기존 configuration 또는 현재 discovery descriptor intent를 유지하고
@@ -411,7 +412,7 @@ handler에 도달하는 값, connection·runtime snapshot이 보여주는 상태
   `NotRequired`로 닫고 같은 configuration generation에 재시도하지 않으며 probe·deadline을
   만들지 않는다.
 - Reply, timeout, cancellation, disconnect와 shutdown이 경쟁해도 request 결과를 한 번만
-  완료한다. 다른 peer나 owner에 자동 재제출하지 않는다.
+  완료한다. 재제출은 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)를 확인한다.
 - `Relocate`·`Shutdown` 뒤 liveness timer, subscription과 callback이 남지 않는다.
 - C++·.NET·JVM·Node.js가 같은 고정 시간과 관찰 결과를 제공한다.
 

@@ -161,7 +161,7 @@ the source uses a conservative 32 KiB chunk size that is safe in any deployment.
 
 The source doesn't put the existing queue prefix and timers fixed by capture on the
 relay lane again. Relay must not recreate this saved-work reference, and the target must
-not deduplicate saved-work records against relay records. Before relay-ready, an explicit target failure reply restores the source from the memory payload in original queue order. After relay-ready, source resumption follows authority settlement in [§4.4](#44-ordered-relay-and-one-way-cutover).
+not deduplicate saved-work records against relay records. Before relay-ready, an explicit target failure reply restores the source from the memory payload in original queue order without re-reading the Location Store. After relay-ready, source resumption follows authority settlement in [§4.4](#44-ordered-relay-and-one-way-cutover).
 
 The source doesn't wait for the queue to become empty, because new messages can keep
 arriving at the source mailbox or previous route. After sending the Restore request, it
@@ -297,12 +297,7 @@ match is called a [CAS](../00-foundation/02-glossary.en.md#compare-and-set). The
 required owner and membership value in one CAS. If any single condition differs, no
 value changes and the target queue doesn't open either.
 
-If the Store returns a transient error or the response is indeterminate, the target
-retries with the same expected source fence and `RelocationId`. The retry deadline
-doesn't create a separate timeout; it uses the absolute deadline the Restore operation
-already carries as-is. On retry, the deadline isn't restarted or extended. When a
-response isn't received, the target first re-reads the Store to check whether that
-target has already been recorded as the owner.
+Target CAS resubmission, its deadline, and indeterminate-response settlement follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received).
 
 Location runtime [§10](01-location-runtime.en.md#10-when-a-store-response-isnt-received) owns source `Preserve` after Restore expiry and the same-target exception after source lease expiry. Confirmed target commit opens its queue; a winning source fence removes staging. Retention and terminals while authority is indeterminate follow [§4.4](#44-ordered-relay-and-one-way-cutover) and §10. No Session route update precedes confirmed target commit.
 
@@ -382,7 +377,7 @@ sequenceDiagram
     A->>B: [send] cutover · includes record count and checksum
     B->>B: [local] verify the complete pre-boundary relay batch
     loop until target is confirmed as owner or Restore validity expires
-        B->>L: [request] CAS or confirm result with the same source fence and RelocationId
+        B->>L: [request] CAS or confirm authority under Location runtime §10
         L-->>B: [reply] success · retryable failure · current owner
     end
     opt target authority still unconfirmed at Restore expiry
@@ -594,7 +589,7 @@ defined by [Complete Host Relocation Flow](05-host-relocation-flow.en.md).
 | Target CAS fails on condition mismatch after the ready-to-receive-relay reply | Source owner fenced by `Preserve`, or another confirmed authority | If the source fence won, target staging is removed and the source resumes retained work (§4.4). |
 | Target receives no CAS response | Owner confirmed by Store read, or UNKNOWN | Source fencing and the exceptional post-Restore target CAS follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). The queue stays closed until target commit is confirmed. |
 | Authority is indeterminate at Restore expiry | Settlement pending | Source fencing and target progress after source lease expiry follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). Dispatch remains closed until target commit is confirmed. |
-| Connection breaks and cutover is lost, source process still running | Follows the target's outcome | Source resends the whole pre-boundary batch and cutover over a new connection. Target replaces the partially received span wholly with the retransmitted batch and proceeds with CAS when the verification values match. |
+| Connection breaks and cutover is lost, source process still running | Follows the cutover retransmission outcome in [§4.4](#44-ordered-relay-and-one-way-cutover) | Whole-batch resend and replacement follow [§4.4](#44-ordered-relay-and-one-way-cutover). |
 | Neither cutover nor retransmission arrives by the cutover-wait Warning threshold | Source authority retained, dispatch sealed | Target records a Warning. On successful source `Preserve`, it removes staging and the source processes retained work (§4.4). |
 | Target process terminates after CAS succeeds | Target authority is kept, but the object is unavailable | Doesn't roll back to source or automatically resume on another target. |
 | No route update within `SessionRelocationSealTimeout` | Target owner, Session connection closed | Session owner closes the physical connection and cleans binding, held messages, and seal. A late update is ignored with only a Warning. |
