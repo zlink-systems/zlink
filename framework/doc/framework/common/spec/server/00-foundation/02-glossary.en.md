@@ -733,10 +733,8 @@ purpose is to avoid losing a message even when the sender still has the old loca
 cached — it isn't a redirect that tells the sender the new address and asks it to
 resend.
 
-An individual message that arrives late at the previous owner after a relocation
-commit is the target of Message Follow. Message Follow isn't kept indefinitely — it's
-valid only within the [Message Follow duration](#message-follow-duration); a message
-arriving after that period ends is treated as a normal stale-route failure.
+The Message Follow target, duration, and expiry result are defined by
+[Location runtime §7.3](../05-location-relocation/01-location-runtime.en.md#73-delivering-a-message-arriving-at-a-previous-owner-to-the-new-owner).
 
 This is different from [relocation ingress hold](#relocation-ingress-hold), which the
 source holds after sealing during relocation. The hold is temporary storage the
@@ -748,21 +746,19 @@ already changed.
 |---|---|
 | Shape | Framework-managed message delivery after an owner transition |
 | .NET notation | No public type |
-| Public composition | Keeps the new owner's `ActorRef` or Spot location and the Message Follow expiration time. |
-| Creation/management | Created by the previous owner's runtime after a relocation commit finishes. |
-| Lifetime | Removed once the Message Follow duration ends; a message arriving at the same location afterward is treated as a stale-route failure. |
+| Public composition, creation, and lifetime | Follow the Message Follow route rule in [Location runtime §7.3](../05-location-relocation/01-location-runtime.en.md#73-delivering-a-message-arriving-at-a-previous-owner-to-the-new-owner). |
 
 <a id="message-follow-duration"></a>
 ### Message Follow Duration
 
-The period for which [Message Follow](#message-follow) is valid. Starts at the
-relocation commit and, once it passes, the previous owner no longer forwards.
+The Message Follow duration and expiration are defined by
+[Location runtime §7.3](../05-location-relocation/01-location-runtime.en.md#73-delivering-a-message-arriving-at-a-previous-owner-to-the-new-owner).
 
 | Item | Content |
 |---|---|
 | Shape | A framework-managed duration |
 | .NET notation | `ZLinkLocationOptions.MessageFollowDuration` |
-| Lifetime | Starts at relocation commit and ends at expiration. The Message Follow entry is removed after expiration. |
+| Lifetime | Follows the duration rule in [Location runtime §7.3](../05-location-relocation/01-location-runtime.en.md#73-delivering-a-message-arriving-at-a-previous-owner-to-the-new-owner). |
 
 <a id="relocation-ingress-hold"></a>
 ### Relocation Ingress Hold
@@ -1038,9 +1034,8 @@ The boundary where the sending runtime's queue for an operation family accepts w
 <a id="submitted"></a>
 ### One-Way Normal Completion
 
-Normal completion of a one-way call means that source-local outbound admission
-accepted the operation. It doesn't return a public status or result value, and
-doesn't confirm target handler execution or remote queue acceptance.
+The one-way normal completion boundary and return result are defined by
+[Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary).
 
 <a id="completion-dispatcher"></a>
 ### Completion Dispatcher
@@ -1674,8 +1669,7 @@ kind.
 | Lifetime | Kept for the Server's lifecycle. `0` only excludes it from new selection — it doesn't remove the role, connection, or already-submitted work. |
 
 Node placement, RouteMesh Channel Server, and ClientServer Server use the same range
-and default. Weighted selection computes the candidate weight sum using at least a
-64-bit integer. Logical Multicast includes an eligible remote member exactly once,
+and default. ChannelName weighted selection follows [Channel Messaging §3](../02-channel-transport/02-channel-messaging.en.md#3-how-to-select-a-target--channelname-select-one-selection-order-weighted-round-robin). Logical Multicast includes an eligible remote member exactly once,
 regardless of the magnitude of its positive weight.
 
 <a id="full-mesh"></a>
@@ -1993,7 +1987,7 @@ handler registration are all finished, so it can receive new messages.
 |---|---|
 | Shape | Selectable runtime target state |
 | .NET notation | `ZLinkMeshPeerSnapshot.Ready`, `ZLinkClientServerServerSnapshot.Ready`, and per-feature state enums |
-| Public composition | Transport is ready, identity/lifecycle checks passed, and required handler/role conditions are met. A select-one candidate must also satisfy positive weight and non-draining. |
+| Public composition | Transport is ready, identity/lifecycle checks passed, and required handler/role conditions are met. Select-one candidate conditions follow [Channel Messaging §3](../02-channel-transport/02-channel-messaging.en.md#3-how-to-select-a-target--channelname-select-one-selection-order-weighted-round-robin). |
 | Lifetime | Immediately excluded from new target selection once any condition closes. |
 
 <a id="max-message-size"></a>

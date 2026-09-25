@@ -203,9 +203,9 @@ sequenceDiagram
     Transport->>Target: message 전달
 ```
 
-위 다이어그램은 one-way send의 target 선택과 비동기 제출 완료를 보여준다. 정상 완료는 선택한
-송신 경로의 source-local queue가 message를 수락했다는 뜻이다. Framework는 수락 상태, 선택한
-RID 또는 server identity를 application 결과로 반환하지 않는다.
+위 다이어그램은 one-way send의 target 선택과 비동기 제출 경로를 보여준다. 완료 경계는
+[Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)가 정의한다.
+Framework는 선택한 RID 또는 server identity를 application 결과로 반환하지 않는다.
 
 ### 후보 목록과 선택 순서는 변경 시점에 미리 준비한다
 
@@ -285,7 +285,8 @@ startup이 실패한다.
 ## 5. 선택 뒤 자동 재전송하지 않는 이유
 
 Framework가 target을 선택하고 request를 submit한 뒤 연결 종료나 timeout이 발생할 수 있다.
-이 경우 다른 Server member에 같은 request를 자동으로 다시 보내지 않는다.
+이 경우 request의 재제출 경계는
+[Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
 
 첫 target이 request를 이미 실행했지만 reply만 전달되지 않았을 수 있기 때문이다. 다른
 target에 다시 보내면 같은 업무가 두 번 실행될 수 있다.

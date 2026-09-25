@@ -321,17 +321,8 @@ least that value; the snapshot never controls payload admission.
 
 #### Suppressing Duplicate Notifications
 
-A runtime that completed a relay may send `messageFollow` to the source runtime. The source
-runtime invalidates its current cache entry only when it points at the same route fence
-as the source route. It does not erase a newer route. Even if the notification is lost, the
-cache lifetime must eventually expire the stale route.
-
-The sender's dedicated suppression registry uses the complete source and target route fences
-as its key. Its state moves through `idle → inFlight → sentUntilExpiry`, and only a send
-failure returns it from `inFlight` to `idle`. Route-cache expiry or replacement also removes
-the marker. The registry does not own the original operation's payload, reply route, or
-terminal completion. [45. Target Selection and Route Cache](../03-spot-actor/08-routing.en.md#2-how-to-send-to-a-spotactor-by-global-id)
-shows the state flow.
+The `messageFollow` cache invalidation and notification suppression rules are defined by
+[Routing §2.5](../03-spot-actor/08-routing.en.md#25-a-message-arriving-at-a-previous-owner-route).
 
 ### 3.2 Bound Session Replacement Notification
 
@@ -379,24 +370,8 @@ owns physical pipe selection and replacement.
 
 ### The Probe/Ack Cycle
 
-```mermaid
-sequenceDiagram
-    participant A as Node A
-    participant B as Node B
-
-    Note over A,B: Admission succeeds — peer timeout deadline starts
-    A->>B: livenessProbe(id) — every 5s, a new non-zero id if none is outstanding
-    B->>A: livenessAck(id)
-    Note over A: Only the first Ack matching the current outstanding id<br/>restarts the 15s deadline and clears outstanding
-```
-
-- **The timing and judgment rules — the 5-second probe period, the 15-second deadline, one
-  outstanding ID resent as is, only the first ACK for the current ID refreshing the deadline, the
-  immediate not-ready conditions — are owned by
-  [Transport liveness §3 and §10](05-transport-liveness.en.md#3-routemesh-and-clientserver).** This
-  section defines only the command schema and the connection epoch those records ride.
-- The probe, ACK, and timer are handled by the infrastructure reserve and are not delivered to the application queue or a handler.
-- **Both admitted peers probe.** The 5-second probe obligation is bidirectional and begins the moment a connection is admitted, independent of which side dialed. A node that only answers a peer's probe with an ACK but never originates its own probe is non-conforming: the other side would judge it live while it never confirms the reverse direction. The diagram shows one direction for brevity; each admitted peer runs the full probe/ACK cycle toward the other.
+Probe timing and ACK judgment are defined by [Transport liveness §3](05-transport-liveness.en.md#3-routemesh-and-clientserver).
+The probe, ACK, and timer are handled by the infrastructure reserve and are not delivered to the application queue or a handler.
 - **Probe and ACK ride the admitted physical connection's current epoch, and that epoch is stable for the connection's lifetime.** A `livenessProbe` and its `livenessAck` are addressed to the peer identity and connection generation that admission established (`scope: admitted-physical-connection-lifetime`). A redundant re-dial or a repeated `hello`/`admit` for a peer that is already admitted on a live physical connection is idempotent: it neither supersedes the admitted connection nor rotates its connection generation. Emitting a probe or ACK stamped with a superseded or not-yet-delivered generation — one the peer's live pipe does not recognize — is a defect; the peer silently drops it as "an ACK from a different connection," and neither side's deadline is refreshed. A new connection generation is minted only when Core's selected route changes to a new route generation ([Transport liveness §5](05-transport-liveness.en.md#5-ready-and-failure-determination)), not on every inbound admission record for an already-admitted, unchanged descriptor.
 
 ### Classic Fanout Beacon

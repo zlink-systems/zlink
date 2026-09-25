@@ -848,9 +848,8 @@ RID, source host 실행 세대와 128-bit `OperationId`를 요청 식별자로 �
 
 Location Store는 `Ready` 변경과 최종 결과 기록을 한 번에 처리한다. 충돌이 발생하면 저장된
 결과를 다시 읽는다. **취소, timeout 또는 response loss만으로 생성이 실패했다고 판단하지
-않는다.** 현재 record를 다시 읽어 결과를 확인하며 원래 요청을 다른 owner에 자동 제출하지
-않는다. Remote 생성은 command 20의 `Existing | Created | Rejected`, 정확한 ref와 선택적인
-application reply를 받아야 완료된다.
+않는다.** 현재 record와 같은 `OperationId`의 저장 결과를 다시 읽어 확인하며 원래 Create·GetOrCreate 요청을 다른 owner에게 제출하지 않는다. Remote 생성은 command 20의 `Existing | Created | Rejected`, 정확한 ref와 선택적인
+application reply를 받아야 완료된다. Create·GetOrCreate가 `Rejected` terminal을 받으면 같은 operation을 다른 owner에게 재제출하지 않는다.
 
 ### 7.1 Message를 받은 node에서 Instance Spot을 처음 만든다
 
@@ -943,18 +942,23 @@ Framework는 `Ready` 위치를 잠시 캐시에 둘 수 있다. Cache에는 ID, 
 `AuthorityOwnerGeneration`, `StoreVersion`, owner lease, node 실행 세대와 route를 저장한다.
 `RouteCacheMaxAge` 기본값은 15초이며 owner가 새 작업을 받을 수 있는 마지막 시각을 넘지
 못한다. `Missing`, `Creating`과 Store 오류는 캐시에 두지 않는다. 더 높은 `StoreVersion`이나
-owner lease 만료를 확인하면 즉시 제거한다.
+owner lease 만료를 확인하면 즉시 제거한다. 실행 중 변경한 `RouteCacheMaxAge`는 새 cache entry부터 적용하며 기존 entry의 수명을 연장하지 않는다.
 
 이동 직후 이전 owner로 들어온 message는 새 owner에게 전달할 수 있다. 이 기능을 Message
 Follow라고 하며, 기간인 `MessageFollowDuration`의 기본값은 30초다. 값이 0이면 각각 cache 또는
 전달을 끈다. 두 기능을 모두 사용하면 cache 보관 시간은 전달 기간보다 최소 5초 짧아야 한다.
-잘못된 설정은 configuration error다.
+잘못된 설정은 configuration error다. Message Follow 기간은 relocation commit에서 시작한다.
+이전 owner는 새 owner의 `ActorRef` 또는 Spot 위치와 만료 시각을 보관하고, 만료 뒤 route를 제거한다.
 
-**이전 owner는 이동이 완료될 때 기록한 source→target 정보만 사용하며 Store를 새로 읽지
-않는다.** 새 owner의 `AuthorityOwnerGeneration`은 이전 값보다 커야 하며 최대 8번까지만 이어서
-전달한다. 이동 하나당 보관할 수 있는 양에는 상한을 두지 않는다. 기존 operation ID,
-`ObjectGeneration`, payload와 reply route를 그대로 유지한다. 순환은 `Unavailable`, generation
-불일치는 `InvalidOperation`이다.
+**이전 owner는 commit된 source→target Message Follow route만 사용하며 Store를 새로 읽거나
+application handler를 실행하지 않는다.** Route는 global object ID, `ObjectGeneration`,
+source·target `AuthorityOwnerGeneration`과 owner fence를 검증한다. Owner generation은 hop마다
+증가해야 하며 최대 8번까지만 이어서 전달한다. Route 하나의 queue에는 message 수와 저장
+크기 상한을 두지 않지만 각 message의 negotiated message bound는 지킨다. 기존 operation ID,
+`ObjectGeneration`, payload와 reply route를 그대로 유지한다. Route가 없거나 만료됐거나 순환하면
+`Unavailable`, generation 불일치는 `InvalidOperation`이다. Message Follow route는 이전 `ObjectGeneration`의 packet과 reply를 거부한다. 이 generation 검사는 일반 message의
+target 제한이 아니라 같은 incarnation의 이동인지 확인한다. 실행 중 변경한
+`MessageFollowDuration`은 새 relocation부터 적용한다.
 
 ### 7.4 운영 도구에서 현재 위치를 조회한다
 
@@ -1290,6 +1294,8 @@ CAS에 적용한다. Cutover와 Session route update는 one-way이므로 target�
 completion reply가 없으며, source는 Location Store를 대신 갱신하지 않는다. Provider 함수의
 정확한 반환값과 입력 제한은 [Location Store](02-location-store-redis.ko.md)와
 [Relocation Store](03-relocation-store-redis.ko.md)가 정의한다.
+
+일시적 오류나 불확정 응답의 target CAS는 같은 expected source fence와 `RelocationId`로 다시 제출한다. 별도 timeout을 만들거나 Restore absolute deadline을 다시 시작·연장하지 않는다.
 
 Restore 유효시간은 target의 일반적인 새 CAS 제출을 끝내고 source가 §6.1의 `Preserve` fence로 판정하기 시작한다. Source lease 만료 뒤의 같은 target 예외는 이 절이 정한다. Source는 target `NewOwner` CAS가 기대하는 `StoreVersion`을 조건으로
 `Preserve`를 실행한다. Source `Preserve` 성공이 확인되면 target의 늦은 CAS는 commit할 수

@@ -434,9 +434,8 @@ completion 의미를 가진다. Instance intent가 없는 direct call은 existin
 - **Resolve 뒤 같은 owner에서 close와 recreate가 발생했다면 target queue가 수락하는 시점의
   current Ready Spot이 message를 처리한다.**
 - **찾은 owner가 더 이상 해당 SpotId를 소유하지 않으면 현재 operation은 stale route
-  오류로 끝낸다.** Framework는 fresh owner를 찾아 같은 operation을 자동으로 다시 보내지 않는다.
-- **Timeout, cancellation, disconnect와 실행 여부가 불명확한 failure 뒤 다른 owner에게 자동
-  재제출하지 않는다.**
+  오류로 끝낸다.** 재제출 경계는 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
+- **Timeout·cancellation·disconnect 뒤 재제출은 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)의 경계를 따른다.**
 
 One-way call은 local outbound admission까지만 기다린다. Cold activation이 필요해도 application
 handler 실행은 기다리지 않는다. 여기서 outbound admission은 activation envelope가 선택한
@@ -447,30 +446,10 @@ resolve, cold activation, 최초 message dispatch와 reply를 하나의 deadline
 
 ## 6. Route cache 수치와 Message Follow
 
-`RouteCacheMaxAge`의 기본값은 15초이고 `MessageFollowDuration`의 기본값은 30초다. 둘 다 0이면
-각각 cache와, Actor/Spot이 다른 MeshNode로 relocation된 뒤에도 이전 owner에 도착한 message를 새
-owner에게 대신 전달하는 [Message Follow](../00-foundation/02-glossary.ko.md#message-follow)를 끈다. 두
-값이 양수이면 cache max age가 Message Follow duration보다
-최소 5초 작아야 한다. Runtime 변경은 새 cache entry와 새 relocation에만 적용한다. Positive
-Ready cache는 current owner lease의 local admission deadline과 이 `RouteCacheMaxAge` 안에서만
-사용한다.
-
-Relocation commit 뒤 source는 commit된 source→target Message Follow route만 사용해 이전
-physical route로 도착한 message를 current owner에 전달한다. Message Follow 중에는 Store를
-읽거나 application handler를 실행하지 않는다. Message Follow route는 Spot ID,
-[ObjectGeneration](../00-foundation/02-glossary.ko.md#objectgeneration), source와 target
-AuthorityOwnerGeneration과 owner fence가 모두 일치하는지 검증한다. Target owner generation은 hop마다
-증가하며 최대 8 hops다.
-
-Message Follow route 하나의 대기열에는 message 수와 저장 크기 어느 쪽에도 상한을 두지 않으며
-negotiated message bound는 지킨다. Message Follow는 original operation ID, generation,
-payload와 reply route를 보존한다. Route 없음·만료와 loop는 `Unavailable`, generation
-mismatch는 `InvalidOperation`으로 끝난다. Failed application operation을 Store에서 찾은
-owner에게 다시 제출하지 않으며 다음 call만 fresh resolve를 수행한다.
-
-이 generation 검사는 relocation route가 같은 incarnation에 속하는지 확인한다. Spot direct
-send/request의 target은 `SpotId`이며 `ObjectGeneration` mismatch로 current Ready Spot의 handler
-실행을 거부하지 않는다.
+Route cache와 Message Follow의 기본값·기간·검증·전달 결과는
+[Location runtime §7.3](../05-location-relocation/01-location-runtime.ko.md#73-이전-owner로-도착한-message를-새-owner에게-전달한다)가 정의한다.
+실패한 application operation의 재제출 경계는
+[Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
 
 ### 6.1 SpotWide와 PerActor의 route 설치
 
@@ -515,7 +494,7 @@ host shutdown의 seal([Host relocation §14](../05-location-relocation/05-host-r
 먼저 확정되면 등록한 context 요청은 실행하지 않고 그 결과를 diagnostics에 남긴다. Pending
 요청은 실행되거나 seal에 의해 대체된 결과가 기록될 때까지 버리지 않는다.
 
-Manager `Close`는 결과를 caller에게 반환한다. Context `Close`는 결과가 없으므로 `false`,
+Manager `Close`는 결과를 caller에게 반환한다. Manager `Close`가 moving 결과로 끝나도 Framework는 같은 `Close`를 새 owner에게 자동 재제출하지 않는다. Context `Close`는 결과가 없으므로 `false`,
 실패, 합쳐진 요청과 실행되지 않은 요청을 각각 diagnostics에 기록한다.
 `OnClosing(ExplicitClose)`은 cleanup 시작을 뜻하며 authority 해제 완료를 뜻하지 않는다.
 
@@ -588,8 +567,8 @@ Source seal, durable capture, target reservation·factory·restore, authority co
 - 이 queue·timer 규칙은 `SpotWide`와 Instance Spot에 적용한다. `PerActor`에서는 Actor queue와
   Actor timer만 Actor와 함께 이전하고 Spot-level application timer는 이전하지 않는다.
 
-Original send·request를 maintenance target에 새 operation으로 자동 재제출하지 않지만 seal 뒤
-source ingress hold는 commit된 Message Follow route로 relay한다.
+Original send·request의 재제출 경계는 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
+Seal 뒤 source ingress hold는 commit된 Message Follow route로 relay한다.
 
 ## 9. 실패와 관측
 

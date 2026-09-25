@@ -208,7 +208,7 @@ eligibility or source-local admission before any binding operation has started.
 
 Starting the binding operation fixes the selected target. Core owns HWM retry and
 completion; the Framework does not reselect for capacity or resubmit the binding operation.
-There is no automatic resubmission after completion.
+There is no automatic resubmission after completion. A later detach or timeout is terminal for that operation. A new select-one operation may choose members eligible when it starts.
 
 ## 6. Logical Multicast and Classic Fanout
 
@@ -320,9 +320,8 @@ flowchart LR
 
 The global object request timeout covers the current Ready authority resolve, outbound
 admission, handler, and reply as a whole. A source only passes the remaining time, after
-subtracting what earlier stages used, to the next stage. Since there is no receipt proving a
-remote target did not accept the request, it is not automatically resubmitted to a different
-owner after a timeout or connection failure.
+subtracting what earlier stages used, to the next stage. The resubmission boundary for a request after timeout or connection failure is defined by
+[§5](#5-backpressure-and-error-classification).
 
 How a request sent within the same handler turn releases and reacquires the gate while
 waiting is defined by
@@ -331,8 +330,8 @@ waiting is defined by
 When reply, timeout, cancellation, and Spot shutdown race, only the terminal result decided
 first is used. If the Spot has already terminated, or a new generation was created under the
 same Spot ID, a late reply from the previous activation is not delivered to the new Spot.
-There is no automatic resend to a different RouteMesh member, ClientServer server, or send
-path after a target connection closes or times out.
+The resubmission boundary after target connection closure or timeout is defined by
+[§5](#5-backpressure-and-error-classification).
 
 ## 10. Operation Identity and Where Completion Happens (Implementation)
 
@@ -445,32 +444,15 @@ later callbacks from running.
 
 ## 12. Once Accepted, It Is Never Resent
 
-Once transport has accepted a message, whether the target has executed it is unknowable.
-Resending to a different target in this state can cause double execution.
-
-**The runtime never automatically resends after acceptance.** This holds even if the
-connection drops
-([Transport Liveness 「5. Ready And Failure Determination」](../02-channel-transport/05-transport-liveness.en.md)).
-The application can start a new call, and at that point the risk of duplicate execution is
-judged by the application.
-
-This rule requires distinguishing "failure after sending" from "failure before sending."
-
-| Failure timing | May it be resent |
-|---|---|
-| Before transport accepts | Yes. It's certain the target never received it |
-| After transport accepts | No. Whether it executed is unknowable |
+The resubmission boundary after transport acceptance is defined by
+[§5](#5-backpressure-and-error-classification).
+The application judges the possibility of duplicate execution when starting a new call.
 
 ## 13. The Completion Point of a Call That Does Not Wait for a Reply
 
-A call that does not wait for a reply completes normally at the moment this process's send
-path accepts the message. Whether the remote queue received it or the handler executed it
-can't be known from this result
-([Framework API 「12. Spot, Actor, And STREAM Owner」](../00-foundation/06-framework-api.en.md#21-dispatch-failure-action-owner)).
-
-"Local acceptance" and "transport acceptance" are not separate events. In this product the
-send path is the socket's send queue, so both terms refer to the same completion boundary.
-Documentation and code comments use the single term send acceptance.
+The completion boundary for a call that does not await a reply is defined by
+[§4](#4-one-way-submit--the-admission-boundary).
+In this product local acceptance and transport acceptance are the same socket send-queue event. Documentation and code comments call this event `send acceptance`.
 
 ## 14. Failures Are Not Classified by String (Implementation)
 
@@ -587,9 +569,7 @@ slot is registered — are owned, with their rules, by §10/§11 and are not rep
 
 **Submit and admission**
 
-- A one-way call completes with no return data once the admission boundary (§4 table)
-  accepts it, and completes with one value from the §5 error classification table on
-  failure.
+- Verify one-way completion and failure against [§4](#4-one-way-submit--the-admission-boundary) and [§5](#5-backpressure-and-error-classification).
 - A send whose local capacity is unavailable waits up to the family send timeout; if
   capacity becomes available first it's submitted exactly once and completes normally; if
   the timeout is decided first it completes with `DeadlineExceeded`.
@@ -597,8 +577,7 @@ slot is registered — are owned, with their rules, by §10/§11 and are not rep
   place to wait; only a call that runs out of time ends with `DeadlineExceeded`.
 - Logical Multicast completes normally with no return data even with zero targets, and an
   individual target's failure after starting does not change the public return value.
-- Classic fanout publish completes normally once the publisher socket queue accepts it, even
-  with no subscribers.
+- Verify completion of Classic fanout with no subscribers against the publish rule in [§6](#6-logical-multicast-and-classic-fanout).
 
 **Deadline and reply token**
 
@@ -617,8 +596,7 @@ slot is registered — are owned, with their rules, by §10/§11 and are not rep
   shutdown is decided first, and the remaining results are not delivered to the caller.
 - A reply from a previous activation that arrives after the Spot has terminated, or after a
   new generation was created, is not delivered to the new Spot.
-- The same request is not automatically resubmitted to a different owner after a timeout or
-  connection failure.
+- Verify resubmission after timeout or connection failure against the boundary in [§5](#5-backpressure-and-error-classification).
 - In ClientServer DEALER-ROUTER, if earlier one-way DATA or `PAUSED`/HWM delays
   a reply until the configured request timeout is decided first, the request
   completes once with timeout and the late reply doesn't complete the caller
@@ -645,8 +623,7 @@ Binding cancellation observations reference
   confirmation.
 - However far the number of requests in progress grows, no request ends for lack of a
   completion slot; each ends with a reply, an error, a timeout, a cancellation, or shutdown.
-- Even if the connection drops after transport has accepted the message, the runtime does
-  not resend to a different target.
+- Verify resubmission after acceptance and disconnection against the boundary in [§5](#5-backpressure-and-error-classification).
 - A result completed by cancellation, timeout, or shutdown is distinguished by a dedicated
   type or value, not by the error message string.
 

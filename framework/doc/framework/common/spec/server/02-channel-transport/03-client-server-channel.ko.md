@@ -268,36 +268,22 @@ Server weight는 선택 가능한 여러 Server 사이에서 새로운 send와 r
 이 [weight](../00-foundation/02-glossary.ko.md#weight)는 처리 가능한 동시 request 수나 Server의
 물리적 성능을 뜻하지 않는다. 예를 들어 다른 조건이 같은 Server A의 weight가
 `100`이고 Server B가 `50`이면, 반복되는 target 선택에서 A의 배정 비중을 B의 두
-배로 반영한다. 개별 request마다 A가 반드시 선택된다는 뜻은 아니다. 같은 weight를
-가진 Server끼리는 순환하며 선택한다.
+배로 반영한다. 개별 request마다 A가 반드시 선택된다는 뜻은 아니다. 선택 순서는 [Channel messaging §3](02-channel-messaging.ko.md#3-target을-선택하는-방법--channelname-select-one-선택-순서가중-라운드로빈)이 정한다.
 
-- **Weight는 `Ready`이고 drain 중이 아닌 Server 사이에서만 비교한다.** 연결이 준비되지
-  않았거나 drain 중인 Server는 weight가 높아도 선택하지 않기 때문이다.
-- **Framework는 이 조건을 먼저 적용한 뒤 남은 positive weight 합계를 최소 64-bit
-  정수로 계산한다.** 이 합계가 넘치지 않도록 계산한 상대 비율로 Server를 선택하기
-  위해서다.
+ChannelName의 ready·drain eligibility와 weighted select-one 절차는 [Channel messaging §3](02-channel-messaging.ko.md#3-target을-선택하는-방법--channelname-select-one-선택-순서가중-라운드로빈)이 정한다.
 
 Drain은 Server를 안전하게 종료하거나 service 대상에서 제외하기 위해 새 send와
 request의 선택을 먼저 막고, 이미 Server가 받은 작업은 정해진 시간까지 마무리하는
-과정이다. Weight `0`과 drain은 모두 새로운 target 선택에서 제외되지만 의미는
-다르다. Weight `0`은 Server를 계속 실행한 채 선택 비중만 0으로 바꾼 설정이고,
+과정이다. Weight `0`과 drain의 차이는 다음과 같다. Weight `0`은 Server를 계속 실행한 채 선택 비중만 0으로 바꾼 설정이고,
 drain은 기존 작업을 정리한 뒤 descriptor와 listener를 닫는 종료 절차다.
 
-| Server 상태 | 새로운 send와 request의 target 여부 |
-|---|---|
-| Ready이고 weight가 0보다 크다. | 다른 선택 가능한 Server와의 상대 weight 비율을 반영하여 선택 후보에 포함한다. 같은 weight의 Server끼리는 순환하며 선택한다. |
-| Weight가 `0`이다. | 새로운 target 선택에서 제외한다. Server는 계속 실행할 수 있고 weight를 다시 높이면 선택 후보로 돌아올 수 있다. Server role이나 기존 연결을 Client role로 바꾸지는 않는다. |
-| 안전한 종료를 위해 drain 중이다. | 새로운 target 선택에서 제외한다. Server는 새 업무 message의 수락을 중단하고, 이미 수락한 handler와 request reply만 deadline까지 처리한 뒤 descriptor와 listener를 정리한다. |
+Weight `0`은 Server role이나 기존 연결을 Client role로 바꾸지 않는다.
 
 ### 4.1 같은 process의 Server도 선택 후보이다
 
 동일한 `ChannelName`의 `Client`와 `Server`를 같은 process에 등록했다면 local
-Server도 remote Server와 같은 후보 집합에 포함한다.
-
-- **Local Server도 listener bind와 service admission을 마쳐 `Ready`이고, weight가 0보다
-  크며, draining 상태가 아닐 때만 선택할 수 있다.** Framework는 local Server라는 이유로
-  우선 선택하거나 remote Server를 후보에서 제외하지 않는다. 후보가 여러 개이면
-  local·remote 구분 없이 같은 weight 비율과 순환 규칙을 적용하기 위해서다.
+Server도 listener bind와 service admission을 마친 뒤 remote Server와 같은 후보 집합에 들어간다.
+선택 자격과 순서는 [Channel messaging §3](02-channel-messaging.ko.md#3-target을-선택하는-방법--channelname-select-one-선택-순서가중-라운드로빈)이 정한다.
 
 ```mermaid
 flowchart LR
@@ -483,9 +469,8 @@ Server descriptor 조회와 owner lease 상태, monitoring이 제공하는 conne
   서로 바꾸어 사용하지 않는다.
 - Server weight는 `0`, 기본값 `100`과 상한 `10000`을 허용하고 `-1`과 `10001`은 startup
   설정과 runtime 변경에서 거부한다.
-- 같은 ChannelName의 여러 Server를 weight, weight 0과 drain state에 따라 선택한다.
-- Local Server도 remote Server와 같은 readiness, weight와 drain 규칙으로 선택하며 선택된
-  local Server의 handler도 실제 transport를 거쳐 실행한다.
+- ChannelName Server 선택은 [Channel messaging §3](02-channel-messaging.ko.md#3-target을-선택하는-방법--channelname-select-one-선택-순서가중-라운드로빈)을 검증한다.
+- 선택된 local Server의 handler도 실제 transport를 거쳐 실행한다.
 
 **재시작과 장애**
 

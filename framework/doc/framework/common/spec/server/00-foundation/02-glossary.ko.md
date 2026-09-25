@@ -687,10 +687,8 @@ message를 새 owner에게 대신 전달하는 동작이다. 보내는 쪽이 �
 있어도 message를 잃지 않게 하는 것이 목적이며, 새 주소를 알려 주고 재전송을
 요구하는 redirect가 아니다.
 
-Relocation commit 뒤 이전 owner에 늦게 도착한 개별 message가 Message Follow 대상이다.
-Message Follow는 무기한 유지하지 않고 [Message Follow duration](#message-follow-duration)
-안에서만 유효하며, 이 기간이 끝난 뒤 도착한 message는 일반 stale route 실패로
-처리한다.
+Message Follow의 대상·기간과 만료 결과는
+[Location runtime §7.3](../05-location-relocation/01-location-runtime.ko.md#73-이전-owner로-도착한-message를-새-owner에게-전달한다)가 정의한다.
 
 Relocation 중 source가 seal한 뒤 보관하는
 [relocation ingress hold](#relocation-ingress-hold)와는 다르다. Hold는 commit 전까지
@@ -701,21 +699,19 @@ source가 보관했다가 target queue로 넘기는 임시 저장이고, Message
 |---|---|
 | 형태 | Framework가 관리하는 owner 이전 뒤 message 전달 |
 | .NET 표기 | Public type 없음 |
-| 공개 구성 | 새 owner의 `ActorRef` 또는 Spot 위치와 Message Follow 만료 시각을 유지한다. |
-| 생성·관리 | Relocation commit이 끝난 뒤 이전 owner runtime이 만든다. |
-| 수명 | Message Follow duration이 끝나면 제거하고, 이후 같은 위치로 온 message는 stale route 실패로 처리한다. |
+| 공개 구성·생성·수명 | [Location runtime §7.3](../05-location-relocation/01-location-runtime.ko.md#73-이전-owner로-도착한-message를-새-owner에게-전달한다)의 Message Follow route 규칙을 따른다. |
 
 <a id="message-follow-duration"></a>
 ### Message Follow duration
 
-[Message Follow](#message-follow)가 유효한 기간이다. Relocation commit
-시점부터 시작하며 이 기간이 지나면 이전 owner는 더 이상 전달하지 않는다.
+[Message Follow](#message-follow)의 기간과 만료 시점은
+[Location runtime §7.3](../05-location-relocation/01-location-runtime.ko.md#73-이전-owner로-도착한-message를-새-owner에게-전달한다)가 정의한다.
 
 | 항목 | 내용 |
 |---|---|
 | 형태 | Framework가 관리하는 기간 |
 | .NET 표기 | `ZLinkLocationOptions.MessageFollowDuration` |
-| 수명 | Relocation commit에서 시작해 만료로 끝난다. 만료 뒤 Message Follow 항목을 제거한다. |
+| 수명 | [Location runtime §7.3](../05-location-relocation/01-location-runtime.ko.md#73-이전-owner로-도착한-message를-새-owner에게-전달한다)의 기간 규칙을 따른다. |
 
 <a id="relocation-ingress-hold"></a>
 ### Relocation ingress hold
@@ -980,15 +976,15 @@ Gate와 [Actor queue claim](#actor-queue-claim)의 수명은
 | .NET 표기 | public type 없음 |
 | 공개 구성 | 별도 상태값이나 remote 수신 확인값을 반환하지 않는다. |
 | 생성·관리 | 송신 runtime이 관리하며 target 종류별 queue 경계는 [Submit과 completion §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)가 소유한다. |
-| 전달 | Wire receipt가 아니라 source-local 완료 경계다. |
+| 전달 | One-way 완료 경계는 [Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)를 따른다. |
 | 수명 | 한 제출 operation의 수락까지 적용한다. 대기·실패는 해당 family의 완료 계약을 따른다. |
 | Application 권한 | Application은 public call의 terminal을 기다리며 내부 queue를 직접 선택하지 않는다. |
 
 <a id="submitted"></a>
 ### One-way 정상 완료
 
-One-way call의 정상 완료는 source-local outbound admission이 operation을 수락했다는 뜻이다. Public
-status나 result 값을 반환하지 않으며 target handler 실행이나 remote queue 수락을 확인하지 않는다.
+One-way 정상 완료 경계와 반환 결과는
+[Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)가 정의한다.
 
 <a id="completion-dispatcher"></a>
 ### Completion dispatcher
@@ -1587,8 +1583,7 @@ ChannelName의 후보가 하나도 남지 않았을 때의 error kind는
 | 생성·관리 | Application이 Server registration에 지정하고 허용된 runtime API로 변경한다. Descriptor revision이 변경을 순서화한다. |
 | 수명 | Server lifecycle 동안 유지된다. `0`은 새 선택에서 제외할 뿐 role, connection과 이미 제출된 작업을 없애지 않는다. |
 
-Node placement, RouteMesh Channel Server와 ClientServer Server가 같은 범위와 기본값을 사용한다. Weighted
-selection은 후보 weight 합계를 최소 64-bit 정수로 계산한다. Logical Multicast는 positive weight의 크기와
+Node placement, RouteMesh Channel Server와 ClientServer Server가 같은 범위와 기본값을 사용한다. ChannelName weighted selection은 [Channel messaging §3](../02-channel-transport/02-channel-messaging.ko.md#3-target을-선택하는-방법--channelname-select-one-선택-순서가중-라운드로빈)을 따른다. Logical Multicast는 positive weight의 크기와
 관계없이 eligible remote member를 한 번 포함한다.
 
 <a id="full-mesh"></a>
@@ -1896,7 +1891,7 @@ message를 받을 수 있는 target이다.
 |---|---|
 | 형태 | Selectable runtime target state |
 | .NET 표기 | `ZLinkMeshPeerSnapshot.Ready`, `ZLinkClientServerServerSnapshot.Ready`와 기능별 state enum |
-| 공개 구성 | Transport가 준비되었고 identity·lifecycle 검사를 통과했으며 필요한 handler·role 조건을 만족한다. Select-one 후보는 여기에 positive weight와 non-draining 조건도 만족해야 한다. |
+| 공개 구성 | Transport가 준비되었고 identity·lifecycle 검사를 통과했으며 필요한 handler·role 조건을 만족한다. Select-one 후보 조건은 [Channel messaging §3](../02-channel-transport/02-channel-messaging.ko.md#3-target을-선택하는-방법--channelname-select-one-선택-순서가중-라운드로빈)이 정한다. |
 | 수명 | 조건 중 하나가 닫히면 새 target 선택에서 즉시 제외된다. |
 
 <a id="max-message-size"></a>

@@ -708,13 +708,7 @@ the temporary queue, and restores source messages and timers to the original que
 target doesn't create a request terminal result or run a one-way message from the
 temporary queue.
 
-After relay-ready acceptance, neither a cutover-submit result nor an earlier Store
-read naming source reopens source dispatch. A winning source `Preserve` fence resumes
-retained work under [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). The target continues toward CAS only after verifying the complete relay and cutover under
-[common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
-If authority is confirmed as source or a different `RelocationId`, the target removes its
-object and queue, and the Session cleans up under its own seal timeout, and the source's Message Follow also ends after
-its defined duration.
+Source resumption and target cutover verification after relay-ready follow [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover); authority settlement and staging terminals follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received).
 
 Once the Location Store records the target as the current processing node, it isn't
 rolled back to the source. If the target runtime is still running, a failed stage can be
@@ -744,16 +738,13 @@ the source temporarily holds new messages during a move is called
 | Entry/`PerActor` Actor timer | Moves with the Actor queue to the Actor owner. Spot-level application timers aren't moved — a schedule that must be kept is managed in the application's external state. |
 | A session connected to an Actor | The physical STREAM connection is kept. The specific seal/route-transition order and timeouts are summarized by [04 §7](04-relocation-flow.en.md#7-session-during-actor-relocation) and owned by [Session and Actor Binding "8"](../04-session/02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation). |
 
-Operation identity and authority generation are also kept when delivering a
-late-arriving message to the target via the previous owner. Independently of Session
-command 44 application, a Message Follow route only delivers packets arriving on the
-previous route to the target Actor within `MessageFollowDuration`. Packets and replies
-of a previous generation are rejected. A newly created Actor under the same ActorId
-must be rebound by the application.
+The Message Follow duration, preserved values, and generation check for a message arriving
+at a previous owner are defined by
+[Location runtime §7.3](01-location-runtime.en.md#73-delivering-a-message-arriving-at-a-previous-owner-to-the-new-owner).
+The application must rebind an Actor newly created under the same ActorId.
 
 An Instance Spot's `Close` and relocation are ordered within the same authority commit.
-If `Closing` comes first, close finishes and it isn't moved. If relocation comes first,
-a late `Close` is a moving result and isn't automatically resubmitted.
+If `Closing` comes first, close finishes and it isn't moved. If relocation comes first, a late `Close` is a moving result. Manager `Close` resubmission follows [Spot address messaging §7](../03-spot-actor/06-spot-address-messaging.en.md#7-close-and-the-generation-boundary).
 
 ## 13. Relocate Completion and Failure
 

@@ -640,11 +640,7 @@ message를 처리한다. Framework는 target에 만든 instance를 외부에 공
 queue를 폐기하며 source의 message와 timer를 원래 queue에 되돌린다. Target은 temporary
 queue의 record로 request의 terminal 결과를 만들거나 one-way message를 실행하지 않는다.
 
-Relay-ready reply accepted 뒤에도 cutover submit 결과나 source를 가리킨 이전 Store read만으로
-source dispatch를 열지 않는다. Source `Preserve` fence가 성공하면 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)에 따라 보관 작업을 source에서 재개한다.
-Target은 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)에 따라
-완전한 relay와 cutover를 확인한 경우에만 CAS를 계속한다. Target authority가 source 또는 다른 `RelocationId`로 확인되면 target object와 queue를
-정리하고 Session은 자체 seal timeout으로 정리한다. Source의 Message Follow도 정해진 기간에 끝난다.
+Relay-ready 뒤의 source 재개와 target cutover 검증은 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)가 정하고, authority 판정과 staging terminal은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다.
 
 Location Store가 target을 현재 처리 node로 기록한 뒤에는 source로 되돌리지 않는다. Target
 runtime이 계속 실행 중이면 실패한 단계를 다시 시도할 수 있다. Restore 만료 뒤 같은 target의 예외와 staging terminal은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. Source `Preserve`와 target CAS는
@@ -672,15 +668,12 @@ message를 임시 보관하는 구간을
 | Entry·`PerActor` Actor timer | Actor queue와 함께 Actor owner로 이전한다. Spot-level application timer는 이전하지 않으며 유지해야 하는 schedule은 application의 외부 state에서 관리한다. |
 | Actor에 연결된 session | Physical STREAM connection은 유지한다. Seal·route 전환의 정확한 순서와 timeout은 [04 §7](04-relocation-flow.ko.md#7-actor-relocation-중-session)이 요약하고 [Session과 Actor binding 「8」](../04-session/02-session-actor-binding.ko.md#8-actor-relocation-중-session의-책임)이 소유한다. |
 
-이전 owner로 늦게 도착한 message를 target에 전달할 때도 operation identity와 authority
-generation을 유지한다. Session command 44 적용과 무관하게 Message Follow route는
-`MessageFollowDuration` 안에서만 이전 route로 도착한 packet을 Target Actor에 전달한다.
-이전 generation의 packet과 reply는 거부한다. 같은 ActorId로 새로 만든 Actor는 application이
-다시 bind해야 한다.
+이전 owner로 늦게 도착한 message의 Message Follow 기간·보존 값·generation 판정은
+[Location runtime §7.3](01-location-runtime.ko.md#73-이전-owner로-도착한-message를-새-owner에게-전달한다)가 정의한다.
+같은 ActorId로 새로 만든 Actor는 application이 다시 bind해야 한다.
 
 Instance Spot의 `Close`와 relocation은 같은 authority commit에서 순서를 정한다. `Closing`이
-먼저면 close를 완료하고 이전하지 않는다. Relocation이 먼저면 늦은 `Close`는 moving 결과이며
-자동 재제출하지 않는다.
+먼저면 close를 완료하고 이전하지 않는다. Relocation이 먼저면 늦은 `Close`는 moving 결과다. Manager `Close`의 재제출 규칙은 [Spot 주소 메시징 §7](../03-spot-actor/06-spot-address-messaging.ko.md#7-close와-generation-경계)이 정한다.
 
 ## 13. Relocate 완료와 실패
 
@@ -720,7 +713,7 @@ Relay-ready 전 명시적 실패 또는 그 뒤 source `Preserve` fence 성공�
 authority와 queue를 재개한다. Target commit이 확인된 unit은 source로 돌아오지 않는다.
 Host 결과는 위 표의 확정된 unit별 authority를 따른다.
 
-Restore 만료에 target commit이 불확정이면 source는 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)의 `Preserve` fence로 판정한다. Store 응답이 불확정이면 source lease가 유효한 동안 준비한 unit과 수락된 보관 작업을 유지한다. 만료 시에는 위 표의 expired-owner 결과를 따른다. Host 결과는 위 표를 따른다. Session route-update 실패는 Session seal timeout 결과를 따르며, 확인된 target authority를 source로 되돌리지 않는다.
+Restore 만료 뒤 Store 판정은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따르고, host 결과는 위 표의 unit별 authority로 정한다. Session route-update 실패의 결과는 [Session과 Actor binding §8](../04-session/02-session-actor-binding.ko.md#8-actor-relocation-중-session의-책임)이 정한다.
 
 직접 전송한 payload의 checksum이 조립 결과와 다르면 target은 부분 조립 payload로 복원하지
 않고 relay-ready reply 전의 명시적 실패로 응답하며, source는 memory에 유지한 payload로

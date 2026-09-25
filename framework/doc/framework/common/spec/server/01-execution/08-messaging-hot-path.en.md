@@ -114,11 +114,9 @@ arrived" to "the first instruction of the caller continuation" — the Framework
 switch, the dispatcher turn of E5. Owner turns run FIFO, so a caller that submits 100 requests back to
 back gets all 100 into the binding in submit order.
 
-**A send completes** not when the E4 call returns but when local admission actually succeeded — the
-[source-local admission](../00-foundation/02-glossary.en.md#source-local-admission) in which the socket's
-send queue accepts the message, not a confirmation of remote receipt
-([Submit And Completion "2"](01-submit-and-completion.en.md#2-completion-meaning-per-terminator-and-per-language-names),
-["13"](01-submit-and-completion.en.md#13-the-completion-point-of-a-call-that-does-not-wait-for-a-reply)).
+The Send completion boundary is defined by
+[Submit and completion §4](01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary).
+E5 delivers that completion even when admission is pending after the E4 call returns.
 With immediate admission, E5 takes out the E3 entry within the same call, decides the result and hands
 it to the dispatcher slot; when admission is pending on HWM, a later completion takes the same E5 path.
 Either way the caller continuation runs in a new dispatcher turn. The continuation of a caller that released its gate with `Yield` runs

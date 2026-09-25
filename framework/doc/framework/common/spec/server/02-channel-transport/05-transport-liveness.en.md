@@ -103,8 +103,9 @@ as `not_required`. It's distinguished from `not_connected`, where a connection i
 there's no ready connection — `not_required` is excluded from probe/deadline and
 liveness/health failure aggregation.
 
-The framework checks the connection every 5 seconds, even with no application message, in
-the following order.
+The framework checks the connection every 5 seconds on both admitted peers, even with no
+application message, in the following order. Regardless of which peer dialed, each peer starts
+probing the other at admission and returns an ACK for a received probe.
 
 RouteMesh uses ROUTER-ROUTER Application and [Completion connections](../00-foundation/02-glossary.en.md#completion-connection), while
 ClientServer uses one DEALER-ROUTER Application connection. In both topologies,
@@ -312,11 +313,11 @@ complete a request's final result exactly once.
 | When the connection was lost | Request handling |
 |---|---|
 | Before transport accepted the request | Ends as route-not-connected. |
-| Whether transport accepted it is unknown | Not automatically resubmitted to a different peer. |
+| Whether transport accepted it is unknown | Follows the resubmission boundary in [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification). |
 | Already accepted | Ends exactly once, via one of a reply, request timeout, cancellation, `Shutdown`, or route failure. |
 
-The framework doesn't automatically resubmit a request or one-way message to a different peer
-or owner after a connection loss.
+The resubmission boundary for a request or one-way message after connection loss is defined by
+[Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 
 [Core socket `zlink_connect`](../../../../../../../core/doc/spec/core/socket/README.en.md#zlink_connect)
 owns transport reconnection to the same endpoint. The framework retains existing configuration
@@ -450,8 +451,8 @@ contract test.
   `NotRequired` before ready, doesn't retry the same configuration generation, and doesn't
   build probe/deadline.
 - Even if reply, timeout, cancellation, disconnect, and shutdown race, the request result
-  completes exactly once. The request is not automatically resubmitted to a different peer or
-  owner.
+  completes exactly once. Verify resubmission against
+  [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 - No liveness timer, subscription, or callback remains after `Relocate`/`Shutdown`.
 - C++/.NET/JVM/Node.js provide the same fixed times and observed results.
 

@@ -700,8 +700,8 @@ monitoring, independent of publish.
 
 #### Non-Normative .NET Example
 
-Publish completion isn't the handler execution result — it only represents the
-local outbound admission boundary, i.e. source-local admission.
+The one-way Publish completion boundary is defined by
+[Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary).
 
 ```csharp
 static async ValueTask PublishAsync<TEvent>(
@@ -796,7 +796,7 @@ together.
 | Family | Saturated queue | Result the caller gets |
 |---|---|---|
 | Send/one-way | An outbound or Spot/Actor queue **on the same runtime** | Follows [Async Execution Policy §1](../01-execution/01-submit-and-completion.en.md) — waits for a slot up to send timeout; if the time runs out, `DeadlineExceeded` |
-| Send/one-way | A Spot/Actor queue **on a different node** | **No result.** The send already completed once the source outbound queue accepted it ([Framework Error Model §4](../00-foundation/07-framework-error-model.en.md)). A later target admission failure doesn't change the already-completed result — it's only left in metric/log/trace |
+| Send/one-way | A Spot/Actor queue **on a different node** | **No result.** Send completion follows [Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary). A later target admission failure is recorded in metric/log/trace |
 | Publish (before starting) | A worker slot or source-local outbound | Waits up to send timeout. If it can't be secured, `DeadlineExceeded` |
 | Publish (after starting) | Local Spot queue | **Waits until room appears.** Publish has already completed, so waiting does not change the caller's result. Only a failure for a reason other than capacity is recorded as an observation (§4.3) |
 | Request | A Spot/Actor queue in the same runtime or on another node | Same as send — it waits for room, and ends with `DeadlineExceeded` when the time runs out ([Framework error model §5](../00-foundation/07-framework-error-model.en.md#bounded-queue-failure)). |
