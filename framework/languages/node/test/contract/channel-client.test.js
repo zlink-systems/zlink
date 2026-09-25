@@ -1340,7 +1340,6 @@ test('ZLinkChannelClient request/reply round-trips through public binding socket
   const ctx = zlink.createContext();
   const router = zlink.createRouterSocket(ctx);
   const dealer = zlink.createDealerSocket(ctx);
-  const endpoint = `tcp://127.0.0.1:${await reservePort()}`;
   let routerMonitor;
   let dealerMonitor;
   const completionPoller = ownCompletions(dealer);
@@ -1348,7 +1347,8 @@ test('ZLinkChannelClient request/reply round-trips through public binding socket
   try {
     routerMonitor = router.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
     dealerMonitor = dealer.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
-    router.bind(endpoint);
+    router.bind('tcp://127.0.0.1:0');
+    const endpoint = router.options.lastEndpoint;
     dealer.connect(endpoint);
     await waitForMonitorConnectionReady(routerMonitor, 'channel client router connection', router);
     await waitForMonitorConnectionReady(dealerMonitor, 'channel client dealer connection', router);
@@ -2873,19 +2873,22 @@ test('CH-002 manual endpoint round-robin distributes requests across three serve
 test('DSC-008 requestToChannel traffic survives location scale-out and scale-in', async () => {
   const locationProvider = new framework.ZLinkInMemoryProviderLocationStore();
   const locationQuery = new framework.ZLinkLocationStoreRepository(locationProvider);
-  const heldPorts = await reserveHeldPorts(3);
-  const providerAEndpoint = `tcp://127.0.0.1:${heldPorts.ports[0]}`;
-  const providerBEndpoint = `tcp://127.0.0.1:${heldPorts.ports[1]}`;
-  const providerCEndpoint = `tcp://127.0.0.1:${heldPorts.ports[2]}`;
-  const providerA = createScaleoutProvider(locationProvider, providerAEndpoint, 'provider-a');
-  const providerB = createScaleoutProvider(locationProvider, providerBEndpoint, 'provider-b');
-  const providerC = createScaleoutProvider(locationProvider, providerCEndpoint, 'provider-c');
+  const providerA = createScaleoutProvider(locationProvider, 'tcp://127.0.0.1:0', 'provider-a');
+  const providerB = createScaleoutProvider(locationProvider, 'tcp://127.0.0.1:0', 'provider-b');
+  const providerC = createScaleoutProvider(locationProvider, 'tcp://127.0.0.1:0', 'provider-c');
+  let providerAEndpoint;
+  let providerBEndpoint;
+  let providerCEndpoint;
   let clientAppA;
   let clientAppB;
 
   try {
-    await heldPorts.release(providerAEndpoint);
     await providerA.runtime.start();
+    const firstDescriptors = await waitForScaleoutPeers(
+      locationQuery,
+      (entries) => entries.length === 1
+    );
+    providerAEndpoint = firstDescriptors[0].endpoint;
     await waitForReadyEndpoints(locationQuery, [providerAEndpoint]);
     clientAppA = await createScaleoutClientApp(locationProvider);
     clientAppB = await createScaleoutClientApp(locationProvider);
@@ -2905,12 +2908,20 @@ test('DSC-008 requestToChannel traffic survives location scale-out and scale-in'
       assert.equal(providerId, 'provider-a');
     }
 
-    await heldPorts.release(providerBEndpoint);
     await providerB.runtime.start();
+    const second = await waitForScaleoutPeers(locationQuery, (entries) => entries.length === 2);
+    providerBEndpoint = second.find((entry) => entry.endpoint !== providerAEndpoint).endpoint;
     await waitForReadyEndpoints(locationQuery, [providerAEndpoint, providerBEndpoint]);
-    await heldPorts.release(providerCEndpoint);
     await providerC.runtime.start();
-    await waitForReadyEndpoints(locationQuery, [providerAEndpoint, providerBEndpoint, providerCEndpoint]);
+    const third = await waitForScaleoutPeers(locationQuery, (entries) => entries.length === 3);
+    providerCEndpoint = third.find(
+      (entry) => entry.endpoint !== providerAEndpoint && entry.endpoint !== providerBEndpoint
+    ).endpoint;
+    await waitForReadyEndpoints(locationQuery, [
+      providerAEndpoint,
+      providerBEndpoint,
+      providerCEndpoint
+    ]);
     await waitForClientServerTargets(clientRuntimeA, 'scaleout-api', 3);
     await waitForClientServerTargets(clientRuntimeB, 'scaleout-api', 3);
     const scaleoutTraffic = await waitForScaleoutTrafficProviders([clientA, clientB], 'node-scaleout', ['provider-b', 'provider-c']);
@@ -2943,7 +2954,6 @@ test('DSC-008 requestToChannel traffic survives location scale-out and scale-in'
     }
     assertRequestIdsHandledOnce(scaleinRequestIds, providerA, providerB, providerC);
   } finally {
-    await heldPorts.releaseAll();
     await clientAppB?.close();
     await clientAppA?.close();
     await Promise.allSettled([
@@ -2956,8 +2966,8 @@ test('DSC-008 requestToChannel traffic survives location scale-out and scale-in'
 
 test('DSC-009 same routing id different endpoint replaces located provider', async () => {
   const locationStore = new framework.ZLinkInMemoryLocationStore();
-  const providerV1Endpoint = `tcp://127.0.0.1:${await reservePort()}`;
-  const providerV2Endpoint = `tcp://127.0.0.1:${await reservePort()}`;
+  const providerV1Endpoint = 'tcp://127.0.0.1:9401';
+  const providerV2Endpoint = 'tcp://127.0.0.1:9402';
   const providerRid = 'api-a';
 
   const providerV1Lease = await locationStore.claimOwnerLease('provider-v1', 30000);
@@ -3997,7 +4007,6 @@ test('ZLinkChannelRequestDispatcher invokes request handler and replies through 
   const ctx = zlink.createContext();
   const router = zlink.createRouterSocket(ctx);
   const dealer = zlink.createDealerSocket(ctx);
-  const endpoint = `tcp://127.0.0.1:${await reservePort()}`;
   const filterEvents = [];
   let routerMonitor;
   let dealerMonitor;
@@ -4006,7 +4015,8 @@ test('ZLinkChannelRequestDispatcher invokes request handler and replies through 
   try {
     routerMonitor = router.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
     dealerMonitor = dealer.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
-    router.bind(endpoint);
+    router.bind('tcp://127.0.0.1:0');
+    const endpoint = router.options.lastEndpoint;
     dealer.connect(endpoint);
     await waitForMonitorConnectionReady(routerMonitor, 'channel dispatcher router connection', router);
     await waitForMonitorConnectionReady(dealerMonitor, 'channel dispatcher dealer connection', router);
@@ -4926,7 +4936,7 @@ async function waitForScaleoutPeers(store, predicate, routingId) {
     lastEntries = page.items.filter((entry) =>
       routingId === undefined || String(entry.serverRid) === routingId);
     if (predicate(lastEntries)) {
-      return;
+      return lastEntries;
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
@@ -5061,38 +5071,6 @@ async function reservePort() {
     reservedPorts.add(port);
     return port;
   }
-}
-
-async function reserveHeldPorts(count) {
-  const entries = [];
-  for (let index = 0; index < count; index += 1) {
-    const server = net.createServer();
-    server.listen(0, '127.0.0.1');
-    await once(server, 'listening');
-    const { port } = server.address();
-    entries.push({ port, server, released: false });
-  }
-  return {
-    ports: entries.map((entry) => entry.port),
-    async release(endpoint) {
-      const port = Number(endpoint.replace(/^tcp:\/\/127\.0\.0\.1:/, ''));
-      const entry = entries.find((candidate) => candidate.port === port);
-      if (entry !== undefined) {
-        await releaseHeldPort(entry);
-      }
-    },
-    async releaseAll() {
-      await Promise.all(entries.map((entry) => releaseHeldPort(entry)));
-    }
-  };
-}
-
-async function releaseHeldPort(entry) {
-  if (entry.released) {
-    return;
-  }
-  entry.released = true;
-  await new Promise((resolve, reject) => entry.server.close((error) => error ? reject(error) : resolve()));
 }
 
 function subscribeMaybe(socket, received) {

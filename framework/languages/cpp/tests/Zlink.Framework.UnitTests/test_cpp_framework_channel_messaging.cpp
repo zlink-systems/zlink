@@ -1735,12 +1735,12 @@ int main ()
                                   .timeout (std::chrono::milliseconds (2000))
                                   .async ()
                                   .reply;
-    const auto native_client_reply =
-      copy_message_parts (await_native_reply (std::move (native_client_future)).result ().value ());
+    auto native_client_result = await_native_reply (std::move (native_client_future)).result ();
     const int native_server_result = native_server_done.get ();
     if (native_server_result != 0) {
         return native_server_result;
     }
+    const auto native_client_reply = copy_message_parts (native_client_result.value ());
     const auto decoded_native_reply = client_codec.decode_envelope_reply<reply_t> (
       native_client_reply, serializers, "native channel reply was empty",
       "native channel reply decode failed", "native channel request");
@@ -1750,17 +1750,17 @@ int main ()
 
     const auto framework_core_context = std::make_shared<zlink::context_t> ();
     zlink::framework::zlink_builder_t native_bus_builder;
-    const auto native_bus_endpoint = zlink::framework::tests::reserve_loopback_tcp_endpoint ();
+    zlink::context_t native_bus_server_context;
+    zlink::router_socket_t native_bus_server (native_bus_server_context);
+    zlink::socket_monitor_t native_bus_server_monitor = native_bus_server.monitor_open ();
+    native_bus_server.bind ("tcp://127.0.0.1:0");
+    const auto native_bus_endpoint = native_bus_server.options ().last_endpoint ();
     native_bus_builder.channel ("native-bus").enable_client ().connect (native_bus_endpoint);
     auto native_bus_runtime =
       zlink::framework::detail::channel_runtime_t::from (native_bus_builder.message_bus ());
     native_bus_runtime.bind_core_context (framework_core_context);
     native_bus_runtime.bind_serializers (serializers);
 
-    zlink::context_t native_bus_server_context;
-    zlink::router_socket_t native_bus_server (native_bus_server_context);
-    zlink::socket_monitor_t native_bus_server_monitor = native_bus_server.monitor_open ();
-    native_bus_server.bind (native_bus_endpoint);
     auto native_bus_server_done = std::async (std::launch::async, [&] () -> int {
         for (int request_index = 0; request_index < 2; ++request_index) {
             zlink::received_t native_received;
@@ -1786,22 +1786,25 @@ int main ()
                               .timeout (std::chrono::milliseconds (2000))
                               .async<reply_t> ()
                               .result ();
-    if (!native_bus_reply || native_bus_reply.value ().value != 127) {
-        return 82;
-    }
+    const bool native_bus_reply_valid = native_bus_reply && native_bus_reply.value ().value == 127;
     auto native_bus_missing_reply = native_bus_builder.request_client ("native-bus")
                                       .request (missing_probe_request_t{27})
                                       .timeout (std::chrono::milliseconds (2000))
                                       .async<reply_t> ()
                                       .result ();
-    if (native_bus_missing_reply
-        || native_bus_missing_reply.error_kind ()
-             != zlink::framework::framework_error_kind_t::not_found) {
-        return 246;
-    }
+    const bool native_bus_missing_reply_valid =
+      !native_bus_missing_reply
+      && native_bus_missing_reply.error_kind ()
+           == zlink::framework::framework_error_kind_t::not_found;
     const int native_bus_server_result = native_bus_server_done.get ();
     if (native_bus_server_result != 0) {
         return native_bus_server_result;
+    }
+    if (!native_bus_reply_valid) {
+        return 82;
+    }
+    if (!native_bus_missing_reply_valid) {
+        return 246;
     }
 
     zlink::framework::runtime::messaging::envelope_header_t validation_header;

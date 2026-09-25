@@ -578,12 +578,11 @@ test('backend mesh dispatch pump drains a local channel record through claim and
   let senderPump;
 
   try {
-    const receiverEndpoint = await reserveTcpEndpoint();
-    const senderEndpoint = await reserveTcpEndpoint();
-    receiver.setBind(receiverEndpoint);
+    receiver.setBind('tcp://127.0.0.1:0');
     receiver.addChannelName('backend.dispatch');
     receiver.start();
-    sender.setBind(senderEndpoint);
+    const receiverEndpoint = receiver.status().localEndpoint;
+    sender.setBind('tcp://127.0.0.1:0');
     sender.start();
     sender.connectPeer({
       endpoint: receiverEndpoint,
@@ -1560,7 +1559,6 @@ test('MeshNode runtime manager owns lifecycle and forwards pull-dispatch records
   const context = factory.createChannelAdapter().createContext();
   const meshName = `runtime.dispatch.${process.pid}`;
   const receiverEndpoint = await reserveTcpEndpoint();
-  const senderEndpoint = await reserveTcpEndpoint();
   class RuntimeDispatchNotice {
     handle() {}
   }
@@ -1595,7 +1593,7 @@ test('MeshNode runtime manager owns lifecycle and forwards pull-dispatch records
 
   try {
     await runtime.start();
-    sender.setBind(senderEndpoint);
+    sender.setBind('tcp://127.0.0.1:0');
     sender.start();
     senderPump = new backend.ZLinkMeshDispatchPump(sender, {
       applicationJobQueue: applicationJobQueue(),
@@ -1848,7 +1846,6 @@ test('Logical Multicast binding commit preserves admission after post-start abor
 test('framework host dispatches a MeshNode channel record through registered handler lifecycle', async () => {
   const meshName = `host.dispatch.${process.pid}`;
   const receiverEndpoint = await reserveTcpEndpoint();
-  const senderEndpoint = await reserveTcpEndpoint();
   let resolveHandled;
   const handled = new Promise((resolve) => {
     resolveHandled = resolve;
@@ -1877,7 +1874,7 @@ test('framework host dispatches a MeshNode channel record through registered han
   try {
     await host.start();
     const node = host.requirePrimaryMeshNode();
-    sender.setBind(senderEndpoint);
+    sender.setBind('tcp://127.0.0.1:0');
     sender.start();
     senderPump = new backend.ZLinkMeshDispatchPump(sender, {
       applicationJobQueue: applicationJobQueue(),
@@ -2071,7 +2068,6 @@ test('backend bound router dispose releases its poller and endpoint through sock
   const factory = new backend.ZLinkNodeBackendAdapterFactory();
   const channel = factory.createChannelAdapter();
   const context = channel.createContext();
-  const endpoint = await reserveTcpEndpoint();
   const dealer = channel.createDealerSocket(context);
   const router = channel.createRouterSocket(context);
   let reboundRouter;
@@ -2099,7 +2095,8 @@ test('backend bound router dispose releases its poller and endpoint through sock
   });
 
   try {
-    router.bind(endpoint);
+    router.bind('tcp://127.0.0.1:0');
+    const endpoint = router.lastEndpoint;
     dealer.connect(endpoint);
     const reply = await dealer.request(Buffer.from('request'), 1000);
     try {

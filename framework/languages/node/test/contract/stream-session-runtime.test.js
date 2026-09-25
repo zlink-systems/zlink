@@ -2187,8 +2187,6 @@ test('stream session runtime dispatches unmatched response frames to the session
 });
 
 test('stream session node runtime receives framed packets from public binding stream socket', async () => {
-  const port = await reservePort();
-  const endpoint = `tcp://127.0.0.1:${port}`;
   const factory = new backend.ZLinkNodeBackendAdapterFactory();
   const context = factory.createChannelAdapter().createContext();
   const streamAdapter = factory.createStreamAdapter();
@@ -2212,7 +2210,8 @@ test('stream session node runtime receives framed packets from public binding st
   });
 
   try {
-    socket.bind(endpoint);
+    socket.bind('tcp://127.0.0.1:0');
+    const port = Number(new URL(socket.lastEndpoint).port);
     runtime = createStreamRuntime({
       socket,
       readablePoller: streamAdapter.createReadablePoller(socket),
@@ -2534,15 +2533,6 @@ function fakeMessageBytes(bytes) {
       this.closed = true;
     }
   };
-}
-
-async function reservePort() {
-  const server = net.createServer();
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const { port } = server.address();
-  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-  return port;
 }
 
 async function closeClient(client) {

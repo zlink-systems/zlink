@@ -35,6 +35,7 @@ import systems.zlink.framework.handlers.ZLinkPublish;
 import systems.zlink.framework.handlers.ZLinkRequest;
 import systems.zlink.framework.handlers.ZLinkSend;
 import systems.zlink.framework.handlers.ZLinkSpotRequest;
+import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
@@ -754,8 +755,6 @@ final class ChannelMessagingTest {
             "REG-003 manual channel handlers dispatch registered packets and report missing"
                     + " packets")
     void manualChannelHandlers_dispatchRegisteredPacketsAndReportMissingPackets() throws Exception {
-        String endpoint = tcpEndpoint();
-        String fanoutEndpoint = tcpEndpoint();
         CountDownLatch sendLatch = new CountDownLatch(1);
         CountDownLatch publishLatch = new CountDownLatch(1);
         CopyOnWriteArrayList<String> observedErrors = new CopyOnWriteArrayList<>();
@@ -800,7 +799,7 @@ final class ChannelMessagingTest {
 
         DefaultZLinkFrameworkOptions serverOptions = new DefaultZLinkFrameworkOptions();
         {
-            var channel = listenClientServer(serverOptions, "manual-reg", endpoint);
+            var channel = listenClientServer(serverOptions, "manual-reg", "tcp://127.0.0.1:0");
             channel.addRequestHandler(
                     ManualRegistrationRequestHandler.class, ManualRequest.class, String.class);
             channel.addSendHandler(ManualRegistrationCommandHandler.class, ManualCommand.class);
@@ -813,19 +812,7 @@ final class ChannelMessagingTest {
             var channel =
                     publisherOptions
                             .addFanoutChannel("manual-events")
-                            .enablePublisher(fanoutEndpoint);
-        }
-        ;
-
-        DefaultZLinkFrameworkOptions subscriberOptions = new DefaultZLinkFrameworkOptions();
-        subscriberOptions.configureDispatch().unhandled().setPublishLogLevel(ZLinkLogLevel.WARN);
-        {
-            var channel = subscriberOptions.addFanoutChannel("manual-events");
-            channel.connect(fanoutEndpoint);
-            channel.addPublishHandler(
-                    ManualRegistrationPublishHandler.class,
-                    ManualEvent.class,
-                    "ManualRegisteredEvent");
+                            .enablePublisher("tcp://127.0.0.1:0");
         }
         ;
 
@@ -834,77 +821,100 @@ final class ChannelMessagingTest {
                                 serverOptions, new ZLinkJavaBackendAdapterFactory());
                 ZLinkFrameworkRuntime publisher =
                         RuntimeTestSupport.startFramework(
-                                publisherOptions, new ZLinkJavaBackendAdapterFactory());
-                ZLinkFrameworkRuntime ignoredSubscriber =
-                        RuntimeTestSupport.startFramework(
-                                subscriberOptions, new ZLinkJavaBackendAdapterFactory())) {
-            String reply =
-                    awaitChannelReply(
-                            client, "manual-reg", new ManualRequest("registered"), String.class);
-            assertEquals("manual:registered", reply);
+                                publisherOptions, new ZLinkJavaBackendAdapterFactory())) {
+            String fanoutEndpoint =
+                    publisher.listenerStatus(ZLinkListenerKind.FANOUT, "manual-events").endpoint();
+            DefaultZLinkFrameworkOptions subscriberOptions = new DefaultZLinkFrameworkOptions();
+            subscriberOptions
+                    .configureDispatch()
+                    .unhandled()
+                    .setPublishLogLevel(ZLinkLogLevel.WARN);
+            {
+                var channel = subscriberOptions.addFanoutChannel("manual-events");
+                channel.connect(fanoutEndpoint);
+                channel.addPublishHandler(
+                        ManualRegistrationPublishHandler.class,
+                        ManualEvent.class,
+                        "ManualRegisteredEvent");
+            }
+            ;
 
-            client.client().sendToChannel("manual-reg", new ManualCommand("command")).submit();
-            assertTrue(sendLatch.await(1, TimeUnit.SECONDS), "manual send was not delivered");
-            assertEquals("command", MANUAL_REG_SEND_MESSAGE.get());
-            assertEquals("ManualRegisteredCommand", MANUAL_REG_SEND_PACKET.get());
-            assertEquals("manual-reg", MANUAL_REG_SEND_CHANNEL.get());
+            try (ZLinkFrameworkRuntime ignoredSubscriber =
+                    RuntimeTestSupport.startFramework(
+                            subscriberOptions, new ZLinkJavaBackendAdapterFactory())) {
+                String reply =
+                        awaitChannelReply(
+                                client,
+                                "manual-reg",
+                                new ManualRequest("registered"),
+                                String.class);
+                assertEquals("manual:registered", reply);
 
-            publishManualRegistrationUntilDelivered(
-                    publisher, "ManualRegisteredEvent", "published");
-            assertTrue(publishLatch.await(1, TimeUnit.SECONDS), "manual publish was not delivered");
-            assertEquals("published", MANUAL_REG_PUBLISH_MESSAGE.get());
-            assertEquals("manual", MANUAL_REG_PUBLISH_TOPIC.get());
-            assertEquals("manual-events", MANUAL_REG_PUBLISH_CHANNEL.get());
+                client.client().sendToChannel("manual-reg", new ManualCommand("command")).submit();
+                assertTrue(sendLatch.await(1, TimeUnit.SECONDS), "manual send was not delivered");
+                assertEquals("command", MANUAL_REG_SEND_MESSAGE.get());
+                assertEquals("ManualRegisteredCommand", MANUAL_REG_SEND_PACKET.get());
+                assertEquals("manual-reg", MANUAL_REG_SEND_CHANNEL.get());
 
-            CompletionException missingRequest =
-                    assertThrows(
-                            CompletionException.class,
-                            () ->
-                                    client.client()
-                                            .requestToChannel(
-                                                    "manual-reg",
-                                                    new ManualMissingRequest("missing"))
-                                            .submit(String.class)
-                                            .toCompletableFuture()
-                                            .join());
-            assertTrue(missingRequest.getCause() instanceof ZLinkFrameworkException);
-            assertTrue(
-                    missingRequest
-                            .getCause()
-                            .getMessage()
-                            .contains("HANDLER_MISSING for packet 'ManualMissingReq'"));
+                publishManualRegistrationUntilDelivered(
+                        publisher, "ManualRegisteredEvent", "published");
+                assertTrue(
+                        publishLatch.await(1, TimeUnit.SECONDS),
+                        "manual publish was not delivered");
+                assertEquals("published", MANUAL_REG_PUBLISH_MESSAGE.get());
+                assertEquals("manual", MANUAL_REG_PUBLISH_TOPIC.get());
+                assertEquals("manual-events", MANUAL_REG_PUBLISH_CHANNEL.get());
 
-            client.client()
-                    .sendToChannel("manual-reg", new ManualMissingCommand("missing-command"))
-                    .submit();
+                CompletionException missingRequest =
+                        assertThrows(
+                                CompletionException.class,
+                                () ->
+                                        client.client()
+                                                .requestToChannel(
+                                                        "manual-reg",
+                                                        new ManualMissingRequest("missing"))
+                                                .submit(String.class)
+                                                .toCompletableFuture()
+                                                .join());
+                assertTrue(missingRequest.getCause() instanceof ZLinkFrameworkException);
+                assertTrue(
+                        missingRequest
+                                .getCause()
+                                .getMessage()
+                                .contains("HANDLER_MISSING for packet 'ManualMissingReq'"));
 
-            publishManualRegistrationUntilObserved(publisher, missingPublishLogged);
+                client.client()
+                        .sendToChannel("manual-reg", new ManualMissingCommand("missing-command"))
+                        .submit();
 
-            missingSendLogged.get(2, TimeUnit.SECONDS);
-            assertTrue(
-                    hasDispatchError(
-                            observedErrors,
-                            ZLinkDispatchMessageKind.REQUEST,
-                            ZLinkDispatchErrorReason.HANDLER_MISSING,
-                            ZLinkDispatchErrorAction.REPLY_ERROR,
-                            "ManualMissingReq",
-                            "manual-reg"));
-            assertTrue(
-                    hasDispatchError(
-                            observedErrors,
-                            ZLinkDispatchMessageKind.SEND,
-                            ZLinkDispatchErrorReason.HANDLER_MISSING,
-                            ZLinkDispatchErrorAction.DROP,
-                            "ManualMissingCommand",
-                            "manual-reg"));
-            assertTrue(
-                    hasDispatchError(
-                            observedErrors,
-                            ZLinkDispatchMessageKind.PUBLISH,
-                            ZLinkDispatchErrorReason.HANDLER_MISSING,
-                            ZLinkDispatchErrorAction.DROP,
-                            "ManualMissingEvent",
-                            "manual-events"));
+                publishManualRegistrationUntilObserved(publisher, missingPublishLogged);
+
+                missingSendLogged.get(2, TimeUnit.SECONDS);
+                assertTrue(
+                        hasDispatchError(
+                                observedErrors,
+                                ZLinkDispatchMessageKind.REQUEST,
+                                ZLinkDispatchErrorReason.HANDLER_MISSING,
+                                ZLinkDispatchErrorAction.REPLY_ERROR,
+                                "ManualMissingReq",
+                                "manual-reg"));
+                assertTrue(
+                        hasDispatchError(
+                                observedErrors,
+                                ZLinkDispatchMessageKind.SEND,
+                                ZLinkDispatchErrorReason.HANDLER_MISSING,
+                                ZLinkDispatchErrorAction.DROP,
+                                "ManualMissingCommand",
+                                "manual-reg"));
+                assertTrue(
+                        hasDispatchError(
+                                observedErrors,
+                                ZLinkDispatchMessageKind.PUBLISH,
+                                ZLinkDispatchErrorReason.HANDLER_MISSING,
+                                ZLinkDispatchErrorAction.DROP,
+                                "ManualMissingEvent",
+                                "manual-events"));
+            }
         } finally {
             diagnosticsLogger.removeHandler(diagnosticsHandler);
             MANUAL_REG_SEND_LATCH.set(null);
@@ -986,7 +996,6 @@ final class ChannelMessagingTest {
     @Test
     @DisplayName("PUB-001 partial REG-002 annotation fanout publish dispatches")
     void scannedMethodHandlerGroup_publishDispatches() throws InterruptedException {
-        String endpoint = tcpEndpoint();
         CountDownLatch latch = new CountDownLatch(1);
         FANOUT_LATCH.set(latch);
         FANOUT_MESSAGE.set(null);
@@ -995,30 +1004,36 @@ final class ChannelMessagingTest {
 
         DefaultZLinkFrameworkOptions publisherOptions = new DefaultZLinkFrameworkOptions();
         {
-            var channel = publisherOptions.addFanoutChannel("events").enablePublisher(endpoint);
+            var channel =
+                    publisherOptions
+                            .addFanoutChannel("events")
+                            .enablePublisher("tcp://127.0.0.1:0");
         }
         ;
 
-        DefaultZLinkFrameworkOptions subscriberOptions = new DefaultZLinkFrameworkOptions();
-        subscriberOptions.addHandlersFromPackageOf(ChannelMessagingTest.class);
-        {
-            var channel = subscriberOptions.addFanoutChannel("events");
-            channel.connect(endpoint);
-            channel.addHandlerGroup("annotated-events");
-        }
-        ;
+        try (ZLinkFrameworkRuntime publisher =
+                RuntimeTestSupport.startFramework(
+                        publisherOptions, new ZLinkJavaBackendAdapterFactory())) {
+            String endpoint =
+                    publisher.listenerStatus(ZLinkListenerKind.FANOUT, "events").endpoint();
+            DefaultZLinkFrameworkOptions subscriberOptions = new DefaultZLinkFrameworkOptions();
+            subscriberOptions.addHandlersFromPackageOf(ChannelMessagingTest.class);
+            {
+                var channel = subscriberOptions.addFanoutChannel("events");
+                channel.connect(endpoint);
+                channel.addHandlerGroup("annotated-events");
+            }
+            ;
 
-        try (ZLinkFrameworkRuntime ignoredPublisher =
-                        RuntimeTestSupport.startFramework(
-                                publisherOptions, new ZLinkJavaBackendAdapterFactory());
-                ZLinkFrameworkRuntime subscriber =
-                        RuntimeTestSupport.startFramework(
-                                subscriberOptions, new ZLinkJavaBackendAdapterFactory())) {
-            publishUntilDelivered(ignoredPublisher);
+            try (ZLinkFrameworkRuntime subscriber =
+                    RuntimeTestSupport.startFramework(
+                            subscriberOptions, new ZLinkJavaBackendAdapterFactory())) {
+                publishUntilDelivered(publisher);
 
-            assertTrue(latch.await(1, TimeUnit.SECONDS), "annotated publish was not delivered");
-            assertEquals("home:1", FANOUT_MESSAGE.get());
-            assertEquals("score", FANOUT_TOPIC.get());
+                assertTrue(latch.await(1, TimeUnit.SECONDS), "annotated publish was not delivered");
+                assertEquals("home:1", FANOUT_MESSAGE.get());
+                assertEquals("score", FANOUT_TOPIC.get());
+            }
         } finally {
             FANOUT_LATCH.set(null);
             FANOUT_MESSAGE.set(null);
@@ -1029,61 +1044,66 @@ final class ChannelMessagingTest {
     @Test
     @DisplayName("PUB-001 fanout delivers the same sequence to three subscribers")
     void fanout_deliversSameSequenceToThreeSubscribers() {
-        String endpoint = tcpEndpoint();
         FANOUT_SEQUENCE_ONE.clear();
         FANOUT_SEQUENCE_TWO.clear();
         FANOUT_SEQUENCE_THREE.clear();
 
         DefaultZLinkFrameworkOptions publisherOptions = new DefaultZLinkFrameworkOptions();
         {
-            var channel = publisherOptions.addFanoutChannel("sequence").enablePublisher(endpoint);
-        }
-        ;
-
-        DefaultZLinkFrameworkOptions firstOptions = new DefaultZLinkFrameworkOptions();
-        {
-            var channel = firstOptions.addFanoutChannel("sequence");
-            channel.connect(endpoint);
-            channel.addPublishHandler(
-                    FanoutSequenceOneHandler.class, FanoutSequence.class, "FanoutSequence");
-        }
-        ;
-
-        DefaultZLinkFrameworkOptions secondOptions = new DefaultZLinkFrameworkOptions();
-        {
-            var channel = secondOptions.addFanoutChannel("sequence");
-            channel.connect(endpoint);
-            channel.addPublishHandler(
-                    FanoutSequenceTwoHandler.class, FanoutSequence.class, "FanoutSequence");
-        }
-        ;
-
-        DefaultZLinkFrameworkOptions thirdOptions = new DefaultZLinkFrameworkOptions();
-        {
-            var channel = thirdOptions.addFanoutChannel("sequence");
-            channel.connect(endpoint);
-            channel.addPublishHandler(
-                    FanoutSequenceThreeHandler.class, FanoutSequence.class, "FanoutSequence");
+            var channel =
+                    publisherOptions
+                            .addFanoutChannel("sequence")
+                            .enablePublisher("tcp://127.0.0.1:0");
         }
         ;
 
         try (ZLinkFrameworkRuntime publisher =
-                        RuntimeTestSupport.startFramework(
-                                publisherOptions, new ZLinkJavaBackendAdapterFactory());
-                ZLinkFrameworkRuntime ignoredFirst =
-                        RuntimeTestSupport.startFramework(
-                                firstOptions, new ZLinkJavaBackendAdapterFactory());
-                ZLinkFrameworkRuntime ignoredSecond =
-                        RuntimeTestSupport.startFramework(
-                                secondOptions, new ZLinkJavaBackendAdapterFactory());
-                ZLinkFrameworkRuntime ignoredThird =
-                        RuntimeTestSupport.startFramework(
-                                thirdOptions, new ZLinkJavaBackendAdapterFactory())) {
-            String commonSequence = publishUntilCommonFanoutSequence(publisher);
+                RuntimeTestSupport.startFramework(
+                        publisherOptions, new ZLinkJavaBackendAdapterFactory())) {
+            String endpoint =
+                    publisher.listenerStatus(ZLinkListenerKind.FANOUT, "sequence").endpoint();
+            DefaultZLinkFrameworkOptions firstOptions = new DefaultZLinkFrameworkOptions();
+            {
+                var channel = firstOptions.addFanoutChannel("sequence");
+                channel.connect(endpoint);
+                channel.addPublishHandler(
+                        FanoutSequenceOneHandler.class, FanoutSequence.class, "FanoutSequence");
+            }
+            ;
 
-            assertTrue(FANOUT_SEQUENCE_ONE.contains(commonSequence));
-            assertTrue(FANOUT_SEQUENCE_TWO.contains(commonSequence));
-            assertTrue(FANOUT_SEQUENCE_THREE.contains(commonSequence));
+            DefaultZLinkFrameworkOptions secondOptions = new DefaultZLinkFrameworkOptions();
+            {
+                var channel = secondOptions.addFanoutChannel("sequence");
+                channel.connect(endpoint);
+                channel.addPublishHandler(
+                        FanoutSequenceTwoHandler.class, FanoutSequence.class, "FanoutSequence");
+            }
+            ;
+
+            DefaultZLinkFrameworkOptions thirdOptions = new DefaultZLinkFrameworkOptions();
+            {
+                var channel = thirdOptions.addFanoutChannel("sequence");
+                channel.connect(endpoint);
+                channel.addPublishHandler(
+                        FanoutSequenceThreeHandler.class, FanoutSequence.class, "FanoutSequence");
+            }
+            ;
+
+            try (ZLinkFrameworkRuntime ignoredFirst =
+                            RuntimeTestSupport.startFramework(
+                                    firstOptions, new ZLinkJavaBackendAdapterFactory());
+                    ZLinkFrameworkRuntime ignoredSecond =
+                            RuntimeTestSupport.startFramework(
+                                    secondOptions, new ZLinkJavaBackendAdapterFactory());
+                    ZLinkFrameworkRuntime ignoredThird =
+                            RuntimeTestSupport.startFramework(
+                                    thirdOptions, new ZLinkJavaBackendAdapterFactory())) {
+                String commonSequence = publishUntilCommonFanoutSequence(publisher);
+
+                assertTrue(FANOUT_SEQUENCE_ONE.contains(commonSequence));
+                assertTrue(FANOUT_SEQUENCE_TWO.contains(commonSequence));
+                assertTrue(FANOUT_SEQUENCE_THREE.contains(commonSequence));
+            }
         } finally {
             FANOUT_SEQUENCE_ONE.clear();
             FANOUT_SEQUENCE_TWO.clear();
@@ -1094,7 +1114,6 @@ final class ChannelMessagingTest {
     @Test
     @DisplayName("PUB-001 partial manual fanout publish dispatches across hosts")
     void publisherAndSubscriber_workAcrossHosts() throws InterruptedException {
-        String endpoint = tcpEndpoint();
         CountDownLatch latch = new CountDownLatch(1);
         FANOUT_LATCH.set(latch);
         FANOUT_MESSAGE.set(null);
@@ -1102,31 +1121,37 @@ final class ChannelMessagingTest {
 
         DefaultZLinkFrameworkOptions publisherOptions = new DefaultZLinkFrameworkOptions();
         {
-            var channel = publisherOptions.addFanoutChannel("events").enablePublisher(endpoint);
+            var channel =
+                    publisherOptions
+                            .addFanoutChannel("events")
+                            .enablePublisher("tcp://127.0.0.1:0");
         }
         ;
 
-        DefaultZLinkFrameworkOptions subscriberOptions = new DefaultZLinkFrameworkOptions();
-        {
-            var channel = subscriberOptions.addFanoutChannel("events");
-            channel.connect(endpoint);
-            channel.addPublishHandler(
-                    ScoreChangedHandler.class, ScoreChanged.class, "ScoreChanged");
-        }
-        ;
+        try (ZLinkFrameworkRuntime publisher =
+                RuntimeTestSupport.startFramework(
+                        publisherOptions, new ZLinkJavaBackendAdapterFactory())) {
+            String endpoint =
+                    publisher.listenerStatus(ZLinkListenerKind.FANOUT, "events").endpoint();
+            DefaultZLinkFrameworkOptions subscriberOptions = new DefaultZLinkFrameworkOptions();
+            {
+                var channel = subscriberOptions.addFanoutChannel("events");
+                channel.connect(endpoint);
+                channel.addPublishHandler(
+                        ScoreChangedHandler.class, ScoreChanged.class, "ScoreChanged");
+            }
+            ;
 
-        try (ZLinkFrameworkRuntime ignoredPublisher =
-                        RuntimeTestSupport.startFramework(
-                                publisherOptions, new ZLinkJavaBackendAdapterFactory());
-                ZLinkFrameworkRuntime subscriber =
-                        RuntimeTestSupport.startFramework(
-                                subscriberOptions, new ZLinkJavaBackendAdapterFactory())) {
-            publishUntilDelivered(ignoredPublisher);
+            try (ZLinkFrameworkRuntime subscriber =
+                    RuntimeTestSupport.startFramework(
+                            subscriberOptions, new ZLinkJavaBackendAdapterFactory())) {
+                publishUntilDelivered(publisher);
 
-            assertTrue(latch.await(1, TimeUnit.SECONDS), "fanout publish was not delivered");
-            assertEquals("home:1", FANOUT_MESSAGE.get());
-            assertEquals("score", FANOUT_TOPIC.get());
-            assertEquals("events", FANOUT_CHANNEL.get());
+                assertTrue(latch.await(1, TimeUnit.SECONDS), "fanout publish was not delivered");
+                assertEquals("home:1", FANOUT_MESSAGE.get());
+                assertEquals("score", FANOUT_TOPIC.get());
+                assertEquals("events", FANOUT_CHANNEL.get());
+            }
         } finally {
             FANOUT_LATCH.set(null);
             FANOUT_MESSAGE.set(null);

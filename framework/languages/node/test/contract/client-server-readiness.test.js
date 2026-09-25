@@ -57,8 +57,7 @@ for (const weight of [100, 0]) {
 }
 
 test('Client-only ClientServer topology without a Ready Server is degraded', async () => {
-  const port = await reservePort();
-  const app = await createApp(channel => channel.client().connect(`tcp://127.0.0.1:${port}`));
+  const app = await createApp((channel) => channel.client().connect('tcp://127.0.0.1:0'));
   try {
     const runtime = app.get(nestjs.ZLINK_CLIENT_SERVER_RUNTIME);
     const status = runtime.snapshot('work');

@@ -5,9 +5,7 @@ import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpHandler
 import com.sun.net.httpserver.HttpServer
 import java.lang.reflect.Modifier
-import java.net.InetAddress
 import java.net.InetSocketAddress
-import java.net.ServerSocket
 import java.nio.charset.StandardCharsets
 import java.time.Duration
 import java.util.ArrayDeque
@@ -225,8 +223,7 @@ class HttpClientCoroutineTest {
 
     @Test
     fun `suspend connection refusal preserves unavailable kind`() {
-        val port = ServerSocket(0, 0, InetAddress.getLoopbackAddress()).use { it.localPort }
-        zlinkHttpClient("http://127.0.0.1:$port") { timeout(Duration.ofSeconds(1)) }
+        zlinkHttpClient("http://127.0.0.1:0") { timeout(Duration.ofSeconds(1)) }
             .use { client ->
                 val failure =
                     Assertions.assertThrows(ZLinkFrameworkException::class.java) {
