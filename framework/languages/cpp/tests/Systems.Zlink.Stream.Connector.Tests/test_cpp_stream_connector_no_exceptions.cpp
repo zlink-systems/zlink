@@ -9,7 +9,7 @@
 #include <string_view>
 #include <vector>
 
-static_assert (ZLINK_STREAM_CONNECTOR_HAS_EXCEPTIONS == 0);
+static_assert (ZLINK_HAS_EXCEPTIONS == 0);
 
 int main ()
 {

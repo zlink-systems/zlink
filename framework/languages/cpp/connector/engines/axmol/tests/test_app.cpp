@@ -49,7 +49,7 @@ void dispatch_until (connector_t &first, connector_t &second, Predicate ready)
 int main (int argc, char **argv)
 {
     if (argc != 2) {
-        std::cerr << "usage: axmol-test-app <engine-lobby-websocket-endpoint>\n";
+        std::cerr << "engine-required: axmol-test-app <engine-lobby-websocket-endpoint>\n";
         return 2;
     }
     try {
