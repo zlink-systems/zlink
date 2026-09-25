@@ -318,6 +318,8 @@ response에만** 들어간다.
   제거한다.** 재연결 후 자동 재전송하지 않는다(§6).
 - Outbound operation은 연결 상태와 입력 검증을 통과해 connector의 송신 순서에 등록될 때
   수락한다. 이 수락은 frame을 write queue에 넣을 자리를 기다리기 전에 일어난다.
+- 연결마다 frame write queue의 크기는 operation 4,096개로 고정한다. Queue가 차면 뒤에 수락한
+  operation은 자리를 기다리며, 각자의 timeout이나 취소를 따른다.
 - Write queue는 자리를 기다리는 operation까지 수락 순서대로 유지하고 frame write를 하나씩
   완료한 뒤 다음 write를 시작한다. 따라서 뒤에 수락한 operation은 먼저 수락한 operation의
   frame write를 앞지르지 않는다.
@@ -575,7 +577,7 @@ disconnect 이벤트가 사유를 인자로 함께 전달하는 것은 이 읽�
 | Option | 허용 값·항목 간 제약 |
 |---|---|
 | endpoint | 비어 있지 않은 URI이고 scheme은 §3.1의 transport와 일치한다 |
-| connect·request·wait timeout, heartbeat interval·timeout, reconnect 초기·최대 지연, outbound queue 크기 | 양수 |
+| connect·request·wait timeout, heartbeat interval·timeout, reconnect 초기·최대 지연 | 양수 |
 | reconnect backoff 계수 | 양수 |
 | reconnect 최대 시도 | 무제한 또는 양수 |
 | 송신·수신 payload 한도 | 양수이며 §4.7의 한도를 따른다 |

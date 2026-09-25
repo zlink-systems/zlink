@@ -7175,6 +7175,10 @@
           "$ref": "operation-id"
         },
         {
+          "name": "remainingDeadlineMs",
+          "$ref": "nonzero-u64"
+        },
+        {
           "name": "messageFollowHopCount",
           "$ref": "u8",
           "minimum": 0,
@@ -7307,6 +7311,10 @@
         {
           "name": "operation",
           "$ref": "operation-id"
+        },
+        {
+          "name": "remainingDeadlineMs",
+          "$ref": "nonzero-u64"
         },
         {
           "name": "messageFollowHopCount",

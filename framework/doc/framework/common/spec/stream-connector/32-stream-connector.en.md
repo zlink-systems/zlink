@@ -365,6 +365,9 @@ When all usable `u64` values are exhausted, a new Request is not admitted. §9 o
   automatically resent after reconnection (§6).
 - An outbound operation is accepted when it passes connection-state and input validation and is
   registered in the connector's send order, before it waits for room in the frame write queue.
+- Each connection's frame write queue has a fixed capacity of 4,096 operations. When it is full,
+  later accepted operations wait for a place in that queue, subject to their
+  applicable timeout or cancellation.
 - The write queue preserves acceptance order, including operations waiting for room. It completes
   each frame write before starting the next, so a later accepted operation cannot overtake an
   earlier operation's frame write.
@@ -674,7 +677,7 @@ configuration mistake from a connection failure.
 | Option | Allowed value and cross-option constraint |
 |---|---|
 | Endpoint | Nonempty URI whose scheme matches the §3.1 transport |
-| Connect/request/wait timeout, heartbeat interval/timeout, reconnect initial/maximum delay, outbound queue size | Positive |
+| Connect/request/wait timeout, heartbeat interval/timeout, reconnect initial/maximum delay | Positive |
 | Reconnect backoff factor | Positive |
 | Reconnect maximum attempts | Unlimited or positive |
 | Send/receive payload bound | Positive and subject to §4.7 |
