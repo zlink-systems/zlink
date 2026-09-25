@@ -269,12 +269,12 @@ exception, cancellation 또는 request reply encoding failure로 끝나면 barri
 폐기한다. Reply encoding이 끝난 뒤 caller가 연결을 종료했거나 transport가 reply를
 수락하지 못해도 Join은 취소하지 않는다.
 
+<a id="actor-join-completion"></a>
+
 Framework는 Join 결과를 0이 아닌 128-bit `OperationId`와 함께 Actor Join completion
 callback으로 application에 알린다. 이 callback은 handler가 끝난 뒤 비동기로 진행된 Join의
 최종 결과를 전달하는 용도다. `Accepted`는 위치 변경을 commit한 target Actor가 받는다.
 `Rejected`와 relay-ready reply가 accepted 상태가 되기 전 `Failed`는 기존 source Actor가 받는다.
-그 뒤 target process가
-종료되면 completion callback을 다른 runtime에서 다시 실행하지 않는다.
 
 Target의 `OnJoinedActor` callback이 끝나기 전에는 completion callback이나 뒤에 대기한
 application payload를 실행하지 않는다. Source의 `OnLeaveActor` notification은 one-way으로
@@ -302,7 +302,6 @@ process 종료 뒤 completion을 자동 replay하는 근거로 사용하지 않�
 `OperationId`는 application이 completion callback 재시도를 같은 작업으로 구분할 때
 사용하는 idempotency ID다. Relocation 전체를 식별하는 `RelocationId`, placement
 reservation ID 또는 여러 Store 항목을 함께 확정하는 [aggregate commit ID](../00-foundation/02-glossary.ko.md#bounded-aggregate-commit)와는 다른 값이다.
-Cross-node `Accepted`의 Relocation manifest에도 별도 field로 저장한다.
 
 | Completion outcome | Callback을 실행하는 Actor | Application이 받는 정보 |
 |---|---|---|
@@ -867,8 +866,6 @@ Session owner 쪽 검증·처리 절차를 소유한다 — 이 문서는 그 �
 - Actor authority, source·target membership, capacity와 aggregate generation을
   bounded aggregate commit 하나로 확정하며 후처리를 위해 같은 aggregate를 다시
   commit하지 않는다.
-- Same-node와 cross-node Join completion은 source와 target process가 실행되는 동안만
-  전달한다. Process 재시작 뒤 completion replay는 보장하지 않는다.
 - Public [Actor Join `OperationId`](../00-foundation/02-glossary.ko.md#actor-join-operationid)를
   completion idempotency에만 사용하고 `RelocationId`,
   reservation ID와 aggregate commit ID를 재사용하지 않는다.

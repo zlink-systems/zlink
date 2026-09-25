@@ -223,13 +223,9 @@ export interface ZLinkRelocationStore {
 }
 ```
 
-Reference is an opaque UTF-8 `1..4096`-byte string the framework issues
-before put, using match. A deleted or expired reference also
-isn't reused for different content. Re-putting the same reference with
-the same bytes returns `alreadyStored`; putting different bytes returns
-`conflict`. With this rule, the framework can reconcile the storage
-result after a timeout or connection error by doing a direct read of
-the same reference. `retentionMs` must be a positive safe integer.
+[Relocation Store Redis §3–4](../../../05-location-relocation/03-relocation-store-redis.en.md#3-reference-and-storage-size)
+defines reference and retry behavior. Node.js maps the two outcomes to
+`alreadyStored` and `conflict`. `retentionMs` must be a positive safe integer.
 
 One data chunk is at most 64 MiB of application bytes; the encoded blob limit the provider
 receives is owned by [Relocation Store Redis §3](../../../05-location-relocation/03-relocation-store-redis.en.md#3-reference-and-storage-size). The state/queue/timer handoff payload of

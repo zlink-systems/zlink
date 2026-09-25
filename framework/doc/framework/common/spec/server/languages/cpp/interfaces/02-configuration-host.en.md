@@ -847,13 +847,9 @@ or SSL stream. `map_*<THandler>(...)` determines the handler shape at
 compile time and applies the canonical invocation priority and failure
 conditions without modification.
 
-A route parameter and query string bind to the `request_type` DTO. For
-example, a value from `/games/{gameId}/moves?actorId=p1` merges with
-the body DTO to form the handler request. If the same field exists in
-body, route, and query at once, route, query, body take priority in
-that order. This priority follows the ASP.NET Core-style route handler
-usability rule that an identifier shown in the URL is a more explicit
-input than the request body.
+A route parameter and query string bind to the `request_type` DTO.
+[HTTP hosting §4](../60-http-hosting.en.md#4-route-builder)
+defines precedence when fields collide.
 
 `use<TMiddleware>()` wires cross-cutting processing, such as exception,
 logging, validation, auth, correlation id, before and after the route
@@ -1217,9 +1213,7 @@ public:
 };
 ```
 
-- **Middleware is a `before`/`after` pair.** It isn't a `next` delegate
- approach — the shape is different from a
- [handler filter](../../../00-foundation/06-framework-api.en.md).
+- [System structure §7.2](../01-system-structure.en.md#72-middleware-execution-order) defines middleware `before`/`after` execution order.
 - **A middleware instance is built with `create_instance`, receiving
  the DI provider together.**
 

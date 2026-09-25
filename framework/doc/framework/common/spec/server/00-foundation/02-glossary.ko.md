@@ -646,8 +646,8 @@ public readonly record struct ZLinkActorJoinOperationId(
 | .NET 표기 | `ZLinkActorJoinOperationId` |
 | 공개 구성 | `High`와 `Low`를 함께 비교해야 한다. Application이 각 field에 별도 의미를 부여하지 않는다. |
 | 생성·관리 | Framework가 Actor Join registration에서 생성하고 모든 completion retry에 같은 값을 전달한다. |
-| 전달 | `Accepted`, `Rejected`, `Failed` Actor Join completion에 포함한다. Cross-node `Accepted`에서는 Relocation manifest의 별도 field에도 저장한다. |
-| 수명 | Same-node outcome, `Rejected`와 relay-ready accepted 전 `Failed`는 current process lifetime까지만 retry를 보장한다. Cross-node `Accepted`는 manifest가 유지되는 동안 durable at-least-once completion에 사용한다. |
+| 전달 | `Accepted`, `Rejected`, `Failed` Actor Join completion에 포함한다. |
+| 수명 | [Actor Join completion](../03-spot-actor/05-spot-actor-membership.ko.md#actor-join-completion)이 모든 outcome의 보존과 재시도를 정한다. |
 
 <a id="deferred-join-barrier"></a>
 ### Deferred Join barrier
@@ -2413,43 +2413,14 @@ client 실행 환경에 맞게 제공한다.
 <a id="stream-packet"></a>
 ### Stream packet
 
-Message kind와 선택적인 packet name 같은 header 정보에 payload를 결합한 STREAM
-전송 단위다. Request와 reply를 연결하는 값도 header에 포함한다.
-
-| 항목 | 내용 |
-|---|---|
-| 형태 | Binary frame과 복합 header |
-| .NET 표기 | Raw packet public type 없음. .NET Connector는 typed send/request call과 `ZLinkMessage` 계열 값으로 감싼다. |
-| 생성·관리 | Connector runtime이 encode·decode하며 application은 header를 직접 조립하거나 수정하지 않는다. |
-| 수명 | 한 STREAM transport frame의 송수신과 pending request matching 동안 유지된다. |
-
-| Wire 구성 | 형식 |
-|---|---|
-| Frame prefix | `u16 header_len`, `u32 payload_size` |
-| Fixed header | `format_marker = 0xF2`, `kind u8`, `codec u8`, `flags u8` |
-| Request sequence | Flag가 있을 때 `request_seq u64`; `0`은 사용하지 않는다. |
-| Packet name | `u8 name_len + UTF-8 bytes`, 최대 255 byte. Response와 Error는 길이 `0`이다. |
-| Metadata | Flag가 있을 때 `u16 meta_len + encoded metadata` |
-| Correlation ID | Flag가 있을 때 `u8 length + ASCII bytes` |
-| Flow | Flag가 있을 때 36 byte `flow_id`와 1 byte `flow_origin`이 함께 존재한다. |
-| Payload | Header 뒤의 `payload_size` byte |
-
-모든 multi-byte 정수는 network byte order를 사용한다.
+STREAM 전송 단위다. Wire 구성과 sequence 제약은
+[Stream Connector §4](../../stream-connector/32-stream-connector.ko.md#4-wire-계약)가 정한다.
 
 <a id="dispatch-mode"></a>
 ### Dispatch mode
 
-수신 callback을 receive loop에서 자동으로 실행할지, application이 지정한 문맥에서
-명시적으로 직접 꺼내 실행할지를 정하는 Connector 설정이다. 게임 엔진에서는 main thread
-제약 때문에 기본값으로 `Manual`을 사용한다.
-
-| 항목 | 내용 |
-|---|---|
-| 형태 | Closed Connector execution mode |
-| .NET 표기 | 현재 공통 .NET 언어별 interface에는 독립 public enum이 없다. C# contract pseudocode로는 `Manual`과 `Immediate` 두 값이다. |
-| 공개 구성 | `Manual`은 dispatch queue를 application이 명시적으로 직접 꺼내 실행하고 `Immediate`는 receive 경로에서 callback을 inline 실행한다. |
-| 생성·관리 | Application이 Connector option에 지정하며 게임 엔진의 기본값은 `Manual`이다. |
-| 수명 | Connector instance configuration 동안 유지된다. |
+Connector의 callback 실행 모드다. 값과 실행 계약은
+[Stream Connector §7](../../stream-connector/32-stream-connector.ko.md#7-dispatch-모드)이 정한다.
 
 ---
 

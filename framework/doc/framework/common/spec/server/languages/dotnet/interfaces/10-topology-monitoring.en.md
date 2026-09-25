@@ -211,69 +211,13 @@ as Application Job Queue pressure.
 MeshName, ChannelName, or StreamNodeName. A configuration error defined in §3.1 is thrown as a
 `ZLinkFrameworkException` whose `Kind` is `NotConfigured`.
 
-`IsReady` is true only when `State == Serving`. `AcceptingWork` indicates
-whether the current host is accepting new application operations. The
-two values let readiness and admission be judged without exposing
-relocation unit count or internal queue state to the application.
+`AcceptingWork` has type `bool`. Observation of readiness and new-work acceptance state follows
+[Runtime monitoring §11](../../../06-observability/01-runtime-monitoring.en.md#11-verification-requirements).
 
-`RelocateAsync(...)` moves the current stateful objects to a target of
-the application version the mode determines. `PlannedMaintenance`
-doesn't specify `TargetApplicationVersion` — the framework fixes the
-source host's `ApplicationVersion` as the effective target version.
-`RollingUpdate` must specify a `TargetApplicationVersion` greater than
-source. A different value combination is rejected with
-`ArgumentException` before starting the operation.
-
-Target candidates are narrowed in the following order.
-
-1. `PlannedMaintenance` keeps only a target whose application version
-   matches source. `RollingUpdate` keeps only a target that exactly
-   matches the caller-specified application version, excluding a
-   different higher or lower version.
-2. It keeps only a `Serving` Object Server on the same Mesh that isn't
-   the source.
-3. It keeps only a target compatible in stable type, factory, relocation
-   policy, and state adapter.
-4. It confirms population capacity and reservation availability and
-   excludes the same `MaintenanceWave` as source.
-5. It keeps only a target whose RID and lifecycle generation match in
-   the same descriptor snapshot and Core peer table, and whose peer is
-   `Admitted` and `Ready`.
-6. If multiple candidates remain, it applies the existing node-wide
-   placement weight.
-
-If there's no eligible target for the requested version, it waits until the deadline
-for descriptor and Core ready state to converge, and then returns
-`Blocked/TargetUnavailable`.
-
-Once every object has finished moving, it returns `Relocated`, and the
-host becomes `Relocated`. In this state, new application operations
-aren't accepted, but infrastructure and connections are kept. If the move
-can't be safely started or completed, it returns `Blocked`. The
-framework cleans up not-yet-committed changes, and returns to `Serving`
-if the host still has a local object to keep processing.
-
-`ShutdownAsync(...)` doesn't start relocation. Calling it from `Serving`
-cleans up remaining application processing and resources; calling it
-from `Relocated` only cleans up infrastructure and connections. In both
-cases, it becomes `Stopped` once shutdown finishes. If `deadline ==
-null`, the default for each operation is 30 seconds.
-
-If `ShutdownAsync(...)` is called during `Relocating`, only the current
-atomic relocation unit's terminal result is confirmed, and the rest of
-relocation isn't started. The relocation waiter receives
-`Blocked/ShutdownRequested`, and the shutdown operation cleans up the
-remaining objects and resources on the source.
-
-The `CancellationToken` the caller passes only ends that waiter. An
-already-started shared lifecycle operation keeps running and doesn't
-affect other waiters or host lifecycle. A waiter that repeatedly calls
-the same operation shares the in-progress operation and terminal result.
-Only a call with the same `Mode` and effective target application
-version joins; the later call's deadline doesn't change the shared
-operation deadline. A call with a different `Mode` or effective target
-application version doesn't change the existing operation and returns
-`Blocked/OperationInProgress`.
+[Host relocation and shutdown](../../../05-location-relocation/05-host-relocation-flow.en.md)
+defines target selection, deadline, lifecycle outcomes, and waiter handling for
+`RelocateAsync(...)` and `ShutdownAsync(...)`.
+.NET maps an invalid mode/version combination to `ArgumentException`.
 
 ## 3. Common Topology State
 
@@ -375,30 +319,13 @@ MeshNodes in ready state. Since a local channel can also be used
 normally, having 0 peers alone doesn't make every RouteMesh judged
 unavailable.
 
-Between two Object Clients, a peer connection isn't made only when
-neither side has RouteMesh Channel Server membership. The same applies
-when only Channel Client membership exists. Each other's RID appears in
-`Peers` as `NotRequired`, but isn't included in `ReadyPeerCount`. This
-state is excluded from liveness probe/reconnect/health failure
-aggregation, and doesn't change topology to `Degraded`. If either side
-has Channel Server membership, including weight `0`, a connection is
-needed, and the unconnected state is `NotConnected`. A peer that needs a
-connection but has no ready connection is shown as `NotConnected` and
-reflected in failure aggregation. Peer observation for a Channel-only
-topology whose Object role is `None` keeps the existing rule.
+[Channel topology §8](../../../02-channel-transport/01-channel-topology.en.md) defines NotRequired and NotConnected peer status and liveness accounting.
 
-`Placement.IsAvailable` is true when this node is Object Server role and
-can accept new Actors/Spots. Both Actor and Spot capacity, and
-activation concurrency, must have room. Population reservation, the
-current value of activation concurrency, the activation barrier, and
-per-stable-type internal counts aren't included in public status.
+[Runtime monitoring](../../../06-observability/01-runtime-monitoring.en.md) defines the observed meaning of `Placement.IsAvailable`.
 
 ## 5. ClientServer
 
-A Server registered on the same process is also a normal target subject
-to the same weight rule as a remote Server. Status provides the total
-selectable target count and per-target operational status, and doesn't
-provide endpoint or discovery revision.
+[ClientServer channel §4](../../../02-channel-transport/03-client-server-channel.en.md) defines the local and remote target set and selection conditions.
 
 ```csharp
 public enum ZLinkClientServerRole
@@ -434,10 +361,7 @@ public interface IZLinkClientServerRuntime
 }
 ```
 
-`ReadyTargetCount` includes every Ready Server with positive weight that
-isn't draining, without distinguishing local/remote. `Targets` is a
-read-only value for diagnostics. This list isn't used to select a
-specific Server or change target weight.
+`ReadyTargetCount` and `Targets` project the target status defined by [ClientServer channel §4](../../../02-channel-transport/03-client-server-channel.en.md).
 
 ## 6. Fanout
 
@@ -471,37 +395,11 @@ connection API. Querying a manual ChannelName through
 
 ## 7. Observation Stream
 
-The unit each `ObserveAsync(...)` delivers is
-`ZLinkObservedStatus<TStatus>`. `Status` is a completed immutable status
-at the moment state changed meaningfully, shared across observers.
-`Loss` is a loss accumulator specific to this one enumeration, so it
-isn't put inside status. If a consumer can't keep up with the rate of
-change, intermediate statuses are coalesced and the latest status is
-delivered. The status stream isn't an event log auditing every
-transition.
-
-`ZLinkObservedStatus<TStatus>.Loss` delivered by `ObserveAsync(...)` has type
-`ZLinkObservationLoss`. `CoalescedCount` and `DiscardedTerminalCount` have type
-`ulong`. [Runtime monitoring §7.2](../../../06-observability/01-runtime-monitoring.en.md#72-coalescing) owns the delivery unit, loss-counter semantics, range and saturation,
-and subscription lifetime contract.
-
-A general-purpose event DTO whose nullable field meaning changes based on
-an identifier isn't used. A consumer can use the entire received status
-as the current state, without interpreting a field combination per event
-kind.
-
-`Sequence` is a value for comparing status order within the same runtime
-instance. It can restart from 0 when the process restarts, and doesn't
-guarantee persistence or a global order.
-
-`SafeToShutdown` is the source's own observation that every relocation unit it
-started has reached the Message Follow route removal point (S4) and that its
-cutover retransmission window has ended. It is never a completion ACK from a
-target, and it is true when this source has not started a relocation.
-
-`CancellationToken` only ends that asynchronous enumeration. Once
-cancellation is recognized, no new status is delivered, and it doesn't
-affect other observers, topology connections, or host lifecycle.
+`ObserveAsync(...)` delivers `ZLinkObservedStatus<TStatus>`; `Loss` is
+`ZLinkObservationLoss`, and `CoalescedCount` and `DiscardedTerminalCount`
+are `ulong`. [Runtime monitoring](../../../06-observability/01-runtime-monitoring.en.md)
+defines coalescing, loss, sequence, and `SafeToShutdown`.
+`CancellationToken` is the .NET enumeration cancellation argument.
 
 ## 8. Dispatch Policy And Diagnostics
 

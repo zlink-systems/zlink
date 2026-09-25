@@ -139,9 +139,7 @@ Caller는 target RID나 predicate를 지정하지 않는다.
 callback 없이 `existing`으로 반환한다. Creating이면 authority 변경을 기다리고 CAS loser는
 별도 factory나 callback을 시작하지 않는다. 서로 다른 operation은 ready 뒤 `existing`을
 받고 cleanup 뒤 새 reservation을 경쟁하며 앞선 application reply를 공유하지 않는다.
-같은 source Node RID·lifecycle generation·`OperationId`의 재전송만 correlation-free
-`creation-operation-terminal-v1` envelope를 읽고 현재 correlation·reply route로 reply를
-다시 encode한다. Terminal은 original deadline 뒤 5분 동안 유지한다. Callback exception은 `rejected`가 아니라
+생성 terminal의 재전송과 보존은 [Framework API §15](../../../00-foundation/06-framework-api.ko.md)이 정한다. Callback exception은 `rejected`가 아니라
 typed creation failure다. 전체 deadline이
 끝나면 `DeadlineExceeded`, 둘 수 있는 node가 없으면 `Unavailable`이다. ActorRef의 object generation이
 current와 다른 lifecycle operation은 `InvalidOperation`, 이동 중에는 `Unavailable`이다.
@@ -157,10 +155,7 @@ Join을 실행하고 실패하면 barrier를 폐기한다. Handler가 `yield(...
 경우에는 마지막 continuation이 끝나기 전까지 barrier를 활성화하지 않는다.
 
 Result는 같은 operation ID의 `onJoinCompleted(...)` Actor callback으로 전달한다.
-Operation ID는 completion idempotency ID이며 `RelocationId`, reservation ID나
-aggregate commit ID가 아니다. Same-node와 cross-node completion retry는 current
-source와 target process lifetime으로 제한한다. Process 종료 뒤 다른 runtime이
-completion을 자동 replay하지 않는다.
+[Actor Join completion](../../../03-spot-actor/05-spot-actor-membership.ko.md#actor-join-completion)이 Operation ID의 목적과 수명을 정한다.
 
 Request 없는 overload는 empty `ZLinkMessage`를 고정한다. Timeout 기본값은 5초이고
 명시 값은 millisecond 올림 기준 유한한 `1..2_147_483_647` ms다. `defer()`를
@@ -185,7 +180,6 @@ Public trace category는 `actor-relocation`다. 의미와 검증 기준은
 [Actor model](../../../03-spot-actor/04-actor-model.ko.md), [Spot·Actor membership](../../../03-spot-actor/05-spot-actor-membership.ko.md),
 [Session Actor dispatch](../../../04-session/02-session-actor-binding.ko.md)가 소유한다.
 
-Actor request에 선언된 `yield(...)`는 현재 Actor handler가 `SpotWide` User Spot의 shared execution
-gate에서 실행 중일 때만 유효하다. Entry Spot Actor와 `PerActor` User Spot의 Actor가 호출하면 operation을
-제출하거나 turn을 반환하지 않고 `invalidConfiguration`으로 완료한다. Actor Join은
-동기 `defer()`만 제공하며 `submit(...)`과 `yield(...)`를 제공하지 않는다.
+Actor request의 `yield(...)` 유효 문맥과 제출 전 `InvalidOperation`은
+[실행 gate §16](../../../01-execution/02-handler-turn-and-execution-gate.ko.md#yield-call-eligibility)이 정한다.
+Actor Join은 동기 `defer()`만 제공하며 `submit(...)`과 `yield(...)`를 제공하지 않는다.

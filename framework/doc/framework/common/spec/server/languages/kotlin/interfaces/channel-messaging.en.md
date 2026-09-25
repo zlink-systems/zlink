@@ -165,22 +165,9 @@ calls use the same single outcome as Java's `ZLinkMessage.decode(Class<T>)` and 
 invoke the serializer again. Another `T` ends with `TYPE_MISMATCH` when it cannot accept
 the first value, and a failure from the first call is delivered again.
 
-`ZLinkKotlinRequestCall.yield()` is only a coroutine bridge for Java's
-`yield(...)` — it doesn't turn an arbitrary suspension into Yield. If
-it's not a `SPOT_WIDE` User Spot or Instance Spot application handler,
-it completes with `InvalidOperation` before suspending the coroutine or
-submitting the underlying operation. The same rule applies to a Node
-direct request, Entry/`PER_ACTOR`, Channel handler, and outside the
-owner context. A regular `await()` that waits on a target needing the
-current Spot gate is also rejected before submission. The one-way
-wrapper keeps FIFO queue admission and doesn't call the handler inline or
-reentrantly.
+`ZLinkKotlinRequestCall.yield()` bridges the Java call to a coroutine; [Execution gate](../../../01-execution/02-handler-turn-and-execution-gate.en.md) defines eligibility and admission.
 
-If the queue is full, it waits until the send timeout. Timeout completes
-with `DeadlineExceeded`, a route break with `Unavailable`, and runtime
-shutdown with `ShuttingDown`. Absence of target or session binding is
-`NotFound`. If cancellation is triggered first, it completes as coroutine
-cancellation.
+[Submit and completion](../../../01-execution/01-submit-and-completion.en.md) defines one-way admission and terminal outcomes; Kotlin maps cancellation to coroutine cancellation.
 
 A topic passed to `publishToTopic(...)`, which takes a topic, or registered with the Java
 builder's `subscribe`, that [Channel messaging §7](../../../02-channel-transport/02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic) forbids raises the Java runtime's

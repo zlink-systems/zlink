@@ -730,11 +730,8 @@ JSON response body가 되고, 기본 status는 `200 OK`다.
 `Boost.Beast` request, socket, SSL stream을 받지 않는다. `map_*<THandler>(...)`는 handler
 shape를 compile-time으로 판별하며 그 문서가 정한 호출 우선순위와 실패 조건을 그대로 적용한다.
 
-route parameter와 query string은 `request_type` DTO에 binding한다. 예를 들어
-`/games/{gameId}/moves?actorId=p1`로 들어온 값은 body DTO와 합쳐 handler request가 된다.
-같은 필드가 body, route, query에 동시에 있으면 route, query, body 순서로 우선한다. 이
-우선순위는 URL에 드러난 식별자가 request body보다 더 명시적인 입력이라는 ASP.NET Core식
-route handler 사용성을 따르기 위한 규칙이다.
+route parameter와 query string은 `request_type` DTO에 binding한다. 필드 충돌의 우선순위는
+[HTTP hosting §4](../60-http-hosting.ko.md#4-route-builder)가 정한다.
 
 `use<TMiddleware>()`는 exception, logging, validation, auth, correlation id 같은
 cross-cutting 처리를 route handler 앞뒤에 연결한다. middleware/filter는 Beast나 Asio
@@ -1069,8 +1066,7 @@ public:
 };
 ```
 
-- **middleware는 `before`/`after` 쌍이다.** `next` delegate 방식이 아니다 —
- [handler filter](../../../00-foundation/06-framework-api.ko.md)와 모양이 다르다.
+- middleware의 `before`/`after` 실행 순서는 [System structure §7.2](../01-system-structure.ko.md#72-middleware-실행-순서)가 정한다.
 - **middleware 인스턴스는 `create_instance`로 만들고 DI provider를 함께 받는다.**
 
 ## 7. Transport

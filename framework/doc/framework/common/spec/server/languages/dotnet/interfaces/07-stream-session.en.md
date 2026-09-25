@@ -157,51 +157,10 @@ completes terminal-once as `DeadlineExceeded` and does not start later
 admission or replay. `CancellationToken` keeps the existing .NET cancellation
 contract, and the reply call doesn't provide this modifier.
 
-`OnActorBindingReplacedAsync(...)` is an optional callback run once on the previous session when
-the same Actor is bound to a new session. The application may use `Context.Client.Send(...)` to
-notify the client, but does not call `Context.CloseAsync()`. The framework closes the connection
-`100 ms` after the callback reaches a successful or failed terminal; an empty outbound queue does not shorten this delay.
-The new bind does not wait for this callback or close.
-
-| Implementation difference | Current state |
-|---|---|
-| Session Actor binding replacement | The .NET runtime implements command 51 send/receive, this callback, and the non-blocking 100 ms close timer. No implementation difference remains. |
-
-After bind, `RelayAsync(...)` and `NotifyDisconnectedAsync(...)` use the
-per-Actor binding. A physical disconnect is notified by the framework to
-every current binding, running the Spot callback at most once per
-binding identity. `NotifyDisconnectedAsync(...)` is a logical
-notification while the connection is kept, and waits for the callback
-terminal. The binding callback runs at most once, and after terminal
-the binding is committed as a tombstone and removed. The physical STREAM
-connection and Actor/Spot membership are kept. No new public Unbind API is
-provided. Rebind completes as soon as the new identity becomes current and
-does not wait for the previous session. The previous session may notify
-the client in `OnActorBindingReplacedAsync(...)`. The framework closes the connection `100 ms`
-after the callback reaches a successful or failed terminal. Callback or close
-failure doesn't remove the new binding or restore the old one. Relocation
-keeps the same ObjectGeneration and only updates that Actor's
-binding route, so it isn't a rebind and doesn't run the disconnect callback.
-A different Actor binding of the same Session and
-the physical STREAM connection aren't changed.
-
-`RelayAsync(...)` is a one-way operation that completes normally once the
-Actor relay accepts source-local admission. For a request relayed to a bound Actor,
-the typed reply returned by the Actor handler completes the original STREAM
-correlation once ([Session–Actor binding §12](../../../04-session/02-session-actor-binding.en.md#12-failure-and-errors)).
-Only a request the session callback handles itself is submitted through `IZLinkSessionClient.Reply(...)`.
-
-Packet and lifecycle callbacks of the same session run serially.
-Handshake and node-scope errors are reported through runtime monitoring
-and aren't delivered to `OnErrorAsync(...)`.
-
-Session binding fixes the specified incarnation of `ActorRef.ActorId +
-ObjectGeneration` once. The MeshName/NodeRid of the Ref submitted at bind
-is used as the initial control route snapshot. If there's no mapping,
-`NotFound`; if the current generation differs, `InvalidOperation`; if in
-pre-commit seal, `Unavailable` — the framework doesn't find a different
-ref in the Store and hidden-retry the same bind operation. `IZLinkSessionActor.Ref` has type `ActorRef`.
-[Session–Actor binding §8.2](../../../04-session/02-session-actor-binding.en.md#82-control-messages-42-43-44) owns relocation route updates for a bound Session. An overload taking a local `IZLinkActor` isn't provided.
+`OnActorBindingReplacedAsync(...)`, `RelayAsync(...)`, and `NotifyDisconnectedAsync(...)`
+are the .NET callback and call surface. [Session–Actor binding](../../../04-session/02-session-actor-binding.en.md)
+defines replacement, relay completion, disconnect, and relocation route updates.
+`IZLinkSessionActor.Ref` has type `ActorRef`.
 
 ## 2. STREAM Transport Handle
 

@@ -1060,13 +1060,8 @@ millisecond로 올린다. 만료되면 `deadline_exceeded`로 terminal-once 완�
 범위만 허용한다. `0`, 음수와 상한 초과는 설정 시점 또는 늦어도 startup에서 configuration error로
 거부하며 기본값으로 바꾸지 않는다.
 
-Logical Multicast의 `publish_call_t::async()`은 I/O executor에 direct handoff한다. 즉시 worker slot을
-얻지 못하면 send timeout까지 capacity를 기다린다. Slot을 얻으면 raw binding publish를 정확히 한 번 호출한다.
-이 call이 시작된 시점이 operation commit barrier다. Transaction이 시작된 뒤 개별 target 실패는 이미 수락한
-target을 rollback하거나 전체 publish를 자동 재시도하지 않는다. Remote transport와 local Spot queue의
-target별 수락·실패 결과는 반환하거나 monitoring에 집계하지 않는다. Target snapshot이 0개여도 정상
-완료한다. Remote Spot queue 제출과 remote·local handler 실행 또는 완료는 `task_t<void>` 완료 조건이
-아니다.
+Logical Multicast의 worker 수락, commit, terminal과 재시도 규칙은 [Interaction model §5](../../../00-foundation/04-interaction-model.ko.md#5-spot-logical-multicast)와 [Cancellation과 shutdown §4](../../../01-execution/03-cancellation-and-shutdown.ko.md#4-logical-multicast-cancellation)가 정한다.
+C++의 `publish_call_t::async()`는 `task_t<void>`를 반환한다.
 
 framework는 아래 서비스를 기본 등록한다. 사용자는 직접 생성하지 않고 DI에서
 주입받아 사용할 수 있다.

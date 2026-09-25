@@ -326,14 +326,14 @@ reply encoding failure, every barrier is discarded. Once reply encoding
 finishes, Join isn't canceled even if the caller closed the connection or
 transport couldn't accept the reply.
 
+<a id="actor-join-completion"></a>
+
 The framework notifies the application of the Join result via an Actor
 Join completion callback, together with a non-zero 128-bit `OperationId`.
 This callback delivers the final result of a Join that proceeded
 asynchronously after the handler ended. `Accepted` is received by the
 target Actor that committed the location change. `Rejected` and `Failed`
 before relay-ready is accepted are received by the existing source Actor.
-If the target process terminates afterward, the completion callback isn't
-re-run on a different runtime.
 
 Before the target's `OnJoinedActor` callback finishes, the completion
 callback and application payload waiting behind it aren't run. The
@@ -369,9 +369,7 @@ completion after process termination.
 completion callback retries as the same work. It's a different value from
 `RelocationId`, which identifies the whole relocation, the placement
 reservation ID, or an [aggregate commit ID](../00-foundation/02-glossary.en.md#bounded-aggregate-commit) confirming several Store entries
-together. It's also stored as a separate field in a cross-node `Accepted`'s
-relocation manifest.
-
+together.
 | Completion outcome | Actor that runs the callback | Information the application receives |
 |---|---|---|
 | `Accepted` | The target Actor that committed the location change receives it. For a same-target no-op, the current Actor receives it. | Receives the current `ActorRef` and the optional reply the target User Spot's `OnActorJoin` callback returned. |
@@ -1062,9 +1060,6 @@ The Session route contract is defined by
 - Actor authority, source/target membership, capacity, and aggregate
   generation are confirmed in one bounded aggregate commit, and the same
   aggregate isn't committed again for post-processing.
-- Same-node and cross-node Join completion is only delivered while the
-  source and target processes are running. Completion replay after a
-  process restart isn't guaranteed.
 - The public [Actor Join `OperationId`](../00-foundation/02-glossary.en.md#actor-join-operationid)
   is only used for completion idempotency, and `RelocationId`, reservation
   ID, and aggregate commit ID aren't reused.

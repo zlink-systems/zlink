@@ -120,11 +120,7 @@ The factory only uses the context and cancellation it received,
 and doesn't take ActorId, a different owner RID, relocation phase, or
 Store token as a duplicate input.
 
-Join completion's 128-bit operation ID is a completion idempotency ID
-— it isn't `RelocationId`, a reservation ID, or an aggregate commit ID.
-Same-node and cross-node completion retry is bounded to the current
-source and target process lifetime. After process exit, a different
-runtime doesn't automatically replay the completion.
+[Actor Join completion](../../../03-spot-actor/05-spot-actor-membership.en.md#actor-join-completion) owns the Operation ID purpose and lifetime.
 
 Every Actor factory configure callback selects exactly one policy.
 `preserve_state_with<TAdapter>()`'s `TAdapter` must implement
@@ -207,10 +203,9 @@ public:
 Actor send and request only take a global `actor_id_t` as target. There's
 no overload that takes [MeshName](../../../00-foundation/02-glossary.en.md#meshname),
 ActorRef, [owner](../../../00-foundation/02-glossary.en.md#owner) NodeRid, or the
-current SpotId. The runtime only caches a positive Ready route and
-doesn't keep a negative cache. A missing route is distinguished as
-`not_found`, and an -ref generation mismatch as
-`invalid_operation`.
+current SpotId. [Routing §2.2](../../../03-spot-actor/08-routing.en.md#22-the-condition-for-using-a-recent-ready-route) defines
+Ready route caching and failure classification. C++ maps the errors to
+`not_found` and `invalid_operation`.
 
 ## 3. Single-Use Manager Operation
 
@@ -285,11 +280,8 @@ type as `actor_create_existing_t` without a callback. If it's Creating,
 it waits for the authority change, and a CAS loser doesn't start a
 separate factory or callback. A different operation receives
 `actor_create_existing_t` after Ready, races a new reservation after
-cleanup, and doesn't share the preceding application reply. Only a
-resend with the same source Node RID/lifecycle generation/`OperationId`
-reads the correlation-free `creation-operation-terminal-v1` envelope
-and re-encodes the reply with the current correlation/reply route. The
-terminal is kept for 5 minutes after the original deadline. A callback
+cleanup, and doesn't share the preceding application reply. Creation terminal replay and retention follow
+[Framework API §15](../../../00-foundation/06-framework-api.en.md#15-userinstance-spot-and-actor-factory-registration). A callback
 exception isn't a rejected result — it's a typed creation failure. A
 different type is `type_mismatch`.
 [Deadline](../../../00-foundation/02-glossary.en.md#deadline) applies across

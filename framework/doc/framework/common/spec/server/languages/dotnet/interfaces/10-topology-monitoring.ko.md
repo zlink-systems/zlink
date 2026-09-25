@@ -204,49 +204,12 @@ Framework는 이를 그대로 투영하며 Application Job Queue pressure로 다
 `name`은 설정한 MeshName, ChannelName 또는 StreamNodeName이다. §3.1이 정한 configuration error는
 `Kind`가 `NotConfigured`인 `ZLinkFrameworkException`으로 던진다.
 
-`IsReady`는 `State == Serving`일 때만 true다. `AcceptingWork`는 현재 host가 새로운 application
-operation을 받아들이는지를 나타낸다. 두 값은 relocation unit 수나 queue 내부 상태를 application에
-노출하지 않고도 readiness와 admission을 판단할 수 있게 한다.
+`AcceptingWork`의 타입은 `bool`이다. Readiness와 새 작업 수락 상태의 관찰은
+[Runtime monitoring §11](../../../06-observability/01-runtime-monitoring.ko.md#11-검증-요구)을 따른다.
 
-`RelocateAsync(...)`는 mode가 정한 application version의 target으로 현재 stateful object를 이전한다.
-`PlannedMaintenance`에서는 `TargetApplicationVersion`을 지정하지 않으며 Framework가 source host의
-`ApplicationVersion`을 effective target version으로 고정한다. `RollingUpdate`에서는 source보다 큰
-`TargetApplicationVersion`을 반드시 지정한다. 다른 값 조합은 operation을 시작하기 전에
-`ArgumentException`으로 거부한다.
-
-Target 후보는 다음 순서로 줄인다.
-
-1. `PlannedMaintenance`는 source와 application version이 같은 target만 남긴다. `RollingUpdate`는 호출자가
-   지정한 application version과 정확히 같은 target만 남기며 더 높거나 낮은 다른 version도 제외한다.
-2. 같은 Mesh에서 source가 아니며 `Serving` 상태인 Object Server만 남긴다.
-3. Stable type, factory, relocation policy와 state adapter가 호환되는 target만 남긴다.
-4. Population capacity와 reservation 가능 여부를 확인하고 source와 같은 `MaintenanceWave`를 제외한다.
-5. 같은 descriptor snapshot과 Core peer table에서 RID와 lifecycle generation이 일치하며
-   `Admitted`·`Ready`인 target만 남긴다.
-6. 남은 후보가 여러 개이면 기존 node-wide placement weight를 적용한다.
-
-요청한 version의 eligible target이 없으면 deadline까지 descriptor와 Core ready 상태의 수렴을 기다린 뒤
-`Blocked/TargetUnavailable`을 반환한다.
-
-모든 object의 이전이 끝나면 `Relocated`를 반환하고 host는 `Relocated`가 된다.
-이 상태에서는 새 application operation을 받지 않지만 infrastructure와 연결은 유지한다. 이전을 안전하게
-시작하거나 완료할 수 없으면 `Blocked`를 반환한다. Framework는 아직 commit하지 않은 변경을 정리하고
-host가 계속 처리할 local object가 있으면 `Serving`으로 복귀한다.
-
-`ShutdownAsync(...)`는 relocation을 시작하지 않는다. `Serving`에서 호출하면 남은 application 처리와
-resource를 정리하고, `Relocated`에서 호출하면 infrastructure와 연결만 정리한다. 두 경우 모두 종료를
-완료하면 `Stopped`가 된다. `deadline == null`이면 각 operation의 기본값은 30초다.
-
-`ShutdownAsync(...)`가 `Relocating` 중 호출되면 현재 atomic relocation unit의 terminal 결과까지만
-확정하고 나머지 relocation을 시작하지 않는다. Relocation waiter는 `Blocked/ShutdownRequested`를 받고
-shutdown operation은 source에 남은 object와 resource를 정리한다.
-
-호출자가 전달한 `CancellationToken`은 해당 waiter만 종료한다. 이미 시작한 shared lifecycle operation은
-계속 실행되며 다른 waiter와 host lifecycle에 영향을 주지 않는다. 같은 operation을 반복 호출한 waiter는
-진행 중인 operation과 terminal 결과를 공유한다. `Mode`와 effective target application version이 모두 같은
-호출은 합류하며 뒤 호출의 deadline은 shared operation deadline을 바꾸지 않는다. `Mode` 또는 effective
-target application version이 다른 options로 호출하면 기존 operation을 변경하지 않고
-`Blocked/OperationInProgress`를 반환한다.
+`RelocateAsync(...)`와 `ShutdownAsync(...)`의 target 선택, deadline, lifecycle 결과와 waiter 처리는
+[Host relocation과 shutdown](../../../05-location-relocation/05-host-relocation-flow.ko.md)이 정한다.
+.NET은 잘못된 mode·version 조합을 `ArgumentException`으로 표현한다.
 
 ## 3. 공통 topology 상태
 
@@ -341,24 +304,13 @@ public interface IZLinkRouteMeshRuntime
 `ReadyPeerCount`는 ready 상태인 remote MeshNode 수다. Local channel도 정상적으로 사용할 수 있으므로
 peer가 0개라는 이유만으로 모든 RouteMesh를 unavailable로 판정하지 않는다.
 
-두 Object Client 사이에서 양쪽 모두 RouteMesh Channel Server membership이 없을 때만 peer connection을
-만들지 않는다. Channel Client membership만 있는 경우도 같다. 서로의 RID는 `Peers`에
-`NotRequired`로 나타내되 `ReadyPeerCount`에는 포함하지 않는다. 이 상태는 liveness probe·reconnect·health
-failure 집계에서 제외하며 topology를 `Degraded`로 바꾸지 않는다. 어느 한쪽에라도 weight `0`을 포함한
-Channel Server membership이 있으면 연결이 필요하며, 연결되지 않은 상태는 `NotConnected`다.
-연결이 필요한데 ready connection이 없는 peer는 `NotConnected`로 나타내고 장애 집계에
-반영한다. Object role이 `None`인 Channel-only topology의 peer 관측은 기존 규칙을 유지한다.
+`NotRequired`·`NotConnected` peer 상태와 liveness 집계는 [Channel topology §8](../../../02-channel-transport/01-channel-topology.ko.md)가 정한다.
 
-`Placement.IsAvailable`은 이 node가 Object Server role이고 새로운 Actor·Spot을 받을 수 있을 때 true다.
-Actor 또는 Spot capacity와 activation concurrency에 모두 여유가 있어야 한다. Population reservation,
-activation concurrency의 현재 값, activation barrier와 stable type별 내부 count는 public status에
-포함하지 않는다.
+`Placement.IsAvailable`의 관찰 의미는 [Runtime monitoring](../../../06-observability/01-runtime-monitoring.ko.md)이 정한다.
 
 ## 5. ClientServer
 
-같은 process에 등록한 Server도 remote Server와 같은 weight 규칙을 적용받는 정상적인 target이다.
-Status는 선택 가능한 전체 target 수와 target별 운영 상태를 제공하며 endpoint와 discovery revision은
-제공하지 않는다.
+Local·remote target 집합과 선택 조건은 [ClientServer channel §4](../../../02-channel-transport/03-client-server-channel.ko.md)가 정한다.
 
 ```csharp
 public enum ZLinkClientServerRole
@@ -394,9 +346,7 @@ public interface IZLinkClientServerRuntime
 }
 ```
 
-`ReadyTargetCount`에는 local·remote 구분 없이 positive weight를 가지고 있으며 draining 상태가 아닌
-Ready Server를 포함한다. `Targets`는 진단을 위한 읽기 전용 값이다. 이 목록으로 특정 Server를 선택하거나
-target weight를 변경하지 않는다.
+`ReadyTargetCount`와 `Targets`는 [ClientServer channel §4](../../../02-channel-transport/03-client-server-channel.ko.md)의 target 상태를 투영한다.
 
 ## 6. Fanout
 
@@ -428,29 +378,11 @@ Manual subscriber의 연결 목록은 manual connection API가 소유한다. Man
 
 ## 7. 관찰 stream
 
-각 `ObserveAsync(...)`가 전달하는 단위는 `ZLinkObservedStatus<TStatus>`다. `Status`는 상태가 의미 있게
-바뀌었을 때의 완성된 immutable status이며 관찰자 사이에 공유한다. `Loss`는 이 enumeration 하나에만
-해당하는 유실 누계이므로 status 안에 넣지 않는다. 소비자가 변경 속도를 따라가지 못하면 중간 status를
-합치고 최신 status를 전달한다. Status stream은 모든 전이를 감사하는 event log가 아니다.
-
-`ObserveAsync(...)`의 `ZLinkObservedStatus<TStatus>.Loss`는 `ZLinkObservationLoss`다.
-`CoalescedCount`와 `DiscardedTerminalCount`의 타입은 `ulong`이며, 전달 단위와
-유실 counter의 의미·범위·포화 및 구독 유지 계약은
-[Runtime monitoring §7.2](../../../06-observability/01-runtime-monitoring.ko.md#72-합치기)가 소유한다.
-
-Identifier에
-따라 nullable field의 의미가 달라지는 범용 event DTO는 사용하지 않는다. 소비자는 event 종류별 field
-조합을 해석하지 않고 받은 status 전체를 현재 상태로 사용할 수 있다.
-
-`Sequence`는 같은 runtime instance의 status 순서를 비교하는 값이다. Process가 다시 시작되면 0부터
-시작할 수 있으며 persistence나 전역 순서를 보장하지 않는다.
-
-`SafeToShutdown`은 이 source가 시작한 모든 relocation unit이 Message Follow route 제거 지점(S4)에
-도달했고 cutover 재전송 window가 끝났음을 source가 스스로 관찰한 값이다. target의 완료 ACK가 아니며,
-relocation을 시작한 적이 없으면 true다.
-
-`CancellationToken`은 해당 asynchronous enumeration만 종료한다. 취소를 인식한 뒤에는 새 status를
-전달하지 않으며 다른 observer, topology 연결과 host lifecycle에는 영향을 주지 않는다.
+`ObserveAsync(...)`는 `ZLinkObservedStatus<TStatus>`를 전달하며 `Loss`는 `ZLinkObservationLoss`다.
+`CoalescedCount`와 `DiscardedTerminalCount`는 `ulong`이다.
+관찰 합치기·유실·순서와 `SafeToShutdown`의 의미는
+[Runtime monitoring](../../../06-observability/01-runtime-monitoring.ko.md)이 정한다.
+`CancellationToken`은 .NET enumeration 취소 인자다.
 
 ## 8. Dispatch policy와 diagnostics
 

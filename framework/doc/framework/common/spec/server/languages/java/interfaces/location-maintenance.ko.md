@@ -226,9 +226,7 @@ public interface ZLinkRelocationStore {
 }
 ```
 
-Reference는 Framework가 put 전에 발급하는 opaque UTF-8 `1..4096` bytes이며 case-sensitive
-match다. 같은 reference와 같은 bytes를 다시 put하면 `ZLinkBlobAlreadyStored`, 다른 bytes면
-`ZLinkBlobConflict`다. 삭제되거나 만료된 reference도 다른 content에 재사용하지 않는다.
+Reference와 put 재시도는 [Relocation Store Redis §3–4](../../../05-location-relocation/03-relocation-store-redis.ko.md)가 정한다. Java 결과 타입은 `ZLinkBlobAlreadyStored`와 `ZLinkBlobConflict`다.
 
 Actor·Spot relocation의 application state·queue·timer handoff payload는 이 Store에 저장하지 않는다.
 Source가 payload를 memory에 유지한 채 source–target ordered mesh 연결로 직접 chunk 전송하며, source
@@ -241,9 +239,7 @@ Framework는 저장하는 최대 256 GiB logical stream을 최대 4,096개의
 64 MiB chunk와 immutable root manifest로 나눈다. Checksum과 root·chunk 관계는 Framework가 계산하고
 검증하며 provider는 manifest를 해석하지 않는다.
 
-Read는 원래 bytes와 provider clock 기준 expiry를 반환한다. Renew와 delete retry는 idempotent하며,
-delete는 reference가 없어도 성공한 no-op이다. Framework가 reference를 미리 발급하므로 timeout이나
-결과 유실 뒤 같은 reference를 직접 read하여 저장 여부를 재조정할 수 있다.
+Read 재조정, renew와 delete는 [Relocation Store Redis §3–4](../../../05-location-relocation/03-relocation-store-redis.ko.md)가 정한다.
 
 ## 취소와 오류
 

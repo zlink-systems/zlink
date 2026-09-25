@@ -3,45 +3,11 @@
 [Interface table of contents](README.en.md) · [Java Configuration](../../java/interfaces/configuration-host.en.md) ·
 [MeshNode Common Contract](../../../03-spot-actor/03-mesh-node.en.md)
 
-A Kotlin application directly uses the Java builder. There is one rule:
-**every Java registration member that takes an application type as a
-`Class` argument has a reified inline extension of the same name, and the
-Kotlin application uses that extension.** The extension moves the `Class`
-argument into a type parameter, keeps the other arguments as they are,
-and passes that `T::class.java` to the same Java member — nothing more.
-Validation, defaults and errors are owned by the Java contract; Kotlin
-adds none. This document declares the extensions of the host
-configuration members, [Channel Messaging](channel-messaging.en.md) those
-of the Channel Server builders, and the [Spot Interface](spots.en.md)
-those of the Spot registries and contexts. Any other Kotlin DSL is only
-provided when a receiver and reified type genuinely reduce duplication,
-and doesn't create a role, factory default, or allocation provider that
-isn't in the Java contract. So ClientServer's Client-only
-connect and the intent merging per Server RID/lifecycle generation, and
-fanout's Subscriber-only connect and the ban on mixing automatic/manual
-subscriber, apply the same contract as
-[Java Configuration](../../java/interfaces/configuration-host.en.md)
-unchanged. On the same ClientServer ChannelName, the Java builder's
-`client()` and `server()` can each be registered once, without adding a
-separate Kotlin DSL or public API. The two roles share one topology
-through separate registrations under the `(ChannelName, Role)` key, and
-a duplicate of the same role is a startup error. A local Server is also
-selected under the same readiness/weight/drain conditions as a remote
-Server, without local priority or calling a handler directly.
+The Kotlin projection reuses Java `client()` and `server()` builders; [ClientServer channel](../../../02-channel-transport/03-client-server-channel.en.md) and [Channel topology](../../../02-channel-transport/01-channel-topology.en.md) define ClientServer and fanout connection behavior.
 
-Automatic RouteMesh compares RID in canonical byte order, and only the
-MeshNode with the smaller RID connects to the counterpart endpoint. A
-manual topology can connect from one or both sides depending on
-application endpoint configuration. If bidirectional connection or automatic discovery contention/a stale snapshot produces two pipes
-for the same RID, the common rule in
-[channel topology](../../../02-channel-transport/01-channel-topology.en.md) applies.
+[Channel topology §8](../../../02-channel-transport/01-channel-topology.en.md) defines RouteMesh connection direction.
 
-A peer connection isn't needed only when both MeshNodes are Object
-Client and neither has RouteMesh Channel Server membership. The same
-applies when only Channel Client membership is registered. If either
-side has Channel Server membership, including weight `0`, a connection
-is needed. ClientServer and classic fanout are separate physical
-topologies, so they aren't included in this judgment.
+[Channel topology §8](../../../02-channel-transport/01-channel-topology.en.md) defines Object Client peer necessity.
 
 A [MeshNode](../../../00-foundation/02-glossary.en.md#meshnode)'s object role is
 one of `None`, `Client`, `Server`. Not calling `objects()` means
@@ -208,6 +174,8 @@ default to pause `80` and resume `60`; pause is an integer in `1..100`, resume i
 bounds, ordering, and overflow validation also match the Java public contract.
 
 ## Kotlin Source Signature
+
+Each listed reified registration extension passes its type parameter as `T::class.java` to the same-named Java member, preserves the other arguments, and adds no validation, defaults, or errors.
 
 ```kotlin
 fun ZLinkFrameworkOptions.useCoroutineHandlers(dispatcher: CoroutineDispatcher)

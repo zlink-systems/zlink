@@ -77,27 +77,19 @@ public interface IZLinkWorkerOptions
 }
 ```
 
-One-way call의 `Async()`는 정상 완료 값을 만들지 않는다. 정상 완료는 operation family가 정의한
-source-local queue가 message를 수락했다는 뜻이다. Remote handler 실행, subscriber 수신, remote Spot queue
-수락과 application callback 완료는 기다리지 않는다. Queue capacity가 부족하면 해당 family의 send timeout까지
-capacity signal을 기다리고, deadline 안에 공간이 생기면 message를 정확히 한 번 제출한다. Timeout은
-`DeadlineExceeded`, route 단절은 `Unavailable`, runtime 종료는 `ShuttingDown`으로 exceptional
-completion한다. Actor·Spot·Mesh·session target 부재는 `NotFound`를 사용한다.
-`CancellationToken`이 먼저 확정되면 cancelled `ValueTask`로 완료한다.
+One-way admission, timeout과 terminal completion은
+[Submit과 completion](../../../01-execution/01-submit-and-completion.ko.md)이 정한다.
+.NET `Async()`는 결과 없는 `ValueTask`를 반환하며 실패를 exceptional completion으로 전달한다.
 
-각 one-way call은 해당 public configuration에 설정한 send timeout을 사용한다. 공개 설정이 없을 때의
-기본값은 1초다.
+One-way send timeout과 기본값은
+[Submit과 completion](../../../01-execution/01-submit-and-completion.ko.md)이 정한다.
 
-Logical Multicast의 `IZLinkPublishCall`은 source-local 실행 용량을 send timeout 안에 확보하면 publish를
-시작하고 결과값 없이 정상 완료한다. 시작한 뒤에는 개별 target 실패를 전체 실패로 바꾸거나 자동으로
-재시도하지 않는다. Target별 수락·실패 결과는 반환하거나 monitoring에 집계하지 않으며 target이 없어도
-정상 완료한다.
+`IZLinkPublishCall`은 결과 없는 `ValueTask`를 반환한다. Logical Multicast의 완료 경계는
+[Submit과 completion §6](../../../01-execution/01-submit-and-completion.ko.md)이 정한다.
 
-`CancellationToken`이 admission보다 먼저 확정되면 cancelled `ValueTask`로 한 번만 완료한다.
-Pre-cancellation은 runtime admission을 시작하지 않는다. Admission·timeout·[shutdown](../../../00-foundation/02-glossary.ko.md#shutdown)과
-cancellation이 경쟁하면 원자 terminal winner 하나만 완료하고 timeout이나 cancellation 뒤에 late admission을
-만들지 않는다. [Logical Multicast](../../../00-foundation/02-glossary.ko.md#logical-multicast)는 publish가 시작되기 전 cancellation만 operation 시작을 막는다.
-Publish가 시작된 뒤에는 선택한 target 집합에 대한 제출을 끝까지 진행한다.
+`CancellationToken`의 취소와 admission·timeout·shutdown의 terminal 경쟁은
+[Submit과 completion](../../../01-execution/01-submit-and-completion.ko.md)이 정한다.
+.NET은 취소를 cancelled `ValueTask`로 전달한다.
 
 잘못된 인자·handle·상태, 중복 terminal과 이미 사용한 reply token은 .NET exceptional completion으로
 처리한다. Timeout이나 cancellation 뒤에는 operation을 자동으로 다시 제출하지 않는다.
@@ -109,16 +101,12 @@ Worker call의 `Submit`, `Async`와 `Yield`는
 [비동기 실행 정책 §1.2](../../../01-execution/02-handler-turn-and-execution-gate.ko.md)의 완료 의미를 따른다.
 Worker option은 host가 시작되기 전에만 설정할 수 있다.
 
-`Yield` terminal은 `RequestToChannel`, `RequestToSpot`, `RequestToActor`, `RunIoWorker`, `RunCpuWorker`와
-Actor·Spot create·get-or-create call에만 존재한다. Actor join, Node direct request, send, publish, timer 등록,
-close와 destroy에는 제공하지 않는다. 공통 request·worker·create call이더라도 Runtime은
-operation submit 전에 current execution context를 확인한다. `SpotWide` User Spot 또는 Instance Spot
-application handler가 아니면 outbound admission, queue 변경과 gate 반환 없이
-`InvalidOperation`으로 완료한다.
+`Yield` terminal은 `RequestToChannel`, `RequestToSpot`, `RequestToActor`, `RunIoWorker`,
+`RunCpuWorker`와 Actor·Spot create·get-or-create call에 있다. 유효 문맥과 제출 전 오류는
+[Handler turn과 execution gate](../../../01-execution/02-handler-turn-and-execution-gate.ko.md)가 정한다.
 
-`SpotWide` member Actor가 `Yield`하면 Actor queue claim은 유지하고 User Spot gate만 반환한다. Terminal
-continuation은 같은 gate를 다시 얻어 현재 Actor job을 끝낸 뒤 Actor claim을 해제한다. 같은 Actor의 다음
-job은 그 전에 시작하지 않는다. `PerActor` User Spot과 Entry Spot에서는 `Yield`를 허용하지 않는다.
+`SpotWide` member Actor의 `Yield` 중 gate와 Actor claim 처리는
+[Handler turn과 execution gate](../../../01-execution/02-handler-turn-and-execution-gate.ko.md)가 정한다.
 
 Assembly scan에서 사용하는 최소 attribute 표면은 다음과 같다.
 

@@ -227,14 +227,8 @@ public record ZLinkStreamConnectorOptions(
 }
 ```
 
-**The option validation timing is owned by
-[Common Spec §6.3](../../32-stream-connector.en.md#63-option-validation).**
-In Java, `ZLinkStreamConnectorFactory.create(options)` checks every
-option, and on a validation failure it builds no `ZLinkStreamConnector`
-instance and fails with a `ZLinkStreamException` (§11). A single value
-out of range carries `VALIDATION_FAILED`, and a mismatch between
-options carries `CONFIGURATION_ERROR`. `maxReconnectAttempts` must be
-`UNLIMITED_RECONNECT_ATTEMPTS` or positive.
+`ZLinkStreamConnectorFactory.create(options)` throws `ZLinkStreamException` (§11)
+for option validation under [Common Spec §6.3](../../32-stream-connector.en.md#63-option-validation).
 
 `skipServerCertificateValidation` is used only for a test's self-signed
 certificate. The production default is `false`. Setting this value to
@@ -351,10 +345,9 @@ public interface ZLinkStreamWaitCall {
 }
 ```
 
-Once the request timeout ends, the pending request is removed and the
-returned `CompletionStage` completes with a timeout failure. Even if
-the removed request's response arrives late, that stage isn't
-completed again.
+Pending cleanup on request timeout follows
+[Common Spec §5.2](../../32-stream-connector.en.md#52-request-correlation).
+Java delivers the result through `CompletionStage`.
 
 
 ### 7.1 Request Hooks
@@ -425,10 +418,9 @@ public interface ZLinkStreamSequenceCall {
 - `expectNone(name).within(Duration).submit()` — **fails with a
   `ZLinkStreamException` carrying `VALIDATION_FAILED`** if it arrives
   within the window. The symmetric of `waitFor`.
-- `waitForSequence(name).expect(p1).expect(p2)….timeout(t).submit()` —
-  confirms a push of the same name arrives **in predicate order**, and
-  returns `List<ZLinkStreamMessage<TPayload>>`. Verifies **"arrived in
-  order"**, not "N arrived."
+- `waitForSequence(name).expect(p1).expect(p2)….timeout(t).submit()` returns
+  `List<ZLinkStreamMessage<TPayload>>`; sequence observation and failure follow
+  [Common Spec §10.1](../../32-stream-connector.en.md#101-test-wait-surface).
 - **The predicate and the return value handle `ZLinkStreamMessage`.**
   The argument `where(...)` and `expect(...)` receive is the message,
   not the payload.
@@ -491,14 +483,9 @@ public enum ZLinkStreamDispatchMode {
 }
 ```
 
-The default is `MANUAL`. The receive loop, reconnect loop, and request
-callback task don't directly call a user handler — they put it in the
-dispatch queue. The application calls `dispatch().submit()` on the
-thread of its choice.
-
-`IMMEDIATE` runs the callback inline on the receive path, so a slow
-handler blocks the receive loop and the receives after it are delayed.
-A client sample with a UI thread or game loop keeps `MANUAL`.
+The callback execution of `MANUAL` and `IMMEDIATE` and its relationship
+to `dispatch().submit()` follow
+[Common Spec §7](../../32-stream-connector.en.md#7-dispatch-mode).
 
 ## 10. Connection State
 

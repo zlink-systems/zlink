@@ -386,20 +386,10 @@ a finite integer in range `1..2147483647`. `undefined` selects the
 default, and `0`, a negative value, a non-integer value, and exceeding
 the cap are rejected with `ZLinkConfigurationError`.
 
-[Logical Multicast](../../../00-foundation/02-glossary.en.md#logical-multicast)'s
-`ZLinkPublishCall.submit(...)` does a direct handoff to a I/O
-executor. If a worker slot isn't obtained immediately, it waits for
-capacity up to the send timeout. After obtaining the slot but before the
-publish attempt starts, abort and
-[shutdown](../../../00-foundation/02-glossary.en.md#shutdown) can block the
-operation from starting. The moment the publish attempt starts is the
-operation commit barrier — an abort after that doesn't interrupt the
-already-confirmed [snapshot](../../../00-foundation/02-glossary.en.md#publish-target-snapshot)
-operation. Once the transaction has started, an individual target
-failure doesn't roll back an already-accepted target or automatically
-retry the whole publish. Per-target admission/failure results of remote
-transport and the local Spot queue aren't returned or aggregated into
-monitoring. It completes normally even with 0 targets in the snapshot.
+[Interaction model §5](../../../00-foundation/04-interaction-model.en.md#5-spot-logical-multicast)
+and [Cancellation and shutdown §4](../../../01-execution/03-cancellation-and-shutdown.en.md#4-logical-multicast-cancellation)
+define Logical Multicast worker admission, commit, terminal, and retry.
+Node.js calls it through `ZLinkPublishCall.submit(...)`.
 
 ## 6. Serializer And STREAM Session
 

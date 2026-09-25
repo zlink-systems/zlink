@@ -209,11 +209,7 @@ into chunks no larger than `relocationPayloadChunkLimitBytes` and transfers
 them directly over the source–target ordered mesh connection. Source
 memory is the restore origin, and the handoff payload isn't stored in the
 Relocation Store. The adapter doesn't use `TState`, `stateContractId`,
-state class, or `ZLinkMessage`. The framework immediately copies the capture result. The
-capture array is still owned by the adapter — changing it after
-completion doesn't change the preserved payload. Restore is passed a fresh
-defensive copy per call, and the adapter doesn't keep the array after the
-stage finishes. A zero-length array is also valid application state — it
+state class, or `ZLinkMessage`. Array ownership and lifetime follow [common membership §6](../../../03-spot-actor/05-spot-actor-membership.en.md#6-relocation-policy-shared-by-every-move-path). A zero-length array is also valid application state — it
 isn't interpreted as omitting Restore or as `recreateOnRelocation`. In a
 whole User Spot relocation, the Spot adapter is used for the Spot itself,
 and each Actor participant uses that Actor type's
@@ -223,9 +219,8 @@ that selected `disableRelocation()`, and a factory that selected
 `recreateOnRelocation()` has no application state adapter.
 
 A capture exception aborts relocation before authority publication and
-keeps source admission. A restore exception keeps target admission
-sealed while retrying with the same immutable payload or replacing the
-target. The factory creates a fresh Spot instance per target attempt and
+keeps source admission. Retry on the same target after a restore exception and the prohibition on
+target substitution are defined by [host relocation failure §5](../../../05-location-relocation/06-failure-failover-policy.en.md#5-host-relocation-failure). The factory creates a fresh Spot instance per target attempt and
 doesn't reuse the source or a previous attempt's instance. Restore can be
 repeated within the same attempt. An exception isn't turned into an
 empty payload or success. A null stage and null `byte[]` from capture,

@@ -16,8 +16,8 @@ title: "Runtime Status Query and Operational Diagnostics"
 An application operator queries the framework runtime's current status
 once, observes subsequent changes, and uses logs to determine why a status
 changed.
-The application uses this information to judge whether the runtime can accept new
-work, the scope of a failure, and relocation/shutdown results.
+The application observes readiness and new-work acceptance state and checks the scope of failure
+and relocation/shutdown results. The receiving operation decides acceptance of each request.
 
 This document owns the complete status at a specific point in time, the
 status-change stream, and structured-log identifiers. The name/unit/label
@@ -119,10 +119,9 @@ up already-accepted work within a time limit is called
 | `stopped` | Runtime and infrastructure cleanup are finished. |
 | `error` | An error occurred that prevents continuing to operate the runtime. |
 
-**`IsReady` is `true` only when `State` is `serving`.** `AcceptingWork` is a
-separate value indicating whether the current host accepts new application
-operations, and the two values aren't reinterpreted as conditions that
-substitute for each other. The precise meaning of relocation option,
+**`IsReady` is `true` only when `State` is `serving`.** `AcceptingWork` separately
+observes the current host's new-work acceptance state; it is not used to predecide
+acceptance of an individual request. The precise meaning of relocation option,
 deadline, and result is set by
 [Host Relocation And Shutdown](../05-location-relocation/05-host-relocation-flow.en.md).
 
@@ -488,8 +487,8 @@ or contract test.
 
 **Host status**
 
-- Readiness, whether new work is accepted, and relocation and shutdown
-  results can be judged from host status alone.
+- Host status observes readiness and new-work acceptance state and confirms relocation and shutdown
+  results. The receiving operation decides acceptance of each request.
 - Public status has no endpoint, descriptor revision, owner lease, claim,
   reservation, native handle, or raw event DTO.
 - `SafeToShutdown` isn't published before every relocation unit reaches

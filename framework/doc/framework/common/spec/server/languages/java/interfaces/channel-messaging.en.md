@@ -140,26 +140,9 @@ choose the physical wiring isn't provided. `sendToNode(String, RoutingId,
 Object)` specifies an RID, so its first argument is interpreted as
 [MeshName](../../../00-foundation/02-glossary.en.md#meshname).
 
-A Spot direct operation only takes the global SpotId as address and
-returns a Spot-dedicated fluent call. That call's `instanceSpot()` marker
-and optional stable type/initial Mesh express the cold-activation intent
-for a Missing Instance Spot. Without the marker, Missing authority ends
-as not-found. Existing [authority](../../../00-foundation/02-glossary.en.md#authority)
-uses the stored kind/stable type and current owner, so it doesn't require
-type or Mesh again. The detailed members and
-[cold activation](../../../00-foundation/02-glossary.en.md#cold-activation) selection
-rules are owned by the [Java Spot Interface](spots.en.md).
+Java exposes `instanceSpot()` on the Spot direct call; [Spot address messaging](../../../03-spot-actor/06-spot-address-messaging.en.md) defines cold activation.
 
-On the [RouteMesh](../../../00-foundation/02-glossary.en.md#routemesh) builder
-`channelName(channelName)` returns, select exactly one of `client()` or
-`server()`. The builder of `addClientServerChannel(channelName)` can
-register one or both of the two roles, but each role at most once.
-Client and Server of the same ChannelName share one ClientServer
-topology but are separate registrations under the `(ChannelName, Role)`
-key. A duplicate registration of the same role is a startup error. The
-RouteMesh ChannelName conflict rule stays the same. Weight and handler
-can't be set before selecting the role, and Server settings only exist on
-each Server builder.
+Java exposes `channelName(channelName)` and `addClientServerChannel(channelName)` builders; [Channel topology](../../../02-channel-transport/01-channel-topology.en.md) and [ClientServer channel](../../../02-channel-transport/03-client-server-channel.en.md) define role registration.
 
 RouteMesh Channel Server, ClientServer Server, and node-wide placement
 weight are all `int`, in range `0..10000`, defaulting to `100`. An
@@ -167,14 +150,7 @@ out-of-range value is a configuration error in both startup config and
 runtime change. Weighted selection computes the sum of candidate weight
 using at least a 64-bit integer.
 
-ClientServer's local Server is also included in the same candidate set
-as a remote Server once it finishes listener and service admission. The
-same Ready, positive [weight](../../../00-foundation/02-glossary.en.md#weight), and
-non-draining conditions apply — there's no local priority or remote
-exclusion rule. Even when a local Server is selected, the actual
-transport message is delivered from the Client DEALER to the Server
-ROUTER, without bypassing codec, HWM, timeout, cancellation, correlation,
-or terminal completion.
+[ClientServer channel §4](../../../02-channel-transport/03-client-server-channel.en.md) defines local Server candidacy and selection.
 
 A topic specified in `ZLinkFanoutClient.publish(...)` or registered with `subscribe` that
 [Channel messaging §7](../../../02-channel-transport/02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic) forbids raises `ZLinkConfigurationException`. The overload

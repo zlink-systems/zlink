@@ -209,14 +209,9 @@ public enum ZLinkLocationRole : ushort
 }
 ```
 
-An operational query only returns human-readable health/topology/service
-summary and object location. It doesn't return Store key/version, owner lease generation,
-descriptor payload, or protocol envelope. `NodeRid` is kept as the public
-`RoutingId` since it's the actual transport routing identity.
+[Location runtime §7.4](../../../05-location-relocation/01-location-runtime.en.md) defines the operational query fields and visibility.
 
-Page size is `1..1000`, and the continuation token is an opaque value
-issued by that query. The application doesn't interpret the token or use
-it in a different query.
+[Location runtime §7.4](../../../05-location-relocation/01-location-runtime.en.md) defines page, token, state, and failure rules; .NET maps Store failure to `ZLinkFrameworkErrorKind.Unavailable`.
 
 Direct lookup by Actor ID and Spot ID each queries one current object
 location. Missing returns `null`; Creating returns a `Creating` entry;
@@ -229,18 +224,4 @@ The encoded page is at most 4 MiB. A Store query failure is
 
 ## 4. Host Maintenance
 
-Host maintenance is owned by `IZLinkFrameworkRuntime.RelocateAsync(...)`
-and `ShutdownAsync(...)`. `RelocateAsync(...)` moves as much workload as
-possible to a different owner and completes in the `Relocated` state.
-`PlannedMaintenance` only moves to the same application version as
-source, and doesn't take a target version. `RollingUpdate` requires a
-target version greater than source, and only moves to a node matching
-that version exactly. Both modes restrict and select candidates in the
-order version, maintenance wave, capability, capacity, placement weight.
-If there's no target satisfying the requested condition, it waits until
-the deadline and then completes with `Blocked/TargetUnavailable`. The
-application can shut down the host with `ShutdownAsync(...)` after
-confirming the result. Calling `ShutdownAsync(...)` directly from
-`Serving` doesn't start a new relocation, and shuts down the host after
-bounded cleanup. The signature and result are owned by
-[Host Monitoring](10-topology-monitoring.en.md).
+`IZLinkFrameworkRuntime.RelocateAsync(...)` and `ShutdownAsync(...)` expose host maintenance; [Host relocation and shutdown](../../../05-location-relocation/05-host-relocation-flow.en.md) defines target selection, deadline, and outcomes.

@@ -28,18 +28,8 @@ options at creation and doesn't expose the implementation detail type.
 static connector_t connector_factory_t::create(connector_options_t options);
 ```
 
-**Every option is checked in `connect`**
-([Common Spec §6.3](../../32-stream-connector.en.md#63-option-validation)).
-The C++ core throws nothing and `create` returns a value, so the
-creation surface has no channel for a validation failure. `connect` is
-therefore the earliest point at which C++ can report one, and the
-rejection comes **before a connection is made.** A single value out of
-range is
-`error_code_t::validation_failed`, and a mismatch between options is
-`error_code_t::configuration_error` — a conflict between the endpoint
-scheme and `transport`, a transport this build doesn't support, and a
-`compression_codec` given together with `compression_t::none` fall into
-the latter.
+`connect` returns `error_code_t::validation_failed` or `error_code_t::configuration_error`
+for option validation under [Common Spec §6.3](../../32-stream-connector.en.md#63-option-validation).
 
 ## 2. `connector_t`
 
@@ -71,10 +61,8 @@ void close(std::function<void(result_t<void>)> callback);   // receives the clos
 result_t<void> dispatch();                                 // runs one pending callback of Manual mode.
 ```
 
-**`received_count` returns the received count per packet name**
-([Common Spec §10](../../32-stream-connector.en.md#10-receive-message-queue)).
-Consuming does not lower it, it is independent of the dispatch mode, and it
-restarts at zero when the connection is established.
+`received_count` returns a count per packet name. Counting and reset follow
+[Common Spec §10](../../32-stream-connector.en.md#10-receive-message-queue).
 
 A received message is a `message_t<TPayload>`. The `on<T>` handler and
 the `wait_for` family handle this type.
@@ -89,11 +77,9 @@ struct message_t {
 };
 ```
 
-A push callback is registered with `on<T>(...)`. In
-`dispatch_mode_t::manual`, `dispatch()` runs the callback, and in
-`dispatch_mode_t::immediate`, the receive path runs the callback. The
-`wait_for` family directly consumes a matching packet from the receive
-queue in both modes.
+A push callback is registered with `on<T>(...)`. The relationship of
+`dispatch()` and `wait_for` to dispatch follows
+[Common Spec §7](../../32-stream-connector.en.md#7-dispatch-mode).
 
 **A handler registration returns a `subscription_t` that deregisters
 it** ([Common Spec §7](../../32-stream-connector.en.md#7-dispatch-mode)).
@@ -286,12 +272,9 @@ auto result = connector.expect_none<order_changed_t>()
                 .submit();
 ```
 
-A sequence observation applies each `expect` predicate to a push of the
-same name in arrival order. It uses one overall timeout, and on
-success returns a `std::vector<message_t<TMessage>>`. The argument a
-predicate receives is the message too, not the payload. This is a
-contract that verifies arrival **in the specified order**, not simply
-whether N arrived.
+`wait_for_sequence` returns `std::vector<message_t<TMessage>>`.
+Sequence observation and failure follow
+[Common Spec §10.1](../../32-stream-connector.en.md#101-test-wait-surface).
 
 ```cpp
 auto result = connector.wait_for_sequence<order_changed_t>()

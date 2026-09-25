@@ -412,7 +412,8 @@ route parameter, query string, body 순서로 우선순위를 둔다. 이 우선
 validation 문서와 테스트에서 고정한다.
 
 `use<TMiddleware>()`는 `TMiddleware::before(http_context_t&)`와
-`TMiddleware::after(http_context_t&)`를 route handler 앞뒤로 호출한다. middleware는 raw
+`TMiddleware::after(http_context_t&)`를 등록한다. 실행 순서는
+[System structure §7.2](01-system-structure.ko.md#72-middleware-실행-순서)가 정한다. middleware는 raw
 Beast request나 socket을 받지 않고, `http_context_t`의 correlation id와 framework header
 map만 사용한다. request에 `X-Correlation-Id` 또는 `X-Request-Id`가 있으면 그 값을 response
 `X-Correlation-Id`로 되돌려 보내고, 없으면 runtime이 request correlation id를 만든다.

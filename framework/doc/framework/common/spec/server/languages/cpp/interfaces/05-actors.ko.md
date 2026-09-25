@@ -116,10 +116,7 @@ concrete Actor를 만든 뒤 `configure()`를 호출한다. Factory는 전달받
 context와 cancellation만 사용하며 ActorId, 다른 owner RID, relocation phase 또는
 Store token을 중복 입력으로 받지 않는다.
 
-Join completion의 128-bit operation ID는 completion idempotency ID이며
-`RelocationId`, reservation ID나 aggregate commit ID가 아니다. Same-node와
-cross-node completion retry는 current source와 target process lifetime으로 제한한다.
-Process 종료 뒤 다른 runtime이 completion을 자동 replay하지 않는다.
+[Actor Join completion](../../../03-spot-actor/05-spot-actor-membership.ko.md#actor-join-completion)이 Operation ID의 목적과 수명을 정한다.
 
 모든 Actor factory configure callback은 policy를 정확히 하나 선택한다. `preserve_state_with<TAdapter>()`의 `TAdapter`는
 `actor_relocation_adapter_t<TActor>`를 구현해야 하며 다른 adapter type이면 socket bind 전에 configuration error로
@@ -184,8 +181,8 @@ public:
 ```
 
 Actor send와 request는 global `actor_id_t`만 target으로 받는다. [MeshName](../../../00-foundation/02-glossary.ko.md#meshname), ActorRef, [owner](../../../00-foundation/02-glossary.ko.md#owner) NodeRid와 current
-SpotId를 받는 overload는 없다. Runtime은 positive Ready route만 cache하고 negative cache를 두지 않는다.
-Missing route는 `not_found`, -ref generation mismatch는 `invalid_operation`으로 구분한다.
+SpotId를 받는 overload는 없다. Ready route cache와 실패 분류는 [Routing §2.2](../../../03-spot-actor/08-routing.ko.md)가 정한다.
+C++는 두 오류를 `not_found`와 `invalid_operation`으로 표현한다.
 
 ## 3. Single-use manager operation
 
@@ -257,10 +254,7 @@ Mesh는 `not_found`다.
 `actor_create_existing_t`로 반환한다. Creating이면 authority 변경을 기다리며 CAS loser는
 별도 factory나 callback을 시작하지 않는다. 서로 다른 operation은 Ready 뒤
 `actor_create_existing_t`를 받고 cleanup 뒤 새 reservation을 경쟁하며 앞선 application
-reply를 공유하지 않는다. 같은 source Node RID·lifecycle generation·`OperationId`의
-재전송만 correlation-free `creation-operation-terminal-v1` envelope를 읽고 현재
-correlation·reply route로 reply를 다시 encode한다. Terminal은 original deadline 뒤 5분
-동안 유지한다. Callback exception은 rejected result가
+reply를 공유하지 않는다. 생성 terminal의 재전송과 보존은 [Framework API §15](../../../00-foundation/06-framework-api.ko.md)이 정한다. Callback exception은 rejected result가
 아니라 typed creation failure다. Type이 다르면 `type_mismatch`다.
 [Deadline](../../../00-foundation/02-glossary.ko.md#deadline)은 resolve, reservation, factory와
 Ready 전체에 적용한다. `Find`는 Ready ref만 반환하며 생성하지 않는다. `FindSpot`은 current User Spot

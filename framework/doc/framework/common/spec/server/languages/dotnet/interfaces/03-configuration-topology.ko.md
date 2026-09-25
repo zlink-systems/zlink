@@ -303,55 +303,23 @@ raw client는 별도 wire error code가 아니라 연결 종료를 관찰한다.
 `Client()` 또는 `Server()`를 정확히 한 번 호출한다. `Client()`는 송신 경로만 만들고, `Server()`만
 [weight](../../../00-foundation/02-glossary.ko.md#weight)와 handler 등록을 제공한다. Server [membership](../../../00-foundation/02-glossary.ko.md#membership)이 없는 MeshNode도 시작할 수 있다.
 
-Automatic [RouteMesh](../../../00-foundation/02-glossary.ko.md#routemesh)는 RID를 canonical byte order로 비교하고 더 작은 RID의 MeshNode만 상대 endpoint로
-connect한다. Local과 remote의 object role이 모두 `Client`이고 양쪽 모두 RouteMesh Channel Server
-membership이 없을 때만 connection intent를 만들지 않는다. Channel Client membership만으로는 연결하지
-않는다. 어느 한쪽에라도 Channel Server membership이 있으면 weight가 `0`이어도 connection이 필요하다.
-Manual topology는 application endpoint 구성에 따라 한쪽 또는 양쪽에서 connect할 수 있다.
-양쪽 연결이나 automatic discovery 경합·오래된 snapshot으로 같은 RID의 pipe가 둘 생길 때의 처리는
-[channel topology](../../../02-channel-transport/01-channel-topology.ko.md)의 공통 규칙을 따른다.
+[Channel topology §8](../../../02-channel-transport/01-channel-topology.ko.md)가 RouteMesh 연결 방향과 peer 필요성을 정한다.
 
-Manual endpoint의 remote object role과 RouteMesh Server membership을 connect 전에 알 수 없으면
-handshake에서 확인한다. 양쪽이 Object Client이고 양쪽 모두 RouteMesh Channel Server membership이
-없을 때만 admission을 `NotRequired` terminal로 끝내고 ready 전에 socket을 닫는다. 같은 endpoint와
-configuration generation에서는 background reconnect를 반복하지 않는다. Endpoint, expected RID 또는
-configuration generation이 바뀌면 새 intent로 한 번 다시 확인한다.
+Manual handshake와 `NotRequired` 처리는 [Channel topology §8](../../../02-channel-transport/01-channel-topology.ko.md)가 정한다.
 
 `Listen(string endpoint)`, `Bind(string endpoint)`와 `EnablePublisher(string endpoint)`를 제공하며,
 host·port 조합 overload도 같은 listener 설정을 표현한다.
 
-`AddClientServerChannel(channelName)`은 `Client()`와 `Server()` 중 하나 또는 둘 다 등록할 수 있으며 각
-역할은 최대 한 번만 등록한다. Registration key는 `(ChannelName, Role)`이며 Client와 Server는 별도
-registration으로 하나의 ClientServer topology를 공유한다. 같은 역할을 두 번 등록하면 startup이 실패한다.
-RouteMesh ChannelName 충돌 규칙은 그대로
-유지한다. Client는 등록한 manual endpoint와 location store에서 자동 발견한 같은 [ChannelName](../../../00-foundation/02-glossary.ko.md#channelname)의 server
-endpoint를 모두 연결 대상으로 사용할 수 있다.
-두 source가 같은 Server RID와 [lifecycle generation](../../../00-foundation/02-glossary.ko.md#lifecycle-generation)을 가리키면 connection intent와 ready target을 하나로
-합친다. Automatic과 manual 모두 Client만 server로 connect하며 Server는 client endpoint를 찾거나 outbound
-connect를 시작하지 않는다. Server는 받은 send/request handler와 request reply만 제공하며 연결된 client로
-새 업무 호출을 시작하지 않는다.
+`AddClientServerChannel(channelName)`은 `Client()`와 `Server()`를 제공한다. 등록과 연결은 [ClientServer channel](../../../02-channel-transport/03-client-server-channel.ko.md)이 정한다.
 
-같은 process에 Server 역할도 등록되어 있으면 listener와 service admission을 마친 local Server를 remote
-Server와 같은 candidate 집합에 넣는다. [Ready](../../../00-foundation/02-glossary.ko.md#ready), positive weight, non-draining 조건을 동일하게 적용하고
-local 우선순위나 remote 제외 규칙을 두지 않는다. 선택 뒤에는 Client DEALER에서 Server ROUTER로 실제
-transport message를 전달하며 handler를 직접 호출하지 않는다.
+Local Server의 후보 포함과 선택은 [ClientServer channel §4](../../../02-channel-transport/03-client-server-channel.ko.md)가 정한다.
 
 `ConfigureNetwork()`의 기본 BindHost는 `127.0.0.1`이고 AdvertiseHost를 생략하면
 [Network listener identity §2.1](../../../02-channel-transport/04-network-listener-identity.ko.md#21-기본값)의 기본값을 따른다. [Automatic discovery](../../../00-foundation/02-glossary.ko.md#automatic-discovery) listener는 `Listen()`·`Bind()`·`EnablePublisher()`의 port를 생략하거나
 listener 호출 자체를 생략하면 port `0`으로 bind한다. Manual mode에서 endpoint를 다른 discovery source로
 얻지 못하면 listen port와 remote endpoint를 명시한다. Listener별 host 설정은 root 기본값보다 우선한다.
 
-[Location store](../../../00-foundation/02-glossary.ko.md#location-store)를 등록한 fanout publisher는 Framework가 lifecycle별 RID를 만들고 전용 descriptor를 게시한다.
-Store가 없는 publisher는 fixed RID와 listener endpoint를 수동으로 전달하는 대상으로 계속 사용할 수 있다.
-Endpoint를
-받지 않는 `EnableSubscriber()`는 location store에서 같은 ChannelName의 유효한 publisher를 모두 발견한다.
-`Connect(endpoint)`는 명시한 endpoint만 사용하는 manual subscriber를 구성한다. 한 fanout
-channel에서 automatic subscriber와 manual subscriber를 함께 설정하면 startup이 실패한다. Automatic
-subscriber는 location store가 필요하지만 manual publisher와 manual subscriber만 사용하는 host에는
-필요하지 않다.
-Publisher는 [descriptor](../../../00-foundation/02-glossary.ko.md#descriptor)만 게시하고 subscriber endpoint로 outbound connect를 시작하지 않는다. Subscriber만
-publisher endpoint로 connect하며 automatic subscriber는 Publisher RID와 lifecycle generation마다 connection
-intent 하나를 만든다.
+Fanout descriptor, discovery와 연결 방향은 [Channel topology](../../../02-channel-transport/01-channel-topology.ko.md)이 정한다. 이 builder는 `EnableSubscriber()`와 `Connect(endpoint)`를 제공한다.
 
 Automatic RID는 `prefix-<lowercase-canonical-uuid-v4>` 형식이다. UUID v4는 `8-4-4-4-12` 자리의
 lowercase canonical 문자열로 표현한다. Prefix는 ASCII `[A-Za-z0-9._-]` 1..64자이고 full RID는 UTF-8
@@ -391,39 +359,19 @@ owner route를 결정하므로 이 설정은 MeshName을 받지 않는다.
 MeshNode가 이 값을 게시하며 음수는 startup 전에 `ZLinkConfigurationException`으로 거부한다.
 `MaintenanceWave`는 `null`이면 wave exclusion을 사용하지 않는 stable ID다.
 
-`Objects()`를 호출하지 않은 MeshNode의 object role은 `None`이다. `Client()`는 manager와 ID-only message
-client를 제공하지만 placement target이 되지 않는다. `Server()`는 Client capability를 포함하며 Entry Spot과
-factory를 등록한다. 두 role은 Location Store가 필수다. Role은 한 번만 선택할 수 있다.
+`Objects().Client()`와 `Objects().Server()`는 .NET role builder다. 역할은 [MeshNode](../../../03-spot-actor/03-mesh-node.ko.md)가 정한다.
 
-`Objects().Client()`를 선택한 MeshNode에도 `Channel(...).Server()`를 등록할 수 있다. 이 조합은
-Channel request·send를 처리하기 위한 peer connection이 필요하다. Server weight가 `0`이어도 Server
-capability와 연결 필요성은 유지되며 새 Channel operation의 선택 후보에서만 제외된다.
-`AddRouteSendHandler(...)`·`AddRouteRequestHandler(...)` 같은 application Node direct handler는 Object
-Client에 등록할 수 없고 socket bind 전에 `ZLinkConfigurationException`으로 실패한다.
+Object Client의 Channel peer 연결 조건은 [Channel topology](../../../02-channel-transport/01-channel-topology.ko.md)가 정한다. 잘못된 Node direct handler 등록은 `ZLinkConfigurationException`으로 표현한다.
 
-두 Object Client 사이에는 양쪽 모두 RouteMesh Channel Server membership이 없을 때만 automatic 또는
-manual peer connection이 필요하지 않다. Channel Client membership만 등록한 경우도 같다. 어느 한쪽에라도
-RouteMesh Channel Server membership이 있으면 연결을 유지한다. ClientServer와 classic fanout은 별도 물리
-topology이므로 이 판정에 포함하지 않는다. Object Client와 Object Server, Object Server끼리의 connection은
-유지한다.
+Object Client pair의 연결 필요성은 [Channel topology](../../../02-channel-transport/01-channel-topology.ko.md)가 정한다.
 
 Actor·User Spot·Instance Spot [factory](../../../00-foundation/02-glossary.ko.md#factory)는 stable type, object 종류별 factory option과 explicit relocation
 policy를 같은 registration에서 고정한다. Policy를 생략하는 overload는 없다. [Stable type](../../../00-foundation/02-glossary.ko.md#stable-type)은 UTF-8
 1..255 bytes이고 중복 type은 startup 오류다. Entry Spot ID는 Framework가 발급한다.
 
-Node placement weight는 0..10000이고 기본값은 100이다. 범위 밖 값은 startup 설정과 runtime 변경에서
-`ZLinkConfigurationException`이다. Actor·Spot population limit의 기본값 `0`은 제한 없음이며,
-pending activation concurrency 기본값은 128이다.
-Type별 limit은 `null`이면 node limit을 공유하고 값이 있으면 1..`int.MaxValue`이며 node limit보다 작은 값을
-적용한다. Capacity를 weight보다 먼저 적용하고 eligible node가 없으면 `Unavailable`이다.
+.NET placement builder는 weight와 population capacity option을 제공한다. Eligibility와 capacity 판정은 [Location runtime](../../../05-location-relocation/01-location-runtime.ko.md)이 정한다.
 
-`SetInstanceSpotIdleTimeout(...)`은 유휴 Instance Spot 정리 기준 시간이다. 기본값은 `TimeSpan.Zero`이고
-`TimeSpan.Zero`는 정리하지 않음을 뜻한다. 허용 범위는 `TimeSpan.Zero`와 양수이며 음수는 startup 전에
-`ZLinkConfigurationException`이다. 값은 MeshNode lifecycle
-시작 전에 고정하고 실행 중 setter를 제공하지 않는다. `ZLinkWorkerOptions.IdleTimeout`과는 별개의 설정이며
-서로 값을 상속하지 않는다. 정리 대상은 Instance Spot뿐이고 Entry Spot과 User Spot은 이 설정의 영향을
-받지 않는다. 유휴 판정 조건, `ZLinkSpotCloseReason.IdleEvicted` 전달과 정리 뒤 cold activation 규칙은
-[Spot 모델 §6.2](../../../03-spot-actor/01-spot-model.ko.md#62-사용하지-않고-남아-있는-instance-spot-정리)가 소유한다.
+`SetInstanceSpotIdleTimeout(...)`은 .NET option이다. 기본값, 검증과 유휴 정리는 [Spot 모델 §6.2](../../../03-spot-actor/01-spot-model.ko.md)가 정한다.
 
 ## 3. Manual peer
 
@@ -441,11 +389,7 @@ public interface IZLinkMeshPeerConnections
 }
 ```
 
-`Connect(...)`로 지정한 양쪽 MeshNode가 Object Client이고 양쪽 모두 RouteMesh Channel Server
-membership이 없으면 configuration intent는 목록에 남을 수 있지만 ready peer가 되지 않는다. Handshake가
-`NotRequired`로 끝난 뒤 같은 configuration generation에는 다시 연결하지 않으며 public RouteMesh status의
-ready peer 수와 liveness 대상에 포함하지 않는다. 어느 한쪽에라도 weight `0`을 포함한 Channel Server
-membership이 있으면 일반 peer admission과 liveness 규칙을 적용한다.
+`Connect(...)` peer의 수락과 liveness는 [Channel topology §8](../../../02-channel-transport/01-channel-topology.ko.md)가 정한다.
 
 Handler filter는 application이 구현하고 root에 등록하는 public extension point다. `next`를 호출하면 남은
 filter와 handler가 실행된다. 호출하지 않은 request는 `Rejected`로 끝나며 filter가 업무 reply를 직접
@@ -477,12 +421,7 @@ public interface IZLinkHandlerFilter
 }
 ```
 
-`ChannelSend`와 `ChannelRequest`는 RouteMesh와 ClientServer를 모두 포함한다. RouteMesh와 Node direct
-context는 MeshName을 제공하고 ClientServer와 `ClassicFanout`은 `null`을 제공한다. Filter는 `next`를
-최대 한 번 호출한다. 두 번째 호출은 `ZLinkFrameworkErrorKind.InvalidOperation`으로 실패하며 handler를
-다시 실행하지 않는다. Request에서 `next`를 호출하지 않으면
-`ZLinkFrameworkErrorKind.Rejected` reply를 보낸다. Filter가 업무 reply를 대체하는 동작은 호환
-overload나 adapter로 제공하지 않는다.
+`ChannelSend`와 `ChannelRequest`는 RouteMesh와 ClientServer를 포함한다. .NET은 filter 실패를 `ZLinkFrameworkErrorKind.InvalidOperation`과 `Rejected`로 표현한다. 실행과 거부는 [Framework API §10](../../../00-foundation/06-framework-api.ko.md)이 정한다.
 
 `AddInstanceSpotFactory`의 type 이름은 비어 있을 수 없고 UTF-8로 255 byte 이하여야 한다. Type별 active와
 pending limit은 생략할 수 있지만 명시한 값은 1..`int.MaxValue`다.
@@ -502,18 +441,9 @@ Framework는 등록 호출 안에서 callback을 동기적으로 한 번 실행�
 고정한다. Application이 callback 밖에 builder를 보관했다가 다시 호출하면 configuration error다.
 Callback이 예외를 던지면 factory를 등록하지 않고 같은 예외를 호출자에게 전달한다.
 
-`ZLinkUserSpotExecutionMode.PerActor`를 선택한 User Spot은
-`RecreateOnRelocation()`만 허용한다. `DisableRelocation()`이나 `PreserveStateWith<TAdapter>()`를
-함께 등록하면 socket bind 전에 startup configuration error다. PerActor Spot은
-stateless execution shell이며 member Actor의 relocation policy와 adapter가 Actor
-state를 각각 처리한다. 유지해야 하는 shared state와 Spot-level schedule은
-application의 Redis·database·service 같은 외부 저장소에 둔다.
+PerActor relocation policy는 [Spot 모델](../../../03-spot-actor/01-spot-model.ko.md)이 정한다. .NET option 이름은 `ZLinkUserSpotExecutionMode.PerActor`다.
 
-Execution mode의 기본값은 `SpotWide`, relocation coordination mode의 기본값은
-`FrameworkManaged`다.
-`ApplicationSignaled`는 `SpotWide`에서만 허용한다. `PerActor`와 함께 등록하면
-socket bind 전에 startup configuration error다. Callback은 `IZLinkSpot`의 기본
-no-op 구현을 사용하므로 application override는 필수가 아니다.
+Execution·coordination mode의 기본값과 허용 범위는 [Spot 모델](../../../03-spot-actor/01-spot-model.ko.md)이 정한다. .NET은 `SpotWide`, `FrameworkManaged`, `ApplicationSignaled`를 제공한다.
 
 expected RID를 생략하면 admission handshake가 remote identity를 결정한다. expected RID를 지정한 경우
 handshake identity가 다르면 연결을 admission하지 않는다. Manual 연결도 자동 discovery 연결과 같은
@@ -634,14 +564,10 @@ public interface IZLinkMeshNodeSocketConfig
 }
 ```
 
-ClientServer application listener의 `MaxMessageSize` 기본값은 `16 MiB`다. `0`은 Framework가 별도
-single-message 상한을 두지 않는다는 뜻이며 Core HWM budget이나 Application job queue 설정과 결합 검증하지
-않는다. 이 설정은 RouteMesh ServerServer에 적용하지 않는다.
+`MaxMessageSize`는 .NET ClientServer application listener option이다. 기본 한도, `0`의 의미와 RouteMesh 제외 범위는 [Framework API §4](../../../00-foundation/06-framework-api.ko.md#4-routemesh-등록)가 정한다.
 
-`ConfigureSpotPublisher()`는 publish 전용 전달 정책 option을 제공하지 않는다. [Logical Multicast](../../../00-foundation/02-glossary.ko.md#logical-multicast)는
-source-local 실행 용량을 send timeout 안에 확보하면 시작하고 결과값 없이 정상 완료한다. Target별
-수락·실패 결과를 기다리거나 public monitoring에 집계하지 않으며 일부 target 실패 때문에 전체 publish를
-자동 재시도하지 않는다. Target이 없어도 정상 완료한다.
+`ConfigureSpotPublisher()`는 publish 전용 전달 정책 option을 제공하지 않는다.
+Logical Multicast의 완료 경계는 [Submit과 completion §6](../../../01-execution/01-submit-and-completion.ko.md)이 정한다.
 
 `IZLinkRouteMeshRuntimeOptions`는 public DI singleton이다. 등록되지 않은 membership을 조회하면
 `ZLinkConfigurationException`이다.
@@ -651,20 +577,9 @@ source-local 실행 용량을 send timeout 안에 확보하면 시작하고 결�
 ChannelName은 local RouteMesh 또는 ClientServer Server 등록을 유일하게 고른다. HWM과 timeout은
 `ConfigureRouterSocket()`에서 startup 전에 설정한다.
 
-`IZLinkMeshNodeSocketConfig`는 RouteMesh ServerServer의 `MaxMessageSize`를 제공하지 않는다. SS sender와
-receiver는 Framework-level complete-message 상한으로 message를 거절하지 않는다. HWM, mailbox byte budget과
-service-wire 표현 한계는 별도 자원·wire guard로 유지한다.
+`IZLinkMeshNodeSocketConfig`는 .NET socket 설정 표면이다. Message 한도와 자원 guard는 [Application job queue와 backpressure](../../../01-execution/04-application-job-queue-and-backpressure.ko.md)가 정한다.
 
-`ConfigureDispatch()`는 host 전체 진단·unhandled dispatch 설정을 반환한다.
-`ConfigureInboundDispatch()`가 반환하는 `IZLinkInboundDispatchOptions`는 Core HWM profile과
-Application Job Queue profile·manual cap·pause/resume threshold를 서로 독립된 설정으로 소유한다.
-Core memory limit·manual budget·profile은 Core에 전달한다. .NET binding은
-`GC.GetGCMemoryInfo().TotalAvailableMemoryBytes`의 양수 유한값을 runtime memory hint로 전달한다.
-두 profile은 기본값 `Balanced`인 독립된 enum과 계산이고 pressure threshold 기본값은 `80`/`60`이다.
-Manual job cap은 `1..2,147,483,647`이며 생략하면 common spec의 startup CPU snapshot과
-32/64/128/256 계수를 사용한다. Pause threshold는 `1..100`, resume threshold는 `0..99`의 정수이고
-resume은 pause보다 작아야 한다. 이 범위·순서 위반과 capacity overflow는 socket bind 전에 실패하고
-runtime 중 다시 계산하지 않는다.
+`ConfigureInboundDispatch()`는 `IZLinkInboundDispatchOptions`를 반환한다. Core HWM, capacity와 threshold 판정은 [Application job queue와 backpressure](../../../01-execution/04-application-job-queue-and-backpressure.ko.md)가 정한다.
 
 ## 6. 메시징 metadata
 
