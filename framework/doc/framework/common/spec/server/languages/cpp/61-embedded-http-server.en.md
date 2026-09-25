@@ -122,6 +122,8 @@ If port is omitted, it's filled with the default port by scheme
 (`http` 80, `https` 443). If host is absent, it fails at startup
 validation.
 
+`framework_runtime_t::http_listener_statuses()` returns the currently bound HTTP endpoints in `listen(...)` registration order. Each entry retains the exact endpoint string passed to `listen(...)` and gives a bound URL formed from its `http` or `https` scheme and the acceptor's local address and actual port. Thus repeated port-0 endpoint strings remain separate entries. The result is empty when no HTTP endpoint is bound. A bind failure remains a host startup failure.
+
 TLS is a per-endpoint configuration. An HTTPS endpoint needs a
 certificate and private key. An HTTPS endpoint with no TLS
 configuration must fail before options apply or hosted service start,

@@ -106,6 +106,8 @@ app.add_zlink_framework ([&] (auto &options) {
 endpoint는 `http://host:port` 또는 `https://host:port` 형식이다. port를 생략하면 scheme에 따라
 기본 port(`http` 80, `https` 443)를 채운다. host가 없으면 startup validation에서 실패한다.
 
+`framework_runtime_t::http_listener_statuses()`는 현재 bind된 HTTP endpoint를 `listen(...)` 등록 순서로 반환한다. 각 항목에는 `listen(...)`에 전달한 endpoint 문자열을 그대로 보관하고, 해당 endpoint의 `http` 또는 `https` scheme과 acceptor의 local address 및 실제 port로 만든 bound URL을 제공한다. 따라서 같은 port-0 endpoint 문자열을 여러 번 등록해도 항목을 구분할 수 있다. Bind된 HTTP endpoint가 없으면 빈 목록을 반환한다. Bind 실패는 host startup failure다.
+
 TLS는 endpoint별 설정이다. HTTPS endpoint에는 certificate와 private key가 필요하다. TLS 설정이
 없는 HTTPS endpoint는 runtime start 뒤가 아니라 options apply 또는 hosted service start 전에
 실패해야 한다.
