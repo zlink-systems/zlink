@@ -503,13 +503,15 @@ Close 절차는 다음 순서로 진행한다.
 
 1. Expected owner와 ObjectGeneration을 검증해 authority를 `Closing`으로 전이한다.
 2. Local admission을 seal하고 seal 전에 수락한 turn·timer를 정해진 boundary까지 처리한다.
-3. Handler scope, timer와 local activation resource를 한 번 정리한다.
+3. `OnClosing`을 Close당 최대 한 번 호출한 뒤 handler scope, timer와 local activation resource를 한 번
+   정리한다. `OnClosing` 호출이 실패하면 그 실패를 diagnostics에 기록하고 정리를 계속한다. Close를
+   재개해도 이미 호출한 `OnClosing`은 다시 호출하지 않는다.
 4. 같은 owner·generation fence로 authority를 해제한다.
 
 1단계에서 `Closing` 전이가 확정되지 않으면 authority는 바뀌지 않고 Close는 아래 결과로 끝난다.
-`Closing` 전이가 확정된 뒤에는 authority를 `Ready`로 되돌리지 않는다. 2–4단계 중 하나가 실패하면
-Close는 caller에게 그 실패를 반환하고, target owner runtime이 실패한 단계부터 같은 owner·generation으로
-남은 단계를 이어서 처리한다. 끝난 단계는 반복하지 않는다.
+`Closing` 전이가 확정된 뒤에는 authority를 `Ready`로 되돌리지 않는다. 2–4단계에서 `OnClosing`
+호출 이외의 작업이 실패하면 Close는 caller에게 그 실패를 반환하고, target owner runtime은 같은
+owner·generation에서 실패한 작업부터 남은 작업을 이어서 처리한다. 완료한 작업은 반복하지 않는다.
 
 같은 incarnation이 이미 없으면 idempotent `false`, 같은 Spot ID의 다른 generation이 있으면
 `InvalidOperation`, 이동 seal 중이면 `Unavailable`로 끝난다. Framework는 current ref를 다시
