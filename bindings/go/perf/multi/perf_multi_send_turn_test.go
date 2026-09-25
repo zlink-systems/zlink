@@ -21,6 +21,11 @@ func (s testSendSubmission) Admitted(ctx context.Context) error {
 	select {
 	case <-s.release:
 		return nil
+	default:
+	}
+	select {
+	case <-s.release:
+		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
