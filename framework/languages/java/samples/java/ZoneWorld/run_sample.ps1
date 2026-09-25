@@ -237,7 +237,7 @@ function Write-ServerConfig {
         $advertise = "127.0.0.1"
     }
     $path = Join-Path $ConfigDir "$Name.properties"
-    Set-ZlinkSampleUtf8File -Path $path -Value @(
+    Set-ZlinkSampleProperties -Path $path -Value @(
         "sample.role=$Role",
         "sample.node-id=$Node",
         "sample.mesh-endpoint=tcp://${bindHost}:$Mesh",
@@ -257,8 +257,8 @@ function Write-ClientConfig {
     param([Parameter(Mandatory = $true)][string]$Id)
     $safeId = $Id.Replace(',', '-')
     $path = Join-Path $ConfigDir "client-$safeId-$($script:ClientRunNumber).properties"
-    $armFile = (Join-Path $RunDir "b8-block-command-44").Replace('\', '/')
-    Set-ZlinkSampleUtf8File -Path $path -Value @(
+    $armFile = Join-Path $RunDir "b8-block-command-44"
+    Set-ZlinkSampleProperties -Path $path -Value @(
         "sample.gateway-endpoint=tcp://127.0.0.1:$GatewayStream",
         "sample.ops-endpoint=tcp://127.0.0.1:$OpsStream",
         "sample.scenarios=$Id",
