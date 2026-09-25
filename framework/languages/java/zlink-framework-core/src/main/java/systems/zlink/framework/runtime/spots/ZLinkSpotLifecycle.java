@@ -324,27 +324,17 @@ final class ZLinkSpotLifecycle {
         }
     }
 
-    CompletionStage<Boolean> closeReserved(String spotId, long objectGeneration) {
-        requireSpotId(spotId);
-        SpotActivation current = spots.get(spotId);
-        if (current == null) {
-            return CompletableFuture.completedFuture(false);
-        }
-        if (current.backendSpot.lifecycleGeneration() != objectGeneration) {
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("User Spot generation is stale"));
-        }
-        if (actorOccupancy.hasActorsInSpot(spotId)) {
-            return CompletableFuture.completedFuture(false);
-        }
+    void retireClosed(SpotActivation current) {
+        String spotId = current.backendSpot.spotId();
         if (!spots.remove(spotId, current)) {
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("User Spot is moving or closing"));
+            throw new IllegalStateException("User Spot changed during Close cleanup");
         }
-        current.close();
         ZLinkRuntimeMetrics.add("zlink.spot.count", -1, Map.of("kind", "user"));
         ZLinkRuntimeMetrics.increment("zlink.spot.closed", Map.of("kind", "user"));
-        return CompletableFuture.completedFuture(true);
+    }
+
+    Executor closeExecutor() {
+        return backendExecutor;
     }
 
     CompletionStage<Void> completeRelocationSource(

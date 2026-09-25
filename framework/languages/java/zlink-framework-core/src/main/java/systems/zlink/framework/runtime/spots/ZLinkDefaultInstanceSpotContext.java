@@ -91,16 +91,41 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
     }
 
     CompletionStage<Void> runClosing(Supplier<CompletionStage<Void>> operation) {
+        return runClosing(dispatchQueue.isCurrent(), operation);
+    }
+
+    boolean isCurrentDispatchTurn() {
+        return dispatchQueue.isCurrent();
+    }
+
+    CompletionStage<Void> runClosing(
+            boolean initiatedInsideTurn, Supplier<CompletionStage<Void>> operation) {
+        sealTimerAdmission();
+        CompletionStage<Void> acceptedTurns =
+                initiatedInsideTurn ? infrastructureQueue.awaitQuiescence() : awaitQuiescence();
+        return acceptedTurns.thenCompose(ignored -> runLifecycle(operation));
+    }
+
+    void sealTimerAdmission() {
         timers.freeze();
-        return infrastructureQueue
-                .awaitQuiescence()
-                .thenCompose(ignored -> runLifecycle(operation));
+    }
+
+    void closeTimers() {
+        timers.close();
+    }
+
+    void closeHandlerInstances() {
+        handlerInstances.close();
+    }
+
+    void closeBackendSpot() {
+        backendSpot.close();
     }
 
     void closeResources() {
-        timers.close();
-        handlerInstances.close();
-        backendSpot.close();
+        closeTimers();
+        closeHandlerInstances();
+        closeBackendSpot();
     }
 
     CompletionStage<Void> awaitQuiescence() {

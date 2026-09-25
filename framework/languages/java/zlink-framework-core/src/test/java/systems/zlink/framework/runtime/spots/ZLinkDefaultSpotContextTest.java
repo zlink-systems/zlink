@@ -529,6 +529,48 @@ final class ZLinkDefaultSpotContextTest {
     }
 
     @Test
+    void instanceClosingWaitsForYieldedContinuation() throws Exception {
+        ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+        try (ZLinkWorkerPool workerPool = new ZLinkWorkerPool(0, 1, Duration.ofSeconds(1))) {
+            TestHost host = new TestHost(executor);
+            DefaultInstanceSpotContext context = host.instanceContext(workerPool);
+            CompletableFuture<Void> started = new CompletableFuture<>();
+            CompletableFuture<Void> continuation = new CompletableFuture<>();
+            CompletableFuture<Void> probe = new CompletableFuture<>();
+            AtomicInteger closingCalls = new AtomicInteger();
+
+            CompletionStage<Void> accepted =
+                    context.enqueueDispatch(
+                            () -> {
+                                started.complete(null);
+                                return ZLinkSerialExecutionQueue.yieldCurrent(continuation);
+                            });
+            started.get(2, TimeUnit.SECONDS);
+            CompletionStage<Void> closing =
+                    context.runClosing(
+                            () -> {
+                                closingCalls.incrementAndGet();
+                                return CompletableFuture.completedFuture(null);
+                            });
+
+            context.enqueueDispatch(
+                    () -> {
+                        probe.complete(null);
+                        return CompletableFuture.completedFuture(null);
+                    });
+            probe.get(2, TimeUnit.SECONDS);
+            assertFalse(closing.toCompletableFuture().isDone());
+            assertEquals(0, closingCalls.get());
+            continuation.complete(null);
+            accepted.toCompletableFuture().get(2, TimeUnit.SECONDS);
+            closing.toCompletableFuture().get(2, TimeUnit.SECONDS);
+            assertEquals(1, closingCalls.get());
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void instanceClosingDrainsAcceptedTurnWhenInitiatorYields() throws Exception {
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         try (ZLinkWorkerPool workerPool = new ZLinkWorkerPool(0, 1, Duration.ofSeconds(1))) {

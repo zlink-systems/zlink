@@ -179,6 +179,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     private final Set<RoutingId> autoConnectedRouterPeerNodeRids = ConcurrentHashMap.newKeySet();
     private final Map<String, ZLinkInstanceSpotActivation> instanceSpotActivations =
             new ConcurrentHashMap<>();
+
+    private record ClosingFence(String spotId, long objectGeneration, long ownerGeneration) {}
+
+    private record RetainedClose(ZLinkSpotCloseCoordinator coordinator, Object commandFence) {}
+
+    private final Map<ClosingFence, RetainedClose> closingCoordinators = new ConcurrentHashMap<>();
     private final Map<String, Duration> instanceSpotIdleTimeouts = new HashMap<>();
     private final List<ZLinkInternalMeshNode> routeMeshNodes;
     private final Map<String, ZLinkInternalMeshNode> routeMeshNodesByName;
@@ -723,24 +729,104 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         userSpotLocationRuntime = Objects.requireNonNull(locationRuntime, "locationRuntime");
         userSpotLocationResolvers = locationResolvers;
         for (var registration : frameworkRegistration.meshNodes()) {
-            if (registration.relocatableSpotFactories().isEmpty()) {
-                continue;
-            }
             ZLinkInternalMeshNode meshNode = routeMeshNodesByName.get(registration.meshName());
             if (meshNode == null) {
                 throw new ZLinkConfigurationException(
                         "MeshNode runtime is missing: " + registration.meshName());
+            }
+            meshNode.spotNode()
+                    .setSpotAdmissionResolver(
+                            (spotId, authorityOwnerGeneration, instanceIntent, activationPresent) ->
+                                    targetSpotAdmission(
+                                            authorityStore,
+                                            meshNode.spotNode().routingId(),
+                                            spotId,
+                                            authorityOwnerGeneration,
+                                            instanceIntent,
+                                            activationPresent));
+            if (registration.relocatableSpotFactories().isEmpty()) {
+                continue;
             }
             ZLinkInternalMeshNode.UserSpotOperationHandler handler =
                     new ZLinkUserSpotOperationHandler(
                             registration.meshName(),
                             meshNode,
                             authorityStore,
+                            this,
                             spotLifecycle,
                             serializer,
                             registration.relocatableSpotFactories());
             meshNode.setUserSpotOperationHandler(handler);
         }
+    }
+
+    private CompletionStage<? extends RuntimeException> targetSpotAdmission(
+            ZLinkLocationRepository authorityStore,
+            RoutingId targetNodeRid,
+            String spotId,
+            long authorityOwnerGeneration,
+            boolean instanceIntent,
+            boolean activationPresent) {
+        if (draining || closing) {
+            return CompletableFuture.completedFuture(spotAdmissionFailure(spotId));
+        }
+        EntrySpotActivation entry = spotLifecycle.entrySpotActivationFor(spotId);
+        if (entry != null
+                && activationPresent
+                && !instanceIntent
+                && authorityOwnerGeneration == 0
+                && entry.context.nodeRid().equals(targetNodeRid)) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return authorityStore
+                .read(
+                        systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
+                                spotId),
+                        () -> false)
+                .thenApply(
+                        read -> {
+                            if (read instanceof ZLinkAuthoritySnapshot snapshot) {
+                                var authority = userSpotAuthorities.decode(snapshot.payload());
+                                if (authority.isEmpty()) {
+                                    return ZLinkFrameworkErrorOrigin.framework(
+                                            ZLinkFrameworkErrorKind.NOT_FOUND,
+                                            "Spot is not available: " + spotId);
+                                }
+                                if (!authority.get().nodeRid().equals(targetNodeRid)
+                                        || (authorityOwnerGeneration != 0
+                                                && snapshot.authorityOwnerGeneration()
+                                                        != authorityOwnerGeneration)) {
+                                    return ZLinkFrameworkErrorOrigin.framework(
+                                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                            "Spot owner fence has changed: " + spotId);
+                                }
+                                if (authority.get().state()
+                                        == systems.zlink.framework.runtime.locations
+                                                .ZLinkServiceAuthorityPayloadCodec.State.CLOSING) {
+                                    return spotAdmissionFailure(spotId);
+                                }
+                                if (authority.get().state()
+                                                == systems.zlink.framework.runtime.locations
+                                                        .ZLinkServiceAuthorityPayloadCodec.State
+                                                        .CREATING
+                                        && !instanceIntent) {
+                                    return ZLinkFrameworkErrorOrigin.framework(
+                                            ZLinkFrameworkErrorKind.NOT_FOUND,
+                                            "Spot is still creating: " + spotId);
+                                }
+                                if (activationPresent
+                                        || (instanceIntent
+                                                && authority.get().instance().isPresent())) {
+                                    return null;
+                                }
+                                return ZLinkFrameworkErrorOrigin.framework(
+                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                        "Spot activation is unavailable: " + spotId);
+                            }
+                            return ZLinkFrameworkErrorOrigin.framework(
+                                    ZLinkFrameworkErrorKind.NOT_FOUND,
+                                    "Spot is not available: " + spotId);
+                        });
     }
 
     private static ZLinkBackendSpotNodeMode resolveSpotNodeMode(SpotNodeRegistration registration) {
@@ -809,6 +895,14 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
                         spot.spotId());
         return store.read(key, () -> false)
+                .handle(
+                        (read, readFailure) -> {
+                            if (readFailure != null) {
+                                throw new ZLinkSpotCloseCoordinator.UncertainCommitFailure(
+                                        readFailure, readFailure);
+                            }
+                            return read;
+                        })
                 .thenCompose(
                         read -> {
                             if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
@@ -829,9 +923,14 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                 .ZLinkUserSpotOperationException(
                                                 107, 33, "User Spot authority kind is stale"));
                             }
-                            if (authority.state()
-                                            != systems.zlink.framework.runtime.locations
-                                                    .ZLinkServiceAuthorityPayloadCodec.State.READY
+                            if ((authority.state()
+                                                    != systems.zlink.framework.runtime.locations
+                                                            .ZLinkServiceAuthorityPayloadCodec.State
+                                                            .READY
+                                            && authority.state()
+                                                    != systems.zlink.framework.runtime.locations
+                                                            .ZLinkServiceAuthorityPayloadCodec.State
+                                                            .CLOSING)
                                     || snapshot.allocation().state()
                                             != ZLinkPlacementAllocationState.ACTIVE) {
                                 return CompletableFuture.failedFuture(
@@ -1989,6 +2088,15 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return draining;
     }
 
+    ZLinkFrameworkException spotAdmissionFailure(String spotId) {
+        if (draining || closing) {
+            return ZLinkFrameworkErrorOrigin.framework(
+                    ZLinkFrameworkErrorKind.SHUTTING_DOWN, "Spot runtime is draining: " + spotId);
+        }
+        return ZLinkFrameworkErrorOrigin.framework(
+                ZLinkFrameworkErrorKind.REJECTED, "Spot is closing: " + spotId);
+    }
+
     ZLinkActorSessionCoordinator actorSessions() {
         return actorSessions;
     }
@@ -2653,17 +2761,17 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     new IllegalStateException("Instance Spot type or Mesh does not match"));
         }
         if (authority.state()
+                == systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec.State
+                        .CLOSING) {
+            return activationFromExisting(snapshot, stableType, meshName);
+        }
+        if (authority.state()
                         == systems.zlink.framework.runtime.locations
                                 .ZLinkServiceAuthorityPayloadCodec.State.READY
                 && snapshot.allocation().state()
                         == systems.zlink.framework.runtime.internal.locations
                                 .ZLinkPlacementAllocationState.ACTIVE) {
             return activationFromExisting(snapshot, stableType, meshName);
-        }
-        if (authority.state()
-                == systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec.State
-                        .CLOSING) {
-            return instanceSpotNotFound("Instance Spot is closing: " + authority.spotId());
         }
         if (System.currentTimeMillis() >= deadline) {
             return CompletableFuture.failedFuture(
@@ -2700,9 +2808,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         if (authority.instance().isEmpty()
                 || !authority.stableType().equals(stableType)
                 || !authority.meshName().equals(meshName)
-                || authority.state()
-                        != systems.zlink.framework.runtime.locations
-                                .ZLinkServiceAuthorityPayloadCodec.State.READY
+                || (authority.state()
+                                != systems.zlink.framework.runtime.locations
+                                        .ZLinkServiceAuthorityPayloadCodec.State.READY
+                        && authority.state()
+                                != systems.zlink.framework.runtime.locations
+                                        .ZLinkServiceAuthorityPayloadCodec.State.CLOSING)
                 || snapshot.allocation().state()
                         != systems.zlink.framework.runtime.internal.locations
                                 .ZLinkPlacementAllocationState.ACTIVE) {
@@ -2719,11 +2830,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         snapshot.ownerId(), snapshot.authorityOwnerGeneration(),
                         snapshot.ownerLeaseGeneration(), snapshot.storeVersion());
         return CompletableFuture.completedFuture(new InstanceActivation(source, route, stableType));
-    }
-
-    private static <T> CompletionStage<T> instanceSpotNotFound(String message) {
-        return CompletableFuture.failedFuture(
-                new ZLinkFrameworkException(ZLinkFrameworkErrorKind.NOT_FOUND, message));
     }
 
     private CompletionStage<Void> activateInstanceSpotTarget(
@@ -4312,13 +4418,160 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     @Override
     CompletionStage<Boolean> closeInstanceSpot(String spotId, long objectGeneration) {
         ZLinkInstanceSpotActivation activation = instanceSpotActivations.get(spotId);
-        if (activation == null || activation.context.objectGeneration() != objectGeneration) {
-            return CompletableFuture.completedFuture(false);
+        if (activation != null && activation.context.objectGeneration() == objectGeneration) {
+            return activation.closeExplicit();
         }
-        return activation.closeExplicit();
+        return requireUserSpotLocationStore()
+                .read(
+                        systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
+                                spotId),
+                        () -> false)
+                .thenCompose(
+                        read -> {
+                            if (read instanceof ZLinkAuthoritySnapshot snapshot) {
+                                var authority = userSpotAuthorities.decode(snapshot.payload());
+                                if (snapshot.objectGeneration() != objectGeneration
+                                        || authority.isEmpty()
+                                        || authority.get().state()
+                                                != systems.zlink.framework.runtime.locations
+                                                        .ZLinkServiceAuthorityPayloadCodec.State
+                                                        .CLOSING) {
+                                    closingCoordinators
+                                            .entrySet()
+                                            .removeIf(
+                                                    entry ->
+                                                            entry.getValue().commandFence() == null
+                                                                    && entry.getKey()
+                                                                            .spotId()
+                                                                            .equals(spotId)
+                                                                    && entry.getKey()
+                                                                                    .objectGeneration()
+                                                                            == objectGeneration
+                                                                    && (snapshot.objectGeneration()
+                                                                                    != objectGeneration
+                                                                            || snapshot
+                                                                                            .authorityOwnerGeneration()
+                                                                                    != entry.getKey()
+                                                                                            .ownerGeneration()
+                                                                            || authority.isEmpty()
+                                                                            || authority
+                                                                                            .get()
+                                                                                            .state()
+                                                                                    != systems.zlink
+                                                                                            .framework
+                                                                                            .runtime
+                                                                                            .locations
+                                                                                            .ZLinkServiceAuthorityPayloadCodec
+                                                                                            .State
+                                                                                            .CLOSING));
+                                    return CompletableFuture.completedFuture(false);
+                                }
+                                closingCoordinators
+                                        .entrySet()
+                                        .removeIf(
+                                                entry ->
+                                                        entry.getValue().commandFence() == null
+                                                                && entry.getKey()
+                                                                        .spotId()
+                                                                        .equals(spotId)
+                                                                && entry.getKey().objectGeneration()
+                                                                        == objectGeneration
+                                                                && entry.getKey().ownerGeneration()
+                                                                        != snapshot
+                                                                                .authorityOwnerGeneration());
+                                ZLinkSpotCloseCoordinator retained =
+                                        closingCoordinator(
+                                                spotId,
+                                                objectGeneration,
+                                                snapshot.authorityOwnerGeneration());
+                                return retained == null
+                                        ? CompletableFuture.completedFuture(false)
+                                        : retained.close();
+                            }
+                            if (read instanceof ZLinkAuthorityMissing) {
+                                var matching =
+                                        closingCoordinators.entrySet().stream()
+                                                .filter(
+                                                        entry ->
+                                                                entry.getKey()
+                                                                                .spotId()
+                                                                                .equals(spotId)
+                                                                        && entry.getKey()
+                                                                                        .objectGeneration()
+                                                                                == objectGeneration
+                                                                        && entry.getValue()
+                                                                                        .commandFence()
+                                                                                == null)
+                                                .map(entry -> entry.getValue().coordinator())
+                                                .toList();
+                                return matching.size() == 1
+                                        ? matching.getFirst().close()
+                                        : CompletableFuture.completedFuture(false);
+                            }
+                            return CompletableFuture.completedFuture(false);
+                        });
     }
 
-    CompletionStage<Boolean> sealInstanceSpotAuthority(ZLinkInstanceSpotActivation activation) {
+    void retainClosingCoordinator(
+            String spotId,
+            long objectGeneration,
+            long ownerGeneration,
+            ZLinkSpotCloseCoordinator coordinator) {
+        retainClosingCoordinator(spotId, objectGeneration, ownerGeneration, coordinator, null);
+    }
+
+    void retainClosingCoordinator(
+            String spotId,
+            long objectGeneration,
+            long ownerGeneration,
+            ZLinkSpotCloseCoordinator coordinator,
+            Object commandFence) {
+        RetainedClose prior =
+                closingCoordinators.putIfAbsent(
+                        new ClosingFence(spotId, objectGeneration, ownerGeneration),
+                        new RetainedClose(coordinator, commandFence));
+        if (prior != null
+                && (prior.coordinator() != coordinator
+                        || !java.util.Objects.equals(prior.commandFence(), commandFence))) {
+            throw new IllegalStateException("Close coordinator already owns this authority fence");
+        }
+    }
+
+    ZLinkSpotCloseCoordinator closingCoordinator(
+            String spotId, long objectGeneration, long ownerGeneration) {
+        return closingCoordinator(spotId, objectGeneration, ownerGeneration, null);
+    }
+
+    ZLinkSpotCloseCoordinator retainedClosingCoordinator(
+            String spotId, long objectGeneration, long ownerGeneration) {
+        RetainedClose retained =
+                closingCoordinators.get(
+                        new ClosingFence(spotId, objectGeneration, ownerGeneration));
+        return retained == null ? null : retained.coordinator();
+    }
+
+    ZLinkSpotCloseCoordinator closingCoordinator(
+            String spotId, long objectGeneration, long ownerGeneration, Object commandFence) {
+        RetainedClose retained =
+                closingCoordinators.get(
+                        new ClosingFence(spotId, objectGeneration, ownerGeneration));
+        return retained != null && java.util.Objects.equals(retained.commandFence(), commandFence)
+                ? retained.coordinator()
+                : null;
+    }
+
+    void releaseClosingCoordinator(
+            String spotId,
+            long objectGeneration,
+            long ownerGeneration,
+            ZLinkSpotCloseCoordinator coordinator) {
+        closingCoordinators.computeIfPresent(
+                new ClosingFence(spotId, objectGeneration, ownerGeneration),
+                (ignored, retained) -> retained.coordinator() == coordinator ? null : retained);
+    }
+
+    CompletionStage<Boolean> sealInstanceSpotAuthority(
+            ZLinkInstanceSpotActivation activation, Runnable markCommitted) {
         var store = requireUserSpotLocationStore();
         String key =
                 systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
@@ -4330,7 +4583,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                     instanceof
                                     systems.zlink.framework.runtime.internal.locations
                                             .ZLinkAuthorityMissing) {
-                                return CompletableFuture.completedFuture(true);
+                                return CompletableFuture.completedFuture(false);
                             }
                             if (!(read
                                     instanceof
@@ -4348,9 +4601,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                     "invalid Instance Spot"
                                                                             + " authority"));
                             if (authority.instance().isEmpty()
-                                    || authority.state()
-                                            != systems.zlink.framework.runtime.locations
-                                                    .ZLinkServiceAuthorityPayloadCodec.State.READY
                                     || !authority.spotId().equals(activation.context.spotId())
                                     || !authority.meshName().equals(activation.context.meshName())
                                     || !authority.nodeRid().equals(activation.context.nodeRid())
@@ -4369,6 +4619,17 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                     || snapshot.allocation().objectKind()
                                             != systems.zlink.framework.locations
                                                     .ZLinkPlacementObjectKind.INSTANCE_SPOT) {
+                                return CompletableFuture.completedFuture(false);
+                            }
+                            if (authority.state()
+                                    == systems.zlink.framework.runtime.locations
+                                            .ZLinkServiceAuthorityPayloadCodec.State.CLOSING) {
+                                activation.markSealedStoreVersion(snapshot.storeVersion());
+                                return CompletableFuture.completedFuture(true);
+                            }
+                            if (authority.state()
+                                    != systems.zlink.framework.runtime.locations
+                                            .ZLinkServiceAuthorityPayloadCodec.State.READY) {
                                 return CompletableFuture.completedFuture(false);
                             }
                             byte[] closing =
@@ -4401,38 +4662,70 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                 stored) {
                                                     activation.markSealedStoreVersion(
                                                             stored.storeVersion());
-                                                    ZLinkInternalMeshNode routeNode =
-                                                            routeMeshNodesByName.get(
-                                                                    activation.context.meshName());
-                                                    if (routeNode != null) {
-                                                        routeNode.forgetInstanceIntent(
-                                                                activation.authorityRouteFence());
-                                                    }
                                                     return true;
                                                 }
                                                 return false;
-                                            });
+                                            })
+                                    .exceptionallyCompose(
+                                            failure ->
+                                                    store.read(key, () -> false)
+                                                            .handle(
+                                                                    (current, readFailure) -> {
+                                                                        if (readFailure != null) {
+                                                                            throw new ZLinkSpotCloseCoordinator
+                                                                                    .UncertainCommitFailure(
+                                                                                    failure,
+                                                                                    readFailure);
+                                                                        }
+                                                                        return current;
+                                                                    })
+                                                            .thenCompose(
+                                                                    current -> {
+                                                                        if (current
+                                                                                        instanceof
+                                                                                        ZLinkAuthoritySnapshot
+                                                                                                committed
+                                                                                && committed
+                                                                                                .objectGeneration()
+                                                                                        == activation
+                                                                                                .context
+                                                                                                .objectGeneration()
+                                                                                && committed
+                                                                                                .authorityOwnerGeneration()
+                                                                                        == snapshot
+                                                                                                .authorityOwnerGeneration()
+                                                                                && java.util.Arrays
+                                                                                        .equals(
+                                                                                                committed
+                                                                                                        .payload(),
+                                                                                                closing)) {
+                                                                            activation
+                                                                                    .markSealedStoreVersion(
+                                                                                            committed
+                                                                                                    .storeVersion());
+                                                                            markCommitted.run();
+                                                                        }
+                                                                        return CompletableFuture
+                                                                                .failedFuture(
+                                                                                        failure);
+                                                                    }));
                         });
     }
 
     @Override
     CompletionStage<Boolean> completeInstanceSpotClose(ZLinkInstanceSpotActivation activation) {
+        return releaseInstanceSpotAuthority(activation);
+    }
+
+    void retireInstanceSpotActivation(ZLinkInstanceSpotActivation activation) {
         String spotId = activation.context.spotId();
-        // A Missing authority record is permission for a new cold activation.
-        // Retire the local generation before publishing that permission so a
-        // request racing explicit close cannot reuse this sealed activation.
-        instanceSpotActivations.remove(spotId, activation);
-        activation.closeResources();
-        return releaseInstanceSpotAuthority(activation)
-                .thenApply(
-                        closed -> {
-                            ZLinkInternalMeshNode routeNode =
-                                    routeMeshNodesByName.get(activation.context.meshName());
-                            if (routeNode != null) {
-                                routeNode.forgetInstanceIntent(activation.authorityRouteFence());
-                            }
-                            return closed;
-                        });
+        if (!instanceSpotActivations.remove(spotId, activation)) {
+            throw new IllegalStateException("Instance Spot changed during Close cleanup");
+        }
+        ZLinkInternalMeshNode routeNode = routeMeshNodesByName.get(activation.context.meshName());
+        if (routeNode != null) {
+            routeNode.forgetInstanceIntent(activation.authorityRouteFence());
+        }
     }
 
     void discardInstanceSpotActivation(ZLinkInstanceSpotActivation activation) {
@@ -4442,6 +4735,41 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         if (routeNode != null) {
             routeNode.forgetInstanceIntent(activation.authorityRouteFence());
         }
+    }
+
+    CompletionStage<Boolean> discardStaleInstanceSpotActivation(
+            ZLinkInstanceSpotActivation activation) {
+        return requireUserSpotLocationStore()
+                .read(
+                        systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
+                                activation.context.spotId()),
+                        () -> false)
+                .thenApply(
+                        read -> {
+                            if (read instanceof ZLinkAuthoritySnapshot snapshot) {
+                                var authority = userSpotAuthorities.decode(snapshot.payload());
+                                if (authority.isPresent()
+                                        && authority.get().instance().isPresent()
+                                        && authority.get().state()
+                                                == systems.zlink.framework.runtime.locations
+                                                        .ZLinkServiceAuthorityPayloadCodec.State
+                                                        .READY
+                                        && snapshot.objectGeneration()
+                                                == activation.context.objectGeneration()
+                                        && authority
+                                                .get()
+                                                .nodeRid()
+                                                .equals(activation.context.nodeRid())
+                                        && activation.authorityFenceMatches(
+                                                snapshot.ownerId(),
+                                                snapshot.ownerLeaseGeneration(),
+                                                snapshot.authorityOwnerGeneration())) {
+                                    return false;
+                                }
+                            }
+                            discardInstanceSpotActivation(activation);
+                            return false;
+                        });
     }
 
     private CompletionStage<Boolean> releaseInstanceSpotAuthority(
@@ -5240,6 +5568,17 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 failure.sourceRid,
                 failure.correlationId,
                 failure.error);
+    }
+
+    void reportSpotClosingFailure(String spotId, Throwable failure) {
+        reportDispatchError(
+                DispatchFailureReport.of(
+                                ZLinkDispatchErrorSurface.SPOT_ROUTE,
+                                ZLinkDispatchMessageKind.CONTROL,
+                                ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
+                                ZLinkDispatchErrorAction.FAIL_CALLER)
+                        .spotId(spotId)
+                        .error(failure));
     }
 
     void recordSpotDrop(String spotId, String reason) {

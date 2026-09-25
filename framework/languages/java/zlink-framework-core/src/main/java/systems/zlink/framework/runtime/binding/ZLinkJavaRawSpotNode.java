@@ -86,6 +86,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
     private volatile ZLinkInternalSpotNode.MessageFollowRelayHandler messageFollowRelayHandler;
     private volatile ZLinkInternalSpotNode.RelocationStagingIngressHandler
             relocationStagingIngressHandler;
+    private volatile ZLinkInternalSpotNode.SpotAdmissionResolver spotAdmissionResolver;
     private final Map<
                     ZLinkServiceM6BWireCodec.SpotRouteFence,
                     ZLinkServiceM6BWireCodec.SpotRouteFence>
@@ -208,6 +209,11 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
     public void setRelocationStagingIngressHandler(
             ZLinkInternalSpotNode.RelocationStagingIngressHandler handler) {
         relocationStagingIngressHandler = Objects.requireNonNull(handler, "handler");
+    }
+
+    @Override
+    public void setSpotAdmissionResolver(ZLinkInternalSpotNode.SpotAdmissionResolver resolver) {
+        spotAdmissionResolver = Objects.requireNonNull(resolver, "resolver");
     }
 
     @Override
@@ -1453,9 +1459,27 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
                 || spotAuthorityOwnerGeneration(
                                 routingId(), header.target().spotId(), target.lifecycleGeneration())
                         != header.target().authorityOwnerGeneration()) {
-            return false;
+            ZLinkInternalSpotNode.SpotAdmissionResolver resolver = spotAdmissionResolver;
+            if (resolver == null) {
+                return false;
+            }
+            resolver.resolve(
+                            header.target().spotId(),
+                            header.target().authorityOwnerGeneration(),
+                            false,
+                            false)
+                    .whenComplete(
+                            (rejection, readFailure) -> {
+                                try {
+                                    parts.forEach(Message::close);
+                                    failure.accept(readFailure == null ? rejection : readFailure);
+                                } finally {
+                                    terminalRelease.run();
+                                }
+                            });
+            return true;
         }
-        target.enqueueRoute(
+        var received =
                 systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived.lazyJournal(
                         systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult
                                 .OK,
@@ -1468,7 +1492,39 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
                         parts,
                         header.request() ? reply : null,
                         terminalRelease,
-                        contentType));
+                        contentType);
+        ZLinkInternalSpotNode.SpotAdmissionResolver resolver = spotAdmissionResolver;
+        CompletionStage<Void> admitted =
+                resolver == null
+                        ? target.enqueueRoute(received)
+                        : resolver.resolve(
+                                        header.target().spotId(),
+                                        header.target().authorityOwnerGeneration(),
+                                        false,
+                                        true)
+                                .handle(
+                                        (rejection, readFailure) -> {
+                                            if (readFailure != null) {
+                                                received.close();
+                                                throw new java.util.concurrent.CompletionException(
+                                                        readFailure);
+                                            }
+                                            return rejection;
+                                        })
+                                .thenCompose(
+                                        rejection -> {
+                                            if (rejection != null) {
+                                                received.close();
+                                                return CompletableFuture.failedFuture(rejection);
+                                            }
+                                            return target.enqueueRoute(received);
+                                        });
+        admitted.whenComplete(
+                (ignored, enqueueFailure) -> {
+                    if (enqueueFailure != null) {
+                        failure.accept(enqueueFailure);
+                    }
+                });
         return true;
     }
 
@@ -2363,6 +2419,46 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
             String contentType,
             Consumer<List<Message>> reply,
             Consumer<Throwable> failure) {
+        ZLinkInternalSpotNode.SpotAdmissionResolver resolver = spotAdmissionResolver;
+        if (resolver == null) {
+            return enqueueRemoteInstanceSpotAdmitted(
+                    sourceNodeRid, header, metadata, parts, contentType, reply, failure);
+        }
+        resolver.resolve(
+                        header.route().targetSpotId(),
+                        header.route().authorityOwnerGeneration(),
+                        true,
+                        false)
+                .whenComplete(
+                        (rejection, readFailure) -> {
+                            if (readFailure != null || rejection != null) {
+                                closeRemoteInstancePayload(parts);
+                                failure.accept(readFailure == null ? rejection : readFailure);
+                            } else if (!enqueueRemoteInstanceSpotAdmitted(
+                                    sourceNodeRid,
+                                    header,
+                                    metadata,
+                                    parts,
+                                    contentType,
+                                    reply,
+                                    failure)) {
+                                closeRemoteInstancePayload(parts);
+                                failure.accept(
+                                        new IllegalStateException(
+                                                "Instance Spot target rejected admission"));
+                            }
+                        });
+        return true;
+    }
+
+    private boolean enqueueRemoteInstanceSpotAdmitted(
+            RoutingId sourceNodeRid,
+            ZLinkServiceM6BWireCodec.InstanceSpotMessage header,
+            byte[] metadata,
+            List<Message> parts,
+            String contentType,
+            Consumer<List<Message>> reply,
+            Consumer<Throwable> failure) {
         InstanceAuthority authority =
                 selectRemoteInstanceSpotAuthority(header.stableType(), header.route());
         if (authority == null || !authority.stableType().equals(header.stableType())) {
@@ -2428,8 +2524,10 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
                                 });
                     });
             return true;
-        } catch (RuntimeException ignored) {
-            return false;
+        } catch (RuntimeException dispatchFailure) {
+            closeRemoteInstancePayload(parts);
+            failure.accept(dispatchFailure);
+            return true;
         }
     }
 
@@ -2644,12 +2742,19 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
         }
         ZLinkJavaRawSpot target = localSpot(targetNodeRid, targetSpotId, targetGeneration);
         if (target == null) {
-            return CompletableFuture.failedFuture(new ZlinkSubmitException(SubmitResult.NOT_FOUND));
+            ZLinkInternalSpotNode.SpotAdmissionResolver resolver = spotAdmissionResolver;
+            return resolver == null
+                    ? CompletableFuture.failedFuture(
+                            new ZlinkSubmitException(SubmitResult.NOT_FOUND))
+                    : resolver.resolve(targetSpotId, 0, false, false)
+                            .thenCompose(CompletableFuture::failedFuture);
         }
         byte[] acceptedRecord =
                 owner.encodeLocalSpotAccepted(
                         source.spotId(), targetSpotId, targetGeneration, metadata, parts, null);
-        target.enqueueRoute(
+        return enqueueAdmittedLocalSpot(
+                target,
+                targetSpotId,
                 new systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived(
                         systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult
                                 .OK,
@@ -2662,7 +2767,31 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
                         null,
                         () -> {},
                         ZLinkChannelContentTypeFrame.decode(parts)));
-        return CompletableFuture.completedFuture(null);
+    }
+
+    private CompletionStage<Void> enqueueAdmittedLocalSpot(
+            ZLinkJavaRawSpot target, String spotId, ZLinkBackendReceived received) {
+        ZLinkInternalSpotNode.SpotAdmissionResolver resolver = spotAdmissionResolver;
+        if (resolver == null) {
+            return target.enqueueRoute(received);
+        }
+        return resolver.resolve(spotId, 0, false, true)
+                .handle(
+                        (rejection, readFailure) -> {
+                            if (readFailure != null) {
+                                received.close();
+                                throw new java.util.concurrent.CompletionException(readFailure);
+                            }
+                            return rejection;
+                        })
+                .thenCompose(
+                        rejection -> {
+                            if (rejection != null) {
+                                received.close();
+                                return CompletableFuture.failedFuture(rejection);
+                            }
+                            return target.enqueueRoute(received);
+                        });
     }
 
     CompletionStage<ZLinkBackendReceived> requestToSpot(
@@ -2745,8 +2874,12 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
                         source.spotId(), targetSpotId, targetGeneration, metadata, parts, sequence);
         ZLinkJavaRawSpot target = localSpot(targetNodeRid, targetSpotId, targetGeneration);
         if (target == null) {
-            return CompletableFuture.failedFuture(
-                    new ZlinkRequestException(RequestResult.NOT_FOUND));
+            ZLinkInternalSpotNode.SpotAdmissionResolver resolver = spotAdmissionResolver;
+            return resolver == null
+                    ? CompletableFuture.failedFuture(
+                            new ZlinkRequestException(RequestResult.NOT_FOUND))
+                    : resolver.resolve(targetSpotId, 0, false, false)
+                            .thenCompose(CompletableFuture::failedFuture);
         }
         ZLinkTerminalWinner terminal = new ZLinkTerminalWinner();
         CompletableFuture<ZLinkBackendReceived> completion = new CompletableFuture<>();
@@ -2781,7 +2914,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
         Supplier<CompletionStage<ZLinkBackendReceived>> enqueue =
                 () -> {
                     handedOff[0] = true;
-                    target.enqueueRoute(request)
+                    enqueueAdmittedLocalSpot(target, targetSpotId, request)
                             .whenComplete(
                                     (ignored, failure) -> {
                                         if (failure != null
