@@ -214,7 +214,13 @@ Peer state는 연결이 없는 두 경우를 구분한다.
 
 RouteMesh placement 상태는 새 object 수락 여부와 현재 active Actor·Spot 수를
 제공한다. Status는 Spot과 그 안에서 application message를 처리하는 Actor의 개수를
-각각 제공한다. Startup에 등록한 type별 capacity reservation, Spot 초기화가 끝나기 전에
+각각 제공한다. 이 개수에는 status를 보고하는 MeshNode에서 활성화된 Actor·Spot만 포함한다. 현재
+process에서 해당 MeshNode의 activation 기록으로 개수를 정하며, Location Store의 placement
+projection에서 가져오지 않는다. `IsAvailable`의 capacity 여유도 같은 MeshNode를 대상으로 하며, 판정
+기준은 [Object Placement Capability §5.1](../03-spot-actor/03-mesh-node.ko.md#51-weight와-capacity)을
+따른다.
+
+Startup에 등록한 type별 capacity reservation, Spot 초기화가 끝나기 전에
 최초 message 전달을 막는
 [activation barrier](../00-foundation/02-glossary.ko.md#activation-barrier)와 내부 capacity counter는
 제공하지 않는다.

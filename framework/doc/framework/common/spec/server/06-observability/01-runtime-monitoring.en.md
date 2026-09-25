@@ -252,8 +252,14 @@ failure. This state alone doesn't cause a RouteMesh to become `degraded`.
 
 RouteMesh placement state provides whether new objects are accepted and
 the current active Actor/Spot count. Status separately provides the count
-of Spots and the Actors processing application messages within them. The
-per-type capacity reservation registered at startup, the
+of Spots and the Actors processing application messages within them. These
+counts include only Actors and Spots active on the MeshNode reporting the
+status. They are determined from that MeshNode's activation records in the
+current process, rather than the Location Store placement projection. The
+capacity headroom used by `IsAvailable` applies to the same MeshNode and
+follows [Object Placement Capability §5.1](../03-spot-actor/03-mesh-node.en.md#51-weight-and-capacity).
+
+The per-type capacity reservation registered at startup, the
 [activation barrier](../00-foundation/02-glossary.en.md#activation-barrier) blocking
 first-message delivery before Spot initialization finishes, and internal
 capacity counters, aren't provided.
