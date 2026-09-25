@@ -2954,6 +2954,167 @@ final class ZLinkJavaRawSpotNodeM6BTest {
         }
     }
 
+    @Test
+    void acceptedInstanceSpotRequestCompletesAfterAdmissionSeals() throws Exception {
+        String endpoint = "inproc://jvm-m6b-closing-instance-" + System.nanoTime();
+        RoutingId targetRid = RoutingId.from("jvm-m6b-closing-target");
+        RoutingId sourceRid = RoutingId.from("jvm-m6b-closing-source");
+        String spotId = "jvm-m6b-closing-spot";
+        CompletableFuture<Void> queued = new CompletableFuture<>();
+        try (var context = Zlink.createContext();
+                var targetNode = new ZLinkJavaRawMeshNode(context, "mesh");
+                var sourceNode = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            targetNode.setRoutingId(targetRid);
+            targetNode.setBind(endpoint);
+            sourceNode.setRoutingId(sourceRid);
+            sourceNode.setBind("inproc://jvm-m6b-closing-source-" + System.nanoTime());
+            targetNode.start();
+            sourceNode.start();
+            sourceNode.connectPeer(endpoint, targetRid);
+            awaitAdmitted(sourceNode, targetRid);
+
+            ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) targetNode.spotNode();
+            spots.registerInstanceSpotType(
+                    "orders",
+                    (type, route, spot) -> {
+                        spot.onDispatchEvent(info -> queued.complete(null));
+                        return CompletableFuture.completedFuture(null);
+                    });
+            var route =
+                    new ZLinkServiceM6BWireCodec.InstanceRouteFence(
+                            targetRid,
+                            targetNode.lifecycleGeneration(),
+                            spotId,
+                            41,
+                            "owner-a",
+                            17,
+                            9,
+                            "store-3");
+            spots.registerInstanceSpotAuthority("orders", route);
+
+            try (Message packet = Message.from("Packet");
+                    Message payload = Message.from("queued")) {
+                var request =
+                        sourceNode
+                                .requestInstanceSpot(
+                                        route,
+                                        "orders",
+                                        null,
+                                        new byte[0],
+                                        List.of(packet, payload),
+                                        Duration.ofSeconds(10))
+                                .toCompletableFuture();
+                queued.get(2, TimeUnit.SECONDS);
+                ZLinkBackendSpot spot = spots.localSpot(spotId);
+                assertNotNull(spot);
+                spot.sealInstanceSpotAdmission();
+                ZLinkBackendReceived accepted = spot.recvRoute(ZLinkBackendRecvMode.DONT_WAIT);
+                assertNotNull(accepted);
+                try (accepted;
+                        Message response = Message.from("accepted")) {
+                    accepted.reply().accept(List.of(response));
+                }
+                List<Message> replies = request.get(2, TimeUnit.SECONDS);
+                try {
+                    assertEquals("accepted", replies.getFirst().toUtf8String());
+                } finally {
+                    replies.forEach(Message::close);
+                }
+            }
+        }
+    }
+
+    @Test
+    void instanceSpotRequestAfterAdmissionSealsGetsFailureReply() throws Exception {
+        String endpoint = "inproc://jvm-m6b-sealed-instance-" + System.nanoTime();
+        RoutingId targetRid = RoutingId.from("jvm-m6b-sealed-target");
+        RoutingId sourceRid = RoutingId.from("jvm-m6b-sealed-source");
+        String spotId = "jvm-m6b-sealed-spot";
+        try (var context = Zlink.createContext();
+                var targetNode = new ZLinkJavaRawMeshNode(context, "mesh");
+                var sourceNode = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            targetNode.setRoutingId(targetRid);
+            targetNode.setBind(endpoint);
+            sourceNode.setRoutingId(sourceRid);
+            sourceNode.setBind("inproc://jvm-m6b-sealed-source-" + System.nanoTime());
+            targetNode.start();
+            sourceNode.start();
+            sourceNode.connectPeer(endpoint, targetRid);
+            awaitAdmitted(sourceNode, targetRid);
+
+            ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) targetNode.spotNode();
+            spots.registerInstanceSpotType("orders");
+            var route =
+                    new ZLinkServiceM6BWireCodec.InstanceRouteFence(
+                            targetRid,
+                            targetNode.lifecycleGeneration(),
+                            spotId,
+                            41,
+                            "owner-a",
+                            17,
+                            9,
+                            "store-3");
+            spots.registerInstanceSpotAuthority("orders", route);
+            ZLinkBackendSpot spot =
+                    spots.activateInstanceSpot(spotId, "orders")
+                            .toCompletableFuture()
+                            .get(2, TimeUnit.SECONDS)
+                            .spot();
+            spot.sealInstanceSpotAdmission();
+
+            try (Message packet = Message.from("Packet");
+                    Message payload = Message.from("late")) {
+                var request =
+                        sourceNode
+                                .requestInstanceSpot(
+                                        route,
+                                        "orders",
+                                        null,
+                                        new byte[0],
+                                        List.of(packet, payload),
+                                        Duration.ofSeconds(10))
+                                .toCompletableFuture();
+                ExecutionException failure =
+                        assertThrows(
+                                ExecutionException.class, () -> request.get(2, TimeUnit.SECONDS));
+                assertTrue(failure.getCause() instanceof ZLinkFrameworkException);
+                assertEquals(
+                        ZLinkFrameworkErrorKind.NOT_FOUND,
+                        ((ZLinkFrameworkException) failure.getCause()).kind());
+            }
+        }
+    }
+
+    @Test
+    void instanceSpotAcceptsRequestAgainAfterFailedCloseRestoresAdmission() {
+        ZLinkJavaRawSpot spot = new ZLinkJavaRawSpot(null, "failed-close-spot", 1);
+        spot.sealInstanceSpotAdmission();
+        spot.restoreInstanceSpotAdmission();
+
+        AtomicReference<String> reply = new AtomicReference<>();
+        try (Message request = Message.from("request");
+                Message response = Message.from("accepted")) {
+            ZLinkBackendReceived received =
+                    new ZLinkBackendReceived(
+                            ZLinkBackendRequestResult.OK,
+                            Optional.empty(),
+                            Optional.empty(),
+                            Optional.empty(),
+                            new byte[0],
+                            new byte[0],
+                            List.of(request),
+                            parts -> reply.set(parts.getFirst().toUtf8String()),
+                            () -> {},
+                            "application/json");
+            spot.enqueueRoute(received).toCompletableFuture().join();
+            try (ZLinkBackendReceived accepted = spot.recvRoute(ZLinkBackendRecvMode.DONT_WAIT)) {
+                assertNotNull(accepted);
+                accepted.reply().accept(List.of(response));
+            }
+        }
+        assertEquals("accepted", reply.get());
+    }
+
     private static byte[] payloadBytes(int length, int seed) {
         byte[] payload = new byte[length];
         for (int index = 0; index < payload.length; index++) {
