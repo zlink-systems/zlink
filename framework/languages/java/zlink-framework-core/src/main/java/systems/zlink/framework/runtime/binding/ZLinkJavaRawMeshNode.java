@@ -2394,12 +2394,20 @@ final class ZLinkJavaRawMeshNode
      * invalid); anything else relays internalError+requestFailed (spec 32:119-120).
      */
     static int[] relayedFailurePair(Throwable relayFailure) {
+        while ((relayFailure instanceof java.util.concurrent.CompletionException
+                        || relayFailure instanceof java.util.concurrent.ExecutionException)
+                && relayFailure.getCause() != null) {
+            relayFailure = relayFailure.getCause();
+        }
         if (relayFailure instanceof ZLinkRelayedReplyTerminalException relayed) {
             return new int[] {relayed.terminalResult, relayed.failureCode};
         }
         if (relayFailure instanceof ZLinkFrameworkException framework) {
             return switch (framework.kind()) {
+                case NOT_FOUND -> new int[] {102, 14};
                 case REJECTED -> new int[] {106, 15};
+                case UNAVAILABLE -> new int[] {105, 13};
+                case SHUTTING_DOWN -> new int[] {103, 0};
                 default -> new int[] {105, 17};
             };
         }
@@ -5446,7 +5454,8 @@ final class ZLinkJavaRawMeshNode
                                             systems.zlink.framework.runtime.internal.completion
                                                     .ZLinkTerminalWinner.Cause.FAILURE)) {
                                         if (header.request()) {
-                                            replyInstanceFailure(inbound, header, 102, 1);
+                                            int[] pair = relayedFailurePair(failure);
+                                            replyInstanceFailure(inbound, header, pair[0], pair[1]);
                                         } else {
                                             recordInstanceActivationDrop(failure);
                                         }

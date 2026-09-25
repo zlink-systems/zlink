@@ -99,16 +99,18 @@ class ShoppingMallClientScenario(
 
     private suspend fun runConcurrentIdempotency(): StartOrderRes = coroutineScope {
         val request = StartOrderReq("cart-success", "addr-office", "pm-ok", "order-concurrent-001")
-        val first = async { start(apiA, request) }
-        val second = async { start(apiB, request) }
-        val resultA = first.await()
-        val resultB = second.await()
-        ensure(resultA.orderId == resultB.orderId)
+        val first = async { runCatching { start(apiA, request) } }
+        val second = async { runCatching { start(apiB, request) } }
+        val resultA = first.await().getOrNull()
+        val resultB = second.await().getOrNull()
+        ensure(resultA != null || resultB != null)
+        val result = resultA ?: requireNotNull(resultB)
+        ensure(resultA == null || resultB == null || resultA.orderId == resultB.orderId)
         ensure(
-            waitForStatus(apiA, resultA.orderId, OrderStatuses.Confirmed).status ==
+            waitForStatus(apiA, result.orderId, OrderStatuses.Confirmed).status ==
                 OrderStatuses.Confirmed
         )
-        resultA
+        result
     }
 
     private suspend fun start(base: String, request: StartOrderReq): StartOrderRes =

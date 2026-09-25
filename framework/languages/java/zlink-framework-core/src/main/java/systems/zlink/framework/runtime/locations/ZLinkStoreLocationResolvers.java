@@ -284,14 +284,14 @@ public final class ZLinkStoreLocationResolvers
     }
 
     private CompletionStage<SpotRoute> resolveReadySpot(String spotId, Object read) {
-        if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
-                || snapshot.allocation().state() != ZLinkPlacementAllocationState.ACTIVE) {
+        if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
             spotRoutes.remove(spotId);
             return CompletableFuture.completedFuture(null);
         }
         var authority = spotAuthorityCodec.decode(snapshot.payload()).orElse(null);
         if (authority == null
-                || authority.state() != ZLinkServiceAuthorityPayloadCodec.State.READY
+                || (authority.state() == ZLinkServiceAuthorityPayloadCodec.State.READY
+                        && snapshot.allocation().state() != ZLinkPlacementAllocationState.ACTIVE)
                 || !authority.spotId().equals(spotId)
                 || !authority.ownerId().equals(snapshot.ownerId())
                 || authority.ownerLeaseGeneration() != snapshot.ownerLeaseGeneration()) {
@@ -308,6 +308,10 @@ public final class ZLinkStoreLocationResolvers
                         snapshot.authorityOwnerGeneration(),
                         snapshot.ownerLeaseGeneration(),
                         authority.user().isPresent() ? ZLinkSpotKind.USER : ZLinkSpotKind.INSTANCE);
+        if (authority.state() != ZLinkServiceAuthorityPayloadCodec.State.READY) {
+            spotRoutes.remove(spotId);
+            return CompletableFuture.completedFuture(route);
+        }
         return admitPositiveRoute(
                 spotRoutes,
                 spotId,

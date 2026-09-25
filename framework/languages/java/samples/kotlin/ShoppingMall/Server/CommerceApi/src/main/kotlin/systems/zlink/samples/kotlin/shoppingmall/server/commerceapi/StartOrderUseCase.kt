@@ -1,8 +1,9 @@
 package systems.zlink.samples.kotlin.shoppingmall.server.commerceapi
 
-import kotlinx.coroutines.delay
 import org.springframework.stereotype.Component
 import systems.zlink.framework.channels.ZLinkClient
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+import systems.zlink.framework.errors.ZLinkFrameworkException
 import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.kotlin.requestToChannel
 import systems.zlink.samples.kotlin.shoppingmall.server.configuration.CommerceStore
@@ -35,13 +36,22 @@ class StartOrderUseCase(
             val state = store.findReadModel(existing.orderId) ?: store.placeholder(existing.orderId)
             return StartOrderRes(state.orderId, state.status)
         }
-        if (existing != null && existing.ownerInstanceId != instanceId) {
-            return forwardToOwner(existing.ownerInstanceId, request)
-        }
+        try {
+            if (existing != null && existing.ownerInstanceId != instanceId) {
+                return forwardToOwner(existing.ownerInstanceId, request)
+            }
 
-        val command = buildCommand(request, existing)
-        val state = workflows.startWorkflow(command)
-        return StartOrderRes(state.orderId, state.status)
+            val command = buildCommand(request, existing)
+            val state = workflows.startWorkflow(command)
+            return StartOrderRes(state.orderId, state.status)
+        } catch (error: ZLinkFrameworkException) {
+            if (error.kind() == ZLinkFrameworkErrorKind.REJECTED) {
+                val stored = store.findIdempotency(request.idempotencyKey)
+                val state = stored?.let { store.findReadModel(it.orderId) }
+                if (state != null) return StartOrderRes(state.orderId, state.status)
+            }
+            throw error
+        }
         // --8<-- [end:doc-sm-api-start]
     }
 
@@ -106,21 +116,9 @@ class StartOrderUseCase(
         request: StartOrderReq,
     ): StartOrderRes {
         val channel = SampleNames.commerceApiChannel(ownerInstanceId)
-        var lastError: RuntimeException? = null
-        for (attempt in 1..SampleTimings.MaxChannelAttempts) {
-            try {
-                return kotlinChannels
-                    .requestToChannel<StartOrderRes>(channel, request)
-                    .timeout(SampleTimings.RequestTimeout)
-                    .await()
-            } catch (error: RuntimeException) {
-                lastError = error
-                delay(SampleTimings.ChannelRetryDelay.toMillis())
-            }
-        }
-        throw IllegalStateException(
-            "Peer CommerceApi '$ownerInstanceId' was not ready for forwarded start.",
-            lastError,
-        )
+        return kotlinChannels
+            .requestToChannel<StartOrderRes>(channel, request)
+            .timeout(SampleTimings.RequestTimeout)
+            .await()
     }
 }
