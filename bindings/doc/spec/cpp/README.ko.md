@@ -215,6 +215,8 @@ Layout 섹션이다. 이 C++ README는 그 카테고리의 C++ 투영만 정의�
 | Eventing | `socket_monitor_t`, monitor 이벤트, poller, poll 이벤트, timer, readiness 헬퍼 | `Contracts/Eventing/` |
 | Errors | 공개 예외와 result 도메인 타입 | `Contracts/Errors/` |
 
+`explicit poller_t(context_t &context_)`는 전달한 context가 소유하는 poller를 만든다. `poller_t`에는 context를 받지 않는 생성자가 없다.
+
 `poller_t`는 `void add(socket_monitor_t &monitor_, poll_event_flag_t events_, std::uintptr_t slot_)`,
 `void modify(socket_monitor_t &monitor_, poll_event_flag_t events_)`, `bool remove(socket_monitor_t &monitor_)`로 socket monitor를
 source로 받는다(공통 spec "`Poller`의 monitor source"). monitor mask는 `pollin` 또는 none만 유효하고 다른 bit는

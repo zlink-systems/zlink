@@ -224,6 +224,8 @@ source-of-truth detail lives in the [.NET bindings blueprint](../dotnet/README.e
 | Eventing | `socket_monitor_t`, monitor events, poller, poll events, timer, readiness helpers | `Contracts/Eventing/` |
 | Errors | Public exception and result domain types | `Contracts/Errors/` |
 
+`explicit poller_t(context_t &context_)` creates a poller owned by that context; `poller_t` has no constructor without a context.
+
 `poller_t` accepts a socket monitor as a source through `void add(socket_monitor_t &monitor_, poll_event_flag_t events_, std::uintptr_t slot_)`,
 `void modify(socket_monitor_t &monitor_, poll_event_flag_t events_)` and `bool remove(socket_monitor_t &monitor_)` (common spec
 "Monitor sources in `Poller`"). A monitor mask accepts only `pollin` or none; any other bit is rejected with
