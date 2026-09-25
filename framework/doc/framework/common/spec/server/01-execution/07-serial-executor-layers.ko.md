@@ -387,7 +387,10 @@ Drain()
 
         if (result == Completed) Release(work);
         // Suspended면 작업이 turn을 반납한 것이다. 완료는 나중에 처리하고
-        // 이 loop는 바로 다음 작업으로 넘어간다.
+        // 이 loop는 바로 다음 작업으로 넘어간다. Lifecycle 항목이 Suspended인 동안 TryTakeNext는
+        // 그 항목의 ready continuation은 고를 수 있지만 뒤의 lifecycle 항목은 고르지 않는다.
+        // Continuation도 lifecycle burst 상한과 양보 부채를 따르며, 기다리는 동안 실행 가능한
+        // application 작업은 돈다(handler turn과 execution gate §7).
 
         if (Now() - sliceStartedAt >= policy.ownerTimeBudget)
             break;                     // §6.4 — 여기서 소유자가 양보한다
