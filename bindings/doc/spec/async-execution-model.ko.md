@@ -177,7 +177,7 @@ C의 raw completion 관측은
 - Poller `wait()` 중 poller를 파괴하면 native destroy를 호출하지 않고 소유 context가 handle과 state를 보관한다. Context close는 shutdown, 진입 기록의 호출 수 0 대기, close/destroy, `zlink_ctx_term` 순서를 따르며 registration과 operation state를 정확히 한 번 해제한다.
 - Poller를 생성할 때 전달한 context와 다른 context의 socket을 등록하면 `InvalidState`를 반환하며 등록 항목과 소유 context는 바뀌지 않는다. Socket을 등록한 적이 없거나 모든 socket을 제거한 poller도 활성 `wait()` 중 파괴하면 생성 시 전달한 context가 보관한다.
 - 다른 thread가 blocking receive 중인 socket을 close하면 close는 그 receive를 기다리지 않고 반환한다. 이후 그 socket의 호출은 `ESHUTDOWN` 투영 오류로 끝나고, context close는 그 receive를 `ETERM`으로 끝낸 뒤 native close를 한 번 실행한다.
-- 여러 thread가 socket·monitor·poller 호출을 반복하는 동안 context close를 실행하면 각 호출은 성공하거나 `ETERM` 투영 오류로 끝나며, AddressSanitizer 빌드에서 해제된 handle 접근이 보고되지 않는다. Context close가 반환한 뒤의 호출은 `ETERM` 투영 오류로 끝난다.
+- 여러 thread가 context close 없이는 성공하는 socket·monitor·poller 호출을 반복하는 동안 context close를 실행하면 각 호출은 성공하거나 `ETERM` 투영 오류로 끝나며(설정 함수군은 `INTERNAL_ERROR`와 internal errno `ETERM`), AddressSanitizer 빌드에서 해제된 handle 접근이 보고되지 않는다. Context close가 반환한 뒤의 호출은 `ETERM` 투영 오류로 끝난다.
 - Poller를 파괴하고 새 poller를 만든 뒤 파괴한 poller 객체로 `wait()`나 등록을 호출하면 `ESHUTDOWN` 투영 오류로 끝나고, 새 poller의 등록과 event는 바뀌지 않는다.
 - Poller `wait()`가 완료시킨 terminal의 continuation에서 context close를 호출해도 context close는 반환한다.
 

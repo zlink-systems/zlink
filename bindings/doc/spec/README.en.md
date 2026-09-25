@@ -1692,6 +1692,11 @@ Every data-path function (`send`, `recv`, `request`, `reply`,
      languages, an error value for return-based languages) exposes this
      through an `internalErrno`/`internal_errno` field (for debugging
      only).
+   - The binding reads errno on the thread where the native call returned,
+     before language runtime code can change that thread's errno, and keeps
+     it with the result. If the language runtime can change errno between two
+     native calls, the binding does not read errno again through a separate
+     native call (including `zlink_errno()`) after the failure.
    - For every other result code, calling `zlink_errno()` is
      unnecessary.
    - Except for the C ABI, bindings do not expose a public raw `zlink_errno()` accessor; callers use the error type’s `internalErrno`/`internal_errno` field.

@@ -1447,6 +1447,9 @@ Actor의 공개 service 계약은 [Framework API](../../../framework/doc/framewo
    - 바인딩의 에러 타입(exception 언어는 예외 객체, return-based 언어는
      에러 값)은 `internalErrno` / `internal_errno` 필드로 이를 노출한다
      (디버깅 전용).
+   - 바인딩은 native 호출이 반환한 thread에서, 언어 runtime 코드가 그 thread의 errno를 바꾸기 전에
+     errno를 읽어 결과와 함께 보관한다. 언어 runtime이 두 native 호출 사이에 errno를 바꿀 수 있으면
+     실패 뒤 별도의 native 호출(`zlink_errno()` 포함)로 errno를 다시 읽지 않는다.
    - 그 외 result code 에서는 `zlink_errno()` 호출이 불필요하다.
    - C ABI를 제외한 바인딩은 raw `zlink_errno()` 접근자를 공개하지 않는다. 호출자는 에러 타입의 `internalErrno`/`internal_errno` 필드를 사용한다.
 
