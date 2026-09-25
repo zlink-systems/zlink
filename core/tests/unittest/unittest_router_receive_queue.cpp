@@ -13,6 +13,7 @@
 #include "api/socket/socket_request_reply_internal.hpp"
 #include "sockets/common/socket_base.hpp"
 #include "sockets/internal/fq.hpp"
+#include "sockets/dealer/dealer.hpp"
 #include "sockets/router/router.hpp"
 
 #include <atomic>
@@ -62,6 +63,12 @@ class session_termination_test_access_t
         // termination lifecycle.
         socket_receive_entry_scope_t receive_lock (socket_->receive_runtime ());
         socket_->xpipe_terminated (pipe_);
+    }
+
+    static void deactivate_socket_pipe (socket_base_t *socket_, pipe_t *pipe_)
+    {
+        socket_receive_entry_scope_t receive_lock (socket_->receive_runtime ());
+        socket_->xread_deactivated (pipe_);
     }
 
     static void reset_pipe_inbound_queue (pipe_t *pipe_)
@@ -981,6 +988,65 @@ void test_unrelated_handover_preserves_prefetched_multipart_source ()
     TEST_ASSERT_EQUAL_STRING ("A-tail", second.c_str ());
 }
 
+void test_dealer_single_part_deactivation_keeps_fair_order ()
+{
+    void *const handle = zlink_socket (get_test_context (), ZLINK_SOCKET_DEALER);
+    socket_handle_t pin = as_socket_handle (handle);
+    zlink::dealer_t *const dealer = static_cast<zlink::dealer_t *> (pin.socket);
+    zlink::object_t *parents[2] = {dealer, dealer};
+    const uint64_t hwms[2] = {1024 * 1024, 1024 * 1024};
+    const bool conflates[2] = {false, false};
+    zlink::pipepair_options_t options;
+    options.session_pipe = true;
+    zlink::pipe_t *pairs[3][2] = {};
+    passive_pipe_sink_t sink;
+    for (size_t i = 0; i < 3; ++i) {
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink::pipepair (parents, pairs[i], hwms, conflates, options));
+        pairs[i][1]->set_event_sink (&sink);
+        zlink::session_termination_test_access_t::attach_socket_pipe (
+          dealer, pairs[i][0], true);
+    }
+
+    write_internal_pipe_part (pairs[0][1], "X-first", false);
+    write_internal_pipe_part (pairs[1][1], "B-first", false);
+    write_internal_pipe_part (pairs[2][1], "A-first", false);
+    write_internal_pipe_part (pairs[0][1], "X-second", false);
+    const char *const expected[] = {"X-first", "B-first"};
+    for (size_t i = 0; i < 2; ++i) {
+        zlink_msg_t part;
+        size_t count = 0;
+        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_recv (
+          handle, NULL, &part, 1, &count, ZLINK_RECV_FLAGS_DONTWAIT));
+        TEST_ASSERT_EQUAL_UINT (1, count);
+        TEST_ASSERT_EQUAL_STRING_LEN (
+          expected[i], static_cast<const char *> (zlink_msg_data (&part)),
+          std::strlen (expected[i]));
+        zlink_multipart_close (&part, count);
+    }
+
+    zlink::session_termination_test_access_t::deactivate_socket_pipe (
+      dealer, pairs[1][0]);
+    zlink_msg_t next;
+    size_t count = 0;
+    const zlink_recv_result_t rc = zlink_recv (
+      handle, NULL, &next, 1, &count, ZLINK_RECV_FLAGS_DONTWAIT);
+    std::string payload;
+    if (rc == ZLINK_RECV_OK) {
+        payload.assign (static_cast<const char *> (zlink_msg_data (&next)),
+                        zlink_msg_size (&next));
+        zlink_multipart_close (&next, count);
+    }
+    pin = socket_handle_t ();
+    close_zero_linger (handle);
+    zlink::ctx_t *const ctx =
+      static_cast<zlink::ctx_t *> (get_test_context ());
+    TEST_ASSERT_SUCCESS_ERRNO (ctx->wait_for_socket_count_at_most (0, 5000));
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, rc);
+    TEST_ASSERT_EQUAL_UINT (1, count);
+    TEST_ASSERT_EQUAL_STRING ("X-second", payload.c_str ());
+}
+
 int main (int argc, char **argv)
 {
     const char *selected = NULL;
@@ -1004,6 +1070,7 @@ int main (int argc, char **argv)
     RUN_SELECTED (test_fq_stale_request_skips_capacity_admission);
     RUN_SELECTED (test_router_selection_change_discards_every_standby_record);
     RUN_SELECTED (test_unrelated_handover_preserves_prefetched_multipart_source);
+    RUN_SELECTED (test_dealer_single_part_deactivation_keeps_fair_order);
 #undef RUN_SELECTED
     const bool matched = !selected || Unity.NumberOfTests == 1;
     const int result = UNITY_END ();

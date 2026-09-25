@@ -113,8 +113,8 @@ void zlink::fq_t::deactivate (pipe_t *pipe_)
 void zlink::fq_t::deactivate_at (pipes_t::size_type index_)
 {
     pipe_t *const pipe = _pipes[index_];
-    pipe_t *const current_pipe = _pipes[_current];
-    if (_more && current_pipe == pipe) {
+    pipe_t *const current_pipe = _more ? _pipes[_current] : NULL;
+    if (current_pipe == pipe) {
         _more = false;
         _multipart_abort_pending = true;
     }
