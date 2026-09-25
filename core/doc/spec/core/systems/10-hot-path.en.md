@@ -39,11 +39,12 @@ this tree must update the table.
 | `zlink_send` (PAIR, DEALER) | `submit_completion_aware_part` → blocking goes through `send_completion_submit_blocking`, a refused DONTWAIT through `register_send_writable_wait_after_failure` → `try_admit_send_parts_scoped` → `xsend_selected_pipe` / `xsend_configured_endpoint` / `send_direct_with_retry` → `lb_t::sendpipe_to` → `pipe_t::write_*` |
 | `zlink_send_rid` (ROUTER, STREAM) | as above, through the `send_direct_with_retry` branch |
 | `zlink_request` (DEALER, ROUTER) | `request_part_common` → `submit_pull_blocking_request` → `request_admission_submit_blocking` → `try_admit_send_parts_scoped` → `arm_socket_pending_request_timeout` |
-| `zlink_reply` (ROUTER) | `public_router_reply_submit` → `checkout_router_reply_target` → `send_public_router_reply_with_wait` → `retain_reply_transport_pipe` → `send_completion_staged_frames_on_pipe` |
-| `zlink_recv` / `zlink_router_recv` | `recv_dealer_record` / `router_recv_part_impl` → `recv_common` / `recv_routed` → `fq_t::recvpipe` → `pipe_t::read` → `reclassify_transport_pair_application_head` → `end_public_part_receive_delivery_hold` |
+| `zlink_reply` (ROUTER) | `public_router_reply_submit` → `checkout_router_reply_target` → `send_public_router_reply_with_wait` → `retain_reply_transport_pipe` → `router_t::is_selected_pipe` → `send_completion_staged_frames_on_pipe` |
+| `zlink_recv` / `zlink_router_recv` | `recv_dealer_record` / `recv_router_record` → `recv_common` / `recv_routed` (`routed_receive_pre_admission_t::admit`) → for DEALER `fq_t::recvpipe` → `pipe_t::read`, for ROUTER `router_t::recv_selected` → `fq_t::recvpipe_with_record_admission` → `selected_receive_candidate_t::allow` → `router_t::is_selected_pipe` → `pipe_t::read_with_record_admission` / `pipe_t::read` → `reclassify_transport_pair_application_head` → `end_public_part_receive_delivery_hold` |
 | `zlink_completion_recv` | `process_submit_commands` → `prepare_completion_pull` when blocking with a nonzero timeout → `socket_completion::recv` |
-| `zlink_poll` / `zlink_poller_wait` | `get_events_internal` → `process_commands` → `xhas_in` / `xhas_out` |
-| I/O thread → socket delivery | `pipe_t::flush` → `activate_read` command → `xread_activated` → `fq_t::activated`; `process_async_mailbox` |
+| `zlink_poll` / `zlink_poller_wait` | `get_events_internal` → `process_commands` → `xhas_in` / `xhas_out`; ROUTER `ZLINK_POLLROUTE` uses `router_t::has_route_change` |
+| `pipe_t::write_*` / `pipe_t::read` (DEALER, PUB, SUB, `ZLINK_OPT_CONFLATE=1`) | `write_message_unlocked` / `write_reserved_decoder_frame` → `publish_outbound_frame_unlocked` → `ypipe_conflate_t::write_with_replacement_accounting` → `dbuffer_t<msg_t>::write_with_replacement_accounting`; `pipe_t::read` → `ypipe_conflate_t::read` → `dbuffer_t<msg_t>::read` → `dbuffer_t<msg_t>::read_if` (`pipe_t::read_with_record_admission` goes through `ypipe_conflate_t::read_if`) |
+| I/O thread → socket delivery | `pipe_t::flush` → `activate_read` command → `xread_activated` → `fq_t::has_pipe` → `fq_t::activated`; `process_async_mailbox` |
 
 ## 3. What the hot path must not do
 

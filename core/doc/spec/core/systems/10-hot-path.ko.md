@@ -35,11 +35,12 @@ path다. 이 표는 규범이다: 표의 함수(또는 그 callee)를 고치는 
 | `zlink_send` (PAIR·DEALER) | `submit_completion_aware_part` → blocking은 `send_completion_submit_blocking`, DONTWAIT 거절은 `register_send_writable_wait_after_failure` → `try_admit_send_parts_scoped` → `xsend_selected_pipe` / `xsend_configured_endpoint` / `send_direct_with_retry` → `lb_t::sendpipe_to` → `pipe_t::write_*` |
 | `zlink_send_rid` (ROUTER·STREAM) | 위와 같되 `send_direct_with_retry` 분기 |
 | `zlink_request` (DEALER·ROUTER) | `request_part_common` → `submit_pull_blocking_request` → `request_admission_submit_blocking` → `try_admit_send_parts_scoped` → `arm_socket_pending_request_timeout` |
-| `zlink_reply` (ROUTER) | `public_router_reply_submit` → `checkout_router_reply_target` → `send_public_router_reply_with_wait` → `retain_reply_transport_pipe` → `send_completion_staged_frames_on_pipe` |
-| `zlink_recv` / `zlink_router_recv` | `recv_dealer_record` / `router_recv_part_impl` → `recv_common` / `recv_routed` → `fq_t::recvpipe` → `pipe_t::read` → `reclassify_transport_pair_application_head` → `end_public_part_receive_delivery_hold` |
+| `zlink_reply` (ROUTER) | `public_router_reply_submit` → `checkout_router_reply_target` → `send_public_router_reply_with_wait` → `retain_reply_transport_pipe` → `router_t::is_selected_pipe` → `send_completion_staged_frames_on_pipe` |
+| `zlink_recv` / `zlink_router_recv` | `recv_dealer_record` / `recv_router_record` → `recv_common` / `recv_routed` (`routed_receive_pre_admission_t::admit`) → DEALER는 `fq_t::recvpipe` → `pipe_t::read`, ROUTER는 `router_t::recv_selected` → `fq_t::recvpipe_with_record_admission` → `selected_receive_candidate_t::allow` → `router_t::is_selected_pipe` → `pipe_t::read_with_record_admission` / `pipe_t::read` → `reclassify_transport_pair_application_head` → `end_public_part_receive_delivery_hold` |
 | `zlink_completion_recv` | `process_submit_commands` → blocking이고 timeout이 0이 아니면 `prepare_completion_pull` → `socket_completion::recv` |
-| `zlink_poll` / `zlink_poller_wait` | `get_events_internal` → `process_commands` → `xhas_in` / `xhas_out` |
-| I/O thread → socket 전달 | `pipe_t::flush` → `activate_read` command → `xread_activated` → `fq_t::activated`; `process_async_mailbox` |
+| `zlink_poll` / `zlink_poller_wait` | `get_events_internal` → `process_commands` → `xhas_in` / `xhas_out`; ROUTER의 `ZLINK_POLLROUTE`는 `router_t::has_route_change` |
+| `pipe_t::write_*` / `pipe_t::read` (DEALER·PUB·SUB, `ZLINK_OPT_CONFLATE=1`) | `write_message_unlocked` / `write_reserved_decoder_frame` → `publish_outbound_frame_unlocked` → `ypipe_conflate_t::write_with_replacement_accounting` → `dbuffer_t<msg_t>::write_with_replacement_accounting`; `pipe_t::read` → `ypipe_conflate_t::read` → `dbuffer_t<msg_t>::read` → `dbuffer_t<msg_t>::read_if` (`pipe_t::read_with_record_admission`은 `ypipe_conflate_t::read_if`를 거친다) |
+| I/O thread → socket 전달 | `pipe_t::flush` → `activate_read` command → `xread_activated` → `fq_t::has_pipe` → `fq_t::activated`; `process_async_mailbox` |
 
 ## 3. Hot path 안에서 금지되는 동작
 
