@@ -107,22 +107,18 @@ async function runFailureTransition(gatewayEndpoint: string, opsEndpoint: string
     );
     await source
       .waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
-      .where((message) =>
-        message.payload.players.some(
-          (player) => player.playerId === targetJoin.playerId && player.zoneId === pair.targetZoneId
-        )
+      .where(
+        (message) =>
+          message.payload.zoneId === pair.sourceZoneId &&
+          message.payload.players.some(
+            (player) =>
+              player.playerId === targetJoin.playerId && player.zoneId === pair.targetZoneId
+          )
       )
       .timeout(20_000)
       .submit();
     zlinkStreamAssert.ensure(targetNode.registered, 'ZW-C3 did not begin from Registered=true.');
     zlinkStreamAssert.ensure(targetNode.connected, 'ZW-C2 did not begin from Connected=true.');
-    const expired = source
-      .waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
-      .where(
-        (message) => !message.payload.players.some((player) => player.zoneId === pair.targetZoneId)
-      )
-      .timeout(60_000)
-      .submit();
     const unregistered = ops
       .waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
       .where(
@@ -138,9 +134,18 @@ async function runFailureTransition(gatewayEndpoint: string, opsEndpoint: string
       .timeout(60_000)
       .submit();
     console.log(`scenario ZW-B4-C2-C3 armed node=${targetNode.nodeId}`);
+    await withScenarioContext('ZW-C2 runtime disconnected status', disconnected);
+    const expired = source
+      .waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
+      .where(
+        (message) =>
+          message.payload.zoneId === pair.sourceZoneId &&
+          !message.payload.players.some((player) => player.playerId === targetJoin.playerId)
+      )
+      .timeout(60_000)
+      .submit();
     await Promise.all([
       withScenarioContext('ZW-B4 border snapshot expiry', expired),
-      withScenarioContext('ZW-C2 runtime disconnected status', disconnected),
       withScenarioContext('ZW-C3 report TTL expired status', unregistered)
     ]);
     const previousOwnerTerminal = await target

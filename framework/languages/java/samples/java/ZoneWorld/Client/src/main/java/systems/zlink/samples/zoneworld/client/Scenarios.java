@@ -713,11 +713,28 @@ final class Scenarios {
                                 Messages.ZoneStateNotify.class,
                                 value ->
                                         value.zoneId().equals(pair.sourceZoneId())
-                                                && has(value, target.playerId),
+                                                && value.players().stream()
+                                                        .anyMatch(
+                                                                player ->
+                                                                        player.playerId()
+                                                                                        .equals(
+                                                                                                target.playerId)
+                                                                                && player.zoneId()
+                                                                                        .equals(
+                                                                                                pair
+                                                                                                        .targetZoneId())),
                                 Duration.ofSeconds(30));
                 target.moveTo(edge.target().x(), edge.target().y());
                 visible.toCompletableFuture().join();
                 String node = nodeOwning(ops.watch(), pair.targetZoneId());
+                CompletionStage<ZLinkStreamMessage<Messages.NodeStatusNotify>> dropped =
+                        waitFor(
+                                ops.connector,
+                                Messages.NodeStatusNotify.class,
+                                value -> value.nodeId().equals(node) && !value.connected(),
+                                Duration.ofSeconds(60));
+                System.out.println("scenario ZW-B4 armed node=" + node);
+                dropped.toCompletableFuture().join();
                 CompletionStage<ZLinkStreamMessage<Messages.ZoneStateNotify>> expired =
                         waitFor(
                                 source.connector,
@@ -726,7 +743,6 @@ final class Scenarios {
                                         value.zoneId().equals(pair.sourceZoneId())
                                                 && !has(value, target.playerId),
                                 Duration.ofSeconds(60));
-                System.out.println("scenario ZW-B4 armed node=" + node);
                 expired.toCompletableFuture().join();
             }
         }

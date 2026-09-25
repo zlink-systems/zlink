@@ -662,7 +662,10 @@ internal object Scenarios {
                                 .waitFor<Messages.ZoneStateNotify>()
                                 .where {
                                     it.payload().zoneId == pair.sourceZoneId &&
-                                        has(it.payload(), target.playerId)
+                                        it.payload().players.any { player ->
+                                            player.playerId == target.playerId &&
+                                                player.zoneId == pair.targetZoneId
+                                        }
                                 }
                                 .timeout(Duration.ofSeconds(30))
                                 .await()
@@ -670,6 +673,16 @@ internal object Scenarios {
                     target.moveTo(crossing.target.x, crossing.target.y)
                     visible.await()
                     val node = nodeOwning(ops.watch(), pair.targetZoneId)
+                    val dropped =
+                        async(start = CoroutineStart.UNDISPATCHED) {
+                            ops.connector
+                                .waitFor<Messages.NodeStatusNotify>()
+                                .where { it.payload().nodeId == node && !it.payload().connected }
+                                .timeout(Duration.ofSeconds(60))
+                                .await()
+                        }
+                    println("scenario ZW-B4 armed node=$node")
+                    dropped.await()
                     val expired =
                         async(start = CoroutineStart.UNDISPATCHED) {
                             source.connector
@@ -681,7 +694,6 @@ internal object Scenarios {
                                 .timeout(Duration.ofSeconds(60))
                                 .await()
                         }
-                    println("scenario ZW-B4 armed node=$node")
                     expired.await()
                 }
             }
