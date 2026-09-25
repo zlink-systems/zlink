@@ -11,9 +11,9 @@ partial termination member taking a MeshName — Kotlin uses the Java
 host's `relocate()` and `shutdown()` unchanged.
 
 Kotlin also uses Java's `ZLinkListenerKind` and `ZLinkListenerStatus`.
-`ZLinkFrameworkRuntime.listenerStatus(kind, name)` returns the current
-advertised endpoint after the selected listener has completed bind; it
-doesn't add a Kotlin-specific wrapper.
+`ZLinkFrameworkRuntime.listenerStatus(kind, name)` calls the
+[common listener status query](../../../02-channel-transport/04-network-listener-identity.en.md#31-listener-state-the-publisher-checks)
+directly and doesn't add a Kotlin-specific wrapper.
 
 The source owner of the call, handler, and coroutine lifecycle adapter
 the Kotlin artifact directly declares is

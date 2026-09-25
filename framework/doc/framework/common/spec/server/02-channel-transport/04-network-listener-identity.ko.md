@@ -190,8 +190,7 @@ endpoint와 client remote endpoint를 모두 명시해야 한다.
 ### 3.1 Publisher가 확인하는 listener 상태
 
 Publisher application은 publisher capability가 제공하는 listener 상태 조회로
-현재 listener가 remote process에 제공하는 endpoint를 확인할 수 있다. 이 조회는
-host가 시작되어 listener bind가 완료된 뒤에만 성공한다. 반환되는 port는 설정에
+현재 listener가 remote process에 제공하는 endpoint를 확인할 수 있다. 반환되는 port는 설정에
 입력한 port가 아니라 operating system이 실제로 선택한 bound port다.
 
 조회 결과의 endpoint는 `AdvertiseHost`와 실제 bound port를 결합한 advertised
@@ -206,11 +205,13 @@ Listener를 다시 시작하면 조회 결과의 endpoint가 달라질 수 있�
   current descriptor를 따라가는지 확인하는 관찰 자료로만 사용한다.
 
 공통 조회는 listener 종류와 설정 이름으로 현재 process의 listener를 지정한다.
-결과에는 종류, 이름, advertised endpoint와 조회 시각이 포함된다. 해당 listener의
-bind가 끝난 뒤에만 조회가 성공하며, 알 수 없는 listener나 bind가 끝나지 않은
-listener는 configuration error를 반환한다. 정확한 메서드와 값의 타입은 언어별
-interface에서 고정하지만, 모든 구현은 `ROUTE_MESH`, `CLIENT_SERVER`, `FANOUT`,
-`STREAM` 네 종류를 같은 의미로 제공한다.
+결과에는 종류, 이름, advertised endpoint와 조회 시각이 포함된다. 조회 결과는 해당
+listener의 bound 기록 하나로 정한다. 이 기록은 listener의 bind가 끝날 때 생기고, 그
+listener를 닫는 작업이 시작될 때 사라진다. Host 종료도 listener를 닫는 작업이다. 조회는
+이 기록을 한 번 읽어 기록이 있으면 성공하고, 없으면 configuration error를 반환한다. 알 수
+없는 listener, bind가 끝나지 않은 listener와 닫는 작업이 시작된 listener가 모두 여기에
+해당한다. 정확한 메서드와 값의 타입은 언어별 interface에서 고정하지만, 모든 구현은
+`ROUTE_MESH`, `CLIENT_SERVER`, `FANOUT`, `STREAM` 네 종류를 같은 의미로 제공한다.
 
 ## 4. Listener 종류별 record
 

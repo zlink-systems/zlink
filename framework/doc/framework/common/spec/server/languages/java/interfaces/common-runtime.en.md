@@ -120,13 +120,12 @@ public final class ZLinkFrameworkRuntime
 }
 ```
 
-`listenerStatus(kind, name)` returns the current advertised endpoint only
-after that listener has bound successfully. If port `0` was configured, the
-endpoint combines the actual OS-assigned port with the advertise host; it is
-never a wildcard bind address. A missing registration, a listener not yet
-bound, or a role that provides no endpoint fails with
-`ZLinkFrameworkErrorKind.NOT_CONFIGURED`. `observedAt` is the time the query
-result was produced.
+`listenerStatus(kind, name)` is the Java projection of the
+[common listener status query](../../../02-channel-transport/04-network-listener-identity.en.md#31-listener-state-the-publisher-checks).
+`kind` selects RouteMesh, ClientServer, Fanout, or STREAM, and `name` is that
+registration name. When the query ends with a configuration error, it fails with
+`ZLinkFrameworkErrorKind.NOT_CONFIGURED`. The returned status's `observedAt` is
+the observation time.
 
 The canonical declaration of `ZLinkObservedStatus<T>` and
 `ZLinkObservationLoss`, which `observe()` delivers, is owned by the

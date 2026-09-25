@@ -208,8 +208,7 @@ must be specified explicitly.
 
 A publisher application can confirm the endpoint the current listener
 provides to remote processes through the listener state query provided by the
-publisher capability. This query only succeeds after the host
-has started and the listener has finished binding. The returned port isn't
+publisher capability. The returned port isn't
 the port entered in configuration — it's the bound port the operating
 system actually chose.
 
@@ -228,11 +227,15 @@ If the listener restarts, the endpoint in the query result may change.
 
 The common query identifies a local listener by its listener kind and
 configured name. Its result contains the kind, name, advertised endpoint,
-and observation time. The query is successful only after that listener has
-completed binding; querying an unknown listener or a listener that has not
-completed binding is a configuration error. The precise method and value types
-are fixed by each language interface, but every implementation exposes the same
-four listener kinds: `ROUTE_MESH`, `CLIENT_SERVER`, `FANOUT`, and `STREAM`.
+and observation time. The result is determined by that listener's bound
+record alone. The record is created when the listener completes binding and
+is removed when closing that listener starts. Host shutdown also closes
+listeners. The query reads the record once: it succeeds if the record exists
+and returns a configuration error otherwise. This covers an unknown listener,
+a listener that hasn't completed binding, and a listener whose closing has
+started. The precise method and value types are fixed by each language
+interface, but every implementation exposes the same four listener kinds:
+`ROUTE_MESH`, `CLIENT_SERVER`, `FANOUT`, and `STREAM`.
 
 ## 4. Record Per Listener Kind
 
