@@ -192,7 +192,7 @@ peer·target 수는 현재 연결 상태를 그대로 제공한다. Host가 appl
 |---|---|
 | `starting` | 해당 topology의 listener, connection과 registration을 준비하고 있다. |
 | `ready` | Host가 `serving`이고 해당 topology가 application message를 처리할 수 있다. |
-| `degraded` | 일부 peer·target 또는 Location Store를 사용할 수 없어 해당 topology의 기능 전부를 제공할 수 없다. |
+| `degraded` | 일부 peer·target을 사용할 수 없거나 host가 [Location runtime §5](../05-location-relocation/01-location-runtime.ko.md#5-store-연결이-끊기면-이전-owner의-새-작업을-막는다)의 새 작업 차단 조건에 해당하여 해당 topology의 기능 전부를 제공할 수 없다. |
 | `stopping` | Host shutdown에 따라 해당 topology가 이미 수락한 작업과 연결을 정리하고 있다. |
 | `stopped` | 해당 topology의 작업과 연결 정리가 끝났다. |
 | `failed` | 해당 topology를 계속 운영할 수 없는 오류가 발생했다. |
@@ -226,9 +226,10 @@ Startup에 등록한 type별 capacity reservation, Spot 초기화가 끝나기 �
 제공하지 않는다.
 
 **Placement의 `IsAvailable`은 host가 `serving`이고 Object Server이며 placement weight가
-양수이고, Actor 또는 Spot capacity와 activation concurrency에 모두 여유가 있을 때만
-`true`다.** Activation concurrency의 현재 값과 limit은 public status에 별도 field로
-노출하지 않는다.
+양수이고, Actor 또는 Spot capacity와 activation concurrency에 모두 여유가 있으며, host가
+[Location runtime §5](../05-location-relocation/01-location-runtime.ko.md#5-store-연결이-끊기면-이전-owner의-새-작업을-막는다)의
+새 작업 차단 조건에 해당하지 않을 때만 `true`다.** Activation concurrency의 현재 값과 limit은
+public status에 별도 field로 노출하지 않는다.
 
 새 target 선택 비율에 사용하는 [weight](../00-foundation/02-glossary.ko.md#weight)는 signed integer
 `0..10000`이다. 값이 `0`이면 새 placement 대상으로 선택하지 않는다.
