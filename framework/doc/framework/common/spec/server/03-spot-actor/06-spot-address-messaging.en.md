@@ -608,15 +608,17 @@ The close procedure proceeds in the following order.
    `Closing`.
 2. Seals local admission and processes turns/timers accepted before the
    seal up to a set boundary.
-3. Cleans up handler scope, timer, and local activation resource, once.
+3. Invokes `OnClosing` at most once per Close, then cleans up the handler scope, timer, and local
+   activation resource once. If `OnClosing` fails, the failure is recorded in diagnostics and cleanup
+   continues. Resuming Close does not invoke `OnClosing` again if it was already invoked.
 4. Releases authority with the same owner/generation fence.
 
 If the transition to `Closing` in step 1 is not committed, authority does not
 change and Close ends with a result listed below. Once the transition to
-`Closing` is committed, authority never returns to `Ready`. If one of steps 2–4
-fails, Close returns that failure to the caller, and the target owner runtime
-continues the remaining steps from the failed step on the same owner and
-generation. A completed step is not repeated.
+`Closing` is committed, authority never returns to `Ready`. If work other than
+the `OnClosing` invocation in steps 2–4 fails, Close returns that failure to the
+caller, and the target owner runtime continues the remaining work from the failed
+operation on the same owner and generation. Completed operations are not repeated.
 
 If that incarnation no longer exists, idempotent `false`; if a different
 generation of the same Spot ID exists, `InvalidOperation`; if sealing for a
