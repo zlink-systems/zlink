@@ -26,13 +26,16 @@ internal sealed partial class ZLinkFrameworkRuntime
                 ? null
                 : AwaitStateLane(identity.ReadAsync()).AdvertisedEndpoint;
         }
+        else if (kind == ZLinkListenerKind.RouteMesh)
+        {
+            endpoint = RouteMeshEndpoint(state, name);
+        }
         else
         {
             endpoint = AwaitStateLane(
                 state.RunStateAsync(() =>
                     kind switch
                     {
-                        ZLinkListenerKind.RouteMesh => RouteMeshEndpoint(state, name),
                         ZLinkListenerKind.Fanout => state.PublisherBundles.TryGetValue(
                             name,
                             out var publisher
@@ -60,10 +63,18 @@ internal sealed partial class ZLinkFrameworkRuntime
         if (
             !Registration.SpotNodes.TryGetValue(name, out var registration)
             || registration.Router is not { } router
-            || !state.SpotNodes.TryGetValue(name, out var node)
         )
             return null;
 
+        // The lane turn only reads the started node; the mesh status query and endpoint
+        // resolution run outside the lane.
+        var node = AwaitStateLane(
+            state.RunStateAsync(() =>
+                state.SpotNodes.TryGetValue(name, out var started) ? started : null
+            )
+        );
+        if (node is null)
+            return null;
         var bound = node.Node.MeshStatus().LocalEndpoint;
         if (string.IsNullOrWhiteSpace(bound))
             return null;
