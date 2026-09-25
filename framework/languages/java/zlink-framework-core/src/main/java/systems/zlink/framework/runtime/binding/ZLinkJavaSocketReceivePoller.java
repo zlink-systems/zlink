@@ -24,7 +24,7 @@ final class ZLinkJavaSocketReceivePoller implements AutoCloseable {
     private final Poller poller;
     private final boolean ownsCompletionQueue;
     private final PollEvents events = new PollEvents(1);
-    private boolean registered;
+    private volatile boolean registered;
     private boolean closed;
 
     ZLinkJavaSocketReceivePoller(Socket socket) {
@@ -38,26 +38,31 @@ final class ZLinkJavaSocketReceivePoller implements AutoCloseable {
         poller = Zlink.createPoller();
     }
 
-    synchronized void ensureRegistered() {
-        if (closed || registered) {
+    void ensureRegistered() {
+        if (registered) {
             return;
         }
-        // Framework creates the wrapper before it applies routing options
-        // and calls bind/connect. Register the fully configured socket when
-        // the receive owner first needs readiness. For socket kinds that
-        // support it, the binding owns async DONTWAIT retry and completion
-        // draining on this public poller.
-        if (ownsCompletionQueue) {
-            poller.add(
-                    socket,
-                    SOCKET_SLOT,
-                    PollEventFlags.POLLIN,
-                    PollEventFlags.POLLOUT,
-                    PollEventFlags.POLLCOMPLETION);
-        } else {
-            poller.add(socket, SOCKET_SLOT, PollEventFlags.POLLIN);
+        synchronized (this) {
+            if (closed || registered) {
+                return;
+            }
+            // Framework creates the wrapper before it applies routing options
+            // and calls bind/connect. Register the fully configured socket when
+            // the receive owner first needs readiness. For socket kinds that
+            // support it, the binding owns async DONTWAIT retry and completion
+            // draining on this public poller.
+            if (ownsCompletionQueue) {
+                poller.add(
+                        socket,
+                        SOCKET_SLOT,
+                        PollEventFlags.POLLIN,
+                        PollEventFlags.POLLOUT,
+                        PollEventFlags.POLLCOMPLETION);
+            } else {
+                poller.add(socket, SOCKET_SLOT, PollEventFlags.POLLIN);
+            }
+            registered = true;
         }
-        registered = true;
     }
 
     synchronized boolean waitForReadable(Duration timeout) {

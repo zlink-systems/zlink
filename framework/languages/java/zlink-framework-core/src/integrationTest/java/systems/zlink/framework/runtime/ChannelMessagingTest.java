@@ -26,7 +26,9 @@ import systems.zlink.framework.channels.ZLinkRouteMessageContext;
 import systems.zlink.framework.channels.ZLinkRouteRequestHandler;
 import systems.zlink.framework.channels.ZLinkRouteSendHandler;
 import systems.zlink.framework.channels.ZLinkSendHandler;
+import systems.zlink.framework.configuration.ZLinkEndpointConnections;
 import systems.zlink.framework.configuration.ZLinkLogLevel;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.handlers.ZLinkHandlerGroup;
@@ -53,8 +55,6 @@ import systems.zlink.framework.spots.SpotHandleResolver;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 
-import java.io.IOException;
-import java.net.ServerSocket;
 import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -79,8 +79,6 @@ import java.util.logging.Logger;
 import java.util.logging.SimpleFormatter;
 
 final class ChannelMessagingTest {
-    private static final AtomicInteger NEXT_PORT =
-            new AtomicInteger(32_000 + (int) (ProcessHandle.current().pid() % 10_000));
     private static final AtomicReference<CountDownLatch> FANOUT_LATCH = new AtomicReference<>();
     private static final AtomicReference<String> FANOUT_MESSAGE = new AtomicReference<>();
     private static final AtomicReference<String> FANOUT_TOPIC = new AtomicReference<>();
@@ -1191,9 +1189,25 @@ final class ChannelMessagingTest {
     }
 
     @Test
+    void legacyRouteMeshListenerStatusRejectsUnknownAndUnboundListeners() {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "route").enableClient("tcp://127.0.0.1:1");
+
+        try (ZLinkFrameworkRuntime runtime =
+                RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {
+            assertThrows(
+                    ZLinkConfigurationException.class,
+                    () -> runtime.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "missing"));
+            assertThrows(
+                    ZLinkConfigurationException.class,
+                    () -> runtime.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route"));
+        }
+    }
+
+    @Test
     void routeMesh_requestByRoutingIdSucceeds() {
-        String sourceEndpoint = tcpEndpoint();
-        String targetEndpoint = tcpEndpoint();
+        ZLinkEndpointConnections sourceConnections;
+        ZLinkEndpointConnections targetConnections;
         RoutingId sourceRid = RoutingId.from("source-node");
         RoutingId targetRid = RoutingId.from("target-node");
         ROUTE_REQUEST_CHANNEL.set(null);
@@ -1201,18 +1215,18 @@ final class ChannelMessagingTest {
         DefaultZLinkFrameworkOptions sourceOptions = new DefaultZLinkFrameworkOptions();
         {
             var channel = ZLinkLegacyTopology.addRouteMeshChannel(sourceOptions, "route");
-            channel.enableServer(sourceEndpoint);
+            channel.enableServer("tcp://127.0.0.1:0");
             channel.setRoutingId(sourceRid);
-            channel.enableClient(targetEndpoint);
+            sourceConnections = channel.clientConnections();
         }
         ;
 
         DefaultZLinkFrameworkOptions targetOptions = new DefaultZLinkFrameworkOptions();
         {
             var channel = ZLinkLegacyTopology.addRouteMeshChannel(targetOptions, "route");
-            channel.enableServer(targetEndpoint);
+            channel.enableServer("tcp://127.0.0.1:0");
             channel.setRoutingId(targetRid);
-            channel.enableClient(sourceEndpoint);
+            targetConnections = channel.clientConnections();
             channel.addRequestHandler(
                     RouteEchoHandler.class, EchoRequest.class, String.class, "Echo");
         }
@@ -1224,6 +1238,10 @@ final class ChannelMessagingTest {
                 ZLinkFrameworkRuntime target =
                         RuntimeTestSupport.startFramework(
                                 targetOptions, new ZLinkJavaBackendAdapterFactory())) {
+            sourceConnections.connect(
+                    target.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
+            targetConnections.connect(
+                    ignoredSource.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
             assertEquals("route:hello", awaitRouteReply(ignoredSource, targetRid));
             assertEquals("route", ROUTE_REQUEST_CHANNEL.get());
         } finally {
@@ -1233,26 +1251,26 @@ final class ChannelMessagingTest {
 
     @Test
     void routeMesh_missingRequestHandlerRepliesFrameworkError() {
-        String sourceEndpoint = tcpEndpoint();
-        String targetEndpoint = tcpEndpoint();
+        ZLinkEndpointConnections sourceConnections;
+        ZLinkEndpointConnections targetConnections;
         RoutingId sourceRid = RoutingId.from("route-missing-source");
         RoutingId targetRid = RoutingId.from("route-missing-target");
 
         DefaultZLinkFrameworkOptions sourceOptions = new DefaultZLinkFrameworkOptions();
         {
             var channel = ZLinkLegacyTopology.addRouteMeshChannel(sourceOptions, "route");
-            channel.enableServer(sourceEndpoint);
+            channel.enableServer("tcp://127.0.0.1:0");
             channel.setRoutingId(sourceRid);
-            channel.enableClient(targetEndpoint);
+            sourceConnections = channel.clientConnections();
         }
         ;
 
         DefaultZLinkFrameworkOptions targetOptions = new DefaultZLinkFrameworkOptions();
         {
             var channel = ZLinkLegacyTopology.addRouteMeshChannel(targetOptions, "route");
-            channel.enableServer(targetEndpoint);
+            channel.enableServer("tcp://127.0.0.1:0");
             channel.setRoutingId(targetRid);
-            channel.enableClient(sourceEndpoint);
+            targetConnections = channel.clientConnections();
         }
         ;
 
@@ -1262,6 +1280,10 @@ final class ChannelMessagingTest {
                 ZLinkFrameworkRuntime target =
                         RuntimeTestSupport.startFramework(
                                 targetOptions, new ZLinkJavaBackendAdapterFactory())) {
+            sourceConnections.connect(
+                    target.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
+            targetConnections.connect(
+                    source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
             ZLinkFrameworkException error = awaitRouteMissingHandlerError(source, targetRid);
             assertTrue(error.getMessage().contains("HANDLER_MISSING"));
             assertTrue(error.getMessage().contains("Missing"));
@@ -1270,8 +1292,8 @@ final class ChannelMessagingTest {
 
     @Test
     void routeMesh_nonInitiatorRequestUsesInboundProbeIdentity() {
-        String initiatorEndpoint = tcpEndpoint();
-        String nonInitiatorEndpoint = tcpEndpoint();
+        ZLinkEndpointConnections initiatorConnections;
+
         RoutingId initiatorRid = RoutingId.from("route-a-initiator");
         RoutingId nonInitiatorRid = RoutingId.from("route-z-non-initiator");
         ZLinkInMemoryLocationStore store = new ZLinkInMemoryLocationStore();
@@ -1282,8 +1304,8 @@ final class ChannelMessagingTest {
         initiatorOptions.configureLocations().setPollingInterval(Duration.ofMillis(50));
         {
             var channel = ZLinkLegacyTopology.addRouteMeshChannel(initiatorOptions, "route");
-            channel.enableServer(initiatorEndpoint);
-            channel.enableClient(nonInitiatorEndpoint);
+            channel.enableServer("tcp://127.0.0.1:0");
+            initiatorConnections = channel.clientConnections();
             channel.setRoutingId(initiatorRid);
             channel.addRequestHandler(
                     RouteEchoHandler.class, EchoRequest.class, String.class, "Echo");
@@ -1295,7 +1317,7 @@ final class ChannelMessagingTest {
         nonInitiatorOptions.configureLocations().setPollingInterval(Duration.ofMillis(50));
         {
             var channel = ZLinkLegacyTopology.addRouteMeshChannel(nonInitiatorOptions, "route");
-            channel.enableServer(nonInitiatorEndpoint);
+            channel.enableServer("tcp://127.0.0.1:0");
             channel.setRoutingId(nonInitiatorRid);
         }
         ;
@@ -1306,6 +1328,8 @@ final class ChannelMessagingTest {
                 ZLinkFrameworkRuntime nonInitiator =
                         RuntimeTestSupport.startFramework(
                                 nonInitiatorOptions, new ZLinkJavaBackendAdapterFactory())) {
+            initiatorConnections.connect(
+                    nonInitiator.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
             assertEquals("route:hello", awaitRouteReply(nonInitiator, initiatorRid));
             assertEquals("route", ROUTE_REQUEST_CHANNEL.get());
         } finally {
@@ -1315,17 +1339,17 @@ final class ChannelMessagingTest {
 
     @Test
     void routeMesh_scannedHandlerGroupRequestSucceeds() {
-        String sourceEndpoint = tcpEndpoint();
-        String targetEndpoint = tcpEndpoint();
+        ZLinkEndpointConnections sourceConnections;
+        ZLinkEndpointConnections targetConnections;
         RoutingId sourceRid = RoutingId.from("route-scanned-source");
         RoutingId targetRid = RoutingId.from("route-scanned-target");
 
         DefaultZLinkFrameworkOptions sourceOptions = new DefaultZLinkFrameworkOptions();
         {
             var channel = ZLinkLegacyTopology.addRouteMeshChannel(sourceOptions, "route");
-            channel.enableServer(sourceEndpoint);
+            channel.enableServer("tcp://127.0.0.1:0");
             channel.setRoutingId(sourceRid);
-            channel.enableClient(targetEndpoint);
+            sourceConnections = channel.clientConnections();
         }
         ;
 
@@ -1333,9 +1357,9 @@ final class ChannelMessagingTest {
         targetOptions.addHandlersFromPackageOf(ChannelMessagingTest.class);
         {
             var channel = ZLinkLegacyTopology.addRouteMeshChannel(targetOptions, "route");
-            channel.enableServer(targetEndpoint);
+            channel.enableServer("tcp://127.0.0.1:0");
             channel.setRoutingId(targetRid);
-            channel.enableClient(sourceEndpoint);
+            targetConnections = channel.clientConnections();
             channel.addHandlerGroup("route-shared");
         }
         ;
@@ -1346,14 +1370,18 @@ final class ChannelMessagingTest {
                 ZLinkFrameworkRuntime ignoredTarget =
                         RuntimeTestSupport.startFramework(
                                 targetOptions, new ZLinkJavaBackendAdapterFactory())) {
+            sourceConnections.connect(
+                    ignoredTarget.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
+            targetConnections.connect(
+                    source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
             assertEquals("scanned-route:hello", awaitScannedRouteReply(source, targetRid));
         }
     }
 
     @Test
     void handlerFiltersWrapNodeDirectRequestDispatch() {
-        String sourceEndpoint = tcpEndpoint();
-        String targetEndpoint = tcpEndpoint();
+        ZLinkEndpointConnections sourceConnections;
+        ZLinkEndpointConnections targetConnections;
         RoutingId sourceRid = RoutingId.from("route-filter-source");
         RoutingId targetRid = RoutingId.from("route-filter-target");
         FILTER_PACKET.set(null);
@@ -1363,9 +1391,9 @@ final class ChannelMessagingTest {
         DefaultZLinkFrameworkOptions sourceOptions = new DefaultZLinkFrameworkOptions();
         {
             var channel = ZLinkLegacyTopology.addRouteMeshChannel(sourceOptions, "route");
-            channel.enableServer(sourceEndpoint);
+            channel.enableServer("tcp://127.0.0.1:0");
             channel.setRoutingId(sourceRid);
-            channel.enableClient(targetEndpoint);
+            sourceConnections = channel.clientConnections();
         }
         ;
 
@@ -1373,9 +1401,9 @@ final class ChannelMessagingTest {
         targetOptions.useFilter(ReplyDecoratingFilter.class);
         {
             var channel = ZLinkLegacyTopology.addRouteMeshChannel(targetOptions, "route");
-            channel.enableServer(targetEndpoint);
+            channel.enableServer("tcp://127.0.0.1:0");
             channel.setRoutingId(targetRid);
-            channel.enableClient(sourceEndpoint);
+            targetConnections = channel.clientConnections();
             channel.addRequestHandler(
                     RouteEchoHandler.class, EchoRequest.class, String.class, "Echo");
         }
@@ -1387,6 +1415,10 @@ final class ChannelMessagingTest {
                 ZLinkFrameworkRuntime ignoredTarget =
                         RuntimeTestSupport.startFramework(
                                 targetOptions, new ZLinkJavaBackendAdapterFactory())) {
+            sourceConnections.connect(
+                    ignoredTarget.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
+            targetConnections.connect(
+                    source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
             assertEquals("route:hello", awaitRouteReply(source, targetRid));
             assertEquals("Echo", FILTER_PACKET.get());
             assertEquals("route", FILTER_MESH.get());
@@ -1400,26 +1432,26 @@ final class ChannelMessagingTest {
 
     @Test
     void routeMesh_matchesRepliesByRequestSequenceWhenPacketNameIsShared() {
-        String sourceEndpoint = tcpEndpoint();
-        String targetEndpoint = tcpEndpoint();
+        ZLinkEndpointConnections sourceConnections;
+        ZLinkEndpointConnections targetConnections;
         RoutingId sourceRid = RoutingId.from("route-seq-source");
         RoutingId targetRid = RoutingId.from("route-seq-target");
 
         DefaultZLinkFrameworkOptions sourceOptions = new DefaultZLinkFrameworkOptions();
         {
             var channel = ZLinkLegacyTopology.addRouteMeshChannel(sourceOptions, "route");
-            channel.enableServer(sourceEndpoint);
+            channel.enableServer("tcp://127.0.0.1:0");
             channel.setRoutingId(sourceRid);
-            channel.enableClient(targetEndpoint);
+            sourceConnections = channel.clientConnections();
         }
         ;
 
         DefaultZLinkFrameworkOptions targetOptions = new DefaultZLinkFrameworkOptions();
         {
             var channel = ZLinkLegacyTopology.addRouteMeshChannel(targetOptions, "route");
-            channel.enableServer(targetEndpoint);
+            channel.enableServer("tcp://127.0.0.1:0");
             channel.setRoutingId(targetRid);
-            channel.enableClient(sourceEndpoint);
+            targetConnections = channel.clientConnections();
             channel.addRequestHandler(
                     DelayedRouteEchoHandler.class,
                     SharedPacket.class,
@@ -1434,6 +1466,10 @@ final class ChannelMessagingTest {
                 ZLinkFrameworkRuntime ignoredTarget =
                         RuntimeTestSupport.startFramework(
                                 targetOptions, new ZLinkJavaBackendAdapterFactory())) {
+            sourceConnections.connect(
+                    ignoredTarget.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
+            targetConnections.connect(
+                    source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
             assertEquals("warmup", awaitSharedRouteReply(source, targetRid, "warmup:1"));
 
             CompletionStage<String> slow =
@@ -1454,8 +1490,8 @@ final class ChannelMessagingTest {
 
     @Test
     void routeMesh_sendByRoutingIdDispatchesToHandler() throws InterruptedException {
-        String sourceEndpoint = tcpEndpoint();
-        String targetEndpoint = tcpEndpoint();
+        ZLinkEndpointConnections sourceConnections;
+        ZLinkEndpointConnections targetConnections;
         RoutingId sourceRid = RoutingId.from("route-send-source");
         RoutingId targetRid = RoutingId.from("route-send-target");
         CountDownLatch latch = new CountDownLatch(1);
@@ -1468,18 +1504,18 @@ final class ChannelMessagingTest {
         DefaultZLinkFrameworkOptions sourceOptions = new DefaultZLinkFrameworkOptions();
         {
             var channel = ZLinkLegacyTopology.addRouteMeshChannel(sourceOptions, "route");
-            channel.enableServer(sourceEndpoint);
+            channel.enableServer("tcp://127.0.0.1:0");
             channel.setRoutingId(sourceRid);
-            channel.enableClient(targetEndpoint);
+            sourceConnections = channel.clientConnections();
         }
         ;
 
         DefaultZLinkFrameworkOptions targetOptions = new DefaultZLinkFrameworkOptions();
         {
             var channel = ZLinkLegacyTopology.addRouteMeshChannel(targetOptions, "route");
-            channel.enableServer(targetEndpoint);
+            channel.enableServer("tcp://127.0.0.1:0");
             channel.setRoutingId(targetRid);
-            channel.enableClient(sourceEndpoint);
+            targetConnections = channel.clientConnections();
             channel.addSendHandler(RouteNoticeHandler.class, RouteNotice.class, "Notice");
         }
         ;
@@ -1490,6 +1526,10 @@ final class ChannelMessagingTest {
                 ZLinkFrameworkRuntime ignoredTarget =
                         RuntimeTestSupport.startFramework(
                                 targetOptions, new ZLinkJavaBackendAdapterFactory())) {
+            sourceConnections.connect(
+                    ignoredTarget.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
+            targetConnections.connect(
+                    source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
             routeSendUntilDelivered(source, targetRid);
 
             assertTrue(latch.await(1, TimeUnit.SECONDS), "route mesh send was not delivered");
@@ -1760,10 +1800,6 @@ final class ChannelMessagingTest {
         }
     }
 
-    private static String tcpEndpoint() {
-        return "tcp://127.0.0.1:" + nextPort();
-    }
-
     private static void admitRawClient(ZLinkBackendDealerSocket dealer) throws Exception {
         byte[] channel = "profile".getBytes(StandardCharsets.UTF_8);
         byte[] identity = "default".getBytes(StandardCharsets.UTF_8);
@@ -1907,27 +1943,8 @@ final class ChannelMessagingTest {
         return count;
     }
 
-    private static int nextPort() {
-        for (int attempt = 0; attempt < 200; attempt++) {
-            int port = NEXT_PORT.getAndIncrement();
-            if (isBindable(port)) {
-                return port;
-            }
-        }
-        throw new IllegalStateException("failed to allocate tcp port");
-    }
-
     private static String message(String value) {
         return value;
-    }
-
-    private static boolean isBindable(int port) {
-        try (ServerSocket server = new ServerSocket(port)) {
-            server.setReuseAddress(false);
-            return true;
-        } catch (IOException ignored) {
-            return false;
-        }
     }
 
     public static final class EchoHandler implements ZLinkRequestHandler<EchoRequest, String> {

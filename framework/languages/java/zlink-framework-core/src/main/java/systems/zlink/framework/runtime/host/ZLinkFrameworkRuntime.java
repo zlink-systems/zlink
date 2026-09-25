@@ -680,11 +680,10 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                 registration.meshNodes().stream()
                                         .filter(value -> value.meshName().equals(name))
                                         .findFirst()
-                                        .orElseThrow(
-                                                () ->
-                                                        new ZLinkConfigurationException(
-                                                                "RouteMesh is not configured: "
-                                                                        + name));
+                                        .orElse(null);
+                        if (mesh == null) {
+                            yield channels.listenerEndpoint(kind, name);
+                        }
                         ZLinkInternalMeshNode node = meshNodes.nodesByName().get(name);
                         if (node == null) {
                             throw new ZLinkConfigurationException(
