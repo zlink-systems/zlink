@@ -140,6 +140,14 @@ poller에 socket source를 등록하면 Core가 그 socket의 lifetime pin을 �
 안전하다. close된 socket source는 `POLLERR`를 한 번 반환하고, 해당 등록과
 lifetime pin은 remove할 때까지 유지된다.
 
+`zlink_ctx_shutdown`이 호출되면, 그 context에 속한 socket source(monitor handle 포함)를 close하지 않은 채
+등록한 poller의 wait는 진행 중인 wait를 포함해 timeout을 기다리지 않고 event 없이
+[`ZLINK_CONFIG_INTERNAL_ERROR`(`ETERM`)](03-errors.ko.md#7-configuration-result)로 끝난다. 그 source를
+remove하거나 close할 때까지 이후 wait도 같다. 그 socket의 읽지 않은 completion은
+[completion 종결 규칙](socket/README.ko.md#completion-pull과-ownership)을 따른다. poller는 context에 속하지
+않고 fd·timer source는 shutdown의 영향을 받지 않으므로, 그런 socket source가 없는 poller의 wait는 event나
+timeout까지 계속된다.
+
 poller 하나의 add, modify, remove와 wait는 caller가 직렬화한다. 서로 다른 poller는
 동시에 사용할 수 있다. wait가 반환한 event array는 caller-owned이며 Core 내부
 pointer를 포함하지 않는다.
