@@ -58,12 +58,12 @@ camelCase 메서드, PascalCase 공개 타입, TypeScript에 어울리는 곳에
 | [64-bit byte HWM과 monitoring 계약](#64-bit-byte-hwm과-monitoring-계약) | `bigint` HWM 표현과 monitor snapshot field |
 | [Receive flow state](#receive-flow-state) | receive-flow 상태 타입, setter와 monitor 표면 |
 | [필수 기능 범위](#필수-기능-범위) | 정렬 시 보장해야 할 사용자 대면 기능 |
-| [Spot Get-Or-Create](#spot-get-or-create) | `getOrCreateSpot` 계약 |
+| [Spot Get-Or-Create](#spot-get-or-create) | Framework 공개 계약 링크 |
 | [Receive와 Subscribe 형태](#receive와-subscribe-형태) | 호출자 제공 저장소와 no-data 구분 |
 | [에러와 검증 정책](#에러와-검증-정책) | 검증 시점과 에러 구조화 |
 | [성능 정책](#성능-정책) | hot path 제약 |
 | [구현 체크리스트](#구현-체크리스트) | 정렬 선언 전 확인 항목과 필수 검증 명령 |
-| [Actor 및 Spot Route 결과](#actor-및-spot-route-결과) | route 결과 타입과 Actor 대상 send/request |
+| [Actor 및 Spot Route 결과](#actor-및-spot-route-결과) | Framework 공개 계약 링크 |
 
 ## 공개 계약 소스
 
@@ -139,13 +139,6 @@ bindings/node/
 |   |   |   |   +-- monitor.ts
 |   |   |   |   +-- poller.ts
 |   |   |   |   +-- timer.ts
-|   |   |   +-- service/
-|   |   |   |   +-- spot/
-|   |   |   |   |   +-- spot_node.ts
-|   |   |   |   |   +-- spot.ts
-|   |   |   |   |   +-- actor.ts
-|   |   |   |   |   +-- spot_operations.ts
-|   |   |   |   |   +-- spot_models.ts
 |   |   |   +-- errors/
 |   |   |   |   +-- errors.ts
 |   |   |   |   +-- results.ts
@@ -183,19 +176,12 @@ bindings/node/
 |   |   |   +-- options/
 |   |   |   |   +-- option_mapping.ts
 |   |   |   |   +-- validation.ts
-|   |   |   +-- service/
-|   |   |   |   +-- spot/
-|   |   |   |   |   +-- spot_node.ts
-|   |   |   |   |   +-- spot.ts
-|   |   |   |   |   +-- actor.ts
-|   |   |   |   |   +-- spot_operations.ts
 |   |   |   +-- errors/
 |   |   |   |   +-- native_errors.ts
 |   |   |   +-- native/
 |   |   |   |   +-- native.ts
 |   |   |   +-- internal/
 |   |   |   |   +-- request_pump.ts
-|   |   |   |   +-- service_mapping.ts
 +-- native/
 +-- tests/
 +-- samples/
@@ -241,8 +227,6 @@ Contract/runtime 경계는 다음 요구를 만족한다.
 다음 Node 전용 단축 경로는 허용하지 않는다.
 
 - `src/zlink/contracts`는 런타임 핸들 모듈을 재export하지 않는다.
-- 계약 파일은 공개 서비스 모델을 기술하기 위해 런타임 리소스 클래스를 import
-  하지 않는다.
 - `runtime/handles/canonical.ts`와 같은 공개 런타임 aggregate가 공개 리소스
   동작의 원천으로 남아 있어서는 안 된다. 그러한 선언을 이름 있는 계약 파일과
   리소스별 이름의 런타임 구현 파일로 분할한다.
@@ -283,11 +267,7 @@ TypeScript 인터페이스를 먼저 정의한다.
   `PubSocket`, `SubSocket`, `XPubSocket`, `XSubSocket`, `StreamSocket`.
 - eventing 역할: `MonitorSocket`, `Poller`, poll event source, `Timer`,
   `Stopwatch`, `AtomicCounter`.
-  `Spot`, `Actor`.
-- operation builder: send, routed send, request, reply, publish, channel
-  send/request, SPOT send/request/reply, actor create, actor join, actor join
-  reply builder.
-- application handler 역할: SPOT dispatch handler, route handler.
+- operation builder 역할: raw send, routed send, request, reply, publish.
 
 이 역할을 구현하는 런타임 클래스 이름은 private 또는 unexported여도 된다. 그러나
 패키지 루트 팩토리와 생성된 선언은 공개 계약 인터페이스 이름을 사용해야 한다.
@@ -333,8 +313,6 @@ perf나 샘플이 네이티브 객체에 더 빨리 접근하도록 문서화되
   publish/subscribe 표면.
 - `eventing/`: monitor, monitor snapshot/event, poller, poll event, timer, 공개
   poll 헬퍼.
-- `service/`: SPOT node, SPOT 핸들, 토폴로지 모델,
-  Actor 참조, Actor 생명주기, operation 빌더.
 - `errors/`: 타입 있는 에러 클래스 또는 태그된 에러 도메인.
 - enum, flag, result, literal-union 타입은 그 의미를 정의하는 카테고리에 산다.
   단순히 문법으로 묶기 위해 `enums` 폴더를 만들지 않는다.
@@ -353,10 +331,6 @@ TypeScript 관용 표기를 유지한다.
   스트림 packet handler 계약, 소켓 플래그.
 - `eventing/`: monitor, monitor event/status, poller, poll events, timer, 이벤트
   handler 계약.
-- `service/`: SPOT node, Spot, Actor, topology model, service operation builder를
-  담는 `spot/` 하위 폴더를 사용한다. `spot_node.ts`, `spot.ts`,
-  `actor.ts`, `spot_operations.ts` 같은 이름 있는 파일을 사용하고, 모델 파일은
-  해당 서비스 도메인과 함께 묶는다.
 - `errors/`: 공개 에러 클래스, result 도메인, 에러 코드 매핑.
 
 공개 리소스 동작을 하나의 종합 `models.ts`나 런타임-export barrel에 모으지
@@ -387,10 +361,8 @@ TypeScript 관용 표기를 유지한다.
   `xsub_socket.ts`, `stream_socket.ts`.
 - `eventing/`: `monitor_socket.ts`, `poller.ts`, `poll_events.ts`, `timer.ts`,
   관련 이벤트 materialization 헬퍼.
-- `options/`: context, socket, service가 공유하는 option 검증과 native option
+- `options/`: context와 socket이 공유하는 option 검증과 native option
   id/value 매핑.
-- `service/`: SPOT node, Spot, Actor, 토폴로지, 서비스 operation 구현. 구현이
-  충분히 커지면 `spot/` 하위 폴더를 사용한다.
 - `errors/`: 네이티브 에러 변환과 검증 헬퍼.
 - `native/`: 네이티브 addon 로딩, 플랫폼 lookup, N-API 바인딩 표면.
 - `internal/`: 표준 .NET 런타임 분류에 맞지 않는 작은 비공개 glue만 둔다. 표준
@@ -401,17 +373,15 @@ TypeScript 관용 표기를 유지한다.
 하지 않는다. 패키지 루트는 팩토리에서 네이티브 기반 런타임 구현을 인스턴스화할 수
 있으나, 런타임 구현 모듈이 아니라 계약 이름을 export한다.
 
-`runtime/sockets/sockets.ts`, `runtime/service/service.ts`,
-`runtime/eventing/eventing.ts`, `runtime/core/index.ts` 같은 카테고리 파일은
+`runtime/sockets/sockets.ts`, `runtime/eventing/eventing.ts`, `runtime/core/index.ts` 같은 카테고리 파일은
 작은 barrel로만 허용된다. 인근 구현 파일을 재export하거나 런타임 내부에 머무는
 팩토리 와이어링을 정의할 수 있으나, 네이티브 기반 리소스 클래스 본문, operation
-빌더, 마샬링 로직을 담지 않는다. 리뷰어가 `RouterSocket`, `SpotNode`, `Poller`의
+빌더, 마샬링 로직을 담지 않는다. 리뷰어가 `RouterSocket`, `Poller`의
 동작을 이해하려고 카테고리 aggregate를 읽어야 한다면 파일 분할이 정렬되지 않은
 것이다.
 
 런타임 구현 파일의 이름은 네이티브 기반 구현이라는 사실이 아니라 구현하는 리소스나
-operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
-`timer.ts`를 사용하며, `default_router_socket.ts`, `default_spot_node.ts`,
+operation을 따라 짓는다. `router_socket.ts`, `poller.ts`, `timer.ts`를 사용하며, `default_router_socket.ts`,
 `default_poller.ts` 등의 이름은 사용하지 않는다.
 
 공유 헬퍼는 두 번째 공개 구현 aggregate가 되어선 안 된다. `runtime/internal/*`은
@@ -419,7 +389,7 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
 동작을 소유하거나 표준 .NET 런타임 분류를 숨기면 안 된다. 네이티브 핸들 소유권은
 `runtime/handles`, 버퍼 변환은 `runtime/buffers`, option mapping은
 `runtime/options`, 네이티브 addon 선언은 `runtime/native`, 공개 리소스 동작은
-`sockets/router_socket.ts`나 `service/spot/spot_node.ts` 같은 리소스 런타임 파일에
+`sockets/router_socket.ts` 같은 리소스 런타임 파일에
 속한다.
 
 카테고리 아래의 공유 헬퍼 파일도 같은 규칙을 따른다. `runtime/sockets/socket_common.ts`
@@ -431,13 +401,12 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
 
 다음 형태들은 명시적인 정렬 실패다.
 
-- `runtime/service/service.ts`가 `SpotNode`, `Spot`, `Actor` 구현을 한 파일에 담은 경우.
 - `runtime/eventing/eventing.ts`가 monitor socket, poll events, poller, timer,
   stopwatch, counter 구현을 한 파일에 담은 경우.
 - `runtime/core/context.ts`가 context, context options, 무관한 런타임 헬퍼 구현을
   한 파일에 담은 경우.
 - `runtime/core/runtime_info.ts`가 헬퍼 함수에 도달하기 위해 복사된 구현
-  prelude나 소켓/서비스 동작을 담은 경우.
+  prelude나 소켓 동작을 담은 경우.
 - `runtime/sockets/socket_common.ts`가 한 거대한 파일에 operation 빌더, monitor
   socket 동작, route 헬퍼, 메시지 변환, base 소켓 동작을 모두 담은 경우.
 - `runtime/internal/*`이 비공개 헬퍼 메커니즘 대신 공개 리소스 동작을 소유한
@@ -456,14 +425,8 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
   `createRouterSocket()`, `createPubSocket()`, `createSubSocket()`,
   `createXPubSocket()`, `createXSubSocket()`, `createStreamSocket()`는 런타임 소켓
   구현을 생성한다.
-  서비스 계층 구현을 생성한다.
-- `Spot` 핸들은 `SpotNode.createSpot()`, `entrySpot()`,
-  `getOrCreateSpot(...)`, `spotLookup(...)`을 통해 얻는다. 직접적인 `Spot`
-  생성은 공개되지 않는다.
-- Actor 핸들은 `SpotNode.createActor(...)`를 통해 생성한다. 직접적인 Actor 생성은
-  공개되지 않는다.
-- `createPoller()`, `createTimer()`, `createTimer(spot)`은 eventing 리소스를
-  생성한다.
+공개 Spot과 Actor 생성 및 service 소유 timer는 [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md)가 규정한다. 이 binding spec은 Core raw socket, monitor, poller, 일반 timer의 생성을 정의한다.
+- `createPoller()`, `createTimer()`는 eventing 리소스를 생성한다.
 - `Pollable`은 `BaseSocket | SocketMonitor | Timer | number`이며 `Poller.add/modify/remove`는
   `SocketMonitor` overload를 제공한다(공통 spec "`Poller`의 monitor source"). socket monitor에는
   `PollEventFlag.PollIn`만 유효하고 다른 readiness mask는 typed `ConfigResult.InvalidArgument`로
@@ -523,8 +486,7 @@ canonical 이름은 `setReadableHandler`이며 다른 바인딩도 같은 정식
 - 케이스만 다를 뿐 다른 바인딩과 동일한 정식 액션 이름을 사용한다.
   `send`, `request`, `reply`, `publish`, `subscribe`, `unsubscribe`,
   `recv`, `recvRouted`, `receiveSubscriptionEvent`,
-  `recvPacket`, `setDispatchHandler`, `getOrCreateSpot`,
-  `sendToChannel`, `requestToChannel`, `sendToSpot`, `requestToSpot`.
+  `recvPacket`, `setDispatchHandler`.
 - 호환성만을 위해 옛 alias를 유지하지 않는다. 이전 이름이 정식 의미와
   충돌하면 제거하고 정식 TypeScript 이름을 노출한다.
 - `sendNoWait`, `publishWithFlags`, `requestAsync` 같은 operation-start 변형을
@@ -537,17 +499,12 @@ canonical 이름은 `setReadableHandler`이며 다른 바인딩도 같은 정식
 - 데이터 평면의 `recv`, routed recv, `subscribe`, 구독-이벤트 receive는 호출자가
   제공한 `Received`, `TopicMessage`, `SubscriptionEvent` 객체를 채우고
   `boolean`을 반환한다.
-- send, routed send, publish, request, reply, SPOT operation, Actor location/
-  session operation은 fluent 빌더를 반환한다.
-- 빌더 시작 메서드는 대상 identity, topic, channel, routing ID와 `ReplyToken`만
+- Raw send, routed send, publish, request, reply는 fluent builder를 반환한다.
+- 빌더 시작 메서드는 대상 identity, topic, routing ID와 `ReplyToken`만
   받는다. payload와 그 operation이 지원하는 option은 빌더 단계다.
-- SPOT channel 대상 operation은 `sendToChannel(...)`과
-  `requestToChannel(...)`을 사용한다. SPOT topic publish는 `publish(topic)`으로
-  유지한다.
 - operation 시작 메서드와 같은 이름의 단일 payload 단축 오버로드를 추가하지
   않는다. `send(message)`, `send(routingId, message)`,
-  `publish(topic, message)`, `sendToChannel(channel, message)`,
-  `sendToSpot(..., message)`은 공개 계약 멤버가 아니다. 호출자는
+  `publish(topic, message)`는 공개 계약 멤버가 아니다. 호출자는
   `send(...).message(message).submit()`을 사용한다.
 - multipart payload는 `message(...)` 반복 호출로 누적한다. `messages(...)`
   편의는 같은 빌더 계약에 위임하고 계약 소스에 선언될 때 허용된다.
@@ -596,8 +553,6 @@ canonical 이름은 `setReadableHandler`이며 다른 바인딩도 같은 정식
 - Sockets: pair, dealer, router, pub, sub, xpub, xsub, stream, 타입 있는 옵션,
   request/reply, publish/subscribe, 스트림 packet API.
 - Eventing: monitor, monitor snapshot/event, poller, poll event, timer.
-- Service: SPOT node, SPOT 핸들, 토폴로지 스냅샷, Actor
-  참조, Actor 생명주기, operation 빌더.
 - Errors: 타입 있는 에러 클래스 또는 core result 도메인을 보존하는 태그된 에러
   객체.
 
@@ -688,29 +643,20 @@ native config 실패를 native errno가 포함된 config 범주의 `ZlinkError`�
     GC가 정리한다 — REQREP 등 close 집약 경로의 per-close 비용을 늘리지 않기 위한 결정이다.
 - 모든 소켓 패밀리와 그 타입 있는 옵션.
 - Monitor, poller, timer, readiness 의미.
-- SPOT node, SPOT 핸들, 토폴로지 스냅샷, Actor, 스트림
-  Actor 바인딩.
 
 바인딩은 적절할 때 동기 또는 비동기 형식을 노출할 수 있으나, core operation의
 의미를 바꾸지 않는다.
 
 ## Spot Get-Or-Create
 
-Node는 `SpotNode.getOrCreateSpot(spotRid)`를 노출한다. 이는
-`zlink_spot_node_spot_get_or_new(...)`에 직접 매핑되며, `spotLookup`과
-`createSpot`을 조합해 구현하지 않는다.
-
-이 메서드는 `{ spot, created }`를 반환한다. 반환된 `Spot`은 호출자 소유이며
-일반적인 방식으로 close 한다. `created`는 논리적 spot을 생성한 호출에 대해서만
-`true`다.
+공개 Spot `GetOrCreate`의 입력·결과와 owner는
+[Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md#17-creategetorcreate-결과와-relocation-policy)를 따른다.
 
 ## Receive와 Subscribe 형태
 
 - 데이터 평면 receive와 subscribe API는 재사용 가능한 저장을 위해 호출자가 제공한
   결과 객체를 사용한다.
 - 논블로킹 no-data는 `false`를 반환하며 throw된 에러와 구별된다.
-- SPOT readable dispatch 이벤트는 readiness 알림이다. 호출자는 일치하는 receive
-  API를 no-data가 될 때까지 비운다(drain).
 - 일반 socket, routed socket, subscription과 successful request result에서 수신한 각 part는
   addon이 만든 JavaScript 소유 `Buffer`를 payload로 사용하는 `Message`가 된다. Payload를
   읽을 때 추가 native 호출이 발생하지 않으며 `Message`를 닫아도 `Buffer`의 수명 규칙은
@@ -720,9 +666,6 @@ Node는 `SpotNode.getOrCreateSpot(spotRid)`를 노출한다. 이는
   nullable `ReplyToken`, Sub·XSub topic과 Core가 제공한 source `RoutingId`를 보존한다.
   수신 회계와 결과 수명의 경계는 [공통 수신 ownership 계약](../README.ko.md#receive-ownership)을 따른다.
   Node의 public·internal 수신 API에는 part 단위 release가 없다.
-- Actor join 요청 receive 같은 서비스 제어/admission receive 경로는 재사용 가능한
-  데이터 평면 저장보다 더 명확할 때 nullable, `undefined`, 또는 태그된 결과 반환
-  형태를 사용할 수 있다. 그래도 no-data와 throw된 하드 receive 에러는 구별한다.
 
 ### STREAM packet storage
 
@@ -734,7 +677,7 @@ output이 empty다.
 ## 에러와 검증 정책
 
 - 고정 크기 경계 문자열과 id는 네이티브 addon 호출 전에 검증한다.
-- routing id, actor id, endpoint, channel 이름, topic을 조용히 잘라내지 않는다.
+- routing id, endpoint, channel 이름, topic을 조용히 잘라내지 않는다.
 - submit, request, recv, handler, close, bind, connect, config 에러 도메인을
   보존한다.
 - 공개 에러는 호출자가 에러 텍스트를 파싱하지 않고 분기할 수 있을 만큼 구조적인
@@ -759,8 +702,6 @@ output이 empty다.
 - 노출되는 헬퍼 함수와 빌더 편의 메서드는 런타임 헬퍼가 아니라 계약 소스에
   선언된다.
 - Receive/구독 의미는 공통 바인딩 정책과 일치한다.
-- 데이터 평면 호출자 제공 저장과 다른 서비스 제어/admission receive 예외는 그
-  차이가 있는 곳에 문서화된다.
 - Perf 의미는 `bindings/c/perf`와 일치한다.
 - `src/zlink/contracts`는 `src/zlink/runtime`에 대한 import나 export 의존을 갖지
   않는다.
@@ -793,21 +734,7 @@ Node 계약은 `bindings/node/`에서 다음 명령으로 검증한다.
 
 ## Actor 및 Spot Route 결과
 
-Node는 Actor와 Spot route 조회 결과를 공개 JavaScript 객체와 일치하는 TypeScript
-선언으로 노출한다.
-
-- `ActorRoute`는 해석된 Actor 참조, Actor 노드 RID, 현재 Spot RID, 현재 Spot
-  종류(kind)를 보존한다.
-- `SpotRoute`는 Spot RID, owner 노드 RID, Spot 종류를 보존한다.
-- `SpotKind`는 Entry Spot과 user Spot을 구분한다. invalid 종류는 성공한 route
-  결과가 아니다.
-- SpotNode 스냅샷 엔트리는 core 스냅샷과 동일한 Spot kind/현재 Spot 필드를
-  노출한다.
-
-- Node는 resolve된 Actor ref를 인자로 받는 `SpotNode.sendToActor(actorRef)`와 `SpotNode.requestToActor(actorRef)`를 노출한다.
-- send operation은 submit이 성공하면 하나 이상의 message part 소유권을 넘기고, Actor 소유자 mailbox가 인계를 받으면 완료된다.
-- request operation은 submit이 성공하면 요청 part의 소유권을 넘기고, Actor handler가 만든 reply part를 전달한다.
-- Node는 제거된 Discovery route table이나 resolver API를 compatibility helper로 되살리면 안 된다.
+공개 Spot/Actor 형태는 [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md).
 
 ## Pull completion 공개 계약
 

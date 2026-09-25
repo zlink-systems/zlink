@@ -178,7 +178,7 @@ and errno). Each item maps to one test.
 - Sending an array of length one produces a one-part record; sending a multipart array returns all parts to the receiver in the same order and in one call.
 - If `DONTWAIT` is admitted immediately, it returns ID `0` and no completion.
 - If `DONTWAIT` is refused because of HWM, byte credit, or a pipe that is not ready, it returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero wait token; Core does not retain the payload, and the caller resubmits its retained complete record.
-- When the single pipe gains write credit, exactly one `ZLINK_COMPLETION_WRITABLE` record (`ZLINK_SEND_ADMITTED`, the same `user_context`, empty `peer_rid`) is returned for that token, and `ZLINK_POLLOUT` and `ZLINK_POLLCOMPLETION` are level-held until it is read.
+- When the single logical route gains write credit, exactly one `ZLINK_COMPLETION_WRITABLE` record (`ZLINK_SEND_ADMITTED`, the same `user_context`, empty `peer_rid`) is returned for that token, and `ZLINK_POLLOUT` and `ZLINK_POLLCOMPLETION` are level-held until it is read.
 - If the completion reservations are exhausted so that no wait token can be created, the result is `ZLINK_SUBMIT_OUT_OF_MEMORY` with `ENOMEM` and ID `0`.
 - A `ZLINK_RECV_FLAGS_DONTWAIT` receive with no available data returns `ZLINK_RECV_NO_DATA` with `EAGAIN`.
 

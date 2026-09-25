@@ -91,8 +91,8 @@ its language-specific overloads, visibility, and ownership.
 Async terminals return a **submission result object** captured at submit time. `SendSubmission` carries
 `result` (a submit-time snapshot, `OK`|`BACKPRESSURED`) and the admission stage; `RequestSubmission` adds
 the reply stage. When `result` is `OK` the admission is already complete (SEND ends there; REQUEST's reply
-completes from the completion queue); when `BACKPRESSURED` the binding retains the input and completes
-admission via WRITABLE resubmission. Other submit failures (`NOT_CONNECTED`, `NOT_FOUND`, `NOT_ADMITTED`,
+completes from the completion queue); when `BACKPRESSURED` the binding resubmits from the staging record owned by
+[submit result projection](README.en.md#submit-result-projection) after WRITABLE and completes admission. Other submit failures (`NOT_CONNECTED`, `NOT_FOUND`, `NOT_ADMITTED`,
 `INVALID_ARGUMENT`, `TERMINATED`, `OUT_OF_MEMORY`, `INTERNAL_ERROR`, …) are raised as exceptions/errors, not
 through the result object (the caller does not watch two places). The object and field names
 (`Submission`, `result`, `admitted`, `reply`) are shared across the seven languages. The structure and join

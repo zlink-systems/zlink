@@ -46,13 +46,13 @@ contract/runtime 소유, 공개 계약 카테고리, 파일 분할 기준, 검�
 | [생성 진입점](#생성-진입점) | 공개 팩토리 메서드 목록 |
 | [필수 기능 커버리지](#필수-기능-커버리지) | 정렬 시 보장해야 할 사용자 노출 기능 |
 | [Receive 및 Subscribe 형태](#receive-및-subscribe-형태) | 호출자 제공 저장소와 no-data 구분 |
-| [Service 및 SPOT 형태](#service-및-spot-형태) | `ISpotNode`/`ISpot` 책임 분리 |
+| [Service 및 SPOT 형태](#service-및-spot-형태) | Framework 공개 계약 링크 |
 | [Byte HWM 및 monitoring ABI v4](#byte-hwm-및-monitoring-abi-v4) | `ulong` byte HWM과 monitor snapshot field |
 | [Receive flow state](#receive-flow-state) | receive-flow 상태 타입, setter와 monitor 표면 |
 | [에러 및 검증 정책](#에러-및-검증-정책) | 검증 시점과 예외 매핑 |
 | [성능 정책](#성능-정책) | hot path 제약 |
 | [구현 체크리스트](#구현-체크리스트) | 정렬 선언 전 확인 항목과 필수 검증 명령 |
-| [Actor 및 Spot Route 결과](#actor-및-spot-route-결과) | route 결과 record와 Actor 대상 send/request |
+| [Actor 및 Spot Route 결과](#actor-및-spot-route-결과) | Framework 공개 계약 링크 |
 
 ## 공개 계약 소스
 
@@ -127,11 +127,6 @@ bindings/dotnet/
 |   |   |   |   +-- PollEvent.cs
 |   |   |   |   +-- Timer.cs
 |   |   |   |   +-- ZlinkPoll.cs
-|   |   |   +-- Service/
-|   |   |   |   +-- SpotNode.cs
-|   |   |   |   +-- Spot.cs
-|   |   |   |   +-- Actor.cs
-|   |   |   |   +-- SpotNodeModels.cs
 |   |   |   +-- Errors/
 |   |   |   |   +-- Errors.cs
 |   |   +-- Runtime/
@@ -140,7 +135,6 @@ bindings/dotnet/
 |   |   |   +-- Messaging/
 |   |   |   +-- Sockets/
 |   |   |   +-- Eventing/
-|   |   |   +-- Service/
 |   |   |   +-- Errors/
 |   |   |   +-- Buffers/
 |   |   |   +-- Options/
@@ -153,8 +147,8 @@ bindings/dotnet/
 ```
 
 - `Contracts`와 `Runtime` 폴더 이름은 저장소상의 소유 경계다. `Systems.Zlink.Contracts`나 `Systems.Zlink.Runtime`을 사용자 노출 네임스페이스로 공개해도 된다는 허가가 아니다.
-- 공개 생성은 공개 계약이 명시적으로 구체 값 타입을 요구하지 않는 한 `IContext`, socket 인터페이스, `ISpotNode`, `IPoller`, `IZlinkTimer` 같은 공개 계약을 반환한다.
-- `Context`, socket 클래스, `SpotNode`, `Poller`, `Timer` 같은 런타임 클래스는 구현 소유자이며 소비자 표면으로 선호되는 대상이 아니다.
+- 공개 생성은 공개 계약이 명시적으로 구체 값 타입을 요구하지 않는 한 `IContext`, socket 인터페이스, `IPoller`, `IZlinkTimer` 같은 공개 계약을 반환한다.
+- `Context`, socket 클래스, `Poller`, `Timer` 같은 런타임 클래스는 구현 소유자이며 소비자 표면으로 선호되는 대상이 아니다.
 
 `IPoller`는 `void Add(ISocketMonitor monitor, PollEventFlags events, nuint slot)`, `void Modify(ISocketMonitor monitor, PollEventFlags events)`,
 `bool Remove(ISocketMonitor monitor)`로 socket monitor를 source로 받는다(공통 spec "`Poller`의 monitor source"); one-shot
@@ -209,7 +203,7 @@ Contract/runtime 경계는 다음 요구를 만족한다.
 - 동작 계약은 `Contracts/`에 있는 공개 `I*` 인터페이스다.
   operation builder 계약은 그 패키지에서 정해진 공개 형태에 따라
   `SendOperation`이나 `RequestOperation` 같은 도메인 이름을 사용할 수 있다.
-- 호출자가 `Context`, `DealerSocket`, `RouterSocket`, `SpotNode`, `Poller`,
+- 호출자가 `Context`, `DealerSocket`, `RouterSocket`, `Poller`,
   `Timer` 같은 공개 팩토리를 통해 리소스를 생성해야 할 때, 네이티브 기반 구현은
   `Runtime/`의 internal sealed 클래스다.
 - 인스턴스화 불가한 추상 기반 클래스는 위의 런타임 구현 클래스들을 위한 구현 지원
@@ -242,14 +236,8 @@ Contract/runtime 경계는 다음 요구를 만족한다.
   pub/sub socket 계약, pair, dealer, router, pub, sub, xpub, xsub, stream
   socket family 인터페이스. 단, 해당 family가 네이티브 기반 동작을 가질 때만
   family 인터페이스를 둔다.
-- Eventing 리소스 역할: monitor socket 계약, `IPoller`, poll event source
-  계약, `IZlinkTimer`.
-  `ISpotNode`, `ISpot`, 그리고 Actor handle이 노출될 때의 `IActor` 또는
-  동등한 actor 리소스 계약.
-- Operation builder 역할: send, request, reply, publish,
-  channel send/request, SPOT send/request/reply, actor create, actor join,
-  actor join reply operation.
-- Handler 역할: SPOT dispatch handler, route handler와 admission handler.
+- Eventing 리소스 역할: monitor socket 계약, `IPoller`, poll event source 계약, `IZlinkTimer`.
+- Operation builder 역할: raw send, request, reply, publish.
 
 ### RoutingId 문자열 및 바이너리 헬퍼
 
@@ -294,8 +282,7 @@ receive-path 값을 캐시할 수 있지만, equality와 공개 동작은 오직
   채우고 `bool`을 반환한다.
 - .NET 호출자는 재사용 가능한 수신 저장소를 `Received.Create()`로 만든다.
   `Received`에는 공개 생성자가 없다.
-- `Send`, routed send, `Publish`, `Request`, `Reply`, SPOT 연산, Actor
-  location/세션 연산은 fluent operation builder를 반환한다.
+- Raw `Send`, routed send, `Publish`, `Request`, `Reply`는 fluent operation builder를 반환한다.
 - PUB/XPUB `Publish(topic)`의 terminal은 동기 `PublishSubmitOperation.Submit()
   -> void`다. 기본 PUB 의미론은 lossy이므로 publisher는 [HWM](../../../../core/doc/spec/core/glossary.ko.md#hwm)(queue의 byte 보관량을 제한하는 기준)에서 대기하지
   않는다. `NODROP`에서 가득 찬 subscriber는 그 자리에서
@@ -304,7 +291,7 @@ receive-path 값을 캐시할 수 있지만, equality와 공개 동작은 오직
   예외 없이 `false`로 관찰하는 별도 표면이다.
   `.Flags(SendFlags.None)`을 명시하면 `Submit()`은 `SendTimeout`까지 local admission을
   기다리고, `.Flags(SendFlags.DontWait)`은 즉시 backpressure 동작을 유지한다.
-- builder의 시작 메서드는 target identity, topic, channel, routing id,
+- builder의 시작 메서드는 target identity, topic, routing id,
   `ReplyToken`만 받는다. Payload, request timeout과 terminal 선택은 builder
   단계에서 처리한다.
 - Reply builder는 payload를 모은 뒤 `Submit()`으로 끝난다.
@@ -316,8 +303,7 @@ receive-path 값을 캐시할 수 있지만, equality와 공개 동작은 오직
   실패는 즉시 `ZlinkSubmitException`으로 전달한다.
 - operation 시작 메서드와 같은 이름을 가진 single-payload 단축 오버로드를
   추가하지 않는다. `Send(Message)`, `Send(RoutingId, Message)`,
-  `Publish(string, Message)`, `SendToChannel(string, Message)`,
-  `SendToSpot(..., Message)`는 공개 계약 멤버가 아니다. 호출자는 역할별
+  `Publish(string, Message)`, 는 공개 계약 멤버가 아니다. 호출자는 역할별
   builder terminal을 사용하며, DEALER/ROUTER routed send는
   `Send(...).Message(message).Async()`가 canonical이다.
 - multipart payload는 `Message(...)` 호출을 반복해 누적한다.
@@ -327,7 +313,7 @@ receive-path 값을 캐시할 수 있지만, equality와 공개 동작은 오직
   프로토콜 envelope 헬퍼를 노출하지 않는다. dealer는 `Request()`로 request를
   시작할 수 있지만, API 레벨의 peer routing id를 갖지 않으므로 임의 token에
   대해 reply하지는 못한다. Reply는 수신된 request context나, 대상 context가
-  명시적인 router/SPOT reply 표면에서 시작한다.
+  명시적인 raw ROUTER reply 표면에서 시작한다.
 - 메시지 payload 팩토리는 `Message.From(...)` 오버로드를 사용한다. `FromBytes`
   같은 소스 타입 접미사나 `Of` 같은 값 스타일 팩토리는 공개 계약의 일부가
   아니다.
@@ -358,26 +344,13 @@ receive-path 값을 캐시할 수 있지만, equality와 공개 동작은 오직
 - `Sockets/`: socket 동작 계약, socket 능력 인터페이스, 타입화된 옵션 facade.
 - `Eventing/`: monitor, monitor snapshot/event, poller, timer, poll event
   계약. 공개되는 경우 static poll 헬퍼도 여기에 포함한다.
-- `Service/`: SPOT node, SPOT handle, topology 모델,
-  actor ref, actor 생명주기, service 전용 operation builder.
 - `Errors/`: 예외 계층과 에러 도메인 매핑.
 
 각 카테고리 안의 파일은 구현 순서가 아니라 사용자 노출 개념에 따라 나뉜다.
 
-- 공통 messaging 연산은 send, request, reply로 나뉘고, service topology 모델은 SPOT node 모델과 공유 topology enum으로 나뉜다.
-- Request result는 socket enum 파일이 아니라 messaging request 계약에 속한다.
-- 수신 메시지 종류는 받은 메시지 metadata와 함께 둔다.
-- SPOT node 모드, socket snapshot, Spot snapshot, actor snapshot은 SPOT node 모델에 속한다.
-
-SPOT은 `ISpot`이라는 단일 핸들 계약으로 유지한다. 호출자가 실제로 그 역할들을
-개별로 받아야 하는 경우가 아니라면 역할별 인터페이스로 쪼개지 않는다.
-
-- `ISpotNode`는 node 설정, peer 연결, Spot 생성, Actor 작업, topology 조회 역할을 별도 인터페이스로 나누어 조합할 수 있다. 그래도 기본 생성 경로와 사용자-facing 반환 타입은 `ISpotNode`이며, 역할 인터페이스가 런타임 구현 타입을 노출하면 안 된다.
-- SPOT 콜백 등록에는 명명된 콜백 delegate를 사용해 공개 시그니처가 래퍼 context 객체를 추가하지 않고도 콜백의 의미를 기술하도록 한다.
-- 등록 메서드는 현재 핸들러가 저장되거나 교체되기 때문에 `Set...Handler` 이름을 사용한다. `On...` 이름은 이벤트가 발생할 때 호출되는 메서드 전용이다.
-- 이 delegate들은 SPOT 핸들 계약에서만 사용되므로 `ISpot` 옆에 선언한다.
-- Lifecycle data type은 actor 모델과 함께 둔다. 메시지 part를 소유하는 lifecycle event envelope는 복제 가능한 record가 아니라 sealed class로 둔다.
-- Actor operation 계약은 join, management, session binding으로 나눈다.
+- 공통 messaging 연산은 send, request, reply로 나뉜다.
+- request 결과는 messaging request 계약에 둔다.
+- 수신 message kind는 수신 message metadata에 둔다.
 
 사용자 또는 프레임워크 어댑터가 공개 API를 필요로 한다면, 그 API는
 P/Invoke나 런타임 브리지 코드를 읽지 않고도 이 폴더에서 발견 가능해야 한다.
@@ -396,8 +369,6 @@ P/Invoke나 런타임 브리지 코드를 읽지 않고도 이 폴더에서 발�
   옵션 접근자, 수신 헬퍼, operation 구현 클래스.
 - `Eventing/`: poller, timer, monitor 상태, 콜백 전달, 이벤트 materialize
   헬퍼.
-- `Service/`: SPOT node, Spot, Actor, topology 변환기,
-  service 옵션 지원, service operation 구현.
 - `Errors/`: 경계 검증, 네이티브 result 매핑, errno 변환.
 - `Buffers/`: routing-id 코덱, payload buffer ownership, copy/borrow 정책,
   snapshot buffer 헬퍼.
@@ -419,17 +390,8 @@ facade 연결을 위해 내부적으로 런타임 코드에 위임할 수 있지
   `CreateRouterSocket()`, `CreatePubSocket()`, `CreateSubSocket()`,
   `CreateXPubSocket()`, `CreateXSubSocket()`, `CreateStreamSocket()`은
   런타임 socket 구현을 만든다.
-- `IContext.CreateSpotNode()`와 `CreateSpotNode(SpotNodeMode)`는 서비스 계층
-  구현을 만든다.
-- `Spot` 핸들은 `ISpotNode.CreateSpot()`, `ISpotNode.EntrySpot()`,
-  `ISpotNode.GetOrCreateSpot(...)`, `ISpotNode.SpotLookup(...)`을 통해 얻는다.
-  `Spot`을 직접 생성하는 것은 공개되지 않는다. `GetOrCreateSpot(...)`은
-  `zlink_spot_node_spot_get_or_new(...)`로 직접 사상되며, lookup과 create를
-  관리 코드에서 조합해 구현하지 않는다.
-- `Actor` 핸들은 `ISpotNode.CreateActor(...)`로 만든다. Actor를 직접 생성하는
-  것은 공개되지 않는다.
-- `Zlink.CreatePoller()`, `Zlink.CreateTimer()`, `Zlink.CreateTimer(ISpot)`은
-  eventing 리소스를 만든다.
+공개 Spot과 Actor 생성 및 service 소유 timer는 [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md)가 규정한다. 이 binding spec은 Core raw socket, monitor, poller, 일반 timer의 생성을 정의한다.
+- `Zlink.CreatePoller()`, `Zlink.CreateTimer()`는 eventing 리소스를 만든다.
 - `Zlink.Version()`, `Zlink.Has(...)`, `Zlink.Strerror(...)`, `Zlink.Proxy(...)`,
   `Zlink.Sleep(...)`, `Zlink.MultipartClose(...)`,
   `ZlinkPoll.Poll(...)`은 공개 static facade다. 네이티브 호출이 `Runtime/`에
@@ -456,10 +418,7 @@ C보다 좁거나 더 관용적일 수 있지만, 의미는 동일하게 유지�
 - pair, dealer, router, pub, sub, xpub, xsub, stream socket.
 - 공통 옵션, 타입화된 socket 옵션, TLS, bind/connect/disconnect, routing id,
   channel name, request/reply, publish/subscribe, 콜백 표면.
-- socket monitor, monitor event/snapshot, poller, poll event, timer,
-  SPOT과의 timer 통합.
-- SPOT node, SPOT handle, topology snapshot, actor ref,
-  actor 연산, actor 생명주기, stream actor binding.
+- socket monitor, monitor event/snapshot, poller, poll event, timer.
 - submit, request, recv, handler, close, bind, connect, config 실패에 대한
   타입화된 예외.
 
@@ -479,7 +438,7 @@ object identity 기반 dictionary 조회를 포함해 다시 사용하면 안 �
 
 - message/routed receive는 `Received.Create()`로 만들어진 호출자 제공
   `Received` 객체를 채우고 `bool`을 반환한다.
-- raw `SUB` / `XSUB`와 SPOT subscribe는 호출자 제공 `TopicMessage`나
+- raw `SUB` / `XSUB` subscribe는 호출자 제공 `TopicMessage`나
   `SubscriptionEvent` 객체를 채우고 `bool`을 반환한다.
 - `TopicMessage.ReleaseForReuse()`는 현재 part와 metadata를 해제하고 내부 topic 수신
   버퍼를 유지해 다음 `Subscribe`에서 재사용하게 한다. `TopicMessage`가 열린 상태에서만
@@ -494,34 +453,10 @@ object identity 기반 dictionary 조회를 포함해 다시 사용하면 안 �
 - 실제 receive 실패(데이터 없음이 아닌 실패)는 `ZlinkRecvException`을 던진다.
 - monitor recv나 timer recv 같은 제어 플레인 API는 데이터 없음이 자연스러운
   값 형태인 경우 nullable 반환 형태를 유지할 수 있다.
-- `RecvActorJoin(...)` 같은 서비스 제어/admission API도 nullable 반환 형태를
-  유지할 수 있다. 이들은 데이터 플레인 drain API는 아니지만, 데이터 없음과
-  실제 receive 실패(데이터 없음이 아닌 실패)는 구분해 유지한다.
-
-SPOT의 `SubscribeReadable`과 `RoutedReadable` dispatch 이벤트는 readiness
-알림이다. 호출자는 일치하는 receive API를 데이터 없음이 보고될 때까지 drain한다.
 
 ## Service 및 SPOT 형태
 
-SPOT은 서비스 계층 API이며, raw socket의 누출이 아니다.
-
-- `ISpotNode`는 node 생명주기, route identity, peer 연결,
-  route bridge/channel coordination, 외부 pub ingress 부착, topology snapshot, spot 생성,
-  actor 생성을 소유한다.
-- `ISpot`은 SPOT topic publish/subscribe, routed send/request/reply,
-  routed receive, dispatch 이벤트, actor join receive/reply, actor 생명주기
-  콜백을 소유한다.
-- `Spot.Publish(topic)`는 소유 node의 SPOT topic 플레인에 들어간다. raw `PUB`
-  socket을 노출하거나 선택하지 않는다.
-- `Spot.Publish(topic)`는 수신자가 이미 publish 가능한 `Spot`이므로 짧은
-  publish 이름을 유지한다. 바인딩 계약에서 `PublishSpot`이나 `PublishToTopic`
-  으로 이름을 바꾸지 않는다.
-- channel을 대상으로 하는 SPOT 연산은 `SendToChannel(...)`과
-  `RequestToChannel(...)`을 사용해 목적지를 가진 send/request 이름이
-  `SendToSpot(...)`, `RequestToSpot(...)`, `RequestToRouter(...)`와 정렬되도록
-  한다.
-- Actor location과 stream session binding은 서로 독립적이다. actor가 사용자
-  Spot에 join하기 위해 bound stream session이 반드시 필요하지는 않다.
+공개 Spot/Actor 형태는 [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md).
 
 ## Byte HWM 및 monitoring ABI v4
 
@@ -597,7 +532,7 @@ Request/reply API는 HWM 값을 인자로 받지 않는다. `Async(...)`의 time
 ## 에러 및 검증 정책
 
 - 고정 크기 네이티브 경계 값은 core를 호출하기 전에 검증한다.
-- 잘못된 routing id, actor id, endpoint, channel name, topic은 truncation이
+- 잘못된 routing id, endpoint, channel name, topic은 truncation이
   발생하기 전에 .NET argument/config 예외를 발생시킨다.
 - submit, request, recv, handler, close, bind, connect, config 에러는
   타입화된 zlink 예외로 사상된다.
@@ -635,8 +570,6 @@ Request/reply API는 HWM 값을 인자로 받지 않는다. `Async(...)`의 time
 - 공개 static facade, 확장 헬퍼, builder convenience 메서드는 `Contracts/`
   에서 발견 가능하다.
 - recv/sub API는 호출자 제공 저장소 형태를 사용한다.
-- 서비스 제어/admission receive 예외는 데이터 플레인의 호출자 제공 저장소와
-  다른 부분이 문서화된다.
 - perf 의미는 `bindings/c/perf`와 일치한다. private 런타임 단축 경로를 사용해서
   측정의 의미를 바꾸지 않는다.
 - `Contracts/`의 공개 시그니처는 `Runtime/Native/`, raw handle, 네이티브
@@ -653,7 +586,7 @@ Request/reply API는 HWM 값을 인자로 받지 않는다. `Async(...)`의 time
   실행한다.
 - `./tests/run_tests.sh`를 실행한다.
 - 공개 예제나 생성 경로가 바뀐 경우 `./samples/run_samples.sh`를 실행한다.
-- hot path, receive, send, request, poller, timer, service 동작이 바뀐 경우
+- hot path, receive, send, request, poller 또는 timer 동작이 바뀐 경우
   `./perf/run_benchmarks.sh`와 `./perf/run_benchmarks_multi.sh`를 smoke
   게이트로 실행한다.
 - 프레임워크 어댑터, 샘플, perf, 테스트에서 reflection, `NonPublic`,
@@ -662,20 +595,7 @@ Request/reply API는 HWM 값을 인자로 받지 않는다. `Async(...)`의 time
 
 ## Actor 및 Spot Route 결과
 
-`.NET`은 route lookup 결과를 공개 계약 record로 노출한다.
-
-- `ActorRoute`는 resolve된 `ActorRef`, `Actor.NodeRid`, `CurrentSpotRid`,
-  `CurrentSpotKind`를 보존한다.
-- `SpotRoute`는 `SpotRid`, `OwnerNodeRid`, `SpotKind`를 보존한다.
-- `SpotKind`는 Entry Spot과 사용자 Spot을 구분한다. 잘못된 kind는 성공한
-  route 결과가 아니다.
-- `SpotNodeSpotEntry`와 `SpotNodeActorEntry`는 코어 snapshot과 동일한 Spot
-  kind/현재 Spot 필드를 노출한다.
-
-- 바인딩은 resolve된 Actor ref를 인자로 받는 `ISpotNode.SendToActor(ActorRef)`와 `ISpotNode.RequestToActor(ActorRef)`를 노출한다.
-- `SendToActor`는 submit이 성공하면 하나 이상의 message part 소유권을 넘기고, Actor 소유자 mailbox가 인계를 받으면 완료된다.
-- `RequestToActor`는 submit이 성공하면 요청 part의 소유권을 넘기고, Actor handler가 만든 reply part를 task 또는 callback으로 전달한다.
-- 바인딩은 제거된 Discovery route table이나 resolver API를 compatibility helper로 되살리면 안 된다.
+공개 Spot/Actor 형태는 [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md).
 
 ## Pull completion 공개 계약
 

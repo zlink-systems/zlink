@@ -79,8 +79,9 @@ absolute value that each peer advertises through its own `ZLINK_DEALER_OPT_WEIGH
 `ZLINK_ROUTER_OPT_WEIGHT`. [§7](#7-dealer-options) defines the DEALER option.
 
 A candidate is a connected outbound peer whose advertised weight is positive. A peer with weight
-`0` is excluded from the candidate set. If every known peer has weight `0`, a submit may fail with
-`ZLINK_SUBMIT_NOT_ADMITTED`.
+`0` is excluded from the candidate set. When every known peer has weight `0`, flag-specific submit
+results follow [whole-message send](README.en.md#whole-message-send-and-pending-admission) and
+[Request and reply](README.en.md#request-and-reply).
 
 Each candidate has an accumulator that starts at `0`. The following selection procedure runs once
 for each message sent.
@@ -111,12 +112,7 @@ from compatible positive-weight logical routes; typed requests select from posit
 routes confirmed as ROUTER during handshake. The operation does not change to another endpoint
 while waiting for HWM or a temporary disconnect.
 
-A `DONTWAIT` ordinary send or request pins no endpoint. If no candidate has write capacity in
-its single admission attempt, it returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero
-wait token whose target is the whole candidate peer set. When any candidate reports write capacity
-or a new peer connects, Core publishes one `ZLINK_COMPLETION_WRITABLE` record, and the resubmission
-selects a peer again with the selection procedure at that time. A DEALER with `0` peers right after
-connect still receives a wait token.
+A `DONTWAIT` ordinary send or request pins no endpoint. The wait token targets the whole candidate peer set. Restored write credit and a newly connected peer are wake edges that re-evaluate that set. Flag-specific submit results and resubmission follow [Socket Common whole-message send](README.en.md#whole-message-send-and-pending-admission) and [request](README.en.md#request-and-reply).
 
 The identifier in step 2 is the peer routing ID, compared as a byte string. An absent routing ID is
 an empty byte string, so it sorts before every non-empty identifier. Peers with the same identifier,
@@ -291,18 +287,7 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send (
   zlink_completion_id_t *completion_id_out_);
 ```
 
-Input-array consumption and record atomicity follow
-[§4 Whole-message ownership and record atomicity](#4-whole-message-ownership-and-record-atomicity).
-`part_count_` must be positive. A `DONTWAIT` call makes exactly one admission attempt. If it is admitted immediately, it has ID
-`0` and no completion. If no candidate peer has write capacity (HWM, byte credit, remote PAUSE,
-weight `0`, and `0` peers included), it returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a
-nonzero wait token, and Core does not retain the payload. When any candidate peer gains write
-capacity, Core produces exactly one `ZLINK_COMPLETION_WRITABLE` record for that token
-(`ZLINK_SEND_ADMITTED`, the same `user_context`, empty `peer_rid`), and the caller resubmits its
-retained record with `DONTWAIT`. The token ends with the WRITABLE record; socket close or context termination
-ends it internally and delivers no record. `NONE` snapshots
-`SNDTIMEO` on entry, waits through admission, and finishes with ID `0`. [Socket Common](README.en.md#whole-message-send-and-pending-admission)
-owns the detailed result, errno, and context contract.
+Input-array consumption, flag-specific submit results, wait tokens, and resubmission follow [Socket Common whole-message send](README.en.md#whole-message-send-and-pending-admission). The DEALER token target and wake edges follow the [§3 selection rule](#3-outbound-peer-selection) above.
 
 ---
 
@@ -325,24 +310,17 @@ snapshots the `ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS` value, whose default is 5,00
 completion returns it unchanged.
 
 Candidates are positive-weight logical routes confirmed as ROUTER during handshake. A DEALER peer
-remains a DATA candidate but is excluded from request candidates. No known ROUTER returns
-`ZLINK_SUBMIT_NOT_CONNECTED` with `ENOTCONN`; known ROUTERs all at weight `0` return
-`ZLINK_SUBMIT_NOT_ADMITTED` with `ECONNREFUSED`. `NONE` waits within `SNDTIMEO` for an
-unknown endpoint to complete handshake and an eligible ROUTER to appear, then applies this
-decision. Only a `NONE` call that selects a detached known positive-weight ROUTER waits on that
+remains a DATA candidate but is excluded from request candidates. Flag-specific results when there is no candidate follow
+[Socket Common request](README.en.md#request-and-reply). `NONE` waits within `SNDTIMEO` for an
+unknown endpoint to complete handshake and an eligible ROUTER to appear, then applies the linked
+flag-specific submit result. Only a `NONE` call that selects a detached known positive-weight ROUTER waits on that
 configured endpoint, and the selected endpoint does not change before the operation
 terminates.
 
-`DONTWAIT` makes one admission attempt and pins no endpoint. If no ROUTER is eligible (no
-known ROUTER, all at weight `0`, or `0` peers right after connect) or the selected ROUTER has no
-write capacity, it returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero wait token
-whose target is the whole request candidate set. Core retains no request payload. When any
-candidate reports write capacity, a peer confirmed as ROUTER connects, or a weight changes from
-`0` to a positive value, Core publishes one `ZLINK_COMPLETION_WRITABLE` record, and when the caller
-resubmits the same request, the selection procedure at that time picks a ROUTER again.
+`DONTWAIT` makes one admission attempt and pins no endpoint. The wait token targets the whole request candidate set. A newly connected ROUTER candidate, restored write credit, or a weight changing from `0` to positive re-evaluates that set. Flag-specific submit results and resubmission follow [Socket Common request](README.en.md#request-and-reply).
 
-The reply timeout starts at local send-queue admission, that is, when `ZLINK_SUBMIT_OK` is
-returned. It does not start while a wait token is outstanding. When the submit-time transport
+The reply timeout start and wait-token period follow
+[Socket Common request](README.en.md#request-and-reply). When the submit-time transport
 pair terminates after admission, the request ends at once with `ZLINK_REQUEST_NOT_CONNECTED`,
 whatever the cause, per the [Socket Common §6 completion table](README.en.md#request-and-reply), and
 the payload is not replayed. [Socket Common](README.en.md#completion-pull-and-ownership) owns completion ownership and
@@ -413,14 +391,13 @@ Verify the following using only the public surface: DEALER option set/get, `zlin
 
 - Repeated sends to two peers with weights `100` and `300` repeat the selection order `second, first, second, second`.
 - Candidates with equal weights are selected in turn, and with enough messages their selection frequencies match the configured ratio.
-- If every known peer has weight `0`, a submit may fail with `ZLINK_SUBMIT_NOT_ADMITTED`.
+- If every known peer has weight `0`, flag-specific submit results follow
+  [whole-message send](README.en.md#whole-message-send-and-pending-admission) and
+  [Request and reply](README.en.md#request-and-reply).
 - Two processes configured with the same peers and weights produce the same selection order when their candidate identifiers are distinct.
 - A reconnected peer starts again with accumulator `0` and retains its previous sorting position.
 - A peer that cannot accept a message because it has no write capacity is excluded only for that message and continues from its retained accumulator when it reports capacity again.
-- A DONTWAIT SEND or REQUEST pins no endpoint. If no candidate has write capacity, it returns
-  `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero wait token; when any candidate reports
-  write capacity or a new peer connects, one WRITABLE record is published, and the resubmission
-  selects a peer again. A DEALER with `0` peers still receives a wait token.
+- A DONTWAIT SEND or REQUEST pins no endpoint. Candidate-set selection and wake edges follow the rule above; flag-specific submit results follow [Socket Common whole-message send](README.en.md#whole-message-send-and-pending-admission) and [request](README.en.md#request-and-reply).
 
 **Whole-message ownership and atomicity**
 
@@ -433,18 +410,10 @@ Verify the following using only the public surface: DEALER option set/get, `zlin
 
 - If a request returns `ZLINK_SUBMIT_OK`, it returns a nonzero ID and exactly one REQUEST
   completion for reply, timeout, or terminal. A failed submit returns ID `0` and no completion.
-- `NONE` waits within `SNDTIMEO` for an eligible ROUTER; then no known positive-weight ROUTER
-  returns `ZLINK_SUBMIT_NOT_CONNECTED` with `ENOTCONN`, and known ROUTERs all at weight `0` return
-  `ZLINK_SUBMIT_NOT_ADMITTED` with `ECONNREFUSED`. A DEALER peer is not a typed-request candidate.
-  The selected configured endpoint remains fixed during reconnect.
-- `DONTWAIT` makes one admission attempt and pins no endpoint. If no ROUTER is eligible or none has
-  write capacity, it returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero wait token,
-  and Core retains no payload. After the WRITABLE record, the caller resubmits the same request and
-  a ROUTER is selected again.
-- The request timeout starts at local queue admission and does not start while a wait token is
-  outstanding. When the submit-time pair terminates after admission, one
-  `ZLINK_REQUEST_NOT_CONNECTED` completion arrives at once without waiting for the timeout, and the
-  payload is not replayed.
+- `NONE` waits within `SNDTIMEO` for an eligible ROUTER candidate. A DEALER peer is not a typed-request candidate, and the selected configured endpoint remains fixed during reconnect.
+- `DONTWAIT` pins no endpoint. Flag-specific submit results and resubmission follow [Socket Common request](README.en.md#request-and-reply).
+- Request timeout and post-admission pair termination follow
+  [Socket Common request](README.en.md#request-and-reply).
 - When the completion reservations shared by SEND wait tokens and REQUEST are exhausted, a REQUEST
   immediately returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`, ID `0`, and no completion
   regardless of flags, and a DONTWAIT SEND returns `ZLINK_SUBMIT_OUT_OF_MEMORY` with `ENOMEM` and

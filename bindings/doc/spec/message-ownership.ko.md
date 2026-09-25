@@ -138,7 +138,7 @@ alias로 유지한다. 다만 기존 깊은 복사가 **`copy`와 같은 시그�
 일반 socket에서 재시도하거나 여러 socket에 같은 payload를 보내야 하는 Application은
 첫 submit 전에 필요한 수만큼 `Copy`(공유) 또는 `Clone`(독립)을 만든다. Binding이 일반
 socket의 send 실패 뒤 원본을 암묵적으로 복원하거나 submit할 때마다 내부 copy를 만드는
-방식은 이 계약을 만족하지 않는다. STREAM backpressure 재시도는 아래 예외 규칙을 따른다.
+방식은 이 계약을 만족하지 않는다. 비동기 재제출의 staging은 [Submit 결과 투영](README.ko.md#submit-result-projection)을 따른다.
 
 ## Send operation의 ownership 이전
 
@@ -146,7 +146,7 @@ socket의 send 실패 뒤 원본을 암묵적으로 복원하거나 submit할 �
 part를 제출하는 모든 operation을 포함한다.
 
 Builder가 `Message`를 받아들이면 send operation이 frame의 독점 보관 책임을 얻고
-`Message`는 held 상태가 된다. Core로 ownership이 실제 이전되는 시점은 각 part의
+`Message`는 held 상태가 된다. Core로 ownership이 실제 이전되는 시점은 record 전체의
 native submit 호출이다. Reference 객체를 사용하는 언어에서도 held 상태인 원본을
 읽거나 변경하거나 다른 operation에 제출하면 안 된다. 값을 이동하는 언어에서는
 builder가 값을 받는 시점에 type system으로 같은 제한을 표현할 수 있다.
@@ -163,8 +163,9 @@ operation = socket.send().message(message)
 result = operation.submit()
 ```
 
-기본 구현은 native frame을 Core `*_part` 함수에 직접 전달한다. Public builder의
-재사용 계약을 유지하려고 내부 copy를 추가하면 안 된다. Managed storage를 사용하는
+기본 구현은 모든 native frame을 배열로 모아
+[whole-message API](README.ko.md#whole-message-api-사용-의무-required)에 한 번 전달한다.
+비동기 재제출의 staging copy는 [Submit 결과 투영](README.ko.md#submit-result-projection)이 정한다. Managed storage를 사용하는
 성능 특화 경로는 submit에서 Core frame을 materialize할 수 있지만, 아래 기존 perf
 검증을 통과해야 하며 ownership 전이는 기본 구현과 같아야 한다.
 
@@ -174,16 +175,14 @@ Builder가 `Message`를 받아들이기 전에 null, closed 객체 또는 argume
 발견하면 입력은 owned 상태를 유지한다. Builder가 입력을 받아 held 상태가 된 뒤에는
 Application에 ownership을 암묵적으로 돌려주지 않는다.
 
-`submit()`은 held part 전체에 대한 preflight validation을 마친 뒤 첫 Core 함수를
-호출해야 한다. Preflight validation이 실패하면 operation이 held part를 모두 닫고
-원본 객체를 재사용 불가 상태로 만든다. 첫 Core 호출이 시작된 뒤에는 이미 전달한 part는
-Core 결과에 따라 처리하고, 아직 전달하지 않은 part는 operation이 정리한다. 이 규칙은
-언어마다 builder가 입력을 돌려주는 별도 public contract를 만들지 않게 한다.
+`submit()`은 held part 전체를 검사한 뒤 [whole-message API](README.ko.md#whole-message-api-사용-의무-required)를
+record마다 한 번 호출한다. 검사 실패 시 operation이 held part를 모두 닫고 원본을 재사용 불가
+상태로 만든다. Core 호출이 시작되면 전체 배열의 소비는
+[Core whole-message send](../../../core/doc/spec/core/socket/README.ko.md#whole-message-send와-pending-admission)를 따른다.
 
 ### 일반 socket의 submit 결과
 
-PAIR, PUB, DEALER, ROUTER와 해당 request/reply helper는 Core 호출의 성공과 실패 모두에서
-제출한 part를 소비한다. `DONTWAIT` submit이 backpressure를 반환한 경우도 같다.
+Native 입력 슬롯의 소비는 [Core whole-message send](../../../core/doc/spec/core/socket/README.ko.md#whole-message-send와-pending-admission)가 소유한다. Binding은 호출 전 staging record로 재제출을 준비한다.
 
 | 결과 | Message 상태 | Application의 다음 동작 |
 |---|---|---|
@@ -195,34 +194,14 @@ PAIR, PUB, DEALER, ROUTER와 해당 request/reply helper는 Core 호출의 성�
 Binding이 exception, result enum 또는 `Result` 타입 중 무엇을 사용하더라도 이 상태
 전이는 같아야 한다.
 
-### STREAM backpressure 예외
+### STREAM backpressure
 
-STREAM send는 Core 계약의 예외를 그대로 노출한다. 성공과 backpressure가 아닌 실패는
-part를 소비한다. `DONTWAIT` 호출이 `BACKPRESSURED`와 `EAGAIN`을 반환하면 Core가 part를
-소비하지 않으므로 binding은 retained payload를 copy 없이 다시 submit할 수 있게
-유지해야 한다.
-
-Reference builder를 사용하는 언어는 같은 operation을 retry 가능한 상태로 유지하는
-방식을 기본으로 사용한다. 값을 이동하는 언어처럼 같은 builder 재사용이 부자연스러운
-경우에는 retained payload나 retry 가능한 operation을 결과로 반환할 수 있다. 어떤
-표현을 사용해도 payload를 다시 materialize하거나 caller에게 이미 consumed된 것으로
-보고하면 안 된다.
-
-Binding은 이 예외를 모든 socket의 일반 규칙으로 확대하면 안 된다. 반대로 STREAM
-backpressure에서 retained payload를 닫거나 consumed 상태로 바꾸어 Core가 보장한
-재시도를 막아도 안 된다.
+STREAM backpressure 뒤 binding의 재제출은 [Submit 결과 투영](README.ko.md#submit-result-projection)의 호출 전 staging record를 사용한다. Native 입력 슬롯의 소비는 [Core whole-message send](../../../core/doc/spec/core/socket/README.ko.md#whole-message-send와-pending-admission)를 따른다.
 
 ### Multipart submit
 
-Multipart operation은 첫 part부터 마지막 part까지 하나의 record로 제출한다. Core가
-중간 또는 마지막 part에서 실패하면 이미 제출한 part와 열린 record를 소비하고
-폐기한다. Binding은 submit 전에 전체 part의 독점 보관 책임을 얻는다. 첫 Core 호출이
-시작된 뒤 실패하면 아직 Core에 전달하지 않은 나머지 part도 operation이 닫아서,
-submit 반환 뒤 builder가 held `Message`를 남겨 두지 않게 해야 한다.
-
-따라서 submit을 시작한 multipart payload는 결과와 관계없이 Application이 다시 사용할
-수 없다. 재시도하려면 submit 전에 보관한 전체 record의 copy를 사용하여 첫 part부터
-새 operation을 시작한다.
+Multipart는 [Whole-message API 사용 의무](README.ko.md#whole-message-api-사용-의무-required)에 따라
+모든 part를 한 배열로 한 번 제출한다. 재제출에는 호출 전에 보관한 record 전체를 사용한다. Native 입력 슬롯의 소비는 [Core whole-message send](../../../core/doc/spec/core/socket/README.ko.md#whole-message-send와-pending-admission)를 따른다.
 
 ## 수신과 전달
 
@@ -469,14 +448,13 @@ body option은 native relay와 managed 처리의 서로 다른 사용 방식이 
 4. Builder가 입력을 받아들이기 전 validation 실패 뒤에는 원본 `Message`를 다시 사용할
    수 있다.
 5. Held 상태에서 submit preflight가 실패하면 operation이 모든 입력을 닫는다.
-6. STREAM의 `DONTWAIT` backpressure 뒤에는 retained payload를 copy 없이 다시 submit할
-   수 있다.
+6. STREAM의 `DONTWAIT` backpressure 뒤에는 호출 전 staging record로 다시 제출한다.
 7. `Copy`(ref-count 공유)로 만든 source와 copy 중 하나를 보내도 다른 하나는 계속
    owned 상태이며, 각자 독립적으로 닫을 수 있다(refcount 관찰).
-8. Builder가 각 payload를 받아 held 상태로 전환한 뒤 multipart 전송에 실패하면,
-   Core에 전달하지 않은 part를 포함한 모든 입력이 재사용 불가 상태가 된다.
+8. Builder가 각 payload를 받아 held 상태로 전환한 뒤 multipart 전송에 실패하면
+   whole-message 호출이 전체 입력 배열을 소비하고 모든 입력이 재사용 불가 상태가 된다.
 9. Submit하지 않은 builder를 명시적으로 종료하면 held part가 모두 닫힌다.
-10. STREAM backpressure 뒤 retry owner를 종료하면 Core가 보존한 part가 닫힌다.
+10. STREAM backpressure 뒤 operation을 종료하면 binding이 보관한 staging record를 정리한다.
 11. 기본 구현에서 receive 성공으로 얻은 `Message`를 send하면 추가 payload copy 없이
     ownership이 이동한다. Binding별 managed materialization을 채택한 범위에서는 send
     직전에 native frame을 만들 수 있다.
@@ -490,10 +468,8 @@ body option은 native relay와 managed 처리의 서로 다른 사용 방식이 
     ownership을 제공한다. Packet handler 등록 뒤 option 변경은 실패한다.
 17. Direct receive 한 번은 record 하나만 소비하며 다음 record를 binding 내부에 미리
     보관하지 않는다.
-18. Multipart send는 첫 Core 호출 전에 모든 part의 준비를 끝내고 Core `*_part` API를
-    순서대로 호출한다. 성공, HWM, timeout과 실패에서 모든 part의 ownership을 하나의
-    operation 규칙으로 정리한다. STREAM은 하나로 materialize한 payload를 `FINAL` 한 번으로
-    제출한다.
+18. Multipart send는 모든 part를 준비한 뒤 Core whole-message API를 record당 한 번 호출한다.
+    성공, HWM, timeout과 실패에서 모든 part는 같은 소비 규칙을 따른다.
 19. `Move`(소유권 이전) 뒤 대상은 원본의 payload를 소유하고 **원본은 empty** 상태가 되어
     재사용/close가 안전하며(no-op), refcount는 증가하지 않는다. 대상의 이전 내용은 닫힌다.
 20. `Clone`(deep copy)으로 만든 사본은 원본과 storage를 공유하지 않는다 — 사본을 수정해도
@@ -511,13 +487,13 @@ allocation/copy 계측과 source-level boundary test는 원인을 확인하는 �
 
 | Binding | 현재 구현 | 목표 계약과의 gap |
 |---|---|---|
-| C | `zlink_msg_t`와 Core `*_part` API를 직접 사용한다. | 기준 구현이다. Socket별 ownership 예외를 wrapper binding test의 기준으로 사용해야 한다. |
+| C | `zlink_msg_t`와 Core `*_part` API를 직접 사용한다. | 기준 구현이다. Whole-message ownership을 wrapper binding test의 기준으로 사용해야 한다. |
 | C++ | `message_t`가 native frame을 소유한다. Direct rvalue send는 frame을 move하지만 기본 builder helper는 각 part에 `zlink_msg_copy()`로 temporary native view를 만들어 모든 결과에서 원본을 보존한다. 이 copy는 작은 inline payload는 값으로 복사하고 큰 payload는 refcount storage를 공유한다. 일부 move 경로는 실패한 native part를 원본에 복원한다. | 기본 builder의 ownership을 Core consume 규칙과 맞춰야 한다. Temporary init/copy/close 제거의 성능 효과는 기존 perf에서 확인한 뒤 구현 방식을 선택해야 한다. |
-| .NET | `Message`가 `ZlinkMsg`를 소유한다. `AsReadOnlySpan()`과 `AsSpan()`은 native payload view를 반환하고 `ToArray()`와 `AsReadOnlyMemory()`만 호출 시점에 복사한다. Routed single-part receive는 `[ThreadStatic]` wrapper pool을 사용한다. Multipart send는 전체 native frame을 먼저 준비한 뒤 Core part API를 직접 호출한다. | Receive eager managed copy는 256 B 이상과 큰 payload에서 성능이 하락하여 채택하지 않았다. Native payload의 size와 address 조회를 줄이는 최적화를 기존 perf로 검토해야 한다. 일반 socket 실패의 consume 규칙, multipart ownership 이전과 STREAM backpressure 예외도 목표 계약에 맞춰야 한다. |
-| Java | `Message`가 FFM native frame을 소유한다. Routed receive는 owner `Received`가 part reference를 제거한 뒤 `ThreadLocal` bounded pool에 public wrapper를 반환한다. Public `Message.close()`처럼 owner alias가 남을 수 있는 종료와 receive 실패 경로는 wrapper를 pool에 반환하지 않는다. Single-part와 multipart send는 Core part API를 직접 호출한다. | Wrapper 반환 뒤 reference 사용 금지는 정식 공통 정책과 Java exact interface에 반영했다. Core가 실패에서 소비한 frame의 상태와 STREAM backpressure 예외도 목표 계약에 맞춰야 한다. |
-| Node | Direct receive, routed receive, SUB, request completion과 multipart는 JS-owned `Buffer`로 `Message`를 만든다. STREAM callback header도 JS-owned `Buffer`를 사용한다. STREAM callback body는 `packetBodyMaterialization`으로 `Native`와 `Managed`를 선택하며 기본값은 `Native`다. Receive는 한 번에 record 하나만 가져오고 deterministic cleanup이 끝난 public wrapper를 최대 64개까지 재사용한다. Multipart send는 private addon이 모든 part를 먼저 준비한 뒤 Core part API를 반복하고, STREAM은 하나로 materialize한 payload를 `FINAL`로 제출한다. | Core는 STREAM backpressure의 native frame ownership을 검증하지만 Node public wrapper가 같은 결과에서 ownership을 유지하는 결정적 contract test는 아직 없다. Wrapper 반환 뒤 접근 금지도 나머지 contract test에 맞춰야 한다. Node managed receive와 STREAM 두 방식의 기존 perf A/B 결과를 계속 기록한다. |
+| .NET | `Message`가 `ZlinkMsg`를 소유한다. `AsReadOnlySpan()`과 `AsSpan()`은 native payload view를 반환하고 `ToArray()`와 `AsReadOnlyMemory()`만 호출 시점에 복사한다. Routed single-part receive는 `[ThreadStatic]` wrapper pool을 사용한다. Multipart send는 전체 native frame을 먼저 준비한 뒤 Core part API를 직접 호출한다. | Receive eager managed copy는 256 B 이상과 큰 payload에서 성능이 하락하여 채택하지 않았다. Native payload의 size와 address 조회를 줄이는 최적화를 기존 perf로 검토해야 한다. whole-message 실패의 소비 규칙과 multipart ownership 이전도 목표 계약에 맞춰야 한다. |
+| Java | `Message`가 FFM native frame을 소유한다. Routed receive는 owner `Received`가 part reference를 제거한 뒤 `ThreadLocal` bounded pool에 public wrapper를 반환한다. Public `Message.close()`처럼 owner alias가 남을 수 있는 종료와 receive 실패 경로는 wrapper를 pool에 반환하지 않는다. Single-part와 multipart send는 Core part API를 직접 호출한다. | Wrapper 반환 뒤 reference 사용 금지는 정식 공통 정책과 Java exact interface에 반영했다. Core가 실패에서 소비한 frame의 상태도 목표 계약에 맞춰야 한다. |
+| Node | Direct receive, routed receive, SUB, request completion과 multipart는 JS-owned `Buffer`로 `Message`를 만든다. STREAM callback header도 JS-owned `Buffer`를 사용한다. STREAM callback body는 `packetBodyMaterialization`으로 `Native`와 `Managed`를 선택하며 기본값은 `Native`다. Receive는 한 번에 record 하나만 가져오고 deterministic cleanup이 끝난 public wrapper를 최대 64개까지 재사용한다. Multipart send는 private addon이 모든 part를 먼저 준비한 뒤 Core part API를 반복하고, STREAM은 하나로 materialize한 payload를 `FINAL`로 제출한다. | Core는 STREAM backpressure의 native frame 소비를 검증하지만 Node public wrapper와 staging의 ownership을 확인하는 contract test는 아직 없다. Wrapper 반환 뒤 접근 금지도 나머지 contract test에 맞춰야 한다. Node managed receive와 STREAM 두 방식의 기존 perf A/B 결과를 계속 기록한다. |
 | Go | `Message`가 native frame을 소유한다. 기본 `Message(...)`는 submit용 frame을 copy하여 실패 시 원본을 보존하고 성공 시 원본을 닫아 moved 상태로 바꾼다. `MoveMessage(...)`만 처음부터 ownership을 이전한다. | 기본 `Message` send의 추가 copy를 없애고 결과별로 달라지는 원본 상태를 Core 규칙에 맞춰야 한다. 별도 move 선택 없이 기본 경로가 ownership을 이전해야 한다. |
-| Rust | `Message`가 inline native frame을 소유하고 builder가 값을 받아 submit에서 Core로 전달한다. 일반 socket의 submit 뒤에는 builder part를 drop한다. STREAM backpressure에서도 결과를 판정하기 전에 part를 drop하여 retained payload를 남기지 않는다. | 일반 socket 구조는 목표에 가깝다. STREAM backpressure에서는 retained part나 retry 가능한 operation을 결과에 보존해야 한다. Multipart cleanup 범위도 contract test로 고정해야 한다. |
+| Rust | `Message`가 inline native frame을 소유하고 builder가 값을 받아 submit에서 Core로 전달한다. 일반 socket의 submit 뒤에는 builder part를 drop한다. STREAM backpressure에서도 결과를 판정하기 전에 part를 drop한다. | 일반 socket 구조는 목표에 가깝다. STREAM backpressure 재제출에는 호출 전 staging record가 필요하다. Multipart cleanup 범위도 contract test로 고정해야 한다. |
 | Python | `Message`가 native frame을 소유하지만 send materializer가 `_clone_native_msg()`로 part를 복제하여 caller 원본을 보존한다. 일부 receive data view는 native storage 수명 문제를 피하기 위해 Python-owned bytes snapshot을 만든다. | 기본 send ownership을 Core 규칙과 맞춰야 한다. Receive snapshot과 native view 중 어느 쪽을 유지할지는 기존 perf와 실제 public lifecycle을 함께 비교해 결정한다. |
 
 현재 정식 공통 정책인 [바인딩 API 정책](README.ko.md)은 일반 `message(...)` builder가
@@ -528,7 +504,6 @@ allocation/copy 계측과 source-level boundary test는 원인을 확인하는 �
 종료하는 동작도 없다.
 
 이 초안은 기본 builder가 입력을 held 상태로 바꾸고 consumed 또는 closed 객체의 접근
-오류를 공통으로 강제한다. STREAM backpressure에서는 retained payload를 copy 없이
-재시도할 수 있게 하며, held part를 정리하는 deterministic builder 종료 동작도
-요구한다. Builder ownership 전환을 구현하기 전에는 해당 정책과 언어별 exact interface를
+오류를 공통으로 강제한다. STREAM backpressure에서는 호출 전 staging record로 재제출하며, held part를 정리하는
+deterministic builder 종료 동작도 요구한다. Builder ownership 전환을 구현하기 전에는 해당 정책과 언어별 exact interface를
 함께 개정해야 한다.

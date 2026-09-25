@@ -39,7 +39,7 @@ operation/model grouping.
 | [Native Wait Boundary](#native-wait-boundary) | The boundary between blocking recv and poller-based receive |
 | [Proposed Repository Layout](#proposed-repository-layout) | The full Gradle project directory tree |
 | [Contract Interface Rule](#contract-interface-rule) | Types that stay interfaces and types that stay concrete |
-| [Factory Entry Points](#factory-entry-points) | Root/context/service factory methods |
+| [Factory Entry Points](#factory-entry-points) | Root/context raw factory methods |
 | [Contract File Requirements](#contract-file-requirements) | What a contract file may and may not import |
 | [Runtime Implementation Requirements](#runtime-implementation-requirements) | The implementation detail runtime owns |
 | [Socket Contract Shape](#socket-contract-shape) | Common and per-type socket behavior |
@@ -50,10 +50,10 @@ operation/model grouping.
 | [Byte HWM And Monitoring ABI v4](#byte-hwm-and-monitoring-abi-v4) | Non-negative `long` HWM and monitor snapshot fields |
 | [Receive flow state](#receive-flow-state) | The receive-flow state type, setter, and monitor surface |
 | [Error And Result Policy](#error-and-result-policy) | Typed exceptions and validation timing |
-| [Spot And Actor Contract Shape](#spot-and-actor-contract-shape) | `SpotNode`/`Spot` responsibilities and route results |
-| [Spot Get-Or-Create](#spot-get-or-create) | The `getOrCreateSpot` contract |
+| [Spot And Actor Contract Shape](#spot-and-actor-contract-shape) | Framework-owned public shapes |
+| [Spot Get-Or-Create](#spot-get-or-create) | Framework public contract link |
 | [Performance Policy](#performance-policy) | Hot-path constraints |
-| [Architecture requirements](#architecture-requirements_1) | Contract/runtime boundary requirements |
+| [Runtime architecture requirements](#runtime-architecture-requirements) | Contract/runtime boundary requirements |
 | [Implementation Checklist](#implementation-checklist) | Checks before declaring alignment |
 | [Verification](#verification) | Required verification commands and structural searches |
 
@@ -109,8 +109,6 @@ bindings/java/src/main/java/systems/zlink/
 |   +-- messaging/
 |   +-- sockets/
 |   +-- eventing/
-|   +-- service/
-|   |   +-- spot/
 |   +-- errors/
 +-- internal/
 +-- runtime/
@@ -118,8 +116,6 @@ bindings/java/src/main/java/systems/zlink/
 |   +-- messaging/
 |   +-- sockets/
 |   +-- eventing/
-|   +-- service/
-|   |   +-- spot/
 |   +-- errors/
 |   +-- nativeapi/
 ```
@@ -132,10 +128,10 @@ connect contract-owned state to runtime implementations without making those
 hooks application-facing API.
 
 `runtime` is the implementation map. It mirrors the Java target classification:
-`core`, `messaging`, `sockets`, `eventing`, `service`, `errors`, and Java's
+`core`, `messaging`, `sockets`, `eventing`, `errors`, and Java's
 `nativeapi` equivalent of `.NET` `Runtime/Native`. It owns native handles,
 downcalls, marshalling, completion-drain state, socket
-kernels, service kernels, option mapping, and lifecycle details. Runtime
+kernels, option mapping, and lifecycle details. Runtime
 support code such as handle lifetime, buffer conversion, and option mapping is
 kept under the owning runtime category instead of introducing extra public
 package categories.
@@ -154,7 +150,6 @@ The Java contract categories are normative.
 | `systems.zlink.contracts.messaging` | Message values, received envelopes, topic messages, subscription events, payload ownership, common message metadata. |
 | `systems.zlink.contracts.sockets` | Socket resource contracts, socket operation builders, socket options, send/recv/request/reply/publish surfaces. |
 | `systems.zlink.contracts.eventing` | Poller, poll events, monitor socket, monitor snapshots, timer resource contracts. |
-| `systems.zlink.contracts.service.spot` | SpotNode, Spot, Actor, route/admission handlers, actor lifecycle, and service operation builders. |
 | `systems.zlink.contracts.errors` | Public exception and typed error/result domains. |
 
 Runtime packages use the same .NET-standard classification with Java package
@@ -166,7 +161,6 @@ names:
 | `systems.zlink.runtime.messaging` | Message materialization, multipart progress, request execution, and completion-registry integration. |
 | `systems.zlink.runtime.sockets` | Socket kernels, socket family implementations, poller drain, and socket operation execution. |
 | `systems.zlink.runtime.eventing` | Monitor, poller, poll event, timer, and dispatch loop implementations. |
-| `systems.zlink.runtime.service.*` | SpotNode, Spot, Actor, topology, and service operation implementations. |
 | `systems.zlink.runtime.errors` | Native errno/result conversion into public exception/result domains. |
 | `systems.zlink.runtime.nativeapi` | JNI/Panama declarations, ABI mirrors, symbol loading, and native artifact lookup. |
 
@@ -302,20 +296,6 @@ systems/zlink/contracts/
 |   +-- SubscriptionEntry.java
 |   +-- SubscriptionEvent.java
 |   +-- TopicMessage.java
-+-- service/
-|   +-- spot/
-|       +-- Actor.java
-|       +-- Spot.java
-|       +-- SpotDispatchInfo.java
-|       +-- SpotRoute.java
-|       +-- SpotNode.java
-|       +-- ActorJoinOperations/
-|       +-- ActorManagementOperations/
-|       +-- ActorModels/
-|       +-- ServiceEnums/
-|       +-- SpotNodeModels/
-|       +-- SpotOperations/
-|       +-- TopologyEnums/
 +-- sockets/
     +-- Socket.java
     +-- StreamSocket.java
@@ -375,21 +355,12 @@ systems/zlink/runtime/
 |   +-- NativeStreamSocket.java
 |   +-- NativeRouterReceiveSupport.java
 |   +-- NativeRouterRequestSupport.java
-|   +-- NativeRouterSpotSupport.java
-|   +-- NativeStreamActorSupport.java
 |   +-- SocketOperations.java
 +-- eventing/
 |   +-- NativeMonitorSocket.java
 |   +-- NativePollEvents.java
 |   +-- NativePoller.java
 |   +-- NativeTimer.java
-+-- service/
-|   +-- spot/
-|       +-- NativeActor.java
-|       +-- NativeSpot.java
-|       +-- NativeSpotNode.java
-|       +-- SpotOptions.java
-|       +-- SpotRoutedSupport.java
 +-- errors/
 |   +-- NativeErrorRuntime.java
 +-- nativeapi/
@@ -404,7 +375,7 @@ systems/zlink/runtime/
 
 Runtime support files are allowed only when they hide real implementation
 complexity inside one of the target runtime categories. They are not a
-substitute for resource owners such as `NativeRouterSocket`, `NativeSpotNode`,
+substitute for resource owners such as `NativeRouterSocket`,
 or `NativePoller`.
 
 ## Contract Interface Rule
@@ -430,10 +401,6 @@ interfaces and must be created by factories.
 - `MonitorSocket`
 - `Poller`
 - `Timer`
-- `SpotNode`
-- `Spot`
-- Actor resource contracts when the Java surface exposes actor handles or actor
-  lifecycle resources as native-backed handles
 
 These are operation contracts because they hide staged multipart state, request state, or native submit
 state:
@@ -442,15 +409,10 @@ state:
 - publish operation
 - request operation
 - reply operation
-- SPOT send/request/reply operation
-- Actor create/join/reply/location operation
-- stream actor bind/unbind/send operation
 
 Handler roles may be interfaces or functional interfaces when
 callers provide behavior to the runtime:
 
-- SPOT dispatch handler
-- actor lifecycle handler
 
 ### Must Stay Concrete
 
@@ -464,7 +426,6 @@ Do not create interfaces for these only for symmetry:
 - options and filter value objects
 - route result models
 - snapshot models
-- actor references
 - enum/flag/result types
 - exceptions
 
@@ -485,7 +446,6 @@ Required root factory methods:
 - `Zlink.createContext()`
 - `Zlink.createPoller()`
 - `Zlink.createTimer()`
-- `Zlink.createTimer(Spot spot)`
 
 `Zlink` may also own public static helpers such as version, capability,
 strerror, proxy, shutdown, sleep, and auto-HWM recalculation. Those helpers may
@@ -506,31 +466,14 @@ Required context factory methods:
 - `createXPubSocket()`
 - `createXSubSocket()`
 - `createStreamSocket()`
-- `createSpotNode(...)`
 
 Every factory returns a public contract interface or concrete value type. It
-never returns `NativeContext`, `NativeRouterSocket`, `NativeSpotNode`, or any
+never returns `NativeContext`, `NativeRouterSocket`, or any
 other runtime class.
 
 ### Service Factories
 
-SPOT and Actor handles are created only by service methods on `SpotNode` or
-other contract-owned service objects.
-
-Allowed SPOT construction patterns:
-
-- `SpotNode.createSpot(...)`
-- `SpotNode.entrySpot()`
-- `SpotNode.getOrCreateSpot(...)`
-- `SpotNode.spotLookup(...)`
-
-Allowed Actor construction patterns:
-
-- `SpotNode.createActor(...)`
-- actor factory/service methods explicitly owned by `SpotNode` or `Spot`
-
-Direct public constructors for `Spot`, `SpotNode`, `Actor`, or runtime service
-classes are not part of the target contract.
+Public Spot and Actor creation, including service-owned timers, is specified by the [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md). This binding specification defines creation of Core raw sockets, monitors, pollers, and generic timers.
 
 ## Contract File Requirements
 
@@ -585,7 +528,6 @@ Runtime owns:
 - native error mapping;
 - typed option mapping;
 - native resource adoption and release;
-- service snapshots decoded from native data.
 
 If a runtime implementation needs package-private access to a concrete value
 object, use a narrow internal bridge owned by runtime/nativeapi. Do not expose
@@ -610,12 +552,12 @@ A typed socket contract adds only behavior meaningful for that socket type:
 
 - `PairSocket`: send and recv.
 - `DealerSocket`: send, recv, request.
-- `RouterSocket`: routed send, routed recv, request, reply, and SPOT routing.
+- `RouterSocket`: routed send, routed recv, request, and reply.
 - `PubSocket`: publish.
 - `SubSocket`: subscribe and subscription-event receive.
 - `XPubSocket`: publish and subscription-event receive.
 - `XSubSocket`: send and subscription control defined by the public binding contract.
-- `StreamSocket`: RAW recv, PACKET recv, stream send, actor gateway, and bound-actor operations.
+- `StreamSocket`: RAW recv, PACKET recv, and stream send.
 
 The runtime makes one Core whole-message call per record and manages the native
 part array and count internally. Protocol envelope helpers and native routing-ID
@@ -634,10 +576,6 @@ A builder start method accepts only a target identifier and reply token:
 - `request()`
 - `request(routingId)`
 - `reply(routingId, replyToken)`
-- `sendToSpot(nodeRid, spotRid)`
-- `requestToSpot(nodeRid, spotRid)`
-- `replyToSpot(nodeRid, spotRid, replyToken)`
-- `sendBoundActor(sessionRid, actorId)`
 
 PAIR, DEALER, ROUTER, and STREAM send builders use the `SendOperation` family. Send provides
 asynchronous `submit()` and synchronous `submit_sync()`. Request provides `submit()` and
@@ -697,7 +635,7 @@ contract types.
 
 - is reusable caller-provided receive storage;
 - owns received message parts until closed or adopted;
-- may carry routing ID, SPOT routing ID, `ReplyToken`, and reply sender
+- may carry routing ID, `ReplyToken`, and reply sender
   metadata;
 - does not expose native receive cursors or native handles.
 
@@ -725,26 +663,7 @@ Hard receive failures throw the documented exception type.
 framing; `close()` and reuse for the next receive release the payload and metadata.
 The [common receive ownership contract](../README.en.md#receive-ownership) defines the boundary with receive accounting.
 
-SPOT readable dispatch events are readiness notifications. Callers drain the
-corresponding receive API until no-data.
-
-Service control/admission receive APIs may use `Optional`, nullable, or typed
-result-return forms when those are clearer than reusable data-plane storage.
-They still must distinguish no-data from hard receive failure.
-
-`ReceiveRecord.sourceBindingGeneration()` returns the validated binding
-generation for a record sent from a bound STREAM session to an Actor. For that
-record, `sourceSpotRid()` returns the session routing ID. Other records preserve
-the zero value supplied by Core.
-
-The binding decodes a Mesh dispatch `SEND_READY` record as
-`MeshSendReadyData`. This value preserves Core's destination kind, target node
-RID, target Spot RID, target Actor ref, and channel name. Fields that do not
-apply to the destination kind retain the empty value supplied by Core.
-`ReceiveRecord.sendReady()` returns this value only when the kind data has that
-type and returns `null` for other record kinds.
-This record kind belongs to the service-wire dispatch protocol; it is not a
-Core HWM send-ready callback or an asynchronous-send completion.
+Public Spot/Actor receive shapes are owned by [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 ## Handler Registration Naming
 
@@ -760,7 +679,6 @@ Canonical Java names:
 
 - `setDispatchHandler`
 - `recvRouted`
-- `recvActorLifecycle`
 
 ## Byte HWM And Monitoring ABI v4
 
@@ -850,7 +768,7 @@ Java public errors preserve core result-domain meaning but do not expose native
 errno as the primary user API.
 
 - Fixed-size boundary values are validated before native calls.
-- Routing ids, actor ids, endpoints, channel names, and topics are not silently
+- Routing ids, endpoints, channel names, and topics are not silently
   truncated.
 - `SubmitException`, `RecvException`, `RequestException`,
   `ConfigException`, and other typed exceptions preserve the relevant public
@@ -860,45 +778,12 @@ errno as the primary user API.
 
 ## Spot And Actor Contract Shape
 
-SPOT service contracts live under `systems.zlink.contracts.service.spot`.
-
-`SpotNode` is the owner for:
-
-- node lifecycle;
-- service registration;
-- peer/channel configuration;
-- route lookup;
-- spot creation and lookup;
-- actor creation;
-- actor route lookup;
-- actor lifecycle receive;
-- SPOT dispatch receive.
-
-`Spot` is the handle contract for SPOT-level send/request/reply, publish,
-dispatch, actor operation entrypoints, and timer integration.
-
-Actor and SPOT route results are concrete contract models:
-
-- `ActorRoute` preserves resolved Actor ref, Actor node RID, current Spot RID,
-  and current Spot kind.
-- `SpotRoute` preserves Spot RID, owner node RID, and Spot kind.
-- `SpotKind` distinguishes Entry Spot from user Spot.
-- Invalid kind is not a successful route result.
-
-- Java exposes `SpotNode.sendToActor(ActorRef)` and `SpotNode.requestToActor(ActorRef)`, taking a resolved Actor ref as their argument.
-- The send operation hands off ownership of one or more message parts once submit succeeds, and completes once the Actor owner mailbox accepts the handoff.
-- The request operation hands off ownership of the request part once submit succeeds, and delivers the reply part the Actor handler produced.
-- Java does not revive a removed Discovery route table or resolver API as a compatibility helper.
+Public Spot/Actor shapes are defined by [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 ## Spot Get-Or-Create
 
-Java exposes `SpotNode.getOrCreateSpot(RoutingId)`. It maps directly to
-`zlink_spot_node_spot_get_or_new(...)`; it must not be implemented by
-composing `spotLookup` and `createSpot`.
-
-The method returns a concrete result containing the caller-owned `Spot`
-contract and a `created` boolean. `created` is `true` only for the call that
-created the logical spot.
+The [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md#17-creategetorcreate-results-and-relocation-policy)
+owns public Spot `GetOrCreate` inputs, results, and ownership.
 
 ## Performance Policy
 
@@ -913,7 +798,7 @@ substrates. Public contract code should not contain raw native receive loops.
 
 Perf, samples, and tests use exported public contract packages only.
 
-## Architecture requirements
+## Runtime architecture requirements
 
 The Java binding maintains these boundaries:
 
@@ -943,8 +828,7 @@ resource design in place.
 
 The Java binding is aligned only when all items are true:
 
-- `Context`, sockets, eventing resources, SpotNode, Spot,
-  and Actor native-backed resources are public contract interfaces.
+- `Context`, sockets, and eventing resources are public contract interfaces.
 - Runtime native-backed implementations live under `systems.zlink.runtime.*`.
 - Factory entrypoints return contract interfaces and hide runtime class names.
 - Runtime packages are not JPMS-exported.
@@ -976,7 +860,7 @@ lifecycles change:
 
 - `./samples/run_samples.sh`
 
-Run perf smoke gates when send, receive, request, poller, timer, service, or
+Run perf smoke gates when send, receive, request, poller, timer, or
 hot-path behavior changes:
 
 - `./perf/single/run_benchmarks.sh`

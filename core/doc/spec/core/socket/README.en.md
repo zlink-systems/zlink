@@ -1034,15 +1034,17 @@ and closes the completion or discards the socket.
 | `NONE` local send-queue admission | `ZLINK_SUBMIT_OK` | 0 | none |
 | Immediate `DONTWAIT` admission | `ZLINK_SUBMIT_OK` | 0 | none |
 | `DONTWAIT` backpressured or target not ready yet | `ZLINK_SUBMIT_BACKPRESSURED`, `EAGAIN` | nonzero wait token | one WRITABLE record |
-| ROUTER or STREAM RID with no route | `ZLINK_SUBMIT_NOT_CONNECTED`, `EHOSTUNREACH` | 0 | none |
+| STREAM RID with no route | `ZLINK_SUBMIT_NOT_CONNECTED`, `EHOSTUNREACH` | 0 | none |
+| ROUTER directed send with no route | [ROUTER options §5](07-router.en.md#5-router-options) | §5 | §5 |
 | Completion reservation limit exceeded | `ZLINK_SUBMIT_OUT_OF_MEMORY`, `ENOMEM` | 0 | none |
 | Validation or target failure | applicable submit result | 0 | none |
 
 `NONE` snapshots `ZLINK_OPT_SNDTIMEO` on entry and waits for local
 send-queue admission. The default is 1,000 ms, `0` is immediate, and `-1`
 waits indefinitely. Expiration returns `ZLINK_SUBMIT_BACKPRESSURED` with
-`errno == EAGAIN`, ID `0`, and no completion. `DONTWAIT` does not wait:
-it makes exactly one admission attempt. Immediate admission returns ID `0` and
+`errno == EAGAIN`, ID `0`, and no completion. A DEALER `NONE` submit when every known peer has weight `0` returns
+`ZLINK_SUBMIT_NOT_ADMITTED` with `errno == ECONNREFUSED`, ID `0`.
+`DONTWAIT` does not wait: it makes exactly one admission attempt. Immediate admission returns ID `0` and
 no completion. Backpressure from HWM, byte credit, or flow pause, or a target
 that exists but is not ready yet (transport pair not ready, peer weight 0, a
 DEALER with zero peers right after connect), returns
@@ -1050,10 +1052,9 @@ DEALER with zero peers right after connect), returns
 `completion_id_out_`. Core keeps only the token, the target, and
 `user_context_`; it does not retain the payload. Every input slot is consumed
 as on every other result, so the caller resubmits the complete record from its own copy.
-A ROUTER or STREAM RID with no route at all returns
-`ZLINK_SUBMIT_NOT_CONNECTED` with `errno == EHOSTUNREACH` and ID `0`
-immediately, without a token (for ROUTER while `ZLINK_ROUTER_OPT_MANDATORY` is
-positive, the default; with it off the record is dropped as before).
+A STREAM RID with no connection returns `ZLINK_SUBMIT_NOT_CONNECTED` with
+`errno == EHOSTUNREACH`, ID `0`, and no token. A route-less ROUTER directed send
+follows [ROUTER options §5](07-router.en.md#5-router-options).
 
 REQUEST completions and wait tokens share 65,536 unified completion
 reservations per socket. SEND reserves a slot only when a DONTWAIT call
@@ -1085,21 +1086,21 @@ backpressured again. `ZLINK_POLLOUT` is the socket-wide aggregate hint that a
 submit retry is worth trying; the precise per-target signal is the WRITABLE
 record itself with its token, context, and RID.
 
-Target granularity is the single pipe for PAIR, the candidate peer set for
-DEALER, and the exact submitted RID for ROUTER and STREAM. For DEALER, any
+Target granularity is PAIR's single logical route, DEALER's candidate peer set, and the exact
+submitted RID for ROUTER and STREAM. A replacement PAIR physical pipe retains the same token target. For DEALER, any
 candidate opening publishes one WRITABLE, the resubmit selects an open peer
 again, and no endpoint is fixed by an earlier call. For ROUTER and STREAM, credit on
 another RID does not publish the token. The wake edges that publish WRITABLE
 are a peer drain below LWM or a credit refill, a pipe attach (connect
 completes), a peer weight change from 0 to positive, ROUTER route adoption or
 standby promotion, and flow RESUME. Core never retains a SEND or REQUEST
-payload before admission and has no Core-owned retry FIFO. A transient
-transport shutdown is not terminal
-for a wait token or for an in-progress NONE wait. NONE creates no
+payload before admission and has no Core-owned retry FIFO. A transient transport shutdown is not terminal for a PAIR, DEALER, or ROUTER wait token
+or an in-progress NONE wait. A STREAM physical disconnect ends its RID; its
+[STREAM routed-send contract](08-stream.en.md#4-routed-send) returns `ZLINK_SEND_TERMINAL` with `ENOTCONN`. NONE creates no
 token; it waits for reconnect and admission to the same target within the
 snapshotted `SNDTIMEO`.
 
-A wait token ends only in three ways: (a) the WRITABLE record above; (b)
+A PAIR, DEALER, or ROUTER wait token ends in three ways: (a) the WRITABLE record above; (b)
 explicit removal of the target (`zlink_disconnect_rid`, endpoint termination
 for that RID), which produces a WRITABLE record with
 `send_result == ZLINK_SEND_TERMINAL` and `send_terminal_errno == ENOENT`; (c)
@@ -1144,10 +1145,10 @@ ZLINK_EXPORT zlink_submit_result_t zlink_reply (
 The DEALER target is always `NULL`; the ROUTER target is always non-NULL. Other
 socket types return `ZLINK_SUBMIT_NOT_SUPPORTED` with `errno == ENOTSUP`. A
 ROUTER typed request to a DEALER RID returns `ZLINK_SUBMIT_NOT_ADMITTED` with
-`errno == EPROTOTYPE`; ordinary DATA send to that RID remains valid. For a RID
-not present in the routing map, NONE returns `ZLINK_SUBMIT_NOT_FOUND` with
-`errno == ENOENT` and DONTWAIT returns `ZLINK_SUBMIT_NOT_CONNECTED` with
-`errno == EHOSTUNREACH` and no token.
+`errno == EPROTOTYPE`; ordinary DATA send to that RID remains valid. For a RID absent from the routing map, regardless of mandatory, NONE returns
+`ZLINK_SUBMIT_NOT_FOUND` with `errno == ENOENT`; DONTWAIT returns
+`ZLINK_SUBMIT_NOT_CONNECTED` with `errno == EHOSTUNREACH` and no token.
+[ROUTER options](07-router.en.md#5-router-options) separately define route-less directed send.
 
 `part_count_` must be positive; `0` returns `ZLINK_SUBMIT_INVALID_ARGUMENT` with `errno == EINVAL`.
 An optional ID output is set to `0` before other validation and remains `0` for a submit
@@ -1193,9 +1194,7 @@ granularity, wake edges, the level-held `ZLINK_POLLOUT` and
 explicit target removal with `ZLINK_SEND_TERMINAL` and `ENOENT`; socket close
 or context termination ends the token internally and delivers no record) are
 the same as for a SEND wait token in
-[whole-message send](#whole-message-send-and-pending-admission). A RID with no mandatory ROUTER
-route immediately returns `ZLINK_SUBMIT_NOT_CONNECTED` with
-`errno == EHOSTUNREACH` and ID `0` and creates no token.
+[whole-message send](#whole-message-send-and-pending-admission). The first paragraph of this section defines the result of a request to a ROUTER RID without a route.
 
 `timeout_ms_ == 0` snapshots the requester socket's request timeout, whose
 default is 5,000 ms. The reply timeout begins monotonically when the request
@@ -1536,19 +1535,11 @@ connection, options, send/receive/completion functions, return values, and
   snapshotted `SNDTIMEO` and returns ID `0` with no completion.
 - STREAM accepts only `part_count_ == 1`; another count returns `ZLINK_SUBMIT_NOT_SUPPORTED`
   with `ENOTSUP` and ID `0`. Every whole-message call consumes every input slot on success and
-  failure. A ROUTER or STREAM RID with no route
-  returns `ZLINK_SUBMIT_NOT_CONNECTED` with `EHOSTUNREACH` and ID `0`;
-  completion reservation exhaustion returns `ZLINK_SUBMIT_OUT_OF_MEMORY` with
+  failure. Route-less RID results follow [whole-message send](#whole-message-send-and-pending-admission)
+  and [Request and reply](#request-and-reply). Completion reservation exhaustion returns `ZLINK_SUBMIT_OUT_OF_MEMORY` with
   `ENOMEM` and ID `0`.
-- Core neither retains a SEND or REQUEST payload before admission nor keeps a
-  Core-owned retry FIFO. A wait token is reserved per target (the PAIR pipe,
-  the DEALER candidate peer set, the exact ROUTER or STREAM RID), and a
-  transient disconnect before admission does not end the token. After ID `0`,
-  Core does not replay the application payload.
-- A wait token ends only through the WRITABLE record, explicit target removal
-  (`ZLINK_SEND_TERMINAL` with `ENOENT`), or socket close and context
-  termination (ended internally, no record delivered). A peer weight
-  of 0 does not end a wait token.
+- Token targets, lifetime, and payload replay follow
+  [whole-message send](#whole-message-send-and-pending-admission).
 - Filling all 65,536 slots with a mix of SEND wait tokens and REQUEST
   completions makes the next SEND `DONTWAIT` call return
   `ZLINK_SUBMIT_OUT_OF_MEMORY` with `ENOMEM` and the next REQUEST
@@ -1569,8 +1560,7 @@ connection, options, send/receive/completion functions, return values, and
   0 peers right after connect) returns `ZLINK_SUBMIT_BACKPRESSURED` with
   `EAGAIN` and a nonzero wait token; Core retains no payload, and the caller
   resubmits the same request after the WRITABLE record with the same token,
-  context, and RID. A missing mandatory ROUTER route returns
-  `ZLINK_SUBMIT_NOT_CONNECTED` with `EHOSTUNREACH`, ID `0`, and no token.
+  context, and RID. A missing ROUTER RID follows the route-miss paragraph in [Request and reply](#request-and-reply).
 - Only a successful `zlink_reply()` call consumes the token scoped to
   `(responding ROUTER, source RID)`. Physical disconnect, generation change,
   and requester timeout do not invalidate it; RID removal, responder close,

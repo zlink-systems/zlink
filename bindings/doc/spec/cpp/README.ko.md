@@ -43,7 +43,7 @@ title: "C++ 바인딩 최종 구조"
 | [에러와 result 정책](#에러와-result-정책) | 실패 표현과 result 도메인 |
 | [성능 정책](#성능-정책) | hot path·링크 대상 제약 |
 | [완성 구조 요구사항](#완성-구조-요구사항) | 완성 선언 전 확인 항목 |
-| [Actor와 Spot 라우트 결과](#actor와-spot-라우트-결과) | 라우트 결과 타입과 Actor 대상 send/request |
+| [Actor와 Spot 라우트 결과](#actor와-spot-라우트-결과) | Framework 공개 계약 링크 |
 
 ## 공개 계약 소스
 
@@ -55,8 +55,7 @@ title: "C++ 바인딩 최종 구조"
 - 컴파일된 라이브러리: C++ 바인딩은 코어 네이티브 `zlink` 라이브러리와 별도로 `zlink_cpp`
   같은 C++ 라이브러리 타깃을 빌드하고 설치한다.
 - 언어 기준: C++20.
-- 네임스페이스: 모든 공개 타입은 `zlink` 아래에 둔다. service 타입은 `zlink::service`
-  아래에 둔다.
+- 네임스페이스: raw binding 공개 타입은 `zlink` 아래에 둔다.
 - 내부 구현: 네이티브 브리지 헬퍼, 콜백 트램펄린, 요청 진행 헬퍼, 비공개 `detail` 헬퍼,
   비공개 구현 헤더, `.cpp` 파일은 `bindings/cpp/src/Runtime/` 아래에 둔다.
 - 문서의 역할: 이 README는 형태, 경계, 필수 의미 범위를 정의한다. 정확한 멤버 목록은
@@ -116,13 +115,6 @@ bindings/cpp/
 |       |   |   +-- timers.hpp
 |       |   |   +-- events.hpp
 |       |   |   +-- status.hpp
-|       |   +-- Service/
-|       |   |   +-- spot_node.hpp
-|       |   |   +-- spot.hpp
-|       |   |   +-- actor.hpp
-|       |   |   +-- spot_node_models.hpp
-|       |   |   +-- actor_models.hpp
-|       |   |   +-- operation_contracts.hpp
 |       |   +-- Errors/
 |       |       +-- errors.hpp
 |       |       +-- results.hpp
@@ -154,16 +146,6 @@ bindings/cpp/
 |       |   +-- detail.hpp
 |       +-- Options/
 |       |   +-- socket_options.cpp
-|       +-- Service/
-|       |   +-- actor.cpp
-|       |   +-- actor_ops.cpp
-|       |   +-- detail.hpp
-|       |   +-- request_reply.cpp
-|       |   +-- spot.cpp
-|       |   +-- spot_node.cpp
-|       |   +-- actor_detail.hpp
-|       |   +-- spot_state.hpp
-|       |   +-- spot_submit.hpp
 |       +-- Native/
 |           +-- socket_handle.hpp
 |           +-- native_message_parts.hpp
@@ -187,7 +169,7 @@ bindings/cpp/
 
 런타임 헬퍼 헤더는 공개 계약 API가 아니다. 공개 샘플, perf, 테스트는 `<zlink.hpp>`를
 include하고 C++ 바인딩 라이브러리에 링크한다. 런타임 헬퍼 경로는 include하지 않는다.
-`include/zlink/message.hpp`, `include/zlink/services/spot.hpp`,
+`include/zlink/message.hpp`,
 `include/zlink/sockets/dealer.hpp` 같은 래퍼 헤더는 완성된 레이아웃의 일부가 아니다.
 완성된 트리는 이들을 포워딩 헤더로 대체하지도 않는다.
 
@@ -231,7 +213,6 @@ Layout 섹션이다. 이 C++ README는 그 카테고리의 C++ 투영만 정의�
 | Messaging | `message_t`, `received_t`, `topic_message_t`, `subscription_event_t`, multipart 헬퍼 | `Contracts/Messaging/` |
 | Sockets | `pair_socket_t`, `dealer_socket_t`, `router_socket_t`, `pub_socket_t`, `sub_socket_t`, `xpub_socket_t`, `xsub_socket_t`, `stream_socket_t`, send/recv/request/reply 빌더 | `Contracts/Sockets/` |
 | Eventing | `socket_monitor_t`, monitor 이벤트, poller, poll 이벤트, timer, readiness 헬퍼 | `Contracts/Eventing/` |
-| Service | `spot_node_t`, `spot_t`, `actor_ref_t`, actor 생명주기 모델, service operation 빌더 | `Contracts/Service/` |
 | Errors | 공개 예외와 result 도메인 타입 | `Contracts/Errors/` |
 
 `poller_t`는 `void add(socket_monitor_t &monitor_, poll_event_flag_t events_, std::uintptr_t slot_)`,
@@ -239,8 +220,7 @@ Layout 섹션이다. 이 C++ README는 그 카테고리의 C++ 투영만 정의�
 source로 받는다(공통 spec "`Poller`의 monitor source"). monitor mask는 `pollin` 또는 none만 유효하고 다른 bit는
 `config_error_t(config_result_t::invalid_argument)`로 거절한다. ready 뒤 `socket_monitor_t::recv(DONTWAIT)`로 drain한다.
 
-위 지도는 공개 API 색인이다. 계약 표면 개요의 C++ 등가물이며, `IContext`, `ISpot`,
-`IActor` 같은 추상 인터페이스를 의미하지 않는다. 공개 리소스 객체는 호출자가 진정한 대체
+위 지도는 공개 API 색인이다. 계약 표면 개요의 C++ 등가물이며, `IContext` 같은 추상 인터페이스를 의미하지 않는다. 공개 리소스 객체는 호출자가 진정한 대체
 동작을 필요로 하지 않는 한 구체 RAII 파사드로 유지한다. 좁은 인터페이스는 codec, callback,
 handler, poll target처럼 사용자가 자연스럽게 교체하는 역할에만 허용한다.
 
@@ -249,24 +229,7 @@ handler, poll target처럼 사용자가 자연스럽게 교체하는 역할에�
 1. `<zlink.hpp>`에서 시작해 C++ 바인딩이 포함하는 공개 계약 카테고리를 본다.
 2. 해당 `Contracts/...` 헤더를 열어 구체 공개 타입과 그 공개 멤버 목록을 살핀다.
 
-예를 들어 완성된 SPOT 표면은 인터페이스/구현 쌍이 아니라 구체 파사드로 보인다.
-
-```cpp
-namespace zlink::service {
-
-class spot_t {
-public:
-    spot_t(spot_t&&) noexcept = default;
-    spot_t(const spot_t&) = delete;
-
-    send_operation_t send();
-    reply_operation_t reply();
-    int recv(received_t& out, recv_flags_t flags = recv_flags_t::none);
-    void close();
-};
-
-} // namespace zlink::service
-```
+공개 Spot과 Actor facade 형태는 [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md)가 규정한다.
 
 `zlink.hpp`는 이 파사드들의 공개 목차 역할을 한다.
 
@@ -285,39 +248,10 @@ public:
 #include "zlink/Contracts/Sockets/pubsub_socket_contracts.hpp"
 #include "zlink/Contracts/Eventing/poll_event.hpp"
 #include "zlink/Contracts/Eventing/poller.hpp"
-#include "zlink/Contracts/Service/spot_node.hpp"
-#include "zlink/Contracts/Service/spot.hpp"
-#include "zlink/Contracts/Service/actor.hpp"
 #include "zlink/Contracts/Errors/errors.hpp"
 ```
 
-런타임 세부사항은 파사드 뒤에 둔다. 공개 헤더는 불투명 구현 상태를 이름지을 수 있으나
-네이티브 핸들, 콜백 트램펄린, part 루프, request 펌프, marshalling 헬퍼를 노출하지 않는다.
-
-```cpp
-namespace zlink::service {
-
-class spot_t {
-public:
-    spot_t(spot_t&&) noexcept;
-    spot_t(const spot_t&) = delete;
-    ~spot_t();
-
-    send_operation_t send();
-    reply_operation_t reply();
-    void close();
-
-private:
-    struct impl;
-    std::unique_ptr<impl> impl_;
-};
-
-} // namespace zlink::service
-```
-
-이 구조는 공개 표면을 훑어보기 쉽게 유지하면서 C++ ownership 의미를 보존한다.
-`spot_t`, `spot_node_t`, `actor_ref_t`가 계약이고, `src/Runtime/...`과 비공개
-`zlink::detail` 헬퍼는 구현 지원이다.
+런타임 세부는 raw socket facade 뒤에 두고, 공개 헤더에 native handle, callback trampoline, whole-message array, request pump, marshalling helper를 노출하지 않는다.
 
 ## 코어 기능 소유 규칙
 
@@ -326,8 +260,7 @@ C++가 노출하는 모든 안정 코어 기능은 다음 소유 규칙을 따�
 1. 올바른 `bindings/cpp/include/zlink/Contracts/` 카테고리에 공개 타입 또는 메서드를
    추가한다.
 2. `bindings/cpp/include/zlink.hpp`와 의도적으로 설치하는 투영 헤더를 갱신한다.
-3. C++ 도메인 소유자를 결정한다: context, message, socket, monitor, timer, service,
-   SPOT, actor, error, option 중 하나.
+3. C++ 도메인 소유자를 결정한다: context, message, socket, monitor, timer, error, option 중 하나.
 4. raw C 핸들 접근, whole-message 배열 marshalling, callback userdata, 트램펄린 상태, 네이티브 marshalling
    헬퍼는 `src/Runtime/` 헤더와 `.cpp` 파일에 둔다.
 5. 새로운 기능이 사용자 워크플로 또는 측정에 영향을 줄 때는 공개 헤더 테스트와 최소 하나의
@@ -337,11 +270,8 @@ C++가 노출하는 모든 안정 코어 기능은 다음 소유 규칙을 따�
 7. 사용하지 않게 된 공개 이름은 남기지 않는다. 별칭 deprecated, 포워딩 오버로드, 대체
    공개 헤더는 이후 문서가 이 C++ 정책을 명시적으로 바꾸지 않는 한 두지 않는다.
 
-명시적인 Spot routing-id 확보는 C++ 바인딩이
-`spot_node_t::get_or_create_spot(routing_id_t)`로 노출하며,
-`zlink_spot_node_spot_get_or_new(...)`에 직접 매핑한다. 이 메서드는 소유된 `spot_t`
-파사드와 생성 플래그를 반환한다. 이 동작을 `spot_lookup()`과 `create_spot()`을 조합해
-구현하지 않는다.
+Spot `GetOrCreate`의 공개 계약은
+[Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md#17-creategetorcreate-결과와-relocation-policy)가 소유한다.
 
 ## 라이브러리 형태
 
@@ -362,7 +292,7 @@ C++ 바인딩은 코어 C 계약 위에 얹힌 작은 네이티브 C++ 라이브
   명확한 도메인 타입의 대체로 템플릿 기계장치를 노출하지 않는다.
 - 가상 인터페이스는 호출자가 대체 동작을 필요로 할 때만 사용한다. 기본적으로 모든 핸들을
   추상 인터페이스로 감싸지 않는다.
-- multipart send, publish, request, reply, actor, SPOT operation은 빌더를 필수로 한다.
+- Core raw multipart send, publish, request, reply operation에는 빌더를 필수로 한다.
   이렇게 해야 네이티브 request 상태가 숨고 ownership이 분명해진다.
 
 ## 계약/런타임 배치 규칙
@@ -416,8 +346,6 @@ C++가 header-only를 벗어나면 바인딩은 컴파일된 산출물을 하나
   표면.
 - `Eventing/`: monitor, monitor snapshot/event, poller, poll event, timer, 공개 poll
   헬퍼.
-- `Service/`: SPOT node, SPOT handle, 토폴로지 모델, actor ref,
-  actor 생명주기, operation 빌더.
 - `Errors/`: 예외 또는 타입 지정 error-result 도메인.
 - enum, flag, result 타입은 의미를 정의하는 카테고리 안에 둔다. 문법별로 묶기 위한
   `Enums/` 폴더를 만들지 않는다.
@@ -430,15 +358,12 @@ C++가 header-only를 벗어나면 바인딩은 컴파일된 산출물을 하나
   복사 없이 메시지로 넘겨야 할 때는 고급 API인
   `external_message_t::from(span, free_fn, hint)` 오버로드를 사용한다. 이 오버로드는 버퍼를
   메시지에 맡기고, 메시지가 버퍼를 해제할 때 `free_fn(data, hint)`를 한 번 호출한다.
-- send, routed send, publish, request, reply, SPOT operation, Actor location/session
-  operation은 move-only fluent 빌더를 반환한다.
-- 빌더 시작 메서드는 대상 identity, topic, channel, routing ID와 `reply_token_t`만
+- Raw send, routed send, publish, request, reply는 move-only fluent builder를 반환한다.
+- 빌더 시작 메서드는 대상 identity, topic, routing ID와 `reply_token_t`만
   받는다. payload, flag, timeout, async submit 선택은 빌더 단계에서 한다.
-- SPOT 채널 대상 operation은 `send_to_channel(...)`과 `request_to_channel(...)`을 사용한다.
-  SPOT topic publish는 `publish(topic)`을 그대로 사용한다.
 - operation 시작 메서드와 같은 이름의 단일 payload 단축 오버로드를 추가하지 않는다.
   `send(message)`, `send(routing_id, message)`, `publish(topic, message)`,
-  `send_to_channel(channel, message)`, `send_to_spot(..., message)`는 공개 계약 멤버가
+  는 공개 계약 멤버가
   아니다. 호출자는 `send(...).message(message).submit()`을 사용한다.
 - multipart payload는 `message(...)`를 반복 호출해 쌓는다. `messages(...)` 편의 메서드는
   동일한 빌더 계약에 위임하고 `Contracts/`에 선언될 때만 허용한다.
@@ -550,14 +475,12 @@ native result를 담은 `config_error_t`를 던진다.
   `atomic_counter_t`, `stopwatch_t`, `thread_t`.
 - Messaging: message ownership, 빌더 multipart 입력, received metadata, topic message,
   subscription event, routing id, callback 타입.
-- Socket family: pair, dealer, router, pub, sub, xpub, xsub, stream, stream-bound
-  actor snapshot, 공통 옵션, 타입 지정 socket 옵션, bind/connect/disconnect, TLS,
+- Socket family: pair, dealer, router, pub, sub, xpub, xsub, stream,
+  공통 옵션, 타입 지정 socket 옵션, bind/connect/disconnect, TLS,
   callback, request/reply 표면.
 - Eventing: socket monitor, monitor event, monitor snapshot, poller, one-shot `poll(...)`,
   poll event, timer,
   readiness flag.
-- Services: SPOT node, SPOT handle, 토폴로지 snapshot, actor ref,
-  actor 생명주기, actor operation.
 - Errors: 코어 result 도메인을 보존하는 타입 지정 예외 또는 error-result 표면.
 
 C++ 표면은 raw 네이티브 핸들, whole-message 배열 marshalling, callback userdata, 내부 inproc endpoint,
@@ -579,9 +502,6 @@ C++ 호출자는 C 핸들 정리를 추론하지 않아도 된다.
 - data-plane 수신과 subscribe 경로는 호출자가 제공하는 저장소를 사용한다.
 - 수신 결과의 수명 API는 [64-bit byte HWM과 monitoring 계약](#64-bit-byte-hwm과-monitoring-계약)의
   C++ 출력 객체 설명을 따른다.
-- Actor join 요청 수신처럼 service 제어/입장 수신 경로는 C++ 호출자에게 더 명확하면
-  optional이나 타입 지정 결과 반환을 사용해도 된다. 다만 data 없음과 강한 수신 실패는 여전히
-  구분해야 한다.
 - callback은 네이티브 callback 수명과 사용자 callable 수명을 내부에서 일관되게 유지한다.
 
 ## 에러와 result 정책
@@ -593,7 +513,7 @@ C++ 호출자는 C 핸들 정리를 추론하지 않아도 된다.
 - request, submit, recv, bind, connect, config, handler, close 실패는 result 도메인
   의미를 유지한다.
 - `pollout`은 send 복구 readiness 신호이며 일반적인 writable 비트가 아니다.
-- ROUTER/PUB 기본값, SPOT HWM 기본값, SPOT dispatch worker 의미는 코어 헤더를 따른다.
+- ROUTER/PUB 기본값은 코어 헤더를 따른다.
 
 ## 성능 정책
 
@@ -624,25 +544,11 @@ C++ 호출자는 C 핸들 정리를 추론하지 않아도 된다.
 - handler 등록은 `set_..._handler` 이름을 사용하고, 공개 `on_...` 별칭은 두지 않는다.
 - 공개 헬퍼/free function과 빌더 편의 메서드는 런타임 헬퍼가 아니라 `Contracts/`에
   선언한다.
-- service 제어/입장 수신 예외는 data-plane의 호출자 제공 저장소와 다를 때 문서화한다.
 - perf 테스트는 C perf와 동일한 측정 의미를 사용한다.
 
 ## Actor와 Spot 라우트 결과
 
-C++는 Actor와 Spot 라우트 조회 결과를 구체 계약 타입으로 노출한다.
-
-- `actor_route_t`는 해석된 Actor ref, `actor.node_rid`, `current_spot_rid`,
-  `current_spot_kind`를 보존한다.
-- `spot_route_t`는 `spot_rid`, `owner_node_rid`, `spot_kind`를 보존한다.
-- `spot_kind`는 Entry Spot과 사용자 Spot을 구분한다. 잘못된 kind는 성공한 라우트 결과가
-  아니다.
-- `spot_node_spot_entry_t`와 `spot_node_actor_entry_t`는 코어 snapshot과 같은 Spot
-  kind/현재 Spot 필드를 노출한다.
-
-- C++는 resolve된 Actor ref를 인자로 받는 `spot_node_t::send_to_actor(actor_ref_t)`와 `spot_node_t::request_to_actor(actor_ref_t)`를 노출한다.
-- `send_to_actor`는 submit이 성공하면 하나 이상의 message part 소유권을 넘기고, Actor 소유자 mailbox가 인계를 받으면 완료된다.
-- `request_to_actor`는 submit이 성공하면 요청 part의 소유권을 넘기고, Actor handler가 만든 reply part를 native awaitable 결과로 전달한다.
-- C++는 제거된 Discovery route table이나 resolver API를 compatibility helper로 되살리면 안 된다.
+공개 Spot/Actor 형태는 [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md).
 
 ## Pull completion 공개 계약
 
