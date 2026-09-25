@@ -61,6 +61,7 @@ class fq_t
 
   private:
     bool try_get_pipe_index (pipe_t *pipe_, pipes_t::size_type *index_out_);
+    bool preserve_current_pipe (pipe_t *current_pipe_, pipe_t *removed_pipe_);
     void deactivate_at (pipes_t::size_type index_);
     void deactivate_current_after_read_miss ();
     template <bool WithAdmission>

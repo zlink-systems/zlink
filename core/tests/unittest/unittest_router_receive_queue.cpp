@@ -904,6 +904,83 @@ void test_router_selection_change_discards_every_standby_record ()
       1, credential_free_probe.calls.load (std::memory_order_acquire));
 }
 
+void test_unrelated_handover_preserves_prefetched_multipart_source ()
+{
+    void *const handle = zlink_socket (get_test_context (), ZLINK_SOCKET_ROUTER);
+    const int handover = ZLINK_RID_DUPLICATE_HANDOVER;
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_set_option (
+      handle, ZLINK_OPT_RID_DUPLICATE_POLICY, &handover, sizeof handover));
+    socket_handle_t pin = as_socket_handle (handle);
+    zlink::router_t *const router = static_cast<zlink::router_t *> (pin.socket);
+    zlink::object_t *parents[2] = {router, router};
+    const uint64_t hwms[2] = {1024 * 1024, 1024 * 1024};
+    const bool conflates[2] = {false, false};
+    zlink::pipepair_options_t options;
+    options.session_pipe = true;
+    zlink::pipe_t *pairs[4][2] = {};
+    passive_pipe_sink_t sink;
+    const char *const ids[] = {"X", "B", "A", "B"};
+    for (size_t i = 0; i < 4; ++i) {
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink::pipepair (parents, pairs[i], hwms, conflates, options));
+        pairs[i][0]->set_peer_routing_id (
+          reinterpret_cast<const unsigned char *> (ids[i]), 1);
+        pairs[i][0]->set_transport_pair (
+          zlink::transport_lane_application, 201 + i, 1);
+        pairs[i][1]->set_transport_pair (
+          zlink::transport_lane_application, 201 + i, 1);
+        pairs[i][0]->set_transport_lane_count (1);
+        pairs[i][1]->set_transport_lane_count (1);
+        pairs[i][1]->set_event_sink (&sink);
+        if (i < 3)
+            zlink::session_termination_test_access_t::attach_socket_pipe (
+              router, pairs[i][0], true);
+    }
+
+    write_internal_pipe_part (pairs[0][1], "X-first", false);
+    write_internal_pipe_part (pairs[1][1], "B-first", false);
+    write_internal_pipe_part (pairs[1][1], "B-pending", false);
+    write_internal_pipe_part (pairs[2][1], "A-head", true);
+    write_internal_pipe_part (pairs[2][1], "A-tail", false);
+    write_internal_pipe_part (pairs[0][1], "X-second", false);
+    zlink_msg_t parts[4];
+    const zlink_routing_id_t *rid = NULL;
+    uint64_t token = 0;
+    size_t count = 0;
+    for (int i = 0; i < 2; ++i) {
+        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_router_recv (
+          handle, &rid, &token, parts, 4, &count, ZLINK_RECV_FLAGS_DONTWAIT));
+        zlink_multipart_close (parts, count);
+    }
+    TEST_ASSERT_TRUE (router->within_receive_turn ([&] { return router->xhas_in (); }));
+    zlink::session_termination_test_access_t::attach_socket_pipe (
+      router, pairs[3][0], true);
+    const int rc = zlink_router_recv (
+      handle, &rid, &token, parts, 4, &count, ZLINK_RECV_FLAGS_DONTWAIT);
+    std::string first;
+    std::string second;
+    if (rc == ZLINK_RECV_OK) {
+        if (count > 0)
+            first.assign (static_cast<char *> (zlink_msg_data (&parts[0])),
+                          zlink_msg_size (&parts[0]));
+        if (count > 1)
+            second.assign (static_cast<char *> (zlink_msg_data (&parts[1])),
+                           zlink_msg_size (&parts[1]));
+        zlink_multipart_close (parts, count);
+    }
+    const char received_rid = rid ? static_cast<char> (rid->data[0]) : '\0';
+    pin = socket_handle_t ();
+    close_zero_linger (handle);
+    zlink::ctx_t *const ctx =
+      static_cast<zlink::ctx_t *> (get_test_context ());
+    TEST_ASSERT_SUCCESS_ERRNO (ctx->wait_for_socket_count_at_most (0, 5000));
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, rc);
+    TEST_ASSERT_EQUAL_UINT (2, count);
+    TEST_ASSERT_EQUAL_INT ('A', received_rid);
+    TEST_ASSERT_EQUAL_STRING ("A-head", first.c_str ());
+    TEST_ASSERT_EQUAL_STRING ("A-tail", second.c_str ());
+}
+
 int main (int argc, char **argv)
 {
     const char *selected = NULL;
@@ -926,6 +1003,7 @@ int main (int argc, char **argv)
     RUN_SELECTED (test_fq_reject_consume_releases_multipart_source);
     RUN_SELECTED (test_fq_stale_request_skips_capacity_admission);
     RUN_SELECTED (test_router_selection_change_discards_every_standby_record);
+    RUN_SELECTED (test_unrelated_handover_preserves_prefetched_multipart_source);
 #undef RUN_SELECTED
     const bool matched = !selected || Unity.NumberOfTests == 1;
     const int result = UNITY_END ();

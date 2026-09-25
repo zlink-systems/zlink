@@ -113,11 +113,28 @@ void zlink::fq_t::deactivate (pipe_t *pipe_)
 void zlink::fq_t::deactivate_at (pipes_t::size_type index_)
 {
     pipe_t *const pipe = _pipes[index_];
+    pipe_t *const current_pipe = _pipes[_current];
+    if (_more && current_pipe == pipe) {
+        _more = false;
+        _multipart_abort_pending = true;
+    }
     _active--;
     _pipes.swap (index_, _active);
     publish_pipe_receive_activity (pipe, false);
-    if (_current == _active)
+    if (!preserve_current_pipe (current_pipe, pipe) && _current == _active)
         _current = 0;
+}
+
+bool zlink::fq_t::preserve_current_pipe (pipe_t *current_pipe_,
+                                         pipe_t *removed_pipe_)
+{
+    if (!current_pipe_ || current_pipe_ == removed_pipe_)
+        return false;
+    pipes_t::size_type index = 0;
+    if (!try_get_pipe_index (current_pipe_, &index) || index >= _active)
+        return false;
+    _current = index;
+    return true;
 }
 
 void zlink::fq_t::deactivate_current_after_read_miss ()
@@ -148,11 +165,6 @@ void zlink::fq_t::pipe_terminated (pipe_t *pipe_)
 
     pipe_t *const current_pipe =
       _active > 0 && _current < _active ? _pipes[_current] : NULL;
-    if (_more && pipe_ == current_pipe) {
-        _more = false;
-        _multipart_abort_pending = true;
-    }
-
     //  Remove the pipe from the list; adjust number of active pipes
     //  accordingly.
     if (index < _active)
@@ -162,17 +174,9 @@ void zlink::fq_t::pipe_terminated (pipe_t *pipe_)
     _pipes.erase (pipe_);
     normalize_state ();
 
-    //  Removal uses swaps. Preserve the pipe selected for an in-progress
-    //  fair-queue turn when some other pipe terminates; otherwise the next
-    //  frame could silently come from a different peer.
-    if (current_pipe && current_pipe != pipe_) {
-        pipes_t::size_type current_index = 0;
-        if (try_get_pipe_index (current_pipe, &current_index)
-            && current_index < _active)
-            _current = current_index;
-    } else if (_active > 0) {
+    //  Erase can swap once more after deactivation; preserve the same source.
+    if (!preserve_current_pipe (current_pipe, pipe_) && _active > 0)
         _current = index < _active ? index : 0;
-    }
 }
 
 void zlink::fq_t::discard_pending_records (
