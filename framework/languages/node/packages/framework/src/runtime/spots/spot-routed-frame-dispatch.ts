@@ -37,6 +37,7 @@ interface ZLinkSpotRoutedFrameDispatchOptions {
   readonly createReceived: () => ZLinkBackendReceived;
   readonly nativeSpotId: string;
   readonly serial: ZLinkSpotSerialTurnExecutor;
+  readonly isSpotClosing?: () => boolean;
   readonly resolveActor: (actorId: string) => ZLinkActor | undefined;
   readonly getTarget: () => ZLinkRoutedFrameAdmissionTarget & ZLinkSpot;
   readonly defaultAccept: boolean;
@@ -123,6 +124,7 @@ export class ZLinkSpotRoutedFrameDispatch {
     });
     this.routedActorAdmission = new ZLinkSpotRoutedActorAdmission({
       serial: options.serial,
+      isSpotClosing: options.isSpotClosing,
       getTarget: options.getTarget,
       defaultAccept: options.defaultAccept,
       routedActorTransferProvider: options.routedActorTransferProvider,
@@ -234,7 +236,9 @@ export class ZLinkSpotRoutedFrameDispatch {
     if (await this.routePacketDispatch.dispatch(received)) {
       return;
     }
-    await this.routedActorAdmission.admit(received);
+    await this.options.serial.executeLifecycleOperation(() =>
+      this.routedActorAdmission.admit(received)
+    );
   }
 }
 

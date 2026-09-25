@@ -11,6 +11,10 @@ import { throwIfAborted } from '../abort';
 import type { Message } from '../../contracts/Common/Message';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import { ZLinkConfigurationException } from '../configuration';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 import { ZLinkDispatchErrorReporter } from '../channels';
 import { ZLINK_ACTOR_JOIN_ENTRY_SPOT_RUNTIME, ZLinkSpotActorDispatcher } from '../actors';
 import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
@@ -37,6 +41,7 @@ export interface ZLinkSpotActorMembershipOptions {
   readonly entrySpotIdProvider?: (meshName: string) => string | undefined;
   readonly spotRouteResolver?: ZLinkSpotRouteResolver;
   readonly actorTransferRuntime?: ZLinkSpotActorTransferRuntime;
+  readonly isSpotClosing?: (activation: ZLinkSpotActivation) => boolean;
 }
 
 export type ZLinkActorJoinRollback = () => Promise<void> | void;
@@ -57,6 +62,36 @@ export class ZLinkSpotActorMembership {
   ): Promise<ZLinkSpotActorJoinResult> {
     throwIfAborted(signal);
     const activation = this.requireActivation(spotId);
+    return await this.runLifecycleOperation(activation, async () => {
+      if (this.options.isSpotClosing?.(activation) === true) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RequestRejected,
+          `User Spot '${String(spotId)}' is closing.`
+        );
+      }
+      return await this.admitActorJoinCore(
+        activation,
+        actor,
+        request,
+        commit,
+        signal,
+        leaveSource,
+        contentType
+      );
+    });
+  }
+
+  private async admitActorJoinCore(
+    activation: ZLinkSpotActivation,
+    actor: ZLinkActor,
+    request: Message,
+    commit: (
+      spot: ZLinkSpot
+    ) => Promise<ZLinkActorJoinRollback | void> | ZLinkActorJoinRollback | void,
+    signal: AbortSignal | undefined,
+    leaveSource: (() => Promise<void>) | undefined,
+    contentType: string
+  ): Promise<ZLinkSpotActorJoinResult> {
     const dispatcher = this.createActorDispatcher(activation);
     const transaction: {
       rollbackExternal?: ZLinkActorJoinRollback;
@@ -103,6 +138,17 @@ export class ZLinkSpotActorMembership {
   ): Promise<void> {
     throwIfAborted(signal);
     const activation = this.requireActivation(spotId, meshName);
+    await this.runLifecycleOperation(activation, () =>
+      this.leaveActorCore(activation, actor, signal, meshName)
+    );
+  }
+
+  private async leaveActorCore(
+    activation: ZLinkSpotActivation,
+    actor: ZLinkActor,
+    signal?: AbortSignal,
+    meshName?: string
+  ): Promise<void> {
     const localEntryNodeRid =
       (meshName === undefined ? undefined : this.options.nodeRidProvider?.(meshName)) ??
       this.options.entryNodeRidProvider?.() ??
@@ -177,11 +223,13 @@ export class ZLinkSpotActorMembership {
   ): Promise<void> {
     throwIfAborted(signal);
     const activation = this.requireActivation(spotId);
-    await activation.serial.execute(async () => {
-      activation.beginActorTransfer(actor.context.actorId);
-      await activation.spot.onLeaveActor(actor);
-      activation.commitActorDeparture(actor.context.actorId);
-    });
+    await this.runLifecycleOperation(activation, () =>
+      activation.serial.execute(async () => {
+        activation.beginActorTransfer(actor.context.actorId);
+        await activation.spot.onLeaveActor(actor);
+        activation.commitActorDeparture(actor.context.actorId);
+      })
+    );
   }
 
   async prepareActorLeaveForTransfer(
@@ -191,12 +239,16 @@ export class ZLinkSpotActorMembership {
   ): Promise<void> {
     throwIfAborted(signal);
     const activation = this.requireActivation(spotId);
-    await activation.serial.execute(() => activation.spot.onLeaveActor(actor));
+    await this.runLifecycleOperation(activation, () =>
+      activation.serial.execute(() => activation.spot.onLeaveActor(actor))
+    );
   }
 
   async commitActorLeaveAfterTransfer(spotId: RoutingId, actorId: string): Promise<void> {
     const activation = this.requireActivation(spotId);
-    await activation.serial.execute(() => activation.commitActorDeparture(actorId));
+    await this.runLifecycleOperation(activation, () =>
+      activation.serial.execute(() => activation.commitActorDeparture(actorId))
+    );
   }
 
   async restoreActorAfterFailedTransfer(
@@ -206,24 +258,26 @@ export class ZLinkSpotActorMembership {
   ): Promise<void> {
     throwIfAborted(signal);
     const activation = this.requireActivation(spotId);
-    await activation.serial.execute(async () => {
-      activation.cancelActorTransfer(actor.context.actorId);
-      await activation.spot.onJoinedActor(actor);
-    });
+    await this.runLifecycleOperation(activation, () =>
+      activation.serial.execute(async () => {
+        activation.cancelActorTransfer(actor.context.actorId);
+        await activation.spot.onJoinedActor(actor);
+      })
+    );
   }
 
   async beginActorTransfer(spotId: RoutingId, actorId: string): Promise<void> {
     const activation = this.requireActivation(spotId);
-    await activation.serial.execute(() => {
-      activation.beginActorTransfer(actorId);
-    });
+    await this.runLifecycleOperation(activation, () =>
+      activation.serial.execute(() => activation.beginActorTransfer(actorId))
+    );
   }
 
   async cancelActorTransfer(spotId: RoutingId, actorId: string): Promise<void> {
     const activation = this.requireActivation(spotId);
-    await activation.serial.execute(() => {
-      activation.cancelActorTransfer(actorId);
-    });
+    await this.runLifecycleOperation(activation, () =>
+      activation.serial.execute(() => activation.cancelActorTransfer(actorId))
+    );
   }
 
   async notifyJoinedActorDisconnected(
@@ -250,6 +304,15 @@ export class ZLinkSpotActorMembership {
       throw new ZLinkConfigurationException(`Spot '${spotId}' is not active.`);
     }
     return activation;
+  }
+
+  private async runLifecycleOperation<T>(
+    activation: ZLinkSpotActivation,
+    operation: () => Promise<T> | T
+  ): Promise<T> {
+    const pending = activation.serial.executeLifecycleOperation(operation);
+    const turn = activation.serial.currentTurn;
+    return turn === undefined ? await pending : await turn.yieldFrameworkPromise(pending);
   }
 
   private createActorDispatcher(activation: ZLinkSpotActivation): ZLinkSpotActorDispatcher {

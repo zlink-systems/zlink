@@ -100,10 +100,14 @@ export class ZLinkPublicSpotManager implements ZLinkSpotManager {
     if (this.options.isLocalNode(current.meshName, current.nodeRid)) {
       const closed = await this.options.coordinator.close(
         spot,
-        (local) => this.options.local.close(local.meshName, local.spotId, signal),
-        signal,
-        (local) => this.options.local.hasActiveSpot(local.spotId),
-        (local) => this.options.local.canCloseUserSpot(local.meshName, local.spotId)
+        (local, beginAuthority) =>
+          this.options.local.closeUserWithAuthority(
+            local.meshName,
+            local.spotId,
+            beginAuthority,
+            signal
+          ),
+        signal
       );
       if (closed) this.options.resolver()?.invalidate?.(spot.spotId);
       return closed;

@@ -95,6 +95,7 @@ interface ZLinkSpotActorJoinDispatchOptions {
   readonly createReceived: () => ZLinkBackendReceived;
   readonly createTopicMessage: () => ZLinkBackendTopicMessage;
   readonly serial: ZLinkSpotSerialTurnExecutor;
+  readonly isSpotClosing?: () => boolean;
   readonly actors: ZLinkSpotActorAdmissionRuntime;
   readonly packets?: ZLinkSpotActorPacketRuntime;
   readonly boundSessionRuntime?: ZLinkSpotBoundSessionRuntime;
@@ -152,6 +153,7 @@ export class ZLinkSpotActorJoinDispatch {
       createReceived: options.createReceived,
       nativeSpotId: this.nativeSpotId,
       serial: options.serial,
+      isSpotClosing: options.isSpotClosing,
       resolveActor: actors.resolveActor,
       getTarget: () => actors.getTarget() as ZLinkActorJoinAdmissionTarget & ZLinkSpot,
       defaultAccept: actors.defaultAccept,
@@ -309,7 +311,9 @@ export class ZLinkSpotActorJoinDispatch {
         await waitSpotDispatchIdle();
         return;
       }
-      await this.nativeActorJoinAdmission.admit(request);
+      await this.options.serial.executeLifecycleOperation(() =>
+        this.nativeActorJoinAdmission.admit(request, this.options.isSpotClosing?.() === true)
+      );
     }
   }
 }

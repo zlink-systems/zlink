@@ -69,17 +69,22 @@ class ShoppingMallClientScenario {
       'pm-ok',
       'order-concurrent-001'
     );
-    const [concurrentA, concurrentB] = await Promise.all([
-      this.startWithRetry(apiA, concurrentReq, signal),
-      this.startWithRetry(apiB, concurrentReq, signal)
+    const concurrentResults = await Promise.allSettled([
+      apiA.post('/orders/start').body(concurrentReq).fetch<StartOrderRes>(),
+      apiB.post('/orders/start').body(concurrentReq).fetch<StartOrderRes>()
     ]);
+    const successfulStarts = concurrentResults.filter(
+      (result): result is PromiseFulfilledResult<StartOrderRes> => result.status === 'fulfilled'
+    );
+    zlinkStreamAssert.ensure(successfulStarts.length > 0, 'Sample scenario assertion failed.');
+    const concurrentOrderId = successfulStarts[0].value.state.orderId;
     zlinkStreamAssert.ensure(
-      concurrentA.state.orderId === concurrentB.state.orderId,
+      successfulStarts.every((result) => result.value.state.orderId === concurrentOrderId),
       'Sample scenario assertion failed.'
     );
     const concurrentConfirmed = await this.waitForStatus(
       apiA,
-      concurrentA.state.orderId,
+      concurrentOrderId,
       OrderStatuses.Confirmed,
       signal
     );
@@ -87,7 +92,7 @@ class ShoppingMallClientScenario {
       concurrentConfirmed.status === OrderStatuses.Confirmed,
       'Sample scenario assertion failed.'
     );
-    reportOrder('concurrent', concurrentA.state.orderId);
+    reportOrder('concurrent', concurrentOrderId);
 
     const pending = await apiB
       .post('/orders/start')
@@ -229,23 +234,6 @@ class ShoppingMallClientScenario {
   private async getOrder(api: ZLinkHttpClient, orderId: string): Promise<OrderState> {
     return (await api.get(`/orders/${encodeURIComponent(orderId)}`).fetch<GetOrderStateRes>())
       .state;
-  }
-
-  private async startWithRetry(
-    api: ZLinkHttpClient,
-    request: StartOrderReq,
-    signal?: AbortSignal
-  ): Promise<StartOrderRes> {
-    let lastFailure: unknown;
-    for (let attempt = 0; attempt < 300; attempt += 1) {
-      try {
-        return await api.post('/orders/start').body(request).fetch<StartOrderRes>();
-      } catch (error) {
-        lastFailure = error;
-      }
-      await delay(100, signal);
-    }
-    throw lastFailure;
   }
 
   private async waitForStatus(

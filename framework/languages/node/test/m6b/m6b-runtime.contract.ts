@@ -4156,7 +4156,10 @@ test('Instance Close prevents a waiting materialization of the closed generation
     instanceSpotFactories: new Map([['mesh-a', new Map([['TenantWorker', TenantInstance]])]]),
     instanceSpotApplicationTargetProvider: () =>
       ready ? { stableType: 'TenantWorker', objectGeneration: 8n } : undefined,
-    beginInstanceClosingAuthority: async () => ({ restoreReady: async () => undefined }),
+    beginInstanceClosingAuthority: async (_meshName, _spotId, onCommitted) => {
+      onCommitted();
+      return { release: async () => undefined };
+    },
     releaseInstanceAuthority: async () => {
       releaseStarted();
       await releaseFinished;

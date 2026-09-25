@@ -32,6 +32,48 @@ const { ZLinkSpotActivationRegistry } = require(
   '../../packages/framework/dist/runtime/spots/spot-activation-registry'
 );
 
+function closeUserSpot(manager, meshName, spotId, signal) {
+  return manager.closeUserWithAuthority(
+    meshName,
+    spotId,
+    async (onCommitted) => {
+      onCommitted();
+      return { release: async () => undefined };
+    },
+    signal
+  );
+}
+
+test('Close seal waits for an accepted Yielded turn and permits its continuation', async () => {
+  const { ZLinkExecutionBarrier } = require('../../packages/framework/dist/runtime/execution');
+  const { ZLinkSpotSerialTurnExecutor } = require(
+    '../../packages/framework/dist/runtime/spots/spot-serial-turn-executor'
+  );
+  const barrier = new ZLinkExecutionBarrier();
+  const serial = new ZLinkSpotSerialTurnExecutor();
+  serial.setExecutionBarrier(barrier);
+  const release = createDeferred();
+  const entered = createDeferred();
+  let continued = false;
+  const turn = serial.execute(async () => {
+    entered.resolve();
+    await serial.yieldPromise(release.promise);
+    continued = true;
+  });
+  await entered.promise;
+  await Promise.resolve();
+  const seal = barrier.seal();
+  let quiescent = false;
+  const wait = barrier.waitForQuiescence(seal).then(() => { quiescent = true; });
+  await Promise.resolve();
+  assert.equal(quiescent, false);
+  release.resolve();
+  await turn;
+  await wait;
+  assert.equal(continued, true);
+  assert.equal(barrier.commit(seal), true);
+});
+
 test('Spot activation idle scan visits at most 64 entries and resumes from its cursor', () => {
   const registry = new ZLinkSpotActivationRegistry();
   for (let index = 0; index < 130; index += 1) {
@@ -344,7 +386,8 @@ test('spot actor leave rejoins the actor original remote Entry Spot', async () =
     }
   };
   const activation = {
-    serial: { execute: (operation) => operation() },
+    meshName: 'test.mesh',
+    serial: new framework.ZLinkSpotSerialTurnExecutor(),
     beginActorTransfer: (actorId) => events.push(['begin', actorId]),
     spot: { onLeaveActor: async (left) => events.push(['leave', left.actorId]) },
     commitActorDeparture: (actorId) => events.push(['commit', actorId])
@@ -443,16 +486,8 @@ test('spot actor leave yields its current turn while the Entry rejoin is pending
     }
   };
   const activation = {
-    serial: {
-      isCurrentTurn: true,
-      currentTurn: {
-        async yieldFrameworkPromise(pending) {
-          events.push('yield');
-          completeJoin();
-          return await pending;
-        }
-      }
-    },
+    meshName: 'test.mesh',
+    serial: new framework.ZLinkSpotSerialTurnExecutor(),
     beginActorTransfer(actorId) {
       events.push(`begin:${actorId}`);
     },
@@ -478,7 +513,15 @@ test('spot actor leave yields its current turn while the Entry rejoin is pending
     }
   });
 
-  await membership.leaveActor('bingo-room', actor);
+  const leaving = activation.serial.execute(async () => {
+    await membership.leaveActor('bingo-room', actor);
+    events.push('handler:end');
+  });
+  await waitFor(() => events.includes('join-entry:play-node-a'));
+  await activation.serial.execute(() => events.push('other-turn'));
+  assert.equal(events.includes('handler:end'), false);
+  completeJoin();
+  await leaving;
 
   assert.deepEqual(events, [
     'begin:player-1',
@@ -486,7 +529,8 @@ test('spot actor leave yields its current turn while the Entry rejoin is pending
     'commit:player-1',
     'clear:player-1',
     'join-entry:play-node-a',
-    'yield'
+    'other-turn',
+    'handler:end'
   ]);
 });
 
@@ -515,8 +559,8 @@ test('ZLinkSpotManager creates lists finds and closes spots with lifecycle order
   assert.deepEqual(events, ['configure', 'onCreate:open', 'onInitialize']);
   assert.deepEqual(await manager.find('test.mesh', created.spotId), { spotId: created.spotId });
   assert.deepEqual(await manager.list('test.mesh'), [{ spotId: created.spotId }]);
-  assert.equal(await manager.close('test.mesh', created.spotId), true);
-  assert.equal(await manager.close('test.mesh', created.spotId), false);
+  assert.equal(await closeUserSpot(manager, 'test.mesh', created.spotId), true);
+  assert.equal(await closeUserSpot(manager, 'test.mesh', created.spotId), false);
   assert.equal(await manager.find('test.mesh', created.spotId), null);
   assert.deepEqual(events, [
     'configure',
@@ -586,7 +630,56 @@ test('ZLinkSpotManager consumes MeshNode Spot send and request records', async (
     for (const part of sendParts) part.close();
     for (const part of requestParts) part.close();
     for (const part of replyParts ?? []) part.close();
-    await manager.close('test.mesh', created.spotId);
+    await closeUserSpot(manager, 'test.mesh', created.spotId);
+  }
+});
+
+test('MeshNode User Spot request preserves a typed Rejected reply', async () => {
+  const { createInternalFrameworkException, ZLinkFrameworkInternalErrorKind } = require(
+    '../../packages/framework/dist/runtime/framework-errors-internal'
+  );
+  class Spot {}
+  class RejectingPacket {
+    handle() {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RequestRejected,
+        'Closing authority rejects this request.'
+      );
+    }
+  }
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [Spot],
+    spotPacketHandlers: [{ spotType: Spot, handlerType: RejectingPacket, packetName: 'RejectingPacket' }]
+  });
+  const created = await manager.create('test.mesh', Spot);
+  const parts = channelProtocol.encodeChannelEnvelopeParts(
+    1,
+    'mesh',
+    'RejectingPacket',
+    { value: 1 }
+  ).map((part) => zlink.Message.from(part));
+  let reply;
+  try {
+    await manager.dispatchMeshSpot(
+      'test.mesh',
+      { ownerKind: framework.ReadyOwnerKind.Spot, spotId: created.spotId },
+      {
+        kind: framework.ReceiveKind.SpotRequest,
+        parts,
+        reply(response) {
+          reply = response.map((part) => zlink.Message.from(part));
+          return zlink.SubmitResult.Ok;
+        }
+      }
+    );
+    assert.throws(
+      () => channelProtocol.decodeChannelReply(reply),
+      (error) => error.kind === framework.ZLinkFrameworkErrorKind.Rejected
+    );
+  } finally {
+    for (const part of parts) part.close();
+    for (const part of reply ?? []) part.close();
+    await closeUserSpot(manager, 'test.mesh', created.spotId);
   }
 });
 
@@ -655,7 +748,7 @@ test('ZLinkSpotManager reports HostShutdown only for shutdown-drained User and I
     shutdownInstanceRid
   );
 
-  assert.equal(await manager.close('test.mesh', explicitUser.spotId), true);
+  assert.equal(await closeUserSpot(manager, 'test.mesh', explicitUser.spotId), true);
   assert.equal(await manager.close('test.mesh', explicitInstanceRid), true);
   await manager.drainForShutdown('test.mesh');
 
@@ -863,11 +956,12 @@ test('ZLinkSpotManager establishes the durable Closing fence before explicit Ins
       'test.mesh',
       new Map([['explicit', ExplicitCloseInstanceSpot]])
     ]]),
-    async beginInstanceClosingAuthority(meshName, candidateSpotId) {
+    async beginInstanceClosingAuthority(meshName, candidateSpotId, onCommitted) {
       assert.equal(meshName, 'test.mesh');
       assert.equal(String(candidateSpotId), String(spotId));
       order.push('durable-closing');
-      return { restoreReady: async () => { throw new Error('unexpected restore'); } };
+      onCommitted();
+      return { release: async () => undefined };
     }
   });
 
@@ -889,8 +983,9 @@ test('ZLinkSpotManager releases Instance authority when no newer application is 
       new Map([['relocated', RelocatedInstanceSpot]])
     ]]),
     instanceSpotApplicationTargetProvider: () => undefined,
-    async beginInstanceClosingAuthority() {
-      return { restoreReady: async () => { throw new Error('unexpected restore'); } };
+    async beginInstanceClosingAuthority(_meshName, _spotId, onCommitted) {
+      onCommitted();
+      return { release: async () => undefined };
     },
     async releaseInstanceAuthority(meshName, candidateSpotId, objectGeneration) {
       released.push([meshName, String(candidateSpotId), objectGeneration]);
@@ -918,10 +1013,11 @@ test('ZLinkSpotManager defers an Instance context close until activation complet
       events.push('wait-for-terminal');
       await releaseQuiescence.promise;
     },
-    async beginInstanceClosingAuthority() {
+    async beginInstanceClosingAuthority(_meshName, _spotId, onCommitted) {
+      onCommitted();
       durableCloseCalls++;
       events.push('durable-closing');
-      return { restoreReady: async () => { throw new Error('unexpected restore'); } };
+      return { release: async () => undefined };
     }
   });
 
@@ -972,6 +1068,386 @@ test('ZLinkSpotManager leaves an explicit Instance intact when the durable Closi
   await manager.close('test.mesh', spotId);
 });
 
+test('Close holds admission until a pending authority CAS reports its outcome', async () => {
+  const casResult = createDeferred();
+  const entered = createDeferred();
+  const spotId = zlink.RoutingId.from('pending-authority-decision');
+  let storedState = 'ready';
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [],
+    instanceSpotFactories: new Map([['test.mesh', new Map([['test', class {}]])]]),
+    async beginInstanceClosingAuthority(_meshName, _spotId, onCommitted) {
+      storedState = 'closing';
+      entered.resolve();
+      await casResult.promise;
+      onCommitted();
+      return { release: async () => undefined };
+    }
+  });
+  await manager.materializeInstance('test.mesh', 'test', spotId, 1n);
+  const close = manager.close('test.mesh', spotId);
+  await entered.promise;
+  assert.equal(storedState, 'closing');
+  assert.equal(manager.isSpotClosing('test.mesh', spotId), false);
+  let decided = false;
+  const admission = manager.pendingSpotCloseDecision('test.mesh', spotId).then(() => {
+    decided = true;
+    return manager.isSpotClosing('test.mesh', spotId);
+  });
+  await Promise.resolve();
+  assert.equal(decided, false);
+  casResult.resolve();
+  assert.equal(await admission, true);
+  assert.equal(await close, true);
+});
+
+test('Close leaves admission Ready when authority CAS fails before commit', async () => {
+  const spotId = zlink.RoutingId.from('failed-authority-decision');
+  let closingCalls = 0;
+  class Spot { async onClosing() { closingCalls++; } }
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [],
+    instanceSpotFactories: new Map([['test.mesh', new Map([['test', Spot]])]]),
+    beginInstanceClosingAuthority: async () => { throw new Error('CAS failed'); }
+  });
+  await manager.materializeInstance('test.mesh', 'test', spotId, 1n);
+  await assert.rejects(() => manager.close('test.mesh', spotId), /CAS failed/);
+  assert.equal(manager.isSpotClosing('test.mesh', spotId), false);
+  assert.notEqual(await manager.find('test.mesh', spotId), null);
+  assert.equal(closingCalls, 0);
+});
+
+test('User Join membership settles before a later Close checks Ready authority', async () => {
+  const spotId = 'join-before-close-lane';
+  const leaveEntered = createDeferred();
+  const finishLeave = createDeferred();
+  let authorityState = 'ready';
+  let casCalls = 0;
+  let closingCalls = 0;
+  class Spot {
+    async onActorJoin() { return { accepted: true }; }
+    async onJoinedActor() {}
+    async onClosing() { closingCalls++; }
+  }
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [Spot],
+    entrySpotCallbacks: {
+      async onLeaveActor() {
+        leaveEntered.resolve();
+        await finishLeave.promise;
+      }
+    }
+  });
+  await manager.getOrCreate('test.mesh', Spot, spotId);
+  const actor = {
+    actorId: 'lane-actor',
+    context: {
+      actorId: 'lane-actor',
+      [framework.ZLINK_ACTOR_LIFECYCLE_SNAPSHOT]() {
+        return {
+          actorRef: { nodeRid: zlink.RoutingId.from('node-a'), actorId: 'lane-actor', generation: 1n },
+          actorType: 'player',
+          membershipEpoch: 1n
+        };
+      }
+    }
+  };
+  const request = zlink.Message.from(JSON.stringify('join'));
+  try {
+    const joining = manager.admitActorJoin(spotId, actor, request, () => undefined);
+    await leaveEntered.promise;
+    const closing = manager.closeUserWithAuthority('test.mesh', spotId, async (onCommitted) => {
+      casCalls++;
+      authorityState = 'closing';
+      onCommitted();
+      return { release: async () => { authorityState = 'missing'; } };
+    });
+    assert.equal(authorityState, 'ready');
+    finishLeave.resolve();
+    assert.equal((await joining).accepted, true);
+    assert.equal(await closing, false);
+    assert.equal(authorityState, 'ready');
+    assert.deepEqual([casCalls, closingCalls], [0, 0]);
+    assert.notEqual(await manager.find('test.mesh', spotId), null);
+  } finally {
+    request.close();
+  }
+});
+
+test('User Close commits before a later Join and rejects that Join', async () => {
+  const spotId = 'close-before-join-lane';
+  const casEntered = createDeferred();
+  const finishCas = createDeferred();
+  let authorityState = 'ready';
+  let joinCalls = 0;
+  class Spot {
+    async onActorJoin() { joinCalls++; return { accepted: true }; }
+  }
+  const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [Spot] });
+  await manager.getOrCreate('test.mesh', Spot, spotId);
+  const closing = manager.closeUserWithAuthority('test.mesh', spotId, async (onCommitted) => {
+    authorityState = 'closing';
+    casEntered.resolve();
+    await finishCas.promise;
+    onCommitted();
+    return { release: async () => { authorityState = 'missing'; } };
+  });
+  await casEntered.promise;
+  const actor = {
+    actorId: 'lane-actor',
+    context: {
+      actorId: 'lane-actor',
+      [framework.ZLINK_ACTOR_LIFECYCLE_SNAPSHOT]() {
+        return {
+          actorRef: { nodeRid: zlink.RoutingId.from('node-a'), actorId: 'lane-actor', generation: 1n },
+          actorType: 'player',
+          membershipEpoch: 1n
+        };
+      }
+    }
+  };
+  const request = zlink.Message.from(JSON.stringify('join'));
+  try {
+    const joining = manager.admitActorJoin(spotId, actor, request, () => undefined);
+    finishCas.resolve();
+    await assert.rejects(
+      () => joining,
+      (error) => error.kind === framework.ZLinkFrameworkErrorKind.Rejected
+    );
+    assert.equal(await closing, true);
+    assert.equal(authorityState, 'missing');
+    assert.equal(joinCalls, 0);
+  } finally {
+    request.close();
+  }
+});
+
+test('Committed Close owner resumes failed release without a second Close request', async () => {
+  const spotId = zlink.RoutingId.from('owner-resumes-close-release');
+  const continued = createDeferred();
+  let authorityCalls = 0;
+  let closingCalls = 0;
+  let releaseCalls = 0;
+  class Spot { async onClosing() { closingCalls++; } }
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [],
+    instanceSpotFactories: new Map([['test.mesh', new Map([['test', Spot]])]]),
+    beginInstanceClosingAuthority: async (_meshName, _spotId, onCommitted) => {
+      authorityCalls++;
+      onCommitted();
+      return { release: async () => undefined };
+    },
+    releaseInstanceAuthority: async () => {
+      releaseCalls++;
+      if (releaseCalls === 1) throw new Error('release failed once');
+    },
+    detachedTaskRunner: {
+      runDetached(taskName, callback) {
+        if (!taskName.startsWith('spot close continuation ')) return;
+        void callback().then(continued.resolve, continued.reject);
+      }
+    }
+  });
+  await manager.materializeInstance('test.mesh', 'test', spotId, 1n);
+  await assert.rejects(() => manager.close('test.mesh', spotId), /release failed once/);
+  await continued.promise;
+  assert.equal(manager.isSpotClosing('test.mesh', spotId), false);
+  assert.equal(await manager.find('test.mesh', spotId), null);
+  assert.deepEqual([authorityCalls, closingCalls, releaseCalls], [1, 1, 2]);
+});
+
+test('Instance intent waits for the owner continuation before rematerializing', async () => {
+  const spotId = zlink.RoutingId.from('intent-waits-for-close-continuation');
+  const continuing = createDeferred();
+  const release = createDeferred();
+  const continued = createDeferred();
+  let releaseCalls = 0;
+  class Spot {}
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [],
+    instanceSpotFactories: new Map([['test.mesh', new Map([['test', Spot]])]]),
+    beginInstanceClosingAuthority: async (_meshName, _spotId, onCommitted) => {
+      onCommitted();
+      return { release: async () => undefined };
+    },
+    releaseInstanceAuthority: async () => {
+      releaseCalls++;
+      if (releaseCalls === 1) throw new Error('release failed once');
+      continuing.resolve();
+      await release.promise;
+    },
+    detachedTaskRunner: {
+      runDetached(taskName, callback) {
+        if (!taskName.startsWith('spot close continuation ')) return;
+        void callback().then(continued.resolve, continued.reject);
+      }
+    }
+  });
+  await manager.materializeInstance('test.mesh', 'test', spotId, 1n);
+  await assert.rejects(() => manager.close('test.mesh', spotId), /release failed once/);
+  await continuing.promise;
+  let materialized = false;
+  const intent = manager.materializeInstance('test.mesh', 'test', spotId, 2n).then(() => {
+    materialized = true;
+  });
+  await Promise.resolve();
+  assert.equal(materialized, false);
+  release.resolve();
+  await continued.promise;
+  await intent;
+  assert.equal(materialized, true);
+  assert.equal(releaseCalls, 2);
+});
+
+test('Committed Close resumes after local seal failure without another CAS', async () => {
+  const spotId = zlink.RoutingId.from('resume-close-seal');
+  const continued = createDeferred();
+  let authorityCalls = 0;
+  let closingCalls = 0;
+  class Spot { async onClosing() { closingCalls++; } }
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [],
+    instanceSpotFactories: new Map([['test.mesh', new Map([['test', Spot]])]]),
+    beginInstanceClosingAuthority: async (_meshName, _spotId, onCommitted) => {
+      authorityCalls++;
+      onCommitted();
+      return { release: async () => undefined };
+    },
+    detachedTaskRunner: {
+      runDetached(taskName, callback) {
+        if (!taskName.startsWith('spot close continuation ')) return;
+        void callback().then(continued.resolve, continued.reject);
+      }
+    }
+  });
+  await manager.materializeInstance('test.mesh', 'test', spotId, 1n);
+  const activation = manager.activations.activationForClose('test.mesh', spotId);
+  const originalSeal = activation.sealExecution.bind(activation);
+  let seals = 0;
+  activation.sealExecution = () => {
+    seals++;
+    if (seals === 1) throw new Error('seal failed');
+    return originalSeal();
+  };
+  await assert.rejects(() => manager.close('test.mesh', spotId), /seal failed/);
+  await continued.promise;
+  assert.equal(manager.isSpotClosing('test.mesh', spotId), false);
+  assert.deepEqual([authorityCalls, seals, closingCalls], [1, 2, 1]);
+});
+
+test('User Close resumes fenced authority release without repeating cleanup', async () => {
+  const spotId = 'resume-user-authority-release';
+  const continued = createDeferred();
+  let authorityCalls = 0;
+  let releaseCalls = 0;
+  let closingCalls = 0;
+  class Spot { async onClosing() { closingCalls++; } }
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [Spot],
+    detachedTaskRunner: {
+      runDetached(taskName, callback) {
+        if (!taskName.startsWith('spot close continuation ')) return;
+        void callback().then(continued.resolve, continued.reject);
+      }
+    }
+  });
+  await manager.getOrCreate('test.mesh', Spot, spotId);
+  const beginAuthority = async (onCommitted) => {
+    authorityCalls++;
+    onCommitted();
+    return {
+      release: async () => {
+        releaseCalls++;
+        if (releaseCalls === 1) throw new Error('authority release failed');
+      }
+    };
+  };
+  await assert.rejects(
+    () => manager.closeUserWithAuthority('test.mesh', spotId, beginAuthority),
+    /authority release failed/
+  );
+  await continued.promise;
+  assert.equal(manager.isSpotClosing('test.mesh', spotId), false);
+  assert.deepEqual([authorityCalls, releaseCalls, closingCalls], [1, 2, 1]);
+});
+
+test('Relocation seal prevents Close CAS and preserves admission', async () => {
+  const spotId = zlink.RoutingId.from('relocating-close-conflict');
+  let authorityCalls = 0;
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [],
+    instanceSpotFactories: new Map([['test.mesh', new Map([['test', class {}]])]]),
+    beginInstanceClosingAuthority: async () => { authorityCalls++; throw new Error('unexpected CAS'); }
+  });
+  await manager.materializeInstance('test.mesh', 'test', spotId, 1n);
+  const activation = manager.activations.activationForClose('test.mesh', spotId);
+  const relocationSeal = activation.sealExecution();
+  await assert.rejects(
+    () => manager.close('test.mesh', spotId),
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+  );
+  assert.equal(authorityCalls, 0);
+  assert.equal(manager.isSpotClosing('test.mesh', spotId), false);
+  assert.notEqual(await manager.find('test.mesh', spotId), null);
+  activation.abortExecutionSeal(relocationSeal);
+});
+
+test('Close invokes OnClosing after a yielded continuation finishes', async () => {
+  const spotId = zlink.RoutingId.from('yielded-close-boundary');
+  const entered = createDeferred();
+  const release = createDeferred();
+  let continued = false;
+  let closingCalls = 0;
+  class Spot { async onClosing() { assert.equal(continued, true); closingCalls++; } }
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [],
+    instanceSpotFactories: new Map([['test.mesh', new Map([['test', Spot]])]]),
+    beginInstanceClosingAuthority: async (_meshName, _spotId, onCommitted) => {
+      onCommitted();
+      return { release: async () => undefined };
+    }
+  });
+  await manager.materializeInstance('test.mesh', 'test', spotId, 1n);
+  const activation = manager.activations.activationForClose('test.mesh', spotId);
+  const turn = activation.serial.execute(async () => {
+    entered.resolve();
+    await activation.serial.yieldPromise(release.promise);
+    continued = true;
+  });
+  await entered.promise;
+  const close = manager.close('test.mesh', spotId);
+  await waitFor(() => manager.isSpotClosing('test.mesh', spotId));
+  assert.equal(closingCalls, 0);
+  release.resolve();
+  await turn;
+  assert.equal(await close, true);
+  assert.equal(closingCalls, 1);
+});
+
+test('OnClosing failure is diagnosed while Close finishes cleanup once', async () => {
+  const spotId = zlink.RoutingId.from('diagnosed-close-failure');
+  const diagnostics = [];
+  let closingCalls = 0;
+  let releaseCalls = 0;
+  class Spot { async onClosing() { closingCalls++; throw new Error('callback failed'); } }
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [],
+    instanceSpotFactories: new Map([['test.mesh', new Map([['test', Spot]])]]),
+    beginInstanceClosingAuthority: async (_meshName, _spotId, onCommitted) => {
+      onCommitted();
+      return { release: async () => undefined };
+    },
+    releaseInstanceAuthority: async () => { releaseCalls++; },
+    closeErrorSink: { reportRuntimeTaskException: (name, error) => diagnostics.push([name, error]) }
+  });
+  await manager.materializeInstance('test.mesh', 'test', spotId, 1n);
+  await assert.rejects(() => manager.close('test.mesh', spotId), /callback failed/);
+  assert.equal(await manager.close('test.mesh', spotId), false);
+  assert.deepEqual([closingCalls, releaseCalls, diagnostics.length], [1, 1, 1]);
+  assert.match(diagnostics[0][0], /onClosing/);
+  assert.match(diagnostics[0][1].message, /callback failed/);
+});
+
 test('ZLinkSpotManager blocks Instance rematerialization while durable close CAS is pending', async () => {
   const releaseClosing = createDeferred();
   let initialized = 0;
@@ -987,7 +1463,11 @@ test('ZLinkSpotManager blocks Instance rematerialization while durable close CAS
       'test.mesh',
       new Map([['explicit', CasPendingInstanceSpot]])
     ]]),
-    beginInstanceClosingAuthority: async () => await releaseClosing.promise
+    beginInstanceClosingAuthority: async (_meshName, _spotId, onCommitted) => {
+      const authority = await releaseClosing.promise;
+      onCommitted();
+      return authority;
+    }
   });
 
   await manager.materializeInstance('test.mesh', 'explicit', spotId, 1n);
@@ -998,7 +1478,7 @@ test('ZLinkSpotManager blocks Instance rematerialization while durable close CAS
   assert.equal(initialized, 1);
   assert.equal(manager.isInstanceClosing('test.mesh', spotId), true);
   releaseClosing.resolve({
-    restoreReady: async () => { throw new Error('unexpected restore'); }
+    release: async () => undefined
   });
   assert.equal(await close, true);
   await rematerialize;
@@ -1023,11 +1503,12 @@ test('ZLinkSpotManager evicts an idle Instance Spot with the contracted close re
       new Map([['idle', IdleInstanceSpot]])
     ]]),
     instanceSpotIdleTimeoutMs: new Map([['test.mesh', 5]]),
-    async beginInstanceIdleClosingAuthority(meshName, candidateSpotId) {
+    async beginInstanceIdleClosingAuthority(meshName, candidateSpotId, onCommitted) {
       assert.equal(meshName, 'test.mesh');
       assert.equal(String(candidateSpotId), String(spotId));
       order.push('durable-closing');
-      return true;
+      onCommitted();
+      return { release: async () => undefined };
     }
   });
 
@@ -1063,11 +1544,11 @@ test('ZLinkSpotManager cancels idle eviction when the durable Closing fence lose
   await manager.close('test.mesh', spotId);
 });
 
-test('ZLinkSpotManager restores Ready authority when idle eviction loses local occupancy', async () => {
+test('ZLinkSpotManager cancels idle eviction before CAS when local occupancy appears', async () => {
   let actorCount = 0;
-  let restoreCalls = 0;
   let authorityCalls = 0;
   let quiescenceCalls = 0;
+  const idleTimeouts = new Map([['test.mesh', 5]]);
   class OccupiedIdleInstanceSpot {}
   const spotId = zlink.RoutingId.from('idle-instance-occupied');
   const manager = new framework.DefaultZLinkSpotManager({
@@ -1076,22 +1557,26 @@ test('ZLinkSpotManager restores Ready authority when idle eviction loses local o
       'test.mesh',
       new Map([['idle', OccupiedIdleInstanceSpot]])
     ]]),
-    instanceSpotIdleTimeoutMs: new Map([['test.mesh', 5]]),
+    instanceSpotIdleTimeoutMs: idleTimeouts,
     actorCountProvider: () => actorCount,
     instanceSpotApplicationQuiescenceProvider: async () => {
       quiescenceCalls++;
-      actorCount = quiescenceCalls === 1 ? 1 : 0;
+      if (quiescenceCalls === 1) {
+        actorCount = 1;
+        idleTimeouts.set('test.mesh', 0);
+      }
     },
     async beginInstanceIdleClosingAuthority() {
       authorityCalls++;
-      return { restoreReady: async () => { restoreCalls++; } };
+      throw new Error('idle CAS must not start after occupancy appears');
     }
   });
 
   await manager.materializeInstance('test.mesh', 'idle', spotId, 1n);
-  await waitFor(() => restoreCalls === 1);
+  await waitFor(() => quiescenceCalls === 1, 1000);
+  await Promise.resolve();
 
-  assert.equal(authorityCalls, 1);
+  assert.equal(authorityCalls, 0);
   assert.equal(quiescenceCalls, 1);
   assert.notEqual(await manager.find('test.mesh', spotId), null);
   actorCount = 0;
@@ -1110,7 +1595,7 @@ test('ZLinkSpotManager rejects a public same-Spot operation instead of running i
       (error) => error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation
     );
   });
-  await manager.close('test.mesh', created.spotId);
+  await closeUserSpot(manager, 'test.mesh', created.spotId);
 });
 
 test('ZLinkSpotManager shares concurrent close and finishes cleanup after onClosing failure', async () => {
@@ -1143,9 +1628,9 @@ test('ZLinkSpotManager shares concurrent close and finishes cleanup after onClos
   });
   await manager.getOrCreate('test.mesh', FailingCloseSpot, 'failing-close-room');
 
-  const first = assert.rejects(() => manager.close('test.mesh', 'failing-close-room'), /close lifecycle failed/);
+  const first = assert.rejects(() => closeUserSpot(manager, 'test.mesh', 'failing-close-room'), /close lifecycle failed/);
   await entered.promise;
-  const second = assert.rejects(() => manager.close('test.mesh', 'failing-close-room'), /close lifecycle failed/);
+  const second = assert.rejects(() => closeUserSpot(manager, 'test.mesh', 'failing-close-room'), /close lifecycle failed/);
   assert.equal(await manager.find('test.mesh', 'failing-close-room'), null);
   release.resolve();
   await Promise.all([first, second]);
@@ -1153,7 +1638,7 @@ test('ZLinkSpotManager shares concurrent close and finishes cleanup after onClos
   assert.equal(closingCalls, 1);
   assert.equal(nativeDisposes, 1);
   assert.equal(await manager.find('test.mesh', 'failing-close-room'), null);
-  assert.equal(await manager.close('test.mesh', 'failing-close-room'), false);
+  assert.equal(await closeUserSpot(manager, 'test.mesh', 'failing-close-room'), false);
   assert.equal(await manager.find('test.mesh', 'failing-close-room'), null);
 });
 
@@ -1209,7 +1694,7 @@ test('ZLinkSpotManager claims location before activation and releases on close',
   assert.equal(constructedB, 0);
   assert.equal(activatedB, 0);
 
-  await managerA.close('play', 'room-1');
+  await closeUserSpot(managerA, 'play', 'room-1');
   assert.equal(await store.resolveSpot({ meshName: 'play', spotId: 'room-1' }), undefined);
 });
 
@@ -1241,10 +1726,10 @@ test('ZLinkSpotManager scopes identical Spot RIDs and Core Spot creation by Mesh
   assert.deepEqual(await manager.list('mesh.a'), [{ spotId: 'shared-room' }]);
   assert.deepEqual(await manager.list('mesh.b'), [{ spotId: 'shared-room' }]);
 
-  assert.equal(await manager.close('mesh.a', 'shared-room'), true);
+  assert.equal(await closeUserSpot(manager, 'mesh.a', 'shared-room'), true);
   assert.equal(await manager.find('mesh.a', 'shared-room'), null);
   assert.deepEqual(await manager.find('mesh.b', 'shared-room'), { spotId: 'shared-room' });
-  assert.equal(await manager.close('mesh.b', 'shared-room'), true);
+  assert.equal(await closeUserSpot(manager, 'mesh.b', 'shared-room'), true);
 });
 
 test('ZLinkSpotManager rolls location claim back when activation fails or rejects', async () => {
@@ -2057,7 +2542,7 @@ test('ZLinkSpotManager caller cancellation does not cancel shared getOrCreate ac
   const result = await waitingCaller;
   assert.equal(result.state, framework.ZLinkSpotCreateState.Existing);
   assert.deepEqual(await manager.find('test.mesh', 'shared-cancel-room'), { spotId: 'shared-cancel-room' });
-  await manager.close('test.mesh', 'shared-cancel-room');
+  await closeUserSpot(manager, 'test.mesh', 'shared-cancel-room');
 });
 
 test('ZLinkSpotManager reserves same-turn getOrCreate before activation yields', async () => {
@@ -2467,7 +2952,7 @@ test('spot manager rolls local membership back when joined callback fails', asyn
 
   assert.equal(committed, false);
   assert.deepEqual(events, ['admission', 'entry-left', 'commit', 'joined', 'rollback']);
-  await manager.close('test.mesh', 'stage-rollback');
+  await closeUserSpot(manager, 'test.mesh', 'stage-rollback');
   request.close();
 });
 
@@ -2719,7 +3204,7 @@ test('spot manager rejects one-phase native remote join without materializing a 
 
   assert.equal(materialized, false);
   assert.equal(replies[0], 1);
-  await manager.close('test.mesh', 'room-1');
+  await closeUserSpot(manager, 'test.mesh', 'room-1');
   nativeJoinMessage.close();
 });
 
@@ -2764,7 +3249,7 @@ test('Mesh actor join skips the target callback after the source operation is te
     });
   } finally {
     request.close();
-    await manager.close('test.mesh', 'room-1');
+    await closeUserSpot(manager, 'test.mesh', 'room-1');
   }
   assert.equal(callbackCalls, 0);
   assert.equal(replyCalls, 0);
@@ -2814,7 +3299,7 @@ test('Mesh actor join drops a callback result when the source ends before target
     });
   } finally {
     request.close();
-    await manager.close('test.mesh', 'room-1');
+    await closeUserSpot(manager, 'test.mesh', 'room-1');
   }
   assert.equal(callbackCalls, 1);
   assert.equal(replyCalls, 0);
@@ -3795,7 +4280,7 @@ test('spot timer dispatches handler on the spot serial executor with dotnet tick
 
   const tick = await tickReceived;
   await blockingTurn;
-  await manager.close('test.mesh', created.spotId);
+  await closeUserSpot(manager, 'test.mesh', created.spotId);
 
   assert.equal(tick.name, 'heartbeat');
   assert.equal(tick.deliveryIndex, 1n);
@@ -3807,7 +4292,7 @@ test('spot timer dispatches handler on the spot serial executor with dotnet tick
   assert.deepEqual(events, ['spot:start', 'spot:end', 'origin:Timer', 'tick:1:spot-1', 'closing:false']);
 });
 
-test('ZLinkSpotContext close closes current spot after timer callback returns', async () => {
+test('Instance Spot context close finishes after its timer callback returns', async () => {
   const events = [];
   const closed = createDeferred();
   class SelfCloseHandler {
@@ -3827,10 +4312,14 @@ test('ZLinkSpotContext close closes current spot after timer callback returns', 
     }
   }
 
-  const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [SelfClosingSpot] });
-  const created = await manager.create('test.mesh', SelfClosingSpot);
+  const spotId = zlink.RoutingId.from('self-closing-instance');
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [],
+    instanceSpotFactories: new Map([['test.mesh', new Map([['self-close', SelfClosingSpot]])]])
+  });
+  await manager.materializeInstance('test.mesh', 'self-close', spotId, 1n);
   await closed.promise;
-  await waitFor(async () => (await manager.find('test.mesh', created.spotId)) === null);
+  await waitFor(async () => (await manager.find('test.mesh', spotId)) === null);
   await waitFor(() => events.includes('closing'));
 
   assert.deepEqual(events, ['tick', 'after-close-request', 'closing']);
@@ -3851,12 +4340,12 @@ test('ZLinkSpotManager close rejects user spot while joined actors remain', asyn
   });
   const created = await manager.create('test.mesh', OccupiedSpot);
 
-  assert.equal(await manager.close('test.mesh', created.spotId), false);
+  assert.equal(await closeUserSpot(manager, 'test.mesh', created.spotId), false);
   assert.deepEqual(await manager.find('test.mesh', created.spotId), { spotId: created.spotId });
   assert.deepEqual(events, []);
 
   actorCount = 0;
-  assert.equal(await manager.close('test.mesh', created.spotId), true);
+  assert.equal(await closeUserSpot(manager, 'test.mesh', created.spotId), true);
   assert.equal(await manager.find('test.mesh', created.spotId), null);
   assert.deepEqual(events, ['closing']);
 });
@@ -3880,7 +4369,7 @@ test('ZLinkSpotManager close rechecks actor occupancy after earlier serial work'
   const actorJoin = manager.executeOnSpot(OccupiedSpot, created.spotId, () => {
     actorCount = 1;
   });
-  const closing = manager.close('test.mesh', created.spotId);
+  const closing = closeUserSpot(manager, 'test.mesh', created.spotId);
 
   releaseTurn.resolve();
   await blockingTurn;
@@ -3949,7 +4438,7 @@ test('Spot timer callbacks advance nominal ticks when platform delays truncate f
       assert.deepEqual(ticks.map(tick => tick.skippedTicks), [0n, 0n, 0n]);
       assert.ok(ticks.every(tick => tick.scheduledIndex >= tick.deliveryIndex));
     } finally {
-      await manager.close('test.mesh', created.spotId);
+      await closeUserSpot(manager, 'test.mesh', created.spotId);
     }
   }, delay => Math.max(1, Math.trunc(delay)));
 });
@@ -4592,7 +5081,11 @@ test('HostShutdown closes occupied User and Instance scopes with membership visi
   for (const activation of manager.activations.activeActivations()) {
     activation.commitActorJoin(actor);
     activations.set(String(activation.spotId), activation);
-    assert.equal(await manager.close('test.mesh', activation.spotId), false);
+    const close =
+      activation.domain.kind === 'user'
+        ? closeUserSpot(manager, 'test.mesh', activation.spotId)
+        : manager.close('test.mesh', activation.spotId);
+    assert.equal(await close, false);
   }
   await manager.drainForShutdown('test.mesh');
   assert.deepEqual(closed.sort(), [...activations.keys()].sort());
