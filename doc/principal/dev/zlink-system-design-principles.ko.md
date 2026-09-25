@@ -84,6 +84,26 @@ runtime 내부는 모른다.
   `Systems.Zlink`, npm `@zlink-systems/zlink`, Maven `systems.zlink:zlink`)에 의존한다.
   바인딩 내부 구현을 참조하는 framework 코드는 없다.
 
+## 제어 결정과 요청 수락의 소유
+
+스펙이 정한 결정은 그 결정을 소유한 한 곳에서 내린다. 같은 결정을 위한 독립적인 권위 상태를
+다른 곳에 두지 않는다. 조회 결과와 cache는 스펙이 허용한 용도로만 사용하며 현재 owner의
+수락 판정을 대신하지 않는다. Core·binding이 소유한 연결 선택·교체, reconnect, handover,
+completion, 재전송과 errno 분류를 framework가 다시 판정하지 않는다.
+
+요청자와 수신자는 요청 경계마다 정한다. 요청자는 자신이 소유한 논리 대상 선택과 경로,
+deadline, 새 시도 여부, 대기 취소와 terminal 결과 처리를 결정한다. 수신자는 현재 소유한
+대상의 상태로 해당 요청의 수락 여부를 판정하고 스펙의 닫힌 결과 목록으로 답한다. 요청자는
+수신자 상태의 조회 결과나 cache로 그 수락 여부를 미리 판정하지 않는다. 보낼 대상이 없다는
+결과는 요청자의 대상 선택에 속한다. 수락된 요청은 성공 또는 실패의 terminal 결과까지
+스펙이 정한 절차로 처리하며, 원 요청의 deadline을 임의로 연장하지 않는다.
+
+스펙이 같은 operation의 전달 절차로 정한 ingress hold, Message Follow, Session relay와
+보존된 reply route의 사용은 새 대상 선택이나 실패한 operation의 재시도가 아니다. 이 절차는
+원래의 operation identity, deadline, payload와 reply route를 해당 계약에 따라 보존한다.
+수신자가 실패 후 새 owner를 검색해 새 operation을 제출하거나 임의의 대체 대상으로 보내는
+동작은 허용하지 않는다.
+
 ## ZLink 기반 애플리케이션: 헥사고날
 
 ZLink를 사용해 만드는 애플리케이션(샘플, 게임 서버 등)은 헥사고날을 쓴다. 업무 규칙과 use
@@ -292,6 +312,7 @@ temporal decomposition, 얕은 모듈 등 19개 항목)와 얕은 모듈 스멜 
 | Z3 | **스펙 없는 공개 API 확산** | spec·가이드 문서 근거 없이, 한 언어에만 있던 공개 API·동작이 다른 언어로 그대로 전파됐는가? (`AGENTS.md` 위반 신호) |
 | Z4 | **경계 넘어 의미 드리프트** | timeout·cancellation·backpressure·ownership 같은 단어가 transport/codec/storage 경계를 넘을 때 다르게 해석되는가? |
 | Z5 | **Infrastructure 안의 도메인 규칙** | ZLink handler·Spot·Actor 콜백 코드(`Infrastructure/ZLink/`) 안에 업무 규칙이 직접 들어가 있는가? |
+| Z6 | **제어 결정의 분산** | 스펙에 정의되지 않은 대상 대체·새 operation 제출이 있는가, 또는 요청자가 수신자의 현재 수락을 cache로 대신 판정하는가? ([제어 결정과 요청 수락의 소유](#제어-결정과-요청-수락의-소유)) |
 
 ---
 
