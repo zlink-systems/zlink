@@ -144,7 +144,9 @@ The monitor queue is bounded and lossy. When the queue is full, it discards the 
 arriving record regardless of event type and retains records already in the queue. It does
 not aggregate events or preferentially retain specific event types, and it exposes no
 public counter or status field for the number of discarded records. A delayed monitor
-consumer does not block raw socket submission.
+consumer does not block raw socket submission. Monitor events therefore do not reconstruct
+a ROUTER's selected route per RID. The snapshot in
+[ROUTER §10.1](socket/07-router.en.md#101-observing-the-selected-route) decides the selected route.
 
 The thread rule follows the single-consumer rule in
 [§2](#2-monitor-lifecycle-and-consumption-modes): the caller serializes recv and close so

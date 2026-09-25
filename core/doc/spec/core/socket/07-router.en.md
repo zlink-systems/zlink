@@ -260,7 +260,7 @@ returns `ZLINK_RECV_NO_DATA` and `EAGAIN`.
 
 When `parts_capacity_` is smaller than the record's part count, the call does not consume the record,
 writes the needed count to `*part_count_out_`, and returns `ZLINK_RECV_BUFFER_TOO_SMALL` with
-`ENOBUFS`. Retrying with a large enough array returns the same record. Use the output combinations in
+`ENOBUFS`. Retrying with a large enough array returns the same record(except a record of a pipe that left the selection — [§10.1](#101-observing-the-selected-route)). Use the output combinations in
 [section 2](#2-data-and-request-receive) to determine whether a reply is required. The returned
 payload contains no internal request metadata.
 
@@ -333,6 +333,62 @@ submit succeeds. While an unread `ZLINK_COMPLETION_WRITABLE` record exists, `ZLI
 `ZLINK_POLLCOMPLETION` are level-held, and the precise per-RID signal is that record's token and
 `peer_rid`. Results of SEND and REQUEST operations retained by Core are received through
 `ZLINK_POLLCOMPLETION` and `zlink_completion_recv()`. Reply submit creates no completion.
+
+### 10.1 Observing the selected route
+
+More than one transport pipe can exist for the same RID — a reconnect in the same direction and a
+standby in the opposite direction ([routing ID duplicate policy](README.en.md#routing-id-duplicate-policy)).
+Core selects one application route per RID, and the application observes that choice only through
+the following snapshot.
+
+```c
+typedef struct zlink_router_route_t {
+  zlink_routing_id_t rid;
+  uint64_t route_generation; /* nonzero opaque value; compare for equality only */
+} zlink_router_route_t;
+
+ZLINK_EXPORT zlink_config_result_t zlink_router_routes_snapshot(
+  void *router_,
+  zlink_router_route_t *routes_out_,
+  size_t capacity_,
+  size_t *route_count_out_);
+
+ZLINK_EXPORT uint64_t zlink_router_recv_route_generation(void *router_);
+```
+
+- **The snapshot returns every selected route atomically.** It has one row per RID and contains only
+  selected routes whose admission has completed. An RID with no row has no selected route.
+- **`route_generation` takes a new value whenever the selection for the same RID changes.** It changes
+  when a new pipe takes over the existing one by handover, or when the selected pipe ends and a
+  standby is promoted. The caller does not interpret the size or order of the value.
+- **`ZLINK_POLLROUTE` becomes ready when a selected route changes** ([Polling §6](../05-polling.en.md#6-public-types)).
+  The readiness is level-triggered and is cleared when a snapshot that reflects every later change
+  succeeds. If a change races with the snapshot, the readiness remains. Monitor events are transport
+  observations, not the result of the route selection. `ZLINK_EVENT_CONNECTION_READY` on a standby
+  pipe does not mean that the selected route is ready.
+- **Records from a pipe that is not selected are not returned.** When the selection changes, Core
+  discards the pending DATA and REQUEST records of the replaced pipe and of standby pipes as whole
+  records at that moment, so `ZLINK_POLLIN` reflects only records of the selected route. A record held
+  back because the buffer was too small is not returned on retry if its pipe left the selection in the
+  meantime — the only exception to
+  [receiving the same record again](README.en.md#zlink_recv-and-zlink_router_recv). No reply token is
+  issued for a discarded REQUEST. Both Cores reach the same selection under the
+  [routing ID duplicate policy](README.en.md#routing-id-duplicate-policy), so when the requester's Core
+  moves that pair out of the selection it completes the request once with `ZLINK_REQUEST_NOT_CONNECTED`
+  as the [completion table](README.en.md#completion-pull-and-ownership) defines.
+- **`zlink_router_recv_route_generation()` returns the route generation of the record returned by the
+  last successful `zlink_router_recv()`.** It has the same lifetime as the returned RID (until the next
+  data recv on the same socket). It is `0` if the next data recv failed or there was no successful
+  receive. When the caller processes
+  the record, it compares this value with the current selected route generation of that RID to recognize
+  a record whose route changed after it was returned.
+- **Keep one route observer per socket.** The same observer calls the snapshot and handles
+  `ZLINK_POLLROUTE`. If two threads call the snapshot at the same time, the success of one can clear
+  the readiness.
+- If `capacity_` is smaller than the number of selected routes, the call writes the required number
+  to `*route_count_out_`, returns `ZLINK_CONFIG_BUFFER_TOO_SMALL`, and does not clear the readiness. On
+  success it writes the number of rows to `*route_count_out_`. A handle that is not a ROUTER returns
+  `ZLINK_CONFIG_NOT_SUPPORTED`.
 
 ## 11. Receive flow state
 
@@ -419,7 +475,7 @@ and status snapshots. Each item maps to one test.
   which releases them with `zlink_multipart_close()`; on failure, ownership does not move.
 - If `parts_capacity_` is too small, the call returns the needed count and
   `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS` without consuming the record. A retry with a large
-  enough array returns the same record.
+  enough array returns the same record(except a record of a pipe that left the selection — [§10.1](#101-observing-the-selected-route)).
 - A reply or error reply received through `zlink_router_recv()` returns no payload and terminates the connection with `EPROTO`.
 - Raw-sending a DATA or REQUEST payload returned by `zlink_router_recv()` does not restore request-reply semantics.
 - Passing a ROUTER to the common `zlink_recv()` surface is rejected as unsupported.
@@ -454,7 +510,7 @@ and status snapshots. Each item maps to one test.
 - A DONTWAIT call makes one admission attempt. Backpressure or a route that is not ready (transport pair not ready, weight `0`) returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero wait token for that RID, and the caller resubmits the same request after the WRITABLE record with the same token, context, and `peer_rid`. A RID with no mandatory route returns `ZLINK_SUBMIT_NOT_CONNECTED` with `EHOSTUNREACH`, ID `0`, and no token.
 - If `timeout_ms_ == 0`, the request uses the `ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS` default.
 - A valid error reply preserves a non-OK `zlink_request_result_t` mapped from errno and the payload after the errno part in the completion; a malformed errno part completes with `ZLINK_REQUEST_PROTOCOL_ERROR` and no payload.
-- The request timeout starts at local admission and does not start while a wait token is outstanding; when the submit-time pair terminates after admission, one `ZLINK_REQUEST_NOT_CONNECTED` completion arrives at once without waiting for the timeout.
+- The request timeout starts at local admission and does not start while a wait token is outstanding; when the submit-time pair terminates or leaves the selection after admission, one `ZLINK_REQUEST_NOT_CONNECTED` completion arrives at once without waiting for the timeout.
 - Shared completion-slot exhaustion immediately returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`, ID `0`, and no completion, regardless of flags.
 
 **Reply**

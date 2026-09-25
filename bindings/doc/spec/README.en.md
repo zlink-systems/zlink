@@ -1365,6 +1365,10 @@ is the baseline.
   internally, and exposes only aggregate routed recv and the
   [common request completion surface](async-coroutine-policy.en.md#6-per-language-terminal-interfaces). It does not provide a
   direct receive callback.
+- A binding projects the `ROUTER` selected-route snapshot (`zlink_router_routes_snapshot()`) and
+  `ZLINK_POLLROUTE` with the meaning defined in
+  [Core ROUTER §10.1](../../../core/doc/spec/core/socket/07-router.en.md#101-observing-the-selected-route).
+  A route generation is a nonzero opaque equality token; its sign or size does not imply order.
 - Core's raw `STREAM` is an exceptional type that picks one of three
   modes: `recv`, the raw callback (`zlink_recv_handler()`), or the packet
   callback (`zlink_stream_packet_handler()`). A high-level binding's

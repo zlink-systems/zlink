@@ -308,8 +308,8 @@ connect한다. Local과 remote의 object role이 모두 `Client`이고 양쪽 �
 membership이 없을 때만 connection intent를 만들지 않는다. Channel Client membership만으로는 연결하지
 않는다. 어느 한쪽에라도 Channel Server membership이 있으면 weight가 `0`이어도 connection이 필요하다.
 Manual topology는 application endpoint 구성에 따라 한쪽 또는 양쪽에서 connect할 수 있다.
-양쪽 연결이나 automatic discovery 경합·오래된 snapshot으로 중복 후보가 생기면 handshake와 admission이
-같은 RID와 lifecycle generation을 확인해 하나만 ready 상태로 유지한다.
+양쪽 연결이나 automatic discovery 경합·오래된 snapshot으로 같은 RID의 pipe가 둘 생길 때의 처리는
+[channel topology](../../../02-channel-transport/01-channel-topology.ko.md)의 공통 규칙을 따른다.
 
 Manual endpoint의 remote object role과 RouteMesh Server membership을 connect 전에 알 수 없으면
 handshake에서 확인한다. 양쪽이 Object Client이고 양쪽 모두 RouteMesh Channel Server membership이

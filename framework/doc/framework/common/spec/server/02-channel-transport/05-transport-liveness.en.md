@@ -122,14 +122,20 @@ applies.
 5. Only the first ACK matching the ID the current connection is waiting for resets the
    deadline to 15 seconds.
 
-One connection keeps at most one ID still awaiting a response.
+One connection keeps at most one ID still awaiting a response. When Core's selected route changes,
+the waiting ID is discarded and a probe on the new route uses an ID that has not been used before. An
+ACK is used as evidence only when the route generation of its record
+([Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.en.md#101-observing-the-selected-route)) equals
+the selected route generation that the framework last observed for that RID. If it differs, the
+framework queries the snapshot again and discards the ACK if it also differs from the newly observed
+generation.
 
 | Input received | Effect on the current connection |
 |---|---|
 | The first ACK matching the awaited ID | Removes that ID and resets the deadline to 15 seconds. |
 | A duplicate receipt of the same ACK | Doesn't change state. |
 | An ACK for a previous probe ID | Doesn't change state. |
-| An ACK from a different physical connection | Not used as evidence for the current connection. |
+| An ACK for a previous route's probe, processed after the framework observed the selected-route change | The waiting ID was discarded at that observation, so the state does not change. |
 | A regular application message | Only updates the last-receive time for diagnostics — doesn't extend the deadline. |
 
 If a valid ACK isn't received within 15 seconds, that connection is switched to not-ready and
@@ -266,13 +272,15 @@ A connection is immediately removed from the ready target list when any of the f
 confirmed.
 
 - The peer sent an orderly close.
-- A transport error or disconnect event was received.
+- A ClientServer or Fanout connection received a transport error or disconnect event. A RouteMesh
+  disconnect event is a trigger to query the snapshot again, and the decision uses the selected-route
+  condition below.
 - The RouteMesh/ClientServer peer deadline was exceeded.
 - A fanout publisher sent no record for 15 seconds.
 - Identity, [lifecycle generation](../00-foundation/02-glossary.en.md#lifecycle-generation) (which
   distinguishes different process runs using the same RID), or security verification failed.
-- A new connection with the same lifecycle generation as the current discovery descriptor was
-  admitted, replacing the existing physical connection.
+- Core's selected route disappeared or changed to a new route generation. The new route goes
+  through handshake admission again.
 - The host became `Draining`, `Stopped`, or `Error` and no longer allows new target
   selection.
 
@@ -285,12 +293,15 @@ been observed. A successful call alone is not proof that the physical close has 
 new connection for the same endpoint is created only after the close has been observed. The
 `connection_id` of a monitor event is used only for diagnostics and correlation, never as a
 fence identifying a physical pair, as a send/reply target, or as a reconnect condition. Core
-owns the selection and replacement of physical pipes; the framework determines the current
-connection from the descriptor's RID, security identity, and lifecycle generation together
-with the observation order of monitor events.
+owns the selection and replacement of physical pipes. The framework observes the selected route
+per RID through the snapshot and `ZLINK_POLLROUTE` of [Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.en.md#101-observing-the-selected-route), and decides the
+logical admission of that route from the descriptor's RID, security identity, and lifecycle
+generation. It does not reconstruct the selected route from the order of monitor events.
 
-Orderly close and transport disconnect don't wait 15 seconds. A late-arriving ACK or frame
-from a previous physical connection can't change the new connection's state.
+Orderly close and transport disconnect don't wait 15 seconds. Core does not return records
+of a previous physical connection after the selection changes. Once the framework has observed the
+selection change, a record of the previous generation is no longer evidence, so it can't change the
+new connection's state. A handshake is admitted only after the same comparison.
 
 One peer's failure doesn't turn the whole host `Error`. Other ready peers and the local
 [Owner](../00-foundation/02-glossary.en.md#owner) — the MeshNode that actually runs the Actor or

@@ -1156,6 +1156,10 @@ streamSocket.bindActor(sessionRid, actorRef)
   바인딩 runtime은 내부에서 `zlink_router_recv()` 를 사용하고, public
   표면에는 aggregate routed recv와 [공통 request 완료 표면](async-coroutine-policy.ko.md#6-언어별-terminal-interface)만 노출한다.
   direct receive callback 은 제공하지 않는다.
+- `ROUTER` 의 선택 route snapshot(`zlink_router_routes_snapshot()`)과 `ZLINK_POLLROUTE` 는
+  [Core ROUTER §10.1](../../../core/doc/spec/core/socket/07-router.ko.md#101-선택-route-관찰)이 정한
+  의미대로 투영한다. Route generation 은 0이 아닌 opaque equality token 이며 부호나 크기로 순서를
+  판단하지 않는다.
 - core raw `STREAM` 은 `recv`, raw callback (`zlink_recv_handler()`),
   packet callback (`zlink_stream_packet_handler()`) 의 세 모드 중 하나를
   선택하는 예외 타입이다. 고수준 바인딩의 canonical public 계약은
