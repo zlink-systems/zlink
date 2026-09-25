@@ -198,29 +198,18 @@ void write_internal_admitted_pipe_part (zlink::pipe_t *pipe_,
     TEST_ASSERT_SUCCESS_ERRNO (msg.close ());
 }
 
-struct route_snapshot_free_probe_t
+struct discarded_free_probe_t
 {
-    explicit route_snapshot_free_probe_t (void *router_) :
-        router (router_), calls (0), snapshot_result (ZLINK_CONFIG_INTERNAL_ERROR),
-        route_count (0)
+    discarded_free_probe_t () : calls (0)
     {
     }
-    void *router;
     std::atomic<int> calls;
-    std::atomic<int> snapshot_result;
-    std::atomic<size_t> route_count;
 };
 
-void snapshot_route_on_free (void *data_, void *hint_)
+void count_discarded_free (void *data_, void *hint_)
 {
-    route_snapshot_free_probe_t *const probe =
-      static_cast<route_snapshot_free_probe_t *> (hint_);
-    zlink_router_route_t routes[4];
-    size_t count = 0;
-    const int result = zlink_router_routes_snapshot (
-      probe->router, routes, 4, &count);
-    probe->route_count.store (count, std::memory_order_release);
-    probe->snapshot_result.store (result, std::memory_order_release);
+    discarded_free_probe_t *const probe =
+      static_cast<discarded_free_probe_t *> (hint_);
     probe->calls.fetch_add (1, std::memory_order_release);
     std::free (data_);
 }
@@ -854,14 +843,15 @@ void test_router_selection_change_discards_every_standby_record ()
     const bool third_selected_before =
       router->is_selected_pipe (pairs[2][0]);
 
-    route_snapshot_free_probe_t free_probe (router_handle);
+    discarded_free_probe_t data_free_probe;
+    discarded_free_probe_t credential_free_probe;
     const char payload[] = "standby-data";
     void *const data = std::malloc (sizeof payload - 1);
     TEST_ASSERT_NOT_NULL (data);
     memcpy (data, payload, sizeof payload - 1);
     zlink::msg_t zero_copy;
     TEST_ASSERT_SUCCESS_ERRNO (zero_copy.init_data (
-      data, sizeof payload - 1, &snapshot_route_on_free, &free_probe));
+      data, sizeof payload - 1, &count_discarded_free, &data_free_probe));
     TEST_ASSERT_TRUE (pairs[0][1]->write (&zero_copy));
     pairs[0][1]->flush ();
     // pipe_t::write transfers the queued handle; reset this local alias.
@@ -871,7 +861,7 @@ void test_router_selection_change_discards_every_standby_record ()
     TEST_ASSERT_NOT_NULL (credential_data);
     zlink::msg_t credential;
     TEST_ASSERT_SUCCESS_ERRNO (credential.init_data (
-      credential_data, 1, &snapshot_route_on_free, &free_probe));
+      credential_data, 1, &count_discarded_free, &credential_free_probe));
     credential.set_flags (zlink::msg_t::credential);
     TEST_ASSERT_TRUE (pairs[0][1]->write (&credential));
     pairs[0][1]->flush ();
@@ -887,11 +877,10 @@ void test_router_selection_change_discards_every_standby_record ()
     const bool first_standby_queued = pairs[0][0]->check_read ();
     const bool second_standby_queued = pairs[1][0]->check_read ();
     const bool newest_selected = router->is_selected_pipe (pairs[3][0]);
-    const int free_calls = free_probe.calls.load (std::memory_order_acquire);
-    const int snapshot_result =
-      free_probe.snapshot_result.load (std::memory_order_acquire);
-    const size_t snapshot_count =
-      free_probe.route_count.load (std::memory_order_acquire);
+    const int data_free_calls =
+      data_free_probe.calls.load (std::memory_order_acquire);
+    const int credential_free_calls =
+      credential_free_probe.calls.load (std::memory_order_acquire);
 
     router_pin = socket_handle_t ();
     close_zero_linger (router_handle);
@@ -907,9 +896,12 @@ void test_router_selection_change_discards_every_standby_record ()
     TEST_ASSERT_TRUE (second_queued_before);
     TEST_ASSERT_FALSE (first_standby_queued);
     TEST_ASSERT_FALSE (second_standby_queued);
-    TEST_ASSERT_EQUAL_INT (2, free_calls);
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, snapshot_result);
-    TEST_ASSERT_EQUAL_UINT (1, snapshot_count);
+    TEST_ASSERT_EQUAL_INT (1, data_free_calls);
+    TEST_ASSERT_EQUAL_INT (1, credential_free_calls);
+    TEST_ASSERT_EQUAL_INT (
+      1, data_free_probe.calls.load (std::memory_order_acquire));
+    TEST_ASSERT_EQUAL_INT (
+      1, credential_free_probe.calls.load (std::memory_order_acquire));
 }
 
 int main (int argc, char **argv)
