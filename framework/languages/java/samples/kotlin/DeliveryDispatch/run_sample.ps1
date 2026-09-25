@@ -77,7 +77,7 @@ function Wait-LogCount {
 
 function Write-Config {
     param([string]$Path, [string]$CourierNode)
-    Set-ZlinkSampleUtf8File -Path $Path -Value @(
+    Set-ZlinkSampleProperties -Path $Path -Value @(
         "trackingChannelEndpoint=tcp://127.0.0.1:$TrackingChannelPort",
         "trackingSpotEndpoint=tcp://127.0.0.1:$TrackingSpotPort",
         "customerStreamEndpoint=tcp://127.0.0.1:$CustomerStreamPort",
