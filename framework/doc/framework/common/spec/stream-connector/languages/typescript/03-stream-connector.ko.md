@@ -341,7 +341,7 @@ interface ZlinkStreamReconnectOptions {
   readonly initialDelayMs?: number;
   readonly maxDelayMs?: number;
   readonly backoffFactor?: number;
-  readonly maxAttempts?: number | null;   // null이면 무제한. 그 밖에는 양수여야 한다(공통 스펙 §6)
+  readonly maxAttempts?: number | null;   // null이면 무제한
 }
 
 interface ZlinkStreamPacketNameResolver { resolve(payloadType: Function): string; }
@@ -382,11 +382,8 @@ interface RequiredZlinkStreamConnectorOptions {
 ```
 
 connector 생성은 `zlinkStreamConnectorFactory.create(options)`를 사용한다.
-**`create(options)`가 option 전 항목을 검증하며**, 검증에 실패하면 connector를 만들지 않고
-`ZlinkStreamException`을 던진다([공통 스펙 §6.3](../../32-stream-connector.ko.md#63-옵션-검증)).
-값 하나가 허용 범위를 벗어나면 `ValidationFailed`, 항목 사이가 맞지 않으면 `ConfigurationError`를
-담는다. endpoint scheme과 `transport`의 충돌, 브라우저가 지원하지 않는 `tcp`·`tls`,
-`compression: none`에 `compressionCodec`을 함께 넣는 것이 뒤쪽에 해당한다.
+`zlinkStreamConnectorFactory.create(options)`는 [공통 스펙 §6.3](../../32-stream-connector.ko.md#63-옵션-검증)의
+option 검증에 실패하면 `ZlinkStreamException`을 던진다.
 
 - **취소는 optional `AbortSignal`로 전달한다.** 다른 언어의 cancellation token 모양을 복제하지
   않는다([비동기 실행과 coroutine 정책](../../../server/01-execution/README.ko.md)).
@@ -419,7 +416,7 @@ waitForSequence<T>(nameOrType: string | Function): ZlinkStreamSequenceCall<T>; /
   제공한다.** 생성자를 주면 options의 `nameResolver`가 이름을 결정한다. TypeScript의 type은
   런타임에 남지 않으므로 type 기반 길의 인자는 생성자 값이다.
 - `await expectNone<T>(name).within(ms).run(signal)` — window 안에 도착하면 **`ValidationFailed`를 담은 `ZlinkStreamException`을 throw**. `waitFor`의 대칭.
-- `await waitForSequence<T>(name).expect(p1).expect(p2)….timeout(ms).run(signal)` — 같은 이름 push가 **술어 순서대로** 도착하는지 확인하고 `ZlinkStreamMessage<T>` 배열을 돌려준다. "N개 도착"이 아니라 **"순서대로 도착"** 을 검증한다.
+- `await waitForSequence<T>(name).expect(p1).expect(p2)….timeout(ms).run(signal)` — `ZlinkStreamMessage<T>` 배열을 반환하며, 순서 관측과 실패는 [공통 스펙 §10.1](../../32-stream-connector.ko.md#101-테스트-대기-표면)이 정한다.
 - **술어와 반환은 `ZlinkStreamMessage<T>`를 다룬다.** `where(...)`와 `expect(...)`가 받는 인자도 payload가 아니라 message다.
 - **status 전용 표면을 두지 않는다.** status는 payload 필드이므로
   `waitFor<T>(name).where(message => message.payload.status === …)`로 표현한다.
@@ -431,8 +428,8 @@ waitForSequence<T>(nameOrType: string | Function): ZlinkStreamSequenceCall<T>; /
 수신 큐의 계약은 [공통 스펙 §10](../../32-stream-connector.ko.md#10-수신-메시지-큐)이 소유한다.
 TypeScript 표면에는 수신 큐 관련 option이나 오류 코드가 없다.
 
-**`receivedCount(name)`은 packet 이름별 수신 개수를 돌려준다**(§4). 소비해도 줄지 않고
-dispatch mode와 무관하며, 연결이 성립할 때 0에서 다시 시작한다.
+`receivedCount(name)`은 packet 이름별 수신 개수를 돌려준다. 집계와 초기화는
+[공통 스펙 §10](../../32-stream-connector.ko.md#10-수신-메시지-큐)이 정한다.
 
 ## 6. 세션 종료 사유 (close reason)
 

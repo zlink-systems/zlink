@@ -196,17 +196,15 @@ User·Instance Spot factory의 `preserveStateWith` 등록은 factory type에 맞
 `byte[]`로 capture·restore하며 relocation adapter 전용 size 상한을 두지 않는다. Framework는
 payload를 `relocationPayloadChunkLimitBytes` 이하의 chunk로 나눠 source–target ordered mesh 연결로
 직접 전송한다. Source memory가 복원 원본이며 handoff payload를 Relocation Store에 저장하지 않는다.
-`TState`, `stateContractId`, state class와 `ZLinkMessage`를 사용하지 않는다. Framework는 capture
-결과를 즉시 복사한다. Capture 배열은 adapter가 계속 소유하며 completion 뒤 변경해도 보존한 payload가
-바뀌지 않는다. Restore에는 호출마다 fresh defensive copy를 전달하고 adapter는 stage가 끝난 뒤 배열을 보관하지
-않는다. 길이가 0인 배열도 유효한 application state이며 Restore를 생략하거나 `recreateOnRelocation`으로 해석하지 않는다.
+`TState`, `stateContractId`, state class와 `ZLinkMessage`를 사용하지 않는다. 배열의 소유권과 수명은 [공통 membership §6](../../../03-spot-actor/05-spot-actor-membership.ko.md#6-모든-이동-경로가-공유하는-relocation-policy)이 정한다. 길이가 0인 배열도 유효한 application state이며 Restore를 생략하거나 `recreateOnRelocation`으로 해석하지 않는다.
 Whole User Spot relocation에서는 Spot 자체에 Spot adapter를 사용하고 각 Actor participant에는 해당 Actor type의
 `ZLinkActorRelocationAdapter`를 사용한다.
 Instance Spot relocation에는 Spot adapter를 사용한다. Same-node operation과 `disableRelocation()`을 선택한 factory에서는 adapter를
 호출하지 않고 `recreateOnRelocation()`을 선택한 factory에는 application state adapter가 없다.
 
 Capture exception은 authority publication 전에 relocation을 abort하고 source admission을 유지한다. Restore
-exception은 target admission을 sealed 상태로 유지한 채 같은 immutable payload를 retry하거나 target을 교체한다.
+exception 뒤의 같은 target 재시도와 target 교체 금지는
+[host relocation 장애 §5](../../../05-location-relocation/06-failure-failover-policy.ko.md#5-host-relocation-장애)가 정한다.
 Factory는 target attempt마다 fresh Spot instance를 만들며 source나 이전 attempt instance를 재사용하지 않는다.
 같은 attempt에서는 Restore가 반복될 수 있다. Exception을 빈 payload나 성공으로 바꾸지 않는다. Capture의 null
 stage와 null `byte[]`, Restore의 null stage는 contract 위반이다. Host relocation에서 deadline이 먼저 확정되지 않은

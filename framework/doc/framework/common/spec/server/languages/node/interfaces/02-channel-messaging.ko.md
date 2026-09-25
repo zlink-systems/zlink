@@ -337,15 +337,8 @@ local·remote Actor route가 바뀌어도 framework socket send timeout 하나�
 허용한다. `undefined`는 기본값을 선택하며 `0`, 음수, 정수가 아닌 값과 상한 초과는
 `ZLinkConfigurationError`로 거부한다.
 
-[Logical Multicast](../../../00-foundation/02-glossary.ko.md#logical-multicast)의
-`ZLinkPublishCall.submit(...)`은 I/O executor에 direct handoff한다. 즉시 worker slot을 얻지 못하면
-send timeout까지 capacity를 기다린다. Slot을 얻은 뒤 publish attempt가 시작되기 전에는 abort와
-[shutdown](../../../00-foundation/02-glossary.ko.md#shutdown)이 operation 시작을 막을 수 있다. Publish attempt를 시작한
-시점이 operation commit barrier이며, 그 뒤의 abort는 이미 확정한
-[snapshot](../../../00-foundation/02-glossary.ko.md#publish-target-snapshot) operation을 중단하지 않는다. Transaction이 시작된 뒤
-개별 target 실패는 이미 수락한 target을 rollback하거나 전체 publish를 자동 재시도하지 않는다. Remote
-transport와 local Spot queue의 target별 수락·실패 결과는 반환하거나 monitoring에 집계하지 않는다.
-Target snapshot이 0개여도 정상 완료한다.
+Logical Multicast의 worker 수락, commit, terminal과 재시도 규칙은 [Interaction model §5](../../../00-foundation/04-interaction-model.ko.md#5-spot-logical-multicast)와 [Cancellation과 shutdown §4](../../../01-execution/03-cancellation-and-shutdown.ko.md#4-logical-multicast-cancellation)가 정한다.
+Node.js는 `ZLinkPublishCall.submit(...)`으로 호출한다.
 
 ## 6. Serializer와 STREAM session
 

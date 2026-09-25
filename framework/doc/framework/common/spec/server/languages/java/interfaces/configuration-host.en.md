@@ -294,44 +294,13 @@ serverOptions.addRouteMesh("orders")
  CheckoutReply.class); // registers this node as a checkout request processing candidate.
 ```
 
-An automatic [RouteMesh](../../../00-foundation/02-glossary.en.md#routemesh)
-compares RID in canonical byte order, and only the MeshNode with the
-smaller RID connects to the counterpart endpoint. A manual topology can
-connect from one or both sides depending on application endpoint
-configuration. If bidirectional connection or automatic discovery contention/a stale snapshot produces two pipes
-for the same RID, the common rule in
-[channel topology](../../../02-channel-transport/01-channel-topology.en.md) applies.
+[Channel topology §8](../../../02-channel-transport/01-channel-topology.en.md) defines RouteMesh connection direction and duplicate-pipe handling.
 
-A peer connection isn't needed only when both MeshNodes' object role is
-`Client` and neither has RouteMesh Channel Server membership. The same
-applies when only Channel Client membership is registered. If either
-side has Channel Server membership, a connection is made and liveness is
-kept even if weight is `0`. ClientServer and classic fanout
-registration are separate physical topologies, so they aren't included
-in this judgment.
+[Channel topology §8](../../../02-channel-transport/01-channel-topology.en.md) defines Object Client peer necessity.
 
-ClientServer can use manual endpoint and location store
-[automatic discovery](../../../00-foundation/02-glossary.en.md#automatic-discovery)
-together. If the two sources point to the same Server RID and
-[lifecycle generation](../../../00-foundation/02-glossary.en.md#lifecycle-generation),
-the connection intent and ready target are merged into one. In both
-automatic and manual, only Client connects to server — Server doesn't
-look for a client endpoint or start an outbound connect. Client and
-Server can each be registered once on the same ChannelName, sharing one
-ClientServer topology through separate registrations under the
-`(ChannelName, Role)` key. Registering the same role twice fails
-startup, and the RouteMesh [ChannelName](../../../00-foundation/02-glossary.en.md#channelname)
-conflict rule is kept. A local Server, after listener and service
-admission, is also selected under the same readiness/[weight](../../../00-foundation/02-glossary.en.md#weight)/
-drain conditions as a remote Server, without local priority or calling a
-direct handler.
+[ClientServer channel](../../../02-channel-transport/03-client-server-channel.en.md) defines registration, deduplication, direction, and local Server selection.
 
-In fanout, the Publisher only publishes a descriptor and doesn't start
-an outbound connect. Only the subscriber connects to the publisher
-endpoint, and an automatic subscriber creates one connection intent per
-Publisher RID and lifecycle generation. Configuring both an automatic
-subscriber and a manual subscriber endpoint on one ChannelName fails
-startup.
+[Channel topology](../../../02-channel-transport/01-channel-topology.en.md) defines fanout discovery and connection direction.
 
 Omitting object role means `None`. `client()` only provides global
 object operations and doesn't become a placement target, and `server()`

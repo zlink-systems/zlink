@@ -354,69 +354,19 @@ handler instance를 소유하고 생성자 dependency만 해당 activation scope
 cross-node Join에서는 source handler와 scope를 정리하고 target activation에서 다시
 만든다. 복구해야 하는 상태는 handler field가 아니라 `TSpot` 또는 `TActor`가 소유한다.
 
-`ZLinkSpotCloseReason`의 numeric 값은 `ExplicitClose=0`, `HostShutdown=1`, `RelocationOut=2`,
-`IdleEvicted=3`이다. `IdleEvicted`는 Instance Spot 전용 이유이며 Entry Spot과 User Spot에는 전달하지
-않는다. 유휴 판정 조건과 정리 뒤 재활성화 규칙은
-[Spot 모델 §6.2](../../../03-spot-actor/01-spot-model.ko.md#62-사용하지-않고-남아-있는-instance-spot-정리)가 소유한다.
-`Deadline`은 closing operation의 absolute deadline이다. Framework는 callback invocation 전에는
-`cleanupCancellationToken`을 취소하지 않고 [deadline](../../../00-foundation/02-glossary.ko.md#deadline)이 끝날 때 취소한다. 이미 취소된 handler token을 재사용하지
-않는다. Entry·User·Instance Spot만 callback을 받고 Actor별 closing callback은 제공하지 않는다. Host Shutdown은
-Actor membership과 local instance가 유효한 상태에서 callback을 실행하고 completion 뒤 scope와 [authority](../../../00-foundation/02-glossary.ko.md#authority)를
-정리한다. Standalone Actor relocation은 Entry Spot을 닫지 않으므로 이 callback을 호출하지 않는다.
+`ZLinkSpotCloseReason`의 값은 `ExplicitClose=0`, `HostShutdown=1`, `RelocationOut=2`, `IdleEvicted=3`이다. Close와 cleanup은 [Spot 모델](../../../03-spot-actor/01-spot-model.ko.md)이 정한다. Framework는 `OnClosingAsync`를 호출하기 전에 `cleanupCancellationToken`을 취소하지 않고, closing deadline이 끝나면 취소하며, 이미 취소된 handler token을 다시 쓰지 않는다.
 
-`IZLinkSpotRelocationAdapter<TSpot>`은 `PreserveStateWith<TAdapter>()`로 등록한다. Cross-node User·[Instance Spot](../../../00-foundation/02-glossary.ko.md#entry-spot-user-spot과-instance-spot) instance를
-materialize할 때만 호출한다. Whole User Spot relocation에서는 [Spot](../../../00-foundation/02-glossary.ko.md#spot) adapter가 Spot application payload를 처리하고,
-각 member Actor의 payload는 Actor factory에 등록한 Actor adapter가 각각 처리한다. `RecreateOnRelocation()`은 adapter를 호출하지
-않고 application state 없이 instance를 다시 만들며 `DisableRelocation()`은 capture 전에 cross-node 이동을 거부한다.
+`IZLinkSpotRelocationAdapter<TSpot>`은 `PreserveStateWith<TAdapter>()`로 등록한다. Adapter 호출 조건은 [Spot 모델](../../../03-spot-actor/01-spot-model.ko.md)이 정한다.
 
-Spot adapter의 capture와 restore는 stable relocation attempt에서 at-least-once 호출될 수 있으므로 retry-safe해야
-한다. `CaptureAsync(...)` 결과에는 relocation adapter 전용 size 상한이 없으며, Framework는 payload를
-`RelocationPayloadChunkLimit` 이하의 chunk로 나눠 source–target ordered mesh 연결로 직접 전송한다.
-Source memory가 복원 원본이며 handoff payload를 Relocation Store에 저장하지 않는다. 빈 배열은
-유효하고 null은 contract 위반이다. Framework는 완료된 배열을 즉시 복사하고 이후 application
-mutation을 관찰하지 않는다. `RestoreAsync(...)`의
-`ReadOnlyMemory<byte>`는 callback 완료까지만 유효하므로 보관하려면 application이 복사해야 한다. Capture
-exception은 durable abort와 source normalization 뒤 admission을 복원한다. Restore exception이 발생한 instance는
-폐기하고, 새 attempt는 [factory](../../../00-foundation/02-glossary.ko.md#factory)가 만든 새 instance에 같은 immutable payload를 적용한다. Framework가 operation
-deadline 때문에 callback을 취소하면 `DeadlineExceeded`로 분류한다. Framework는 callback의 external side effect를
-exactly-once로 실행한다고 보장하지 않는다.
+.NET Spot adapter data는 `byte[]`와 `ReadOnlyMemory<byte>`를 사용한다. 재시도, payload 전송과 실패 처리는 [Location runtime](../../../05-location-relocation/01-location-runtime.ko.md)이 정한다.
 
-Maintenance가 Actor를 다른 node의 Entry Spot에 복원하면 Actor adapter restore를 먼저 완료하고 Location authority와
-Entry [membership](../../../00-foundation/02-glossary.ko.md#membership)을 commit한다. 이 작업은
-application membership 변경이 아니므로 target `OnJoinedActorAsync(...)`, source
-`OnLeaveActorAsync(...)`와 relocation 전용 callback을 호출하지 않는다. Accepted
-journal·queue·Actor timer를 복원하고 Location authority·membership을 commit한 뒤 Actor
-message 처리를 시작한다. Bound Session의 relocation route 갱신은 [Session–Actor binding §8.2](../../../04-session/02-session-actor-binding.ko.md#82-control-message-424344)가 소유한다.
-User Spot으로 향하는 일반 application join은 target의 `OnActorJoinAsync(...)`,
-membership commit, target의 `OnJoinedActorAsync(...)` 순서를 유지한다. Entry Spot
-복귀는 admission callback 없이 membership을 commit한 뒤 target Entry Spot의
-`OnJoinedActorAsync(...)`를 호출한다.
-`SpotWide` User Spot aggregate move와 `PerActor` User Spot의 Actor relocation도
-application membership callback을 호출하지 않는다.
+Entry Spot maintenance와 Join의 callback·membership 순서는 [Spot–Actor membership](../../../03-spot-actor/05-spot-actor-membership.ko.md)이 정한다.
 
-`PerActor` User Spot은 `RecreateOnRelocation` Spot policy만 허용하고 Spot relocation adapter를
-등록하지 않는다. Spot field와 Spot-level application timer는 relocation 대상이
-아니다. Target Spot authority를 먼저 전환한 뒤 Actor를 독립적으로 이전하며
-`ToSpot`·Create·Join은 Spot authority, `ToActor`는 Actor별 current owner를 사용한다.
-Target runtime-private shell은 같은 public SpotId와 ObjectGeneration을 사용하며 authority
-전환 전에는 public lookup에 노출하지 않는다. Stale source route는 operation identity,
-generation, deadline, correlation과 reply route를 보존해 relay한다. Actor queue seal부터 one-way
-cutover submit의 성공 또는 실패 terminal까지 source-local 1초는 운영 목표이며 초과해도 relocation을
-취소하거나 rollback하지 않는다.
+PerActor 이동과 보존된 relay는 [Spot 모델](../../../03-spot-actor/01-spot-model.ko.md)과 [Location runtime](../../../05-location-relocation/01-location-runtime.ko.md)이 정한다.
 
-`RelocationReady().Defer()`는 `SpotWide` factory가
-`ApplicationSignaled` coordination mode를 선택한 Spot turn에서만 유효하다. `Defer()`는
-현재 handler가 끝난 뒤 다음 application turn 앞에 relocation 경계를 등록한다.
-Framework는 이동하지 않았거나 relay-ready reply가 accepted 상태가 되기 전에 abort했으면 source에서 `Continued`,
-이동했으면 target에서 `Relocated` completion을
-`OnRelocationReadyCompletedAsync(...)`에 전달한다. 기본 구현은 no-op이다.
-Callback 완료 전에는 보류한 message와 timer를 실행하지 않는다.
+.NET은 `RelocationReady().Defer()`와 `OnRelocationReadyCompletedAsync(...)`를 제공한다. 유효 문맥과 완료 경계는 [Spot 모델](../../../03-spot-actor/01-spot-model.ko.md)이 정한다.
 
-기본 `FrameworkManaged`, `PerActor`, Entry·Instance Spot, Spot turn 밖과 같은 turn의
-중복 `Defer()`는 queue mutation 전에 `ZLinkFrameworkErrorKind.InvalidOperation`
-오류로 끝난다. `Defer()` 뒤 같은 turn에서 다른 Framework operation을 시작해도
-같은 오류다. Callback은 process recovery에서 다시 실행될 수 있으므로 override는
-retry-safe해야 한다.
+제출 전 오류는 [Execution gate](../../../01-execution/02-handler-turn-and-execution-gate.ko.md)가 정한다. .NET은 `ZLinkFrameworkErrorKind.InvalidOperation`으로 표현한다.
 
 Spot과 Actor의 current location 조회는 manager가 global ID로 수행한다. Public resolver와 runtime handle은
 제공하지 않는다. owner route와 generation 갱신 규칙은
@@ -501,12 +451,7 @@ Timer option을 생략하면 `OverrunPolicy`는 `SkipLateTicks`, `MaxCatchUpTick
 검증한다. 다른 policy에서는 이 값을 사용하지 않으며 이 범위로 validation하지 않는다. 이 설명은 기존
 `ZLinkTimerOptions` public surface를 바꾸지 않는다.
 
-Framework timer는 owner Actor·Spot에 속한 logical registration이다. Cross-node relocation에서는 timer 이름,
-handler type, period, `ZLinkTimerOptions`, scheduling cursor와 seal 시점의 pending tick을 relocation payload에
-자동으로 포함한다. Application의 relocation adapter는 timer를 capture·restore하거나 target에서 다시 등록하지
-않는다. Framework가 관리하는 timer resource는 payload에 포함하지 않고 target에서 logical registration으로
-다시 만든다. Source는 queue를 seal한 뒤 새 tick을 dispatch하지 않으며 target은 Restore와 authority commit을
-마치고 dispatch admission이 열린 뒤에만 복원한 pending tick과 다음 tick을 [owner](../../../00-foundation/02-glossary.ko.md#owner) mailbox에 제출한다.
+Relocation 중 logical timer 등록과 pending tick 처리는 [Spot timer](../../../03-spot-actor/10-spot-timer.ko.md)와 [Host relocation](../../../05-location-relocation/05-host-relocation-flow.ko.md)이 정한다.
 
 Spot 외부 client는 다음 시그니처를 사용한다.
 
@@ -593,9 +538,7 @@ public interface IZLinkSpotPublisherClient
 }
 ```
 
-Entry·User·Instance SpotId는 UTF-8 encoded 크기 1..255 bytes의 global string key다. Stable type은 UTF-8 1..255 bytes이며 case-sensitive 값 비교로
-비교하고 normalization하지 않는다. `SpotRef.ObjectGeneration`은 1..`long.MaxValue`다. MeshName과 NodeRid는
-조회 시점의 route snapshot이며 identity key에 포함하지 않는다.
+Spot ID와 route snapshot은 [Spot 주소 메시징](../../../03-spot-actor/06-spot-address-messaging.ko.md)이 정한다. .NET의 `SpotRef.ObjectGeneration`은 `long`이다.
 
 `IZLinkSpotOutbound`과 `IZLinkSpotClient`는 global SpotId를 받고
 `IZLinkSpotSendCall` 또는 `IZLinkSpotRequestCall`을 반환한다. Marker overload는
@@ -607,46 +550,21 @@ Cold activation의 type·Mesh 선택, 생성 순서와 최초 message 보존은
 [Spot address messaging §4](../../../03-spot-actor/06-spot-address-messaging.ko.md#4-cold-activation--message로-instance-spot을-처음-만드는-방법)가 소유한다. 완료 경계는
 [Spot address messaging §5](../../../03-spot-actor/06-spot-address-messaging.ko.md#5-existing-owner를-향한-direct-call과-완료-경계)를 따른다.
 
-`InMesh`는 Instance marker가 있는 call에서만 유효하며 marker 없이 사용하면
-`InvalidOperation`이다. Instance marker와 각 option은 한 번만 설정할 수 있다.
-Send는 `Async`, request는 `Async<TReply>` 또는 `Yield<TReply>`로 한 번만 제출한다.
+Instance marker와 `InMesh`의 유효성은 [Spot 주소 메시징](../../../03-spot-actor/06-spot-address-messaging.ko.md)이 정한다. .NET은 잘못된 사용을 `InvalidOperation`으로 표현한다.
 
-`IZLinkInstanceSpot`은 `IZLinkSpot`을 상속하지 않는 actor-free lifecycle interface다. Direct packet과 timer
-handler만 등록할 수 있다. Actor handler나 Logical Multicast subscription을 등록하면 Framework는 `Ready`
-commit 전에 activation을 거부한다.
+`IZLinkInstanceSpot`은 별도의 .NET interface다. Handler와 activation 제약은 [Spot 모델](../../../03-spot-actor/01-spot-model.ko.md)이 정한다.
 
-`CloseAsync(spotRef)`는 지정한 incarnation만 닫는다. 해당 incarnation이 없으면 `false`, generation이 다르면
-`InvalidOperation`, pre-commit seal 중이면 `Unavailable`이다. User Spot에 Actor membership이 남아 있으면
-`false`이며 Actor를 자동 leave·destroy하지 않는다. Framework는 current ref를 다시 찾아 다른 incarnation을
-닫지 않는다.
+Spot close 결과는 [Object lifecycle](../../../03-spot-actor/09-object-lifecycle.ko.md)이 정한다. .NET은 `false`, `InvalidOperation`, `Unavailable`로 표현한다.
 
 `IZLinkSpotManager`는 User Spot의 명시적 create·get-or-create, resolve와 close만 제공한다. Manager에
 Spot kind를 선택하는 인자나 Instance Spot create·get-or-create overload를 두지 않는다. Instance Spot의
 생성 경로는 Spot 전용 message call의 명시적 `InstanceSpot(...)` opt-in 하나다. Instance Spot
 구현이 자신의 lifecycle 종료를 요청하는 `IZLinkInstanceSpotContext.Close()`는 남긴다([Spot 주소 메시징 §7](../../../03-spot-actor/06-spot-address-messaging.ko.md#7-close와-generation-경계)).
 
-User Spot Create와 GetOrCreate call은 single-use다. 같은 option을 두 번 설정하면 `InvalidOperation`, terminal
-`Async(...)`를 두 번 호출하면 `InvalidOperation`이다. `InMesh(...)` 선택과 오류 및 전체
-deadline 규칙은 Actor create와 같다. `Create`는 Framework가 새 global Spot ID를 발급한다. `GetOrCreate`는 같은
-User Spot stable type의 Ready Spot을 `Existing`으로 반환한다. Creating이면 authority
-변경을 기다리고, Ready가 되면 `Existing`, cleanup으로 Missing이 되면 새 reservation을
-경쟁한다. CAS loser는 별도 factory를 실행하지 않는다. Kind나 type이 다르면 `TypeMismatch`, deadline 안에 terminal state가 되지 않으면
-`DeadlineExceeded`다. Creation request는 최대 1 MiB이며 reservation 전에 immutable
-reference와 hash로 보관한다.
+Create·GetOrCreate 결과는 [Spot 주소 메시징](../../../03-spot-actor/06-spot-address-messaging.ko.md)과 [Object lifecycle](../../../03-spot-actor/09-object-lifecycle.ko.md)이 정한다. .NET은 `Async(...)`를 제공하고 오류를 `InvalidOperation`, `TypeMismatch`, `DeadlineExceeded`로 표현한다.
 
-Stored creation intent의 재개 범위와 steady `Ready` owner 실패의 구분은
-[Object lifecycle §3](../../../03-spot-actor/09-object-lifecycle.ko.md#3-없는-객체를-언제-만드는가)가 소유한다.
-Public activation driver, address, handle, resolver와 unbounded list는 제공하지 않는다. 운영 조회는
-Location runtime의 page size 1..1000, encoded page 4 MiB 이하인 paged query가 소유한다.
+Stored creation intent의 재개는 [Object lifecycle §3](../../../03-spot-actor/09-object-lifecycle.ko.md)이, 운영 query 한도는 [Location runtime](../../../05-location-relocation/01-location-runtime.ko.md)이 정한다.
 
-Cold Instance factory 또는 initialize가 실패하면 해당 call은 typed failure로 완료된다. 같은 call을 내부에서
-숨겨 재시도하지 않으며, 실패 상태나 recovery 절차를 조작하는 public API는 제공하지 않는다.
+Cold activation 실패는 [Spot 주소 메시징](../../../03-spot-actor/06-spot-address-messaging.ko.md)이 정한다.
 
-`IZLinkSpotPublisherClient.Publish(...)`와 `IZLinkSpotOutbound.Publish(...)`는 [Logical Multicast](../../../00-foundation/02-glossary.ko.md#logical-multicast)다.
-외부 publisher와 Spot callback의 outbound는 모두 ChannelName과 topic만 받는다. Process-local [ChannelName](../../../00-foundation/02-glossary.ko.md#channelname)
-index가 owner [MeshNode](../../../00-foundation/02-glossary.ko.md#meshnode)를 선택하며 caller는 [MeshName](../../../00-foundation/02-glossary.ko.md#meshname)을 추가로 넘기지 않는다.
-각 remote target은 MeshNode ROUTER의 송신 규칙을 따르며, 같은 node의 일치하는 Spot queue는 immutable
-message storage를 공유한다. 정확한 설정 표면은
-[Topology configuration §5](03-configuration-topology.ko.md#5-publisher와-runtime-option)가 소유한다.
-Remote transport와 local Spot queue의 target별 수락·실패 결과는 반환하거나 monitoring에 집계하지
-않는다. Remote Spot queue 제출과 remote·local handler 실행 또는 완료는 기다리지 않는다.
+`IZLinkSpotPublisherClient.Publish(...)`와 `IZLinkSpotOutbound.Publish(...)`는 .NET Logical Multicast API다. 라우팅과 terminal 결과는 [Submit과 completion](../../../01-execution/01-submit-and-completion.ko.md)이 정한다.

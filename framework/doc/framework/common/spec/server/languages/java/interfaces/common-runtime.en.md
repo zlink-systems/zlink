@@ -133,103 +133,11 @@ The canonical declaration of `ZLinkObservedStatus<T>` and
 [Monitoring Public Interface](monitoring.en.md). This document only
 fixes the fact that the host status stream uses the same envelope.
 
-`relocate(options)` closes new application admission and placement, and
-moves current objects to a compatible target. On success it becomes
-`RELOCATED` state, and the host process and infrastructure connections
-are kept. A User Spot moves the [Spot](../../../00-foundation/02-glossary.en.md#spot)
-and the entire current member Actor set together as one aggregate. There's
-no fixed cap on the total participant count. If even one aggregate
-participant selected `disableRelocation()`, it ends with
-`Blocked/RelocationDisabled`; if target/capacity/reservation can't be
-secured, or no target satisfies the requested application version and registered factory/type/
-relocation-adapter eligibility, `Blocked/TargetUnavailable`. After target selection, an
-incompatible transferred state schema/type adapter is `Blocked/StateIncompatible`. This
-preflight failure doesn't change
-admission. The mere existence of a
-[User Spot](../../../00-foundation/02-glossary.en.md#entry-user-instance-spot)
-doesn't block relocation. If there's even one local manual RouteMesh
-peer, ClientServer client endpoint, fanout subscriber endpoint, or
-manual fanout publisher, it ends with
-`Blocked/ManualTopologyUnsupported`. Automatic RouteMesh only
-transitions to `RELOCATING` after the source's Core peer table has the
-same RID/lifecycle generation as the descriptor admitted and ready.
-`shutdown()` doesn't start a new relocation. Neither operation performs
-a hidden remote `GetOrCreate`, and waiter cancellation doesn't cancel an
-already-started shared operation. Each call returns a dedicated
-`CompletableFuture` view following the shared operation's result.
-`toCompletableFuture().cancel(...)` only releases that waiter — the host
-operation keeps proceeding, and other waiters receive the same terminal
-result. A separate public cancellation token or a host-operation-cancel
-member isn't added. Calling `shutdown()` during `RELOCATING` only
-confirms the currently running atomic relocation unit to a terminal
-state and doesn't start the rest of relocation. The relocation waiter
-receives `Blocked/ShutdownRequested`, and the host continues bounded
-cleanup.
-
-### Relocation Mode And Target Selection
-
-The caller always specifies mode. `targetApplicationVersion` and
-`deadline` are nullable components. If `deadline == null`, the
-framework's default host relocation deadline is used.
-
-- `PLANNED_MAINTENANCE` is used for a node check or reboot that keeps the
- same application version. `targetApplicationVersion` must be `null`,
- and the result's `effectiveTargetApplicationVersion` is the source
- host's application version.
-- `ROLLING_UPDATE` is used when replacing with a new application
- version. `targetApplicationVersion` must be specified and must be
- greater than the source version. The framework only uses a node whose
- application version exactly matches this value as a target candidate,
- and doesn't substitute an intermediate version or a different, higher
- version.
-
-If the mode and target version combination doesn't satisfy the above
-conditions, the framework rejects the call with
-`IllegalArgumentException` without changing admission or placement
-state. The candidate selection order for a valid call is as follows.
-
-1. `PLANNED_MAINTENANCE` keeps only a node matching the source version;
- `ROLLING_UPDATE` keeps only a node exactly matching the specified
- target version.
-2. Keeps only an Object Server that isn't source and is `SERVING` on
- the same Mesh.
-3. Confirms stable type, the relocation behavior selected on the
- factory, and adapter capability match.
-4. Confirms population capacity and reservation availability, and
- excludes the same maintenance wave as source.
-5. Keeps only a node whose Core peer with the matching RID and
- lifecycle generation on the same descriptor snapshot is `ADMITTED`.
-6. Applies node-wide placement weight to the remaining candidates.
-
-Since the version condition is applied first, even if capability or
-capacity is sufficient, it doesn't fall back to a node of a different
-version. If there's no version/wave/capacity or -ready target, it
-re-checks until the deadline and then it's `Blocked/TargetUnavailable`. The same result applies
-when no -ready target satisfies registered factory/type/relocation-adapter eligibility.
-After target selection, an incompatible transferred state schema/type adapter is
-`Blocked/StateIncompatible`. A Store lookup failure is
-`Blocked/StoreUnavailable`.
-
-While the same shared relocation is running, a call with the same mode
-and effective target version joins the existing operation and receives
-the same terminal result. The first call's deadline fixes the shared
-operation deadline, and a later joining call's deadline doesn't extend or
-shorten the operation. A call whose mode or target version differs from
-the running operation doesn't change the current operation or queue —
-it returns `Blocked/OperationInProgress`. This result records the
-rejected call's requested mode, and the source version for planned
-maintenance or the requested target version for rolling update, as
-`effectiveTargetApplicationVersion`.
-
-If the deadline ends first before every target becomes `Prepared` and
-the relocation commit is published, the relocation staging and
-reservation are cleaned up in durable-abort order, source authority and
-admission are restored from the payload kept in source memory, and
-`Blocked/DeadlineExceeded` is returned.
-There's no rollback to source after commit — the remaining stages are
-only processed while the same target process is running. If the target
-process terminates, a different runtime doesn't automatically take over
-the relocation, and `RELOCATED` isn't returned.
+`relocate(options)` and `shutdown()` are host lifecycle APIs. Java delivers the shared
+result through a per-call `CompletableFuture` view; cancellation affects only that waiter.
+[Host relocation flow](../../../05-location-relocation/05-host-relocation-flow.en.md)
+defines target, deadline, commit, and shutdown.
+Java maps an invalid mode/version combination to `IllegalArgumentException`.
 
 `ZLinkFrameworkRuntime` owns one monitoring view each for RouteMesh,
 ClientServer, and automatic fanout. The three accessors return the same

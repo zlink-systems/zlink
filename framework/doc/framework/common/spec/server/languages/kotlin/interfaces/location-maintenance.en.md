@@ -27,8 +27,7 @@ The following boundaries of the Java contract apply to Kotlin unchanged.
  target. The steady-state responsibilities remaining with the Store are
  the Instance Spot cold activation record and the terminal record of a
  pending request completed after relocation.
-- Retrying with the same reference and same bytes is AlreadyStored;
- different bytes is Conflict.
+- [Relocation Store Redis §3–4](../../../05-location-relocation/03-relocation-store-redis.en.md) defines reference retry; Kotlin uses Java's `AlreadyStored` and `Conflict` outcomes.
 - One data chunk is at most 64 MiB of application bytes, and the framework composes a
  logical stream of at most 256 GiB from at most 4,096 chunks. The encoded blob limit is
  owned by [Relocation Store Redis §3](../../../05-location-relocation/03-relocation-store-redis.en.md#3-reference-and-storage-size).

@@ -372,9 +372,8 @@ export declare function zlinkSpotTimerHandler<TSpot extends ZLinkSpot = ZLinkSpo
 ## 7. Server HTTP client integration
 
 서버 handler에서 HTTP 요청을 실행할 때는 이름으로 등록한 client를 주입받는다. 등록한 client는 Nest
-module의 수명과 함께 정리된다. `yield()`는 현재 handler가 `SpotWide` User Spot 또는 Instance Spot의
-shared turn에서 실행 중일 때만 선택할 수 있다. 다른 handler에서는 HTTP operation을 제출하거나 turn을
-반환하지 않고 `invalidConfiguration`으로 완료한다.
+module의 수명과 함께 정리된다. `yield()`의 유효 문맥과 제출 전 `InvalidOperation`은
+[실행 gate §16](../../../01-execution/02-handler-turn-and-execution-gate.ko.md#yield-call-eligibility)이 정한다.
 
 ```ts
 export interface ZLinkNamedHttpClientOptions {

@@ -368,7 +368,7 @@ interface ZlinkStreamReconnectOptions {
   readonly initialDelayMs?: number;
   readonly maxDelayMs?: number;
   readonly backoffFactor?: number;
-  readonly maxAttempts?: number | null;   // null means unlimited; otherwise it must be positive (common spec §6)
+  readonly maxAttempts?: number | null;   // null means unlimited
 }
 
 interface ZlinkStreamPacketNameResolver { resolve(payloadType: Function): string; }
@@ -409,14 +409,8 @@ interface RequiredZlinkStreamConnectorOptions {
 ```
 
 A connector is created with `zlinkStreamConnectorFactory.create(options)`.
-**`create(options)` checks every option**, and on a validation failure
-it builds no connector and throws a `ZlinkStreamException`
-([Common Spec §6.3](../../32-stream-connector.en.md#63-option-validation)).
-A single value out of range carries `ValidationFailed`, and a mismatch
-between options carries `ConfigurationError` — a conflict between the
-endpoint scheme and `transport`, the `tcp`/`tls` the browser doesn't
-support, and a `compressionCodec` given together with
-`compression: none` fall into the latter.
+`zlinkStreamConnectorFactory.create(options)` throws `ZlinkStreamException`
+for option validation under [Common Spec §6.3](../../32-stream-connector.en.md#63-option-validation).
 
 - **Cancellation is delivered through an optional `AbortSignal`.** It
   doesn't replicate another language's cancellation token shape
@@ -462,10 +456,9 @@ waitForSequence<T>(nameOrType: string | Function): ZlinkStreamSequenceCall<T>; /
 - `await expectNone<T>(name).within(ms).run(signal)` — **throws a
   `ZlinkStreamException` carrying `ValidationFailed`** if it arrives
   within the window. The symmetric of `waitFor`.
-- `await waitForSequence<T>(name).expect(p1).expect(p2)….timeout(ms).run(signal)` —
-  confirms a push of the same name arrives **in predicate order**, and
-  returns a `ZlinkStreamMessage<T>` array. Verifies **"arrived in
-  order"**, not "N arrived."
+- `await waitForSequence<T>(name).expect(p1).expect(p2)….timeout(ms).run(signal)` returns
+  a `ZlinkStreamMessage<T>` array; sequence observation and failure follow
+  [Common Spec §10.1](../../32-stream-connector.en.md#101-test-wait-surface).
 - **The predicate and the return value handle
   `ZlinkStreamMessage<T>`.** The argument `where(...)` and `expect(...)`
   receive is the message, not the payload.
@@ -482,9 +475,8 @@ The receive queue's contract is owned by
 [Common Spec §10](../../32-stream-connector.en.md). The TypeScript surface
 carries no receive-queue option or error code.
 
-**`receivedCount(name)` returns the received count per packet name** (§4).
-Consuming does not lower it, it is independent of the dispatch mode, and it
-restarts at zero when the connection is established.
+`receivedCount(name)` returns a count per packet name. Counting and reset follow
+[Common Spec §10](../../32-stream-connector.en.md#10-receive-message-queue).
 
 ## 6. Session Close Reason
 

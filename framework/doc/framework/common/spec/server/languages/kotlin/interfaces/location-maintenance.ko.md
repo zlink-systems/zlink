@@ -21,7 +21,7 @@ Java 계약의 다음 경계를 Kotlin에서도 그대로 적용한다.
 - Actor·Spot relocation의 state handoff payload는 이 Store에 저장하지 않고 source에서 target으로
  직접 chunk 전송한다. Store에 남는 정상 실행 책임은 Instance Spot cold activation 기록과
  relocation 뒤 완료되는 pending request의 terminal 기록이다.
-- 같은 reference와 같은 bytes의 재시도는 AlreadyStored, 다른 bytes는 Conflict다.
+- Reference 재시도는 [Relocation Store Redis §3–4](../../../05-location-relocation/03-relocation-store-redis.ko.md)가 정하며 Kotlin은 Java `AlreadyStored`와 `Conflict` 결과를 사용한다.
 - Data chunk 하나는 application bytes 기준 최대 64 MiB이며 Framework가 최대 4,096개 chunk로 최대 256 GiB
  logical stream을 구성한다. Encoded blob 상한은 [Relocation Store Redis §3](../../../05-location-relocation/03-relocation-store-redis.ko.md#3-reference와-저장-크기)이 소유한다.
 - Store 등록 뒤 ownership과 close 순서는 Java 계약과 같다. Shared connection lease는 provider가

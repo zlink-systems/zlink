@@ -324,6 +324,6 @@ Public trace category는 `spot-instance`, `actor-relocation`다. 의미와 검�
 [Spot address와 messaging](../../../03-spot-actor/06-spot-address-messaging.ko.md)과
 [Spot·Actor membership](../../../03-spot-actor/05-spot-actor-membership.ko.md)이 소유한다.
 
-이 문서에 선언된 `yield(...)`는 `SpotWide` User Spot 또는 Instance Spot의 shared turn에서만 유효하다.
-Entry Spot과 `PerActor` User Spot에서 호출하면 operation을 제출하거나 turn을 반환하지 않고
-`invalidConfiguration`으로 완료한다. `submit(...)`은 현재 turn을 유지하는 공통 `Async` 의미다.
+`yield(...)`의 유효 문맥과 제출 전 `InvalidOperation`은
+[실행 gate §16](../../../01-execution/02-handler-turn-and-execution-gate.ko.md#yield-call-eligibility)이 정한다.
+`submit(...)`은 공통 `Async`의 Node.js 표기다.

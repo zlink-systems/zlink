@@ -452,9 +452,9 @@ conflict, priority is route parameter, query string, body in that
 order. This priority is fixed in the startup validation document and
 tests.
 
-`use<TMiddleware>()` calls `TMiddleware::before(http_context_t&)` and
-`TMiddleware::after(http_context_t&)` before and after the route
-handler. A middleware doesn't take a raw Beast request or socket — it
+`use<TMiddleware>()` registers `TMiddleware::before(http_context_t&)` and
+`TMiddleware::after(http_context_t&)`. Their execution order follows
+[System structure §7.2](01-system-structure.en.md#72-middleware-execution-order). A middleware doesn't take a raw Beast request or socket — it
 only uses `http_context_t`'s correlation id and framework header map.
 If a request has `X-Correlation-Id` or `X-Request-Id`, that value is
 sent back as the response's `X-Correlation-Id`; otherwise the runtime

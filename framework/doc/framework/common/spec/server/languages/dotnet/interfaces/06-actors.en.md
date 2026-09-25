@@ -229,94 +229,30 @@ stage, and a value present means it's a member of that user
 [Spot](../../../00-foundation/02-glossary.en.md#spot). A separate boolean
 representing the same state isn't provided.
 
-The Actor Join call only provides a resultless synchronous `Defer()`, and
-doesn't provide `Async(...)`/`Yield(...)`. If a `SpotWide` User Spot's
-member Actor yields an Actor/Spot/Channel request or worker call, the
-Actor queue claim is kept and only the User Spot gate is returned. The
-same Actor's next job doesn't start until the terminal continuation
-re-acquires the gate and finishes the current job. On an Entry Spot and
-`PerActor` User Spot Actor, it completes with `InvalidOperation` before
-request/worker operation submit.
+The Actor Join call provides only a resultless synchronous `Defer()`, without
+`Async(...)` or `Yield(...)`. [Handler turn and execution gate](../../../01-execution/02-handler-turn-and-execution-gate.en.md)
+defines gate and claim handling when an Actor request yields.
 
-`Defer()` only registers an immutable Join intent and an inactive
-barrier on the current handler, and doesn't start a target lookup or
-Store I/O. If the handler finishes normally, the Join runs; if it fails,
-the barrier is discarded. The target admission/relocation result is
-delivered via the `OnJoinCompletedAsync(...)` callback with the same
-128-bit operation ID. Even if the handler uses `Yield(...)`, the barrier
-isn't activated until the last continuation finishes.
+[Handler turn and execution gate](../../../01-execution/02-handler-turn-and-execution-gate.en.md)
+defines `Defer()` registration and barrier activation.
+.NET delivers the result through `OnJoinCompletedAsync(...)`.
 
-Operation ID is a completion idempotency ID, not a `RelocationId`,
-reservation ID, or aggregate commit ID. Same-node and cross-node
-completion retry are limited to the current source and target process
-lifetime. After the process ends, a different runtime doesn't
-automatically replay completion.
+[Actor Join completion](../../../03-spot-actor/05-spot-actor-membership.en.md#actor-join-completion) owns the Operation ID purpose and lifetime.
 
 The overload with no request fixes an empty `ZLinkMessage`. The default
 timeout is 5 seconds, and an explicit value is a finite `1..int.MaxValue`
 ms rounded up to milliseconds. `Defer()` fixes a monotonic absolute
 deadline.
 
-Relocation policy is owned by the Actor factory registration.
-`DisableRelocation` rejects, before capture, a move that requires
-cross-node materialization. `RecreateOnRelocation` creates the same
-logical identity again with the target
-[factory](../../../00-foundation/02-glossary.en.md#factory), without restoring
-application state. `PreserveStateWith<TAdapter>()` transfers the byte array
-`IZLinkActorRelocationAdapter<TActor>` returns directly from the source to
-the target as an opaque application
-payload and restores it to the target Actor instance. It doesn't take a
-separate application state generic or a stable state contract ID, and
-doesn't use a Framework message wrapper as the payload. The adapter isn't
-given a relocation reference, accepted journal, relocation phase,
-source/target owner, or Store CAS version.
+`PreserveStateWith<TAdapter>()` uses `IZLinkActorRelocationAdapter<TActor>`; [Location runtime](../../../05-location-relocation/01-location-runtime.en.md) defines Actor relocation policy and payload transfer.
 
-For maintenance that materializes an Actor instance on a different node,
-cross-node User Spot/[Entry Spot](../../../00-foundation/02-glossary.en.md#entry-user-instance-spot)
-join, and every Actor participant of a whole User Spot relocation, the
-same Actor factory policy is used. Only for `PreserveStateWith` are the
-Actor adapter's `CaptureAsync(...)` and `RestoreAsync(...)` called. A
-same-node join doesn't call the adapter and isn't rejected with
-`DisableRelocation` either. A cross-node move on `DisableRelocation`
-policy is rejected before capture, without an adapter.
+[Location runtime](../../../05-location-relocation/01-location-runtime.en.md) defines which Actor moves invoke the adapter.
 
-The target finishes restore and accepted-journal validation/staging
-before the [owner](../../../00-foundation/02-glossary.en.md#owner) commit, without
-running an application handler. After the owner commit and lifecycle
-callback, the saved existing work is put on the actual Actor queue first,
-and the relocation temporary queue's work is moved after that. Once
-temporary queue registration is removed and dispatch is switched
-atomically, the target opens as `Ready` and the relocation fence is
-released. Source cleanup, the `Completed` record don't block the target's message processing.
-If the target process terminates after `Ready`, it's handled as ordinary
-owner loss, and the previous relocation isn't automatically replayed. A
-public phase API for manipulating this barrier isn't provided.
+[Location runtime](../../../05-location-relocation/01-location-runtime.en.md) defines queue cutover and Ready admission.
 
-On a retry within the same source and target process, factory and
-`RestoreAsync(...)` can be called more than once. `CaptureAsync(...)` can
-also be called again before the authority commit. Both callbacks must be
-retry-safe, producing the same result for the same logical relocation,
-and must not depend on exactly-once execution of an external side
-effect. A capture exception restores admission after a durable abort and
-source normalization. `CaptureAsync(...)`'s result has no
-relocation-adapter-specific size cap; the framework splits the payload
-into chunks no larger than `RelocationPayloadChunkLimit` and transfers
-them directly over the source–target ordered mesh connection. Source
-memory is the restore origin, and the handoff payload isn't stored in the
-Relocation Store. An empty array is valid, and null is a contract
-violation. The framework immediately copies the completed array. `RestoreAsync(...)`'s
-`ReadOnlyMemory<byte>` is only valid until the callback completes. If a
-restore exception occurs, the instance is discarded and the same
-immutable payload is applied to a new instance. A different target isn't
-automatically selected. If the framework cancels a callback due to the
-operation deadline, it's classified as `DeadlineExceeded`. Only the
-current owner and attempt fence can commit completion and open
-admission, and a relocation ID isn't provided to the callback.
+`CaptureAsync(...)` and `RestoreAsync(...)` use `ReadOnlyMemory<byte>` and `byte[]` in .NET; [Location runtime](../../../05-location-relocation/01-location-runtime.en.md) and [Failure and failover policy](../../../05-location-relocation/06-failure-failover-policy.en.md) define retry, failure, and completion authority.
 
-If connection-bound work already accepted before starting relocation
-doesn't finish within the deadline, relocation is aborted and
-`RelocateAsync(...)` completes with `Blocked/DeadlineExceeded`. A public
-ACK or phase API to directly confirm or manipulate this isn't provided.
+[Host relocation](../../../05-location-relocation/05-host-relocation-flow.en.md) defines the pre-relocation drain and deadline result.
 
 The order of lifecycle callbacks run during Entry Spot maintenance and a
 regular join, sealed retry after a callback failure, and callback
@@ -325,30 +261,7 @@ omission for a whole User Spot aggregate move are determined by the
 substitute for this lifecycle callback. There's no public phase API that
 controls this order.
 
-When creating a new distributed Actor, the framework reserves creation
-authority and the target's pending capacity together so multiple targets
-can't create the same Actor concurrently. This reservation is processed
-in the following order.
-
-1. The provider creates a `Creating` row on authority and secures the
- target's pending capacity together.
-2. Only the target that secured the reservation first runs the factory
- and the Entry Spot's `OnCreateActorAsync(...)`.
-3. If the callback approves, it commits initial Entry
- [membership](../../../00-foundation/02-glossary.en.md#membership), `Ready`,
- active capacity, and the `Created` terminal result together.
-4. If the callback rejects, it doesn't create Ready or active capacity,
- and publishes the `Rejected` terminal result while cleaning up the
- Creating row and pending capacity.
-5. Node shutdown, timeout, or a callback exception is published as an
- `Aborted` failure, distinct from an application `Rejected`.
-6. A target that loses the reservation race doesn't start a separate
- factory. It reads the existing reservation result the provider
- returned and joins the current creation attempt.
-
-Resolve and remote messaging only use the `Ready` state. Entry Spot
-initialization also completes before the host's `Serving` publication.
-There's no application API that controls this barrier.
+[Actor model](../../../03-spot-actor/04-actor-model.en.md) defines creation reservation and the Ready barrier.
 
 Actor factory options and relocation policy are registered together in
 the `AddActorFactory<TActor,TFactory>(...)` configure callback of
@@ -358,26 +271,9 @@ must select exactly one policy.
 The [Actor Model §6.2](../../../03-spot-actor/04-actor-model.en.md#62-create-and-getorcreate-input) owns the single-use rules, duplicate-option handling, and terminal
 re-invocation errors of `Create` and `GetOrCreate` calls.
 
-At the terminal call, one deadline is fixed that
-applies across resolve, reservation, factory, and the Ready barrier. If
-`InMesh(...)` is omitted and there's one object-role Mesh, that Mesh is
-used; with 0, `NotConfigured`; with two or more, `InvalidOperation`. If
-the specified Mesh doesn't exist, `NotFound`. The caller doesn't specify
-a target RID, predicate, or callback.
+[Actor model](../../../03-spot-actor/04-actor-model.en.md) defines the create deadline and Mesh selection. .NET maps the selection failures to `NotConfigured`, `InvalidOperation`, and `NotFound`.
 
-`Create` returns `AlreadyExists` if a
-[Ready](../../../00-foundation/02-glossary.en.md#ready) incarnation of the same
-ActorId exists, and `TypeMismatch` if stable type differs. `GetOrCreate`
-returns a Ready Actor of the same type as `Existing`, and waits for the
-authority change if it's a Creating attempt. A CAS loser doesn't run a
-separate factory. A different operation receives `Existing` after Ready,
-competes for a new reservation after cleanup, and doesn't share an
-earlier application reply. Only a resend of the same source Node
-RID/lifecycle generation/`OperationId` reads the correlation-free
-`creation-operation-terminal-v1` envelope and re-encodes the reply with
-the current correlation/reply route. The terminal is kept for 5 minutes
-after the original deadline. If a Creating attempt doesn't finish within
-the deadline, that caller gets `DeadlineExceeded`.
+[Actor model](../../../03-spot-actor/04-actor-model.en.md), [Object lifecycle](../../../03-spot-actor/09-object-lifecycle.en.md), and [Framework API](../../../00-foundation/06-framework-api.en.md) define Create/GetOrCreate outcomes and terminal replay. .NET projects `AlreadyExists`, `TypeMismatch`, `Existing`, and `DeadlineExceeded`.
 
 The creation request and semantic terminal envelope are each at most 1
 MiB. The creation request records an immutable reference and hash before

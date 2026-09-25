@@ -110,9 +110,8 @@ public interface IZlinkStreamActor
   client가 등록한 델리게이트를 따로 보관해야 하기 때문이다.
 - `PendingDispatchCount`는 **dispatch pump 상태를 진단하기 위한 값**이다.
   **application flow control에 사용하지 않는다.**
-- **`ReceivedCount(name)`은 packet 이름별 수신 개수를 돌려준다**([공통 스펙
-  §10](../../32-stream-connector.ko.md#10-수신-메시지-큐)). 소비해도 줄지 않고 dispatch mode와
-  무관하며, 연결이 성립할 때 0에서 다시 시작한다.
+- `ReceivedCount(name)`은 packet 이름별 수신 개수를 돌려준다. 집계와 초기화는
+  [공통 스펙 §10](../../32-stream-connector.ko.md#10-수신-메시지-큐)이 정한다.
 - **등록 표면은 모두 `IDisposable`을 돌려준다**([공통 스펙 §7](../../32-stream-connector.ko.md#7-dispatch-모드)).
   `On(...)`과 `OnConnectionStateChanged`·`OnDisconnected`·`OnErrorReceived`가 같다.
   `Dispose()`를 두 번 호출해도 오류로 처리하지 않는다.
@@ -268,20 +267,11 @@ public interface IZlinkStreamCodecRegistration
   취소하지 않는다.
 - **frame write가 시작된 뒤에는 caller cancellation이 partial frame을 만들지 않는다.**
 
-## 7. Dispatch와 bounded admission
+## 7. Dispatch
 
-**`.NET` 고유 계약이다.**
-
-| 항목 | 계약 |
-|---|---|
-| `Manual`(기본) | 수신 callback·request callback·lifecycle event가 **`Dispatch.Async(...)`를 호출한 실행 문맥**에서 처리된다 |
-| `Immediate` | **receive 경로에서 인라인 실행한다**(별도 dispatch 작업 없음). 느린 handler는 receive loop를 막으므로 후속 receive 처리가 지연된다 |
-| `MaxPendingDispatchCallbacks` | **`Manual`에서만 적용된다.** 수신 handler가 기다리는 자리를 제한하며, 자리가 없으면 날 때까지 기다린다. **이미 수락한 request의 완료 callback은 이 제한에 들지 않는다** — 수락한 호출의 완료는 자리를 이유로 미루거나 거절하지 않는다. `Immediate`는 큐를 거치지 않으므로 이 제한을 지나지 않는다 |
-| outbound 전송 queue | dispatch 제한과 **별개인 순서 보존 queue**. 자리가 없으면 날 때까지 기다리고, 기다리다 시간이 다 되면 `DeadlineExceeded`다. 자리가 없다는 이유로 거절하지 않는다 |
-
-- **먼저 수락한 send는 뒤에 시작한 request보다 먼저 전송된다.** request는 **자기 frame의 실제 write가
-  끝난 뒤** response를 기다린다.
-- **전송을 background thread의 callback 실행으로 우회하지 않는다.**
+`.NET`은 [공통 스펙 §7](../../32-stream-connector.ko.md#7-dispatch-모드)의 `Manual` pump를
+`Dispatch.Async(...)`로 표현한다. Outbound admission과 순서, timeout은
+[공통 스펙 §5.2](../../32-stream-connector.ko.md#52-request-correlation)가 정한다.
 
 ## 8. 수신 메시지 history
 
@@ -337,7 +327,7 @@ public sealed class ZlinkStreamTypedSequenceBuilder<TPayload>
 ```
 
 - `ExpectNone(name).Within(TimeSpan).Async(ct)` — window 안에 도착하면 **`ValidationFailed`를 담은 `ZlinkStreamException`을 던진다**. `WaitFor`의 대칭.
-- `WaitForSequence(name).Expect(p1).Expect(p2)…Timeout(t).Async(ct)` — 같은 이름 push가 **술어 순서대로** 도착하는지 확인하고 `IReadOnlyList<ZlinkStreamMessage<TPayload>>`를 돌려준다. "N개 도착"이 아니라 **"순서대로 도착"** 을 검증한다.
+- `WaitForSequence(name).Expect(p1).Expect(p2)…Timeout(t).Async(ct)` — `IReadOnlyList<ZlinkStreamMessage<TPayload>>`를 반환하며, 순서 관측과 실패는 [공통 스펙 §10.1](../../32-stream-connector.ko.md#101-테스트-대기-표면)이 정한다.
 - **술어와 반환은 `ZlinkStreamMessage<TPayload>`를 다룬다.** `Where(...)`와 `Expect(...)`가 받는 인자도 payload가 아니라 message다.
 - **status 전용 표면을 두지 않는다.** status는 payload 필드이므로 `WaitFor<T>(name).Where(p => p.Status == …)`로 표현한다. connector가 어느 필드가 status인지 알지 않는다.
 
@@ -392,30 +382,11 @@ property로 표현한다.
 nullable `int`의 `null`로 표현한다.**
 
 ```csharp
-public int? MaxAttempts { get; init; } = 3; // null이면 무제한. 그 밖에는 양수여야 한다
+public int? MaxAttempts { get; init; } = 3; // null은 무제한
 ```
 
-**`.NET`에만 있는 option:**
-
-| option | 기본값 | 의미 |
-|---|---|---|
-| `MaxPendingDispatchCallbacks` | 1024 | dispatch 대기 callback 한도(§7) |
-
-**검증 계약:**
-
-검증 시점은 [공통 스펙 §6.3](../../32-stream-connector.ko.md#63-옵션-검증)가 소유한다. `.NET`은
-`ZlinkStreamConnectorFactory.Create(options)`가 option 전 항목을 확인하며, 검증에 실패하면
-`IZlinkStreamConnector` 인스턴스를 만들지 않고 실패를 호출자에게 전달한다.
-
-| 위반 | 실패 |
-|---|---|
-| endpoint 없음 | `ZlinkStreamException`의 `ValidationFailed` |
-| 지원하지 않는 scheme, URI scheme과 `Transport` 불일치 | `ZlinkStreamException`의 `ConfigurationError` |
-| 압축을 끈 구성에 `CompressionCodec`을 함께 지정 | `ZlinkStreamException`의 `ConfigurationError` |
-| 유효하지 않은 timeout·queue 크기·heartbeat/reconnect 조합 | `ZlinkStreamException`의 `ValidationFailed` |
-
-모든 timeout과 queue 크기 option은 **양수**여야 하고, preview 길이는 **음수일 수 없다.**
-`MaxAttempts`는 `null`이거나 양수여야 한다.
+`ZlinkStreamConnectorFactory.Create(options)`는 [공통 스펙 §6.3](../../32-stream-connector.ko.md#63-옵션-검증)의
+option 검증에 실패하면 connector를 만들지 않고 해당 오류 코드를 담은 `ZlinkStreamException`을 던진다.
 
 ## 13. 회귀 테스트
 

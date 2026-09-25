@@ -145,11 +145,8 @@ returns `created` or `rejected`. `getOrCreate` returns a
 change, and a CAS loser doesn't start a separate factory or callback. A
 different operation receives `existing` after ready, competes for a new
 reservation after cleanup, and doesn't share an earlier application
-reply. Only a resend of the same source Node RID/lifecycle
-generation/`OperationId` reads the correlation-free
-`creation-operation-terminal-v1` envelope and re-encodes the reply with
-the current correlation/reply route. The terminal is kept for 5 minutes
-after the original deadline. A callback exception isn't `rejected` —
+reply. Creation terminal replay and retention follow
+[Framework API §15](../../../00-foundation/06-framework-api.en.md#15-userinstance-spot-and-actor-factory-registration). A callback exception isn't `rejected` —
 it's a typed creation failure. If the whole deadline ends,
 `DeadlineExceeded`; if no node can host it, `Unavailable`. An
 lifecycle operation whose ActorRef's object generation differs from
@@ -171,11 +168,7 @@ handler used `yield(...)`, the barrier isn't activated until the last
 continuation finishes.
 
 The result is delivered via the `onJoinCompleted(...)` Actor callback
-with the same operation ID. Operation ID is a completion idempotency
-ID, not a `RelocationId`, reservation ID, or aggregate commit ID.
-Same-node and cross-node completion retry are limited to the current
-source and target process lifetime. After the process ends, a different
-runtime doesn't automatically replay completion.
+with the same operation ID. [Actor Join completion](../../../03-spot-actor/05-spot-actor-membership.en.md#actor-join-completion) owns the Operation ID purpose and lifetime.
 
 The overload with no request fixes an empty `ZLinkMessage`. The default
 timeout is 5 seconds, and an explicit value is a finite
@@ -214,10 +207,7 @@ verification criteria are owned by
 [Spot/Actor Membership](../../../03-spot-actor/05-spot-actor-membership.en.md), and
 [Session Actor Dispatch](../../../04-session/02-session-actor-binding.en.md).
 
-`yield(...)` declared on an Actor request is only valid while the
-current Actor handler is running on a `SpotWide` User Spot's shared
-execution gate. If called by an Entry Spot Actor or a `PerActor` User
-Spot's Actor, it completes with `invalidConfiguration`, without
-submitting the operation or returning the turn. Actor Join only
-provides synchronous `defer()`, and doesn't provide `submit(...)` and
+The valid context and pre-submission `InvalidOperation` for Actor request
+`yield(...)` are defined by the [execution gate §16](../../../01-execution/02-handler-turn-and-execution-gate.en.md#yield-call-eligibility).
+Actor Join only provides synchronous `defer()`, without `submit(...)` or
 `yield(...)`.

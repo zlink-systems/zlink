@@ -225,45 +225,19 @@ public interface IZLinkRelocationStore
 }
 ```
 
-Reference is opaque UTF-8 `1..4096` bytes the framework issues before
-put. Retrying with the same reference and same bytes returns
-`AlreadyStored`; different bytes returns `Conflict`. A deleted or expired
-reference also isn't reused for different content.
+[Relocation Store Redis](../../../05-location-relocation/03-relocation-store-redis.en.md) defines references and idempotent put; .NET projects `AlreadyStored` and `Conflict`.
 
-The application state/queue/timer handoff payload of an Actor/Spot
-relocation isn't stored in this Store. The source keeps the payload in
-memory and transfers it as chunks directly over the source–target ordered
-mesh connection, and source memory is the restore origin. The
-steady-state responsibilities remaining with this Store are recording the
-first message and creation information of an Instance Spot cold
-activation, and recording the reply payload and terminal result of a
-pending request completed after relocation.
+[Relocation Store Redis](../../../05-location-relocation/03-relocation-store-redis.en.md) defines which payloads are stored.
 
-A data chunk splitting a stored payload is at most 64 MiB. The
-framework attaches a 23-byte immutable envelope in front of each chunk.
-So the encoded blob `IZLinkRelocationStore.PutAsync(...)` receives is at
-most `64 MiB + 23 bytes`. The framework composes a logical stream of at
-most 256 GiB from at most 4,096 data chunks and an immutable root
-manifest. The framework computes and verifies the payload checksum and
-the root/chunk relationship.
+[Relocation Store Redis](../../../05-location-relocation/03-relocation-store-redis.en.md) defines chunk and envelope bounds.
 
-Read result bytes aren't changed while the consumer is using them. Renew
-and delete are idempotent, and delete is a successful no-op even when the
-reference doesn't exist.
+[Relocation Store Redis](../../../05-location-relocation/03-relocation-store-redis.en.md) defines read ownership, renew, and delete.
 
 ## 4. Cancellation And Result Reconciliation
 
-If cancellation is requested before the call, the provider doesn't start
-I/O or commit. If cancellation, timeout, or transport failure occurs
-after the call has started, whether the commit was applied may be
-uncertain.
+[Relocation Store Redis](../../../05-location-relocation/03-relocation-store-redis.en.md) defines Store cancellation and uncertain outcomes.
 
-The framework reconciles the result using the Location Store's
-read and version, or the Relocation Store's caller-issued reference.
-`Conflict`, `Missing`, `Expired`, and `AlreadyStored` are closed normal
-results. A Store call exception that isn't `ArgumentException` or
-`OperationCanceledException` is classified by the framework as a
-provider failure.
+[Relocation Store Redis](../../../05-location-relocation/03-relocation-store-redis.en.md) defines result reconciliation; .NET maps provider exceptions to `ArgumentException`, `OperationCanceledException`, or provider failure.
 
 ## 5. Lifetime
 

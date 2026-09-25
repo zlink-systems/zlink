@@ -313,56 +313,17 @@ and only `Server()` provides
 A MeshNode with no Server [membership](../../../00-foundation/02-glossary.en.md#membership)
 can also start.
 
-An automatic [RouteMesh](../../../00-foundation/02-glossary.en.md#routemesh)
-compares RID in canonical byte order, and only the MeshNode with the
-smaller RID connects to the counterpart endpoint. Connection intent isn't
-created only when both local and remote object roles are `Client` and
-neither has RouteMesh Channel Server membership. Channel Client
-membership alone doesn't connect. If either side has Channel Server
-membership, connection is needed even if weight is `0`. A manual
-topology can connect from one or both sides depending on application
-endpoint configuration. If bidirectional connection or automatic discovery contention/a stale snapshot produces two pipes
-for the same RID, the common rule in
-[channel topology](../../../02-channel-transport/01-channel-topology.en.md) applies.
+RouteMesh connection direction and peer necessity follow [Channel topology §8](../../../02-channel-transport/01-channel-topology.en.md).
 
-If a manual endpoint's remote object role and RouteMesh Server membership
-can't be known before connect, they're confirmed in the handshake. Only
-when both sides are Object Client and neither has RouteMesh Channel
-Server membership does admission end with a `NotRequired` terminal and
-close the socket before ready. Background reconnect isn't repeated for
-the same endpoint and configuration generation. If the endpoint, expected
-RID, or configuration generation changes, it's re-confirmed once as a new
-intent.
+[Channel topology §8](../../../02-channel-transport/01-channel-topology.en.md) defines manual handshake and NotRequired handling.
 
 `Listen(string endpoint)`, `Bind(string endpoint)`, and
 `EnablePublisher(string endpoint)` are provided, and the host/port
 combination overload expresses the same listener configuration.
 
-`AddClientServerChannel(channelName)` can register `Client()` and
-`Server()`, either one or both, and each role is registered at most
-once. The registration key is `(ChannelName, Role)`, and Client and
-Server share one ClientServer topology through separate registrations.
-Registering the same role twice fails startup. The RouteMesh ChannelName
-conflict rule stays the same. A Client can use both the registered manual
-endpoint and the server endpoint of the same
-[ChannelName](../../../00-foundation/02-glossary.en.md#channelname) automatically
-discovered from the location store as connection targets. If the two
-sources point to the same Server RID and
-[lifecycle generation](../../../00-foundation/02-glossary.en.md#lifecycle-generation),
-the connection intent and ready target are merged into one. In both
-automatic and manual, only Client connects to server — Server doesn't
-look for a client endpoint or start an outbound connect. Server only
-provides the received send/request handler and request reply, and
-doesn't start a new business call to a connected client.
+`AddClientServerChannel(channelName)` exposes `Client()` and `Server()`; registration and connection decisions follow [ClientServer channel](../../../02-channel-transport/03-client-server-channel.en.md).
 
-If a Server role is also registered on the same process, a local Server
-that finished listener and service admission is put in the same
-candidate set as a remote Server. The same
-[Ready](../../../00-foundation/02-glossary.en.md#ready), positive weight, and
-non-draining conditions apply, with no local priority or remote
-exclusion rule. After selection, the actual transport message is
-delivered from the Client DEALER to the Server ROUTER, without calling
-the handler directly.
+[ClientServer channel §4](../../../02-channel-transport/03-client-server-channel.en.md) defines local Server candidacy and selection.
 
 `ConfigureNetwork()`'s default BindHost is `127.0.0.1`, and if AdvertiseHost is omitted,
 the default of [Network listener identity §2.1](../../../02-channel-transport/04-network-listener-identity.en.md#21-defaults) applies. An
@@ -374,22 +335,7 @@ different discovery source, the listen port and remote endpoint are
 specified explicitly. A per-listener host setting takes priority over the
 root default.
 
-A fanout publisher that registered a
-[location store](../../../00-foundation/02-glossary.en.md#location-store) has the
-framework generate a per-lifecycle RID and publish a dedicated
-descriptor. A publisher with no Store can still be used as a target with
-a fixed RID and manually delivered listener endpoint. `EnableSubscriber()`,
-which takes no endpoint, discovers every valid publisher of the same
-ChannelName from the location store. `Connect(endpoint)` configures a
-manual subscriber that only uses the specified endpoint. Configuring both
-an automatic subscriber and a manual subscriber on one fanout channel
-fails startup. An automatic subscriber needs a location store, but it
-isn't needed for a host that only uses a manual publisher and manual
-subscriber. A publisher only publishes a
-[descriptor](../../../00-foundation/02-glossary.en.md#descriptor) and doesn't start
-an outbound connect to a subscriber endpoint. Only the subscriber
-connects to the publisher endpoint, and an automatic subscriber creates
-one connection intent per Publisher RID and lifecycle generation.
+[Channel topology](../../../02-channel-transport/01-channel-topology.en.md) defines fanout descriptors, discovery, and connection direction; this builder exposes `EnableSubscriber()` and `Connect(endpoint)`.
 
 Automatic RID has the format `prefix-<lowercase-canonical-uuid-v4>`.
 UUID v4 is represented as a lowercase canonical string in `8-4-4-4-12`
@@ -446,28 +392,11 @@ this value, and a negative value is rejected with
 `ZLinkConfigurationException` before startup. `MaintenanceWave` is a
 stable ID that, when `null`, means no wave exclusion is used.
 
-The object role of a MeshNode that didn't call `Objects()` is `None`.
-`Client()` provides a manager and an ID-only message client, but doesn't
-become a placement target. `Server()` includes Client capability and
-registers Entry Spot and factory. Both roles require a Location Store.
-The role can only be selected once.
+`Objects().Client()` and `Objects().Server()` are the .NET role builders; [MeshNode](../../../03-spot-actor/03-mesh-node.en.md) defines the roles.
 
-A MeshNode that selected `Objects().Client()` can also register
-`Channel(...).Server()`. This combination needs a peer connection to
-process Channel request/send. Even if Server weight is `0`, Server
-capability and the need for connection are kept — it's only excluded
-from the selection candidates of a new Channel operation. An application
-Node direct handler such as `AddRouteSendHandler(...)`/
-`AddRouteRequestHandler(...)` can't be registered on an Object Client and
-fails with `ZLinkConfigurationException` before socket bind.
+[Channel topology](../../../02-channel-transport/01-channel-topology.en.md) defines Channel peer connection requirements for Object Client. Invalid Node direct handler registration maps to `ZLinkConfigurationException`.
 
-Between two Object Clients, an automatic or manual peer connection isn't
-needed only when neither side has RouteMesh Channel Server membership.
-The same applies when only Channel Client membership is registered. If
-either side has RouteMesh Channel Server membership, the connection is
-kept. ClientServer and classic fanout are separate physical topologies,
-so they aren't included in this judgment. A connection between an Object
-Client and Object Server, or between Object Servers, is kept.
+[Channel topology](../../../02-channel-transport/01-channel-topology.en.md) defines Object Client pair connection requirements.
 
 The Actor/User Spot/Instance Spot
 [factory](../../../00-foundation/02-glossary.en.md#factory) fixes stable type,
@@ -477,27 +406,9 @@ same registration. There's no overload that omits the policy.
 bytes, and a duplicate type is a startup error. The Entry Spot ID is
 issued by the framework.
 
-Node placement weight is 0..10000, defaulting to 100. An out-of-range
-value is `ZLinkConfigurationException` in both startup config and
-runtime change. The default `0` for Actor/Spot population limit means no
-limit, and the default for pending activation concurrency is 128. If a
-per-type limit is `null`, it shares the node limit; if it has a value, it
-must be 1..`int.MaxValue`, and a value smaller than the node limit
-applies. Capacity is applied before weight, and if there's no eligible
-node, it's `Unavailable`.
+The .NET placement builder exposes weight and population-capacity options; [Location runtime](../../../05-location-relocation/01-location-runtime.en.md) defines eligibility and capacity decisions.
 
-`SetInstanceSpotIdleTimeout(...)` is the reference time for cleaning up
-an idle Instance Spot. The default is `TimeSpan.Zero`, and
-`TimeSpan.Zero` means no cleanup. The allowed range is `TimeSpan.Zero`
-and positive values — a negative value is `ZLinkConfigurationException`
-before startup. The value is fixed before the MeshNode lifecycle starts,
-and a runtime setter isn't provided. It's a separate setting from
-`ZLinkWorkerOptions.IdleTimeout`, and they don't inherit each other's
-value. Only Instance Spot is a cleanup target — Entry Spot and User Spot
-aren't affected by this setting. The idle judgment condition, the
-delivery of `ZLinkSpotCloseReason.IdleEvicted`, and the cold-activation
-rule after cleanup are owned by
-[Spot Model §6.2](../../../03-spot-actor/01-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
+`SetInstanceSpotIdleTimeout(...)` is the .NET option; [Spot model §6.2](../../../03-spot-actor/01-spot-model.en.md) defines its default, validation, and idle cleanup.
 
 ## 3. Manual Peer
 
@@ -515,14 +426,7 @@ public interface IZLinkMeshPeerConnections
 }
 ```
 
-If both MeshNodes specified via `Connect(...)` are Object Client and
-neither has RouteMesh Channel Server membership, the configuration intent
-can remain in the list but doesn't become a ready peer. Once handshake
-ends with `NotRequired`, it doesn't reconnect for the same configuration
-generation, and isn't included in the public RouteMesh status's ready
-peer count or liveness targets. If either side has Channel Server
-membership, including weight `0`, the regular peer admission and
-liveness rule applies.
+[Channel topology §8](../../../02-channel-transport/01-channel-topology.en.md) defines Connect peer admission and liveness.
 
 A handler filter is a public extension point the application implements
 and registers on the root. Calling `next` runs the remaining filters and
@@ -557,15 +461,7 @@ public interface IZLinkHandlerFilter
 }
 ```
 
-`ChannelSend` and `ChannelRequest` include both RouteMesh and
-ClientServer. The RouteMesh and Node direct context provides MeshName,
-and ClientServer and `ClassicFanout` provide `null`. A filter calls
-`next` at most once. A second call fails with
-`ZLinkFrameworkErrorKind.InvalidOperation` and doesn't re-run the
-handler. If `next` isn't called on a request, a
-`ZLinkFrameworkErrorKind.Rejected` reply is sent. Behavior where a filter
-substitutes for the business reply isn't provided via a compatibility
-overload or adapter.
+`ChannelSend` and `ChannelRequest` cover RouteMesh and ClientServer. .NET maps filter failures to `ZLinkFrameworkErrorKind.InvalidOperation` and `Rejected`; [Framework API §10](../../../00-foundation/06-framework-api.en.md) defines filter execution and rejection.
 
 `AddInstanceSpotFactory`'s type name can't be empty and must be at most
 255 UTF-8 bytes. Per-type active and pending limits can be omitted, but
@@ -595,20 +491,9 @@ calls it again, it's a configuration error. If the callback throws, the
 factory isn't registered and the same exception is propagated to the
 caller.
 
-A User Spot that selected `ZLinkUserSpotExecutionMode.PerActor` only
-allows `RecreateOnRelocation()`. Registering `DisableRelocation()` or
-`PreserveStateWith<TAdapter>()` together is a startup configuration
-error before socket bind. A PerActor Spot is a stateless execution
-shell, and the member Actor's relocation policy and adapter each handle
-Actor state. Shared state and Spot-level schedules that must be kept are
-placed in an external store the application owns, such as Redis or a
-database.
+[Spot model](../../../03-spot-actor/01-spot-model.en.md) defines PerActor relocation policy; .NET names the option `ZLinkUserSpotExecutionMode.PerActor`.
 
-Execution mode defaults to `SpotWide`, and relocation coordination mode
-defaults to `FrameworkManaged`. `ApplicationSignaled` is only allowed with
-`SpotWide`. Registering it together with `PerActor` is a startup
-configuration error before socket bind. The callback uses `IZLinkSpot`'s
-default no-op implementation, so an application override isn't required.
+[Spot model](../../../03-spot-actor/01-spot-model.en.md) defines execution and coordination mode defaults and eligibility; .NET exposes `SpotWide`, `FrameworkManaged`, and `ApplicationSignaled`.
 
 If expected RID is omitted, the admission handshake determines the
 remote identity. If expected RID is specified, the connection isn't
@@ -741,18 +626,11 @@ public interface IZLinkMeshNodeSocketConfig
 }
 ```
 
-The ClientServer application listener's default `MaxMessageSize` is `16 MiB`.
-`0` means the framework adds no separate single-message cap and is not cross-validated
-with the Core HWM budget or application job queue setting. This setting does not apply to
-RouteMesh ServerServer.
+`MaxMessageSize` is the .NET ClientServer application listener option. [Framework API §4](../../../00-foundation/06-framework-api.en.md#4-routemesh-registration) owns its default bound, the meaning of `0`, and its exclusion from RouteMesh.
 
-`ConfigureSpotPublisher()` doesn't provide a publish-only delivery
-policy option. [Logical Multicast](../../../00-foundation/02-glossary.en.md#logical-multicast)
-starts once it secures source-local execution capacity within the send
-timeout, and completes normally with no return value. It doesn't wait
-for or aggregate per-target admission/failure results into public
-monitoring, and doesn't automatically retry the whole publish due to
-some target's failure. It completes normally even with no targets.
+`ConfigureSpotPublisher()` has no publish-only delivery policy option.
+[Submit and completion §6](../../../01-execution/01-submit-and-completion.en.md)
+defines Logical Multicast completion.
 
 `IZLinkRouteMeshRuntimeOptions` is a public DI singleton. Querying
 unregistered membership is `ZLinkConfigurationException`.
@@ -764,22 +642,9 @@ create/relocation target selection. ChannelName uniquely selects a local
 RouteMesh or ClientServer Server registration. HWM and timeout are set
 before startup in `ConfigureRouterSocket()`.
 
-`IZLinkMeshNodeSocketConfig` doesn't provide a RouteMesh ServerServer
-`MaxMessageSize`. An SS sender or receiver doesn't reject a message because
-of a Framework-level complete-message cap. HWM, mailbox byte budgets, and
-service-wire representation bounds remain separate resource and wire guards.
+`IZLinkMeshNodeSocketConfig` is the .NET socket-config surface; [Application job queue and backpressure](../../../01-execution/04-application-job-queue-and-backpressure.en.md) defines message bounds and resource guards.
 
-`ConfigureDispatch()` returns host-wide diagnostics and unhandled-dispatch settings.
-The `IZLinkInboundDispatchOptions` returned by `ConfigureInboundDispatch()` owns the Core HWM
-profile and the independent application-job-queue profile, manual cap, and pause/resume
-thresholds. Core memory limit, manual budget, and profile are forwarded to Core. The .NET
-binding forwards a positive finite `GC.GetGCMemoryInfo().TotalAvailableMemoryBytes` as its
-runtime memory hint. Both profiles independently default to `Balanced`, and the pressure
-thresholds default to `80`/`60`. Manual job cap is `1..2,147,483,647`; omission uses the common
-startup CPU snapshot and 32/64/128/256 coefficients. Pause threshold is an integer in `1..100`,
-resume threshold is an integer in `0..99`, and resume must be less than pause. Violating these
-bounds or their ordering, or overflowing capacity, fails before socket bind, and runtime does
-not recompute the result.
+`ConfigureInboundDispatch()` returns `IZLinkInboundDispatchOptions`; [Application job queue and backpressure](../../../01-execution/04-application-job-queue-and-backpressure.en.md) defines Core HWM, capacity, and threshold decisions.
 
 ## 6. Messaging Metadata
 

@@ -78,38 +78,20 @@ public interface IZLinkWorkerOptions
 }
 ```
 
-A one-way call's `Async()` doesn't produce a normal-completion value.
-Normal completion means the source-local queue the operation family
-defines accepted the message. It doesn't wait for remote handler
-execution, subscriber receipt, remote Spot queue admission, or
-application callback completion. If queue capacity is insufficient, it
-waits for a capacity signal up to that family's send timeout, and submits
-the message exactly once if room opens up within the deadline. Timeout
-completes exceptionally with `DeadlineExceeded`, a route break with
-`Unavailable`, and runtime shutdown with `ShuttingDown`. Absence of an
-Actor/Spot/Mesh/session target uses `NotFound`. If `CancellationToken` is
-triggered first, it completes with a cancelled `ValueTask`.
+[Submit and completion](../../../01-execution/01-submit-and-completion.en.md)
+defines one-way admission, timeout, and terminal completion.
+.NET `Async()` returns a resultless `ValueTask` and reports failure by exceptional completion.
 
-Each one-way call uses the send timeout set on its public configuration.
-The default when there's no public setting is 1 second.
+[Submit and completion](../../../01-execution/01-submit-and-completion.en.md)
+defines the one-way send timeout and its default.
 
-Logical Multicast's `IZLinkPublishCall` starts the publish and completes
-normally with no return value once it secures source-local execution
-capacity within the send timeout. After starting, an individual target
-failure doesn't turn into an overall failure and isn't automatically
-retried. Per-target admission/failure results aren't returned or
-aggregated into monitoring, and it completes normally even with no
-targets.
+`IZLinkPublishCall` returns a resultless `ValueTask`.
+[Submit and completion §6](../../../01-execution/01-submit-and-completion.en.md)
+defines the Logical Multicast completion boundary.
 
-If `CancellationToken` is triggered before admission, it completes
-exactly once with a cancelled `ValueTask`. Pre-cancellation doesn't start
-runtime admission. If admission/timeout/[shutdown](../../../00-foundation/02-glossary.en.md#shutdown)
-and cancellation race, only one atomic terminal winner completes, and
-late admission isn't created after a timeout or cancellation. For
-[Logical Multicast](../../../00-foundation/02-glossary.en.md#logical-multicast), only
-cancellation before publish starts blocks the operation from starting.
-Once publish has started, submission to the selected target set proceeds
-to completion.
+[Submit and completion](../../../01-execution/01-submit-and-completion.en.md)
+defines cancellation and the terminal race with admission, timeout, and shutdown.
+.NET reports cancellation with a cancelled `ValueTask`.
 
 An invalid argument/handle/state, a duplicate terminal, and an
 already-used reply token are handled as .NET exceptional completion. An
@@ -125,21 +107,13 @@ semantics of
 [Async Execution Policy §1.2](../../../01-execution/02-handler-turn-and-execution-gate.en.md).
 Worker options can only be set before the host starts.
 
-The `Yield` terminal only exists on `RequestToChannel`,
-`RequestToSpot`, `RequestToActor`, `RunIoWorker`, `RunCpuWorker`, and the
-Actor/Spot create/get-or-create call. It isn't provided for Actor join,
-Node direct request, send, publish, timer registration, close, and
-destroy. Even for a common request/worker/create call, the runtime checks
-the current execution context before operation submit. If it isn't a
-`SpotWide` User Spot or Instance Spot application handler, it completes
-with `InvalidOperation` without outbound admission, queue change, or gate
-return.
+The `Yield` terminal exists on `RequestToChannel`, `RequestToSpot`, `RequestToActor`,
+`RunIoWorker`, `RunCpuWorker`, and Actor/Spot create/get-or-create calls.
+[Handler turn and execution gate](../../../01-execution/02-handler-turn-and-execution-gate.en.md)
+defines eligibility and pre-submission errors.
 
-If a `SpotWide` member Actor yields, the Actor queue claim is kept and
-only the User Spot gate is returned. The terminal continuation
-re-acquires the same gate, finishes the current Actor job, and then
-releases the Actor claim. The same Actor's next job doesn't start before
-that. `Yield` isn't allowed on a `PerActor` User Spot or Entry Spot.
+[Handler turn and execution gate](../../../01-execution/02-handler-turn-and-execution-gate.en.md)
+defines gate and Actor-claim handling when a `SpotWide` member Actor yields.
 
 The minimal attribute surface used for assembly scanning is as follows.
 

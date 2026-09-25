@@ -22,23 +22,12 @@ Stream connector client는 별도 package이며
 
 ## 계약 적용 규칙
 
-- [RouteMesh](../../00-foundation/02-glossary.ko.md#routemesh) 등록은 `AddRouteMesh(meshName)`으로 시작하고 `Channel(channelName).Client()` 또는
- `.Server()`로 역할을 정한다. Server membership이 없는 MeshNode도 허용한다.
-- Channel send/request는 ChannelName만 받고 process-local RouteMesh 또는 ClientServer 송신 경로를 고른다.
-- Node direct handler와 [ChannelName](../../00-foundation/02-glossary.ko.md#channelname) handler는 서로 다른 interface family를 사용한다.
-- typed payload는 JSON을 기본으로 직렬화한다. JSON 사용을 위해 message type마다 codec을 등록하지 않는다.
-- metadata는 handler에 변경할 수 없는 `ZLinkMessageMetadata` [snapshot](../../00-foundation/02-glossary.ko.md#snapshot)으로 전달한다.
-- Object role은 [MeshNode](../../00-foundation/02-glossary.ko.md#meshnode)마다 `None`, `Client`, `Server` 중 하나이며 Client와 Server는
- `IZLinkLocationStore` 구현을 명시적으로 등록한다. Framework가 제공하는 공식 Redis package는 이
- interface의 provider 가운데 하나이며 Redis 사용 자체가 Object role의 필수 조건은 아니다.
-- Actor·User Spot·Instance [Spot](../../00-foundation/02-glossary.ko.md#spot)의 일반 message는 global ID만 받는다. Actor와 User Spot의 manager create는
- stable type과 optional Mesh·placement를 받고 remote placement를 수행하며 mutation은 `ActorRef` 또는
- `SpotRef`를 받는다. Missing [Instance Spot](../../00-foundation/02-glossary.ko.md#entry-spot-user-spot과-instance-spot)은 Spot 전용 fluent call에서 activation을 명시한다.
-- Host lifecycle은 `IZLinkFrameworkRuntime`의 `RelocateAsync(...)`와 `ShutdownAsync(...)`가 소유한다.
-- Framework service runtime은 bindings의 public raw socket API만 사용하고 Core service C API, private SPI,
- reflection과 native symbol 직접 호출을 사용하지 않는다.
-- Logical Multicast의 target별 ROUTER 제출과 manual peer의 expected RID 의미는
- [Topology configuration](interfaces/03-configuration-topology.ko.md)이 소유한다.
+공통 동작은 [Framework API](../../00-foundation/06-framework-api.ko.md),
+[Channel topology](../../02-channel-transport/01-channel-topology.ko.md),
+[Spot 모델](../../03-spot-actor/01-spot-model.ko.md),
+[Actor 모델](../../03-spot-actor/04-actor-model.ko.md)과
+[Submit과 completion](../../01-execution/01-submit-and-completion.ko.md)이 정한다.
+아래 interface 문서는 .NET 타입과 시그니처를 정의한다.
 
 ## 취소
 

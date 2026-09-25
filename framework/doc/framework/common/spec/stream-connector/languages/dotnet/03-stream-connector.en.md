@@ -126,10 +126,8 @@ public interface IZlinkStreamActor
   `UserCallbackFailed` error.
 - `PendingDispatchCount` is a **value for diagnosing dispatch pump
   status.** **It isn't used for application flow control.**
-- **`ReceivedCount(name)` returns the received count per packet name**
-  ([Common Spec §10](../../32-stream-connector.en.md#10-receive-message-queue)).
-  Consuming does not lower it, it is independent of the dispatch mode, and it
-  restarts at zero when the connection is established.
+- `ReceivedCount(name)` returns a count per packet name. Counting and reset follow
+  [Common Spec §10](../../32-stream-connector.en.md#10-receive-message-queue).
 - **Every registration surface returns an `IDisposable`**
   ([Common Spec §7](../../32-stream-connector.en.md#7-dispatch-mode)).
   `On(...)`, `OnConnectionStateChanged`, `OnDisconnected`, and
@@ -312,22 +310,11 @@ owned by [Common Spec §6](../../32-stream-connector.en.md).
 - **Once a frame write has started, caller cancellation doesn't create
   a partial frame.**
 
-## 7. Dispatch And Bounded Admission
+## 7. Dispatch
 
-**This is a `.NET`-specific contract.**
-
-| Item | Contract |
-|---|---|
-| `Manual` (default) | A receive callback/request callback/lifecycle event is processed in the **execution context that called `Dispatch.Async(...)`** |
-| `Immediate` | **Runs inline on the receive path** (no separate dispatch work). A slow handler blocks the receive loop, so the receives after it are delayed |
-| `MaxPendingDispatchCallbacks` | **Applies only in `Manual`.** It bounds the places a receive handler waits in; when none is free, the work waits until one appears. **The completion callback of an already-accepted request is not counted here** — the completion of an accepted call is never deferred or refused for want of a place. `Immediate` does not pass through this bound since it doesn't go through the queue |
-| Outbound send queue | An order-preserving queue **separate** from the dispatch bound. When it is full the send waits for room, and ends with `DeadlineExceeded` if the wait runs out of time. It is never rejected for want of room |
-
-- **A send accepted earlier is sent before a request started later.**
-  A request waits for the response **only after its own frame's actual
-  write finishes.**
-- **A send doesn't route around callback execution on a background
-  thread.**
+`.NET` expresses the `Manual` pump in [Common Spec §7](../../32-stream-connector.en.md#7-dispatch-mode)
+as `Dispatch.Async(...)`. [Common Spec §5.2](../../32-stream-connector.en.md#52-request-correlation)
+owns outbound admission, ordering, and timeouts.
 
 ## 8. Receive Message History
 
@@ -394,10 +381,9 @@ public sealed class ZlinkStreamTypedSequenceBuilder<TPayload>
 - `ExpectNone(name).Within(TimeSpan).Async(ct)` — **throws a
   `ZlinkStreamException` carrying `ValidationFailed`** if it arrives
   within the window. The symmetric of `WaitFor`.
-- `WaitForSequence(name).Expect(p1).Expect(p2)…Timeout(t).Async(ct)` —
-  confirms a push of the same name arrives **in predicate order**, and
-  returns `IReadOnlyList<ZlinkStreamMessage<TPayload>>`. Verifies
-  **"arrived in order"**, not "N arrived."
+- `WaitForSequence(name).Expect(p1).Expect(p2)…Timeout(t).Async(ct)` returns
+  `IReadOnlyList<ZlinkStreamMessage<TPayload>>`; sequence observation and failure
+  follow [Common Spec §10.1](../../32-stream-connector.en.md#101-test-wait-surface).
 - **The predicate and the return value handle
   `ZlinkStreamMessage<TPayload>`.** The argument `Where(...)` and
   `Expect(...)` receive is the message, not the payload.
@@ -470,33 +456,12 @@ The **unlimited reconnect** that
 requires is expressed as `null` on a nullable `int`.
 
 ```csharp
-public int? MaxAttempts { get; init; } = 3; // null means unlimited; otherwise it must be positive
+public int? MaxAttempts { get; init; } = 3; // null means unlimited
 ```
 
-**`.NET`-only option:**
-
-| Option | Default | Meaning |
-|---|---|---|
-| `MaxPendingDispatchCallbacks` | 1024 | The dispatch pending callback bound (§7) |
-
-**Validation contract:**
-
-The validation timing is owned by
-[Common Spec §6.3](../../32-stream-connector.en.md#63-option-validation).
-In `.NET`, `ZlinkStreamConnectorFactory.Create(options)` checks every
-option, and on a validation failure it builds no `IZlinkStreamConnector`
-instance and delivers the failure to the caller.
-
-| Violation | Failure |
-|---|---|
-| No endpoint | `ZlinkStreamException`'s `ValidationFailed` |
-| Unsupported scheme, URI scheme/`Transport` mismatch | `ZlinkStreamException`'s `ConfigurationError` |
-| A `CompressionCodec` given together with compression turned off | `ZlinkStreamException`'s `ConfigurationError` |
-| An invalid timeout/queue size/heartbeat/reconnect combination | `ZlinkStreamException`'s `ValidationFailed` |
-
-Every timeout and queue size option must be **positive**, and the
-preview length **can't be negative.** `MaxAttempts` must be `null` or
-positive.
+`ZlinkStreamConnectorFactory.Create(options)` rejects an option that fails
+[Common Spec §6.3](../../32-stream-connector.en.md#63-option-validation) before creating the connector
+and throws `ZlinkStreamException` carrying the corresponding error code.
 
 ## 13. Regression Test
 

@@ -248,11 +248,7 @@ public interface ZLinkRelocationStore {
 }
 ```
 
-Reference is opaque UTF-8 `1..4096` bytes the framework issues before
-put, compared as case-sensitive comparison. Re-putting the same
-reference with the same bytes returns `ZLinkBlobAlreadyStored`; with
-different bytes, `ZLinkBlobConflict`. A deleted or expired reference also
-isn't reused for different content.
+[Relocation Store Redis §3–4](../../../05-location-relocation/03-relocation-store-redis.en.md) defines references and idempotent put; Java maps the outcomes to `ZLinkBlobAlreadyStored` and `ZLinkBlobConflict`.
 
 The application state/queue/timer handoff payload of an Actor/Spot
 relocation isn't stored in this Store. The source keeps the payload in
@@ -271,11 +267,7 @@ most 4,096 64-MiB chunks and an immutable root manifest. The framework computes 
 and the root/chunk relationship, and the provider doesn't interpret the
 manifest.
 
-Read returns the original bytes and expiry based on the provider clock.
-Renew and delete retries are idempotent, and delete is a successful
-no-op even when the reference doesn't exist. Since the framework issues
-the reference in advance, storage state can be reconciled after a
-timeout or lost result by reading the same reference exactly.
+[Relocation Store Redis §3–4](../../../05-location-relocation/03-relocation-store-redis.en.md) defines read reconciliation, renew, and delete.
 
 ## Cancellation And Errors
 

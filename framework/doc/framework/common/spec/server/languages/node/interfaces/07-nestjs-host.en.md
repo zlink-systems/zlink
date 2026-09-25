@@ -377,11 +377,8 @@ export declare function zlinkSpotTimerHandler<TSpot extends ZLinkSpot = ZLinkSpo
 
 To run an HTTP request in a server handler, an injected client
 registered by name is used. A registered client is cleaned up together
-with the Nest module's lifetime. `yield()` can only be chosen while the
-current handler is running on a `SpotWide` User Spot or Instance Spot's
-shared turn. In a different handler, it completes with
-`invalidConfiguration`, without submitting the HTTP operation or
-returning the turn.
+with the Nest module's lifetime. The valid context and pre-submission `InvalidOperation` for `yield()`
+are defined by the [execution gate §16](../../../01-execution/02-handler-turn-and-execution-gate.en.md#yield-call-eligibility).
 
 ```ts
 export interface ZLinkNamedHttpClientOptions {

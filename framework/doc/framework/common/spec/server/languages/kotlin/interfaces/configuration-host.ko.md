@@ -3,32 +3,11 @@
 [인터페이스 목차](README.ko.md) · [Java 구성](../../java/interfaces/configuration-host.ko.md) ·
 [MeshNode 공통 계약](../../../03-spot-actor/03-mesh-node.ko.md)
 
-Kotlin application은 Java builder를 직접 사용한다. 규칙은 하나다 — **application type을 `Class` 인자로
-받는 모든 Java 등록 member에는 같은 이름의 reified inline 확장이 있고, Kotlin application은 그 확장을
-쓴다.** 확장은 `Class` 인자를 type parameter로 옮기고 다른 인자는 그대로 두며, 그 `T::class.java`를 같은
-Java member에 넘기는 것이 전부다. 검증·기본값·오류는 Java contract가 소유하고 Kotlin은 더하지 않는다.
-이 문서는 host 구성 member의 확장을, [Channel messaging](channel-messaging.ko.md)은 Channel Server
-builder의 확장을, [Spot 인터페이스](spots.ko.md)는 Spot registry·context의 확장을 선언한다. 그 밖의
-Kotlin DSL은 receiver와 reified type으로 실제 중복을 줄이는 경우에만 제공하며 Java contract에 없는 역할,
-factory default, allocation provider를 만들지 않는다.
-따라서 ClientServer의 Client-only connect와 Server RID·lifecycle generation별 intent 통합, fanout의
-Subscriber-only connect와 automatic·manual subscriber 혼합 금지는
-[Java 구성](../../java/interfaces/configuration-host.ko.md)의 같은 계약을 그대로 적용한다.
-같은 ClientServer ChannelName에는 Java builder의 `client()`와 `server()`를 각각 한 번 등록할 수 있으며
-별도 Kotlin DSL이나 public API를 추가하지 않는다. 두 역할은 `(ChannelName, Role)` key의 별도
-registration으로 하나의 topology를 공유하고 같은 역할의 중복은 startup 오류다. Local Server도 remote
-Server와 같은 readiness·weight·drain 조건으로 선택하며 local
-우선순위나 handler 직접 호출을 사용하지 않는다.
+Kotlin은 Java `client()`와 `server()` builder를 재사용한다. ClientServer와 fanout 연결은 [ClientServer channel](../../../02-channel-transport/03-client-server-channel.ko.md)과 [Channel topology](../../../02-channel-transport/01-channel-topology.ko.md)이 정한다.
 
-Automatic RouteMesh는 RID를 canonical byte order로 비교하고 더 작은 RID의 MeshNode만 상대 endpoint로
-connect한다. Manual topology는 application endpoint 구성에 따라 한쪽 또는 양쪽에서 connect할 수 있다.
-양쪽 연결이나 automatic discovery 경합·오래된 snapshot으로 같은 RID의 pipe가 둘 생길 때의 처리는
-[channel topology](../../../02-channel-transport/01-channel-topology.ko.md)의 공통 규칙을 따른다.
+RouteMesh 연결 방향은 [Channel topology §8](../../../02-channel-transport/01-channel-topology.ko.md)가 정한다.
 
-두 MeshNode가 모두 Object Client이고 양쪽 모두 RouteMesh Channel Server membership이 없을 때만 peer
-connection이 필요하지 않다. Channel Client membership만 등록한 경우도 같다. 어느 한쪽에라도 weight
-`0`을 포함한 Channel Server membership이 있으면 연결이 필요하다. ClientServer와 classic fanout은 별도
-물리 topology이므로 이 판정에 포함하지 않는다.
+Object Client peer 필요성은 [Channel topology §8](../../../02-channel-transport/01-channel-topology.ko.md)가 정한다.
 
 [MeshNode](../../../00-foundation/02-glossary.ko.md#meshnode)의 object role은 `None`, `Client`, `Server` 중 하나다. `objects()`를 호출하지 않으면 `None`,
 `client()`는 outbound manager와 resolve를 제공하고 `server()`는 Client 기능과 [factory](../../../00-foundation/02-glossary.ko.md#factory)·Entry registration을
@@ -170,6 +149,8 @@ Core profile과 Application job queue profile은 Java 공개 계약의 독립된
 snapshot과 bind 전 범위·순서·overflow 검증도 Java 공개 계약과 같다.
 
 ## Kotlin source signature
+
+아래 reified 등록 확장은 모두 type parameter를 `T::class.java`로 같은 이름의 Java member에 넘기고, 다른 인자는 그대로 전달하며, 검증·기본값·오류를 더하지 않는다.
 
 ```kotlin
 fun ZLinkFrameworkOptions.useCoroutineHandlers(dispatcher: CoroutineDispatcher)

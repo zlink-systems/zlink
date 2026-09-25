@@ -39,11 +39,7 @@ without a callback. If Creating, it waits for the authority change, and
 a CAS loser doesn't start a separate factory or callback. A different
 operation receives `Existing` after Ready, competes for a new
 reservation after cleanup, and doesn't share an earlier application
-reply. Only a resend of the same source Node RID/lifecycle
-generation/`OperationId` reads the correlation-free
-`creation-operation-terminal-v1` envelope and re-encodes the reply with
-the current correlation/reply route. The terminal is kept for 5 minutes
-after the original deadline. A callback exception isn't `Rejected` —
+reply. Creation terminal replay and retention follow [Framework API §15](../../../00-foundation/06-framework-api.en.md#15-userinstance-spot-and-actor-factory-registration). A callback exception isn't `Rejected` —
 it's a typed creation failure. A different type is `TypeMismatch`.
 Kotlin doesn't add a local Actor create, directory, resolver, or hidden
 remote retry.
@@ -65,14 +61,11 @@ each Actor participant of a whole
 [User Spot](../../../00-foundation/02-glossary.en.md#entry-user-instance-spot)
 relocation. It isn't called on a same-node join or on a factory that
 selected `disableRelocation()` or `recreateOnRelocation()`. The `ByteArray`
-capture returns has no relocation-adapter-specific size cap. The Java
-runtime copies it at completion and splits the payload into chunks no
+capture returns has no relocation-adapter-specific size cap. The framework splits the payload into chunks no
 larger than `relocationPayloadChunkLimitBytes`, transferring them directly
 over the source–target ordered mesh connection. Source memory is the
 restore origin, and the handoff payload isn't stored in the Relocation
-Store. The adapter owns the array until completion. Restore
-receives a fresh defensive copy per call and doesn't keep it after
-completion. An empty `ByteArray` is also a valid preserved state. The
+Store. Array ownership and lifetime follow [common membership §6](../../../03-spot-actor/05-spot-actor-membership.en.md#6-relocation-policy-shared-by-every-move-path). An empty `ByteArray` is also a valid preserved state. The
 [factory](../../../00-foundation/02-glossary.en.md#factory) creates a fresh Actor
 instance per target attempt and doesn't reuse the source or a previous
 attempt's instance. Restore of the same attempt can be repeated. A
@@ -280,8 +273,4 @@ explicit value is a finite `1..Int.MAX_VALUE` ms rounded up to
 milliseconds. The monotonic absolute deadline is fixed at the moment
 `defer()` is called.
 
-The completion operation ID is an idempotency ID distinct from
-`RelocationId`, reservation ID, or aggregate commit ID. Same-node and
-cross-node completion retry are limited to the current source and
-target process lifetime. After the process ends, a different runtime
-doesn't automatically replay completion.
+[Actor Join completion](../../../03-spot-actor/05-spot-actor-membership.en.md#actor-join-completion) owns the Operation ID purpose and lifetime.
