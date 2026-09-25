@@ -294,6 +294,7 @@ class socket_base_t : public own_t,
     int setsockopt (int option_, const void *optval_, size_t optvallen_);
     int getsockopt (int option_, void *optval_, size_t *optvallen_);
     int get_events (int events_, uint32_t *out_);
+    virtual bool has_route_change () const { return false; }
     int get_events_internal (int events_, uint32_t *out_,
                              bool consume_primary_signaler_ = true);
     void set_all_pipes_nodelay ();
@@ -469,7 +470,9 @@ class socket_base_t : public own_t,
                      uint64_t *route_binding_token_out_ = NULL,
                      zlink::socket_receive_record_scope_t *record_scope_ = NULL,
                      pipe_t::read_admission_fn *admission_ = NULL,
-                     void *admission_userdata_ = NULL);
+                     void *admission_userdata_ = NULL,
+                     bool pin_terminal_source_pipe_out_ = false,
+                     bool *source_pipe_pinned_out_ = NULL);
     // Reads a continuation while record_scope_ retains the receive owner
     // acquired by recv_pipe()/recv_routed(). Multipart callers release the
     // scope only after the complete record has been assembled and published.
@@ -1141,8 +1144,10 @@ class socket_base_t : public own_t,
     }
     command_runtime_t &command_runtime () { return _runtime.command_runtime; }
     const command_runtime_t &command_runtime () const { return _runtime.command_runtime; }
+  protected:
     receive_runtime_t &receive_runtime () { return _runtime.receive_runtime; }
     const receive_runtime_t &receive_runtime () const { return _runtime.receive_runtime; }
+  private:
     monitor_runtime_t &monitor_runtime () { return _runtime.monitor_runtime; }
     const monitor_runtime_t &monitor_runtime () const { return _runtime.monitor_runtime; }
     dispatch_bridge_t &dispatch_runtime () { return _runtime.dispatch_bridge; }
@@ -1558,19 +1563,20 @@ class routing_socket_base_t : public socket_base_t
     bool has_writable_weighted_out_pipes () const;
     bool xsubmit_retry_allowed (const zlink_routing_id_t *target_rid_,
                                 int err_) const ZLINK_OVERRIDE;
-    // ROUTER mutates routes from direct I/O dispatch and supplies a lifecycle
-    // fence. STREAM remains owner-serialized and returns no mutex, avoiding a
-    // partial lock policy on its independent routing path.
+    // ROUTER retains this mutex for cold route lifecycle operations, snapshots,
+    // and reply checkout. Socket-turn owned send and poll paths do not take it.
+    // STREAM returns no mutex for its independent routing path.
     virtual std::mutex *route_lifecycle_mutex () const
     {
         return NULL;
     }
-  private:
+  protected:
     //  Outbound pipes indexed by the peer IDs.
     typedef std::map<blob_t, out_pipe_t> out_pipes_t;
     typedef std::map<pipe_t *, out_pipes_t::iterator> out_pipe_index_t;
     typedef std::set<blob_t> submit_retry_local_rids_t;
     out_pipes_t _out_pipes;
+  private:
     out_pipe_index_t _out_pipe_index;
     submit_retry_local_rids_t _submit_retry_local_rids;
     size_t _writable_weighted_out_pipes;

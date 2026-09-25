@@ -281,6 +281,17 @@ ZLINK_EXPORT zlink_recv_result_t zlink_router_recv (
   size_t *part_count_out_,
   zlink_recv_flags_t flags_);
 
+typedef struct zlink_router_route_t
+{
+    zlink_routing_id_t rid;
+    uint64_t route_generation;
+} zlink_router_route_t;
+
+ZLINK_EXPORT zlink_config_result_t zlink_router_routes_snapshot (
+  void *router_, zlink_router_route_t *routes_out_, size_t capacity_,
+  size_t *route_count_out_);
+ZLINK_EXPORT uint64_t zlink_router_recv_route_generation (void *router_);
+
 /* ========== Raw subscription configuration ========== */
 ZLINK_EXPORT zlink_config_result_t zlink_set_subscription (void *handle_, const char *filter_);
 ZLINK_EXPORT zlink_config_result_t zlink_unset_subscription (void *handle_, const char *filter_);

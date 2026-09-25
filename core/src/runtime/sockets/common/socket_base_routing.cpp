@@ -265,11 +265,8 @@ bool zlink::routing_socket_base_t::has_writable_weighted_out_pipes () const
 }
 
 bool zlink::routing_socket_base_t::xsubmit_retry_allowed (const zlink_routing_id_t *target_rid_,
-                                                          int err_) const
+                                                           int err_) const
 {
-    std::unique_lock<std::mutex> route_lifecycle_lock;
-    if (std::mutex *const sync = route_lifecycle_mutex ())
-        route_lifecycle_lock = std::unique_lock<std::mutex> (*sync);
     if (!target_rid_ || !is_routing_submit_retry_errno (err_))
         return true;
 

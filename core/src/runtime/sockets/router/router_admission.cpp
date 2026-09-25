@@ -21,10 +21,8 @@ int router_t::xselect_routed_submit_target (
   const zlink_routing_id_t *router_rid_or_null_,
   zlink_routed_submit_target_t *target_out_)
 {
-    std::lock_guard<std::mutex> route_lifecycle_lock (
-      _out_pipes_sync);
-    return select_routed_submit_target_locked (
-      router_rid_or_null_, target_out_, NULL, NULL, false);
+    return select_routed_submit_target_in_turn (
+      router_rid_or_null_, target_out_, NULL, NULL, false, NULL);
 }
 
 int router_t::xselect_request_submit_target (
@@ -36,47 +34,40 @@ int router_t::xselect_request_submit_target (
 {
     if (logical_endpoint_out_)
         logical_endpoint_out_->clear ();
-    std::lock_guard<std::mutex> route_lifecycle_lock (_out_pipes_sync);
-    const int rc = select_routed_submit_target_locked (
+    const out_pipe_t *selected_out_pipe = NULL;
+    const int rc = select_routed_submit_target_in_turn (
       router_rid_or_null_, target_out_, transport_connection_id_out_,
-      route_incarnation_id_out_, true);
+      route_incarnation_id_out_, true, &selected_out_pipe);
     if (rc != 0) {
         // Ordinary routed DATA treats an absent or currently unavailable route
         // as a connection failure.  REQUEST has a narrower public contract:
         // a RID that is not present in the routing map is a missing target.
         // Preserve EHOSTUNREACH for an existing-but-unavailable route while
         // normalizing only the absent-map case to ENOENT.
-        if (errno == EHOSTUNREACH
-            && valid_routing_id (router_rid_or_null_)) {
-            const blob_t routing_id (
-              const_cast<unsigned char *> (router_rid_or_null_->data),
-              router_rid_or_null_->size, reference_tag_t ());
-            const out_pipe_t *const out_pipe = lookup_out_pipe (routing_id);
-            if (!out_pipe || !out_pipe->pipe)
-                errno = ENOENT;
-        }
+        if (errno == EHOSTUNREACH && valid_routing_id (router_rid_or_null_)
+            && (!selected_out_pipe || !selected_out_pipe->pipe))
+            errno = ENOENT;
         return -1;
     }
 
-    const blob_t routing_id (
-      const_cast<unsigned char *> (router_rid_or_null_->data),
-      router_rid_or_null_->size, reference_tag_t ());
-    const out_pipe_t *const out_pipe = lookup_out_pipe (routing_id);
-    if (!out_pipe || !out_pipe->pipe
-        || out_pipe->pipe->get_peer_socket_type ()
-             != ZLINK_CORE_SOCKET_ROUTER) {
+    if (!selected_out_pipe || !selected_out_pipe->pipe
+        || selected_out_pipe->pipe->get_peer_socket_type ()
+              != ZLINK_CORE_SOCKET_ROUTER) {
         errno = EPROTOTYPE;
         return -1;
     }
     return 0;
 }
 
-int router_t::select_routed_submit_target_locked (
+int router_t::select_routed_submit_target_in_turn (
   const zlink_routing_id_t *router_rid_or_null_,
   zlink_routed_submit_target_t *target_out_,
   uint64_t *transport_connection_id_out_,
-  uint64_t *route_incarnation_id_out_, bool allow_unpaired_) const
+  uint64_t *route_incarnation_id_out_, bool allow_unpaired_,
+  const out_pipe_t **selected_out_pipe_out_) const
 {
+    if (selected_out_pipe_out_)
+        *selected_out_pipe_out_ = NULL;
     if (transport_connection_id_out_)
         *transport_connection_id_out_ = 0;
     if (route_incarnation_id_out_)
@@ -90,6 +81,8 @@ int router_t::select_routed_submit_target_locked (
       const_cast<unsigned char *> (router_rid_or_null_->data),
       router_rid_or_null_->size, reference_tag_t ());
     const out_pipe_t *out_pipe = lookup_out_pipe (routing_id);
+    if (selected_out_pipe_out_)
+        *selected_out_pipe_out_ = out_pipe;
     if (!out_pipe || !out_pipe->pipe) {
         errno = EHOSTUNREACH;
         return -1;
@@ -130,17 +123,17 @@ int router_t::select_routed_submit_target_locked (
     return 0;
 }
 
-pipe_t *router_t::find_transport_pair_pipe (
+router_t::out_pipe_t *router_t::find_transport_pair_out_pipe (
   const zlink_routing_id_t *target_rid_,
   uint64_t transport_pair_id_,
-  uint64_t transport_pair_generation_) const
+  uint64_t transport_pair_generation_)
 {
     if (!target_rid_ || transport_pair_id_ == 0 || transport_pair_generation_ == 0)
         return NULL;
 
     const blob_t target_rid (const_cast<unsigned char *> (target_rid_->data),
                              target_rid_->size, reference_tag_t ());
-    const out_pipe_t *current = lookup_out_pipe (target_rid);
+    out_pipe_t *current = lookup_out_pipe (target_rid);
     if (current && current->pipe
         && current->pipe->get_transport_lane () == transport_lane_application
         && current->pipe->get_transport_pair_id () == transport_pair_id_
@@ -150,7 +143,7 @@ pipe_t *router_t::find_transport_pair_pipe (
                      static_cast<void *> (current->pipe),
                      static_cast<unsigned long long> (transport_pair_id_),
                      static_cast<unsigned long long> (transport_pair_generation_));
-        return current->pipe;
+        return current;
     }
     // Exact targets are capabilities for the current RID binding. A handover
     // keeps the superseded pipe in _standby_pipes only so it can be promoted
@@ -324,6 +317,7 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_,
                                       bool locally_initiated_,
                                       route_adoption_actions_t *actions_)
 {
+    zlink_assert (actions_);
     const out_pipe_t *const existing_outpipe = lookup_out_pipe (routing_id_);
     if (existing_outpipe) {
         const bool paired_application =
@@ -347,7 +341,7 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_,
             blob_t standby_routing_id (buf, sizeof buf);
             blob_t original_routing_id (
               routing_id_.data (), routing_id_.size ());
-            pipe_->invalidate_router_route_binding ();
+            zlink_assert (!is_selected_pipe (pipe_));
             pipe_->set_router_socket_routing_id (
               standby_routing_id);
             add_out_pipe (
@@ -377,7 +371,11 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_,
         pipe_t *const old_pipe = existing_outpipe->pipe;
         const bool old_locally_initiated = existing_outpipe->locally_initiated;
         const uint32_t old_peer_weight = existing_outpipe->weight;
-        old_pipe->invalidate_router_route_binding ();
+        if (socket_base_t *const held = discard_route_records (
+              old_pipe, &actions_->discarded,
+              &actions_->staged_route_source_pipe,
+              &actions_->staged_reply_token, &actions_->staged_reply_rid))
+            actions_->staged_hold_socket = held;
         if (actions_ && old_pipe->retain_lifetime_ref ())
             actions_->superseded_pipe = old_pipe;
         erase_out_pipe (old_pipe);
@@ -401,10 +399,13 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_,
             actions_->terminate_pipe = old_pipe;
     }
 
-    pipe_->invalidate_router_route_binding ();
+    zlink_assert (!is_selected_pipe (pipe_));
     pipe_->set_router_socket_routing_id (routing_id_);
     add_out_pipe (ZLINK_MOVE (routing_id_), pipe_, locally_initiated_);
-    pipe_->publish_router_route_binding ();
+    pipe_->publish_router_route_binding (next_route_generation ());
+    zlink_assert (is_selected_pipe (pipe_));
+    zlink_assert (lookup_out_pipe (pipe_->get_routing_id ())->pipe == pipe_);
+    publish_route_change (pipe_->get_routing_id (), &actions_->discarded);
     if (actions_)
         actions_->cache_completion = true;
     if (router_debug::enabled ()) {
@@ -421,6 +422,21 @@ void router_t::finish_route_adoption (pipe_t *adopted_pipe_,
 {
     if (!actions_)
         return;
+    finish_route_discard (&actions_->discarded);
+    if (actions_->staged_hold_socket) {
+        actions_->staged_hold_socket->end_public_part_receive_delivery_hold ();
+        actions_->staged_hold_socket = NULL;
+    }
+    if (actions_->staged_route_source_pipe) {
+        actions_->staged_route_source_pipe->release_lifetime_ref ();
+        actions_->staged_route_source_pipe = NULL;
+    }
+    if (actions_->staged_reply_token != 0) {
+        socket_reqrep_internal::revoke_router_reply_target (
+          make_socket_handle (this), &actions_->staged_reply_rid,
+          actions_->staged_reply_token);
+        actions_->staged_reply_token = 0;
+    }
     const bool route_published = actions_->cache_completion;
     if (actions_->superseded_pipe) {
         // A standby keeps its physical lanes, but supersession ends this

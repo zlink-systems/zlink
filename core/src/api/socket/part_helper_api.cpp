@@ -9,6 +9,7 @@
 #include "api/socket/part_helper_internal.hpp"
 #include "api/socket/request_reply_protocol_internal.hpp"
 #include "core/c_api_copy_internal.hpp"
+#include "core/pipe.hpp"
 #include "sockets/common/socket_base.hpp"
 #include "utils/routing_id.hpp"
 
@@ -36,6 +37,8 @@ zlink::part_helper_internal::recv_sequence_state_t::recv_sequence_state_t () :
     request_seq (0),
     transport_pair_id (0),
     transport_pair_generation (0),
+    route_generation (0),
+    route_source_pipe (NULL),
     subscribed (0),
     next_part_index (0),
     public_delivery_hold (false)
@@ -134,13 +137,6 @@ zlink::part_helper_internal::try_take_staged_recv_record (
             return staged_recv_record_error;
         }
 
-        const size_t part_count = recv.buffered_parts.size ();
-        if (parts_capacity_ < part_count) {
-            *part_count_out_ = part_count;
-            errno = ENOBUFS;
-            return staged_recv_record_error;
-        }
-
         metadata_out_->return_source_rid_as_null =
           recv.return_source_rid_as_null;
         metadata_out_->source_node_rid = recv.source_node_rid;
@@ -148,6 +144,15 @@ zlink::part_helper_internal::try_take_staged_recv_record (
         metadata_out_->transport_pair_id = recv.transport_pair_id;
         metadata_out_->transport_pair_generation =
           recv.transport_pair_generation;
+        metadata_out_->route_generation = recv.route_generation;
+
+        const size_t part_count = recv.buffered_parts.size ();
+        if (parts_capacity_ < part_count) {
+            *part_count_out_ = part_count;
+            errno = ENOBUFS;
+            return staged_recv_record_error;
+        }
+
         // Caller slots are uninitialized (whole-message recv does not require
         // init), so adopt rather than move: adopt overwrites without inspecting
         // or closing the destination, avoiding an uninitialized read.
@@ -157,6 +162,8 @@ zlink::part_helper_internal::try_take_staged_recv_record (
             errno_assert (adopt_rc == 0);
         }
         *part_count_out_ = part_count;
+        metadata_out_->route_source_pipe = recv.route_source_pipe;
+        recv.route_source_pipe = NULL;
         held_socket = reset_recv_sequence (&recv);
     }
     if (held_socket)
@@ -174,7 +181,9 @@ int zlink::part_helper_internal::stage_recv_sequence (const std::shared_ptr<hand
                                                       size_t part_count_,
                                                       std::thread::id owner_thread_,
                                                       uint64_t transport_pair_id_,
-                                                      uint64_t transport_pair_generation_)
+                                                      uint64_t transport_pair_generation_,
+                                                      uint64_t route_generation_,
+                                                      zlink::pipe_t *route_source_pipe_)
 {
     if (!state_ || !parts_ || part_count_ == 0) {
         errno = EFAULT;
@@ -195,12 +204,15 @@ int zlink::part_helper_internal::stage_recv_sequence (const std::shared_ptr<hand
     state_->recv.transport_pair_id = transport_pair_id_;
     state_->recv.transport_pair_generation =
       transport_pair_generation_;
+    state_->recv.route_generation = route_generation_;
     if (buffer_recv_parts (&state_->recv, parts_, part_count_) != 0) {
         const int saved_errno = errno;
         reset_recv_sequence (&state_->recv);
         errno = saved_errno;
         return -1;
     }
+    // The caller transfers its receive-turn pin only after staging succeeds.
+    state_->recv.route_source_pipe = route_source_pipe_;
     return 0;
 }
 
@@ -238,8 +250,8 @@ int zlink::part_helper_internal::buffer_recv_parts (recv_sequence_state_t *recv_
 
     for (size_t i = 0; i < part_count_; ++i) {
         if (zlink_msg_move (&recv_->buffered_parts[i], &parts_[i]) != 0) {
-            for (size_t j = 0; j < recv_->buffered_parts.size (); ++j)
-                zlink_msg_close (&recv_->buffered_parts[j]);
+            for (size_t j = 0; j < i; ++j)
+                zlink_msg_move (&parts_[j], &recv_->buffered_parts[j]);
             recv_->buffered_parts.clear ();
             recv_->next_part_index = 0;
             errno = EFAULT;
@@ -320,7 +332,7 @@ int zlink::part_helper_internal::take_recv_part (
 }
 
 zlink::socket_base_t *zlink::part_helper_internal::reset_recv_sequence (
-  recv_sequence_state_t *state_)
+  recv_sequence_state_t *state_, recv_reset_cleanup_t *cleanup_)
 {
     if (!state_)
         return NULL;
@@ -331,9 +343,13 @@ zlink::socket_base_t *zlink::part_helper_internal::reset_recv_sequence (
     state_->active = false;
     publish_buffered_recv_readiness (state_);
 
-    for (size_t i = 0; i < state_->buffered_parts.size (); ++i)
-        zlink_msg_close (&state_->buffered_parts[i]);
-    state_->buffered_parts.clear ();
+    if (cleanup_)
+        cleanup_->parts.take_from (&state_->buffered_parts);
+    else {
+        for (size_t i = 0; i < state_->buffered_parts.size (); ++i)
+            zlink_msg_close (&state_->buffered_parts[i]);
+        state_->buffered_parts.clear ();
+    }
     state_->next_part_index = 0;
 
     state_->family = recv_family_none;
@@ -342,12 +358,33 @@ zlink::socket_base_t *zlink::part_helper_internal::reset_recv_sequence (
     state_->return_source_rid_as_null = true;
     copy_routing_id (NULL, &state_->source_node_rid);
     state_->request_seq = 0;
+    if (state_->route_source_pipe) {
+        if (cleanup_)
+            cleanup_->route_source_pipe = state_->route_source_pipe;
+        else
+            state_->route_source_pipe->release_lifetime_ref ();
+        state_->route_source_pipe = NULL;
+    }
     state_->transport_pair_id = 0;
     state_->transport_pair_generation = 0;
     state_->subscribed = 0;
     state_->topic_id.clear ();
     state_->public_delivery_hold = false;
     return held_socket;
+}
+
+void zlink::part_helper_internal::finish_recv_reset_cleanup (
+  recv_reset_cleanup_t *cleanup_)
+{
+    if (!cleanup_)
+        return;
+    for (size_t i = 0; i < cleanup_->parts.size (); ++i)
+        zlink_msg_close (&cleanup_->parts[i]);
+    cleanup_->parts.clear ();
+    if (cleanup_->route_source_pipe) {
+        cleanup_->route_source_pipe->release_lifetime_ref ();
+        cleanup_->route_source_pipe = NULL;
+    }
 }
 
 int zlink::part_helper_internal::prepare_recv_step (
@@ -398,10 +435,12 @@ void zlink::part_helper_internal::complete_recv_step (const std::shared_ptr<hand
         return;
 
     socket_base_t *held_socket = NULL;
+    recv_reset_cleanup_t cleanup;
     {
         std::lock_guard<std::mutex> lock (state_->mutex);
-        held_socket = reset_recv_sequence (&state_->recv);
+        held_socket = reset_recv_sequence (&state_->recv, &cleanup);
     }
+    finish_recv_reset_cleanup (&cleanup);
     if (held_socket)
         held_socket->end_public_part_receive_delivery_hold ();
 }
@@ -412,10 +451,12 @@ void zlink::part_helper_internal::abort_recv_step (const std::shared_ptr<handle_
         return;
 
     socket_base_t *held_socket = NULL;
+    recv_reset_cleanup_t cleanup;
     {
         std::lock_guard<std::mutex> lock (state_->mutex);
-        held_socket = reset_recv_sequence (&state_->recv);
+        held_socket = reset_recv_sequence (&state_->recv, &cleanup);
     }
+    finish_recv_reset_cleanup (&cleanup);
     if (held_socket)
         held_socket->end_public_part_receive_delivery_hold ();
 }

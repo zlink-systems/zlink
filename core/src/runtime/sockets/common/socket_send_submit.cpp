@@ -757,8 +757,7 @@ int zlink::socket_base_t::prepare_request_submit_target (
             break;
         const bool dealer_wait =
           options.type == ZLINK_CORE_SOCKET_DEALER
-          && (selection_errno == ENOTCONN
-              || selection_errno == ECONNREFUSED);
+          && selection_errno == ENOTCONN;
         if (!dealer_wait || timeout_.timeout_ms == 0) {
             errno = selection_errno;
             return -1;

@@ -11,7 +11,7 @@ SETUP_TEARDOWN_TESTCONTEXT
 
 namespace
 {
-const short undefined_event_bit = 64;
+const short undefined_event_bit = 128;
 
 void test_poll_timeout_and_socket_mask_validation ()
 {

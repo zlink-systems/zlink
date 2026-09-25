@@ -113,11 +113,28 @@ void zlink::fq_t::deactivate (pipe_t *pipe_)
 void zlink::fq_t::deactivate_at (pipes_t::size_type index_)
 {
     pipe_t *const pipe = _pipes[index_];
+    pipe_t *const current_pipe = _more ? _pipes[_current] : NULL;
+    if (current_pipe == pipe) {
+        _more = false;
+        _multipart_abort_pending = true;
+    }
     _active--;
     _pipes.swap (index_, _active);
     publish_pipe_receive_activity (pipe, false);
-    if (_current == _active)
+    if (!preserve_current_pipe (current_pipe, pipe) && _current == _active)
         _current = 0;
+}
+
+bool zlink::fq_t::preserve_current_pipe (pipe_t *current_pipe_,
+                                         pipe_t *removed_pipe_)
+{
+    if (!current_pipe_ || current_pipe_ == removed_pipe_)
+        return false;
+    pipes_t::size_type index = 0;
+    if (!try_get_pipe_index (current_pipe_, &index) || index >= _active)
+        return false;
+    _current = index;
+    return true;
 }
 
 void zlink::fq_t::deactivate_current_after_read_miss ()
@@ -148,11 +165,6 @@ void zlink::fq_t::pipe_terminated (pipe_t *pipe_)
 
     pipe_t *const current_pipe =
       _active > 0 && _current < _active ? _pipes[_current] : NULL;
-    if (_more && pipe_ == current_pipe) {
-        _more = false;
-        _multipart_abort_pending = true;
-    }
-
     //  Remove the pipe from the list; adjust number of active pipes
     //  accordingly.
     if (index < _active)
@@ -162,17 +174,57 @@ void zlink::fq_t::pipe_terminated (pipe_t *pipe_)
     _pipes.erase (pipe_);
     normalize_state ();
 
-    //  Removal uses swaps. Preserve the pipe selected for an in-progress
-    //  fair-queue turn when some other pipe terminates; otherwise the next
-    //  frame could silently come from a different peer.
-    if (current_pipe && current_pipe != pipe_) {
-        pipes_t::size_type current_index = 0;
-        if (try_get_pipe_index (current_pipe, &current_index)
-            && current_index < _active)
-            _current = current_index;
-    } else if (_active > 0) {
+    //  Erase can swap once more after deactivation; preserve the same source.
+    if (!preserve_current_pipe (current_pipe, pipe_) && _active > 0)
         _current = index < _active ? index : 0;
+}
+
+void zlink::fq_t::discard_pending_records (
+  pipe_t *pipe_, std::deque<msg_t> *detached_out_,
+  bool *deferred_delimiter_out_, bool *recheck_out_)
+{
+    normalize_state ();
+    zlink_assert (detached_out_);
+    zlink_assert (deferred_delimiter_out_ && recheck_out_);
+    *deferred_delimiter_out_ = false;
+    *recheck_out_ = false;
+    pipes_t::size_type index = 0;
+    const bool registered = try_get_pipe_index (pipe_, &index);
+
+    if (registered && _record_admission_blocked_set.erase (pipe_) != 0)
+        _record_admission_blocked.erase (
+          std::remove (_record_admission_blocked.begin (),
+                       _record_admission_blocked.end (), pipe_),
+          _record_admission_blocked.end ());
+
+    if (registered && _more && index == _current) {
+        _more = false;
     }
+
+    for (;;) {
+        // Allocate before dequeueing so every consumed frame has an owner.
+        detached_out_->emplace_back ();
+        msg_t *const msg = &detached_out_->back ();
+        const int rc = msg->init ();
+        errno_assert (rc == 0);
+        const bool read = pipe_->read_for_route_discard (msg);
+        if (!read) {
+            if (msg->check () && msg->is_delimiter ())
+                *deferred_delimiter_out_ = true;
+            // An empty read may leave no valid message to close.
+            if (!msg->check ())
+                detached_out_->pop_back ();
+            break;
+        }
+    }
+
+    if (!registered)
+        return;
+    if (index < _active)
+        deactivate_at (index);
+    else
+        publish_pipe_receive_activity (pipe_, false);
+    *recheck_out_ = true;
 }
 
 void zlink::fq_t::activated (pipe_t *pipe_)
@@ -258,20 +310,21 @@ int zlink::fq_t::recv (msg_t *msg_)
 
 int zlink::fq_t::recvpipe (msg_t *msg_, pipe_t **pipe_)
 {
-    return recvpipe_internal<false> (msg_, pipe_, NULL, NULL);
+    return recvpipe_internal<false> (msg_, pipe_, NULL, NULL, NULL, NULL);
 }
 
 int zlink::fq_t::recvpipe_with_record_admission (
   msg_t *msg_, pipe_t **pipe_, pipe_t::read_admission_fn *admission_,
-  void *userdata_)
+  void *userdata_, read_candidate_fn candidate_, void *candidate_userdata_)
 {
-    return recvpipe_internal<true> (msg_, pipe_, admission_, userdata_);
+    return recvpipe_internal<true> (msg_, pipe_, admission_, userdata_,
+                                    candidate_, candidate_userdata_);
 }
 
 template <bool WithAdmission>
 int zlink::fq_t::recvpipe_internal (
   msg_t *msg_, pipe_t **pipe_, pipe_t::read_admission_fn *admission_,
-  void *userdata_)
+  void *userdata_, read_candidate_fn candidate_, void *candidate_userdata_)
 {
     normalize_state ();
 
@@ -315,8 +368,12 @@ int zlink::fq_t::recvpipe_internal (
 #endif
         bool admission_failed = false;
         bool admission_consumed = false;
+        const bool candidate_admitted =
+          !candidate_ || candidate_ (current_pipe, candidate_userdata_);
+        // Rejected candidates are read without record admission so their
+        // owner can discard them without consuming reply capacity.
         const bool fetched =
-          WithAdmission
+          WithAdmission && candidate_admitted
             ? current_pipe->read_with_record_admission (
                 msg_, admission_, userdata_, &admission_failed,
                 &admission_consumed)
@@ -337,6 +394,9 @@ int zlink::fq_t::recvpipe_internal (
                     if (!current_pipe->read (msg_))
                         break;
                 }
+                _more = false;
+                if (_active > 0)
+                    _current = (_current + 1) % _active;
             } else {
                 rc = msg_->init ();
                 errno_assert (rc == 0);
