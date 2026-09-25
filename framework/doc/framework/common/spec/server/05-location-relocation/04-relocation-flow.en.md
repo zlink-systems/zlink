@@ -465,7 +465,7 @@ to the new address arrives at the target first isn't guaranteed.
 | Kind | Values kept when relaying | Result the caller waits for |
 |---|---|---|
 | `send` | Target identity and payload | Confirms only the transport submit result. There's no target application response. |
-| `request` | The value that identifies retries and duplicate delivery as the same work, [Operation identity](../00-foundation/02-glossary.en.md#operation-identity), correlation, reply route, payload, and original absolute deadline | Waits for the settled owner's response, a terminal at the original request deadline, or the source-lease-expiry `Unavailable` terminal in [§4.4](#44-ordered-relay-and-one-way-cutover). If source `Preserve` wins, source processes retained work. |
+| `request` | The value that identifies retries and duplicate delivery as the same work, [Operation identity](../00-foundation/02-glossary.en.md#operation-identity), correlation, reply route, payload, and the remaining request budget; the requester retains its original absolute deadline for terminal completion | Waits for the settled owner's response, a terminal at the original request deadline, or the source-lease-expiry `Unavailable` terminal in [§4.4](#44-ordered-relay-and-one-way-cutover). If source `Preserve` wins, source processes retained work. |
 
 Relocation adds no application ACK to `send`. It doesn't turn a `request` into a new
 operation and doesn't resubmit it against another target, hidden from the caller. The
@@ -627,9 +627,15 @@ redefine those values and only adds the following two.
   the hop count and duration limit Location Runtime sets, no relocation-specific record
   count or byte cap is added.
 
-A followed request carries the original absolute deadline in [§5.2](#52-send-and-request)
-through every hop. Each relay hop bounds its local wait by the remaining time. Relaying never
-extends the client's terminal deadline.
+The original requester's deadline in [§5.2](#52-send-and-request) remains authoritative for its
+terminal result. Wire request commands 22 and 25 carry the remaining request budget as
+`remainingDeadlineMs`. On the first send of a Spot or Actor request, the sender transmits its
+positive remaining budget after earlier stages, rounded up to the next whole millisecond (a budget
+above the u64 millisecond maximum, about 584 million years, saturates to that maximum); if the budget has
+expired, it completes the timeout without transmitting. Each receiving hop sets a local deadline
+from its receive time and the transmitted budget; it forwards only a positive remainder and does
+not forward an expired request. Network transit time can make a receiving hop's local deadline
+later than the requester's deadline. Relaying never extends the requester's terminal deadline.
 
 A late cutover or Session route update being late doesn't indefinitely extend the
 Message Follow period. Conversely, a Session route being applied first doesn't

@@ -427,7 +427,7 @@ Target execution queue에는 payload로 전송된 기존 작업, 전환 경계 �
 | 종류 | Relay할 때 유지하는 값 | Caller가 기다리는 결과 |
 |---|---|---|
 | `send` | 대상 identity와 payload | Transport submit 결과까지만 확인한다. Target application response는 없다. |
-| `request` | Retry나 중복 전달을 같은 작업으로 판정하는 값인 [Operation identity](../00-foundation/02-glossary.ko.md#operation-identity), correlation, reply route, payload와 원래 absolute deadline | 확정된 owner의 response, 원래 request deadline의 terminal 또는 source lease 만료 시 [§4.4](#44-ordered-relay와-one-way-cutover)의 `Unavailable` terminal을 기다린다. Source `Preserve` fence가 이기면 source가 보관 작업을 처리한다. |
+| `request` | Retry나 중복 전달을 같은 작업으로 판정하는 값인 [Operation identity](../00-foundation/02-glossary.ko.md#operation-identity), correlation, reply route, payload와 남은 request 예산. 요청자는 terminal 완료를 위해 원래 absolute deadline을 유지한다 | 확정된 owner의 response, 원래 request deadline의 terminal 또는 source lease 만료 시 [§4.4](#44-ordered-relay와-one-way-cutover)의 `Unavailable` terminal을 기다린다. Source `Preserve` fence가 이기면 source가 보관 작업을 처리한다. |
 
 Relocation은 `send`에 application ACK를 추가하지 않는다. `request`를 새로운 operation으로
 바꾸거나 다른 target에 숨겨서 다시 제출하지 않는다. Source는 relayed request의 caller가
@@ -571,9 +571,13 @@ reply route를 유지한다. Store를 다시 읽거나 application handler를 so
 - Message Follow의 전달량에는 이 handoff가 별도로 두는 상한이 없다 — Location runtime이 정한
   hop 수와 기간 제한 외에 relocation 전용 record 수·byte 상한을 추가하지 않는다.
 
-Follow되는 request는 [§5.2](#52-send와-request)의 원래 absolute deadline을 hop마다
-그대로 전달한다. Relay hop의 local wait도 그 남은 시간 안에서 끝낸다. Client의 terminal
-deadline은 relay로 연장하지 않는다.
+원래 요청자의 [§5.2](#52-send와-request) deadline이 그 terminal 결과를 정한다. Wire의 request
+command(22·25)는 남은 request 예산을 `remainingDeadlineMs`로 싣는다. Spot·Actor request를 처음 보낼 때
+송신자는 앞 단계 뒤에 남은 양수 예산을 다음 정수 millisecond로 올려 싣고(u64 millisecond 최댓값, 약
+5억 8천만 년을 넘는 예산은 그 최댓값으로 싣는다), 예산이 이미 끝났으면 보내지 않고
+timeout으로 완료한다. 받은 hop은 받은 시각과 받은 예산으로 자기 local deadline을 정하고, 남은 값이 양수일
+때만 다음 hop으로 보내며 만료된 request는 보내지 않는다. 전송 시간 때문에 받은 hop의 local deadline이
+요청자의 deadline보다 늦을 수 있다. Relay는 요청자의 terminal deadline을 연장하지 않는다.
 
 Late cutover나 Session route update가 늦었다는 이유로 Message Follow 기간을 무기한 연장하지
 않는다. 반대로 Session route가 먼저 적용됐다는 이유로 이미 이전 주소로 전송된 server
