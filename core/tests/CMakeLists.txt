@@ -529,7 +529,9 @@ endif()
 if(TARGET test_phase3_request_reply_contract)
   set_tests_properties(
     test_phase3_request_reply_contract
-    PROPERTIES TIMEOUT 180)
+    PROPERTIES
+      TIMEOUT 180
+      RESOURCE_LOCK "${NETWORK_INTEGRATION_RESOURCE_LOCK}")
 endif()
 if(TARGET test_zmp_request_reply)
   set_tests_properties(

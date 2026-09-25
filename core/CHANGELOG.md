@@ -32,7 +32,17 @@ are unchanged (`LIBZLINK_ABI_SOVERSION=0`).
 - A blocking DEALER REQUEST submit that knows only weight-0 routes returns
   `NOT_ADMITTED` without waiting (#1087).
 - The PUB/SUB conflate queue is a lock-free SPSC queue, and the writer ledger
-  subtraction for replaced frames is made in one place (#1087).
+  subtraction for replaced frames is made in one place. A replacing record now
+  keeps the replaced record's position in receive order; it no longer moves to
+  the tail, so the receive order across topics can differ from 1.7 (#1087).
+- After `zlink_ctx_shutdown`, a poller wait on a socket source of that context
+  ends without events with `ZLINK_CONFIG_INTERNAL_ERROR` (`ETERM`), and
+  `zlink_completion_recv` ends with `ZLINK_RECV_TERMINATED`. Completions that
+  were not yet received are discarded, as on socket close; 1.7 could still
+  return already published completions depending on command-processing order
+  (#1087).
+- Registering `ZLINK_POLLROUTE` on a source that is not a ROUTER socket fails
+  with `ENOTSUP` (#1087).
 - Public endpoint disconnect waits for bind endpoint release outside the
   socket turn, and monitor lossy state is published with release/acquire
   (#1087).
