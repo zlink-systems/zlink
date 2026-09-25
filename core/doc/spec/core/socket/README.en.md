@@ -441,7 +441,8 @@ option state.
 
 PUB/SUB retain the topic and payload as one complete record. Only unread records of the same
 topic are replaced by the latest record; once reception starts, the complete record is preserved.
-Records for different topics are retained independently.
+A replacement retains the replaced record's position in receive order. Records for different
+topics are retained independently.
 
 `ZLINK_OPT_CONFLATE` remains enabled and queryable as `1` on PUB and SUB. On DEALER, setting it to
 `1` returns `ZLINK_CONFIG_NOT_SUPPORTED` with `ENOTSUP`, setting it to `0` succeeds as a no-op, and
