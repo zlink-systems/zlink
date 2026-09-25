@@ -324,7 +324,8 @@ response에만** 들어간다.
   완료한 뒤 다음 write를 시작한다. 따라서 뒤에 수락한 operation은 먼저 수락한 operation의
   frame write를 앞지르지 않는다.
 - Request timeout은 operation 수락 때 시작해 queue 대기, frame write와 reply 대기를 모두
-  포함한다. Queue 대기 중 만료되면 frame 전송 전 수락 실패로 완료한다. 오류 분류는 §9가 정한다.
+  포함한다. Queue 대기 중 만료되면 frame을 쓰지 않고 실패로 완료한다. 오류 분류는 §9가 정한다.
+- `Send`는 그 frame을 transport에 쓴 뒤 완료한다.
 
 ### 5.3 error payload
 
@@ -625,12 +626,19 @@ state handler 모두 같다. connector를 닫아야만 등록을 없앨 수 있�
 
 **connector는 handler의 완료를 기다리지 않는다.** 등록된 handler — push handler, error handler,
 끊김 handler, 연결 상태 handler, request callback과 Actor lifecycle callback — 를 실행하는 것은 connector의 일이지만 그
-handler가 끝나기를 기다리는 것은 아니다. 종류에 따른 예외는 없다. `close`는 연결 상태 handler와
-끊김 handler를 **실행한 뒤** 돌아오며 그 handler가 끝났는지는 보지 않는다. 재연결 시도가 소진되어
-끊길 때와 transport 오류로 끊길 때도 같다(§6).
+handler가 끝나기를 기다리는 것은 아니다. 종류에 따른 예외는 없다. `close`로 생기는 연결 상태 callback과
+끊김 callback도 다른 callback과 같이 dispatch mode를 따른다. `Immediate`에서는 종료 작업이 그 handler를
+실행하고, `Manual`에서는 `close` 뒤의 다음 dispatch pump에서 실행한다. 어느 경우든 `close`는 handler가
+끝났는지 보지 않는다. 재연결 시도가 소진되어 끊길 때와 transport 오류로 끊길 때도 같다(§6).
 
-connector가 기다리는 것은 자기 것뿐이다 — 보내지 못한 frame의 배출, transport 종료, 대기 중인
-request의 실패 처리. 이것이 끝나면 `close`가 돌아온다.
+connector가 기다리는 것은 자기 것뿐이다 — transport 종료와 대기 중인 operation의 실패 처리. 종료 작업은
+아직 transport에 쓰지 않은 frame을 쓰지 않고, 그 frame의 operation을 `Disconnected`로 실패시킨다. 전달
+방식은 §9.2가 정한다. transport를 닫을 때 상대가 읽거나 응답하기를 기다리지 않는다. Send의 frame이
+transport에 쓰였는지 확인하려면 `close` 전에 그 Send의 완료를 기다린다(§5.2).
+
+위 목록의 handler·callback 밖에서 호출한 `close`는 종료 작업이 끝난 뒤 돌아온다. 그 안에서 호출한
+`close`는 종료 작업을 시작한 뒤 곧바로 돌아오며, 종료 결과는 그 밖에서 호출한 `close`가 기다린다.
+callback이 자기를 실행하는 경로의 종료를 기다리는 순환 대기를 만들지 않기 위해서다.
 
 handler가 값을 돌려주는 언어에서는 그 값이 끝나기를 기다리지 않는다는 뜻이고, handler를 그
 자리에서 실행하는 언어에서는 실행이 곧 끝이므로 차이가 없다. 어느 쪽이든 **끝나지 않는
@@ -664,7 +672,7 @@ handler 하나가 종료를 막지 못한다.**
 | `ConnectTimeout` | 연결 시간 초과 |
 | `FrameDecodeFailed` | frame·header decode 실패(§4.5), 또는 구조가 올바른 Error frame의 JSON payload가 §5.3을 충족하지 않음 |
 | `FrameTooLarge` | payload가 수신 한도를 초과 |
-| `SendFailed` | Send의 queue 대기 만료·전송 실패 또는 Request의 `request_seq` 고갈로 인한 수락 실패 |
+| `SendFailed` | frame 전송 실패 또는 Request의 `request_seq` 고갈로 인한 수락 실패 |
 | `CompressionFailed` | 압축 실패 |
 | `DecompressionFailed` | 압축 해제 실패 |
 | `TlsValidationFailed` | TLS 검증 실패 |
@@ -679,8 +687,9 @@ terminal 여부, 종료 사유와 reconnect 조건을 바꾸지 않는다.
 | `ConfigurationError`, `ValidationFailed` | 호출 실패 | 유지하거나 연결 시도 전 상태 유지 | 없음 | 안 함 |
 | `RequestTimeout` | 해당 request만 실패 | 유지 | 없음 | 안 함 |
 | `ConnectTimeout`, `TlsValidationFailed` | connect 실패 | `Disconnected` | `TransportError` | reconnect option의 시도 정책을 적용 |
-| `Disconnected` | 진행 중인 operation 실패 | transport가 끊겼으면 `Disconnected` | `TransportError` | reconnect option이 켜져 있으면 적용 |
-| `SendFailed` — queue 대기 만료 또는 sequence 고갈 | 해당 operation만 실패 | 유지 | 없음 | 안 함 |
+| `Disconnected` — transport 끊김 | 진행 중인 operation 실패 | `Disconnected` | `TransportError` | reconnect option이 켜져 있으면 적용 |
+| `Disconnected` — `close` | 진행 중인 operation 실패 | `Disconnected` | `ClientClose` | 안 함 |
+| `SendFailed` — sequence 고갈 | 해당 operation만 실패 | 유지 | 없음 | 안 함 |
 | `SendFailed` — transport write 실패 | 해당 operation 실패 | transport가 끊겼으면 `Disconnected`, 아니면 유지 | transport가 끊겼으면 `TransportError`, 아니면 없음 | transport가 끊겼고 reconnect option이 켜져 있으면 적용 |
 | `FrameDecodeFailed` — frame·header | 해당 frame을 전달하지 않고 pending request를 실패시킴 | 종료 | `TransportError` | reconnect option이 켜져 있으면 적용 |
 | `FrameDecodeFailed` — Error JSON payload | [§5.2](#52-request-correlation)의 `request_seq` 수신 대상 | 유지 | 없음 | 안 함 |
@@ -862,6 +871,7 @@ Unity WebGL UPM package는 새 wire runtime을 만들지 않는다. npm package 
 | **flow 비전송** | **outbound frame에 flow 필드와 flag `0x10`이 없고, inbound flow 필드는 구조 검사 뒤 버려지며, one-way `Send`에 correlation id가 없다(§5.5)** |
 | **요청 hook** | **request sending hook이 connector·Actor handle request 모두에서 전송 직전에 등록 순서로 실행되고 추가한 metadata가 frame에 실리며, reply received hook이 성공·실패·timeout·연결 종료마다 한 번 실행되고 결과를 바꾸지 못하며, hook 실패가 request 결과를 바꾸지 않는다(§5.7)** |
 | **이름 두 형태** | **수신 등록·send·request는 connector·Actor handle 수준에서, 대기 표면은 connector 수준에서 이름 명시 형태와 타입 형태를 모두 제공하고 같은 packet 이름에 닿는다(§5)** |
-| **handler와 종료** | **push·error·끊김·연결 상태·Actor bound·Actor unbound handler와 request callback 모두 등록 순서·callback 실패·완료를 기다리지 않는 규칙을 따르며, 끝나지 않는 handler가 있어도 connector가 그 완료를 기다리지 않는다. `close`는 연결 상태 handler와 끊김 handler를 실행한 뒤 돌아온다. 재연결 소진과 transport 오류로 끊길 때도 같은 순서로 실행하고 기다리지 않는다(§7)** |
+| **handler와 종료** | **push·error·끊김·연결 상태·Actor bound·Actor unbound handler와 request callback 모두 등록 순서·callback 실패·완료를 기다리지 않는 규칙을 따르며, 끝나지 않는 handler가 있어도 connector가 그 완료를 기다리지 않는다. `close`로 생기는 연결 상태·끊김 callback은 `Immediate`에서 종료 작업이 실행하므로 callback 밖에서 호출한 `close`가 돌아오기 전에, `Manual`에서 `close` 뒤의 다음 dispatch pump에서 실행된다. handler 안에서 호출한 `close`는 종료를 시작한 뒤 돌아온다. 재연결 소진과 transport 오류로 끊길 때도 같은 순서로 실행하고 기다리지 않는다(§7)** |
+| **close와 쓰지 않은 frame** | **상대가 읽지 않아도 `close`가 돌아오고, transport에 쓰지 않은 frame의 Send·Request는 `Disconnected`로 실패하며, 완료된 Send의 frame은 transport에 쓰여 있다(§5.2·§7)** |
 | **종료 사유 읽기** | **끊긴 뒤 이벤트를 받지 않은 코드도 같은 값을 읽는다. 첫 connect 실패에도 사유가 남고, 재연결해도 지워지지 않는다(§6.2)** |
 
