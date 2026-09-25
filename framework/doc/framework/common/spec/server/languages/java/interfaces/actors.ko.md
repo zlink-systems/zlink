@@ -45,10 +45,7 @@ Actor adapter는 application state를 opaque `byte[]`로 capture·restore하며 
 size 상한을 두지 않는다. Framework는 payload를 `relocationPayloadChunkLimitBytes` 이하의 chunk로 나눠
 source–target ordered mesh 연결로 직접 전송한다. Source memory가 복원 원본이며 handoff payload를
 Relocation Store에 저장하지 않는다. Public state DTO, `TState`, `stateContractId`, state class와
-`ZLinkMessage`를 relocation surface에 두지 않는다. Framework는 capture가 정상 완료한 배열을 즉시
-복사한다. Capture가 반환한 배열은 adapter가 계속 소유하며 completion 뒤 재사용하거나
-변경해도 보존한 payload가 바뀌지 않는다. Restore에는 호출마다 보존한 payload의 fresh defensive copy를 전달하고
-adapter는 stage가 끝난 뒤 그 배열을 보관하지 않는다. 길이가 0인 배열도 유효한 보존 state이며
+`ZLinkMessage`를 relocation surface에 두지 않는다. 배열의 소유권과 수명은 [공통 membership §6](../../../03-spot-actor/05-spot-actor-membership.ko.md#6-모든-이동-경로가-공유하는-relocation-policy)이 정한다. 길이가 0인 배열도 유효한 보존 state이며
 `recreateOnRelocation()`을 선택한 것으로 해석하거나 restore를 생략하지 않는다. Adapter는 owner claim, relocation envelope, generation과 recovery phase를
 받지 않는다.
 
@@ -117,10 +114,7 @@ Actor Join call은 동기 `defer()`만 제공하며 `submit(...)`·`yield(...)`�
 Join을 실행하고 실패하면 barrier를 폐기한다. 결과는 같은 128-bit operation ID의
 `onJoinCompleted(...)` Actor callback으로 전달한다.
 
-Operation ID는 completion idempotency ID이며 `RelocationId`, reservation ID나
-aggregate commit ID가 아니다. Same-node와 cross-node completion retry는 current
-source와 target process lifetime으로 제한한다. Process 종료 뒤 다른 runtime이
-completion을 자동 replay하지 않는다.
+[Actor Join completion](../../../03-spot-actor/05-spot-actor-membership.ko.md#actor-join-completion)이 Operation ID의 목적과 수명을 정한다.
 
 Request 없는 overload는 empty `ZLinkMessage`를 고정한다. Timeout 기본값은 5초이고
 명시 값은 millisecond 올림 기준 유한한 `1..Integer.MAX_VALUE` ms다. `defer()`에서
@@ -275,9 +269,7 @@ current Ready ref만 반환하며 directory와 resolver를 제공하지 않는�
 `Existing`으로 반환한다. Creating이면 authority 변경을 기다리며 CAS loser는
 별도 factory나 callback을 시작하지 않는다. 서로 다른 operation은 Ready 뒤 `Existing`을
 받고 cleanup 뒤 새 reservation을 경쟁하며 앞선 application reply를 공유하지 않는다.
-같은 source Node RID·lifecycle generation·`OperationId`의 재전송만 correlation-free
-`creation-operation-terminal-v1` envelope를 읽고 현재 correlation·reply route로 reply를
-다시 encode한다. Terminal은 original deadline 뒤 5분 동안 유지한다. Callback exception은 `Rejected`가 아니라
+생성 terminal의 재전송과 보존은 [Framework API §15](../../../00-foundation/06-framework-api.ko.md)가 정한다. Callback exception은 `Rejected`가 아니라
 typed creation failure다.
 
 `ActorRef.objectGeneration()`은 `1..Long.MAX_VALUE`다. Typed JSON은 required property `actorId`,

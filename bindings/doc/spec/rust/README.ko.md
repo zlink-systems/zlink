@@ -39,12 +39,12 @@ private `runtime` 모듈이 소스 소유권을 조직화하고, `lib.rs`가 어
 | [Byte HWM과 Auto-HWM](#byte-hwm과-auto-hwm) | Rust `u64`와 Core byte HWM의 매핑 |
 | [Receive flow state](#receive-flow-state) | receive-flow 상태 타입, setter와 monitor 표면 |
 | [필수 능력 커버리지](#필수-능력-커버리지) | 정렬 완료 시 보장해야 할 사용자 대상 능력 |
-| [Spot Get-Or-Create](#spot-get-or-create) | `get_or_create_spot` 계약 |
+| [Spot Get-Or-Create](#spot-get-or-create) | Framework 공개 계약 링크 |
 | [Receive와 Subscribe 형태](#receive와-subscribe-형태) | 저장소 재사용, no-data 구분 |
 | [에러 및 검증 정책](#에러-및-검증-정책) | FFI 경계 검증과 타입 기반 에러 |
 | [성능 정책](#성능-정책) | hot path 제약 |
 | [구현 체크리스트](#구현-체크리스트) | 정렬 선언 전 확인 항목과 필수 검증 명령 |
-| [Actor와 Spot Route 결과](#actor와-spot-route-결과) | route 결과 값 타입과 Actor 대상 send/request |
+| [Actor와 Spot Route 결과](#actor와-spot-route-결과) | Framework 공개 계약 링크 |
 
 ## 공개 계약 소스
 
@@ -120,13 +120,6 @@ bindings/rust/
 |   |   +-- eventing/
 |   |   |   +-- monitor.rs
 |   |   |   +-- poller.rs
-|   |   +-- service/
-|   |   |   +-- spot/
-|   |   |   |   +-- spot_node.rs
-|   |   |   |   +-- spot.rs
-|   |   |   |   +-- actor.rs
-|   |   |   |   +-- spot_operations.rs
-|   |   |   |   +-- spot_models.rs
 |   |   +-- errors/
 |   |   |   +-- errors.rs
 |   |   |   +-- results.rs
@@ -148,11 +141,6 @@ bindings/rust/
 |   |   +-- eventing/
 |   |   |   +-- poller.rs
 |   |   |   +-- timer.rs
-|   |   +-- service/
-|   |   |   +-- spot/
-|   |   |   |   +-- spot_node.rs
-|   |   |   |   +-- spot.rs
-|   |   |   |   +-- actor.rs
 |   |   +-- errors/
 |   |   |   +-- native_errors.rs
 |   |   +-- native/
@@ -202,8 +190,6 @@ bindings/rust/
 리팩터는 아래 Rust 고유의 단축 경로가 제거되어야 비로소 완료된다.
 
 - `contracts` 모듈은 `runtime`이나 `runtime::native`를 re-export하지 않는다.
-- 계약 파일은 공개 service model을 기술하기 위해 런타임 리소스 타입을 import하지
-  않는다.
 - 공개 re-export barrel은 리소스 동작의 출처가 되지 않는다. 선언을 명명된 계약
   모듈과 런타임 구현 모듈로 분리한다.
 - `lib.rs`는 계약 이름과 생성자를 export하며, 런타임 모듈을 export하지 않는다.
@@ -220,8 +206,7 @@ bindings/rust/
   error 같은 구체값은 구체 타입으로 유지한다.
 - Trait는 호출자에게 대체 가능한 동작이나 generic bound가 필요할 때만 사용한다.
   모든 구체 핸들마다 기본으로 trait를 정의하지 않는다.
-- Multipart send, publish, request, reply, SPOT, actor 작업에는 Builder가
-  필수이며, 이를 통해 네이티브 상태를 숨긴다.
+- Raw multipart send, publish, request, reply에는 builder가 필요하며, 이를 통해 native 상태를 숨긴다.
 - `unsafe`와 raw FFI는 private 모듈로 한정한다.
 
 ### Safe FFI RAII Wrapper 배치
@@ -271,8 +256,6 @@ Trait는 호출자에게 대체 가능한 동작이나 generic bound가 필요�
 - `sockets/`: socket 타입/trait, socket option 타입, send/request/reply builder
   계약, stream packet 값과 socket flag.
 - `eventing/`: monitor, monitor event/status, poller, poll event, timer 계약.
-- `service/`: SPOT node, Spot, Actor, topology model, service operation builder를
-  담는 `spot/` 하위 모듈로 둔다.
 - `errors/`: 공개 error 타입, result 도메인, error-code 매핑.
 
 공개 리소스 동작을 위한 단일 통합 `models.rs`나 런타임 export barrel은 피한다.
@@ -290,8 +273,6 @@ Trait는 호출자에게 대체 가능한 동작이나 generic bound가 필요�
 - `sockets/`: socket base 타입, socket kernel, 모든 socket family의 socket 구현,
   콜백 adapter, operation 구현 타입.
 - `eventing/`: poller/timer/monitor 구현과 event materialization 헬퍼.
-- `service/`: SPOT node, Spot, Actor, topology, service
-  operation 구현.
 - `errors/`: 네이티브 에러 변환과 검증 헬퍼.
 - `native/`: FFI 바인딩, 네이티브 로딩, raw 핸들, unsafe 경계 코드.
 
@@ -308,14 +289,8 @@ Trait는 호출자에게 대체 가능한 동작이나 generic bound가 필요�
   `create_router_socket()`, `create_pub_socket()`, `create_sub_socket()`,
   `create_xpub_socket()`, `create_xsub_socket()`, `create_stream_socket()`은
   네이티브 기반 socket 구현을 생성한다.
-- `Context::create_spot_node(...)`는 service 계층 구현을 생성한다.
-- `Spot` 핸들은 `SpotNode::create_spot(...)`, `entry_spot()`,
-  `get_or_create_spot(...)`, 또는 `spot_lookup(...)`을 통해 얻는다. 직접적인
-  `Spot` 생성은 공개되지 않는다.
-- Actor 핸들은 `SpotNode::create_actor(...)`을 통해 생성된다. 직접적인 Actor
-  생성은 공개되지 않는다.
-- `Poller::new(...)`, `Timer::new(...)`, 그리고 timer-on-SPOT 헬퍼가 eventing
-  리소스를 생성한다.
+공개 Spot과 Actor 생성 및 service 소유 timer는 [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md)가 규정한다. 이 binding spec은 Core raw socket, monitor, poller, 일반 timer의 생성을 정의한다.
+- `Poller::new(...)`, `Timer::new(...)`는 eventing 리소스를 생성한다.
 - `Poller`는 `add_monitor(&self, monitor: &SocketMonitor, events: i16, slot: usize) -> Result<(), ConfigError>`,
   `modify_monitor(&self, monitor: &SocketMonitor, events: i16) -> Result<(), ConfigError>`,
   `remove_monitor(&self, monitor: &SocketMonitor) -> Result<(), ConfigError>`로 socket monitor를 source로
@@ -341,8 +316,6 @@ Trait는 호출자에게 대체 가능한 동작이나 generic bound가 필요�
   publish/subscribe 표면.
 - `eventing/`: monitor, monitor snapshot/event, poller, poll event, timer, 공개
   poll 헬퍼.
-- `service/`: SPOT node, SPOT 핸들, topology model, actor
-  ref, actor lifecycle, operation builder.
 - `errors/`: typed error/result 도메인.
 - Enum, flag, result 타입은 그 의미를 정의하는 카테고리에 둔다. 구문으로 선언을
   묶기 위해 `enums` 모듈을 만들지 않는다.
@@ -352,17 +325,13 @@ Trait는 호출자에게 대체 가능한 동작이나 generic bound가 필요�
 - 데이터 플레인 `recv`, routed recv, `subscribe`, subscription-event receive는
   호출자가 제공한 `&mut Received`, `&mut TopicMessage`, 또는
   `&mut SubscriptionEvent` 값을 채우고 `Result<bool, RecvError>`를 반환한다.
-- Send, routed send, publish, request, reply, SPOT 작업, Actor
-  location/session 작업은 typestate builder를 반환한다.
-- Builder의 start 메서드는 대상 identity, topic, channel, routing ID 또는
+- Raw send, routed send, publish, request, reply는 typestate builder를 반환한다.
+- Builder의 start 메서드는 대상 identity, topic, routing ID 또는
   `ReplyToken`만 받는다. Payload, request timeout과 terminal 선택은 builder의
   상태 또는 단계이다.
-- SPOT의 채널 지정 작업은 `send_to_channel(...)`과 `request_to_channel(...)`을
-  사용한다. SPOT의 토픽 publish는 `publish(topic)`을 그대로 유지한다.
 - Operation 시작 메서드와 동일한 이름의 단일 payload 단축 메서드를 추가하지
   않는다. `send(message)`, `send(routing_id, message)`,
-  `publish(topic, message)`, `send_to_channel(channel, message)`,
-  `send_to_spot(..., message)`는 공개 계약 멤버가 아니다. 호출자는
+  `publish(topic, message)`는 공개 계약 멤버가 아니다. 호출자는
   `send(...).message(message).submit()`을 사용한다.
 - Multipart payload는 반복된 `message(...)` 호출로 누적된다. `messages(...)`
   편의 메서드는 동일한 builder 계약에 위임하고 공개 crate 표면에 선언될 때만
@@ -415,8 +384,6 @@ Crate는 명확한 공개 모듈 또는 re-export를 노출해야 한다.
 - Sockets: pair, dealer, router, pub, sub, xpub, xsub, stream, typed option,
   콜백, request/reply, publish/subscribe, stream packet API.
 - Eventing: monitor, monitor snapshot/event, poller, poll event, timer.
-- Service: SPOT node, SPOT 핸들, topology snapshot, actor
-  ref, actor lifecycle, operation builder.
 - Error: core 의미를 보존하는 typed error/result 도메인.
 
 공개 crate는 자주 쓰이는 타입을 crate root에서 re-export할 수 있지만, private
@@ -480,20 +447,14 @@ Socket의 공통 option facade에 있는
   `XSubSocket::subscription_at(index)`는 해당 인덱스의 subscription filter와
   pattern 여부를 반환한다. 해당 인덱스가 없으면 `None`을 반환한다.
 - Monitor, poller, timer, readiness 의미.
-- SPOT node, SPOT 핸들, topology snapshot, actor, stream
-  actor binding.
 
 Rust 이름과 ownership 모델은 C와 다를 수 있지만, 동작은 core 능력의 의미와
 일치해야 한다.
 
 ## Spot Get-Or-Create
 
-Rust는 `SpotNode::get_or_create_spot(&RoutingId) -> Result<(Spot, bool),
-ConfigError>`를 노출한다. 이것은 `zlink_spot_node_spot_get_or_new(...)`에
-직접 매핑되며, `spot_lookup`과 `create_spot`을 조합해서 구현하지 않는다.
-
-반환된 `Spot`은 호출자가 소유하며 일반적인 `Drop` lifetime 규칙을 따른다.
-boolean은 논리적 spot을 생성한 호출에서만 `true`이다.
+공개 Spot `GetOrCreate`의 입력·결과와 owner는
+[Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md#17-creategetorcreate-결과와-relocation-policy)를 따른다.
 
 ## Receive와 Subscribe 형태
 
@@ -504,19 +465,13 @@ boolean은 논리적 spot을 생성한 호출에서만 `true`이다.
   SUB topic/routing ID metadata를 보존한다.
   수신 회계와 결과 수명의 경계는 [공통 수신 ownership 계약](../README.ko.md#receive-ownership)을 따른다.
 - non-blocking no-data는 hard receive 실패와 구별된다.
-- SPOT readable dispatch 이벤트는 readiness 알림이다. 호출자는 매칭되는 receive
-  API를 no-data가 될 때까지 비운다.
 - 반환된 메시지 데이터는 명확한 ownership과 lifetime을 가진다. borrowed 데이터는
   네이티브 owner보다 오래 살아남지 않는다.
-- Actor join request receive 같은 service control/admission receive 경로는
-  재사용 데이터 플레인 저장소보다 명확할 경우 `Option`, nullable 등가물, 또는
-  typed result-return 형식을 사용할 수 있다. 그래도 no-data와 hard receive
-  실패는 구분한다.
 
 ## 에러 및 검증 정책
 
 - 네이티브 고정 크기 id와 문자열은 FFI 경계를 넘기 전에 검증한다.
-- routing id, actor id, endpoint, channel 이름, topic을 조용히 자르지 않는다.
+- routing id, endpoint, channel 이름, topic을 조용히 자르지 않는다.
 - submit, request, recv, handler, close, bind, connect, config 에러 도메인을
   보존한다.
 - 공개 에러는 문자열 파싱이 아니라 Rust 타입으로 검사할 수 있어야 한다.
@@ -541,8 +496,6 @@ boolean은 논리적 spot을 생성한 호출에서만 `true`이다.
 - 공개 free function과 builder convenience 메서드는 런타임 헬퍼가 아니라 공개
   crate 모듈에 선언된다.
 - Receive/subscription 의미는 공통 바인딩 정책과 일치한다.
-- 데이터 플레인의 호출자 제공 저장소와 다른 service control/admission receive
-  예외는 문서화된다.
 - Perf 의미는 `bindings/c/perf`와 일치한다.
 - `src/contracts`는 `src/runtime`에 대한 import 또는 export 의존성을 갖지
   않는다.
@@ -562,7 +515,7 @@ Rust 리팩터 이후 필수 검증. `bindings/rust/`에서 다음 명령을 실
   `cargo clippy --workspace --all-targets -- -D warnings`를 실행한다.
 - `./tests/run_tests.sh`를 실행한다.
 - 공개 예제나 생성 경로가 변경되었을 때 `./samples/run_samples.sh`를 실행한다.
-- Hot path, receive, send, request, poller, timer, 또는 service 동작이
+- Hot path, receive, send, request, poller 또는 timer 동작이
   변경되었을 때 smoke gate로 `./perf/run_benchmarks.sh`와
   `./perf/run_benchmarks_multi.sh`를 실행한다.
 - rustdoc/공개 re-export를 검사하여, crate export가 런타임 구현 모듈이 아닌
@@ -574,20 +527,7 @@ Rust 리팩터 이후 필수 검증. `bindings/rust/`에서 다음 명령을 실
 
 ## Actor와 Spot Route 결과
 
-Rust는 Actor와 Spot route 조회 결과를 공개 값 타입으로 노출한다.
-
-- `ActorRoute`는 해석된 Actor ref, Actor node RID, 현재 Spot RID, 현재 Spot
-  kind를 보존한다.
-- `SpotRoute`는 Spot RID, 소유자 node RID, Spot kind를 보존한다.
-- `SpotKind`는 Entry Spot과 사용자 Spot을 구분한다. 잘못된 kind는 성공한 route
-  결과가 아니다.
-- SpotNode snapshot 항목은 core snapshot과 동일한 Spot kind/현재 Spot 필드를
-  노출한다.
-
-- Rust는 resolve된 Actor ref를 인자로 받는 `SpotNode::send_to_actor(&ActorRef)`와 `SpotNode::request_to_actor(&ActorRef)`를 노출한다.
-- send operation은 submit이 성공하면 하나 이상의 message part 소유권을 넘기고, Actor 소유자 mailbox가 인계를 받으면 완료된다.
-- request operation은 submit이 성공하면 요청 part의 소유권을 넘기고, Actor handler가 만든 reply part를 전달한다.
-- Rust는 제거된 Discovery route table이나 resolver API를 compatibility helper로 되살리면 안 된다.
+공개 Spot/Actor 형태는 [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md).
 
 ## Pull completion 공개 계약
 

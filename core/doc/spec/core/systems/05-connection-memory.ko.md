@@ -60,29 +60,15 @@ memory 비용이고, binding이나 application이 dequeue 뒤 payload를 계속 
 
 ### 3.2 빈 pipe oversize 예외
 
-비어 있는 application pipe는 socket의 최대 message 크기를 넘지 않는 범위에서 HWM보다 큰
-complete message 한 건을 허용하고, 그 뒤의 write를 중단한다. 끝나지 않은 multipart에는 이
-예외를 적용하지 않는다.
+빈 pipe의 complete message 수용 경계와 다음 write 차단은 [Auto HWM의 message 처리 순서](06-auto-hwm.ko.md#message-처리-순서)를 따른다.
 
 ### 3.3 Pending request lifecycle state
 
-Pending map entry, callback과 timeout state는 live request 수에 따라 증가하며
-[pending request 수용 한도](06-auto-hwm.ko.md#pending-request-수용)의 physical pair별 32 MiB
-size-weighted work budget과 unresolved request count 한도 16,384가 completion liveness를
-제한한다. Work charge는 실제 allocator byte나 보관 중인 payload byte가 아니며, queue HWM의
-current·snapshot 값에 포함되지 않는다. Application HWM은 queue에 머무르는 frame만 제한하고
-unresolved correlation의 별도 lifecycle 한도로 재사용되지 않는다.
+Pending map entry, callback과 timeout state는 live request 수에 따라 증가한다. Pair별 work·count 수용 한도와 reservation 반환은 [Auto HWM의 pending request 수용](06-auto-hwm.ko.md#pending-request-수용)을 따른다.
 
 ### 3.4 Completion progress lane
 
-ROUTER-ROUTER의 [completion progress lane](../glossary.ko.md#completion-progress-lane)은
-terminal reply와 error reply를 진행시키고, peer 사이의 receive-flow-state frame을
-동기화하는 별도 경로다. 이 lane에는 byte HWM, LWM, manual HWM과 Core budget
-reservation을 적용하지 않는다. Application pipe가 가득 차도 유효한 completion record와
-receive-flow-state frame은 connection이 유지되고 allocation이 성공하면 수용한다.
-
-DEALER-ROUTER에는 이 별도 connection이 없다. Reply·error reply byte는 DATA·REQUEST와 같은
-Application physical queue의 accounted byte에 포함되며 HWM과 peer PAUSED를 적용한다.
+ROUTER-ROUTER의 [completion progress lane](../glossary.ko.md#completion-progress-lane)은 terminal reply·error reply와 receive-flow-state frame의 별도 경로다. 이 lane과 DEALER-ROUTER Application queue의 HWM·회계는 [Auto HWM §2 Completion lane HWM·회계](06-auto-hwm.ko.md#2-auto-hwm-budget-계산)를 따른다.
 
 Completion lane의 `SNDBUF`·`RCVBUF` 기본값 `-1`은 transport 종류와 관계없이 OS 기본값과
 autotuning을 유지한다. Application이 0 이상의 값을 명시하면 completion lane에는 최대 64 KiB로
@@ -126,15 +112,8 @@ connection memory 관점에서 확인할 항목은 다음과 같다. 각 항목�
 - frame charge의 증가·전환·반환과 HWM admission의 관찰 항목은 [Auto HWM §5](06-auto-hwm.ko.md#5-구현-및-contract-test-검증-요구)가 소유한다. 이 문서는 항목을 반복하지 않는다.
 
 **oversize와 completion**
-- 빈 application pipe에 socket 최대 message 크기 이내이며 HWM보다 큰 complete message를 보내면 한 건 수락되고, 그 뒤의 write는 중단된다.
-- 끝나지 않은 multipart에는 빈 pipe oversize 예외가 적용되지 않는다.
-- ROUTER-ROUTER application pipe가 가득 찬 상태에서도 유효한 reply·error reply는 connection이
-  유지되고 allocation이 성공하면 Completion lane으로 수용된다.
-- RUNNING·PAUSED receive-flow-state frame은 DEALER-ROUTER에서 single Application connection의
-  Core control 경로로, ROUTER-ROUTER에서 Completion lane으로 동기화된다.
-- ROUTER-ROUTER completion progress lane에는 byte HWM, LWM, manual HWM과 Core budget reservation이 적용되지 않는다.
-- DEALER-ROUTER reply·error reply는 Application physical queue byte에 포함되고 HWM·PAUSED를
-  적용하며 Completion current·peak·pending 회계에는 포함되지 않는다.
+- 빈 queue oversize와 pending request 수용 검증은 [Auto HWM의 검증 요구](06-auto-hwm.ko.md#5-구현-및-contract-test-검증-요구)를 참조한다.
+- Completion lane의 운반은 [ZMP request-reply lane](../protocol/01-zmp.ko.md#41-request-reply-lane), HWM·회계는 [Auto HWM §2 Completion lane HWM·회계](06-auto-hwm.ko.md#2-auto-hwm-budget-계산)를 참조한다.
 
 **측정**
 - monitor는 application queue·completion의 current byte와 oversize 허용 이력을 구분해 보고하고, retained-credit 호환 field는 항상 0으로 보고한다.

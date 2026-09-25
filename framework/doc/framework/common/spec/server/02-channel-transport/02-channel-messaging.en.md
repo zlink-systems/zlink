@@ -225,10 +225,10 @@ sequenceDiagram
     Transport->>Target: deliver the message
 ```
 
-The diagram above shows target selection and async submit completion for a one-way
-send. Normal completion means the selected send path's source-local queue accepted
-the message. The framework doesn't return acceptance status, the selected RID, or
-server identity as an application result.
+The diagram above shows target selection and the async submit path for a one-way send.
+The completion boundary is defined by
+[Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary).
+The framework does not return the selected RID or server identity as an application result.
 
 ### The Candidate List and Selection Order Are Prepared in Advance Whenever State Changes
 
@@ -331,8 +331,8 @@ allowed. In this case host startup fails.
 ## 5. Why There Is No Automatic Resend After Selection
 
 After the framework selects a target and submits the request, a connection closure
-or timeout can occur. In this case the same request isn't automatically resent to a
-different Server member.
+or timeout can occur. The resubmission boundary for the request in this case is defined by
+[Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 
 This is because the first target may have already run the request, with only the
 reply not delivered. Resending to a different target could run the same work twice.

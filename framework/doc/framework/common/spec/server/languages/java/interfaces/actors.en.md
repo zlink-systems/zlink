@@ -56,12 +56,7 @@ source–target ordered mesh connection. Source memory is the restore
 origin, and the handoff payload isn't stored in the Relocation Store. A
 public state DTO, `TState`,
 `stateContractId`, state class, and `ZLinkMessage` aren't put on the
-relocation surface. The framework immediately copies the array once
-capture completes normally. The array capture returns is still owned by
-the adapter — reusing or changing it after completion doesn't change the
-preserved payload. Restore is passed a fresh defensive copy of the preserved
-payload per call, and the adapter doesn't keep that array after the
-stage finishes. A zero-length array is also a valid preserved state — it
+relocation surface. Array ownership and lifetime follow [common membership §6](../../../03-spot-actor/05-spot-actor-membership.en.md#6-relocation-policy-shared-by-every-move-path). A zero-length array is also a valid preserved state — it
 isn't interpreted as choosing `recreateOnRelocation()` or omitting
 restore. The adapter doesn't receive owner claim, relocation envelope,
 generation, or recovery phase.
@@ -168,11 +163,7 @@ normally, the Join runs; if it fails, the barrier is discarded. The
 result is delivered via the `onJoinCompleted(...)` Actor callback with
 the same 128-bit operation ID.
 
-Operation ID is a completion idempotency ID, not a `RelocationId`,
-reservation ID, or aggregate commit ID. Same-node and cross-node
-completion retry are limited to the current source and target process
-lifetime. After the process ends, a different runtime doesn't
-automatically replay completion.
+[Actor Join completion](../../../03-spot-actor/05-spot-actor-membership.en.md#actor-join-completion) owns the Operation ID purpose and lifetime.
 
 The overload with no request fixes an empty `ZLinkMessage`. The default
 timeout is 5 seconds, and an explicit value is a finite `1..Integer.MAX_VALUE`
@@ -334,11 +325,7 @@ Actor of the same type as `Existing`, without a callback. If Creating, it
 waits for the authority change, and a CAS loser doesn't start a separate
 factory or callback. A different operation receives `Existing` after
 Ready, competes for a new reservation after cleanup, and doesn't share an
-earlier application reply. Only a resend of the same source Node
-RID/lifecycle generation/`OperationId` reads the correlation-free
-`creation-operation-terminal-v1` envelope and re-encodes the reply with
-the current correlation/reply route. The terminal is kept for 5 minutes
-after the original deadline. A callback exception isn't `Rejected` — it's
+earlier application reply. Creation terminal replay and retention follow [Framework API §15](../../../00-foundation/06-framework-api.en.md#15-userinstance-spot-and-actor-factory-registration). A callback exception isn't `Rejected` — it's
 a typed creation failure.
 
 `ActorRef.objectGeneration()` is `1..Long.MAX_VALUE`. Typed JSON uses

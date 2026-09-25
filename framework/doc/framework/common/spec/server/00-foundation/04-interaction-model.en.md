@@ -20,25 +20,23 @@ currently processes a global Spot or Actor is called
 
 | Model | Target selection | Completion the caller observes |
 |---|---|---|
-| node direct send | The caller directly specifies one RID belonging to the same [MeshName](02-glossary.en.md#meshname) — a name identifying one [RouteMesh](02-glossary.en.md#routemesh) physical connection group. | Completes with no return data once the source-local queue accepts the message. |
+| node direct send | The caller directly specifies one RID belonging to the same [MeshName](02-glossary.en.md#meshname) — a name identifying one [RouteMesh](02-glossary.en.md#routemesh) physical connection group. | Follows the one-way completion boundary in [Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary) |
 | [node direct](02-glossary.en.md#node-direct) request | The caller directly specifies one RID belonging to the same MeshName. | Completes with one of reply, timeout, or route error. |
-| channel send | The framework selects one ready target from the [RouteMesh](02-glossary.en.md#routemesh) — a scope in which multiple MeshNodes participate and exchange node and Channel messages — or ClientServer send paths registered under [ChannelName](02-glossary.en.md#channelname) — a name identifying the Channel scope a message is sent to. | Completes with no return data once the selected send path's source-local queue accepts it. |
+| channel send | The framework selects one ready target from the [RouteMesh](02-glossary.en.md#routemesh) — a scope in which multiple MeshNodes participate and exchange node and Channel messages — or ClientServer send paths registered under [ChannelName](02-glossary.en.md#channelname) — a name identifying the Channel scope a message is sent to. | Follows the one-way completion boundary in [Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary) |
 | channel request | The framework selects one [ready target](02-glossary.en.md#ready-target) from the [RouteMesh](02-glossary.en.md#routemesh) or ClientServer send paths registered under `ChannelName`. | Completes with one of reply, timeout, or route error. |
 | [Logical Multicast](02-glossary.en.md#logical-multicast) | The framework selects matching targets among `ChannelName`'s remote members and local Spots. | Completes with no return data once it starts the publish transaction. Doesn't wait for per-target submission or handler completion. |
-| Spot message | The caller specifies a global [Spot ID](02-glossary.en.md#spot-id) — a globally unique logical address identifying a Spot — and the framework finds the [owner](02-glossary.en.md#owner) of the current [Ready](02-glossary.en.md#ready) — the state where a Spot can receive application messages — [authority](02-glossary.en.md#authority). | Send completes with no return data after source-local queue acceptance; request completes with the reply result. |
-| Actor message | The caller specifies a global Actor ID and the framework finds the current [Ready](02-glossary.en.md#ready) authority's owner. | Send completes with no return data after source-local queue acceptance; request completes with the reply result. |
+| Spot message | The caller specifies a global [Spot ID](02-glossary.en.md#spot-id) — a globally unique logical address identifying a Spot — and the framework finds the [owner](02-glossary.en.md#owner) of the current [Ready](02-glossary.en.md#ready) — the state where a Spot can receive application messages — [authority](02-glossary.en.md#authority). | Follows the one-way completion boundary in [Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary); requests complete with the reply result |
+| Actor message | The caller specifies a global Actor ID and the framework finds the current [Ready](02-glossary.en.md#ready) authority's owner. | Follows the one-way completion boundary in [Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary); requests complete with the reply result |
 | Object create/get-or-create | The caller specifies a global ID and stable type, adding placement intent if needed. | Returns an `ActorRef`/`SpotRef` pointing at the created object, or a typed creation error. |
-| classic fanout | The framework uses the set of ready subscribers with a matching topic subscription as the target. | Completes with no return data once the local publisher queue accepts it. |
-| STREAM | The caller uses the connection identified by session RID. | A one-way packet completes with no return data after local queue acceptance; a request returns a reply. |
+| classic fanout | The framework uses the set of ready subscribers with a matching topic subscription as the target. | Follows the one-way completion boundary in [Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary) |
+| STREAM | The caller uses the connection identified by session RID. | Follows the one-way completion boundary in [Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary); requests complete with the reply result |
 
 The method by which the framework picks one matching target in a Channel operation
 is called `select-one`.
 
-This table's "completion" is the completion boundary of each interaction
-*model*. The summary of message *kinds* (Send, Request, Logical Multicast,
-[Classic fanout](02-glossary.en.md#classic-fanout) publish, STREAM send/request) and their completion conditions is
-defined by
-[Message Model "2. Message Kinds And Completion"](05-message-model.en.md#2-message-kinds-and-completion).
+The one-way completion boundary in this table is defined by
+[Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary).
+Message kinds are defined by [Message model §2](05-message-model.en.md#2-message-kinds-and-completion).
 
 ## 2. The Public Interface That Starts an Interaction
 
@@ -125,8 +123,8 @@ public interface IZLinkSessionClient
 }
 ```
 
-A `Send...` call waits up to local outbound admission via `Async()` and completes
-with no return value. A `Request...` call waits for a reply via `Async<TReply>()`.
+A `Send...` call uses `Async()`; its one-way completion boundary is defined by
+[Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary). A `Request...` call waits for a reply via `Async<TReply>()`.
 Even in a language declaring `Yield<TReply>()`, this operation can only be used on
 the shared turn of a `SpotWide` User Spot or Instance Spot.
 
@@ -160,28 +158,20 @@ connection until the logical diagram's selection finishes.
 - **Node direct is used for infrastructure and explicit owner routing.** If the
   target RID isn't a current Mesh member, it ends with `NotFound`; if it's a
   member but the pipe isn't ready, it waits up to the send-readiness limit and
-  then ends with `Unavailable`. A Node direct operation doesn't automatically
-  resend a failed request to a different node.
+  then ends with `Unavailable`. The Node direct request resubmission boundary is defined by
+  [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 - **A global Spot/Actor message only uses a cached Ready route and a committed
   [Message Follow](02-glossary.en.md#message-follow) — the action of forwarding a
   message that arrives at the previous owner node, on behalf of the new owner,
   after relocation — route.** If it can't relay to the current owner within the
   Message Follow limit, it ends with `Unavailable`, and the source doesn't read
   the Store and resubmit the same operation to a different owner.
-- **A Channel operation first decides the process-local send path by
-  ChannelName.** A RouteMesh path picks one, with weight greater than 0, from
-  the ready members at the moment of the call; a ClientServer path picks one
-  from ready servers. No application callback sits between selection and
-  submit.
-- **[Weight](02-glossary.en.md#weight) 0 excludes it from new channel
-  selection, and on RouteMesh also excludes it from Logical Multicast remote
-  targets.** It doesn't affect RID direct or an already-submitted operation.
-- **Immediately before starting the first binding operation, select-one picks
-  one current eligible member of the same
-  [ChannelName](02-glossary.en.md#channelname).** Once the binding operation
-  starts, the selected target is fixed and Core owns HWM retry and completion. The
-  framework neither reselects the target for capacity nor replays the
-  operation. A direct call doesn't use this selection rule.
+- Channel operation process-local send path, select-one choice, and submit order follow [Channel Messaging §3](../02-channel-transport/02-channel-messaging.en.md#3-how-to-select-a-target--channelname-select-one-selection-order-weighted-round-robin).
+- ChannelName weight `0` selection follows [Channel Messaging §3](../02-channel-transport/02-channel-messaging.en.md#3-how-to-select-a-target--channelname-select-one-selection-order-weighted-round-robin).
+  Logical Multicast remote targets follow [Spot Messaging](../03-spot-actor/02-spot-messaging.en.md).
+- **The select-one target commitment and HWM retry boundary are defined by
+  [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).**
+  Direct calls do not use select-one.
 - **Node direct keeps RID, Spot/Actor keeps global ID, and session keeps a
   binding token — physical peer lifecycle generation isn't exposed as public
   target identity.**
@@ -219,23 +209,22 @@ sequenceDiagram
     else admission fails by send timeout
         Src-->>App: completes with DeadlineExceeded (the send itself failed)
     end
-    Note over Src,Tgt: Whichever path it ends on, the framework doesn't<br/>automatically resubmit the same request
+    Note over Src,Tgt: Submit and completion §5 defines request resubmission
 ```
 
-- **`send` provides only a single async submit — it doesn't provide a
-  synchronous terminator that tries once immediately.** The return isn't
-  confirmation that the destination handler ran — it indicates whether the
-  framework accepted the message onto the local outbound queue.
+- **`send` provides one async submit.** The one-way completion boundary and terminator kinds are
+  defined by [Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary).
 - **If the queue is temporarily full, it waits for admission up to a finite
   send timeout.** A one-way error occurring after acceptance is reported
   through the standard logger/telemetry provider configured by the application
   and through monitoring. The framework provides no dedicated runtime error
   sink.
 - **Global Spot/Actor send also uses the same async terminator.** The source
-  resolves the current Ready authority and completes the submit via local
-  outbound admission. A cache hit also keeps the same public meaning, so it
+  resolves the current Ready authority. The completion boundary is defined by
+  [Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary). A cache hit also keeps the same public meaning, so it
   neither provides a synchronous submit depending on cache state, nor requires
-  the caller to supply an owner node and generation.
+  the caller to supply an owner node and generation. The completion boundary is defined by
+  [Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary).
 - **A message call doesn't create a Missing object's creation intent by
   default.** Only when Instance intent is specified on a Spot-specific fluent
   call, and no Instance Spot is running, is a new Spot created and prepared to
@@ -244,26 +233,12 @@ sequenceDiagram
   still only takes a global [Spot ID](02-glossary.en.md#spot-id) — an optional
   [stable type](02-glossary.en.md#stable-type) and initial Mesh are cold
   activation options on the fluent call.
-- **A valid one-way call completes with no return value once [source-local admission](02-glossary.en.md#source-local-admission),
-  the source-side queue acceptance boundary, succeeds.**
-  - If capacity isn't secured by the send timeout, it
-    completes with [`DeadlineExceeded`](02-glossary.en.md#deadlineexceeded) — a
-    framework exception raised when an operation's completion condition isn't
-    met by its allowed deadline.
-  - A missing target/route and runtime
-    shutdown complete with an operation-specific exception.
-  - Invalid
-    argument/handle/state and a duplicate submit are also local exceptional
-    completions.
-  - Cancellation is expressed as that language's cancelled
-    awaitable.
-  - The framework never automatically resubmits the operation after
-    any terminal completion.
+- **The one-way completion, failure, and resubmission boundaries are defined by
+  [Submit and completion §§4–5](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary).**
 - **`request` builds reply correlation on the selected send path and delivers
   the terminal result exactly once.** Request timeout is the time waiting for
-  a reply, and send-stage backpressure is handled by send timeout. The
-  framework doesn't automatically resend a request that ended in route error
-  or timeout. Each language's transport error is converted into one of this
+  a reply, and send-stage backpressure is handled by send timeout. The resubmission boundary after route error or timeout is defined by
+  [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification). Each language's transport error is converted into one of this
   document's closed framework results — a transport-specific result isn't
   exposed on the public call.
 - **A request started from a Spot preserves the original activation and
@@ -422,8 +397,9 @@ is as follows.
 4. The framework restores the first record to the head of the local queue, then opens the
    activation barrier.
 
-A node that loses the race takes the winner's result as is. It neither runs the factory
-separately nor re-sends the message.
+A receiver that loses the first-message `Reserve` does not use the winner's result or
+forward its admitted operation. It completes that operation under
+[Spot address messaging §4.2](../03-spot-actor/06-spot-address-messaging.en.md#42-when-several-nodes-receive-the-first-message-at-once).
 
 ### `ActorRef` and `SpotRef` — A Snapshot of Where It Was
 
@@ -645,8 +621,7 @@ verify the following. Each item maps to one test.
 
 **Completion**
 
-- A node direct send, channel send, Spot/Actor send, and STREAM one-way packet
-  complete with no return data once the source-local queue accepts them.
+- Verify node direct, channel, Spot/Actor, and STREAM one-way completion against [Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary).
 - A node direct request, channel request, Spot/Actor request, and STREAM
   request complete with one of reply, timeout, or route error.
 - Object create/get-or-create returns an `ActorRef`/`SpotRef` pointing at the
@@ -662,8 +637,7 @@ verify the following. Each item maps to one test.
 
 - If the queue is full and admission doesn't succeed by the send timeout, it
   ends with `DeadlineExceeded`.
-- The framework doesn't automatically resubmit a request that ended in route
-  error or timeout.
+- Verify request resubmission after route error or timeout against [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 - If a reply is submitted twice with the same reply token, the second call
   ends as a local exceptional completion.
 - A request whose reply route can be restored completes with a structured

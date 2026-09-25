@@ -30,12 +30,12 @@ directly is used only for transport inspection and codec extension implementatio
 ## 2. Message Kinds and Completion
 
 The public interface that starts each interaction, and how its target is selected,
-is owned by the [Interaction Model](04-interaction-model.en.md). This section
-defines only the message *kind* and its completion condition.
+is owned by the [Interaction Model](04-interaction-model.en.md). This section defines the message *kind*. The one-way completion boundary is defined by
+[Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary).
 
 | Kind | Meaning | Completion |
 |---|---|---|
-| Send | A one-way message delivered once to a target handler | Completes with no return data once the source-local queue accepts it; doesn't wait for the remote handler to complete |
+| Send | A one-way message delivered once to a target handler | Follows the one-way completion boundary in [Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary) |
 | Request | A message where the target handler returns a reply or an error | Completes exactly once, with a reply, an error, a timeout, or a cancellation |
 | [Logical Multicast](02-glossary.en.md#logical-multicast) | A message published to matching Spots at each MeshNode of the target ChannelName | Completes with no return data once source-local capacity is secured and publish begins; doesn't tally per-target counts for monitoring |
 | [Classic Fanout](02-glossary.en.md#classic-fanout) publish | A message published to the subscribers of an independent fanout channel | Completes with no return data once the local publisher queue accepts it; doesn't confirm subscriber receipt |

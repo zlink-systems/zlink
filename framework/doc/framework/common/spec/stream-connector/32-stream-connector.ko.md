@@ -296,9 +296,8 @@ payload를 기준으로 하므로 압축을 요청한 송신은 압축 결과를
 `request_seq`는 runtime이 관리하는 `u64` correlation sequence이며 **request·response·error
 response에만** 들어간다.
 
-- 같은 connector 인스턴스 안에서 **동시에 pending인 request 사이에 `request_seq`가 중복되면
-  안 된다.**
-- 값 `0`은 사용하지 않는다.
+`request_seq`는 `0`을 사용하지 않고 connector 인스턴스가 살아 있는 동안 재사용하지 않는다.
+사용 가능한 `u64` 값을 모두 사용하면 새 Request를 수락하지 않는다. 오류 분류는 §9가 정한다.
 
 **매칭 규칙:**
 
@@ -306,16 +305,24 @@ response에만** 들어간다.
 |---|---|
 | `Send` 전송 | `request_seq` 없이 보낸다. pending map에 넣지 않는다 |
 | `Request` 전송 | 새 `request_seq`를 부여하고 pending map에 등록한다 |
-| `Response` 수신 | 같은 `request_seq`의 pending request를 **성공으로 완료**한다 |
-| `Error` 수신 — `request_seq` 있음 | 같은 `request_seq`의 pending request를 **실패로 완료**한다 |
-| `Error` 수신 — `request_seq` 없음 | pending request와 무관한 **stream 수준 오류**로 error 표면에 전달한다(§9) |
+| `Response` 수신 — `request_seq`가 pending request와 일치 | 해당 request를 **성공으로 완료**한다 |
+| `Response` 수신 — terminal request 또는 일치하는 pending request 없음 | 버린다. 두 번째 terminal을 만들지 않는다 |
+| `Error` 수신 — `request_seq`가 pending request와 일치 | 해당 request를 **실패로 완료**한다 |
+| `Error` 수신 — `request_seq`가 없거나 pending request와 불일치 | pending request와 무관한 **stream 수준 오류**로 error 표면에 전달한다(§9) |
 
 - **pending request 매칭은 `request_seq`가 정본이다.** `Response`와 `Error`에는 **packet name
   필드가 아예 없으므로**(`name_len = 0`) 이름으로 대조할 수도 없다. 어떤 응답인지는 sequence가
   이미 정한다. STREAM session에서 Actor request를 relay할 때도 같은 terminal reply 원칙을 사용한다
   ([Session Actor Dispatch §3](../server/04-session/02-session-actor-binding.ko.md#5-bind와-relay)).
-- **request timeout·close·disconnect가 발생하면 pending request는 모두 실패로 완료하고 map에서
+- **request timeout·close·disconnect가 발생하면 pending request는 실패로 완료하고 map에서
   제거한다.** 재연결 후 자동 재전송하지 않는다(§6).
+- Outbound operation은 연결 상태와 입력 검증을 통과해 connector의 송신 순서에 등록될 때
+  수락한다. 이 수락은 frame을 write queue에 넣을 자리를 기다리기 전에 일어난다.
+- Write queue는 자리를 기다리는 operation까지 수락 순서대로 유지하고 frame write를 하나씩
+  완료한 뒤 다음 write를 시작한다. 따라서 뒤에 수락한 operation은 먼저 수락한 operation의
+  frame write를 앞지르지 않는다.
+- Request timeout은 operation 수락 때 시작해 queue 대기, frame write와 reply 대기를 모두
+  포함한다. Queue 대기 중 만료되면 frame 전송 전 수락 실패로 완료한다. 오류 분류는 §9가 정한다.
 
 ### 5.3 error payload
 
@@ -480,7 +487,7 @@ await connector.Close.Async(cancellationToken);    // callback 밖에서는 공�
 
 - 자동 reconnect는 **기본으로 켜져 있다.**
 - reconnect 중의 send는 큐에 저장하지 않고 **`Disconnected` 오류로 실패**한다.
-- 연결이 끊기면 **pending request는 모두 실패**하며, reconnect 후 **자동 재전송하지 않는다.**
+- 연결이 끊긴 request의 terminal 결과와 재전송 여부는 [§5.2](#52-request-correlation)가 정한다.
 - **reconnect 최대 시도 횟수는 무제한을 표현할 수 있어야 한다.** 표현 수단(널 값, 음수, 이름
   붙인 상수 등)은 언어 문서가 소유한다. 연결이 복구될 때까지 계속 시도하는 client는 큰 수를
   적는 대신 무제한을 지정하며, 그래야 시도 횟수가 유한한 구성과 구분된다.
@@ -524,7 +531,7 @@ await connector.Close.Async(cancellationToken);    // callback 밖에서는 공�
 | [dispatch mode](../server/00-foundation/02-glossary.ko.md#dispatch-mode) | `Manual`(§7) |
 | codec | JSON(§5.4) |
 | 압축 | Lz4(§8) |
-| 송신·수신 payload 한도 | 각 64KB(§4.7) |
+| 송신·수신 payload 한도 | [§4.7](#47-payload-크기-한도) |
 | TLS 인증서 검증 | 켜짐 — 검증 생략 option의 기본값은 꺼짐이며 테스트의 자체 서명 인증서에만 사용한다 |
 
 ### 6.2 종료 사유
@@ -564,6 +571,18 @@ disconnect 이벤트가 사유를 인자로 함께 전달하는 것은 이 읽�
 - endpoint와 transport의 정합(§3.1), connect·request·wait timeout, heartbeat interval과 timeout,
   reconnect 지연·backoff 계수·최대 시도, 송신·수신 payload 한도, codec과 압축 설정, dispatch mode를
   **모두 확인한다.** §6.1의 기본값을 적용한 뒤의 값을 검증한다.
+
+| Option | 허용 값·항목 간 제약 |
+|---|---|
+| endpoint | 비어 있지 않은 URI이고 scheme은 §3.1의 transport와 일치한다 |
+| connect·request·wait timeout, heartbeat interval·timeout, reconnect 초기·최대 지연, outbound queue 크기 | 양수 |
+| reconnect backoff 계수 | 양수 |
+| reconnect 최대 시도 | 무제한 또는 양수 |
+| 송신·수신 payload 한도 | 양수이며 §4.7의 한도를 따른다 |
+| preview 길이 | 음수가 아니다 |
+| codec·압축·dispatch mode | 각 닫힌 값 집합에 속한다. 압축을 끄면 압축 codec을 함께 지정하지 않는다 |
+| transport | endpoint scheme과 일치하고 실행 환경에서 지원된다(§3) |
+
 - **검증 지점은 그 언어가 실패를 알릴 수 있는 가장 이른 곳이다.** 실패를 돌려줄 통로가 있는
   언어는 connector를 만들 때 검증하고, 생성 표면에 그 통로가 없는 언어는 연결을 시도할 때
   검증한다. 어느 쪽이든 **연결이 이뤄지기 전에** 거부한다.
@@ -580,6 +599,9 @@ disconnect 이벤트가 사유를 인자로 함께 전달하는 것은 이 읽�
 |---|---|
 | **`Manual`**(기본) | receive loop가 handler·error·disconnect·request callback을 직접 호출하지 않고 내부 큐에 넣는다. 사용자가 명시적으로 pump해 실행한다 |
 | `Immediate` | receive 경로에서 직접 실행한다 |
+
+`Manual`에서는 callback을 dispatch pump를 호출한 실행 문맥에서 실행한다. Callback 대기에는
+별도 수락 상한을 두지 않으며 수락한 request의 completion은 callback 실행 대기와 독립적으로 확정한다.
 
 **기본값이 `Manual`인 이유는 게임 엔진 제약이다**(§2.2). 엔진 객체는 main thread 밖에서 다룰
 수 없으므로, main thread에서 pump해야 안전하다.
@@ -636,16 +658,16 @@ handler 하나가 종료를 막지 못한다.**
 | `Disconnected` | 연결이 없거나 끊김 |
 | `ConfigurationError` | 구성이 잘못됨(scheme 불일치, **환경이 지원하지 않는 transport** 등) |
 | `ValidationFailed` | 검증 실패 — 전송 전 검증(metadata 한도 초과, 송신 payload 한도 초과), option 값이 허용 범위를 벗어난 구성 검증(§6.3), 대기 표면의 관측 조건 위반(§10.1)을 함께 덮는다 |
-| `RequestTimeout` | reply 대기 시간 초과 |
+| `RequestTimeout` | Request 수락 뒤 queue 대기·write·reply 대기 중 시간 초과 |
 | `ConnectTimeout` | 연결 시간 초과 |
 | `FrameDecodeFailed` | frame·header decode 실패(§4.5), 또는 구조가 올바른 Error frame의 JSON payload가 §5.3을 충족하지 않음 |
 | `FrameTooLarge` | payload가 수신 한도를 초과 |
-| `SendFailed` | 전송 실패 |
+| `SendFailed` | Send의 queue 대기 만료·전송 실패 또는 Request의 `request_seq` 고갈로 인한 수락 실패 |
 | `CompressionFailed` | 압축 실패 |
 | `DecompressionFailed` | 압축 해제 실패 |
 | `TlsValidationFailed` | TLS 검증 실패 |
 | `UserCallbackFailed` | 사용자 callback이 실패 |
-| `RemoteError` | 서버가 §5.3을 충족하는 Error payload로 응답함. `request_seq`가 pending request와 맞으면 그 request를 실패시키고, 없거나 맞지 않으면 error 이벤트로 전달함 |
+| `RemoteError` | 서버가 §5.3을 충족하는 Error payload로 응답함. 전달 대상은 [§5.2](#52-request-correlation)가 정함 |
 
 오류가 현재 operation과 연결에 미치는 영향은 다음과 같다. 언어별 문서는 오류 이름의 표현만 소유하며
 terminal 여부, 종료 사유와 reconnect 조건을 바꾸지 않는다.
@@ -655,9 +677,11 @@ terminal 여부, 종료 사유와 reconnect 조건을 바꾸지 않는다.
 | `ConfigurationError`, `ValidationFailed` | 호출 실패 | 유지하거나 연결 시도 전 상태 유지 | 없음 | 안 함 |
 | `RequestTimeout` | 해당 request만 실패 | 유지 | 없음 | 안 함 |
 | `ConnectTimeout`, `TlsValidationFailed` | connect 실패 | `Disconnected` | `TransportError` | reconnect option의 시도 정책을 적용 |
-| `Disconnected`, `SendFailed` | 진행 중인 operation 실패 | transport가 끊겼으면 `Disconnected` | `TransportError` | reconnect option이 켜져 있으면 적용 |
+| `Disconnected` | 진행 중인 operation 실패 | transport가 끊겼으면 `Disconnected` | `TransportError` | reconnect option이 켜져 있으면 적용 |
+| `SendFailed` — queue 대기 만료 또는 sequence 고갈 | 해당 operation만 실패 | 유지 | 없음 | 안 함 |
+| `SendFailed` — transport write 실패 | 해당 operation 실패 | transport가 끊겼으면 `Disconnected`, 아니면 유지 | transport가 끊겼으면 `TransportError`, 아니면 없음 | transport가 끊겼고 reconnect option이 켜져 있으면 적용 |
 | `FrameDecodeFailed` — frame·header | 해당 frame을 전달하지 않고 pending request를 실패시킴 | 종료 | `TransportError` | reconnect option이 켜져 있으면 적용 |
-| `FrameDecodeFailed` — Error JSON payload | 맞는 `request_seq`가 있으면 그 request만 실패시키고, 없거나 맞지 않으면 error 이벤트로 전달 | 유지 | 없음 | 안 함 |
+| `FrameDecodeFailed` — Error JSON payload | [§5.2](#52-request-correlation)의 `request_seq` 수신 대상 | 유지 | 없음 | 안 함 |
 | `FrameTooLarge` | 해당 frame을 전달하지 않고 pending request를 실패시킴 | 종료 | `TransportError` | reconnect option이 켜져 있으면 적용 |
 | `CompressionFailed` | 해당 송신 operation만 실패 | 유지 | 없음 | 안 함 |
 | `DecompressionFailed` | 해당 수신 packet 또는 pending request만 실패 | 유지 | 없음 | 안 함 |

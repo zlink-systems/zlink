@@ -38,7 +38,7 @@ Java public contract 분류는
 | [Native Wait Boundary](#native-wait-boundary) | blocking recv와 poller 기반 수신의 경계 |
 | [Proposed Repository Layout](#proposed-repository-layout) | Gradle 프로젝트 전체 디렉터리 트리 |
 | [Contract Interface Rule](#contract-interface-rule) | interface로 남을 타입과 concrete로 남을 타입 |
-| [Factory Entry Points](#factory-entry-points) | root/context/service factory 메서드 |
+| [Factory Entry Points](#factory-entry-points) | root/context raw factory 메서드 |
 | [Contract File Requirements](#contract-file-requirements) | contract 파일이 import할 수 있는 것/없는 것 |
 | [Runtime Implementation Requirements](#runtime-implementation-requirements) | runtime이 소유하는 구현 세부 |
 | [Socket Contract Shape](#socket-contract-shape) | 공통/타입별 socket 동작 |
@@ -49,8 +49,8 @@ Java public contract 분류는
 | [Byte HWM 및 monitoring ABI v4](#byte-hwm-및-monitoring-abi-v4) | 양수 `long` HWM과 monitor snapshot field |
 | [Receive flow state](#receive-flow-state) | receive-flow 상태 타입, setter와 monitor 표면 |
 | [Error And Result Policy](#error-and-result-policy) | typed exception과 검증 시점 |
-| [Spot And Actor Contract Shape](#spot-and-actor-contract-shape) | `SpotNode`/`Spot` 책임과 route 결과 |
-| [Spot Get-Or-Create](#spot-get-or-create) | `getOrCreateSpot` 계약 |
+| [Spot And Actor Contract Shape](#spot-and-actor-contract-shape) | Framework 소유 공개 형태 |
+| [Spot Get-Or-Create](#spot-get-or-create) | Framework 공개 계약 링크 |
 | [Performance Policy](#performance-policy) | hot path 제약 |
 | [아키텍처 요구](#아키텍처-요구) | contract/runtime 경계 요구 |
 | [Implementation Checklist](#implementation-checklist) | 정렬 선언 전 확인 항목 |
@@ -107,8 +107,6 @@ bindings/java/src/main/java/systems/zlink/
 |   +-- messaging/
 |   +-- sockets/
 |   +-- eventing/
-|   +-- service/
-|   |   +-- spot/
 |   +-- errors/
 +-- internal/
 +-- runtime/
@@ -116,8 +114,6 @@ bindings/java/src/main/java/systems/zlink/
 |   +-- messaging/
 |   +-- sockets/
 |   +-- eventing/
-|   +-- service/
-|   |   +-- spot/
 |   +-- errors/
 |   +-- nativeapi/
 ```
@@ -129,9 +125,9 @@ bindings/java/src/main/java/systems/zlink/
 연결해야 하지만 그 hook을 애플리케이션용 API로 만들면 안 되는 코드만 둔다.
 
 `runtime`은 구현 map이다. Java 목표 분류인 `core`, `messaging`, `sockets`,
-`eventing`, `service`, `errors`, 그리고 `.NET`의 `Runtime/Native`에 대응하는
+`eventing`, `errors`, 그리고 `.NET`의 `Runtime/Native`에 대응하는
 Java의 `nativeapi`를 사용한다. native handle, downcall, marshalling, callback
-bridge 상태, Core reply/send completion, socket kernel, service kernel, option mapping,
+bridge 상태, Core reply/send completion, socket kernel, option mapping,
 lifecycle 세부를 소유한다. handle lifetime, buffer conversion, option mapping
 같은 runtime support 코드는 별도 public package category를 늘리지 않고 해당
 runtime 소유 카테고리 안에 둔다.
@@ -150,7 +146,6 @@ Java contract 카테고리는 규범적이다.
 | `systems.zlink.contracts.messaging` | 메시지 값, 수신 envelope, topic message, subscription event, payload ownership, 공통 메시지 메타데이터. |
 | `systems.zlink.contracts.sockets` | Socket resource contract, socket operation builder, socket option, send/recv/request/reply/publish surface. |
 | `systems.zlink.contracts.eventing` | Poller, poll event, monitor socket, monitor snapshot, timer resource contract. |
-| `systems.zlink.contracts.service.spot` | SpotNode, Spot, Actor, route/admission handler, actor lifecycle, service operation builder. |
 | `systems.zlink.contracts.errors` | Public exception과 typed error/result 도메인. |
 
 Runtime 패키지는 동일한 .NET 표준 분류를 Java 패키지 이름으로 사용한다:
@@ -161,7 +156,6 @@ Runtime 패키지는 동일한 .NET 표준 분류를 Java 패키지 이름으로
 | `systems.zlink.runtime.messaging` | 메시지 materialization, multipart progress, request 실행과 completion registry 연결. |
 | `systems.zlink.runtime.sockets` | Socket kernel, socket family 구현, poller drain과 socket operation 실행. |
 | `systems.zlink.runtime.eventing` | Monitor, poller, poll event, timer, dispatch loop 구현. |
-| `systems.zlink.runtime.service.*` | SpotNode, Spot, Actor, topology, service operation 구현. |
 | `systems.zlink.runtime.errors` | Native errno/result를 public exception/result 도메인으로 변환. |
 | `systems.zlink.runtime.nativeapi` | JNI/Panama 선언, ABI mirror, 심볼 로딩, native artifact lookup. |
 
@@ -289,20 +283,6 @@ systems/zlink/contracts/
 |   +-- SubscriptionEntry.java
 |   +-- SubscriptionEvent.java
 |   +-- TopicMessage.java
-+-- service/
-|   +-- spot/
-|   |   +-- SpotRoute.java
-|       +-- Actor.java
-|       +-- Spot.java
-|       +-- SpotDispatchInfo.java
-|       +-- SpotNode.java
-|       +-- ActorJoinOperations/
-|       +-- ActorManagementOperations/
-|       +-- ActorModels/
-|       +-- ServiceEnums/
-|       +-- SpotNodeModels/
-|       +-- SpotOperations/
-|       +-- TopologyEnums/
 +-- sockets/
     +-- Socket.java
     +-- StreamSocket.java
@@ -361,21 +341,12 @@ systems/zlink/runtime/
 |   +-- NativeStreamSocket.java
 |   +-- NativeRouterReceiveSupport.java
 |   +-- NativeRouterRequestSupport.java
-|   +-- NativeRouterSpotSupport.java
-|   +-- NativeStreamActorSupport.java
 |   +-- SocketOperations.java
 +-- eventing/
 |   +-- NativeMonitorSocket.java
 |   +-- NativePollEvents.java
 |   +-- NativePoller.java
 |   +-- NativeTimer.java
-+-- service/
-|   +-- spot/
-|       +-- NativeActor.java
-|       +-- NativeSpot.java
-|       +-- NativeSpotNode.java
-|       +-- SpotOptions.java
-|       +-- SpotRoutedSupport.java
 +-- errors/
 |   +-- NativeErrorRuntime.java
 +-- nativeapi/
@@ -389,7 +360,7 @@ systems/zlink/runtime/
 ```
 
 Runtime support 파일은 목표 runtime 카테고리 안에서 실제 구현 복잡성을 감출
-때에만 허용한다. `NativeRouterSocket`, `NativeSpotNode`, `NativePoller` 같은
+때에만 허용한다. `NativeRouterSocket`, `NativePoller` 같은
 resource 소유자의 대체물이 아니다.
 
 ## Contract Interface Rule
@@ -415,10 +386,6 @@ factory가 생성해야 한다.
 - `MonitorSocket`
 - `Poller`
 - `Timer`
-- `SpotNode`
-- `Spot`
-- Java surface가 actor handle 또는 actor lifecycle resource를 native-backed
-  handle로 노출할 때의 Actor resource contract
 
 다음은 staged multipart 상태, request 상태와 native submit
 상태를 감추기 때문에 operation contract이다:
@@ -427,15 +394,10 @@ factory가 생성해야 한다.
 - publish operation
 - request operation
 - reply operation
-- SPOT send/request/reply operation
-- Actor create/join/reply/location operation
-- stream actor bind/unbind/send operation
 
 호출자가 runtime에 동작을 제공하는 경우 handler 역할은 interface
 또는 functional interface가 될 수 있다:
 
-- SPOT dispatch handler
-- actor lifecycle handler
 
 ### Must Stay Concrete
 
@@ -449,7 +411,6 @@ factory가 생성해야 한다.
 - option과 filter 값 객체
 - route result 모델
 - snapshot 모델
-- actor 참조
 - enum/flag/result 타입
 - exception
 
@@ -470,7 +431,6 @@ factory가 생성해야 한다.
 - `Zlink.createContext()`
 - `Zlink.createPoller()`
 - `Zlink.createTimer()`
-- `Zlink.createTimer(Spot spot)`
 
 `Zlink`는 version, capability 조회, strerror, proxy, shutdown, sleep, auto-HWM
 재계산 같은 public static helper도 소유할 수 있다. 이 helper들은 runtime/native
@@ -491,31 +451,14 @@ factory가 생성해야 한다.
 - `createXPubSocket()`
 - `createXSubSocket()`
 - `createStreamSocket()`
-- `createSpotNode(...)`
 
 모든 factory는 public contract interface 또는 concrete 값 타입을 반환한다.
-`NativeContext`, `NativeRouterSocket`, `NativeSpotNode` 같은 runtime 클래스를
+`NativeContext`, `NativeRouterSocket` 같은 runtime 클래스를
 반환하지 않는다.
 
 ### Service Factories
 
-SPOT과 Actor handle은 `SpotNode` 또는 다른 contract 소유 service 객체의 service
-메서드만으로 생성한다.
-
-허용되는 SPOT 생성 패턴:
-
-- `SpotNode.createSpot(...)`
-- `SpotNode.entrySpot()`
-- `SpotNode.getOrCreateSpot(...)`
-- `SpotNode.spotLookup(...)`
-
-허용되는 Actor 생성 패턴:
-
-- `SpotNode.createActor(...)`
-- `SpotNode` 또는 `Spot`이 명시적으로 소유한 actor factory/service 메서드
-
-`Spot`, `SpotNode`, `Actor` 또는 runtime service 클래스의 직접 public
-constructor는 목표 contract의 일부가 아니다.
+공개 Spot과 Actor 생성 및 service 소유 timer는 [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md)가 규정한다. 이 binding spec은 Core raw socket, monitor, poller, 일반 timer의 생성을 정의한다.
 
 ## Contract File Requirements
 
@@ -567,7 +510,6 @@ Runtime이 소유하는 것:
 - native error mapping;
 - typed option mapping;
 - native resource 채택과 해제;
-- native data로부터 디코딩된 service snapshot.
 
 Runtime 구현이 concrete 값 객체에 대한 package-private 접근이 필요하면
 runtime/nativeapi가 소유하는 좁은 내부 bridge를 사용한다. native handle이나
@@ -591,13 +533,12 @@ Typed socket contract는 해당 socket 타입에 의미 있는 기능만 더한�
 
 - `PairSocket`: send와 recv.
 - `DealerSocket`: send, recv, request.
-- `RouterSocket`: routed send, routed recv, request, reply와 SPOT routing.
+- `RouterSocket`: routed send, routed recv, request, reply.
 - `PubSocket`: publish.
 - `SubSocket`: subscribe와 subscription event 수신.
 - `XPubSocket`: publish와 subscription event 수신.
 - `XSubSocket`: public 바인딩 contract가 정의하는 send와 subscription 제어.
-- `StreamSocket`: RAW recv, PACKET recv, stream send, actor gateway, bound actor
-  operation.
+- `StreamSocket`: RAW recv, PACKET recv, stream send.
 
 Runtime은 record마다 Core whole-message API를 한 번 호출하며 native part 배열과 count를 내부에서
 관리한다. Protocol envelope helper와 native routing-ID pointer도 public contract가 아니다.
@@ -615,10 +556,6 @@ Builder 시작 메서드는 대상 식별자와 reply token만 받는다:
 - `request()`
 - `request(routingId)`
 - `reply(routingId, replyToken)`
-- `sendToSpot(nodeRid, spotRid)`
-- `requestToSpot(nodeRid, spotRid)`
-- `replyToSpot(nodeRid, spotRid, replyToken)`
-- `sendBoundActor(sessionRid, actorId)`
 
 PAIR·DEALER·ROUTER·STREAM send builder는 `SendOperation` family를 사용한다. Send는 비동기
 `submit()`과 동기 `submit_sync()`를 제공한다. 비동기 `submit()`은 `CompletionStage`를 직접 돌려주지 않고
@@ -685,7 +622,7 @@ Submit과 completion의 합류는 [공통 실행 모델](../async-execution-mode
 
 - 호출자가 제공하는 재사용 가능한 수신 저장소다;
 - close 또는 채택될 때까지 수신된 메시지 part를 소유한다;
-- routing ID, SPOT routing ID, `ReplyToken`, reply sender metadata를
+- routing ID, `ReplyToken`, reply sender metadata를
   가질 수 있다;
 - native receive cursor나 native handle을 노출하지 않는다.
 
@@ -714,25 +651,7 @@ boolean ok = router.recv(received, RecvFlags.DONT_WAIT);
 보존하며 `close()`와 다음 수신 저장소 재사용으로 payload와 metadata를 정리한다.
 수신 회계와 결과 수명의 경계는 [공통 수신 ownership 계약](../README.ko.md#receive-ownership)을 따른다.
 
-SPOT readable dispatch 이벤트는 readiness 알림이다. 호출자는 대응하는 receive
-API를 no-data가 될 때까지 drain한다.
-
-service 제어/admission receive API는 재사용 가능한 데이터 평면 저장소보다 더
-명확할 때 `Optional`, nullable, typed result-return 형태를 사용할 수 있다. 이
-경우에도 no-data와 하드 수신 실패를 구분해야 한다.
-
-`ReceiveRecord.sourceBindingGeneration()`은 bound STREAM session에서 Actor로
-전달한 record의 검증된 binding generation을 반환한다. 이 경우
-`sourceSpotRid()`은 session routing ID를 반환한다. 다른 record에서는 Core가
-전달한 0을 유지한다.
-
-Mesh dispatch의 `SEND_READY` record는 `MeshSendReadyData`로 decode한다. 이 값은
-Core의 destination kind와 target node RID, target Spot RID, target Actor ref,
-channel name을 그대로 보존한다. 해당 destination kind에 사용하지 않는 필드는
-Core가 전달한 empty value로 유지한다. `ReceiveRecord.sendReady()`는 kind data가
-이 타입일 때만 값을 반환하며 다른 record kind에는 `null`을 반환한다.
-이 record kind는 service-wire dispatch protocol이며 Core HWM send-ready callback이나
-async send completion을 뜻하지 않는다.
+공개 Spot/Actor 수신 형태는 [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md)가 소유한다.
 
 ## Handler Registration Naming
 
@@ -748,7 +667,6 @@ Handler 등록 이름은 이벤트 발생이 아니라 등록을 설명한다.
 
 - `setDispatchHandler`
 - `recvRouted`
-- `recvActorLifecycle`
 
 ## Byte HWM 및 monitoring ABI v4
 
@@ -831,7 +749,7 @@ Java public error는 core result 도메인의 의미를 보존하지만, native 
 주된 사용자 API로 노출하지 않는다.
 
 - 고정 크기 경계 값은 native 호출 전에 검증한다.
-- routing id, actor id, endpoint, channel 이름, topic은 조용히 잘리지 않는다.
+- routing id, endpoint, channel 이름, topic은 조용히 잘리지 않는다.
 - `SubmitException`, `RecvException`, `RequestException`, `ConfigException`
   등 typed exception은 관련된 public result 값을 보존한다.
 - native errno와 플랫폼별 error 텍스트는 진단용 세부로 등장할 수 있다.
@@ -839,45 +757,12 @@ Java public error는 core result 도메인의 의미를 보존하지만, native 
 
 ## Spot And Actor Contract Shape
 
-SPOT service contract는 `systems.zlink.contracts.service.spot` 아래에 둔다.
-
-`SpotNode`가 소유하는 것:
-
-- node lifecycle;
-- service 등록;
-- peer/channel 구성;
-- route lookup;
-- spot 생성과 lookup;
-- actor 생성;
-- actor route lookup;
-- actor lifecycle receive;
-- SPOT dispatch receive.
-
-`Spot`은 SPOT 수준의 send/request/reply, publish, dispatch, actor operation
-진입점, timer 통합에 대한 handle contract다.
-
-Actor와 SPOT route 결과는 concrete contract 모델이다:
-
-- `ActorRoute`는 resolve된 Actor ref, Actor node RID, 현재 Spot RID, 현재
-  Spot kind를 보존한다.
-- `SpotRoute`는 Spot RID, owner node RID, Spot kind를 보존한다.
-- `SpotKind`는 Entry Spot과 사용자 Spot을 구분한다.
-- Invalid kind는 성공한 route 결과가 아니다.
-
-- Java는 resolve된 Actor ref를 인자로 받는 `SpotNode.sendToActor(ActorRef)`와 `SpotNode.requestToActor(ActorRef)`를 노출한다.
-- send operation은 submit이 성공하면 하나 이상의 message part 소유권을 넘기고, Actor 소유자 mailbox가 인계를 받으면 완료된다.
-- request operation은 submit이 성공하면 요청 part의 소유권을 넘기고, Actor handler가 만든 reply part를 전달한다.
-- Java는 제거된 Discovery route table이나 resolver API를 compatibility helper로 되살리면 안 된다.
+공개 Spot/Actor 형태는 [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md).
 
 ## Spot Get-Or-Create
 
-Java는 `SpotNode.getOrCreateSpot(RoutingId)`를 노출한다.
-`zlink_spot_node_spot_get_or_new(...)`에 직접 매핑되며, `spotLookup`과
-`createSpot`을 조합하여 구현하지 않는다.
-
-이 메서드는 호출자가 소유하는 `Spot` contract와 `created` boolean을 담은
-concrete result를 반환한다. `created`는 해당 logical spot을 생성한 호출에 한해서
-`true`다.
+공개 Spot `GetOrCreate`의 입력·결과와 owner는
+[Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md#17-creategetorcreate-결과와-relocation-policy)를 따른다.
 
 ## Performance Policy
 
@@ -921,8 +806,7 @@ concrete contract resource에서 helper 클래스만 추출하는 것으로 시�
 
 다음 항목이 모두 참일 때에만 Java 바인딩이 정렬된 것으로 본다:
 
-- `Context`, socket, eventing resource, SpotNode, Spot,
-  Actor의 native-backed resource가 public contract interface다.
+- `Context`, socket, eventing resource의 native-backed resource가 public contract interface다.
 - runtime native-backed 구현이 `systems.zlink.runtime.*` 아래에 있다.
 - factory 진입점이 contract interface를 반환하고 runtime 클래스 이름을 감춘다.
 - runtime 패키지가 JPMS로 export되지 않는다.
@@ -952,7 +836,7 @@ concrete contract resource에서 helper 클래스만 추출하는 것으로 시�
 
 - `./samples/run_samples.sh`
 
-send, receive, request, poller, timer, service, 핫 패스 동작이 바뀌면 perf
+send, receive, request, poller, timer, 핫 패스 동작이 바뀌면 perf
 smoke gate를 실행한다:
 
 - `./perf/single/run_benchmarks.sh`

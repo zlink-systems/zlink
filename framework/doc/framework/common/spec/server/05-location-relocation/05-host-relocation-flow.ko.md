@@ -192,7 +192,7 @@ Host의 endpoint, 실행 세대와 제공 기능을 Store에 게시한 정보를
 | 0 | `Preparing` | Registration, bind, descriptor 검증과 recovery를 진행하며 application message를 받지 않는다. |
 | 1 | `Serving` | Host가 ready 상태이며 새로운 application work를 받는다. |
 | 2 | `Relocating` | 새 placement와 selection에서는 제외됐지만 아직 seal하지 않은 local unit은 message와 timer를 계속 처리한다. |
-| 3 | `Relocated` | 모든 stateful object가 source dispatch에서 분리됐다. Host와 infrastructure 연결은 유지한다. |
+| 3 | `Relocated` | 모든 unit의 target authority commit을 확인했고 source dispatch에서 분리됐다. Host와 infrastructure 연결은 유지한다. |
 | 4 | `Draining` | `Shutdown`이 새 admission을 닫고 이미 수락한 work와 resource를 정리한다. |
 | 5 | `Stopped` | Application resource, infrastructure resource와 listener 정리가 끝났다. |
 | 6 | `Error` | Startup 또는 runtime 오류 때문에 service를 제공할 수 없다. |
@@ -210,19 +210,15 @@ stateDiagram-v2
     Serving --> Draining: Shutdown이 admission 봉인
     Serving --> Error: runtime 오류
     Relocating --> Serving: Blocked 뒤 source 처리 복원
-    Relocating --> Relocated: 모든 relocation unit 분리
+    Relocating --> Relocated: 모든 target authority commit 확인
+    Relocating --> Error: 일부 unit commit 뒤 다른 unit의 source fence 성공
     Relocating --> Draining: Shutdown 요청
     Relocated --> Draining: Shutdown 요청
     Error --> Draining: bounded cleanup 시작
     Draining --> Stopped: resource cleanup 완료
 ```
 
-각 unit에서 relay-ready reply가 accepted 상태가 되기 전 명시적인 실패만 tentative 작업을
-정리하고 source 처리를 복원할 수 있다. 다른 unit이 이미 이 경계를 지났더라도 아직 경계를
-지나지 않은 source workload를 복원하고 host는 `Serving`으로 돌아갈 수 있다. 경계를 지난
-unit은 cutover submit 결과와 관계없이 source로 되돌리지 않고 target의 cutover 수신(connection
-재수립 시 재전송 포함) 또는 cutover 대기 fallback을 계속 따른다. `Serving` 복귀가 모든
-unit의 source rollback을 뜻하지 않는다.
+각 unit의 source 재개는 relay-ready 전 명시적 실패 또는 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 source `Preserve` fence 성공으로 결정된다. Target commit을 확인한 unit은 source로 돌아오지 않는다. 모든 unit이 source로 돌아오면 host는 `Serving`, 일부 unit이 이미 target에 commit했다면 host는 `Error`로 전환한다.
 
 Relocation outcome은 다음 값으로 고정한다. 표의 reason 가운데
 [`DeadlineExceeded`](../00-foundation/02-glossary.ko.md#deadlineexceeded)는 정해진 시간 안에
@@ -230,7 +226,7 @@ Relocation outcome은 다음 값으로 고정한다. 표의 reason 가운데
 
 | 값 | Outcome | 허용 reason | 의미 |
 |---:|---|---|---|
-| 0 | `Relocated` | `None` | 모든 stateful object가 source dispatch에서 분리됐다. |
+| 0 | `Relocated` | `None` | 모든 unit의 target authority CAS 성공을 확인했다. |
 | 1 | `Blocked` | `TargetUnavailable`, `StoreUnavailable`, `RelocationDisabled`, `StateIncompatible`, `DeadlineExceeded`, `RelocationFailed`, `RuntimeNotReady`, `ManualTopologyUnsupported`, `ShutdownRequested`, `OperationInProgress` | Relocation을 시작할 수 없거나 전체 workload 이전을 끝내지 못했다. |
 
 Wire 값은 `Relocated=0`, `Blocked=1`이다. Reason은 `None=0`, `TargetUnavailable=1`,
@@ -323,6 +319,10 @@ sequenceDiagram
     Source->>Target: [request] 모든 unit의 temporary queue·Restore와 relay 준비
     Target-->>Source: [reply] 모든 unit의 relay 수신 준비 완료
     Source->>Target: [send] 모든 unit의 ingress-hold relay와 cutover
+    Target->>Store: [request] 검증한 relay 뒤 각 unit의 target authority CAS
+    Store-->>Target: [reply] 모든 unit의 target authority 확정
+    Source->>Store: [request] 모든 target owner 확인
+    Store-->>Source: [reply] 모든 target owner 확정
     Source->>Store: [request] source host를 Relocated로 전환
     Store-->>Source: [reply] Relocated 상태 확정
     Source-->>App: [reply] host relocation 결과 Relocated
@@ -331,11 +331,9 @@ sequenceDiagram
     Source-->>App: [reply] Shutdown 결과 Stopped 또는 ForceStopped
 ```
 
-`Relocated`는 모든 unit의 cutover submit 시도가 성공 또는 실패 terminal에 도달했다는 source
-측 결과이며 target CAS 완료 reply를 기다렸다는 뜻이 아니다. `Relocated`에서는 descriptor,
-connection, listener와 infrastructure resource를 유지한다. 이 다이어그램은 target이 준비된
-정상 흐름이다. Target이 없으면 앞 절의 deadline 규칙으로 `Blocked/TargetUnavailable`을
-반환한다.
+`Relocated`는 [§13](#13-relocate-완료와-실패)의 target authority 성공 결과다.
+Descriptor, connection, listener와 infrastructure resource는 유지한다. Target이 없으면
+앞 절의 deadline 규칙으로 `Blocked/TargetUnavailable`을 반환한다.
 
 Automatic ClientServer client와 fanout subscriber는 replacement descriptor로 새 connection을
 만들고 source 상태를 selection에 반영한다. Accepted work와 barrier가 남은 기존 connection은
@@ -425,9 +423,7 @@ unit의 시작도 늦어진다 — 부하를 덜어내려는 이동이 부하 �
 
 이 batch 순서는 Application Job Queue capacity chunk가 아니다. 각 target의 pre-dispatch
 temporary queue와 saved work는 retained-byte owner가 소유하는 ordered durable backlog이며,
-ordinary staging ingress는 shared reservation을 사용해 받은 뒤 durable handoff에서 즉시
-반환한다. Target-only CAS와 required lifecycle이 끝나 dispatch가 runnable해지면 backlog의
-handler turn이 순서대로 live queued-job permit을 하나씩 얻는다. 따라서 compatible target의
+staging ingress와 runnable callback의 permit handoff는 [Application job queue §3](../01-execution/04-application-job-queue-and-backpressure.ko.md#3-ordinary-ingress-permit-순서)을 따른다. 따라서 compatible target의
 job limit가 aggregate backlog보다 작아도 aggregate를 capacity blocker로 실패시키거나
 member를 source에 남기지 않고 점진적으로 실행한다.
 
@@ -486,8 +482,8 @@ Relocation unit마다 다음 시점을 기록한다. 각 시점은 그 사건이
 각 unit은 기본 1초 이내를 목표로 한다. **이 값은 timeout도 correctness 조건도 아니며**,
 [Actor와 Spot relocation 전체 흐름의 `RelocationCutoverWaitTimeout`(기본 1,000 ms)](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)과
 숫자는 같지만 다른 값이다 — 이 1초는 warning 임계값으로만 사용하는 관측용 목표이고,
-`RelocationCutoverWaitTimeout`은 cutover 대기가 끝나면 target이 CAS와 queue 개방으로
-넘어가는 protocol fallback 시한이다. 초과해도 relocation을 취소하거나 source로 되돌리지
+`RelocationCutoverWaitTimeout`은 cutover 대기 Warning 시한이다. CAS와 queue 개방의 조건은
+[공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)가 정한다. 초과해도 relocation을 취소하거나 source로 되돌리지
 않는다. Framework는 같은 operation을 one-way cutover submit이 terminal result에 도달할 때까지 계속하고 warning과
 `zlink.relocation.interruption` histogram을 기록한다. Source application close는 cutover
 submit의 성공 또는 실패 terminal 뒤 수행한다. Target은 처리 시작 ACK를 보내지 않으며 target
@@ -495,9 +491,8 @@ admission open은 target-local status와 trace로 관찰한다.
 
 Host operation deadline이 끝나면 새 unit relocation을 시작하지 않는다. 이미 시작한 unit 중
 target이 relay-ready reply를 보내기 전에 명시적으로 실패한 unit만 안전한 abort를 수행한다.
-Reply 결과가 불확정이면 target의 cutover 대기 fallback이 시작됐을 수 있으므로 source
-dispatch를 다시 열지 않는다. Cutover 전송을 시도한 unit도 source로 되돌리지 않으며
-target이 Restore 유효시간까지 owner 전환을 계속한다. Source가 모든 unit의 cutover 전송을
+Reply 결과가 불확정이면 target의 완전한 relay 확인이 아직 끝나지 않았을 수 있으므로 source
+dispatch를 다시 열지 않는다. Relay-ready 뒤 cutover submit 결과나 source를 가리키는 이전 read만으로 source dispatch를 열지 않는다. [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 source `Preserve` fence가 확인되면 보관 작업을 source에서 재개하고, target commit이 확인되면 source로 되돌리지 않는다. Source가 모든 unit의 cutover 전송을
 시도하지 못하면 host는 `Relocated`가 되지 않는다. 시도한 cutover submit의 성공·실패는 완료
 조건이 아니다.
 
@@ -519,7 +514,7 @@ ID는 유지되며, 이동이 끝난 대상은 target에서 기존 queue 순서�
 |---|---|
 | Application | Host의 `Relocate`를 호출한다. `ApplicationSignaled`를 선택한 `SpotWide` User Spot만 안전한 이동 시점을 `RelocationReady().Defer()`로 알린다. |
 | Source runtime | 현재 실행 중인 작업을 끝내고 application dispatch를 중단한다. Application state와 아직 실행하지 않은 queue·timer를 source memory에 payload로 확정해 target에 직접 전송하고, capture 뒤 이전 주소로 도착하는 message만 target에 relay한다. Location Store는 변경하지 않는다. |
-| Target runtime | 전송받은 chunk를 조립해 checksum을 검증한 뒤 같은 ID를 사용하는 Actor나 Spot을 만들고 state와 기존 작업을 복원한다. Relay의 cutover 경계를 받거나 relay-ready 뒤 cutover 대기 시간이 끝나면 Location Store를 source에서 target으로 CAS하고, 성공한 경우에만 queue를 연다. |
+| Target runtime | 전송받은 chunk를 조립해 checksum을 검증한 뒤 같은 ID를 사용하는 Actor나 Spot을 만들고 state와 기존 작업을 복원한다. [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 완전한 relay와 cutover를 확인한 뒤 Location Store를 source에서 target으로 CAS하고, 성공한 경우에만 queue를 연다. |
 | Location Store | 현재 어느 node가 Actor나 Spot을 처리하는지 기록한다. 여러 값을 함께 바꿔야 할 때는 모두 바꾸거나 하나도 바꾸지 않는다. |
 | Relocation Store | Handoff payload는 보관하지 않는다. Instance Spot을 최초 message로 새로 만들 때의 기록과 relocation 뒤 완료되는 pending request의 terminal 결과만 남는 책임으로 기록한다. |
 
@@ -536,8 +531,7 @@ Target factory가 policy별로 하는 일은 다음과 같다.
 
 Framework는 별도 state contract ID나 generic state type을 추가하지 않는다.
 
-Relocation unit 하나의 temporary queue에는 record 수와 저장 크기 어느 쪽에도 상한을 두지
-않으며, Framework는 같은 object에 temporary queue를 추가로 만들지 않는다.
+Relocation unit의 accepted record permit handoff는 [Application job queue §3](../01-execution/04-application-job-queue-and-backpressure.ko.md#3-ordinary-ingress-permit-순서)을 따른다. Framework는 같은 object에 temporary queue를 추가로 만들지 않는다.
 
 ## 10. Unit 종류별 차이
 
@@ -646,16 +640,11 @@ message를 처리한다. Framework는 target에 만든 instance를 외부에 공
 queue를 폐기하며 source의 message와 timer를 원래 queue에 되돌린다. Target은 temporary
 queue의 record로 request의 terminal 결과를 만들거나 one-way message를 실행하지 않는다.
 
-Relay-ready reply가 accepted 상태가 된 뒤에는 Cutover를 아직 보내지 않았거나 submit이
-실패해도 Location Store가 source를 가리키는 동안 source dispatch를 다시 열지 않는다.
-Target은 cutover(connection 재수립 시 재전송 포함)를 받거나 cutover 대기 fallback으로 CAS를
-계속한다. Target CAS가 끝내 실패하면 target object와 queue를 제거하고 Session은 자체 seal
-timeout으로 정리한다. Source의 Message Follow도 정해진 기간에 끝난다.
+Relay-ready 뒤의 source 재개와 target cutover 검증은 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)가 정하고, authority 판정과 staging terminal은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다.
 
 Location Store가 target을 현재 처리 node로 기록한 뒤에는 source로 되돌리지 않는다. Target
-runtime이 계속 실행 중이면 실패한 단계를 다시 시도할 수 있다. Location Store 갱신은 Restore
-유효시간까지 다시 시도하며, 그 안에 target owner를 확인하지 못하면 준비한 Actor 또는 Spot과
-queue를 제거하고 Session route를 갱신하지 않는다. Source나 target process가 종료되면 다른
+runtime이 계속 실행 중이면 실패한 단계를 다시 시도할 수 있다. Restore 만료 뒤 같은 target의 예외와 staging terminal은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. Source `Preserve`와 target CAS는
+[Location runtime §6.1·§10](01-location-runtime.ko.md#61-read와-cas)으로 확정한다. Source나 target process가 종료되면 다른
 runtime이 이 relocation을 이어받지 않는다. Commit 뒤 target이 종료되면 source로 되돌리지
 않고 해당 object를 unavailable 상태로 둔다. 이후 자동 복구는 계약에 포함하지 않는다. Source는
 one-way cutover 뒤 완료 reply를 기다리지 않고 Message Follow로 전환한다. Target은 CAS와
@@ -674,54 +663,37 @@ message를 임시 보관하는 구간을
 
 | Resource | 이동 규칙 |
 |---|---|
-| 새 작업 차단 뒤 도착한 message | Source는 record 수와 저장 크기 어느 쪽에도 상한 없이 임시 보관한다. Owner 변경이 성공하면 operation identity와 ObjectGeneration을 유지해 target에 전달한다. Relay-ready reply가 accepted되기 전 명시 취소에서는 도착 순서대로 source queue에 되돌리며, 그 뒤에는 source로 복원하지 않는다. |
+| 새 작업 차단 뒤 도착한 message | Source는 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)에 따라 보관하고 permit handoff는 Application job queue §3을 따른다. Target commit이면 원래 operation identity와 ObjectGeneration을 유지해 전달하고, source `Preserve` fence가 이기면 원래 순서로 source queue에 되돌린다. |
 | `SpotWide`·Instance Spot timer | Runtime handle과 continuation은 이전하지 않는다. Logical registration, 다음 실행 시각과 pending tick을 이전하며 target이 queue 순서에 맞춰 자동 복원한다. Application은 timer를 중복 capture하거나 restore에서 다시 등록하지 않는다. |
 | Entry·`PerActor` Actor timer | Actor queue와 함께 Actor owner로 이전한다. Spot-level application timer는 이전하지 않으며 유지해야 하는 schedule은 application의 외부 state에서 관리한다. |
 | Actor에 연결된 session | Physical STREAM connection은 유지한다. Seal·route 전환의 정확한 순서와 timeout은 [04 §7](04-relocation-flow.ko.md#7-actor-relocation-중-session)이 요약하고 [Session과 Actor binding 「8」](../04-session/02-session-actor-binding.ko.md#8-actor-relocation-중-session의-책임)이 소유한다. |
 
-이전 owner로 늦게 도착한 message를 target에 전달할 때도 operation identity와 authority
-generation을 유지한다. Session command 44 적용과 무관하게 Message Follow route는
-`MessageFollowDuration` 안에서만 이전 route로 도착한 packet을 Target Actor에 전달한다.
-이전 generation의 packet과 reply는 거부한다. 같은 ActorId로 새로 만든 Actor는 application이
-다시 bind해야 한다.
+이전 owner로 늦게 도착한 message의 Message Follow 기간·보존 값·generation 판정은
+[Location runtime §7.3](01-location-runtime.ko.md#73-이전-owner로-도착한-message를-새-owner에게-전달한다)가 정의한다.
+같은 ActorId로 새로 만든 Actor는 application이 다시 bind해야 한다.
 
 Instance Spot의 `Close`와 relocation은 같은 authority commit에서 순서를 정한다. `Closing`이
-먼저면 close를 완료하고 이전하지 않는다. Relocation이 먼저면 늦은 `Close`는 moving 결과이며
-자동 재제출하지 않는다.
+먼저면 close를 완료하고 이전하지 않는다. Relocation이 먼저면 늦은 `Close`는 moving 결과다. Manager `Close`의 재제출 규칙은 [Spot 주소 메시징 §7](../03-spot-actor/06-spot-address-messaging.ko.md#7-close와-generation-경계)이 정한다.
 
 ## 13. Relocate 완료와 실패
 
-모든 unit이 source dispatch에서 분리되고 relay-ready reply를 보낸 각 target에 대한 one-way
-cutover submit 시도가 성공 또는 실패의 terminal result에 도달하면 host는 `Relocated`로
-전환하고 `Relocated/None`을 반환한다. 이 결과는 target Location Store CAS 완료 확인이
-아니다. Descriptor 게시, owner lease, listener, peer connection과 raw transport resource는 이때 정리하지
-않는다.
+모든 unit이 source dispatch에서 분리되고 각 target의 Location Store authority CAS 성공을
+확인한 뒤에만 host는 `Relocated`로 전환하고 `Relocated/None`을 반환한다. Source의 cutover
+submit terminal은 target 성공의 증거가 아니다. Source는 target의 별도 reply를 기다리지 않고
+[Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)의 authoritative owner
+결과로 확인한다. Descriptor, owner lease, listener와 transport resource는 유지한다.
 
 | 완료 지점 | 관찰 주체 | 의미 |
 |---|---|---|
-| Restore와 relay-ready reply | Source unit | Target temporary queue와 Restore가 준비됐으며 source가 아직 owner다. |
-| One-way cutover submit terminal | Source unit | Boundary 전 relay 뒤 cutover를 한 번 제출했고 성공 또는 실패가 확정됐다. 어느 결과도 target CAS 완료 확인이 아니다. |
-| `Relocated/None` reply | Source host와 caller | 모든 source unit dispatch가 끝났고 모든 cutover submit 시도가 terminal result에 도달했다. Submit 성공은 완료 조건이 아니다. |
-| Location Store CAS 성공 | Target unit | Target이 owner이며 이전한 기존 queue와 relay queue를 순서대로 개방할 수 있다. |
-| Session route update 적용 | Session owner | [04 §7](04-relocation-flow.ko.md#7-actor-relocation-중-session)과 [Session과 Actor binding 「8」](../04-session/02-session-actor-binding.ko.md#8-actor-relocation-중-session의-책임)이 소유한다. |
+| Restore와 relay-ready reply | Source unit | Target staging 준비. Source가 아직 owner다. |
+| One-way cutover submit terminal | Source unit | Submit 결과만 확정된다. Target authority 성공은 아직 모른다. |
+| Location Store CAS 성공 | Target unit | Target이 owner이며 검증된 relay와 기존 queue를 개방할 수 있다([공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)). |
+| `Relocated/None` reply | Source host와 caller | 모든 unit의 target authority 성공을 확인했다. |
+| Session route update 적용 | Session owner | [Session과 Actor binding §8](../04-session/02-session-actor-binding.ko.md#8-actor-relocation-중-session의-책임)이 소유한다. |
 
-Target은 cutover reply나 Session route update reply를 보내지 않는다. Source host는 target
-CAS와 Session route 적용을 기다리는 acknowledgement journal이나 numeric high-water를 만들지
-않는다.
-
-Cutover가 connection 장애로 유실될 수 있으므로, source는 각 unit의 boundary 전 relay batch와
-cutover의 사본을 최초 cutover submit terminal 뒤에도 cutover 대기 시간
-(`RelocationCutoverWaitTimeout`)과 같은 시간 동안 유지한다. 이 시간이 그 unit의 cutover
-재전송 창이다. 창 안에서 target과의 connection이 다시 수립되면 source는 batch와 cutover를 새
-connection으로 다시 보내고, target은 부분 수신한 boundary 전 relay 구간을 폐기하고 재전송
-batch 전체로 원자적으로 교체한다 — 개별 중복 제거나 부분 병합이 아니라 전체 교체이므로 구간
-안의 순서가 batch 순서로 확정된다. 재전송은 batch 하나를 다시 보내는 것이며 message별 ACK나
-journal이 아니다. 사본은 pipe를 점유하지 않는 source memory 보관이며, 창이 끝나면 source가
-정확히 한 번 정리하고 그 뒤에는 재전송하지 않는다. 재전송 창은 위 표의 완료 지점을 바꾸지
-않는다 — host는 최초 cutover submit terminal에서 그대로 `Relocated`로 전환하며, 재전송은 그
-뒤의 복구 동작이다. Source process가 이미 정리되거나 종료된 뒤에는 재전송이 불가능하고
-target은 cutover 대기 fallback으로 진행한다. Unit 하나의 재전송·교체 규칙은
-[Actor와 Spot relocation 전체 흐름](04-relocation-flow.ko.md)이 소유한다.
+Source는 target CAS를 기다리기 위한 acknowledgement journal이나 numeric high-water를
+만들지 않는다. Boundary 전 relay batch의 보관·재전송·미전달 operation의 terminal은
+[공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)가 소유한다.
 
 Operation이 deadline까지 완료 조건을 만족하지 못한 결과를
 [`DeadlineExceeded`](../00-foundation/02-glossary.ko.md#deadlineexceeded)라고 한다.
@@ -734,16 +706,14 @@ Operation이 deadline까지 완료 조건을 만족하지 못한 결과를
 | Target 선택 뒤 전달한 state schema/type adapter가 호환되지 않거나 허용한 재시도에서 `Capture`와 `Restore`가 모두 실패한다. | `Blocked/StateIncompatible` |
 | Framework가 relay-ready reply acceptance 전에 deadline 때문에 callback을 취소하거나 작업이 deadline을 넘는다. | `Blocked/DeadlineExceeded` |
 | Target이 relay-ready reply 전에 Restore를 명시적으로 거부해 source queue를 복원할 수 있다. | 아직 cutover를 시도하지 않은 source workload를 복원하고 `Blocked/RelocationFailed` |
+| Relay-ready 뒤 Restore deadline에 target commit이 확정되지 않는다. | Source가 [Location runtime §6.1·§10](01-location-runtime.ko.md#61-read와-cas)의 `Preserve` fence로 authority를 확정한다. 모든 unit의 source fence가 이기면 `Serving`과 `Blocked/RelocationFailed`, 모든 unit의 target commit이 확인되면 `Relocated/None`, 양쪽에 commit된 unit이 있으면 `Error`와 `Blocked/RelocationFailed`다. Fence 결과가 불확정이면 source lease가 유효한 동안 기존 Store 실패 정책에 따라 보관과 판정을 계속한다. |
+| Source owner lease가 `Preserve` 성공 전에 만료된다. | [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 expired-owner terminal로 해당 unit을 실패 처리하고 host는 `Error`, 결과는 `Blocked/RelocationFailed`(원인: source owner lease 만료)로 끝낸다. Target staging은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. |
 
-Relay-ready reply가 accepted 상태가 되기 전 명시적인 실패는 임시 record를 정리하고 해당
-source authority와 queue가 새 작업을 다시 받게 한다. 일부 unit이 이 경계를 지났다면 cutover
-submit의 성공·실패와 관계없이 그 unit은 source로 되돌리지 않는다. 아직 경계를 지나지 않은
-source workload만 다시 처리한 뒤 host를 `Serving`으로 전환할 수 있다.
+Relay-ready 전 명시적 실패 또는 그 뒤 source `Preserve` fence 성공은 해당 unit의 source
+authority와 queue를 재개한다. Target commit이 확인된 unit은 source로 돌아오지 않는다.
+Host 결과는 위 표의 확정된 unit별 authority를 따른다.
 
-Relay-ready reply가 accepted 상태가 된 뒤 target CAS, queue 개방 또는 Session route update
-실패는 source가 동기적으로 받는 Host 결과가 아니다. Target은 Restore 유효시간까지 CAS를
-다시 시도하고, 끝내 target owner를 확인하지 못하면 준비한 unit을 제거하고 Error log를 남긴다.
-이미 반환한 `Relocated` 결과를 바꾸거나 source dispatch를 다시 열지 않는다.
+Restore 만료 뒤 Store 판정은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따르고, host 결과는 위 표의 unit별 authority로 정한다. Session route-update 실패의 결과는 [Session과 Actor binding §8](../04-session/02-session-actor-binding.ko.md#8-actor-relocation-중-session의-책임)이 정한다.
 
 직접 전송한 payload의 checksum이 조립 결과와 다르면 target은 부분 조립 payload로 복원하지
 않고 relay-ready reply 전의 명시적 실패로 응답하며, source는 memory에 유지한 payload로
@@ -796,13 +766,13 @@ queue를 파괴하기 전에 소유한 transport 실행 문맥에서 cancellatio
 
 `Relocated` 상태의 source는 이전 주소로 도착하는 send와 request를 target으로 전달하기 위해
 Message Follow route와 필요한 descriptor, peer connection과 listener를 유지하고, 각 unit의
-cutover 재전송 사본도 재전송 창(§13)이 끝날 때까지 유지한다. Deployment가 설정한
+cutover 재전송 사본도 authority 판정과 재전송 사본 정리가 끝날 때까지 유지한다(공통 relocation §4.4). Deployment가 설정한
 `MessageFollowDuration` 전체를 사용하려면 그 기간이 끝난 뒤 `Shutdown`을 호출한다. 먼저
 `Shutdown`을 호출하면 남은 Message Follow route와 재전송 사본도 source transport와 함께
 정리한다.
 
 Source runtime은 자기가 시작한 relocation operation에 대해, 모든 unit이 Message Follow
-route를 제거할 수 있는 시점(S4, §8)에 도달하고 각 unit의 재전송 창(§13)이 끝난 뒤, 종료해도
+route를 제거할 수 있는 시점(S4, §8)에 도달하고 각 unit의 authority 판정과 재전송 사본 정리가 끝난 뒤, 종료해도
 안전하다는 관찰 상태 `SafeToShutdown`을 자기 runtime status에 게시한다. 두 조건 모두
 source에서 일어나는 사건이므로 이 판정에 다른 node의 시각은 필요 없다. 이 값은 target이나
 다른 주체가 보내는 완료 ACK가 아니라 source가 게시하고 다른 주체가 관찰하는 값이며, 정확한
@@ -874,7 +844,7 @@ host state, relocation mode·outcome·reason과 shutdown outcome·reason을 [Run
 
 Relocation unit별 시점 S0–S4와 세 구간 지표(source 정지 S0→S1, target 재개 S2→S3, route
 수렴 S1→S4)의 시점 정의와 측정 주체는 §8이 정한다. `SafeToShutdown` 관찰 상태(§14)의 status
-표면은 [Runtime monitoring](../06-observability/01-runtime-monitoring.ko.md)이, 구간 지표 계기와 cutover 대기 fallback 횟수를 세는
+표면은 [Runtime monitoring](../06-observability/01-runtime-monitoring.ko.md)이, 구간 지표 계기와 cutover 대기 Warning 횟수를 세는
 `cutover_timeout` counter는 [Runtime metrics](../06-observability/02-runtime-metrics.ko.md)가 소유한다.
 
 Spot을 system 전체에서 찾는 전역 문자열 주소를 [Spot ID](../00-foundation/02-glossary.ko.md#spot-id)라고
@@ -949,23 +919,20 @@ record 조회, metric·event)만으로 다음을 확인한다. Unit 하나의 ha
 - In-flight payload 예산이 차 있으면 새 unit이 source admission seal 전에 대기하고, 대기하는
   Actor·Spot이 그동안 message를 계속 처리한다. Coordinator가 동시 unit 수 상한을 별도로 두지
   않는다.
-- 재전송 창 안에서 connection이 재수립되면 source가 boundary batch와 cutover를 다시 보내고
-  target이 부분 수신 staging을 재전송 batch 전체로 교체하며, 창이 끝나면 사본이 정확히 한 번
-  정리되고 그 뒤 재전송이 발생하지 않는다.
+- Connection 재수립 시 재전송, 부분 staging 교체와 사본 정리가
+  [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)대로 일어난다.
 
 **지표와 SafeToShutdown**
 
 - Source 정지 시간(S0→S1), target 재개 시간(S2→S3)과 route 수렴 시간(S1→S4)을 각 시점이
   일어나는 node가 자기 clock으로 측정하며, 서로 다른 node의 시각을 직접 뺀 지표가 없다.
-- `SafeToShutdown`이 모든 unit의 S4 도달과 각 unit 재전송 창 종료보다 먼저 게시되지 않으며,
+- `SafeToShutdown`이 모든 unit의 S4 도달과 각 unit의 authority 판정·재전송 사본 정리보다 먼저 게시되지 않으며,
   두 판정에 다른 node의 시각을 사용하지 않는다.
 - 게시 전 `Shutdown`도 허용되고 그 결과는 §14의 route·사본 정리와 같다.
 
 **Failure와 cleanup**
 
-- Relay-ready reply가 accepted 상태가 되기 전 명시적인 abort에서만 target temporary queue를
-  실행하지 않고 폐기하며 source 원본을 queue에 되돌린다. 이 경계 뒤에는 cutover submit 결과와
-  관계없이 source를 복원하지 않는다.
+- Target은 relay-ready 전 명시적 abort 또는 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 source `Preserve` fence 성공 뒤 staged work를 버린다. Fence 성공 뒤 source는 보관한 작업을 재개한다.
 - Request terminal 결과를 두 runtime에서 중복으로 만들지 않는다.
 - Owner commit 뒤 같은 target runtime이 실패하면 source로 rollback하거나 다른 target을 자동
   선택하지 않는다.

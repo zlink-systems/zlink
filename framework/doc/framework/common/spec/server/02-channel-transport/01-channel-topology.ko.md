@@ -311,9 +311,7 @@ ChannelName에 대해 `Client` 또는 `Server` role을 추가로 등록한다.
 **Client role만 등록한 caller**
 
 현재 MeshNode에 `match` Client role만 등록하면 이 node는 `match` 호출을 시작할 수 있지만
-target 후보에는 포함되지 않는다. Framework는 같은 MeshName의 remote Server 후보 가운데
-[ready](../00-foundation/02-glossary.ko.md#ready)이고 weight가 0보다 큰 node 하나를
-[select-one](../00-foundation/02-glossary.ko.md#select-one)으로 선택한다.
+target 후보에는 포함되지 않는다. 같은 MeshName의 remote Server 후보에서 하나를 선택하는 규칙은 [Channel messaging §3](02-channel-messaging.ko.md#3-target을-선택하는-방법--channelname-select-one-선택-순서가중-라운드로빈)이 정한다.
 
 ```mermaid
 flowchart LR
@@ -346,36 +344,30 @@ RID와 weight를 생략했다.
 Channel 호출을 시작하는 기능까지 포함하기 때문이다.
 
 현재 MeshNode에 `match` Server role을 등록하면 Client role을 다시 등록하지 않아도 Channel
-호출을 시작할 수 있다. 호출을 시작한 현재 MeshNode도 RouteMesh의 선택 후보에 포함된다. 현재
-MeshNode가 ready이고 weight가 0보다 크며 drain 중이 아니면 remote Server와 같은 조건으로
-후보가 된다.
+호출을 시작할 수 있다. RouteMesh select-one은 게시된 remote Server membership을 후보로
+사용하며 송신 MeshNode 자신은 해당 호출의 후보가 아니다. 후보 자격과 선택 순서는
+[Channel messaging §3](02-channel-messaging.ko.md#3-target을-선택하는-방법--channelname-select-one-선택-순서가중-라운드로빈)이 정한다.
 
 ```mermaid
 flowchart LR
     Caller(("server A에 포함된<br/>송신 capability"))
 
-    subgraph ServerTargets[" "]
+    subgraph ServerTargets["remote Server 후보"]
         direction TB
-        SA["server A<br/>자기 node · 이번 호출에서 선택"]
-        SB["server B"]
+        SB["server B<br/>이번 호출에서 선택"]
         SC["server C"]
         SD["server D"]
     end
 
-    Caller -->|Server 하나를 선택| SA
+    Caller -->|Server 하나를 선택| SB
 
     style ServerTargets fill:transparent,stroke:transparent
 ```
 
 왼쪽 원은 별도로 등록한 Client role이 아니라 server A의 Server role에 포함된 송신
-capability를 나타낸다. Server A는 호출을 시작하면서 자신의 RouteMesh 호출에서도 후보가
-된다. 그림은 자기 node가 선택된 경우다.
-
-Remote Server가 선택되면 앞의 [물리 연결 그림](#physical-routemesh-diagram)의 기존
-RouteMesh peer 연결을 사용한다. 자기 node가 선택되면 Framework는 같은 RouteMesh message
-처리 경로를 사용하여 local submission을 수행한다. 두 경우 모두 codec, admission, HWM,
-timeout, correlation과 terminal completion을 건너뛰지 않으며 handler를 직접 호출하는
-우회 경로를 제공하지 않는다. 양의 weight를 가진 후보가 없을 때만 target 없음으로 끝난다.
+capability를 나타낸다. 그림은 remote Server B가 선택된 경우다. 선택된 Server에는
+[물리 연결 그림](#physical-routemesh-diagram)의 기존 RouteMesh peer 연결로 제출한다.
+후보가 없을 때의 결과는 [Framework API](../00-foundation/06-framework-api.ko.md#no-eligible-select-one-member)가 정한다.
 
 두 그림은 서로 다른 층을 보여준다 — 물리 연결 그림은 어느 MeshNode가 실제로 ROUTER를
 연결하는지를, 논리 관계 그림은 그 연결 위에서 Framework가 ChannelName 호출마다 target을
@@ -391,9 +383,7 @@ Client와 Server role 목록은 startup 뒤 바꿀 수 없다. Server membership
 `0..10000` 범위에서 실행 중 변경할 수 있으며 기본값은 `100`이다. 범위 밖 값은 startup
 설정과 runtime 변경에서 configuration error다.
 
-Framework는 readiness, capacity와 drain 조건을 먼저 적용한 뒤 남은 후보의 positive weight
-합계를 최소 64-bit 정수로 계산한다. 이 합계가 넘치지 않도록 계산한 비율만 target
-선택에 사용한다.
+ChannelName 후보의 weight 합계와 선택 절차는 [Channel messaging §3](02-channel-messaging.ko.md#3-target을-선택하는-방법--channelname-select-one-선택-순서가중-라운드로빈)이 정한다.
 
 [Weight](../00-foundation/02-glossary.ko.md#weight) 변경은 다음 대상에만 적용한다.
 
@@ -481,10 +471,10 @@ Endpoint와 RID만 전달해 generation `0`을 사용하거나 RID를 security i
 fallback은 descriptor 기반 연결에 사용하지 않는다. Descriptor를 찾지 못한 수동 연결은
 descriptor 기반 placement를 주장하지 않고 등록된 endpoint와 handshake 결과만 따른다. Object
 role이 활성화된 MeshNode도 descriptor가 아직 없을 때 endpoint-only intent를 먼저 등록한다.
-이후 Location Store에 일치하는 descriptor가 나타나면 host·Spot runtime이 그 intent를 새
-descriptor 값으로 교체할 수 있다. 교체는 endpoint, RID, 양수 lifecycle generation과 security
-identity를 모두 전달하며, 이전 endpoint intent가 liveness close로 닫히기 전에는 새 intent를
-설치하지 않는다. Descriptor가 없는 동안에는 이 경로도 placement owner라고 주장하지 않는다.
+이후 Location Store에 일치하는 descriptor가 나타나거나 descriptor의 endpoint·identity 값이
+바뀌면 host·Spot runtime은 intent를 완전한 descriptor 값으로 교체한다. 교체 intent는 endpoint,
+RID, 양수 lifecycle generation과 security identity를 모두 전달한다.
+Service admission은 [Transport liveness §5](05-transport-liveness.ko.md#5-ready와-장애-판정)를 따른다. Descriptor가 없는 동안에는 이 경로도 placement owner라고 주장하지 않는다.
 
 Automatic에서도 연결 경합이나 오래된 discovery snapshot 때문에 같은 RID의 pipe가 둘 생기면 같은
 규칙(Core가 pipe를 선택하고 Framework는 선택 route에서만 admission)을 적용한다. 이 안전장치는 automatic initiator 선택을 대신하지 않으며
@@ -576,13 +566,9 @@ MeshNode는 다음 준비가 모두 끝나야 ready 상태가 된다.
 ready 연결로 사용한다. 현재 연결할 peer가 없다는 이유만으로 MeshNode의 ready 전환을 막지는
 않는다. 따라서 Server membership이 없는 송신 전용 MeshNode도 시작할 수 있다.
 
-ChannelName Server는 MeshNode가 ready이고 자신의 weight가 0보다 클 때만 새 select-one
-target이 된다. 이때 후보 집합은 [§4](#4-local-server-없이도-호출을-시작할-수-있는-경우)가
-descriptor에 게시한 Server membership에서 나온다. Descriptor에 게시되지 않은 Server
-membership은 remote caller가 알 수 없으므로 후보가 되지 않는다.
+ChannelName의 후보 선택은 [Channel messaging §3](02-channel-messaging.ko.md#3-target을-선택하는-방법--channelname-select-one-선택-순서가중-라운드로빈)을 따르며, remote 후보의 membership은 [§4](#4-local-server-없이도-호출을-시작할-수-있는-경우)의 descriptor에서 얻는다.
 
-Framework는 target 선택과 message submit을 하나의 작업으로 처리한다. 선택한 RID를
-application에 중간 결과로 반환하지 않는다.
+ChannelName의 target 선택과 message submit 경계는 [Channel messaging §3](02-channel-messaging.ko.md#3-target을-선택하는-방법--channelname-select-one-선택-순서가중-라운드로빈)이 정한다.
 
 Client role은 local 송신 경로만 만들기 때문에 선택할 수 있는 remote Server 수에 포함하지
 않는다. 현재 MeshNode에 같은 ChannelName Server role이 없어도 remote Server를 선택하여
@@ -691,9 +677,8 @@ Fanout 연결의 ready와 liveness는 [Transport liveness](05-transport-liveness
 
 **Weight와 target 선택**
 
-- Channel weight는 `0`, 기본값 `100`과 상한 `10000`을 허용하고 `-1`과 `10001`은 startup
-  설정과 runtime 변경에서 거부한다.
-- Weight 0과 drain은 새로운 ChannelName 선택에만 적용한다.
+- Channel weight 범위는 [§5](#5-실행-중-바꿀-수-있는-값weight)를 검증한다.
+- ChannelName 선택 자격과 순서는 [Channel messaging §3](02-channel-messaging.ko.md#3-target을-선택하는-방법--channelname-select-one-선택-순서가중-라운드로빈)을 검증한다.
 - Logical Multicast는 positive weight의 크기와 관계없이 eligible remote member마다 한 번만
   전송한다.
 

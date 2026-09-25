@@ -35,35 +35,9 @@ public suspend fun <T> CompletionStage<T>.await(): T
 이 함수는 Java `CompletionStage`의 성공 값과 실패 원인을 보존한다. Coroutine 취소는 대기 중인 continuation만
 끝내며 이미 시작한 shared host operation을 취소하지 않는다.
 
-User Spot은 Spot과 current member Actor 전체를 하나의 aggregate로 이전하며 participant 총수에
-고정 상한을 두지 않는다. 따라서 존재 자체가 relocation blocker가
-아니다. `disableRelocation()` 선택, eligible target 부재와 target 선택 뒤 state schema/type adapter 불일치의
-relocation reason은 Java와 동일하다.
-Local manual RouteMesh peer, ClientServer client endpoint, fanout subscriber endpoint 또는 manual fanout publisher가
-하나라도 있으면 Java enum의 `MANUAL_TOPOLOGY_UNSUPPORTED(8)`로 `Blocked`된다. Automatic RouteMesh는 source의
-Core peer table에서 descriptor와 같은 RID·lifecycle generation이 admitted·ready가 된 뒤에만
-`RELOCATING(2)`으로 전환한다. `shutdown()`에는 manual topology 제한을 적용하지 않는다.
-
-`PLANNED_MAINTENANCE(0)`는 `targetApplicationVersion == null`이어야 하며 source와 같은 version만
-target 후보로 사용한다. `ROLLING_UPDATE(1)`는 source보다 큰 target version을 반드시 지정하고 그 값과
-정확히 같은 version만 후보로 사용한다. Framework는 version, source가 아닌 `SERVING` Object Server,
-stable type·factory·adapter capability, capacity와 다른 maintenance wave, RID·lifecycle generation이
-일치하는 `ADMITTED` Core peer, placement weight 순서로 target을 선택한다. 다른 version으로 fallback하지
-않는다. Version·wave·capacity 또는 등록 factory/type·relocation adapter eligibility를 만족하는 -ready
-target이 없으면 deadline까지 다시 확인한 뒤 `BLOCKED/TARGET_UNAVAILABLE`이다. Target 선택 뒤 전달한 state
-schema/type adapter가 호환되지 않으면 `BLOCKED/STATE_INCOMPATIBLE`, Store 조회 실패는
-`BLOCKED/STORE_UNAVAILABLE`이다.
-
-같은 mode와 effective target version의 동시 호출은 첫 호출이 시작한 shared operation에 참여하고 같은
-terminal result를 받는다. 첫 options의 deadline이 shared operation deadline을 고정한다. Mode 또는 target
-version이 다르면 기존 operation을 변경하지 않고 `BLOCKED/OPERATION_IN_PROGRESS(10)`를 반환한다.
-Kotlin은 이 규칙을 축약하는 default mode나 별도 target 선택 extension을 제공하지 않는다.
-
-Java와 같이 모든 target을 `Prepared`로 만들고 relocation commit을 publish하기 전 deadline은 durable abort와
-source normalization 뒤 `Blocked/DeadlineExceeded`다. Commit 뒤에는 source로 rollback하지 않으며
-같은 target process가 실행 중일 때만 남은 단계를 처리한다. Target process가 종료되면 다른 runtime이
-relocation을 자동으로 이어받지 않으며 `Relocated`를 반환하지 않는다. `RELOCATING`에서 `shutdown()`을 호출하면 실행 중인 atomic
-unit만 끝내고 relocation waiter는 `Blocked/ShutdownRequested`를 받는다. Kotlin enum이나 result를 추가하지 않는다.
+Kotlin은 Java의 host relocation mode와 result enum을 사용한다. Target 선택, deadline,
+commit과 shutdown은 [Host relocation flow](../../../05-location-relocation/05-host-relocation-flow.ko.md)가 정한다.
+`CompletionStage.await()` 취소는 대기 중인 continuation에만 적용한다.
 
 ```kotlin
 val relocation = frameworkRuntime.relocate(

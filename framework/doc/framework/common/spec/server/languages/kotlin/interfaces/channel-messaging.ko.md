@@ -154,17 +154,9 @@ type처럼 호출 지점에서 `T`를 유지할 수 없으면 두 번째 overloa
 다른 `T`가 첫 값과 맞지 않으면 `TYPE_MISMATCH`로 끝나고, 첫 호출이 실패했다면 그 실패를
 다시 전달한다.
 
-`ZLinkKotlinRequestCall.yield()`는 Java `yield(...)`의 coroutine bridge일 뿐 임의 suspension을 Yield로
-바꾸지 않는다.
-`SPOT_WIDE` User Spot 또는 Instance Spot application handler가 아니면 coroutine을 suspend하거나 underlying
-operation을 제출하기 전에 `InvalidOperation`으로 완료한다. Node direct request, Entry·`PER_ACTOR`,
-Channel handler와 owner context 밖에도 같은 규칙을 적용한다. 현재 Spot gate가 필요한 target을 기다리는
-일반 `await()`도 submission 전에 거부한다. One-way wrapper는 FIFO queue admission을 유지하고 handler를
-inline 또는 reentrant하게 호출하지 않는다.
+`ZLinkKotlinRequestCall.yield()`는 Java call의 coroutine bridge다. 유효 문맥과 수락은 [Execution gate](../../../01-execution/02-handler-turn-and-execution-gate.ko.md)가 정한다.
 
-Queue가 가득 차면 send timeout까지 기다린다. Timeout은 `DeadlineExceeded`, route 단절은
-`Unavailable`, runtime 종료는 `ShuttingDown`으로 완료한다. Target이나 session binding이 없으면
-`NotFound`다. Cancellation이 먼저 확정되면 coroutine cancellation로 완료한다.
+One-way 수락과 terminal 결과는 [Submit과 completion](../../../01-execution/01-submit-and-completion.ko.md)이 정한다. Kotlin은 취소를 coroutine cancellation으로 표현한다.
 
 Topic을 받는 `publishToTopic(...)`에 전달하거나 Java builder의 `subscribe`에 등록하는 topic이
 [Channel messaging §7](../../../02-channel-transport/02-channel-messaging.ko.md#7-classic-fanout과의-경계liveness-beacon-topic-예약)이 금지한 값이면 Java runtime의 `ZLinkConfigurationException`을 발생시킨다.

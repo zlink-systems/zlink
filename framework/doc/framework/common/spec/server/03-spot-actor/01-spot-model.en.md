@@ -133,8 +133,7 @@ If the same Restore request arrives again, the existing temporary queue and
 Restore progress state are used. Messages aren't put into a previous target
 attempt's or a different `ObjectGeneration`'s queue. Only on an explicit
 abort before relay-ready is accepted is the target temporary queue discarded
-without running and source-held work restored to the original queue. After
-that boundary, source isn't restored regardless of cutover-submit result.
+without running and source-held work restored to the original queue. After that boundary, source resumption and target staging cleanup follow authority settlement in [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
 After owner commit, the temporary queue is only moved to the real queue while
 the same target process is running. If the target process terminates, a
 different runtime doesn't automatically take over this work.
@@ -572,16 +571,14 @@ public interface IZLinkSpotContext : IZLinkSpotCommonContext
         IZLinkActor actor,
         CancellationToken cancellationToken = default);
 
-    ValueTask<bool> CloseAsync(
-        CancellationToken cancellationToken = default);
+    void Close();
 }
 
 public interface IZLinkInstanceSpotContext : IZLinkSpotCommonContext
 {
     IZLinkInstanceSpotHandlerRegistry Handlers { get; } // registers only direct handlers
 
-    ValueTask<bool> CloseAsync(
-        CancellationToken cancellationToken = default);
+    void Close();
 }
 ```
 

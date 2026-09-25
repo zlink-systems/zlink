@@ -116,8 +116,7 @@ target 안의 수신 순서를 유지한다. `PerActor`에서는 Spot과 Actor r
 같은 Restore 요청을 다시 받으면 기존 temporary queue와 Restore 진행 상태를 사용한다. 이전
 target attempt나 다른 `ObjectGeneration`의 queue에는 message를 넣지 않는다. Relay-ready reply가
 accepted 상태가 되기 전 명시적 abort에서만 target temporary queue를 실행하지 않고 폐기하며
-source가 보관한 작업을 원래 queue로 되돌린다. 그 뒤에는 cutover submit 결과와 관계없이 source를
-복원하지 않는다. owner commit 뒤에는 같은 target process가 실행 중일 때만 temporary queue를 실제
+source가 보관한 작업을 원래 queue로 되돌린다. 그 뒤 source 재개와 target staging 정리는 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 authority 판정을 따른다. owner commit 뒤에는 같은 target process가 실행 중일 때만 temporary queue를 실제
 queue로 옮긴다. Target process가 종료되면 다른 runtime이 이 작업을 자동으로 이어받지 않는다.
 
 Queue와 gate의 관계는 [실행 계약 §2](../01-execution/02-handler-turn-and-execution-gate.ko.md#execution-gate)를 따른다.
@@ -500,16 +499,14 @@ public interface IZLinkSpotContext : IZLinkSpotCommonContext
         IZLinkActor actor,
         CancellationToken cancellationToken = default);
 
-    ValueTask<bool> CloseAsync(
-        CancellationToken cancellationToken = default);
+    void Close();
 }
 
 public interface IZLinkInstanceSpotContext : IZLinkSpotCommonContext
 {
     IZLinkInstanceSpotHandlerRegistry Handlers { get; } // Direct handler만 등록
 
-    ValueTask<bool> CloseAsync(
-        CancellationToken cancellationToken = default);
+    void Close();
 }
 ```
 

@@ -22,7 +22,7 @@ library behavior, tests, samples, packaging, and perf runner all match this
 document and the rules in `core/include/zlink.h`.
 
 The shared bindings architecture map still holds as review vocabulary.
-core, messaging, sockets, eventing, service, and errors are the conceptual
+core, messaging, sockets, eventing, and errors are the conceptual
 areas a reviewer uses when reading the C header. C expresses these areas
 not as separate `contracts/` and `runtime/` folders, but through header
 sections, type/function prefixes, tests, samples, and documentation
@@ -43,12 +43,12 @@ folders.
 | [Byte HWM and Auto-HWM](#byte-hwm-and-auto-hwm) | Core ABI byte-HWM configuration, calculation, and admission rules |
 | [Receive flow state](#receive-flow-state) | The receive-flow state enum, function, results, and monitor surface |
 | [Required feature coverage](#required-feature-coverage) | The header feature groups a review checks |
-| [Spot Get-Or-New](#spot-get-or-new) | The `zlink_spot_node_spot_get_or_new` contract |
+| [Spot Get-Or-New](#spot-get-or-new) | Core boundary and Framework API links |
 | [Ownership and lifecycle](#ownership-and-lifecycle) | Handle/message ownership transfer rules |
 | [Error and Result policy](#error-and-result-policy) | The C result domain, and why no exceptions |
 | [Performance policy](#performance-policy) | Why C is the performance baseline for the other bindings |
 | [Implementation checklist](#implementation-checklist) | What to confirm before declaring alignment |
-| [Actor and Spot route results](#actor-and-spot-route-results) | The route-result structs and the routing helper policy |
+| [Actor and Spot route results](#actor-and-spot-route-results) | Core boundary link |
 
 ## Public contract source
 
@@ -117,7 +117,7 @@ The C binding keeps the native ABI shape.
 - A callback API exposes a C function pointer and userdata only when the public header declares it.
 
 Higher-level object convenience forms such as `Received.Reply(...)`,
-`Socket.Send().Message(...).Submit()`, and `Spot.Publish(topic)` do not
+`Socket.Send().Message(...).Submit()`, and `PubSocket.Publish(topic)` do not
 apply to C. Those shapes belong to the higher-level bindings.
 
 ## Interface shape exceptions
@@ -180,7 +180,6 @@ A C review checks the following groups in `core/include/zlink.h`.
 - Message lifecycle, message data access, copy/move/adopt rules, attribute lookup.
 - Socket lifecycle, bind/connect, disconnect, options, TLS helpers, routing id, send, receive, request, reply, publish, subscribe, stream API.
 - Eventing API: monitor, poller, timer, pull receive, and readiness semantics.
-- SPOT node, SPOT handle, topology snapshot, actor, service-layer API.
 - error/result enums and errno mapping.
 
 If a feature exists in `core/include/zlink.h`, the C binding exposes it
@@ -189,14 +188,9 @@ public C API.
 
 ## Spot Get-Or-New
 
-`bindings/c/include/zlink.h` exposes `zlink_spot_node_spot_get_or_new(...)`
-with the same signature and result contract as the core public header.
-This function atomically gets or creates a local logical Spot by routing
-id, and returns both a caller-owned `Spot` facade handle and a
-was-it-created flag.
-
-This API does not join an actor to the Spot — join remains a separate
-service operation.
+The C binding follows the [Core runtime boundary](../../../../core/doc/spec/core/08-runtime-boundary.en.md#3-capabilities-owned-by-framework)
+and provides no service C ABI. The [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md#17-creategetorcreate-results-and-relocation-policy)
+owns Spot `GetOrCreate`.
 
 ## Ownership and lifecycle
 
@@ -223,7 +217,7 @@ The C binding reports public results as a C result domain, not exceptions.
 The C binding is the performance baseline for the other bindings.
 
 - The hot path uses the caller-provided whole-message array directly and does not build another intermediate collection containing the same payload.
-- The send/recv, request, dispatch, poller, timer, stream, SPOT, and actor paths do not add hidden sleeps, busy waits, thread joins, reflection-like dynamic dispatch, coarse global locks, or avoidable copies.
+- The send/recv, request, dispatch, poller, timer, and stream paths do not add hidden sleeps, busy waits, thread joins, reflection-like dynamic dispatch, coarse global locks, or avoidable copies.
 - The perf runner and samples include only the public header.
 - `bindings/c/perf` measures `core/build`'s runtime unless the perf policy explicitly says otherwise.
 
@@ -239,18 +233,7 @@ Before declaring the C binding aligned:
 
 ## Actor and Spot route results
 
-The C binding exposes the core route-result structs directly as public
-ABI.
-
-- `zlink_actor_route_t` carries a resolved Actor ref. Besides `actor.node_rid`, it includes `current_spot_rid` and `current_spot_kind`.
-- `zlink_spot_route_t` carries the requested `spot_rid`, `owner_node_rid`, and `spot_kind`.
-- `zlink_spot_kind_t` distinguishes an Entry Spot from a user Spot. An invalid kind is not a successful Actor or Spot route result.
-- A C sample that routes by Actor id first resolves the Actor, then passes `actor.node_rid` and `current_spot_rid` to the existing Spot routed API.
-
-The C binding does not add `zlink_router_send_actor`,
-`zlink_router_request_actor`, or an Actor-to-ROUTER request helper.
-Actor-directed delivery is handled by route lookup followed by the
-existing Spot routed send/request.
+The service C ABI boundary is defined by [Core runtime boundary §3](../../../../core/doc/spec/core/08-runtime-boundary.en.md#3-capabilities-owned-by-framework).
 
 ## Pull completion and STREAM packets
 

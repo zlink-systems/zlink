@@ -111,18 +111,7 @@ public interface IZLinkRouteClient
 }
 ```
 
-Node direct submits to a single target RID that isn't an Object Client.
-The Channel operation selects the unique
-[RouteMesh](../../../00-foundation/02-glossary.en.md#routemesh) or ClientServer send
-path for a ChannelName from the process-local route index. It selects one
-ready positive-weight member by round-robin and submits within the same
-operation, and the client doesn't return the selected RID. If ClientServer
-has a local Server on the same ChannelName, it's included as a candidate
-under the same readiness/weight/drain conditions as a remote Server —
-local priority or remote exclusion isn't applied. Even if a local Server
-is selected, the same codec, timeout, cancellation, correlation, and
-terminal completion contract as a remote Server applies. A separate
-public path that calls a local handler directly isn't provided.
+Channel target selection and local Server handling follow [Channel messaging](../../../02-channel-transport/02-channel-messaging.en.md) and [ClientServer channel](../../../02-channel-transport/03-client-server-channel.en.md).
 
 An application Node direct handler can't be registered on an Object
 Client, and that RID isn't a Node direct target. If the caller specifies
@@ -167,15 +156,4 @@ public interface IZLinkFanoutHandler<in TEvent>
 }
 ```
 
-`IZLinkFanoutClient.Publish(...)` takes a ChannelName and typed event,
-and a call that needs an explicit topic uses the
-[topic](../../../00-foundation/02-glossary.en.md#topic) overload. If topic is
-omitted, the framework uses the event's
-[packet name](../../../00-foundation/02-glossary.en.md#packet-name) as topic. A
-topic that [Channel messaging §7](../../../02-channel-transport/02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic) forbids is rejected with `ArgumentException` by both
-publish and `Subscribe`. The `Async(...)` of
-the returned dedicated call completes normally once source-local publish
-admission finishes. It doesn't return subscriber count or receipt
-completion. `IZLinkPublishCall` is a Logical-Multicast-dedicated call and
-isn't used for
-[classic fanout](../../../00-foundation/02-glossary.en.md#classic-fanout).
+`IZLinkFanoutClient.Publish(...)` exposes the topic overload; [Submit and completion §6](../../../01-execution/01-submit-and-completion.en.md) defines Classic fanout publish completion. Forbidden topics map to `ArgumentException` as defined by [Channel messaging §7](../../../02-channel-transport/02-channel-messaging.en.md).

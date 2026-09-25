@@ -325,10 +325,7 @@ MeshNode additionally registers a `Client` or `Server` role for each ChannelName
 **A Caller That Registered Only the Client Role**
 
 If only the `match` Client role is registered on the current MeshNode, this node can
-start `match` calls but isn't included in the target candidates. The framework
-selects, via [select-one](../00-foundation/02-glossary.en.md#select-one), one node among the
-same-MeshName remote Server candidates that's [ready](../00-foundation/02-glossary.en.md#ready) and
-has weight greater than 0.
+start `match` calls but isn't included in the target candidates. Remote Server selection within the same MeshName follows [Channel Messaging §3](02-channel-messaging.en.md#3-how-to-select-a-target--channelname-select-one-selection-order-weighted-round-robin).
 
 ```mermaid
 flowchart LR
@@ -360,41 +357,32 @@ receive this call's message. This behavior isn't a multicast to all four Servers
 `Client` and `Server` roles aren't registered simultaneously for the same ChannelName,
 since `Server` role already includes the functionality to start a Channel call.
 
-If the `match` Server role is registered on the current MeshNode, it can start a
-Channel call without registering the Client role again. The current MeshNode that
-started the call is also included among the RouteMesh selection candidates. If the
-current MeshNode is ready, has weight greater than 0, and isn't draining, it becomes
-a candidate under the same conditions as a remote Server.
+A Server role can start a Channel call without a separate Client role. RouteMesh
+select-one considers remote published Server memberships; the sending MeshNode is not
+a candidate for its own call. Candidate eligibility and order follow
+[Channel Messaging §3](02-channel-messaging.en.md#3-how-to-select-a-target--channelname-select-one-selection-order-weighted-round-robin).
 
 ```mermaid
 flowchart LR
     Caller(("send capability<br/>included in server A"))
 
-    subgraph ServerTargets[" "]
+    subgraph ServerTargets["remote Server candidates"]
         direction TB
-        SA["server A<br/>self node · selected for this call"]
-        SB["server B"]
+        SB["server B<br/>selected for this call"]
         SC["server C"]
         SD["server D"]
     end
 
-    Caller -->|selects one Server| SA
+    Caller -->|selects one Server| SB
 
     style ServerTargets fill:transparent,stroke:transparent
 ```
 
 The left circle represents the send capability included in server A's Server role,
-not a separately registered Client role. Server A starts the call and also becomes a
-candidate for its own RouteMesh call. The diagram shows the case
-where the self node was selected.
-
-If a remote Server is selected, it uses the existing RouteMesh peer connection from
-the [physical connection diagram](#physical-routemesh-diagram) above. If the self node
-is selected, the framework performs local submission using the same RouteMesh
-message-processing path. In both cases, codec, admission, HWM, timeout, correlation,
-and terminal completion aren't skipped, and no bypass path directly invokes the
-handler. Only when there's no candidate with positive weight does the call end with no
-target.
+not a separately registered Client role. The diagram shows remote Server B selected
+for this call. Submission uses the existing RouteMesh peer connection in the
+[physical connection diagram](#physical-routemesh-diagram). The result when no
+candidate remains is defined by [Framework API](../00-foundation/06-framework-api.en.md#no-eligible-select-one-member).
 
 The two diagrams show different layers — the physical connection diagram shows which
 MeshNode actually connects a ROUTER, and the logical relationship diagram shows how
@@ -414,9 +402,7 @@ membership's weight can be changed at runtime, within `0..10000`, with a default
 `100`. A value outside the range is a configuration error, both at startup
 configuration and at runtime change.
 
-The framework applies readiness, capacity, and drain conditions first, then computes
-the sum of remaining candidates' positive weight using at least a 64-bit integer. It
-only uses the ratio computed so that this sum doesn't overflow for target selection.
+ChannelName candidate weight sums and selection are defined by [Channel Messaging §3](02-channel-messaging.en.md#3-how-to-select-a-target--channelname-select-one-selection-order-weighted-round-robin).
 
 A [weight](../00-foundation/02-glossary.en.md#weight) change only applies to the following.
 
@@ -517,10 +503,10 @@ security identity, isn't used for a descriptor-backed connection. If no descript
 available, the manual connection follows only the registered endpoint and the
 handshake result; it doesn't claim descriptor-backed placement. An Object-enabled
 MeshNode registers the endpoint-only intent even when the descriptor isn't available
-yet. If a matching descriptor appears later in the Location Store, the host and Spot
-runtimes may replace that intent with the descriptor values. The replacement passes
-the endpoint, RID, positive lifecycle generation, and security identity together, and
-doesn't install the new intent until liveness has closed the previous endpoint intent.
+yet. When a matching descriptor appears later in the Location Store, or its endpoint or
+identity values change, the host and Spot runtimes replace the intent with the complete
+descriptor values: endpoint, RID, positive lifecycle generation, and security identity. Service admission follows
+[Transport liveness §5](05-transport-liveness.en.md#5-ready-and-failure-determination).
 While the descriptor is absent, this path also makes no placement-owner claim.
 
 Even for Automatic, if connection contention or a stale discovery snapshot produces two pipes
@@ -626,14 +612,9 @@ connection once the handshake confirms identity and admission finishes. The
 MeshNode's transition to ready isn't blocked merely because there's currently no peer
 to connect to. So a send-only MeshNode with no Server membership can also start.
 
-A ChannelName Server only becomes a new select-one target when the MeshNode is ready
-and its own weight is greater than 0. Here the candidate set comes from the Server
-membership [§4](#4-when-a-call-can-start-without-a-local-server) published to the
-descriptor. A Server membership not published to the descriptor is unknown to a
-remote caller, so it isn't a candidate.
+ChannelName candidate selection follows [Channel Messaging §3](02-channel-messaging.en.md#3-how-to-select-a-target--channelname-select-one-selection-order-weighted-round-robin); remote candidate membership comes from the descriptor published in [§4](#4-when-a-call-can-start-without-a-local-server).
 
-The framework treats target selection and message submit as one operation. It doesn't
-return the selected RID to the application as an intermediate result.
+The ChannelName target selection and message submit boundary is defined by [Channel Messaging §3](02-channel-messaging.en.md#3-how-to-select-a-target--channelname-select-one-selection-order-weighted-round-robin).
 
 Since Client role only builds a local send path, it isn't included in the count of
 selectable remote Servers. Even without the same ChannelName Server role on the
@@ -759,9 +740,8 @@ select-one returns. Each item leads to one contract test.
 
 **Weight and target selection**
 
-- Channel weight allows `0`, default `100`, and cap `10000`; `-1` and `10001` are
-  rejected at startup configuration and runtime change.
-- Weight 0 and drain only apply to new ChannelName selection.
+- Channel weight range verifies [§5](#5-values-that-can-change-at-runtime-weight).
+- ChannelName eligibility and ordering verify [Channel Messaging §3](02-channel-messaging.en.md#3-how-to-select-a-target--channelname-select-one-selection-order-weighted-round-robin).
 - Logical Multicast sends exactly once per eligible remote member, regardless of the
   magnitude of positive weight.
 

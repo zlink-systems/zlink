@@ -73,7 +73,7 @@ owner로 늦게 도착한 message를 새 owner에게 대신 전달하는 동작�
 | 경계 | 한 번 검증하는 값 | 재검증하지 않는 곳 |
 |---|---|---|
 | Transport ingress | Authenticated peer RID·node generation, frame 형식 | Target queue, Session owner |
-| Target handoff(relocation) | Source owner fence, target fence, Store version, Restore와 cutover 또는 1,000 ms fallback | Source, Message Follow, Session owner |
+| Target handoff(relocation) | Source owner fence, target fence, Store version, [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 완전한 relay·cutover 검증 | Source, Message Follow, Session owner |
 | Session owner(`SessionBindingAggregate`) | Physical Session identity·SessionRid, binding generation과 그것이 가리키는 `ActorId`·`ObjectGeneration`, relocation identity | Actor Join, host relocation, Message Follow, route cache |
 
 ## 3. Startup 조건
@@ -203,9 +203,9 @@ application queue에 직접 추가한다. Current Spot은 authority 검증에 �
   기다리면, 업무가 밀릴 때 연결이 끊긴 것으로 오판할 수 있다.
 
 Actor가 session에 보내는 push는 `boundSessionSend(36)` record로 session owner에
-전달한다. Session owner는 source Actor `ObjectGeneration`, source `NodeGeneration`,
-`AuthorityOwnerGeneration`과 expected binding generation이 모두 current일 때만 실제
-STREAM connection에 제출한다. 제출하는 frame에는 그 binding의 Actor slot을 싣는다.
+전달한다. Session owner는 [§8.1](#81-seal-held-message와-route-전환)의 Session-owned binding 검증을
+통과한 push만 실제 STREAM connection에 제출한다. Source node·authority generation은
+transport와 Actor owner 경계에서 각각 확인한다. 제출하는 frame에는 그 binding의 Actor slot을 싣는다.
 
 **Binding의 완료와 그 인지는 해석의 여지가 없는 두 선형화점으로 정의한다. push의
 current 판정에 그 선형화점 밖의 사본을 사용하지 않는다.**
@@ -226,9 +226,9 @@ current 판정에 그 선형화점 밖의 사본을 사용하지 않는다.**
    끝날 때는 역순이다 — 새 slotted 제출을 먼저 막고, 이미 수락한 frame을 제출한 뒤
    `$zlink.actor.unbound`를 같은 queue에 넣는다.
 3. **판정 권위는 하나다.** push의 current 판정은 [§8.1](#81-seal-held-message와-route-전환)이
-   열거한 Session owner 검증 항목(위의 네 generation 값)만 사용한다. 파생 사본의
+   열거한 Session owner 검증 항목만 사용한다. 파생 사본의
    미갱신·불일치를 binding이 stale하다는 근거로 사용하지 않는다. Source 측도 전송 조건으로
-   binding 정체성(SessionRid·binding generation)과 위 열거 항목 외의 field 일치를
+   binding 정체성(SessionRid·binding generation) 외의 field 일치를
    요구하지 않는다 — binding 성립 후 owner lifecycle field가 갱신되어도 같은 binding의
    push는 현행 등록 route로 전송된다.
 4. **거절은 조용히 사라지지 않는다.** current가 아니어서 제출을 거절한 push는
@@ -265,7 +265,7 @@ sequenceDiagram
     Note over S,L: message마다 Store를 조회하지 않는다
 
     A->>S: [send] command 36 · Actor→session push
-    S->>S: [local] source generation·expected binding generation이 current인지 확인
+    S->>S: [local] §8.1의 current Session identity, ActorId/ObjectGeneration과 expected binding generation 확인
     S-->>C: 실제 STREAM connection에 제출
 
     alt 저장한 route가 더 이상 유효하지 않다
@@ -282,8 +282,7 @@ Bind가 성공하면 session owner는 검증된 Actor route를 binding에 저장
 disconnect 통지와 Actor에서 session으로 보내는 push는 이 binding 정보를 사용하며
 message를 보낼 때마다 Location Store를 다시 조회하지 않는다. 저장한 route가 더 이상
 유효하지 않으면 active Message Follow route로 정확히 한 번 전달하거나 `Unavailable`로
-끝낸다. Location Store에서 새 `ActorRef`를 찾아 같은 message를 다른 owner에게 자동으로
-다시 보내지 않는다.
+끝낸다. 같은 message의 재제출 경계는 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
 
 저장한 route는 current owner lease와 local admission deadline 안에서만 유효하다.
 Location Store가 일시적으로 사용할 수 없더라도 이 lease나 deadline을 연장하지 않는다.
@@ -496,34 +495,7 @@ Session route
 조건을 사용하지 않는다. Seal 중 도착한 message는 aggregate가 보관하지만 개별 message
 크기, transport, deadline과 cancellation 제한은 그대로 적용한다.
 
-```mermaid
-sequenceDiagram
-    participant C as Relocation coordinator
-    participant S as Session owner
-    participant A as Source runtime
-    participant B as Target runtime
-    participant L as Location Store
-
-    C->>S: [request] command 42 · 해당 binding route 고정과 이후 message 보관
-    S-->>C: [reply] command 43 · 해당 binding seal 설치 완료
-    A->>B: [request] temporary queue 설치·Restore 후 dispatch 없이 relay 준비
-    B-->>A: [reply] temporary queue·Restore 준비 완료 · source owner 유지
-    A->>B: [send/request relay] capture 뒤 ingress hold
-    alt cutover가 1,000ms 안에 도착
-        A->>B: [send] cutover · boundary 전 relay 전송 완료
-    else relay 준비 reply 뒤 1,000ms 동안 cutover 없음
-        B->>B: [local] cutover_timeout Warning · fallback 진행
-    end
-    B->>L: [request] source fence가 같으면 owner를 target으로 CAS
-    L-->>B: [reply] target owner CAS 결과
-    B->>B: [local] queue 병합 · regular route 전환 · lifecycle 완료 · dispatch 개방
-    B->>S: [send] command 44 · target route 적용·held 제출·seal 해제
-    alt SessionRelocationSealTimeout 안에 해당 update 처리
-        S->>S: [local] route 전환 · held Session message 제출 · seal 해제
-    else seal timeout
-        S->>S: [local] physical Session 종료와 binding·held·seal 정리
-    end
-```
+Restore·relay·cutover·CAS와 queue 병합의 순서는 [공통 relocation §4](../05-location-relocation/04-relocation-flow.ko.md#4-정상-처리-순서)를 따른다. 이 절의 Session seal·route 전환은 위 검증 값과 아래 timeout 규칙을 따른다.
 
 Session owner는 seal 설치 시점부터 설정 가능한 `SessionRelocationSealTimeout`을
 적용한다. 기본값은 3,000 ms이며 server 설정으로 바꿀 수 있고, seal 설치부터 해당
@@ -541,9 +513,7 @@ ACK를 추가하지 않으며, `request`는 기존 correlation, deadline과 call
 Target이 relay-ready reply가 accepted 상태가 되기 전에 명시적으로 실패하면 source가
 owner다. Relocation coordinator는 durable abort와 source queue 복원을 먼저 확정한 뒤 command
 44 abort를 one-way로 보낸다. Session owner는 matching seal을 해제하고 보관한 Session
-message를 source route로 다시 제출하며 reply를 만들지 않는다. Relay-ready reply가
-accepted 상태가 된 뒤에는 CAS 또는 cutover submit이 실패해도 source route를 다시 열지
-않으며, `SessionRelocationSealTimeout`이 physical Session과 held state를 정리한다.
+message를 source route로 다시 제출하며 reply를 만들지 않는다. Relay-ready 뒤에는 CAS 또는 cutover submit 결과만으로 source route를 열지 않는다. Source `Preserve` fence가 성공하면 coordinator는 같은 command 44 abort로 matching seal을 해제하고 보관한 message를 source route에 제출한다. Authority 판정 중 seal timeout은 기존 규칙을 따른다.
 
 ### 8.2 Control message 42·43·44
 
@@ -663,9 +633,8 @@ execution gate의 분리, [Handler turn과 execution gate](../01-execution/02-ha
 
 Request reply·error는 original STREAM correlation을 terminal-once로 완료한다. Request를
 target Actor route에 제출한 뒤 timeout, cancellation 또는 route failure가 발생하면
-target이 이미 업무를 실행했는지 확정하지 못할 수 있다. Framework는 이런 실패 뒤 다른
-Actor, 새 owner 또는 다른 [MeshNode](../00-foundation/02-glossary.ko.md#meshnode)를 선택해 같은
-request를 자동으로 다시 보내지 않는다. Session이 닫힌 뒤 늦게 도착한 reply도 새
+target이 이미 업무를 실행했는지 확정하지 못할 수 있다. 이런 실패 뒤 request의 재제출 경계는
+[Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다. Session이 닫힌 뒤 늦게 도착한 reply도 새
 session이나 새 binding의 reply로 사용하지 않는다. 서로 다른 session의 request가 같은
 업무 결과를 공유하는 것을 막기 위한 경계다.
 
@@ -808,8 +777,7 @@ lane 정책 타입, 검증 지점 하나)은 [§10](#10-실행과-수명)·[§11
 - Timeout 뒤 또는 중복으로 온 command 44는 route를 다시 바꾸지 않고 Warning만 남긴다.
 - Relay-ready 전에 target이 명시적으로 실패하면 held message가 source route로 처리되고 connection은
   유지된다.
-- Relay-ready 뒤 CAS 또는 cutover submit이 실패하면 source route로 돌아가지 않고 seal timeout으로
-  정리된다.
+- Relay-ready 뒤 source route 재개는 공통 relocation §4.4의 source `Preserve` fence 결과를 따른다. Fence 판정 중 seal timeout은 기존대로 처리한다.
 - Wire에서 command 43에는 sequence·high-water가 없고, command 44에는 응답이 없으며, command 45는
   오가지 않는다.
 

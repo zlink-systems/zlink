@@ -91,16 +91,10 @@ can be bound to one session.
 
 ## 3. Actor Queue
 
-Every Actor application payload is submitted directly to the target Actor's
-application queue. The same rule applies whether the Actor is in an Entry
-Spot, a user Spot, or on a remote MeshNode.
-
-- Payload accepted by the same Actor queue is processed in order on the Actor
-  turn.
-- Actor send/request, [STREAM session](../00-foundation/02-glossary.en.md#stream-session)
-  relay, and calls between Actors all go into the same Actor queue.
-- Actor payload isn't put on the Spot application queue or converted into a
-  Spot callback.
+The Actor payload queue and execution gate are defined by
+[Execution contract §2](../01-execution/02-handler-turn-and-execution-gate.en.md#execution-gate).
+Actor send/request, [STREAM session](../00-foundation/02-glossary.en.md#stream-session) relay,
+and calls between Actors use this Actor queue.
 
 [Execution contract §2–§3](../01-execution/02-handler-turn-and-execution-gate.en.md#execution-gate)
 owns gates, turns, Yield, and Actor claims. Membership processing order for Entry and User Spots follows
@@ -229,17 +223,7 @@ the Actor's dedicated queue. The order for changing both Actor and Spot state
 together, and the rule rejecting a stale owner's change, are defined by
 [Spot And Actor Membership](05-spot-actor-membership.en.md).
 
-When the lifecycle queue and application payload queue can both run, **the
-lifecycle queue runs first.** This is to prevent running payload addressed to
-that Actor before its Join finishes, or after its leave is confirmed. This
-priority applies only between the two queues — it doesn't change the
-acceptance order within each queue.
-
-This priority is not an absolute priority. The occupancy cap between different
-execution objects, the lifecycle continuous-run cap between the two lanes of one
-execution object, and [yield debt](../00-foundation/02-glossary.en.md#yield-debt) are owned by
-[execution contract §7](../01-execution/02-handler-turn-and-execution-gate.en.md#execution-lanes).
-This section only fixes the priority between the two queues.
+The lane priority and acceptance order between an Actor's lifecycle work and application payload work follow [execution contract §7](../01-execution/02-handler-turn-and-execution-gate.en.md#execution-lanes).
 
 ## 5. Actor Messaging
 
@@ -277,10 +261,10 @@ The caller doesn't specify the following values as an Actor message target.
   under the same `ActorId`, the current Ready Actor at the moment the target
   queue accepts it processes the message.
 - If the resolved owner no longer owns that ActorId, the current operation
-  ends with a stale-route error. The framework doesn't automatically resend
-  the same operation after finding a new owner in the Location Store.
-- Even on a request timeout or a failure where execution status is unknown,
-  the framework doesn't automatically resend.
+  ends with a stale-route error. The resubmission boundary is defined by
+  [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
+- Resubmission after request timeout or an uncertain execution status follows the same
+  [§5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 - Actor direct messaging doesn't create or change a session binding.
 
 ### 5.2 Handler Selection
@@ -629,9 +613,8 @@ owned by
 
 - **The replayer is the framework runtime that started the operation, and only
   durable lifecycle operations carrying an `OperationId` are replayed.**
-  Application requests are never resent automatically, as
-  [§5.1](#51-route-cache-and-generation) states — a request whose execution is
-  unknown must not run on two owners. The "caller resends after the handover"
+  The resubmission boundary for application requests is defined by
+  [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification). The "caller resends after the handover"
   in the Core socket contract means the application for application requests
   and the framework for durable operations.
 - **The only replay condition is a typed transient transport failure with no
@@ -701,8 +684,7 @@ ActorId isn't used as a metric label.
   atomically, so messages aren't duplicated or dropped.
 - If Relocation Restore explicitly fails before relay-ready is accepted, the
   target temporary queue is discarded without running and the source-owned
-  original is restored. Afterward, source isn't restored regardless of
-  cutover-submit result.
+  original is restored. Afterward, source resumption and target staging cleanup follow authority settlement in [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
 - Even after receiving multiple Restores with the same `RelocationId`,
   target attempt, and owner generation, the temporary queue and application
   instance are created only once. A previous attempt's temporary queue isn't
@@ -748,8 +730,8 @@ Gate, Yield, Actor-claim, and self-request observations reference
 - A durable lifecycle operation (Actor create/join, session bind) continues
   with the same `OperationId` after a missing route, the single timeout caused
   by a handover, or a lost reply, and receives its original terminal within the
-  deadline; an application request is not resent automatically in the same
-  situation.
+  deadline; resubmission of an application request in the same situation follows
+  [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 - A durable operation that was never admitted by the deadline ends with
   `Unavailable`, one admitted but left without a reply by the deadline ends
   with `DeadlineExceeded`, and a typed non-transient failure such as a protocol

@@ -324,10 +324,7 @@ sequenceDiagram
     D->>D: pending[seq=N] 매칭 → REQUEST completion enqueue
 ```
 
-이 diagram에서 wire에 나타나는 header 배치는 위 kind와 sequence 규칙이 계약이다. `routing_id`는
-reply wire part가 아니라 ROUTER가 대상 reply pipe를 고르는 local 선택 key다. DEALER peer에는
-현재 ready Application pipe를, ROUTER peer에는 현재 ready Completion pipe를 사용한다.
-Pending 매칭과 completion enqueue는 [§9 내부 구조](#9-내부-구조)의 구현 서술이다.
+이 diagram에서 wire에 나타나는 header 배치는 위 kind와 sequence 규칙이 계약이다. `routing_id`는 reply wire part가 아닌 local 선택 key다. Source RID의 reply route와 현재 pipe 선택은 [Socket Request와 reply](../socket/README.ko.md#request와-reply)를 따른다. Pending 매칭과 completion enqueue는 [§9 내부 구조](#9-내부-구조)의 구현 서술이다.
 
 ## 6. Transport routing_id와의 관계
 

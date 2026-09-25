@@ -217,32 +217,19 @@ public interface IZLinkRelocationStore
 }
 ```
 
-Reference는 Framework가 put 전에 발급하는 opaque UTF-8 `1..4096` bytes다. 같은 reference와 같은 bytes를
-재시도하면 `AlreadyStored`, 다른 bytes면 `Conflict`다. 삭제되거나 만료된 reference도 다른 content에
-재사용하지 않는다.
+Reference와 put 재시도는 [Relocation Store Redis](../../../05-location-relocation/03-relocation-store-redis.ko.md)가 정한다. .NET 결과 이름은 `AlreadyStored`와 `Conflict`다.
 
-Actor·Spot relocation의 application state·queue·timer handoff payload는 이 Store에 저장하지 않는다.
-Source가 payload를 memory에 유지한 채 source–target ordered mesh 연결로 직접 chunk 전송하며, source
-memory가 복원 원본이다. 이 Store에 남는 정상 실행 책임은 Instance Spot cold activation의 최초
-message·생성 정보 기록과 relocation 뒤 완료되는 pending request의 reply payload·terminal 결과 기록이다.
+Store의 payload 범위는 [Relocation Store Redis](../../../05-location-relocation/03-relocation-store-redis.ko.md)가 정한다.
 
-Framework가 저장하는 payload를 나눈 data chunk는 최대 64 MiB다. Framework는 각 chunk 앞에 23-byte immutable
-envelope를 붙인다. 따라서 `IZLinkRelocationStore.PutAsync(...)`가 받는 encoded blob은 최대
-`64 MiB + 23 bytes`다. Framework는 최대 256 GiB logical stream을 최대 4,096개의 data chunk와 immutable
-root manifest로 구성한다. Payload checksum과 root·chunk 관계는 Framework가 계산하고 검증한다.
+Chunk와 envelope 한도는 [Relocation Store Redis](../../../05-location-relocation/03-relocation-store-redis.ko.md)가 정한다.
 
-Read result bytes는 consumer가 사용하는 동안 변경하지 않는다. Renew와 delete는 idempotent하며 delete는
-reference가 없어도 성공한 no-op이다.
+Read 소유권, renew와 delete는 [Relocation Store Redis](../../../05-location-relocation/03-relocation-store-redis.ko.md)가 정한다.
 
 ## 4. 취소와 결과 재조정
 
-호출 전에 cancellation이 요청되면 provider는 I/O나 commit을 시작하지 않는다. 호출이 시작된 뒤
-cancellation, timeout 또는 transport failure가 발생하면 commit 여부가 불확실할 수 있다.
+Store 취소와 결과 불확실성은 [Relocation Store Redis](../../../05-location-relocation/03-relocation-store-redis.ko.md)가 정한다.
 
-Framework는 Location Store의 직접 read와 version 또는 Relocation Store의 caller-issued reference로 결과를
-재조정한다. `Conflict`, `Missing`, `Expired`와 `AlreadyStored`는 닫힌 정상 결과다.
-`ArgumentException`과 `OperationCanceledException`이 아닌 Store 호출 예외는 Framework가 provider failure로
-분류한다.
+결과 재조정은 [Relocation Store Redis](../../../05-location-relocation/03-relocation-store-redis.ko.md)가 정한다. .NET은 provider 예외를 `ArgumentException`, `OperationCanceledException` 또는 provider failure로 표현한다.
 
 ## 5. 수명
 

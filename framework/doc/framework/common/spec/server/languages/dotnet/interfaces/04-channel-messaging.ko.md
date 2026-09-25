@@ -105,13 +105,7 @@ public interface IZLinkRouteClient
 }
 ```
 
-Node direct는 Object Client가 아닌 target RID 하나로 submit한다. Channel operation은 process-local route index에서 ChannelName으로
-유일한 [RouteMesh](../../../00-foundation/02-glossary.ko.md#routemesh) 또는 ClientServer 송신 경로를 선택한다. Ready positive-weight member 하나를
-round-robin으로 선택하고 같은 operation에서 submit하며 client는 선택된 RID를 반환하지 않는다.
-ClientServer의 같은 ChannelName에 local Server가 있으면 remote Server와 같은 readiness·weight·drain
-조건으로 candidate에 포함하고 local 우선순위나 remote 제외를 적용하지 않는다. Local Server를 선택해도
-remote Server와 같은 codec, timeout, cancellation, correlation과 terminal completion 계약을 적용한다.
-Local handler를 직접 호출하는 별도 public 경로는 제공하지 않는다.
+Channel target 선택과 local Server 처리는 [Channel messaging](../../../02-channel-transport/02-channel-messaging.ko.md)과 [ClientServer channel](../../../02-channel-transport/03-client-server-channel.ko.md)이 정한다.
 
 Object Client에는 application Node direct handler를 등록할 수 없으며 해당 RID는 Node direct target이
 아니다. Caller가 Object Client RID를 지정하면 다른 target으로 바꾸지 않고
@@ -149,9 +143,4 @@ public interface IZLinkFanoutHandler<in TEvent>
 }
 ```
 
-`IZLinkFanoutClient.Publish(...)`는 ChannelName과 typed event를 받고, 명시적인 topic이 필요한 호출은 [topic](../../../00-foundation/02-glossary.ko.md#topic)
-overload를 사용한다. Topic을 생략하면 Framework가 event의 [packet name](../../../00-foundation/02-glossary.ko.md#packet-name)을 topic으로 사용한다. [Channel messaging §7](../../../02-channel-transport/02-channel-messaging.ko.md#7-classic-fanout과의-경계liveness-beacon-topic-예약)이 금지한 topic은
-publish와 `Subscribe` 모두 `ArgumentException`으로 거부한다. 반환한 전용 call의 `Async(...)`는 source-local publish admission이
-완료되면 정상 완료한다. Subscriber 수와 수신
-완료는 반환하지 않는다. `IZLinkPublishCall`은 Logical Multicast 전용 call이며
-[classic fanout](../../../00-foundation/02-glossary.ko.md#classic-fanout)에 사용하지 않는다.
+`IZLinkFanoutClient.Publish(...)`는 topic overload를 제공한다. Classic fanout의 publish 완료는 [Submit과 completion §6](../../../01-execution/01-submit-and-completion.ko.md)이 정한다. 금지 topic은 [Channel messaging §7](../../../02-channel-transport/02-channel-messaging.ko.md)에 따라 `ArgumentException`으로 표현한다.

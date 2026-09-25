@@ -95,7 +95,7 @@ public interface ZLinkInstanceSpotContext {
  ZLinkSpotOutbound outbound();
  <T> ZLinkWorkerCall<T> runCpuWorker(ZLinkWorkerTask<T> work);
  <T> ZLinkWorkerCall<T> runIoWorker(ZLinkIoWorkerTask<T> work);
- CompletionStage<Boolean> close();
+ void close();
  CompletionStage<ZLinkTimer> addTimer(
  String name,
  Duration period,
@@ -121,7 +121,7 @@ public interface ZLinkSpotContext {
  <T> ZLinkWorkerCall<T> runIoWorker(ZLinkIoWorkerTask<T> work);
  ZLinkSpotRelocationReadyCall relocationReady();
  CompletionStage<Void> leaveActor(ZLinkActor actor);
- CompletionStage<Boolean> close();
+ void close();
  CompletionStage<ZLinkTimer> addTimer(
  String name,
  Duration period,
@@ -196,17 +196,15 @@ User·Instance Spot factory의 `preserveStateWith` 등록은 factory type에 맞
 `byte[]`로 capture·restore하며 relocation adapter 전용 size 상한을 두지 않는다. Framework는
 payload를 `relocationPayloadChunkLimitBytes` 이하의 chunk로 나눠 source–target ordered mesh 연결로
 직접 전송한다. Source memory가 복원 원본이며 handoff payload를 Relocation Store에 저장하지 않는다.
-`TState`, `stateContractId`, state class와 `ZLinkMessage`를 사용하지 않는다. Framework는 capture
-결과를 즉시 복사한다. Capture 배열은 adapter가 계속 소유하며 completion 뒤 변경해도 보존한 payload가
-바뀌지 않는다. Restore에는 호출마다 fresh defensive copy를 전달하고 adapter는 stage가 끝난 뒤 배열을 보관하지
-않는다. 길이가 0인 배열도 유효한 application state이며 Restore를 생략하거나 `recreateOnRelocation`으로 해석하지 않는다.
+`TState`, `stateContractId`, state class와 `ZLinkMessage`를 사용하지 않는다. 배열의 소유권과 수명은 [공통 membership §6](../../../03-spot-actor/05-spot-actor-membership.ko.md#6-모든-이동-경로가-공유하는-relocation-policy)이 정한다. 길이가 0인 배열도 유효한 application state이며 Restore를 생략하거나 `recreateOnRelocation`으로 해석하지 않는다.
 Whole User Spot relocation에서는 Spot 자체에 Spot adapter를 사용하고 각 Actor participant에는 해당 Actor type의
 `ZLinkActorRelocationAdapter`를 사용한다.
 Instance Spot relocation에는 Spot adapter를 사용한다. Same-node operation과 `disableRelocation()`을 선택한 factory에서는 adapter를
 호출하지 않고 `recreateOnRelocation()`을 선택한 factory에는 application state adapter가 없다.
 
 Capture exception은 authority publication 전에 relocation을 abort하고 source admission을 유지한다. Restore
-exception은 target admission을 sealed 상태로 유지한 채 같은 immutable payload를 retry하거나 target을 교체한다.
+exception 뒤의 같은 target 재시도와 target 교체 금지는
+[host relocation 장애 §5](../../../05-location-relocation/06-failure-failover-policy.ko.md#5-host-relocation-장애)가 정한다.
 Factory는 target attempt마다 fresh Spot instance를 만들며 source나 이전 attempt instance를 재사용하지 않는다.
 같은 attempt에서는 Restore가 반복될 수 있다. Exception을 빈 payload나 성공으로 바꾸지 않는다. Capture의 null
 stage와 null `byte[]`, Restore의 null stage는 contract 위반이다. Host relocation에서 deadline이 먼저 확정되지 않은
@@ -258,12 +256,12 @@ tick sequence, 다음 예정 시각과 아직 실행하지 않은 pending tick�
 logical timer registration을 복원하므로 application이 timer를 다시 등록하지 않는다. 현재 실행 중인 timer callback만 source에서
 완료하고, target Ready 전에는 복원한 tick을 application handler에 제출하지 않는다.
 
-User Spot의 `close()`는 active Actor membership이 있으면 `false`를 반환한다. Spot state, admission과 authority는
+Manager의 User Spot `close(spotRef)`는 active Actor membership이 있으면 `false`를 반환한다. Spot state, admission과 authority는
 바꾸지 않고 `onClosing`을 호출하거나 Actor를 자동 leave·destroy하지 않는다. Caller는 Actor를 명시적으로
 leave 또는 destroy한 뒤 다시 close한다. Manager에서 Spot이 missing인 경우도 `false`이므로 caller는 사전 read
 없이 두 경우를 구분하지 않는다. Host `Shutdown`은 Actor barrier를 끝낸 뒤 Spot cleanup을 수행한다.
 Manager의 `find`와 `close`도 User Spot만 대상으로 한다. Instance Spot이 자신의 lifecycle을 끝내는 public 표면은
-`ZLinkInstanceSpotContext.close()`이며 이 context 내부 close 계약은 유지한다.
+`ZLinkInstanceSpotContext.close()`이며, 결과가 없는 요청이다([Spot 주소 메시징 §7](../../../03-spot-actor/06-spot-address-messaging.ko.md#7-close와-generation-경계)).
 
 다음 예제에서 `spotClient`는 `ZLinkSpotOutbound`이고 `cartId`는 호출할 global SpotId다. Instance
 intent를 명시했으므로 Spot이 없을 때만 cold activation에 필요한 stable type과 최초 Mesh를 사용한다.
@@ -365,7 +363,7 @@ public interface systems.zlink.framework.spots.ZLinkInstanceSpotContext {
  public abstract systems.zlink.framework.spots.ZLinkSpotOutbound outbound();
  public default <T> systems.zlink.framework.spots.ZLinkWorkerCall<T> runCpuWorker(systems.zlink.framework.spots.ZLinkWorkerTask<T>);
  public default <T> systems.zlink.framework.spots.ZLinkWorkerCall<T> runIoWorker(systems.zlink.framework.spots.ZLinkIoWorkerTask<T>);
- public abstract java.util.concurrent.CompletionStage<java.lang.Boolean> close();
+ public abstract void close();
  public abstract java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkTimer> addTimer(java.lang.String, java.time.Duration, java.lang.Class<?>, systems.zlink.framework.spots.ZLinkTimerOptions);
 }
 public interface systems.zlink.framework.spots.ZLinkInstanceSpotHandlerRegistry {
@@ -461,7 +459,7 @@ public interface systems.zlink.framework.spots.ZLinkSpotContext {
  public default <T> systems.zlink.framework.spots.ZLinkWorkerCall<T> runCpuWorker(systems.zlink.framework.spots.ZLinkWorkerTask<T>);
  public default <T> systems.zlink.framework.spots.ZLinkWorkerCall<T> runIoWorker(systems.zlink.framework.spots.ZLinkIoWorkerTask<T>);
  public abstract java.util.concurrent.CompletionStage<java.lang.Void> leaveActor(systems.zlink.framework.actors.ZLinkActor);
- public abstract java.util.concurrent.CompletionStage<java.lang.Boolean> close();
+ public abstract void close();
  public abstract java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkTimer> addTimer(java.lang.String, java.time.Duration, java.lang.Class<?>, systems.zlink.framework.spots.ZLinkTimerOptions);
 }
 public final class systems.zlink.framework.spots.ZLinkSpotCreateResult extends java.lang.Record {

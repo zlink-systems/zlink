@@ -326,7 +326,7 @@ after relocation commits is called
 | `zlink.relocation.interruption` | histogram | `s` | `unit_kind`, optional `execution_mode` | Records the source-local time from one Actor/Instance Spot/User Spot unit's admission seal to the one-way cutover submit's success or failure terminal. `unit_kind` is `actor`, `instance_spot`, `user_spot`. Exceeding 1 second isn't turned into a relocation failure. |
 | `zlink.relocation.target_resume` | histogram | `s` | `unit_kind` | Records the target-local time from the point the target confirmed one unit's Location Store CAS to the point it opened that unit's application dispatch. |
 | `zlink.relocation.route_convergence` | histogram | `s` | `unit_kind` | Records the source-local time from one unit's cutover submit terminal to the point that unit's Message Follow route can be removed (based on follow-duration expiry). It's the basis for how long the source must keep the Message Follow route. |
-| `zlink.relocation.cutover_timeout` | counter | `{fallback}` | `unit_kind` | Accumulates the count of times the cutover wait ran out and the target proceeded with the fallback Location Store CAS without verifying the completeness confirmation values. |
+| `zlink.relocation.cutover_timeout` | counter | `{warning}` | `unit_kind` | Counts `cutover_timeout` Warnings emitted when the `RelocationCutoverWaitTimeout` threshold is crossed. |
 | `zlink.host.shutdown.duration` | histogram | `s` | `outcome` | Records the time from host `Shutdown` start to terminal result. |
 | `zlink.host.shutdown.forced` | counter | `{operation}` | `reason` | Accumulates the count of host `Shutdown`s that forcibly ended remaining work to finish cleanup within the time limit. |
 
@@ -374,10 +374,8 @@ sequenceDiagram
   instrument.
 
 The [§10](#10-label-cardinality) rule of not distinguishing individual
-relocations by label also applies to these instruments. A non-zero
-`zlink.relocation.cutover_timeout` means the fallback path that doesn't
-guarantee relay ordering is actually being used in that deployment, so an
-operator uses it as the basis for adjusting the cutover wait setting
+relocations by label also applies to these instruments. A non-zero `zlink.relocation.cutover_timeout` means cutover crossed the Warning
+threshold. An operator may review the cutover wait setting
 (`RelocationCutoverWaitTimeout` in [Framework API](../00-foundation/06-framework-api.en.md)).
 
 ## 9. Location and Telemetry
@@ -464,8 +462,7 @@ implementation or contract test.
   [Host Relocation And Shutdown](../05-location-relocation/05-host-relocation-flow.en.md).
 - Relocation interval instruments are measured with each node's own local
   clock, and no metric directly subtracts clocks of different nodes.
-  `zlink.relocation.cutover_timeout` matches the count of fallback CAS
-  operations performed without verification.
+  `zlink.relocation.cutover_timeout` matches the count of cutover-wait Warnings.
 - Instance activation is observed per registered type, excluding Spot
   ID/owner ID/generation from labels.
 - An Instance one-way activation failure is a `surface=instance_spot`

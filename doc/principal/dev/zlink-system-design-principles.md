@@ -90,6 +90,29 @@ internals.
   `Systems.Zlink`, npm `@zlink-systems/zlink`, Maven `systems.zlink:zlink`), not the
   binding's source. No framework code references a binding's internal implementation.
 
+## Ownership of Control Decisions and Request Admission
+
+Each decision defined by a spec has one owner and one decision location. No other location
+keeps independent authoritative state for that decision. Lookup results and caches are used
+only as the spec permits; they do not replace the current owner's admission decision. The
+framework does not re-decide connection selection or replacement, reconnect, handover,
+completion, retransmission, or errno classification owned by core or a binding.
+
+The requester and receiver are identified at each request boundary. The requester decides
+the logical target and route it owns, the deadline, whether to start a new attempt,
+cancellation of its wait, and handling of the terminal result. The receiver uses the current
+state of the target it owns to decide admission and returns a value from the spec's closed
+result list. The requester does not infer that admission decision from a lookup result or
+cache of receiver state. Finding no target to send to is part of the requester's target
+selection. An accepted request proceeds under the specified protocol to a successful or
+failed terminal result; the original deadline is not extended independently.
+
+Ingress hold, Message Follow, Session relay, and use of a preserved reply route are
+continuations of the same operation when the spec defines them as such. They preserve the
+original operation identity, deadline, payload, and reply route as their contracts require.
+The receiver does not search for a new owner after failure, submit a new operation, or
+choose an unspecified substitute target.
+
 ## Applications Built on ZLink: Hexagonal
 
 Applications built using ZLink (samples, game servers, etc.) use hexagonal
@@ -329,6 +352,7 @@ In addition to the general document's 19-item checklist, check the following.
 | Z3 | **Public API spread with no spec** | Did a public API or behavior that existed in only one language propagate to other languages with no spec or guide-document grounds? (A sign of an `AGENTS.md` violation) |
 | Z4 | **Meaning drift across a boundary** | Does a word like timeout, cancellation, backpressure, or ownership get interpreted differently crossing a transport/codec/storage boundary? |
 | Z5 | **Domain rules inside Infrastructure** | Does business-rule logic live directly inside ZLink handler/Spot/Actor callback code (`Infrastructure/ZLink/`)? |
+| Z6 | **Scattered control decisions** | Is there a substitute target or a new operation submission the spec does not define, or does a requester infer the receiver's current admission from a cache? ([Ownership of control decisions and request admission](#ownership-of-control-decisions-and-request-admission)) |
 
 ---
 

@@ -55,40 +55,13 @@ MeshNode descriptor is published, the following settings can't be changed.
 
 ### 3.1 Automatic RID
 
-When a MeshNode uses an automatic RID, the framework generates a new RID
-for each lifecycle. The caller can only specify a prefix used for
-diagnostics. If the prefix is omitted, the framework uses a default prefix
-matching the listener kind.
-
-| Component | Contract |
-|---|---|
-| Prefix | Only ASCII `[A-Za-z0-9._-]` characters, length `1..64`. |
-| UUID | A 16-byte random value using the RFC 4122 UUID v4 bit layout, represented as a 36-character lowercase canonical string in `8-4-4-4-12` digit groups. |
-| Full RID | The format `prefix-<lowercase-canonical-uuid-v4>`, UTF-8 encoded size at most 255 bytes. |
-
-The full rule covering the Core binary RID, framework prefix, Entry Spot, and
-caller-provided RID together is defined by
-[System-Wide Routing ID Policy](../02-channel-transport/04-network-listener-identity.en.md#6-system-wide-transport-rid-and-spot-id-policy).
-
-Don't interpret the prefix and UUID as application identity that persists
-across object placement, sharding, or a restart.
-
-The CAS that confirms ownership of a MeshNode descriptor checks whether the
-same `(MeshName, RID)` is currently used by a different owner. If an active
-conflict is confirmed, the existing descriptor isn't changed, and a second
-UUID or claim isn't created. Startup ends immediately with a configuration
-error.
-
-A replacement lifecycle using an automatic RID doesn't reuse the previous
-lifecycle's RID — it generates a new RID.
+MeshNode automatic RID issuance, format, conflict, and lifecycle rules are defined by
+[Transport RID and Spot ID Policy §6](../02-channel-transport/04-network-listener-identity.en.md#6-system-wide-transport-rid-and-spot-id-policy). If the prefix is omitted, the framework uses the default prefix for the listener kind.
 
 ### 3.2 Entry Spot ID
 
-An Object Server MeshNode also issues an Entry Spot's
-[Spot ID](../00-foundation/02-glossary.en.md#spot-id)(the global logical address
-identifying a Spot) with the same diagnostic prefix. This section owns the issuance, format, and conflict
-handling rules for the Entry Spot ID. The Entry Spot description in
-[Spot Model](01-spot-model.en.md) points here.
+Entry Spot ID issuance, format, and conflict rules for an Object Server MeshNode are defined by
+[Transport RID and Spot ID Policy §6.3](../02-channel-transport/04-network-listener-identity.en.md#63-entry-spot-id).
 
 An Object Server MeshNode issues the Entry Spot ID and publishes it on its descriptor
 whether or not the application registered an Entry Spot type. Registering an Entry Spot
@@ -96,27 +69,8 @@ type only chooses the application handler this Spot runs; it doesn't change whet
 descriptor carries `entrySpotId`, and it doesn't decide whether the node can serve a
 remote creation request.
 
-```text
-MeshNode RID:   <prefix>-<node-uuid-v4>
-Entry Spot ID: <prefix>-entry-<lowercase-canonical-uuid-v4>
-```
-
-The MeshNode and Entry Spot each generate a separate UUID v4. The
-relationship isn't determined by comparing the two UUID values. The Entry
-Spot ID is kept for the same MeshNode lifecycle and newly issued on a
-replacement lifecycle. If an active conflict of the global Spot ID authority
-is confirmed, a second UUID or reservation isn't created, and startup ends
-immediately with a configuration error.
-
-The full Entry Spot ID must be at most 255 UTF-8 bytes. If the prefix is
-omitted, the same default diagnostic prefix chosen for the MeshNode's
-automatic RID is also used for the Entry Spot.
-
-The MeshNode descriptor publishes the Entry Spot ID together with the
-lifecycle generation. Actor placement and Entry Spot join use this mapping,
-and don't compute a node relationship by parsing the prefix or the `entry`
-marker. The prefix and marker are diagnostic information, not a stable host
-identity, shard, or placement key.
+The MeshNode descriptor mapping and publication rule for the Entry Spot ID are defined by
+[Transport RID and Spot ID Policy §6.3](../02-channel-transport/04-network-listener-identity.en.md#63-entry-spot-id).
 
 The order in which Entry Spot is prepared at startup, and the rule that it
 isn't published to the descriptor/resolver before initialization finishes, is
@@ -416,7 +370,7 @@ change node-wide placement weight either.
 | Messaging method | How the target is selected and delivered |
 |---|---|
 | Node direct | Submitted once to a specific target RID within the caller-specified `MeshName`. An Object Client RID isn't an application Node direct target. |
-| Channel | A process-local `ChannelName` index determines the RouteMesh. One Server that's ready in that Mesh and has Channel weight greater than 0 is selected in proportion to weight. |
+| Channel | The process-local `ChannelName` index finds the RouteMesh; [Channel Messaging §3](../02-channel-transport/02-channel-messaging.en.md#3-how-to-select-a-target--channelname-select-one-selection-order-weighted-round-robin) selects the target. |
 | [Logical Multicast](../00-foundation/02-glossary.en.md#logical-multicast)(a way of delivering one message to several Spots in the same Channel via ChannelName and topic) | First, every remote MeshNode that is a member of that ChannelName and is ready and has Channel weight greater than 0 is selected. Each receiving MeshNode delivers the message to every local Spot subscription matching the ChannelName and topic condition. |
 | Actor direct | After confirming the global ActorId's current Ready authority, submits to the current owner route. |
 | [Spot direct](../00-foundation/02-glossary.en.md#spot-direct)(a way of specifying a single global Spot ID to send/request to that Spot) | After confirming the global SpotId's current [Ready](../00-foundation/02-glossary.en.md#ready) [authority](../00-foundation/02-glossary.en.md#authority), submits to the current [owner route](../00-foundation/02-glossary.en.md#owner-route). |
@@ -427,9 +381,7 @@ distinguishing different logical incarnations of the same ActorId/Spot ID — is
 used and where it isn't is defined by
 [Spot/Actor Routing §2.5](08-routing.en.md).
 
-Target selection and message submit are one operation. The framework doesn't
-return a list of selected RIDs to the application and then require a
-separate send.
+The ChannelName target selection and message submit boundary is defined by [Channel Messaging §3](../02-channel-transport/02-channel-messaging.en.md#3-how-to-select-a-target--channelname-select-one-selection-order-weighted-round-robin).
 
 Node/Channel/Actor/Spot send and request use the same MeshNode ROUTER.
 Classic fanout is a separate PUB/SUB socket contract and isn't included in

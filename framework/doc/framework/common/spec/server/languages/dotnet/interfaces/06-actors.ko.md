@@ -222,87 +222,35 @@ Actor packet handler는 Spot이 소유한 registry에 등록한다. Handler의 �
 [Spot interface](05-spots.ko.md)가 정의한다. `SpotId == null`은 Entry Spot 단계이고 값이 있으면 해당 user
 [Spot](../../../00-foundation/02-glossary.ko.md#spot)에 참여한 상태다. 같은 상태를 나타내는 별도 boolean은 제공하지 않는다.
 
-Actor Join call은 결과 없는 동기 `Defer()`만 제공하고 `Async(...)`·`Yield(...)`를
-제공하지 않는다. `SpotWide` User Spot의 member Actor가 Actor·Spot·Channel request
-또는 worker call을 `Yield(...)`하면 Actor queue claim은 유지하고 User Spot gate만
-반환한다. 같은 Actor의 다음 job은 terminal continuation이 gate를 다시 얻어 현재
-job을 완료할 때까지 시작하지 않는다. Entry Spot과 `PerActor` User Spot Actor에서는
-request·worker operation submit 전에 `InvalidOperation`으로 완료한다.
+Actor Join call은 결과 없는 동기 `Defer()`만 제공하고 `Async(...)`·`Yield(...)`를 제공하지 않는다.
+Actor request의 `Yield` 중 gate와 claim 처리는
+[Handler turn과 execution gate](../../../01-execution/02-handler-turn-and-execution-gate.ko.md)가 정한다.
 
-`Defer()`는 현재 handler에 immutable Join intent와 비활성 barrier만 등록하며 target
-조회나 Store I/O를 시작하지 않는다. Handler가 정상적으로 끝나면 Join을 실행하고
-실패하면 barrier를 폐기한다. Target admission·relocation 결과는 같은 128-bit
-operation ID의 `OnJoinCompletedAsync(...)` callback으로 전달한다. Handler가
-`Yield(...)`를 사용해도 barrier는 마지막 continuation이 끝나기 전에는 활성화하지
-않는다.
+`Defer()` 등록과 barrier 활성화는
+[Handler turn과 execution gate](../../../01-execution/02-handler-turn-and-execution-gate.ko.md)가 정한다.
+.NET은 결과를 `OnJoinCompletedAsync(...)` callback으로 전달한다.
 
-Operation ID는 completion idempotency ID이며 `RelocationId`, reservation ID와
-aggregate commit ID가 아니다. Same-node와 cross-node completion retry는 current
-source와 target process lifetime으로 제한한다. Process 종료 뒤 다른 runtime이
-completion을 자동 replay하지 않는다.
+[Actor Join completion](../../../03-spot-actor/05-spot-actor-membership.ko.md#actor-join-completion)이 Operation ID의 목적과 수명을 정한다.
 
 Request 없는 overload는 empty `ZLinkMessage`를 고정한다. Timeout 기본값은 5초이고
 명시 값은 millisecond 올림 기준 유한한 `1..int.MaxValue` ms다. `Defer()`에서
 monotonic absolute deadline을 고정한다.
 
-Relocation policy는 Actor factory registration이 소유한다. `DisableRelocation`은 cross-node materialization이 필요한
-이동을 capture 전에 거부한다. `RecreateOnRelocation`은 target [factory](../../../00-foundation/02-glossary.ko.md#factory)로 같은 logical identity를 다시 만들고 application
-state를 복구하지 않는다. `PreserveStateWith<TAdapter>()`는 `IZLinkActorRelocationAdapter<TActor>`가 반환한 byte 배열을
-opaque application payload로 source에서 target으로 직접 전송하고 target Actor instance에 복원한다. 별도 application state generic과 stable
-state contract ID를 받지 않으며 Framework message wrapper를 payload로 사용하지 않는다. Adapter는 relocation
-reference, accepted journal, relocation phase, source·target owner와 Store CAS version을 받지 않는다.
+`PreserveStateWith<TAdapter>()`는 `IZLinkActorRelocationAdapter<TActor>`를 사용한다. Actor relocation policy와 payload 전송은 [Location runtime](../../../05-location-relocation/01-location-runtime.ko.md)이 정한다.
 
-다른 node에서 Actor instance를 materialize하는 maintenance, cross-node User Spot·[Entry Spot](../../../00-foundation/02-glossary.ko.md#entry-spot-user-spot과-instance-spot) join과 whole User
-Spot relocation의 모든 Actor participant는 같은 Actor factory policy를 사용한다. `PreserveStateWith`일 때만 Actor adapter의
-`CaptureAsync(...)`와 `RestoreAsync(...)`를 호출한다. Same-node join은 adapter를 호출하지 않으며 `DisableRelocation`으로
-거부하지도 않는다. `DisableRelocation` policy의 cross-node 이동은 adapter 없이 capture 전에 거부한다.
+Actor 이동별 adapter 호출 여부는 [Location runtime](../../../05-location-relocation/01-location-runtime.ko.md)이 정한다.
 
-Target은 [owner](../../../00-foundation/02-glossary.ko.md#owner) commit 전에 restore와 accepted journal validation·staging을 완료하며 application handler를
-실행하지 않는다. Owner commit과 lifecycle callback 뒤 저장된 기존 작업을 실제 Actor queue에 먼저 넣고
-relocation temporary queue의 작업을 그 뒤에 옮긴다. Temporary queue 등록을 제거하고 dispatch를 atomic하게
-전환한 뒤 target을 `Ready`로 열고 relocation fence를 해제한다. Source cleanup, `Completed` 기록은 target message 처리를 막지 않는다. `Ready` 뒤 target process가 종료되면
-ordinary owner loss로 처리하며 이전 relocation을 자동 replay하지 않는다. 이 barrier를 조작하는 public
-phase API는 제공하지 않는다.
+Queue cutover와 Ready admission은 [Location runtime](../../../05-location-relocation/01-location-runtime.ko.md)이 정한다.
 
-같은 source와 target process 안의 재시도에서 factory와 `RestoreAsync(...)`를 두 번 이상
-호출할 수 있다. `CaptureAsync(...)`도 authority commit 전에 다시 호출될 수 있다. 두 callback은 같은 logical relocation에 대해 같은
-결과를 내도록 retry-safe해야 하며 외부 side effect의 exactly-once 실행에 의존하면 안 된다. Capture exception은
-durable abort와 source normalization 뒤 admission을 복원한다. `CaptureAsync(...)` 결과에는 relocation
-adapter 전용 size 상한이 없으며, Framework는 payload를 `RelocationPayloadChunkLimit` 이하의 chunk로
-나눠 source–target ordered mesh 연결로 직접 전송한다. Source memory가 복원 원본이며 handoff
-payload를 Relocation Store에 저장하지 않는다. 빈 배열은 유효하고 null은 contract 위반이다. Framework는
-완료된 배열을 즉시 복사한다. `RestoreAsync(...)`의
-`ReadOnlyMemory<byte>`는 callback 완료까지만 유효하다. Restore exception이 발생한 instance는 폐기하고 새
-instance에 같은 immutable payload를 적용한다. 다른 target을 자동 선택하지 않는다. Framework가 operation deadline 때문에
-callback을 취소하면 `DeadlineExceeded`로 분류한다. Current owner와 attempt fence만 completion을 commit하고
-admission을 열 수 있으며 callback에는 relocation ID를 제공하지 않는다.
+.NET adapter는 `CaptureAsync(...)`와 `RestoreAsync(...)`에 `byte[]`·`ReadOnlyMemory<byte>`를 사용한다. 재시도, 실패와 completion 권한은 [Location runtime](../../../05-location-relocation/01-location-runtime.ko.md)과 [Failure and failover policy](../../../05-location-relocation/06-failure-failover-policy.ko.md)가 정한다.
 
-Relocation을 시작하기 전에 이미 수락한 connection-bound work가 deadline 안에 끝나지 않으면 relocation을
-중단하고 `RelocateAsync(...)`는 `Blocked/DeadlineExceeded`로 완료한다. 이를 직접 확인하거나 조작하는 public ACK나
-phase API는 제공하지 않는다.
+Relocation 전 drain과 deadline 결과는 [Host relocation](../../../05-location-relocation/05-host-relocation-flow.ko.md)이 정한다.
 
 Entry Spot maintenance와 일반 join에서 실행하는 lifecycle callback의 순서, callback 실패 뒤 sealed retry와 whole
 User Spot aggregate move의 callback 생략은 [Spot interface](05-spots.ko.md)가 정한다. Actor relocation adapter는 이
 lifecycle callback을 대신하지 않는다. 이 순서를 제어하는 public phase API는 없다.
 
-새 distributed Actor를 만들 때 Framework는 여러 target이 같은 Actor를 동시에 만들지 못하도록 생성 권한과
-target의 대기 capacity를 함께 예약한다. 이 예약은 다음 순서로 처리한다.
-
-1. Provider는 authority에 `Creating` row를 만들고 target pending capacity를 함께 확보한다.
-2. 예약을 먼저 확보한 target만 factory와 Entry Spot의 `OnCreateActorAsync(...)`를
- 실행한다.
-3. Callback이 승인하면 initial Entry
- [membership](../../../00-foundation/02-glossary.ko.md#membership), `Ready`, active
- capacity와 `Created` terminal result를 함께 commit한다.
-4. Callback이 거절하면 Ready와 active capacity를 만들지 않고 Creating row와 pending
- capacity를 정리하면서 `Rejected` terminal result를 publish한다.
-5. Node 종료, timeout 또는 callback exception은 application `Rejected`와 구분한
- `Aborted` failure로 publish한다.
-6. 예약 경쟁에서 진 target은 별도 factory를 시작하지 않는다. Provider가 반환한 기존 reservation 결과를
- 읽어 현재 생성 시도에 합류한다.
-
-Resolve와 remote messaging은 `Ready` 상태만 사용한다. Entry Spot initialization도 Host `Serving`
-publication보다 먼저 완료한다. 이 barrier를 제어하는 application API는 없다.
+Actor 생성 예약과 Ready barrier는 [Actor 모델](../../../03-spot-actor/04-actor-model.ko.md)이 정한다.
 
 Actor factory option과 relocation policy는
 [Topology configuration](03-configuration-topology.ko.md)의 `AddActorFactory<TActor,TFactory>(...)` configure
@@ -311,20 +259,9 @@ callback에서 함께 등록한다. Callback에서 policy를 정확히 하나 �
 `Create`와 `GetOrCreate` call의 single-use, 중복 option과 terminal 재호출 오류는
 [Actor 모델 §6.2](../../../03-spot-actor/04-actor-model.ko.md#62-create와-getorcreate-입력)가 소유한다.
 
-Terminal 호출 시 resolve, reservation, factory와 Ready
-barrier 전체에 적용할 deadline 하나를 확정한다. `InMesh(...)`를 생략했을 때 object-role Mesh가 하나이면
-그 Mesh를 사용하고, 0개이면 `NotConfigured`, 둘 이상이면 `InvalidOperation`이다. 명시한 Mesh가
-없으면 `NotFound`다. Caller는 target RID, predicate와 callback을 지정하지 않는다.
+Create deadline과 Mesh 선택은 [Actor 모델](../../../03-spot-actor/04-actor-model.ko.md)이 정한다. .NET은 선택 실패를 `NotConfigured`, `InvalidOperation`, `NotFound`로 표현한다.
 
-`Create`는 같은 ActorId의 [Ready](../../../00-foundation/02-glossary.ko.md#ready) incarnation이 있으면 `AlreadyExists`, stable type이 다르면
-`TypeMismatch`다. `GetOrCreate`는 같은 type의 Ready Actor를 `Existing`으로
-반환하고, Creating attempt이면 authority 변경을 기다린다. CAS loser는 별도 factory를
-실행하지 않는다. 서로 다른 operation은 Ready 뒤 `Existing`을 받고 cleanup 뒤 새
-reservation을 경쟁하며 앞선 application reply를 공유하지 않는다. 같은 source Node
-RID·lifecycle generation·`OperationId`의 재전송만 correlation-free
-`creation-operation-terminal-v1` envelope를 읽고 현재 correlation·reply route로 reply를
-다시 encode한다. Terminal은 original deadline 뒤 5분 동안 유지한다. Creating attempt가 deadline 안에 끝나지 않으면
-해당 caller는 `DeadlineExceeded`다.
+Create·GetOrCreate 결과와 terminal 재전송은 [Actor 모델](../../../03-spot-actor/04-actor-model.ko.md), [Object lifecycle](../../../03-spot-actor/09-object-lifecycle.ko.md)과 [Framework API](../../../00-foundation/06-framework-api.ko.md)가 정한다. .NET 결과 이름은 `AlreadyExists`, `TypeMismatch`, `Existing`, `DeadlineExceeded`다.
 
 Creation request와 semantic terminal envelope는 각각 최대 1 MiB다. Creation request는 reservation 전에 immutable reference와 hash를
 기록한다. Factory는 같은 ID, ObjectGeneration과 creation attempt에 대해

@@ -1210,18 +1210,10 @@ admission only allows the `1..INT_MAX` range. `0`, negative, and
 exceeding the bound are rejected as a configuration error at setting
 time or, at latest, at startup, and aren't switched to the default.
 
-Logical Multicast's `publish_call_t::async()` does a direct handoff to
-a I/O executor. If a worker slot isn't obtained immediately, it
-waits for capacity up to the send timeout. Once a slot is obtained, it
-calls the raw binding publish exactly once. The point this call starts
-is the operation commit barrier. After the transaction starts, an
-individual target failure doesn't roll back an already-accepted target
-or automatically retry the whole publish. Per-target
-accept/failure results of remote transport and local Spot queue aren't
-returned or aggregated in monitoring. It completes normally even with
-0 target snapshots. Remote Spot queue submission and remote/local
-handler execution or completion aren't `task_t<void>` completion
-conditions.
+[Interaction model §5](../../../00-foundation/04-interaction-model.en.md#5-spot-logical-multicast)
+and [Cancellation and shutdown §4](../../../01-execution/03-cancellation-and-shutdown.en.md#4-logical-multicast-cancellation)
+define Logical Multicast worker admission, commit, terminal, and retry.
+C++ `publish_call_t::async()` returns `task_t<void>`.
 
 The framework registers the following services by default. The user
 can inject and use them from DI instead of constructing them directly.

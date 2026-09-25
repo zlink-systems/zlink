@@ -404,6 +404,16 @@ application turn.
 The order within each lane is exactly the order accepted. Neither lane has
 front insertion.
 
+**An item of the lifecycle lane ends when the result of its operation is
+settled.** For Join and leave that is the membership outcome, for relocation
+the commit or abort, and for a lifecycle control the result of that control.
+Until then the next item of the same lane does not start. Until that result is
+settled, the operation retains its position in the lifecycle FIFO; releasing a
+turn does not admit the next lifecycle item. When it waits for infrastructure
+outside a user callback, it releases the turn and resumes through the execution
+gate. Application turns remain eligible under the operation's admission and seal
+rules ([§13](#13-separating-application-progress-from-infrastructure-progress)).
+
 The two lanes exist per owner as physically distinct FIFOs and do not affect
 each other's ordering. However much work has piled up in the application
 FIFO, lifecycle work still runs in its own lane.

@@ -23,13 +23,8 @@ connector는 factory가 값 객체로 만든다. 생성 시 options를 복사하
 static connector_t connector_factory_t::create(connector_options_t options);
 ```
 
-**option 전 항목의 검증은 `connect`에서 이뤄진다**([공통 스펙 §6.3](../../32-stream-connector.ko.md#63-옵션-검증)).
-C++ core는 예외를 던지지 않고 `create`는 값을 돌려주므로, 생성 표면에는 검증 실패를 전달할
-통로가 없다. 그래서 C++이 실패를 알릴 수 있는 가장 이른 지점이 `connect`이며, **연결이 이뤄지기
-전에** 거부한다. 값 하나가 허용 범위를 벗어나면 `error_code_t::validation_failed`, 항목 사이가
-맞지 않으면 `error_code_t::configuration_error`다. endpoint scheme과 `transport`의 충돌, 이 빌드가
-지원하지 않는 transport, `compression_t::none`에 `compression_codec`을 함께 넣는 것이 뒤쪽에
-해당한다.
+`connect`는 [공통 스펙 §6.3](../../32-stream-connector.ko.md#63-옵션-검증)의 option 검증을
+`error_code_t::validation_failed` 또는 `error_code_t::configuration_error`로 반환한다.
 
 ## 2. `connector_t`
 
@@ -60,9 +55,8 @@ void close(std::function<void(result_t<void>)> callback);   // 종료 결과를 
 result_t<void> dispatch();                                 // Manual mode의 대기 callback 하나를 실행한다.
 ```
 
-**`received_count`는 packet 이름별 수신 개수를 돌려준다**([공통 스펙
-§10](../../32-stream-connector.ko.md#10-수신-메시지-큐)). 소비해도 줄지 않고 dispatch mode와 무관하며,
-연결이 성립할 때 0에서 다시 시작한다.
+`received_count`는 packet 이름별 수신 개수를 돌려준다. 집계와 초기화는
+[공통 스펙 §10](../../32-stream-connector.ko.md#10-수신-메시지-큐)이 정한다.
 
 수신 message는 `message_t<TPayload>`다. `on<T>` handler와 `wait_for` 계열이 이 타입을 다룬다.
 
@@ -76,9 +70,8 @@ struct message_t {
 };
 ```
 
-push callback은 `on<T>(...)`으로 등록한다. `dispatch_mode_t::manual`에서는 `dispatch()`가 callback을
-실행하고, `dispatch_mode_t::immediate`에서는 수신 경로가 callback을 실행한다. `wait_for` 계열은 두
-mode 모두에서 수신 큐의 일치하는 packet을 직접 소비한다.
+push callback은 `on<T>(...)`으로 등록한다. `dispatch()`와 `wait_for`의 dispatch 관계는
+[공통 스펙 §7](../../32-stream-connector.ko.md#7-dispatch-모드)이 정한다.
 
 **handler 등록은 등록을 해제할 수 있는 `subscription_t`를 반환한다**([공통 스펙
 §7](../../32-stream-connector.ko.md#7-dispatch-모드)). push handler와 error·disconnect·connection
@@ -253,9 +246,8 @@ auto result = connector.expect_none<order_changed_t>()
                 .submit();
 ```
 
-순서 관측은 각 `expect` 술어를 같은 이름의 push에 도착 순서대로 적용한다. 하나의 전체 timeout을
-사용하며 성공하면 `std::vector<message_t<TMessage>>`를 반환한다. 술어가 받는 인자도 payload가
-아니라 message다. 단순히 N개가 도착했는지가 아니라 지정한 순서대로 도착했는지를 검증하는 계약이다.
+`wait_for_sequence`는 `std::vector<message_t<TMessage>>`를 반환한다. 순서 관측과 실패는
+[공통 스펙 §10.1](../../32-stream-connector.ko.md#101-테스트-대기-표면)이 정한다.
 
 ```cpp
 auto result = connector.wait_for_sequence<order_changed_t>()
@@ -384,7 +376,7 @@ struct reconnect_options_t {
     std::chrono::milliseconds initial_delay{250};
     std::chrono::milliseconds max_delay{5000};
     double backoff_factor = 2.0;
-    std::optional<int> max_attempts = 3; // 빈 값이면 무제한. 그 밖에는 양수여야 한다
+    std::optional<int> max_attempts = 3; // 빈 값은 무제한
 };
 
 struct connector_options_t {

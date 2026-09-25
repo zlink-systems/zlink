@@ -161,6 +161,8 @@ typedef void (zlink_free_fn) (void *data_, void *hint_);
 
 `zlink_free_fn` is the callback type used by `zlink_msg_init_data()` to create a zero-copy
 message. The library invokes this function when the message data buffer is no longer needed.
+The library may invoke this callback on an internal thread, while holding an internal lock, or during a
+socket turn. The callback must not call any zlink API or wait; it must release the buffer and return.
 
 ## 6. Functions
 
@@ -460,10 +462,7 @@ of `zlink_msg_t` structures.
 
 ### Send
 
-The send path admits the complete `parts_` array from one call as one record. It consumes every input
-slot on both success and failure and leaves the slots empty and initialized. If submit fails, the peer
-sees no part. Retry uses a complete record retained before the call. [Socket Common](socket/README.en.md#whole-message-send-and-pending-admission)
-owns the detailed contract.
+Whole-record admission atomicity, input-slot consumption, and resubmission follow [Socket Common whole-message send](socket/README.en.md#whole-message-send-and-pending-admission).
 
 ### Receive
 

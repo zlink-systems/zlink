@@ -386,10 +386,8 @@ close are recorded in diagnostics and metrics.
 
 ## 7. Composition with Send Completion
 
-- **Core and the binding own HWM waiting, internal retries, and per-operation
-  completion.** Framework selects a specific target and starts one binding operation.
-  After the operation starts, Framework does not select another target or create a
-  second operation for the same payload because of PAUSE or HWM.
+- **The HWM retry and resubmission boundary for Send completion is defined by
+  [Submit and completion §5](01-submit-and-completion.en.md#5-backpressure-and-error-classification).**
 - **Framework does not retain the removed `send_ready` callback or event, a readiness waiter,
   or a retry adapter.** [Deadline](../00-foundation/02-glossary.en.md#deadline) — the final time
   point by which work must finish — cancellation, detach, and shutdown follow the existing
@@ -399,9 +397,8 @@ close are recorded in diagnostics and metrics.
 
 ## 8. Waiting to Send
 
-**The Framework calls the Core socket's send or request once.** Waiting for room to send is
-done by Core and the binding, as §7 defines. The Framework builds no waiting queue of its
-own, never sends again, and never makes a second call with the same content.
+The binding operation's submission count and HWM waiting owner are defined by
+[Submit and completion §5](01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 
 - **If the wait runs out of time, the call ends with
   [`DeadlineExceeded`](../00-foundation/02-glossary.en.md#deadlineexceeded).** Send, publish,

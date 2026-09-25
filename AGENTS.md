@@ -165,6 +165,7 @@ sub-agent는 codex에 이슈가 있을 때 쓴다 — 쿼터 소진, 콘텐츠 �
   호출부의 수동 encode/decode로 내부 연결 문제를 우회하지 않는다.
 - 비자명한 설계는 최소 두 대안을 비교하되, 요청하지 않은 장문의 설계 문서를 만들지 않는다.
   인터페이스를 단순하게 유지하고 자료구조와 protocol 결정은 소유 모듈 안에 숨긴다.
+- **[제어 결정과 요청 수락의 소유](./doc/principal/dev/zlink-system-design-principles.ko.md#제어-결정과-요청-수락의-소유)(필수).**
 - **계층 소유권(필수).** 어떤 결정(연결 선택·교체, reconnect, handover 수렴, completion drain,
   DONTWAIT 재제출, errno 분류, reply 라우팅, 재전송)을 코드에 넣기 전에 그 결정을 소유한 계층을
   spec 조항으로 먼저 확인한다. Core·binding이 소유한 결정을 Framework에서 다시 구현하거나 같은
