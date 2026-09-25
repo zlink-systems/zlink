@@ -187,16 +187,14 @@ public interface IZLinkSpotContext : IZLinkSpotCommonContext
  IZLinkActor actor,
  CancellationToken cancellationToken = default);
 
- ValueTask<bool> CloseAsync(
- CancellationToken cancellationToken = default);
+ void Close();
 }
 
 public interface IZLinkInstanceSpotContext : IZLinkSpotCommonContext
 {
  IZLinkInstanceSpotHandlerRegistry Handlers { get; }
 
- ValueTask<bool> CloseAsync(
- CancellationToken cancellationToken = default);
+ void Close();
 }
 
 public interface IZLinkEntrySpot
@@ -625,7 +623,7 @@ commit 전에 activation을 거부한다.
 `IZLinkSpotManager`는 User Spot의 명시적 create·get-or-create, resolve와 close만 제공한다. Manager에
 Spot kind를 선택하는 인자나 Instance Spot create·get-or-create overload를 두지 않는다. Instance Spot의
 생성 경로는 Spot 전용 message call의 명시적 `InstanceSpot(...)` opt-in 하나다. Instance Spot
-구현이 자신의 lifecycle을 종료하는 `IZLinkInstanceSpotContext.CloseAsync()`는 남긴다.
+구현이 자신의 lifecycle 종료를 요청하는 `IZLinkInstanceSpotContext.Close()`는 남긴다([Spot 주소 메시징 §7](../../../03-spot-actor/06-spot-address-messaging.ko.md#7-close와-generation-경계)).
 
 User Spot Create와 GetOrCreate call은 single-use다. 같은 option을 두 번 설정하면 `InvalidOperation`, terminal
 `Async(...)`를 두 번 호출하면 `InvalidOperation`이다. `InMesh(...)` 선택과 오류 및 전체

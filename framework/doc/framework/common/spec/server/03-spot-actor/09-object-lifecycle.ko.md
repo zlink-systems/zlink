@@ -75,7 +75,9 @@ machine은 그 상태를 담당 component 한 곳에만 전달하므로, 뒤 단
 | `Ready` | route와 authority·owner lease fence | route admission |
 | `Unavailable` | authority와 무효 owner evidence | terminal completion adapter |
 
-`Unavailable`은 authority가 남아 있지만 current owner를 사용할 수 없다는 뜻이다. Authority가
+Resolver의 `Unavailable`은 Ready route가 없는 authority의 상태를 보존한다. Instance intent가
+`Creating`을 보면 위의 waiter로, idle cleanup 중이면 §5의 route 갱신으로 전달한다. Instance
+intent가 없는 `Closing` direct call의 결과는 [Spot 메시징 §9](06-spot-address-messaging.ko.md#9-실패와-관측)가 정한다. Authority가
 없다는 `Missing`과 같은 상태로 취급하지 않는다. Explicit `Close`, `IdleEvicted` cleanup 또는
 다른 정식 lifecycle operation이 authority release를 완료한 뒤에만 resolver가 새 `Missing`
 입력을 만들 수 있다.
@@ -89,8 +91,8 @@ Stored creation intent는 같은 target node·lifecycle에서 끝나지 않은 �
 ### 동시에 만들려 할 때
 
 여러 caller가 동시에 같은 객체를 만들려 하면 **만들 권한을 먼저 확보한 쪽만** 자신을
-owner로 기록하고 만든다. 나머지는 만들어진 객체를 대상으로 삼는다. factory는 한 번만
-실행된다.
+owner로 기록하고 만든다. 나머지의 생성 결과는 operation 종류에 따라 정한다. 최초 Instance message를 받은 target의
+`Reserve` 패배는 [Spot 메시징 §4.2](06-spot-address-messaging.ko.md#42-여러-node가-동시에-첫-message를-받는-경우)를 따른다.
 
 **만드는 중 상태를 캐시하지 않는다.** "만드는 중"은 곧 바뀔 상태이므로
 [Spot·Actor routing 「2.2 최근 Ready route를 사용하는 조건」](08-routing.ko.md#22-최근-ready-route를-사용하는-조건)의
@@ -164,7 +166,9 @@ message가 전부 거절된다. 객체 세대는 lifecycle 변경과 이동 중�
 ```mermaid
 flowchart TB
     M["낡은 route로 도착한 message"] --> O{"이 node가<br/>아직 owner인가"}
-    O -- "아니오" --> X["낡은 경로 오류<br/>자동 재시도 없음"]
+    O -- "아니오" --> F["routing §2.5의<br/>Message Follow 확인"]
+    F -- "유효한 route 없음" --> X["낡은 경로 오류<br/>자동 재시도 없음"]
+    F -- "유효한 route 있음" --> R["같은 operation relay"]
     O -- "예" --> L{"owner 유효 기간이<br/>남았는가"}
     L -- "아니오" --> X
     L -- "예" --> G["객체 세대는 보지 않는다"]
@@ -176,7 +180,9 @@ flowchart TB
 왼쪽 축이 일반 message가 지나는 길이다. `G`에서 세대 검사를 넣고 싶어지는 자리가
 함정이고, 오른쪽 `K`가 세대를 보는 유일한 경로다.
 
-**걸러낸 message는 낡은 경로 오류로 끝낸다. Runtime이 자동으로 다시 시도하지 않는다.**
+이전 owner에 도착한 message는 [Routing §2.5](08-routing.ko.md#25-이전-owner-route에-도착한-message)의
+Message Follow를 먼저 적용한다. 유효한 Follow route가 없을 때만 낡은 경로 오류로 끝내며,
+runtime은 operation을 새로 제출하지 않는다.
 다시 시도하면 보내는 쪽은 성공으로 보지만 실제로는 두 번 실행됐을 수 있다.
 Application이 새 호출을 시작할 수는 있으며, 그때 중복 실행 위험은 application이
 판단한다.

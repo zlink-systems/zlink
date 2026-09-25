@@ -413,12 +413,10 @@ owner loss, and the previous relocation payload isn't automatically
 replayed. A public phase API for manipulating this barrier isn't
 provided.
 
-`RelayReady`, when the target's relay-ready reply reaches its accepted state, is the
-irreversible boundary for source restoration. Only an explicit failure before that
-boundary restores source dispatch and the matching Session seal. After the boundary,
-source dispatch doesn't reopen regardless of the cutover submit result. The target runs
-owner CAS and queue opening after receiving cutover or after the cutover wait setting
-(`relocationCutoverWaitTimeoutMs`, 1,000 ms default) ends.
+A cutover-submit result alone does not reopen source dispatch after `RelayReady`. A
+successful source `Preserve` fence resumes retained work at the source under
+[common relocation §4.4](../../../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). Target cutover verification and owner CAS follow [common relocation §4.4](../../../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
+`relocationCutoverWaitTimeoutMs` (default 1,000 ms) is the cutover-wait Warning threshold.
 
 On a retry within the same source and target process, factory and
 `restore(...)` can be called more than once. `capture(...)` can also be

@@ -463,10 +463,8 @@ sequenceDiagram
 This diagram shows the normal flow of a request where the Location Store has
 no owner and the selected target obtains creation authority. If a Ready
 owner already exists, the factory isn't run — the request is put on the
-existing Spot queue. If a different target obtained creation authority
-first, the current target doesn't create the Spot. Once the authorized
-target's Spot becomes Ready, the first request's identity and deadline are
-preserved and it's delivered exactly once to the current owner.
+existing Spot queue. If another target acquired creation authority first, the current target does not create a Spot
+and completes the original operation with the `Unavailable` result in §4.2.
 
 ### 4.1.1 If the Target Process Terminates During Activation
 
@@ -490,10 +488,13 @@ placement candidate nodes. Even if concurrently sent first messages arrive
 at different targets, only the target that obtains creation authority in
 the Store runs the factory. The other targets don't create a local Spot.
 
-If the authorized Spot is already Ready, the first operation's identity,
-payload, reply correlation, and deadline are preserved and delivered
-exactly once to the current owner. If still `Creating`, it waits for the
-same activation's completion. If the existing authority is a User Spot or
+A target that loses `Reserve` does not select the current owner again or forward the first
+operation. That target preserves the original operation ID, payload, absolute deadline, reply
+correlation, and reply route and produces one `Unavailable` terminal. For a request still within its original deadline it returns the error on the original reply
+route; if the deadline has passed, the existing timeout terminal remains. For a one-way send
+whose source-local outbound admission has already completed, it records the failure in diagnostics. An Instance-intent call whose source
+resolver observes `Creating` follows the activation wait in
+[Object lifecycle §3](09-object-lifecycle.en.md#3-when-to-build-a-missing-object). If the existing authority is a User Spot or
 differs from the stable type specified in the builder, it's
 `TypeMismatch`. A regular direct call with no type specified to an
 existing Instance Spot uses the type stored in authority, so it can be sent
@@ -587,10 +588,7 @@ procedure.
 - **After a relocation unit is sealed, ingress arriving on the source route
   is kept in the relocation hold, and no application handler runs for it.**
 - **If the operation explicitly aborts before relay-ready is accepted, the
-  held ingress returns to the source queue in arrival order.** Afterward,
-  source isn't restored regardless of the cutover-submit result — the
-  operation ID, generation, and reply route are preserved as they are and
-  relayed to the target via the Message Follow route.
+  held ingress returns to the source queue in arrival order.** Afterward, authority settlement in [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover) decides whether source processes held ingress or relays it to target with its operation ID, generation, and reply route preserved.
 - **A `Relocating` unit that is waiting for a permit hasn't been sealed
   yet.** So it continues accepting application messages and timers on its
   existing [owner route](../00-foundation/02-glossary.en.md#owner-route).
@@ -601,6 +599,28 @@ The Spot manager's public `Close` takes a User Spot's `SpotRef`. For
 Instance Spot, an application handler or timer requests local `Close` from
 its own lifecycle context. Host shutdown and `Relocate` can clean up or
 move an Instance Spot via a separate operational lifecycle.
+
+**`Close` on a Spot context is a request that returns no result.** It is called only from
+a handler or timer turn. The call registers a Close request with the context's captured
+generation. Duplicate calls in the same turn and later calls for that generation join an
+already registered or running Close. The request starts in the Spot's
+[lifecycle lane](../01-execution/02-handler-turn-and-execution-gate.en.md#execution-lanes)
+after the requesting turn ends, whether normally, by exception, by cancellation, or with a
+reply failure. That turn is excluded from Close's wait for accepted turns.
+
+Close and relocation follow the authority-commit order of
+[Host relocation §12](../05-location-relocation/05-host-relocation-flow.en.md#12-moving-pending-messages-timers-and-sessions).
+If relocation wins, the registered context request is neither run nor resubmitted, and its
+moving result is recorded in diagnostics. If `Closing` wins, Close finishes and the Spot is
+not moved. If the idle-cleanup seal in [Object lifecycle §5](09-object-lifecycle.en.md#5-when-to-clean-up-an-active-object-and-what-bounds-it)
+or the host-shutdown seal in [Host relocation §14](../05-location-relocation/05-host-relocation-flow.en.md#14-the-race-between-shutdown-and-relocate)
+wins first, the registered context request is not run and its result is recorded in
+diagnostics. A pending request remains until it runs or its superseding-seal result is
+recorded.
+
+Manager `Close` returns its result to its caller. Context `Close` returns no result;
+`false`, failure, joined, and unrun requests are each recorded in diagnostics.
+`OnClosing(ExplicitClose)` indicates cleanup started, not that authority release completed.
 
 The close procedure proceeds in the following order.
 
@@ -616,8 +636,9 @@ The close procedure proceeds in the following order.
 If the transition to `Closing` in step 1 is not committed, authority does not
 change and Close ends with a result listed below. Once the transition to
 `Closing` is committed, authority never returns to `Ready`. If work other than
-the `OnClosing` invocation in steps 2–4 fails, Close returns that failure to the
-caller, and the target owner runtime continues the remaining work from the failed
+the `OnClosing` invocation in steps 2–4 fails, manager `Close` returns that
+failure to the caller (context `Close` follows the diagnostics rule above), and
+the target owner runtime continues the remaining work from the failed
 operation on the same owner and generation. Completed operations are not repeated.
 
 If that incarnation no longer exists, idempotent `false`; if a different
@@ -681,9 +702,7 @@ authority commit, and admission order are set by
 [Spot And Actor Membership](05-spot-actor-membership.en.md).
 
 - **Only an explicit failure before relay-ready is accepted keeps the
-  source.** Afterward, source isn't restored regardless of the
-  cutover-submit result, and the procedure continues only on the same
-  target process selected earlier. If the target process
+  source.** Afterward, authority settlement follows [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). A confirmed target commit continues only on the same target process selected earlier. If the target process
   terminates, a different target isn't selected and relocation isn't
   automatically resumed.
 - **Not-yet-executed messages at seal time, the accepted journal, and
@@ -706,7 +725,7 @@ seal is relayed via the committed Message Follow route.
 | The target authority of a Spot direct send or request without Instance intent is `Missing` or `Creating` | `NotFound`. |
 | The generation of a control addressed by `ActorRef`/`SpotRef` differs from the current generation (a direct message doesn't compare generations, per [08-routing §2.6](08-routing.en.md#26-where-objectgeneration-is-used-and-where-its-not)) | `InvalidOperation`. |
 | The [owner fence](../00-foundation/02-glossary.en.md#owner-fence) differs | `Unavailable`. |
-| New admission requested on an owner whose target authority is `Closing` | `Rejected`. |
+| A Spot direct send or request without Instance intent finds target authority `Closing`, at the source or owner | `Rejected`. |
 | The runtime is `Draining` and takes no new admission (whatever the target authority state) | `ShuttingDown`. |
 | Ingress arrives on the source route after a relocation seal | Not rejected — retained in the relocation hold. |
 | A message arrives at a `Relocating` unit not yet sealed | Accepted, keeping existing owner admission. |

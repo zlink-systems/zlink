@@ -367,10 +367,9 @@ message 처리를 막지 않는다. Infrastructure relocation은 Entry Spot의 j
 `"ready"` 뒤 target process가 종료되면 ordinary owner loss로 처리하며 이전 relocation payload를 자동
 replay하지 않는다. 이 barrier를 조작하는 public phase API는 제공하지 않는다.
 
-Target의 relay-ready reply가 accepted 상태가 되는 `RelayReady`가 source 복원의 비가역 경계다. 이 경계 전
-명시적인 failure만 source dispatch와 matching Session seal을 복원한다. 경계 뒤에는 cutover submit의
-성공·실패와 관계없이 source dispatch를 다시 열지 않는다. Target은 cutover를 받거나 cutover 대기
-설정(`relocationCutoverWaitTimeoutMs`, 기본 1,000 ms)이 끝나면 owner CAS와 queue 개방을 진행한다.
+`RelayReady` 뒤 cutover submit 결과만으로 source dispatch를 다시 열지 않는다. Source
+`Preserve` fence가 성공하면 [공통 relocation §4.4](../../../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)에 따라 보관 작업을 source가 재개한다. Target의 cutover 검증과 owner CAS는 [공통 relocation §4.4](../../../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)를 따른다.
+`relocationCutoverWaitTimeoutMs`(기본 1,000 ms)는 cutover 대기 Warning 시한이다.
 
 같은 source와 target process 안의 재시도에서 factory와 `restore(...)`를 두 번 이상 호출할 수 있다.
 `capture(...)`도 [authority](../../../00-foundation/02-glossary.ko.md#authority) commit 전에 반복될 수 있다. Current owner와 attempt fence만 completion을 commit하고

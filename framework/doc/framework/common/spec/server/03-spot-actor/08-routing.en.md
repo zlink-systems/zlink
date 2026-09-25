@@ -166,7 +166,7 @@ which state it was in again.
 |---|---|---|
 | `ReadyRoute` | Route and authority/owner-lease fences | Stored in the positive route cache and delivered to route admission. |
 | `Missing` | The fact that no authority record exists | Delivered to the creation coordinator. |
-| `Unavailable` | The fact that authority remains but the current owner can't be used | Delivered to the terminal completion mapper. |
+| `Unavailable` | The fact that authority remains without a Ready route, and that authority's state (`Creating`, `Closing`, and so on) | Calls without Instance intent go to the terminal mapper of [Spot address messaging §9](06-spot-address-messaging.en.md#9-failure-and-observability). Instance-intent activation follows the `Creating` wait and idle-cleanup route refresh in [Object lifecycle §§3, 5](09-object-lifecycle.en.md#3-when-to-build-a-missing-object). |
 | `StoreFailure` | The fact that authority presence couldn't be determined | Delivered to Store retry/reconciliation. |
 
 Only `ReadyRoute` is stored in the positive route cache, and only `Missing` is
@@ -196,8 +196,8 @@ first registers a manual endpoint-only intent. When
 `replacePeerConnection(endpoint, rid, lifecycleGeneration,
 securityIdentity)`.
 
-The replacement path installs the new intent only after transport liveness
-confirms that the previous intent is closed. `ZLinkJavaRawMeshNode` retains
+The replacement intent follows service admission in [Transport liveness §5](../02-channel-transport/05-transport-liveness.en.md#5-ready-and-failure-determination).
+`ZLinkJavaRawMeshNode` retains
 the intent, the observed peer routing ID, and the close state together while
 processing the admission fence and liveness events. An endpoint-only intent
 without a descriptor isn't used as placement evidence. A caller can't bypass
@@ -498,7 +498,7 @@ the Session owner.
 3. Only Actor messages arriving at source after Capture enter ingress hold and are relayed
    on the same ordered connection into the pre-boundary relay span. Saved queue work and
    timers aren't relayed. Source sends cutover one-way after the current relay prefix.
-4. On cutover or 1,000ms after relay-ready, target commits owner and membership using a
+4. After complete-relay and cutover verification in [Relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover), target commits owner and membership using a
    target-only Location Store CAS.
 5. After CAS, saved work, pre-boundary relay, and remaining temporary work enter the real
    Actor queue in order, then the regular route is installed while dispatch stays closed.
@@ -529,10 +529,7 @@ the relocation.
 On an explicit relocation failure before relay-ready is accepted, the target temporary
 queue is discarded, and the source Actor queue and admission are restored without re-reading
 the Location Store. If a bound Session seal exists, source coordinator sends command 44 abort one-way so held
-messages are submitted to source route and only the matching seal is released. After
-relay-ready, the runtime doesn't roll back to the source route or snapshot, regardless of the
-cutover-submit result. Source Message Follow delivers
-a message on the previous route to target. If the target process terminates, a different
+messages are submitted to source route and only the matching seal is released. After relay-ready, neither a cutover-submit result nor an earlier read naming source restores the source route or snapshot. A confirmed source `Preserve` fence under [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover) returns retained work to the source route; confirmed target commit does not. After target commit, Source Message Follow delivers a message on the previous route to target. If the target process terminates, a different
 runtime doesn't automatically take over the route update.
 
 ## 4. How a Request's Reply Returns

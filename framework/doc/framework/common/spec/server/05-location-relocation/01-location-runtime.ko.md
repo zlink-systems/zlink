@@ -164,15 +164,16 @@ Location Store가 기록하는 record와 조건만 §8~§9에서 다시 구체�
    조립해 checksum을 확인한 뒤 외부에 아직 공개하지 않은 instance에 복원한다. Restore가
    끝나면 source에 relay 수신 준비를 알린다. Source는 이 통지 뒤 ingress hold를 relay하고
    같은 ordered connection으로 cutover를 one-way로 보낸다.
-6. Target은 cutover를 받거나 relay 준비 reply 뒤 1,000ms가 지나면 Location Store의 처음
-   읽은 version이 그대로일 때만 owner, membership과 수용 공간을 한 번에 변경한다. 이
-   방식을 compare-and-set, 줄여서 [CAS](../00-foundation/02-glossary.ko.md#compare-and-set)라고 한다.
+6. Target은 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의
+   완전한 relay batch와 cutover를 검증한 뒤, Location Store의 처음 읽은 version이 그대로일
+   때만 owner, membership과 수용 공간을 한 번에 변경한다. 이 방식을 compare-and-set,
+   줄여서 [CAS](../00-foundation/02-glossary.ko.md#compare-and-set)라고 한다.
 7. Owner 변경 뒤 저장된 기존 작업, cutover 전 relay와 나머지 temporary 작업을 실제 object
    queue에 순서대로 넣는다. Temporary queue 등록을 제거하고 regular route로 전환하되
    dispatch는 닫아 둔다. 필요한 lifecycle callback을 끝낸 뒤 application message 처리를
    시작한다.
 8. Source는 cutover를 보낸 뒤 완료 reply를 기다리지 않고 Message Follow를 유지한다.
-   Memory에 유지한 payload 원본은 cutover submit이 끝난 뒤 정리한다.
+   Memory에 유지한 payload와 relay batch는 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 authority 판정 또는 source lease 만료 terminal까지 유지한다.
 
 **Handoff payload와 owner 변경은 하나의 distributed transaction이나 2PC로 묶지 않는다.**
 Restore 요청, 각 chunk와 target의 owner CAS는 같은 `RelocationId`, target attempt와 source
@@ -720,7 +721,7 @@ Authority를 읽으면 record가 없는 `Missing(StoreNow)` 또는 현재 값이
 | `Reserve` | `Missing → Reserved`. ObjectGeneration, 첫 AuthorityOwnerGeneration과 수용 공간을 발급한다. |
 | `Commit` | 그 reservation의 `Reserved → Active`다. |
 | `Abort` | 그 reservation의 `Reserved → Missing`이다. |
-| `Preserve` | Active owner, generation과 사용 중인 수용 공간은 유지하고 `StoreVersion`과 Framework 내부 데이터만 바꾼다. Target 정보는 없어야 한다. |
+| `Preserve` | Active owner, generation과 사용 중인 수용 공간은 유지하고 `StoreVersion`과 Framework 내부 데이터만 바꾼다. 일반 사용에는 target 정보가 없어야 한다. Relocation 정리에서는 같은 `RelocationId`의 target 정보를 제거할 수 있다. |
 | `NewOwner` | Active record를 target owner로 바꾼다. ObjectGeneration은 유지하고 AuthorityOwnerGeneration을 증가시킨다. 미리 확보한 target 수용 공간을 사용한다. |
 | `Delete` | Active record와 조회용 index를 제거하고 사용 중인 수용 공간을 같은 요청에서 감소시킨다. |
 
@@ -738,7 +739,11 @@ relocation이 미리 확보한 수용 공간을 검증한다. Record가 없거�
 payload의 위치를 갱신하거나 target 준비 완료를 기록할 때만 미리 확보한 reservation 정보를
 함께 전달할 수 있다. Framework는 authority key, 처음 읽은 `StoreVersion`, source·target
 owner와 현재 수용 공간을 모두 확인한다. 성공하면 reservation이 기대하는 `StoreVersion`도
-같은 요청에서 갱신한다. Owner, 수용 공간과 reservation 상태는 유지한다.
+같은 요청에서 갱신한다. Owner, 수용 공간과 reservation 상태는 유지한다. Relocation 정리의 `Preserve`도 기존 작업이다. `SpotWide` unit에서는 source `Preserve`와 target의 전체-unit 조건부 batch가 같은 Spot aggregate authority record의 `StoreVersion`을 조건으로 검사하고, 성공한 요청이 그 version을 변경한다. 따라서 둘 다 commit할 수 없다. Source가 target `NewOwner`가 기대하는 `StoreVersion`을 조건으로 이를 먼저 commit하면
+owner와 generation은 그대로 두고 version을 바꾸므로 늦은 target CAS는 실패한다. Source는
+현재 owner lease를 확인하고 같은 `RelocationId`의 target 정보를 정리한다. 반대로 target
+`NewOwner`가 먼저 commit했으면 source `Preserve`는 성공하지 않는다. 응답이 불명확하면
+[§10](#10-when-a-store-response-isnt-received)에 따라 같은 key와 version으로 확인한다.
 
 ### 6.2 여러 페이지를 같은 시점의 목록으로 읽는다
 
@@ -906,8 +911,9 @@ Framework는 최초 message를 queue 선두에 복원한 뒤 새 message를 받�
 | `Creating` 기록 뒤 `Ready` 전 | 같은 record와 generation으로 생성을 계속하거나 정확히 같은 record를 취소한다. |
 | `Ready` 뒤 최초 message 복원 전 | 저장 데이터로 최초 message부터 복원한다. 그 전에는 새 message를 받지 않는다. |
 
-이미 `Ready`면 원래 요청을 현재 owner에게 한 번 전달한다. `Creating`이면 같은 생성 결과를
-기다린다. 이전 generation의 process 내부 instance에서는 message를 실행하지 않는다. User
+이미 `Ready`인 authority가 다른 owner를 가리키거나 `Creating`이면, 수신 target은
+[Spot 주소 메시징 §4.2](../03-spot-actor/06-spot-address-messaging.ko.md#42-여러-node가-동시에-첫-message를-받는-경우)의
+`Reserve` 패배 결과를 따른다. 이전 generation의 process 내부 instance에서는 message를 실행하지 않는다. User
 Spot이거나 type이 다르면 `TypeMismatch`다. 위치 확인과 message 전달 사이에 별도의 owner
 변경을 허용하지 않는다.
 
@@ -1001,8 +1007,7 @@ Runtime이 종료를 진행하여 새 작업을 받지 않는 상태를
 
 **Location Store의 owner를 source에서 target으로 바꾸는 CAS는 준비를 마친 target만
 실행한다.** Source와 Session owner는 target 선택 결과나 timeout을 근거로 Location Store를
-사용하지 않는다. Target은 Restore와 temporary queue 등록을 마치고 cutover를 받거나 1,000ms가
-지나기 전에는 CAS를 시작하지 않는다. CAS가 실패하면 application dispatch를 열지 않는다.
+사용하지 않는다. Target의 authority CAS는 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 완전성 검증 뒤에만 시작한다. CAS가 실패하면 application dispatch를 열지 않는다.
 
 다음 그림은 §5의 owner lease 갱신이 §3.1의 host 실행 조합을 유지하는 동안, target이 현재
 record를 읽고 CAS로 owner를 바꾸는 흐름을 보여준다 — Location Store가 소유하는 부분만
@@ -1080,7 +1085,7 @@ host 실행 세대, owner 정보와 필요한 공간을 모두 고정한다.
 | 변경 목적 | 허용 내용 |
 |---|---|
 | 새 owner로 이동 | 하나 이상의 object owner를 바꾸며, 필요한 target 공간을 모두 합산해 확보한다. |
-| 이동 완료 후 불필요한 진행 정보 제거 | 모든 object owner, generation, membership과 사용 중인 공간을 유지하고 진행 정보만 지운다. |
+| Source fence 또는 이동 완료 뒤 불필요한 진행 정보 제거 | Spot aggregate authority record의 `StoreVersion`을 조건으로 확인하고 변경한다. 모든 object owner, generation, membership과 사용 중인 공간을 유지하며 같은 이동의 진행 정보만 지운다. |
 
 두 목적에 맞지 않는 공간 또는 membership 변경이 있으면 `Conflict`이며 아무것도 바꾸지
 않는다. 준비에 성공하면 `(AggregateId, AggregateGeneration)`과 `Prepared` 상태를 기록한다.
@@ -1275,9 +1280,7 @@ Relay-ready reply가 accepted 상태가 되기 전 명시적으로 취소할 때
 
 위 정리가 끝나기 전에 source가 새 작업을 받으면 안 된다.
 
-**Relay-ready reply가 accepted 상태가 된 뒤에는 cutover submit 결과와 관계없이 이 절차로
-source를 복원하지 않는다.** Target CAS가 실패하면 target object와 queue를 제거하고 Session은
-자체 timeout으로 정리한다.
+Relay-ready 뒤의 source 재개는 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 `Preserve` fence 성공으로 결정한다. Target CAS가 실패하면 target staging을 정리한다.
 
 ## 10. Store 응답을 받지 못했을 때
 
@@ -1288,16 +1291,12 @@ completion reply가 없으며, source는 Location Store를 대신 갱신하지 �
 정확한 반환값과 입력 제한은 [Location Store](02-location-store-redis.ko.md)와
 [Relocation Store](03-relocation-store-redis.ko.md)가 정의한다.
 
-Relocation CAS의 retry deadline은 Restore operation의 absolute deadline이다. 저장 payload의
-보관 기간을 별도 기준으로 사용하지 않는다. Retry 가능한 failure 또는 불확정 응답이면
-target이 같은 source fence와 `RelocationId`로 read/CAS를 반복한다. 그 target이 owner임을
-확인하면 성공으로 수렴한다. 다른 valid owner나 generation이면 stale relocation으로 즉시
-종료한다.
-
-Restore 유효시간까지 target owner를 확인하지 못하면 `location_update_failed` Error를
-기록하고 target의 준비된 Actor 또는 Spot, temporary queue와 relocation state를 제거한다.
-Target은 application dispatch를 열거나 Session route update를 보내지 않는다. 이미 terminal인
-`RelocationId`에 대한 늦은 Store 응답은 object를 다시 활성화하지 않는다.
+Restore 유효시간은 target의 일반적인 새 CAS 제출을 끝내고 source가 §6.1의 `Preserve` fence로 판정하기 시작한다. Source lease 만료 뒤의 같은 target 예외는 이 절이 정한다. Source는 target `NewOwner` CAS가 기대하는 `StoreVersion`을 조건으로
+`Preserve`를 실행한다. Source `Preserve` 성공이 확인되면 target의 늦은 CAS는 commit할 수
+없다. Source는 owner로 남아 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의
+보관 작업을 다시 처리한다. 같은 `RelocationId`의 target owner가 이미 확인되면 source는
+target route를 채택하고 target은 staging queue를 연다. `Preserve` 응답이 불확정이면 source lease가 유효한 동안 새 timer 없이 이 절의 Store-failure 정책으로 반복한다. Source lease 만료는 source의 작업을 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 expired-owner terminal로 끝낸다. 그 뒤 Store read가 만료된 source를 target의 원래 expected `StoreVersion`에 그대로 기록하고 target이 완전한 relay·cutover를 검증했으면, target lease가 유효한 동일한 target만 같은 `RelocationId`와 expected `StoreVersion`으로 원래 `NewOwner` CAS(`SpotWide`에는 §8.1의 whole-unit batch)를 다시 제출할 수 있다. 응답이 불확정이면 이 절의 Store 실패 정책으로 같은 authority를 확인한다. 같은 `RelocationId`의 target commit이 확인되면 target dispatch를 열고, 결과 확인 뒤 target commit이 아닌 definitive `Conflict`이면 staging을 폐기한다. Commit 확인 전 target lease가 만료되어도 staging을 폐기한다. Commit 확인 전에는 dispatch를 열지 않는다. Source `Preserve` fence가 확인된 경우에도 staging을 폐기하며, source를 가리킨 이전 read만으로는 폐기하지 않는다. Source의 owner lease가
+§5에 따라 유효할 때만 dispatch를 재개한다.
 
 `StoreFailureGrace` 동안에는 마지막으로 완전히 읽은 descriptor 목록을 유지한다. 그 목록의
 target에 대한 connection intent(아직 연결되지 않은 target 포함)를 유지하고 기존 connection의 연결
@@ -1442,14 +1441,12 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
   부분 조립 payload로 복원되지 않는다. 이미 변경한 owner는 source로 되돌아가지 않는다.
 - Relay-ready reply가 accepted 상태가 되기 전 명시적 취소에서는 Location Store가 바뀌지
   않고 target temporary queue만 폐기된다. Bound Session이 있으면 command 44 abort가
-  one-way로 전송된 뒤 source queue가 다시 열리며 적용 reply는 기다리지 않는다. 그 뒤에는
-  cutover submit 결과와 관계없이 source queue가 다시 열리지 않는다.
+  one-way로 전송된 뒤 source queue가 다시 열리며 적용 reply는 기다리지 않는다. 그 뒤에도 cutover submit 결과만으로 source queue를 열지 않는다. §10의 source `Preserve` 성공은 다시 연다.
 
 **Store 장애와 상호 운용**
 
 - Store 장애 유예 시간에는 새 discovery connection만 막히고 owner deadline은 연장되지
-  않는다. Relocation CAS는 같은 key·version·fence로 Restore 유효시간까지 재시도되고, 만료되면
-  target object와 queue가 제거되며 Session update가 전송되지 않는다.
+  않는다. Relocation CAS의 일반 재제출은 Restore 유효시간까지다. Source lease 만료 뒤 같은 target 예외와 staging terminal은 §10을 따른다. Target commit 확인 전에는 Session update를 보내지 않는다.
 - Owner lease exact read가 `Missing`을 돌려주거나, owner ID·lease generation이 descriptor와
   다르거나, 같은 read의 `StoreNow` 기준으로 owner lease가 만료된 descriptor는 automatic discovery, 새
   object 배치, Instance Spot cold activation, relocation의 최초 target 선택, select-one

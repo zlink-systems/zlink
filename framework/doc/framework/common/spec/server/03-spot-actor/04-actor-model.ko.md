@@ -613,8 +613,7 @@ ActorId는 metric label로 사용하지 않는다.
 - Temporary queue 제거와 regular route 전환을 atomic하게 처리하여 message가 중복되거나
   누락되지 않게 한다.
 - Relocation Restore가 relay-ready reply accepted 전에 명시적으로 실패하면 target temporary queue를
-  실행하지 않고 폐기하며 source가 소유한 원본을 되돌린다. 그 뒤에는 cutover submit 결과와 관계없이
-  source를 복원하지 않는다.
+  실행하지 않고 폐기하며 source가 소유한 원본을 되돌린다. 그 뒤 source 재개와 target staging 정리는 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 authority 판정을 따른다.
 - 같은 `RelocationId`, target attempt와 owner generation의 Restore를 여러 번 받아도 temporary
   queue와 application instance를 한 번만 만든다. 이전 attempt의 temporary queue는 사용하지 않는다.
 - 같은 Actor의 payload가 ingress 종류와 관계없이 Actor queue 수락 순서대로 실행된다.

@@ -68,8 +68,8 @@ duration보다 최소 5초 작아야 한다. 0은 해당 기능을 끈다.
 configuration error다. `RelocationInFlightPayloadBudget`은 peer 연결 하나에 대해 동시에 전송 중인
 relocation chunk byte 합계의 상한이고 기본값은 16 MiB이며 `0`은 예산을 적용하지 않는다.
 `RelocationNodeInFlightPayloadBudget`은 같은 계상 규칙을 node 전체 합계에 적용하며 기본값 `0`은
-미적용이다. `RelocationCutoverWaitTimeout`은 target이 cutover를 기다리는 시간이자 source가 재전송용
-boundary batch 사본을 유지하는 시간이고 기본값은 1초다. 네 값 모두 startup-only이며 음수는 socket
+미적용이다. `RelocationCutoverWaitTimeout`은 cutover 대기 Warning 임계값이고 기본값은 1초다.
+Source 사본 유지와 authority CAS는 [공통 relocation §4.4](../../../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)를 따른다. 네 값 모두 startup-only이며 음수는 socket
 bind 전에 configuration error다.
 
 ## 3. Readiness와 운영 query

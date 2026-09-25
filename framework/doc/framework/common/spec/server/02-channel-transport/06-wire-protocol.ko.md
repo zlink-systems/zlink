@@ -325,15 +325,10 @@ callback·연결 종료는 새 bind terminal을 지연시키거나 되돌리지 
 ### Physical connection replacement
 
 Remote runtime이 endpoint, identity, membership, weight와 상태를 발견할 수 있도록 게시하는 등록
-정보인 [Descriptor](../00-foundation/02-glossary.ko.md#descriptor) admission과 physical transport
-replacement는 같은 fence를 사용한다.
-완전한 descriptor 기대값이 있으면 generation이 0인 endpoint-only manual intent는
-그 값을 덮어쓰지 못한다. Runtime은 endpoint 단위로 현재
-physical connection의 종료를 요청하고, 그 endpoint의 close snapshot 또는 disconnect
-event를 받기 전에는 같은 endpoint에 새 connection을 만들지 않는다. 호출 성공은
-physical close의 관찰을 대신하지 않는다. Monitor event의 `connection_id`는 진단과
-correlation 전용이며 fence로 사용하지 않는다. 선택 route의 판정과 이전 connection record의 처리는
-[Transport liveness §5](05-transport-liveness.ko.md#5-ready와-장애-판정)가 정한다.
+정보인 [Descriptor](../00-foundation/02-glossary.ko.md#descriptor)의 RID, security identity와 lifecycle
+generation은 service admission의 expected 값이다. Descriptor intent와 admission은
+[Transport liveness §5](05-transport-liveness.ko.md#5-ready와-장애-판정)가 정하고,
+physical pipe 선택·교체는 [Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.ko.md#101-선택-route-관찰)이 소유한다.
 
 ### ClientServer 방향
 
@@ -621,9 +616,7 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
   길이와 CRC-32C가 Prepare가 선언한 값과 일치하고 decode가 완료된 경우에만 복원을 시작한다.
   어느 하나라도 어긋나면 명시적 실패이며, target은 부분 조립 복원을 시도하지 않고 투명하게
   재시도하지 않는다. 실패하면 target은 자신의 부분 chunk와 준비 자원을 정리한 뒤 대응하는
-  Prepare에 command 53 `relocationFailed`를 reply로 보낸다. source memory에서 capture한
-  payload를 복원하고 operation을 실패로 끝내는 조건은 이 명시적 실패 수신뿐이다 — 연결
-  단절 같은 불확정 결과는 source 관점에서 비가역이다.
+  Prepare에 command 53 `relocationFailed`를 reply로 보낸다. source memory에서 capture한 payload는 명시적 실패 전에는 즉시 복원할 수 있다. Relay-ready 뒤 cutover submit 결과나 source를 가리키는 이전 read만으로 source dispatch를 열지 않는다. [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 source `Preserve` fence가 확인되면 보관 작업을 source에서 재개하고, target commit이 확인되면 source로 되돌리지 않는다.
 - Command 31 `relocationData`는 capture 뒤 ingress hold의 application record만 같은 ordered
   connection으로 운반한다. Saved queue 작업이나 timer는 결코 담지 않으며 그것들은 오직 command
   52 chunk로만 이동한다. Saved queue prefix와 timer를 포함하지 않으며 record별 ACK나
@@ -632,11 +625,7 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
   넣는다. Body에는 그 boundary가 마감하는 정확한 relay batch를 설명하는 `boundaryRecordCount`와
   `boundaryChecksumCrc32c`가 추가된다. Target은 response를 보내지 않는다. Reserved ID 32, 35와
   41은 보내거나 accept하지 않는다.
-- Source가 이미 보낸 cutover가 target에 도달하지 못했음을(연결 단절) 확인하고 source instance가
-  여전히 살아 있으면, 새 connection을 열어 pending batch 전체와 새 cutover를 함께 재전송한다 —
-  꼬리만 보내지 않는다. Target은 부분적으로 staging된 batch를 이어붙이지 않고 통째로 교체한다.
-  재전송 창은 `RelocationCutoverWaitTimeout`(기본 1,000 ms, 설정 가능)과 같다. 이 창이 지나면
-  다음 항의 CAS fallback이 적용되며 Warning과 counter 증가 외의 추가 blind retry는 없다.
+- Same-endpoint transport 재연결은 [Transport liveness §6](05-transport-liveness.ko.md#6-connection-loss와-reconnect)에 따라 Core가 수행한다. Core가 선택한 route를 노출하면 Framework가 service handshake와 identity admission을 다시 수행한다. 그 뒤 source의 batch 재전송과 target의 부분 staging 교체는 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)를 따른다.
 - Source는 application state, relocation 시작 전에 실행하지 않은 queue와 timer 정보를 direct
   transfer용으로 저장한다. Native timer handle과 callback continuation은 encode하지 않는다.
 - Target은 temporary queue를 등록한 뒤 factory와 chunk 조립을 실행한다. 이 작업을 마칠 때까지
@@ -672,10 +661,8 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
 
 ### Target CAS와 남은 Store 역할
 
-- Chunk 조립과 temporary queue 등록을 마친 뒤 cutover를 받으면 target은 Location Store owner와
-  membership을 source에서 target으로 CAS한다. Restore 준비 reply를 보낸 뒤
-  `RelocationCutoverWaitTimeout`(기본 1,000 ms) 안에 cutover가 오지 않아도 `cutover_timeout`
-  Warning을 기록하고 같은 CAS를 시작한다. 이 CAS는 target만 실행한다.
+- Cutover control의 field는 위 항목이 정의한다. Target의 완전성 검증과 authority CAS 조건은
+  [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)를 따른다. `RelocationCutoverWaitTimeout`은 Warning 임계값일 뿐이다.
 - Source와 Session owner는 timeout, local mirror 또는 Session route 결과로 Location Store를
   변경하지 않는다.
 - Relocation Store는 더 이상 Actor·Spot relocation payload를 보관하지 않는다 — 위 direct chunk
@@ -683,13 +670,7 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
   사용한 적이 없다. Relocation Store에 남은 책임은 Instance Spot cold activation envelope(§8)와
   relocation 후 pending request terminal record뿐이며, 이 두 경로는 이 절과 무관하게 Store 자체의
   `relocation-manifest-v1`·`relocation-root-pointer` format과 CAS 규율을 그대로 사용한다.
-- CAS가 실패하면 target queue를 열지 않고 Restore operation이 가진 유효시간(Relocation Store
-  보존과 무관한, target의 absolute deadline)까지 같은 CAS를 다시 시도한다. 응답이 불확정이면 Store를
-  다시 읽어 target 자신이 owner인지 먼저 확인한다. 다른 valid owner나 generation이 확인되면 stale
-  relocation으로 즉시 종료한다.
-- 그 deadline까지 target owner를 확인하지 못하면 `location_update_failed` Error를 기록하고
-  target에 준비한 Actor 또는 Spot, temporary queue와 relocation state를 제거한다. Session route는
-  갱신하지 않는다. 늦은 Store 응답은 종료한 `RelocationId`를 다시 활성화하지 않는다.
+- Target의 CAS 오류와 불확정 응답은 [Location runtime §10](../05-location-relocation/01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)의 같은 `RelocationId` authority read로 수렴한다. Restore 만료 뒤 같은 target의 CAS 예외와 staging terminal은 [Location runtime §10](../05-location-relocation/01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다.
 - CAS가 성공하면 source로 되돌리지 않는다.
 
 ## 10. Relocation, Actor membership과 Ready
@@ -701,7 +682,7 @@ message를 구분하는 데 사용한다. Application에 노출하지 않는다.
 
 ### Authority와 target-only CAS
 
-CAS 전에는 source가 owner다. Target은 Restore를 끝내고 cutover 또는 1,000 ms fallback을 기다리는
+CAS 전에는 source가 owner다. Target은 Restore를 끝내고 [Relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 완전한 relay·cutover 확인을 기다리는
 준비된 instance일 뿐 application message를 실행하지 않는다. Target-only CAS가 성공한 시점부터
 target이 owner다. 같은 Actor나 Spot의 `ObjectGeneration`은 유지하고 owner generation만 증가시킨다.
 
@@ -728,9 +709,9 @@ Follow가 target에 전달한다.
 
 Source는 cutover `[send]` submit이 성공 또는 실패 terminal에 도달한 뒤 target 완료 응답을 기다리지
 않는다. Relay-ready reply가 accepted 상태가 되기 전 명시적인 target 실패만 abort하고 source queue와
-Session seal을 복원한다. 그 뒤 submit 실패는 source를 복원하지 않는다. Cutover가 늦거나 중복되면 target은
-`late_cutover` Warning만 기록하고 state를 다시 변경하지 않는다. 1,000 ms fallback으로 queue를
-연 경우에는 늦은 relay가 새 target direct message보다 먼저 실행된다고 보장하지 않는다.
+Session seal을 복원한다. 그 뒤 submit 결과만으로 source를 복원하지 않으며, source `Preserve` fence 성공은 [Relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)를 따른다. Cutover가 늦거나 중복되면 target은
+`late_cutover` Warning만 기록하고 state를 다시 변경하지 않는다. Target queue를 열기 전의 relay 완전성 조건은
+[Relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)가 소유한다.
 
 ### Session route
 
@@ -749,8 +730,7 @@ Session seal을 복원한다. 그 뒤 submit 실패는 source를 복원하지 �
 - Timeout 뒤 늦은 command 44나 동일한 duplicate는 Warning만 남기며 route, seal 또는 authority를
   다시 변경하지 않는다.
 - Target이 relay-ready reply가 accepted 상태가 되기 전에 명시적으로 실패하면 matching seal만
-  해제하고 보관한 Session message를 source route로 제출한다. 그 뒤 failure와 cutover submit 실패는
-  source route를 다시 열지 않는다.
+  해제하고 보관한 Session message를 source route로 제출한다. 그 뒤 source route 재개는 [Session·Actor binding §8.1](../04-session/02-session-actor-binding.ko.md#81-seal-held-message와-route-전환)의 source `Preserve` fence 결과를 따른다.
 
 Transport, target과 Session owner가 수행하는 검증과 그 경계는
 [Session·Actor binding §8.1](../04-session/02-session-actor-binding.ko.md#81-seal-held-message와-route-전환)을 따른다.

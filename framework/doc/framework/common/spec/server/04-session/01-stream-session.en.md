@@ -204,13 +204,10 @@ information loss.
 
 ### 4.1 Transport Operation Teardown Boundary
 
-When a physical stream starts closing, the framework stops new packet
-admission and completes or cancels in-flight read and write operations on
-their owning transport execution context. That completion or cancellation
-must be observed before destroying the TCP, TLS, or WebSocket socket, stream,
-or session resources. A late-arriving transport callback doesn't reference a
-resource that has already been cleaned up, and doesn't complete one operation
-twice or start the next operation twice.
+When physical stream close begins, the framework seals new packet admission and stops packet
+pulls. [Core socket `zlink_close`](../../../../../../../core/doc/spec/core/socket/README.en.md#zlink_close)
+owns completion of accepted native read/write operations and resource cleanup. The framework
+observes Core's close result before cleaning up Session callbacks and managed resources.
 
 ## 5. Reply Correlation
 

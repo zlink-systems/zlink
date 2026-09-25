@@ -88,8 +88,9 @@ Framework는 orderly close와 transport 오류를 즉시 반영하고, 응답이
 connection을 liveness deadline 안에 `not-ready`로 바꾼다. 한 peer의 장애는 다른 ready peer와
 local owner의 처리를 중단시키거나 host 전체를 `Error`로 바꾸지 않는다.
 
-Framework는 현재 configuration 또는 discovery descriptor를 사용해 같은 논리 peer와
-connection을 다시 설정한다. 이때 service handshake와 identity 확인을 다시 수행한다. 이전
+같은 endpoint의 transport reconnect는 [Core socket `zlink_connect`](../../../../../../../core/doc/spec/core/socket/README.ko.md#zlink_connect)가
+소유한다. Framework는 현재 configuration·discovery descriptor intent를 유지하고 Core가 선택
+route 준비를 알리면 service handshake와 identity 확인을 다시 수행한다. 이전
 connection ID, reply route, Session binding과 ready 상태는 재사용하지 않는다. Connection
 loss 전에 transport가 operation을 수락했는지 알 수 없으면 그 operation은 다른 peer에
 제출하지 않는다. 자세한 시간과 상태 전이는
@@ -188,14 +189,14 @@ source runtime, 선택한 target runtime, Location Store와 Relocation Store가 
 | 실패 시점 | Framework의 처리 |
 |---|---|
 | Relay-ready reply가 accepted 상태가 되기 전 명시적 실패 | Target instance와 temporary queue를 폐기하고 source owner·membership과 queue를 유지한다. 다른 target을 자동 선택하지 않는다. |
-| Relay-ready reply가 accepted 상태가 된 뒤, owner 변경 commit 전 | Cutover submit 결과와 관계없이 source를 복원하지 않는다. Target은 cutover 수신 또는 1,000ms fallback으로 owner 변경을 계속한다. |
+| Relay-ready reply accepted 뒤, owner 변경 commit 전 | Cutover submit 결과만으로 source를 복원하지 않는다. [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 완전성 검증과 `Preserve` fence가 authority와 source 재개를 결정한다. |
 | Store 변경 결과를 받지 못함 | 성공이나 실패를 추측하지 않고 같은 authority record를 다시 읽어 실제 owner를 확인한다. |
 | Owner 변경 commit 뒤, 같은 target process가 실행 중임 | Source로 되돌리지 않는다. 같은 target에서 lifecycle callback이나 dispatch 전환을 deadline 안에 다시 시도할 수 있다. |
 | Owner 변경 commit 뒤 target process가 종료됨 | Location Store의 target owner는 유지하지만 object는 `Unavailable` 상태가 된다. 다른 runtime이 relocation을 이어받지 않는다. |
 | Source process 또는 target process가 operation 중 종료됨 | 다른 target 선택, process 재시작 뒤 relocation 재개와 source rollback을 수행하지 않는다. |
 
-Relay-ready reply가 accepted 상태가 되기 전 source를 유지하는 것은 failover가 아니라 비가역
-경계 전 operation의 취소다. 그 뒤에는 owner commit 전이라도 source를 복원하지 않는다. Commit
+Relay-ready 전 명시적 취소와 그 뒤 source `Preserve` fence 성공은 모두 확인된 source
+authority에서 작업을 이어간다. Fence 성공 뒤의 source 재개는 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)가 정한다. Commit
 뒤 같은 target에서 계속하는 것도 새로운 target 선택이 아니다. Process 종료 뒤 object
 failover는 현재 계약에 포함되지 않는다. 자세한 단계와 결과는
 [Host relocation 전체 흐름 §1.1](05-host-relocation-flow.ko.md#11-장애-처리-범위)과
@@ -298,8 +299,7 @@ Spot 하나의 global ID를 지정해 해당 Spot에 send 또는 request를 전�
 
 **Host relocation과 Session 장애**
 
-- Relay-ready reply가 accepted 상태가 되기 전 명시적 failure만 source를 유지하고, 그 뒤
-  failure는 cutover submit 결과와 관계없이 source로 되돌리지 않는다.
+- Relay-ready 뒤 cutover submit 결과나 source를 가리키는 이전 read만으로 source dispatch를 열지 않는다. [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 source `Preserve` fence가 확인되면 source에서 보관 작업을 재개하고, target commit이 확인되면 source로 되돌리지 않는다.
 - Source 또는 target process 종료 뒤 다른 runtime이 relocation을 이어받거나 다른 target을
   자동 선택하지 않는다.
 - Session owner process 종료 뒤 Session과 binding을 다른 process에서 복원하지 않는다.

@@ -151,8 +151,8 @@ Millisecond 변환 불가, 0, 음수와 무한대는 socket bind 전에 configur
 256 KiB이며 transport가 협상한 frame 한도를 넘게 설정하면 socket bind 전에 startup configuration
 error다. In-flight budget은 peer 연결당 동시 전송 chunk byte 합계 상한으로 기본값 16 MiB, `0`은
 미적용이다. Node in-flight budget은 같은 규칙의 node 전체 합계이고 기본값 `0`은 미적용이다.
-Cutover wait timeout은 target의 cutover 대기이자 source의 재전송용 boundary batch 사본 유지 시간으로
-기본값 1초다. 네 값 모두 startup-only이며 음수는 socket bind 전에 configuration error다.
+Cutover wait timeout은 cutover 대기 Warning 임계값으로 기본값 1초다. Source 사본 유지와
+authority CAS는 [공통 relocation §4.4](../../../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)를 따른다. 네 값 모두 startup-only이며 음수는 socket bind 전에 configuration error다.
 
 Kotlin은 Java `ZLinkStreamNodeBuilder.configureSocket()`와
 `ZLinkStreamSocketConfig.setMaxMessageSize(...)`를 그대로 사용한다. 기본값은 `64 KiB`이며,

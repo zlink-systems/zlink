@@ -179,8 +179,8 @@ owned by [ClientServer Channel](../02-channel-transport/03-client-server-channel
 
 ## 7. What the Framework Hides
 
-The Framework internally manages transport address selection, peer
-reconnect, multipart framing, packet codec, reply correlation, and the
+The Framework internally manages transport address intent, peer service
+handshake, multipart framing, packet codec, reply correlation, and the
 backpressure queue. An application handler uses a typed payload and
 context, and does not configure raw socket wiring itself.
 

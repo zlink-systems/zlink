@@ -97,9 +97,10 @@ non-responding half-open connection to `not-ready` within the liveness deadline.
 failure doesn't stop processing by another ready peer or local owner, or turn the whole host
 `Error`.
 
-The Framework re-establishes a connection to the same logical peer using the current
-configuration or discovery descriptor. It redoes the service handshake and identity verification
-at this point. A previous connection ID, reply route, Session binding, and ready state aren't
+[Core socket `zlink_connect`](../../../../../../../core/doc/spec/core/socket/README.en.md#zlink_connect)
+owns transport reconnection to the same endpoint. The framework retains the current
+configuration or discovery descriptor intent and repeats the service handshake and identity
+verification after Core reports a selected route ready. A previous connection ID, reply route, Session binding, and ready state aren't
 reused. If it is unknown whether transport accepted an operation before the connection loss, that
 operation isn't submitted to a different peer. The detailed timing and state transition are
 defined by
@@ -204,15 +205,15 @@ operation finishes.
 | Failure timing | Framework handling |
 |---|---|
 | Explicit failure before relay-ready reply becomes accepted | Discards the target instance and temporary queue, keeps source owner/membership and queue. Doesn't automatically select a different target. |
-| After relay-ready reply becomes accepted but before the owner-change commit | Doesn't restore source regardless of cutover-submit result. Target continues the owner change through cutover receipt or the 1,000ms fallback. |
+| After relay-ready acceptance but before owner commit | A cutover-submit result alone does not restore source. Complete-relay verification and the `Preserve` fence under [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover) decide authority and source resumption. |
 | No Store change result received | Doesn't guess success or failure — re-reads the same authority record to confirm the actual owner. |
 | After the owner-change commit, same target process running | Doesn't roll back to the source. Can retry the lifecycle callback or dispatch switchover on the same target within the deadline. |
 | Target process terminated after the owner-change commit | The Location Store keeps the target owner, but the object becomes `Unavailable`. A different runtime doesn't take over the relocation. |
 | Source or target process terminated during the operation | Doesn't select a different target, resume relocation after a process restart, or roll back to the source. |
 
-Keeping the source before relay-ready reply becomes accepted isn't failover — it's canceling an
-operation before its irreversible boundary. After that boundary, the source isn't restored even before owner
-commit. Continuing on the same target after commit also isn't a new target selection. Object
+An explicit cancellation before relay-ready and a later successful source `Preserve`
+fence both continue work under confirmed source authority. Source resumption after the
+fence follows [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). Continuing on the same target after commit also isn't a new target selection. Object
 failover after process termination isn't part of the current contract. The detailed stages and
 result are defined by
 [Complete Host Relocation Flow §1.1](05-host-relocation-flow.en.md#11-failure-handling-scope) and
@@ -325,8 +326,7 @@ Delivering a send or request to one Spot by specifying its global ID is called
 
 **Host relocation and Session failure**
 
-- Only an explicit failure before relay-ready reply becomes accepted keeps the source; a later
-  failure doesn't roll back to source regardless of cutover-submit result.
+- After relay-ready, neither a cutover-submit result nor an earlier read naming source reopens source dispatch. A confirmed source `Preserve` fence under [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover) returns retained work to source dispatch; confirmed target commit does not.
 - After a source or target process terminates, a different runtime doesn't take over the
   relocation or automatically select a different target.
 - After a Session owner process terminates, the Session and binding aren't restored on a

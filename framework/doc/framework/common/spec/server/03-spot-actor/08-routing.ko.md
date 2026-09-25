@@ -145,7 +145,7 @@ Local owner와 remote owner에는 같은 handler, metadata와 completion 계약�
 |---|---|---|
 | `ReadyRoute` | route와 authority·owner lease fence | Positive route cache에 저장하고 route admission으로 전달한다. |
 | `Missing` | authority record가 없다는 사실 | creation coordinator로 전달한다. |
-| `Unavailable` | authority는 남아 있지만 current owner를 사용할 수 없다는 사실 | terminal completion mapper로 전달한다. |
+| `Unavailable` | authority는 남아 있지만 Ready route가 없다는 사실과 그 authority 상태(`Creating`·`Closing` 등) | Instance intent가 없는 call은 [Spot 주소 메시징 §9](06-spot-address-messaging.ko.md#9-실패와-관측)의 terminal mapper로 전달한다. Instance-intent activation은 [Object lifecycle §3·§5](09-object-lifecycle.ko.md#3-없는-객체를-언제-만드는가)의 `Creating` 대기와 idle-cleanup route 갱신을 따른다. |
 | `StoreFailure` | authority 유무를 판정하지 못했다는 사실 | Store retry·reconciliation으로 전달한다. |
 
 Positive route cache에는 `ReadyRoute`만 저장하고, creation coordinator에는 `Missing`만
@@ -170,7 +170,7 @@ intent를 등록한다. 이후 `ZLinkFrameworkRuntime.connectManualObjectPeers`,
 descriptor를 찾으면 `replacePeerConnection(endpoint, rid, lifecycleGeneration,
 securityIdentity)`를 호출한다.
 
-교체 경로는 이전 intent의 transport liveness close를 확인한 뒤에만 새 intent를 설치한다.
+Intent 교체의 service admission은 [Transport liveness §5](../02-channel-transport/05-transport-liveness.ko.md#5-ready와-장애-판정)를 따른다.
 `ZLinkJavaRawMeshNode`는 intent, 실제 peer routing ID와 close 상태를 함께 보관하여 admission
 fence와 liveness event를 처리한다. Descriptor를 찾지 못한 endpoint-only intent는 placement
 근거로 사용하지 않는다. Caller가 generation이나 security identity를 직접 설정하여 이 절차를
@@ -431,7 +431,7 @@ Session owner에 새 route를 전달한다.
 3. Capture 뒤 source로 들어온 Actor message만 ingress hold에 보관했다가 같은 ordered connection으로
    boundary 전 relay 구간에 전달한다. Saved queue와 timer는 relay하지 않는다. Source는 현재 relay
    prefix 뒤에 cutover를 one-way로 보낸다.
-4. Target은 cutover를 받거나 relay 준비 reply 뒤 1,000ms가 지나면 owner와 membership을 target-only
+4. Target은 [Relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 완전한 relay·cutover 확인 뒤 owner와 membership을 target-only
    Location Store CAS로 commit한다.
 5. CAS 뒤 saved work, boundary 전 relay와 나머지 temporary work를 실제 Actor queue에 순서대로
    넣고 regular route로 전환하되 dispatch는 닫아 둔다.
@@ -458,9 +458,7 @@ Relay-ready reply가 accepted 상태가 되기 전 명시적인 relocation failu
 다시 확인하지 않고 target temporary queue를 폐기한 뒤 source Actor queue와 admission을 복원한다.
 Bound Session seal이 있으면 source
 coordinator가 command 44 abort를 one-way로 보내고, Session owner는 matching seal만 해제한
-뒤 held message를 source route에 제출한다. Relay-ready 뒤에는 cutover submit 결과와 관계없이 source route나 snapshot으로
-되돌리지 않는다. Source Message
-Follow route가 이전 route의 message를 target에 전달한다. Target process가 종료되면
+뒤 held message를 source route에 제출한다. Relay-ready 뒤 cutover submit 결과나 source를 가리키는 이전 read만으로 source route와 snapshot을 되돌리지 않는다. [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 source `Preserve` fence가 확인되면 보관 작업을 source route에서 재개하고, target commit이 확인되면 source로 되돌리지 않는다. Target commit 뒤 이전 route의 message는 source Message Follow route로 전달한다. Target process가 종료되면
 다른 runtime이 route 갱신을 자동으로 이어받지 않는다.
 
 ## 4. Request의 reply가 돌아가는 방법

@@ -313,7 +313,7 @@ Spot.
 
 ```ts
 await context.leaveActor(actor);        // User Spot: only removes the member Actor
-const closed = await context.close();   // User/Instance Spot: closes this Spot itself
+context.close();                        // User/Instance Spot: registers a close request
 await entryContext.destroyActor(actor); // Entry Spot: destroys the Actor entirely
 ```
 
@@ -321,9 +321,8 @@ await entryContext.destroyActor(actor); // Entry Spot: destroys the Actor entire
 (`leaveActor`/`destroyActor`) and an optional `signal`.
 
 **Completion result.** `leaveActor` (`ZLinkSpotContext` only) only releases member Actor
-membership and does not destroy the Actor itself. `close` (`ZLinkSpotContext`/
-`ZLinkInstanceSpotContext`) uses the same completion kinds as the manager's `close(spotRef)` (the
-earlier entry in the spot-instance category), but targets this Spot itself. `destroyActor`
+membership and does not destroy the Actor itself. Context `close()` registers a no-result request ([common Spot messaging §7](../../common/spec/server/03-spot-actor/06-spot-address-messaging.en.md#7-close-and-the-generation-boundary)).
+Only manager `close(spotRef)` returns a result. `destroyActor`
 (`ZLinkEntrySpotContext` only) destroys the Actor entirely — unlike `leaveActor`, it removes the
 Actor itself rather than releasing membership.
 

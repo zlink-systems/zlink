@@ -82,7 +82,8 @@ message to a different target.
 produced, it completes exactly once with one of the following `ErrorKind`s.
 
 - `NotFound` if the target or handler doesn't exist.
-- `Unavailable` if the route, connection, or current owner is unavailable.
+- `Unavailable` if the route, connection, or current owner is unavailable. It also means
+  the selected receiver could not admit this operation after losing first-message `Reserve`.
 - `DeadlineExceeded` if the reply isn't received within the deadline.
 - `ProtocolError` if the wire, payload, or reply type can't be processed.
 - `ShuttingDown` if the runtime is shutting down.
