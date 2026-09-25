@@ -272,7 +272,9 @@ struct socket_monitor_runtime_t
     void *socket;
     int64_t events;
     std::atomic<int64_t> events_atomic;
-    bool lossy;
+    // Published by monitor configuration; the worker and queue owner read it
+    // without holding monitor.sync.
+    std::atomic<bool> lossy;
     // Serializes public monitor replacement without extending the event-state
     // lock across context/socket creation or async mailbox ownership changes.
     recursive_mutex_t operation_sync;
