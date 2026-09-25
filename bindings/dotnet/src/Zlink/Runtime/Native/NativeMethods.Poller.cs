@@ -93,9 +93,14 @@ internal static partial class NativeMethods
     internal static extern int zlink_proxy(IntPtr frontend, IntPtr backend,
         IntPtr capture);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl,
-        SetLastError = true)]
-    internal static extern int zlink_has(
+    // zlink_has returns a native C++ `bool` (one byte; see core/include/zlink/core/api.h
+    // and core/doc/spec/core/07-utilities.{en,ko}.md). It never fails and never sets
+    // errno, so the return must be marshaled as U1 (reads only the byte the callee
+    // guarantees), not the platform `int` — widening to `int` reads whatever garbage
+    // is left in the rest of the register and can surface as a spurious negative rc.
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.U1)]
+    internal static extern bool zlink_has(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string capability);
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]

@@ -262,7 +262,7 @@ public final class Native {
     private static final MethodHandle MH_STRERROR = downcall("zlink_strerror",
             FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
     private static final MethodHandle MH_HAS = downcall("zlink_has",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
+            FunctionDescriptor.of(ValueLayout.JAVA_BOOLEAN, ValueLayout.ADDRESS));
     private static final MethodHandle MH_SLEEP = downcall("zlink_sleep",
             FunctionDescriptor.ofVoid(ValueLayout.JAVA_INT));
     private static final MethodHandle MH_SET_TLS_SRV = downcall(
@@ -1135,9 +1135,9 @@ public final class Native {
         }
     }
 
-    public static int has(MemorySegment capability) {
+    public static boolean has(MemorySegment capability) {
         try {
-            return (int) MH_HAS.invokeExact(capability);
+            return (boolean) MH_HAS.invokeExact(capability);
         } catch (Throwable t) {
             throw new RuntimeException("zlink_has failed", t);
         }

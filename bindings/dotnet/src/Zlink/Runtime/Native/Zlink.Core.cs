@@ -27,11 +27,10 @@ public static partial class Zlink
         if (capability == null)
             throw new ArgumentNullException(nameof(capability));
 
-        var rc = NativeMethods.zlink_has(capability);
-        if (rc < 0)
-            throw ZlinkException.CreateConfigException(
-                NativeMethods.GetLastPInvokeError());
-        return rc != 0;
+        // zlink_has cannot fail (core/doc/spec/core/07-utilities.en.md §5): it
+        // returns a plain predicate, never an error, so there is no rc to check
+        // and no errno to read.
+        return NativeMethods.zlink_has(capability);
     }
 
     private static void ProxyCore(IZlinkSocket frontend, IZlinkSocket backend,
