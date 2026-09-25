@@ -309,7 +309,7 @@ Terminal call은 별도 check와 send로 나누지 않고 다음 순서로 resol
 
 1. global Spot ID의 current authority를 조회한다.
 2. Ready authority가 있으면 저장된 kind와 stable type을 사용해 current owner로 전송한다.
-3. authority가 Missing이고 Instance intent가 없으면 `NotFound`로 끝낸다.
+3. authority가 Missing이고 Instance intent가 없으면 §9 표의 결과로 끝낸다.
 4. authority가 Missing이고 Instance intent가 있으면 eligible Object Mesh를 선택한다. 이
    단계부터 후보 계산에 사용하는 descriptor는 owner lease가 살아 있는 것으로 한정한다 —
    판정 기준은
@@ -506,10 +506,15 @@ Close 절차는 다음 순서로 진행한다.
 3. Handler scope, timer와 local activation resource를 한 번 정리한다.
 4. 같은 owner·generation fence로 authority를 해제한다.
 
+1단계에서 `Closing` 전이가 확정되지 않으면 authority는 바뀌지 않고 Close는 아래 결과로 끝난다.
+`Closing` 전이가 확정된 뒤에는 authority를 `Ready`로 되돌리지 않는다. 2–4단계 중 하나가 실패하면
+Close는 caller에게 그 실패를 반환하고, target owner runtime이 실패한 단계부터 같은 owner·generation으로
+남은 단계를 이어서 처리한다. 끝난 단계는 반복하지 않는다.
+
 같은 incarnation이 이미 없으면 idempotent `false`, 같은 Spot ID의 다른 generation이 있으면
 `InvalidOperation`, 이동 seal 중이면 `Unavailable`로 끝난다. Framework는 current ref를 다시
 찾아 새 incarnation을 닫지 않는다. Seal 전에 accepted된 operation은 기존 generation에서 완료할
-수 있지만 seal 뒤 operation은 closing 또는 stale 결과로 끝난다.
+수 있다. Seal 뒤에 도착한 신규 admission의 결과는 §9 표가 정한다.
 
 **User Spot에 current Actor membership이 하나라도 있으면 Close는 `false`로 끝나며 admission과
 authority를 유지한다.** Framework는 member Actor를 숨겨서 이동하거나 destroy하지 않는다.
@@ -566,10 +571,11 @@ source ingress hold는 commit된 Message Follow route로 relay한다.
 | 조건 | 결과 |
 |---|---|
 | Object role Mesh 후보가 없거나 여러 개인 create와 cold activation | §3·§4의 typed error(`NotConfigured`·`InvalidOperation`·`NotFound`)로 끝난다. |
-| Ready authority가 없다 | `NotFound`다. |
+| Instance intent가 없는 Spot direct send·request의 target authority가 `Missing` 또는 `Creating`이다 | `NotFound`다. |
 | `ActorRef`·`SpotRef`로 지정한 control의 generation이 current generation과 다르다(direct message는 [08-routing §2.6](08-routing.ko.md#26-objectgeneration을-어디에-사용하고-어디에-사용하지-않는가)대로 generation을 비교하지 않는다) | `InvalidOperation`이다. |
 | [owner fence](../00-foundation/02-glossary.ko.md#owner-fence)가 다르다 | `Unavailable`이다. |
-| `Closing` 또는 `Draining` owner에 신규 admission을 요청했다 | 거부한다. |
+| Target authority가 `Closing`인 owner에 신규 admission을 요청했다 | `Rejected`다. |
+| Runtime이 `Draining`이라 신규 admission을 받지 않는다(target authority 상태와 관계없이) | `ShuttingDown`이다. |
 | Relocation seal 이후 source route로 ingress가 도착했다 | 거부하지 않고 relocation hold에 보관한다. |
 | `Relocating`이지만 아직 seal하지 않은 unit에 message가 도착했다 | 기존 owner admission을 유지해 수락한다. |
 | Request가 실패했다 | 다른 Spot ID, MeshName이나 owner로 우회하지 않는다. |

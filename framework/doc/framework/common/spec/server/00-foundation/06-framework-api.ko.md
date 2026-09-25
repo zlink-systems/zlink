@@ -888,7 +888,7 @@ gate·Actor claim의 수명은 [같은 문서 §3](../01-execution/02-handler-tu
 
 [Spot direct](02-glossary.ko.md#spot-direct) 시작 method는 global Spot ID와 payload를 받고 Spot 전용 send/request call을 반환한다. 이 call은
 metadata와 terminal 외에 [Instance intent](02-glossary.ko.md#instance-intent), optional stable type과 initial Mesh를
-설정할 수 있다. Instance intent가 없는 call은 existing-only이며 Missing에서 `NotFound`다. Instance
+설정할 수 있다. Instance intent가 없는 call은 existing-only이며 authority 상태별 결과는 [Spot 주소 메시징 §9](../03-spot-actor/06-spot-address-messaging.ko.md#9-실패와-관측)가 정한다. Instance
 intent를 가진 call은 Location resolve와 [cold activation](02-glossary.ko.md#cold-activation) claim을 분리하지 않고 하나의 terminal operation으로
 수행한다. Existing authority가 있으면 저장된 kind·type과 current Mesh를 사용하며 cold activation option으로
 현재 owner를 제한하거나 이동시키지 않는다.
@@ -947,8 +947,8 @@ Global object message의 missing·route·incarnation 불일치 결과는 다음�
 |---|---|---|---|---|
 | Actor one-way | `NotFound` | `Unavailable` | 해당 없음 | 해당 없음 |
 | Actor request | `NotFound` | `Unavailable` | 해당 없음 | 해당 없음 |
-| Spot one-way | `NotFound` | `Unavailable` | 해당 없음 | 해당 없음 |
-| Spot request | `NotFound` | `Unavailable` | 해당 없음 | 해당 없음 |
+| Spot one-way | [Spot 주소 메시징 §9](../03-spot-actor/06-spot-address-messaging.ko.md#9-실패와-관측) | `Unavailable` | 해당 없음 | 해당 없음 |
+| Spot request | [Spot 주소 메시징 §9](../03-spot-actor/06-spot-address-messaging.ko.md#9-실패와-관측) | `Unavailable` | 해당 없음 | 해당 없음 |
 | ActorRef로 직접 지정한 session bind | `NotFound` | `Unavailable` | `InvalidOperation` | `Unavailable` |
 | ActorRef로 직접 지정한 destroy | idempotent `false` | `Unavailable` | `InvalidOperation` | `Unavailable` |
 | SpotRef로 직접 지정한 close | idempotent `false` | `Unavailable` | `InvalidOperation` | `Unavailable` |
