@@ -29,7 +29,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
     private readonly Func<ZLinkHostCapacityStatus?> _capacitySnapshot;
     private readonly Func<bool> _safeToShutdownSnapshot;
     private readonly Action? _resetCapacityMetrics;
-    private readonly Func<ZLinkListenerKind, string, ZLinkListenerStatus>? _listenerStatus;
+    private readonly Func<ZLinkListenerKind, string, ZLinkListenerStatus> _listenerStatus;
     private readonly ILogger<ZLinkFrameworkMaintenanceRuntime>? _logger;
     private readonly ZLinkStateLane _lane = new();
     private readonly List<ZLinkObservationQueue<ZLinkFrameworkRuntimeStatus>> _observers = [];
@@ -56,14 +56,14 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
             ValueTask<ZLinkFrameworkRelocationReason?>
         > relocationPreflight,
         Func<CancellationToken, ValueTask<bool>> publishRelocating,
+        Func<ZLinkListenerKind, string, ZLinkListenerStatus> listenerStatus,
         long sourceApplicationVersion = 0,
         Func<bool>? acceptingWorkSnapshot = null,
         Func<ZLinkHostCapacityStatus?>? capacitySnapshot = null,
         Action? resetCapacityMetrics = null,
         ILogger<ZLinkFrameworkMaintenanceRuntime>? logger = null,
         Func<bool>? safeToShutdownSnapshot = null,
-        Action<Action>? subscribeSafeToShutdownChanged = null,
-        Func<ZLinkListenerKind, string, ZLinkListenerStatus>? listenerStatus = null
+        Action<Action>? subscribeSafeToShutdownChanged = null
     )
     {
         _lifecycle = lifecycle;
@@ -103,13 +103,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
     }
 
     public ZLinkListenerStatus GetListenerStatus(ZLinkListenerKind kind, string name) =>
-        (
-            _listenerStatus
-            ?? throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotConfigured,
-                "Listener status is not configured."
-            )
-        )(kind, name);
+        _listenerStatus(kind, name);
 
     public ZLinkFrameworkRuntimeStatus Status
     {
