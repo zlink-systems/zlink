@@ -158,6 +158,14 @@ socket before removing it from the poller. A closed socket source reports
 `POLLERR` once, and its registration and lifetime pin remain in place until it is
 removed.
 
+After `zlink_ctx_shutdown`, every wait of a poller that has an unclosed socket source (including a monitor
+handle) of that context, including a wait already in progress, ends without waiting for its timeout and
+without events with [`ZLINK_CONFIG_INTERNAL_ERROR` (`ETERM`)](03-errors.en.md#7-configuration-result). Later
+waits end the same way until that source is removed or closed. Unread completions of that socket follow
+[Completion pull and ownership](socket/README.en.md#completion-pull-and-ownership). A poller does not belong
+to a context and fd and timer sources are not affected by shutdown, so the wait of a poller with no such
+socket source continues until an event or its timeout.
+
 The caller serializes add, modify, remove, and wait on one poller. Different
 pollers can be used concurrently. An event array returned by wait is caller-owned
 and contains no pointer to Core storage.
