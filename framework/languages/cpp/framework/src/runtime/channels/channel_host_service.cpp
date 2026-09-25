@@ -14,6 +14,7 @@
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/fanout/fanout_subscription.hpp"
+#include "runtime/transport/listener_identity.hpp"
 
 #include <zlink/Contracts/Eventing/poller.hpp>
 #include <zlink/Contracts/Core/context.hpp>
@@ -55,7 +56,8 @@ class channel_host_service_t::server_loop_t
                    const handler_registry_t &handlers,
                    std::atomic_bool &stop,
                    std::shared_ptr<zlink::context_t> core_context,
-                   std::shared_ptr<application_job_queue_t> application_jobs) :
+                   std::shared_ptr<application_job_queue_t> application_jobs,
+                   std::shared_ptr<listener_status_registry_t> listener_statuses) :
         _runtime (detail::channel_runtime_t::from (bus)),
         _channel_name (std::move (channel_name)),
         _endpoints (std::move (endpoints)),
@@ -65,6 +67,7 @@ class channel_host_service_t::server_loop_t
         _handlers (&handlers),
         _stop (&stop),
         _application_jobs (std::move (application_jobs)),
+        _listener_statuses (std::move (listener_statuses)),
         _context (std::move (core_context)),
         _router (std::make_unique<zlink::router_socket_t> (*_context))
     {
@@ -89,6 +92,11 @@ class channel_host_service_t::server_loop_t
           0, max_handler_workers, std::chrono::milliseconds (100), "zlink-channel-server");
         _poller.add (*_router, zlink::poll_event_flag_t::pollin, 1);
         _poller.add (_monitor, zlink::poll_event_flag_t::pollin, 2);
+        if (_listener_statuses)
+            _listener_statuses->update (
+              listener_kind_t::client_server, _channel_name,
+              transport::advertised_tcp_endpoint (_router->options ().last_endpoint (),
+                                                  std::nullopt, "ClientServer"));
     }
 
     ~server_loop_t () { stop (); }
@@ -176,6 +184,8 @@ class channel_host_service_t::server_loop_t
         if (_router) {
             _router.reset ();
         }
+        if (_listener_statuses)
+            _listener_statuses->remove (listener_kind_t::client_server, _channel_name);
     }
 
   private:
@@ -358,6 +368,7 @@ class channel_host_service_t::server_loop_t
     const handler_registry_t *_handlers;
     std::atomic_bool *_stop;
     std::shared_ptr<application_job_queue_t> _application_jobs;
+    std::shared_ptr<listener_status_registry_t> _listener_statuses;
     std::shared_ptr<zlink::context_t> _context;
     std::unique_ptr<zlink::router_socket_t> _router;
     zlink::received_t _received;
@@ -544,7 +555,8 @@ channel_host_service_t::channel_host_service_t (
   std::vector<channel_snapshot_t> channels,
   handler_registry_t &handlers,
   serializer_registry_t &serializers,
-  std::shared_ptr<application_job_queue_t> application_jobs) :
+  std::shared_ptr<application_job_queue_t> application_jobs,
+  std::shared_ptr<listener_status_registry_t> listener_statuses) :
     _bus (std::move (bus)),
     _channels (std::move (channels)),
     _handlers (&handlers),
@@ -555,7 +567,8 @@ channel_host_service_t::channel_host_service_t (
         ? std::move (application_jobs)
         : std::make_shared<application_job_queue_t> (application_job_queue_configuration_t{
             application_job_queue_profile_t::balanced, std::nullopt, 1,
-            static_cast<std::uint32_t> (std::numeric_limits<std::int32_t>::max ())}))
+            static_cast<std::uint32_t> (std::numeric_limits<std::int32_t>::max ())})),
+    _listener_statuses (std::move (listener_statuses))
 {
 }
 
@@ -576,7 +589,7 @@ task_t<void> channel_host_service_t::start (service_provider_t &services)
         auto loop = std::make_unique<server_loop_t> (
           _bus, channel.name, channel.server.bind_endpoints, channel.server.routing_id,
           channel.server, services, *_serializers, *_handlers, _stop, _core_context,
-          _application_jobs);
+          _application_jobs, _listener_statuses);
         auto *raw = loop.get ();
         _loops.push_back (std::move (loop));
         _threads.emplace_back ([raw] { raw->run (); });

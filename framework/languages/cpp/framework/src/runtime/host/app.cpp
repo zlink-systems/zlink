@@ -2629,7 +2629,7 @@ void app_t::_apply_zlink_framework ()
     if (detail::has_inbound_channel (channel_snapshot)) {
         add_hosted_service (std::make_unique<runtime::channel_host_service_t> (
           _state->zlink.message_bus (), channel_snapshot, _state->handlers, _state->serializers,
-          _state->application_job_queue));
+          _state->application_job_queue, _state->listener_statuses));
     }
     if (!stream_snapshot.empty ()) {
         detail::configure_stream_dispatch_executor ();
