@@ -47,9 +47,11 @@ import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkFanoutRuntime;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
+import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
@@ -78,6 +80,7 @@ import systems.zlink.framework.testkit.FakeZLinkBackendAdapterFactory;
 import systems.zlink.httpclient.ZLinkFrameworkHttpExecutionTurn;
 import systems.zlink.httpclient.ZLinkHttpExecutionTurn;
 
+import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
@@ -578,12 +581,8 @@ final class ZLinkFrameworkAutoConfigurationTest {
 
                 ZLinkFrameworkRuntime source = sourceContext.getBean(ZLinkFrameworkRuntime.class);
                 ZLinkFrameworkRuntime target = context.getBean(ZLinkFrameworkRuntime.class);
-                sourceConnections
-                        .get()
-                        .connect(ZLinkLegacyTopology.routeBoundEndpoint(target, "route"));
-                targetConnections
-                        .get()
-                        .connect(ZLinkLegacyTopology.routeBoundEndpoint(source, "route"));
+                sourceConnections.get().connect(legacyRouteBoundEndpoint(target, "route"));
+                targetConnections.get().connect(legacyRouteBoundEndpoint(source, "route"));
 
                 String reply =
                         sourceContext
@@ -1643,5 +1642,23 @@ final class ZLinkFrameworkAutoConfigurationTest {
                 return Optional.empty();
             }
         };
+    }
+
+    /**
+     * Reads the endpoint a legacy route channel ROUTER actually bound, straight from the router
+     * that owns it. Legacy route channels are not public listeners, so listenerStatus does not
+     * report them.
+     */
+    private static String legacyRouteBoundEndpoint(
+            ZLinkFrameworkRuntime runtime, String channelName) {
+        try {
+            Method router =
+                    ZLinkChannelRuntime.class.getDeclaredMethod("requireRouteRouter", String.class);
+            router.setAccessible(true);
+            return ((ZLinkBackendRouterSocket) router.invoke(runtime.client(), channelName))
+                    .lastEndpoint();
+        } catch (ReflectiveOperationException error) {
+            throw new IllegalStateException(error);
+        }
     }
 }

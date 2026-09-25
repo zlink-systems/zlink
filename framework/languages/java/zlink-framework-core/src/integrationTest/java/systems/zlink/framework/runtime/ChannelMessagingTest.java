@@ -1238,9 +1238,9 @@ final class ChannelMessagingTest {
                 ZLinkFrameworkRuntime target =
                         RuntimeTestSupport.startFramework(
                                 targetOptions, new ZLinkJavaBackendAdapterFactory())) {
-            sourceConnections.connect(ZLinkLegacyTopology.routeBoundEndpoint(target, "route"));
+            sourceConnections.connect(RuntimeTestSupport.legacyRouteBoundEndpoint(target, "route"));
             targetConnections.connect(
-                    ZLinkLegacyTopology.routeBoundEndpoint(ignoredSource, "route"));
+                    RuntimeTestSupport.legacyRouteBoundEndpoint(ignoredSource, "route"));
             assertEquals("route:hello", awaitRouteReply(ignoredSource, targetRid));
             assertEquals("route", ROUTE_REQUEST_CHANNEL.get());
         } finally {
@@ -1279,8 +1279,8 @@ final class ChannelMessagingTest {
                 ZLinkFrameworkRuntime target =
                         RuntimeTestSupport.startFramework(
                                 targetOptions, new ZLinkJavaBackendAdapterFactory())) {
-            sourceConnections.connect(ZLinkLegacyTopology.routeBoundEndpoint(target, "route"));
-            targetConnections.connect(ZLinkLegacyTopology.routeBoundEndpoint(source, "route"));
+            sourceConnections.connect(RuntimeTestSupport.legacyRouteBoundEndpoint(target, "route"));
+            targetConnections.connect(RuntimeTestSupport.legacyRouteBoundEndpoint(source, "route"));
             ZLinkFrameworkException error = awaitRouteMissingHandlerError(source, targetRid);
             assertTrue(error.getMessage().contains("HANDLER_MISSING"));
             assertTrue(error.getMessage().contains("Missing"));
@@ -1326,7 +1326,7 @@ final class ChannelMessagingTest {
                         RuntimeTestSupport.startFramework(
                                 nonInitiatorOptions, new ZLinkJavaBackendAdapterFactory())) {
             initiatorConnections.connect(
-                    ZLinkLegacyTopology.routeBoundEndpoint(nonInitiator, "route"));
+                    RuntimeTestSupport.legacyRouteBoundEndpoint(nonInitiator, "route"));
             assertEquals("route:hello", awaitRouteReply(nonInitiator, initiatorRid));
             assertEquals("route", ROUTE_REQUEST_CHANNEL.get());
         } finally {
@@ -1368,8 +1368,8 @@ final class ChannelMessagingTest {
                         RuntimeTestSupport.startFramework(
                                 targetOptions, new ZLinkJavaBackendAdapterFactory())) {
             sourceConnections.connect(
-                    ZLinkLegacyTopology.routeBoundEndpoint(ignoredTarget, "route"));
-            targetConnections.connect(ZLinkLegacyTopology.routeBoundEndpoint(source, "route"));
+                    RuntimeTestSupport.legacyRouteBoundEndpoint(ignoredTarget, "route"));
+            targetConnections.connect(RuntimeTestSupport.legacyRouteBoundEndpoint(source, "route"));
             assertEquals("scanned-route:hello", awaitScannedRouteReply(source, targetRid));
         }
     }
@@ -1412,8 +1412,8 @@ final class ChannelMessagingTest {
                         RuntimeTestSupport.startFramework(
                                 targetOptions, new ZLinkJavaBackendAdapterFactory())) {
             sourceConnections.connect(
-                    ZLinkLegacyTopology.routeBoundEndpoint(ignoredTarget, "route"));
-            targetConnections.connect(ZLinkLegacyTopology.routeBoundEndpoint(source, "route"));
+                    RuntimeTestSupport.legacyRouteBoundEndpoint(ignoredTarget, "route"));
+            targetConnections.connect(RuntimeTestSupport.legacyRouteBoundEndpoint(source, "route"));
             assertEquals("route:hello", awaitRouteReply(source, targetRid));
             assertEquals("Echo", FILTER_PACKET.get());
             assertEquals("route", FILTER_MESH.get());
@@ -1462,8 +1462,8 @@ final class ChannelMessagingTest {
                         RuntimeTestSupport.startFramework(
                                 targetOptions, new ZLinkJavaBackendAdapterFactory())) {
             sourceConnections.connect(
-                    ZLinkLegacyTopology.routeBoundEndpoint(ignoredTarget, "route"));
-            targetConnections.connect(ZLinkLegacyTopology.routeBoundEndpoint(source, "route"));
+                    RuntimeTestSupport.legacyRouteBoundEndpoint(ignoredTarget, "route"));
+            targetConnections.connect(RuntimeTestSupport.legacyRouteBoundEndpoint(source, "route"));
             assertEquals("warmup", awaitSharedRouteReply(source, targetRid, "warmup:1"));
 
             CompletionStage<String> slow =
@@ -1521,8 +1521,8 @@ final class ChannelMessagingTest {
                         RuntimeTestSupport.startFramework(
                                 targetOptions, new ZLinkJavaBackendAdapterFactory())) {
             sourceConnections.connect(
-                    ZLinkLegacyTopology.routeBoundEndpoint(ignoredTarget, "route"));
-            targetConnections.connect(ZLinkLegacyTopology.routeBoundEndpoint(source, "route"));
+                    RuntimeTestSupport.legacyRouteBoundEndpoint(ignoredTarget, "route"));
+            targetConnections.connect(RuntimeTestSupport.legacyRouteBoundEndpoint(source, "route"));
             routeSendUntilDelivered(source, targetRid);
 
             assertTrue(latch.await(1, TimeUnit.SECONDS), "route mesh send was not delivered");

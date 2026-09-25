@@ -1,8 +1,10 @@
 package systems.zlink.framework.runtime;
 
+import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -21,6 +23,23 @@ final class RuntimeTestSupport {
                                     ZLinkBackendAdapterProvider.class);
                     start.setAccessible(true);
                     return (ZLinkFrameworkRuntime) start.invoke(null, options, backendFactory);
+                });
+    }
+
+    /**
+     * Reads the endpoint a legacy route channel ROUTER actually bound, straight from the router
+     * that owns it. Legacy route channels are not public listeners, so listenerStatus does not
+     * report them.
+     */
+    static String legacyRouteBoundEndpoint(ZLinkFrameworkRuntime runtime, String channelName) {
+        return invoke(
+                () -> {
+                    Method router =
+                            ZLinkChannelRuntime.class.getDeclaredMethod(
+                                    "requireRouteRouter", String.class);
+                    router.setAccessible(true);
+                    return ((ZLinkBackendRouterSocket) router.invoke(runtime.client(), channelName))
+                            .lastEndpoint();
                 });
     }
 
