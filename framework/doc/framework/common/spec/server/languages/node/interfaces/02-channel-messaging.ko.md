@@ -98,13 +98,6 @@ export interface ZLinkFanoutChannelBuilder {
 export interface ZLinkFanoutClient {
  publish(channelName: string, event: unknown): ZLinkFanoutPublishCall;
  publish(channelName: string, topic: string, event: unknown): ZLinkFanoutPublishCall;
- getListenerStatus(channelName: string): ZLinkFanoutListenerStatus;
-}
-
-export interface ZLinkFanoutListenerStatus {
- readonly channelName: string;
- readonly endpoint: string;
- readonly observedAt: Date;
 }
 
 export interface ZLinkFanoutPublishCall {
@@ -136,10 +129,8 @@ aggregate와 `PerActor` User Spot의 Actor relocation도 membership callback을
 Subscriber 수와 수신 완료는 반환하지 않는다. `ZLinkPublishCall`은 Logical Multicast 전용이며 classic
 fanout에 사용하지 않는다. Subscriber가 0개여도 publisher local queue가 event를 수락하면 정상 완료한다.
 
-`getListenerStatus(...)`는 publisher listener가 bind한 뒤 현재 advertised endpoint를
-반환한다. 설정에 port `0`을 사용했으면 반환되는 endpoint에는 operating system이
-선택한 실제 port가 들어간다. host가 시작되지 않았거나 해당 channel이 publisher로
-등록되지 않았으면 `ZLinkConfigurationException`으로 실패한다.
+Publisher listener의 advertised endpoint는 `ZLinkFrameworkRuntime.getListenerStatus('fanout', channelName)`으로
+조회한다([Location·관측 인터페이스](03-location-observability.ko.md)).
 
 Topic을 명시하는 overload에 전달하거나 `subscribe`에 등록하는 topic이
 [Channel messaging §7](../../../02-channel-transport/02-channel-messaging.ko.md#7-classic-fanout과의-경계liveness-beacon-topic-예약)이 금지한 값이면 `ZLinkConfigurationException`을 발생시킨다. Topic을 생략한 overload는 typed event의 [packet name](../../../00-foundation/02-glossary.ko.md#packet-name)을

@@ -103,13 +103,6 @@ export interface ZLinkFanoutChannelBuilder {
 export interface ZLinkFanoutClient {
  publish(channelName: string, event: unknown): ZLinkFanoutPublishCall;
  publish(channelName: string, topic: string, event: unknown): ZLinkFanoutPublishCall;
- getListenerStatus(channelName: string): ZLinkFanoutListenerStatus;
-}
-
-export interface ZLinkFanoutListenerStatus {
- readonly channelName: string;
- readonly endpoint: string;
- readonly observedAt: Date;
 }
 
 export interface ZLinkFanoutPublishCall {
@@ -149,11 +142,9 @@ count or receipt completion. `ZLinkPublishCall` is Logical-Multicast-only
 and isn't used for classic fanout. Even with 0 subscribers, it
 completes normally once the publisher local queue accepts the event.
 
-`getListenerStatus(...)` returns the current advertised endpoint once
-the publisher listener has bound. If port `0` was used in configuration,
-the returned endpoint contains the actual port the operating system
-chose. It fails with `ZLinkConfigurationException` if the host hasn't
-started or that channel isn't registered as a publisher.
+The publisher listener's advertised endpoint is queried with
+`ZLinkFrameworkRuntime.getListenerStatus('fanout', channelName)`
+([location and observability interfaces](03-location-observability.en.md)).
 
 A topic passed to the overload that specifies topic, or registered with `subscribe`, that
 [Channel messaging §7](../../../02-channel-transport/02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic) forbids raises `ZLinkConfigurationException`. The overload that omits topic uses the
