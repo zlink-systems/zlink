@@ -263,9 +263,9 @@ internal static partial class NativeMethods
     internal static extern IntPtr zlink_stopwatch_start();
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern ulong zlink_stopwatch_intermediate(IntPtr watch);
+    internal static extern CULong zlink_stopwatch_intermediate(IntPtr watch);
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern ulong zlink_stopwatch_stop(IntPtr watch);
+    internal static extern CULong zlink_stopwatch_stop(IntPtr watch);
 
 }
