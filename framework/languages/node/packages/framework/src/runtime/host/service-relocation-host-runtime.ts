@@ -1386,6 +1386,28 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     targetApplicationVersion: bigint | undefined,
     signal?: AbortSignal
   ): Promise<void> {
+    await activation.serial.executeLifecycleOperation(() =>
+      this.relocateSpotAggregateCore(
+        meshName,
+        activation,
+        kind,
+        actorStates,
+        target,
+        targetApplicationVersion,
+        signal
+      )
+    );
+  }
+
+  private async relocateSpotAggregateCore(
+    meshName: string,
+    activation: ZLinkSpotActivation,
+    kind: 'user_spot' | 'instance_spot',
+    actorStates: readonly ZLinkActorRuntimeState[],
+    target: ZLinkMeshNodeDescriptor | undefined,
+    targetApplicationVersion: bigint | undefined,
+    signal?: AbortSignal
+  ): Promise<void> {
     const store = this.requireLocationStore();
     const spotKey = encodeAuthorityKey(kind, String(activation.spotId));
     const spotAuthority = await requireAuthority(store, spotKey, signal);
@@ -1441,12 +1463,16 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       objectGeneration: spotAuthority.objectGeneration,
       authorityOwnerGeneration: spotAuthority.authorityOwnerGeneration,
       seal: async (captureSignal) => {
-        interruptionStartedAt = performance.now();
-        spotMessageFollowSeal = this.sealSpotMessageFollow(meshName, spotAuthority, activation);
-        // captureRelocation seals synchronously before its first await. Invoke
-        // it in the same event-loop turn as the wire ingress seal so no
-        // accepted direct message can enter between the two boundaries.
-        const spotCaptureOperation = activation.captureRelocation(captureSignal);
+        const { spotCaptureOperation } = await this.afterSpotCloseDecision(
+          meshName,
+          activation.spotId,
+          () => {
+            interruptionStartedAt = performance.now();
+            spotMessageFollowSeal = this.sealSpotMessageFollow(meshName, spotAuthority, activation);
+            // Both seals run in the same event-loop turn after the Close decision.
+            return { spotCaptureOperation: activation.captureRelocation(captureSignal) };
+          }
+        );
         const preparedSessions = Promise.all(
           actorStates.map(async (state) => ({
             state,
@@ -1764,6 +1790,24 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     targetApplicationVersion: bigint | undefined,
     signal?: AbortSignal
   ): Promise<void> {
+    await activation.serial.executeLifecycleOperation(() =>
+      this.relocatePerActorSpotShellCore(
+        meshName,
+        activation,
+        target,
+        targetApplicationVersion,
+        signal
+      )
+    );
+  }
+
+  private async relocatePerActorSpotShellCore(
+    meshName: string,
+    activation: ZLinkSpotActivation,
+    target: ZLinkMeshNodeDescriptor | undefined,
+    targetApplicationVersion: bigint | undefined,
+    signal?: AbortSignal
+  ): Promise<void> {
     const spotKey = encodeAuthorityKey('user_spot', String(activation.spotId));
     const spotAuthority = await requireAuthority(this.requireLocationStore(), spotKey, signal);
     const spotRegistration = this.spotRegistration(
@@ -1796,9 +1840,16 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       objectGeneration: spotAuthority.objectGeneration,
       authorityOwnerGeneration: spotAuthority.authorityOwnerGeneration,
       seal: async (captureSignal) => {
-        interruptionStartedAt = performance.now();
-        spotMessageFollowSeal = this.sealSpotMessageFollow(meshName, spotAuthority, activation);
-        spotCapture = await activation.captureRelocation(captureSignal);
+        const { spotCaptureOperation } = await this.afterSpotCloseDecision(
+          meshName,
+          activation.spotId,
+          () => {
+            interruptionStartedAt = performance.now();
+            spotMessageFollowSeal = this.sealSpotMessageFollow(meshName, spotAuthority, activation);
+            return { spotCaptureOperation: activation.captureRelocation(captureSignal) };
+          }
+        );
+        spotCapture = await spotCaptureOperation;
         return {
           boundSessionState: Buffer.alloc(0),
           queuedMessages: [],
@@ -4093,6 +4144,26 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const value = this.options.spotManager();
     if (value === undefined) throw new Error('Host relocation requires the Spot manager.');
     return value;
+  }
+
+  private afterSpotCloseDecision<T>(
+    meshName: string,
+    spotId: RoutingId,
+    seal: () => T
+  ): T | Promise<T> {
+    const manager = this.requireSpotManager();
+    const sealAfterDecision = (): T => {
+      if (manager.isSpotClosing(meshName, spotId)) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.SpotMoving,
+          `Spot '${String(spotId)}' is closing.`,
+          true
+        );
+      }
+      return seal();
+    };
+    const decision = manager.pendingSpotCloseDecision(meshName, spotId);
+    return decision === undefined ? sealAfterDecision() : decision.then(sealAfterDecision);
   }
 
   private requireActorManager(): DefaultZLinkActorManager {

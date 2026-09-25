@@ -56,19 +56,6 @@ export interface ZLinkSpotRelocationCapture {
   readonly timers: readonly ZLinkTimerRelocationState[];
 }
 
-/**
- * Internal signal that a close seal reached quiescence but the activation
- * became occupied again while it waited (an actor join queued ahead of the
- * close finished after the eager pre-seal occupancy check). This is not a
- * close failure: the seal is released, the Spot stays open, and the caller
- * reports `close(...)` as `false` instead of throwing.
- */
-export class ZLinkSpotCloseOccupiedError extends Error {
-  constructor(spotId: RoutingId) {
-    super(`Spot '${String(spotId)}' became occupied while its close seal reached quiescence.`);
-  }
-}
-
 export class ZLinkSpotActivation {
   readonly meshName: string;
   readonly spotId: RoutingId;

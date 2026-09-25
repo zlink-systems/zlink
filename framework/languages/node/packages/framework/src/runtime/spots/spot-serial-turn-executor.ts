@@ -157,6 +157,11 @@ export class ZLinkSpotSerialTurnExecutor {
     return this.enqueueFrameworkTurn(operation, workOptions);
   }
 
+  /** Holds this Spot's lifecycle FIFO until the full operation result settles. */
+  executeLifecycleOperation<T>(operation: () => Promise<T> | T): Promise<T> {
+    return this.scheduler.submitLifecycleOperation(operation);
+  }
+
   private async enqueueApplicationTurn<T>(
     operation: () => Promise<T> | T,
     workOptions: ZLinkSerialWorkOptions = {}
@@ -275,18 +280,6 @@ export class ZLinkSpotSerialTurnExecutor {
     resume: () => void,
     reject: (reason: unknown) => void
   ): boolean {
-    const barrier = this.executionBarrier;
-    const resumeClaim = barrier?.tryEnter();
-    if (barrier !== undefined && resumeClaim === undefined) {
-      reject(
-        createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.SpotMoving,
-          'The yielded Spot turn cannot resume after its execution unit was sealed.'
-        )
-      );
-      return true;
-    }
-    turn.bindExecutionClaim(resumeClaim);
     void this.enqueueContinuationTurn(async () => {
       this.resumedOwnerTurn = turn;
       try {

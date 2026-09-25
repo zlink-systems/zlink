@@ -226,9 +226,10 @@ export class ZLinkLocationLifecycle {
 
   async beginInstanceSpotClosing(
     meshName: string,
-    spotId: RoutingId
+    spotId: RoutingId,
+    onCommitted: () => void
   ): Promise<ZLinkInstanceClosingAuthority | undefined> {
-    return await this.spotClaims.beginInstanceClosing(meshName, spotId);
+    return await this.spotClaims.beginInstanceClosing(meshName, spotId, onCommitted);
   }
 
   trackInstanceSpot(input: ZLinkTrackedInstanceAuthority): void {

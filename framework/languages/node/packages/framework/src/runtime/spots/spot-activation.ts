@@ -77,7 +77,7 @@ import type {
 } from './spot-actor-join-dispatch';
 import { ZLinkSpotActorAdmissionCoordinator } from './spot-actor-admission-coordinator';
 import type { ZLinkRouteToActorJoinPrewarm } from './spot-actor-packet-dispatch';
-import { ZLinkSpotActivation, ZLinkSpotCloseOccupiedError } from './spot-activation-state';
+import { ZLinkSpotActivation } from './spot-activation-state';
 import type { ZLinkSpotLocationClaim } from './spot-location-claim';
 import type {
   ZLinkSpotActorHandoffRuntime,
@@ -114,6 +114,7 @@ export interface ZLinkSpotActivationLifecycleOptions {
   readonly channelMeshNameForChannel?: (channelName: string) => string | undefined;
   readonly providerResolver?: ZLinkProviderResolver;
   readonly dispatchErrors?: ZLinkDispatchErrorReporter;
+  readonly closeErrorSink?: import('../diagnostics/dispatch-error-port').ZLinkDispatchErrorSink;
   readonly runtimeEventPublisher?: ZLinkRuntimeEventPublisher;
   readonly workerRuntime: ZLinkWorkerRuntime;
   readonly messageSerializers?: ReadonlyMap<string, ZLinkMessageSerializer>;
@@ -145,6 +146,7 @@ export interface ZLinkSpotActivationLifecycleOptions {
     signal?: AbortSignal,
     reason?: ZLinkSpotCloseReason
   ) => Promise<boolean>;
+  readonly isSpotClosing: (activation: ZLinkSpotActivation) => boolean;
   readonly registerActivation: (activation: ZLinkSpotActivation) => void;
   readonly routeToActorJoinPrewarm?: ZLinkRouteToActorJoinPrewarm;
   readonly releaseLocation: (
@@ -173,7 +175,9 @@ export class ZLinkSpotActivationLifecycle {
     {
       closingAttempted: boolean;
       timersDisposed: boolean;
+      serialDisposed: boolean;
       handlersDisposed: boolean;
+      actorDispatchDisposed: boolean;
       nativeDisposed: boolean;
       locationReleased: boolean;
       inFlight?: Promise<void>;
@@ -491,7 +495,9 @@ export class ZLinkSpotActivationLifecycle {
     const state = this.cleanupStates.get(activation);
     return (
       state?.timersDisposed === true &&
+      state.serialDisposed === true &&
       state.handlersDisposed === true &&
+      state.actorDispatchDisposed === true &&
       state.nativeDisposed === true &&
       state.locationReleased === true
     );
@@ -803,21 +809,10 @@ export class ZLinkSpotActivationLifecycle {
     };
   }
 
-  async close(
-    activation: ZLinkSpotActivation,
-    signal?: AbortSignal,
-    reason = ZLinkSpotCloseReason.ExplicitClose
-  ): Promise<void> {
-    const seal = activation.sealExecution();
-    await this.closeAfterSeal(activation, seal, signal, reason);
-  }
-
-  async closeAfterSeal(
+  async sealForClose(
     activation: ZLinkSpotActivation,
     seal: import('../execution').ZLinkExecutionBarrierSeal,
-    signal?: AbortSignal,
-    reason = ZLinkSpotCloseReason.ExplicitClose,
-    deadline?: Date
+    signal?: AbortSignal
   ): Promise<void> {
     try {
       await activation.waitForExecutionQuiescence(seal, signal);
@@ -825,19 +820,24 @@ export class ZLinkSpotActivationLifecycle {
       activation.abortExecutionSeal(seal);
       throw error;
     }
-    // The eager occupancy check that authorized this seal (startClose ->
-    // canClose()) ran before quiescence, so it can miss an actor join that
-    // was already queued on the serial executor at that moment. Recheck now
-    // that every turn admitted before the seal has finished, and release the
-    // seal instead of closing an occupied Spot.
-    if (!activation.canClose(reason)) {
-      activation.abortExecutionSeal(seal);
-      throw new ZLinkSpotCloseOccupiedError(activation.spotId);
-    }
     if (!activation.commitExecutionSeal(seal)) {
       throw new Error(`Spot '${String(activation.spotId)}' close seal is stale.`);
     }
-    await this.cleanupActivation(activation, activation.meshName, true, signal, reason, deadline);
+  }
+
+  async cleanupClosedActivation(
+    activation: ZLinkSpotActivation,
+    reason = ZLinkSpotCloseReason.ExplicitClose,
+    deadline?: Date
+  ): Promise<void> {
+    await this.cleanupActivation(
+      activation,
+      activation.meshName,
+      true,
+      undefined,
+      reason,
+      deadline
+    );
   }
 
   async dispatchActorPacket(
@@ -967,7 +967,9 @@ export class ZLinkSpotActivationLifecycle {
     const state = this.cleanupStates.get(activation) ?? {
       closingAttempted: false,
       timersDisposed: false,
+      serialDisposed: false,
       handlersDisposed: false,
+      actorDispatchDisposed: false,
       nativeDisposed: false,
       locationReleased: false
     };
@@ -994,7 +996,9 @@ export class ZLinkSpotActivationLifecycle {
     state: {
       closingAttempted: boolean;
       timersDisposed: boolean;
+      serialDisposed: boolean;
       handlersDisposed: boolean;
+      actorDispatchDisposed: boolean;
       nativeDisposed: boolean;
       locationReleased: boolean;
     },
@@ -1011,10 +1015,15 @@ export class ZLinkSpotActivationLifecycle {
     };
     if (notifyClosing && !state.closingAttempted) {
       state.closingAttempted = true;
-      await cleanup(
-        () => invokeSpotClosing(activation.spot.onClosing?.bind(activation.spot), reason, deadline),
-        () => undefined
-      );
+      try {
+        await invokeSpotClosing(activation.spot.onClosing?.bind(activation.spot), reason, deadline);
+      } catch (error) {
+        this.options.closeErrorSink?.reportRuntimeTaskException(
+          `spot ${String(activation.spotId)} onClosing`,
+          error
+        );
+        errors.push(error);
+      }
     }
     if (!state.timersDisposed) {
       await cleanup(
@@ -1024,10 +1033,14 @@ export class ZLinkSpotActivationLifecycle {
         }
       );
     }
-    await cleanup(
-      () => activation.serialExecutor.close(),
-      () => undefined
-    );
+    if (!state.serialDisposed) {
+      await cleanup(
+        () => activation.serialExecutor.close(),
+        () => {
+          state.serialDisposed = true;
+        }
+      );
+    }
     if (!state.handlersDisposed) {
       await cleanup(
         () => disposeLifecycleHandlers(activation.spot),
@@ -1036,11 +1049,15 @@ export class ZLinkSpotActivationLifecycle {
         }
       );
     }
-    if (!state.nativeDisposed) {
+    if (!state.actorDispatchDisposed) {
       await cleanup(
         () => activation.actorDispatch?.dispose(),
-        () => undefined
+        () => {
+          state.actorDispatchDisposed = true;
+        }
       );
+    }
+    if (!state.nativeDisposed) {
       await cleanup(
         () => activation.nativeSpot?.dispose(),
         () => {
@@ -1048,7 +1065,14 @@ export class ZLinkSpotActivationLifecycle {
         }
       );
     }
-    if (!state.locationReleased) {
+    if (
+      !state.locationReleased &&
+      state.timersDisposed &&
+      state.serialDisposed &&
+      state.handlersDisposed &&
+      state.actorDispatchDisposed &&
+      state.nativeDisposed
+    ) {
       await cleanup(
         () => this.options.releaseLocation(activation, locationMeshName, activation.spotId),
         () => {

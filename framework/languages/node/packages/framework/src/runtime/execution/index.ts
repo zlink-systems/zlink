@@ -66,13 +66,6 @@ export class ZLinkSpotSerialTurn {
     readonly yieldAllowed: boolean
   ) {}
 
-  bindExecutionClaim(claim: ZLinkExecutionBarrierClaim | undefined): void {
-    if (this.executionClaim !== undefined) {
-      throw new Error('ZLink Spot serial turn already owns an execution claim.');
-    }
-    this.executionClaim = claim;
-  }
-
   get isSuspended(): boolean {
     return this.suspendSignaled;
   }
@@ -150,7 +143,6 @@ export class ZLinkSpotSerialTurn {
       return;
     }
     this.suspendSignaled = true;
-    this.releaseBoundExecutionClaim();
     this.suspendedResolve?.();
   }
 
@@ -259,6 +251,10 @@ export class ZLinkExecutionBarrier {
   private readonly quiescenceWaiters = new Set<() => void>();
   private committed = false;
 
+  get isSealed(): boolean {
+    return this.currentSeal !== undefined || this.committed;
+  }
+
   async enter(): Promise<ZLinkExecutionBarrierClaim> {
     if (this.committed) {
       throw createInternalFrameworkException(
@@ -270,18 +266,6 @@ export class ZLinkExecutionBarrier {
       return await new Promise<ZLinkExecutionBarrierClaim>((resolve, reject) => {
         this.admissionWaiters.push({ resolve, reject });
       });
-    }
-    return this.createClaim();
-  }
-
-  /**
-   * Re-enters a previously yielded application turn only while admission is
-   * open. A continuation must fail instead of waiting behind a relocation
-   * seal that already won the turn-boundary race.
-   */
-  tryEnter(): ZLinkExecutionBarrierClaim | undefined {
-    if (this.committed || this.currentSeal !== undefined) {
-      return undefined;
     }
     return this.createClaim();
   }

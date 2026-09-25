@@ -248,6 +248,75 @@ test('application and lifecycle lanes preserve FIFO order', async () => {
   );
 });
 
+test('a suspended lifecycle result retains FIFO while application and continuation work run', async () => {
+  const serial = scheduler([], { ownerTimeBudget: 0, lifecycleBurstLimit: 1 });
+  const started = deferred<void>();
+  const terminal = deferred<void>();
+  const events: string[] = [];
+  let idle = false;
+  const first = serial.submitLifecycleOperation(async () => {
+    events.push('lifecycle-first');
+    started.resolve();
+    await terminal.promise;
+    events.push('lifecycle-first-terminal');
+  });
+  await started.promise;
+  void serial.whenIdle().then(() => {
+    idle = true;
+  });
+  const second = serial.submitLifecycleOperation(() => events.push('lifecycle-second'));
+  const application = serial.submit(() => events.push('application'));
+  const continuation = serial.submitContinuation(() => events.push('continuation'));
+  await Promise.all([application, continuation]);
+  assert.deepEqual(events, ['lifecycle-first', 'application', 'continuation']);
+  assert.equal(idle, false);
+  assert.equal(serial.hasPendingWork, true);
+  terminal.resolve();
+  await Promise.all([first, second, serial.whenIdle()]);
+  assert.equal(idle, true);
+  assert.deepEqual(events, [
+    'lifecycle-first',
+    'application',
+    'continuation',
+    'lifecycle-first-terminal',
+    'lifecycle-second'
+  ]);
+});
+
+test('a yielded lifecycle turn resumes before its lifecycle successor', async () => {
+  const serial = new ZLinkSpotSerialTurnExecutor(true, undefined, {
+    ownerTimeBudget: 0,
+    lifecycleBurstLimit: 1
+  });
+  const started = deferred<void>();
+  const ready = deferred<void>();
+  const events: string[] = [];
+  const first = serial.execute(
+    async () => {
+      events.push('lifecycle-start');
+      started.resolve();
+      await serial.yieldPromise(ready.promise);
+      events.push('lifecycle-resume');
+    },
+    { lane: 'lifecycle' }
+  );
+  await started.promise;
+  const successor = serial.execute(() => events.push('lifecycle-successor'), {
+    lane: 'lifecycle'
+  });
+  const application = serial.execute(() => events.push('application'));
+  await application;
+  assert.deepEqual(events, ['lifecycle-start', 'application']);
+  ready.resolve();
+  await Promise.all([first, successor]);
+  assert.deepEqual(events, [
+    'lifecycle-start',
+    'application',
+    'lifecycle-resume',
+    'lifecycle-successor'
+  ]);
+});
+
 test('an empty scheduler schedules new work without polling', async () => {
   const serial = scheduler();
   const observed: string[] = [];
