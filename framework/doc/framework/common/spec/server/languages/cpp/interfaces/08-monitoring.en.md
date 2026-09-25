@@ -113,6 +113,7 @@ public:
     virtual listener_status_t listener_status(
       listener_kind_t kind,
       std::string name) const = 0;
+    virtual std::vector<http_listener_status_t> http_listener_statuses() const = 0;
     virtual std::unique_ptr<runtime_observation_t> observe(
       std::size_t capacity,
       std::function<void(
@@ -144,6 +145,11 @@ enum class listener_kind_t {
     client_server,
     fanout,
     stream
+};
+
+struct http_listener_status_t {
+    std::string configured_endpoint;
+    std::string bound_url;
 };
 
 struct listener_status_t {
