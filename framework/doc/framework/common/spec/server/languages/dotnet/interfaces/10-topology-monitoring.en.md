@@ -11,7 +11,7 @@ request host shutdown and confirm the operational status of RouteMesh/
 ClientServer/Fanout. The status and observation stream only include the
 values the application needs to judge state and choose a response.
 
-Descriptor revision, lifecycle generation, endpoint, admission/claim/
+Descriptor revision, lifecycle generation, remote descriptor endpoint, admission/claim/
 reservation stage, and Location Store record — used when the framework
 coordinates topology — aren't included in the public interface. These
 values can't be changed by the application and are only used by the
@@ -168,10 +168,25 @@ public sealed record ZLinkFrameworkRuntimeStatus(
     ZLinkHostCapacityStatus Capacity = default,
     bool SafeToShutdown = true);
 
+public enum ZLinkListenerKind
+{
+    RouteMesh,
+    ClientServer,
+    Fanout,
+    Stream,
+}
+
+public sealed record ZLinkListenerStatus(
+    ZLinkListenerKind Kind,
+    string Name,
+    string Endpoint,
+    DateTimeOffset ObservedAt);
+
 public interface IZLinkFrameworkRuntime
 {
     ZLinkFrameworkRuntimeStatus Status { get; }
     void ResetCapacityMetrics();
+    ZLinkListenerStatus GetListenerStatus(ZLinkListenerKind kind, string name);
 
     IAsyncEnumerable<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>> ObserveAsync(
         CancellationToken cancellationToken = default);
@@ -190,6 +205,11 @@ In `ZLinkCoreHwmStatus`, `ApplicationAccountedBytes`, `OutstandingApplicationLea
 `RetiredQueueCount`, and `DeferredOriginCreditBytes` are ABI-reserved compatibility fields and
 are always `0` since 0.13.1. The framework projects them unchanged and does not reinterpret them
 as Application Job Queue pressure.
+
+`GetListenerStatus(kind, name)` is the listener state query of
+[Network listener identity §3.1](../../../02-channel-transport/04-network-listener-identity.en.md#31-listener-state-the-publisher-checks). `name` is the configured
+MeshName, ChannelName, or StreamNodeName. A configuration error defined in §3.1 is thrown as a
+`ZLinkFrameworkException` whose `Kind` is `NotConfigured`.
 
 `IsReady` is true only when `State == Serving`. `AcceptingWork` indicates
 whether the current host is accepting new application operations. The

@@ -323,9 +323,19 @@ export interface ZLinkHostCapacityStatus {
  readonly applicationJobQueue: ZLinkApplicationJobQueueStatus;
 }
 
+export type ZLinkListenerKind = 'routeMesh' | 'clientServer' | 'fanout' | 'stream';
+
+export interface ZLinkListenerStatus {
+ readonly kind: ZLinkListenerKind;
+ readonly name: string;
+ readonly endpoint: string;
+ readonly observedAt: Date;
+}
+
 export interface ZLinkFrameworkRuntime {
  readonly status: ZLinkFrameworkRuntimeStatus;
  resetCapacityMetrics(): void;
+ getListenerStatus(kind: ZLinkListenerKind, name: string): ZLinkListenerStatus;
  diagnosticsLevel: ZLinkMessageFlowLogMode;
  observe(signal?: AbortSignal): AsyncIterable<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>>;
  relocate(options: ZLinkFrameworkRelocationOptions): Promise<ZLinkFrameworkRelocationResult>;
@@ -337,6 +347,11 @@ In `ZLinkCoreHwmStatus`, `applicationAccountedBytes`, `outstandingApplicationLea
 `retiredQueueCount`, and `deferredOriginCreditBytes` are ABI-reserved compatibility fields and
 are always `0n` since 0.13.1. The framework projects them unchanged and does not reinterpret them
 as Application Job Queue pressure.
+
+`getListenerStatus(kind, name)` is the listener state query of
+[Network listener identity §3.1](../../../02-channel-transport/04-network-listener-identity.en.md#31-listener-state-the-publisher-checks). `name` is the configured
+MeshName, ChannelName, or StreamNodeName. A configuration error defined in §3.1 fails with
+`ZLinkConfigurationException`.
 
 Reading `diagnosticsLevel` returns the process's current diagnostics level;
 changing it applies the new level starting at later message-processing

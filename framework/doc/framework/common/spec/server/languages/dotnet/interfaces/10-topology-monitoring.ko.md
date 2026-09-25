@@ -10,7 +10,7 @@
 확인할 때 사용하는 public interface를 고정한다. Status와 관찰 stream에는 application이 상태를 판단하거나
 대응 방법을 선택하는 데 필요한 값만 포함한다.
 
-Framework가 topology를 조정할 때 사용하는 descriptor revision, lifecycle generation, endpoint,
+Framework가 topology를 조정할 때 사용하는 descriptor revision, lifecycle generation, remote descriptor endpoint,
 admission·claim·reservation 단계와 Location Store record는 public interface에 포함하지 않는다.
 이 값은 application이 변경할 수 없으며 Framework가 stale state와 ownership을 판정할 때만 사용한다.
 
@@ -163,10 +163,25 @@ public sealed record ZLinkFrameworkRuntimeStatus(
     ZLinkHostCapacityStatus Capacity = default,
     bool SafeToShutdown = true);
 
+public enum ZLinkListenerKind
+{
+    RouteMesh,
+    ClientServer,
+    Fanout,
+    Stream,
+}
+
+public sealed record ZLinkListenerStatus(
+    ZLinkListenerKind Kind,
+    string Name,
+    string Endpoint,
+    DateTimeOffset ObservedAt);
+
 public interface IZLinkFrameworkRuntime
 {
     ZLinkFrameworkRuntimeStatus Status { get; }
     void ResetCapacityMetrics();
+    ZLinkListenerStatus GetListenerStatus(ZLinkListenerKind kind, string name);
 
     IAsyncEnumerable<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>> ObserveAsync(
         CancellationToken cancellationToken = default);
@@ -184,6 +199,10 @@ public interface IZLinkFrameworkRuntime
 `ZLinkCoreHwmStatus`의 `ApplicationAccountedBytes`, `OutstandingApplicationLeaseCount`,
 `RetiredQueueCount`, `DeferredOriginCreditBytes`는 ABI 호환용 reserved field이며 0.13.1 이후 항상 `0`이다.
 Framework는 이를 그대로 투영하며 Application Job Queue pressure로 다시 해석하지 않는다.
+
+`GetListenerStatus(kind, name)`은 [Network listener identity §3.1](../../../02-channel-transport/04-network-listener-identity.ko.md#31-publisher가-확인하는-listener-상태)의 listener 상태 조회다.
+`name`은 설정한 MeshName, ChannelName 또는 StreamNodeName이다. §3.1이 정한 configuration error는
+`Kind`가 `NotConfigured`인 `ZLinkFrameworkException`으로 던진다.
 
 `IsReady`는 `State == Serving`일 때만 true다. `AcceptingWork`는 현재 host가 새로운 application
 operation을 받아들이는지를 나타낸다. 두 값은 relocation unit 수나 queue 내부 상태를 application에
