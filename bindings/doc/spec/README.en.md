@@ -12,27 +12,21 @@ title: "Bindings API Policy"
 > all of `bindings/`. The per-language documents (`c/`, `cpp/`, `java/`,
 > `dotnet/`, `node/`, `python/`, `go/`, `rust/`) align to this policy.
 
-> The implementation baseline for request-reply, SPOT routed, and Actor
-> dispatch follows the current public contract in `core/include/zlink.h`.
-> Actor dispatch is an independent public service-layer capability, like
-> SPOT, and the public surface described in each per-language document
-> aligns to this shared contract as well.
-> See `c/`, `cpp/`, `java/`, `dotnet/`, `node/`, `python/`, `go/`, `rust/`
-> for the per-language interface signatures and usage examples.
+> Raw bindings follow [Core runtime boundary §3](../../../core/doc/spec/core/08-runtime-boundary.en.md#3-capabilities-owned-by-framework) for the service C ABI boundary; public Spot/Actor shapes follow [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 | Section | Covers |
 |---|---|
 | [Purpose](#purpose) | This document's scope and the meaning of the Required/Target notation |
 | [Binding Contract Category Policy](#binding-contract-category-policy) | Contract category classification |
 | [Binding Runtime Category Policy](#binding-runtime-category-policy) | Runtime category classification |
-| [Actor/Spot Route Surface](#actorspot-route-surface) | Route lookup result types, and Actor-targeted send/request |
+| [Actor/Spot Route Surface](#actorspot-route-surface) | Framework public contract link |
 | [High-Performance Binding Policy](#high-performance-binding-policy) | Hot-path constraints |
 | [Core Whole-Message API and Public Binding Surface](#core-whole-message-api-and-public-binding-surface) | The boundary between Core's array API and the public surface |
 | [Whole-Message API Usage Requirement (Required)](#whole-message-api-usage-requirement-required) | The internal array-and-count rule |
-| [Spot Get-Or-Create Mapping](#spot-get-or-create-mapping) | The `zlink_spot_node_spot_get_or_new` mapping rule |
+| [Spot Get-Or-Create Mapping](#spot-get-or-create-mapping) | Framework public contract link |
 | [Public vs Internal API Boundary](#public-vs-internal-api-boundary) | The contract/runtime separation principle and its test |
 | [Core Alignment Rules](#core-alignment-rules) | Alignment rules against the core contract |
-| [Actor Dispatch Binding Contract](#actor-dispatch-binding-contract) | The public Actor dispatch surface |
+| [Actor Dispatch Binding Contract](#actor-dispatch-binding-contract) | Framework public contract link |
 | [Document Interpretation Rules](#document-interpretation-rules) | How to read the Required/Target notation |
 | [Core Principles](#core-principles) | The core principles that run through this whole policy |
 | [Monitor Ready Contract](#monitor-ready-contract) | The meaning of monitor readiness |
@@ -41,7 +35,7 @@ title: "Bindings API Policy"
 | [Domain Object Policy](#domain-object-policy) | The value-type-vs-interface test |
 | [Socket Type Capability Policy](#socket-type-capability-policy) | The capabilities each socket family exposes |
 | [Per-Language Spec File Compliance Rule](#per-language-spec-file-compliance-rule) | The relationship between the per-language documents and this document |
-| [Service Layer Policy](#service-layer-policy) | The public contract for the SPOT/Actor service layer |
+| [Service Layer Policy](#service-layer-policy) | Framework public contract link |
 | [Core API Additions](#core-api-additions) | Binding coverage for recently added core capabilities |
 | [Option Policy](#option-policy) | Rules for exposing socket/context options |
 | [Performance Policy](#performance-policy) | Shared performance standards across all bindings |
@@ -66,8 +60,8 @@ title: "Bindings API Policy"
 | [API Reference](#api-reference) | Standards for generating API reference documentation |
 | [Disconnecting A Peer By Routing ID](#disconnecting-a-peer-by-routing-id) | The routing-id-based peer disconnect contract |
 | [Related Documents](#related-documents) | Links to related documents |
-| [Core API Surface 6.0.0 Alignment](#core-api-surface-600-alignment) | Alignment status for the 6.0.0 core API surface |
-| [Spot Route Bridge API](#spot-route-bridge-api) | The route bridge API contract |
+| [Core API Surface 6.0.0 Alignment](#core-api-surface-600-alignment) | Core runtime boundary link |
+| [Spot Route Bridge API](#spot-route-bridge-api) | Framework public contract link |
 
 ## Purpose
 
@@ -144,7 +138,6 @@ implementation file structure.
 | `messaging` | The message data and receive-result contract | Payload types independent of socket kind, such as `Message`, `Received`, topic message, subscription event, and multipart payload helpers |
 | `sockets` | The socket-kind and socket-operation contract | `PairSocket`, `DealerSocket`, `RouterSocket`, `PubSocket`, `SubSocket`, `StreamSocket`, socket interfaces, send/recv/publish/request/reply builders, socket options |
 | `eventing` | The waiting, event-source, and observation contract | `Poller`, `PollEvent`, timer, monitor socket, monitor event, monitor snapshot |
-| `service` | The core service-layer contract | Public types that belong to a service domain, such as Spot and Actor dispatch |
 | `errors` | The public error and failure-representation contract | Base exception, bind/connect/send/recv/submit/config/request exceptions, public error-code/result mapping |
 
 ### Contract Category Rules
@@ -154,8 +147,6 @@ implementation file structure.
   runtime's internal structure as-is.
 - Keep `core` small. A type that can only be explained by knowing a
   specific domain belongs in that domain's category, not in `core`.
-- `service` can have subdomains such as `spot` and `actor`. Create a
-  subdomain only when a user must learn it as an independent concept.
 - `eventing` does not mean monitoring alone. It also holds public
   contracts for waiting on or observing events, such as poller, timer,
   and monitor.
@@ -165,12 +156,7 @@ implementation file structure.
 - Do not make a representation-format category such as `enums` a
   canonical category. Enums, flags, and results belong in the category of
   the public concept that interprets their value.
-- Put operation, result, and callback helper types in the domain that
-  defines their meaning. For example, send/request/reply results and
-  callbacks belong in the messaging contract, while Actor
-  join/session/management results and callbacks belong in the service
-  contract. A snapshot entry stays with the service model that returns
-  that snapshot.
+- Put raw operation, result, and callback helper types in the domain that defines their meaning. Send/request/reply results and callbacks belong in the messaging contract. Public Spot/Actor shapes are owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 ### Handler Registration Naming Policy
 
@@ -205,10 +191,7 @@ The representative canonical semantic names are:
 | Meaning | Canonical name |
 |------|----------------|
 | Registering a raw STREAM packet handler | `setPacketHandler` |
-| Registering a SPOT dispatch event handler | `setDispatchHandler` |
 | socket receive readiness handler registration | `setReadableHandler` |
-| SPOT routed receive | `recvRouted` |
-| SPOT Actor lifecycle receive | `recvActorLifecycle` |
 
 The representative enum/result/flags placement rules are:
 
@@ -216,7 +199,6 @@ The representative enum/result/flags placement rules are:
 |---------|------|------|
 | `SendFlags`, `RecvFlags`, `SubmitResult`, `RecvResult` | `sockets` | Describes the input to or result of a socket operation. |
 | `PollEventFlag`, `PollSourceKind`, `MonitorEventType` | `eventing` | Describes an event-wait or observation result. |
-| `SpotDispatchEvent`, `SpotPeerKind` | `service.spot` | Its meaning is defined only inside the Spot service domain. |
 | `ConfigResult`, `ErrorCode` | `errors` | Describes a failure meaning shared across multiple domains. |
 
 Every wrapper binding shares the same architecture map. This map is not a
@@ -234,7 +216,6 @@ contracts/
   messaging/
   sockets/
   eventing/
-  service/
   errors/
 
 runtime/
@@ -242,7 +223,6 @@ runtime/
   sockets/
   messaging/
   eventing/
-  service/
   errors/
   buffers/
   options/
@@ -258,13 +238,11 @@ Do not overuse public interfaces, however. Value objects and plain data
 types such as `Message`, `RoutingId`, `Received`, `TopicMessage`, and
 enum/result/flags are not split into separate interfaces. Interfaces
 belong only where a user needs to receive something polymorphically —
-for example, a common socket role, a poll target, a monitor target, a
-codec, a handler/callback, or a SPOT client role.
+for example, a common socket role, a poll target, a monitor target, a codec, or a handler/callback role.
 
 `runtime` is the implementation area that executes the public contract.
 It hides implementation decisions such as the socket send/recv flow,
-message materialization, the poller/timer/monitor loop, the service
-runtime, native interop, and buffer/handle/error mapping. A runtime type
+message materialization, the poller/timer/monitor loop, native interop, and buffer/handle/error mapping. A runtime type
 is not recommended as public API, and a user should not depend on it
 directly without going through the contract surface.
 
@@ -287,8 +265,7 @@ The separation rules are:
   substrate, manages a callback trampoline and request progress, or
   performs marshalling goes in the runtime or native bridge source.
 - For a resource type where it's more natural for a user to depend on a
-  role than on an implementation — `Context`, socket, poller, timer,
-  SpotNode, Spot, Actor — separate the contract role from the default
+  role than on an implementation — `Context`, socket, poller, timer — separate the contract role from the default
   implementation in whatever way the language supports.
 - Value-centric types such as `Message`, `RoutingId`, `Received`,
   `TopicMessage`, snapshot DTOs, and enum/flags/result are not wrapped in
@@ -310,12 +287,10 @@ but must not itself become a public surface a user has to import.
 The same standard applies to file structure.
 
 - Use a category aggregate file only as a small re-export barrel or for
-  factory wiring. If a single category file such as `sockets`, `service`,
-  or `eventing` holds the actual behavior of several public resources,
+  factory wiring. If a single category file such as `sockets` or `eventing` holds the actual behavior of several public resources,
   the contract/runtime split has not happened.
 - Put a native-backed resource's implementation in its own per-resource
-  file. For example, each socket family, poller, timer, SpotNode, Spot,
-  and Actor should have its own implementation file. The file name
+  file. For example, each socket family, poller, and timer should have its own implementation file. The file name
   follows language convention but must reveal the resource or operation
   name.
 - A shared helper file is not a substitute location for a public
@@ -323,7 +298,7 @@ The same standard applies to file structure.
   functionality shared across multiple implementations, such as a native
   call wrapper, handle validation, a marshalling helper, or error
   mapping. Do not collect a resource's actual behavior — for `Context`,
-  `RouterSocket`, `SpotNode`, `Poller` — into a helper file.
+  `RouterSocket`, `Poller` — into a helper file.
 - A contract file and a runtime file do not need a strict 1:1 mapping,
   but for any given public resource, its contract owner and runtime owner
   must each be clear.
@@ -341,8 +316,7 @@ coupled group of contracts that share the same reason to change.
 
 The file-splitting rules are:
 
-- A resource contract a user looks up directly — `Context`, a socket
-  family, `SpotNode`, `Spot`, `Actor`, poller, timer — can have its own
+- A resource contract a user looks up directly — `Context`, a socket family, poller, timer — can have its own
   file even if it's thin.
 - A type where ownership, storage, value validation, or cost model
   matters — `Message`, `Received`, `TopicMessage`, `RoutingId` — gets its
@@ -355,10 +329,6 @@ The file-splitting rules are:
 - Staged operation builder contracts such as send/request/reply share the
   same domain-level reason to change, so they can be grouped into one
   operation contract file.
-- A group with a clear service subdomain — Actor join, actor management,
-  SpotNode snapshot models — gets its own domain file. Split it further
-  only once the model file grows large enough that distinct reasons to
-  change appear, such as peer/status/socket/actor snapshots.
 - The same principle applies to runtime implementation files. One
   implementation file holding several native-backed resources' lifecycle,
   send/recv/request flow, callback registration, and snapshot mapping all
@@ -424,8 +394,7 @@ A representation-format folder such as `enums` is not a top-level
 category in the shared architecture map. Enums, flags, results, and
 literal unions belong in the domain category that interprets their
 value. For example, `RecvFlags` belongs to the `sockets` contract,
-`PollEventFlags` to `eventing`, and `SpotPeerKind` to the `service`
-contract.
+`PollEventFlags` to the `eventing` contract.
 
 ## Binding Runtime Category Policy
 
@@ -449,7 +418,6 @@ The recommended runtime categories are:
 | `messaging` | Native message part assembly, multipart handling, message conversion, request progress |
 | `sockets` | Socket operation execution, send/recv/publish/request/reply flow |
 | `eventing` | Poller, timer, monitor, event dispatch loop |
-| `service` | Spot, Actor service runtime |
 | `options` | Public option validation, native option mapping |
 | `errors` | Converting native errno/result into public exception/result |
 | `buffers` | Byte buffer, direct buffer, pooled buffer, pinned memory, copy/borrow policy |
@@ -494,18 +462,7 @@ only repeats a method list — that adds complexity instead of reducing it.
 
 ## Actor/Spot Route Surface
 
-Every binding must expose the core's Actor route and Spot route results
-without loss. Per-language type names can differ, but the following
-meaning must be preserved.
-
-- An Actor route exposes the Actor ref's node rid, current Spot rid, and
-  current Spot kind.
-- A Spot route exposes the looked-up Spot rid, owner node rid, and Spot
-  kind.
-- Spot kind distinguishes Entry Spot, user Spot, and an invalid value.
-- A binding does not create a new direct `router -> actor` or
-  `actor -> router` API. A user combines a route lookup result with the
-  existing Spot routed API.
+The public Actor/Spot route surface is owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 ## High-Performance Binding Policy
 
@@ -593,10 +550,10 @@ following families.
 
 - send (including single-part, multi-part, and routed)
 - recv (including single-part, multi-part, and routed)
-- request (including dealer, router, and SPOT variants)
-- reply (including router and SPOT variants)
+- request (dealer and router variants)
+- reply (router variant)
 - publish
-- subscribe (including SPOT subscribe)
+- subscribe (raw SUB/XSUB)
 
 ### Array Handling
 
@@ -626,28 +583,9 @@ Core's same-handle concurrency contract.
 
 ## Spot Get-Or-Create Mapping
 
-Core provides `zlink_spot_node_spot_get_or_new(...)` for the atomic
-"get a local logical Spot by routing id, or create it if absent"
-contract.
-
-Every higher-level binding must map its public get-or-create SpotNode API
-directly onto that C function. It must not compose `spot_lookup()` and
-`create_spot()` to emulate the same behavior, because doing so loses
-core's atomicity contract and reintroduces the lookup/create race.
-
-The per-language names are:
-
-- C++: `spot_node_t::get_or_create_spot(...)`
-- .NET binding: `SpotNode.GetOrCreateSpot(...)`
-- Java: `SpotNode.getOrCreateSpot(...)`
-- Node: `SpotNode.getOrCreateSpot(...)`
-- Go: `SpotNode.GetOrCreateSpot(...)`
-- Rust: `SpotNode::get_or_create_spot(...)`
-- Python: `SpotNode.get_or_create_spot(...)`
-
-Each wrapper returns both the owned `Spot` facade and whether this call
-created the logical spot. The returned facade follows that language's
-normal Spot lifetime rules.
+The [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md#17-creategetorcreate-results-and-relocation-policy) owns public Spot and Actor `GetOrCreate` behavior.
+Raw Core bindings assume no service C ABI
+([Core runtime boundary](../../../core/doc/spec/core/08-runtime-boundary.en.md#3-capabilities-owned-by-framework)).
 
 ### Compliance Check
 
@@ -789,7 +727,7 @@ The judgment rules are:
   type must be explainable in public contract source.
 - Do not expose the runtime/internal folder name or the module/package
   path itself as public API. However, a basic implementation class or
-  type such as `Context`, socket, `SpotNode`, `Poller`, or `Timer` may be
+  type such as `Context`, socket, `Poller`, or `Timer` may be
   exposed as a per-language public projection. In that case, the public
   behavior a user observes must still be explainable in public contract
   source.
@@ -807,7 +745,6 @@ The fixed categories are:
 - `Messaging/`: message, routing id, received, topic message, multipart.
 - `Sockets/`: socket contracts, socket implementations, socket options.
 - `Eventing/`: monitor, poller, timer, readiness events.
-- `Service/`: SPOT, actor, SPOT topology.
 - `Errors/`: public error/result/exception domains and runtime mapping.
 - `Native/`: the native bridge category, kept only under runtime/internal
   source.
@@ -833,14 +770,12 @@ bindings/<lang>/
 |   |   +-- Messaging
 |   |   +-- Sockets
 |   |   +-- Eventing
-|   |   +-- Service
 |   |   +-- Errors
 |   +-- <private runtime/internal area>
 |   |   +-- Core
 |   |   +-- Messaging
 |   |   +-- Sockets
 |   |   +-- Eventing
-|   |   +-- Service
 |   |   +-- Errors
 |   |   +-- Native
 +-- codecs/
@@ -862,7 +797,7 @@ The shared standard is:
   type. Do not wrap a value-only type in a meaningless interface or
   trait.
 - A type that hides a native resource and its behavior — socket, context,
-  monitor, timer, service node, spot, actor — may have an abstraction
+  monitor, timer — may have an abstraction
   boundary that fits the language's convention.
 - In principle, write perf, sample, and framework adapters against the
   public contract too. Depending on a runtime-internal type just because
@@ -916,7 +851,7 @@ the `Contracts` or `Runtime` name below.
 | Rust | `bindings/rust/src/contracts/` | private `bindings/rust/src/runtime/` and `bindings/rust/src/runtime/native/` modules | `lib.rs` re-exports and public rustdoc projection |
 
 Each per-language README must show where the `Core`, `Messaging`,
-`Sockets`, `Eventing`, `Service`, and `Errors` roles are actually placed
+`Sockets`, `Eventing`, and `Errors` roles are actually placed
 in its source. `Native` exists only as a runtime/native bridge role and
 is never made a public contract role.
 
@@ -968,14 +903,7 @@ to it.
 - A control-plane API such as `Monitor.recv` or `Timer.recv` is called
   infrequently and returns a small result, so a per-language nullable,
   optional, or value-return form is allowed.
-- A service control/admission receive such as `Spot.recvActorJoin` is
-  also not a data-plane drain path, so a per-language nullable, optional,
-  or result-value form is allowed. However, no-data and a hard error must
-  still be separated, and the public contract must clearly document this
-  exception.
-- `send`, routed send, `publish`, `request`, `reply`, SPOT
-  send/request/reply, and the Actor location/session-attach family return
-  an operation builder.
+- Raw `send`, routed send, `publish`, `request`, and `reply` return an operation builder. Public Spot/Actor builder shapes are owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 - A builder start point's arguments take only the operation's target —
   destination, topic, channel, routing id, or request sequence. Payload,
   flags, and timeout are expressed at the builder stage.
@@ -994,7 +922,7 @@ to it.
   several runtime classes. A per-binding root facade or context factory
   owns construction responsibility. For example, the .NET binding
   creates a context with `Zlink.CreateContext()`, and creates socket and
-  service resources through `IContext.Create...` factories.
+  public raw resources through `IContext.Create...` factories. Public Spot/Actor factories follow [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 - A runtime concrete type must not appear directly in a public contract
   signature. A public method's arguments and return value must be
   explainable through a contract interface, value object, DTO, enum, or
@@ -1048,17 +976,11 @@ existing one, the canonical recv surface must satisfy this section.
 | `StreamSocket.recv` | `Received` |
 | `SubscriberSocketBase.subscribe` (SUB / XSUB) | `TopicMessage` |
 | `XPubSocketBase.receiveSubscriptionEvent` | `SubscriptionEvent` |
-| `Spot.subscribe` | `TopicMessage` |
-| `Spot.recv` (routed) | `Received` |
 
 `Monitor.recv` (`MonitorEvent`) and `Timer.recv` (`uint64`) are
 control-plane calls, called infrequently and with a lightweight value
 result, so they are not in scope for this section. They keep a
-return-form (or a per-language `Optional`/nullable/`Option`). A service
-control-plane API that receives an Actor join admission request, such as
-`Spot.recvActorJoin`, can apply the same exception. In that case, the
-public contract must document the no-data representation and the hard
-error representation separately.
+return-form (or a per-language `Optional`/nullable/`Option`). Public Spot/Actor receive shapes are owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 #### Base Contract
 
@@ -1078,10 +1000,9 @@ error representation separately.
 - A multipart result accumulates into the caller's result storage. The
   binding must not build a temporary collection and cache it separately
   from the caller's result storage — that allocation would not go away.
-- For routed recv (router / spot), the routing id must be filled into
-  storage inside the caller-provided `Received`. A path that allocates a
-  new byte array per routing id does not belong on the internal hot
-  path.
+- For raw ROUTER receive, the routing id must be filled into storage inside the
+  caller-provided `Received`. A path that allocates a new byte array per routing id
+  does not belong on the internal hot path.
 
 #### Canonical Per-Language Signature
 
@@ -1108,17 +1029,15 @@ A C ABI binding is not in scope for this section. The C binding exposes
 For a high-level binding (C++ / .NET / Java / Node / Python / Go / Rust),
 `Received` is a **shared envelope that holds the result of one
 data-plane recv call**. The meaning of request, reply, routed source, and
-payload lifecycle must stay the same regardless of socket kind or
-service kind.
+payload lifecycle must stay the same across raw socket kinds. Public Spot/Actor result shapes are owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 The rules below are `Required`.
 
-- The receive results of PAIR / DEALER / ROUTER / STREAM / SPOT routed
-  recv all use the same `Received` meaning.
+- The raw receive results of PAIR / DEALER / ROUTER / STREAM use the same `Received` meaning.
 - A request-reply receive result must not fork into a separate
   protocol-specific result type. A surface that splits request meaning by
   socket kind into separate public types — `DealerReceived`,
-  `RouterReceived`, `SpotReceived` — is not canonical.
+  `RouterReceived` — is not canonical.
 - Request meaning is independent of socket kind. If `request_seq` is
   present, the receive result has request-reply context; if not, it's an
   ordinary receive result.
@@ -1134,7 +1053,7 @@ The rules below are `Required`.
 
 The C ABI binding is an exception. C does not build a managed/object
 result storage; it exposes the same envelope components through typed
-out-params such as `zlink_router_recv()`, `zlink_spot_recv_part()`,
+out-params such as `zlink_router_recv()`,
 and `zlink_dealer_recv_part()`. Do not add a public aggregate object such
 as `zlink_received_t` to C — doing so would grow message-part ownership,
 init/close/reset, and reply-context retention into a new public lifetime
@@ -1165,11 +1084,10 @@ canonical path new code and samples/perf must follow.
 
 ### Operation Builder Policy
 
-zlink's send/request/reply/publish family, and the Actor
-location/session-attach family, all have many combination axes. Spreading
+zlink's raw send/request/reply/publish family has several combination axes. Spreading
 target path, payload part count, `flags`, `timeout`, and the native-suspension
 completion mode across plain method overloads makes a
-socket or service handle a shallow, wide interface, and forces multipart
+socket a shallow, wide interface, and forces multipart
 payload to be wrapped in an external List/Vector container. A high-level
 binding hides this combinatorial complexity inside an operation object,
 and multipart naturally accumulates through repeated `message(...)` calls
@@ -1183,29 +1101,18 @@ Python / Go / Rust.
 #### Start Points In Scope
 
 An operation builder start point is exposed with the same pattern across
-**every send, request, reply, publish, Actor location, and Actor
-session-attach surface**. The name is converted to fit language
+**every raw send, request, reply, and publish surface**. The name is converted to fit language
 convention.
 
 ##### Spot facade (`Spot` / `spot_t`)
 
-- `publish(topic)`
-- `sendToChannel(channelName)` / `send_to_channel(channel_name)`
-- `sendToSpot(destNodeRid, destSpotRid)` / `send_to_spot(...)`
-- `requestToChannel(channelName)` / `request_to_channel(...)`
-- `requestToSpot(destNodeRid, destSpotRid)` / `request_to_spot(...)`
-- `requestToRouter(peerRid)` / `request_to_router(...)`
-- `replyToSpot(destNodeRid, destSpotRid, requestSeq)` / `reply_to_spot(...)`
-- `replyToRouter(peerRid, requestSeq)` / `reply_to_router(...)`
-- `replyActorJoin(request, accepted)` (Actor join admission reply)
+Public Spot operation start points are owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 ##### Raw socket facade
 
 - `PubSocket.publish(topic)` / `XPubSocket.publish(topic)`
 - `DealerSocket.send()` / `DealerSocket.request()`
 - `RouterSocket.send(rid)` / `RouterSocket.request(rid)` / `RouterSocket.reply(rid, requestSeq)`
-- `RouterSocket.sendToSpot(destNodeRid, destSpotRid)` / `requestToSpot(...)` /
-  `replyToSpot(destNodeRid, destSpotRid, requestSeq)`
 - `PairSocket.send()` (PAIR send)
 - `StreamSocket.sendTo(rid)` (STREAM peer send)
 - Any other raw send-capable socket's send entrypoint exposes an
@@ -1213,21 +1120,12 @@ convention.
 
 ##### SpotNode/StreamSocket Actor surface
 
-- `SpotNode.joinActor(actor, destNodeRid, destSpotRid)` / `join_actor(...)`
-- `SpotNode.leaveActor(actor, currentSpotRid)` / `leave_actor(...)`
-- `SpotNode.destroyActor(actor)` / `destroy_actor(...)`
-- `SpotNode.remoteActorGetRef(targetNodeRid, actorId)` / `remote_actor_get_ref(...)`
-- `StreamSocket.bindActor(sessionRid, actor)` / `bind_actor(...)`
-- `StreamSocket.unbindActor(sessionRid, actorId)` / `unbind_actor(...)`
-- `StreamSocket.sendBoundActor(sessionRid, actorId)` / `send_bound_actor(...)`
-- `SpotNode.sendBoundSessionMsg(actor)` / `send_bound_session_msg(...)`
+Public Actor/SpotNode operation start points are owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 #### Common Builder Rules
 
 - A start point does not send immediately — it returns a per-language
-  operation builder such as `SendOp`, `RequestOp`, `ReplyOp`,
-  `ActorJoinOp`, `ActorLeaveOp`, `ActorDestroyOp`, `ActorLookupOp`,
-  `ActorBindOp`, or `ActorUnbindOp`. Regardless of which start point is
+  operation builder such as `SendOp`, `RequestOp`, or `ReplyOp`. Regardless of which start point is
   used, multipart payload is always expressed through repeated
   `.message(...)` calls.
 - A builder convenience such as `.messages(...)`, `.flags(...)`,
@@ -1243,10 +1141,8 @@ convention.
   external List/Vector container.
 - Do not create a single-payload shortcut overload with the same name as
   a start point. For example, public overloads such as `send(message)`,
-  `send(routingId, message)`, `publish(topic, message)`,
-  `sendToChannel(channelName, message)`, and
-  `sendToSpot(nodeRid, spotRid, message)` are forbidden. Express all of
-  these through builder steps, such as
+  `send(routingId, message)`, and `publish(topic, message)` are forbidden.
+  Express these through builder steps, such as
   `send(...).message(message).submit()`.
 - When a language can naturally express an explicit move/consume name, it
   can add an ownership-transfer step (`moveMessage`, `MoveMessage`,
@@ -1255,23 +1151,17 @@ convention.
   state that the caller cannot reuse that message even after a submit
   failure. This does not change the existing `message(...)` step's
   contract of preserving the original on failure.
-- For an operation where payload is semantically required — send,
-  request, reply, publish, Actor join, ActorReplyJoin, and so on — a
+- For a raw send, request, reply, or publish operation where payload is required, a
   `submit` with zero messages is forbidden. A language whose type system
   can prevent this blocks it at compile time; other languages block it
   with a validation error at `submit` time.
-- For an operation with no payload — Actor `leave`, `destroy`,
-  `bindActor`, `unbindActor`, `remoteActorGetRef` — the builder can submit
-  immediately without a `message(...)` step. But it still exposes the
-  same builder shape and option steps (`flags(...)`, `timeout(...)`, and
-  the async-completion final execution method).
 - `flags` and `timeout` are optional builder
   steps, not start-point parameters. A start point takes only
   semantically key arguments, such as the target address or request
   sequence.
 - A messaging call in a sample or documentation example does not repeat a
   default value. For a message-sending function such as `request`,
-  `requestToChannel`, `send`, `sendToChannel`, `reply`, or `publish`, use
+  `send`, `reply`, or `publish`, use
   the packet name inferred by default from the request object or the
   registered packet type. Use a packet-name override such as
   `.packetName(...)`, `.packet_name(...)`, or `.PacketName(...)` only when
@@ -1295,43 +1185,17 @@ convention.
   DEALER cannot designate a specific peer routing id, so reply-routing
   decisions would leak into a protocol helper, and the user would need to
   understand token semantics.
-- An async request or async Actor operation does not take submit flags. The
+- An async raw request does not take submit flags. The
   detailed completion surface follows the
   [bindings async execution surface policy](async-coroutine-policy.en.md).
 - A builder cannot be submitted again once it has been submitted. A
   language that offers a move-only or ownership type blocks this by
   type; otherwise it is blocked by a runtime state check.
-- Because an Actor join start point's admission completion shape differs,
-  its builder exposes a dedicated completion result (`ActorJoinResult`)
-  that captures both the reply payload and the final Actor ref together.
-  lookup/destroy/leave/bind/unbind use the ordinary reply completion
-  shape (`RequestResult`).
+
 
 #### Common Flow Example
 
-Names are converted to fit language convention.
-
-```java
-spot.publish(topic)
-    .message(part1)
-    .message(part2)
-    .flags(SendFlags.DONTWAIT)
-    .submit();
-
-routerSocket.requestToSpot(destNodeRid, destSpotRid)
-    .message(reqPart)
-    .timeout(Duration.ofSeconds(3))
-    .submit();
-
-spotNode.joinActor(actor, destNodeRid, destUserSpotRid)
-    .message(joinStatePart)
-    .timeout(Duration.ofSeconds(3))
-    .submit();
-
-streamSocket.bindActor(sessionRid, actorRef)
-    .timeout(Duration.ofSeconds(2))
-    .submit();
-```
+A raw builder is used as `routerSocket.request(rid).message(part).submit()`. Public Spot/Actor examples are owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 #### Per-Language Async Execution Surface Standard
 
@@ -1340,7 +1204,7 @@ belongs in the
 [bindings async execution surface policy](async-coroutine-policy.en.md).
 
 This rule is Required under the POSD standard. When adding or cleaning up
-a new send/request/reply/publish or Actor location/attach public API,
+a new raw send/request/reply/publish public API,
 use this operation builder shape and the async execution surface policy
 as the baseline, and do not grow the existing overloads into more
 canonical APIs.
@@ -1354,12 +1218,11 @@ is the baseline.
 
 #### Direct Receive Callback Constraints
 
-- The direct receive callback install surface exists only for raw
-  `STREAM` and SPOT routed receive.
+- The direct receive callback install surface exists only for raw `STREAM`.
 - A binding must not publicly expose an `onReceive`-style direct data
   callback for raw `PAIR`, `DEALER`, or `ROUTER`.
 - A binding must not publicly expose an `onSubscribe`-style direct topic
-  callback for raw `SUB`, `XSUB`, or SPOT subscribe receive.
+  callback for raw `SUB` or `XSUB` receive.
 - `ROUTER` inbound routed traffic is received through a single routed
   recv surface. The binding runtime uses `zlink_router_recv()`
   internally, and exposes only aggregate routed recv and the
@@ -1380,24 +1243,7 @@ is the baseline.
 
 #### SPOT Channel And Dispatch Surface
 
-- SPOT is a channel-aware model. A binding must provide
-  `create_route_bridge(...)` or an equivalent typed bridge,
-  `create_publisher(...)` or an equivalent publisher handle,
-  `send_to_channel`, `send_to_spot`, `request_to_channel`, the
-  channel-aware send/request operation builder start points, and the SPOT
-  topic publish/subscribe surface. Legacy surfaces that attach an
-  external channel `DEALER`, route mesh `ROUTER`, or raw `PUB` socket
-  directly to a `SpotNode` are not part of the public contract.
-- A SPOT subscribe result exposes topic/parts. The channel name is not
-  repeated as a message result field.
-- `zlink_spot_dispatch_event_handler()` is the canonical readable
-  notification surface for the SPOT topic/routed/channel-reply/timer/actor
-  planes.
-- The Actor dispatch surface is a public service-layer capability, same
-  as SPOT. Every binding exposes it through public types that fit its
-  own language convention, and the shared meaning follows the
-  `Actor Dispatch Binding Contract` section and the `Actor Dispatch
-  Policy` section below.
+Public SPOT channel and dispatch operations are owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 #### Auto-HWM And SpotNode Options
 
@@ -1530,7 +1376,7 @@ signatures belong to [async-coroutine-policy §6](async-coroutine-policy.en.md#6
 |---|---|
 | SEND `OK`, ID `0` | End the terminal with `result == OK` and a completed `admitted` stage. |
 | REQUEST `OK`, nonzero ID | Return `result == OK` with a completed `admitted`, and connect the corresponding REQUEST completion to the `reply` stage. |
-| `BACKPRESSURED`, `EAGAIN`, nonzero wait token | Retain the input for resubmission and wait for WRITABLE. Continue the same operation according to Core's drain and resubmission contract; the terminal returns `result == BACKPRESSURED` and an `admitted` stage that completes on resubmission admission. |
+| `BACKPRESSURED`, `EAGAIN`, nonzero wait token | Before calling Core, the binding retains an independently owned staging record and passes a separate native array to each attempt. Core consumes even a failed attempt's array. After WRITABLE, the binding resubmits the same operation from staging. The terminal returns `result == BACKPRESSURED` and an `admitted` stage that completes on admission. Staging is released once on admission, terminal failure, or socket/context lifecycle cleanup. |
 | Submit failure without a wait token | Complete the terminal with that submit error (raised as an exception/error, not through the result object). |
 
 - **The binding delivers a WRITABLE found by socket-local context and token to its waiter without rechecking Core's guaranteed submit RID echo.**
@@ -1544,8 +1390,8 @@ A binding that uses Core's whole-message API adds **no lock or gate of its own o
 owns record atomicity, consumption of the complete array, and concurrent-submission results;
 [Core thread safety](../../../core/doc/spec/core/socket/README.en.md#2-thread-safety)
 owns the race between close and an in-flight submission. A binding whose public API preserves a
-message on failure submits an independently owned staging copy to Core to implement that contract.
-A binding adds no multipart ABI or public transaction abstraction.
+message on failure also retains the source under its language ownership contract, independently of
+the staging record above. A binding adds no multipart ABI or public transaction abstraction.
 
 Request reply completion, timeout, and language wait cancellation follow
 [Timeout](#timeout) and the [async execution model](async-execution-model.en.md#6-caller-wait-cancellation).
@@ -1567,62 +1413,8 @@ Each binding maps HWM values as follows.
 
 ##### SpotNode HWM Options
 
-- A SPOT node option name follows core's public enum as-is. A binding
-  does not expose a directional HWM option or a delivery-queue
-  hard-limit option. What it exposes is the four admission options
-  `ZLINK_SPOT_NODE_OPT_ROUTER_HWM_PROFILE`,
-  `ZLINK_SPOT_NODE_OPT_ROUTER_HWM`,
-  `ZLINK_SPOT_NODE_OPT_PUBSUB_HWM_PROFILE`,
-  `ZLINK_SPOT_NODE_OPT_PUBSUB_HWM`, and the two dispatch-worker options
-  `ZLINK_SPOT_NODE_OPT_DISPATCH_WORKERS_MIN` and
-  `ZLINK_SPOT_NODE_OPT_DISPATCH_WORKERS_MAX`.
-  The removed `ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES` and
-  `ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES` do not remain as aliases on a
-  raw socket or on a socket/SpotNode/Spot facade. A binding exposes only
-  the byte-valued context memory limit, Core budget, profile, and ABI v1
-  budget snapshot as the canonical Auto HWM surface.
-  A dispatch-worker option adjusts only the size of the callback worker
-  pool owned by `SpotNode`, and does not mean `ZLINK_IO_THREADS` or a
-  data-plane thread count. `min` must be at least 1, and `max` must be at
-  least `min`. Absent explicit configuration, it maps to `min=max=1` when
-  there is 1 CPU, and otherwise to `min=2`, `max=cpu_count`.
-#### SPOT Status And Snapshot Names
+SpotNode HWM options are owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
-- A SPOT binding status object must expose core's
-  `disconnected_sub_target_count` and `disconnected_routed_target_count`
-  under a name that fits language convention. Because core currently does
-  not disconnect a target from delivery-queue growth alone, both values
-  currently report `0`.
-- When a SPOT binding exposes or documents an internal socket snapshot
-  name, it uses the public snapshot name core returns as-is. The current
-  names are `mesh-pub`, `mesh-xsub`, `peer_ctrl_pub`, `peer_ctrl_sub`,
-  `routed-router`, `local-pub`, and `internal_receiver`. `local-pub` is
-  the local fanout socket that sends to a subscriber inside the same
-  node. (`ingress-sub`, `pub-ingress-tx`, `internal-router`, and
-  `internal-router-tx` have been removed and are not part of the
-  snapshot.)
-#### Dispatch Readiness Meaning
-
-- `zlink_spot_dispatch_event_handler()` is the single entry point for
-  SPOT routed receive and Actor lifecycle readiness. A binding does not
-  expose a direct routed callback as public API.
-- `ZLINK_SPOT_DISPATCH_EVENT_SUBSCRIBE_READABLE` and
-  `ZLINK_SPOT_DISPATCH_EVENT_ROUTED_READABLE` are readiness
-  notifications, not message-count notifications. A binding must not
-  describe or implement them as edge-triggered one-shot events.
-- `ZLINK_SPOT_DISPATCH_EVENT_ACTOR_READABLE` and
-  `ZLINK_SPOT_DISPATCH_EVENT_ACTOR_JOIN_READABLE` belong to the same
-  dispatch-readiness axis. An Actor readable event must let the caller
-  know which Actor to drain, and an Actor join readable event must be
-  drained through `Spot`'s join receive surface.
-- A SPOT dispatch consumer must reflect, in its documentation and
-  samples, the rule of draining `subscribe`/`recv_routed` until each
-  language's no-data representation appears. For example, C++ uses the
-  `recv_result_t::no_data` return value, and Java/Node/Python use `false`
-  from the API that fills caller-provided result storage.
-- The first SPOT routed recv must not perform hidden activation, hidden
-  queue open, or hidden target registration. A binding assumes the same
-  premise and does not layer lazy bootstrap logic on top.
 #### Send Completion, Peer Weight, And STREAM Receive Modes
 
 - Send outcomes follow [Submit result projection](#submit-result-projection);
@@ -1656,96 +1448,9 @@ Each binding maps HWM values as follows.
 
 ## Actor Dispatch Binding Contract
 
-This section is the Actor public contract that applies to every language
-binding in common. A per-language document must spell out the contract
-below using names and types that fit its own language convention.
-
-Actor dispatch is not an add-on to SPOT messaging — it's an independent
-public service-layer capability. Because `SpotNode`, `Spot`, and
-`StreamSocket` share ownership of lifecycle and routing, each public
-type exposes its own share of the responsibility. The exact surface
-placement follows the `Actor Dispatch Policy` section below.
-
-#### Actor Id, Ref, And Lifecycle Entry Points
-
-- An Actor id is a non-empty UTF-8 string up to 255 bytes. A NUL
-  character is not allowed.
-- An Actor ref carries `node_rid`, `actor_id`, and `generation`.
-  `generation == 0` is an unchecked remote ref, and is not treated as an
-  invalid value.
-- Creating an unchecked remote Actor ref is owned by `SpotNode`. It may
-  be expressed as a static method or a factory function per language
-  convention, but the canonical documentation and samples are based on
-  the `SpotNode`-owned surface. Do not add a separate duplicate unchecked
-  factory as public API directly on `ActorRef` itself.
-- A local Actor is created by `SpotNode`. An Actor can join only one Spot
-  at a time, and leaving does not drain unread messages.
-- `Actor.close`, or an equivalent lifecycle method, destroys the local
-  Actor owned by that Actor handle. `SpotNode.destroyActor(actorRef)`, or
-  an equivalent method, is a ref-based destroy surface for a caller that
-  holds only an Actor ref, without an Actor handle. These are not the
-  same responsibility repeated under two names — they are two entry
-  points with different owners, and a per-language spec must document
-  this difference.
-- `Actor.join` / `Actor.leave` are the surface for a caller holding a
-  local Actor handle. `SpotNode.joinActor(actorRef, ...)` /
-  `SpotNode.leaveActor(actorRef, ...)` are the surface for a caller
-  holding only an Actor ref. Providing only one of the two makes either
-  the ref-only flow or the owned-handle flow unnecessarily complicated.
-
-#### STREAM Session Binding
-
-- One STREAM session can bind multiple Actors. Bind/unbind is keyed on
-  the session routing id and either the actor id or the Actor ref.
-- A public API that sends from STREAM to an Actor uses the bound session
-  and actor id as its selector. A removed lookup/send helper name is not
-  kept in the public API.
-- `Actor.sendBoundSession` and `Actor.closeBoundSession` do not take a
-  session routing id as an argument. An Actor hides its current
-  bound-session selection internally. When a caller must select
-  explicitly by session routing id, it uses
-  `StreamSocket.sendBoundActor(...)` instead.
-- Actor recv info's `source_node_rid` and `source_session_rid` are value
-  fields of the core struct, so they are not documented as
-  nullable/optional. No-data is delivered only through the recv result's
-  own representation, such as `false`, a no-data result, or `Ok(false)`.
-
-#### Dispatch And Join Results
-
-- An Actor readable dispatch event must let the caller know which Actor
-  to drain. A language that hands the callback off to a different
-  execution context must non-blockingly pre-drain the Actor part at
-  callback-entry time, so the public dispatch info can return that part.
-- A Spot join request carries a message. A join reply must also return a
-  message to the caller together with the accept/reject result. Join
-  completion must deliver the final Actor ref (for a remote join, the
-  target node's ref) and the joined Spot rid to the application through
-  a dedicated `actor join` result type.
-- The request-reply surface exposes only the payload part the core reply
-  function supports. Because the core reply function has no send-flag
-  argument, a binding does not add a no-op flag-setting step to the reply
-  builder.
-
-#### Removed APIs
-
-- Remote Actor creation and the admission handler have been removed from
-  the public surface. An Actor that must start on a remote node is
-  created by the application directly on that SpotNode with `actor_new`.
-  When a checked ref for a remote Actor is needed, use the async
-  `remote_actor_get_ref` lookup.
-- Actor location is updated through the Actor creation, Spot join/leave,
-  and Actor destroy flows. STREAM session bind/unbind neither creates nor
-  removes an Actor location.
-- Session attach and Actor location movement are different state
-  transitions. Joining a user Spot does not require a bound STREAM
-  session. Moving an Actor's location does not automatically change the
-  session mapping.
-- There is no per-Actor queue-limit option. A binding must not make this
-  a public option.
-- A removed Actor ref function, a stream actor lookup/send helper, or a
-  session-actor-key design name is not kept in the public surface or
-  documentation.
-
+The [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md)
+owns the public Actor service contract. Raw bindings follow the
+[Core runtime boundary](../../../core/doc/spec/core/08-runtime-boundary.en.md#3-capabilities-owned-by-framework).
 
 ## Document Interpretation Rules
 - This document's policy body is a normative document by default.
@@ -1799,8 +1504,7 @@ placement follows the `Actor Dispatch Policy` section below.
   ready-count surface.
 - When a readiness gate is needed, use the low-cost event edge directly.
 - Raw perf/samples use `CONNECTION_READY` event counting.
-- SPOT perf/samples do not use a separate service event gate.
-- SPOT perf uses an explicit `READY`/`START` barrier protocol.
+- Public Spot/Actor perf and sample policy follows [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 - Do not turn a delivery-ready/count-family monitor event into a new gate
   contract.
 
@@ -1995,6 +1699,7 @@ Every data-path function (`send`, `recv`, `request`, `reply`,
      only).
    - For every other result code, calling `zlink_errno()` is
      unnecessary.
+   - Except for the C ABI, bindings do not expose a public raw `zlink_errno()` accessor; callers use the error type’s `internalErrno`/`internal_errno` field.
 
 #### Per-Language Error Representation
 
@@ -2090,20 +1795,14 @@ function family's concrete error type.
   - Python: docstring `Raises: BindError`
   - Go: document the return type as `returns *BindError`
   - Rust: return type `Result<T, BindError>`
-- When a method spans multiple function families (for example, a service
-  layer's combined call), declare the shared parent
-  `ZlinkException`/`ZlinkError` and list the subtypes that can actually
-  occur in the doc.
+- When a raw method spans multiple function families, declare the shared parent `ZlinkException`/`ZlinkError` and list the subtypes that can occur in the doc.
 - A validation exception (a language-native `IllegalArgumentException`,
   and so on) is separate from the system above and does not enter the
   `ZlinkException`/`ZlinkError` hierarchy.
 
 ### Flags Policy
 
-Every data-path function has a `flags` option. An ordinary socket
-function expresses it as a per-language signature's `flags` parameter,
-and a function targeting a SPOT operation builder expresses it as the
-builder's `flags(...)` step.
+Every raw data-path function has a `flags` option expressed as a per-language signature parameter or a builder `flags(...)` step.
 
 | Function family | `flags` usage |
 |---|---|
@@ -2130,7 +1829,7 @@ builder's `flags(...)` step.
 - Per-language `flags` representation:
   - C: `int flags = 0` (the C ABI does not apply the builder policy)
   - C++ / Java / .NET / Node / Python / Go / Rust send/request/reply/
-    publish/Actor-attach surfaces: expressed through the builder's
+    publish surfaces: expressed through the builder's
     `.flags(...)` step. No separate `flags` argument or `_with_flags`
     variant is added to the operation start-point signature.
   - C++ / Java / .NET / Node / Python / Go / Rust data-plane
@@ -2178,14 +1877,15 @@ create a separate name such as `request_callback`, `send_nonblocking`, or
 
 ```
 // GOOD: one name, builder absorbs the form.
-spot.request_to_channel(channel)
+// router: RouterSocket
+router.request(rid)
     .message(part)
     .timeout(Duration::from_secs(3))
     .submit()                              // returns the language completion object
 
 // BAD: split names for the same operation.
-request_to_channel(channel, parts, timeout)
-request_to_channel_async(channel, parts, timeout)
+request(rid, parts, timeout)
+request_async(rid, parts, timeout)
 ```
 
 #### Shared Result Type Names
@@ -2203,37 +1903,7 @@ reveals the domain concept the value represents, directly.
 
 #### SPOT Target Naming
 
-SPOT routed naming separates pub/sub from targeted messaging.
-
-- **Channel-aware path**
-  - `send_to_channel(channel_name) -> SendOp`
-  - `request_to_channel(channel_name) -> RequestOp`
-- **SPOT topic path**
-  - `publish(topic) -> SendOp`
-    - The receiver is already a publish-capable socket or `Spot`, so it
-      does not repeat owner or parameter meaning, as in `publish_spot`
-      or `publish_to_topic`.
-- **Direct routed path**
-  - `send_to_spot(dest_node_rid, dest_spot_rid) -> SendOp`
-  - `request_to_spot(dest_node_rid, dest_spot_rid) -> RequestOp`
-  - `request_to_router(peer_rid) -> RequestOp`
-- **Reply path**
-  - `reply_to_spot(dest_node_rid, dest_spot_rid, request_seq) -> ReplyOp`
-  - `reply_to_router(peer_rid, request_seq) -> ReplyOp`
-
-The payload and options of `SendOp`, `RequestOp`, and `ReplyOp` are
-expressed through the `message(...)`, `flags(...)`, `timeout(...)`, and
-`submit...` steps the `Operation Builder Policy` section defines. So a
-new canonical SPOT surface does not add a `Message`/`List<Message>`/
-`flags`/`timeout` combination overload on the same start point.
-
-On a new SPOT binding surface, `send_to_channel`/`request_to_channel`/
-`publish(...)` are treated as the default path, instead of the old
-`send_service`/`request_service`. A direct address-targeted path can be
-separately supported as core's typed routed surface.
-
-Convert to camelCase / PascalCase / snake_case per each language's
-convention.
+Public Spot/Actor target names are owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 ### Request Policy
 
@@ -2241,13 +1911,8 @@ A request offers one language-native suspension terminal on the same
 `RequestOp` operation builder the `request` entrypoint returns. Do not create a
 separate name (`request_callback`, `requestAsync`, `submit_async`, and so on).
 
-For a SPOT operation builder target, the work start point is
-`requestToChannel`/`requestToSpot`/`requestToRouter`; for a raw
-`DealerSocket`/`RouterSocket`, the work start point is
-`request`/`request(peer)`. Regardless of the start point, the completion
-mode is selected through the per-language final execution method the
-[bindings async execution surface policy](async-coroutine-policy.en.md)
-defines.
+For raw `DealerSocket`/`RouterSocket`, the request start point is `request`/`request(peer)`. The per-language final execution method follows the [bindings async execution surface policy](async-coroutine-policy.en.md).
+
 - **On success, return only the reply payload's `List<Message>`.** Do not wrap request-target
   metadata in `Received` or introduce a separate `Reply` type.
 - Because multipart reply is possible, it returns `List<Message>`, not a
@@ -2374,10 +2039,8 @@ Rules:
 
 #### `TopicMessage`
 
-The recv result for raw `SUB`/`XSUB` and `Spot subscribe`. Raw pub/sub wraps
-the complete payload array returned by C API `zlink_subscribe()`, while Spot
-subscribe wraps the result of `zlink_spot_subscribe_part()`. The binding's
-public API returns either result as one per-language multipart object.
+Raw `SUB`/`XSUB` receive returns the complete payload array from Core `zlink_subscribe()`
+as a per-language multipart object. Public Spot subscribe results follow [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 | Member | Type | Meaning |
 |------|------|------|
@@ -2392,9 +2055,7 @@ public API returns either result as one per-language multipart object.
 Rules:
 - Do not create `Subscribed` or a similar subclass. Expose only
   `TopicMessage`.
-- A Spot subscribe result exposes `topic + parts` together. The channel
-  is state that already lives on the `SpotNode` the `Spot` handle is
-  bound to, so it is not repeated as a message result field.
+
 - `topic` is a UTF-8 `string`. It is not exposed as `bytes`/`byte[]`/
   `Vec<u8>` (even if it arrives internally as raw bytes, the public API
   decodes it).
@@ -2409,8 +2070,8 @@ operation, not a requirement that every binding expose the same method name.
 
 #### `Received`
 
-The single canonical domain object that carries a PAIR / DEALER / ROUTER
-/ STREAM / SPOT routed recv result. Other than lacking a topic field, it
+The single canonical domain object that carries a raw PAIR / DEALER / ROUTER
+/ STREAM recv result. Other than lacking a topic field, it
 has the same convenience-method set as `TopicMessage`. A routed recv
 result provides a `send()` operation builder for sending an ordinary
 response, and a request-reply result also provides a `reply()` builder.
@@ -2418,17 +2079,16 @@ Both entrypoints accumulate payload and options through builder steps,
 per the `Operation Builder Policy`.
 
 `Received` is not a per-socket-kind message wrapper. Request meaning is
-the same across DEALER, ROUTER, and SPOT, and is expressed only through
+the same across DEALER and ROUTER, and is expressed only through
 `request_seq` and reply context. A binding must not add a
 protocol-specific public result type such as `DealerReceived`/
-`RouterReceived`/`SpotReceived` as a new canonical surface. If an
+`RouterReceived` as a new canonical surface. If an
 existing binding has such a type, remove it, and new code, samples,
 perf, and framework integrations must use `Received`.
 
 | Member | Type | Meaning |
 |------|------|------|
-| `routing_id` | `RoutingId?` | The sender's routing id (router = `peer_rid`, spot = `source_node_rid`) |
-| `spot_rid` | `RoutingId?` | Set only for SPOT routed recv (`source_spot_rid`) |
+| `routing_id` | `RoutingId?` | The sender's routing id (router = `peer_rid`) |
 | `request_seq` | `uint64?` | Set in request-reply mode; otherwise null |
 | `parts` | `List<Message>` | The multipart payload |
 | `is_single_part()` | `bool` | Same as above |
@@ -2449,7 +2109,7 @@ contract type.
   `Received`. A high-level binding converts a core out-param's
   `request_seq == 0` into absent.
 - A non-zero `request_seq` means a receive result that has request-reply
-  context. This meaning is the same across DEALER / ROUTER / SPOT.
+  context. This meaning is the same across DEALER / ROUTER.
 - A substrate-level distinction such as a request/reply message type must
   not split the public `Received` meaning. If such a value is genuinely
   needed as a public contract, expose it only as `Received`'s shared
@@ -2460,9 +2120,7 @@ contract type.
   routed source context exists, even without `request_seq`.
 - `send()` has no request-reply meaning. It simply sends an ordinary
   routed message back toward whoever sent this `Received`.
-- A `ROUTER` and `STREAM` receive result sends by peer routing id. A
-  `SPOT` routed receive result sends by source node rid and source spot
-  rid.
+- A `ROUTER` and `STREAM` receive result sends by peer routing id. Public Spot receive results follow [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 - Payload accumulation and options such as `flags(...)` are expressed
   through `SendOp` builder steps, and a non-blocking submit flag such as
   `DONTWAIT` is also delivered through the builder's `.flags(...)` step.
@@ -2485,8 +2143,7 @@ contract type.
 
 #### `SubscriptionEvent`
 
-The subscribe/unsubscribe event XPub receives, and the recv result for a
-Spot subscription event.
+The raw subscribe/unsubscribe event XPub receives. Public Spot subscription events are owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 | Member | Type | Meaning |
 |------|------|------|
@@ -2497,7 +2154,6 @@ Spot subscription event.
 Rules:
 - Expose it only as a value object (no methods, fields only).
 - No lifecycle such as `close()` (it's a value type).
-- A Spot subscription event result exposes `topic + subscribed`.
 
 #### `RoutingId`
 
@@ -2597,23 +2253,7 @@ option or count-to-byte alias is exposed.
 
 #### Service-Layer Entry Objects
 
-The following are value objects returned from service-layer snapshot/
-query calls. Every binding must **spell out the field list in its
-spec** (a raw C struct must not be exposed as-is — wrap it in
-per-language named fields).
-
-- `SpotNodeStatus` — a spot node status snapshot
-- `SpotNodePeerEntry` — a spot node peer entry. Must include `weight`.
-- `SpotNodeSubjectEntry` — a spot node subject entry
-
-Each spec spells out these types' fields as a table or code block. `C++`
-wraps the raw `zlink_*_t` struct as `class <name>_t { ... }` rather than
-exposing it directly on the binding API surface.
-
-An extra method/field beyond the canonical set above is a policy
-violation. When a per-language spec is found missing one, fill it in
-against the canonical baseline, and remove any added non-standard
-method.
+Public Spot/Actor snapshot shapes are owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 ## Socket Type Capability Policy
 - Expose a per-socket-type capability only on that type itself.
@@ -2647,9 +2287,7 @@ method.
 - Keep implementation state such as a future/promise completion
   linkage (a pending map, and so on) inside the socket class, and expose
   only methods externally.
-- The only exception is a service-layer surface that **combines
-  different socket types** — these are independent service contracts,
-  not a single-socket-function wrapper.
+- Public Spot/Actor combined surfaces are owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 - This rule applies identically across every binding
   (C++/Java/.NET/Node/Python/Go/Rust), and a violation found in a spec
   file is **fixed immediately**.
@@ -2679,9 +2317,7 @@ method.
 
 `disconnectRid` is the peer-rid disconnect surface of a connectable raw
 socket. `STREAM` is a bind-only socket and does not expose `connect`,
-`disconnect`, or `disconnectRid` as public API. `Spot` also does not
-expose a raw peer-rid disconnect — disconnecting a SPOT node peer is
-handled by the `SpotNode.disconnectPeerRid` family.
+`disconnect`, or `disconnectRid` as public API. Public Spot/Actor peer management is owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 #### Send Capabilities
 
@@ -2748,9 +2384,7 @@ spec file.
   language's convention.
 - A capability marked `—` must not exist on that socket-type class in any
   language binding.
-- Service-layer functionality the Socket Capability Matrix doesn't cover
-  may be exposed as public API only when it's specified in a separate
-  role matrix or policy section.
+- Public Spot/Actor capabilities follow [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 - Watch especially for these frequent violations:
   - No plain `send` (a send without routingId) on `RouterSocket`/
     `StreamSocket` — it must be `send(routingId, ...)`.
@@ -2801,530 +2435,8 @@ spec file.
 - When a new C API is added to a public header, every per-language spec
   file must be updated together.
 ## Service Layer Policy
-- This section defines the public API policy for the service layer
-  (Spot, Actor) that sits on top of the socket layer.
-- The service layer follows the same POSD principles, naming policy,
-  error policy, ownership policy, and testing policy as the socket
-  layer.
-- The service layer's baseline is the Spot/Actor C API in
-  `core/include/zlink.h`.
 
-### Spot / SpotNode Lifecycle (POSD Principles)
-
-- **`SpotNode` is the lifecycle owner.** `Spot` is a pub/sub facade on
-  top of it, valid only while `SpotNode` is alive.
-- `Spot` is not built with an independent constructor. **It is created
-  through a factory method such as `SpotNode.createSpot(...)`**. The
-  name follows language idiom (`spot_node.new_spot`,
-  `spotNode.createSpot`, and so on).
-- The "get if it exists, otherwise create" flow keyed on an explicit
-  Spot routing id is exposed through a `SpotNode.getOrCreateSpot(...)`
-  family method that directly maps to
-  `zlink_spot_node_spot_get_or_new(...)`. A binding must not emulate
-  this meaning by combining lookup and create.
-- `Spot`'s life is bound to its parent `SpotNode`.
-  - `spot.close()` — ends only the Spot; the node stays alive
-  - `spotNode.close()` — cleans up the node and every live Spot under it
-    together (cascading close)
-- This removes the need for a user to manually combine the close order
-  of `Spot` and `SpotNode`. The binding pre-processes child spots inside
-  `SpotNode.close()` before tearing down the node.
-- The C API's raw `zlink_spot_new(...)` + `zlink_spot_node_new(...)`
-  combination is not exposed as a binding public constructor as-is. It
-  must be wrapped in a `SpotNode`-centered factory pattern.
-
-### Service Layer Introspection Surface Tiers
-
-The service layer's introspection/snapshot/entry types are **split into
-two tiers by usage frequency**. A binding spec reflects this split.
-
-- **Primary (core)**: a snapshot/query surface an ordinary user uses
-  frequently. Described in `bindings/<lang>/README.md`'s upper section.
-  - `SpotNodeStatus` (spot node status)
-
-- **Advanced/Diagnostic**: for special purposes such as debugging or
-  operational monitoring. Described in a separate "Advanced" or
-  "Diagnostic" subsection in the spec.
-  - `SpotNodePeerEntry`, `SpotNodeSubjectEntry`
-  - `SpotNodeSocketEntry`, `SpotNodeSpotEntry`, `SpotNodeActorEntry`
-  - Various filter types (`SpotNodePeerFilter`, `SpotNodeSubjectFilter`,
-    `SpotNodeSocketFilter`)
-
-The Primary types alone must be enough for a basic usage scenario. The
-"register / discover / connect a service" flow must complete without
-learning the Advanced types.
-
-### Public Exposure Of `zlink_errno()`
-
-- A binding **does not expose the raw `zlink_errno()`/`zlinkErrno()`
-  function publicly**. Error detail is accessed **only ever through the
-  error type's `internalErrno`/`internal_errno` field**.
-- Do not create a dual path where a user investigating an error
-  "sometimes uses `ZlinkException.getCode()` and sometimes uses
-  `Zlink.errno()`" — unify it to one entry point.
-- It's allowed for a binding's internal implementation to call
-  `zlink_errno()` to fill in the exception object (for internal
-  interpretation). The ban applies only to the public surface.
-- A message-lookup utility such as `Zlink.strerror(errno)` can remain as
-  a convenience, but the raw `errno()` accessor should be private or
-  removed.
-
-### Service Layer Architecture
-- The service layer's current public axes are `SpotNode`, `Spot`,
-  `Actor`, `StreamSocket`'s Actor binding surface, and the SPOT route
-  bridge/publisher surface. The public Discovery/Registry handle was
-  removed from the core contract in core 8.4.3, so it must not be
-  revived as a new binding surface.
-
-```
-SpotNode
-  |-- bind
-  |-- raw mesh: connectPeer, disconnectPeer
-  |   createPublisher
-  |-- actor: create, lookup, remote create, join, leave
-  |-- introspection: status, peers, peers(filter),
-  |   subjects, spots, actors
-  `-- TLS: setTlsServer, setTlsClient
-
-Spot
-  |-- publish, subscribe
-  |-- sendToChannel, requestToChannel
-  |-- sendToSpot, requestToSpot, requestToRouter
-  |-- replyToSpot, replyToRouter
-  |-- actor join: recvActorJoin, replyActorJoin, actors
-  |-- actor lifecycle: recvActorLifecycle
-  |-- setSubscription, unsetSubscription
-  |-- setDispatchHandler
-  `-- close facade only
-
-Actor
-  |-- ref: nodeRid, actorId, generation
-  |-- receive: recvPart
-  |-- bound session: send, close
-  `-- close lifecycle handle
-
-StreamSocket
-  |-- bindActor, unbindActor
-  `-- sendBoundActor
-
-  |-- connect
-  |-- snapshot
-  `-- close
-```
-
-### Actor Dispatch Policy
-
-Actor dispatch is a formal service-layer contract that currently exists
-in core's public header. A binding does not hide Actor as an internal
-SPOT detail — it organizes it as a separate public capability spanning
-`SpotNode`, `Spot`, `Actor`, and `StreamSocket`.
-
-If the language provides a unit for splitting public surface — a header,
-module, package, namespace — Actor must have its own independent
-entrypoint. This entrypoint must not be a thin forwarding file that
-merely re-includes/imports/exports the whole SPOT header or module. The
-Actor entrypoint must substantively own the public types and function
-declarations that make up the Actor contract — the Actor value object,
-the Actor lifecycle handle, the Actor recv/join helper. A structure where
-the SPOT entrypoint reuses the Actor entrypoint is allowed, but a
-structure where the Actor entrypoint exists only by leaning on the whole
-SPOT implementation is non-compliant.
-
-The baseline core public types and functions are as follows.
-
-- Types: `zlink_actor_ref_t`, `zlink_actor_route_t`,
-  `zlink_actor_recv_info_t`, `zlink_actor_join_info_t`,
-  `zlink_actor_join_result_t`, `zlink_actor_join_entry_spot_result_t`,
-  `zlink_actor_lookup_result_t`, `zlink_spot_actor_lifecycle_info_t`,
-  `zlink_actor_join_spot_handler_fn`,
-  `zlink_actor_join_entry_spot_handler_fn`,
-  `zlink_actor_lookup_handler_fn`, `zlink_spot_node_spot_entry_t`,
-  `zlink_spot_node_actor_entry_t`
-- `SpotNode` axis: `zlink_spot_node_actor_new`,
-  `zlink_spot_node_actor_lookup`, `zlink_remote_actor_get_ref` (async
-  lookup), `zlink_spot_node_actor_destroy` (async submit),
-  `zlink_spot_node_actor_join_spot` (async submit + a dedicated
-  completion typedef), `zlink_spot_node_actor_join_entry_spot` (async
-  submit + a dedicated completion typedef),
-  `zlink_spot_node_actor_leave_spot` (async submit),
-  `zlink_spot_node_actor_recv_part`,
-  `zlink_spot_node_actor_send_bound_session_msg`,
-  `zlink_spot_node_actor_reply_no_bind`,
-  `zlink_spot_node_actor_close_bound_session`
-- `Spot` axis: `zlink_spot_actor_join_recv`, `zlink_spot_actor_join_reply`,
-  `zlink_spot_recv_actor_lifecycle`, `zlink_spot_actors`
-- `StreamSocket` axis: `zlink_stream_bind_actor` (async submit),
-  `zlink_stream_unbind_actor` (async submit),
-  `zlink_stream_send_bound_actor_part`, `zlink_stream_bound_actors`
-- Snapshot axis: `zlink_spot_node_spots`, `zlink_spot_node_actors`,
-  `zlink_spot_actors`
-
-The binding surface follows this split of responsibility.
-
-| Public owner | Actor role |
-|---|---|
-| `SpotNode` | Local Actor create/lookup, async remote Actor lookup, async destroy, async join/leave, node-level Actor snapshot |
-| `Actor` | Holds the Actor ref, Actor recv, bound STREAM session message send, bound session close |
-| `Spot` | Actor join request recv/reply, Actor lifecycle event receive, a snapshot of Actors currently joined to this Spot |
-| `StreamSocket` / session facade | Async STREAM session Actor bind/unbind, send targeted at a bound Actor, session-attach list lookup |
-
-A binding must provide the following domain objects as a public
-contract. The name can be converted to fit language convention, but the
-field meaning does not change.
-
-| Object | Required meaning |
-|---|---|
-| `ActorRef` | `node_rid`, `actor_id`, `generation` |
-| `ActorRoute` | The routed target Actor, current Spot routing id, current Spot kind |
-| `ActorRecvInfo` | The receiving Actor, source node/session routing id, flags |
-| `ActorReceived` | `ActorRecvInfo` plus payload parts. The name can change per language convention, but the native array, capacity, and count are not exposed as public fields. In a language that owns the payload parts, expose it as a disposable envelope, not a cloneable record/value |
-| `ActorJoinInfo` + join message | The `source_actor`, `target_actor`, `source_node_rid`, `source_spot_rid`, `target_node_rid`, `target_spot_rid`, `join_epoch`, `flags`, and join message needed to judge and respond to a join request. Can be grouped into an `ActorJoinRequest` wrapper or a tuple/pair per language convention. A wrapper that owns the join message must be disposable. The native reply context is kept only inside the binding and is not exposed as a public field |
-| `ActorJoinResult` | Delivered on join completion. `result`, the final `actor` ref (the target node's ref for a remote join), `joined_spot_rid`, `join_epoch`, `flags` |
-| `ActorJoinEntrySpotResult` | Delivered on Entry Spot join completion. `result`, the final `actor` ref, `target_node_rid`, `join_epoch`, `flags`. No join message or reply payload |
-| `ActorLookupResult` | Delivered on remote Actor lookup completion. `result`, the checked `actor` ref, `flags` |
-| `SpotActorLifecycleEvent` | The result of draining a Spot lifecycle readable event. `kind`, `info`. In a language where it also owns request parts, expose it as a disposable envelope, not a cloneable record/value |
-| `SpotActorLifecycleInfo` | Included in a Spot lifecycle event. `previous_actor`, `current_actor`, `previous_spot_rid`, `current_spot_rid`, `join_epoch`, `flags` |
-| `SpotNodeSpotEntry` | Spot routing id, Entry/User Spot kind, whether a dispatch handler is set, joined/pending Actor count, route sync state, change timestamp |
-| `SpotNodeActorEntry` | Actor ref, current Spot routing id, current Spot kind, route sync state, pending message count, change timestamp |
-
-The detailed rules are as follows.
-
-- An Actor id is a non-empty UTF-8 string up to 255 bytes. A NUL
-  character is not allowed.
-- `generation == 0` is an unchecked remote ref, and is not treated as an
-  invalid value.
-- A local Actor is created by `SpotNode`, and its lifecycle handle is
-  exposed as the per-language `Actor` type. An Actor can join only one
-  Spot at a time.
-- `leave` is an async submit API. It does not drain unread Actor
-  messages. It always returns to the Entry Spot of the same node —
-  if `leave` succeeds from a user Spot, a source-left event and an
-  Entry-Spot-joined lifecycle event fire, and the active route is
-  updated to the Entry Spot location.
-- Entry Spot join is an async submit API. The target argument is the
-  SpotNode rid, not an Entry Spot rid. Because a SpotNode has only one
-  Entry Spot, the public API does not require a separate Entry Spot rid.
-  An Entry Spot join does not send a join message and does not go
-  through the application join queue. The completion handler returns
-  only success/failure and the final Actor ref.
-- An Actor that must start on a remote node is created by the
-  application directly on that SpotNode with `actor_new`. A checked ref
-  for a remote Actor is obtained through the async
-  `remote_actor_get_ref` lookup. Remote create-or-get and an admission
-  handler are not on the public surface.
-- A Spot join request carries a message. A join reply must also return a
-  message to the caller together with the accept/reject result. Join
-  completion delivers the final Actor ref and joined Spot rid to the
-  caller as an `ActorJoinResult` value.
-- The request-reply surface exposes only the payload part the core reply
-  function supports. Because the core reply function has no send-flag
-  argument, a binding does not add a no-op flag-setting step to the
-  reply builder.
-- `ActorJoinInfo` exposing this does not mean it must expose every field
-  of native `zlink_actor_join_info_t` as a public field. A per-language
-  binding keeps the native request context needed for the reply as
-  opaque internal state. The public value object exposes
-  `source_actor`, `target_actor`, the source/target node and Spot
-  routing id, `join_epoch`, `flags`, and the message — what a user needs
-  to judge and respond.
-- One STREAM session can bind multiple Actors. Bind/unbind is keyed on
-  the session routing id and either the actor id or the Actor ref.
-- When a language can naturally provide a session facade, it's better to
-  expose STREAM Actor bind/unbind and send targeted at a bound Actor as
-  operations on the session facade, rather than as socket-wide
-  functions. This avoids repeatedly passing the session routing id.
-- A public API that sends from STREAM to an Actor uses the bound session
-  and actor id as its selector.
-- Actor location is updated through the Actor creation, Spot join/leave,
-  and Actor destroy flows. STREAM session bind/unbind does not change
-  Actor location.
-- There is no per-Actor queue-limit option. A binding must not make this
-  a public option.
-- A removed Actor ref function, a stream actor lookup/send helper, or a
-  session-actor-key design name is not kept in the public surface or
-  documentation.
-
-An Actor dispatch event uses the same readiness model as the SPOT
-dispatch event handler.
-
-- `ZLINK_SPOT_DISPATCH_EVENT_ACTOR_READABLE` is a notification that an
-  Actor part can be read. One callback does not mean one part.
-- `ZLINK_SPOT_DISPATCH_SUBJECT_ACTOR`'s subject is a native Actor ref
-  valid only during the callback. A binding's public API does not
-  expose a raw pointer.
-- A language that hands the callback off to a different execution
-  context must non-blockingly pre-drain the Actor part at callback-entry
-  time, so the public dispatch info can return that part.
-- `ZLINK_SPOT_DISPATCH_EVENT_ACTOR_JOIN_READABLE` is the readiness signal
-  for a Spot's Actor join request plane. A binding must let it be
-  drained through `Spot.recvActorJoin` or an equivalent public surface
-  until each language's no-data representation appears.
-
-### SpotNode Capability Matrix
-
-| Capability | SpotNode |
-|---|---|
-| `bind` | Y |
-| `connectPeer` | Raw mesh only |
-| `disconnectPeer` | Raw mesh only |
-| `disconnectPeerRid` | Raw mesh only |
-| `createSpot` | Y |
-| `entrySpot` | Y |
-| `spotLookup` | Y |
-| `setTlsServer` | Y |
-| `setTlsClient` | Y |
-| `status` | Y |
-| `peers` | Y |
-| `peers(filter)` | Y |
-| `subjects` | Y |
-| `internalSockets` | Diagnostic |
-| `spots` | Y |
-| `actors` | Y |
-| `close` | Y |
-
-- SpotNode does not directly expose the data-plane API (`send`/`recv`/
-  `publish`/`subscribe`).
-- The data plane is accessed only through the `Spot` facade.
-- `connectPeer`/`disconnectPeer` are control paths exclusive to raw peer
-  topology.
-- `createSpot` is a public factory placed on top of `zlink_spot_new()`.
-  `entrySpot` wraps `zlink_spot_node_entry_spot()` in a per-language
-  typed `Spot` factory. `spotLookup` wraps
-  `zlink_spot_node_spot_lookup()` as a per-language typed `Spot` lookup
-  surface. Treated as centered on `createPublisher`.
-
-### Actor Capability Matrix
-
-Actor dispatch is an independent service-layer capability spanning
-`SpotNode`, `Actor`, `Spot`, and `StreamSocket`. Each binding must expose
-the roles below as a public surface that fits its own language
-convention.
-
-| Capability | Public owner | Core substrate |
-|---|---|---|
-| local Actor create | `SpotNode` | `zlink_spot_node_actor_new` |
-| local Actor lookup | `SpotNode` | `zlink_spot_node_actor_lookup` |
-| unchecked remote Actor ref | `SpotNode` | `zlink_remote_actor_get_ref` |
-| Actor destroy by ref | `SpotNode` | `zlink_spot_node_actor_destroy` |
-| owned Actor close/destroy | `Actor` | `zlink_spot_node_actor_destroy` |
-| Spot Actor lifecycle receive | `Spot` | `zlink_spot_recv_actor_lifecycle` |
-| Actor join by ref | `SpotNode` | `zlink_spot_node_actor_join_spot` |
-| Actor Entry Spot join by ref | `SpotNode` | `zlink_spot_node_actor_join_entry_spot` |
-| owned Actor join | `Actor` | `zlink_spot_node_actor_join_spot` |
-| owned Actor Entry Spot join | `Actor` | `zlink_spot_node_actor_join_entry_spot` |
-| Actor leave by ref | `SpotNode` | `zlink_spot_node_actor_leave_spot` |
-| owned Actor leave | `Actor` | `zlink_spot_node_actor_leave_spot` |
-| Actor recv | `Actor` | `zlink_spot_node_actor_recv_part` |
-| no-bind request reply | `SpotNode` | `zlink_spot_node_actor_reply_no_bind` |
-| bound session send | `Actor` | `zlink_spot_node_actor_send_bound_session_msg` |
-| bound session close | `Actor` | `zlink_spot_node_actor_close_bound_session` |
-| join request recv | `Spot` | `zlink_spot_actor_join_recv` |
-| join request reply | `Spot` | `zlink_spot_actor_join_reply` |
-| STREAM bind Actor | `StreamSocket` / session facade | `zlink_stream_bind_actor` |
-| STREAM unbind Actor | `StreamSocket` / session facade | `zlink_stream_unbind_actor` |
-| STREAM send bound Actor | `StreamSocket` / session facade | `zlink_stream_send_bound_actor_part` |
-| STREAM bound Actor snapshot | `StreamSocket` / session facade | `zlink_stream_bound_actors` |
-| node Spot snapshot | `SpotNode` | `zlink_spot_node_spots` |
-| node Actor snapshot | `SpotNode` | `zlink_spot_node_actors` |
-| Spot joined Actor snapshot | `Spot` | `zlink_spot_actors` |
-
-### Spot Capability Matrix
-
-| Capability | Spot |
-|---|---|
-| `publish(topic, ...)` | Y |
-| `subscribe` | Y |
-| `receiveSubscriptionEvent` | Y |
-| `setSubscription` / `unsetSubscription` | Y |
-| `sendToChannel` / `requestToChannel` | Y |
-| `sendToSpot` | Routed ordinary send (spot → spot) |
-| `requestToSpot` | Routed request initiation (spot → spot) |
-| `requestToRouter` | Routed request initiation (spot → router) |
-| `replyToSpot` | Routed reply surface (spot → spot) |
-| `replyToRouter` | Routed reply surface (spot → router) |
-| `setDispatchHandler` | Y |
-| `recvActorLifecycle` | Y |
-| `close` | Y |
-
-- Spot is not a socket type — it's a channel-aware facade layered on top
-  of SpotNode.
-- Spot routed receive can be exposed as `recv_routed` or an equivalent
-  typed recv surface.
-- Spot has no `bind`/`connect` (SpotNode owns that).
-- Spot's `close` releases only the facade — SpotNode stays alive.
-
-### Removed Discovery/Registry Capability
-
-The public Discovery and Registry C API was removed from the core
-contract in core 8.4.3. A binding must not expose a Discovery/Registry
-factory, resolver method, sync option, registry query client, or
-compatibility alias as current API.
-
-### Service Observability Policy
-- Public service-layer observation uses a snapshot/query surface instead
-  of a separate monitor handle.
-- SPOT (SpotNode, Spot) observation uses the `status`, `peers`,
-  `peers(filter)`, `subjects`, `spots`, and `actors` APIs. A binding that
-  needs internal socket diagnostics keeps `internalSockets` as a
-  separate diagnostic surface.
-- When a state transition needs to be observed, compare successive
-  snapshot/query results.
-- The SocketMonitor callback release policy stays the same as before.
-  - When a callback registration API exists, release it only through
-    `close()`
-
-### Service Layer Domain Objects
-- The service layer must also use domain objects.
-- The minimum core domain objects:
-  - `MonitorStatus`: a monitor status snapshot
-  - `SpotNodeStatus`: SpotNode status (state, peer count, and so on)
-- Advanced/Diagnostic domain objects:
-  - `SpotNodePeerEntry`: peer information
-  - `SpotNodeSubjectEntry`: subject information
-  - `SpotNodeSocketEntry`: internal socket diagnostic information. Uses
-    the shared `SocketType` enum for the socket kind — does not create a
-    separate SpotNode-only socket-type enum that repeats the same
-    values.
-  - `SpotNodeSpotEntry`: node-owned Spot information
-  - `SpotNodeActorEntry`: node-owned Actor route information
-- Filter objects:
-  - `SpotNodePeerFilter`: a peer-lookup filter
-  - `SpotNodeSubjectFilter`: a subject-lookup filter
-  - `SpotNodeSocketFilter`: an internal socket diagnostic filter
-- Enum/value objects:
-  - `SocketType`: the socket kind shared between an ordinary socket and
-    SpotNode's internal socket diagnostics
-  - `SpotRole`: `PUB`, `SUB`
-  - `SubjectKind`: `NONE`, `TOPIC`, `PATTERN`
-  - `SpotNodeState`: `IDLE`, `CONNECTING`, `PARTIAL_READY`, `READY`,
-    `ERROR`
-  - `MonitorSourceKind`: `SOCKET`, `SPOT_PUB`, `SPOT_SUB`
-  - `SpotPeerSource`: `MANUAL`, `DISCOVERY`, `MIXED`
-  - `SpotPeerState`: `CONFIGURED`, `CONNECTING`, `CONNECTED`
-- `MonitorStatus.isReady()` or an equivalent convenience accessor
-  interprets ready meaning only for a raw socket monitor source. For a
-  `SPOT_PUB`/`SPOT_SUB` source, the ready bit must not be
-  reinterpreted as extended SPOT readiness.
-
-### Service Layer Naming Policy
-- The service layer also follows the Naming Policy.
-- The allowed variation is the same three variations as the Naming
-  Policy — casing variation, a minimal suffix for a language without
-  overloads, and per-language property/getter convention only.
-- Word substitution, omission, or replacement is forbidden.
-- The detailed rules are the same as the Naming Policy body.
-
-#### Service Layer Canonical Name Table
-
-| Component | Canonical Name | Description |
-|---|---|---|
-| SpotNode | `bind` | Binds an endpoint |
-| SpotNode | `connectPeer` | Connects a raw peer |
-| SpotNode | `disconnectPeer` | Disconnects a raw peer |
-| SpotNode | `createRouteBridge` | Registers a caller/channel-runtime-owned socket with the SPOT route bridge |
-| SpotNode | `createPublisher` | Creates a publisher handle used for SpotNode's topic-publish ingress |
-| SpotNode | `setTlsServer` | Configures TLS server |
-| SpotNode | `setTlsClient` | Configures TLS client |
-| SpotNode | `status` | A node status snapshot |
-| SpotNode | `peers` | A peer-list snapshot |
-| SpotNode | `peers(filter)` | A filtered peer lookup |
-| SpotNode | `subjects` | A subject-list snapshot |
-| SpotNode | `internalSockets` | An internal socket diagnostic snapshot |
-| SpotNode | `spots` | A node-owned Spot snapshot |
-| SpotNode | `actors` | A node-owned Actor snapshot |
-| SpotNode | `close` | Terminates the node |
-| Spot | `publish(topic, ...)` | Publishes a Spot topic |
-| Spot | `subscribe` | Receives a topic subscription |
-| Spot | `receiveSubscriptionEvent` | Receives a topic subscription event |
-| Spot | `setSubscription` / `unsetSubscription` | Manages a subscription filter |
-| Spot | `sendToChannel` / `requestToChannel` | A channel-targeted routed send/request |
-| Spot | `setDispatchHandler` | Registers the topic/routed/channel-reply/timer readable notification handler |
-| Spot | `recvActorLifecycle` | Receives an Actor join/leave lifecycle event |
-| Spot | `close` | Terminates the facade |
-
-### Service Layer Test Policy
-- Because the service layer includes components not directly verified
-  by a sample or perf, it must be tested for correct FFI mapping,
-  lifecycle, and type conversion.
-- The service layer is tested using the same categories as the Test
-  Matrix.
-
-#### Service Layer Surface Tests
-- Confirm SpotNode role-matrix alignment
-- Confirm Spot role-matrix alignment
-- Confirm the service TLS helper exists
-- Confirm the typed domain objects exist (SpotNodeStatus,
-  SpotNodePeerEntry, SpotNodeSocketEntry, SpotNodeSpotEntry,
-  SpotNodeActorEntry, and so on)
-- Confirm the typed enums exist (SpotRole, SubjectKind, SpotNodeState,
-  and so on)
-
-#### Service Layer Contract Tests
-- SpotNode: no leak across the create/bind/close lifecycle
-- Spot: create/close lifecycle (SpotNode must stay alive)
-- Confirm native resources are cleaned up on exception/error paths too
-
-#### Service Layer Behavior Tests
-- SpotNode bind → Spot publish → Spot subscribe path succeeds
-- Spot subscribe → returns empty when there's no data (non-blocking)
-- Confirm exception on Spot publish failure
-- Confirm the Spot dispatch event callback fires
-- Confirm the Spot receiveSubscriptionEvent path
-- Confirm SpotRouteBridge attach/send/request/handleReceived paths work
-- Confirm the SpotNode publisher handle publish path works
-
-#### Service Layer Introspection Tests
-- SpotNode status → verify SpotNodeStatus fields (state, peerCount,
-  subjectCount, and so on)
-- SpotNode peers → verify the SpotNodePeerEntry list
-- SpotNode peers(filter) → verify the filtered result
-- SpotNode subjects → verify the SpotNodeSubjectEntry list
-
-#### Service Layer Test Scope
-
-| Test Category | SpotNode+Spot | Actor | Stream Actor Binding |
-|---|---|---|---|
-| Surface | Required | Required | Required |
-| Contract | Required | Required | Required |
-| Behavior | Required | Required | Required |
-| Introspection | Required | Required | Required |
-
-- A binding without a service/spot family can exclude this test.
-- Here, "monitor" refers to a socket monitor.
-
-### Service Layer Sample Policy
-- Service-family samples defined in the Canonical Sample Set:
-  - `spot_recv_sample`: Spot channel-aware subscribe/routed recv
-  - `spot_callback_sample`: Spot dispatch event callback
-  - `monitor_recv_sample`: monitor event receive (including socket
-    monitor)
-- A binding without a service/spot family can exclude the `spot_*`
-  samples.
-
-### Per-Binding Service Layer Scope
-- Not every binding has to implement the entire service layer.
-- The minimum requirement:
-
-| Component | Required level |
-|---|---|
-| SpotNode + Spot | Required if that binding has spot support |
-
-### Callback API Policy
-- A callback registration API is exposed according to each socket
-  type's role.
-- The Callback Capabilities table above is the baseline.
-- Canonical handler registration names:
-  - `setDispatchHandler`: registers the SPOT unified readable
-    notification callback
-- SPOT routed receive and Actor lifecycle do not expose a direct
-  callback registration API. `setDispatchHandler` announces a readable
-  event, and the user explicitly drains the queue with `recvRouted` or
-  `recvActorLifecycle`.
-- `onReceive` may be used only as the internal name for the raw
-  `STREAM` direct fragment callback. It is not used as a canonical
-  public binding API name.
-- Unregistering a callback by setting it to `null`/`None` is not
-  allowed. A callback is unregistered only by closing the socket.
+Service layer policy is owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 ## Core API Additions
 
@@ -3348,7 +2460,7 @@ owns native request submission, reply matching, and timeout. Binding completion 
 the [async execution model](async-execution-model.en.md#4-pollers-and-completion-drain);
 language-specific blocking and awaitable surfaces follow the
 [terminal policy](async-coroutine-policy.en.md#6-per-language-terminal-interfaces).
-Request-reply is a capability extension of Router/Dealer sockets and SPOT.
+Raw socket request-reply is provided by Router/Dealer sockets. Public Spot paths are owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 #### APIs Not On The Public Surface
 
@@ -3373,13 +2485,7 @@ marker state inside a `Message` object.
 | Dealer | Dealer | **N** | Neither side has a routing_id |
 | Router | Dealer | **N** | Dealer cannot reply to a specific peer |
 
-**SPOT paths:**
-
-| Requester | Responder | Possible | Reply path |
-|--------|--------|------|-----------|
-| Spot | Spot | Y | Replies with the peer's address + request_seq |
-| Spot | Router | Y | Spot requests Router; Router replies to Spot |
-| Router | Spot | Y | Router requests Spot; Spot replies to Router |
+Public Spot request/reply paths are owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 `DealerSocket.request()` connection constraints:
 - Every connected target must be a Router. If Router and Dealer are
@@ -3395,27 +2501,7 @@ Raw socket request, reply, and ROUTER receive declarations follow
 [Core completion pull and ownership](../../../core/doc/spec/core/socket/README.en.md#completion-pull-and-ownership)
 owns completion records and the lifetime of returned reply parts.
 
-**SPOT service-layer operation names (binding-level concepts):**
-
-```c
-zlink_submit_result_t zlink_spot_send_channel_part(void *spot, ...);
-zlink_submit_result_t zlink_spot_request_channel_part(void *spot, ...);
-zlink_submit_result_t zlink_spot_send_spot_part(void *spot, ...);
-zlink_submit_result_t zlink_spot_request_spot_part(void *spot, ...);
-zlink_submit_result_t zlink_spot_request_router_part(void *spot, ...);
-zlink_submit_result_t zlink_spot_reply_spot_part(void *spot, ...);
-zlink_submit_result_t zlink_spot_reply_router_part(void *spot, ...);
-zlink_submit_result_t zlink_router_request_spot_part(void *router, ...);
-zlink_submit_result_t zlink_router_reply_spot_part(void *router, ...);
-zlink_submit_result_t zlink_router_send_spot_part(void *router, ...);
-zlink_submit_result_t zlink_spot_publish_part(void *spot, ...);
-zlink_recv_result_t zlink_spot_subscribe_part(void *spot, ...);
-zlink_recv_result_t zlink_spot_recv_part(void *spot, ...);
-zlink_handler_result_t zlink_spot_dispatch_event_handler(void *spot, ...);
-```
-
-The list above describes operation names at the binding/service layer; it is not a list of Core C
-function declarations. See `core/include/zlink.h` for the actual Core C request-reply signatures.
+Public Spot/Actor API shapes are owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 #### Receive Dispatch Model
 
@@ -3424,7 +2510,7 @@ owns ROUTER application record kinds, source RIDs, and reply tokens. Reply match
 the [Core request contract](../../../core/doc/spec/core/socket/README.en.md#request-and-reply);
 delivery of matched results to the language follows the
 [common completion owner](async-execution-model.en.md#4-pollers-and-completion-drain).
-SPOT-specific routing context belongs to a separate service-layer API.
+SPOT-specific routing context is owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 #### Request API Variants
 
@@ -3445,12 +2531,7 @@ builder policy does not apply to the C ABI.
 
 #### SPOT Request-Reply
 
-The same request-reply protocol is used on top of SPOT direct delivery.
-After SPOT routed control, the ZMP header of the first application payload carries the
-request-reply kind and sequence; no request-reply-specific payload part is added. A SPOT reply is
-also sent with the peer's address + request_seq, without a ctx. Multiple requests can be
-outstanding concurrently on the same Spot. A high-level request's completion ends with the first
-reply.
+Public SPOT request and reply operations are owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 #### Timeout
 
@@ -3502,425 +2583,18 @@ Language completion types and terminal signatures follow the
 
 ### SPOT Messaging Policy
 
-> See `cpp/`, `java/`, `dotnet/`, `node/`, `python/`, `go/`, `rust/` for
-> the per-language SPOT interfaces.
-
-The SPOT public surface separates two naming axes. `sendToChannel(...)`
-and `requestToChannel(...)` are the channel-aware direct messaging path,
-while `publish(topic, ...)` publishes to the topic plane the `Spot`
-itself belongs to. Direct address-targeted routed messaging is an
-optional supplementary typed surface. Request-reply is layered on top
-of routed messaging.
-
-#### Pub/Sub Messaging
-
-SPOT pub/sub is a publish/subscribe model based on the channel a `Spot`
-handle belongs to and a `topic`. The publish caller does not pass the
-channel name as a separate argument.
-
-The binding runtime submits the payload collected by a publish builder to Core
-once as an array and count. Subscribe receive also gets the topic and complete
-payload array in one Core call, then fills the language-level object.
-
-Binding rules:
-- A binding does not have a separate no-wait function name for publish.
-- A non-blocking publish is selected through the builder flag and classifies
-  errno into `zlink_submit_result_t`. A binding does not add a separate
-  `tryPublish` or `publishNoWait`.
-- A `subscribe` receive is exposed as a typed receive surface that
-  returns `topic + parts`.
-- Topic filter configuration is exposed as a typed subscription API.
-- A channel-aware send/request or topic publish failure is promoted to
-  `SubmitError`.
-  - `NOT_FOUND`: for channel-aware send/request, no matching
-    `channel_name` or attach target exists; for topic publish, there is
-    no target on the topic plane to publish to.
-  - `NOT_CONNECTED`: an attachment exists, but there is no active send path
-  - `BACKPRESSURED`: a path exists, but the HWM has been reached
-  - `NOT_ADMITTED`: the target peer is draining, so a new submit is
-    rejected
-
-#### Routed Direct Messaging
-
-SPOT routed direct messaging sends a message directly to a specific Spot
-or Router peer, or a routed reply target. All payload parts accumulated by
-the builder are submitted to Core once as an array and count. Both the high-level
-binding's `Spot` facade and `RouterSocket`'s router-to-spot helper expose
-this capability as an operation builder start point that fits the
-`Operation Builder Policy`. A raw socket's ordinary send/request/reply
-also follows the same builder pattern.
-
-Binding rules:
-- The binding runtime makes one Core whole-message call per operation.
-- The high-level binding's `Spot` endpoint, `RouterSocket`'s
-  router-to-spot helper, and every ordinary send/request/reply/publish
-  surface on raw `DealerSocket`/`RouterSocket`/`PubSocket`/`StreamSocket`
-  all follow this document's `Operation Builder Policy`.
-- The destination address/request sequence is taken as a builder
-  start-point argument, and payload/flags/timeout/callback are expressed
-  as builder steps.
-- Routed recv uses the handler/recv surface of the Event Dispatcher
-  below.
-
-#### SPOT Lifecycle / Bridge / Deprecated Attachment
-
-```c
-void *zlink_spot_new(void *node);          /* create SPOT facade */
-zlink_close_result_t zlink_spot_destroy(void **spot_p);
-
-void *zlink_spot_node_new(
-    void *ctx,
-    const zlink_spot_node_options_t *options);
-zlink_close_result_t zlink_spot_node_destroy(void **node_p);
-zlink_bind_result_t zlink_spot_node_bind(void *node, const char *endpoint);
-zlink_connect_result_t zlink_spot_node_connect_peer(void *node,
-    const char *peer_endpoint);
-zlink_connect_result_t zlink_spot_node_disconnect_peer(void *node,
-    const char *peer_endpoint);
-zlink_connect_result_t zlink_spot_node_disconnect_peer_rid(void *node,
-    const zlink_routing_id_t *peer_rid);
-
-void *zlink_spot_route_bridge_new(
-    void *ctx,
-    void *spot_node,
-    const zlink_spot_route_bridge_options_t *options);
-int zlink_spot_route_bridge_attach_router_channel(
-    void *bridge,
-    const char *channel_name,
-    void *router,
-    const zlink_spot_route_bridge_endpoint_options_t *options);
-int zlink_spot_route_bridge_send(
-    void *bridge,
-    const char *channel_name,
-    const zlink_routing_id_t *target_node_rid,
-    const zlink_routing_id_t *target_spot_rid,
-    zlink_msg_t *parts,
-    size_t part_count,
-    zlink_send_flags_t flags);
-int zlink_spot_route_bridge_request(
-    void *bridge,
-    const char *channel_name,
-    const zlink_routing_id_t *target_node_rid,
-    const zlink_routing_id_t *target_spot_rid,
-    zlink_msg_t *parts,
-    size_t part_count,
-    zlink_reply_handler_fn reply_handler,
-    void *userdata,
-    zlink_send_flags_t flags,
-    uint32_t timeout_ms);
-int zlink_spot_route_bridge_handle_router_received(
-    void *bridge,
-    const char *channel_name,
-    const zlink_routing_id_t *source_node_rid,
-    uint64_t request_seq,
-    zlink_msg_t *parts,
-    size_t part_count,
-    bool *handled_out);
-int zlink_spot_route_bridge_drain(void *bridge);
-int zlink_spot_route_bridge_close(void *bridge);
-
-void *zlink_spot_node_publisher_new(void *node);
-int zlink_spot_node_publisher_publish(
-    void *publisher,
-    const char *topic,
-    zlink_msg_t *parts,
-    size_t part_count,
-    zlink_send_flags_t flags);
-int zlink_spot_node_publisher_close(void *publisher);
-```
-
-`options == NULL` or `options->mode == 0` turns on every SPOT
-capability. A binding uses this default in each language's default
-constructor, and where it exposes `mode`, it maps `PUBSUB`, `ROUTED`, and
-`ALL` to the same meaning as the C contract. The internal socket
-observation API is based on `zlink_spot_node_internal_sockets()`, and
-returns only already-created sockets.
-
-The SpotNode option facade must not omit core's six public options.
-
-| Core option | Binding surface |
-|-------------|-----------------|
-| `ZLINK_SPOT_NODE_OPT_ROUTER_HWM_PROFILE` | router admission HWM profile |
-| `ZLINK_SPOT_NODE_OPT_ROUTER_HWM` | router admission HWM override |
-| `ZLINK_SPOT_NODE_OPT_PUBSUB_HWM_PROFILE` | pub/sub admission HWM profile |
-| `ZLINK_SPOT_NODE_OPT_PUBSUB_HWM` | pub/sub admission HWM override |
-| `ZLINK_SPOT_NODE_OPT_DISPATCH_WORKERS_MIN` | minimum dispatch callback workers |
-| `ZLINK_SPOT_NODE_OPT_DISPATCH_WORKERS_MAX` | maximum dispatch callback workers |
-
-Dispatch worker min/max configures `SpotNode`'s dispatch-callback
-execution pool. It must not be described as an option that changes the
-data-plane thread count or transport I/O thread count. Value validation
-matches core: `min >= 1`, `max >= min`. A binding exposes these two
-values as a per-language typed option/property, and must not revive a
-raw option bag as the canonical path.
-
-Binding rules:
-- `SpotNode` and `Spot` are exposed as separate typed handles.
-- `Spot` is a facade layered on top of `SpotNode`. When `SpotNode` is
-  released, `Spot` also becomes invalid.
-- Use `SpotRouteBridge` to send from Spot to a different channel, or to
-  receive a Spot relay packet on a `ROUTER` channel. The `ROUTER` socket
-  registered with the bridge continues to be owned by the caller or the
-  channel runtime.
-- A raw Core socket has no API to set or query logical channel metadata.
-  A channel name is used only as the logical routing value
-  `SpotRouteBridge`'s typed operations accept.
-- The bridge's `handle_router_received()` is called from the channel
-  runtime's receive loop. When `handled == true`, the bridge takes
-  payload ownership, and the caller does not process the same received
-  object again.
-- `SpotNodePublisher` is a handle for publishing to SpotNode's topic
-  publish ingress without external code attaching a raw `PUB` socket to
-  `SpotNode`.
-- `Spot.publish(topic).message(...).submit()` is the channel-aware topic
-  plane that enters `SpotNode`'s own topic publish ingress queue. An
-  external channel call is described through `SpotRouteBridge` and the
-  channel-runtime-owned socket path.
-- `connect_peer`/`disconnect_peer` are control paths exclusive to raw
-  peer topology. They must not be described as the central API of the
-  channel-aware public surface.
+SPOT messaging policy is owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 ### SPOT Event Dispatcher Policy
 
-Core provides a callback-based event dispatcher model. It can handle
-multiple event sources (sub recv, routed recv, timer)
-without synchronization, inside a single I/O thread context.
-
-Core principles:
-- Once a handler callback is registered, the core I/O thread calls the
-  callback when the event occurs.
-- Because every callback runs in the same thread context, state can be
-  shared without a lock.
-- Calling recv, send, or reply inside the callback has no
-  synchronization issue.
-- The timer also runs in the same context.
-
-#### Callback Registration API
-
-```c
-/* raw STREAM direct recv callback */
-zlink_handler_result_t zlink_recv_handler(void *s,
-    zlink_socket_msg_handler_fn handler, void *userdata);
-
-/* raw STREAM packet callback */
-zlink_handler_result_t zlink_stream_packet_handler(void *stream,
-    zlink_stream_packet_handler_fn handler, void *userdata);
-
-/* install or replace the async-send completion callback */
-zlink_handler_result_t zlink_send_complete_handler(void *s,
-    zlink_send_complete_handler_fn handler, void *userdata);
-```
-
-Rules:
-- A receive-side core C attach function allows only one active handler per subject.
-  Attaching again while a native handler is already attached can return
-  `EBUSY`. A public binding's `set...Handler` surface does not directly
-  repeat this raw attach function — it provides the meaning of storing
-  or replacing the current public handler.
-- `zlink_send_complete_handler()` is replace-only. It rejects `NULL`, and
-  replacing it from the same socket's completion callback fails with
-  `EDEADLK`. The callback only hands completion to application state; calling
-  send, publish, or request inside it fails with `EDEADLK`.
-- `zlink_recv_handler()` is allowed only on raw `STREAM`.
-- `zlink_stream_packet_handler()` is also allowed only on raw `STREAM`,
-  and the three modes — `recv`/raw callback/packet callback — are
-  mutually exclusive.
-- Raw `PAIR`, `DEALER`, `ROUTER`, `SUB`, `XSUB` do not have a direct
-  receive callback install surface. `PAIR`, `DEALER`, `ROUTER` receive
-  only through a public recv method, and `SUB`, `XSUB` receive only
-  through the topic subscribe receive surface.
-- After a callback is registered, a direct recv on the same subject and
-  registering that data-plane `ZLINK_POLLIN` can fail with `EBUSY`. The
-  exact scope follows STREAM/SPOT's per-type rules.
-- A public callback setter is replace-only. Passing `NULL` is not
-  allowed.
-
-#### Spot Dispatch Event Handler
-
-Spot's core event dispatcher is `zlink_spot_dispatch_event_handler()`.
-Once this handler is registered, every event related to the Spot arrives
-through a single callback. Callbacks for the same `spot` must be
-delivered in order. The implementation must not call the same `spot`'s
-dispatch callback concurrently or reentrantly. Inside the callback, a
-caller must be able to check the event kind and process Spot messaging
-sequentially by calling recv.
-
-This serialization is per-`spot`. It does not require global
-serialization across different `spot`s. The implementation must be able
-to process different Spots in parallel, while still preserving the
-sequential-processing contract for the same `spot`.
-
-```c
-typedef enum zlink_spot_dispatch_event_t {
-    ZLINK_SPOT_DISPATCH_EVENT_SUBSCRIBE_READABLE = 1,
-    ZLINK_SPOT_DISPATCH_EVENT_ROUTED_READABLE = 2,
-    ZLINK_SPOT_DISPATCH_EVENT_TIMER_READABLE = 3,
-    ZLINK_SPOT_DISPATCH_EVENT_CHANNEL_REPLY_READABLE = 4,
-    ZLINK_SPOT_DISPATCH_EVENT_ACTOR_READABLE = 5,
-    ZLINK_SPOT_DISPATCH_EVENT_ACTOR_JOIN_READABLE = 6
-} zlink_spot_dispatch_event_t;
-
-typedef enum zlink_spot_dispatch_subject_kind_t {
-    ZLINK_SPOT_DISPATCH_SUBJECT_SPOT = 1,
-    ZLINK_SPOT_DISPATCH_SUBJECT_TIMER = 2,
-    ZLINK_SPOT_DISPATCH_SUBJECT_CHANNEL_DEALER = 3,
-    ZLINK_SPOT_DISPATCH_SUBJECT_ACTOR = 4
-} zlink_spot_dispatch_subject_kind_t;
-
-typedef struct zlink_spot_dispatch_info_t {
-    zlink_spot_dispatch_event_t event;
-    zlink_spot_dispatch_subject_kind_t subject_kind;
-    void *subject;
-} zlink_spot_dispatch_info_t;
-
-typedef void (*zlink_spot_dispatch_event_handler_fn)(
-    void *spot, const zlink_spot_dispatch_info_t *info, void *userdata);
-
-zlink_handler_result_t zlink_spot_dispatch_event_handler(void *spot,
-    zlink_spot_dispatch_event_handler_fn handler, void *userdata);
-```
-
-Usage pattern:
-- Register a dispatch event handler.
-- When the callback fires, check `info->event`, `info->subject_kind`,
-  and `info->subject`.
-- Inside the active dispatch callback for the same `spot`, the ordinary
-  recv surfaces can be used.
-- On `SUBSCRIBE_READABLE`, drain the pub/sub plane with
-  `zlink_spot_subscribe_part()` or
-  `zlink_spot_recv_subscription_event()`.
-- On `ROUTED_READABLE`, recv the routed/request message with
-  `zlink_spot_recv_part()`.
-- On `TIMER_READABLE`, recv the timer fire with `zlink_timer_recv()`
-  against the `info->subject` timer handle.
-- `CHANNEL_REPLY_READABLE` is only a readiness signal — there is no
-  separate public drain API. The reply is delivered automatically by
-  core through the `zlink_reply_handler_fn` registered when
-  `zlink_spot_request_channel_part()` was called. The `info->subject`
-  dealer handle is diagnostic information meaningful only on the
-  deprecated dealer attach path.
-- On `ACTOR_READABLE`, drain `zlink_spot_node_actor_recv_part()` keyed on
-  the Actor subject delivered via `info->subject`. The public API does
-  not expose the raw subject pointer or the part loop — it returns an
-  `ActorReceived` or an equivalent aggregate value object.
-- On `ACTOR_JOIN_READABLE`, drain the join request plane with
-  `zlink_spot_actor_join_recv()`.
-- A dispatch event is a readable notification. One callback does not
-  mean one message.
-- Inside the callback, a caller must be able to drain that plane until
-  there's nothing left to read.
-- The first call to `zlink_spot_recv_part()` must not perform hidden
-  activation, hidden queue open, or hidden registration.
-- Because dispatch callbacks for the same `spot` are serialized, Spot
-  messaging can be processed sequentially.
-- Because different `spot`s can be processed in parallel, a
-  high-performance room execution model can be built.
-
-#### Spot Timer API
-
-A Spot-owned timer is created with `zlink_spot_timer_new(spot)`, and
-controlled afterward through the common `zlink_timer_*` functions.
-
-```c
-void *zlink_spot_timer_new(void *spot);
-
-/* use the common timer API after creation */
-zlink_close_result_t zlink_timer_destroy(void **timer_p);
-zlink_config_result_t zlink_timer_start(void *timer,
-    uint64_t interval_ns, uint64_t repeat_count);
-zlink_config_result_t zlink_timer_stop(void *timer);
-
-typedef void (*zlink_timer_handler_fn)(
-    void *timer, uint64_t fire_count, void *userdata);
-
-zlink_handler_result_t zlink_timer_handler(void *timer,
-    zlink_timer_handler_fn handler, void *userdata);
-zlink_recv_result_t zlink_timer_recv(void *timer, uint64_t *fire_count_out);
-```
-
-Rules:
-- A timer is created dependent on a Spot, via
-  `zlink_spot_timer_new(spot)`.
-- After creation, it's controlled through the common
-  `zlink_timer_start`, `zlink_timer_stop`, `zlink_timer_recv`,
-  `zlink_timer_handler`, and `zlink_timer_destroy` APIs.
-- `interval_ns` is in nanoseconds. `repeat_count = 0` means infinite
-  repeat.
-- A timer fire arrives at the dispatch event handler as
-  `TIMER_READABLE`.
-- A timer handler callback can be registered directly, or polled with
-  `zlink_timer_recv()`.
-- Inside the dispatch callback, a pending fire can be processed
-  sequentially with `zlink_timer_recv()`.
-
-Binding rules:
-- A timer is exposed as a typed wrapper.
-- `interval_ns` is converted to that language's Duration type.
-- Timer and dispatch event are unified, so a user must be able to handle
-  sub recv + routed recv + timer without synchronization, just by
-  registering a callback.
-
-#### Dispatch Model Summary
-
-```
-zlink_spot_dispatch_event_handler callback
-  (serialized per spot, non-reentrant)
-  |-- SUBSCRIBE_READABLE -> zlink_spot_subscribe_part()
-  |                         or zlink_spot_recv_subscription_event()
-  |-- ROUTED_READABLE -> zlink_spot_recv_part()
-  |-- TIMER_READABLE -> zlink_timer_recv()
-  |-- CHANNEL_REPLY_READABLE -> readiness only; reply handler runs internally
-  |-- ACTOR_READABLE -> zlink_spot_node_actor_recv_part()
-  `-- ACTOR_JOIN_READABLE -> zlink_spot_actor_join_recv()
-```
-
-For the same `spot`, a caller must be able to process recv, send, and
-reply sequentially inside this callback. Different `spot`s must be able
-to run in parallel where needed. Inside the callback, a caller must be
-able to drain the plane the event announced.
-
-#### Receive-Model Summary
-
-| Socket type | Receive path |
-|-----------|----------|
-| `PAIR` / `DEALER` | The runtime uses `zlink_recv()`; the public surface is aggregate recv |
-| `SUB` / `XSUB` | The runtime uses `zlink_subscribe()`; the public surface is aggregate topic recv |
-| `ROUTER` | Runtime uses `zlink_router_recv()` and the public surface is aggregate routed recv. Request completion follows the [common execution model](async-execution-model.en.md#4-pollers-and-completion-drain). |
-| `STREAM` | One of three modes below (mutually exclusive). Raw recv / `zlink_recv_handler()` / `zlink_stream_packet_handler()` |
-| `SPOT` | `zlink_spot_recv_part()` + `zlink_spot_subscribe_part()` + `zlink_spot_recv_subscription_event()` + `zlink_spot_recv_actor_lifecycle()` + `zlink_spot_dispatch_event_handler()`. Does not expose a direct routed callback |
-
-A binding reflects the contract above in its implementation as-is. A
-public socket class exposes only the aggregate recv surface, and a
-forbidden callback install surface must not be reachable by a bypass
-through any base class.
-
-#### Typed Receive Surface
-
-SPOT receive provides several typed surfaces. A binding layers a
-per-language handler/callback surface on top of these typed surfaces.
-
-#### Spot Receive
-
-```c
-zlink_recv_result_t zlink_spot_recv_part(void *spot, ...);
-zlink_recv_result_t zlink_spot_recv_actor_lifecycle(void *spot, ...);
-```
-
-- `request_seq = 0` means an ordinary routed message.
-- `request_seq != 0` means a request-reply message.
-- `source_rid + spot_rid` is the sender's address, used as the reply
-  target.
-- A binding's public API exposes an aggregate `Received` or a
-  per-language equivalent type, instead of the part helper.
-- Actor lifecycle is drained with `zlink_spot_recv_actor_lifecycle()`
-  after a dispatch event.
+SPOT event dispatch policy is owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 #### Router Receive (unified routed recv surface)
 
 Raw ROUTER DATA/REQUEST receive signatures and metadata follow
 [Core routed receive](../../../core/doc/spec/core/socket/README.en.md#zlink_recv-and-zlink_router_recv);
 request-result delivery follows the [common completion owner](async-execution-model.en.md#4-pollers-and-completion-drain).
-SPOT-specific routing context belongs to a separate service-layer API.
+SPOT-specific routing context is owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 #### Pub/Sub Receive
 
@@ -3932,38 +2606,7 @@ SPOT-specific routing context belongs to a separate service-layer API.
 
 #### SPOT Snapshot Query
 
-```c
-zlink_config_result_t zlink_spot_node_status(void *node,
-    zlink_spot_node_status_t *out);
-zlink_config_result_t zlink_spot_node_peers(void *node,
-    zlink_spot_node_peer_entry_t *entries, size_t *count);
-zlink_config_result_t zlink_spot_node_peers(void *node,
-    const zlink_spot_node_peer_filter_t *filter,
-    zlink_spot_node_peer_entry_t *entries, size_t *count);
-zlink_config_result_t zlink_spot_node_subjects(void *node,
-    const zlink_spot_node_subject_filter_t *filter,
-    zlink_spot_node_subject_entry_t *entries, size_t *count);
-zlink_config_result_t zlink_spot_node_internal_sockets(void *node,
-    const zlink_spot_node_socket_filter_t *filter,
-    zlink_spot_node_socket_entry_t *entries, size_t *count);
-zlink_config_result_t zlink_spot_node_spots(void *node,
-    zlink_spot_node_spot_entry_t *entries, size_t *count);
-zlink_config_result_t zlink_spot_node_actors(void *node,
-    zlink_spot_node_actor_entry_t *entries, size_t *count);
-zlink_config_result_t zlink_spot_actors(void *spot,
-    zlink_actor_ref_t *entries, size_t *count);
-```
-
-Binding rules:
-- A snapshot result is converted into a per-language typed domain object
-  array.
-- A filter query is exposed as a typed filter builder or struct.
-- A binding must properly release the memory of a returned array.
-
-### SpotNode Node-Level Options
-
-SpotNode's node-level options are handled through the
-`zlink_set_spot_node_option()` family.
+SPOT snapshot query operations are owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 ## Option Policy
 
@@ -3994,21 +2637,19 @@ SpotNode's node-level options are handled through the
 
 | Facade | Contents | Applies to |
 |---|---|---|
-| `CommonSocketOptions` | linger, sendHighWaterMark, receiveHighWaterMark, sendTimeout, receiveTimeout, immediate, connectTimeout, ipv6, tcpNoDelay, tcpKeepAlive, heartbeatInterval/Ttl/Timeout, maxMessageSize, backlog, reconnectInterval/Max, submitRetryMode, submitRetryTimeout, submitRetryAttempts | All |
+| `CommonSocketOptions` | linger, sendHighWaterMark, receiveHighWaterMark, sendTimeout, receiveTimeout, immediate, connectTimeout, ipv6, tcpNoDelay, tcpKeepAlive, maxMessageSize, backlog, reconnectInterval/Max, submitRetryMode, submitRetryTimeout, submitRetryAttempts | All |
 | `RouterSocketOptions` | mandatory (bool), handover (bool), probe (bool), connectRoutingId (RoutingId), requestTimeout (Duration), peerWeight (int, read/write) | Router |
 | `DealerSocketOptions` | probe (bool), requestTimeout (Duration), peerWeight (int, read/write) | Dealer |
 | `StreamSocketOptions` | notify (bool) | Stream |
 | `PubSocketOptions` | verbose (bool), verboser (bool), noDrop (bool), manual (bool) | Pub, XPub |
 | `SubSocketOptions` | topicsCount (int, read-only) | Sub, XSub |
 
-- Each facade's option items are based on the matching option enum value
-  in `core/include/zlink.h`.
+- Each raw facade's option items follow the [Core transport liveness boundary](../../../core/doc/spec/core/08-runtime-boundary.en.md#4-transport-liveness-boundary)
+  and the public option enum in `core/include/zlink.h`.
 - The option value type inside a facade follows the Option Value Types
   policy.
 - A submit retry option exposes off/0ms/0 attempts as the default on the
-  raw socket facade. A managed SPOT/service internal profile may use
-  `LOCAL_FAILURE`/100ms/2 attempts, but this does not change the raw
-  socket option default. A `DONTWAIT` call, backpressure, admission
+  raw socket facade. Public Spot/Actor internal policy is owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md). A `DONTWAIT` call, backpressure, admission
   rejection, and the reply timeout after a successful request submit are
   not subject to submit retry.
 
@@ -4215,23 +2856,15 @@ Core API/contract:
 - `ZLINK_ROUTER_OPT_WEIGHT`
 - `ZLINK_DEALER_OPT_WEIGHT`
 - Value range `0..10000`, default `100`
-- The submit result `ZLINK_SUBMIT_NOT_ADMITTED` (value 13) — returned
-  when the target peer's weight is `0`
+- Flag-specific weight-`0` submit results follow [Core whole-message send](../../../core/doc/spec/core/socket/README.en.md#whole-message-send-and-pending-admission) and [Request and reply](../../../core/doc/spec/core/socket/README.en.md#request-and-reply).
 - The socket monitor event `ZLINK_EVENT_PEER_WEIGHT_CHANGED` (bit 15)
-- `zlink_spot_node_peer_entry_t.weight` /
-  `zlink_member_peer_entry_t.weight`
 
 Binding rules:
 - `weight` is exposed through a per-language typed option/property
-  surface. It applies to `ROUTER` and `DEALER`. A weight-setting surface
-  is not exposed on `SpotNode` or `Spot`.
-- Include `NOT_ADMITTED` in the `SubmitError` family so a caller can
-  distinguish a weight-`0` rejection.
-- The `PEER_WEIGHT_CHANGED` event bit is exposed as a typed value on the
-  existing socket monitor/service monitor surface. `value` is the new
-  weight, `0..10000`.
-- The `SpotNodePeerEntry`/`MemberPeerEntry` domain object must include a
-  `weight` field.
+  surface. It applies to `ROUTER` and `DEALER`. Spot and Actor options follow [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
+- Project `NOT_ADMITTED` as `SubmitError` only when Core returns it.
+- Project `PEER_WEIGHT_CHANGED` through the Core socket monitor as a typed value.
+  Service observability follows [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 ## Monitor Policy
 - The monitor plane also follows the same rules.
@@ -4266,9 +2899,8 @@ Binding rules:
 ### Binding Validation vs Native Error
 - The binding immediately blocks a format/range error in an input
   value.
-- Core decides socket-state, connection-state, transport-state, and
-  protocol-state errors, and the binding delivers them to the caller
-  as-is.
+- Core decides socket-state, connection-state, transport-state, protocol-state, and peer-weight submit results.
+  The binding projects Core results and errno without reclassifying by state.
 
 ### What A Binding Must Validate
 - a value that risks truncation
@@ -4338,8 +2970,8 @@ and is not treated as an error.
 | 0 | `OK` | — | success | submit succeeded |
 | 1 | `BACKPRESSURED` | `EAGAIN` | control flow | the send queue is saturated (HWM) |
 | 2 | `NOT_CONNECTED` | `ENOTCONN`, `EHOSTUNREACH` | control flow | the target peer/path is not connected |
-| 3 | `NOT_FOUND` | `ENOENT` | control flow | the target peer/spot/route does not exist |
-| 13 | `NOT_ADMITTED` | `ECONNREFUSED` family | control flow | a new submit was rejected because the target peer's weight is `0` |
+| 3 | `NOT_FOUND` | `ENOENT` | control flow | the target peer/route does not exist |
+| 13 | `NOT_ADMITTED` | `ECONNREFUSED` family | control flow | Admission refusal returned by Core. Flag-specific weight-`0` results follow [Core whole-message send](../../../core/doc/spec/core/socket/README.en.md#whole-message-send-and-pending-admission) and [Request and reply](../../../core/doc/spec/core/socket/README.en.md#request-and-reply). |
 | 4 | `TERMINATED` | `ETERM` | runtime/lifecycle | the context has terminated |
 | 5 | `INVALID_HANDLE` | `EFAULT` | caller contract violation | a NULL handle / invalid pointer |
 | 6 | `INVALID_ARGUMENT` | `EINVAL` | caller contract violation | an invalid argument |
@@ -4565,7 +3197,7 @@ the errno classification.
 
 | Situation | `request()` |
 |------|------------|
-| backpressure | waits for writable (added to the timeout) |
+| pre-admission backpressure | WRITABLE wait under [submit result projection](#submit-result-projection). The reply timeout starts at admission under [Core Request and reply](../../../core/doc/spec/core/socket/README.en.md#request-and-reply). |
 | timeout | `RequestError(TIMED_OUT)` |
 | target not found | `RequestError(NOT_FOUND)` |
 | a remote error reply | `RequestError(<matching code>)` |
@@ -4693,8 +3325,8 @@ Examples:
        `routing_id()`, Java `routingId()`, Node `getRoutingId()`
 - **No other word substitution, word omission, or word replacement is
   allowed.**
-  - forbidden example: changing `setDispatchHandler` to
-    `spotDispatchHandler` → word substitution
+  - forbidden example: changing `setReceiveHandler` to
+    `socketReceiveHandler` → word substitution
   - forbidden example: shortening `querySnapshot` to `snapshot` → word
     omission; if this is desired, the canonical name itself must be
     defined as `snapshot`
@@ -4737,14 +3369,12 @@ Anti-pattern vs. correct pattern:
 | `sendMultipartMessages(parts)` | `send().message(p1).message(p2).submit()` | Multipart is expressed through repeated builder `.message(...)` calls |
 | `publish(topic, message)` | `publish(topic).message(message).submit()` | Topic and payload are not mixed into one start point |
 | `publishToTopic(topic, msg)` | `publish(topic).message(msg).submit()` | publish is already the topic-having operation; the builder separates payload into a step |
-| `sendToChannel(channel, message)` | `sendToChannel(channel).message(message).submit()` | The channel target and payload are separated into builder steps |
-| `requestToChannel(channel, parts, timeout)` | `requestToChannel(channel).message(p1).message(p2).timeout(timeout).submit()` | A channel request's payload and timeout are builder steps |
 | `requestFrame(seq, parts)` | forbidden on the public surface | Request sequence and frame layout are runtime/internal helper detail |
-| `dealer.reply(token, parts)` | `received.reply().message(...).submit()`, or a router/SPOT reply | DEALER cannot designate a specific peer routing id, so an arbitrary-token reply doesn't conceptually fit |
+| `dealer.reply(token, parts)` | `received.reply().message(...).submit()`, or a router reply | DEALER cannot designate a specific peer routing id, so an arbitrary-token reply doesn't conceptually fit |
 | `recvWithTimeout(timeout)` | `recv(timeout)` | The signature is enough |
 | `setLingerTimeoutMilliseconds(ms)` | `setLinger(duration)` | The type conveys the unit |
 
-The send/request/reply/publish/Actor surface exposes only the builder
+The raw send/request/reply/publish surface exposes only the builder
 start point, per the `Operation Builder Policy`, and every variation
 axis — payload, flags, timeout, callback — is expressed as a builder
 step. A start-point name carries only the action, and does not repeat
@@ -4852,6 +3482,8 @@ breaking cleanup work. However, an `Internal-only` item is not exposed
 in the public API, samples, guides, or spec signatures even in its
 target state.
 
+This table and the Required surface test apply to the Core raw socket ABI. [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md) defines public Spot/Actor APIs and their verification.
+
 | Area | C API | C++ | .NET | Java | Go | Rust | Node | Python |
 |---|---|---|---|---|---|---|---|---|
 | Multipart-only public surface | Required | Required | Required | Required | Required | Required | Required | Required |
@@ -4861,12 +3493,9 @@ target state.
 | Public flags surface | Raw C flags | `int flags` | `SendFlags` / `RecvFlags` | `SendFlags` overload | `flags SendFlags` | `SendFlags` via `.flags(...)` builder step | `flags?: SendFlags` | keyword `flags` |
 | Typed option surface | N/A raw C options | Required | Required | Required | Required | Required | Required | Required |
 | Socket TLS helpers | `zlink_set_tls_*` | Required | Required | Required | Required | Required | Required | Required |
-| Service TLS helpers | `zlink_set_tls_*` on service handles | Required | Required | Required | Required | Required | Required | Required |
 | Socket Capability Matrix compliance | Based on Core | Required | Required | Required | Required | Required | Required | Required |
 | `onReceive` callback | STREAM raw fn ptr | Internal-only | Internal-only | Internal-only | Internal-only | Internal-only | Internal-only | Internal-only |
 | `setPacketHandler` callback registration | STREAM packet fn ptr | Required | Required | Required | Required | Required | Required | Required |
-| `setDispatchHandler` callback registration | SPOT raw fn ptr | Required once implemented | Required once implemented | Required once implemented | Required once implemented | Required once implemented | Required once implemented | Required once implemented |
-| `recvActorLifecycle` | SPOT lifecycle queue | Required | Required | Required | Required | Required | Required | Required |
 | HWM-managed send completion | Core-owned completion | Required | Required | Required | Required | Required | Required | Required |
 | StreamSocket `connect` blocked | N/A | Required | Required | Required | Required | Required | Required | Required |
 | StreamSocket `disconnectRid` blocked | N/A | Required | Required | Required | Required | Required | Required | Required |
@@ -5022,7 +3651,7 @@ following criteria.
   Tests`, `Helper/Facade Tests`, `Optimization Guard Tests`, `Boundary
   Validation Tests`, `Option Tests`, `Ownership Tests` are baseline
   `Required` items for every binding.
-- `Callback Tests`, `Monitor Tests`, `Poller Tests`, `Service Tests`,
+- `Callback Tests`, `Monitor Tests`, `Poller Tests`,
   `Codec Tests`, `Sample Smoke Tests` are `Conditional` items for a
   binding that provides the matching public API, extension package, or
   sample suite.
@@ -5030,11 +3659,12 @@ following criteria.
   where runtime characteristics create a risk.
 
 ### Required: Surface Tests
+
+Public Spot/Actor API verification is defined by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 - a canonical public API surface test
 - confirming socket-type role separation
 - confirming a typed option surface exists
 - confirming the shared socket TLS helper exists
-- confirming the service TLS helper exists
 - confirming a raw option bag is not exposed
 - confirming a monitor canonical surface exists
   - `recv()`
@@ -5179,22 +3809,12 @@ following criteria.
   public poller API.
 - Confirm a socket monitor can be registered with the poller and its events
   drained after `POLLIN` readiness.
-- Confirm the poller doesn't silently accept a service-specific handle
-  it doesn't support.
 - Verify a readiness event value does not replace the data-plane
   contract.
 
 ### Conditional: Service Tests
-- A binding that provides the spot/actor public API verifies that
-  service's lifecycle through a minimal path.
-- Confirm a lifecycle constraint such as close/connect/unbind is
-  delivered through the public API per the native contract.
-- For spot publish/subscribe, spot request/reply, and SPOT status/
-  snapshot, perform a round-trip or snapshot verification wherever a
-  public surface exists.
-- A service test's goal is verifying the service-layer binding
-  contract. It does not re-run the entire core service matrix in every
-  language.
+
+Public Spot/Actor test contracts are owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 ### Raw Payload Distribution Verification
 
@@ -5207,6 +3827,7 @@ The [raw payload policy](#binding-raw-scope) defines the distribution scope.
   the canonical sample set.
 - Sample smoke is the minimal verification that confirms the public API
   is usable.
+- `monitor_recv_sample` covers monitor-event receive, including the socket monitor.
 - Sample smoke does not replace the core transport matrix, stress
   testing, or perf measurement.
 
@@ -5384,7 +4005,7 @@ The perf policy is managed across every language in a shared way, in
 - Representative violation examples:
   - a public `recvHandler`/`onReceive` → remove, or move to the
     internal raw STREAM bridge
-  - `spotDispatchHandler` → `setDispatchHandler`
+  - `socketReceiveHandler` → `setReceiveHandler`
   - `on_topic_message` → `subscribe`
 
 #### Step 3: Deep Module Structure
@@ -5459,7 +4080,7 @@ The perf policy is managed across every language in a shared way, in
   - an Option test verifies the typed surface
   - an Ownership test verifies send/recv ownership
   - where the matching public API exists, a Callback, Monitor, Poller,
-    Service, or Codec test verifies the public contract
+    or Codec test verifies the public contract
   - where a sample suite exists, a Sample Smoke test verifies running
     the canonical API
 
@@ -5501,17 +4122,13 @@ The perf policy is managed across every language in a shared way, in
      public API.
    - Every `—` item in the Socket Capability Matrix is not exposed in
      the public API.
-   - The Capability Matrix of any service-layer component that binding
-     implements is aligned the same way. If a binding doesn't implement
-     it, exclude it from the exit condition.
+   - Public Spot/Actor verification follows [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
    - The surface test verifies this and passes.
 
 2. **Name Normalization Complete**
    - Every public API uses the Naming Policy's canonical name.
    - No deprecated alias remains.
-   - The Callback API Policy's canonical names (`setPacketHandler`,
-     `setDispatchHandler`) exist matching their
-     roles.
+   - The raw callback surface exposes `setPacketHandler` for its role.
 
 3. **Shallow Wrappers Removed**
    - No public type merely wraps a native function 1:1.
@@ -5545,8 +4162,7 @@ The perf policy is managed across every language in a shared way, in
 
 7. **Sample Alignment Complete**
    - Every sample in the Canonical Sample Set exists.
-   - This includes a sample for any service-layer component that
-     binding implements.
+   - Public Spot/Actor samples follow [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
    - A sample for an unimplemented `Target` component is excluded.
    - Every sample uses only the canonical API.
    - No sample uses a deprecated/legacy path.
@@ -5736,37 +4352,8 @@ documentation tool.
 
 ## Disconnecting A Peer By Routing ID
 
-- Every binding exposes core's peer-rid disconnect surface for a
-  connectable raw socket type.
-- The raw socket API maps to `zlink_disconnect_rid()`, and the SpotNode
-  API maps to `zlink_spot_node_disconnect_peer_rid()`.
-- `StreamSocket` is bind-only and does not expose peer-rid disconnect.
-- A Spot facade type also does not expose a separate peer-rid disconnect
-  method, because peer mesh ownership belongs to SpotNode.
-
-| Language | Raw socket name | SpotNode name |
-|---|---|---|
-| C | `zlink_disconnect_rid` | `zlink_spot_node_disconnect_peer_rid` |
-| C++ | `disconnect_rid` | `disconnect_peer_rid` |
-| Python | `disconnect_rid` | `disconnect_peer_rid` |
-| Node | `disconnectRid` | `disconnectPeerRid` |
-| Go | `DisconnectRID` | `DisconnectPeerRID` |
-| Rust | `disconnect_rid` | `disconnect_peer_rid` |
-| Java | `disconnectRid` | `disconnectPeerRid` |
-| .NET | `DisconnectRid` | `DisconnectPeerRid` |
-
-A binding must expose `ZLINK_OPT_RID_DUPLICATE_POLICY`,
-`ZLINK_RID_DUPLICATE_REJECT`, `ZLINK_RID_DUPLICATE_HANDOVER`, and the
-connect result values `NOT_FOUND`, `CONFLICT`, `BUSY`, using each
-language's usual enum/error mapping style.
-
-- C and higher-level bindings no longer expose the removed
-  `ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES` value `0x3034` or
-  `ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES` value `18`. They do not add a
-  compatibility alias, deprecated wrapper, or raw bypass.
-- The canonical Auto HWM surface is the byte-valued context memory limit,
-  Core budget, profile, ABI v1 budget snapshot, and metric reset. A
-  socket, SpotNode, or Spot does not add a per-message-unit option.
+- Raw socket RID disconnect follows the [Core socket contract](../../../core/doc/spec/core/socket/README.en.md).
+- Spot and Actor target control follows [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 ## Related Documents
 - `bindings/cpp/`
@@ -5779,50 +4366,11 @@ language's usual enum/error mapping style.
 
 ## Core API Surface 6.0.0 Alignment
 
-- Actor create and join payloads use an aggregate multipart payload.
-- The public binding API takes a message collection for remote actor
-  create, actor join, actor join receive, and actor join reply.
-- A single-message convenience path is allowed only when that
-  language's README explicitly decides to keep that convenience
-  surface. Otherwise, it's removed while cleaning up toward the
-  canonical multipart path during breaking alignment.
-- Even when kept, it must call the multipart path internally, and an
-  empty payload must remain distinguishable from a single empty
-  message.
-- An admission handler receives a borrowed payload view valid only
-  during the callback.
-
-The public Registry scalar setting was removed together with the public
-Discovery/Registry C API in core 8.4.3. A binding must not keep a
-registry option surface, a named registry setter, or a compatibility
-alias as current public API.
+Core exposes no native service ABI under the [Core runtime boundary](../../../core/doc/spec/core/08-runtime-boundary.en.md#3-capabilities-owned-by-framework).
 
 ## Spot Route Bridge API
 
-- A binding must expose `SpotRouteBridge`, or an equivalent typed
-  handle, so `SpotNode` doesn't own the channel socket.
-- The bridge references a `ROUTER` socket owned by the caller/channel
-  runtime, sending a Spot route packet, or handing a SPOT relay packet
-  received in the channel receive loop over to SpotNode.
-- Closing the bridge does not close the registered channel socket.
-
-A per-language API must not omit the following meaning.
-
-- `createRouteBridge(options)` or an equivalent constructor
-- `attachRouterChannel(channelName, routerSocket)`
-- `sendToSpot(targetNode, targetSpot, parts)`
-- `requestToSpot(targetNode, targetSpot, parts, replyHandler, timeout)`
-- `handleRouterReceived(channelName, received)`
-- `close` or `dispose`
-
-`timeout == 0` uses the bridge's default timeout. When
-`handleRouterReceived` returns a handled result, the binding must
-clearly express to the caller that payload ownership has moved to the
-bridge.
-
-The old C API that attaches a router channel peer directly to SpotNode
-is not part of the public contract. A framework adapter must not use
-that path in a new implementation.
+The public Spot route bridge surface is owned by [Framework API](../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 ## Implementation and contract-test verification requirements
 

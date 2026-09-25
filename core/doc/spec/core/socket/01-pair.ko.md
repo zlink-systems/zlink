@@ -142,7 +142,7 @@ PAIR socket에는 단일 logical route가 있다. `DONTWAIT` 송신은 admission
 `completion_id_out_`에 반환한다. Core는 token, target, `user_context_`만 유지하고 payload는
 유지하지 않으므로 호출자는 보관한 record 사본을 다시 제출해야 한다.
 
-단일 pipe에 write credit이 다시 생기면(peer drain, reconnect로 인한 pipe attach) Core는 그
+단일 logical route에 write credit이 다시 생기면(peer drain, reconnect로 인한 pipe attach) Core는 그
 token으로 `ZLINK_COMPLETION_WRITABLE` record를 정확히 하나 발행한다. 이 record는 같은
 `completion_id`, 같은 `user_context`, `send_result == ZLINK_SEND_ADMITTED`,
 `send_terminal_errno == 0`, 빈 `peer_rid`를 가진다. 읽지 않은 WRITABLE record가 있는 동안

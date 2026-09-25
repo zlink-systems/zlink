@@ -88,7 +88,8 @@ Python·Rust reply builder도 flags를 받지 않는다.
 비동기 종결자는 **제출 시점 결과 객체**를 돌려준다. `SendSubmission`은 `result`(제출 시점 스냅샷
 `OK`|`BACKPRESSURED`)와 admission stage를, `RequestSubmission`은 여기에 reply stage를 더한다.
 `result`가 `OK`면 admission은 이미 완료 상태이고(SEND는 이것으로 끝, REQUEST는 reply가 completion에서
-완료된다), `BACKPRESSURED`면 바인딩이 입력을 보관하고 WRITABLE 재제출로 admission을 완성한다. 그 밖의
+완료된다), `BACKPRESSURED`면 바인딩이 [Submit 결과 투영](README.ko.md#submit-result-projection)의
+staging record로 WRITABLE 재제출을 수행해 admission을 완성한다. 그 밖의
 제출 실패(`NOT_CONNECTED`·`NOT_FOUND`·`NOT_ADMITTED`·`INVALID_ARGUMENT`·`TERMINATED`·`OUT_OF_MEMORY`·
 `INTERNAL_ERROR` 등)는 결과 객체가 아니라 **예외/에러**로 낸다(결과 객체와 예외 두 곳을 보게 하지 않는다).
 객체·필드 이름(`Submission`·`result`·`admitted`·`reply`)은 7언어가 공유한다. 구조와 합류 규칙은

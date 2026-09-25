@@ -107,10 +107,11 @@ ZLINK_EXPORT zlink_config_result_t zlink_get_router_option(
 The inline comments in [section 4](#4-public-types) define the value format, range, and default for
 each option. The following contracts are not included in those comments.
 
-- When `ZLINK_ROUTER_OPT_MANDATORY` is positive, a directed submit to a routing ID without a
-  connected pipe fails with `ZLINK_SUBMIT_NOT_CONNECTED`. A `DONTWAIT` call to a routing ID with
-  no route at all then returns `ZLINK_SUBMIT_NOT_CONNECTED` immediately and creates no wait token.
-  With the option at `0` the record is silently dropped (`ZLINK_SUBMIT_OK`, ID `0`).
+- `ZLINK_ROUTER_OPT_MANDATORY` applies to ordinary directed sends to a RID with no route.
+  A positive value (the default) returns `ZLINK_SUBMIT_NOT_CONNECTED` with `EHOSTUNREACH`, ID `0`,
+  and no wait token. At `0`, Core drops the record and returns `ZLINK_SUBMIT_OK`, ID `0`.
+  Typed requests follow the route-less result in [Request and reply](README.en.md#request-and-reply)
+  regardless of this option.
 - `ZLINK_ROUTER_OPT_PROBE` can be set and read with `zlink_set_router_option()` and
   `zlink_get_router_option()` on a DEALER handle as well as on a ROUTER handle. Passing any other
   `zlink_router_option_t` value to a DEALER handle returns `ZLINK_CONFIG_INVALID_ARGUMENT` with `EINVAL`.
@@ -162,24 +163,9 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_rid (
 ```
 
 This sends one complete ordinary raw record to the peer identified by `target_rid_`.
-`part_count_` must be positive. `flags_` is `ZLINK_SEND_FLAGS_NONE` or
-`ZLINK_SEND_FLAGS_DONTWAIT`. `NONE` snapshots `SNDTIMEO`, waits for admission and reconnect of the
-same logical RID, and finishes with ID `0`. A `DONTWAIT` call makes exactly one admission attempt. If admission is immediate, it has
-ID `0` and no completion. If HWM or byte credit prevents admission, or a route exists but is not
-ready yet (transport pair not ready, weight `0`), it returns `ZLINK_SUBMIT_BACKPRESSURED` with
-`EAGAIN` and a nonzero wait token bound to that RID, and Core does not retain the payload. If
-`target_rid_` has no route at all, the result is `ZLINK_SUBMIT_NOT_CONNECTED` immediately with no
-token while `ZLINK_ROUTER_OPT_MANDATORY` is positive (the default; with it at `0` the record is
-silently dropped with ID `0` as before). When the same RID gains write credit (peer
-drain, reconnect, route adoption, standby promotion, or weight `0` to positive), Core produces
-exactly one `ZLINK_COMPLETION_WRITABLE` record for that token with
-`send_result == ZLINK_SEND_ADMITTED` and `peer_rid` set to the submitted RID. Credit on another
-RID does not wake this token. The caller resubmits its retained record to the same RID with
-`DONTWAIT`. Explicitly removing that RID with `zlink_disconnect_rid()` ends the token with a
-WRITABLE record carrying `ZLINK_SEND_TERMINAL` and `ENOENT`; socket close or context termination
-ends it internally and delivers no record. After ID `0`, Core does not replay the
-payload. [Socket Common](README.en.md#whole-message-send-and-pending-admission) owns ownership and the exact
-result and errno contract.
+[§5](#5-router-options) defines the scope and result of mandatory for a RID without a route.
+[whole-message send](README.en.md#whole-message-send-and-pending-admission) defines all other submit
+results, tokens, and ownership.
 
 ## 7. Raw request submit
 
@@ -193,8 +179,7 @@ ZLINK_EXPORT zlink_submit_result_t zlink_request (
 
 `target_router_rid_or_null_` must be the non-NULL logical RID of a target ROUTER. A DEALER RID
 returns `ZLINK_SUBMIT_NOT_ADMITTED` with `EPROTOTYPE`; DATA send to the same RID remains allowed.
-For an RID absent from the routing map, `NONE` returns `ZLINK_SUBMIT_NOT_FOUND` with `ENOENT` and
-`DONTWAIT` returns `ZLINK_SUBMIT_NOT_CONNECTED` with `EHOSTUNREACH` without creating a wait token.
+A RID absent from the routing map follows [Socket Common request](README.en.md#request-and-reply).
 
 `part_count_` must be positive. The optional ID output is set to `0` before other validation; an
 admitted request returns a nonzero REQUEST ID. Before publishing the
@@ -212,13 +197,10 @@ byte credit, or flow pause, or a route for the RID that exists but is not ready 
 not ready, weight `0`), returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero wait token
 whose target is that RID; Core retains no request payload. When that RID has write credit again,
 exactly one `ZLINK_COMPLETION_WRITABLE` record with the same token, context, and `peer_rid` follows,
-and the caller resubmits the same request. Credit on another RID does not publish this token. A
-RID with no mandatory route returns `ZLINK_SUBMIT_NOT_CONNECTED` with `EHOSTUNREACH`, ID `0`, and
-no token.
+and the caller resubmits the same request. Credit on another RID does not publish this token. A request to a RID without a route follows [Socket Common request](README.en.md#request-and-reply).
 
 `timeout_ms_ == 0` snapshots the `ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS` value, whose default is
-5,000 ms. The reply timeout starts at outbound local admission, that is, when `ZLINK_SUBMIT_OK` is
-returned, and does not start while a wait token is outstanding. When the submit-time transport pair
+5,000 ms. The reply timeout start and wait-token period follow [Socket Common request](README.en.md#request-and-reply). When the submit-time transport pair
 terminates after admission, the request ends at once with `ZLINK_REQUEST_NOT_CONNECTED` per the
 [Socket Common §6 completion table](README.en.md#request-and-reply), and the payload is not replayed.
 Exactly one of reply, timeout, and terminal creates the REQUEST completion.
@@ -507,10 +489,10 @@ and status snapshots. Each item maps to one test.
 
 **Request completion**
 - An admitted request returns a nonzero REQUEST ID and exactly one REQUEST completion for reply, timeout, or terminal; a failed submit without a wait token returns ID `0` and no completion.
-- A DONTWAIT call makes one admission attempt. Backpressure or a route that is not ready (transport pair not ready, weight `0`) returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero wait token for that RID, and the caller resubmits the same request after the WRITABLE record with the same token, context, and `peer_rid`. A RID with no mandatory route returns `ZLINK_SUBMIT_NOT_CONNECTED` with `EHOSTUNREACH`, ID `0`, and no token.
+- A DONTWAIT call makes one admission attempt. Backpressure or a route that is not ready (transport pair not ready, weight `0`) returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero wait token for that RID, and the caller resubmits the same request after the WRITABLE record with the same token, context, and `peer_rid`. A request to a RID without a route follows [Socket Common request](README.en.md#request-and-reply).
 - If `timeout_ms_ == 0`, the request uses the `ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS` default.
 - A valid error reply preserves a non-OK `zlink_request_result_t` mapped from errno and the payload after the errno part in the completion; a malformed errno part completes with `ZLINK_REQUEST_PROTOCOL_ERROR` and no payload.
-- The request timeout starts at local admission and does not start while a wait token is outstanding; when the submit-time pair terminates or leaves the selection after admission, one `ZLINK_REQUEST_NOT_CONNECTED` completion arrives at once without waiting for the timeout.
+- Request timeout and post-admission pair termination follow [Socket Common request](README.en.md#request-and-reply).
 - Shared completion-slot exhaustion immediately returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`, ID `0`, and no completion, regardless of flags.
 
 **Reply**

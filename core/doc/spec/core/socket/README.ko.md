@@ -975,21 +975,24 @@ context는 `ZLINK_SUBMIT_INVALID_ARGUMENT`, `errno == EINVAL`이다. Core는 con
 | `NONE` local send queue admission | `ZLINK_SUBMIT_OK` | 0 | 없음 |
 | `DONTWAIT` 즉시 admission | `ZLINK_SUBMIT_OK` | 0 | 없음 |
 | `DONTWAIT` backpressure 또는 target 준비 전 | `ZLINK_SUBMIT_BACKPRESSURED`, `EAGAIN` | nonzero 대기 토큰 | WRITABLE 한 건 |
-| ROUTER·STREAM RID에 route 없음 | `ZLINK_SUBMIT_NOT_CONNECTED`, `EHOSTUNREACH` | 0 | 없음 |
+| STREAM RID에 route 없음 | `ZLINK_SUBMIT_NOT_CONNECTED`, `EHOSTUNREACH` | 0 | 없음 |
+| ROUTER directed send에서 route 없음 | [ROUTER option §5](07-router.ko.md#5-router-option) | §5 | §5 |
 | completion reservation 상한 초과 | `ZLINK_SUBMIT_OUT_OF_MEMORY`, `ENOMEM` | 0 | 없음 |
 | validation·target 실패 | 해당 submit result | 0 | 없음 |
 
 `NONE`은 호출 진입 시 `ZLINK_OPT_SNDTIMEO`를 snapshot하고 local send queue admission까지
 기다린다. 기본값은 1,000 ms, `0`은 즉시, `-1`은 무한 대기다. 만료하면
 `ZLINK_SUBMIT_BACKPRESSURED`, `errno == EAGAIN`, ID `0`, completion 없음으로 실패한다.
+DEALER의 알려진 peer가 모두 weight `0`인 `NONE` 제출은 `ZLINK_SUBMIT_NOT_ADMITTED`,
+`errno == ECONNREFUSED`, ID `0`으로 끝난다.
 `DONTWAIT`은 기다리지 않고 admission을 한 번만 시도한다. 즉시 admission되면 ID `0`이고
 completion이 없다. HWM·byte credit·flow pause에 의한 backpressure이거나 target이 존재하지만 아직
 준비되지 않은 경우(transport pair 미준비, peer weight 0, connect 직후 peer가 0개인 DEALER)에는
 `ZLINK_SUBMIT_BACKPRESSURED`, `errno == EAGAIN`과 함께 nonzero 대기 토큰을 `completion_id_out_`에
 반환한다. Core는 토큰, target과 `user_context_`만 유지하고 payload는 보관하지 않는다. 모든 입력
-슬롯은 다른 결과와 같이 소비되므로 caller는 자신이 보관한 record 전체로 다시 제출한다. ROUTER·STREAM에서
-지정한 RID에 route가 전혀 없으면(ROUTER는 `ZLINK_ROUTER_OPT_MANDATORY`가 양수일 때, 기본값) 즉시
-`ZLINK_SUBMIT_NOT_CONNECTED`, `errno == EHOSTUNREACH`, ID `0`이며 토큰을 만들지 않는다.
+슬롯은 다른 결과와 같이 소비되므로 caller는 자신이 보관한 record 전체로 다시 제출한다. STREAM의 RID에 연결이 없으면 즉시 `ZLINK_SUBMIT_NOT_CONNECTED`, `errno == EHOSTUNREACH`,
+ID `0`이며 토큰을 만들지 않는다. ROUTER directed send의 route 없음 결과는
+[ROUTER option §5](07-router.ko.md#5-router-option)를 따른다.
 
 REQUEST completion과 대기 토큰은 socket당 65,536개의 unified completion reservation을 공유한다.
 SEND는 `DONTWAIT`이 대기 토큰을 반환할 때만 slot을 예약하고, REQUEST는 admission되어
@@ -1012,17 +1015,19 @@ record 하나를 만든다. 재submit도 admission을 한 번만 시도하며 �
 반환한다. `ZLINK_POLLOUT`은 socket 전체의 재시도 가능성을 나타내는 aggregate hint이고, target별
 정확한 신호는 WRITABLE record의 토큰·context·RID다.
 
-Target 단위는 PAIR은 socket의 단일 pipe, DEALER는 candidate peer 집합, ROUTER·STREAM은 지정한 RID
-하나다. DEALER는 candidate 중 하나가 열리면 WRITABLE 한 건을 만들고 재submit 시 열린 peer를 다시
+Target 단위는 PAIR의 단일 logical route, DEALER의 candidate peer 집합, ROUTER·STREAM의 지정한 RID
+하나다. PAIR의 물리 pipe가 바뀌어도 같은 token target이다. DEALER는 candidate 중 하나가 열리면 WRITABLE 한 건을 만들고 재submit 시 열린 peer를 다시
 선택하며 이전 호출에서 endpoint를 고정하지 않는다. ROUTER·STREAM은 다른 RID의 credit으로 해당 토큰을
 발행하지 않는다. WRITABLE을 발행하는 wake edge는 peer drain으로 LWM 아래 도달·credit refill,
 pipe attach(connect 완료), peer weight 0 → 양수, ROUTER route 채택·standby 승격, flow RESUME이다.
 Core는 SEND·REQUEST payload를 admission 전에 보관하지 않으며 Core 소유의 재시도 FIFO도 없다.
-일시적인 transport 종료는 대기 토큰이나 진행 중인 `NONE` wait의 terminal 결과가 아니다.
+PAIR·DEALER·ROUTER의 일시적인 transport 종료는 대기 토큰이나 진행 중인 `NONE` wait의 terminal 결과가 아니다.
+STREAM은 물리 연결 종료 시 RID가 끝나므로 [STREAM routed send](08-stream.ko.md#4-routed-send)의
+`ZLINK_SEND_TERMINAL`·`ENOTCONN` 결과를 따른다.
 `NONE`은 토큰을 만들지 않고 snapshot한 `SNDTIMEO` 안에서 같은 target의 reconnect와 admission을
 기다린다.
 
-대기 토큰은 다음 세 경우로만 종료된다. (a) 위의 WRITABLE record. (b) target의 명시적
+PAIR·DEALER·ROUTER의 대기 토큰은 다음 세 경우로 종료된다. (a) 위의 WRITABLE record. (b) target의 명시적
 제거(`zlink_disconnect_rid`, 해당 RID의 endpoint termination)로 `send_result == ZLINK_SEND_TERMINAL`,
 `send_terminal_errno == ENOENT`인 WRITABLE record. (c) socket close·context termination — Core가
 token을 내부에서 `ZLINK_SEND_TERMINAL`과 lifecycle errno(`ESHUTDOWN` 또는 `ETERM`)로 끝내며
@@ -1060,14 +1065,15 @@ ZLINK_EXPORT zlink_submit_result_t zlink_reply (
 DEALER의 target은 반드시 `NULL`, ROUTER의 target은 반드시 non-NULL이다. 다른 socket은
 `ZLINK_SUBMIT_NOT_SUPPORTED`, `errno == ENOTSUP`다. ROUTER가 DEALER RID로 typed request를
 보내면 `ZLINK_SUBMIT_NOT_ADMITTED`, `errno == EPROTOTYPE`이며 같은 RID의 일반 DATA 송신은
-허용한다. RID가 routing map에 없으면 `NONE`은 `ZLINK_SUBMIT_NOT_FOUND`, `errno == ENOENT`이고
-`DONTWAIT`은 `ZLINK_SUBMIT_NOT_CONNECTED`, `errno == EHOSTUNREACH`이며 토큰을 만들지 않는다.
+허용한다. RID가 routing map에 없으면 mandatory 값과 관계없이 `NONE`은 `ZLINK_SUBMIT_NOT_FOUND`,
+`errno == ENOENT`이고 `DONTWAIT`은 `ZLINK_SUBMIT_NOT_CONNECTED`, `errno == EHOSTUNREACH`이며
+토큰을 만들지 않는다. ROUTER mandatory의 route 없는 directed send 결과와는
+[ROUTER option](07-router.ko.md#5-router-option)에서 구분한다.
 
 `part_count_`는 양수여야 하며 `0`은 `ZLINK_SUBMIT_INVALID_ARGUMENT`, `errno == EINVAL`이다.
 Optional ID output은 다른 validation 전에 `0`이 되며 대기 토큰 없는 submit 실패는 `0`을 유지한다.
 Admission된 request(`ZLINK_SUBMIT_OK`)는 output 생략 여부와 관계없이 nonzero REQUEST ID를 만들고
-정확히 한 REQUEST completion을 queue에 넣는다. `timeout_ms_`는 request 전체 제출을 기준으로
-시작한다. Request의 context는 `NONE`과 `DONTWAIT` 모두에서 허용하며 같은 completion에 그대로 들어간다. Core는 pointer를 읽거나 해제하지 않으며
+정확히 한 REQUEST completion을 queue에 넣는다. Request의 context는 `NONE`과 `DONTWAIT` 모두에서 허용하며 같은 completion에 그대로 들어간다. Core는 pointer를 읽거나 해제하지 않으며
 caller는 completion을 receive·close하거나 socket을 폐기할 때까지 pointee 수명을 유지한다. 대기
 토큰을 반환한 submit은 WRITABLE record에 같은 context를 돌려주고, 그 밖의 submit 실패에는 context
 echo가 없으므로 caller는 반환 직후 자신의 context state를 정리할 수 있다.
@@ -1094,8 +1100,7 @@ record(`send_result == ZLINK_SEND_ADMITTED`)가 정확히 한 건 뒤따르고, 
 physical write credit만 회복된 상태에서는 발행하지 않는다(거절 원인이 되는 자원의 회복만 wake 조건이다 — 규칙 하나). 토큰의 target 단위, wake edge, `ZLINK_POLLOUT`·`ZLINK_POLLCOMPLETION`
 level 유지와 종료 조건(WRITABLE record, 명시적 target 제거의 `ZLINK_SEND_TERMINAL`+`ENOENT`; socket
 close·context termination은 토큰을 내부에서 끝내고 record를 전달하지 않는다)은
-[whole-message send](#whole-message-send와-pending-admission)의 SEND 대기 토큰과 같다. Mandatory ROUTER route가 없는
-RID는 즉시 `ZLINK_SUBMIT_NOT_CONNECTED`, `errno == EHOSTUNREACH`, ID `0`이며 토큰을 만들지 않는다.
+[whole-message send](#whole-message-send와-pending-admission)의 SEND 대기 토큰과 같다. ROUTER RID에 route가 없는 request의 결과는 이 절의 첫 문단을 따른다.
 
 `timeout_ms_ == 0`은 requester socket의 request timeout을 snapshot하며 기본값은 5,000 ms다.
 Reply timeout은 request record가 outbound local send queue에 admission된 시점, 즉
@@ -1358,15 +1363,10 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
   안에서 같은 logical target admission을 기다리며 ID `0`과 completion 없음으로 끝난다.
 - STREAM은 `part_count_ == 1`만 허용하고 다른 수는 `ZLINK_SUBMIT_NOT_SUPPORTED`+`ENOTSUP`,
   ID `0`으로 거절한다. 모든 whole-message 호출은 성공·실패와 관계없이 모든 입력 슬롯을 소비한다.
-  ROUTER·STREAM RID에 route가 없으면 `ZLINK_SUBMIT_NOT_CONNECTED`+`EHOSTUNREACH`, ID `0`이고
-  completion reservation 상한 초과는 `ZLINK_SUBMIT_OUT_OF_MEMORY`+`ENOMEM`, ID `0`이다.
-- Core는 SEND·REQUEST payload를 admission 전에 보관하거나 Core 소유의 재시도 FIFO를 두지 않는다. 대기
-  토큰은 target 단위(PAIR pipe, DEALER candidate peer 집합, ROUTER·STREAM의 해당 RID)로 예약하며
-  admission 전 transient disconnect는 토큰을 종료하지 않는다. ID `0` 뒤에는 application payload를
-  replay하지 않는다.
-- 대기 토큰은 WRITABLE record, target 명시적 제거(`ZLINK_SEND_TERMINAL`+`ENOENT`), 또는 socket
-  close·context termination(record 없이 내부 종료)으로만 끝나며 peer weight 0은 대기 토큰을
-  종료하지 않는다.
+  RID에 route가 없는 결과는 [whole-message send](#whole-message-send와-pending-admission)의
+  결과표와 [Request와 reply](#request와-reply)를 따른다. Completion reservation 상한 초과는 `ZLINK_SUBMIT_OUT_OF_MEMORY`+`ENOMEM`, ID `0`이다.
+- 대기 토큰의 target·수명과 payload replay는
+  [whole-message send](#whole-message-send와-pending-admission)를 따른다.
 - SEND 대기 토큰과 REQUEST completion을 섞어 65,536개 slot을 채우면 다음 SEND `DONTWAIT`은
   `ZLINK_SUBMIT_OUT_OF_MEMORY`+`ENOMEM`, 다음 REQUEST는 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`,
   모두 ID `0`이고, 한 record를 receive하면 다음 submit이 다시 접수된다.
@@ -1381,8 +1381,7 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
 - DONTWAIT request는 admission을 한 번만 시도한다. Backpressure나 준비되지 않은 target(transport
   pair 미준비, weight 0, connect 직후 peer 0개인 DEALER)은 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과
   nonzero 대기 토큰을 반환하고, Core는 payload를 보관하지 않으며 같은 토큰·context·RID의 WRITABLE 뒤
-  caller가 같은 request를 다시 제출한다. Mandatory ROUTER route가 없으면
-  `ZLINK_SUBMIT_NOT_CONNECTED`+`EHOSTUNREACH`, ID `0`, 토큰 없음이다.
+  caller가 같은 request를 다시 제출한다. ROUTER RID가 없을 때의 결과는 [Request와 reply](#request와-reply)의 route-miss 단락을 따른다.
 - `zlink_reply()`의 성공한 제출만 `(responder ROUTER, source RID)` 범위 token을 소비한다.
   Physical disconnect·generation 변경·requester timeout은 token을 무효화하지 않으며 RID 제거,
   responder close와 context termination은 무효화한다.

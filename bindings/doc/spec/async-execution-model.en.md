@@ -66,10 +66,23 @@ call as `void`, a collection, `Result`, `error`, or a language-specific exceptio
 The [Core completion pull and ownership contract](../../../core/doc/spec/core/socket/README.en.md#completion-pull-and-ownership)
 owns raw C readiness, `zlink_completion_recv()`, and record lifetime.
 
-- **A high-level binding has one completion owner per socket: the participant that reads completions and delivers them to language terminals.**
-  This prevents two participants from consuming the same queue. The runtime owns a socket that is
-  not registered with a public poller for `PollCompletion`; registration transfers ownership atomically
-  to the thread calling `wait()`. Removal or clearing the completion bit returns ownership to the runtime.
+- **A high-level binding has one completion owner per socket: the thread driving `wait()` on
+  a public poller registered for `PollCompletion`.** Registration makes that thread the owner.
+  The binding creates no runtime/background owner or automatic completion drain thread; only
+  caller-driven poller `wait()` or a blocking terminal's inline drain advances completions.
+- **An async completion-backed terminal (`admitted` or REQUEST `reply`) advances only while the
+  socket has a `PollCompletion` owner whose `wait()` runs.** Without an owner, the binding rejects
+  submission immediately with typed `InvalidState`.
+- **While an async completion-backed operation is outstanding, removing its `PollCompletion`
+  registration or clearing the completion bit fails with `InvalidState` and retains the owner.**
+  Removal can succeed only after its `admitted`/`reply` stages are terminal and all Core completions
+  and wait tokens have been cleaned up. Successful removal leaves no owner; a new async submit
+  then follows the rule above. Socket close and context termination use the lifecycle cleanup in
+  [§6](#6-caller-wait-cancellation).
+- **Poller close/destroy/Dispose/Drop preserves completion ownership through teardown.** A fallible close returns `InvalidState` while an operation is outstanding. An infallible destructor retains the registration and operation state until affected socket close and poller destroy actually succeed. If Core returns `EBUSY` because a socket API call or poller `wait()` is active, the owning context retains the handles, registration, and operation state for lifecycle cleanup under [§6](#6-caller-wait-cancellation). Context close calls `zlink_ctx_shutdown`, waits for active socket calls and poller waits to exit, then closes every retained socket and destroys every retained poller. If native close or destroy still returns `EBUSY`, it retains the handles and completes those closes after the active call exits. It calls `zlink_ctx_term` only after all socket closes have succeeded, then releases registration and operation state exactly once. If the context stays live, the retained handles remain until context close; no other cleanup trigger or background drain thread is created.
+- **A blocking terminal, such as a synchronous request, drains its own completion inline on the
+  calling thread.** It creates no separate drain thread or persistent owner. With a public poller
+  owner, it must not be called serially with `wait()` on the same execution thread.
 
 High-level `PollCompletion` is a completion progress event returned after the binding takes at least one
 record from the native queue and either completes a live waiter or cleans up detached state. The queue
@@ -150,6 +163,13 @@ Raw C completion observations follow the
   DATA ready at the same time remains available to the subsequent application receive.
 - On a socket registered for completion with a public poller, blocking requests and Go
   `Submit(context.Context)` can receive completion while another thread or goroutine executes `wait()`.
+- Submitting an async completion-backed terminal without a `PollCompletion` owner fails immediately with typed `InvalidState`; the same submit advances after an owner is registered.
+- A blocking terminal drains inline without a poller owner or separate thread.
+- While an operation is outstanding, removing `PollCompletion` or clearing its bit returns `InvalidState` and retains the owner; removal succeeds after cleanup.
+- If a caller wait is canceled but a Core wait token remains, explicit removal and fallible poller close return `InvalidState`.
+- An infallible poller destructor with an outstanding operation retains registration and operation state until affected socket close and poller destroy succeed; cleanup and registration release occur exactly once.
+- Destroying a poller during an active socket API call leaves the `EBUSY` handles and state with the owning context. Context close calls `zlink_ctx_shutdown`, waits for active socket calls and poller waits to exit, closes retained sockets and destroys retained pollers, completes any `EBUSY` closes after the active call exits, then calls `zlink_ctx_term` only after all socket closes succeed; registration and operation state are released exactly once.
+- Destroying a poller during an active `wait()` leaves the `EBUSY` handles and state with the owning context. Context close follows the same shutdown, wait-for-exit, close/destroy, `EBUSY` completion, and `zlink_ctx_term` order; registration and operation state are released exactly once.
 
 **Submit and completion races**
 
@@ -165,6 +185,7 @@ Raw C completion observations follow the
   no corresponding message to the peer.
 - If caller wait cancellation wins after successful submit, a later reply neither changes the caller's
   cancellation result to success nor completes the terminal again.
-- Socket close and context termination finish live waiters with the corresponding lifecycle error.
+- Socket close finishes live waiters with the corresponding lifecycle error and cleans up Core tokens.
+- Context termination also finishes live waiters with the corresponding lifecycle error and cleans up Core tokens.
 - A non-OK request result is observed as a typed request error without the error-reply payload as a
   success value or error property. The Go result is `(nil, error)`.

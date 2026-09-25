@@ -67,8 +67,8 @@ C의 raw readiness, `zlink_completion_recv()`와 record 수명은
 - **고수준 바인딩은 socket마다 completion을 읽어 언어 terminal로 전달하는 completion owner를
   하나만 두며, 그 owner는 public poller에 `PollCompletion`으로 등록해 `wait()`를 구동하는
   thread뿐이다.** 같은 queue의 record를 두 주체가 소비하지 않도록 하기 위해서다. 등록하면 그
-  `wait()` 구동 thread가 owner가 되고, 등록을 제거하거나 completion bit를 빼면 owner가 없는
-  상태가 된다. **바인딩은 runtime(백그라운드) owner나 자동 completion drain thread를 두지 않는다**
+  `wait()` 구동 thread가 owner가 된다. 등록 제거와 completion bit 해제는 아래의
+  진행 중인 operation 규칙을 따른다. **바인딩은 runtime(백그라운드) owner나 자동 completion drain thread를 두지 않는다**
   — completion은 오직 caller가 구동하는 poller의 `wait()`(비동기 terminal) 또는 blocking
   terminal 자신의 in-line drain(아래)으로만 진행한다.
 - **비동기 completion-backed terminal(`admitted`·REQUEST `reply`)은 소켓이 `PollCompletion`
@@ -76,6 +76,12 @@ C의 raw readiness, `zlink_completion_recv()`와 record 수명은
   제출하면 바인딩은 **submit 시점에 진행 불가를 즉시 typed 오류(`InvalidState`)로 거부**하며,
   조용히 hang하거나 백그라운드 drain을 만들지 않는다. 오사용을 지연이 아니라 최전방에서 막기
   위해서다.
+- **진행 중인 비동기 completion-backed operation이 있으면 `PollCompletion` 등록 제거와
+  completion bit 해제를 `InvalidState`로 거부하고 기존 owner를 유지한다.** Operation의
+  `admitted`·`reply`가 terminal에 도달하고 Core completion과 대기 토큰이 모두 정리된 뒤에만
+  owner를 제거한다. 제거에 성공하면 owner가 없는 상태이며 새 비동기 제출은 위 규칙으로 거부한다.
+  Socket close·context termination은 [§6](#6-caller-wait-cancellation)의 lifecycle cleanup을 따른다.
+- **Poller close/destroy/Dispose/Drop도 teardown이 끝날 때까지 completion ownership을 유지한다.** Fallible close는 진행 중인 operation이 있으면 `InvalidState`를 반환한다. Infallible destructor는 영향받는 socket close와 poller destroy가 실제로 성공할 때까지 registration과 operation state를 유지한다. Socket API 호출이나 poller `wait()`가 진행 중이어서 Core가 `EBUSY`를 반환하면 소유 context가 [§6](#6-caller-wait-cancellation)의 lifecycle cleanup을 위해 handle, registration, operation state를 보관한다. Binding context close는 `zlink_ctx_shutdown`을 호출하고 진행 중인 socket API 호출과 poller wait가 끝날 때까지 기다린 뒤, 보관된 모든 socket을 닫고 poller를 파괴한다. Native close 또는 destroy가 여전히 `EBUSY`를 반환하면 handle을 유지하고 진행 중인 호출이 끝난 뒤 close/destroy를 완료한다. 모든 socket close가 성공한 뒤에만 `zlink_ctx_term`을 호출하고, native handle이 실제로 닫힌 뒤 registration과 operation state를 정확히 한 번 해제한다. Context가 계속 살아 있으면 보관된 handle은 context close까지 남으며, 다른 cleanup trigger나 background drain thread는 만들지 않는다.
 - **Blocking terminal(동기 request 등)은 호출 thread에서 자신의 completion을 in-line으로
   drain해 완료하며, 별도 drain thread나 지속 owner를 만들지 않는다.** 소켓이 이미 public poller
   owner를 가진 동안에는 같은 실행 thread에서 `wait()`와 blocking terminal을 직렬로 호출하지
@@ -162,6 +168,12 @@ C의 raw completion 관측은
   백그라운드 drain을 시작하지 않는다.** owner를 등록한 뒤 같은 제출은 정상 완료한다.
 - Blocking terminal은 poller owner 없이도 호출 thread의 in-line drain만으로 자신의 completion을
   한 번 받아 완료하며, 별도 thread를 만들지 않는다.
+- 진행 중인 operation이 있으면 `PollCompletion` 등록 제거와 completion bit 해제는 `InvalidState`를 반환하고 기존 owner는 남는다. Operation 정리 뒤 같은 제거는 성공한다.
+- Caller wait가 취소됐어도 Core wait token이 남아 있으면 명시적 owner 제거와 fallible poller close는 `InvalidState`를 반환한다.
+- 진행 중인 operation을 가진 poller의 infallible destructor는 영향받는 socket close와 poller destroy가 성공할 때까지 registration과 operation state를 유지하며, 정리와 registration 해제는 정확히 한 번 실행된다.
+- Socket API 호출 중 poller를 파괴하여 `EBUSY`가 반환되면 소유 context가 handle과 state를 보관한다. Context close는 `zlink_ctx_shutdown`을 호출하고 활성 socket 호출과 poller wait가 끝날 때까지 기다린 뒤 보관된 socket을 닫고 poller를 파괴한다. `EBUSY`면 활성 호출 종료 뒤 close를 완료하고, 모든 socket close가 성공한 뒤에만 `zlink_ctx_term`을 호출하며 registration과 operation state를 정확히 한 번 해제한다.
+- Poller `wait()` 중 poller를 파괴하여 `EBUSY`가 반환되면 소유 context가 handle과 state를 보관한다. Context close는 같은 shutdown, 활성 호출 종료 대기, close/destroy, `EBUSY` close 완료, `zlink_ctx_term` 순서를 따르며 registration과 operation state를 정확히 한 번 해제한다.
+
 
 **Submit과 completion 경합**
 
@@ -176,6 +188,7 @@ C의 raw completion 관측은
 - 호출 전에 취소한 send·request는 caller terminal에 취소를 반환하고 peer에 해당 message를 보내지 않는다.
 - Successful submit 뒤 caller wait 취소가 먼저 확정되면 뒤의 reply가 caller의 취소 결과를
   성공 결과로 바꾸거나 terminal을 다시 완료하지 않는다.
-- Socket close와 context termination은 live waiter를 해당 lifecycle error로 끝낸다.
+- Socket close는 live waiter를 해당 lifecycle error로 끝내고 Core token을 정리한다.
+- Context termination도 live waiter를 해당 lifecycle error로 끝내고 Core token을 정리한다.
 - Non-OK request 결과는 typed request error로 관측하며 error reply의 payload를 성공값이나
   error property로 받지 않는다. Go의 결과는 `(nil, error)`다.

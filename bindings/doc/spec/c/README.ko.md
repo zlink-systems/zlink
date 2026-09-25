@@ -20,7 +20,7 @@ C에서는 네이티브 ABI 자체가 바인딩 계약이다. `bindings/c`는 �
 규칙에 일치할 때 C 구현이 정렬된 것으로 간주한다.
 
 공유 바인딩 아키텍처 맵은 리뷰 어휘로 여전히 유효하다. core, messaging,
-sockets, eventing, service, errors는 리뷰어가 C 헤더를 읽을 때 사용하는
+sockets, eventing, errors는 리뷰어가 C 헤더를 읽을 때 사용하는
 개념적 영역이다. C는 이 영역들을 별도의 `contracts/`와 `runtime/` 폴더가
 아니라 헤더 섹션, 타입/함수 접두사, 테스트, 샘플, 문서 섹션을 통해 표현한다.
 
@@ -38,12 +38,12 @@ sockets, eventing, service, errors는 리뷰어가 C 헤더를 읽을 때 사용
 | [Byte HWM과 Auto-HWM](#byte-hwm과-auto-hwm) | Core ABI의 byte HWM 설정·계산·admission 규칙 |
 | [Receive flow state](#receive-flow-state) | receive-flow 상태 enum, 함수, 결과와 monitor 표면 |
 | [필수 기능 커버리지](#필수-기능-커버리지) | 리뷰가 점검하는 헤더 기능 그룹 |
-| [Spot Get-Or-New](#spot-get-or-new) | `zlink_spot_node_spot_get_or_new` 계약 |
+| [Spot Get-Or-New](#spot-get-or-new) | Core 경계와 Framework API 참조 |
 | [Ownership과 생명주기](#ownership과-생명주기) | 핸들·메시지 소유권 이동 규칙 |
 | [Error와 Result 정책](#error와-result-정책) | C result 도메인과 예외 미사용 |
 | [성능 정책](#성능-정책) | C가 다른 바인딩의 성능 기준선인 이유 |
 | [구현 체크리스트](#구현-체크리스트) | 정렬 선언 전 확인 항목 |
-| [Actor와 Spot Route 결과](#actor와-spot-route-결과) | route 결과 struct와 라우팅 헬퍼 정책 |
+| [Actor와 Spot Route 결과](#actor와-spot-route-결과) | Core 경계 링크 |
 
 ## 공개 계약 소스
 
@@ -119,7 +119,7 @@ C 바인딩은 네이티브 ABI 형태를 유지한다.
   노출한다.
 
 `Received.Reply(...)`, `Socket.Send().Message(...).Submit()`,
-`Spot.Publish(topic)` 같은 상위 수준 객체 편의 표현은 C에 적용되지 않는다.
+`PubSocket.Publish(topic)` 같은 상위 수준 객체 편의 표현은 C에 적용되지 않는다.
 이런 형태는 상위 수준 바인딩의 것이다.
 
 ## 인터페이스 형태 예외
@@ -184,7 +184,6 @@ C 리뷰는 `core/include/zlink.h`에서 다음 그룹을 점검한다.
 - 소켓 생명주기, bind/connect, disconnect, 옵션, TLS 헬퍼, routing id,
   send, receive, request, reply, publish, subscribe, stream API.
 - 이벤팅 API: monitor, poller, timer, pull receive와 readiness 의미.
-- SPOT node, SPOT handle, topology snapshot, actor, service 계층 API.
 - error/result enum과 errno 매핑.
 
 `core/include/zlink.h`에 기능이 있으면 C 바인딩은 그것을 공개 헤더를 통해
@@ -192,13 +191,9 @@ C 리뷰는 `core/include/zlink.h`에서 다음 그룹을 점검한다.
 
 ## Spot Get-Or-New
 
-`bindings/c/include/zlink.h`는 코어 공개 헤더와 동일한 시그니처 및 결과
-계약으로 `zlink_spot_node_spot_get_or_new(...)`를 노출한다. 이 함수는
-routing id로 로컬 논리 Spot을 원자적으로 얻거나 생성하며, 호출자 소유의
-`Spot` 파사드 핸들과 생성 여부 플래그를 함께 반환한다.
-
-이 API는 actor를 Spot에 join하지 않는다. join은 별도의 service 작업으로
-남는다.
+C binding은 [Core runtime 경계](../../../../core/doc/spec/core/08-runtime-boundary.ko.md#3-framework가-소유하는-기능)에
+따라 service C ABI를 제공하지 않는다. Spot `GetOrCreate`는
+[Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md#17-creategetorcreate-결과와-relocation-policy)가 소유한다.
 
 ## Ownership과 생명주기
 
@@ -232,7 +227,7 @@ C 바인딩은 다른 바인딩의 성능 기준선이다.
 
 - 핫 패스는 호출자가 준비한 whole-message 배열을 그대로 사용하며, 같은 payload를
   담은 중간 collection을 추가로 만들지 않는다.
-- send/recv, request, dispatch, poller, timer, stream, SPOT, actor 경로에
+- send/recv, request, poller, timer, stream 경로에
   숨겨진 sleep, busy wait, thread join, 리플렉션 같은 동적 디스패치, 거친
   글로벌 락, 피할 수 있는 복사를 추가하지 않는다.
 - perf 러너와 샘플은 공개 헤더만 include한다.
@@ -253,20 +248,7 @@ C 바인딩이 정렬되었다고 선언하기 전에:
 
 ## Actor와 Spot Route 결과
 
-C 바인딩은 코어 route 결과 struct를 그대로 공개 ABI로 노출한다.
-
-- `zlink_actor_route_t`는 해석된 Actor ref를 담는다. `actor.node_rid`와
-  더불어 `current_spot_rid`, `current_spot_kind`를 포함한다.
-- `zlink_spot_route_t`는 요청된 `spot_rid`, `owner_node_rid`, `spot_kind`를
-  담는다.
-- `zlink_spot_kind_t`는 Entry Spot과 사용자 Spot을 구분한다. 잘못된 kind는
-  성공적인 Actor 또는 Spot route 결과가 아니다.
-- Actor id로 라우팅하는 C 샘플은 먼저 Actor를 해석한 뒤, `actor.node_rid`와
-  `current_spot_rid`를 기존 Spot routed API에 전달한다.
-
-C 바인딩은 `zlink_router_send_actor`, `zlink_router_request_actor`,
-또는 Actor-to-ROUTER request 헬퍼를 추가하지 않는다. Actor 지정 전달은
-route 조회 뒤 기존 Spot routed send/request로 처리한다.
+Service C ABI 경계는 [Core runtime boundary §3](../../../../core/doc/spec/core/08-runtime-boundary.ko.md#3-framework가-소유하는-기능).
 
 ## Pull completion과 STREAM packet
 

@@ -102,10 +102,11 @@ ZLINK_EXPORT zlink_config_result_t zlink_get_router_option(
 각 option의 값 형식·범위·기본값은 [§4](#4-공개-타입)의 인라인 주석이 정의한다. 주석에
 담기지 않는 계약은 다음과 같다.
 
-- `ZLINK_ROUTER_OPT_MANDATORY`가 양수이면 연결된 pipe가 없는 routing ID의 directed submit을
-  `ZLINK_SUBMIT_NOT_CONNECTED`로 실패시킨다. 그때 route가 전혀 없는 routing ID의 `DONTWAIT`은
-  즉시 `ZLINK_SUBMIT_NOT_CONNECTED`이며 wait token을 만들지 않는다. option이 `0`이면 record를
-  조용히 버리고 `ZLINK_SUBMIT_OK`, ID `0`이다.
+- `ZLINK_ROUTER_OPT_MANDATORY`는 route가 없는 RID의 일반 directed send에 적용한다.
+  양수(기본값)이면 `ZLINK_SUBMIT_NOT_CONNECTED`·`EHOSTUNREACH`, ID `0`으로 실패하고
+  wait token을 만들지 않는다. `0`이면 record를 버리고 `ZLINK_SUBMIT_OK`, ID `0`이다.
+  Typed request는 이 option과 관계없이 [Request와 reply](README.ko.md#request와-reply)의
+  route 없음 결과를 따른다.
 - `ZLINK_ROUTER_OPT_PROBE`는 ROUTER handle뿐 아니라 DEALER handle에서도 `zlink_set_router_option()`과
   `zlink_get_router_option()`으로 설정·조회할 수 있다. DEALER handle에 다른 `zlink_router_option_t` 값을
   넘기면 `ZLINK_CONFIG_INVALID_ARGUMENT`와 `EINVAL`이다.
@@ -153,23 +154,9 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_rid (
   void *user_context_, zlink_completion_id_t *completion_id_out_);
 ```
 
-`target_rid_`의 peer에 일반 raw record 전체를 보낸다. `part_count_`는 양수여야 한다.
-`flags_`는 `ZLINK_SEND_FLAGS_NONE` 또는 `ZLINK_SEND_FLAGS_DONTWAIT`다. `NONE`은
-`SNDTIMEO`를 snapshot해 같은 logical RID의 admission과 reconnect를 기다리고 ID `0`으로 끝난다.
-`DONTWAIT`은 admission을 한 번만 시도한다. 즉시 admission되면 ID `0`과 completion
-없음이다. HWM·byte credit 때문에 admission하지 못하거나 route는 있지만 아직 준비되지
-않았으면(transport pair 미준비, weight `0`) `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 그 RID에
-묶인 nonzero wait token을 반환하며 payload는 유지하지 않는다. `target_rid_`에 route가 전혀
-없으면 `ZLINK_ROUTER_OPT_MANDATORY`가 양수일 때(기본값) 즉시 `ZLINK_SUBMIT_NOT_CONNECTED`이고 token을
-만들지 않는다(option이 `0`이면 조용히 버리고 ID `0`). 같은 RID에 write credit이 생기면(peer drain, reconnect·route 채택·standby 승격,
-weight `0`→양수) Core는 그 token의 `ZLINK_COMPLETION_WRITABLE` record를 정확히 하나 만들며
-`send_result == ZLINK_SEND_ADMITTED`, `peer_rid`는 제출한 RID다. 다른 RID의 credit은 이 token을
-깨우지 않는다. 호출자는 보관한 record를 같은 RID에 `DONTWAIT`로 다시 제출한다.
-`zlink_disconnect_rid()`로 그 RID를 명시적으로 제거하면 token은
-`ZLINK_SEND_TERMINAL`+`ENOENT`인 WRITABLE record로 끝나고, socket close·context 종료는 token을
-내부에서 끝내며 record를 전달하지 않는다. ID `0` 뒤에는 payload를 replay하지 않는다.
-Ownership과 exact result·errno는 [Socket 공통](README.ko.md#whole-message-send와-pending-admission)을
-따른다.
+`target_rid_`의 peer에 일반 raw record 전체를 보낸다. Route 없는 RID에서 mandatory가 적용되는
+범위와 결과는 [§5](#5-router-option)가, 나머지 submit 결과·token·ownership은
+[whole-message send](README.ko.md#whole-message-send와-pending-admission)가 정한다.
 
 ## 7. Raw request submit
 
@@ -183,8 +170,7 @@ ZLINK_EXPORT zlink_submit_result_t zlink_request (
 
 `target_router_rid_or_null_`은 target ROUTER의 non-NULL logical RID여야 한다. DEALER RID를
 지정하면 `ZLINK_SUBMIT_NOT_ADMITTED`+`EPROTOTYPE`이며 같은 RID의 DATA send는 허용한다.
-Routing map에 RID가 없으면 `NONE`은 `ZLINK_SUBMIT_NOT_FOUND`+`ENOENT`, `DONTWAIT`은
-`ZLINK_SUBMIT_NOT_CONNECTED`+`EHOSTUNREACH`이며 wait token을 만들지 않는다.
+Routing map에 RID가 없을 때의 결과는 [Socket 공통 request](README.ko.md#request와-reply)를 따른다.
 
 `part_count_`는 양수여야 한다. Optional ID output은 다른 validation 전에 `0`이 되며 admission된
 request는 nonzero REQUEST ID를 반환한다. Core는 request를
@@ -200,12 +186,10 @@ backpressure이거나 RID의 route가 있으나 아직 준비되지 않은 경�
 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 그 RID를 target으로 하는 nonzero wait token을 반환하며 Core는
 request payload를 보관하지 않는다. 그 RID에 write credit이 생기면 같은 token·context·`peer_rid`의
 `ZLINK_COMPLETION_WRITABLE` record 한 건이 뒤따르고 caller는 같은 request를 다시 제출한다. 다른
-RID의 credit은 이 token을 발행하지 않는다. Mandatory route가 없는 RID는
-`ZLINK_SUBMIT_NOT_CONNECTED`+`EHOSTUNREACH`, ID `0`, token 없음이다.
+RID의 credit은 이 token을 발행하지 않는다. Route가 없는 RID의 request 결과는 [Socket 공통 request](README.ko.md#request와-reply)를 따른다.
 
 `timeout_ms_ == 0`은 `ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS`의 기본 5,000 ms를 snapshot한다.
-Reply timeout은 outbound local admission, 즉 `ZLINK_SUBMIT_OK` 반환부터 시작하며 wait token이
-유지되는 동안은 시작하지 않는다. Admission 뒤 submit 시점 transport pair가 종료되면
+Reply timeout의 시작과 wait token 대기는 [Socket 공통 request](README.ko.md#request와-reply)를 따른다. Admission 뒤 submit 시점 transport pair가 종료되면
 [Socket 공통 §6의 completion 표](README.ko.md#request와-reply)대로 즉시 `ZLINK_REQUEST_NOT_CONNECTED`로
 한 번 종결하며 payload를 replay하지 않는다. Reply·timeout·terminal 중 하나만 REQUEST
 completion을 만든다.
@@ -468,10 +452,10 @@ test 하나로 이어진다.
 
 **Request completion**
 - Admission된 request는 nonzero REQUEST ID를 반환하고 reply·timeout·terminal 중 하나를 정확히 한 REQUEST completion으로 반환하며 wait token 없는 submit 실패는 ID `0`과 completion 없음으로 끝난다.
-- `DONTWAIT`은 admission을 한 번만 시도한다. Backpressure나 준비되지 않은 route(transport pair 미준비, weight `0`)는 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 그 RID의 nonzero wait token을 반환하고, 같은 token·context·`peer_rid`의 WRITABLE record 뒤 caller가 같은 request를 다시 제출한다. Mandatory route가 없는 RID는 `ZLINK_SUBMIT_NOT_CONNECTED`+`EHOSTUNREACH`, ID `0`, token 없음이다.
+- `DONTWAIT`은 admission을 한 번만 시도한다. Backpressure나 준비되지 않은 route(transport pair 미준비, weight `0`)는 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 그 RID의 nonzero wait token을 반환하고, 같은 token·context·`peer_rid`의 WRITABLE record 뒤 caller가 같은 request를 다시 제출한다. Route가 없는 RID의 request 결과는 [Socket 공통 request](README.ko.md#request와-reply)를 따른다.
 - `timeout_ms_ == 0`은 `ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS` 기본값을 사용한다.
 - 유효한 error reply는 errno를 매핑한 non-OK `zlink_request_result_t`와 errno part 뒤의 payload를 completion에 보존하며, malformed errno part는 `ZLINK_REQUEST_PROTOCOL_ERROR`와 payload 없음으로 완료한다.
-- Request timeout은 local admission부터 시작하고 wait token이 유지되는 동안은 시작하지 않으며, admission 뒤 submit 시점 pair가 종료되거나 선택에서 물러나면 timeout을 기다리지 않고 즉시 `ZLINK_REQUEST_NOT_CONNECTED` completion 하나를 받는다.
+- Request timeout과 admission 뒤 pair 종료의 결과는 [Socket 공통 request](README.ko.md#request와-reply)를 따른다.
 - 공유 completion slot 포화는 flags와 관계없이 즉시 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`, ID `0`, completion 없음으로 실패한다.
 
 **Reply**
