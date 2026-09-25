@@ -192,6 +192,7 @@ send_call_t& metadata(std::string key, std::string value);
 send_call_t& metadata(metadata_t metadata);
 send_call_t& compress();
 void submit(); // starts a one-way send on the connector core's existing no-coroutine boundary.
+void submit(std::function<void(result_t<void>)> callback); // receives completion once the frame is written to the transport.
 
 request_call_t& packet_name(std::string name);
 request_call_t& metadata(std::string key, std::string value);
@@ -219,12 +220,7 @@ result_t<message_t<TMessage>> submit(); // consumes and decodes one matching unr
 void submit(std::function<void(result_t<message_t<TMessage>>)> callback);
 ```
 
-The one-way `submit()` doesn't return a result. Since the C++ connector
-core keeps the common contract's no-exception/no-coroutine boundary, a
-new `task_t` isn't introduced for this terminal. A send failure is
-reported through the existing connector error event. Request and wait
-keep the existing result type and also provide a callback completion
-path.
+The argument-less one-way `submit()` doesn't return a result and reports a send failure through the existing connector error event. When completion is needed, use the `submit(...)` overload that takes a callback. That callback runs once, after the frame is written to the transport ([Common Spec §5.2](../../32-stream-connector.en.md#52-request-correlation)) or when the write fails; it follows the dispatch mode like a request callback ([Common Spec §7](../../32-stream-connector.en.md#7-dispatch-mode)), and the failure is delivered to it. Since the C++ connector core keeps the common contract's no-exception/no-coroutine boundary, a new `task_t` isn't introduced for this terminal. Request and wait keep the existing result type and also provide a callback completion path.
 
 Typed `send`, `request`, `on`, and `wait_for` all use the single codec
 put in `connector_options_t::typed_codec` — the injection point of

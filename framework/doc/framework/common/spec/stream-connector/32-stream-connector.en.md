@@ -372,7 +372,9 @@ When all usable `u64` values are exhausted, a new Request is not admitted. §9 o
   each frame write before starting the next, so a later accepted operation cannot overtake an
   earlier operation's frame write.
 - A Request timeout starts at operation acceptance and covers queue wait, frame write, and reply
-  wait. Expiry during queue wait is a pre-send admission failure. §9 owns its error classification.
+  wait. Expiry during queue wait fails the Request without writing its frame. §9 owns its error
+  classification.
+- A `Send` completes once its frame is written to the transport.
 
 ### 5.3 Error Payload
 
@@ -744,15 +746,26 @@ explicitly.
 registered handler — push handler, error handler, disconnect handler,
 connection state handler, request callback and Actor lifecycle callback —
 is the connector's work;
-waiting for it to finish is not. No kind is an exception. `close` returns
-once it has **run** the connection state handlers and the disconnect
-handlers, without looking at whether they finished. Disconnecting after
-the reconnect attempts are used up and disconnecting on a transport
-error are the same (§6).
+waiting for it to finish is not. No kind is an exception. The connection state and disconnect
+callbacks that result from `close` follow the dispatch mode like any other
+callback: in `Immediate` the close work runs those handlers, and in `Manual` they
+run at the next dispatch pump after `close`. Either way `close` does not look
+at whether the handlers finished. Disconnecting after the reconnect attempts
+are used up and disconnecting on a transport error are the same (§6).
 
-What the connector waits for is its own — draining frames it has not
-sent, closing the transport, failing the requests that are waiting.
-`close` returns once that is done.
+What the connector waits for is its own — closing the transport and
+failing the operations that are waiting. The close work does not write
+frames not yet written to the transport, and fails their operations with
+`Disconnected`; §9.2 owns how that failure is delivered. Closing the
+transport does not wait for the peer to read or respond. To know that a
+Send's frame was written to the transport, wait for that Send to complete
+before `close` (§5.2).
+
+A `close` called outside the handlers and callbacks listed above returns once
+the close work is done. A `close` called inside one of them returns right
+after starting the close work, and a `close` called outside them waits for
+that close's result. This avoids a circular wait in which a callback waits for
+the close of the path that runs it.
 
 Where a handler returns a value, this means that value is not waited on;
 where a handler runs in place, running it is finishing it and there is no
@@ -793,7 +806,7 @@ connector does not wait in its place.
 | `ConnectTimeout` | Connect time exceeded |
 | `FrameDecodeFailed` | Frame/header decode failure (§4.5), or a structurally valid Error frame's JSON payload doesn't satisfy §5.3 |
 | `FrameTooLarge` | The payload exceeded the receive bound |
-| `SendFailed` | Send queue wait expired, sending failed, or Request admission failed because `request_seq` was exhausted |
+| `SendFailed` | Writing a frame failed, or Request admission failed because `request_seq` was exhausted |
 | `CompressionFailed` | Compression failure |
 | `DecompressionFailed` | Decompression failure |
 | `TlsValidationFailed` | TLS validation failure |
@@ -810,8 +823,9 @@ reason, or the reconnect condition.
 | `ConfigurationError`, `ValidationFailed` | Call failure | Kept, or the pre-connect-attempt state kept | None | Not done |
 | `RequestTimeout` | Only that request fails | Kept | None | Not done |
 | `ConnectTimeout`, `TlsValidationFailed` | Connect failure | `Disconnected` | `TransportError` | Applies the reconnect option's attempt policy |
-| `Disconnected` | The in-progress operation fails | `Disconnected` if the transport dropped | `TransportError` | Applied if the reconnect option is on |
-| `SendFailed` — queue expiry or sequence exhaustion | Only that operation fails | Kept | None | Not done |
+| `Disconnected` — transport dropped | The in-progress operation fails | `Disconnected` | `TransportError` | Applied if the reconnect option is on |
+| `Disconnected` — `close` | The in-progress operation fails | `Disconnected` | `ClientClose` | Not done |
+| `SendFailed` — sequence exhaustion | Only that operation fails | Kept | None | Not done |
 | `SendFailed` — transport write failure | That operation fails | `Disconnected` if the transport dropped; otherwise kept | `TransportError` if the transport dropped; otherwise none | Applied only if the transport dropped and the reconnect option is on |
 | `FrameDecodeFailed` — frame/header | That frame isn't delivered, and the pending request fails | Ended | `TransportError` | Applied if the reconnect option is on |
 | `FrameDecodeFailed` — Error JSON payload | The `request_seq` recipient defined by [§5.2](#52-request-correlation) | Kept | None | Not done |
@@ -1023,5 +1037,6 @@ test name differs, the meaning must be the same.
 | **No flow sent** | **Outbound frames carry no flow field and no flag `0x10`, inbound flow fields are dropped after the structural check, and a one-way `Send` has no correlation id (§5.5)** |
 | **Request hooks** | **The request sending hook runs just before sending, in registration order, for both connector and Actor handle requests, and the metadata it adds is in the frame; the reply received hook runs once per success, failure, timeout and connection end and cannot change the outcome; a hook failure does not change the request result (§5.7)** |
 | **Both name forms** | **Receive registration, send and request at the connector and Actor handle levels, and the wait surfaces at the connector level, offer the named form and the type form, and both reach the same packet name (§5)** |
-| **Handlers and close** | **Push, error, disconnect, connection state, Actor bound and Actor unbound handlers and request callbacks all follow the registration order, callback failure and no-waiting rules, and the connector does not wait for a handler that never finishes. `close` returns after it has run the connection state handlers and the disconnect handlers. Disconnecting after the reconnect attempts are used up and on a transport error runs them in the same order and does not wait (§7)** |
+| **Handlers and close** | **Push, error, disconnect, connection state, Actor bound and Actor unbound handlers and request callbacks all follow the registration order, callback failure and no-waiting rules, and the connector does not wait for a handler that never finishes. The connection state and disconnect callbacks that result from `close` are run by the close work in `Immediate`, so before a `close` called outside a callback returns, and at the next dispatch pump after `close` in `Manual`. A `close` called inside a handler returns after starting close. Disconnecting after the reconnect attempts are used up and on a transport error runs them in the same order and does not wait (§7)** |
+| **Close and unwritten frames** | **`close` returns even when the peer does not read; Sends and Requests whose frames were not written to the transport fail with `Disconnected`, and a completed Send's frame has been written to the transport (§5.2, §7)** |
 | **Close reason read surface** | **Code that did not receive the event reads the same value. A failed first connect still leaves a reason, and reconnecting does not clear it (§6.2)** |

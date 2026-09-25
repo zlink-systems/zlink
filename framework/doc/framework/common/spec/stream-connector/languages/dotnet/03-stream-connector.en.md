@@ -292,14 +292,8 @@ owned by [Common Spec §6](../../32-stream-connector.en.md).
 
 - `Connect.Async(...)` completes **once connection and receive-loop
   preparation finish.**
-- `Close.Async(...)` **outside a callback** completes once connection
-  close and the connector's internal cleanup (failing pending requests,
-  removing registrations) finish. It does not wait for an asynchronous
-  completion a user handler returned ([Common Spec §7](../../32-stream-connector.en.md)).
-- `Close.Async(...)` **inside a callback** **returns immediately after
-  starting close, to avoid a circular wait.** Afterward,
-  `Close.Async(...)` outside a callback, or `DisposeAsync()`, waits for
-  the shared terminal result.
+- [Common Spec §7](../../32-stream-connector.en.md) owns when
+  `Close.Async(...)` completes.
 - **A repeated `Close` and `DisposeAsync()` share the same terminal
   result or failure.**
 - **Waiting for its own callback's close with `DisposeAsync()` inside
