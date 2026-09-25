@@ -5,7 +5,6 @@
 #include <zlink/codecs/protobuf.hpp>
 
 #include "../support/read_text_file.hpp"
-#include "loopback_tcp_endpoint.hpp"
 #include "test_completion_poller_driver.hpp"
 
 #include "runtime/channels/channel_packet_dispatcher.hpp"
