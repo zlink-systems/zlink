@@ -10,7 +10,7 @@ test.afterEach(async () => {
 });
 
 test('wildcard RouteMesh advertisement admits a loopback RID-fenced peer for node-direct and channel calls', async () => {
-  const localEndpoint = `tcp://127.0.0.1:${await reservePort()}`;
+  const localEndpoint = 'tcp://127.0.0.1:0';
   const remotePort = await reservePort();
   const remoteBindEndpoint = `tcp://0.0.0.0:${remotePort}`;
   const remoteConnectEndpoint = `tcp://127.0.0.1:${remotePort}`;
@@ -44,7 +44,7 @@ test('wildcard RouteMesh advertisement admits a loopback RID-fenced peer for nod
 });
 
 test('endpoint-only admitted RouteMesh peer is a node-direct target after handshake RID resolution', async () => {
-  const localEndpoint = `tcp://127.0.0.1:${await reservePort()}`;
+  const localEndpoint = 'tcp://127.0.0.1:0';
   const remoteEndpoint = `tcp://127.0.0.1:${await reservePort()}`;
   const target = createTargetRuntime(remoteEndpoint);
   const caller = createCallerRuntime(localEndpoint, builder => {

@@ -18,6 +18,7 @@ import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.handlers.ZLinkPacket;
 import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
 import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
@@ -40,8 +41,8 @@ import systems.zlink.framework.streams.ZLinkStreamError;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
 import java.io.InputStream;
-import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.EnumSet;
@@ -82,19 +83,18 @@ final class StreamSessionTest {
     void streamNodeDispatchesTcpRequestAndReplies() throws Exception {
         Zlink.version();
         EchoSession.reset();
-        int port = reservePort();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         {
             var stream = options.addStreamNode("gateway");
-            stream.bind("tcp://127.0.0.1:" + port);
+            stream.bind("tcp://127.0.0.1:0");
             stream.registerSession(EchoSession.class);
         }
         ;
 
-        try (ZLinkFrameworkRuntime ignored =
+        try (ZLinkFrameworkRuntime runtime =
                         RuntimeTestSupport.startFramework(
                                 options, new ZLinkJavaBackendAdapterFactory());
-                Socket client = new Socket("127.0.0.1", port)) {
+                Socket client = new Socket("127.0.0.1", streamPort(runtime))) {
             client.setSoTimeout(3000);
             client.getOutputStream().write(frame(requestHeader(7L, "Ping"), bytes("ping")));
             client.getOutputStream().flush();
@@ -120,19 +120,18 @@ final class StreamSessionTest {
     void streamNodeFailureRepliesErrorAndDoesNotBlockLaterRequests() throws Exception {
         Zlink.version();
         RecoveringSession.reset();
-        int port = reservePort();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         {
             var stream = options.addStreamNode("gateway");
-            stream.bind("tcp://127.0.0.1:" + port);
+            stream.bind("tcp://127.0.0.1:0");
             stream.registerSession(RecoveringSession.class);
         }
         ;
 
-        try (ZLinkFrameworkRuntime ignored =
+        try (ZLinkFrameworkRuntime runtime =
                         RuntimeTestSupport.startFramework(
                                 options, new ZLinkJavaBackendAdapterFactory());
-                Socket client = new Socket("127.0.0.1", port)) {
+                Socket client = new Socket("127.0.0.1", streamPort(runtime))) {
             client.setSoTimeout(3000);
 
             client.getOutputStream().write(frame(requestHeader(11L, "MustFail"), bytes("bad")));
@@ -149,7 +148,6 @@ final class StreamSessionTest {
     @Test
     void streamActorGatewayRelaysRequestAndReplies() throws Exception {
         Zlink.version();
-        int port = reservePort();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addHandlersFromPackageOf(StreamSessionTest.class);
         options.addLocationStore(new ZLinkInMemoryLocationStore());
@@ -168,16 +166,16 @@ final class StreamSessionTest {
         }
         {
             var stream = options.addStreamNode("gateway");
-            stream.bind("tcp://127.0.0.1:" + port);
+            stream.bind("tcp://127.0.0.1:0");
             stream.enableActorDispatch();
             stream.registerSession(ActorRelaySession.class);
         }
         ;
 
-        try (ZLinkFrameworkRuntime ignored =
+        try (ZLinkFrameworkRuntime runtime =
                         RuntimeTestSupport.startFramework(
                                 options, new ZLinkJavaBackendAdapterFactory());
-                Socket client = new Socket("127.0.0.1", port)) {
+                Socket client = new Socket("127.0.0.1", streamPort(runtime))) {
             client.setSoTimeout(3000);
 
             client.getOutputStream().write(frame(requestHeader(1L, "Bind"), bytes("\"player-1\"")));
@@ -500,10 +498,9 @@ final class StreamSessionTest {
         }
     }
 
-    private static int reservePort() throws Exception {
-        try (ServerSocket server = new ServerSocket(0)) {
-            return server.getLocalPort();
-        }
+    private static int streamPort(ZLinkFrameworkRuntime runtime) {
+        return URI.create(runtime.listenerStatus(ZLinkListenerKind.STREAM, "gateway").endpoint())
+                .getPort();
     }
 
     private static byte[] requestHeader(long requestSeq, String packetName) {

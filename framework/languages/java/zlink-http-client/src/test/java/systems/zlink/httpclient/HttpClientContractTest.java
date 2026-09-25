@@ -671,12 +671,8 @@ final class HttpClientContractTest {
 
     @Test
     void connectionRefusedIsUnavailable() throws Exception {
-        int port;
-        try (ServerSocket unused = new ServerSocket(0, 0, InetAddress.getLoopbackAddress())) {
-            port = unused.getLocalPort();
-        }
         try (ZLinkHttpClient client =
-                ZLinkHttpClient.create("http://127.0.0.1:" + port)
+                ZLinkHttpClient.create("http://127.0.0.1:0")
                         .timeout(Duration.ofSeconds(1))
                         .build()) {
             CompletionException ex =

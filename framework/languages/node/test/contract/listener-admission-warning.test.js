@@ -6,7 +6,7 @@ const { once } = require('node:events');
 const framework = require('../../packages/framework/dist/internal');
 
 test('RID-fenced admission warning reports rejection reason, intended endpoint, and advertised endpoint', async () => {
-  const localEndpoint = `tcp://127.0.0.1:${await reservePort()}`;
+  const localEndpoint = 'tcp://127.0.0.1:0';
   const remoteEndpoint = `tcp://127.0.0.1:${await reservePort()}`;
   const advertisedEndpoint = remoteEndpoint.replace('127.0.0.1', '127.0.0.2');
   const target = createRuntime('node-b', remoteEndpoint, '127.0.0.2');

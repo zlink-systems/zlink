@@ -483,7 +483,7 @@ test('ZLinkModule.forRoot boots through the real NestJS DI container and lifecyc
 });
 
 test('ZLinkModule.forRoot maps zlinkRequestHandler providers from NestJS DI', async () => {
-  const apiEndpoint = await reserveTcpEndpoint();
+  const apiEndpoint = 'tcp://127.0.0.1:0';
   class ProfileHandler {
     async handle(request) {
       return { profileId: request.profileId, source: 'provider-group' };
@@ -672,7 +672,7 @@ test('request-scoped handler filters share the channel dispatch scope with the h
 });
 
 test('ZLinkModule.forRoot maps decorated custom NestJS provider objects', async () => {
-  const apiEndpoint = await reserveTcpEndpoint();
+  const apiEndpoint = 'tcp://127.0.0.1:0';
   const PROFILE_HANDLER = Symbol('profile-handler');
   class ProfileHandler {
     async handle(request) {
@@ -706,7 +706,7 @@ test('ZLinkModule.forRoot maps decorated custom NestJS provider objects', async 
 });
 
 test('ZLinkModule.forRoot ignores undecorated providers for an outbound-capable mesh channel', async () => {
-  const apiEndpoint = await reserveTcpEndpoint();
+  const apiEndpoint = 'tcp://127.0.0.1:0';
   const PROFILE_HANDLER = Symbol('profile-handler');
 
   class HandlerModule {}
@@ -736,7 +736,7 @@ test('ZLinkModule.forRoot ignores undecorated providers for an outbound-capable 
 });
 
 test('ZLinkModule.forRootFactory maps zlinkRequestHandler providers from NestJS DI', async () => {
-  const apiEndpoint = await reserveTcpEndpoint();
+  const apiEndpoint = 'tcp://127.0.0.1:0';
   class ProfileHandler {
     async handle(request) {
       return { profileId: request.profileId, source: 'async-provider-group' };
@@ -771,7 +771,7 @@ test('ZLinkModule.forRootFactory maps zlinkRequestHandler providers from NestJS 
 });
 
 test('forRootFactory can disable implicit handlers while retaining explicit DI handlers', async () => {
-  const apiEndpoint = await reserveTcpEndpoint();
+  const apiEndpoint = 'tcp://127.0.0.1:0';
   class ImplicitHandler {
     async handle() {
       return { source: 'implicit' };
@@ -815,7 +815,7 @@ test('forRootFactory can disable implicit handlers while retaining explicit DI h
 });
 
 test('zlinkModule registers discovered handler providers in the application module context', async () => {
-  const apiEndpoint = await reserveTcpEndpoint();
+  const apiEndpoint = 'tcp://127.0.0.1:0';
   const roleRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'zlink-nest-provider-discovery-'));
   const discoveryRoot = path.join(roleRoot, 'Handlers');
   fs.mkdirSync(discoveryRoot);
@@ -873,7 +873,7 @@ module.exports = { ProfileHandler };
 });
 
 test('zlinkModule role root discovers conventional handler directories', async () => {
-  const apiEndpoint = await reserveTcpEndpoint();
+  const apiEndpoint = 'tcp://127.0.0.1:0';
   const roleRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'zlink-nest-role-root-'));
   const discoveryRoot = path.join(roleRoot, 'Handlers');
   fs.mkdirSync(discoveryRoot);
@@ -920,7 +920,7 @@ module.exports = { ProfileHandler };
 });
 
 test('zlinkModule role root automatically dispatches discovered session packet handlers', async () => {
-  const streamEndpoint = await reserveTcpEndpoint();
+  const streamEndpoint = 'tcp://127.0.0.1:0';
   const roleRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'zlink-nest-session-discovery-'));
   const frameworkPackage = path.resolve(__dirname, '../../packages/framework/dist');
   fs.writeFileSync(path.join(roleRoot, 'ping-session-handler.js'), `
@@ -979,7 +979,7 @@ module.exports = { PingSessionHandler };
 });
 
 test('ZLinkModule.forRoot deduplicates grouped useExisting handler aliases', async () => {
-  const apiEndpoint = await reserveTcpEndpoint();
+  const apiEndpoint = 'tcp://127.0.0.1:0';
   const PROFILE_HANDLER = Symbol('profile-handler');
   class ProfileHandler {
     async handle(request) {
@@ -1012,7 +1012,7 @@ test('ZLinkModule.forRoot deduplicates grouped useExisting handler aliases', asy
 });
 
 test('ZLinkModule.forRoot rejects duplicate grouped packet handlers for one channel', async () => {
-  const apiEndpoint = await reserveTcpEndpoint();
+  const apiEndpoint = 'tcp://127.0.0.1:0';
   class FirstProfileHandler {
     async handle() {
       return {};
@@ -1045,7 +1045,7 @@ test('ZLinkModule.forRoot rejects duplicate grouped packet handlers for one chan
 });
 
 test('ZLinkModule.forRoot maps explicit RouteMesh send handlers from NestJS DI', async () => {
-  const routeEndpoint = await reserveTcpEndpoint();
+  const routeEndpoint = 'tcp://127.0.0.1:0';
   class NoticeHandler {
     constructor() {
       this.notices = NoticeHandler.events;
@@ -1122,7 +1122,7 @@ test('ZLinkModule.forRoot maps manual client-server send handlers from NestJS DI
 });
 
 test('ZLinkModule.forRoot maps grouped fanout publish handlers from NestJS DI', async () => {
-  const subscriberEndpoint = await reserveTcpEndpoint();
+  const subscriberEndpoint = 'tcp://127.0.0.1:0';
   const PROFILE_EVENTS = Symbol('profile-events');
   class ProfileEventHandler {
     constructor() {
@@ -1167,7 +1167,7 @@ test('ZLinkModule.forRoot maps grouped fanout publish handlers from NestJS DI', 
 });
 
 test('ZLinkModule.forRoot rejects duplicate grouped publish handlers for one channel', async () => {
-  const subscriberEndpoint = await reserveTcpEndpoint();
+  const subscriberEndpoint = 'tcp://127.0.0.1:0';
   class FirstEventHandler {
     async handle() {}
   }
@@ -1194,8 +1194,8 @@ test('ZLinkModule.forRoot rejects duplicate grouped publish handlers for one cha
 });
 
 test('ZLinkModule.forRoot with grouped handlers exposes capability providers through NestJS context', async () => {
-  const apiEndpoint = await reserveTcpEndpoint();
-  const spotEndpoint = await reserveTcpEndpoint();
+  const apiEndpoint = 'tcp://127.0.0.1:0';
+  const spotEndpoint = 'tcp://127.0.0.1:0';
   class ActorFactory {
     async create(actorId, context) {
       return { actorId, context };
@@ -1247,7 +1247,7 @@ test('ZLinkModule.forRoot with grouped handlers exposes capability providers thr
 });
 
 test('ZLinkModule.forRoot with grouped handlers omits only capabilities not implied by RouteMesh', async () => {
-  const apiEndpoint = await reserveTcpEndpoint();
+  const apiEndpoint = 'tcp://127.0.0.1:0';
   class ProfileHandler {
     async handle(request) {
       return { profileId: request.profileId };
@@ -1563,7 +1563,7 @@ test('ZLinkModule.forRoot discovers SPOT actor request handler decorators from N
 });
 
 test('ZLinkModule.forRoot attaches discovered packet handlers to Instance Spot factories', async () => {
-  const spotEndpoint = await reserveTcpEndpoint();
+  const spotEndpoint = 'tcp://127.0.0.1:0';
   class MatchmakerSpot {}
   class ReserveMatchHandler {
     async handle(_spot, request) {
@@ -2322,7 +2322,7 @@ test('ZLinkModule.forRootFactory exposes capability providers through the real N
 
 test('ZLinkModule.forRootFactory resolves factory dependencies from imported NestJS modules', async () => {
   const CONFIG = Symbol('config');
-  const apiEndpoint = await reserveTcpEndpoint();
+  const apiEndpoint = 'tcp://127.0.0.1:0';
   class ConfigHandler {
     async handle(request) {
       return request;

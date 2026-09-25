@@ -35,7 +35,6 @@ import systems.zlink.framework.streams.ZLinkSessionActor;
 import systems.zlink.framework.streams.ZLinkSessionContext;
 import systems.zlink.framework.streams.ZLinkStreamError;
 
-import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Map;
@@ -251,12 +250,6 @@ final class SessionActorsRuntimeIntegrationTest {
         }
 
         return RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory());
-    }
-
-    static String tcpEndpoint() throws Exception {
-        try (ServerSocket server = new ServerSocket(0)) {
-            return "tcp://127.0.0.1:" + server.getLocalPort();
-        }
     }
 
     public static final class PlayerActor implements ZLinkActor {
