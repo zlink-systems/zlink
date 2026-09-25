@@ -888,8 +888,12 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
                                       uint64_t *route_binding_token_out_,
                                       socket_receive_record_scope_t *record_scope_,
                                       pipe_t::read_admission_fn *admission_,
-                                      void *admission_userdata_)
+                                      void *admission_userdata_,
+                                      bool pin_terminal_source_pipe_out_,
+                                      bool *source_pipe_pinned_out_)
 {
+    if (source_pipe_pinned_out_)
+        *source_pipe_pinned_out_ = false;
     if (source_rid_out_)
         source_rid_out_->size = 0;
     if (connection_id_out_)
@@ -933,14 +937,24 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
                   (*source_pipe_out_)->get_transport_pair_generation ();
         }
         if (rc == 0 && pin_source_pipe_out_ && source_pipe_out_
-            && *source_pipe_out_
-            && !retain_received_source_pipe_ref (*source_pipe_out_)) {
-            *source_pipe_out_ = NULL;
-            // Do not turn a consumed frame into an unowned failure result.
-            // The request/reply reader handles a null live-source reference;
-            // transport-pair identity was copied above while receive ownership
-            // still prevented pipe deallocation.
-            return 0;
+            && *source_pipe_out_) {
+            // The held receive turn protects a terminal REQUEST through reply
+            // target publication. Only staging or multipart needs a pipe pin
+            // after that turn is released.
+            const bool source_outlives_turn =
+              pin_terminal_source_pipe_out_
+              || (msg_->flags () & msg_t::more) != 0;
+            if (source_outlives_turn) {
+                if (retain_received_source_pipe_ref (*source_pipe_out_)) {
+                    if (source_pipe_pinned_out_)
+                        *source_pipe_pinned_out_ = true;
+                } else
+                    *source_pipe_out_ = NULL;
+            } else if (!record_scope_
+                       || !record_scope_->owns (&receive_runtime ())) {
+                // Do not expose an unpinned pointer after the receive turn.
+                *source_pipe_out_ = NULL;
+            }
         }
         return rc;
     };

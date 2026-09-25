@@ -811,6 +811,39 @@ void test_dealer_request_with_only_zero_weight_router_gets_wait_token ()
     assert_part_consumed (&request);
     assert_no_completion_for (dealer, 20);
 
+    const int send_timeout_ms = 2000;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (dealer, ZLINK_OPT_SNDTIMEO, &send_timeout_ms,
+                        sizeof (send_timeout_ms)));
+    zlink_msg_t blocking_request;
+    init_part (&blocking_request, "reject-known-zero-weight");
+    zlink_completion_id_t blocking_id = UINT64_MAX;
+    const std::chrono::steady_clock::time_point started =
+      std::chrono::steady_clock::now ();
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_NOT_ADMITTED,
+      zlink_request (dealer, NULL, &blocking_request, 1,
+                     ZLINK_SEND_FLAGS_NONE, 1000, NULL, &blocking_id));
+    TEST_ASSERT_EQUAL_INT (ECONNREFUSED, zlink_errno ());
+    TEST_ASSERT_EQUAL_UINT64 (0, blocking_id);
+    TEST_ASSERT_TRUE (std::chrono::steady_clock::now () - started
+                      < std::chrono::milliseconds (1000));
+    assert_part_consumed (&blocking_request);
+
+    const int positive_weight = 100;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_router_option (router, ZLINK_ROUTER_OPT_WEIGHT,
+                               &positive_weight, sizeof (positive_weight)));
+    zlink_completion_t writable = receive_completion_eventually (dealer);
+    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_WRITABLE, writable.kind);
+    TEST_ASSERT_EQUAL_UINT64 (request_id, writable.completion_id);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED, writable.send_result);
+    TEST_ASSERT_EQUAL_UINT (0, writable.peer_rid.size);
+    zlink_completion_close (&writable);
+
     test_context_socket_close_zero_linger (dealer);
     test_context_socket_close_zero_linger (router);
 }

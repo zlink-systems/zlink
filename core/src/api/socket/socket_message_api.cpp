@@ -10,6 +10,7 @@
 #include "api/socket/socket_request_reply_internal.hpp"
 #include "core/recv_internal.hpp"
 #include "core/scoped_msg.hpp"
+#include "sockets/router/router.hpp"
 
 namespace
 {
@@ -27,6 +28,9 @@ int validate_basic_recv_entry (void *s_, const void *parts_out_,
     if (!handle.socket)
         return -1;
     handle.socket->clear_last_recv_source_rid ();
+    if (socket_type (handle) == ZLINK_CORE_SOCKET_ROUTER)
+        static_cast<zlink::router_t *> (handle.socket)
+          ->set_last_recv_route_generation (0);
     if (!parts_out_ || !count_out_) {
         errno = EFAULT;
         return -1;

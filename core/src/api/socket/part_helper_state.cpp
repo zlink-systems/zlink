@@ -56,10 +56,12 @@ void zlink::part_helper_internal::cleanup_socket (socket_base_t *socket_)
     socket_->clear_part_helper_state ();
 
     zlink::socket_base_t *held_receive_socket = NULL;
+    recv_reset_cleanup_t cleanup;
     {
         std::lock_guard<std::mutex> lock (state->mutex);
-        held_receive_socket = reset_recv_sequence (&state->recv);
+        held_receive_socket = reset_recv_sequence (&state->recv, &cleanup);
     }
+    finish_recv_reset_cleanup (&cleanup);
     if (held_receive_socket)
         held_receive_socket->end_public_part_receive_delivery_hold ();
     errno = saved_errno;

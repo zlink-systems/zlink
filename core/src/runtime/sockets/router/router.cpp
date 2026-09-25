@@ -5,6 +5,10 @@
 #include "sockets/router/router.hpp"
 #include "sockets/router/router_debug.hpp"
 #include "core/pipe.hpp"
+#include "core/c_api_copy_internal.hpp"
+#include "core/mailbox.hpp"
+#include "api/socket/part_helper_internal.hpp"
+#include "api/socket/socket_request_reply_internal.hpp"
 #include "utils/random.hpp"
 #include "utils/err.hpp"
 #include "utils/debug_log.hpp"
@@ -32,7 +36,11 @@ zlink::router_t::router_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     _next_integral_routing_id (generate_random ()),
     _mandatory (true),
     _probe_router (false),
-    _handover (options.rid_duplicate_policy == ZLINK_RID_DUPLICATE_HANDOVER)
+    _handover (options.rid_duplicate_policy == ZLINK_RID_DUPLICATE_HANDOVER),
+    _route_revision (0),
+    _observed_route_revision (0),
+    _next_route_generation (1),
+    _last_recv_route_generation (0)
 {
     options.type = ZLINK_CORE_SOCKET_ROUTER;
     options.out_batch_size = router_transport_write_batch_size;
@@ -42,6 +50,190 @@ zlink::router_t::router_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
 
     _prefetched_id.init ();
     _prefetched_msg.init ();
+}
+
+uint64_t zlink::router_t::next_route_generation ()
+{
+    const uint64_t value = _next_route_generation;
+    _next_route_generation += 2;
+    return value;
+}
+
+void zlink::router_t::publish_route_change (
+  const blob_t &routing_id_, route_discard_batch_t *discarded_)
+{
+    // Every selected-route transition discards records already queued on all
+    // standbys for this RID. A later promotion must start with a clean pipe.
+    for (std::map<pipe_t *, blob_t>::const_iterator standby =
+           _standby_pipes.begin ();
+         standby != _standby_pipes.end (); ++standby) {
+        if (!(standby->second < routing_id_)
+            && !(routing_id_ < standby->second))
+            (void) discard_route_records (standby->first, discarded_);
+    }
+    _route_revision.fetch_add (1, std::memory_order_release);
+    static_cast<mailbox_t *> (get_mailbox ())->signal ();
+}
+
+bool zlink::router_t::has_route_change () const
+{
+    const uint64_t observed =
+      _observed_route_revision.load (std::memory_order_acquire);
+    const uint64_t published =
+      _route_revision.load (std::memory_order_acquire);
+    return published != observed;
+}
+
+int zlink::router_t::routes_snapshot (zlink_router_route_t *routes_,
+                                      size_t capacity_, size_t *count_)
+{
+    std::lock_guard<std::mutex> lock (_out_pipes_sync);
+    size_t count = 0;
+    for (out_pipes_t::const_iterator it = _out_pipes.begin ();
+         it != _out_pipes.end (); ++it)
+        if (is_selected_pipe (it->second.pipe))
+            ++count;
+    *count_ = count;
+    if (capacity_ < count) {
+        errno = ENOBUFS;
+        return -1;
+    }
+    size_t index = 0;
+    for (out_pipes_t::const_iterator it = _out_pipes.begin ();
+         it != _out_pipes.end (); ++it) {
+        if (!is_selected_pipe (it->second.pipe))
+            continue;
+        const uint64_t generation =
+          it->second.pipe->router_route_binding_token ();
+        zlink_router_route_t &route = routes_[index++];
+        copy_routing_id_from_bytes (it->first.data (), it->first.size (),
+                                    &route.rid);
+        route.route_generation = generation;
+    }
+    _observed_route_revision.store (
+      _route_revision.load (std::memory_order_acquire),
+      std::memory_order_release);
+    errno = 0;
+    return 0;
+}
+
+bool zlink::router_t::is_selected_pipe (pipe_t *pipe_,
+                                        uint64_t generation_,
+                                        uint64_t *observed_generation_out_) const
+{
+    const uint64_t token = pipe_ ? pipe_->router_route_binding_token () : 0;
+    if (observed_generation_out_)
+        *observed_generation_out_ = token;
+    return token != 0 && (generation_ == 0 || token == generation_);
+}
+
+zlink::socket_base_t *zlink::router_t::discard_route_records (
+  pipe_t *pipe_, route_discard_batch_t *discarded_,
+  pipe_t **staged_route_source_pipe_out_,
+  uint64_t *staged_reply_token_out_, zlink_routing_id_t *staged_reply_rid_out_)
+{
+    if (staged_route_source_pipe_out_)
+        *staged_route_source_pipe_out_ = NULL;
+    if (staged_reply_token_out_)
+        *staged_reply_token_out_ = 0;
+    // The route mutex is held by the caller. A selected route loses its
+    // token before queued or prefetched records can be read again.
+    const uint64_t generation = pipe_->router_route_binding_token ();
+    if (generation != 0) {
+        const out_pipe_t *const selected =
+          lookup_out_pipe (pipe_->get_routing_id ());
+        zlink_assert (selected && selected->pipe == pipe_);
+        pipe_->invalidate_router_route_binding ();
+    }
+    zlink_assert (!is_selected_pipe (pipe_));
+    zlink_assert (discarded_);
+    route_discard_batch_t::followup_t followup = {pipe_, false, false};
+    // Allocate this slot before consuming frames; the discard batch itself
+    // closes already detached handles if a later cold allocation fails.
+    discarded_->followups.push_back (followup);
+    route_discard_batch_t::followup_t &pending =
+      discarded_->followups.back ();
+    _fq.discard_pending_records (pipe_, &discarded_->messages,
+                                 &pending.delimiter, &pending.recheck);
+    if (_current_in == pipe_) {
+        if (_prefetched) {
+            discarded_->messages.emplace_back ();
+            int rc = discarded_->messages.back ().init ();
+            errno_assert (rc == 0);
+            rc = discarded_->messages.back ().move (_prefetched_msg);
+            errno_assert (rc == 0);
+            discarded_->messages.emplace_back ();
+            rc = discarded_->messages.back ().init ();
+            errno_assert (rc == 0);
+            rc = discarded_->messages.back ().move (_prefetched_id);
+            errno_assert (rc == 0);
+            _prefetched = false;
+        }
+        reset_current_in_after_multipart_abort ();
+    }
+    const std::shared_ptr<part_helper_internal::handle_state_t> state =
+      part_helper_state ();
+    if (!state || generation == 0)
+        return NULL;
+    std::lock_guard<std::mutex> lock (state->mutex);
+    if (!state->recv.active
+        || state->recv.family != part_helper_internal::recv_family_router
+        || state->recv.route_generation != generation)
+        return NULL;
+    zlink_assert (staged_route_source_pipe_out_);
+    if (state->recv.request_seq != 0) {
+        zlink_assert (staged_reply_token_out_ && staged_reply_rid_out_);
+        *staged_reply_token_out_ = state->recv.request_seq;
+        *staged_reply_rid_out_ = state->recv.source_node_rid;
+    }
+    *staged_route_source_pipe_out_ = state->recv.route_source_pipe;
+    state->recv.route_source_pipe = NULL;
+    discarded_->staged_parts.take_from (&state->recv.buffered_parts);
+    return part_helper_internal::reset_recv_sequence (&state->recv);
+}
+
+zlink::router_t::route_discard_batch_t::~route_discard_batch_t ()
+{
+    close_messages ();
+}
+
+void zlink::router_t::route_discard_batch_t::close_messages ()
+{
+    for (std::deque<msg_t>::iterator it = messages.begin ();
+         it != messages.end (); ++it) {
+        const int rc = it->close ();
+        errno_assert (rc == 0);
+    }
+    messages.clear ();
+    for (size_t i = 0; i < staged_parts.size (); ++i) {
+        const int rc = zlink_msg_close (&staged_parts[i]);
+        errno_assert (rc == 0);
+    }
+    staged_parts.clear ();
+}
+
+void zlink::router_t::finish_route_discard (route_discard_batch_t *batch_)
+{
+    for (std::vector<route_discard_batch_t::followup_t>::iterator it =
+           batch_->followups.begin ();
+         it != batch_->followups.end (); ++it) {
+        if (it->delimiter)
+            it->pipe->complete_route_discard_delimiter ();
+        if (it->recheck && it->pipe->check_read ())
+            _fq.activated (it->pipe);
+    }
+    batch_->followups.clear ();
+    batch_->close_messages ();
+}
+
+uint64_t zlink::router_t::last_recv_route_generation () const
+{
+    return _last_recv_route_generation.load (std::memory_order_acquire);
+}
+
+void zlink::router_t::set_last_recv_route_generation (uint64_t generation_)
+{
+    _last_recv_route_generation.store (generation_, std::memory_order_release);
 }
 
 zlink::router_t::~router_t ()
@@ -144,37 +336,47 @@ int zlink::router_t::xgetsockopt (int option_, void *optval_, size_t *optvallen_
 
 void zlink::router_t::xpipe_terminated (pipe_t *pipe_)
 {
-    std::lock_guard<std::mutex> route_lifecycle_lock (
-      _out_pipes_sync);
-    // Receive-side ownership is released before socket-message teardown takes
-    // its dispatch fence. Keep only FQ/current-record state in this phase.
-    if (pipe_ == _current_in) {
-        // A prefetched frame still belongs to the terminating pipe. It must
-        // not be presented with metadata from the next active pipe.
-        if (_prefetched && !_routing_id_sent) {
-            int rc = _prefetched_id.close ();
-            errno_assert (rc == 0);
-            rc = _prefetched_id.init ();
-            errno_assert (rc == 0);
-            rc = _prefetched_msg.close ();
-            errno_assert (rc == 0);
-            rc = _prefetched_msg.init ();
-            errno_assert (rc == 0);
-            _prefetched = false;
+    route_discard_batch_t discarded;
+    {
+        std::lock_guard<std::mutex> route_lifecycle_lock (_out_pipes_sync);
+        // Receive-side ownership is released before socket-message teardown
+        // takes its dispatch fence. Keep FQ/current-record state in this phase.
+        if (pipe_ == _current_in) {
+            // A prefetched frame still belongs to the terminating pipe. It
+            // must not be presented with metadata from the next active pipe.
+            if (_prefetched && !_routing_id_sent) {
+                discarded.messages.emplace_back ();
+                int rc = discarded.messages.back ().init ();
+                errno_assert (rc == 0);
+                rc = discarded.messages.back ().move (_prefetched_id);
+                errno_assert (rc == 0);
+                discarded.messages.emplace_back ();
+                rc = discarded.messages.back ().init ();
+                errno_assert (rc == 0);
+                rc = discarded.messages.back ().move (_prefetched_msg);
+                errno_assert (rc == 0);
+                _prefetched = false;
+            }
+            if (!_prefetched)
+                _routing_id_sent = false;
+            _current_in = NULL;
+            _terminate_current_in = false;
+            _more_in = false;
         }
-        if (!_prefetched)
-            _routing_id_sent = false;
-        _current_in = NULL;
-        _terminate_current_in = false;
-        _more_in = false;
+        _fq.pipe_terminated (pipe_);
     }
-    _fq.pipe_terminated (pipe_);
+    finish_route_discard (&discarded);
 }
 
 void zlink::router_t::xsocket_msg_pipe_terminated (pipe_t *pipe_)
 {
     bool rollback_outbound = false;
     pipe_t *promoted_writable_pipe = NULL;
+    socket_base_t *staged_hold_socket = NULL;
+    pipe_t *staged_route_source_pipe = NULL;
+    uint64_t staged_reply_token = 0;
+    zlink_routing_id_t staged_reply_rid = {};
+    route_discard_batch_t discarded;
     {
         std::lock_guard<std::mutex> route_lifecycle_lock (
           _out_pipes_sync);
@@ -218,8 +420,12 @@ void zlink::router_t::xsocket_msg_pipe_terminated (pipe_t *pipe_)
                      static_cast<void *> (pipe_), rid_text,
                      _anonymous_pipes.count (pipe_) != 0 ? 1 : 0);
         }
+        const bool selected_route_lost = is_selected_pipe (pipe_);
         if (0 == _anonymous_pipes.erase (pipe_)) {
-            pipe_->invalidate_router_route_binding ();
+            if (selected_route_lost)
+                staged_hold_socket = discard_route_records (
+                  pipe_, &discarded, &staged_route_source_pipe, &staged_reply_token,
+                  &staged_reply_rid);
             erase_out_pipe (pipe_);
             rollback_outbound = true;
             if (pipe_ == _current_out) {
@@ -234,13 +440,16 @@ void zlink::router_t::xsocket_msg_pipe_terminated (pipe_t *pipe_)
             zlink_assert (standby_out);
             const bool locally_initiated = standby_out->locally_initiated;
             const uint32_t peer_weight = standby_out->weight;
-            standby_to_promote->invalidate_router_route_binding ();
+            zlink_assert (!is_selected_pipe (standby_to_promote));
+            (void) discard_route_records (standby_to_promote, &discarded);
             erase_out_pipe (standby_to_promote);
             standby_to_promote->set_router_socket_routing_id (
               standby_routing_id);
             add_out_pipe (ZLINK_MOVE (standby_routing_id),
                           standby_to_promote, locally_initiated);
-            standby_to_promote->publish_router_route_binding ();
+            standby_to_promote->publish_router_route_binding (
+              next_route_generation ());
+            zlink_assert (is_selected_pipe (standby_to_promote));
             out_pipe_t *const promoted =
               lookup_out_pipe (standby_to_promote->get_routing_id ());
             zlink_assert (promoted && promoted->pipe == standby_to_promote);
@@ -248,7 +457,17 @@ void zlink::router_t::xsocket_msg_pipe_terminated (pipe_t *pipe_)
             if (standby_to_promote->retain_lifetime_ref ())
                 promoted_writable_pipe = standby_to_promote;
         }
+        if (selected_route_lost)
+            publish_route_change (terminated_routing_id, &discarded);
     }
+    finish_route_discard (&discarded);
+    if (staged_hold_socket)
+        staged_hold_socket->end_public_part_receive_delivery_hold ();
+    if (staged_route_source_pipe)
+        staged_route_source_pipe->release_lifetime_ref ();
+    if (staged_reply_token != 0)
+        socket_reqrep_internal::revoke_router_reply_target (
+          make_socket_handle (this), &staged_reply_rid, staged_reply_token);
     if (rollback_outbound)
         pipe_->rollback ();
     if (promoted_writable_pipe) {

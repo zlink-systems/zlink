@@ -869,46 +869,10 @@ int zlink::socket_base_t::get_events_internal (
 
     const int rc = process_commands (0, false, false, NULL,
                                      consume_primary_signaler_);
-    if (unlikely (rc != 0)) {
-        if (errno == EINTR)
-            return -1;
-        if (errno == ETERM) {
-            const int terminal_errno = errno;
-            if ((events_ & ZLINK_POLLCOMPLETION) == 0)
-                return -1;
-
-            // stop() publishes context termination before its command reaches
-            // process_stop(). Wake synchronous send waiters here as well.
-            fail_all_blocking_send_waits (ETERM);
-
-            // A POLLCOMPLETION registration remains the sole dispatch owner
-            // during context shutdown, so drain already-resolved request and
-            // send records under the same owner gate as the normal path.
-            zlink_assert (
-              _completion_poller_refs.load (std::memory_order_acquire) != 0);
-            int drained_completions = 0;
-            socket_reqrep_internal::completion_discard_t discard;
-            {
-                socket_public_api_lock_scope_t command_owner (
-                  lifecycle_coordinator (),
-                  !lifecycle_coordinator ().public_api_sync_owned_by_current_thread ());
-                const completion_drain_scope_t drain_scope (this, &discard);
-                _request_completion_pending.exchange (
-                  false, std::memory_order_acq_rel);
-                drained_completions = drain_request_completions ();
-                if (drained_completions < 0)
-                    return -1;
-            }
-            socket_reqrep_internal::release_completion_discard (&discard);
-            if (drained_completions > 0) {
-                *out_ = ZLINK_POLLCOMPLETION;
-                return 0;
-            }
-
-            errno = terminal_errno;
-            return -1;
-        }
-    }
+    // Context termination ends every poll of this socket without events
+    // (Core Polling §5); unread completions follow the completion close rule.
+    if (unlikely (rc != 0) && (errno == EINTR || errno == ETERM))
+        return -1;
     errno_assert (rc == 0);
 
     int drained_completions = 0;
@@ -948,6 +912,8 @@ int zlink::socket_base_t::get_events_internal (
         events |= ZLINK_POLLIN;
     if ((events_ & ZLINK_POLLOUT) && has_out ())
         events |= ZLINK_POLLOUT;
+    if ((events_ & ZLINK_POLLROUTE) && has_route_change ())
+        events |= ZLINK_POLLROUTE;
 
     *out_ = events;
     return 0;
@@ -1049,6 +1015,9 @@ int zlink::socket_base_t::socket_type () const
 
 bool zlink::socket_base_t::has_in ()
 {
+    // Staged and physical readiness share the same receive turn as route
+    // selection changes, so neither can publish a deselected record.
+    const socket_receive_entry_scope_t entry (receive_runtime ());
     // A record retained after BUFFER_TOO_SMALL remains level-ready even
     // though the physical receive queue has already advanced.
     if (part_helper_recv_ready ()) {
@@ -1063,7 +1032,6 @@ bool zlink::socket_base_t::has_in ()
         }
     }
     // Readiness pumps/repartitions the same receive queue as public recv.
-    const socket_receive_entry_scope_t entry (receive_runtime ());
     return xhas_in ();
 }
 

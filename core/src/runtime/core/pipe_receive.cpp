@@ -136,6 +136,16 @@ bool zlink::pipe_t::read (msg_t *msg_)
     return read_internal<false> (msg_, NULL, NULL, NULL, NULL);
 }
 
+bool zlink::pipe_t::read_for_route_discard (msg_t *msg_)
+{
+    return read_internal<false, true> (msg_, NULL, NULL, NULL, NULL);
+}
+
+void zlink::pipe_t::complete_route_discard_delimiter ()
+{
+    process_delimiter ();
+}
+
 bool zlink::pipe_t::requires_record_admission (const msg_t &msg_)
 {
     const bool candidate = (msg_.flags () & msg_t::more) != 0
@@ -183,7 +193,7 @@ bool invoke_pipe_record_admission (const zlink::msg_t &msg_, void *userdata_)
 
 }
 
-template <bool WithAdmission>
+template <bool WithAdmission, bool DeferControl>
 bool zlink::pipe_t::read_internal (msg_t *msg_,
                                    read_admission_fn *admission_,
                                    void *userdata_,
@@ -258,6 +268,8 @@ bool zlink::pipe_t::read_internal (msg_t *msg_,
                   _in_physical_queue, frame_accounted_bytes (msg_),
                   counted_pending_message_ref (*msg_));
             account_inbound_frame (msg_, prefetched_batch_exhausted);
+            if (DeferControl)
+                return true;
             const int rc = msg_->close ();
             zlink_assert (rc == 0);
         } else {
@@ -267,7 +279,8 @@ bool zlink::pipe_t::read_internal (msg_t *msg_,
 
     //  If delimiter was read, start termination process of the pipe.
     if (msg_->is_delimiter ()) {
-        process_delimiter ();
+        if (!DeferControl)
+            process_delimiter ();
         return false;
     }
 
@@ -490,18 +503,17 @@ int zlink::pipe_t::write_reserved_decoder_frame (
           complete_frame && hwm > 0 && in_flight == 0
           && _out_incomplete_bytes > hwm;
 
-        const ypipe_replacement_accounting_t replaced =
-          publish_outbound_frame_unlocked (*msg_, more);
+        publish_outbound_frame_unlocked (*msg_, more);
         if (complete_frame) {
             const uint64_t message_bytes = _out_incomplete_bytes;
-            const uint64_t msgs_written =
+            uint64_t new_msgs_written =
               _msgs_written.load (std::memory_order_acquire);
-            const uint64_t retained_bytes = bytes_written - replaced.bytes;
+            const uint64_t retained_bytes =
+              _bytes_written.load (std::memory_order_acquire);
             const uint64_t new_bytes_written =
               UINT64_MAX - retained_bytes < message_bytes
                 ? UINT64_MAX
                 : retained_bytes + message_bytes;
-            uint64_t new_msgs_written = msgs_written - replaced.complete_messages;
             if (!msg_->is_routing_id () && !msg_->is_credential ())
                 ++new_msgs_written;
             publish_outbound_ledger_unlocked (new_msgs_written,
@@ -566,18 +578,17 @@ int zlink::pipe_t::write_reserved_decoder_frame (
     }
     oversize = oversize || registry_oversize;
 
-    const ypipe_replacement_accounting_t replaced =
-      publish_outbound_frame_unlocked (*msg_, more);
+    publish_outbound_frame_unlocked (*msg_, more);
     if (complete_frame) {
         const uint64_t message_bytes = _out_incomplete_bytes;
-        const uint64_t msgs_written =
+        uint64_t new_msgs_written =
           _msgs_written.load (std::memory_order_acquire);
-        const uint64_t retained_bytes = bytes_written - replaced.bytes;
+        const uint64_t retained_bytes =
+          _bytes_written.load (std::memory_order_acquire);
         const uint64_t new_bytes_written =
           UINT64_MAX - retained_bytes < message_bytes
             ? UINT64_MAX
             : retained_bytes + message_bytes;
-        uint64_t new_msgs_written = msgs_written - replaced.complete_messages;
         if (!msg_->is_routing_id () && !msg_->is_credential ())
             ++new_msgs_written;
         publish_outbound_ledger_unlocked (new_msgs_written,

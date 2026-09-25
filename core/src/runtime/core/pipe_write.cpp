@@ -627,10 +627,8 @@ bool zlink::pipe_t::append_pending_peer_controls_unlocked ()
             get_ctx ()->_physical_queue_registry.commit_message (
               _out_physical_queue, 0, control_bytes,
               counted_pending_message_ref (command), false);
-            publish_outbound_frame_unlocked (command, false);
-        } else {
-            _out_pipe->write (command, false);
         }
+        publish_outbound_frame_unlocked (command, false);
         const uint64_t bytes_written =
           _bytes_written.load (std::memory_order_acquire);
         const uint64_t msgs_written =
@@ -1092,22 +1090,33 @@ bool zlink::pipe_t::counted_pending_message_ref (const msg_t &msg_)
            && !msg_.is_credential () && !msg_.is_delimiter ();
 }
 
-zlink::ypipe_replacement_accounting_t
-zlink::pipe_t::publish_outbound_frame_unlocked (const msg_t &msg_, bool more_)
+void zlink::pipe_t::publish_outbound_frame_unlocked (const msg_t &msg_,
+                                                     bool more_)
 {
-    ypipe_replacement_accounting_t replaced;
     if (!_conflate) {
         _out_pipe->write (msg_, more_);
-        return replaced;
+        return;
     }
 
+    ypipe_replacement_accounting_t replaced;
     _out_pipe->write_with_replacement_accounting (
       msg_, more_, &pipe_t::committed_frame_accounted_bytes_ref,
       &pipe_t::counted_pending_message_ref, &replaced);
+    if (replaced.bytes == 0 && replaced.complete_messages == 0)
+        return;
+    // Replacements retire only records still owned by the queue. Bytes
+    // already read, other topics and a started record keep their charge.
     if (_registry_accounting && replaced.bytes > 0)
         get_ctx ()->_physical_queue_registry.release_committed_frame (
           _out_physical_queue, replaced.bytes, replaced.complete_messages);
-    return replaced;
+    const uint64_t bytes_written =
+      _bytes_written.load (std::memory_order_acquire);
+    const uint64_t msgs_written =
+      _msgs_written.load (std::memory_order_acquire);
+    publish_outbound_ledger_unlocked (
+      msgs_written - replaced.complete_messages,
+      bytes_written - replaced.bytes);
+    publish_outbound_accounting_unlocked (false);
 }
 
 void zlink::pipe_t::release_discarded_pipe_accounting (
@@ -1247,8 +1256,7 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
               oversize_admission);
         }
     }
-    const ypipe_replacement_accounting_t replaced =
-      publish_outbound_frame_unlocked (*msg_, more);
+    publish_outbound_frame_unlocked (*msg_, more);
     if (commits_bytes) {
         const uint64_t message_bytes = _out_incomplete_bytes;
         const uint64_t in_flight =
@@ -1263,12 +1271,9 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
         }
         uint64_t new_msgs_written =
           _msgs_written.load (std::memory_order_acquire);
-        uint64_t new_bytes_written;
-        // Replacements retire only records still owned by the queue. Bytes
-        // already read, other topics and a started record keep their charge.
-        const uint64_t retained_bytes = bytes_written - replaced.bytes;
-        new_msgs_written -= replaced.complete_messages;
-        new_bytes_written =
+        const uint64_t retained_bytes =
+          _bytes_written.load (std::memory_order_acquire);
+        const uint64_t new_bytes_written =
           UINT64_MAX - retained_bytes < message_bytes
             ? UINT64_MAX : retained_bytes + message_bytes;
         if (!msg_->is_routing_id () && !msg_->is_credential ())

@@ -138,6 +138,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_xpub_nodrop
   ${INTEGRATION_TEST_ROOT}/test_timer_poller
   ${INTEGRATION_TEST_ROOT}/test_polling_contract
+  ${INTEGRATION_TEST_ROOT}/test_poller_ctx_shutdown_contract
   ${INTEGRATION_TEST_ROOT}/test_close_completion_poller_release
   ${INTEGRATION_TEST_ROOT}/test_disconnect_progress
   ${INTEGRATION_TEST_ROOT}/test_phase3_completion_contract
@@ -148,6 +149,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_dealer_router_single_lane_contract
   ${INTEGRATION_TEST_ROOT}/test_zmp_request_reply
   ${INTEGRATION_TEST_ROOT}/test_router_handover
+  ${INTEGRATION_TEST_ROOT}/test_router_selected_route_contract
   ${INTEGRATION_TEST_ROOT}/test_router_reject_duplicate
   ${INTEGRATION_TEST_ROOT}/test_router_reject_disconnected_without_app_recv
   ${INTEGRATION_TEST_ROOT}/test_router_same_socket_reconnect_policy
@@ -527,7 +529,9 @@ endif()
 if(TARGET test_phase3_request_reply_contract)
   set_tests_properties(
     test_phase3_request_reply_contract
-    PROPERTIES TIMEOUT 180)
+    PROPERTIES
+      TIMEOUT 180
+      RESOURCE_LOCK "${NETWORK_INTEGRATION_RESOURCE_LOCK}")
 endif()
 if(TARGET test_zmp_request_reply)
   set_tests_properties(
@@ -1025,6 +1029,22 @@ list(REMOVE_DUPLICATES INTEGRATION_SERIAL_TESTS)
 if(INTEGRATION_SERIAL_TESTS)
   set_tests_properties(${INTEGRATION_SERIAL_TESTS} PROPERTIES RUN_SERIAL TRUE)
   set_property(TEST ${INTEGRATION_SERIAL_TESTS} APPEND PROPERTY LABELS "integration;serial")
+endif()
+
+if(TARGET test_router_selected_route_contract)
+  set_tests_properties(test_router_selected_route_contract PROPERTIES LABELS "contract")
+endif()
+if(TARGET test_poller_ctx_shutdown_contract)
+  set_tests_properties(test_poller_ctx_shutdown_contract PROPERTIES LABELS "contract")
+endif()
+
+if(TARGET unittest_router_receive_queue)
+  add_test(
+    NAME contract_router_two_standby_route_records
+    COMMAND $<TARGET_FILE:unittest_router_receive_queue>
+            -n test_router_selection_change_discards_every_standby_record)
+  set_tests_properties(contract_router_two_standby_route_records PROPERTIES
+    LABELS "contract;parallel-safe" TIMEOUT 10)
 endif()
 
 if(E2E_SERIAL_TESTS)

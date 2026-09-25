@@ -320,7 +320,8 @@ typedef enum zlink_poller_event_flag_e
     ZLINK_POLLERR = 4,
     ZLINK_POLLPRI = 8,
     ZLINK_POLLITEMS_DFLT = 16,
-    ZLINK_POLLCOMPLETION = 32
+    ZLINK_POLLCOMPLETION = 32,
+    ZLINK_POLLROUTE = 64
 } zlink_poller_event_flag_e;
 
 #endif

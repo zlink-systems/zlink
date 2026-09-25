@@ -13,10 +13,12 @@
 #include "api/socket/socket_request_reply_internal.hpp"
 #include "sockets/common/socket_base.hpp"
 #include "sockets/internal/fq.hpp"
+#include "sockets/dealer/dealer.hpp"
 #include "sockets/router/router.hpp"
 
 #include <atomic>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -29,9 +31,10 @@ namespace zlink
 class session_termination_test_access_t
 {
   public:
-    static void attach_socket_pipe (socket_base_t *socket_, pipe_t *pipe_)
+    static void attach_socket_pipe (socket_base_t *socket_, pipe_t *pipe_,
+                                    bool locally_initiated_ = false)
     {
-        socket_->attach_pipe (pipe_);
+        socket_->attach_pipe (pipe_, false, locally_initiated_);
     }
 
     static bool receive_mutex_is_held_by_another_thread (socket_base_t *socket_)
@@ -60,6 +63,12 @@ class session_termination_test_access_t
         // termination lifecycle.
         socket_receive_entry_scope_t receive_lock (socket_->receive_runtime ());
         socket_->xpipe_terminated (pipe_);
+    }
+
+    static void deactivate_socket_pipe (socket_base_t *socket_, pipe_t *pipe_)
+    {
+        socket_receive_entry_scope_t receive_lock (socket_->receive_runtime ());
+        socket_->xread_deactivated (pipe_);
     }
 
     static void reset_pipe_inbound_queue (pipe_t *pipe_)
@@ -194,6 +203,22 @@ void write_internal_admitted_pipe_part (zlink::pipe_t *pipe_,
     TEST_ASSERT_TRUE (pipe_->write (&msg));
     pipe_->flush ();
     TEST_ASSERT_SUCCESS_ERRNO (msg.close ());
+}
+
+struct discarded_free_probe_t
+{
+    discarded_free_probe_t () : calls (0)
+    {
+    }
+    std::atomic<int> calls;
+};
+
+void count_discarded_free (void *data_, void *hint_)
+{
+    discarded_free_probe_t *const probe =
+      static_cast<discarded_free_probe_t *> (hint_);
+    probe->calls.fetch_add (1, std::memory_order_release);
+    std::free (data_);
 }
 
 int reject_prefetched_record_and_consume (zlink::pipe_t *pipe_,
@@ -626,16 +651,428 @@ void test_router_prefetched_reject_consume_discards_single_and_multipart_records
     run_router_prefetched_reject_consume_discards_record (true);
 }
 
-int main ()
+void test_fq_reject_consume_releases_multipart_source ()
 {
+    void *owner_handle = zlink_socket (get_test_context (), ZLINK_SOCKET_PAIR);
+    TEST_ASSERT_NOT_NULL (owner_handle);
+    zlink::socket_base_t *owner = as_socket_handle (owner_handle).socket;
+    zlink::object_t *parents[2] = {owner, owner};
+    const uint64_t hwms[2] = {1024 * 1024, 1024 * 1024};
+    const bool conflates[2] = {false, false};
+    zlink::pipepair_options_t options;
+    options.session_pipe = true;
+    zlink::pipe_t *stale[2] = {NULL, NULL};
+    zlink::pipe_t *selected[2] = {NULL, NULL};
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, stale, hwms, conflates, options));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, selected, hwms, conflates, options));
+    passive_pipe_sink_t sink;
+    stale[0]->set_event_sink (&sink);
+    stale[1]->set_event_sink (&sink);
+    selected[0]->set_event_sink (&sink);
+    selected[1]->set_event_sink (&sink);
+
+    zlink::fq_t fq;
+    fq.attach (stale[0]);
+    fq.attach (selected[0]);
+
+    zlink::msg_t synthetic_rid;
+    TEST_ASSERT_SUCCESS_ERRNO (synthetic_rid.init_size (3));
+    memcpy (synthetic_rid.data (), "RID", 3);
+    synthetic_rid.set_flags (zlink::msg_t::routing_id | zlink::msg_t::more);
+    TEST_ASSERT_TRUE (stale[1]->write (&synthetic_rid));
+    TEST_ASSERT_SUCCESS_ERRNO (synthetic_rid.close ());
+    write_internal_pipe_part (stale[1], "stale-head", true);
+    write_internal_pipe_part (stale[1], "stale-tail", false);
+    write_internal_pipe_part (selected[1], "selected", false);
+
+    zlink::msg_t msg;
+    TEST_ASSERT_SUCCESS_ERRNO (msg.init ());
+    zlink::pipe_t *source = NULL;
+    TEST_ASSERT_SUCCESS_ERRNO (fq.recvpipe (&msg, &source));
+    TEST_ASSERT_EQUAL_PTR (stale[0], source);
+    TEST_ASSERT_TRUE ((msg.flags () & zlink::msg_t::more) != 0);
+
+    prefetched_reject_consume_probe_t probe;
+    probe.expected_pipe = stale[0];
+    TEST_ASSERT_EQUAL_INT (
+      -1, fq.recvpipe_with_record_admission (
+            &msg, &source, &reject_prefetched_record_and_consume, &probe));
+    TEST_ASSERT_EQUAL_INT (ENOMEM, errno);
+    TEST_ASSERT_EQUAL_INT (1, probe.callback_count);
+    TEST_ASSERT_TRUE (probe.expected_pipe_seen);
+    TEST_ASSERT_TRUE (probe.more_seen);
+
+    const int next_rc = fq.recvpipe (&msg, &source);
+    const bool selected_seen = next_rc == 0 && source == selected[0]
+                               && msg.size () == 8
+                               && memcmp (msg.data (), "selected", 8) == 0;
+    TEST_ASSERT_SUCCESS_ERRNO (msg.close ());
+
+    fq.pipe_terminated (stale[0]);
+    fq.pipe_terminated (selected[0]);
+    stale[0]->terminate (false);
+    stale[1]->terminate (false);
+    selected[0]->terminate (false);
+    selected[1]->terminate (false);
+    int events = 0;
+    size_t events_size = sizeof events;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (owner_handle, ZLINK_OPT_EVENTS, &events, &events_size));
+    close_zero_linger (owner_handle);
+    TEST_ASSERT_EQUAL_INT (0, next_rc);
+    TEST_ASSERT_TRUE (selected_seen);
+}
+
+struct stale_candidate_admission_probe_t
+{
+    zlink::pipe_t *stale;
+    int admission_calls;
+};
+
+bool admit_selected_candidate (zlink::pipe_t *pipe_, void *userdata_)
+{
+    stale_candidate_admission_probe_t *const probe =
+      static_cast<stale_candidate_admission_probe_t *> (userdata_);
+    return pipe_ != probe->stale;
+}
+
+int reject_request_admission (zlink::pipe_t *, const zlink::msg_t &,
+                              void *userdata_)
+{
+    stale_candidate_admission_probe_t *const probe =
+      static_cast<stale_candidate_admission_probe_t *> (userdata_);
+    ++probe->admission_calls;
+    errno = EAGAIN;
+    return -1;
+}
+
+void test_fq_stale_request_skips_capacity_admission ()
+{
+    void *owner_handle = zlink_socket (get_test_context (), ZLINK_SOCKET_PAIR);
+    TEST_ASSERT_NOT_NULL (owner_handle);
+    zlink::socket_base_t *owner = as_socket_handle (owner_handle).socket;
+    zlink::object_t *parents[2] = {owner, owner};
+    const uint64_t hwms[2] = {1024 * 1024, 1024 * 1024};
+    const bool conflates[2] = {false, false};
+    zlink::pipepair_options_t options;
+    options.session_pipe = true;
+    zlink::pipe_t *stale[2] = {NULL, NULL};
+    zlink::pipe_t *selected[2] = {NULL, NULL};
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, stale, hwms, conflates, options));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, selected, hwms, conflates, options));
+    passive_pipe_sink_t sink;
+    stale[0]->set_event_sink (&sink);
+    stale[1]->set_event_sink (&sink);
+    selected[0]->set_event_sink (&sink);
+    selected[1]->set_event_sink (&sink);
+
+    zlink::fq_t fq;
+    fq.attach (stale[0]);
+    fq.attach (selected[0]);
+    write_internal_admitted_pipe_part (stale[1], "stale-request", false, 101);
+    write_internal_pipe_part (selected[1], "selected", false);
+
+    stale_candidate_admission_probe_t probe = {stale[0], 0};
+    zlink::msg_t msg;
+    TEST_ASSERT_SUCCESS_ERRNO (msg.init ());
+    zlink::pipe_t *source = NULL;
+    TEST_ASSERT_SUCCESS_ERRNO (fq.recvpipe_with_record_admission (
+      &msg, &source, &reject_request_admission, &probe,
+      &admit_selected_candidate, &probe));
+    TEST_ASSERT_EQUAL_PTR (stale[0], source);
+    TEST_ASSERT_EQUAL_INT (0, probe.admission_calls);
+    TEST_ASSERT_EQUAL_MEMORY ("stale-request", msg.data (), msg.size ());
+
+    TEST_ASSERT_SUCCESS_ERRNO (fq.recvpipe_with_record_admission (
+      &msg, &source, &reject_request_admission, &probe,
+      &admit_selected_candidate, &probe));
+    TEST_ASSERT_EQUAL_PTR (selected[0], source);
+    TEST_ASSERT_EQUAL_INT (0, probe.admission_calls);
+    TEST_ASSERT_EQUAL_MEMORY ("selected", msg.data (), msg.size ());
+    TEST_ASSERT_SUCCESS_ERRNO (msg.close ());
+
+    fq.pipe_terminated (stale[0]);
+    fq.pipe_terminated (selected[0]);
+    stale[0]->terminate (false);
+    stale[1]->terminate (false);
+    selected[0]->terminate (false);
+    selected[1]->terminate (false);
+    int events = 0;
+    size_t events_size = sizeof events;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (owner_handle, ZLINK_OPT_EVENTS, &events, &events_size));
+    close_zero_linger (owner_handle);
+}
+
+void test_router_selection_change_discards_every_standby_record ()
+{
+    void *router_handle = zlink_socket (get_test_context (), ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_NOT_NULL (router_handle);
+    const int handover = ZLINK_RID_DUPLICATE_HANDOVER;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (router_handle, ZLINK_OPT_RID_DUPLICATE_POLICY,
+                        &handover, sizeof handover));
+    socket_handle_t router_pin = as_socket_handle (router_handle);
+    zlink::router_t *const router =
+      static_cast<zlink::router_t *> (router_pin.socket);
+    zlink::object_t *parents[2] = {router, router};
+    const uint64_t hwms[2] = {1024 * 1024, 1024 * 1024};
+    const bool conflates[2] = {false, false};
+    zlink::pipepair_options_t options;
+    options.session_pipe = true;
+    zlink::pipe_t *pairs[4][2] = {};
+    passive_pipe_sink_t peer_sink;
+    for (size_t i = 0; i < 4; ++i) {
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink::pipepair (parents, pairs[i], hwms, conflates, options));
+        pairs[i][0]->set_peer_routing_id (
+          reinterpret_cast<const unsigned char *> ("S"), 1);
+        pairs[i][0]->set_transport_pair (
+          zlink::transport_lane_application, 101 + i, 1);
+        pairs[i][1]->set_transport_pair (
+          zlink::transport_lane_application, 101 + i, 1);
+        pairs[i][0]->set_transport_lane_count (1);
+        pairs[i][1]->set_transport_lane_count (1);
+        pairs[i][1]->set_event_sink (&peer_sink);
+        if (i < 3)
+            zlink::session_termination_test_access_t::attach_socket_pipe (
+              router, pairs[i][0], true);
+    }
+    const bool first_standby_before =
+      !router->is_selected_pipe (pairs[0][0]);
+    const bool second_standby_before =
+      !router->is_selected_pipe (pairs[1][0]);
+    const bool third_selected_before =
+      router->is_selected_pipe (pairs[2][0]);
+
+    discarded_free_probe_t data_free_probe;
+    discarded_free_probe_t credential_free_probe;
+    const char payload[] = "standby-data";
+    void *const data = std::malloc (sizeof payload - 1);
+    TEST_ASSERT_NOT_NULL (data);
+    memcpy (data, payload, sizeof payload - 1);
+    zlink::msg_t zero_copy;
+    TEST_ASSERT_SUCCESS_ERRNO (zero_copy.init_data (
+      data, sizeof payload - 1, &count_discarded_free, &data_free_probe));
+    TEST_ASSERT_TRUE (pairs[0][1]->write (&zero_copy));
+    pairs[0][1]->flush ();
+    // pipe_t::write transfers the queued handle; reset this local alias.
+    TEST_ASSERT_SUCCESS_ERRNO (zero_copy.init ());
+    // Private credential frames exercise pipe_t's control-frame close path.
+    void *const credential_data = std::malloc (1);
+    TEST_ASSERT_NOT_NULL (credential_data);
+    zlink::msg_t credential;
+    TEST_ASSERT_SUCCESS_ERRNO (credential.init_data (
+      credential_data, 1, &count_discarded_free, &credential_free_probe));
+    credential.set_flags (zlink::msg_t::credential);
+    TEST_ASSERT_TRUE (pairs[0][1]->write (&credential));
+    pairs[0][1]->flush ();
+    TEST_ASSERT_SUCCESS_ERRNO (credential.init ());
+    write_internal_admitted_pipe_part (pairs[0][1], "standby-request", false, 101);
+    write_internal_admitted_pipe_part (pairs[1][1], "standby-data", false, 0);
+    write_internal_admitted_pipe_part (pairs[1][1], "standby-request", false, 102);
+    const bool first_queued_before = pairs[0][0]->check_read ();
+    const bool second_queued_before = pairs[1][0]->check_read ();
+
+    zlink::session_termination_test_access_t::attach_socket_pipe (
+      router, pairs[3][0], true);
+    const bool first_standby_queued = pairs[0][0]->check_read ();
+    const bool second_standby_queued = pairs[1][0]->check_read ();
+    const bool newest_selected = router->is_selected_pipe (pairs[3][0]);
+    const int data_free_calls =
+      data_free_probe.calls.load (std::memory_order_acquire);
+    const int credential_free_calls =
+      credential_free_probe.calls.load (std::memory_order_acquire);
+
+    router_pin = socket_handle_t ();
+    close_zero_linger (router_handle);
+    zlink::ctx_t *const ctx =
+      static_cast<zlink::ctx_t *> (get_test_context ());
+    TEST_ASSERT_SUCCESS_ERRNO (
+      ctx->wait_for_socket_count_at_most (0, 5000));
+    TEST_ASSERT_TRUE (newest_selected);
+    TEST_ASSERT_TRUE (first_standby_before);
+    TEST_ASSERT_TRUE (second_standby_before);
+    TEST_ASSERT_TRUE (third_selected_before);
+    TEST_ASSERT_TRUE (first_queued_before);
+    TEST_ASSERT_TRUE (second_queued_before);
+    TEST_ASSERT_FALSE (first_standby_queued);
+    TEST_ASSERT_FALSE (second_standby_queued);
+    TEST_ASSERT_EQUAL_INT (1, data_free_calls);
+    TEST_ASSERT_EQUAL_INT (1, credential_free_calls);
+    TEST_ASSERT_EQUAL_INT (
+      1, data_free_probe.calls.load (std::memory_order_acquire));
+    TEST_ASSERT_EQUAL_INT (
+      1, credential_free_probe.calls.load (std::memory_order_acquire));
+}
+
+void test_unrelated_handover_preserves_prefetched_multipart_source ()
+{
+    void *const handle = zlink_socket (get_test_context (), ZLINK_SOCKET_ROUTER);
+    const int handover = ZLINK_RID_DUPLICATE_HANDOVER;
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_set_option (
+      handle, ZLINK_OPT_RID_DUPLICATE_POLICY, &handover, sizeof handover));
+    socket_handle_t pin = as_socket_handle (handle);
+    zlink::router_t *const router = static_cast<zlink::router_t *> (pin.socket);
+    zlink::object_t *parents[2] = {router, router};
+    const uint64_t hwms[2] = {1024 * 1024, 1024 * 1024};
+    const bool conflates[2] = {false, false};
+    zlink::pipepair_options_t options;
+    options.session_pipe = true;
+    zlink::pipe_t *pairs[4][2] = {};
+    passive_pipe_sink_t sink;
+    const char *const ids[] = {"X", "B", "A", "B"};
+    for (size_t i = 0; i < 4; ++i) {
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink::pipepair (parents, pairs[i], hwms, conflates, options));
+        pairs[i][0]->set_peer_routing_id (
+          reinterpret_cast<const unsigned char *> (ids[i]), 1);
+        pairs[i][0]->set_transport_pair (
+          zlink::transport_lane_application, 201 + i, 1);
+        pairs[i][1]->set_transport_pair (
+          zlink::transport_lane_application, 201 + i, 1);
+        pairs[i][0]->set_transport_lane_count (1);
+        pairs[i][1]->set_transport_lane_count (1);
+        pairs[i][1]->set_event_sink (&sink);
+        if (i < 3)
+            zlink::session_termination_test_access_t::attach_socket_pipe (
+              router, pairs[i][0], true);
+    }
+
+    write_internal_pipe_part (pairs[0][1], "X-first", false);
+    write_internal_pipe_part (pairs[1][1], "B-first", false);
+    write_internal_pipe_part (pairs[1][1], "B-pending", false);
+    write_internal_pipe_part (pairs[2][1], "A-head", true);
+    write_internal_pipe_part (pairs[2][1], "A-tail", false);
+    write_internal_pipe_part (pairs[0][1], "X-second", false);
+    zlink_msg_t parts[4];
+    const zlink_routing_id_t *rid = NULL;
+    uint64_t token = 0;
+    size_t count = 0;
+    for (int i = 0; i < 2; ++i) {
+        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_router_recv (
+          handle, &rid, &token, parts, 4, &count, ZLINK_RECV_FLAGS_DONTWAIT));
+        zlink_multipart_close (parts, count);
+    }
+    TEST_ASSERT_TRUE (router->within_receive_turn ([&] { return router->xhas_in (); }));
+    zlink::session_termination_test_access_t::attach_socket_pipe (
+      router, pairs[3][0], true);
+    const int rc = zlink_router_recv (
+      handle, &rid, &token, parts, 4, &count, ZLINK_RECV_FLAGS_DONTWAIT);
+    std::string first;
+    std::string second;
+    if (rc == ZLINK_RECV_OK) {
+        if (count > 0)
+            first.assign (static_cast<char *> (zlink_msg_data (&parts[0])),
+                          zlink_msg_size (&parts[0]));
+        if (count > 1)
+            second.assign (static_cast<char *> (zlink_msg_data (&parts[1])),
+                           zlink_msg_size (&parts[1]));
+        zlink_multipart_close (parts, count);
+    }
+    const char received_rid = rid ? static_cast<char> (rid->data[0]) : '\0';
+    pin = socket_handle_t ();
+    close_zero_linger (handle);
+    zlink::ctx_t *const ctx =
+      static_cast<zlink::ctx_t *> (get_test_context ());
+    TEST_ASSERT_SUCCESS_ERRNO (ctx->wait_for_socket_count_at_most (0, 5000));
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, rc);
+    TEST_ASSERT_EQUAL_UINT (2, count);
+    TEST_ASSERT_EQUAL_INT ('A', received_rid);
+    TEST_ASSERT_EQUAL_STRING ("A-head", first.c_str ());
+    TEST_ASSERT_EQUAL_STRING ("A-tail", second.c_str ());
+}
+
+void test_dealer_single_part_deactivation_keeps_fair_order ()
+{
+    void *const handle = zlink_socket (get_test_context (), ZLINK_SOCKET_DEALER);
+    socket_handle_t pin = as_socket_handle (handle);
+    zlink::dealer_t *const dealer = static_cast<zlink::dealer_t *> (pin.socket);
+    zlink::object_t *parents[2] = {dealer, dealer};
+    const uint64_t hwms[2] = {1024 * 1024, 1024 * 1024};
+    const bool conflates[2] = {false, false};
+    zlink::pipepair_options_t options;
+    options.session_pipe = true;
+    zlink::pipe_t *pairs[3][2] = {};
+    passive_pipe_sink_t sink;
+    for (size_t i = 0; i < 3; ++i) {
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink::pipepair (parents, pairs[i], hwms, conflates, options));
+        pairs[i][1]->set_event_sink (&sink);
+        zlink::session_termination_test_access_t::attach_socket_pipe (
+          dealer, pairs[i][0], true);
+    }
+
+    write_internal_pipe_part (pairs[0][1], "X-first", false);
+    write_internal_pipe_part (pairs[1][1], "B-first", false);
+    write_internal_pipe_part (pairs[2][1], "A-first", false);
+    write_internal_pipe_part (pairs[0][1], "X-second", false);
+    const char *const expected[] = {"X-first", "B-first"};
+    for (size_t i = 0; i < 2; ++i) {
+        zlink_msg_t part;
+        size_t count = 0;
+        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_recv (
+          handle, NULL, &part, 1, &count, ZLINK_RECV_FLAGS_DONTWAIT));
+        TEST_ASSERT_EQUAL_UINT (1, count);
+        TEST_ASSERT_EQUAL_STRING_LEN (
+          expected[i], static_cast<const char *> (zlink_msg_data (&part)),
+          std::strlen (expected[i]));
+        zlink_multipart_close (&part, count);
+    }
+
+    zlink::session_termination_test_access_t::deactivate_socket_pipe (
+      dealer, pairs[1][0]);
+    zlink_msg_t next;
+    size_t count = 0;
+    const zlink_recv_result_t rc = zlink_recv (
+      handle, NULL, &next, 1, &count, ZLINK_RECV_FLAGS_DONTWAIT);
+    std::string payload;
+    if (rc == ZLINK_RECV_OK) {
+        payload.assign (static_cast<const char *> (zlink_msg_data (&next)),
+                        zlink_msg_size (&next));
+        zlink_multipart_close (&next, count);
+    }
+    pin = socket_handle_t ();
+    close_zero_linger (handle);
+    zlink::ctx_t *const ctx =
+      static_cast<zlink::ctx_t *> (get_test_context ());
+    TEST_ASSERT_SUCCESS_ERRNO (ctx->wait_for_socket_count_at_most (0, 5000));
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, rc);
+    TEST_ASSERT_EQUAL_UINT (1, count);
+    TEST_ASSERT_EQUAL_STRING ("X-second", payload.c_str ());
+}
+
+int main (int argc, char **argv)
+{
+    const char *selected = NULL;
+    if (argc == 3 && strcmp (argv[1], "-n") == 0)
+        selected = argv[2];
+    else if (argc != 1)
+        return 1;
     setup_test_environment ();
     UNITY_BEGIN ();
-    RUN_TEST (test_router_recv_serializes_fq_with_pipe_termination);
-    RUN_TEST (test_router_routed_recv_serializes_fq_with_pipe_termination);
-    RUN_TEST (test_router_exposed_multipart_pipe_termination_does_not_join_next_peer_record);
-    RUN_TEST (test_router_prefetched_multipart_pipe_termination_does_not_join_next_peer_record);
-    RUN_TEST (test_router_blocking_followup_does_not_retry_across_aborted_record);
-    RUN_TEST (test_router_empty_pinned_pipe_aborts_multipart_before_next_peer_record);
-    RUN_TEST (test_router_prefetched_reject_consume_discards_single_and_multipart_records);
-    return UNITY_END ();
+#define RUN_SELECTED(test_)                                                      \
+    if (!selected || strcmp (selected, #test_) == 0)                             \
+    RUN_TEST (test_)
+    RUN_SELECTED (test_router_recv_serializes_fq_with_pipe_termination);
+    RUN_SELECTED (test_router_routed_recv_serializes_fq_with_pipe_termination);
+    RUN_SELECTED (test_router_exposed_multipart_pipe_termination_does_not_join_next_peer_record);
+    RUN_SELECTED (test_router_prefetched_multipart_pipe_termination_does_not_join_next_peer_record);
+    RUN_SELECTED (test_router_blocking_followup_does_not_retry_across_aborted_record);
+    RUN_SELECTED (test_router_empty_pinned_pipe_aborts_multipart_before_next_peer_record);
+    RUN_SELECTED (test_router_prefetched_reject_consume_discards_single_and_multipart_records);
+    RUN_SELECTED (test_fq_reject_consume_releases_multipart_source);
+    RUN_SELECTED (test_fq_stale_request_skips_capacity_admission);
+    RUN_SELECTED (test_router_selection_change_discards_every_standby_record);
+    RUN_SELECTED (test_unrelated_handover_preserves_prefetched_multipart_source);
+    RUN_SELECTED (test_dealer_single_part_deactivation_keeps_fair_order);
+#undef RUN_SELECTED
+    const bool matched = !selected || Unity.NumberOfTests == 1;
+    const int result = UNITY_END ();
+    return matched ? result : 1;
 }

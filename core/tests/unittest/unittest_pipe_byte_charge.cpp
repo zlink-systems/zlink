@@ -301,7 +301,8 @@ void test_conflate_decoder_replacement_releases_record_charge ()
         TEST_ASSERT_EQUAL_UINT64 (2, pipes[0]->get_snd_pending_msgs ());
         TEST_ASSERT_EQUAL_UINT64 (4 * (k_metadata_bytes + 1),
                                   pipes[0]->get_snd_queue_accounted_bytes ());
-        const char expected[] = {'B', '2', 'A', '3'};
+        // A3 replaces the unread A1 and keeps its position.
+        const char expected[] = {'A', '3', 'B', '2'};
         for (size_t i = 0; i != sizeof (expected); ++i) {
             zlink::msg_t msg;
             TEST_ASSERT_TRUE (pipes[1]->read (&msg));
@@ -331,6 +332,99 @@ void test_conflate_decoder_replacement_releases_record_charge ()
 
 }
 
+namespace
+{
+void write_conflate_decoder_frame (zlink::pipe_t *pipe_, char value_,
+                                   bool more_)
+{
+    zlink::msg_t msg;
+    TEST_ASSERT_SUCCESS_ERRNO (msg.init_size (1));
+    *static_cast<char *> (msg.data ()) = value_;
+    if (more_)
+        msg.set_flags (zlink::msg_t::more);
+    zlink::decoder_frame_reservation_t storage;
+    zlink::decoder_frame_reservation_t *reservation = NULL;
+    TEST_ASSERT_SUCCESS_ERRNO (pipe_->reserve_inbound_decoder_frame (
+      1, msg.flags (), true, &storage, &reservation));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      pipe_->write_reserved_decoder_frame (&msg, &reservation));
+    TEST_ASSERT_SUCCESS_ERRNO (msg.init ());
+}
+
+//  Publishes A2 while the reader holds A1 inside record admission, then
+//  rejects A1, so A1 is superseded without having been replaced.
+int publish_replacement_and_reject (zlink::pipe_t *, const zlink::msg_t &,
+                                    void *userdata_)
+{
+    zlink::pipe_t *const writer = static_cast<zlink::pipe_t *> (userdata_);
+    write_conflate_decoder_frame (writer, 'A', true);
+    write_conflate_decoder_frame (writer, '2', false);
+    errno = EAGAIN;
+    return -1;
+}
+}
+
+//  The superseded record's charge is returned by whichever frame the writer
+//  publishes next, including a delimiter, and it leaves the written ledger.
+void test_conflate_superseded_record_leaves_ledger_on_control_write ()
+{
+    setup_test_context ();
+    void *writer = test_context_socket (ZLINK_SOCKET_PAIR);
+    void *reader = test_context_socket (ZLINK_SOCKET_PAIR);
+    zlink::socket_base_t *writer_core = as_socket_handle (writer).socket;
+    zlink::socket_base_t *reader_core = as_socket_handle (reader).socket;
+    zlink::object_t *parents[] = {writer_core, reader_core};
+    zlink::pipe_t *pipes[2];
+    const uint64_t hwms[] = {0, 0};
+    const bool conflates[] = {true, true};
+    zlink::pipepair_options_t options;
+    options.session_pipe = true;
+    options.session_owner_index = 0;
+    options.queue_class = zlink::physical_queue_class_application;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, pipes, hwms, conflates, options));
+    credit_pipe_sink_t sink;
+    pipes[0]->set_event_sink (&sink);
+    pipes[1]->set_event_sink (&sink);
+
+    write_conflate_decoder_frame (pipes[0], 'A', true);
+    write_conflate_decoder_frame (pipes[0], '1', false);
+    write_conflate_decoder_frame (pipes[0], 'B', true);
+    write_conflate_decoder_frame (pipes[0], '1', false);
+    pipes[0]->flush ();
+    drain_credit_commands (reader_core);
+
+    zlink::msg_t msg;
+    TEST_ASSERT_SUCCESS_ERRNO (msg.init ());
+    bool admission_failed = false;
+    bool admission_consumed = false;
+    TEST_ASSERT_FALSE (pipes[1]->read_with_record_admission (
+      &msg, &publish_replacement_and_reject, pipes[0], &admission_failed,
+      &admission_consumed));
+    TEST_ASSERT_TRUE (admission_failed);
+    TEST_ASSERT_FALSE (admission_consumed);
+    // A1 waits for the writer's next frame to return its charge.
+    TEST_ASSERT_EQUAL_UINT64 (3, pipes[0]->get_snd_pending_msgs ());
+
+    pipes[0]->terminate (false);
+    const uint64_t record_bytes = 2 * (k_metadata_bytes + 1);
+    TEST_ASSERT_EQUAL_UINT64 (2, pipes[0]->get_snd_pending_msgs ());
+    TEST_ASSERT_EQUAL_UINT64 (2 * record_bytes,
+                              pipes[0]->get_snd_pending_bytes ());
+    TEST_ASSERT_EQUAL_UINT64 (2 * record_bytes,
+                              pipes[0]->get_snd_queue_accounted_bytes ());
+    TEST_ASSERT_SUCCESS_ERRNO (msg.close ());
+
+    pipes[1]->terminate (false);
+    drain_credit_commands (reader_core);
+    drain_credit_commands (writer_core);
+    drain_credit_commands (reader_core);
+    TEST_ASSERT_EQUAL_INT (2, sink.terminated);
+    test_context_socket_close_zero_linger (reader);
+    test_context_socket_close_zero_linger (writer);
+    teardown_test_context ();
+}
+
 int main ()
 {
     UNITY_BEGIN ();
@@ -343,5 +437,6 @@ int main ()
     RUN_TEST (test_hint_at_or_above_hwm_clamps_and_keeps_a_floor_of_one);
     RUN_TEST (test_dequeue_notifies_only_a_writer_waiting_for_credit);
     RUN_TEST (test_conflate_decoder_replacement_releases_record_charge);
+    RUN_TEST (test_conflate_superseded_record_leaves_ledger_on_control_write);
     return UNITY_END ();
 }

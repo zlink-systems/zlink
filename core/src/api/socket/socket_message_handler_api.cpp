@@ -122,17 +122,10 @@ zlink_recv_result_t zlink_completion_recv (
         return ZLINK_RECV_NOT_SUPPORTED;
     }
 
-    // A completion pull is itself a socket progress point. If context shutdown
-    // was observed, prefer an already-published completion; otherwise surface
-    // the lifecycle result with the caller output still empty.
-    const int command_progress_rc = handle.socket->process_submit_commands ();
-    const int command_progress_errno = errno;
-    if (command_progress_rc != 0
-        && !zlink::socket_completion::has_ready (
-          &handle.socket->completion_runtime ())) {
-        errno = command_progress_errno;
+    // A completion pull is itself a socket progress point. A lifecycle failure
+    // (context shutdown) ends the pull with the caller output still empty.
+    if (handle.socket->process_submit_commands () != 0)
         return zlink::recv_result_internal::from_errno (errno);
-    }
 
     const int receive_timeout_ms = flags_ == ZLINK_RECV_FLAGS_DONTWAIT
                                      ? 0 : handle.socket->receive_timeout_ms ();
