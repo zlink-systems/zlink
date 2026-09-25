@@ -277,7 +277,15 @@ export class ZlinkStreamReceivedMessages {
           await queued.callback();
           continue;
         }
-        const { message, signal } = queued;
+        // Not `const { message, signal } = queued`: emscripten 3.1.38's JSDCE
+        // (bundled into the Unity WebGL browser build, see
+        // test/browser/unity-webgl-emscripten.test.js) reads a destructuring
+        // declarator's `node.id.name`, which is undefined for a pattern, and
+        // deletes any declarator whose id.name reads as the unreferenced
+        // identifier `undefined`. Plain property reads carry a real `id.name`
+        // and are not affected.
+        const message = queued.message;
+        const signal = queued.signal;
         const handlers = Array.from(this.handlers.get(message.name)!);
         for (const handler of handlers) {
           try {
