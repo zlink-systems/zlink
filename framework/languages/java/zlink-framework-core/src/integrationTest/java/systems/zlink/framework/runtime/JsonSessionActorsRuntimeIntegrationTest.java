@@ -16,6 +16,7 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.streams.ZLinkSessionActor;
 
+import java.net.Socket;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
@@ -27,14 +28,18 @@ final class JsonSessionActorsRuntimeIntegrationTest {
         SessionActorsRuntimeIntegrationTest.actorRelayRequests.clear();
         Zlink.version();
         String actorId = SessionActorsRuntimeIntegrationTest.uniqueActorId("json-player");
-        try (ZLinkFrameworkRuntime runtime = startLocalJsonRuntime()) {
+        try (ZLinkFrameworkRuntime runtime = startLocalJsonRuntime();
+                Socket client =
+                        SessionActorsRuntimeIntegrationTest.connectStream(runtime, "local-json")) {
             ZLinkActor actor =
                     ((ZLinkActorRuntime) runtime.actorManager())
                             .getOrCreateManagedActor(actorId, "player")
                             .toCompletableFuture()
                             .join();
             ZLinkSessionActor bound =
-                    runtime.sessionActors("local-json", RoutingId.from("json-session"))
+                    runtime.sessionActors(
+                                    "local-json",
+                                    SessionActorsRuntimeIntegrationTest.connectedSession())
                             .bind(actor)
                             .toCompletableFuture()
                             .join();
@@ -75,7 +80,7 @@ final class JsonSessionActorsRuntimeIntegrationTest {
         }
         {
             var stream = options.addStreamNode("local-json");
-            stream.bind("inproc://local-json-bind-" + System.nanoTime());
+            stream.bind("tcp://127.0.0.1:0");
             stream.enableActorDispatch();
             stream.registerSession(SessionActorsRuntimeIntegrationTest.GameSession.class);
         }

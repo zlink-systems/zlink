@@ -39,6 +39,7 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkMeshMessageMetrics;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 import systems.zlink.framework.runtime.messaging.ZLinkPacketNames;
 
@@ -250,9 +251,8 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                         : ZLinkFlowContext.suppress();
         try (flowScope) {
             String packetName =
-                    envelope != null
-                            ? envelope.messageName()
-                            : record.parts().get(0).toUtf8String();
+                    ZLinkChannelEnvelope.decodeDispatchPacket(record.parts(), envelope)
+                            .packetName();
             String contentType =
                     envelope != null
                             ? envelope.contentType()
@@ -309,7 +309,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
         } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
             return CompletableFuture.completedFuture(ZLinkOneWayCalls.TARGET_NOT_FOUND);
         }
-        String packetName = envelope != null ? envelope.messageName() : parts.get(0).toUtf8String();
+        String packetName = ZLinkChannelEnvelope.decodeDispatchPacket(parts, envelope).packetName();
         ChannelRouteSendHandlerRegistration route = namespace.routeSends.get(packetName);
         if (route == null) {
             return CompletableFuture.completedFuture(ZLinkOneWayCalls.TARGET_NOT_FOUND);
