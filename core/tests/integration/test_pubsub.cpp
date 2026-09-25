@@ -58,8 +58,37 @@ void test_conflate_preserves_topic_and_payload ()
     send_published_string_expect_success (pub, "topic", "old");
     send_published_string_expect_success (pub, "other", "independent");
     send_published_string_expect_success (pub, "topic", "latest");
-    recv_subscribed_string_expect_success (sub, "other", "independent");
     recv_subscribed_string_expect_success (sub, "topic", "latest");
+    recv_subscribed_string_expect_success (sub, "other", "independent");
+    test_context_socket_close (sub);
+    test_context_socket_close (pub);
+}
+
+void test_conflate_pollin_is_level_until_record_consumed ()
+{
+    void *pub = test_context_socket (ZLINK_SOCKET_PUB);
+    void *sub = test_context_socket (ZLINK_SOCKET_SUB);
+    const int enabled = 1;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+      pub, ZLINK_OPT_CONFLATE, &enabled, sizeof (enabled)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+      sub, ZLINK_OPT_CONFLATE, &enabled, sizeof (enabled)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_subscription (sub, ""));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (pub, "inproc://conflate-pollin"));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sub, "inproc://conflate-pollin"));
+    send_published_string_expect_success (pub, "topic", "old");
+    send_published_string_expect_success (pub, "topic", "latest");
+
+    zlink_pollitem_t item = {sub, 0, ZLINK_POLLIN, 0};
+    TEST_ASSERT_EQUAL_INT (1, zlink_poll (&item, 1, 1000, NULL));
+    TEST_ASSERT_TRUE ((item.revents & ZLINK_POLLIN) != 0);
+    item.revents = 0;
+    TEST_ASSERT_EQUAL_INT (1, zlink_poll (&item, 1, 0, NULL));
+    TEST_ASSERT_TRUE ((item.revents & ZLINK_POLLIN) != 0);
+
+    recv_subscribed_string_expect_success (sub, "topic", "latest");
+    item.revents = 0;
+    TEST_ASSERT_EQUAL_INT (0, zlink_poll (&item, 1, 0, NULL));
     test_context_socket_close (sub);
     test_context_socket_close (pub);
 }
@@ -71,5 +100,6 @@ int main ()
     UNITY_BEGIN ();
     RUN_TEST (test_tcp);
     RUN_TEST (test_conflate_preserves_topic_and_payload);
+    RUN_TEST (test_conflate_pollin_is_level_until_record_consumed);
     return UNITY_END ();
 }

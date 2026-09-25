@@ -62,10 +62,9 @@ template <typename T> class ypipe_conflate_t ZLINK_FINAL : public ypipe_base_t<T
     //  Rollback only the producer-owned incomplete record.
     bool unwrite (T *value_) { return dbuffer.unwrite (value_); }
 
-    //  dbuffer has no atomic reader-sleep handshake. Requesting a wake for
-    //  every publication prevents a writer from losing a concurrent empty
-    //  observation by the reader.
-    bool flush () { return false; }
+    //  dbuffer keeps receive order in a ypipe, so flush reports a sleeping
+    //  reader exactly as ypipe_t::flush does.
+    bool flush () { return dbuffer.flush (); }
 
     //  Check whether item is available for reading.
     bool check_read ()
@@ -83,8 +82,8 @@ template <typename T> class ypipe_conflate_t ZLINK_FINAL : public ypipe_base_t<T
     bool probe_if_published (void (*fn_) (const T &, void *),
                              void *userdata_)
     {
-        //  dbuffer's read-side lock observes the already-published front
-        //  without changing receiver state.
+        //  dbuffer inspects an already-published front without publishing
+        //  the reader sleep marker.
         return dbuffer.probe_if_published (fn_, userdata_);
     }
 
