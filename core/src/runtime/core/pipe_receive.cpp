@@ -490,18 +490,17 @@ int zlink::pipe_t::write_reserved_decoder_frame (
           complete_frame && hwm > 0 && in_flight == 0
           && _out_incomplete_bytes > hwm;
 
-        const ypipe_replacement_accounting_t replaced =
-          publish_outbound_frame_unlocked (*msg_, more);
+        publish_outbound_frame_unlocked (*msg_, more);
         if (complete_frame) {
             const uint64_t message_bytes = _out_incomplete_bytes;
-            const uint64_t msgs_written =
+            uint64_t new_msgs_written =
               _msgs_written.load (std::memory_order_acquire);
-            const uint64_t retained_bytes = bytes_written - replaced.bytes;
+            const uint64_t retained_bytes =
+              _bytes_written.load (std::memory_order_acquire);
             const uint64_t new_bytes_written =
               UINT64_MAX - retained_bytes < message_bytes
                 ? UINT64_MAX
                 : retained_bytes + message_bytes;
-            uint64_t new_msgs_written = msgs_written - replaced.complete_messages;
             if (!msg_->is_routing_id () && !msg_->is_credential ())
                 ++new_msgs_written;
             publish_outbound_ledger_unlocked (new_msgs_written,
@@ -566,18 +565,17 @@ int zlink::pipe_t::write_reserved_decoder_frame (
     }
     oversize = oversize || registry_oversize;
 
-    const ypipe_replacement_accounting_t replaced =
-      publish_outbound_frame_unlocked (*msg_, more);
+    publish_outbound_frame_unlocked (*msg_, more);
     if (complete_frame) {
         const uint64_t message_bytes = _out_incomplete_bytes;
-        const uint64_t msgs_written =
+        uint64_t new_msgs_written =
           _msgs_written.load (std::memory_order_acquire);
-        const uint64_t retained_bytes = bytes_written - replaced.bytes;
+        const uint64_t retained_bytes =
+          _bytes_written.load (std::memory_order_acquire);
         const uint64_t new_bytes_written =
           UINT64_MAX - retained_bytes < message_bytes
             ? UINT64_MAX
             : retained_bytes + message_bytes;
-        uint64_t new_msgs_written = msgs_written - replaced.complete_messages;
         if (!msg_->is_routing_id () && !msg_->is_credential ())
             ++new_msgs_written;
         publish_outbound_ledger_unlocked (new_msgs_written,
