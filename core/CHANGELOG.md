@@ -12,6 +12,38 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-09-26
+
+The public C API adds ROUTER route publication. Existing symbols and the ABI
+are unchanged (`LIBZLINK_ABI_SOVERSION=0`).
+
+### Added
+
+- ROUTER publishes the route it selected for each routing id:
+  `zlink_router_route_t`, `zlink_router_routes_snapshot`,
+  `zlink_router_recv_route_generation` and the poll event
+  `ZLINK_POLLROUTE = 64` (#1087).
+
+### Changed
+
+- ROUTER discards records from routes it did not select, at the selection
+  change and in the common receive path. A discarded REQUEST does not receive
+  a reply token (#1087).
+- A blocking DEALER REQUEST submit that knows only weight-0 routes returns
+  `NOT_ADMITTED` without waiting (#1087).
+- The PUB/SUB conflate queue is a lock-free SPSC queue, and the writer ledger
+  subtraction for replaced frames is made in one place (#1087).
+- Public endpoint disconnect waits for bind endpoint release outside the
+  socket turn, and monitor lossy state is published with release/acquire
+  (#1087).
+
+### Fixed
+
+- The fair queue no longer returns `ECONNABORTED` in place of the next pipe's
+  record after a reject-consume leaves a multipart cursor behind (#1087).
+- `term_endpoint` for a failed connect no longer terminates a bind endpoint
+  with the same URI (#1087).
+
 ## [1.7.0] - 2026-09-24
 
 The public C API and ABI are unchanged from 1.6.0
