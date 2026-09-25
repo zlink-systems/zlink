@@ -401,7 +401,11 @@ Drain()
 
         if (result == Completed) Release(work);
         // Suspended means the work handed the turn back. its completion is handled
-        // later, and this loop moves straight on to the next work item.
+        // later, and this loop moves straight on to the next work item. While a
+        // lifecycle item is suspended, TryTakeNext may select its ready continuation
+        // but no later lifecycle item. The continuation remains subject to the
+        // lifecycle burst limit and yield debt; eligible application work may run
+        // while it waits (handler turn and execution gate §7).
 
         if (Now() - sliceStartedAt >= policy.ownerTimeBudget)
             break;                     // §6.4 — this is where the owner yields

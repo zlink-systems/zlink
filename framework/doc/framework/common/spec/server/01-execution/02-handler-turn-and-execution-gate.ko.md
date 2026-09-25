@@ -354,6 +354,13 @@ lifecycle을 고르지 않는다. 실행하면 부채를 지운다. 부채 표�
 
 각 lane 안의 순서는 수락 순서 그대로다. 어느 lane에도 앞쪽 삽입은 없다.
 
+**Lifecycle lane의 한 항목은 그 operation의 결과가 확정될 때 끝난다.** Join·leave는 membership 결과,
+relocation은 commit 또는 중단, lifecycle control은 그 control의 결과가 확정될 때다. 그 전에는 같은
+lane의 다음 항목을 시작하지 않는다. 그 결과가 확정될 때까지 operation은 lifecycle FIFO의 순서를 유지하며,
+turn을 반납해도 다음 lifecycle 항목을 시작하지 않는다. User callback 밖에서 infrastructure 진행을 기다릴
+때는 turn을 반납하고 execution gate를 거쳐 재개한다. Application turn은 해당 operation의 admission·seal
+규칙이 허용하는 범위에서 실행한다([§13](#13-application과-infrastructure-진행-분리)).
+
 두 lane은 owner마다 물리적으로 다른 FIFO로 존재하며 서로의 순서에 영향을 주지 않는다.
 Application FIFO에 일이 아무리 쌓여 있어도 lifecycle 작업은 자기 lane에서 실행된다.
 

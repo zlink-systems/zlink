@@ -519,7 +519,10 @@ owner·generation에서 실패한 작업부터 남은 작업을 이어서 처리
 수 있다. Seal 뒤에 도착한 신규 admission의 결과는 §9 표가 정한다.
 
 **User Spot에 current Actor membership이 하나라도 있으면 Close는 `false`로 끝나며 admission과
-authority를 유지한다.** Framework는 member Actor를 숨겨서 이동하거나 destroy하지 않는다.
+authority를 유지한다.** Framework는 member Actor를 숨겨서 이동하거나 destroy하지 않는다. Close는
+User Spot의 [lifecycle lane](../01-execution/02-handler-turn-and-execution-gate.ko.md#execution-lanes)에서
+membership을 확인하고 1단계를 실행한다. 그 lane에 먼저 수락된 Join 또는 leave는 lane의 완료 경계에 따라
+membership 결과가 확정된 뒤 끝나므로, Close는 그 결과를 반영한 membership을 확인한다.
 
 ### 7.1 Remote Close — command 48과 20
 
@@ -531,7 +534,8 @@ generation, `SpotRef`, target node RID와 lifecycle generation, expected
 Target은 service admission에서 확인한 peer identity와 target lifecycle을 먼저 검증하고 current
 User Spot authority를 Store에서 직접 읽는다. 그다음 object generation, owner generation,
 `StoreVersion`, active Actor membership, `Closing`과 relocation 상태를 모두 확인한 뒤에만
-Closing CAS와 local admission seal을 시작한다.
+Closing CAS와 local admission seal을 시작한다. 이 확인과 1단계는 §7의 lifecycle lane 규칙에 따라
+실행한다.
 
 Command 20의 close 성공 tail은 `closed` bool 하나다. `false`는 같은 incarnation이 이미 없거나
 active membership 때문에 authority를 유지한 경우에만 사용한다. Stale generation과 moving

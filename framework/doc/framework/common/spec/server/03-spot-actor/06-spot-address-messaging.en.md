@@ -629,7 +629,12 @@ arrives after the seal.
 
 **If even one current Actor membership remains on a User Spot, Close ends
 with `false` and keeps admission and authority.** The framework doesn't
-secretly move or destroy a member Actor.
+secretly move or destroy a member Actor. Close performs its membership check
+and step 1 in the User Spot's
+[lifecycle lane](../01-execution/02-handler-turn-and-execution-gate.en.md#execution-lanes).
+Under the lane's completion boundary, a Join or leave admitted to that lane
+earlier ends only after its membership outcome is settled, so Close checks the
+membership that includes that outcome.
 
 ### 7.1 Remote Close — Commands 48 and 20
 
@@ -644,7 +649,8 @@ The target first verifies the peer identity and target lifecycle confirmed
 at service admission, and reads the current User Spot
 authority directly from the store. Only then does it check object generation, owner generation,
 `StoreVersion`, active Actor membership, `Closing`, and relocation state,
-all together, before starting the Closing CAS and local admission seal.
+all together, before starting the Closing CAS and local admission seal. The
+target performs this check and step 1 under the lifecycle-lane rule of §7.
 
 Command 20's close-success tail is a single `closed` bool. `false` is only
 used when the same incarnation no longer exists, or authority was kept due
