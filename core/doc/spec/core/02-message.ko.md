@@ -440,10 +440,7 @@ ZLINK_EXPORT void zlink_multipart_close (zlink_msg_t *parts, size_t part_count);
 
 ### Send
 
-송신 경로는 한 호출의 `parts_` 배열 전체를 record 하나로 admission한다. 성공·실패 모두 모든 입력
-슬롯을 소비해 빈 initialized 상태로 두며, 실패하면 어떤 part도 peer에 보이지 않는다. 재시도는
-호출 전에 보관한 record 전체로 한다. 상세 계약은
-[Socket 공통](socket/README.ko.md#whole-message-send와-pending-admission)이 소유한다.
+Whole-record 제출의 원자성, 입력 슬롯 소비와 재제출은 [Socket 공통 whole-message send](socket/README.ko.md#whole-message-send와-pending-admission)를 따른다.
 
 ### Receive
 

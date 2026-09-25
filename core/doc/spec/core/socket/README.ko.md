@@ -1117,7 +1117,7 @@ FIFO를 사용한다. DEALER가 앞선 DATA를 dequeue하지 않거나 local PAU
 한 번의 호출이 reply record 전체(`parts_` 배열)를 제출하고 모든 입력 슬롯을 소비한다. 호출은
 RID·token과 REQUEST가 완결된 상태인지 검증한 뒤 `SNDTIMEO`를 snapshot해 같은 logical source RID의
 reply route admission을 기다린다. Source peer가 DEALER이면 현재 ready Application pipe를, ROUTER이면
-현재 ready Completion pipe를 사용한다. 성공한 제출만 token을 소비한다.
+현재 ready Completion pipe를 사용한다. 성공한 제출만 token을 소비하며 requester application의 수신이나 수락을 보장하지 않는다. Reply 제출은 completion ID나 completion record를 만들지 않는다.
 
 Reply wait 만료는 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`, allocation failure는
 `ZLINK_SUBMIT_OUT_OF_MEMORY`+`ENOMEM`, 다른 runtime failure는
@@ -1191,15 +1191,7 @@ payload 없는 `ZLINK_REQUEST_INTERNAL_ERROR` completion을 만든다. Successfu
 0으로 되돌리되 `struct_size`는 보존한다. `struct_size`가 `0` 또는 정확한 구조체 크기가 아니면
 pointer를 해제하지 않고 no-op이다. Successful receive 뒤에는 WRITABLE을 포함해 모든 record를 close한다.
 
-Completion queue가 비어 있지 않으면 `ZLINK_POLLCOMPLETION`이 level-trigger된다. 읽지 않은 WRITABLE
-record는 `ZLINK_POLLOUT`도 level로 유지한다. Poller wait는
-record를 소비하지 않는다. Caller는 DONTWAIT receive를 `NO_DATA`까지 반복한다. 한 socket queue의
-drain owner는 하나이며 같은 queue를 두 thread에서 동시에 drain하는 것은 지원하지 않는다.
-Completion poller의 등록은 이 consumer가 `zlink_completion_recv(NONE)`를 직접 호출하는 것을
-제한하지 않으며, blocking receive는 별도의 `zlink_poller_wait()` 호출에 의존하지 않고 `RCVTIMEO`
-안에서 completion 진행과 대기를 수행한다. Poller wait는 public record를 소비하지 않으며, 같은
-socket의 transport completion 진행은 하나의 직렬화된 drain 경로를 사용한다. `DONTWAIT` receive는
-이미 게시된 public completion queue를 소비하며 새 transport drain turn을 시작하지 않는다.
+Native completion readiness, poller 등록과 단일 drain owner는 [Completion polling](../05-polling.ko.md#4-completion-polling)을 따른다. Blocking `zlink_completion_recv(NONE)`와 `DONTWAIT` receive의 진행 경계도 [Completion polling](../05-polling.ko.md#4-completion-polling)을 따른다.
 REQUEST와 WRITABLE 결과는 resolver가 socket-local ready queue에 append한 linearization 순서로
 반환한다. 이는 submit 순서나 target별 wire 순서가 아니므로 caller는 ID나 context로 구분한다.
 
@@ -1274,9 +1266,7 @@ manual이면 더 작은 cap, 한쪽이 unlimited manual이고 다른 쪽이 auto
 사용한다. 양쪽이 unlimited면 admission은 unlimited로 유지하되 역할별 상한을 계산용으로
 한 번 예약한다.
 
-ROUTER-ROUTER completion progress lane은 terminal reply와 error reply 전용이다. 이
-lane에는 auto/manual HWM, LWM, inproc boost, 역할별 경계와 Core budget reservation을
-적용하지 않는다. DEALER-ROUTER reply는 Application pipe의 회계와 HWM을 사용한다.
+Completion lane과 DEALER-ROUTER reply의 HWM·회계는 [Auto HWM §2 Completion lane과 reply HWM·회계](../systems/06-auto-hwm.ko.md#2-auto-hwm-budget-계산)를 따른다.
 Auto HWM을 비활성화하면 live pipe의 마지막 applied HWM을 유지하고
 이후 automatic planning에서 제외한다.
 
@@ -1321,13 +1311,7 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
   유지하고 그 외 get/set은 `ZLINK_CONFIG_NOT_SUPPORTED`+`ENOTSUP`다.
 
 **HWM admission** ([Transport/Buffer](#transportbuffer) 참조)
-- accounted byte가 HWM에 도달하면 receiver가 byte credit을 반환할 때까지 이후 write가 대기한다.
-- DEALER-ROUTER의 REPLY·error reply는 DATA·REQUEST와 같은 Application physical HWM 및 peer
-  PAUSED 상태를 적용한다. ROUTER-ROUTER Completion lane의 REPLY·error reply만 이 HWM에서 제외한다.
-- 비어 있는 pipe는 admission 시점에 전체 accounted 크기를 아는 complete message 한 건을 HWM보다 크더라도 수락하고, 그 message도 `ZLINK_OPT_MAXMSGSIZE` 검사를 통과해야 하며, 한 건 수락 뒤의 write는 대기한다.
-- Multipart record는 한 번의 호출로 제출되며 Core가 그 frame들을 pipe에 admission할 때 byte HWM을 frame 단위로 판정한다. caller가 나눠 보내며 쌓이는 public 조립 buffer는 없다.
-- 빈 frame도 charge가 0이 아니므로(payload + `sizeof(zlink_msg_t)`) 빈 frame만 반복 송신해도 HWM에 도달하고, frame이 pipe에서 빠지면 같은 charge가 돌아온다.
-- low water mark 기본값은 `ceil(hwm_bytes / 2)`이고, hint는 항상 `1 .. hwm_bytes - 1` 범위로 clamp되며, HWM에 도달한 sender는 receiver가 현재 보이는 입력을 모두 읽으면 LWM 전에도 깨어날 수 있다.
+- Queue byte 회계와 oversize 수용 검증은 [Auto HWM의 message 처리 순서](../systems/06-auto-hwm.ko.md#message-처리-순서)를, Completion lane HWM·회계 검증은 [Auto HWM §2 Completion lane HWM·회계](../systems/06-auto-hwm.ko.md#2-auto-hwm-budget-계산)를 참조한다.
 
 **수신**
 - `zlink_recv`는 raw `PAIR`·`DEALER`·`STREAM`에서만 성공하고, raw `PUB`·`XPUB`·`SUB`·`XSUB`·`ROUTER`에서는 `ZLINK_RECV_NOT_SUPPORTED`와 `ENOTSUP`이다.
@@ -1355,52 +1339,9 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
   지원하는 각 transport에서 성공하고, 그 뒤 도착한 connect는 새 listener에만 도달한다.
 
 **Whole-message send와 completion**
-- `DONTWAIT`은 admission을 한 번만 시도한다. 즉시 admission되면 ID `0`과 completion 없음이고,
-  backpressure이거나 target이 준비되지 않았으면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 nonzero 대기
-  토큰을 반환하며 payload는 caller가 보관한다. 토큰의 target에 write credit이 생기면
-  `ZLINK_COMPLETION_WRITABLE` record를 정확히 한 번 반환하고, caller는 queue를 `NO_DATA`까지 비운 뒤
-  같은 record를 다시 제출한다. `NONE`은 snapshot한 `SNDTIMEO`
-  안에서 같은 logical target admission을 기다리며 ID `0`과 completion 없음으로 끝난다.
-- STREAM은 `part_count_ == 1`만 허용하고 다른 수는 `ZLINK_SUBMIT_NOT_SUPPORTED`+`ENOTSUP`,
-  ID `0`으로 거절한다. 모든 whole-message 호출은 성공·실패와 관계없이 모든 입력 슬롯을 소비한다.
-  RID에 route가 없는 결과는 [whole-message send](#whole-message-send와-pending-admission)의
-  결과표와 [Request와 reply](#request와-reply)를 따른다. Completion reservation 상한 초과는 `ZLINK_SUBMIT_OUT_OF_MEMORY`+`ENOMEM`, ID `0`이다.
-- 대기 토큰의 target·수명과 payload replay는
-  [whole-message send](#whole-message-send와-pending-admission)를 따른다.
-- SEND 대기 토큰과 REQUEST completion을 섞어 65,536개 slot을 채우면 다음 SEND `DONTWAIT`은
-  `ZLINK_SUBMIT_OUT_OF_MEMORY`+`ENOMEM`, 다음 REQUEST는 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`,
-  모두 ID `0`이고, 한 record를 receive하면 다음 submit이 다시 접수된다.
-
-**Request와 reply**
-- DEALER는 NULL target으로 known positive-weight ROUTER route에, ROUTER는 non-NULL ROUTER RID에
-  request한다. ROUTER가 DEALER RID를 지정하면 `ZLINK_SUBMIT_NOT_ADMITTED`+`EPROTOTYPE`이고 같은
-  RID의 DATA send는 허용된다.
-- Admission된 request는 nonzero REQUEST ID와 정확히 한 REQUEST completion을 만들고 reply
-  timeout은 그 admission부터 시작한다. 대기 토큰 없는 submit 실패는 ID `0`, completion과 context echo
-  없음으로 끝난다.
-- DONTWAIT request는 admission을 한 번만 시도한다. Backpressure나 준비되지 않은 target(transport
-  pair 미준비, weight 0, connect 직후 peer 0개인 DEALER)은 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과
-  nonzero 대기 토큰을 반환하고, Core는 payload를 보관하지 않으며 같은 토큰·context·RID의 WRITABLE 뒤
-  caller가 같은 request를 다시 제출한다. ROUTER RID가 없을 때의 결과는 [Request와 reply](#request와-reply)의 route-miss 단락을 따른다.
-- `zlink_reply()`의 성공한 제출만 `(responder ROUTER, source RID)` 범위 token을 소비한다.
-  Physical disconnect·generation 변경·requester timeout은 token을 무효화하지 않으며 RID 제거,
-  responder close와 context termination은 무효화한다.
-- Responder ROUTER의 live token 65,536개가 차면 새 REQUEST를 drop·eviction하지 않고 source read를
-  멈추며 slot 해제 뒤 round-robin으로 redrive한다.
-- Non-NULL request ID output은 다른 validation 전에 `0`이 되고 대기 토큰 없는 submit 실패는
-  `0`을 유지한다. Output을 생략한 admission된 request도 internal nonzero ID와 context를 정확히 한
-  completion에 넣는다.
-- Reply allocation·runtime·context·socket 실패는 각각 `OUT_OF_MEMORY`+`ENOMEM`,
-  `INTERNAL_ERROR`+`EIO`, `TERMINATED`+`ETERM`, `TERMINATED`+`ESHUTDOWN`이며 모든 호출이 입력 슬롯
-  전체를 소비하고 live token으로 보관한 reply 전체를 재시도할 수 있다.
-- Reply하지 않은 token은 자동 소비되지 않는다. Empty-message reply, logical RID 제거 또는 socket
-  close가 slot을 해제한다.
-- DEALER-ROUTER에서 앞선 DATA record를 dequeue하지 않거나 local PAUSED를 유지하면 뒤의
-  REPLY가 physical head에 도달하지 못해 request timeout이 먼저 완료될 수 있다. 늦은 REPLY는 두 번째
-  completion을 만들지 않는다.
-- DEALER peer로 보내는 reply는 Application HWM·PAUSED와 `SNDTIMEO` admission을 적용하여
-  `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`으로 끝날 수 있다. ROUTER peer로 보내는 reply는 별도
-  Completion lane의 HWM-free admission을 유지한다.
+- SEND 결과·대기 토큰·WRITABLE 재제출·replay 검증은 [whole-message send](#whole-message-send와-pending-admission)를 참조한다.
+- REQUEST admission·timeout·completion·reply token 검증은 [Request와 reply](#request와-reply)를 참조한다.
+- HWM·pending request 수용 검증은 [Auto HWM의 admission](../systems/06-auto-hwm.ko.md#message-처리-순서)과 [pending request 수용](../systems/06-auto-hwm.ko.md#pending-request-수용)을 참조한다.
 
 **Completion receive와 ownership**
 - Completion이 있으면 `ZLINK_POLLCOMPLETION`이 level-trigger되고 poller wait만으로 queue가 줄지
@@ -1430,9 +1371,7 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
 
 **receive-flow 상태**
 - 현재 상태를 다시 설정하는 `zlink_socket_set_receive_flow_state`는 성공하고 새로 보내는 것이 없다.
-- Count `1`인 DEALER-DEALER·DEALER-ROUTER에서는 single Application connection의 Core control
-  경로로, count `2`인 ROUTER-ROUTER에서는 Completion connection으로 PAUSED·RUNNING을 전달하며
-  reconnect 뒤 추가 setter 호출 없이 현재 절대 상태를 다시 보낸다.
+- Receive-flow 상태의 physical lane과 reconnect 전송 검증은 [ZMP request-reply lane](../protocol/01-zmp.ko.md#41-request-reply-lane)을 참조한다.
 - DEALER·ROUTER가 아닌 socket 유형은 `ZLINK_CONFIG_NOT_SUPPORTED`를 반환하며 기존 byte HWM과 transport backpressure를 유지한다.
 
 <!-- zlink-nav:start -->

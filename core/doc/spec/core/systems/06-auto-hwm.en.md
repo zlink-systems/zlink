@@ -146,6 +146,8 @@ excluded from HWM admission and Core budget reservation, but its current and pea
 and pending message count are observed separately. These values are included in
 `total_messaging_accounted_bytes` and excluded from application water-filling.
 
+Even when an Application pipe is full, valid Completion records and receive-flow-state frames are admitted if the connection remains available and allocation succeeds.
+
 DEALER-ROUTER replies and error replies are bytes in the single Application queue. These bytes are
 included in `core_queue_accounted_bytes`, `current_accounted_bytes`, and, for a multipart record,
 `provisional_accounted_bytes`, as well as `peak_accounted_bytes` and
@@ -356,7 +358,7 @@ A multipart message accumulates the charge of each frame. After reading a frame'
 
 When a multipart message whose final size is not yet known reaches HWM, Core stops before allocating the buffer for the next `MORE` frame. However, if the multipart started on an empty queue, it may admit the final frame to complete one record even when that frame exceeds HWM. Eligibility is fixed by whether the queue was empty immediately before the first frame and does not apply to an intermediate `MORE` frame. If allocation failure or a protocol error discards the multipart, Core returns every charge that the multipart reserved or recorded in the queue.
 
-An empty queue may admit one complete message whose total charge is known at admission, and the final frame of a multipart that started while the queue was empty, even when either exceeds HWM. This exception does not apply to two messages simultaneously and does not bypass the `ZLINK_OPT_MAXMSGSIZE` check. See the [HWM description in the Socket specification](../socket/README.en.md#transportbuffer) for detailed public behavior.
+An empty queue may admit one complete message whose total charge is known at admission even when it exceeds HWM. This exception does not apply to two messages simultaneously and does not bypass the `ZLINK_OPT_MAXMSGSIZE` check.
 
 ### Receive Dequeue and Queue Generation
 
@@ -368,9 +370,7 @@ Detaching or reconnecting a queue creates a new generation. HWM replanning and a
 
 Increasing the HWM applies the new value to the current queue generation. Decreasing the HWM makes the writer's admission limit the new target immediately — a frame whose candidate charge added to the unreturned charge exceeds the new target is not admitted. Frames already admitted are not removed, and the applied value reported by snapshots changes to the new target the moment the retained amount falls to or below it (deferred shrink).
 
-Application HWM does not apply to the ROUTER-ROUTER Completion queue that advances terminal replies
-and error replies and synchronizes receive-flow-state frames. DEALER-ROUTER replies and error
-replies apply the same Application queue HWM and peer PAUSED as DATA and REQUEST. Monitor queues are
+Completion-lane and DEALER-ROUTER reply HWM and accounting follow [§2 lane accounting](#2-auto-hwm-budget-calculation). Monitor queues are
 also excluded from the queue list used to distribute the application budget.
 
 ### Synchronization and convergence of the recalculation
@@ -505,13 +505,7 @@ This section collects the items that workers must verify. These behaviors are ob
 - A new pipe pair first reserves the role-specific minimum for each direction regardless of the manual HWM size. A finite manual HWM applies to admission immediately and is included in the next snapshot's `manual_reserved_hwm_bytes` and aggregate HWM statistics.
 
 **Admission (byte accounting)**
-- A frame with no payload still consumes HWM—repeatedly sending empty frames eventually blocks admission at the HWM.
-- An empty queue admits one complete message of known total size even above HWM and rejects a second oversize message.
-- An unknown-size multipart blocks further `MORE` frames from the point HWM is exceeded. However, it admits the final frame of a multipart that started on an empty queue even when the frame exceeds HWM, and this exception does not apply to an intermediate `MORE` frame. After the multipart is discarded, the snapshot's `provisional_accounted_bytes` returns to 0.
-- When the peer dequeues a request, physical-queue current bytes and writer credit return even while the request remains unresolved. Pending work and count reservations remain through reply or timeout but are not added to Application-HWM accounting or physical-queue snapshots. Exhaustion returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` immediately regardless of send flags or `SNDTIMEO`.
-- A pair whose live work charge and unresolved count are both zero admits one request larger than the work budget and blocks the next unresolved request. Reply or timeout makes that same pair admissible again; another pair and ordinary send continue while one pair is full.
-- With either a sufficient Application byte limit or HWM `0`, one 64 KiB request succeeds and a second unresolved request blocks at the 32 MiB work budget. Completing the first request admits the next request.
-- Even while work budget remains, 16,384 unresolved requests cause the next request to block immediately. A terminal reply or timeout for one request admits the next request.
+- Frame, multipart, and oversize admission verification refer to [Message Processing Sequence](#message-processing-sequence); pending work and count verification refer to [Pending-request admission](#pending-request-admission).
 
 **Credit, dequeue, and generation**
 - After receiving a complete message, Core queue charge ends and the sender can send again. The snapshot's `application_accounted_bytes` remains zero even if the application keeps the payload.

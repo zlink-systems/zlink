@@ -303,11 +303,7 @@ ZLINK_EXPORT zlink_submit_result_t zlink_request (
   zlink_completion_id_t *completion_id_out_);
 ```
 
-DEALER requires `target_router_rid_or_null_ == NULL`. `part_count_` must be positive. An admitted request returns a nonzero REQUEST ID
-and produces exactly one REQUEST completion: reply, timeout, or terminal. `timeout_ms_ == 0`
-snapshots the `ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS` value, whose default is 5,000 ms.
-`user_context_` may be `NULL` or an opaque pointer for both `NONE` and `DONTWAIT`; a successful
-completion returns it unchanged.
+DEALER requires `target_router_rid_or_null_ == NULL`. REQUEST input, ID, context, completion, and timeout results follow [Socket Common Request and reply](README.en.md#request-and-reply).
 
 Candidates are positive-weight logical routes confirmed as ROUTER during handshake. A DEALER peer
 remains a DATA candidate but is excluded from request candidates. Flag-specific results when there is no candidate follow
@@ -399,32 +395,9 @@ Verify the following using only the public surface: DEALER option set/get, `zlin
 - A peer that cannot accept a message because it has no write capacity is excluded only for that message and continues from its retained accumulator when it reports capacity again.
 - A DONTWAIT SEND or REQUEST pins no endpoint. Candidate-set selection and wake edges follow the rule above; flag-specific submit results follow [Socket Common whole-message send](README.en.md#whole-message-send-and-pending-admission) and [request](README.en.md#request-and-reply).
 
-**Whole-message ownership and atomicity**
-
-- A send API consumes every `parts_` slot on both success and failure and leaves it as an initialized zero-length message; the caller cannot read or resend the pre-submit payload through the same slots.
-- If a submit fails, no part of that record is visible to the peer and the caller resubmits the complete record retained before the call.
-- A failed request submit returns ID `0` and creates neither a completion nor a context echo.
-- On receive success, ownership of the leading `*part_count_out_` slots moves to the caller, which releases them exactly once with `zlink_multipart_close()`. On failure, ownership does not move.
-
-**Requests and completion**
-
-- If a request returns `ZLINK_SUBMIT_OK`, it returns a nonzero ID and exactly one REQUEST
-  completion for reply, timeout, or terminal. A failed submit returns ID `0` and no completion.
-- `NONE` waits within `SNDTIMEO` for an eligible ROUTER candidate. A DEALER peer is not a typed-request candidate, and the selected configured endpoint remains fixed during reconnect.
-- `DONTWAIT` pins no endpoint. Flag-specific submit results and resubmission follow [Socket Common request](README.en.md#request-and-reply).
-- Request timeout and post-admission pair termination follow
-  [Socket Common request](README.en.md#request-and-reply).
-- When the completion reservations shared by SEND wait tokens and REQUEST are exhausted, a REQUEST
-  immediately returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`, ID `0`, and no completion
-  regardless of flags, and a DONTWAIT SEND returns `ZLINK_SUBMIT_OUT_OF_MEMORY` with `ENOMEM` and
-  ID `0`.
-- If the ROUTER sends multipart DATA before the REPLY for the same request,
-  `ZLINK_POLLCOMPLETION` is not ready until the preceding DATA record is dequeued. After the DATA
-  record, the REPLY appears as exactly one REQUEST completion, and its payload does not appear in DATA
-  receive.
-- If preceding DATA and local PAUSED delay the REPLY until the request timeout completes first,
-  exactly one timeout completion is returned. A late REPLY that arrives after DATA is drained does
-  not create a second completion.
+**Whole-message ownership and request completion**
+- SEND record, input consumption, and resubmission verification refer to [Socket Common whole-message send](README.en.md#whole-message-send-and-pending-admission); REQUEST admission, timeout, and completion verification refer to [Request and reply](README.en.md#request-and-reply).
+- DEALER candidate selection and endpoint pinning verification refer to [§3 Outbound peer selection](#3-outbound-peer-selection).
 
 **Receive**
 

@@ -460,10 +460,7 @@ of `zlink_msg_t` structures.
 
 ### Send
 
-The send path admits the complete `parts_` array from one call as one record. It consumes every input
-slot on both success and failure and leaves the slots empty and initialized. If submit fails, the peer
-sees no part. Retry uses a complete record retained before the call. [Socket Common](socket/README.en.md#whole-message-send-and-pending-admission)
-owns the detailed contract.
+Whole-record admission atomicity, input-slot consumption, and resubmission follow [Socket Common whole-message send](socket/README.en.md#whole-message-send-and-pending-admission).
 
 ### Receive
 

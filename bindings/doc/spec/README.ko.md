@@ -495,9 +495,7 @@ record마다 한 번 호출해야 한다. 이는 `Required` 규칙이다.
 
 ### Multipart 제출
 
-한 Core 호출이 완성된 record 전체를 원자적으로 제출하므로 binding은 part sequence를 위한
-socket-local gate를 만들지 않는다. 서로 독립된 record의 동시 제출은 Core의 same-handle
-concurrency 계약을 따른다.
+Core 입력 슬롯 소비와 whole-record 원자성은 [Core whole-message send](../../../core/doc/spec/core/socket/README.ko.md#whole-message-send와-pending-admission)를 따른다. Binding은 그 결과를 언어 ownership 계약에 투영한다. Binding은 part sequence를 위한 socket-local gate를 추가하지 않는다. 독립된 record의 동시 제출은 [Core same-handle concurrency](../../../core/doc/spec/core/socket/README.ko.md#2-스레드-안전성)를 따른다.
 
 ## Spot Get-Or-Create 매핑
 
@@ -1167,16 +1165,13 @@ Binding은 Framework의 application job queue count를 Core byte snapshot에 합
 대기 토큰의 조건은 [Core whole-message send](../../../core/doc/spec/core/socket/README.ko.md#whole-message-send와-pending-admission)와
 [Core REQUEST DONTWAIT](../../../core/doc/spec/core/socket/README.ko.md#request와-reply)가 소유한다.
 
-비동기 종결자는 **결과 객체**를 돌려준다(`SendSubmission`·`RequestSubmission`). `result`는 제출 시점
-`OK`|`BACKPRESSURED` 스냅샷이고 `admitted`(SEND·REQUEST 공통)·`reply`(REQUEST) stage가 완료를 나른다.
-동기 종결자(`submit_sync()` 등)는 바뀌지 않는다. 대기 규칙과 언어별 시그니처는
-[async-coroutine-policy §6](async-coroutine-policy.ko.md#6-언어별-terminal-interface)가 소유한다.
+`SendSubmission`과 `RequestSubmission`의 stage 전이와 WRITABLE 재제출 결과는 [비동기 실행 모델 §5](async-execution-model.ko.md#5-submit-결과와-completion의-합류)를 따른다. Staging 소유권은 아래 표가 정한다.
 
 | Native 제출 결과 | 고수준 바인딩의 결과 |
 |---|---|
-| SEND `OK`·ID `0` | `result == OK`와 완료된 `admitted` stage로 terminal을 끝낸다. |
-| REQUEST `OK`·nonzero ID | `result == OK`·완료된 `admitted`를 돌려주고 해당 REQUEST completion을 `reply` stage에 연결한다. |
-| `BACKPRESSURED`·`EAGAIN`·nonzero 대기 토큰 | 바인딩은 Core 호출 전에 자신이 소유한 record를 staging에 보관하고, 매 시도마다 별도 native 배열을 Core에 전달한다. Core는 실패한 시도의 배열도 소비한다. WRITABLE 뒤 staging record로 같은 operation을 다시 제출하며, 종결자는 `result == BACKPRESSURED`와 재제출 admission에서 완료되는 `admitted` stage를 돌려준다. Staging은 admission·terminal 실패·socket/context lifecycle cleanup에서 한 번 정리한다. |
+| SEND `OK`·ID `0` | [비동기 실행 모델 §5](async-execution-model.ko.md#5-submit-결과와-completion의-합류)의 SEND stage 결과를 따른다. |
+| REQUEST `OK`·nonzero ID | [비동기 실행 모델 §5](async-execution-model.ko.md#5-submit-결과와-completion의-합류)의 REQUEST stage 결과를 따른다. |
+| `BACKPRESSURED`·`EAGAIN`·nonzero 대기 토큰 | 바인딩은 Core 호출 전에 독립적으로 소유한 staging record를 보관하고 매 시도에 별도 native 배열을 전달한다. WRITABLE 뒤 바인딩은 staging에서 같은 operation을 다시 제출한다. Staging은 admission·terminal 실패·socket/context lifecycle cleanup에서 한 번 정리한다. Stage 결과는 [비동기 실행 모델 §5](async-execution-model.ko.md#5-submit-결과와-completion의-합류)를 따른다. |
 | 대기 토큰 없는 submit 실패 | 해당 submit error로 terminal을 끝낸다(결과 객체가 아니라 예외/에러). |
 
 - **바인딩은 socket-local context·token으로 찾은 WRITABLE을 해당 waiter에 전달하며 Core가 보장한 submit RID echo를 다시 판정하지 않는다.**

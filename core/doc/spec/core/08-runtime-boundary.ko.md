@@ -79,14 +79,8 @@ Framework runtime은 언어 binding의 공개 raw socket API만 사용해 servic
 공통 native service runtime, 별도 Core C SPI, private binding 진입점과 language-neutral service C ABI를 두지
 않는다.
 
-Core는 DEALER-DEALER와 DEALER-ROUTER socket의 receive-flow 상태를 single Application
-connection의 Core control frame으로 운반하고, ROUTER-ROUTER에서는
-[completion progress lane](glossary.ko.md#completion-progress-lane)(terminal reply와 error
-reply의 진행도 담당하는 별도 경로, 이하 completion lane)으로 운반한다. 두 frame은 runtime
-내부에서 소비한다. ROUTER-ROUTER completion lane이 [HWM](glossary.ko.md#hwm) admission과
-[Auto HWM budget](glossary.ko.md#auto-hwm-budget)(Core가 memory 입력에서 계산해 application
-queue들의 HWM을 나눌 때 기준으로 삼는 byte 총량)에서 제외되는 계약은
-[Auto HWM](systems/06-auto-hwm.ko.md)이 소유한다. 이 상태의
+Receive-flow 상태와 reply의 physical lane 배치는 [ZMP request-reply lane](protocol/01-zmp.ko.md#41-request-reply-lane)을 따른다. Completion lane의 HWM·회계는 [Auto HWM §2 Completion lane HWM·회계](systems/06-auto-hwm.ko.md#2-auto-hwm-budget-계산)를 따른다.
+이 상태의
 공개 표면은 설정용 `zlink_socket_set_receive_flow_state()`, 관측용 receive-flow monitor
 event 3개, monitor status snapshot의 receive-flow field다. Raw flow-state frame을 수신,
 송신, encode 또는 decode하는 공개 API는 없으며 flow-state frame은 application receive

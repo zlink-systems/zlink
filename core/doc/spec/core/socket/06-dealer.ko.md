@@ -286,11 +286,7 @@ ZLINK_EXPORT zlink_submit_result_t zlink_request (
   zlink_completion_id_t *completion_id_out_);
 ```
 
-DEALER는 target 인자에 `NULL`을 요구한다. `part_count_`는 양수여야 한다. Admission된 request는 nonzero REQUEST ID를 반환하고
-reply·timeout·terminal 중 한 REQUEST completion을 정확히 한 번 만든다. `timeout_ms_ == 0`은
-`ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS`의 값인 기본 5,000 ms를 snapshot한다.
-`user_context_`는 `NONE`과 `DONTWAIT` 모두에서 NULL 또는 opaque pointer를 받으며
-successful completion에 그대로 반환한다.
+DEALER는 target 인자에 `NULL`을 요구한다. REQUEST의 입력·ID·context·completion과 timeout 결과는 [Socket 공통 Request와 reply](README.ko.md#request와-reply)를 따른다.
 
 후보는 handshake에서 ROUTER로 확인된 양수-weight logical route뿐이다. DEALER peer는 DATA
 후보에는 남지만 request 후보에서는 제외한다. 후보가 없을 때의 flag별 결과는
@@ -372,26 +368,9 @@ snapshot)만으로 다음을 확인한다. 각 항목은 test 하나로 이어�
 - 쓰기 여유가 없어 message를 받지 못한 peer는 그 message에 한해서만 후보에서 빠지고, 여유를 다시 알리면 유지된 누적값에서 이어간다.
 - DONTWAIT SEND와 REQUEST는 endpoint를 고정하지 않는다. 후보 집합과 wake edge는 위 선택 규칙을 따르고, flag별 submit 결과는 [Socket 공통 whole-message send](README.ko.md#whole-message-send와-pending-admission) 및 [request](README.ko.md#request와-reply)를 따른다.
 
-**Whole-message ownership과 원자성**
-- send API는 성공과 실패 모두에서 모든 `parts_` 슬롯을 소비하고 길이 0인 초기화 상태로 둔다 — 호출 후 같은 슬롯에서 전송 전 payload를 다시 읽거나 재전송할 수 없다.
-- Submit이 실패하면 peer에는 그 record의 어떤 part도 보이지 않으며, caller는 호출 전에 보관한 record 전체를 다시 제출한다.
-- 실패한 request submit은 ID `0`이고 completion과 context echo를 만들지 않는다.
-- receive가 성공하면 앞의 `*part_count_out_`개 슬롯 소유권이 caller에게 이동하고 `zlink_multipart_close()`로 정확히 한 번 해제한다. 실패하면 소유권이 이동하지 않는다.
-
-**Request와 completion**
-- Request가 `ZLINK_SUBMIT_OK`이면 nonzero ID를 반환하고 reply·timeout·terminal 중 하나를
-  REQUEST completion으로 정확히 한 번 반환한다. Submit 실패는 ID `0`이고 completion이 없다.
-- `NONE`은 `SNDTIMEO` 안에서 eligible ROUTER 후보를 기다린다. DEALER peer는 typed request 후보가 아니며, 선택한 configured endpoint는 reconnect 동안 바뀌지 않는다.
-- `DONTWAIT`은 endpoint를 고정하지 않는다. Flag별 submit 결과와 재제출은 [Socket 공통 request](README.ko.md#request와-reply)를 따른다.
-- Request timeout과 admission 뒤 pair 종료의 결과는 [Socket 공통 request](README.ko.md#request와-reply)를 따른다.
-- SEND wait token과 REQUEST가 공유하는 completion reservation이 포화하면 REQUEST는 flags와
-  관계없이 즉시 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`, ID `0`, completion 없음이고, DONTWAIT
-  SEND는 `ZLINK_SUBMIT_OUT_OF_MEMORY`+`ENOMEM`, ID `0`이다.
-- ROUTER가 multipart DATA를 먼저 보내고 같은 request의 REPLY를 보내면 앞선 DATA record를
-  dequeue하기 전에는 `ZLINK_POLLCOMPLETION`이 준비되지 않는다. DATA record 뒤 REPLY는
-  정확히 한 REQUEST completion으로 나오며 reply payload는 DATA receive에 나타나지 않는다.
-- 앞선 DATA와 local PAUSED로 REPLY가 늦어 request timeout이 먼저 끝나면 timeout completion
-  하나만 반환하고, DATA를 drain한 뒤 도착한 late REPLY는 두 번째 completion을 만들지 않는다.
+**Whole-message ownership과 Request completion**
+- SEND의 record·입력 소비·재제출 검증은 [Socket 공통 whole-message send](README.ko.md#whole-message-send와-pending-admission), REQUEST의 admission·timeout·completion 검증은 [Request와 reply](README.ko.md#request와-reply)를 참조한다.
+- DEALER 후보 선택과 endpoint 고정 검증은 [§3 outbound peer 선택](#3-outbound-peer-선택)을 참조한다.
 
 **Receive**
 - Non-blocking `zlink_recv()` 호출에 받을 DATA가 없으면 `ZLINK_RECV_NO_DATA`와 `EAGAIN`을 반환한다.

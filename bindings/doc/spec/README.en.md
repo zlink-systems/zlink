@@ -577,9 +577,7 @@ regardless of this rule.
 
 ### Multipart Submission
 
-One Core call atomically submits the complete record, so a binding does not add
-a socket-local gate for a part sequence. Independent concurrent records follow
-Core's same-handle concurrency contract.
+Core input-slot consumption and whole-record atomicity follow [Core whole-message send](../../../core/doc/spec/core/socket/README.en.md#whole-message-send-and-pending-admission). The binding projects those results through its language ownership contract. It adds no socket-local gate for a part sequence. Independent concurrent records follow [Core same-handle concurrency](../../../core/doc/spec/core/socket/README.en.md#2-thread-safety).
 
 ## Spot Get-Or-Create Mapping
 
@@ -1367,16 +1365,13 @@ IDs, part consumption, and wait-token conditions belong to
 [Core whole-message send](../../../core/doc/spec/core/socket/README.en.md#whole-message-send-and-pending-admission) and
 [Core REQUEST DONTWAIT](../../../core/doc/spec/core/socket/README.en.md#request-and-reply).
 
-Async terminals return a **result object** (`SendSubmission`/`RequestSubmission`). `result` is a submit-time
-snapshot (`OK`|`BACKPRESSURED`) and the `admitted` stage (SEND and REQUEST) plus the `reply` stage (REQUEST)
-carry completion. Synchronous terminals (`submit_sync()`, …) are unchanged. Wait rules and per-language
-signatures belong to [async-coroutine-policy §6](async-coroutine-policy.en.md#6-per-language-terminal-interfaces).
+`SendSubmission` and `RequestSubmission` stage transitions and WRITABLE resubmission outcomes follow [async execution model §5](async-execution-model.en.md#5-joining-submit-results-and-completions). The table below owns staging lifetime.
 
 | Native submission result | High-level binding outcome |
 |---|---|
-| SEND `OK`, ID `0` | End the terminal with `result == OK` and a completed `admitted` stage. |
-| REQUEST `OK`, nonzero ID | Return `result == OK` with a completed `admitted`, and connect the corresponding REQUEST completion to the `reply` stage. |
-| `BACKPRESSURED`, `EAGAIN`, nonzero wait token | Before calling Core, the binding retains an independently owned staging record and passes a separate native array to each attempt. Core consumes even a failed attempt's array. After WRITABLE, the binding resubmits the same operation from staging. The terminal returns `result == BACKPRESSURED` and an `admitted` stage that completes on admission. Staging is released once on admission, terminal failure, or socket/context lifecycle cleanup. |
+| SEND `OK`, ID `0` | Follow the SEND stage outcome in [async execution model §5](async-execution-model.en.md#5-joining-submit-results-and-completions). |
+| REQUEST `OK`, nonzero ID | Follow the REQUEST stage outcome in [async execution model §5](async-execution-model.en.md#5-joining-submit-results-and-completions). |
+| `BACKPRESSURED`, `EAGAIN`, nonzero wait token | Before calling Core, the binding retains an independently owned staging record and passes a separate native array to each attempt. After WRITABLE, the binding resubmits the same operation from staging. Staging is released once on admission, terminal failure, or socket/context lifecycle cleanup. Stage outcomes follow [async execution model §5](async-execution-model.en.md#5-joining-submit-results-and-completions). |
 | Submit failure without a wait token | Complete the terminal with that submit error (raised as an exception/error, not through the result object). |
 
 - **The binding delivers a WRITABLE found by socket-local context and token to its waiter without rechecking Core's guaranteed submit RID echo.**
