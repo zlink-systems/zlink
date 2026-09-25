@@ -464,8 +464,9 @@ Automatic discovery는 먼저 local과 remote descriptor를 확인한다. 양쪽
 적용하므로 connect initiator가 하나다.
 
 Manual topology에서는 application이 한쪽 endpoint만 등록하거나 양쪽 endpoint를 모두 등록할
-수 있다. 양쪽이 동시에 연결을 시작하면 Framework는 handshake와 admission에서 RID와
-lifecycle generation이 같은 중복 연결을 확인하고 하나만 ready 상태로 유지한다.
+수 있다. 양쪽이 동시에 연결을 시작해 같은 RID의 pipe가 둘 생기면 어느 pipe를 쓸지는 Core의
+RID 중복 정책이 정한다. Framework는 Core가 선택한 route([Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.ko.md#101-선택-route-관찰))에서
+받은 handshake만 검증해 논리 peer 하나를 ready 상태로 유지하며, 물리 pipe를 고르지 않는다.
 
 Manual endpoint만으로는 connect 전에 remote Object role을 알 수 없을 수 있다. Framework는
 handshake에서 양쪽 Object role이 모두 `Client`임을 확인하면 connection이 필요하지 않다는
@@ -485,8 +486,8 @@ descriptor 값으로 교체할 수 있다. 교체는 endpoint, RID, 양수 lifec
 identity를 모두 전달하며, 이전 endpoint intent가 liveness close로 닫히기 전에는 새 intent를
 설치하지 않는다. Descriptor가 없는 동안에는 이 경로도 placement owner라고 주장하지 않는다.
 
-Automatic에서도 연결 경합이나 오래된 discovery snapshot 때문에 중복 후보가 생기면 같은
-admission 규칙을 적용한다. 이 안전장치는 automatic initiator 선택을 대신하지 않으며
+Automatic에서도 연결 경합이나 오래된 discovery snapshot 때문에 같은 RID의 pipe가 둘 생기면 같은
+규칙(Core가 pipe를 선택하고 Framework는 선택 route에서만 admission)을 적용한다. 이 안전장치는 automatic initiator 선택을 대신하지 않으며
 application이 관찰하는 메시징 의미를 바꾸지 않는다.
 
 Peer handshake에서는 다음 정보를 확인한다.
@@ -501,19 +502,15 @@ Peer handshake에서는 다음 정보를 확인한다.
 | Endpoint와 security identity | 연결한 상대와 신뢰 설정이 등록 정보와 같은지 확인한다. |
 | Protocol version과 필수 capability | 서로 호환되는 runtime인지 확인한다. |
 
-MeshName이나 trust profile이 다르거나 같은 lifecycle identity에서 RID가 충돌하면 연결을
-ready 상태로 만들지 않는다.
+MeshName이나 trust profile이 다르면 연결을 ready 상태로 만들지 않는다. 같은 RID의 pipe가 둘이면
+위와 같이 Core의 선택을 따른다.
 
 [Lifecycle generation](../00-foundation/02-glossary.ko.md#lifecycle-generation)은 `0`이 아닌 내부 식별
 값이다. 숫자가 더 크다는 이유로 새 lifecycle이라고 판단하지 않고 값이 같은지만 비교한다.
 
 Automatic RID를 쓰는 MeshNode가 재시작되면 새 RID와 새 generation을 사용한다. Fixed RID를 사용하는
-MeshNode는 다음 조건을 모두 만족한 뒤 새 generation의 연결을 ready 상태로
-만든다.
-
-1. Application 구성에 해당 peer와 다시 연결하려는 의도가 명시되어 있다.
-2. 새 연결의 identity와 security 정보 확인을 마쳐 인증된 연결로 받아들였다.
-3. 이전 연결이 실제로 종료되었음을 service liveness 검사로 확인했다.
+MeshNode가 새 generation의 연결을 ready 상태로 만드는 조건은
+[MeshNode §7.1](../03-spot-actor/03-mesh-node.ko.md#71-peer-연결)이 정한다.
 
 이전 generation에서 늦게 도착한 frame과 event는 현재 연결을 바꾸지 못한다.
 
@@ -543,8 +540,8 @@ Peer endpoint를 얻는 방법은 automatic과 manual 두 가지다.
 | Manual | Application이 endpoint와 필요하면 expected RID를 등록한다. | Peer 연결만 사용한다면 필요하지 않다. |
 
 [Manual mode](../00-foundation/02-glossary.ko.md#manual-endpoint)도
-[automatic mode](../00-foundation/02-glossary.ko.md#automatic-discovery)와 같은 handshake와 중복 연결
-제거 규칙을 사용한다. Expected RID를 지정하면 실제 remote RID가 다를 때 연결에 실패한다.
+[automatic mode](../00-foundation/02-glossary.ko.md#automatic-discovery)와 같은 handshake와 선택 route
+admission 규칙을 사용한다. Expected RID를 지정하면 실제 remote RID가 다를 때 연결에 실패한다.
 Expected RID를 생략하면 handshake 결과로 remote identity를 확정한다.
 
 Manual peer 양쪽이 Object Client이고 RouteMesh Channel Server membership도 없으면 설정

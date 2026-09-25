@@ -496,9 +496,10 @@ owns this judgment). For every other pair, the RID-order rule applies, so there'
 connect initiator.
 
 In manual topology, the application can register only one endpoint or both endpoints.
-If both sides start the connection at the same time, the framework confirms the
-duplicate connection with matching RID and lifecycle generation at handshake and
-admission, and keeps only one ready.
+If both sides start the connection at the same time and two pipes exist for the same RID,
+Core's routing ID duplicate policy decides which pipe is used. The framework verifies only the
+handshake received on the route that Core selected ([Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.en.md#101-observing-the-selected-route)), keeps one
+logical peer ready, and does not choose a physical pipe.
 
 With only a manual endpoint, the remote Object role may be unknown before connect.
 Once the framework confirms at handshake that both sides' Object role is `Client`, it
@@ -522,8 +523,9 @@ the endpoint, RID, positive lifecycle generation, and security identity together
 doesn't install the new intent until liveness has closed the previous endpoint intent.
 While the descriptor is absent, this path also makes no placement-owner claim.
 
-Even for Automatic, if a duplicate candidate arises due to connection contention or a
-stale discovery snapshot, the same admission rule applies. This safeguard doesn't
+Even for Automatic, if connection contention or a stale discovery snapshot produces two pipes
+for the same RID, the same rule applies (Core selects the pipe and the framework admits only on
+the selected route). This safeguard doesn't
 substitute for automatic-initiator selection and doesn't change the messaging meaning
 the application observes.
 
@@ -539,21 +541,16 @@ The peer handshake checks the following information.
 | Endpoint and security identity | Confirms the connected peer and trust settings match the registration information. |
 | Protocol version and required capability | Confirms the runtimes are mutually compatible. |
 
-If MeshName or trust profile differs, or RID conflicts within the same lifecycle
-identity, the connection isn't made ready.
+If MeshName or trust profile differs, the connection isn't made ready. When two pipes exist for the
+same RID, Core's selection applies as described above.
 
 [Lifecycle generation](../00-foundation/02-glossary.en.md#lifecycle-generation) is a non-zero
 internal identifying value. A larger number alone isn't judged as a new lifecycle —
 only whether the values match is considered.
 
-When a MeshNode using an automatic RID restarts, it uses a new RID and a new generation. For a MeshNode
-using a fixed RID, a new generation's connection is only made ready after
-satisfying all of the following conditions.
-
-1. The application configuration explicitly states intent to reconnect to that peer.
-2. Identity and security information verification for the new connection finished,
-   and it was accepted as an authenticated connection.
-3. A service liveness check confirmed the previous connection actually terminated.
+When a MeshNode using an automatic RID restarts, it uses a new RID and a new generation. The
+conditions under which a MeshNode using a fixed RID makes a new generation's connection ready are
+defined in [MeshNode §7.1](../03-spot-actor/03-mesh-node.en.md#71-peer-connection).
 
 A late-arriving frame or event from a previous generation can't change the current
 connection.
@@ -586,7 +583,7 @@ There are two ways to obtain a peer endpoint: automatic and manual.
 | Manual | The application registers the endpoint, and an expected RID if needed. | Not needed if only peer connections are used. |
 
 [Manual mode](../00-foundation/02-glossary.en.md#manual-endpoint) also uses the same handshake and
-duplicate-connection-removal rule as
+selected-route admission rule as
 [automatic mode](../00-foundation/02-glossary.en.md#automatic-discovery). If expected RID is
 specified, the connection fails when the actual remote RID differs. If expected RID
 is omitted, remote identity is confirmed by the handshake result.

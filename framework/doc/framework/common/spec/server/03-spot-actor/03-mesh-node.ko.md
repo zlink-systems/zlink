@@ -302,8 +302,9 @@ Peer handshake에서는 다음 정보를 교환한다.
 - 변경할 수 없는 `ChannelName` set
 - Security identity
 
-`MeshName` 또는 trust profile이 다르거나 같은 lifecycle identity의 중복 pipe이면
-받아들이지 않는다.
+`MeshName` 또는 trust profile이 다르면 받아들이지 않는다. 같은 RID의 pipe가 둘 이상이면 Core가
+하나를 선택하며([Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.ko.md#101-선택-route-관찰)), Framework는 선택된 route에서 받은
+handshake만 admission한다.
 
 Lifecycle generation은 0이 아닌 opaque equality token이다. 숫자 크기로 어느
 lifecycle이 더 새로운지 판단하지 않는다.
@@ -313,7 +314,7 @@ generation의 connection을 target selection에 포함한다.
 
 1. Application 구성에 해당 peer와 연결하려는 의도가 있다.
 2. 인증된 connection handover를 완료했다.
-3. Service liveness 확인으로 이전 pipe가 종료되었음을 확정했다.
+3. Core의 선택 route가 새 route generation으로 바뀌었다.
 
 Automatic RouteMesh에서는 RID가 더 작은 MeshNode만 connect를 시작한다. Manual
 양방향 connect 또는 automatic 연결 경합으로 중복 후보가 생기면
@@ -350,17 +351,13 @@ sequenceDiagram
     Note over A,B: 물리 connection 층 — ChannelName·ActorId·SpotId 같은<br/>논리 target 선택은 이 connection 위에서 별도로 이뤄진다
     A->>B: connect 시작 (automatic이면 RID가 작은 쪽만 시작)
     A->>B: handshake: MeshName, RID, lifecycle generation,<br/>descriptor revision, ChannelName set, security identity
-    B->>B: MeshName·trust profile 일치, 중복 lifecycle pipe 여부 확인
+    B->>B: Core가 선택한 route의 handshake에서 MeshName·trust profile 일치 확인
     alt admission 거부 조건에 해당
         B-->>A: admission 거부
     else 신규 lifecycle이거나 manual 재연결 3조건 충족
         B-->>A: admission 수락
         Note over A,B: 이 pipe가 ready 상태가 된다
-        alt 같은 (MeshName, RID) 쌍으로 다른 candidate connection이 동시에 존재
-            A->>A: 07-channel-topology 규칙으로 ready connection 하나만 선택
-            B->>B: 같은 규칙을 독립적으로 적용해 같은 connection에 수렴
-            Note over A,B: 나머지 candidate는 target selection에서 제외
-        end
+        Note over A,B: 같은 RID의 pipe가 둘이면 Core가 하나를 선택하고, Framework는 선택 route에서만 admission한다
     end
 ```
 

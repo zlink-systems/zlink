@@ -32,11 +32,9 @@ Server, without local priority or calling a handler directly.
 Automatic RouteMesh compares RID in canonical byte order, and only the
 MeshNode with the smaller RID connects to the counterpart endpoint. A
 manual topology can connect from one or both sides depending on
-application endpoint configuration. If bidirectional connection or
-automatic discovery contention/a stale snapshot creates a duplicate
-candidate, handshake and admission check the same RID and
-[lifecycle generation](../../../00-foundation/02-glossary.en.md#lifecycle-generation)
-and keep only one in ready state.
+application endpoint configuration. If bidirectional connection or automatic discovery contention/a stale snapshot produces two pipes
+for the same RID, the common rule in
+[channel topology](../../../02-channel-transport/01-channel-topology.en.md) applies.
 
 A peer connection isn't needed only when both MeshNodes are Object
 Client and neither has RouteMesh Channel Server membership. The same

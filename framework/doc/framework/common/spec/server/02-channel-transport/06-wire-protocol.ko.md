@@ -332,9 +332,8 @@ replacement는 같은 fence를 사용한다.
 physical connection의 종료를 요청하고, 그 endpoint의 close snapshot 또는 disconnect
 event를 받기 전에는 같은 endpoint에 새 connection을 만들지 않는다. 호출 성공은
 physical close의 관찰을 대신하지 않는다. Monitor event의 `connection_id`는 진단과
-correlation 전용이며 fence로 사용하지 않는다. 늦게 도착한 이전 connection의 event는
-descriptor의 RID·security identity·lifecycle generation과 관찰 순서로 fence되어 새
-connection의 admission이나 ready 상태를 바꾸지 못한다.
+correlation 전용이며 fence로 사용하지 않는다. 선택 route의 판정과 이전 connection record의 처리는
+[Transport liveness §5](05-transport-liveness.ko.md#5-ready와-장애-판정)가 정한다.
 
 ### ClientServer 방향
 
@@ -363,7 +362,7 @@ sequenceDiagram
   소유한다.** 이 절은 command schema와 그 record가 타는 connection epoch만 정의한다.
 - Probe, ACK와 timer는 infrastructure reserve에서 처리하며 application queue나 handler에 전달하지 않는다.
 - **admitted된 양쪽 peer가 모두 probe한다.** 5초 probe 의무는 양방향이며, 어느 쪽이 먼저 연결했는지와 무관하게 connection이 admitted되는 순간 시작한다. peer의 probe에 ACK만 응답하고 자신의 probe는 절대 originate하지 않는 node는 비준수다 — 상대는 그 node를 live로 판정하지만 그 node는 역방향을 확인하지 않는다. 다이어그램은 간결성을 위해 한 방향만 보이나, admitted된 각 peer는 상대를 향해 full probe/ACK cycle을 돌린다.
-- **probe와 ACK는 admitted 물리 connection의 현재 epoch를 타며, 그 epoch는 connection lifetime 동안 안정적이다.** `livenessProbe`와 그 `livenessAck`은 admission이 확립한 peer identity와 connection generation으로 보낸다(`scope: admitted-physical-connection-lifetime`). 이미 live 물리 connection에서 admitted된 peer에 대한 중복 re-dial이나 반복 `hello`/`admit`은 idempotent다 — admitted connection을 무효화하지도, connection generation을 회전시키지도 않는다. superseded되었거나 아직 전달되지 않은 generation(상대의 live pipe가 인식하지 못하는 값)으로 stamp된 probe·ACK를 보내는 것은 결함이며, 상대는 이를 "다른 connection의 ACK"로 조용히 버리고 어느 쪽 deadline도 갱신되지 않는다. 새 connection generation은 admitted connection을 실제로 대체하는 진짜 새 물리 connection이 생길 때만([13. Mesh Node](../03-spot-actor/03-mesh-node.ko.md)의 중복 connection 선택 규칙) 발급하며, 변경 없는 descriptor로 이미 admitted된 peer의 매 inbound admission record마다 발급하지 않는다.
+- **probe와 ACK는 admitted 물리 connection의 현재 epoch를 타며, 그 epoch는 connection lifetime 동안 안정적이다.** `livenessProbe`와 그 `livenessAck`은 admission이 확립한 peer identity와 connection generation으로 보낸다(`scope: admitted-physical-connection-lifetime`). 이미 live 물리 connection에서 admitted된 peer에 대한 중복 re-dial이나 반복 `hello`/`admit`은 idempotent다 — admitted connection을 무효화하지도, connection generation을 회전시키지도 않는다. superseded되었거나 아직 전달되지 않은 generation(상대의 live pipe가 인식하지 못하는 값)으로 stamp된 probe·ACK를 보내는 것은 결함이며, 상대는 이를 "다른 connection의 ACK"로 조용히 버리고 어느 쪽 deadline도 갱신되지 않는다. 새 connection generation은 Core의 선택 route가 새 route generation으로 바뀔 때만([Transport liveness §5](05-transport-liveness.ko.md#5-ready와-장애-판정)) 발급하며, 변경 없는 descriptor로 이미 admitted된 peer의 매 inbound admission record마다 발급하지 않는다.
 
 ### Classic fanout beacon
 

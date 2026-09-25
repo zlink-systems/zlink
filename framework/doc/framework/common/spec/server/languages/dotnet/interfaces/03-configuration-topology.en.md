@@ -321,10 +321,9 @@ neither has RouteMesh Channel Server membership. Channel Client
 membership alone doesn't connect. If either side has Channel Server
 membership, connection is needed even if weight is `0`. A manual
 topology can connect from one or both sides depending on application
-endpoint configuration. If bidirectional connection or automatic
-discovery contention/a stale snapshot creates a duplicate candidate,
-handshake and admission check the same RID and lifecycle generation and
-keep only one in ready state.
+endpoint configuration. If bidirectional connection or automatic discovery contention/a stale snapshot produces two pipes
+for the same RID, the common rule in
+[channel topology](../../../02-channel-transport/01-channel-topology.en.md) applies.
 
 If a manual endpoint's remote object role and RouteMesh Server membership
 can't be known before connect, they're confirmed in the handshake. Only
