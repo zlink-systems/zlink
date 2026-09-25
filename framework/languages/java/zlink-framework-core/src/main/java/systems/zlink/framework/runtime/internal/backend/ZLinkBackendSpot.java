@@ -22,6 +22,12 @@ public interface ZLinkBackendSpot extends ZLinkBackendObject {
         return false;
     }
 
+    /** Closes admission before an Instance Spot drains its accepted routes. */
+    default void sealInstanceSpotAdmission() {}
+
+    /** Restores admission when an Instance Spot close fails. */
+    default void restoreInstanceSpotAdmission() {}
+
     void setRoutingId(String spotId);
 
     void setSubscription(String topic);
