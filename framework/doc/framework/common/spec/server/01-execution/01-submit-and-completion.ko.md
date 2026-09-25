@@ -191,7 +191,7 @@ source-local admission 확인 단계에서만 다른 eligible member를 선택�
 
 Binding operation이 시작되면 선택한 target이 확정된다. Core가 HWM 재시도와
 완료를 소유하며 Framework는 용량을 이유로 target을 다시 선택하거나 binding operation을
-다시 제출하지 않는다. 완료 뒤에는 자동 재제출하지 않는다.
+다시 제출하지 않는다. 완료 뒤에는 자동 재제출하지 않는다. 이후 detach 또는 timeout은 해당 operation의 terminal이다. 새 select-one operation은 시작할 때 그 시점의 eligible member를 선택할 수 있다.
 
 ## 6. Logical Multicast와 Classic fanout
 
@@ -299,8 +299,7 @@ flowchart LR
 
 Global object request timeout은 current Ready authority resolve, outbound
 admission, handler와 reply 전체를 포함한다. Source는 앞 단계에서 사용한 시간을 뺀
-잔여 시간만 다음 단계에 전달한다. Remote target의 미수락을 증명하는 receipt가
-없으므로 timeout이나 연결 실패 뒤 다른 owner에게 request를 자동 재제출하지 않는다.
+잔여 시간만 다음 단계에 전달한다. Timeout·연결 실패 뒤 request의 재제출 경계는 [§5](#5-backpressure와-오류-분류)가 정의한다.
 
 같은 handler turn에서 보낸 request를 기다릴 때 gate를 어떻게 반납하고 재개하는지는
 [Handler turn과 execution gate 「4. 같은 turn에서의 대기와 반납」](02-handler-turn-and-execution-gate.ko.md#4-같은-turn에서의-대기와-반납)이
@@ -308,8 +307,7 @@ admission, handler와 reply 전체를 포함한다. Source는 앞 단계에서 �
 
 Reply, timeout, cancellation과 Spot shutdown이 경쟁하면 먼저 확정된 terminal 결과
 하나만 사용한다. Spot이 종료되거나 같은 Spot ID로 새 generation이 만들어지면 이전
-activation의 늦은 reply를 새 Spot에 전달하지 않는다. Target 연결 종료나 timeout 뒤
-다른 RouteMesh member, ClientServer server 또는 송신 경로로 자동 재전송하지 않는다.
+activation의 늦은 reply를 새 Spot에 전달하지 않는다. Target 연결 종료·timeout 뒤 재제출 경계는 [§5](#5-backpressure와-오류-분류)가 정의한다.
 
 ## 10. Operation identity와 완료 자리 (구현)
 
@@ -416,30 +414,13 @@ callback의 실행을 막지 않는다.
 
 ## 12. 수락 후에는 다시 보내지 않는다
 
-전송이 message를 수락한 뒤에는 대상이 실행했는지 알 수 없다. 이 상태에서 다른
-대상으로 다시 보내면 두 번 실행될 수 있다.
-
-**수락 이후에는 runtime이 자동으로 다시 보내지 않는다.** 연결이 끊겨도
-마찬가지다([Transport liveness 「5. Ready와 장애 판정」](../02-channel-transport/05-transport-liveness.ko.md)).
-Application이 새 호출을 시작할 수는 있으며, 그때 중복 실행 위험은 application이
-판단한다.
-
-이 규칙 때문에 "보낸 뒤 실패"와 "보내기 전 실패"를 구분해야 한다.
-
-| 실패 시점 | 다시 보내도 되는가 |
-|---|---|
-| 전송이 수락하기 전 | 된다. 대상이 받지 않았음이 확실하다 |
-| 전송이 수락한 뒤 | 안 된다. 실행 여부를 알 수 없다 |
+전송 수락 뒤 재제출 경계는 [§5](#5-backpressure와-오류-분류)가 정의한다.
+Application이 새 호출을 시작할 때는 중복 실행 가능성을 판단한다.
 
 ## 13. 응답을 기다리지 않는 호출의 완료 지점
 
-응답을 기다리지 않는 호출은 이 process의 송신 경로가 message를 수락한 시점에 정상
-완료한다. 원격 queue가 받았는지, handler가 실행했는지는 이 결과로 알 수 없다
-([Framework API 「12. Spot, Actor와 STREAM owner」](../00-foundation/06-framework-api.ko.md#21-dispatch-실패-action-owner)).
-
-"로컬 수락"과 "전송 수락"은 서로 다른 사건이 아니다. 이 제품에서 송신 경로는 곧
-socket의 송신 큐이므로 같은 완료 경계를 가리킨다. 문서와 코드 주석에서는 send
-acceptance 한 표현만 사용한다.
+응답을 기다리지 않는 호출의 완료 경계는 [§4](#4-one-way-submit--admission-경계)가 정의한다.
+이 제품에서 local acceptance와 transport acceptance는 socket 송신 queue의 같은 수락 사건이다. 문서와 코드 주석에서는 이 사건을 `send acceptance`라고 부른다.
 
 ## 14. 실패를 문자열로 분류하지 않는다 (구현)
 
@@ -544,8 +525,7 @@ dispatcher 자리 등록 시점)은 §10·§11이 규칙과 함께 소유하며 
 
 **Submit과 admission**
 
-- One-way call은 admission boundary(§4 표)가 수락하면 반환 데이터 없이 완료하고,
-  실패하면 §5 오류 분류 표의 값 하나로 완료한다.
+- One-way 완료와 실패는 [§4](#4-one-way-submit--admission-경계)와 [§5](#5-backpressure와-오류-분류)를 확인한다.
 - Local capacity가 부족한 send는 family send timeout까지 기다리다가, capacity가
   먼저 생기면 정확히 한 번 제출되어 정상 완료하고, timeout이 먼저 확정되면
   `DeadlineExceeded`로 완료한다.
@@ -553,8 +533,7 @@ dispatcher 자리 등록 시점)은 §10·§11이 규칙과 함께 소유하며 
   시간이 다 된 call만 `DeadlineExceeded`로 끝난다.
 - Logical Multicast는 target이 0개여도 반환 데이터 없이 정상 완료하고, 시작 뒤
   개별 target 실패는 public 반환값을 바꾸지 않는다.
-- Classic fanout publish는 subscriber가 없어도 publisher socket queue가 수락하면
-  정상 완료한다.
+- Subscriber가 없는 Classic fanout의 완료는 [§6](#6-logical-multicast와-classic-fanout)의 publish 규칙을 확인한다.
 
 **Deadline과 reply token**
 
@@ -573,7 +552,7 @@ dispatcher 자리 등록 시점)은 §10·§11이 규칙과 함께 소유하며 
   하나로 request가 완료되고, 나머지 결과는 caller에 전달되지 않는다.
 - Spot이 종료되거나 새 generation이 만들어진 뒤 도착한 이전 activation의 reply는
   새 Spot에 전달되지 않는다.
-- Timeout이나 연결 실패 뒤 같은 request가 다른 owner로 자동 재제출되지 않는다.
+- Timeout·연결 실패 뒤 재제출은 [§5](#5-backpressure와-오류-분류)의 경계를 확인한다.
 - ClientServer DEALER-ROUTER에서 앞선 one-way DATA나 PAUSED·HWM 때문에 reply가 늦어 configured
   request timeout이 먼저 확정되면 timeout 하나로 완료하고 late reply는 caller를 다시 완료시키지 않는다.
 - RouteMesh ROUTER-ROUTER에서 Application Job Queue가 PAUSED여도 이미 시작한 request의 raw reply는
@@ -595,8 +574,7 @@ Binding cancellation 관찰은
 - 완료 callback은 확정 시점의 호출 stack이 아니라 새 execution turn에서 실행된다.
 - 진행 중인 request를 아무리 늘려도 완료 자리가 없다는 이유로 끝나는 request가 없고,
   각 request는 답·오류·timeout·취소·종료 가운데 하나로 끝난다.
-- 전송이 message를 수락한 뒤 연결이 끊겨도 runtime은 다른 대상에 다시 보내지
-  않는다.
+- 전송 수락 뒤 연결 단절의 재제출은 [§5](#5-backpressure와-오류-분류)의 경계를 확인한다.
 - 취소·시간 초과·종료로 완료된 결과는 오류 메시지 문자열이 아니라 별도 타입이나
   값으로 구분된다.
 

@@ -377,11 +377,8 @@ export declare function zlinkSpotTimerHandler<TSpot extends ZLinkSpot = ZLinkSpo
 
 To run an HTTP request in a server handler, an injected client
 registered by name is used. A registered client is cleaned up together
-with the Nest module's lifetime. `yield()` can only be chosen while the
-current handler is running on a `SpotWide` User Spot or Instance Spot's
-shared turn. In a different handler, it completes with
-`invalidConfiguration`, without submitting the HTTP operation or
-returning the turn.
+with the Nest module's lifetime. The valid context and pre-submission `InvalidOperation` for `yield()`
+are defined by the [execution gate §16](../../../01-execution/02-handler-turn-and-execution-gate.en.md#yield-call-eligibility).
 
 ```ts
 export interface ZLinkNamedHttpClientOptions {
@@ -450,8 +447,8 @@ with a 3,000 default. Zero, negative, `NaN`, infinity, non-integer, or a value o
 safe-integer range is a configuration error before socket bind.
 
 `relocationCutoverWaitTimeoutMs(value)` is a startup-only positive finite millisecond value
-with a 1,000 default. It is the time the target waits for cutover after the relay-ready
-reply, and it equals the time the source keeps the boundary batch retransmission copy.
+with a 1,000 default. It is the Warning threshold for cutover arrival after the relay-ready reply. Source
+copy retention and authority CAS follow [common relocation §4.4](../../../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
 Zero, negative, `NaN`, infinity, non-integer, or a value outside the safe-integer range is
 a configuration error before socket bind.
 

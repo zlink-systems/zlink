@@ -268,14 +268,9 @@ public:
 } // namespace zlink::framework
 ```
 
-Reference is an opaque UTF-8 `1..4096`-byte string the Framework
-issues before put, using match. A deleted or expired reference
-also isn't reused for different content. Re-putting the same reference
-with the same bytes returns `blob_already_stored_t`; putting different
-bytes returns `blob_conflict_t`. With this rule, the Framework can
-reconcile the storage result after a timeout or connection error by
-doing a direct read of the same reference. `retention` must be
-positive.
+[Relocation Store Redis §3–4](../../../05-location-relocation/03-relocation-store-redis.en.md#3-reference-and-storage-size)
+defines reference and retry behavior. C++ maps the two outcomes to
+`blob_already_stored_t` and `blob_conflict_t`. `retention` must be positive.
 
 One data chunk is at most 64 MiB of application bytes; the encoded blob limit the provider
 receives is owned by [Relocation Store Redis §3](../../../05-location-relocation/03-relocation-store-redis.en.md#3-reference-and-storage-size). The state/queue/timer handoff payload of
@@ -519,8 +514,8 @@ before socket bind.
 ## Relocation Transfer Options
 
 `relocation_cutover_wait_timeout` is a startup-only positive millisecond duration with a
-1,000 ms default. It is the time the target waits for cutover after the relay-ready reply,
-and it equals the time the source keeps the boundary batch retransmission copy. Zero,
+1,000 ms default. It is the Warning threshold for cutover arrival after the relay-ready reply. Source
+copy retention and authority CAS follow [common relocation §4.4](../../../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). Zero,
 negative, infinite, or out-of-range values are configuration errors before socket bind.
 
 `relocation_payload_chunk_limit_bytes` is the size cap of one encoded chunk that a

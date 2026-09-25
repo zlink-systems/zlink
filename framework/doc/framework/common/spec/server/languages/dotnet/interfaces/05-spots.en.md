@@ -190,16 +190,14 @@ public interface IZLinkSpotContext : IZLinkSpotCommonContext
  IZLinkActor actor,
  CancellationToken cancellationToken = default);
 
- ValueTask<bool> CloseAsync(
- CancellationToken cancellationToken = default);
+ void Close();
 }
 
 public interface IZLinkInstanceSpotContext : IZLinkSpotCommonContext
 {
  IZLinkInstanceSpotHandlerRegistry Handlers { get; }
 
- ValueTask<bool> CloseAsync(
- CancellationToken cancellationToken = default);
+ void Close();
 }
 
 public interface IZLinkEntrySpot
@@ -362,102 +360,19 @@ Join, the source handler and scope are cleaned up and re-created in the
 target activation. The state that must be recovered is owned by `TSpot`
 or `TActor`, not a handler field.
 
-`ZLinkSpotCloseReason`'s numeric values are `ExplicitClose=0`,
-`HostShutdown=1`, `RelocationOut=2`, `IdleEvicted=3`. `IdleEvicted` is an
-Instance-Spot-only reason and isn't delivered to Entry Spot or User Spot.
-The idle judgment condition and the reactivation rule after cleanup are
-owned by
-[Spot Model §6.2](../../../03-spot-actor/01-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
-`Deadline` is the closing operation's absolute deadline. The framework
-doesn't cancel `cleanupCancellationToken` before the callback invocation,
-and cancels it when the
-[deadline](../../../00-foundation/02-glossary.en.md#deadline) ends. An already
-cancelled handler token isn't reused. Only Entry/User/Instance Spot
-receive this callback — a per-Actor closing callback isn't provided.
-Host Shutdown runs the callback while Actor membership and the local
-instance are valid, and cleans up scope and
-[authority](../../../00-foundation/02-glossary.en.md#authority) after completion.
-A standalone Actor relocation doesn't close the Entry Spot, so it doesn't
-call this callback.
+`ZLinkSpotCloseReason` maps to `ExplicitClose=0`, `HostShutdown=1`, `RelocationOut=2`, and `IdleEvicted=3`; [Spot model](../../../03-spot-actor/01-spot-model.en.md) defines close and cleanup behavior. The framework does not cancel `cleanupCancellationToken` before invoking `OnClosingAsync`; it cancels the token when the closing deadline ends and does not reuse an already canceled handler token.
 
-`IZLinkSpotRelocationAdapter<TSpot>` is registered with
-`PreserveStateWith<TAdapter>()`. It's only called when materializing a
-cross-node User/[Instance Spot](../../../00-foundation/02-glossary.en.md#entry-user-instance-spot)
-instance. In a whole User Spot relocation, the
-[Spot](../../../00-foundation/02-glossary.en.md#spot) adapter handles the Spot
-application payload, and each member Actor's payload is handled
-separately by the Actor adapter registered on the Actor factory.
-`RecreateOnRelocation()` doesn't call the adapter and re-creates the
-instance with no application state, and `DisableRelocation()` rejects a
-cross-node move before capture.
+`IZLinkSpotRelocationAdapter<TSpot>` is registered with `PreserveStateWith<TAdapter>()`; [Spot model](../../../03-spot-actor/01-spot-model.en.md) defines when the adapter runs.
 
-The Spot adapter's capture and restore can be called at-least-once within
-a stable relocation attempt, so they must be retry-safe.
-`CaptureAsync(...)`'s result has no relocation-adapter-specific size cap;
-the framework splits the payload into chunks no larger than
-`RelocationPayloadChunkLimit` and transfers them directly over the
-source–target ordered mesh connection. Source memory is the restore
-origin, and the handoff payload isn't stored in the Relocation Store. An
-empty array is valid,
-and null is a contract violation. The framework immediately copies the
-completed array and doesn't observe subsequent application mutation.
-`RestoreAsync(...)`'s `ReadOnlyMemory<byte>` is only valid until the
-callback completes, so the application must copy it to keep it. A capture
-exception restores admission after a durable abort and source
-normalization. An instance with a restore exception is discarded, and a
-new attempt applies the same immutable payload to a new instance the
-[factory](../../../00-foundation/02-glossary.en.md#factory) creates. If the
-framework cancels a callback due to the operation deadline, it's
-classified as `DeadlineExceeded`. The framework doesn't guarantee
-exactly-once execution of the callback's external side effect.
+.NET uses `byte[]` and `ReadOnlyMemory<byte>` for Spot adapter data; [Location runtime](../../../05-location-relocation/01-location-runtime.en.md) defines retry, payload transfer, and failure handling.
 
-When maintenance restores an Actor to a different node's Entry Spot, it
-first finishes the Actor adapter restore, then commits Location
-authority and Entry [membership](../../../00-foundation/02-glossary.en.md#membership).
-Since this isn't an application membership change, it doesn't call the
-target's `OnJoinedActorAsync(...)`, the source's
-`OnLeaveActorAsync(...)`, or a relocation-dedicated callback. It restores
-the accepted journal/queue/Actor timer, commits Location authority/
-membership, and then starts Actor message processing. [Session–Actor binding §8.2](../../../04-session/02-session-actor-binding.en.md#82-control-messages-42-43-44) owns relocation route updates for a bound Session.
-A regular application
-join toward a User Spot keeps the order: target's
-`OnActorJoinAsync(...)`, membership commit, target's
-`OnJoinedActorAsync(...)`. An Entry Spot return commits membership with
-no admission callback and then calls the target Entry Spot's
-`OnJoinedActorAsync(...)`. `SpotWide` User Spot aggregate move and a
-`PerActor` User Spot's Actor relocation also don't call an application
-membership callback.
+[Spot–Actor membership](../../../03-spot-actor/05-spot-actor-membership.en.md) defines callback and membership order for Entry Spot maintenance and joins.
 
-A `PerActor` User Spot only allows the `RecreateOnRelocation` Spot
-policy and doesn't register a Spot relocation adapter. Spot fields and a
-Spot-level application timer aren't relocation targets. It moves the
-Actor independently after first switching the target Spot authority —
-`ToSpot`/Create/Join use Spot authority, and `ToActor` uses the current
-owner per Actor. The target's runtime-private shell uses the same public
-SpotId and ObjectGeneration, and isn't exposed to public lookup before
-the authority switch. A stale source route is relayed while preserving
-operation identity, generation, deadline, correlation, and reply route.
-The source-local 1-second window from Actor queue seal to the one-way cutover submit's
-success or failure terminal is an
-operational goal — exceeding it doesn't cancel or roll back the
-relocation.
+[Spot model](../../../03-spot-actor/01-spot-model.en.md) and [Location runtime](../../../05-location-relocation/01-location-runtime.en.md) define PerActor moves and preserved relay.
 
-`RelocationReady().Defer()` is only valid on a Spot turn where the
-`SpotWide` factory selected the `ApplicationSignaled` coordination mode.
-`Defer()` registers a relocation boundary right before the next
-application turn, after the current handler finishes. The framework
-delivers `Continued` from the source if it didn't move or aborted before
-relay-ready was accepted, and `Relocated` from the target if it moved, to
-`OnRelocationReadyCompletedAsync(...)`'s completion. The default
-implementation is a no-op. Held messages and timers aren't run before the
-callback completes.
+`.NET` exposes `RelocationReady().Defer()` and `OnRelocationReadyCompletedAsync(...)`; [Spot model](../../../03-spot-actor/01-spot-model.en.md) defines their eligibility and completion boundary.
 
-A duplicate `Defer()` on the default `FrameworkManaged`, on `PerActor`, on
-Entry/Instance Spot, outside the Spot turn, or in the same turn ends with
-a `ZLinkFrameworkErrorKind.InvalidOperation` error before any queue
-mutation. Starting a different framework operation in the same turn
-after `Defer()` is the same error. Since the callback can run again
-during process recovery, the override must be retry-safe.
+[Execution gate](../../../01-execution/02-handler-turn-and-execution-gate.en.md) defines the pre-mutation error; .NET maps it to `ZLinkFrameworkErrorKind.InvalidOperation`.
 
 The current-location query for Spot and Actor is performed by the
 manager using the global ID. A public resolver and runtime handle aren't
@@ -544,18 +459,7 @@ in `1..Int32.MaxValue` only when `OverrunPolicy == CatchUpBounded`. Other
 policies do not use or validate this value against that range. This prose does
 not change the existing `ZLinkTimerOptions` public surface.
 
-A Framework timer is a logical registration belonging to the owner
-Actor/Spot. On cross-node relocation, the timer name, handler type,
-period, `ZLinkTimerOptions`, scheduling cursor, and the pending tick at
-seal time are automatically included in the relocation payload. The
-application's relocation adapter doesn't capture/restore the timer or
-re-register it on the target. A framework-managed timer resource isn't
-included in the payload — it's re-created on the target as a logical
-registration. The source doesn't dispatch a new tick after sealing the
-queue, and the target only submits the restored pending tick and the
-next tick to the [owner](../../../00-foundation/02-glossary.en.md#owner) mailbox
-after finishing Restore and authority commit and dispatch admission
-opens.
+[Spot timer](../../../03-spot-actor/10-spot-timer.en.md) and [Host relocation](../../../05-location-relocation/05-host-relocation-flow.en.md) define logical timer registration and pending ticks during relocation.
 
 An external client of a Spot uses the following signatures.
 
@@ -642,11 +546,7 @@ public interface IZLinkSpotPublisherClient
 }
 ```
 
-Entry/User/Instance SpotId is a global string key with UTF-8 encoded
-size 1..255 bytes. Stable type is UTF-8 1..255 bytes, compared as a
-case-sensitive value comparison with no normalization. `SpotRef.ObjectGeneration`
-is `1..long.MaxValue`. MeshName and NodeRid are the route snapshot at
-query time and aren't included in the identity key.
+[Spot address messaging](../../../03-spot-actor/06-spot-address-messaging.en.md) defines Spot IDs and route snapshots; .NET projects `SpotRef.ObjectGeneration` as `long`.
 
 `IZLinkSpotOutbound` and `IZLinkSpotClient` take the global SpotId and return
 `IZLinkSpotSendCall` or `IZLinkSpotRequestCall`. Marker overloads are `InstanceSpot()`
@@ -657,68 +557,25 @@ Send `Async(...)` returns `ValueTask`; request `Async<TReply>(...)` and
 [Spot address messaging §4](../../../03-spot-actor/06-spot-address-messaging.en.md#4-cold-activation--how-to-create-an-instance-spot-for-the-first-time-via-a-message) owns type/Mesh selection, the creation sequence, and first-message
 preservation for cold activation. Completion boundaries follow [Spot address messaging §5](../../../03-spot-actor/06-spot-address-messaging.en.md#5-direct-call-to-an-existing-owner-and-the-completion-boundary).
 
-`InMesh` is valid only on a call with the Instance marker; using it without the marker
-ends with `InvalidOperation`. The Instance marker and each option can only be set once.
-Send is submitted once with `Async`, and request with `Async<TReply>` or `Yield<TReply>`.
+[Spot address messaging](../../../03-spot-actor/06-spot-address-messaging.en.md) defines Instance marker and `InMesh` validity; .NET maps invalid use to `InvalidOperation`.
 
-`IZLinkInstanceSpot` is an actor-free lifecycle interface that doesn't
-inherit `IZLinkSpot`. It can only register a direct packet and timer
-handler. If an Actor handler or Logical Multicast subscription is
-registered, the framework rejects activation before the `Ready` commit.
+`IZLinkInstanceSpot` is a separate .NET interface; [Spot model](../../../03-spot-actor/01-spot-model.en.md) defines its handler and activation constraints.
 
-`CloseAsync(spotRef)` only closes the specified incarnation. If that
-incarnation doesn't exist, `false`; if the generation differs,
-`InvalidOperation`; if in pre-commit seal, `Unavailable`. If Actor
-membership remains on the User Spot, `false` — it doesn't automatically
-leave/destroy the Actor. The framework doesn't find the current ref again
-and close a different incarnation.
+[Object lifecycle](../../../03-spot-actor/09-object-lifecycle.en.md) defines Spot close outcomes; .NET maps them to `false`, `InvalidOperation`, and `Unavailable`.
 
 `IZLinkSpotManager` only provides User Spot's explicit create/
 get-or-create, resolve, and close. The manager doesn't have an
 argument to select Spot kind or an Instance Spot create/get-or-create
 overload. Instance Spot's creation path is the one explicit
 `InstanceSpot(...)` opt-in on the Spot-dedicated message call. It leaves
-`IZLinkInstanceSpotContext.CloseAsync()` for an Instance Spot
-implementation to close its own lifecycle.
+`IZLinkInstanceSpotContext.Close()` for an Instance Spot implementation to
+request the end of its own lifecycle
+([Spot address messaging §7](../../../03-spot-actor/06-spot-address-messaging.en.md#7-close-and-the-generation-boundary)).
 
-User Spot Create and GetOrCreate calls are single-use. Setting the same
-option twice is `InvalidOperation`, and calling terminal `Async(...)`
-twice is `InvalidOperation`. The `InMesh(...)` selection and error and
-whole-deadline rules are the same as Actor create. `Create` has the
-framework issue a new global Spot ID. `GetOrCreate` returns a Ready Spot
-of the same User Spot stable type as `Existing`. If Creating, it waits
-for the authority change; once Ready, `Existing`; if it becomes Missing
-through cleanup, it competes for a new reservation. A CAS loser doesn't
-run a separate factory. If kind or type differs, `TypeMismatch`; if the
-terminal state isn't reached within the deadline, `DeadlineExceeded`. A
-creation request is at most 1 MiB and is kept as an immutable reference
-and hash before reservation.
+[Spot address messaging](../../../03-spot-actor/06-spot-address-messaging.en.md) and [Object lifecycle](../../../03-spot-actor/09-object-lifecycle.en.md) define Create/GetOrCreate results; .NET exposes `Async(...)` and maps errors to `InvalidOperation`, `TypeMismatch`, and `DeadlineExceeded`.
 
-[Object lifecycle §3](../../../03-spot-actor/09-object-lifecycle.en.md#3-when-to-build-a-missing-object) owns the scope of stored creation intent resumption and the distinction
-from steady `Ready` owner failure.
-A public
-activation driver, address, handle, resolver, and unbounded list aren't
-provided. An operational query is owned by the Location Runtime's paged
-query with page size 1..1000 and encoded page at most 4 MiB.
+[Object lifecycle §3](../../../03-spot-actor/09-object-lifecycle.en.md) defines stored creation intent resumption; [Location runtime](../../../05-location-relocation/01-location-runtime.en.md) defines operational query limits.
 
-If the cold Instance factory or initialize fails, that call completes
-with a typed failure. The same call isn't hidden-retried internally, and
-a public API for manipulating the failure state or recovery procedure
-isn't provided.
+[Spot address messaging](../../../03-spot-actor/06-spot-address-messaging.en.md) defines cold activation failure.
 
-`IZLinkSpotPublisherClient.Publish(...)` and
-`IZLinkSpotOutbound.Publish(...)` are
-[Logical Multicast](../../../00-foundation/02-glossary.en.md#logical-multicast).
-Both an external publisher's and a Spot callback's outbound only take
-ChannelName and topic. A process-local
-[ChannelName](../../../00-foundation/02-glossary.en.md#channelname) index selects
-the owner [MeshNode](../../../00-foundation/02-glossary.en.md#meshnode), and the
-caller doesn't additionally pass [MeshName](../../../00-foundation/02-glossary.en.md#meshname).
-Each remote target follows the MeshNode ROUTER's send rule, and matching
-Spot queues on the same node share immutable message storage. The
-configuration surface is owned by
-[Topology Configuration §5](03-configuration-topology.en.md#5-publisher-and-runtime-option).
-Per-target admission/failure results of remote transport and the local
-Spot queue aren't returned or aggregated into monitoring. It doesn't wait
-for remote Spot queue submission or remote/local handler execution or
-completion.
+`IZLinkSpotPublisherClient.Publish(...)` and `IZLinkSpotOutbound.Publish(...)` are the .NET Logical Multicast APIs; [Submit and completion](../../../01-execution/01-submit-and-completion.en.md) defines routing and terminal results.

@@ -195,6 +195,8 @@ budget reservation에서 제외하지만 current·peak accounted byte와 pending
 관찰한다. 이 값은 `total_messaging_accounted_bytes`에는 포함되고 application water-filling에는
 포함되지 않는다.
 
+Application pipe가 가득 차도 유효한 Completion record와 receive-flow-state frame은 connection이 유지되고 allocation이 성공하면 수용한다.
+
 DEALER-ROUTER reply·error reply는 single Application queue의 byte다. 이 byte는
 `core_queue_accounted_bytes`·`current_accounted_bytes`, multipart이면
 `provisional_accounted_bytes`, `peak_accounted_bytes`와 `total_messaging_accounted_bytes`에
@@ -464,10 +466,7 @@ Multipart는 각 frame의 charge를 누적한다. Decoder는 wire header에서 f
 비어 있었는지로 고정하며, 중간 `MORE` frame에는 적용하지 않는다. Allocation 실패나 protocol
 오류로 multipart를 폐기하면 그 multipart가 예약하거나 queue에 기록한 charge를 모두 반환한다.
 
-비어 있는 queue에는 전체 charge를 admission 시점에 아는 complete message 한 건과, 비어
-있는 상태에서 시작한 multipart의 final frame을 HWM보다 크더라도 받아들일 수 있다. 이 예외는
-두 message에 동시에 적용하지 않으며 `ZLINK_OPT_MAXMSGSIZE` 검사를 건너뛰지 않는다. 자세한 공개 동작은
-[Socket 스펙의 HWM 설명](../socket/README.ko.md#transportbuffer)을 따른다.
+비어 있는 queue에는 전체 charge를 admission 시점에 아는 complete message 한 건을 HWM보다 크더라도 받아들일 수 있다. 이 예외는 두 message에 동시에 적용하지 않으며 `ZLINK_OPT_MAXMSGSIZE` 검사를 건너뛰지 않는다.
 
 ### Receive dequeue와 queue generation
 
@@ -486,9 +485,7 @@ HWM을 늘리면 현재 queue generation에 새 값을 적용한다. HWM을 줄�
 이미 받아들인 frame은 제거하지 않으며, snapshot이 보고하는 applied 값은 보관량이 새 목표 이하가
 되는 순간 새 목표로 바뀐다(deferred shrink).
 
-ROUTER-ROUTER가 terminal reply와 error reply를 진행시키고 receive-flow-state frame을
-동기화하는 Completion queue에는 application HWM을 적용하지 않는다. DEALER-ROUTER reply와
-error reply는 DATA·REQUEST와 같은 Application queue의 HWM과 peer PAUSED를 적용한다. Monitor
+Completion lane과 DEALER-ROUTER reply의 HWM·회계는 [§2의 lane 회계](#2-auto-hwm-budget-계산)를 따른다. Monitor
 queue도 application budget을 나누는 queue 목록에서 제외한다.
 
 ### 재계산의 동기화와 수렴
@@ -623,13 +620,7 @@ admission 결과, errno)만으로 관찰할 수 있는 동작이며, 각 항목�
 - 새 pipe pair는 수동 HWM 크기와 관계없이 방향별 역할 하한을 먼저 예약한다. 유한한 수동 HWM은 admission에 즉시 적용되고 다음 snapshot의 `manual_reserved_hwm_bytes`와 aggregate HWM 통계에 반영된다.
 
 **admission (byte 회계)**
-- payload가 없는 frame도 HWM을 소비한다 — 빈 frame만 반복해 보내도 HWM에서 admission이 막힌다.
-- 빈 queue는 전체 크기를 아는 complete message 1건을 HWM 초과여도 수락하고, 두 번째 oversize는 거부한다.
-- 미리 크기를 모르는 multipart의 `MORE` frame은 HWM 초과 지점부터 막힌다. 다만 빈 queue에서 시작한 multipart의 final frame은 HWM을 넘더라도 수락하며, 이 예외는 중간 `MORE` frame에 적용하지 않는다. Multipart를 폐기한 뒤 snapshot의 `provisional_accounted_bytes`는 0으로 돌아온다.
-- Peer가 request를 dequeue하면 unresolved 상태여도 physical queue current와 writer credit은 반환된다. Pending work·count reservation은 reply·timeout까지 유지되지만 Application HWM 회계나 snapshot의 physical queue current에는 더해지지 않는다. 한도 부족은 send flags와 `SNDTIMEO`에 관계없이 즉시 `ZLINK_SUBMIT_BACKPRESSURED`·`EAGAIN`이다.
-- Live work charge와 unresolved count가 모두 0인 pair는 work budget보다 큰 request 한 건을 허용하며, unresolved 상태의 다음 request는 막힌다. Reply·timeout 뒤 그 request가 속한 바로 그 pair가 다시 수용하고, 한 pair가 막혀도 다른 pair와 ordinary send는 진행한다.
-- 충분한 Application byte 한도와 HWM `0`에서 모두 64 KiB request 한 건은 성공하고, unresolved 상태의 두 번째 request는 32 MiB work budget에서 막힌다. 한 건을 완료하면 다음 request가 성공한다.
-- Work budget이 남아 있어도 unresolved request 16,384건이 있으면 다음 request는 즉시 막힌다. 한 request가 terminal reply나 timeout으로 완료되면 다음 request가 성공한다.
+- Frame·multipart·oversize 수용 검증은 [Message 처리 순서](#message-처리-순서), pending work·count 검증은 [Pending request 수용](#pending-request-수용)을 참조한다.
 
 **credit·dequeue·generation**
 - complete message를 recv하면 Core queue charge가 종료되고 sender가 다시 보낼 수 있다. Application이 payload를 계속 보유해도 snapshot의 `application_accounted_bytes`는 0이다.

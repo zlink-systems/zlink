@@ -33,7 +33,7 @@ Aligned Node bindings for `libzlink`.
   `recvPacket(streamPacket, flags?)`; set `options.recvMode` to
   `StreamRecvMode.Raw` or `StreamRecvMode.Packet` before bind/connect
 - TLS helpers: `setTlsServer(cert, key, requireClient?)`,
-  `setTlsClient(ca, host, trust?)` on sockets, `Registry`, and `SpotNode`
+  `setTlsClient(ca, host, trust?)` on sockets
 - canonical option facades:
   - `CommonSocketOptions`
   - `DealerSocketOptions`
@@ -116,60 +116,11 @@ values and storage but are ignored. The typed Node socket options do not expose
 them.
 Monitor, timer, and STREAM packet delivery also use caller-driven pull APIs.
 
+`SocketMonitor` uses `recv(flags?)`, `status()`, and `close()`.
+
 ## Service Surface
 
-- `new Discovery(ctx, serviceType, serviceName)`
-- `new Registry(ctx)` + `registry.bind(pubEndpoint, routerEndpoint)`
-- `new RegistryQueryClient(ctx)`
-- `new SpotNode(ctx)`
-- `new Spot(node)`
-
-`SpotNode` exposes `createRouteBridge()` for caller-owned channel sockets and
-`createPublisher()` for publishing into the local SPOT topic plane.
-
-`Spot` is service-aware and uses explicit service names on the data plane:
-`publish(serviceName, topic, ...)`, `sendChannel(channelName, ...)`,
-`requestChannel(channelName, ...)`, `setSubscription()` /
-`unsetSubscription()`, `subscribe(topicMessage, flags?)`,
-  `receiveSubscriptionEvent(subscriptionEvent, flags?)`, `recvRouted(received, flags?)`,
-  `recvActorLifecycle(flags?)`, and `onDispatchEvent()`.
-
-`Discovery` uses `connectRegistry()`, `setValue()` / `getValue()`,
-`setMetadata()` / `getMetadata()`, `memberPeers()`,
-`memberPeerMetadata()`, `monitorOpen(events?, monitorHwmBytes?)`, `setTlsClient()`.
-
-`SpotNode` uses `setPubBind()`, `setRouterBind()`,
-`connectPeer()` / `disconnectPeer()`,
-`attachDiscovery()`, `status()`, `peers()`,
-`peers(filter)()`, `subjects(filter?)`, `setTlsServer()`,
-`setTlsClient()`.
-
-`Registry` uses `bind()`, `setId()`, `addPeer()`, `setHeartbeat()`,
-`setBroadcastInterval()`, `setTlsServer()`, `setTlsClient()`,
-`status()`,
-  `serviceSummary(filter?)`, `memberPeers()`,
-  `memberPeerMetadata()`, `topology()`, `topology(filter)(filter?)`.
-
-`RegistryQueryClient` uses `connect()` and `snapshot(filter?)`.
-
-`SocketMonitor` uses `recv(flags?)`, `status()`,
-  `close()`.
-
-`*_READY_CHANGED` monitor events are readiness edge/state notifications.
-Node bindings must not interpret `event.value` as an aggregate ready count, and
-`snapshot()` must not be used as a ready-count gate.
-
-`Receiver` is removed from the aligned public API.
-`Discovery` requires a non-empty `serviceName`.
-`Registry.bind()` maps directly to the native bind lifecycle and replaces legacy
-`setEndpoints()` / `start()`.
-`Registry.setSockOpt()` and `SpotNode.setDiscovery()` are not part of the
-aligned canonical surface. `Spot` also does not expose raw `setSockOpt()`;
-raw socket options are exposed through typed `socket.options` facades instead
-of raw option bags or per-socket setter aliases. `Spot` keeps service-level
-typed setters such as `setLinger()` and `setNoDrop()`.
-After `attachDiscovery()`, manual socket/node connect-disconnect entry points
-are blocked by the native lifecycle contract.
+Public Spot/Actor APIs follow the [Framework API](../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 ## Verification
 

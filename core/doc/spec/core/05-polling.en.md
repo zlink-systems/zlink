@@ -148,6 +148,8 @@ the bit with modify or removes the registration. Queue records and readiness are
 lost during the transfer. The application maintains one completion-drain owner per
 socket.
 
+Transport completion progress on a socket uses one serialized drain path. Registering a completion poller does not prevent the same consumer from calling `zlink_completion_recv(NONE)` directly. That call performs completion progress and waiting within `RCVTIMEO` without a separate `zlink_poller_wait()`. A `DONTWAIT` receive consumes only the published public queue and starts no new transport drain turn.
+
 ## 5. Source lifetime and serialization
 
 When a socket source is registered with a poller, Core acquires a lifetime pin on

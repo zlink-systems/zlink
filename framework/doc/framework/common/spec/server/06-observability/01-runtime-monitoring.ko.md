@@ -13,8 +13,8 @@ title: "Runtime 상태 조회와 운영 진단"
 ## 1. Runtime 상태 조회 개요
 
 Application 운영자는 Framework runtime의 현재 상태를 한 번 조회하고, 이후 변화를
-관찰하며, 상태가 바뀐 이유를 log에서 찾는다. Application은 이 정보로 새 작업을 받을 수
-있는지와 장애 범위, relocation·shutdown 결과를 판단한다.
+관찰하며, 상태가 바뀐 이유를 log에서 찾는다. Application은 이 정보로 readiness와 새 작업 수락 상태를 관찰하고
+장애 범위와 relocation·shutdown 결과를 확인한다. 개별 요청의 수락은 요청을 받는 operation이 판정한다.
 
 이 문서는 특정 시점의 완전한 status, status 변화 stream과 structured log identifier를
 소유한다. 시간에 따라 누적하거나 수집하는 수치의 이름·단위·label은
@@ -105,9 +105,8 @@ Host runtime state는 다음 값으로 닫혀 있다. 표에 없는 값을 추�
 | `stopped` | Runtime과 infrastructure 정리가 끝났다. |
 | `error` | Runtime을 계속 운영할 수 없는 오류가 발생했다. |
 
-**`IsReady`는 `State`가 `serving`일 때만 `true`다.** `AcceptingWork`는 현재 host가 새
-application operation을 수락하는지를 나타내는 별개 값이며, 두 값을 서로 대신하는
-조건으로 재해석하지 않는다. Relocation option, deadline과 result의 정확한 의미는
+**`IsReady`는 `State`가 `serving`일 때만 `true`다.** `AcceptingWork`는 현재 host의
+새 작업 수락 상태를 관찰하는 별개 값이며 개별 요청 수락의 사전 판정으로 사용하지 않는다. Relocation option, deadline과 result의 정확한 의미는
 [Host relocation과 shutdown](../05-location-relocation/05-host-relocation-flow.ko.md)이 정한다.
 
 Host status는 relocation 뒤 source runtime을 안전하게 종료할 수 있는 시점을 나타내는
@@ -412,8 +411,8 @@ source로 ACK하지 않으며 target-local status와 trace에서 관찰한다.
 
 **Host status**
 
-- Host status 하나만으로 readiness, 새 작업 수락 여부, relocation과 shutdown 결과를
-  판단할 수 있다.
+- Host status로 readiness와 새 작업 수락 상태를 관찰하고 relocation·shutdown 결과를 확인한다.
+  개별 요청의 수락은 해당 수신 operation이 판정한다.
 - Public status에는 endpoint, descriptor revision, owner lease, claim, reservation,
   native handle과 raw event DTO가 없다.
 - `SafeToShutdown`은 모든 relocation unit의 Message Follow route 제거 가능 시점

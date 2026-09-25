@@ -42,12 +42,12 @@ public crate API.
 | [Byte HWM and Auto-HWM](#byte-hwm-and-auto-hwm) | Mapping between Rust `u64` and Core byte HWM |
 | [Receive flow state](#receive-flow-state) | The receive-flow state type, setter, and monitor surface |
 | [Required capability coverage](#required-capability-coverage) | The user-facing capabilities that must be guaranteed once aligned |
-| [Spot Get-Or-Create](#spot-get-or-create) | The `get_or_create_spot` contract |
+| [Spot Get-Or-Create](#spot-get-or-create) | Framework public contract link |
 | [Receive and Subscribe shape](#receive-and-subscribe-shape) | Storage reuse, distinguishing no-data |
 | [Error and validation policy](#error-and-validation-policy) | FFI-boundary validation and type-based errors |
 | [Performance policy](#performance-policy) | Hot-path constraints |
 | [Implementation checklist](#implementation-checklist) | What to confirm before declaring alignment, and required verification commands |
-| [Actor and Spot Route results](#actor-and-spot-route-results) | The route-result value types and Actor-directed send/request |
+| [Actor and Spot Route results](#actor-and-spot-route-results) | Framework public contract link |
 
 ## Public contract source
 
@@ -121,13 +121,6 @@ bindings/rust/
 |   |   +-- eventing/
 |   |   |   +-- monitor.rs
 |   |   |   +-- poller.rs
-|   |   +-- service/
-|   |   |   +-- spot/
-|   |   |   |   +-- spot_node.rs
-|   |   |   |   +-- spot.rs
-|   |   |   |   +-- actor.rs
-|   |   |   |   +-- spot_operations.rs
-|   |   |   |   +-- spot_models.rs
 |   |   +-- errors/
 |   |   |   +-- errors.rs
 |   |   |   +-- results.rs
@@ -149,11 +142,6 @@ bindings/rust/
 |   |   +-- eventing/
 |   |   |   +-- poller.rs
 |   |   |   +-- timer.rs
-|   |   +-- service/
-|   |   |   +-- spot/
-|   |   |   |   +-- spot_node.rs
-|   |   |   |   +-- spot.rs
-|   |   |   |   +-- actor.rs
 |   |   +-- errors/
 |   |   |   +-- native_errors.rs
 |   |   +-- native/
@@ -199,7 +187,6 @@ The contract/runtime boundary meets these requirements.
 The following Rust-specific shortcuts are not allowed.
 
 - The `contracts` modules do not re-export `runtime` or `runtime::native`.
-- Contract files never import a runtime resource type to describe a public service model.
 - A public re-export barrel is never the source of a resource's behavior — declarations are split between a named contract module and a runtime implementation module.
 - `lib.rs` exports contract names and constructors, and never exports a runtime module.
 - Public rustdoc never exposes a runtime implementation module path as a public type.
@@ -213,7 +200,7 @@ runtime.
 - A fallible operation returns `Result<T, ZlinkError>`, or a more specific typed result when that improves clarity.
 - Concrete values — message, routing id, received metadata, topic message, snapshot, option, enum, error — stay concrete types.
 - A trait is used only when the caller needs substitutable behavior or a generic bound. Not every concrete handle gets a trait by default.
-- A Builder is required for multipart send, publish, request, reply, SPOT, and actor operations, and it hides native state.
+- A Builder is required for multipart send, publish, request and reply operations, and it hides native state.
 - `unsafe` and raw FFI are confined to private modules.
 
 ### Safe FFI RAII wrapper placement
@@ -255,7 +242,6 @@ The contract source uses the same classification as the [.NET bindings blueprint
 - `messaging/`: `message.rs`, `received.rs`, `topic_message.rs`, `subscription_event.rs`, common operation payload types.
 - `sockets/`: socket types/traits, socket option types, send/request/reply builder contracts, stream packet values, socket flags.
 - `eventing/`: monitor, monitor event/status, poller, poll event, and timer contracts.
-- `service/`: SPOT node, Spot, Actor, topology model, service operation builders, under a `spot/` submodule.
 - `errors/`: public error types, the result domain, error-code mapping.
 
 Avoid a single consolidated `models.rs` or a runtime export barrel for
@@ -273,7 +259,6 @@ only implementation.
 - `messaging/`: message materialization, request progress, request execution, native buffer conversion helpers.
 - `sockets/`: the socket base type, the socket kernel, the socket implementation for every socket family, callback adapters, operation implementation types.
 - `eventing/`: the poller/timer/monitor implementations and event materialization helpers.
-- `service/`: SPOT node, Spot, Actor, topology, and service operation implementations.
 - `errors/`: native error conversion and validation helpers.
 - `native/`: FFI bindings, native loading, raw handles, unsafe boundary code.
 
@@ -289,10 +274,8 @@ public contract methods.
 
 - `Context::new(...)` creates the native-backed context implementation.
 - `Context::create_pair_socket()`, `create_dealer_socket()`, `create_router_socket()`, `create_pub_socket()`, `create_sub_socket()`, `create_xpub_socket()`, `create_xsub_socket()`, `create_stream_socket()` create the native-backed socket implementations.
-- `Context::create_spot_node(...)` creates the service-layer implementation.
-- A `Spot` handle is obtained via `SpotNode::create_spot(...)`, `entry_spot()`, `get_or_create_spot(...)`, or `spot_lookup(...)`. Direct `Spot` construction is not public.
-- An Actor handle is created via `SpotNode::create_actor(...)`. Direct Actor construction is not public.
-- `Poller::new(...)`, `Timer::new(...)`, and the timer-on-SPOT helpers create eventing resources.
+Public Spot and Actor creation, including service-owned timers, is specified by the [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md). This binding specification defines creation of Core raw sockets, monitors, pollers, and generic timers.
+- `Poller::new(...)` and `Timer::new(...)` create eventing resources.
 - `Poller` accepts a socket monitor as a source through
   `add_monitor(&self, monitor: &SocketMonitor, events: i16, slot: usize) -> Result<(), ConfigError>`,
   `modify_monitor(&self, monitor: &SocketMonitor, events: i16) -> Result<(), ConfigError>` and
@@ -314,18 +297,16 @@ public crate items and re-exports.
 - `messaging/`: message, received metadata, topic message, subscription event, stream packet data, builder payload helpers.
 - `sockets/`: socket operations, socket family, typed options, request/reply, publish/subscribe surfaces.
 - `eventing/`: monitor, monitor snapshot/event, poller, poll event, timer, public poll helpers.
-- `service/`: SPOT node, SPOT handle, topology model, actor ref, actor lifecycle, operation builders.
 - `errors/`: the typed error/result domain.
 - Enum, flag, and result types live in the category that defines their meaning. No `enums` module is created just to group declarations syntactically.
 
 ## Standard interface rules
 
 - Data-plane `recv`, routed recv, `subscribe`, and subscription-event receive fill a caller-provided `&mut Received`, `&mut TopicMessage`, or `&mut SubscriptionEvent` value and return `Result<bool, RecvError>`.
-- Send, routed send, publish, request, reply, SPOT operations, and Actor location/session operations return a typestate builder.
-- A builder's start method takes only a target identity, topic, channel, routing ID, or `ReplyToken`.
+- Raw send, routed send, publish, request, and reply return a typestate builder.
+- A builder's start method takes only a target identity, topic, routing ID, or `ReplyToken`.
   Payload, request timeout, and terminal choice are the builder's state or stages.
-- SPOT's channel-targeted operations use `send_to_channel(...)` and `request_to_channel(...)`. SPOT's topic publish keeps `publish(topic)` as-is.
-- No single-payload shortcut method is added under the same name as an operation's start method. `send(message)`, `send(routing_id, message)`, `publish(topic, message)`, `send_to_channel(channel, message)`, `send_to_spot(..., message)` are not public contract members. A caller uses `send(...).message(message).submit()`.
+- No single-payload shortcut method is added under the same name as an operation's start method. `send(message)`, `send(routing_id, message)`, `publish(topic, message)` are not public contract members. A caller uses `send(...).message(message).submit()`.
 - A multipart payload accumulates via repeated `message(...)` calls. A `messages(...)` convenience method is allowed only when it delegates to the same builder contract and is declared on the public crate surface.
 - A Dealer socket does not expose protocol envelope helpers such as `request_frame(...)` or `reply(request_token, parts)`. Dealer can start a request with `request()`, but has no API-level peer routing id, so it cannot reply to an arbitrary token.
 - A message payload factory uses a fallible from-source contract: `Message::try_from(...)` and a `TryFrom` implementation. A copy-only name such as `copy_from` is not part of the public contract.
@@ -363,7 +344,6 @@ The crate must expose clear public modules or re-exports.
 - Messaging: message, routing id, received metadata, topic message, subscription event, stream packet data.
 - Sockets: pair, dealer, router, pub, sub, xpub, xsub, stream, typed options, request/reply, publish/subscribe, stream packet API.
 - Eventing: monitor, monitor snapshot/event, poller, poll event, timer.
-- Service: SPOT node, SPOT handle, topology snapshot, actor ref, actor lifecycle, operation builders.
 - Error: the typed error/result domain that preserves core semantics.
 
 The public crate may re-export frequently used types at the crate root,
@@ -429,21 +409,14 @@ public crate must cover the following stable, user-facing capabilities.
 - Message ownership, multipart payload, routing id, received metadata, topic message, subscription event, and stream packet values.
 - Every socket family and its typed options. `SubSocket::subscription_at(index)` and `XSubSocket::subscription_at(index)` return that index's subscription filter and whether it is a pattern. If that index doesn't exist, they return `None`.
 - Monitor, poller, timer, readiness semantics.
-- SPOT node, SPOT handle, topology snapshot, actor, stream actor binding.
 
 Rust names and the ownership model may differ from C, but behavior must
 match the meaning of the core capabilities.
 
 ## Spot Get-Or-Create
 
-Rust exposes `SpotNode::get_or_create_spot(&RoutingId) -> Result<(Spot,
-bool), ConfigError>`. This maps directly to
-`zlink_spot_node_spot_get_or_new(...)`, and is not implemented by combining
-`spot_lookup` and `create_spot`.
-
-The returned `Spot` is owned by the caller and follows ordinary `Drop`
-lifetime rules. The boolean is `true` only for the call that created the
-logical spot.
+The [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md#17-creategetorcreate-results-and-relocation-policy)
+owns public Spot `GetOrCreate` inputs, results, and ownership.
 
 ## Receive and Subscribe shape
 
@@ -453,14 +426,12 @@ logical spot.
   `ReplyToken`, and SUB topic/routing ID metadata.
   The [common receive ownership contract](../README.en.md#receive-ownership) defines the boundary with receive accounting.
 - Non-blocking no-data is distinguished from a hard receive failure.
-- A SPOT readable dispatch event is a readiness notification. The caller drains the matching receive API until it returns no-data.
 - Returned message data has clear ownership and lifetime. Borrowed data never outlives its native owner.
-- A service control/admission receive path, such as Actor join request receive, may use `Option`, a nullable equivalent, or a typed result-return form when that's clearer than the reusable data-plane storage. Even then, no-data and a hard receive failure are kept distinct.
 
 ## Error and validation policy
 
 - A native fixed-size id or string is validated before crossing the FFI boundary.
-- Routing id, actor id, endpoint, channel name, and topic are never silently truncated.
+- Routing id, endpoint, channel name, and topic are never silently truncated.
 - The submit, request, recv, handler, close, bind, connect, and config error domains are preserved.
 - A public error must be checkable via a Rust type, not by parsing a string.
 
@@ -479,7 +450,6 @@ logical spot.
 - A trait is used only at a genuine abstraction point.
 - A public free function and a builder convenience method are declared in a public crate module, not a runtime helper.
 - Receive/subscription semantics match the common binding policy.
-- Exceptions where service control/admission receive differs from the data plane's caller-provided storage are documented.
 - Perf semantics match `bindings/c/perf`.
 - `src/contracts` has no import or export dependency on `src/runtime`.
 - `lib.rs` imports a runtime module only to wire up constructors, and does not export a runtime module or a runtime implementation type name.
@@ -495,23 +465,13 @@ Run the required verification commands from `bindings/rust/`.
 - Where clippy is available, run `cargo clippy --workspace --all-targets -- -D warnings`.
 - Run `./tests/run_tests.sh`.
 - Run `./samples/run_samples.sh` when a public example or a generation path changed.
-- Run `./perf/run_benchmarks.sh` and `./perf/run_benchmarks_multi.sh` as a smoke gate when hot-path, receive, send, request, poller, timer, or service behavior changed.
+- Run `./perf/run_benchmarks.sh` and `./perf/run_benchmarks_multi.sh` as a smoke gate when hot-path, receive, send, request, poller or timer behavior changed.
 - Inspect rustdoc/public re-exports to confirm the crate export surfaces contract types, not runtime implementation modules.
 - Search `src/contracts`, `tests`, `samples`, `perf` for imports from `crate::runtime`, `runtime::native`, a raw FFI module, or a generated private file. Check `src/lib.rs` separately to confirm a runtime import is used only to wire up constructors and never appears in a public signature.
 
 ## Actor and Spot Route results
 
-Rust exposes Actor and Spot route lookup results as public value types.
-
-- `ActorRoute` preserves the resolved Actor ref, the Actor node RID, the current Spot RID, and the current Spot kind.
-- `SpotRoute` preserves the Spot RID, the owner node RID, and the Spot kind.
-- `SpotKind` distinguishes an Entry Spot from a user Spot. An invalid kind is not a successful route result.
-- A SpotNode snapshot entry exposes the same Spot kind/current Spot fields as the core snapshot.
-
-- Rust exposes `SpotNode::send_to_actor(&ActorRef)` and `SpotNode::request_to_actor(&ActorRef)`, which take a resolved Actor ref.
-- The send operation, once submit succeeds, transfers ownership of one or more message parts, and completes once the Actor owner's mailbox takes them over.
-- The request operation, once submit succeeds, transfers ownership of the request part and delivers the reply part the Actor handler produced.
-- Rust must not resurrect the removed Discovery route table or resolver API as a compatibility helper.
+Public Spot/Actor shapes are defined by [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 ## Pull completion public contract
 

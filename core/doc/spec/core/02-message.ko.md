@@ -154,7 +154,8 @@ typedef void (zlink_free_fn) (void *data_, void *hint_);
 
 `zlink_free_fn`은 zero-copy message 생성을 위해 `zlink_msg_init_data()`에서 사용되는
 callback 타입이다. message data buffer가 더 이상 필요하지 않을 때 library가 이 함수를
-호출한다.
+호출한다. Library는 이 callback을 내부 thread에서, 내부 lock을 보유한 상태에서 또는 socket turn 안에서
+호출할 수 있다. Callback은 zlink API를 호출하거나 대기해서는 안 된다. Buffer를 해제한 뒤 반환한다.
 
 ## 6. 함수
 
@@ -440,10 +441,7 @@ ZLINK_EXPORT void zlink_multipart_close (zlink_msg_t *parts, size_t part_count);
 
 ### Send
 
-송신 경로는 한 호출의 `parts_` 배열 전체를 record 하나로 admission한다. 성공·실패 모두 모든 입력
-슬롯을 소비해 빈 initialized 상태로 두며, 실패하면 어떤 part도 peer에 보이지 않는다. 재시도는
-호출 전에 보관한 record 전체로 한다. 상세 계약은
-[Socket 공통](socket/README.ko.md#whole-message-send와-pending-admission)이 소유한다.
+Whole-record 제출의 원자성, 입력 슬롯 소비와 재제출은 [Socket 공통 whole-message send](socket/README.ko.md#whole-message-send와-pending-admission)를 따른다.
 
 ### Receive
 

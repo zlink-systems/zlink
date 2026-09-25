@@ -646,8 +646,8 @@ public readonly record struct ZLinkActorJoinOperationId(
 | .NET 표기 | `ZLinkActorJoinOperationId` |
 | 공개 구성 | `High`와 `Low`를 함께 비교해야 한다. Application이 각 field에 별도 의미를 부여하지 않는다. |
 | 생성·관리 | Framework가 Actor Join registration에서 생성하고 모든 completion retry에 같은 값을 전달한다. |
-| 전달 | `Accepted`, `Rejected`, `Failed` Actor Join completion에 포함한다. Cross-node `Accepted`에서는 Relocation manifest의 별도 field에도 저장한다. |
-| 수명 | Same-node outcome, `Rejected`와 relay-ready accepted 전 `Failed`는 current process lifetime까지만 retry를 보장한다. Cross-node `Accepted`는 manifest가 유지되는 동안 durable at-least-once completion에 사용한다. |
+| 전달 | `Accepted`, `Rejected`, `Failed` Actor Join completion에 포함한다. |
+| 수명 | [Actor Join completion](../03-spot-actor/05-spot-actor-membership.ko.md#actor-join-completion)이 모든 outcome의 보존과 재시도를 정한다. |
 
 <a id="deferred-join-barrier"></a>
 ### Deferred Join barrier
@@ -687,10 +687,8 @@ message를 새 owner에게 대신 전달하는 동작이다. 보내는 쪽이 �
 있어도 message를 잃지 않게 하는 것이 목적이며, 새 주소를 알려 주고 재전송을
 요구하는 redirect가 아니다.
 
-Relocation commit 뒤 이전 owner에 늦게 도착한 개별 message가 Message Follow 대상이다.
-Message Follow는 무기한 유지하지 않고 [Message Follow duration](#message-follow-duration)
-안에서만 유효하며, 이 기간이 끝난 뒤 도착한 message는 일반 stale route 실패로
-처리한다.
+Message Follow의 대상·기간과 만료 결과는
+[Location runtime §7.3](../05-location-relocation/01-location-runtime.ko.md#73-이전-owner로-도착한-message를-새-owner에게-전달한다)가 정의한다.
 
 Relocation 중 source가 seal한 뒤 보관하는
 [relocation ingress hold](#relocation-ingress-hold)와는 다르다. Hold는 commit 전까지
@@ -701,21 +699,19 @@ source가 보관했다가 target queue로 넘기는 임시 저장이고, Message
 |---|---|
 | 형태 | Framework가 관리하는 owner 이전 뒤 message 전달 |
 | .NET 표기 | Public type 없음 |
-| 공개 구성 | 새 owner의 `ActorRef` 또는 Spot 위치와 Message Follow 만료 시각을 유지한다. |
-| 생성·관리 | Relocation commit이 끝난 뒤 이전 owner runtime이 만든다. |
-| 수명 | Message Follow duration이 끝나면 제거하고, 이후 같은 위치로 온 message는 stale route 실패로 처리한다. |
+| 공개 구성·생성·수명 | [Location runtime §7.3](../05-location-relocation/01-location-runtime.ko.md#73-이전-owner로-도착한-message를-새-owner에게-전달한다)의 Message Follow route 규칙을 따른다. |
 
 <a id="message-follow-duration"></a>
 ### Message Follow duration
 
-[Message Follow](#message-follow)가 유효한 기간이다. Relocation commit
-시점부터 시작하며 이 기간이 지나면 이전 owner는 더 이상 전달하지 않는다.
+[Message Follow](#message-follow)의 기간과 만료 시점은
+[Location runtime §7.3](../05-location-relocation/01-location-runtime.ko.md#73-이전-owner로-도착한-message를-새-owner에게-전달한다)가 정의한다.
 
 | 항목 | 내용 |
 |---|---|
 | 형태 | Framework가 관리하는 기간 |
 | .NET 표기 | `ZLinkLocationOptions.MessageFollowDuration` |
-| 수명 | Relocation commit에서 시작해 만료로 끝난다. 만료 뒤 Message Follow 항목을 제거한다. |
+| 수명 | [Location runtime §7.3](../05-location-relocation/01-location-runtime.ko.md#73-이전-owner로-도착한-message를-새-owner에게-전달한다)의 기간 규칙을 따른다. |
 
 <a id="relocation-ingress-hold"></a>
 ### Relocation ingress hold
@@ -731,7 +727,7 @@ byte 상한이 없다. `Defer()`를 호출한 뒤 seal하기 전에 도착한 me
 | .NET 표기 | Public type 없음 |
 | 공개 구성 | Message payload와 original operation identity, `ObjectGeneration`과 queue ordering에 필요한 Framework metadata를 유지한다. 내부 storage 형식은 공개하지 않는다. |
 | 생성·관리 | Source runtime이 relocation seal 뒤 도착한 message를 보관한다. 일반 application lane의 count·byte reservation을 relocation 전용 상한으로 다시 적용하지 않는다. Transport, deadline과 cancellation이 정하는 별도 제한은 그대로 적용한다. |
-| 수명 | Relay-ready reply가 accepted 상태가 되기 전 명시적 abort에서는 source queue로 원래 순서에 맞춰 되돌린다. 그 뒤에는 cutover submit 결과와 관계없이 source를 복원하지 않고 target handoff 또는 Message Follow가 소유한 뒤 제거한다. |
+| 수명 | Relay-ready 전 명시적 abort 또는 source `Preserve` fence 성공에는 원래 순서로 source queue에 되돌린다. Target commit이면 target handoff와 Message Follow가 소유한다. 불확정이면 보관한다([공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)). |
 
 <a id="reply-correlation"></a>
 ### Reply correlation
@@ -758,8 +754,8 @@ Client는 reply가 도착하면 `correlation_id`를 현재 대기 중인 request
 비교한다. 값이 일치할 때만 해당 request의 결과로 처리하며, 일치하는 request가
 없으면 늦게 도착한 reply로 판단하여 폐기한다.
 
-Target이 Spot을 새로 준비하거나 current owner로 request를 전달해도 이 정보를
-유지한다. Handler가 별도로 시작한 downstream request에는 원래 request와 다른 값을
+Target이 Spot을 새로 준비하거나 [Spot 주소 메시징 §4.2](../03-spot-actor/06-spot-address-messaging.ko.md#42-여러-node가-동시에-첫-message를-받는-경우)의
+terminal 결과를 반환할 때도 이 정보를 유지한다. Handler가 별도로 시작한 downstream request에는 원래 request와 다른 값을
 사용한다.
 
 전체 생성·전파 계약은 [Flow correlation](../06-observability/04-flow-correlation.ko.md)을 따른다.
@@ -980,15 +976,15 @@ Gate와 [Actor queue claim](#actor-queue-claim)의 수명은
 | .NET 표기 | public type 없음 |
 | 공개 구성 | 별도 상태값이나 remote 수신 확인값을 반환하지 않는다. |
 | 생성·관리 | 송신 runtime이 관리하며 target 종류별 queue 경계는 [Submit과 completion §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)가 소유한다. |
-| 전달 | Wire receipt가 아니라 source-local 완료 경계다. |
+| 전달 | One-way 완료 경계는 [Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)를 따른다. |
 | 수명 | 한 제출 operation의 수락까지 적용한다. 대기·실패는 해당 family의 완료 계약을 따른다. |
 | Application 권한 | Application은 public call의 terminal을 기다리며 내부 queue를 직접 선택하지 않는다. |
 
 <a id="submitted"></a>
 ### One-way 정상 완료
 
-One-way call의 정상 완료는 source-local outbound admission이 operation을 수락했다는 뜻이다. Public
-status나 result 값을 반환하지 않으며 target handler 실행이나 remote queue 수락을 확인하지 않는다.
+One-way 정상 완료 경계와 반환 결과는
+[Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)가 정의한다.
 
 <a id="completion-dispatcher"></a>
 ### Completion dispatcher
@@ -1421,20 +1417,10 @@ payload도 chunk가 순서대로 흘러가며 시작하고 완료할 수 있다.
 <a id="cutover-retransmission-window"></a>
 ### 재전송 창 (Cutover retransmission window)
 
-Cutover submit terminal 뒤에도 source가 boundary 전 relay batch와 cutover의 사본을
-유지하고, connection이 끊겨 cutover가 유실된 경우 새 connection으로 재전송하는
-기간이다. Target은 부분 수신한 boundary 전 relay 구간을 폐기하고 재전송 batch
-전체로 원자적으로 교체한다. 창의 길이는 server 설정
-`RelocationCutoverWaitTimeout`(기본 1,000 ms)과 같다.
-
-| 항목 | 내용 |
-|---|---|
-| 형태 | Framework가 관리하는 source-local 기간. 독립 public type은 없다. |
-| 공개 구성 | 길이는 `RelocationCutoverWaitTimeout`과 같은 값 하나다. |
-| 생성·관리 | Source runtime이 cutover submit terminal에서 시작하며, 유지하는 사본은 pipe를 점유하지 않는 Framework memory이므로 in-flight payload 예산에 계상하지 않는다. |
-| 전달 | 재전송은 batch 하나를 다시 보내는 것이며 message별 journal이나 ACK가 아니다. |
-| 수명 | Cutover submit terminal에서 시작해 창이 끝나면 사본을 정확히 한 번 정리한다. Source가 이미 정리되거나 종료된 뒤에는 재전송이 불가능하다. |
-| Application 권한 | Application은 창을 관찰하거나 바꾸지 않는다. Orchestrator는 [SafeToShutdown](#safe-to-shutdown)으로 창 종료를 포함한 종료 가능 시점을 확인한다. |
+Source가 boundary 전 relay batch와 cutover 사본을 보관하고, connection 장애 뒤 같은
+batch를 재전송할 수 있는 기간이다. Source는 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의
+target commit, source `Preserve` fence 또는 source lease 만료 terminal까지 사본을 유지한다. Cutover 대기
+Warning과 Restore deadline만으로 이 기간을 끝내지 않는다.
 
 <a id="safe-to-shutdown"></a>
 ### SafeToShutdown
@@ -1597,8 +1583,7 @@ ChannelName의 후보가 하나도 남지 않았을 때의 error kind는
 | 생성·관리 | Application이 Server registration에 지정하고 허용된 runtime API로 변경한다. Descriptor revision이 변경을 순서화한다. |
 | 수명 | Server lifecycle 동안 유지된다. `0`은 새 선택에서 제외할 뿐 role, connection과 이미 제출된 작업을 없애지 않는다. |
 
-Node placement, RouteMesh Channel Server와 ClientServer Server가 같은 범위와 기본값을 사용한다. Weighted
-selection은 후보 weight 합계를 최소 64-bit 정수로 계산한다. Logical Multicast는 positive weight의 크기와
+Node placement, RouteMesh Channel Server와 ClientServer Server가 같은 범위와 기본값을 사용한다. ChannelName weighted selection은 [Channel messaging §3](../02-channel-transport/02-channel-messaging.ko.md#3-target을-선택하는-방법--channelname-select-one-선택-순서가중-라운드로빈)을 따른다. Logical Multicast는 positive weight의 크기와
 관계없이 eligible remote member를 한 번 포함한다.
 
 <a id="full-mesh"></a>
@@ -1906,7 +1891,7 @@ message를 받을 수 있는 target이다.
 |---|---|
 | 형태 | Selectable runtime target state |
 | .NET 표기 | `ZLinkMeshPeerSnapshot.Ready`, `ZLinkClientServerServerSnapshot.Ready`와 기능별 state enum |
-| 공개 구성 | Transport가 준비되었고 identity·lifecycle 검사를 통과했으며 필요한 handler·role 조건을 만족한다. Select-one 후보는 여기에 positive weight와 non-draining 조건도 만족해야 한다. |
+| 공개 구성 | Transport가 준비되었고 identity·lifecycle 검사를 통과했으며 필요한 handler·role 조건을 만족한다. Select-one 후보 조건은 [Channel messaging §3](../02-channel-transport/02-channel-messaging.ko.md#3-target을-선택하는-방법--channelname-select-one-선택-순서가중-라운드로빈)이 정한다. |
 | 수명 | 조건 중 하나가 닫히면 새 target 선택에서 즉시 제외된다. |
 
 <a id="max-message-size"></a>
@@ -2428,43 +2413,14 @@ client 실행 환경에 맞게 제공한다.
 <a id="stream-packet"></a>
 ### Stream packet
 
-Message kind와 선택적인 packet name 같은 header 정보에 payload를 결합한 STREAM
-전송 단위다. Request와 reply를 연결하는 값도 header에 포함한다.
-
-| 항목 | 내용 |
-|---|---|
-| 형태 | Binary frame과 복합 header |
-| .NET 표기 | Raw packet public type 없음. .NET Connector는 typed send/request call과 `ZLinkMessage` 계열 값으로 감싼다. |
-| 생성·관리 | Connector runtime이 encode·decode하며 application은 header를 직접 조립하거나 수정하지 않는다. |
-| 수명 | 한 STREAM transport frame의 송수신과 pending request matching 동안 유지된다. |
-
-| Wire 구성 | 형식 |
-|---|---|
-| Frame prefix | `u16 header_len`, `u32 payload_size` |
-| Fixed header | `format_marker = 0xF2`, `kind u8`, `codec u8`, `flags u8` |
-| Request sequence | Flag가 있을 때 `request_seq u64`; `0`은 사용하지 않는다. |
-| Packet name | `u8 name_len + UTF-8 bytes`, 최대 255 byte. Response와 Error는 길이 `0`이다. |
-| Metadata | Flag가 있을 때 `u16 meta_len + encoded metadata` |
-| Correlation ID | Flag가 있을 때 `u8 length + ASCII bytes` |
-| Flow | Flag가 있을 때 36 byte `flow_id`와 1 byte `flow_origin`이 함께 존재한다. |
-| Payload | Header 뒤의 `payload_size` byte |
-
-모든 multi-byte 정수는 network byte order를 사용한다.
+STREAM 전송 단위다. Wire 구성과 sequence 제약은
+[Stream Connector §4](../../stream-connector/32-stream-connector.ko.md#4-wire-계약)가 정한다.
 
 <a id="dispatch-mode"></a>
 ### Dispatch mode
 
-수신 callback을 receive loop에서 자동으로 실행할지, application이 지정한 문맥에서
-명시적으로 직접 꺼내 실행할지를 정하는 Connector 설정이다. 게임 엔진에서는 main thread
-제약 때문에 기본값으로 `Manual`을 사용한다.
-
-| 항목 | 내용 |
-|---|---|
-| 형태 | Closed Connector execution mode |
-| .NET 표기 | 현재 공통 .NET 언어별 interface에는 독립 public enum이 없다. C# contract pseudocode로는 `Manual`과 `Immediate` 두 값이다. |
-| 공개 구성 | `Manual`은 dispatch queue를 application이 명시적으로 직접 꺼내 실행하고 `Immediate`는 receive 경로에서 callback을 inline 실행한다. |
-| 생성·관리 | Application이 Connector option에 지정하며 게임 엔진의 기본값은 `Manual`이다. |
-| 수명 | Connector instance configuration 동안 유지된다. |
+Connector의 callback 실행 모드다. 값과 실행 계약은
+[Stream Connector §7](../../stream-connector/32-stream-connector.ko.md#7-dispatch-모드)이 정한다.
 
 ---
 

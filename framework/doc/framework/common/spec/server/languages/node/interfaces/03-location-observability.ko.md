@@ -309,9 +309,19 @@ export interface ZLinkHostCapacityStatus {
  readonly applicationJobQueue: ZLinkApplicationJobQueueStatus;
 }
 
+export type ZLinkListenerKind = 'routeMesh' | 'clientServer' | 'fanout' | 'stream';
+
+export interface ZLinkListenerStatus {
+ readonly kind: ZLinkListenerKind;
+ readonly name: string;
+ readonly endpoint: string;
+ readonly observedAt: Date;
+}
+
 export interface ZLinkFrameworkRuntime {
  readonly status: ZLinkFrameworkRuntimeStatus;
  resetCapacityMetrics(): void;
+ getListenerStatus(kind: ZLinkListenerKind, name: string): ZLinkListenerStatus;
  diagnosticsLevel: ZLinkMessageFlowLogMode;
  observe(signal?: AbortSignal): AsyncIterable<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>>;
  relocate(options: ZLinkFrameworkRelocationOptions): Promise<ZLinkFrameworkRelocationResult>;
@@ -322,6 +332,10 @@ export interface ZLinkFrameworkRuntime {
 `ZLinkCoreHwmStatus`의 `applicationAccountedBytes`, `outstandingApplicationLeaseCount`,
 `retiredQueueCount`, `deferredOriginCreditBytes`는 ABI 호환용 reserved field이며 0.13.1 이후 항상 `0n`이다.
 Framework는 이를 그대로 투영하며 Application Job Queue pressure로 다시 해석하지 않는다.
+
+`getListenerStatus(kind, name)`은 [Network listener identity §3.1](../../../02-channel-transport/04-network-listener-identity.ko.md#31-publisher가-확인하는-listener-상태)의 listener 상태 조회다.
+`name`은 설정한 MeshName, ChannelName 또는 StreamNodeName이다. §3.1이 정한 configuration error는
+`ZLinkConfigurationException`으로 실패한다.
 
 `diagnosticsLevel`을 읽으면 process의 현재 진단 수준을 반환하고 값을 바꾸면 이후 message processing
 boundary부터 새 수준을 적용한다. 변경은 message 처리를 기다리지 않는 원자적 상태 변경이며 이미 telemetry

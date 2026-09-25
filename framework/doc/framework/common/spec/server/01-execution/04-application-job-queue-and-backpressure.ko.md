@@ -339,10 +339,8 @@ white-box 불변 조건이다. Binding 호출은 queue, registry와 user callbac
 
 ## 7. Send completion과의 합성
 
-- **Core와 binding은 HWM 대기, 내부 재시도와 operation별 completion을 소유한다.**
-  Framework는 특정 target을 선택한 뒤 binding operation 하나만 시작한다. Operation이
-  시작되면 PAUSE나 HWM을 이유로 target을 다시 고르거나 같은 payload로 두 번째 operation을
-  만들지 않는다.
+- **Send completion의 HWM 재시도와 재제출 경계는
+  [Submit과 완료 §5](01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.**
 - **Framework는 제거된 `send_ready` callback·event, readiness waiter 또는 retry adapter를
   두지 않는다.** 작업을 끝내야 하는 마지막 시점인
   [Deadline](../00-foundation/02-glossary.ko.md#deadline), cancellation, detach와 shutdown은
@@ -352,9 +350,8 @@ white-box 불변 조건이다. Binding 호출은 queue, registry와 user callbac
 
 ## 8. 보낼 때의 대기
 
-**Framework는 Core socket의 send와 request를 한 번 호출한다.** 보낼 자리가 없어 기다리는 일은
-§7대로 Core와 binding이 한다. Framework는 기다리는 줄을 따로 만들지 않고, 다시 보내지 않으며,
-같은 내용으로 두 번째 호출을 만들지 않는다.
+Binding operation의 제출 횟수와 HWM 대기 소유는
+[Submit과 완료 §5](01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
 
 - **기다리다 시간이 다 되면 [`DeadlineExceeded`](../00-foundation/02-glossary.ko.md#deadlineexceeded)로
   끝난다.** send·publish·one-way·request가 모두 같다. 밀렸다는 사실 자체는 호출자가 받는

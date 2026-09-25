@@ -81,15 +81,7 @@ Framework runtimes implement service contracts using only the public raw socket 
 language binding. There is no shared native service runtime for Framework, separate Core C
 SPI, private binding entry point, or language-neutral service C ABI.
 
-Core carries receive-flow state for DEALER-DEALER and DEALER-ROUTER in Core control frames
-on the single Application connection. For ROUTER-ROUTER, it carries the state on the
-[completion progress lane](glossary.en.md#completion-progress-lane) (a separate path that
-also progresses terminal replies and error replies, hereafter the completion lane). The
-runtime consumes both types of frame internally. [Auto HWM](systems/06-auto-hwm.en.md) owns
-the contract that excludes the ROUTER-ROUTER completion lane from
-[HWM](glossary.en.md#hwm) admission and the
-[Auto HWM budget](glossary.en.md#auto-hwm-budget) (the byte total Core computes from memory
-inputs and uses as the basis for dividing HWM among application queues). The public surface
+Physical-lane placement for receive-flow state and replies follows [ZMP request-reply lanes](protocol/01-zmp.en.md#41-request-reply-lane). Completion-lane HWM and accounting follow [Auto HWM §2 completion-lane HWM and accounting](systems/06-auto-hwm.en.md#2-auto-hwm-budget-calculation). The public surface
 for this
 state consists of
 `zlink_socket_set_receive_flow_state()` for configuration, three receive-flow monitor

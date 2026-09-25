@@ -51,10 +51,7 @@ generation과 owner 자격도 함께 확인한다.
 
 | 확인한 경계 | Framework의 처리 |
 |---|---|
-| Framework가 target을 선택하며 아직 어느 target도 operation을 수락하지 않음 | 같은 operation의 deadline 안에서 다른 eligible target을 선택할 수 있다. |
-| Caller가 node RID, global object ID 또는 Session binding을 지정함 | 지정한 logical identity를 유지한다. 다른 logical target으로 바꾸지 않는다. |
-| Operation이 target queue에 수락됨 | 같은 operation을 다른 target에서 다시 실행하지 않는다. |
-| Transport 수락 여부를 확인할 수 없음 | 중복 가능성이 있으므로 다른 peer에 자동 재제출하지 않는다. |
+| Target 선택·logical identity·재제출 경계 | [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)를 따른다. |
 | Operation이 terminal 결과에 도달함 | Reply, failure, timeout, cancellation 또는 shutdown 가운데 먼저 확정된 결과 하나만 반환한다. |
 
 Application은 실패 뒤 새 operation을 시작할 수 있다. 새 operation이 앞선 작업과 같은 변경을
@@ -88,8 +85,9 @@ Framework는 orderly close와 transport 오류를 즉시 반영하고, 응답이
 connection을 liveness deadline 안에 `not-ready`로 바꾼다. 한 peer의 장애는 다른 ready peer와
 local owner의 처리를 중단시키거나 host 전체를 `Error`로 바꾸지 않는다.
 
-Framework는 현재 configuration 또는 discovery descriptor를 사용해 같은 논리 peer와
-connection을 다시 설정한다. 이때 service handshake와 identity 확인을 다시 수행한다. 이전
+같은 endpoint의 transport reconnect는 [Core socket `zlink_connect`](../../../../../../../core/doc/spec/core/socket/README.ko.md#zlink_connect)가
+소유한다. Framework는 현재 configuration·discovery descriptor intent를 유지하고 Core가 선택
+route 준비를 알리면 service handshake와 identity 확인을 다시 수행한다. 이전
 connection ID, reply route, Session binding과 ready 상태는 재사용하지 않는다. Connection
 loss 전에 transport가 operation을 수락했는지 알 수 없으면 그 operation은 다른 peer에
 제출하지 않는다. 자세한 시간과 상태 전이는
@@ -118,13 +116,9 @@ Actor와 Spot message는 Location Store에서 확인한 현재 `Ready` owner를 
 만료되거나 owner lease가 무효가 되면 다음 새 operation이 현재 owner를 다시 조회한다. 실패한
 operation 자체는 새 owner에게 자동으로 제출하지 않는다.
 
-계획된 relocation으로 owner가 바뀐 직후에는 이전 owner가 이미 받은 message를 commit된
-target으로 전달할 수 있다. 이 동작을 [Message Follow](../00-foundation/02-glossary.ko.md#message-follow)라고
-한다. 이 전달 경로의 유지 시간을 정하는
-[MessageFollowDuration](../00-foundation/02-glossary.ko.md#message-follow-duration)의 기본값은 30초이며
-0이면 사용하지 않는다. Message Follow는 이미 commit된 이동 경로를 따를 뿐 owner process
-장애 뒤 새 owner를 선택하지 않으므로 failover가 아니다. 자세한 route와 cache 규칙은
-[Spot·Actor routing](../03-spot-actor/08-routing.ko.md)이 정의한다.
+계획된 relocation 뒤 이전 owner에 도착한 message의 Message Follow 경로와 기간은
+[Location runtime §7.3](01-location-runtime.ko.md#73-이전-owner로-도착한-message를-새-owner에게-전달한다)가 정의한다.
+이 경로는 owner process 장애 뒤 새 owner를 선택하는 failover가 아니다.
 
 현재 `Ready` Actor 또는 Spot의 owner process가 종료되면 Framework는 다른 node에 같은 object를
 자동 복원하지 않는다. Location Store에 기록된 owner를 임의로 바꾸거나 같은 global ID의 새
@@ -188,14 +182,14 @@ source runtime, 선택한 target runtime, Location Store와 Relocation Store가 
 | 실패 시점 | Framework의 처리 |
 |---|---|
 | Relay-ready reply가 accepted 상태가 되기 전 명시적 실패 | Target instance와 temporary queue를 폐기하고 source owner·membership과 queue를 유지한다. 다른 target을 자동 선택하지 않는다. |
-| Relay-ready reply가 accepted 상태가 된 뒤, owner 변경 commit 전 | Cutover submit 결과와 관계없이 source를 복원하지 않는다. Target은 cutover 수신 또는 1,000ms fallback으로 owner 변경을 계속한다. |
+| Relay-ready reply accepted 뒤, owner 변경 commit 전 | Cutover submit 결과만으로 source를 복원하지 않는다. [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 완전성 검증과 `Preserve` fence가 authority와 source 재개를 결정한다. |
 | Store 변경 결과를 받지 못함 | 성공이나 실패를 추측하지 않고 같은 authority record를 다시 읽어 실제 owner를 확인한다. |
 | Owner 변경 commit 뒤, 같은 target process가 실행 중임 | Source로 되돌리지 않는다. 같은 target에서 lifecycle callback이나 dispatch 전환을 deadline 안에 다시 시도할 수 있다. |
 | Owner 변경 commit 뒤 target process가 종료됨 | Location Store의 target owner는 유지하지만 object는 `Unavailable` 상태가 된다. 다른 runtime이 relocation을 이어받지 않는다. |
 | Source process 또는 target process가 operation 중 종료됨 | 다른 target 선택, process 재시작 뒤 relocation 재개와 source rollback을 수행하지 않는다. |
 
-Relay-ready reply가 accepted 상태가 되기 전 source를 유지하는 것은 failover가 아니라 비가역
-경계 전 operation의 취소다. 그 뒤에는 owner commit 전이라도 source를 복원하지 않는다. Commit
+Relay-ready 전 명시적 취소와 그 뒤 source `Preserve` fence 성공은 모두 확인된 source
+authority에서 작업을 이어간다. Fence 성공 뒤의 source 재개는 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)가 정한다. Commit
 뒤 같은 target에서 계속하는 것도 새로운 target 선택이 아니다. Process 종료 뒤 object
 failover는 현재 계약에 포함되지 않는다. 자세한 단계와 결과는
 [Host relocation 전체 흐름 §1.1](05-host-relocation-flow.ko.md#11-장애-처리-범위)과
@@ -272,11 +266,8 @@ binding 상태)만으로 다음을 확인한다. 각 항목은 test 하나로 �
 Spot 하나의 global ID를 지정해 해당 Spot에 send 또는 request를 전달하는 방식을
 [Spot direct](../00-foundation/02-glossary.ko.md#spot-direct)라고 한다.
 
-- Channel select-one은 target이 operation을 수락하기 전까지만 다른 eligible server를 선택한다.
-- Node direct, Actor·Spot direct와 Session binding operation은 지정한 logical identity를 다른
-  target으로 바꾸지 않는다.
-- Transport 수락 여부가 불분명하거나 operation이 이미 수락된 뒤에는 다른 peer에 자동
-  재제출하지 않는다.
+- Channel select-one, direct call과 Session binding의 target 확정·재제출 경계는
+  [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
 - Peer 하나의 liveness failure가 다른 ready peer와 host state를 `Error`로 바꾸지 않는다.
 - Reconnect는 handshake와 identity 검증을 다시 수행하고 이전 connection의 reply route,
   Session binding과 ready 상태를 재사용하지 않는다.
@@ -298,8 +289,7 @@ Spot 하나의 global ID를 지정해 해당 Spot에 send 또는 request를 전�
 
 **Host relocation과 Session 장애**
 
-- Relay-ready reply가 accepted 상태가 되기 전 명시적 failure만 source를 유지하고, 그 뒤
-  failure는 cutover submit 결과와 관계없이 source로 되돌리지 않는다.
+- Relay-ready 뒤 cutover submit 결과나 source를 가리키는 이전 read만으로 source dispatch를 열지 않는다. [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 source `Preserve` fence가 확인되면 source에서 보관 작업을 재개하고, target commit이 확인되면 source로 되돌리지 않는다.
 - Source 또는 target process 종료 뒤 다른 runtime이 relocation을 이어받거나 다른 target을
   자동 선택하지 않는다.
 - Session owner process 종료 뒤 Session과 binding을 다른 process에서 복원하지 않는다.

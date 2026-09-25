@@ -84,7 +84,10 @@ later stage doesn't infer the Store result again.
 | `Ready` | Route and authority/owner-lease fences | Route admission |
 | `Unavailable` | Authority and invalid-owner evidence | Terminal completion adapter |
 
-`Unavailable` means authority remains but the current owner can't be used. It isn't the
+The resolver's `Unavailable` preserves the authority state without a Ready route. Instance
+intent seeing `Creating` goes to the waiter above; during idle cleanup it follows the route
+refresh in §5. [Spot messaging §9](06-spot-address-messaging.en.md#9-failure-and-observability)
+decides the result for a `Closing` direct call without Instance intent. It isn't the
 same state as `Missing`, which means no authority exists. Only after an explicit `Close`,
 `IdleEvicted` cleanup, or another formal lifecycle operation completes authority release
 can the resolver produce a new `Missing` input.
@@ -99,8 +102,8 @@ create a new object for that ID, and no one would ever clean it up.
 ### When Multiple Attempt to Create at Once
 
 If several callers try to build the same object at once, **only the caller that secures the
-creation authority first** records itself as owner and creates it. The rest target the
-already-created object. The factory runs exactly once.
+creation authority first** records itself as owner and creates it. The result for another attempt depends on its operation. A target losing `Reserve` for a
+first Instance message follows [Spot messaging §4.2](06-spot-address-messaging.en.md#42-when-several-nodes-receive-the-first-message-at-once).
 
 **Don't cache the in-progress-creation state.** Since "being created" is a state about to
 change, it isn't put into
@@ -181,7 +184,9 @@ lifecycle changes and move relay.
 ```mermaid
 flowchart TB
     M["message arriving via a stale route"] --> O{"is this node<br/>still owner"}
-    O -- "no" --> X["stale-route error<br/>no automatic retry"]
+    O -- "no" --> F["check Message Follow<br/>in routing §2.5"]
+    F -- "no valid route" --> X["stale-route error<br/>no automatic retry"]
+    F -- "valid route" --> R["relay the same operation"]
     O -- "yes" --> L{"is owner validity<br/>period remaining"}
     L -- "no" --> X
     L -- "yes" --> G["object generation isn't checked"]
@@ -194,8 +199,9 @@ The left axis is the path an ordinary message goes through. The point where you'
 add a generation check at `G` is the pitfall, and the right-side `K` is the only path
 where generation is checked.
 
-**A filtered message ends in a stale-route error. The runtime doesn't automatically
-retry.** Retrying would let the sender see success while the request may actually have executed
+A message arriving at the previous owner follows [Routing §2.5](08-routing.en.md#25-a-message-arriving-at-a-previous-owner-route)
+first. Only the absence of a valid Follow route produces a stale-route error; the runtime does
+not submit a new operation. Retrying would let the sender see success while the request may actually have executed
 twice. The application can start a new call, and at that point the risk of duplicate
 execution is judged by the application.
 

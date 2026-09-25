@@ -62,12 +62,12 @@ casing, or file names when a TypeScript idiom is clearer.
 | [64-bit Byte HWM and Monitoring Contract](#64-bit-byte-hwm-and-monitoring-contract) | `bigint` HWM representation and monitor snapshot fields |
 | [Receive flow state](#receive-flow-state) | The receive-flow state type, setter, and monitor surface |
 | [Required Capability Coverage](#required-capability-coverage) | User-facing capabilities that alignment must guarantee |
-| [Spot Get-Or-Create](#spot-get-or-create) | The `getOrCreateSpot` contract |
+| [Spot Get-Or-Create](#spot-get-or-create) | Framework public contract link |
 | [Receive and Subscribe Shape](#receive-and-subscribe-shape) | Caller-provided storage and no-data distinction |
 | [Error and Validation Policy](#error-and-validation-policy) | Validation timing and error structuring |
 | [Performance Policy](#performance-policy) | Hot-path constraints |
 | [Implementation Checklist](#implementation-checklist) | Pre-alignment checks and required verification commands |
-| [Actor and Spot Route Results](#actor-and-spot-route-results) | Route result types, and Actor-targeted send/request |
+| [Actor and Spot Route Results](#actor-and-spot-route-results) | Framework public contract link |
 
 ## Public Contract Source
 
@@ -145,13 +145,6 @@ bindings/node/
 |   |   |   |   +-- monitor.ts
 |   |   |   |   +-- poller.ts
 |   |   |   |   +-- timer.ts
-|   |   |   +-- service/
-|   |   |   |   +-- spot/
-|   |   |   |   |   +-- spot_node.ts
-|   |   |   |   |   +-- spot.ts
-|   |   |   |   |   +-- actor.ts
-|   |   |   |   |   +-- spot_operations.ts
-|   |   |   |   |   +-- spot_models.ts
 |   |   |   +-- errors/
 |   |   |   |   +-- errors.ts
 |   |   |   |   +-- results.ts
@@ -189,19 +182,12 @@ bindings/node/
 |   |   |   +-- options/
 |   |   |   |   +-- option_mapping.ts
 |   |   |   |   +-- validation.ts
-|   |   |   +-- service/
-|   |   |   |   +-- spot/
-|   |   |   |   |   +-- spot_node.ts
-|   |   |   |   |   +-- spot.ts
-|   |   |   |   |   +-- actor.ts
-|   |   |   |   |   +-- spot_operations.ts
 |   |   |   +-- errors/
 |   |   |   |   +-- native_errors.ts
 |   |   |   +-- native/
 |   |   |   |   +-- native.ts
 |   |   |   +-- internal/
 |   |   |   |   +-- request_pump.ts
-|   |   |   |   +-- service_mapping.ts
 +-- native/
 +-- tests/
 +-- samples/
@@ -251,8 +237,6 @@ The contract/runtime boundary meets these requirements:
 The following Node-specific shortcuts are not allowed.
 
 - `src/zlink/contracts` does not re-export runtime handle modules.
-- Contract files do not import runtime resource classes to describe public
-  service models.
 - A public runtime aggregate such as `runtime/handles/canonical.ts` does not
   remain the source of public resource behavior. Split those declarations
   into named contract files and resource-named runtime implementation files.
@@ -297,11 +281,7 @@ resources and roles before writing or exposing a runtime class.
   `StreamSocket`.
 - Eventing roles: `MonitorSocket`, `Poller`, poll event source, `Timer`,
   `Stopwatch`, and `AtomicCounter`.
-  `Spot`, `Actor`.
-- Operation builders: send, routed send, request, reply, publish, channel
-  send/request, SPOT send/request/reply, actor create, actor join, and actor
-  join reply builders.
-- Application handler roles: SPOT dispatch handler and route handler.
+- Operation builders: raw send, routed send, request, reply, and publish.
 
 The runtime class that implements a role may have a private or unexported
 name, but the package-root factory and the generated declaration must use
@@ -351,8 +331,6 @@ and the published TypeScript declarations.
   request/reply and publish/subscribe surfaces.
 - `eventing/`: monitor, monitor snapshot/event, poller, poll events, timer,
   and public poll helpers.
-- `service/`: SPOT node, SPOT handle, topology model, Actor reference, Actor
-  lifecycle, and operation builders.
 - `errors/`: typed error classes or tagged error domains.
 - Enum, flag, result, and literal-union types live in the category that
   defines their meaning. Do not create an `enums` folder just to group them
@@ -373,10 +351,6 @@ shared with .NET, but the names inside it stay idiomatic TypeScript.
 - `sockets/`: socket interfaces, socket option types, send/request/reply
   builder contracts, stream packet values, and socket flags.
 - `eventing/`: monitor, monitor event/status, poller, poll events, and timer contracts.
-- `service/`: a `spot/` subfolder holding SPOT node, Spot, Actor, topology
-  model, and service operation builders. Use named files such as
-  `spot_node.ts`, `spot.ts`, `actor.ts`, and `spot_operations.ts`, and group
-  model files with their service domain.
 - `errors/`: public error classes, result domains, and error-code mapping.
 
 Do not collect public resource behavior into one aggregate `models.ts` or a
@@ -411,10 +385,7 @@ implementation.
 - `eventing/`: `monitor_socket.ts`, `poller.ts`, `poll_events.ts`,
   `timer.ts`, and related event materialization helpers.
 - `options/`: option validation and native option id/value mapping shared by
-  context, sockets, and services.
-- `service/`: SPOT node, Spot, Actor, topology, and service operation
-  implementations. Use a `spot/` subfolder once the implementation grows
-  large enough.
+  context and sockets.
 - `errors/`: native error translation and validation helpers.
 - `native/`: native addon loading, platform lookup, and N-API binding
   surface.
@@ -429,18 +400,16 @@ implementations in factories, but it exports contract names, not runtime
 implementation modules.
 
 Category files such as `runtime/sockets/sockets.ts`,
-`runtime/service/service.ts`, `runtime/eventing/eventing.ts`, and
-`runtime/core/index.ts` are allowed only as small barrels. They may
+`runtime/eventing/eventing.ts` and `runtime/core/index.ts` are allowed only as small barrels. They may
 re-export nearby implementation files or define factory wiring that stays
 internal to runtime, but they do not hold native-backed resource class
 bodies, operation builders, or marshalling logic. If a reviewer must read a
-category aggregate to understand how `RouterSocket`, `SpotNode`, or `Poller`
+category aggregate to understand how `RouterSocket` or `Poller`
 behaves, the file split is not aligned.
 
 Runtime implementation file names describe the resource or operation they
 implement, not the fact that they are native-backed. Use `router_socket.ts`,
-`spot_node.ts`, `poller.ts`, and `timer.ts`, not `default_router_socket.ts`,
-`default_spot_node.ts`, or `default_poller.ts`.
+`poller.ts`, and `timer.ts`, not `default_router_socket.ts` or `default_poller.ts`.
 
 A shared helper must not become a second public implementation aggregate.
 `runtime/internal/*` may own narrow private glue that crosses several
@@ -449,7 +418,7 @@ not hide a standard .NET runtime category. Native handle ownership belongs
 in `runtime/handles`, buffer conversion in `runtime/buffers`, option mapping
 in `runtime/options`, native addon declarations in `runtime/native`, and
 public resource behavior in a resource runtime file such as
-`sockets/router_socket.ts` or `service/spot/spot_node.ts`.
+`sockets/router_socket.ts`.
 
 Shared helper files under a category follow the same rule. A file such as
 `runtime/sockets/socket_common.ts` may hold narrow socket helper types or a
@@ -462,14 +431,12 @@ internal helpers.
 
 The following shapes are explicit alignment failures.
 
-- `runtime/service/service.ts` holds the `SpotNode`, `Spot`, and `Actor`
-  implementations in one file.
 - `runtime/eventing/eventing.ts` holds the monitor socket, poll events,
   poller, timer, stopwatch, and counter implementations in one file.
 - `runtime/core/context.ts` holds context, context options, and unrelated
   runtime helper implementation in one file.
 - `runtime/core/runtime_info.ts` holds a copied implementation prelude, or
-  socket/service behavior, just to reach its helper functions.
+  socket behavior, just to reach its helper functions.
 - `runtime/sockets/socket_common.ts` holds operation builders, monitor
   socket behavior, route helpers, message conversion, and base socket
   behavior all in one large file.
@@ -489,14 +456,8 @@ factories and public contract methods.
   `createRouterSocket()`, `createPubSocket()`, `createSubSocket()`,
   `createXPubSocket()`, `createXSubSocket()`, and `createStreamSocket()`
   create runtime socket implementations.
-  Service-layer implementations are created accordingly.
-- A `Spot` handle is obtained through `SpotNode.createSpot()`,
-  `entrySpot()`, `getOrCreateSpot(...)`, or `spotLookup(...)`. Direct `Spot`
-  construction is not public.
-- An Actor handle is created through `SpotNode.createActor(...)`. Direct
-  Actor construction is not public.
-- `createPoller()`, `createTimer()`, and `createTimer(spot)` create eventing
-  resources.
+Public Spot and Actor creation, including service-owned timers, is specified by the [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md). This binding specification defines creation of Core raw sockets, monitors, pollers, and generic timers.
+- `createPoller()` and `createTimer()` create eventing resources.
 - `Pollable` is `BaseSocket | SocketMonitor | Timer | number`, and `Poller.add/modify/remove`
   provide `SocketMonitor` overloads (common spec "Monitor sources in `Poller`"). Only
   `PollEventFlag.PollIn` is valid for a socket monitor; any other readiness mask is rejected
@@ -558,9 +519,7 @@ using TypeScript spelling.
 - Use the same canonical action names as the other bindings, differing only
   in case: `send`, `request`, `reply`, `publish`, `subscribe`,
   `unsubscribe`, `recv`, `recvRouted`, `receiveSubscriptionEvent`,
-  `recvPacket`, `setDispatchHandler`,
-  `getOrCreateSpot`, `sendToChannel`, `requestToChannel`, `sendToSpot`, and
-  `requestToSpot`.
+  `recvPacket`, and `setDispatchHandler`.
 - Do not keep an alias only for compatibility. When another name
   conflicts with the canonical meaning, expose the canonical
   TypeScript name.
@@ -574,17 +533,13 @@ using TypeScript spelling.
 - Data-plane `recv`, routed recv, `subscribe`, and subscription-event
   receive fill a caller-provided `Received`, `TopicMessage`, or
   `SubscriptionEvent` object and return `boolean`.
-- Send, routed send, publish, request, reply, SPOT operations, and Actor
-  location/session operations return a fluent builder.
-- A builder start method takes only the target identity, topic, channel,
+- Raw send, routed send, publish, request, and reply return a fluent builder.
+- A builder start method takes only the target identity, topic,
   routing ID, or `ReplyToken`. Payload and the options supported by that
   operation are builder steps.
-- SPOT channel-targeted operations use `sendToChannel(...)` and
-  `requestToChannel(...)`. SPOT topic publish stays `publish(topic)`.
 - Do not add a single-payload shortcut overload sharing a name with an
   operation start method. `send(message)`, `send(routingId, message)`,
-  `publish(topic, message)`, `sendToChannel(channel, message)`, and
-  `sendToSpot(..., message)` are not public contract members. Callers use
+  `publish(topic, message)` are not public contract members. Callers use
   `send(...).message(message).submit()`.
 - Multipart payload is accumulated by repeated `message(...)` calls. A
   `messages(...)` convenience is allowed when it delegates to the same
@@ -644,8 +599,6 @@ The package entrypoint groups the API around domain concepts.
   options, request/reply, publish/subscribe, and stream packet
   APIs.
 - Eventing: monitor, monitor snapshot/event, poller, poll events, and timer.
-- Service: SPOT node, SPOT handle, topology snapshot, Actor reference, Actor
-  lifecycle, and operation builders.
 - Errors: typed error classes, or tagged error objects that preserve the
   core result domain.
 
@@ -748,29 +701,20 @@ covers all of the following stable user-facing capabilities.
     choice so close-heavy paths (e.g. REQREP) do not pay extra per-close cost.
 - Every socket family and its typed options.
 - Monitor, poller, timer, and readiness semantics.
-- SPOT node, SPOT handle, topology snapshot, Actor, and stream Actor
-  binding.
 
 The binding may expose a synchronous or asynchronous form where
 appropriate, but it does not change the meaning of a core operation.
 
 ## Spot Get-Or-Create
 
-Node exposes `SpotNode.getOrCreateSpot(spotRid)`. This maps directly to
-`zlink_spot_node_spot_get_or_new(...)`; it is not implemented by combining
-`spotLookup` and `createSpot`.
-
-This method returns `{ spot, created }`. The returned `Spot` is caller-owned
-and is closed the normal way. `created` is `true` only for the call that
-created the logical spot.
+The [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md#17-creategetorcreate-results-and-relocation-policy)
+owns public Spot `GetOrCreate` inputs, results, and ownership.
 
 ## Receive and Subscribe Shape
 
 - The data-plane receive and subscribe APIs use a caller-provided result
   object for reusable storage.
 - Non-blocking no-data returns `false`, distinct from a thrown error.
-- A SPOT readable dispatch event is a readiness notification. The caller
-  drains the matching receive API until it reaches no-data.
 - Each part received from a general socket, routed socket, subscription, or
   successful request result becomes a `Message` whose payload is a JavaScript-owned
   `Buffer` created by the addon. Reading the payload does not require another
@@ -781,10 +725,6 @@ created the logical spot.
   `RoutingId` and nullable `ReplyToken`, and the Sub/XSub topic and Core-provided source `RoutingId`.
   The [common receive ownership contract](../README.en.md#receive-ownership) defines the boundary with receive accounting.
   Node's public and internal receive APIs have no per-part release.
-- A service control/admission receive path such as Actor join request
-  receive can use a nullable, `undefined`, or tagged result-return shape
-  when that is clearer than reusable data-plane storage. It still
-  distinguishes no-data from a thrown hard receive error.
 
 ### STREAM packet storage
 
@@ -797,7 +737,7 @@ error.
 
 - Validate fixed-size boundary strings and ids before the native addon
   call.
-- Do not silently truncate a routing id, actor id, endpoint, channel name,
+- Do not silently truncate a routing id, endpoint, channel name,
   or topic.
 - Preserve the submit, request, recv, handler, close, bind, connect, and
   config error domains.
@@ -823,8 +763,6 @@ error.
 - An exposed helper function or builder convenience method is declared in
   contract source, not only in a runtime helper.
 - Receive/subscription semantics match the shared binding policy.
-- Wherever a service control/admission receive differs from caller-provided
-  data-plane storage, that exception is documented.
 - Perf semantics match `bindings/c/perf`.
 - `src/zlink/contracts` has no import or export dependency on
   `src/zlink/runtime`.
@@ -847,7 +785,7 @@ from `bindings/node/`.
 - Run `npm test`.
 - Run `npm run samples` if a public example or construction path changed.
 - Run `npm run perf:single` and `npm run perf:multi` as smoke gates if a
-  hot path, receive, send, request, poller, timer, or service behavior
+  hot path, receive, send, request, poller or timer behavior
   changed.
 - Inspect the generated declarations and confirm the package root exposes
   contract types, not runtime implementation modules.
@@ -860,27 +798,7 @@ from `bindings/node/`.
 
 ## Actor and Spot Route Results
 
-Node exposes Actor and Spot route lookup results as public JavaScript
-objects with matching TypeScript declarations.
-
-- `ActorRoute` preserves the resolved Actor reference, Actor node RID,
-  current Spot RID, and current Spot kind.
-- `SpotRoute` preserves Spot RID, owner node RID, and Spot kind.
-- `SpotKind` distinguishes Entry Spot from a user Spot. An invalid kind is
-  not a successful route result.
-- A SpotNode snapshot entry exposes the same Spot kind/current Spot fields
-  as the core snapshot.
-
-- Node exposes `SpotNode.sendToActor(actorRef)` and
-  `SpotNode.requestToActor(actorRef)`, taking a resolved Actor ref as their
-  argument.
-- The send operation hands off ownership of one or more message parts once
-  submit succeeds, and completes once the Actor owner mailbox accepts the
-  handoff.
-- The request operation hands off ownership of the request part once submit
-  succeeds, and delivers the reply part the Actor handler produced.
-- Node does not revive a removed Discovery route table or resolver API as a
-  compatibility helper.
+Public Spot/Actor shapes are defined by [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md).
 
 ## Pull completion public contract
 

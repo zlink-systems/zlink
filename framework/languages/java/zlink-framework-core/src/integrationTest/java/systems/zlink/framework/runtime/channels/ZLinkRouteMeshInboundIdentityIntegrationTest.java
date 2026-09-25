@@ -11,6 +11,9 @@ import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.eventing.MonitorEvent;
 import systems.zlink.contracts.eventing.MonitorEventType;
+import systems.zlink.contracts.eventing.PollEventFlags;
+import systems.zlink.contracts.eventing.PollEvents;
+import systems.zlink.contracts.eventing.Poller;
 import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
@@ -114,15 +117,25 @@ final class ZLinkRouteMeshInboundIdentityIntegrationTest {
                         },
                         responder);
 
-        List<Message> reply =
-                requester
-                        .request(targetRid)
-                        .message(Message.from(("request:" + marker).getBytes()))
-                        .timeout(Duration.ofSeconds(2))
-                        .submit()
-                        .reply()
-                        .toCompletableFuture()
-                        .get(3, TimeUnit.SECONDS);
+        List<Message> reply;
+        try (Poller completions = Zlink.createPoller()) {
+            completions.add(requester, 0, PollEventFlags.POLLCOMPLETION);
+            CompletableFuture<List<Message>> pending =
+                    requester
+                            .request(targetRid)
+                            .message(Message.from(("request:" + marker).getBytes()))
+                            .timeout(Duration.ofSeconds(2))
+                            .submit()
+                            .reply()
+                            .toCompletableFuture();
+            PollEvents events = new PollEvents(1);
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            while (!pending.isDone() && System.nanoTime() < deadline) {
+                completions.wait(
+                        events, Duration.ofNanos(Math.max(1, deadline - System.nanoTime())));
+            }
+            reply = pending.get(0, TimeUnit.SECONDS);
+        }
         try {
             assertEquals(1, reply.size());
             assertArrayEquals(

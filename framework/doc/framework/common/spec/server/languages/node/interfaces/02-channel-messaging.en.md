@@ -103,13 +103,6 @@ export interface ZLinkFanoutChannelBuilder {
 export interface ZLinkFanoutClient {
  publish(channelName: string, event: unknown): ZLinkFanoutPublishCall;
  publish(channelName: string, topic: string, event: unknown): ZLinkFanoutPublishCall;
- getListenerStatus(channelName: string): ZLinkFanoutListenerStatus;
-}
-
-export interface ZLinkFanoutListenerStatus {
- readonly channelName: string;
- readonly endpoint: string;
- readonly observedAt: Date;
 }
 
 export interface ZLinkFanoutPublishCall {
@@ -149,11 +142,9 @@ count or receipt completion. `ZLinkPublishCall` is Logical-Multicast-only
 and isn't used for classic fanout. Even with 0 subscribers, it
 completes normally once the publisher local queue accepts the event.
 
-`getListenerStatus(...)` returns the current advertised endpoint once
-the publisher listener has bound. If port `0` was used in configuration,
-the returned endpoint contains the actual port the operating system
-chose. It fails with `ZLinkConfigurationException` if the host hasn't
-started or that channel isn't registered as a publisher.
+The publisher listener's advertised endpoint is queried with
+`ZLinkFrameworkRuntime.getListenerStatus('fanout', channelName)`
+([location and observability interfaces](03-location-observability.en.md)).
 
 A topic passed to the overload that specifies topic, or registered with `subscribe`, that
 [Channel messaging §7](../../../02-channel-transport/02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic) forbids raises `ZLinkConfigurationException`. The overload that omits topic uses the
@@ -395,20 +386,10 @@ a finite integer in range `1..2147483647`. `undefined` selects the
 default, and `0`, a negative value, a non-integer value, and exceeding
 the cap are rejected with `ZLinkConfigurationError`.
 
-[Logical Multicast](../../../00-foundation/02-glossary.en.md#logical-multicast)'s
-`ZLinkPublishCall.submit(...)` does a direct handoff to a I/O
-executor. If a worker slot isn't obtained immediately, it waits for
-capacity up to the send timeout. After obtaining the slot but before the
-publish attempt starts, abort and
-[shutdown](../../../00-foundation/02-glossary.en.md#shutdown) can block the
-operation from starting. The moment the publish attempt starts is the
-operation commit barrier — an abort after that doesn't interrupt the
-already-confirmed [snapshot](../../../00-foundation/02-glossary.en.md#publish-target-snapshot)
-operation. Once the transaction has started, an individual target
-failure doesn't roll back an already-accepted target or automatically
-retry the whole publish. Per-target admission/failure results of remote
-transport and the local Spot queue aren't returned or aggregated into
-monitoring. It completes normally even with 0 targets in the snapshot.
+[Interaction model §5](../../../00-foundation/04-interaction-model.en.md#5-spot-logical-multicast)
+and [Cancellation and shutdown §4](../../../01-execution/03-cancellation-and-shutdown.en.md#4-logical-multicast-cancellation)
+define Logical Multicast worker admission, commit, terminal, and retry.
+Node.js calls it through `ZLinkPublishCall.submit(...)`.
 
 ## 6. Serializer And STREAM Session
 

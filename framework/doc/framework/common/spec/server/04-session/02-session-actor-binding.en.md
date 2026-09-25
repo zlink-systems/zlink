@@ -83,7 +83,7 @@ it either.
 | Boundary | Value validated once | Where it isn't revalidated |
 |---|---|---|
 | Transport ingress | Authenticated peer RID/node generation, frame shape | Target queue, Session owner |
-| Target handoff (relocation) | Source owner fence, target fence, Store version, Restore and cutover or the 1,000 ms fallback | Source, Message Follow, Session owner |
+| Target handoff (relocation) | Source owner fence, target fence, Store version, complete-relay and cutover verification in [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover) | Source, Message Follow, Session owner |
 | Session owner (`SessionBindingAggregate`) | Physical Session identity/SessionRid, binding generation and the `ActorId`/`ObjectGeneration` it points to, relocation identity | Actor Join, host relocation, Message Follow, route cache |
 
 ## 3. Startup Conditions
@@ -244,10 +244,10 @@ that Spot's common gate.
   dropped.
 
 A push sent by the Actor to the session is delivered to the session owner as
-a `boundSessionSend(36)` record. The session owner only submits it to the
-actual STREAM connection when the source Actor `ObjectGeneration`, source
-`NodeGeneration`, `AuthorityOwnerGeneration`, and expected binding
-generation are all current. The submitted frame carries the binding's Actor
+a `boundSessionSend(36)` record. The session owner submits a push to the actual STREAM connection only after the
+Session-owned binding checks in [§8.1](#81-seal-held-messages-and-route-switchover).
+Source node and authority generations are checked at the transport and Actor-owner
+boundaries respectively. The submitted frame carries the binding's Actor
 slot.
 
 **Binding completion and its recognition are defined by two linearization
@@ -277,11 +277,9 @@ uses a copy outside those linearization points.**
    accepted are submitted, and `$zlink.actor.unbound` goes into the same queue.
 3. **There is one judging authority.** A push's current judgment uses only the
    session-owner validation items enumerated by
-   [§8.1](#81-seal-held-messages-and-route-switchover) (the four generation
-   values above). A derived copy being stale or mismatched is never grounds
+   [§8.1](#81-seal-held-messages-and-route-switchover). A derived copy being stale or mismatched is never grounds
    for judging the binding stale. The source side likewise requires no field
-   agreement beyond the binding identity (SessionRid, binding generation) and
-   the enumerated items as a condition for sending — after the binding is
+   agreement beyond the binding identity (SessionRid, binding generation) as a condition for sending — after the binding is
    established, a refresh of owner-lifecycle fields still sends the same
    binding's push over the currently registered route.
 4. **A rejection never disappears silently.** A push refused submission
@@ -320,7 +318,7 @@ sequenceDiagram
     Note over S,L: doesn't query the Store per message
 
     A->>S: [send] command 36 · Actor->session push
-    S->>S: [local] check the source generation/expected binding generation are current
+    S->>S: [local] check current Session identity, ActorId/ObjectGeneration, and expected binding generation under §8.1
     S-->>C: submit to the actual STREAM connection
 
     alt the stored route is no longer valid
@@ -338,8 +336,8 @@ the binding. Afterward, relay, disconnect notifications, and pushes from
 Actor to session use this binding information, and the Location Store isn't
 queried again on every message send. If the stored route is no longer
 valid, it either delivers exactly once via the active Message Follow route,
-or ends with `Unavailable`. It doesn't automatically find a new `ActorRef`
-from the Location Store and resend the same message to a different owner.
+or ends with `Unavailable`. The resubmission boundary for the same message is defined by
+[Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 
 The stored route is only valid within the current owner lease and local
 admission deadline. Even if the Location Store is temporarily unavailable,
@@ -601,34 +599,7 @@ message arriving during the seal is held by the aggregate, but the per-
 message size, transport, deadline, and cancellation limits still apply
 unchanged.
 
-```mermaid
-sequenceDiagram
-    participant C as Relocation coordinator
-    participant S as Session owner
-    participant A as Source runtime
-    participant B as Target runtime
-    participant L as Location Store
-
-    C->>S: [request] command 42 · freeze that binding route and hold later messages
-    S-->>C: [reply] command 43 · that binding's seal installed
-    A->>B: [request] install temporary queue, Restore, prepare relay without dispatch
-    B-->>A: [reply] temporary queue/Restore ready · source still owner
-    A->>B: [send/request relay] post-capture ingress hold
-    alt cutover arrives within 1,000ms
-        A->>B: [send] cutover · pre-boundary relay sent
-    else no cutover for 1,000ms after relay-ready reply
-        B->>B: [local] cutover_timeout Warning · proceed by fallback
-    end
-    B->>L: [request] CAS owner to target if source fence still matches
-    L-->>B: [reply] target owner CAS result
-    B->>B: [local] merge queue · switch regular route · finish lifecycle · open dispatch
-    B->>S: [send] command 44 · apply target route, submit held, release seal
-    alt that update arrives within SessionRelocationSealTimeout
-        S->>S: [local] switch route · submit held Session messages · release seal
-    else seal timeout
-        S->>S: [local] close physical Session and clean binding/held/seal state
-    end
-```
+The Restore, relay, cutover, CAS, and queue-merge order follows [common relocation §4](../05-location-relocation/04-relocation-flow.en.md#4-normal-processing-order). The Session seal and route transition here follow the validation values above and timeout rule below.
 
 The Session owner applies a configurable `SessionRelocationSealTimeout`
 from the moment the seal is installed. Its default is 3,000 ms and can be
@@ -653,10 +624,10 @@ accepted, the source remains owner. The relocation coordinator first
 confirms a durable abort and source queue restoration, then sends the
 command 44 abort one-way. The Session owner releases the matching seal and
 resubmits held Session messages to the source route, and sends no reply.
-Once the relay-ready reply becomes accepted, a CAS or cutover-submit
-failure doesn't reopen the source route, and
-`SessionRelocationSealTimeout` cleans up the physical Session and held
-state.
+After relay-ready, neither a CAS nor a cutover-submit result alone reopens the
+source route. When the source `Preserve` fence wins, the coordinator sends the same
+command 44 abort to release the matching seal and submit held messages to the source
+route. Seal timeout during settlement follows the existing rule.
 
 ### 8.2 Control Messages 42, 43, 44
 
@@ -810,10 +781,8 @@ gate, and the ready-set management, defined by
 A request reply/error completes the original STREAM correlation
 terminal-once. If a timeout, cancellation, or route failure happens after a
 request is submitted to the target Actor route, whether the target already
-ran the work may be undetermined. After such a failure, the framework
-doesn't automatically resend the same request by picking a different
-Actor, a new owner, or a different
-[MeshNode](../00-foundation/02-glossary.en.md#meshnode). A reply arriving late after the
+ran the work may be undetermined. The resubmission boundary for the request after such a failure is defined by
+[Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification). A reply arriving late after the
 session has closed isn't used as a reply for a new session or a new
 binding either. This is a boundary preventing requests from different
 sessions from sharing the same business result.
@@ -990,8 +959,7 @@ here.
   change the route again and only leaves a Warning.
 - If the target explicitly fails before relay-ready, the held messages are
   processed via the source route and the connection is kept.
-- If a CAS or cutover submit fails after relay-ready, it doesn't fall back
-  to the source route and is cleaned up by the seal timeout.
+- After relay-ready, source route resumption follows the source `Preserve` fence in common relocation §4.4. Seal timeout during settlement follows its existing rule.
 - On the wire, command 43 has no sequence/high-water, command 44 has no
   response, and command 45 isn't exchanged.
 

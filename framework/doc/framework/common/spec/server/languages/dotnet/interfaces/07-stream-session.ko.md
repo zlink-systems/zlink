@@ -148,44 +148,10 @@ timeout만 admission deadline으로 사용한다. Caller request timeout은 wire
 완료하고 이후 admission이나 replay를 시작하지 않는다. `CancellationToken`은 기존 .NET cancellation
 계약을 유지하며 reply call에는 이 modifier를 제공하지 않는다.
 
-`OnActorBindingReplacedAsync(...)`는 같은 Actor가 새 session에 bind된 경우 이전 session에서 한 번 실행되는
-선택 callback이다. Application은 이 callback에서 `Context.Client.Send(...)`로 client 안내를 보낼 수 있지만
-`Context.CloseAsync()`를 호출하지 않는다. Callback이 성공 또는 실패로 terminal이 되면 Framework가 `100 ms`
-뒤 connection을 닫는다. Outbound queue가 먼저 비어도 이 시간을 줄이지 않는다. 새 bind는 이 callback이나
-close를 기다리지 않는다.
-
-| 구현 차이 | 현재 상태 |
-|---|---|
-| Session Actor binding 교체 | .NET runtime은 command 51 송수신, 이 callback과 non-blocking 100 ms close timer를 구현한다. 남은 구현 차이가 없다. |
-
-Bind 뒤 `RelayAsync(...)`와 `NotifyDisconnectedAsync(...)`는 Actor별 binding을 사용한다. Physical disconnect는
-Framework가 current binding 전체에 통지하고 지정한 binding identity마다 Spot callback을 최대 한 번 실행한다.
-`NotifyDisconnectedAsync(...)`는 connection이 유지된 상태의 logical notification이며 callback terminal까지
-기다린다. binding callback은 최대 한 번 실행하고 terminal 뒤 해당 binding을 tombstone으로
-확정하여 제거한다. Physical STREAM connection과 Actor·Spot membership은 유지한다. 새 public Unbind API는
-제공하지 않는다. Rebind는 새 identity를 current로 등록한 즉시 완료되며 이전 session의 처리를 기다리지
-않는다. 이전 session의 `OnActorBindingReplacedAsync(...)`에서 client 안내를 보낼 수 있다. Callback이
-성공 또는 실패로 terminal이 되면 Framework가 `100 ms` 뒤 connection을 닫는다. Callback이나 close 실패는 새 binding을
-제거하거나 이전 binding을 복원하지 않는다.
-Relocation은 같은 ObjectGeneration을 유지하며 해당 Actor의 binding route만 갱신하는 동작이므로 rebind가
-아니고 disconnect callback을 실행하지 않는다. 같은 Session의
-다른 Actor binding과 physical STREAM connection은 변경하지 않는다.
-
-`RelayAsync(...)`는 Actor relay가 source-local admission을 수락하면 정상 완료하는 one-way operation이다.
-Bound Actor로 relay된 request의 reply는 Actor handler가 반환한 typed reply가 original STREAM correlation을
-한 번 완료한다([Session–Actor binding §12](../../../04-session/02-session-actor-binding.ko.md#12-실패와-오류)).
-Session callback이 직접 처리하는 request만 `IZLinkSessionClient.Reply(...)`로 제출한다.
-
-같은 session의 packet과 lifecycle callback은 직렬로 실행한다. Handshake와 node 범위 오류는 runtime
-monitoring으로 보고하며 `OnErrorAsync(...)`에 전달하지 않는다.
-
-Session binding은 `ActorRef.ActorId + ObjectGeneration`의 지정한 incarnation을 한 번 고정한다. Bind에
-제출한 Ref의 MeshName·NodeRid는 최초 control route snapshot으로 사용한다. Mapping이 없으면
-`NotFound`, current generation이 다르면 `InvalidOperation`, pre-commit seal 중이면
-`Unavailable`이다. Framework는 Store에서 다른 ref를 찾아 같은 bind operation을 hidden retry하지 않는다.
+`OnActorBindingReplacedAsync(...)`, `RelayAsync(...)`와 `NotifyDisconnectedAsync(...)`는 .NET callback·call 표면이다.
+Binding 교체, relay 완료, disconnect와 relocation route 갱신은
+[Session–Actor binding](../../../04-session/02-session-actor-binding.ko.md)이 정한다.
 `IZLinkSessionActor.Ref`의 타입은 `ActorRef`다.
-Bound Session의 relocation route 갱신은 [Session–Actor binding §8.2](../../../04-session/02-session-actor-binding.ko.md#82-control-message-424344)가 소유한다. Local
-`IZLinkActor`를 받는 overload는 제공하지 않는다.
 
 ## 2. STREAM transport handle
 

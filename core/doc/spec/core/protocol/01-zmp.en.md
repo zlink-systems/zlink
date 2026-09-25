@@ -342,10 +342,7 @@ sequenceDiagram
 ```
 
 In this diagram, the header layout visible on the wire is the contract defined by the kind and sequence
-rules above. `routing_id` is not a reply wire part; it is a local selection key that the ROUTER
-uses to choose the destination reply pipe. Core uses the current ready Application pipe for a
-DEALER peer and the current ready Completion pipe for a ROUTER peer. Pending matching and completion enqueue are
-implementation descriptions in [§9 Internal structure](#9-internal-structure).
+rules above. `routing_id` is a local selection key, not a reply wire part. Source-RID reply routing and current-pipe selection follow [Socket Request and reply](../socket/README.en.md#request-and-reply). Pending matching and completion enqueue are implementation details in [§9 Internals](#9-internal-structure).
 
 ## 6. Relationship to transport routing_id
 

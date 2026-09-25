@@ -155,7 +155,7 @@ Logical Multicast가 필요하지 않은 단방향 service 경계에 사용한�
 
 ## 7. Framework가 숨기는 것
 
-Framework는 transport 주소 선택, peer reconnect, multipart framing, packet codec, reply
+Framework는 transport 주소 intent, peer service handshake, multipart framing, packet codec, reply
 correlation과 backpressure queue를 내부에서 관리한다. application handler는 typed payload와
 context를 사용하며 raw socket 배선을 구성하지 않는다.
 

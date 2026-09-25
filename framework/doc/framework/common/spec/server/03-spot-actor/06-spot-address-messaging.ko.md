@@ -389,9 +389,8 @@ sequenceDiagram
 
 이 다이어그램은 Location Store에 owner가 없고 선택된 target이 생성 권한을 얻은 request의 정상
 흐름을 보여준다. 이미 Ready owner가 있으면 factory를 실행하지 않고 기존 Spot queue에 request를
-넣는다. 다른 target이 먼저 생성 권한을 얻었다면 현재 target은 Spot을 만들지 않는다. 권한을
-얻은 target의 Spot이 Ready가 되면 최초 request의 식별 정보와 deadline을 유지하여 현재 owner에
-한 번만 전달한다.
+넣는다. 다른 target이 먼저 생성 권한을 얻었다면 현재 target은 Spot을 만들지 않고 §4.2의
+`Unavailable` 결과를 원래 operation에 확정한다.
 
 ### 4.1.1 Target process가 activation 도중 종료된 경우
 
@@ -411,9 +410,13 @@ Serving gate를 열지 않는다 — 위 §4.1 11단계가 정의하는 barrier�
 target에 도착해도 Store에서 생성 권한을 얻은 target 하나만 factory를 실행한다. 나머지 target은
 local Spot을 만들지 않는다.
 
-권한을 얻은 Spot이 이미 Ready이면 최초 operation의 identity, payload, reply correlation과
-deadline을 유지하여 current owner로 한 번만 전달한다. 아직 `Creating`이면 같은 activation
-완료를 기다린다. 기존 authority가 User Spot이거나 builder에 명시한 stable type과 다르면
+`Reserve`에서 진 target은 current owner를 다시 선택하거나 최초 operation을 전달하지 않는다.
+그 target이 원래 operation ID, payload, absolute deadline, reply correlation과 reply route를
+보존해 `Unavailable` terminal을 한 번 만든다. Request가 원래 deadline 안에 있으면 원래 reply route로 오류를 반환하고, deadline이 끝났으면
+기존 timeout terminal을 유지한다. 이미 source-local outbound admission이 끝난 one-way send에는
+실패를 diagnostics에 기록한다.
+`Creating` authority를 source resolver가 본 Instance-intent call은
+[Object lifecycle §3](09-object-lifecycle.ko.md#3-없는-객체를-언제-만드는가)의 activation 대기를 따른다. 기존 authority가 User Spot이거나 builder에 명시한 stable type과 다르면
 `TypeMismatch`다. 기존 Instance Spot에 type을 명시하지 않은 일반 direct call은 authority에
 저장된 type을 사용하므로 등록 type 수와 관계없이 전송할 수 있다.
 
@@ -431,9 +434,8 @@ completion 의미를 가진다. Instance intent가 없는 direct call은 existin
 - **Resolve 뒤 같은 owner에서 close와 recreate가 발생했다면 target queue가 수락하는 시점의
   current Ready Spot이 message를 처리한다.**
 - **찾은 owner가 더 이상 해당 SpotId를 소유하지 않으면 현재 operation은 stale route
-  오류로 끝낸다.** Framework는 fresh owner를 찾아 같은 operation을 자동으로 다시 보내지 않는다.
-- **Timeout, cancellation, disconnect와 실행 여부가 불명확한 failure 뒤 다른 owner에게 자동
-  재제출하지 않는다.**
+  오류로 끝낸다.** 재제출 경계는 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
+- **Timeout·cancellation·disconnect 뒤 재제출은 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)의 경계를 따른다.**
 
 One-way call은 local outbound admission까지만 기다린다. Cold activation이 필요해도 application
 handler 실행은 기다리지 않는다. 여기서 outbound admission은 activation envelope가 선택한
@@ -444,30 +446,10 @@ resolve, cold activation, 최초 message dispatch와 reply를 하나의 deadline
 
 ## 6. Route cache 수치와 Message Follow
 
-`RouteCacheMaxAge`의 기본값은 15초이고 `MessageFollowDuration`의 기본값은 30초다. 둘 다 0이면
-각각 cache와, Actor/Spot이 다른 MeshNode로 relocation된 뒤에도 이전 owner에 도착한 message를 새
-owner에게 대신 전달하는 [Message Follow](../00-foundation/02-glossary.ko.md#message-follow)를 끈다. 두
-값이 양수이면 cache max age가 Message Follow duration보다
-최소 5초 작아야 한다. Runtime 변경은 새 cache entry와 새 relocation에만 적용한다. Positive
-Ready cache는 current owner lease의 local admission deadline과 이 `RouteCacheMaxAge` 안에서만
-사용한다.
-
-Relocation commit 뒤 source는 commit된 source→target Message Follow route만 사용해 이전
-physical route로 도착한 message를 current owner에 전달한다. Message Follow 중에는 Store를
-읽거나 application handler를 실행하지 않는다. Message Follow route는 Spot ID,
-[ObjectGeneration](../00-foundation/02-glossary.ko.md#objectgeneration), source와 target
-AuthorityOwnerGeneration과 owner fence가 모두 일치하는지 검증한다. Target owner generation은 hop마다
-증가하며 최대 8 hops다.
-
-Message Follow route 하나의 대기열에는 message 수와 저장 크기 어느 쪽에도 상한을 두지 않으며
-negotiated message bound는 지킨다. Message Follow는 original operation ID, generation,
-payload와 reply route를 보존한다. Route 없음·만료와 loop는 `Unavailable`, generation
-mismatch는 `InvalidOperation`으로 끝난다. Failed application operation을 Store에서 찾은
-owner에게 다시 제출하지 않으며 다음 call만 fresh resolve를 수행한다.
-
-이 generation 검사는 relocation route가 같은 incarnation에 속하는지 확인한다. Spot direct
-send/request의 target은 `SpotId`이며 `ObjectGeneration` mismatch로 current Ready Spot의 handler
-실행을 거부하지 않는다.
+Route cache와 Message Follow의 기본값·기간·검증·전달 결과는
+[Location runtime §7.3](../05-location-relocation/01-location-runtime.ko.md#73-이전-owner로-도착한-message를-새-owner에게-전달한다)가 정의한다.
+실패한 application operation의 재제출 경계는
+[Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
 
 ### 6.1 SpotWide와 PerActor의 route 설치
 
@@ -486,9 +468,7 @@ Relocation 절차 전체의 seal·commit·restore 순서는
 - **Relocation unit을 seal한 뒤 source route로 도착한 ingress는 relocation hold에 보관하며,
   application handler는 실행하지 않는다.**
 - **Relay-ready reply가 accepted 상태가 되기 전에 명시적으로 중단하면 보관한 ingress를 도착
-  순서대로 source queue에 되돌린다.** 그 뒤에는 cutover submit 결과와 관계없이 source를
-  복원하지 않고 operation ID, generation과 reply route를 그대로 유지하여 Message Follow
-  route로 target에 relay한다.
+  순서대로 source queue에 되돌린다.** 그 뒤에는 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 authority 판정에 따라 source가 보관 ingress를 처리하거나 원래 operation ID, generation과 reply route로 target에 전달한다.
 - **Permit을 기다리는 `Relocating` unit은 아직 seal되지 않았다.** 따라서 기존
   [owner route](../00-foundation/02-glossary.ko.md#owner-route)에서 application message와 timer를 계속
   수락한다.
@@ -499,17 +479,39 @@ Spot manager의 public `Close`는 User Spot의 `SpotRef`를 받는다. Instance 
 application handler나 timer가 자신의 lifecycle context에서 local `Close`를 요청한다. Host
 shutdown과 `Relocate`는 별도 운영 lifecycle로 Instance Spot을 정리하거나 이동할 수 있다.
 
+**Spot context의 `Close`는 결과를 반환하지 않는 요청이다.** Handler나 timer turn에서만
+호출한다. 호출 시 context의 generation을 붙여 Close 요청을 등록하며, 같은 turn의 중복 호출과
+나중에 도착한 같은 generation의 요청은 이미 등록됐거나 진행 중인 Close에 합친다. 요청은
+호출한 turn이 정상 종료·예외·취소·reply 실패 중 어느 경로로 끝나든, 그 뒤 Spot의
+[lifecycle lane](../01-execution/02-handler-turn-and-execution-gate.ko.md#execution-lanes)에서 시작한다.
+호출한 turn은 Close의 accepted-turn 대기에 포함하지 않는다.
+
+Close와 relocation의 순서는 [Host relocation §12](../05-location-relocation/05-host-relocation-flow.ko.md#12-대기-중인-message-timer와-session을-옮긴다)의
+authority commit 순서를 따른다. Relocation이 이기면 등록한 context 요청은 실행하거나
+다시 제출하지 않고 moving 결과를 diagnostics에 기록한다. `Closing`이 이기면 Close를 끝내고
+Spot을 이전하지 않는다. Idle cleanup의 seal([Object lifecycle §5](09-object-lifecycle.ko.md#5-활성-객체를-언제-정리하고-무엇으로-막는가))과
+host shutdown의 seal([Host relocation §14](../05-location-relocation/05-host-relocation-flow.ko.md#14-shutdown과-relocate의-경쟁))이
+먼저 확정되면 등록한 context 요청은 실행하지 않고 그 결과를 diagnostics에 남긴다. Pending
+요청은 실행되거나 seal에 의해 대체된 결과가 기록될 때까지 버리지 않는다.
+
+Manager `Close`는 결과를 caller에게 반환한다. Manager `Close`가 moving 결과로 끝나도 Framework는 같은 `Close`를 새 owner에게 자동 재제출하지 않는다. Context `Close`는 결과가 없으므로 `false`,
+실패, 합쳐진 요청과 실행되지 않은 요청을 각각 diagnostics에 기록한다.
+`OnClosing(ExplicitClose)`은 cleanup 시작을 뜻하며 authority 해제 완료를 뜻하지 않는다.
+
 Close 절차는 다음 순서로 진행한다.
 
 1. Expected owner와 ObjectGeneration을 검증해 authority를 `Closing`으로 전이한다.
 2. Local admission을 seal하고 seal 전에 수락한 turn·timer를 정해진 boundary까지 처리한다.
-3. Handler scope, timer와 local activation resource를 한 번 정리한다.
+3. `OnClosing`을 Close당 최대 한 번 호출한 뒤 handler scope, timer와 local activation resource를 한 번
+   정리한다. `OnClosing` 호출이 실패하면 그 실패를 diagnostics에 기록하고 정리를 계속한다. Close를
+   재개해도 이미 호출한 `OnClosing`은 다시 호출하지 않는다.
 4. 같은 owner·generation fence로 authority를 해제한다.
 
 1단계에서 `Closing` 전이가 확정되지 않으면 authority는 바뀌지 않고 Close는 아래 결과로 끝난다.
-`Closing` 전이가 확정된 뒤에는 authority를 `Ready`로 되돌리지 않는다. 2–4단계 중 하나가 실패하면
-Close는 caller에게 그 실패를 반환하고, target owner runtime이 실패한 단계부터 같은 owner·generation으로
-남은 단계를 이어서 처리한다. 끝난 단계는 반복하지 않는다.
+`Closing` 전이가 확정된 뒤에는 authority를 `Ready`로 되돌리지 않는다. 2–4단계에서 `OnClosing`
+호출 이외의 작업이 실패하면 manager `Close`는 caller에게 그 실패를 반환하고(context `Close`는 위의
+diagnostics 규칙을 따른다), target owner runtime은 같은
+owner·generation에서 실패한 작업부터 남은 작업을 이어서 처리한다. 완료한 작업은 반복하지 않는다.
 
 같은 incarnation이 이미 없으면 idempotent `false`, 같은 Spot ID의 다른 generation이 있으면
 `InvalidOperation`, 이동 seal 중이면 `Unavailable`로 끝난다. Framework는 current ref를 다시
@@ -517,7 +519,10 @@ Close는 caller에게 그 실패를 반환하고, target owner runtime이 실패
 수 있다. Seal 뒤에 도착한 신규 admission의 결과는 §9 표가 정한다.
 
 **User Spot에 current Actor membership이 하나라도 있으면 Close는 `false`로 끝나며 admission과
-authority를 유지한다.** Framework는 member Actor를 숨겨서 이동하거나 destroy하지 않는다.
+authority를 유지한다.** Framework는 member Actor를 숨겨서 이동하거나 destroy하지 않는다. Close는
+User Spot의 [lifecycle lane](../01-execution/02-handler-turn-and-execution-gate.ko.md#execution-lanes)에서
+membership을 확인하고 1단계를 실행한다. 그 lane에 먼저 수락된 Join 또는 leave는 lane의 완료 경계에 따라
+membership 결과가 확정된 뒤 끝나므로, Close는 그 결과를 반영한 membership을 확인한다.
 
 ### 7.1 Remote Close — command 48과 20
 
@@ -529,7 +534,8 @@ generation, `SpotRef`, target node RID와 lifecycle generation, expected
 Target은 service admission에서 확인한 peer identity와 target lifecycle을 먼저 검증하고 current
 User Spot authority를 Store에서 직접 읽는다. 그다음 object generation, owner generation,
 `StoreVersion`, active Actor membership, `Closing`과 relocation 상태를 모두 확인한 뒤에만
-Closing CAS와 local admission seal을 시작한다.
+Closing CAS와 local admission seal을 시작한다. 이 확인과 1단계는 §7의 lifecycle lane 규칙에 따라
+실행한다.
 
 Command 20의 close 성공 tail은 `closed` bool 하나다. `false`는 같은 incarnation이 이미 없거나
 active membership 때문에 authority를 유지한 경우에만 사용한다. Stale generation과 moving
@@ -553,9 +559,7 @@ SpotId를 만들거나 생성 뒤 SpotId를 바꾸지 않는다.
 Source seal, durable capture, target reservation·factory·restore, authority commit과 admission
 순서는 [Spot과 Actor membership](05-spot-actor-membership.ko.md)이 정한다.
 
-- **Relay-ready reply가 accepted 상태가 되기 전 명시적 failure만 source를 유지한다.** 그 뒤에는
-  cutover submit 결과와 관계없이 source를 복원하지 않고 selection이 끝난 같은 target
-  process에서만 절차를 계속한다. Target process가 종료되면 다른 target을 선택하거나
+- **Relay-ready reply가 accepted 상태가 되기 전 명시적 failure만 source를 유지한다.** 그 뒤 authority 판정은 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)를 따른다. Target commit이면 선택한 같은 target process에서 절차를 계속한다. Target process가 종료되면 다른 target을 선택하거나
   relocation을 자동으로 재개하지 않는다.
 - **Seal 시점의 실행하지 않은 message, accepted journal과 timer logical registration·pending
   tick은 relocation payload에 포함하며 target Framework가 timer를 자동 복원한다.** Application은
@@ -563,8 +567,8 @@ Source seal, durable capture, target reservation·factory·restore, authority co
 - 이 queue·timer 규칙은 `SpotWide`와 Instance Spot에 적용한다. `PerActor`에서는 Actor queue와
   Actor timer만 Actor와 함께 이전하고 Spot-level application timer는 이전하지 않는다.
 
-Original send·request를 maintenance target에 새 operation으로 자동 재제출하지 않지만 seal 뒤
-source ingress hold는 commit된 Message Follow route로 relay한다.
+Original send·request의 재제출 경계는 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
+Seal 뒤 source ingress hold는 commit된 Message Follow route로 relay한다.
 
 ## 9. 실패와 관측
 
@@ -574,7 +578,7 @@ source ingress hold는 commit된 Message Follow route로 relay한다.
 | Instance intent가 없는 Spot direct send·request의 target authority가 `Missing` 또는 `Creating`이다 | `NotFound`다. |
 | `ActorRef`·`SpotRef`로 지정한 control의 generation이 current generation과 다르다(direct message는 [08-routing §2.6](08-routing.ko.md#26-objectgeneration을-어디에-사용하고-어디에-사용하지-않는가)대로 generation을 비교하지 않는다) | `InvalidOperation`이다. |
 | [owner fence](../00-foundation/02-glossary.ko.md#owner-fence)가 다르다 | `Unavailable`이다. |
-| Target authority가 `Closing`인 owner에 신규 admission을 요청했다 | `Rejected`다. |
+| Instance intent가 없는 Spot direct send·request가 source 또는 owner에서 target authority `Closing`을 확인했다 | `Rejected`다. |
 | Runtime이 `Draining`이라 신규 admission을 받지 않는다(target authority 상태와 관계없이) | `ShuttingDown`이다. |
 | Relocation seal 이후 source route로 ingress가 도착했다 | 거부하지 않고 relocation hold에 보관한다. |
 | `Relocating`이지만 아직 seal하지 않은 unit에 message가 도착했다 | 기존 owner admission을 유지해 수락한다. |

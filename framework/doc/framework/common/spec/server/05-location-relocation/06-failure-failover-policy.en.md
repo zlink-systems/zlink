@@ -55,10 +55,7 @@ owner eligibility recorded in the [Location Store](../00-foundation/02-glossary.
 
 | Confirmed boundary | Framework handling |
 |---|---|
-| The Framework is selecting a target and no target has accepted the operation yet | Can select a different eligible target within the same operation's deadline. |
-| The caller specified a node RID, global object ID, or Session binding | Keeps the specified logical identity. Doesn't switch to a different logical target. |
-| The operation was accepted by the target queue | Doesn't re-run the same operation on a different target. |
-| Whether transport accepted the operation can't be confirmed | Since duplication is possible, doesn't automatically resubmit to a different peer. |
+| Target selection, logical identity, and resubmission boundary | Follow [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification). |
 | The operation reached a terminal result | Returns only whichever of reply, failure, timeout, cancellation, or shutdown was confirmed first. |
 
 The application can start a new operation after a failure. If the new operation requests the same
@@ -97,9 +94,10 @@ non-responding half-open connection to `not-ready` within the liveness deadline.
 failure doesn't stop processing by another ready peer or local owner, or turn the whole host
 `Error`.
 
-The Framework re-establishes a connection to the same logical peer using the current
-configuration or discovery descriptor. It redoes the service handshake and identity verification
-at this point. A previous connection ID, reply route, Session binding, and ready state aren't
+[Core socket `zlink_connect`](../../../../../../../core/doc/spec/core/socket/README.en.md#zlink_connect)
+owns transport reconnection to the same endpoint. The framework retains the current
+configuration or discovery descriptor intent and repeats the service handshake and identity
+verification after Core reports a selected route ready. A previous connection ID, reply route, Session binding, and ready state aren't
 reused. If it is unknown whether transport accepted an operation before the connection loss, that
 operation isn't submitted to a different peer. The detailed timing and state transition are
 defined by
@@ -128,14 +126,10 @@ Actor and Spot messages use the current `Ready` owner confirmed in the Location 
 cache expires or the owner lease becomes invalid, the next new operation re-queries the current
 owner. The failed operation itself isn't automatically submitted to the new owner.
 
-Right after the owner changes via a planned relocation, the previous owner can deliver a message
-it already received to the committed target. This action is called
-[Message Follow](../00-foundation/02-glossary.en.md#message-follow). The default for
-[MessageFollowDuration](../00-foundation/02-glossary.en.md#message-follow-duration), which sets how long this
-delivery path is kept, is 30 seconds; `0` means it's unused. Message Follow isn't failover, since
-it only follows an already-committed move path — it doesn't select a new owner after an owner
-process failure. The detailed route and cache rules are defined by
-[Spot/Actor Routing](../03-spot-actor/08-routing.en.md).
+The Message Follow route and duration for a message arriving at a previous owner after a
+planned relocation are defined by
+[Location runtime §7.3](01-location-runtime.en.md#73-delivering-a-message-arriving-at-a-previous-owner-to-the-new-owner).
+This route does not select a new owner after owner process failure and is not failover.
 
 If the owner process of the current `Ready` Actor or Spot terminates, the Framework doesn't
 automatically restore the same object on a different node. It doesn't arbitrarily change the
@@ -204,15 +198,15 @@ operation finishes.
 | Failure timing | Framework handling |
 |---|---|
 | Explicit failure before relay-ready reply becomes accepted | Discards the target instance and temporary queue, keeps source owner/membership and queue. Doesn't automatically select a different target. |
-| After relay-ready reply becomes accepted but before the owner-change commit | Doesn't restore source regardless of cutover-submit result. Target continues the owner change through cutover receipt or the 1,000ms fallback. |
+| After relay-ready acceptance but before owner commit | A cutover-submit result alone does not restore source. Complete-relay verification and the `Preserve` fence under [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover) decide authority and source resumption. |
 | No Store change result received | Doesn't guess success or failure — re-reads the same authority record to confirm the actual owner. |
 | After the owner-change commit, same target process running | Doesn't roll back to the source. Can retry the lifecycle callback or dispatch switchover on the same target within the deadline. |
 | Target process terminated after the owner-change commit | The Location Store keeps the target owner, but the object becomes `Unavailable`. A different runtime doesn't take over the relocation. |
 | Source or target process terminated during the operation | Doesn't select a different target, resume relocation after a process restart, or roll back to the source. |
 
-Keeping the source before relay-ready reply becomes accepted isn't failover — it's canceling an
-operation before its irreversible boundary. After that boundary, the source isn't restored even before owner
-commit. Continuing on the same target after commit also isn't a new target selection. Object
+An explicit cancellation before relay-ready and a later successful source `Preserve`
+fence both continue work under confirmed source authority. Source resumption after the
+fence follows [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). Continuing on the same target after commit also isn't a new target selection. Object
 failover after process termination isn't part of the current contract. The detailed stages and
 result are defined by
 [Complete Host Relocation Flow §1.1](05-host-relocation-flow.en.md#11-failure-handling-scope) and
@@ -295,12 +289,9 @@ to one test.
 Delivering a send or request to one Spot by specifying its global ID is called
 [Spot direct](../00-foundation/02-glossary.en.md#spot-direct).
 
-- Channel select-one only selects a different eligible server until the target accepts the
-  operation.
-- Node direct, Actor/Spot direct, and Session binding operations don't switch the specified
-  logical identity to a different target.
-- If transport acceptance is unclear, or the operation was already accepted, it isn't
-  automatically resubmitted to a different peer.
+- The target commitment and resubmission boundaries for Channel select-one, direct calls,
+  and Session binding are defined by
+  [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 - One peer's liveness failure doesn't put a different ready peer or the host state into `Error`.
 - A reconnect redoes the handshake and identity verification, and doesn't reuse a previous
   connection's reply route, Session binding, or ready state.
@@ -325,8 +316,7 @@ Delivering a send or request to one Spot by specifying its global ID is called
 
 **Host relocation and Session failure**
 
-- Only an explicit failure before relay-ready reply becomes accepted keeps the source; a later
-  failure doesn't roll back to source regardless of cutover-submit result.
+- After relay-ready, neither a cutover-submit result nor an earlier read naming source reopens source dispatch. A confirmed source `Preserve` fence under [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover) returns retained work to source dispatch; confirmed target commit does not.
 - After a source or target process terminates, a different runtime doesn't take over the
   relocation or automatically select a different target.
 - After a Session owner process terminates, the Session and binding aren't restored on a

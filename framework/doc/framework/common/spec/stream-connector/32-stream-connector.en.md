@@ -339,9 +339,8 @@ The user API doesn't handle raw header bytes.
 `request_seq` is a `u64` correlation sequence the runtime manages, and
 is put **only in request/response/error response.**
 
-- Within the same connector instance, **`request_seq` must not be
-  duplicated among concurrently pending requests.**
-- The value `0` isn't used.
+`request_seq` never uses `0` and is never reused while the connector instance lives.
+When all usable `u64` values are exhausted, a new Request is not admitted. §9 owns its error classification.
 
 **Matching rule:**
 
@@ -349,9 +348,10 @@ is put **only in request/response/error response.**
 |---|---|
 | `Send` sent | Sent with no `request_seq`. Not put in the pending map |
 | `Request` sent | A new `request_seq` is assigned and registered in the pending map |
-| `Response` received | The pending request of the same `request_seq` **completes as success** |
-| `Error` received — has `request_seq` | The pending request of the same `request_seq` **completes as failure** |
-| `Error` received — no `request_seq` | Delivered to the error surface as a **stream-level error** unrelated to a pending request (§9) |
+| `Response` received — `request_seq` matches a pending request | That request **completes as success** |
+| `Response` received — terminal request or no matching pending request | Discarded without a second terminal |
+| `Error` received — `request_seq` matches a pending request | That request **completes as failure** |
+| `Error` received — `request_seq` is absent or does not match a pending request | Delivered to the error surface as a **stream-level error** unrelated to a pending request (§9) |
 
 - **`request_seq` is canonical for pending request matching.** Since
   `Response` and `Error` **have no packet name field at all**
@@ -360,9 +360,16 @@ is put **only in request/response/error response.**
   reply principle is used when relaying an Actor request in a STREAM
   session
   ([Session Actor Dispatch §3](../server/04-session/02-session-actor-binding.en.md#5-bind-and-relay)).
-- **When a request timeout, close, or disconnect occurs, every pending
-  request completes as failure and is removed from the map.** It isn't
+- **When a request timeout, close, or disconnect occurs, pending
+  requests complete as failure and are removed from the map.** They are not
   automatically resent after reconnection (§6).
+- An outbound operation is accepted when it passes connection-state and input validation and is
+  registered in the connector's send order, before it waits for room in the frame write queue.
+- The write queue preserves acceptance order, including operations waiting for room. It completes
+  each frame write before starting the next, so a later accepted operation cannot overtake an
+  earlier operation's frame write.
+- A Request timeout starts at operation acceptance and covers queue wait, frame write, and reply
+  wait. Expiry during queue wait is a pre-send admission failure. §9 owns its error classification.
 
 ### 5.3 Error Payload
 
@@ -554,8 +561,7 @@ state.
 - Automatic reconnect is **on by default.**
 - A send during reconnect isn't queued — it **fails with a
   `Disconnected` error.**
-- Once the connection drops, **every pending request fails**, and it's
-  **not automatically resent** after reconnect.
+- [§5.2](#52-request-correlation) defines the terminal result and retransmission policy for a disconnected request.
 - **The reconnect max attempt count must be able to express
   unlimited.** The form of that expression (a null value, a negative
   number, a named constant, and so on) is owned by the per-language
@@ -611,7 +617,7 @@ the same across every language.**
 | [Dispatch mode](../server/00-foundation/02-glossary.en.md#dispatch-mode) | `Manual` (§7) |
 | Codec | JSON (§5.4) |
 | Compression | Lz4 (§8) |
-| Send/receive payload bound | 64KB each (§4.7) |
+| Send/receive payload bound | [§4.7](#47-payload-size-bound) |
 | TLS certificate validation | On — the default of the validation-skip option is off, used only for a test's self-signed certificate |
 
 ### 6.2 Close Reason
@@ -664,6 +670,18 @@ configuration mistake from a connection failure.
   the codec and compression settings, and the dispatch mode are **all
   checked.** The values checked are the
   ones left after §6.1's defaults are applied.
+
+| Option | Allowed value and cross-option constraint |
+|---|---|
+| Endpoint | Nonempty URI whose scheme matches the §3.1 transport |
+| Connect/request/wait timeout, heartbeat interval/timeout, reconnect initial/maximum delay, outbound queue size | Positive |
+| Reconnect backoff factor | Positive |
+| Reconnect maximum attempts | Unlimited or positive |
+| Send/receive payload bound | Positive and subject to §4.7 |
+| Preview length | Nonnegative |
+| Codec, compression, dispatch mode | In their closed value sets; no compression codec with compression disabled |
+| Transport | Matches endpoint scheme and is supported by the environment (§3) |
+
 - **Validation happens at the earliest point the language can report
   the failure.** A language whose creation surface can return a failure
   validates when the connector is built; one whose creation surface
@@ -687,6 +705,10 @@ configuration mistake from a connection failure.
 |---|---|
 | **`Manual`** (default) | The receive loop doesn't directly call a handler/error/disconnect/request callback — it puts it in an internal queue. The user explicitly pumps it to run |
 | `Immediate` | Runs directly on the receive path |
+
+In `Manual`, a callback runs in the execution context that invokes the dispatch pump. Callback
+waits have no separate admission limit, and completion of an accepted request is settled
+independently of callback execution.
 
 **The reason the default is `Manual` is a game engine constraint**
 (§2.2). Since an engine object can't be handled off the main thread, it
@@ -764,16 +786,16 @@ connector does not wait in its place.
 | `Disconnected` | No connection, or dropped |
 | `ConfigurationError` | Invalid configuration (scheme mismatch, **a transport the environment doesn't support**, etc.) |
 | `ValidationFailed` | A validation failure — covers pre-send validation (metadata bound exceeded, send payload bound exceeded), option validation for a value outside its allowed range (§6.3), and a violation of a wait surface's observation condition (§10.1) |
-| `RequestTimeout` | Reply wait time exceeded |
+| `RequestTimeout` | Time expired during a Request's queue wait, write, or reply wait after acceptance |
 | `ConnectTimeout` | Connect time exceeded |
 | `FrameDecodeFailed` | Frame/header decode failure (§4.5), or a structurally valid Error frame's JSON payload doesn't satisfy §5.3 |
 | `FrameTooLarge` | The payload exceeded the receive bound |
-| `SendFailed` | Send failure |
+| `SendFailed` | Send queue wait expired, sending failed, or Request admission failed because `request_seq` was exhausted |
 | `CompressionFailed` | Compression failure |
 | `DecompressionFailed` | Decompression failure |
 | `TlsValidationFailed` | TLS validation failure |
 | `UserCallbackFailed` | A user callback failed |
-| `RemoteError` | The server responded with an Error payload satisfying §5.3. If `request_seq` matches a pending request, that request fails; if absent or mismatched, it's delivered as an error event |
+| `RemoteError` | The server responded with an Error payload satisfying §5.3. [§5.2](#52-request-correlation) defines its recipient |
 
 The effect an error has on the current operation and connection is
 below. The per-language document only owns the error name's
@@ -785,9 +807,11 @@ reason, or the reconnect condition.
 | `ConfigurationError`, `ValidationFailed` | Call failure | Kept, or the pre-connect-attempt state kept | None | Not done |
 | `RequestTimeout` | Only that request fails | Kept | None | Not done |
 | `ConnectTimeout`, `TlsValidationFailed` | Connect failure | `Disconnected` | `TransportError` | Applies the reconnect option's attempt policy |
-| `Disconnected`, `SendFailed` | The in-progress operation fails | `Disconnected` if the transport dropped | `TransportError` | Applied if the reconnect option is on |
+| `Disconnected` | The in-progress operation fails | `Disconnected` if the transport dropped | `TransportError` | Applied if the reconnect option is on |
+| `SendFailed` — queue expiry or sequence exhaustion | Only that operation fails | Kept | None | Not done |
+| `SendFailed` — transport write failure | That operation fails | `Disconnected` if the transport dropped; otherwise kept | `TransportError` if the transport dropped; otherwise none | Applied only if the transport dropped and the reconnect option is on |
 | `FrameDecodeFailed` — frame/header | That frame isn't delivered, and the pending request fails | Ended | `TransportError` | Applied if the reconnect option is on |
-| `FrameDecodeFailed` — Error JSON payload | If a matching `request_seq` exists, only that request fails; if absent or mismatched, delivered as an error event | Kept | None | Not done |
+| `FrameDecodeFailed` — Error JSON payload | The `request_seq` recipient defined by [§5.2](#52-request-correlation) | Kept | None | Not done |
 | `FrameTooLarge` | That frame isn't delivered, and the pending request fails | Ended | `TransportError` | Applied if the reconnect option is on |
 | `CompressionFailed` | Only that send operation fails | Kept | None | Not done |
 | `DecompressionFailed` | Only that receive packet or pending request fails | Kept | None | Not done |

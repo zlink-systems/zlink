@@ -112,14 +112,11 @@ class ZLinkActorSerialExecutor           // Actor 하나마다 하나
 [User Spot execution mode](../00-foundation/02-glossary.ko.md#user-spot-execution-mode)에
 따라 Actor 작업과 timer 작업이 지나는 queue가 달라진다.
 
-이 mode 옵션은 **User Spot 전용**이다. 다른 Spot 종류의 배선은 이미 정해져 있어 여기의 두
-그림 중 하나를 그대로 따른다 — [Entry Spot](../00-foundation/02-glossary.ko.md#spot-turn)은
-Spot lane과 Actor별 lane을 분리하므로 `PerActor` 그림의 Actor 경로와 같고(단 `Yield`를
-제공하지 않는다 — [02 §2](02-handler-turn-and-execution-gate.ko.md#2-execution-gate--owner-처리-순서)),
-Instance Spot은 Spot 전체가 gate 하나이므로 `SpotWide` 그림과 같다.
-
-`SpotWide`에서 Actor 작업만 queue 두 개를 지난다. 두 mode 모두 직렬 실행이 보장되며 지나는
-queue 수만 다르다.
+실행 mode별 gate 범위와 Actor queue 규칙은
+[Execution gate §2](02-handler-turn-and-execution-gate.ko.md#execution-gate)가 정의한다.
+이 절의 그림은 그 규칙을 구현하는 queue 경로를 보여준다. Entry Spot은 `PerActor` 그림의
+Actor 경로, Instance Spot은 `SpotWide` 그림의 경로를 사용한다. `SpotWide`의 Actor 작업만
+queue 두 개를 지난다.
 
 진입점이 어느 queue에 연결되는지를 mode별로 그리면 다음과 같다. Actor 둘(A·B)과 timer
 둘(`tick`·`beat`)이 있는 Spot을 예로 든다.
@@ -282,11 +279,13 @@ ZLinkExecutionLanePolicy {
 enqueue(작업)                    // application lane
 enqueueWithPayloadBytes(작업, n) // application lane. 실제 payload n byte로 예약한다
 enqueueLifecycle(작업)           // lifecycle lane. 대기 중인 application 작업을 앞지른다
-enqueueBarrierNext(작업)         // 현재 turn 직후, 줄 서 있는 application 작업보다 먼저
 isCurrent()                      // 호출한 thread가 이 queue의 turn을 점유하고 있는가
 awaitQuiescence()                // 줄 선 작업이 모두 끝날 때까지 기다린다
 close()                          // 새 제출을 받지 않고 이미 받은 작업을 끝낸다
 ```
+
+Barrier는 `enqueueLifecycle`로 lifecycle lane에 제출한다. Lane의 FIFO와 우선순위는
+[Execution gate §7](02-handler-turn-and-execution-gate.ko.md#7-lane-분리와-우선순위-구현)을 따른다.
 
 ### 6.3 순서 발급과 삽입의 원자적 범위
 
@@ -387,7 +386,10 @@ Drain()
 
         if (result == Completed) Release(work);
         // Suspended면 작업이 turn을 반납한 것이다. 완료는 나중에 처리하고
-        // 이 loop는 바로 다음 작업으로 넘어간다.
+        // 이 loop는 바로 다음 작업으로 넘어간다. Lifecycle 항목이 Suspended인 동안 TryTakeNext는
+        // 그 항목의 ready continuation은 고를 수 있지만 뒤의 lifecycle 항목은 고르지 않는다.
+        // Continuation도 lifecycle burst 상한과 양보 부채를 따르며, 기다리는 동안 실행 가능한
+        // application 작업은 돈다(handler turn과 execution gate §7).
 
         if (Now() - sliceStartedAt >= policy.ownerTimeBudget)
             break;                     // §6.4 — 여기서 소유자가 양보한다

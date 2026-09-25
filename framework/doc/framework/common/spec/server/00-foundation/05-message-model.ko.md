@@ -27,12 +27,12 @@ extension은 host 단위 정책이며 업무 handler나 개별 send·request 호
 ## 2. 메시지 종류와 완료
 
 각 상호작용을 시작하는 public interface와 대상 선택 방식은
-[상호작용 모델](04-interaction-model.ko.md)이 소유한다. 이 절은 메시지 *종류*와 그 완료
-조건만 정의한다.
+[상호작용 모델](04-interaction-model.ko.md)이 소유한다. 이 절은 메시지 *종류*를 정의한다. One-way 완료 경계는
+[Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)가 정의한다.
 
 | 종류 | 의미 | 완료 |
 |---|---|---|
-| Send | 대상 handler에 한 번 전달하는 one-way 메시지 | Source-local queue가 수락하면 반환 데이터 없이 완료하며 원격 handler 완료를 기다리지 않는다 |
+| Send | 대상 handler에 한 번 전달하는 one-way 메시지 | [Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)의 one-way 완료 경계를 따른다 |
 | Request | 대상 handler가 reply 또는 오류를 반환하는 메시지 | reply, 오류, timeout 또는 cancellation로 한 번 완료된다 |
 | [Logical Multicast](02-glossary.ko.md#logical-multicast) | target ChannelName의 각 MeshNode에서 조건에 맞는 Spot에 발행하는 메시지 | Source-local capacity를 확보해 publish를 시작하면 반환 데이터 없이 완료하며 target별 수를 monitoring에 집계하지 않는다 |
 | [Classic fanout](02-glossary.ko.md#classic-fanout) publish | 독립 fanout channel의 subscriber에 발행하는 메시지 | Local publisher queue가 수락하면 반환 데이터 없이 완료하며 subscriber 수신은 확인하지 않는다 |

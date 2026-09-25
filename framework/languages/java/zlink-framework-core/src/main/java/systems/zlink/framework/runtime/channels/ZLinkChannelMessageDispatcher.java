@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.channels;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
@@ -14,6 +15,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessage
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 
 import java.util.List;
@@ -92,7 +94,34 @@ final class ZLinkChannelMessageDispatcher {
                         ? ZLinkFlowContext.enterOrCreate(inboundFlow, ZLinkFlowOrigin.INBOUND)
                         : ZLinkFlowContext.suppress();
         try {
-            ParsedPacket packet = parsePacket(received.parts());
+            ZLinkChannelEnvelope.DispatchPacket packet;
+            try {
+                packet = ZLinkChannelEnvelope.decodeDispatchPacket(received.parts(), null);
+            } catch (ZLinkFrameworkException invalidEnvelope) {
+                if (received.routingId().isPresent() && received.isRequest()) {
+                    errors.replyError(
+                            router,
+                            received,
+                            ZLinkDispatchErrorSurface.CHANNEL,
+                            ZLinkDispatchMessageKind.REQUEST,
+                            ZLinkDispatchErrorReason.INVALID_FRAME,
+                            null,
+                            channelName,
+                            received.routingId().orElseThrow().toString(),
+                            invalidEnvelope);
+                } else {
+                    errors.report(
+                            ZLinkDispatchErrorSurface.CHANNEL,
+                            ZLinkDispatchMessageKind.SEND,
+                            ZLinkDispatchErrorReason.INVALID_FRAME,
+                            ZLinkDispatchErrorAction.DROP,
+                            null,
+                            channelName,
+                            null,
+                            invalidEnvelope);
+                }
+                return;
+            }
             if (ZLinkFrameworkErrorReply.isPacketName(packet.packetName())) {
                 errors.report(
                         ZLinkDispatchErrorSurface.CLASSIC_FANOUT,
@@ -119,7 +148,10 @@ final class ZLinkChannelMessageDispatcher {
                         null);
                 return;
             }
-            String contentType = ZLinkChannelContentTypeFrame.decode(received.parts());
+            String contentType =
+                    packet.header() == null
+                            ? ZLinkChannelContentTypeFrame.decode(received.parts())
+                            : packet.header().contentType();
             if (!received.isRequest()) {
                 dispatchSend(channelName, packet, contentType);
                 return;
@@ -137,6 +169,7 @@ final class ZLinkChannelMessageDispatcher {
                         packet.packetName(),
                         channelName,
                         null,
+                        packet.header(),
                         null);
                 return;
             }
@@ -181,8 +214,26 @@ final class ZLinkChannelMessageDispatcher {
                         ? ZLinkFlowContext.enterOrCreate(inboundFlow, ZLinkFlowOrigin.INBOUND)
                         : ZLinkFlowContext.suppress();
         try {
-            String contentType = ZLinkChannelContentTypeFrame.decode(received.parts());
-            ParsedPacket packet = parsePacket(received.parts());
+            ZLinkChannelEnvelope.DispatchPacket packet;
+            try {
+                packet = ZLinkChannelEnvelope.decodeDispatchPacket(received.parts(), null);
+            } catch (ZLinkFrameworkException invalidEnvelope) {
+                errors.report(
+                        ZLinkDispatchErrorSurface.CLASSIC_FANOUT,
+                        ZLinkDispatchMessageKind.PUBLISH,
+                        ZLinkDispatchErrorReason.INVALID_FRAME,
+                        ZLinkDispatchErrorAction.DROP,
+                        null,
+                        channelName,
+                        received.topic(),
+                        null,
+                        invalidEnvelope);
+                return;
+            }
+            String contentType =
+                    packet.header() == null
+                            ? ZLinkChannelContentTypeFrame.decode(received.parts())
+                            : packet.header().contentType();
             ChannelPublishHandlerRegistration registration =
                     registry.publishHandler(channelName, packet.packetName());
             if (registration == null) {
@@ -257,7 +308,8 @@ final class ZLinkChannelMessageDispatcher {
         }
     }
 
-    private void dispatchSend(String channelName, ParsedPacket packet, String contentType) {
+    private void dispatchSend(
+            String channelName, ZLinkChannelEnvelope.DispatchPacket packet, String contentType) {
         ChannelSendHandlerRegistration registration =
                 registry.sendHandler(channelName, packet.packetName());
         if (registration == null) {
@@ -359,7 +411,7 @@ final class ZLinkChannelMessageDispatcher {
             ZLinkBackendRouterSocket router,
             ZLinkBackendReceived received,
             long requestSeq,
-            ParsedPacket packet,
+            ZLinkChannelEnvelope.DispatchPacket packet,
             ChannelRequestHandlerRegistration registration,
             String contentType) {
         String packetName = packet.packetName();
@@ -418,6 +470,8 @@ final class ZLinkChannelMessageDispatcher {
                                                                                                         packetName,
                                                                                                         channelName,
                                                                                                         null,
+                                                                                                        packet
+                                                                                                                .header(),
                                                                                                         error);
                                                                                     } else {
                                                                                         try {
@@ -519,12 +573,6 @@ final class ZLinkChannelMessageDispatcher {
                         null,
                         null,
                         null));
-    }
-
-    private static ParsedPacket parsePacket(List<Message> parts) {
-        return parts.size() >= 2
-                ? new ParsedPacket(parts.get(0).toUtf8String(), parts.get(1))
-                : new ParsedPacket("", parts.get(0));
     }
 
     private static boolean isProbeFrame(List<Message> parts) {

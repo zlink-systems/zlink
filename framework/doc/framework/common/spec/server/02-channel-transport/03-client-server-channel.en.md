@@ -303,41 +303,25 @@ concurrent requests a Server can handle or its physical performance. For
 example, if Server A's weight is `100` and Server B's is `50`, with other
 conditions equal, repeated target selection gives A twice B's assignment
 share. It doesn't mean A is necessarily chosen for every individual
-request. Servers with the same weight are chosen in rotation.
+request. The selection order is defined by [Channel Messaging §3](02-channel-messaging.en.md#3-how-to-select-a-target--channelname-select-one-selection-order-weighted-round-robin).
 
-- **Weight is only compared among Servers that are `Ready` and not draining.**
-  A Server whose connection isn't ready, or that's draining, isn't selected
-  even with a high weight.
-- **The framework applies this condition first, then computes the sum of
-  remaining positive weights using at least a 64-bit integer.** This allows it
-  to select a Server by the relative ratio without overflowing the sum.
+ChannelName ready/drain eligibility and weighted select-one are defined by [Channel Messaging §3](02-channel-messaging.en.md#3-how-to-select-a-target--channelname-select-one-selection-order-weighted-round-robin).
 
 Drain is the process of first blocking selection for new sends and requests,
 to safely shut down a Server or exclude it from service targets, then
-finishing work the Server already received within a set time. Weight `0` and
-drain are both excluded from new target selection, but their meaning differs.
+finishing work the Server already received within a set time. Weight `0` and drain have different meanings.
 Weight `0` is a setting that zeroes only the selection share while keeping the
 Server running; drain is a termination procedure that cleans up existing work
 and then closes the descriptor and listener.
 
-| Server state | Whether it's a target for new sends and requests |
-|---|---|
-| Ready and weight greater than 0. | Included as a selection candidate, reflecting its relative weight ratio against other selectable Servers. Servers with the same weight are chosen in rotation. |
-| Weight is `0`. | Excluded from new target selection. The Server can keep running, and raising weight again returns it to the candidate set. It doesn't change the Server role or an existing connection to a Client role. |
-| Draining for a safe shutdown. | Excluded from new target selection. The Server stops accepting new business messages, processes only already-accepted handlers and request replies up to the deadline, then cleans up the descriptor and listener. |
+Weight `0` does not turn the Server role or an existing connection into a Client role.
 
 ### 4.1 A Server in the Same Process Is Also a Selection Candidate
 
 If `Client` and `Server` for the same `ChannelName` are registered in the same
-process, the local Server is included in the same candidate set as remote
-Servers.
-
-- **A local Server can only be selected once its listener bind and service
-  admission finish (making it `Ready`), its weight is greater than 0, and it
-  isn't draining.** The framework doesn't select the local Server
-  preferentially, or exclude remote Servers from candidates, just because it's
-  local. This is so that, with multiple candidates, the same weight ratio and
-  rotation rule apply regardless of local/remote.
+process, the local Server joins the same candidate set as remote Servers after
+listener bind and service admission.
+Eligibility and ordering are defined by [Channel Messaging §3](02-channel-messaging.en.md#3-how-to-select-a-target--channelname-select-one-selection-order-weighted-round-robin).
 
 ```mermaid
 flowchart LR
@@ -548,11 +532,8 @@ provided by monitoring.
   interchangeably with a MeshNode descriptor.
 - Server weight allows `0`, default `100`, and cap `10000`; `-1` and `10001`
   are rejected at startup configuration and runtime change.
-- Multiple Servers for the same ChannelName are selected based on weight,
-  including weight 0, and drain state.
-- A local Server is selected under the same readiness, weight, and drain
-  rules as a remote Server, and the selected local Server's handler also runs
-  through actual transport.
+- ChannelName Server selection verifies [Channel Messaging §3](02-channel-messaging.en.md#3-how-to-select-a-target--channelname-select-one-selection-order-weighted-round-robin).
+- A selected local Server handler also runs through actual transport.
 
 **Restart and Failure**
 

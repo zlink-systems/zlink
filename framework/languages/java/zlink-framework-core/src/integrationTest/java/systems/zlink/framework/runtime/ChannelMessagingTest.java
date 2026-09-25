@@ -46,6 +46,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAc
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 import systems.zlink.framework.spots.SpotHandle;
 import systems.zlink.framework.spots.SpotHandleResolver;
@@ -55,6 +56,7 @@ import systems.zlink.framework.spots.ZLinkSpotContext;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.URI;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -494,19 +496,22 @@ final class ChannelMessagingTest {
                 try (var rawContext = channelAdapter.createContext();
                         var rawDealer = channelAdapter.createDealerSocket(rawContext)) {
                     rawDealer.connect(endpoint);
-                    Thread.sleep(100);
-                    List<Message> malformedParts =
-                            List.of(Message.from("DecodeReq"), Message.from("{"));
+                    admitRawClient(rawDealer);
+                    List<Message> malformedParts = malformedDecodeRequest();
+                    var requestHeader =
+                            ZLinkChannelEnvelope.decodeHeader(malformedParts.get(0), false);
                     try {
                         try (ZLinkBackendReceived reply =
-                                rawDealer
-                                        .request(malformedParts, Duration.ofSeconds(2))
-                                        .toCompletableFuture()
-                                        .get(2, TimeUnit.SECONDS)) {
+                                awaitRawReply(rawDealer, malformedParts)) {
                             assertTrue(ZLinkFrameworkErrorReply.isReply(reply.parts()));
-                            assertTrue(
-                                    ZLinkFrameworkErrorReply.message(reply.parts())
-                                            .contains("PayloadDecodeFailed"));
+                            String errorMessage = ZLinkFrameworkErrorReply.message(reply.parts());
+                            assertTrue(errorMessage.contains("PayloadDecodeFailed"), errorMessage);
+                            var replyHeader =
+                                    ZLinkChannelEnvelope.decodeHeader(reply.parts().get(0), false);
+                            assertEquals(
+                                    requestHeader.correlationId(), replyHeader.correlationId());
+                            assertEquals(requestHeader.channelName(), replyHeader.channelName());
+                            assertEquals(requestHeader.messageName(), replyHeader.messageName());
                         }
                     } finally {
                         malformedParts.forEach(Message::close);
@@ -681,19 +686,22 @@ final class ChannelMessagingTest {
                 try (var rawContext = channelAdapter.createContext();
                         var rawDealer = channelAdapter.createDealerSocket(rawContext)) {
                     rawDealer.connect(endpoint);
-                    Thread.sleep(100);
-                    List<Message> malformedParts =
-                            List.of(Message.from("DecodeReq"), Message.from("{"));
+                    admitRawClient(rawDealer);
+                    List<Message> malformedParts = malformedDecodeRequest();
+                    var requestHeader =
+                            ZLinkChannelEnvelope.decodeHeader(malformedParts.get(0), false);
                     try {
                         try (ZLinkBackendReceived reply =
-                                rawDealer
-                                        .request(malformedParts, Duration.ofSeconds(2))
-                                        .toCompletableFuture()
-                                        .get(2, TimeUnit.SECONDS)) {
+                                awaitRawReply(rawDealer, malformedParts)) {
                             assertTrue(ZLinkFrameworkErrorReply.isReply(reply.parts()));
-                            assertTrue(
-                                    ZLinkFrameworkErrorReply.message(reply.parts())
-                                            .contains("PayloadDecodeFailed"));
+                            String errorMessage = ZLinkFrameworkErrorReply.message(reply.parts());
+                            assertTrue(errorMessage.contains("PayloadDecodeFailed"), errorMessage);
+                            var replyHeader =
+                                    ZLinkChannelEnvelope.decodeHeader(reply.parts().get(0), false);
+                            assertEquals(
+                                    requestHeader.correlationId(), replyHeader.correlationId());
+                            assertEquals(requestHeader.channelName(), replyHeader.channelName());
+                            assertEquals(requestHeader.messageName(), replyHeader.messageName());
                         }
                     } finally {
                         malformedParts.forEach(Message::close);
@@ -1754,6 +1762,57 @@ final class ChannelMessagingTest {
 
     private static String tcpEndpoint() {
         return "tcp://127.0.0.1:" + nextPort();
+    }
+
+    private static void admitRawClient(ZLinkBackendDealerSocket dealer) throws Exception {
+        byte[] channel = "profile".getBytes(StandardCharsets.UTF_8);
+        byte[] identity = "default".getBytes(StandardCharsets.UTF_8);
+        int bodySize = 1 + channel.length + 1 + 1 + identity.length + Integer.BYTES;
+        ByteBuffer hello = ByteBuffer.allocate(10 + 3 + bodySize);
+        hello.put(new byte[] {0x5a, 0x4d, 1, 1, 0, 2});
+        hello.putInt(3 + bodySize);
+        hello.put((byte) 1).putShort((short) bodySize);
+        hello.put((byte) channel.length).put(channel);
+        hello.put((byte) 1);
+        hello.put((byte) identity.length).put(identity);
+        hello.putInt(Integer.MAX_VALUE);
+        try (Message request = Message.from(hello.array());
+                ZLinkBackendReceived reply = awaitRawReply(dealer, List.of(request))) {
+            byte[] admit = reply.parts().get(0).data();
+            assertEquals(0x5a, Byte.toUnsignedInt(admit[0]));
+            assertEquals(0x4d, Byte.toUnsignedInt(admit[1]));
+            assertEquals(2, Byte.toUnsignedInt(admit[3]));
+        }
+    }
+
+    private static ZLinkBackendReceived awaitRawReply(
+            ZLinkBackendDealerSocket dealer, List<Message> parts) throws Exception {
+        CompletableFuture<ZLinkBackendReceived> pending =
+                dealer.request(parts, Duration.ofSeconds(2)).toCompletableFuture();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (!pending.isDone() && System.nanoTime() < deadline) {
+            dealer.waitForReadable(Duration.ofNanos(Math.max(1, deadline - System.nanoTime())));
+        }
+        return pending.get(0, TimeUnit.SECONDS);
+    }
+
+    private static List<Message> malformedDecodeRequest() {
+        var header =
+                new ZLinkChannelEnvelope.Header(
+                        ZLinkChannelEnvelope.KIND_REQUEST,
+                        "profile",
+                        "DecodeReq",
+                        ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
+                        ZLinkChannelEnvelope.newCorrelationId(),
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null);
+        return ZLinkChannelEnvelope.encode(header, Message.from("{"));
     }
 
     private static <T> T awaitChannelReply(

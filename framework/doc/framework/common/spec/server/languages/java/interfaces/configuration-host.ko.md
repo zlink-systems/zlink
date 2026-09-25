@@ -280,29 +280,13 @@ serverOptions.addRouteMesh("orders")
  CheckoutReply.class); // 이 node를 checkout 요청 처리 후보로 등록한다.
 ```
 
-Automatic [RouteMesh](../../../00-foundation/02-glossary.ko.md#routemesh)는 RID를 canonical byte order로 비교하고 더 작은 RID의 MeshNode만 상대 endpoint로
-connect한다. Manual topology는 application endpoint 구성에 따라 한쪽 또는 양쪽에서 connect할 수 있다.
-양쪽 연결이나 automatic discovery 경합·오래된 snapshot으로 같은 RID의 pipe가 둘 생길 때의 처리는
-[channel topology](../../../02-channel-transport/01-channel-topology.ko.md)의 공통 규칙을 따른다.
+RouteMesh 연결 방향과 중복 pipe 처리는 [Channel topology §8](../../../02-channel-transport/01-channel-topology.ko.md)가 정한다.
 
-두 MeshNode의 object role이 모두 `Client`이고 양쪽 모두 RouteMesh Channel Server membership이 없을
-때만 peer connection이 필요하지 않다. Channel Client membership만 등록한 경우도 같다. 어느 한쪽에라도
-Channel Server membership이 있으면 weight가 `0`이어도 connection을 만들고 liveness를 유지한다.
-ClientServer와 classic fanout registration은 별도 물리 topology이므로 이 판정에 포함하지 않는다.
+Object Client peer 필요성은 [Channel topology §8](../../../02-channel-transport/01-channel-topology.ko.md)가 정한다.
 
-ClientServer는 manual endpoint와 location store [automatic discovery](../../../00-foundation/02-glossary.ko.md#automatic-discovery)를 함께 사용할 수 있다. 두 source가 같은
-Server RID와 [lifecycle generation](../../../00-foundation/02-glossary.ko.md#lifecycle-generation)을 가리키면 connection intent와 ready target을 하나로 합친다. Automatic과
-manual 모두 Client만 server로 connect하며 Server는 client endpoint를 찾거나 outbound connect를 시작하지
-않는다. 같은 ChannelName에는 Client와 Server를 각각 한 번 등록할 수 있고 `(ChannelName, Role)` key의
-별도 registration으로 하나의 ClientServer topology를 공유한다. 같은 역할을 두 번 등록하면 startup이
-실패하며 RouteMesh [ChannelName](../../../00-foundation/02-glossary.ko.md#channelname) 충돌 규칙은
-유지한다. Local Server도 listener와 service admission 뒤 remote Server와 같은 readiness·[weight](../../../00-foundation/02-glossary.ko.md#weight)·drain
-조건으로 선택하며 local 우선순위나 direct handler 호출을 사용하지 않는다.
+ClientServer 등록, 중복 제거, 연결 방향과 local Server 선택은 [ClientServer channel](../../../02-channel-transport/03-client-server-channel.ko.md)이 정한다.
 
-Fanout에서는 Publisher가 descriptor만 게시하고 outbound connect를 시작하지 않는다. Subscriber만 publisher
-endpoint로 connect하며 automatic subscriber는 Publisher RID와 lifecycle generation마다 connection intent
-하나를 만든다. 한 ChannelName에 automatic subscriber와 manual subscriber endpoint를 함께 구성하면 startup이
-실패한다.
+Fanout discovery와 연결 방향은 [Channel topology](../../../02-channel-transport/01-channel-topology.ko.md)가 정한다.
 
 Object role을 생략하면 `None`이다. `client()`는 global object operation만 제공하고 placement target이 되지
 않으며 `server()`는 Client capability와 Entry Spot·factory registration을 제공한다. Client와 Server는
@@ -763,6 +747,6 @@ runtime 중 다시 계산하지 않는다.
 configuration error다. `relocationInFlightPayloadBudgetBytes`은 peer 연결 하나에 대해 동시에 전송 중인
 relocation chunk byte 합계의 상한이고 기본값은 16 MiB이며 `0`은 예산을 적용하지 않는다.
 `relocationNodeInFlightPayloadBudgetBytes`은 같은 계상 규칙을 node 전체 합계에 적용하며 기본값 `0`은
-미적용이다. `relocationCutoverWaitTimeout`은 target이 cutover를 기다리는 시간이자 source가 재전송용
-boundary batch 사본을 유지하는 시간이고 기본값은 1초다. 네 값 모두 startup-only이며 음수는 socket
+미적용이다. `relocationCutoverWaitTimeout`은 cutover 대기 Warning 임계값이고 기본값은 1초다.
+Source 사본 유지와 authority CAS는 [공통 relocation §4.4](../../../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)를 따른다. 네 값 모두 startup-only이며 음수는 socket
 bind 전에 configuration error다.

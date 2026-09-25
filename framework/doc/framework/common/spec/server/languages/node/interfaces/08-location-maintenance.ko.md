@@ -210,11 +210,8 @@ export interface ZLinkRelocationStore {
 }
 ```
 
-Reference는 Framework가 put 전에 발급하는 opaque UTF-8 `1..4096` bytes 문자열이며 match를
-사용한다. 삭제되거나 만료된 reference도 다른 content에 다시 사용하지 않는다. 같은 reference와 같은
-bytes를 다시 put하면 `alreadyStored`, 다른 bytes를 put하면 `conflict`다. 이 규칙으로 Framework는
-timeout이나 연결 오류 뒤에 같은 reference를 직접 read하여 저장 결과를 재조정할 수 있다.
-`retentionMs`는 양의 safe integer여야 한다.
+Reference와 put 재시도의 의미는 [Relocation Store Redis §3–4](../../../05-location-relocation/03-relocation-store-redis.ko.md#3-reference와-저장-크기)가 정한다.
+Node.js는 두 결과를 `alreadyStored`와 `conflict`로 표현한다. `retentionMs`는 양의 safe integer여야 한다.
 
 Data chunk 하나는 application bytes 기준 최대 64 MiB이고, provider가 받는 encoded blob 상한은
 [Relocation Store Redis §3](../../../05-location-relocation/03-relocation-store-redis.ko.md#3-reference와-저장-크기)이 소유한다. Actor·Spot relocation의 state·queue·timer handoff payload는 이 Store를

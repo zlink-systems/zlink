@@ -106,10 +106,8 @@ caller가 이미 그 lane 위에 있으면 그 진입은 세지 않는다. 완�
 turn 하나다. 소유 turn은 FIFO로 실행되므로 caller 하나가 100건을 연달아 제출하면 100건이 제출 순서대로
 binding에 모두 도달한다.
 
-**Send의 완료 시점**은 E4의 호출 반환이 아니라 local admission이 실제로 성공한 시점이다 — socket의 송신
-queue가 message를 수락하는 [source-local admission](../00-foundation/02-glossary.ko.md#source-local-admission)이며
-remote 수신 확인이 아니다([Submit과 완료 「2」](01-submit-and-completion.ko.md#2-terminator별-완료-의미와-언어별-이름),
-[「13」](01-submit-and-completion.ko.md#13-응답을-기다리지-않는-호출의-완료-지점)). admission이
+Send의 완료 경계는 [Submit과 완료 §4](01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)가
+정의한다. E4 호출 반환 뒤 pending인 경우에도 E5가 해당 완료를 전달한다. admission이
 즉시 성공하면 E5가 같은 호출 안에서 E3의 entry를 꺼내 결과를 확정하고 dispatcher 자리에 전달하며, HWM으로
 pending이면 나중의 completion이 같은 E5 경로를 탄다. 어느 경우든 caller continuation은 dispatcher의 새 turn에서 실행된다.
 `Yield`로 gate를 반납한 caller의 continuation은 [Handler turn 「3」](02-handler-turn-and-execution-gate.ko.md#3-yield-시-gate와-claim)대로

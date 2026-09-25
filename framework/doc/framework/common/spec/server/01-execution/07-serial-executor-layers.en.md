@@ -114,15 +114,11 @@ layer, the same call has to be looked up again every time work crosses a layer.
 Which queues Actor work and timer work pass through depends on the
 [User Spot execution mode](../00-foundation/02-glossary.en.md#user-spot-execution-mode).
 
-The mode option is **User-Spot only.** The wiring for the other Spot kinds is already settled
-and follows one of the two diagrams here as-is — an
-[Entry Spot](../00-foundation/02-glossary.en.md#spot-turn) separates the Spot lane from
-per-Actor lanes, so it matches the Actor path of the `PerActor` diagram (except that it does not
-offer `Yield` — [02 §2](02-handler-turn-and-execution-gate.en.md#2-execution-gate--the-owners-processing-order)),
-and an Instance Spot uses one gate for the whole Spot, so it matches the `SpotWide` diagram.
-
-Only Actor work under `SpotWide` passes through two queues. Both modes guarantee serial
-execution; only the number of queues crossed differs.
+The execution-mode gate scopes and Actor queue rule are defined by
+[Execution gate §2](02-handler-turn-and-execution-gate.en.md#execution-gate).
+The diagrams in this section show the queue paths implementing that rule. Entry Spots use
+the Actor path in the `PerActor` diagram, and Instance Spots use the `SpotWide` path. Only
+Actor work under `SpotWide` passes through two queues.
 
 The diagrams below show which queue each entry point connects to in each mode. The example Spot
 has two Actors (A and B) and two timers (`tick` and `beat`).
@@ -290,11 +286,13 @@ ZLinkExecutionLanePolicy {
 enqueue(work)                    // application lane
 enqueueWithPayloadBytes(work, n) // application lane; reserved at the actual n payload bytes
 enqueueLifecycle(work)           // lifecycle lane; overtakes queued application work
-enqueueBarrierNext(work)         // right after the current turn, ahead of queued application work
 isCurrent()                      // does the calling thread hold this queue's turn
 awaitQuiescence()                // wait until all queued work has finished
 close()                          // accept no new submissions; finish what was already accepted
 ```
+
+A barrier is submitted to the lifecycle lane through `enqueueLifecycle`. Lane FIFO and
+priority follow [Execution gate §7](02-handler-turn-and-execution-gate.en.md#7-lane-separation-and-priority-implementation).
 
 ### 6.3 Atomic Scope of Sequence-Number Issuance and Insertion
 
@@ -401,7 +399,11 @@ Drain()
 
         if (result == Completed) Release(work);
         // Suspended means the work handed the turn back. its completion is handled
-        // later, and this loop moves straight on to the next work item.
+        // later, and this loop moves straight on to the next work item. While a
+        // lifecycle item is suspended, TryTakeNext may select its ready continuation
+        // but no later lifecycle item. The continuation remains subject to the
+        // lifecycle burst limit and yield debt; eligible application work may run
+        // while it waits (handler turn and execution gate §7).
 
         if (Now() - sliceStartedAt >= policy.ownerTimeBudget)
             break;                     // §6.4 — this is where the owner yields

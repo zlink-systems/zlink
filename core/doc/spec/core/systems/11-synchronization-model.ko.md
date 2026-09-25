@@ -281,8 +281,8 @@ lock을 semaphore나 `try_lock` 재시도로 바꾸는 것은 형태를 바꾸�
   함께 쓰는 lock은 `mutex_t`뿐이다. POSIX backend의 debug·sanitizer 빌드는 `mutex_t`를 재진입을
   즉시 잡는 모드(`ERRORCHECK`)로 만든다. 다른 backend는 이 검출을 제공하지 않으므로 재진입
   금지는 리뷰와 §8의 검증으로 지킨다.
-- **순서.** 설계 규칙으로서 lock은 socket turn → 그 socket이 소유한 pipe 끝 → context registry
-  순서로만 잡는다. 역순으로 잡지 않고, 한 socket의 turn을 쥔 채 다른 socket의 turn이나 pipe 끝을
+- **순서.** 설계 규칙으로서 세 lock 종류는 socket turn → 그 socket이 소유한 pipe 끝 → context
+  registry 순서로만 잡는다. 이 밖의 구현 lock이 끼는 순서는 §6.1이 정한다. 역순으로 잡지 않고, 한 socket의 turn을 쥔 채 다른 socket의 turn이나 pipe 끝을
   잡지 않는다. 상대 socket에 영향을 주는 변경은 command로 보낸다. registry가 pipe 끝의 값을
   조회할 때는 registry lock을 놓고 조회하거나 발행된 값만 읽는다.
 - **memory ordering.** 다른 thread에 값을 발행할 때는 release store, 읽을 때는 acquire load를
@@ -298,6 +298,8 @@ lock을 semaphore나 `try_lock` 재시도로 바꾸는 것은 형태를 바꾸�
 | Auto-HWM 전체 재계산 | 재계산 lock → 상태 lock / socket pin lock(pin 뒤 즉시 반납) / option lock → socket Auto-HWM lock → monitor lock → pipe endpoint lock |
 | Auto-HWM 증분 확장 | 재계산 lock → 상태 lock → option lock → registry lock → (registry 반납) pipe endpoint lock → socket Auto-HWM lock → 상태 lock |
 | pipe 상대 끝 분리 | 자기 endpoint lock 반납 → 상대 endpoint lock |
+| inproc reconnect·stop | socket turn → reconnect runtime lock → control runtime lock. Stop은 reconnect runtime lock을 반납한 뒤 control task를 기다린다 |
+| ROUTER 선택 route 변경 | socket turn → ROUTER route lock → part helper lock(버퍼 부족으로 보류한 record를 버릴 때) |
 
 메시지당 hot path 비용은 다음과 같다. 정상 public send는 pipe mutex 0회, socket 상태어 CAS
 1회(획득)와 atomic 1회(반납)를 쓴다. 정상 public receive도 pipe와 fair queue에서 mutex 0회이며,

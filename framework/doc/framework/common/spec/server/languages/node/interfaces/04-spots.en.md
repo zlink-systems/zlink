@@ -125,13 +125,13 @@ export interface ZLinkSpotContext<
  readonly handlers: ZLinkSpotHandlerRegistry;
  relocationReady(): ZLinkSpotRelocationReadyCall;
  leaveActor(actor: TActor, signal?: AbortSignal): Promise<void>;
- close(signal?: AbortSignal): Promise<boolean>;
+ close(): void;
 }
 
 export interface ZLinkInstanceSpotContext
  extends ZLinkSpotCommonContext<ZLinkInstanceSpot> {
  readonly handlers: ZLinkInstanceSpotHandlerRegistry;
- close(signal?: AbortSignal): Promise<boolean>;
+ close(): void;
 }
 ```
 
@@ -362,8 +362,6 @@ The meaning and verification criteria are owned by
 [Spot Address And Messaging](../../../03-spot-actor/06-spot-address-messaging.en.md)
 and [Spot/Actor Membership](../../../03-spot-actor/05-spot-actor-membership.en.md).
 
-`yield(...)` declared in this document is only valid on the shared turn
-of a `SpotWide` User Spot or Instance Spot. Called on an Entry Spot or
-`PerActor` User Spot, it completes with `invalidConfiguration`, without
-submitting the operation or returning the turn. `submit(...)` is the
-common `Async` semantics that keeps the current turn.
+The valid context and pre-submission `InvalidOperation` for `yield(...)`
+are defined by the [execution gate §16](../../../01-execution/02-handler-turn-and-execution-gate.en.md#yield-call-eligibility).
+`submit(...)` is the Node.js spelling of common `Async`.

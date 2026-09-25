@@ -641,7 +641,7 @@ publish와 무관한 공통 runtime monitoring으로 확인한다.
 
 #### .NET 예시
 
-Publish 완료는 handler 실행 결과가 아니라 local outbound admission, 즉 source-local admission 경계만 나타낸다.
+Publish의 one-way 완료 경계는 [Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)가 정의한다.
 
 ```csharp
 static async ValueTask PublishAsync<TEvent>(
@@ -732,7 +732,7 @@ Spot application queue와 Actor queue는 한도가 있다. 한도를 넘겼을 �
 | 계열 | 포화한 대기열 | 호출자가 받는 결과 |
 |---|---|---|
 | Send·one-way | **같은 runtime**의 outbound 또는 Spot·Actor 대기열 | [Async 실행 정책 §1](../01-execution/01-submit-and-completion.ko.md)을 따른다 — send timeout까지 자리를 기다리고, 시간이 다 되면 `DeadlineExceeded` |
-| Send·one-way | **다른 node**의 Spot·Actor 대기열 | **결과가 없다.** Send는 source outbound queue가 수락한 시점에 이미 완료했다([Framework 오류 모델 §4](../00-foundation/07-framework-error-model.ko.md)). 이후의 target admission 실패는 완료된 결과를 바꾸지 않으며 metric·log·trace로만 남는다 |
+| Send·one-way | **다른 node**의 Spot·Actor 대기열 | **결과가 없다.** Send 완료 경계는 [Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)를 따른다. 이후 target admission 실패는 metric·log·trace로 남는다 |
 | Publish (시작 전) | worker 자리 또는 source-local outbound | send timeout까지 기다린다. 확보하지 못하면 `DeadlineExceeded` |
 | Publish (시작 후) | local Spot 대기열 | **자리가 날 때까지 기다린다.** publish는 이미 완료했으므로 이 대기가 호출자 결과를 바꾸지 않는다. 용량이 아닌 이유로 전달하지 못한 경우만 관측으로 남긴다(§4.3) |
 | Request | 같은 runtime 또는 다른 node의 Spot·Actor 대기열 | send와 같다 — 자리를 기다리고, 시간이 다 되면 `DeadlineExceeded`다([Framework 오류 모델 §5](../00-foundation/07-framework-error-model.ko.md#bounded-queue-failure)). |

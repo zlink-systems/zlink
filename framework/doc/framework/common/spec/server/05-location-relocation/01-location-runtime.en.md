@@ -184,17 +184,17 @@ restates, in §8–§9, the records and conditions the Location Store records am
    an instance not yet exposed externally. Once Restore finishes, it reports relay
    reception ready. The source then relays its ingress hold and sends cutover one-way on
    the same ordered connection.
-6. After receiving cutover, or 1,000ms after the relay-ready reply, the target changes
-   owner, membership, and capacity together in one step, only if the version first read
-   is unchanged. This method is called compare-and-set, abbreviated
+6. After verifying the complete relay batch and cutover under
+   [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover),
+   the target changes owner, membership, and capacity together in one step, only if the
+   version first read is unchanged. This method is called compare-and-set, abbreviated
    [CAS](../00-foundation/02-glossary.en.md#compare-and-set).
 7. After owner change, saved existing work, pre-cutover relay, and remaining temporary
    work enter the real object queue in order. The temporary registration is removed and
    the regular route is installed while dispatch stays closed. Required lifecycle
    callbacks finish before application message processing starts.
 8. The source waits for no completion reply after sending cutover and keeps Message
-   Follow. The original payload kept in memory is cleaned up after cutover submit
-   finishes.
+   Follow. It retains the payload and relay batch until authority settlement or the source-lease-expiry terminal under [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
 
 **The handoff payload and the owner change aren't bundled into one distributed transaction
 or 2PC.** The Restore request, each chunk, and the target's owner CAS are bound by the
@@ -803,7 +803,7 @@ CAS to confirm the first-read `StoreVersion` is unchanged.
 | `Reserve` | `Missing → Reserved`. Issues ObjectGeneration, the first AuthorityOwnerGeneration, and capacity. |
 | `Commit` | That reservation's `Reserved → Active`. |
 | `Abort` | That reservation's `Reserved → Missing`. |
-| `Preserve` | Keeps the Active owner, generation, and capacity in use; changes only `StoreVersion` and Framework-internal data. Target information must be absent. |
+| `Preserve` | Keeps the Active owner, generation, and capacity in use; changes only `StoreVersion` and Framework-internal data. Ordinary use requires no target information; relocation settlement may clear target information for the same `RelocationId`. |
 | `NewOwner` | Changes an Active record to the target owner. Keeps ObjectGeneration and increments AuthorityOwnerGeneration. Uses the pre-secured target capacity. |
 | `Delete` | Removes the Active record and lookup index, and decreases capacity in use in the same request. |
 
@@ -823,7 +823,12 @@ relocation, when updating the completion-record payload location or recording ta
 readiness, can pre-secured reservation information be passed along. The Framework checks
 the authority key, first-read `StoreVersion`, source/target owner, and current capacity,
 all together. On success, the `StoreVersion` the reservation expects is also updated in
-the same request. Owner, capacity, and reservation state are kept.
+the same request. Owner, capacity, and reservation state are kept. Relocation settlement uses this same `Preserve` operation. For a `SpotWide` unit, source `Preserve` and the target's whole-unit conditional batch both compare the `StoreVersion` of the Spot aggregate authority record and a successful request changes that version, so both cannot commit. For a single-row unit: if the source first commits it against the `StoreVersion` expected
+by target `NewOwner`, owner and generation stay put while that version changes, so a late
+target CAS fails. The source verifies its current owner lease and clears target data for
+the same `RelocationId`. If target `NewOwner` committed first, source `Preserve` cannot
+succeed. An indeterminate response is checked using the same key and version under
+[§10](#10-when-a-store-response-isnt-received).
 
 ### 6.2 Reading Multiple Pages as a List from the Same Point in Time
 
@@ -936,10 +941,9 @@ exists before creation.
 
 The Location Store handles the `Ready` change and final-result recording in one step. On
 conflict, the stored result is re-read. **Cancellation, timeout, or response loss alone
-isn't judged as creation failure.** The current record is re-read to confirm the result,
-and the original request isn't automatically resubmitted to a different owner. Remote
+isn't judged as creation failure.** The current record and stored result for the same `OperationId` are re-read to confirm the result; the original Create or GetOrCreate request is not submitted to another owner. Remote
 creation only completes once it receives command 20's `Existing | Created | Rejected`,
-the correct ref, and an optional application reply.
+the correct ref, and an optional application reply. After Create or GetOrCreate receives a `Rejected` terminal, the same operation is not resubmitted to another owner.
 
 ### 7.1 First-Creating an Instance Spot on the Node That Received the Message
 
@@ -1005,8 +1009,9 @@ It isn't used for Actor, other Spot kinds, `Creating`, `Closing`, `Relocating`, 
 | After recording `Creating`, before `Ready` | Continues creation with the same record and generation, or cancels the same record. |
 | After `Ready`, before restoring the first message | Restores starting from the first message using the stored data. No new message is received before that. |
 
-If already `Ready`, the original request is delivered once to the current owner. If
-`Creating`, it waits for the same creation result. A message isn't run on an in-process
+If an existing `Ready` authority points to another owner or authority is `Creating`, the
+receiving target follows the losing-`Reserve` result in
+[Spot address messaging §4.2](../03-spot-actor/06-spot-address-messaging.en.md#42-when-several-nodes-receive-the-first-message-at-once). A message isn't run on an in-process
 instance of a previous generation. If it's a User Spot or a different type, it's
 `TypeMismatch`. No separate owner change is allowed between location confirmation and
 message delivery.
@@ -1040,20 +1045,26 @@ The Framework can briefly cache a `Ready` location. The cache stores ID,
 generation, and route. `RouteCacheMaxAge` defaults to 15 seconds and can't exceed the
 last time the owner can accept new work. `Missing`, `Creating`, and Store errors aren't
 cached. It's removed immediately on confirming a higher `StoreVersion` or owner lease
-expiry.
+expiry. A runtime change to `RouteCacheMaxAge` applies only to new cache entries and does not extend an existing entry’s lifetime.
 
 A message arriving at the previous owner right after a move can be delivered to the new
 owner. This feature is called Message Follow, and its period, `MessageFollowDuration`,
 defaults to 30 seconds. A value of 0 disables caching or delivery, respectively. Using both
 features, the cache retention time must be at least 5 seconds shorter than the delivery
-period. An invalid configuration is a configuration error.
+period. An invalid configuration is a configuration error. The Message Follow duration starts
+at relocation commit. The previous owner keeps the new owner's `ActorRef` or Spot location
+and the expiration time, and removes the route after expiration.
 
-**The previous owner only uses the source→target information recorded when the move
-completed — it doesn't re-read the Store.** The new owner's `AuthorityOwnerGeneration`
-must be greater than the previous value, and forwarding continues for at most 8 hops.
-There's no cap on the amount retainable per move. The existing operation ID,
-`ObjectGeneration`, payload, and reply route are kept unchanged. A cycle is
-`Unavailable`, and a generation mismatch is `InvalidOperation`.
+**The previous owner uses only a committed source→target Message Follow route; it does not
+re-read the Store or run an application handler.** The route verifies the global object ID,
+`ObjectGeneration`, source and target `AuthorityOwnerGeneration`, and owner fence. Owner
+generation must increase per hop, and forwarding continues for at most 8 hops. One route's
+queue has no bound on message count or stored size, but each message respects the negotiated
+message bound. The original operation ID, `ObjectGeneration`, payload, and reply route are
+preserved. An absent or expired route or a loop is `Unavailable`; a generation mismatch is
+`InvalidOperation`. The Message Follow route rejects packets and replies from a previous `ObjectGeneration`. This generation check confirms a move of the same incarnation rather than
+restricting a regular message's target. A runtime change to `MessageFollowDuration` applies to
+new relocations.
 
 ### 7.4 Querying the Current Location from Operational Tools
 
@@ -1109,9 +1120,9 @@ completion conditions for `Relocate` and `Shutdown` are defined by
 
 **Only the prepared target performs the Location Store CAS that changes ownership from
 source to target.** Neither the source nor the Session owner writes the Location Store
-based on target selection or a timeout. The target doesn't start the CAS until Restore
-and temporary queue registration have finished and it has received cutover or 1,000ms has
-passed. If the CAS fails, it doesn't open application dispatch.
+based on target selection or a timeout. The target starts CAS only after the completeness
+verification in [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
+If CAS fails, it doesn't open application dispatch.
 
 The following diagram shows the flow in which, while §5's owner-lease renewal maintains
 §3.1's host-run combination, the target reads the current record and changes owner via
@@ -1190,7 +1201,7 @@ Moving a whole `SpotWide` User Spot allows only two kinds of Store change.
 | Change purpose | Allowed content |
 |---|---|
 | Move to a new owner | Changes one or more object owners, securing the sum of all needed target space. |
-| Remove unneeded progress info after the move completes | Keeps every object's owner, generation, membership, and space in use; erases only progress info. |
+| Source fence or post-commit progress cleanup | Compares and changes the Spot aggregate authority record's `StoreVersion`. Keeps every object's owner, generation, membership, and space in use; erases only this move's progress info. |
 
 A space or membership change that doesn't fit either purpose is `Conflict` and changes
 nothing. On successful preparation, it records `(AggregateId, AggregateGeneration)` and
@@ -1408,9 +1419,9 @@ Explicit cancellation before the relay-ready reply is accepted follows this orde
 
 The source must not accept new work before the cleanup above finishes.
 
-**After the relay-ready reply is accepted, this procedure doesn't restore the source
-regardless of the cutover-submit result.** If the target CAS fails, it removes the target
-object and queue, and the Session cleans up under its own timeout.
+After relay-ready, source resumption follows a successful `Preserve` fence under
+[common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
+A failed target CAS removes target staging.
 
 ## 10. When a Store Response Isn't Received
 
@@ -1423,17 +1434,15 @@ and input limits of provider functions are defined by
 [Location Store](02-location-store-redis.en.md) and
 [Relocation Store](03-relocation-store-redis.en.md).
 
-The retry deadline for relocation CAS is the Restore operation's absolute deadline. A
-stored payload's retention period isn't used as a separate criterion. On a retryable
-failure or indeterminate response, the target repeats read/CAS with the same source
-fence and `RelocationId`. Confirming ownership by that specific target converges to
-success. A different valid owner or generation ends the stale relocation immediately.
+On a transient error or indeterminate response, the target resubmits CAS with the same expected source fence and `RelocationId`. It creates no separate timeout and does not restart or extend the Restore absolute deadline.
 
-If target ownership isn't confirmed before Restore validity expires, the target records a
-`location_update_failed` Error and removes the prepared Actor or Spot, temporary queue,
-and relocation state. It neither opens application dispatch nor sends a Session route
-update. A late Store response for a terminal `RelocationId` doesn't reactivate the
-object.
+Restore expiry ends ordinary new target CAS submissions and starts source settlement with the `Preserve` fence in §6.1. This section owns the same-target exception after source lease expiry. The source conditions `Preserve` on the `StoreVersion` expected
+by the target's `NewOwner` CAS. A confirmed source `Preserve` success proves the target's
+late CAS cannot commit; the source remains owner and resumes its retained work under
+[common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
+If the target with this `RelocationId` is already owner, the source adopts its route and
+the target opens its staged queue. An indeterminate `Preserve` result repeats under this section's Store-failure policy without a new timer while the source lease is valid. Source lease expiry ends source work under the expired-owner terminal in [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). After expiry, if a Store read still names the expired source at the target's original expected `StoreVersion` and the target verified the complete relay and cutover, only that same target with a valid lease may resubmit its original `NewOwner` CAS (the §8.1 whole-unit batch for `SpotWide`) with the same `RelocationId` and expected `StoreVersion`. An indeterminate response follows this section's Store-failure policy for the same authority. Confirmed target commit with that `RelocationId` opens target dispatch; a definitive `Conflict` that excludes this target commit after reconciliation discards staging. Target lease expiry before commit confirmation also discards staging. Dispatch remains closed until target commit is confirmed. A confirmed source `Preserve` fence discards staging; an earlier read naming source alone does not. The source may resume dispatch only
+while its owner lease remains valid under §5.
 
 During `StoreFailureGrace`, the last fully-read descriptor list is kept. The connection
 intents for the targets in that list (including targets not yet connected) are kept and
@@ -1603,15 +1612,13 @@ store record golden fixture. Each item maps to one test.
 - On an explicit cancellation before the relay-ready reply is accepted, the Location
   Store doesn't change and only the target temporary queue is discarded. If a bound
   Session exists, command 44 abort is sent one-way before the source queue reopens, and
-  it doesn't wait for an apply reply. After that point, the source queue doesn't reopen
-  regardless of the cutover-submit result.
+  it doesn't wait for an apply reply. After that point, a cutover-submit result alone does not reopen the source queue;
+  a successful source `Preserve` under §10 does.
 
 **Store Failure And Interoperability**
 
 - During the Store failure grace period, only new discovery connections are blocked, and
-  the owner deadline isn't extended. Relocation CAS retries with the same key, version,
-  and fence until Restore validity expires; on expiry, the target object and queue are
-  removed and no Session update is sent.
+  the owner deadline isn't extended. Ordinary relocation CAS resubmissions end at Restore expiry. The same-target exception after source lease expiry and staging terminals follow §10; no Session update is sent before target commit is confirmed.
 - A descriptor isn't used as a candidate for automatic discovery, new-object placement,
   Instance Spot cold activation, initial relocation target selection, select-one target
   selection, or manual object-peer combination when its exact owner-lease read returns

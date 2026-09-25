@@ -51,56 +51,21 @@ descriptor를 공개한 뒤에는 다음 설정을 바꿀 수 없다.
 
 ### 3.1 Automatic RID
 
-MeshNode가 automatic RID를 사용하면 Framework가 lifecycle마다 새 RID를
-만든다. Caller는 진단에 사용할 prefix만 지정할 수 있다. Prefix를 생략하면
-Framework가 listener 종류에 맞는 기본 prefix를 사용한다.
-
-| 구성 요소 | 계약 |
-|---|---|
-| Prefix | ASCII `[A-Za-z0-9._-]` 문자만 사용하며 길이는 `1..64`자다. |
-| UUID | RFC 4122 UUID v4 bit layout을 사용하는 16-byte random value를 `8-4-4-4-12` 자리의 36자 lowercase canonical 문자열로 표현한다. |
-| Full RID | `prefix-<lowercase-canonical-uuid-v4>` 형식이며 UTF-8로 encode한 크기는 255 bytes 이하다. |
-
-Core binary RID, Framework prefix, Entry Spot과 caller-provided RID를 함께 다루는 전체 규칙은
-[시스템 전체 Routing ID 정책](../02-channel-transport/04-network-listener-identity.ko.md#6-시스템-전체-transport-rid와-spot-id-정책)이 정의한다.
-
-Prefix와 UUID를 object placement, shard 또는 재시작 뒤에도 유지되는 application
-identity로 해석하지 않는다.
-
-MeshNode descriptor의 owner를 확정하는 CAS는 같은 `(MeshName, RID)`를 현재 다른
-owner가 사용하고 있는지 확인한다. Active conflict가 확인되면 기존 descriptor를 변경하지 않고 두 번째
-UUID나 claim을 만들지 않는다. Startup은 즉시 configuration error로 끝난다.
-
-Automatic RID를 쓰는 replacement lifecycle은 이전 lifecycle의 RID를 재사용하지 않고 새 RID를 만든다.
+MeshNode automatic RID의 발급·형식·충돌·lifecycle 규칙은
+[Transport RID와 Spot ID 정책 §6](../02-channel-transport/04-network-listener-identity.ko.md#6-시스템-전체-transport-rid와-spot-id-정책)이 정한다. Prefix를 생략하면 Framework는 listener 종류에 맞는 기본 prefix를 사용한다.
 
 ### 3.2 Entry Spot ID
 
-Object Server MeshNode는 같은 diagnostic prefix로 Entry Spot을 식별하는 전역 논리
-주소인 [Spot ID](../00-foundation/02-glossary.ko.md#spot-id)도 발급한다. 이 절이
-Entry Spot ID의 발급, 형식과 충돌 처리 규칙을 소유한다. [Spot 모델](01-spot-model.ko.md)의
-Entry Spot 설명은 이 절을 가리킨다.
+Object Server MeshNode의 Entry Spot ID 발급·형식·충돌 규칙은
+[Transport RID와 Spot ID 정책 §6.3](../02-channel-transport/04-network-listener-identity.ko.md#63-entry-spot-id)이 정한다.
 
 Object Server MeshNode는 application이 Entry Spot type을 등록했는지와 무관하게 Entry Spot
 ID를 발급하고 descriptor에 싣는다. Entry Spot type 등록은 이 Spot이 실행할 application
 handler를 정할 뿐이며, descriptor의 `entrySpotId` 유무를 바꾸지 않는다. 원격 생성 요청을
 받을 수 있는지도 이 등록으로 갈리지 않는다.
 
-```text
-MeshNode RID:   <prefix>-<node-uuid-v4>
-Entry Spot ID: <prefix>-entry-<lowercase-canonical-uuid-v4>
-```
-
-MeshNode와 Entry Spot은 각각 별도의 UUID v4를 생성한다. 두 UUID 값의 비교로 관계를 판정하지 않는다.
-Entry Spot ID는 같은 MeshNode lifecycle 동안 유지하고 replacement lifecycle에서는 새로 발급한다. Global
-Spot ID authority의 active conflict가 확인되면 두 번째 UUID나 reservation을 만들지 않고 startup을 즉시
-configuration error로 끝낸다.
-
-Full Entry Spot ID는 UTF-8 255 bytes 이하여야 한다. Prefix를 생략하면 MeshNode automatic RID에 선택한
-기본 diagnostic prefix를 Entry Spot에도 사용한다.
-
-MeshNode descriptor는 Entry Spot ID를 lifecycle generation과 함께 공개한다. Actor placement와
-Entry Spot join은 이 mapping을 사용하며 prefix나 `entry` marker를 parsing해 node 관계를 계산하지 않는다.
-Prefix와 marker는 진단 정보이며 stable host identity, shard나 placement key가 아니다.
+MeshNode descriptor의 Entry Spot ID mapping과 공개 규칙은
+[Transport RID와 Spot ID 정책 §6.3](../02-channel-transport/04-network-listener-identity.ko.md#63-entry-spot-id)이 정한다.
 
 Startup에서 Entry Spot을 준비하는 순서와 initialization이 끝나기 전 descriptor·resolver에
 공개하지 않는 규칙은 [§6](#6-등록과-startup-순서)이 정의한다.
@@ -375,7 +340,7 @@ node-wide placement weight도 바꾸지 않는다.
 | 메시징 방식 | Target을 선택하고 전달하는 방법 |
 |---|---|
 | Node direct | Caller가 지정한 `MeshName` 안에서 특정 target RID로 한 번 제출한다. Object Client RID는 application Node direct target이 아니다. |
-| Channel | Process-local `ChannelName` index가 RouteMesh를 정한다. 그 Mesh에서 ready 상태이고 Channel weight가 0보다 큰 Server 중 하나를 weight 비율에 따라 선택한다. |
+| Channel | Process-local `ChannelName` index로 RouteMesh를 찾고 [Channel messaging §3](../02-channel-transport/02-channel-messaging.ko.md#3-target을-선택하는-방법--channelname-select-one-선택-순서가중-라운드로빈)에 따라 target을 선택한다. |
 | [Logical Multicast](../00-foundation/02-glossary.ko.md#logical-multicast)(ChannelName과 topic으로 같은 Channel의 여러 Spot에 message 하나를 전달하는 방식) | 먼저 해당 ChannelName에 참여하고 ready 상태이며 Channel weight가 0보다 큰 remote MeshNode를 모두 선택한다. 각 수신 MeshNode는 자신의 local Spot 중에서 ChannelName과 topic 조건이 일치하는 subscription에 message를 전달한다. |
 | Actor direct | Global ActorId의 current Ready authority를 확인한 뒤 current owner route로 제출한다. |
 | [Spot direct](../00-foundation/02-glossary.ko.md#spot-direct)(global Spot ID 하나를 지정해 그 Spot에 send/request를 보내는 방식) | Global SpotId의 current [Ready](../00-foundation/02-glossary.ko.md#ready) [authority](../00-foundation/02-glossary.ko.md#authority)를 확인한 뒤 current [owner route](../00-foundation/02-glossary.ko.md#owner-route)로 제출한다. |
@@ -387,8 +352,7 @@ Actor·Spot direct는 logical ID만 target으로 사용한다. 같은 ActorId/Sp
 [Routing §2.5](08-routing.ko.md)가
 정한다.
 
-Target 선택과 message submit은 하나의 operation이다. Framework가 선택한 RID 목록을
-application에 반환한 뒤 별도 send를 요구하지 않는다.
+ChannelName의 target 선택과 message submit 경계는 [Channel messaging §3](../02-channel-transport/02-channel-messaging.ko.md#3-target을-선택하는-방법--channelname-select-one-선택-순서가중-라운드로빈)이 정한다.
 
 Node·Channel·Actor·Spot send와 request는 같은 MeshNode ROUTER를 사용한다. Classic
 fanout은 별도의 PUB/SUB socket 계약이며 MeshNode membership에 포함하지 않는다.

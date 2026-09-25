@@ -39,9 +39,7 @@ A PAIR socket passes a `parts_` array and `part_count_` to one `zlink_send()` ca
 record. The part order of a [multipart](../02-message.en.md#4-multipart) message is the array order.
 A single-part message uses an array of length one.
 
-Core admits the complete record atomically. If the call fails, the peer sees none of its parts and
-the caller must resubmit the complete record from a retained copy. Every input slot is consumed on
-both success and failure and is left as an initialized empty message.
+Record atomicity, input-slot consumption, and complete-record resubmission after failure follow [Socket Common whole-message send](README.en.md#whole-message-send-and-pending-admission).
 
 ```mermaid
 sequenceDiagram
@@ -134,33 +132,7 @@ count is written to `*part_count_out_`, and the call returns `ZLINK_RECV_BUFFER_
 
 ### PAIR logical route and reconnect
 
-A PAIR socket has one logical route. A `DONTWAIT` send makes exactly one admission attempt. If
-it is admitted immediately, the result is `ZLINK_SUBMIT_OK` with ID `0`, and no completion is
-produced. If HWM or byte credit prevents admission, or the physical connection is not ready yet,
-the call returns `ZLINK_SUBMIT_BACKPRESSURED` with `errno == EAGAIN` and a nonzero wait token in
-`completion_id_out_`. Core retains only the token, the target, and `user_context_`; it does not
-retain the payload, so the caller resubmits its own retained copy of the record.
-
-When the single pipe regains write credit (peer drain, or pipe attach on reconnect), Core publishes
-exactly one `ZLINK_COMPLETION_WRITABLE` record for that token. The record carries the same
-`completion_id`, the same `user_context`, `send_result == ZLINK_SEND_ADMITTED`,
-`send_terminal_errno == 0`, and an empty `peer_rid`. While an unread WRITABLE record exists,
-`ZLINK_POLLOUT` and `ZLINK_POLLCOMPLETION` are both level-held. The application drains the queue
-with `zlink_completion_recv()` until `NO_DATA`, then resubmits the same record with `DONTWAIT`.
-
-A wait token ends only in one of these ways: the WRITABLE record above; a WRITABLE record with
-`send_result == ZLINK_SEND_TERMINAL` and `send_terminal_errno == ENOENT` when the endpoint is
-explicitly removed with `zlink_disconnect()`; or socket close or context termination, where Core
-ends the token internally and delivers no record. A physical disconnect alone does not
-end the token; when the same logical route reconnects, the pipe attach publishes the WRITABLE
-record. A `NONE` send that waits for admission does not terminate solely because of a
-physical disconnect. When the same PAIR logical route reconnects, Core retries local queue
-admission, and `NONE` uses only the remaining budget from the `SNDTIMEO` snapshot.
-
-After admission, Core keeps no separate replay copy of the application payload. Therefore, if the
-connection disconnects after ID `0` is returned, Core does not send the same record again on a new
-connection. ID `0` means local queue admission, not confirmation that the peer received the record.
-A WRITABLE record is a write-credit notification, not admission of a record.
+The PAIR SEND target is the single logical route even when its physical pipe changes. Pipe attach after reconnect is a wake edge for that route’s wait token. SEND results, WRITABLE resubmission, token lifetime, and replay prohibition follow [Socket Common whole-message send](README.en.md#whole-message-send-and-pending-admission).
 
 ## 5. Implementation and contract-test verification requirements
 
@@ -174,18 +146,8 @@ and errno). Each item maps to one test.
 - After a successful receive, the caller owns the leading `*part_count_out_` slots and closes them exactly once with `zlink_multipart_close`. A failure does not transfer slot ownership.
 - If `parts_capacity_` is smaller than the record's part count, the call returns `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS` and the needed count without consuming the record; retrying with a large enough array receives the same record.
 
-**Whole-message send**
-- Sending an array of length one produces a one-part record; sending a multipart array returns all parts to the receiver in the same order and in one call.
-- If `DONTWAIT` is admitted immediately, it returns ID `0` and no completion.
-- If `DONTWAIT` is refused because of HWM, byte credit, or a pipe that is not ready, it returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero wait token; Core does not retain the payload, and the caller resubmits its retained complete record.
-- When the single pipe gains write credit, exactly one `ZLINK_COMPLETION_WRITABLE` record (`ZLINK_SEND_ADMITTED`, the same `user_context`, empty `peer_rid`) is returned for that token, and `ZLINK_POLLOUT` and `ZLINK_POLLCOMPLETION` are level-held until it is read.
-- If the completion reservations are exhausted so that no wait token can be created, the result is `ZLINK_SUBMIT_OUT_OF_MEMORY` with `ENOMEM` and ID `0`.
-- A `ZLINK_RECV_FLAGS_DONTWAIT` receive with no available data returns `ZLINK_RECV_NO_DATA` with `EAGAIN`.
-
-**Record atomicity and ownership**
-- If a send fails, the peer receives no part of that record.
-- Both successful and failed calls consume every `parts_` slot — after return each `zlink_msg_size` is `0`, and each slot can be closed or used for the next send without reinitialization.
-- A failed record leaves no partial state; the complete record retained before the call can be resubmitted for retry.
+**Whole-message send and ownership**
+- PAIR SEND result, record atomicity, input consumption, and WRITABLE resubmission verification refer to [Socket Common whole-message send](README.en.md#whole-message-send-and-pending-admission).
 
 **Logical reconnect and completion**
 - If the connection disconnects while a wait token is live and the same PAIR logical route reconnects, the pipe attach publishes the WRITABLE record for that token, and the disconnect alone does not produce a TERMINAL record.

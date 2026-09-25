@@ -61,8 +61,8 @@ or a remote reply is delivered as a per-language Framework exception or as a `re
 
 ## 4. `Send` Completion and Failure
 
-`Send` completes with no return value once the source runtime's outbound queue accepts the
-message. This point does not mean the target handler has processed the message.
+The normal `Send` completion boundary is defined by
+[Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary).
 
 | Condition checked before completion | Result |
 |---|---|
@@ -73,8 +73,8 @@ message. This point does not mean the target handler has processed the message.
 
 Even if target activation, admission, or handler execution fails after `Send` completes, that
 failure does not change the result of the already-completed call. The Framework records it
-in metrics, logs, and the message-flow trace, and does not automatically resubmit the same
-message to a different target.
+in metrics, logs, and the message-flow trace. The resubmission boundary is defined by
+[Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 
 ## 5. `Request` Completion and Failure
 
@@ -82,7 +82,8 @@ message to a different target.
 produced, it completes exactly once with one of the following `ErrorKind`s.
 
 - `NotFound` if the target or handler doesn't exist.
-- `Unavailable` if the route, connection, or current owner is unavailable.
+- `Unavailable` if the route, connection, or current owner is unavailable. It also means
+  the selected receiver could not admit this operation after losing first-message `Reserve`.
 - `DeadlineExceeded` if the reply isn't received within the deadline.
 - `ProtocolError` if the wire, payload, or reply type can't be processed.
 - `ShuttingDown` if the runtime is shutting down.
@@ -151,9 +152,8 @@ To start a new operation, an Application directly checks the following.
    duplicate effect.
 3. Re-query business state if needed, then start the new operation.
 
-Core-owned HWM retry within one binding operation is not an Application retry. The Framework
-has no send-ready waiter and does not automatically resubmit the same operation to a
-different logical target.
+The binding operation's HWM retry and Framework resubmission boundary are defined by
+[Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 
 ## 8. Application Job Queue Saturation
 
@@ -181,8 +181,7 @@ item below leads to one contract test.
 
 **`Send` completion boundary**
 
-- `Send` completes on source outbound queue acceptance, and a later remote failure doesn't
-  change the result.
+- Verify `Send` completion and the result after a remote failure against [Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary).
 
 **`Request` completion boundary**
 

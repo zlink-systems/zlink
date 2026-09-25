@@ -201,11 +201,8 @@ public record ZLinkStreamConnectorOptions(
 }
 ```
 
-**옵션 검증 시점은 [공통 스펙 §6.3](../../32-stream-connector.ko.md#63-옵션-검증)가 소유한다.**
-Java는 `ZLinkStreamConnectorFactory.create(options)`가 option 전 항목을 확인하며, 검증에 실패하면
-`ZLinkStreamConnector` 인스턴스를 만들지 않고 `ZLinkStreamException`(§11)으로 실패한다. 값 하나가
-허용 범위를 벗어나면 `VALIDATION_FAILED`, 항목 사이가 맞지 않으면 `CONFIGURATION_ERROR`를 담는다.
-`maxReconnectAttempts`는 `UNLIMITED_RECONNECT_ATTEMPTS`이거나 양수여야 한다.
+`ZLinkStreamConnectorFactory.create(options)`는 [공통 스펙 §6.3](../../32-stream-connector.ko.md#63-옵션-검증)의
+option 검증에 실패하면 `ZLinkStreamException`(§11)을 던진다.
 
 `skipServerCertificateValidation`은 테스트용 자체 서명 인증서에만 사용한다. 운영
 기본값은 `false`다. 이 값을 `true`로 바꾸면 TLS transport와 WSS transport 모두 서버
@@ -313,8 +310,8 @@ public interface ZLinkStreamWaitCall {
 }
 ```
 
-request timeout이 끝나면 pending request를 제거하고 반환한 `CompletionStage`를 timeout
-실패로 완료한다. 제거된 request의 response가 늦게 도착해도 그 stage를 다시 완료하지 않는다.
+request timeout의 pending 정리는 [공통 스펙 §5.2](../../32-stream-connector.ko.md#52-request-correlation)가 정한다.
+Java는 결과를 `CompletionStage`로 전달한다.
 
 
 ### 7.1 Request hook
@@ -377,7 +374,7 @@ public interface ZLinkStreamSequenceCall {
 ```
 
 - `expectNone(name).within(Duration).submit()` — window 안에 도착하면 **`VALIDATION_FAILED`를 담은 `ZLinkStreamException`으로 실패한다**. `waitFor`의 대칭.
-- `waitForSequence(name).expect(p1).expect(p2)….timeout(t).submit()` — 같은 이름 push가 **술어 순서대로** 도착하는지 확인하고 `List<ZLinkStreamMessage<TPayload>>`를 돌려준다. "N개 도착"이 아니라 **"순서대로 도착"** 을 검증한다.
+- `waitForSequence(name).expect(p1).expect(p2)….timeout(t).submit()` — `List<ZLinkStreamMessage<TPayload>>`를 반환하며, 순서 관측과 실패는 [공통 스펙 §10.1](../../32-stream-connector.ko.md#101-테스트-대기-표면)이 정한다.
 - **술어와 반환은 `ZLinkStreamMessage`를 다룬다.** `where(...)`와 `expect(...)`가 받는 인자도 payload가 아니라 message다.
 - **status 전용 표면을 두지 않는다.** status는 payload 필드이므로 `waitFor(T.class).where(T.class, m -> m.payload().status() == …)`로 표현한다.
 
@@ -429,13 +426,8 @@ public enum ZLinkStreamDispatchMode {
 }
 ```
 
-기본값은 `MANUAL`이다. receive loop, reconnect loop, request callback task가 사용자
-handler를 직접 호출하지 않고 dispatch queue에 넣는다. application은 자신이 원하는
-thread에서 `dispatch().submit()`을 호출한다.
-
-`IMMEDIATE`는 receive 경로에서 callback을 인라인 실행하므로, 느린 handler가 receive loop를
-막고 그만큼 후속 receive 처리가 지연된다. UI thread나 game loop가 있는 client sample은 `MANUAL`을
-유지한다.
+`MANUAL`과 `IMMEDIATE`의 callback 실행과 `dispatch().submit()`의 관계는
+[공통 스펙 §7](../../32-stream-connector.ko.md#7-dispatch-모드)이 정한다.
 
 ## 10. 연결 상태
 

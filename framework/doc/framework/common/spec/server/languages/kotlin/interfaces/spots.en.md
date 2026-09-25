@@ -62,8 +62,7 @@ completion and splits the payload into chunks no larger than
 `relocationPayloadChunkLimitBytes`, transferring them directly over the
 source–target ordered mesh connection. Source memory is the restore
 origin, and the handoff payload isn't stored in the Relocation Store.
-The adapter owns the array until completion. Restore receives a fresh defensive copy per call and doesn't
-keep it after completion. An empty `ByteArray` is also a valid
+Array ownership and lifetime follow [common membership §6](../../../03-spot-actor/05-spot-actor-membership.en.md#6-relocation-policy-shared-by-every-move-path). An empty `ByteArray` is also a valid
 preserved state. The factory creates a fresh Spot instance per target
 attempt and doesn't reuse the source or a previous attempt's instance.
 Restore of the same attempt can be repeated. A capture exception keeps
@@ -408,9 +407,8 @@ return a dedicated wrapper that preserves fluent options and single-use
 state, and doesn't expose the Java call, `CompletionStage`, or
 `Class<T>` to the application. `close(SpotRef)` handles Missing as
 `false`, a generation mismatch as `InvalidOperation`, and a sealed
-handoff window as `Unavailable`, only targeting User Spot. An Instance
-Spot's self-close uses Java's `ZLinkInstanceSpotContext.close()`
-unchanged.
+handoff window as `Unavailable`, only targeting User Spot. An Instance Spot's self-close registers a no-result request through Java's
+`ZLinkInstanceSpotContext.close()` and follows [Spot address messaging §7](../../../03-spot-actor/06-spot-address-messaging.en.md#7-close-and-the-generation-boundary).
 
 The maintenance target restores the Actor adapter and queue/timer,
 commits Location authority/membership, and then starts Actor message

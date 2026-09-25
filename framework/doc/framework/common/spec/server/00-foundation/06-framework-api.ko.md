@@ -193,16 +193,15 @@ RootLocationOptions {
     // 같은 합계를 peer 연결 하나가 아니라 source 노드 전체에 대해 제한하는 상한이다.
     // 기본 0(미적용). 양수이면 chunk 제출은 peer 예산과 이 예산을 모두 만족해야 한다.
     RelocationNodeInFlightPayloadBudget: bytes = 0,
-    // Target이 relay 수신 준비 reply를 보낸 뒤 cutover를 기다리는 시간이며,
-    // source가 재전송을 위해 boundary batch와 cutover 사본을 유지하는 시간이기도 하다. 기본 1,000 ms.
+    // Relay 수신 준비 reply 뒤 cutover 대기 Warning 시한. 기본 1,000 ms.
+    // 사본 수명은 relocation §4.4를 따른다.
     RelocationCutoverWaitTimeout: duration = 1000_ms,
 }
 ```
 
 두 예산의 합계는 encoded payload byte가 아니라 Core가 아직 계상 중인 chunk의 accounted
 charge(frame별 metadata charge 포함) 기준이다. 네 설정 모두 배치별로 변경할 수 있고, runtime이 왕복
-시간이나 부하를 관찰해 자동으로 조정하지 않는다. Chunk 분할·협상, 예산 계상과 대기, cutover
-fallback과 재전송 창의 동작 계약은
+시간이나 부하를 관찰해 자동으로 조정하지 않는다. Chunk 분할·협상, 예산 계상과 대기, cutover 대기 Warning과 재전송 창의 동작 계약은
 [Actor와 Spot relocation 전체 흐름](../05-location-relocation/04-relocation-flow.ko.md)이 소유한다.
 
 ## 4. RouteMesh 등록
@@ -228,11 +227,9 @@ MeshName은 물리 mesh의 이름이고 ChannelName은 논리 [membership](02-gl
 개 등록할 수 있다. `ChannelName` 호출은 별도 socket을 만들지 않는다. host가 시작된 뒤 MeshName,
 [routing ID](02-glossary.ko.md#routing-id), endpoint와 membership set은 바꿀 수 없다.
 
-Location option의 `RouteCacheMaxAge` 기본값은 15초이고 `MessageFollowDuration` 기본값은 30초다. 둘 다
-0이면 route cache와 Message Follow를 끈다. 양수이면 cache age가 Message Follow가 유효한 기간인
-[Message Follow duration](02-glossary.ko.md#message-follow-duration)보다 최소 5초 작아야 한다.
-실행 중 변경한 값은 새 cache entry와 새 relocation부터 적용한다. Message Follow duration이 끝난 stale route는
-stale-location 오류로 실패하며 Framework가 자동으로 다시 보내지 않는다.
+Location option의 설정과 Message Follow route가 없거나 만료됐을 때의 `Unavailable` 결과는
+[Location runtime §7.3](../05-location-relocation/01-location-runtime.ko.md#73-이전-owner로-도착한-message를-새-owner에게-전달한다)가 정의한다.
+재제출 경계는 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
 
 RouteMesh Channel builder는 `Client`와 `Server` 역할을 구분한다. `Client`는 ChannelName을 해당 MeshNode의
 outbound 송신 경로로 등록하지만 peer에게 target membership으로 광고하지 않으며 [weight](02-glossary.ko.md#weight)와 handler를 갖지
@@ -299,7 +296,7 @@ aggregate를 relocation할
 
 RouteMesh Channel Server, ClientServer Server와 node-wide placement weight는 모두 정수 `0..10000`, 기본값
 `100`을 사용한다. Startup 설정과 runtime 변경에서 음수나 `10000`보다 큰 값은 configuration error다.
-Weighted selection은 후보 weight 합계를 최소 64-bit 정수로 계산한다. Logical Multicast는 positive weight의
+ChannelName weighted selection은 [Channel messaging §3](../02-channel-transport/02-channel-messaging.ko.md#3-target을-선택하는-방법--channelname-select-one-선택-순서가중-라운드로빈)을 따른다. Logical Multicast는 positive weight의
 크기와 관계없이 eligible remote member를 한 번만 포함하며 weight `0`인 member는 제외한다.
 
 Create call은 target RID, predicate나 selection callback을 제공하지 않는다.
@@ -341,8 +338,8 @@ Manual peer API는 두 가지 intent를 제공한다.
 
 Runtime control은 connect intent 추가, endpoint 기준 intent 해제와 현재 intent 목록 조회를 제공한다.
 Manual peer도 같은 MeshName, RID, generation, immutable ChannelName set과 security identity를 검증한다.
-같은 endpoint의 transport 재접속은 Framework service runtime이 binding의 raw socket reconnect 계약을
-사용해 관리한다. Application은 reconnect loop, pipe identity와 transport backoff를 구성하지 않는다.
+같은 endpoint의 transport 재접속은 [Core socket `zlink_connect`](../../../../../../../core/doc/spec/core/socket/README.ko.md#zlink_connect)가
+소유한다. Framework service runtime은 peer intent와 service handshake를 관리한다. Application은 reconnect loop, pipe identity와 transport backoff를 구성하지 않는다.
 
 ## 6. 메시징 API family
 
@@ -385,8 +382,8 @@ transport API와 명시적인 encoded payload 확장에만 둔다. Handler는 ty
 
 Operation별 call object는 해당 기능에 유효한 설정만 제공한다.
 
-- one-way send와 session Actor relay는 source-local admission을 비동기로 기다리며 정상 완료 값을 반환하지
-  않는다.
+- one-way send와 session Actor relay의 비동기 완료 경계는
+  [Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)가 정의한다.
 - request는 metadata, reply timeout, 취소와 typed reply를 제공한다.
 - Logical Multicast publish는 metadata, ChannelName, [topic](02-glossary.ko.md#topic)과 비동기 submit 하나를 사용한다.
 - Spot과 Actor message 호출은 global ID를 보존하고 current Ready [authority](02-glossary.ko.md#authority)를 Framework 내부에서 찾는다.
@@ -776,8 +773,8 @@ eligible target으로 전송한다. Source는 owner claim이나 reservation을 �
 5. Handler barrier를 유지한 상태에서 recovery root·cursor를 포함한 `Ready`를 commit하고, 첫 record를
    local queue head로 복원한 뒤 barrier를 연다.
 
-경쟁에서 진 runtime은 local Spot instance를 만들지 않으며 source는 `Ready` 뒤 같은 message를 다시
-전송하지 않는다. 이 순서는 public call을 check와 create로 나누거나 application에 target node를 노출하지
+경쟁에서 진 runtime의 결과는 [Spot 주소 메시징 §4.2](../03-spot-actor/06-spot-address-messaging.ko.md#42-여러-node가-동시에-첫-message를-받는-경우)가
+정한다. Source는 `Ready` 뒤 같은 message를 다시 전송하지 않는다. 이 순서는 public call을 check와 create로 나누거나 application에 target node를 노출하지
 않는다.
 
 Recovery pointer는 첫 handler terminal completion을 durable하게 기록하고 cursor를 inbox sequence까지 갱신한 뒤에만
@@ -909,15 +906,13 @@ Actor egress는 bound session FIFO를 사용한다. Actor dispatch capability를
 Framework는 target selection과 transport admission 결과를 다음 공통 결과로 변환한다. Node direct call은
 Node RID를, Spot·Actor message는 global ID를, session binding은 바인딩한 object generation과 binding token을
 유지한다. 물리 peer lifecycle generation은 public commitment가 아니다.
-RouteMesh·ClientServer select-one ChannelName은 첫 binding operation을 시작하기 직전에 현재 eligible
-member 하나를 선택한다. Binding operation이 시작되기 전 route eligibility·source-local admission 확인
-단계에서만 다른 eligible member를 선택할 수 있다. 시작 뒤에는 Core가 HWM 재시도와 완료를 소유하며
-Framework는 용량을 이유로 target을 다시 선택하거나 같은 binding operation을 다시 제출하지 않는다.
+RouteMesh·ClientServer select-one의 target 확정과 HWM 재시도 경계는
+[Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
 
 | 관찰한 조건 | Framework 결과 |
 |---|---|
-| 해당 operation family의 source outbound admission이 operation을 수락함 | one-way send·publish는 결과값 없이 정상 완료하고 request는 pending completion으로 전환 |
-| 일반 one-way의 첫 submit | Binding operation별 completion awaitable이 Core의 HWM 재시도 결과로 완료된다. Framework는 별도 readiness callback을 기다리거나 재시도하지 않으며, deadline이 먼저 끝나면 `DeadlineExceeded` exception으로 완료 |
+| 해당 operation family의 source outbound admission이 operation을 수락함 | One-way 완료는 [Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)를 따르고 request는 pending completion으로 전환 |
+| 일반 one-way의 첫 submit | [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)의 HWM 재시도·완료 경계를 따른다 |
 | Logical Multicast를 시작한 뒤 일부 target에 제출하지 못함 | 이미 수락한 target은 유지한다. Target별 실패를 public 결과나 publish 전용 monitoring으로 만들지 않으며 전체 operation을 rollback하거나 자동으로 다시 시도하지 않음 |
 | 알려진 direct target의 route가 준비되지 않음 | `Unavailable` |
 | Actor·Spot authority 또는 Node·Channel 송신 경로가 없음 | `NotFound` |
@@ -934,12 +929,8 @@ STREAM reply의 유효한 첫 terminator는 transport 시도 전에 one-shot tok
 token을 다시 사용할 수 없다. 같은
 token의 두 call이 경쟁하면 하나만 transport admission을 시작한다.
 Direct pending one-way operation은 Node RID, global Spot·Actor ID 또는 session [binding token](02-glossary.ko.md#binding-token)을 유지한다.
-첫 binding operation을 시작하면 target selection이 확정되고 Core가 그 operation의 HWM
-재시도를 소유한다. 이후 detach나 timeout은 terminal이며 Framework는 현재 route를 다시 조회하거나
-다른 logical target으로 다시 보내지 않는다.
-[Select-one](02-glossary.ko.md#select-one) ChannelName의 target 선택은 위의 binding operation 시작 경계를
-따른다. 이후 새 operation은 그때의 eligible member를 새로 선택할 수 있지만 시작된 operation을 다른
-target으로 다시 보내지 않는다.
+Binding operation의 target 확정·HWM 재시도·재제출 경계는
+[Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
 
 Global object message의 missing·route·incarnation 불일치 결과는 다음처럼 구분한다.
 
@@ -964,18 +955,17 @@ Create·GetOrCreate의 실패 조건과 error kind는 다음과 같다.
 | stale authority fence다 | `Unavailable` |
 
 Application creation callback이 정상적으로 거부하면 exception이 아니라 typed `Rejected`
-result로 완료한다. 다른 owner로 자동 재제출하지 않는다.
+result로 완료한다. `Rejected` 뒤 같은 생성 operation의 재제출 규칙은 [Location runtime §7](../05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다)이 정한다.
 
 이 request 실패는 확인 시점과 관계없이 해당 error kind로 한 번만 완료한다. One-way send는 source의 local
 outbound admission 전에 실패를 확인했을 때만 위 kind의 exceptional completion을 반환할 수 있다. Source가
 record를 수락해 반환 데이터 없이 완료한 뒤 remote activation이나 admission 실패를 확인한 경우에는 이미
-완료된 call을 바꾸지 않는다. 이 실패는 drop metric과 structured message-flow record로 관측하며 error reply를 만들거나 다른
-owner에게 다시 보내지 않는다.
+완료된 call을 바꾸지 않는다. 이 실패는 drop metric과 structured message-flow record로 관측하며 error reply를 만들지 않는다.
+재제출 경계는 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
 
 Request admission 뒤에는 typed reply, typed Framework error, timeout, cancellation, shutdown 또는 protocol
 오류 가운데 하나만 terminal 결과가 된다. Generation 충돌은 Spot·Actor stale 결과이고, target busy와
-capacity 부족은 admission 오류다. Framework는 이 결과를 이유로 다른 logical owner에 자동 재제출하지
-않는다. 호출자 cancellation은 waiter 결과이며 cancellation 뒤 도착한 transport completion은 correlation을
+capacity 부족은 admission 오류다. 이 결과 뒤 재제출 경계는 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다. 호출자 cancellation은 waiter 결과이며 cancellation 뒤 도착한 transport completion은 correlation을
 정리하되 두 번째 terminal 결과를 만들지 않는다.
 
 ## 21. Dispatch 실패 action owner

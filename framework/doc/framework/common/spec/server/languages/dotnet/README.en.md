@@ -23,41 +23,12 @@ owns its per-language interface.
 
 ## Contract Application Rules
 
-- [RouteMesh](../../00-foundation/02-glossary.en.md#routemesh) registration starts
- with `AddRouteMesh(meshName)` and fixes the role with
- `Channel(channelName).Client()` or `.Server()`. A MeshNode with no
- Server membership is also allowed.
-- Channel send/request only takes a ChannelName and picks the
- process-local RouteMesh or ClientServer send path.
-- The Node direct handler and the
- [ChannelName](../../00-foundation/02-glossary.en.md#channelname) handler use
- different interface families.
-- A typed payload is serialized as JSON by default. A codec doesn't need
- to be registered per message type to use JSON.
-- Metadata is delivered to the handler as an immutable
- `ZLinkMessageMetadata`
- [snapshot](../../00-foundation/02-glossary.en.md#snapshot).
-- Object role is one of `None`, `Client`, `Server` per
- [MeshNode](../../00-foundation/02-glossary.en.md#meshnode), and Client and Server
- explicitly register an `IZLinkLocationStore` implementation. The
- official Redis package the framework provides is one of this
- interface's providers — using Redis itself isn't a required condition
- for Object role.
-- A regular message to an Actor/User Spot/Instance
- [Spot](../../00-foundation/02-glossary.en.md#spot) only takes a global ID. The
- manager create for Actor and User Spot takes stable type and an
- optional Mesh/placement, performs remote placement, and the
- mutation takes an `ActorRef` or `SpotRef`. A Missing
- [Instance Spot](../../00-foundation/02-glossary.en.md#entry-user-instance-spot)
- specifies activation on the Spot-dedicated fluent call.
-- Host lifecycle is owned by `IZLinkFrameworkRuntime`'s
- `RelocateAsync(...)` and `ShutdownAsync(...)`.
-- The Framework service runtime only uses the bindings' public raw
- socket API, and doesn't use the Core service C API, private SPI,
- reflection, or a direct native symbol call.
-- The per-target ROUTER submit for Logical Multicast and the meaning of
- manual peer's expected RID are owned by
- [Topology Configuration](interfaces/03-configuration-topology.en.md).
+The [Framework API](../../00-foundation/06-framework-api.en.md),
+[Channel topology](../../02-channel-transport/01-channel-topology.en.md),
+[Spot model](../../03-spot-actor/01-spot-model.en.md),
+[Actor model](../../03-spot-actor/04-actor-model.en.md), and
+[Submit and completion](../../01-execution/01-submit-and-completion.en.md)
+define common behavior. The interface documents below define .NET types and signatures.
 
 ## Cancellation
 

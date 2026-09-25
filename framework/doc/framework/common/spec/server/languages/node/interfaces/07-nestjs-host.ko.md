@@ -372,9 +372,8 @@ export declare function zlinkSpotTimerHandler<TSpot extends ZLinkSpot = ZLinkSpo
 ## 7. Server HTTP client integration
 
 서버 handler에서 HTTP 요청을 실행할 때는 이름으로 등록한 client를 주입받는다. 등록한 client는 Nest
-module의 수명과 함께 정리된다. `yield()`는 현재 handler가 `SpotWide` User Spot 또는 Instance Spot의
-shared turn에서 실행 중일 때만 선택할 수 있다. 다른 handler에서는 HTTP operation을 제출하거나 turn을
-반환하지 않고 `invalidConfiguration`으로 완료한다.
+module의 수명과 함께 정리된다. `yield()`의 유효 문맥과 제출 전 `InvalidOperation`은
+[실행 gate §16](../../../01-execution/02-handler-turn-and-execution-gate.ko.md#yield-call-eligibility)이 정한다.
 
 ```ts
 export interface ZLinkNamedHttpClientOptions {
@@ -432,8 +431,8 @@ activation의 최초 message·생성 정보 기록과, relocation 뒤 완료되�
 configuration error다.
 
 `relocationCutoverWaitTimeoutMs(value)`는 startup-only 양수 finite millisecond 값이고 기본값은
-1,000이다. Target이 relay 수신 준비 reply 뒤 cutover를 기다리는 시간이며, source가 boundary batch
-재전송 사본을 유지하는 시간과 같다. 0, 음수, `NaN`, infinity, 정수가 아닌 값과 safe-integer 범위
+1,000이다. Relay 수신 준비 reply 뒤 cutover 도착을 관찰하는 Warning 임계값이다. Source 사본 유지와
+authority CAS는 [공통 relocation §4.4](../../../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)를 따른다. 0, 음수, `NaN`, infinity, 정수가 아닌 값과 safe-integer 범위
 초과는 socket bind 전에 configuration error다.
 
 `relocationPayloadChunkLimitBytes(value)`는 relocation payload를 나눈 encoded chunk 하나의 크기

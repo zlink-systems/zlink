@@ -240,7 +240,7 @@ public:
     template <typename TActor>
     task_t<void> leave_actor(TActor &actor);
 
-    task_t<bool> close();
+    void close();
 };
 
 class entry_spot_context_t : public spot_common_context_t {
@@ -267,7 +267,7 @@ public:
     instance_spot_context_t &operator=(const instance_spot_context_t &) = delete;
 
     instance_spot_handler_registry_t handlers();
-    task_t<bool> close();
+    void close();
 };
 
 struct spot_actor_join_result_t {

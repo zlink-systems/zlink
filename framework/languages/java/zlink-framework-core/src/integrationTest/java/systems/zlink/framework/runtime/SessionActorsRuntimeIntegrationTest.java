@@ -18,6 +18,7 @@ import systems.zlink.framework.handlers.ZLinkPacket;
 import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
 import systems.zlink.framework.handlers.ZLinkSpotActorSend;
 import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
@@ -26,6 +27,8 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
+import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
+import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 import systems.zlink.framework.spots.ZLinkSpot;
@@ -33,10 +36,17 @@ import systems.zlink.framework.spots.ZLinkSpotContext;
 import systems.zlink.framework.streams.ZLinkSession;
 import systems.zlink.framework.streams.ZLinkSessionActor;
 import systems.zlink.framework.streams.ZLinkSessionContext;
+import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamError;
+import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
+import java.io.InputStream;
+import java.net.Socket;
+import java.net.URI;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.EnumSet;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -49,14 +59,17 @@ import java.util.concurrent.atomic.AtomicReference;
 final class SessionActorsRuntimeIntegrationTest {
     static final LinkedBlockingQueue<String> actorRelayRequests = new LinkedBlockingQueue<>();
     static final AtomicReference<ZLinkActorManager> channelActors = new AtomicReference<>();
+    private static final LinkedBlockingQueue<RoutingId> connectedSessions =
+            new LinkedBlockingQueue<>();
 
     @Test
-    void bindUsesStreamActorGatewayBindingPath() {
+    void bindUsesStreamActorGatewayBindingPath() throws Exception {
         Zlink.version();
-        try (ZLinkFrameworkRuntime runtime = startGatewayRuntime()) {
+        try (ZLinkFrameworkRuntime runtime = startGatewayRuntime();
+                Socket client = connectStream(runtime, "gateway")) {
             ZLinkActor actor = managedActor(runtime, "player-1", "player");
             ZLinkSessionActorsRuntime sessionActors =
-                    runtime.sessionActors("gateway", RoutingId.from("session-1"));
+                    runtime.sessionActors("gateway", connectedSession());
             ZLinkSessionActor bound = sessionActors.bind(actor).toCompletableFuture().join();
 
             assertEquals("player-1", bound.actorId());
@@ -68,10 +81,11 @@ final class SessionActorsRuntimeIntegrationTest {
     void bindCanRelayLocalManagedActorWithoutActorGatewayAttach() throws Exception {
         actorRelayRequests.clear();
         Zlink.version();
-        try (ZLinkFrameworkRuntime runtime = startLocalManagedStreamRuntime()) {
+        try (ZLinkFrameworkRuntime runtime = startLocalManagedStreamRuntime();
+                Socket client = connectStream(runtime, "local")) {
             ZLinkActor actor = managedActor(runtime, "player-1", "player");
             ZLinkSessionActor bound =
-                    runtime.sessionActors("local", RoutingId.from("session-1"))
+                    runtime.sessionActors("local", connectedSession())
                             .bind(actor)
                             .toCompletableFuture()
                             .join();
@@ -100,12 +114,13 @@ final class SessionActorsRuntimeIntegrationTest {
     }
 
     @Test
-    void sessionAndPlayServers_relaySucceeds() {
+    void sessionAndPlayServers_relaySucceeds() throws Exception {
         Zlink.version();
-        try (ZLinkFrameworkRuntime runtime = startGatewayRuntime()) {
+        try (ZLinkFrameworkRuntime runtime = startGatewayRuntime();
+                Socket client = connectStream(runtime, "gateway")) {
             ZLinkActor actor = managedActor(runtime, "player-1", "player");
             ZLinkSessionActorsRuntime sessionActors =
-                    runtime.sessionActors("gateway", RoutingId.from("session-1"));
+                    runtime.sessionActors("gateway", connectedSession());
             ZLinkSessionActor bound = sessionActors.bind(actor).toCompletableFuture().join();
 
             assertEquals("player-1", bound.actorId());
@@ -114,16 +129,43 @@ final class SessionActorsRuntimeIntegrationTest {
     }
 
     @Test
-    void playActorPush_withoutLiveClientStreamFailsNativeSend() {
+    void playActorPush_followsBoundControlOnLiveClientStream() throws Exception {
         Zlink.version();
-        try (ZLinkFrameworkRuntime runtime = startGatewayRuntime()) {
+        try (ZLinkFrameworkRuntime runtime = startGatewayRuntime();
+                Socket client = connectStream(runtime, "gateway")) {
+            client.setSoTimeout(3000);
             ZLinkActor actor = managedActor(runtime, "player-1", "player");
-            runtime.sessionActors("gateway", RoutingId.from("session-1"))
+            runtime.sessionActors("gateway", connectedSession())
                     .bind(actor)
                     .toCompletableFuture()
                     .join();
 
-            actor.context().boundSession().send("push").submit();
+            InputStream input = client.getInputStream();
+            byte[] boundPrefix = input.readNBytes(6);
+            assertEquals(6, boundPrefix.length);
+            ByteBuffer boundSizes = ByteBuffer.wrap(boundPrefix);
+            byte[] boundHeader = input.readNBytes(Short.toUnsignedInt(boundSizes.getShort()));
+            byte[] boundBody = input.readNBytes(boundSizes.getInt());
+            assertEquals(
+                    ZLinkStreamMessageKind.CONTROL,
+                    ZLinkStreamHeaderCodec.decodeOrPlain(boundHeader).kind());
+            assertEquals(
+                    "$zlink.actor.bound",
+                    ZLinkStreamHeaderCodec.decodeOrPlain(boundHeader).packetName());
+            assertEquals(
+                    "player-1",
+                    new String(boundBody, 4, boundBody.length - 4, StandardCharsets.UTF_8));
+
+            actor.context().boundSession().send("push").submit().toCompletableFuture().join();
+            byte[] pushPrefix = input.readNBytes(6);
+            assertEquals(6, pushPrefix.length);
+            ByteBuffer pushSizes = ByteBuffer.wrap(pushPrefix);
+            byte[] pushHeader = input.readNBytes(Short.toUnsignedInt(pushSizes.getShort()));
+            byte[] pushBody = input.readNBytes(pushSizes.getInt());
+            assertEquals(
+                    ZLinkStreamMessageKind.SEND,
+                    ZLinkStreamHeaderCodec.decodeOrPlain(pushHeader).kind());
+            assertEquals("\"push\"", new String(pushBody, StandardCharsets.UTF_8));
         }
     }
 
@@ -133,6 +175,38 @@ final class SessionActorsRuntimeIntegrationTest {
                 .getOrCreateManagedActor(actorId, actorType)
                 .toCompletableFuture()
                 .join();
+    }
+
+    static Socket connectStream(ZLinkFrameworkRuntime runtime, String streamNode) throws Exception {
+        connectedSessions.clear();
+        int port =
+                URI.create(runtime.listenerStatus(ZLinkListenerKind.STREAM, streamNode).endpoint())
+                        .getPort();
+        Socket client = new Socket("127.0.0.1", port);
+        byte[] header =
+                ZLinkStreamHeaderCodec.encode(
+                        new ZLinkStreamHeader(
+                                ZLinkStreamMessageKind.SEND,
+                                ZLinkStreamCodec.RAW,
+                                EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                                Optional.empty(),
+                                "Open",
+                                Map.of(),
+                                Optional.empty()));
+        byte[] body = "\"open\"".getBytes(StandardCharsets.UTF_8);
+        ByteBuffer frame = ByteBuffer.allocate(6 + header.length + body.length);
+        frame.putShort((short) header.length).putInt(body.length).put(header).put(body);
+        client.getOutputStream().write(frame.array());
+        client.getOutputStream().flush();
+        return client;
+    }
+
+    static RoutingId connectedSession() throws Exception {
+        RoutingId session = connectedSessions.poll(2, TimeUnit.SECONDS);
+        if (session == null) {
+            throw new TimeoutException("STREAM client did not connect");
+        }
+        return session;
     }
 
     private static ZLinkFrameworkRuntime startGatewayRuntime() {
@@ -158,7 +232,7 @@ final class SessionActorsRuntimeIntegrationTest {
         }
         {
             var stream = options.addStreamNode("gateway");
-            stream.bind("inproc://gateway-bind-" + System.nanoTime());
+            stream.bind("tcp://127.0.0.1:0");
             stream.enableActorDispatch();
             stream.registerSession(GameSession.class);
         }
@@ -190,7 +264,7 @@ final class SessionActorsRuntimeIntegrationTest {
         }
         {
             var stream = options.addStreamNode("local");
-            stream.bind("inproc://local-managed-bind-" + System.nanoTime());
+            stream.bind("tcp://127.0.0.1:0");
             stream.enableActorDispatch();
             stream.registerSession(GameSession.class);
         }
@@ -451,13 +525,20 @@ final class SessionActorsRuntimeIntegrationTest {
     }
 
     public static final class GameSession implements ZLinkSession {
+        private final ZLinkSessionContext context;
+
+        public GameSession(ZLinkSessionContext context) {
+            this.context = context;
+        }
+
         @Override
         public ZLinkSessionContext context() {
-            return null;
+            return context;
         }
 
         @Override
         public CompletionStage<Void> onConnected() {
+            connectedSessions.offer(context.routingId().orElseThrow());
             return CompletableFuture.completedFuture(null);
         }
 
