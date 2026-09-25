@@ -1189,9 +1189,9 @@ final class ChannelMessagingTest {
     }
 
     @Test
-    void legacyRouteMeshListenerStatusRejectsUnknownAndUnboundListeners() {
+    void routeMeshListenerStatusRejectsNamesThatAreNotMeshNodes() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        ZLinkLegacyTopology.addRouteMeshChannel(options, "route").enableClient("tcp://127.0.0.1:1");
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "route").enableServer("tcp://127.0.0.1:0");
 
         try (ZLinkFrameworkRuntime runtime =
                 RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {
@@ -1238,10 +1238,9 @@ final class ChannelMessagingTest {
                 ZLinkFrameworkRuntime target =
                         RuntimeTestSupport.startFramework(
                                 targetOptions, new ZLinkJavaBackendAdapterFactory())) {
-            sourceConnections.connect(
-                    target.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
+            sourceConnections.connect(ZLinkLegacyTopology.routeBoundEndpoint(target, "route"));
             targetConnections.connect(
-                    ignoredSource.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
+                    ZLinkLegacyTopology.routeBoundEndpoint(ignoredSource, "route"));
             assertEquals("route:hello", awaitRouteReply(ignoredSource, targetRid));
             assertEquals("route", ROUTE_REQUEST_CHANNEL.get());
         } finally {
@@ -1280,10 +1279,8 @@ final class ChannelMessagingTest {
                 ZLinkFrameworkRuntime target =
                         RuntimeTestSupport.startFramework(
                                 targetOptions, new ZLinkJavaBackendAdapterFactory())) {
-            sourceConnections.connect(
-                    target.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
-            targetConnections.connect(
-                    source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
+            sourceConnections.connect(ZLinkLegacyTopology.routeBoundEndpoint(target, "route"));
+            targetConnections.connect(ZLinkLegacyTopology.routeBoundEndpoint(source, "route"));
             ZLinkFrameworkException error = awaitRouteMissingHandlerError(source, targetRid);
             assertTrue(error.getMessage().contains("HANDLER_MISSING"));
             assertTrue(error.getMessage().contains("Missing"));
@@ -1329,7 +1326,7 @@ final class ChannelMessagingTest {
                         RuntimeTestSupport.startFramework(
                                 nonInitiatorOptions, new ZLinkJavaBackendAdapterFactory())) {
             initiatorConnections.connect(
-                    nonInitiator.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
+                    ZLinkLegacyTopology.routeBoundEndpoint(nonInitiator, "route"));
             assertEquals("route:hello", awaitRouteReply(nonInitiator, initiatorRid));
             assertEquals("route", ROUTE_REQUEST_CHANNEL.get());
         } finally {
@@ -1371,9 +1368,8 @@ final class ChannelMessagingTest {
                         RuntimeTestSupport.startFramework(
                                 targetOptions, new ZLinkJavaBackendAdapterFactory())) {
             sourceConnections.connect(
-                    ignoredTarget.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
-            targetConnections.connect(
-                    source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
+                    ZLinkLegacyTopology.routeBoundEndpoint(ignoredTarget, "route"));
+            targetConnections.connect(ZLinkLegacyTopology.routeBoundEndpoint(source, "route"));
             assertEquals("scanned-route:hello", awaitScannedRouteReply(source, targetRid));
         }
     }
@@ -1416,9 +1412,8 @@ final class ChannelMessagingTest {
                         RuntimeTestSupport.startFramework(
                                 targetOptions, new ZLinkJavaBackendAdapterFactory())) {
             sourceConnections.connect(
-                    ignoredTarget.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
-            targetConnections.connect(
-                    source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
+                    ZLinkLegacyTopology.routeBoundEndpoint(ignoredTarget, "route"));
+            targetConnections.connect(ZLinkLegacyTopology.routeBoundEndpoint(source, "route"));
             assertEquals("route:hello", awaitRouteReply(source, targetRid));
             assertEquals("Echo", FILTER_PACKET.get());
             assertEquals("route", FILTER_MESH.get());
@@ -1467,9 +1462,8 @@ final class ChannelMessagingTest {
                         RuntimeTestSupport.startFramework(
                                 targetOptions, new ZLinkJavaBackendAdapterFactory())) {
             sourceConnections.connect(
-                    ignoredTarget.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
-            targetConnections.connect(
-                    source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
+                    ZLinkLegacyTopology.routeBoundEndpoint(ignoredTarget, "route"));
+            targetConnections.connect(ZLinkLegacyTopology.routeBoundEndpoint(source, "route"));
             assertEquals("warmup", awaitSharedRouteReply(source, targetRid, "warmup:1"));
 
             CompletionStage<String> slow =
@@ -1527,9 +1521,8 @@ final class ChannelMessagingTest {
                         RuntimeTestSupport.startFramework(
                                 targetOptions, new ZLinkJavaBackendAdapterFactory())) {
             sourceConnections.connect(
-                    ignoredTarget.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
-            targetConnections.connect(
-                    source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route").endpoint());
+                    ZLinkLegacyTopology.routeBoundEndpoint(ignoredTarget, "route"));
+            targetConnections.connect(ZLinkLegacyTopology.routeBoundEndpoint(source, "route"));
             routeSendUntilDelivered(source, targetRid);
 
             assertTrue(latch.await(1, TimeUnit.SECONDS), "route mesh send was not delivered");

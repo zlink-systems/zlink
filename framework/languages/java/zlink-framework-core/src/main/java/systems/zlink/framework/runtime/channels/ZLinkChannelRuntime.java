@@ -1569,6 +1569,11 @@ public final class ZLinkChannelRuntime
         return publisher;
     }
 
+    /** Internal test access: the endpoint the legacy route channel ROUTER actually bound. */
+    public String legacyRouteBoundEndpoint(String channelName) {
+        return requireRouteRouter(channelName).lastEndpoint();
+    }
+
     private ZLinkBackendRouterSocket requireRouteRouter(String channelName) {
         ZLinkBackendRouterSocket router = sockets.routeRouter(channelName);
         if (router == null) {

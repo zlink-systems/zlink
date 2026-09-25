@@ -1451,35 +1451,6 @@ final class ZLinkChannelSocketRegistry {
 
     String listenerEndpoint(ZLinkListenerKind kind, String channelName) {
         return switch (kind) {
-            case ROUTE_MESH -> {
-                RouterListener listener =
-                        inStateLane(
-                                () -> {
-                                    ChannelRegistration registration =
-                                            registrations.get(channelName);
-                                    if (registration == null
-                                            || registration.kind() != ChannelKind.ROUTE_MESH
-                                            || registration.routeBinds().isEmpty()) {
-                                        throw new ZLinkConfigurationException(
-                                                "RouteMesh listener is not configured: "
-                                                        + channelName);
-                                    }
-                                    ZLinkBackendRouterSocket router = routeRouters.get(channelName);
-                                    if (router == null) {
-                                        throw new ZLinkConfigurationException(
-                                                "RouteMesh listener is not started: "
-                                                        + channelName);
-                                    }
-                                    return new RouterListener(
-                                            registration.routeBinds().getFirst(), router, null);
-                                });
-                String endpoint = advertisedEndpoint(listener.endpoint(), listener.router());
-                if (endpoint.endsWith(":0")) {
-                    throw new ZLinkConfigurationException(
-                            "RouteMesh listener endpoint is not ready: " + channelName);
-                }
-                yield endpoint;
-            }
             case CLIENT_SERVER -> {
                 RouterListener listener =
                         inStateLane(

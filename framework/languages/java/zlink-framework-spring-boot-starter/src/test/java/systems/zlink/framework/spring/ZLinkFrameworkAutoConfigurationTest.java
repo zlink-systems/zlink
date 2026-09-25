@@ -45,7 +45,6 @@ import systems.zlink.framework.locations.ZLinkLocationRuntimeQuery;
 import systems.zlink.framework.locations.ZLinkLocationRuntimeStatus;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkFanoutRuntime;
-import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
@@ -581,14 +580,10 @@ final class ZLinkFrameworkAutoConfigurationTest {
                 ZLinkFrameworkRuntime target = context.getBean(ZLinkFrameworkRuntime.class);
                 sourceConnections
                         .get()
-                        .connect(
-                                target.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route")
-                                        .endpoint());
+                        .connect(ZLinkLegacyTopology.routeBoundEndpoint(target, "route"));
                 targetConnections
                         .get()
-                        .connect(
-                                source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "route")
-                                        .endpoint());
+                        .connect(ZLinkLegacyTopology.routeBoundEndpoint(source, "route"));
 
                 String reply =
                         sourceContext
