@@ -36,12 +36,20 @@ class fq_t
     void deactivate (pipe_t *pipe_);
     void activated (pipe_t *pipe_);
     void pipe_terminated (pipe_t *pipe_);
+    // Detached messages belong to the caller for closing after its locks.
+    void discard_pending_records (pipe_t *pipe_,
+                                  std::deque<msg_t> *detached_out_,
+                                  bool *deferred_delimiter_out_,
+                                  bool *recheck_out_);
+    bool has_pipe (pipe_t *pipe_) { return try_get_pipe_index (pipe_, NULL); }
 
     int recv (msg_t *msg_);
     int recvpipe (msg_t *msg_, pipe_t **pipe_);
+    typedef bool (*read_candidate_fn) (pipe_t *pipe_, void *userdata_);
     int recvpipe_with_record_admission (
       msg_t *msg_, pipe_t **pipe_, pipe_t::read_admission_fn *admission_,
-      void *userdata_);
+      void *userdata_, read_candidate_fn candidate_ = NULL,
+      void *candidate_userdata_ = NULL);
     bool has_in ();
     size_t redrive_record_admission (size_t max_pipes_);
 
@@ -58,7 +66,8 @@ class fq_t
     template <bool WithAdmission>
     int recvpipe_internal (msg_t *msg_, pipe_t **pipe_,
                            pipe_t::read_admission_fn *admission_,
-                           void *userdata_);
+                           void *userdata_, read_candidate_fn candidate_,
+                           void *candidate_userdata_);
     bool block_current_for_record_admission ();
     bool record_admission_blocked (pipe_t *pipe_) const;
     void publish_pipe_receive_activity (pipe_t *pipe_, bool active_) const;

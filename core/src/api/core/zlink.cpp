@@ -206,7 +206,9 @@ zlink_poller_add (void *poller_, void *socket_, void *user_data_, short events_)
     const bool has_completion_channel =
       type == ZLINK_CORE_SOCKET_DEALER || type == ZLINK_CORE_SOCKET_ROUTER
       || zlink::socket_type_supports_completion_pull (type);
-    if (validate_socket_poller_event_mask (events_, has_completion_channel)
+    if (validate_socket_poller_event_mask (
+          events_, has_completion_channel,
+          type == ZLINK_CORE_SOCKET_ROUTER)
         != 0)
         return zlink::config_result_internal::from_errno (errno);
     if ((events_ & ZLINK_POLLCOMPLETION) != 0 && !has_completion_channel) {
@@ -260,7 +262,9 @@ zlink_config_result_t zlink_poller_modify (void *poller_, void *socket_, short e
     const bool has_completion_channel =
       type == ZLINK_CORE_SOCKET_DEALER || type == ZLINK_CORE_SOCKET_ROUTER
       || zlink::socket_type_supports_completion_pull (type);
-    if (validate_socket_poller_event_mask (events_, has_completion_channel)
+    if (validate_socket_poller_event_mask (
+          events_, has_completion_channel,
+          type == ZLINK_CORE_SOCKET_ROUTER)
         != 0)
         return zlink::config_result_internal::from_errno (errno);
     const int index =

@@ -14,7 +14,27 @@
 
 namespace
 {
-int probe_router_reply_token_admission (zlink::pipe_t *,
+struct selected_receive_candidate_t
+{
+    zlink::router_t *router;
+    zlink::pipe_t *checked_pipe;
+    uint64_t generation;
+
+    static bool allow (zlink::pipe_t *pipe_, void *userdata_)
+    {
+        selected_receive_candidate_t *const self =
+          static_cast<selected_receive_candidate_t *> (userdata_);
+        // An internal routing-id frame and its record share one socket turn.
+        if (self->checked_pipe != pipe_) {
+            self->checked_pipe = pipe_;
+            self->generation = 0;
+            self->router->is_selected_pipe (pipe_, 0, &self->generation);
+        }
+        return self->generation != 0;
+    }
+};
+
+int probe_router_reply_token_admission (zlink::pipe_t *pipe_,
                                         const zlink::msg_t &msg_,
                                         void *userdata_)
 {
@@ -47,36 +67,19 @@ void zlink::router_t::copy_router_pipe_source_rid (
         return;
 
     size_t routing_id_size = 0;
-    if (pipe_->try_copy_router_route_binding (
+    // Only a selected pipe reaches routed receive. Selection publishes its
+    // source RID before the binding token, so no route-table fallback is needed.
+    const bool published = pipe_->try_copy_router_route_binding (
           out_->data, sizeof (out_->data), &routing_id_size,
-          route_binding_token_out_)) {
+          route_binding_token_out_);
+    zlink_assert (published);
+    if (published)
         out_->size = static_cast<uint8_t> (routing_id_size);
-        return;
-    }
-
-    std::lock_guard<std::mutex> route_lifecycle_lock (
-      _out_pipes_sync);
-    //  A first-ever duplicate standby has no pipe-owned source snapshot until
-    //  topology admission publishes its original RID. Keep the route table as
-    //  the correctness fallback for that cold handover case.
-    const std::map<pipe_t *, blob_t>::const_iterator standby =
-      _standby_pipes.find (pipe_);
-    const blob_t *routing_id =
-      standby != _standby_pipes.end () ? &standby->second : &pipe_->get_routing_id ();
-    if (routing_id->size () > 0) {
-        copy_routing_id_from_bytes (routing_id->data (), routing_id->size (), out_);
-        if (route_binding_token_out_)
-            *route_binding_token_out_ =
-              pipe_->router_route_binding_token ();
-    }
-    // Only registered ROUTER scheduler endpoints reach the receive path. An
-    // empty local route is therefore not repaired by dereferencing the peer:
-    // the peer link has a separate lifetime domain and is not protected by the
-    // ROUTER route fence.
 }
 
 void zlink::router_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool locally_initiated_)
 {
+    const socket_receive_entry_scope_t receive_turn (receive_runtime ());
     LIBZLINK_UNUSED (subscribe_to_all_);
 
     zlink_assert (pipe_);
@@ -146,14 +149,11 @@ void zlink::router_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
 
 void zlink::router_t::xread_activated (pipe_t *pipe_)
 {
-    if (pipe_ && pipe_->get_transport_pair_id () != 0
-        && pipe_->get_transport_lane () == transport_lane_application
-        && pipe_->get_transport_lane_count () == 1u
-        && pipe_->transport_pair_application_ready_cached ()
-        && pipe_->router_route_binding_token () != 0) {
+    const socket_receive_entry_scope_t receive_turn (receive_runtime ());
+    if (pipe_ && _fq.has_pipe (pipe_)) {
         // Pair admission already adopted and registered this exact pipe.
-        // Reclassification only changes its FQ partition; route identity and
-        // generation tables cannot have changed while the ready cache holds.
+        // Reclassification only changes its FQ partition, including standby
+        // pipes whose records the selected-route change already discarded.
         _fq.activated (pipe_);
         return;
     }
@@ -205,11 +205,8 @@ void zlink::router_t::xread_activated (pipe_t *pipe_)
 
 void zlink::router_t::xread_deactivated (pipe_t *pipe_)
 {
-    if (pipe_ && pipe_->get_transport_pair_id () != 0
-        && pipe_->get_transport_lane () == transport_lane_application
-        && pipe_->get_transport_lane_count () == 1u
-        && pipe_->transport_pair_application_ready_cached ()
-        && pipe_->router_route_binding_token () != 0) {
+    const socket_receive_entry_scope_t receive_turn (receive_runtime ());
+    if (pipe_ && _fq.has_pipe (pipe_)) {
         _fq.deactivate (pipe_);
         return;
     }
@@ -236,6 +233,56 @@ void zlink::router_t::finish_current_in_record ()
     }
     _current_in = NULL;
     (void) reclassify_transport_pair_application_head (completed_pipe);
+}
+
+#if defined(_MSC_VER)
+__declspec(noinline)
+#else
+__attribute__((noinline))
+#endif
+void zlink::router_t::discard_unselected_record (msg_t *first_, pipe_t *pipe_)
+{
+    bool more = (first_->flags () & msg_t::more) != 0;
+    while (more) {
+        msg_t part;
+        int rc = part.init ();
+        errno_assert (rc == 0);
+        pipe_t *part_pipe = NULL;
+        rc = _fq.recvpipe (&part, &part_pipe);
+        more = rc == 0 && part_pipe == pipe_
+               && (part.flags () & msg_t::more) != 0;
+        rc = part.close ();
+        errno_assert (rc == 0);
+    }
+    int rc = first_->close ();
+    errno_assert (rc == 0);
+    rc = first_->init ();
+    errno_assert (rc == 0);
+    if (_current_in == pipe_)
+        reset_current_in_after_multipart_abort ();
+    (void) reclassify_transport_pair_application_head (pipe_);
+}
+
+uint64_t zlink::router_t::recv_selected (
+  msg_t *msg_, pipe_t **pipe_, pipe_t::read_admission_fn *admission_,
+  void *userdata_)
+{
+    selected_receive_candidate_t candidate = {this, NULL, 0};
+    for (;;) {
+        int rc = _fq.recvpipe_with_record_admission (
+          msg_, pipe_, admission_, userdata_,
+          &selected_receive_candidate_t::allow, &candidate);
+        while (rc == 0 && msg_->is_routing_id ())
+            rc = _fq.recvpipe_with_record_admission (
+              msg_, pipe_, admission_, userdata_,
+              &selected_receive_candidate_t::allow, &candidate);
+        if (rc != 0)
+            return 0;
+        if (candidate.generation != 0)
+            return candidate.generation;
+        discard_unselected_record (msg_, *pipe_);
+        candidate.checked_pipe = NULL;
+    }
 }
 
 int zlink::router_t::xrecv (msg_t *msg_)
@@ -267,17 +314,16 @@ int zlink::router_t::xrecv_pipe (msg_t *msg_, pipe_t **pipe_out_)
     }
 
     pipe_t *pipe = NULL;
-    int rc = _fq.recvpipe (msg_, &pipe);
-    while (rc == 0 && msg_->is_routing_id ())
-        rc = _fq.recvpipe (msg_, &pipe);
+    const uint64_t accepted_generation = recv_selected (msg_, &pipe, NULL, NULL);
 
-    if (rc != 0) {
+    if (accepted_generation == 0) {
         if (errno == ECONNABORTED)
             reset_current_in_after_multipart_abort ();
         return -1;
     }
 
     zlink_assert (pipe != NULL);
+    int rc = 0;
     if (pipe_out_)
         *pipe_out_ = _more_in ? _current_in : pipe;
 
@@ -395,14 +441,9 @@ int zlink::router_t::xrecv_routed (msg_t *msg_,
     }
 
     pipe_t *pipe = NULL;
-    int rc = admission_ ? _fq.recvpipe_with_record_admission (
-                            msg_, &pipe, admission_, admission_userdata_)
-                        : _fq.recvpipe (msg_, &pipe);
-    while (rc == 0 && msg_->is_routing_id ())
-        rc = admission_ ? _fq.recvpipe_with_record_admission (
-                            msg_, &pipe, admission_, admission_userdata_)
-                        : _fq.recvpipe (msg_, &pipe);
-    if (rc != 0) {
+    const uint64_t accepted_generation =
+      recv_selected (msg_, &pipe, admission_, admission_userdata_);
+    if (accepted_generation == 0) {
         if (errno == ECONNABORTED)
             reset_current_in_after_multipart_abort ();
         return -1;
@@ -412,13 +453,13 @@ int zlink::router_t::xrecv_routed (msg_t *msg_,
     if (!_more_in) {
         _current_in = pipe;
         if (source_rid_out_)
-            copy_router_pipe_source_rid (
-              pipe, source_rid_out_, route_binding_token_out_);
+            copy_router_pipe_source_rid (pipe, source_rid_out_, NULL);
         _routing_id_sent = true;
     } else if (_current_in && source_rid_out_) {
-        copy_router_pipe_source_rid (
-          _current_in, source_rid_out_, route_binding_token_out_);
+        copy_router_pipe_source_rid (_current_in, source_rid_out_, NULL);
     }
+    if (route_binding_token_out_)
+        *route_binding_token_out_ = accepted_generation;
     if (connection_id_out_)
         *connection_id_out_ = msg_->transport_connection_id ();
     if (source_pipe_out_)
@@ -434,27 +475,19 @@ bool zlink::router_t::xhas_in ()
 {
     if (_more_in)
         return true;
-
     if (_prefetched)
         return probe_router_reply_token_admission (
                  _current_in, _prefetched_msg, this)
                == 0;
-
     pipe_t *pipe = NULL;
-    int rc = _fq.recvpipe_with_record_admission (
+    const uint64_t accepted_generation = recv_selected (
       &_prefetched_msg, &pipe, &probe_router_reply_token_admission, this);
-
-    while (rc == 0 && _prefetched_msg.is_routing_id ()) {
-        rc = _fq.recvpipe_with_record_admission (
-          &_prefetched_msg, &pipe, &probe_router_reply_token_admission, this);
-    }
-
-    if (rc != 0)
+    if (accepted_generation == 0)
         return false;
 
     zlink_assert (pipe != NULL);
     const blob_t &routing_id = pipe->get_routing_id ();
-    rc = _prefetched_id.init_size (routing_id.size ());
+    const int rc = _prefetched_id.init_size (routing_id.size ());
     errno_assert (rc == 0);
     memcpy (_prefetched_id.data (), routing_id.data (), routing_id.size ());
     _prefetched_id.set_flags (msg_t::more);

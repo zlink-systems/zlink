@@ -948,6 +948,8 @@ int zlink::socket_base_t::get_events_internal (
         events |= ZLINK_POLLIN;
     if ((events_ & ZLINK_POLLOUT) && has_out ())
         events |= ZLINK_POLLOUT;
+    if ((events_ & ZLINK_POLLROUTE) && has_route_change ())
+        events |= ZLINK_POLLROUTE;
 
     *out_ = events;
     return 0;
@@ -1049,6 +1051,9 @@ int zlink::socket_base_t::socket_type () const
 
 bool zlink::socket_base_t::has_in ()
 {
+    // Staged and physical readiness share the same receive turn as route
+    // selection changes, so neither can publish a deselected record.
+    const socket_receive_entry_scope_t entry (receive_runtime ());
     // A record retained after BUFFER_TOO_SMALL remains level-ready even
     // though the physical receive queue has already advanced.
     if (part_helper_recv_ready ()) {
@@ -1063,7 +1068,6 @@ bool zlink::socket_base_t::has_in ()
         }
     }
     // Readiness pumps/repartitions the same receive queue as public recv.
-    const socket_receive_entry_scope_t entry (receive_runtime ());
     return xhas_in ();
 }
 

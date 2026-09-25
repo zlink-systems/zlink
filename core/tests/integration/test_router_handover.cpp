@@ -189,12 +189,13 @@ void test_callback_dispatch_same_direction_reconnect_handover ()
     TEST_ASSERT_TRUE_MESSAGE (
       handed_over, "same-direction reconnect was not handed over to the new pipe");
 
-    //  A paired Application pipe may still be selected explicitly by its
-    //  transport-pair identity while the owner validates the replacement.
-    //  Preserve the displaced pipe as standby instead of terminating it at
-    //  routing-id handover time.
+    // The displaced pipe can remain physically attached, but its DATA is no
+    // longer eligible for application receive after the selected route changes.
     send_routed_string_expect_success (server_one, "C", "standby");
-    recv_routed_string_expect_success (client, "standby");
+    zlink_pollitem_t old_item = {client, 0, ZLINK_POLLIN, 0};
+    zlink_config_result_t old_error = ZLINK_CONFIG_INTERNAL_ERROR;
+    TEST_ASSERT_EQUAL_INT (0, zlink_poll (&old_item, 1, 100, &old_error));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, old_error);
 
     test_context_socket_close_zero_linger (client);
     test_context_socket_close_zero_linger (server_two);

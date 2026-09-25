@@ -5,11 +5,14 @@
 
 #include <map>
 #include <mutex>
+#include <deque>
+#include <vector>
 
 #include "sockets/common/socket_base.hpp"
 #include "utils/blob.hpp"
 #include "core/msg.hpp"
 #include "sockets/internal/fq.hpp"
+#include "api/socket/part_helper_internal.hpp"
 
 namespace zlink
 {
@@ -73,6 +76,34 @@ class router_t : public routing_socket_base_t
                       void *admission_userdata_ = NULL,
                       uint64_t *route_binding_token_out_ = NULL) ZLINK_OVERRIDE;
     bool xhas_in () ZLINK_OVERRIDE;
+    bool has_route_change () const ZLINK_OVERRIDE;
+    int routes_snapshot (zlink_router_route_t *routes_, size_t capacity_,
+                         size_t *count_);
+    bool is_selected_pipe (pipe_t *pipe_, uint64_t generation_ = 0,
+                           uint64_t *observed_generation_out_ = NULL) const;
+    template <typename Action>
+    auto within_receive_turn (Action action_) -> decltype (action_ ())
+    {
+        const socket_receive_entry_scope_t receive_turn (receive_runtime ());
+        return action_ ();
+    }
+    // Buffer-too-small staging is cold. Hold the route lock across its token
+    // check and helper publication so a concurrent handover either precedes
+    // staging or clears the staged record at the change point.
+    template <typename Stage>
+    int stage_selected_record (pipe_t *pipe_, uint64_t generation_, Stage stage_)
+    {
+        return within_receive_turn ([&] () -> int {
+            std::lock_guard<std::mutex> lock (_out_pipes_sync);
+            if (generation_ == 0 || !is_selected_pipe (pipe_, generation_)) {
+                errno = ESTALE;
+                return -1;
+            }
+            return stage_ ();
+        });
+    }
+    uint64_t last_recv_route_generation () const;
+    void set_last_recv_route_generation (uint64_t generation_);
     size_t xredrive_reply_token_waiters (size_t max_pipes_) ZLINK_OVERRIDE;
     bool xhas_out () ZLINK_OVERRIDE;
     void xread_deactivated (zlink::pipe_t *pipe_) ZLINK_FINAL;
@@ -112,17 +143,40 @@ class router_t : public routing_socket_base_t
                             pipe_message_admission_t *admission_out_,
                             pipe_write_observer_fn observer_,
                             void *observer_userdata_);
+    struct route_discard_batch_t
+    {
+        ~route_discard_batch_t ();
+        void close_messages ();
+        struct followup_t
+        {
+            pipe_t *pipe;
+            bool delimiter;
+            bool recheck;
+        };
+        std::deque<msg_t> messages;
+        part_helper_internal::recv_part_buffer_t staged_parts;
+        std::vector<followup_t> followups;
+    };
+    void finish_route_discard (route_discard_batch_t *batch_);
     struct route_adoption_actions_t
     {
         route_adoption_actions_t () :
             terminate_pipe (NULL),
             superseded_pipe (NULL),
+            staged_hold_socket (NULL),
+            staged_route_source_pipe (NULL),
+            staged_reply_token (0),
             cache_completion (false)
         {
         }
         pipe_t *terminate_pipe;
         pipe_t *superseded_pipe;
+        socket_base_t *staged_hold_socket;
+        pipe_t *staged_route_source_pipe;
+        uint64_t staged_reply_token;
+        zlink_routing_id_t staged_reply_rid;
         bool cache_completion;
+        route_discard_batch_t discarded;
     };
 
     //  Receive peer id and update lookup map. The caller finishes returned
@@ -134,6 +188,18 @@ class router_t : public routing_socket_base_t
                                 route_adoption_actions_t *actions_);
     void finish_route_adoption (pipe_t *adopted_pipe_,
                                 route_adoption_actions_t *actions_);
+    void publish_route_change (const blob_t &routing_id_,
+                               route_discard_batch_t *discarded_);
+    uint64_t next_route_generation ();
+    void discard_unselected_record (msg_t *first_, pipe_t *pipe_);
+    socket_base_t *discard_route_records (
+      pipe_t *pipe_, route_discard_batch_t *discarded_,
+      pipe_t **staged_route_source_pipe_out_ = NULL,
+      uint64_t *staged_reply_token_out_ = NULL,
+      zlink_routing_id_t *staged_reply_rid_out_ = NULL);
+    uint64_t recv_selected (msg_t *msg_, pipe_t **pipe_,
+                            pipe_t::read_admission_fn *admission_,
+                            void *userdata_);
     bool duplicate_pipe_should_replace (const out_pipe_t &existing_outpipe_,
                                         const blob_t &routing_id_,
                                         bool locally_initiated_) const;
@@ -152,14 +218,15 @@ class router_t : public routing_socket_base_t
         _current_out = NULL;
         _current_out_connection_id = 0;
     }
-    pipe_t *find_transport_pair_pipe (const zlink_routing_id_t *target_rid_,
-                                      uint64_t transport_pair_id_,
-                                      uint64_t transport_pair_generation_) const;
-    int select_routed_submit_target_locked (
+    out_pipe_t *find_transport_pair_out_pipe (
+      const zlink_routing_id_t *target_rid_, uint64_t transport_pair_id_,
+      uint64_t transport_pair_generation_);
+    int select_routed_submit_target_in_turn (
       const zlink_routing_id_t *router_rid_or_null_,
       zlink_routed_submit_target_t *target_out_,
       uint64_t *transport_connection_id_out_,
-      uint64_t *route_incarnation_id_out_, bool allow_unpaired_) const;
+      uint64_t *route_incarnation_id_out_, bool allow_unpaired_,
+      const out_pipe_t **selected_out_pipe_out_) const;
     int apply_peer_weight (pipe_t *pipe_, uint32_t weight_) ZLINK_OVERRIDE;
     std::mutex *route_lifecycle_mutex () const ZLINK_OVERRIDE
     {
@@ -226,6 +293,10 @@ class router_t : public routing_socket_base_t
     // ordinary (non-recursive); monitor events and observer-backed writes stay
     // outside it.
     mutable std::mutex _out_pipes_sync;
+    std::atomic<uint64_t> _route_revision;
+    std::atomic<uint64_t> _observed_route_revision;
+    uint64_t _next_route_generation;
+    std::atomic<uint64_t> _last_recv_route_generation;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (router_t)
 };

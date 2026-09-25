@@ -22,6 +22,7 @@ enum zlink_part_flag_t
 namespace zlink
 {
 class socket_base_t;
+class pipe_t;
 
 namespace part_helper_internal
 {
@@ -60,11 +61,20 @@ struct recv_sequence_state_t
     uint64_t request_seq;
     uint64_t transport_pair_id;
     uint64_t transport_pair_generation;
+    uint64_t route_generation;
+    zlink::pipe_t *route_source_pipe;
     int subscribed;
     std::string topic_id;
     recv_part_buffer_t buffered_parts;
     size_t next_part_index;
     bool public_delivery_hold;
+};
+
+struct recv_reset_cleanup_t
+{
+    recv_reset_cleanup_t () : route_source_pipe (NULL) {}
+    recv_part_buffer_t parts;
+    zlink::pipe_t *route_source_pipe;
 };
 
 struct handle_state_t
@@ -80,6 +90,8 @@ struct recv_record_metadata_t
     uint64_t request_seq;
     uint64_t transport_pair_id;
     uint64_t transport_pair_generation;
+    uint64_t route_generation;
+    zlink::pipe_t *route_source_pipe;
 };
 
 enum staged_recv_record_result_t
@@ -110,7 +122,9 @@ int stage_recv_sequence (const std::shared_ptr<handle_state_t> &state_,
                          size_t part_count_,
                          std::thread::id owner_thread_,
                          uint64_t transport_pair_id_ = 0,
-                         uint64_t transport_pair_generation_ = 0);
+                         uint64_t transport_pair_generation_ = 0,
+                         uint64_t route_generation_ = 0,
+                         zlink::pipe_t *route_source_pipe_ = NULL);
 int adopt_recv_public_delivery_hold (
   const std::shared_ptr<handle_state_t> &state_);
 void set_recv_metadata (recv_sequence_state_t *recv_,
@@ -132,7 +146,9 @@ int take_recv_part (const std::shared_ptr<handle_state_t> &state_,
                     uint64_t *request_seq_out_,
                     uint64_t *transport_pair_id_out_,
                     uint64_t *transport_pair_generation_out_);
-zlink::socket_base_t *reset_recv_sequence (recv_sequence_state_t *state_);
+zlink::socket_base_t *reset_recv_sequence (
+  recv_sequence_state_t *state_, recv_reset_cleanup_t *cleanup_ = NULL);
+void finish_recv_reset_cleanup (recv_reset_cleanup_t *cleanup_);
 int prepare_recv_step (recv_family_t family_,
                        zlink::socket_base_t *source_socket_,
                        const std::shared_ptr<handle_state_t> &state_,

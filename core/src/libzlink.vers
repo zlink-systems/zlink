@@ -61,6 +61,8 @@
     zlink_publish;
     zlink_recv;
     zlink_router_recv;
+    zlink_router_routes_snapshot;
+    zlink_router_recv_route_generation;
     zlink_reply;
     zlink_request;
     zlink_send;

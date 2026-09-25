@@ -8,6 +8,7 @@
 #include "api/socket/socket_request_reply_internal.hpp"
 #include "core/recv_tls_view.hpp"
 #include "sockets/common/socket_base.hpp"
+#include "sockets/router/router.hpp"
 #include "utils/routing_id.hpp"
 
 namespace zlink
@@ -405,6 +406,13 @@ class received_pipe_pin_t
             _pipe->release_lifetime_ref ();
     }
 
+    zlink::pipe_t *release ()
+    {
+        zlink::pipe_t *const pipe = _pipe;
+        _pipe = NULL;
+        return pipe;
+    }
+
   private:
     zlink::pipe_t *_pipe;
 };
@@ -417,20 +425,12 @@ class routed_receive_pre_admission_t
   public:
     routed_receive_pre_admission_t (
       zlink::socket_receive_record_scope_t *scope_,
-      router_reply_target_receive_admission_t *admission_,
-      zlink::socket_base_t *socket_) :
-        _scope (scope_), _admission (admission_), _socket (socket_),
-        _pinned_pipe (NULL)
+      router_reply_target_receive_admission_t *admission_) :
+        _scope (scope_), _admission (admission_)
     {
     }
 
-    ~routed_receive_pre_admission_t ()
-    {
-        if (_pinned_pipe)
-            _pinned_pipe->release_lifetime_ref ();
-    }
-
-    static int admit (zlink::pipe_t *pipe_, const zlink::msg_t &msg_,
+    static int admit (zlink::pipe_t *, const zlink::msg_t &msg_,
                       void *userdata_)
     {
         routed_receive_pre_admission_t *const self =
@@ -452,23 +452,10 @@ class routed_receive_pre_admission_t
         if (!needs_record)
             return 0;
 
-        // Raw multipart still needs the socket-wide record fence, but it does
-        // not retain a source pointer after this call. Metadata can publish a
-        // reply target and therefore keeps the source-pipe lifetime pin.
-        if (has_metadata) {
-            if (!pipe_ || !self->_socket
-                || !self->_socket->retain_received_source_pipe_ref (pipe_)) {
-                errno = EPROTO;
-                return -1;
-            }
-            self->_pinned_pipe = pipe_;
-        }
+        // The record fence covers multipart and metadata admission. The
+        // socket receive turn pins the source once before returning it.
         self->_admission->set_incoming_request (is_request);
         if (self->_scope->acquire_before_frame () != 0) {
-            if (self->_pinned_pipe) {
-                self->_pinned_pipe->release_lifetime_ref ();
-                self->_pinned_pipe = NULL;
-            }
             return errno == ENOMEM
                      ? zlink::pipe_t::read_admission_reject_consume
                      : -1;
@@ -476,18 +463,9 @@ class routed_receive_pre_admission_t
         return 0;
     }
 
-    zlink::pipe_t *release_pinned_pipe ()
-    {
-        zlink::pipe_t *const result = _pinned_pipe;
-        _pinned_pipe = NULL;
-        return result;
-    }
-
   private:
     zlink::socket_receive_record_scope_t *_scope;
     router_reply_target_receive_admission_t *_admission;
-    zlink::socket_base_t *_socket;
-    zlink::pipe_t *_pinned_pipe;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (routed_receive_pre_admission_t)
 };
@@ -700,6 +678,9 @@ router_reply_target_take_result_t take_router_reply_target_locked (
         return router_reply_target_take_missing;
     if (it->second.checked_out)
         return router_reply_target_take_busy;
+    // Pipe termination clears this pointer in forget_router_reply_targets_for_pipe
+    // under the same state mutex before deallocation, so checkout may inspect
+    // it and retain it while this mutex is held.
     if (it->second.pipe
         && (it->second.pipe->get_transport_lane ()
               != transport_lane_application
@@ -957,8 +938,12 @@ int recv_router_record (const socket_handle_t &handle_,
                                 zlink_msg_t *terminal_part_out_,
                                 bool *terminal_part_returned_out_,
                                 uint64_t *transport_pair_id_out_,
-                                uint64_t *transport_pair_generation_out_)
+                                uint64_t *transport_pair_generation_out_,
+                                uint64_t *route_generation_out_,
+                                zlink::pipe_t **source_pipe_pin_out_)
 {
+    if (source_pipe_pin_out_)
+        *source_pipe_pin_out_ = NULL;
     if (!handle_.socket || !source_node_rid_out_ || !reply_token_out_ || !parts_out_
         || !part_count_out_) {
         errno = EFAULT;
@@ -982,8 +967,7 @@ int recv_router_record (const socket_handle_t &handle_,
       &router_reply_target_receive_admission_t::rollback,
       &receive_admission);
     routed_receive_pre_admission_t pre_admission (&receive_record_scope,
-                                                   &receive_admission,
-                                                   handle_.socket);
+                                                   &receive_admission);
 
     // Part receive APIs accept an uninitialised output slot. Only use the
     // zero-copy terminal path when that slot is already a valid msg_t;
@@ -1005,15 +989,18 @@ int recv_router_record (const socket_handle_t &handle_,
     uint64_t transport_pair_id = 0;
     uint64_t transport_pair_generation = 0;
     uint64_t route_binding_token = 0;
+    bool source_pipe_pinned = false;
     zlink_routing_id_t *const source_rid = &source_rid_storage;
     zlink::pipe_t *source_pipe = NULL;
     const int first_recv_rc = handle_.socket->recv_routed (
-      &current, source_rid, flags_, NULL, &source_pipe, false,
+      &current, source_rid, flags_, NULL, &source_pipe,
+      source_pipe_pin_out_ != NULL,
       &transport_pair_id, &transport_pair_generation,
       &route_binding_token,
       &receive_record_scope, &routed_receive_pre_admission_t::admit,
-      &pre_admission);
-    received_pipe_pin_t source_pipe_pin (pre_admission.release_pinned_pipe ());
+      &pre_admission, terminal_part_out_ == NULL, &source_pipe_pinned);
+    received_pipe_pin_t source_pipe_pin (source_pipe_pinned ? source_pipe
+                                                           : NULL);
     if (first_recv_rc != 0)
         return -1;
 
@@ -1163,6 +1150,8 @@ int recv_router_record (const socket_handle_t &handle_,
         *transport_pair_id_out_ = transport_pair_id;
     if (transport_pair_generation_out_)
         *transport_pair_generation_out_ = transport_pair_generation;
+    if (route_generation_out_)
+        *route_generation_out_ = route_binding_token;
 
     int export_rc = 0;
     if (!first_has_more) {
@@ -1176,8 +1165,11 @@ int recv_router_record (const socket_handle_t &handle_,
         export_rc = export_payload_parts (
           raw_parts.data (), raw_parts.size (), parts_out_, part_count_out_);
     }
-    if (export_rc == 0)
+    if (export_rc == 0) {
         published_reply_guard.release ();
+        if (source_pipe_pin_out_)
+            *source_pipe_pin_out_ = source_pipe_pin.release ();
+    }
     return export_rc;
 }
 
@@ -1300,8 +1292,8 @@ zlink::pipe_t *retain_reply_transport_pipe (
         && cached_application->get_transport_lane ()
              == transport_lane_application
         && target_.route_binding_token != 0
-        && cached_application->router_route_binding_token ()
-             == target_.route_binding_token
+        && static_cast<zlink::router_t *> (socket_)->is_selected_pipe (
+             cached_application, target_.route_binding_token)
         && cached_application->transport_pair_application_ready_cached ()
         && cached_application->get_peer_socket_type ()
              == target_.source_peer_socket_type

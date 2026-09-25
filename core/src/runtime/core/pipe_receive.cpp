@@ -136,6 +136,16 @@ bool zlink::pipe_t::read (msg_t *msg_)
     return read_internal<false> (msg_, NULL, NULL, NULL, NULL);
 }
 
+bool zlink::pipe_t::read_for_route_discard (msg_t *msg_)
+{
+    return read_internal<false, true> (msg_, NULL, NULL, NULL, NULL);
+}
+
+void zlink::pipe_t::complete_route_discard_delimiter ()
+{
+    process_delimiter ();
+}
+
 bool zlink::pipe_t::requires_record_admission (const msg_t &msg_)
 {
     const bool candidate = (msg_.flags () & msg_t::more) != 0
@@ -183,7 +193,7 @@ bool invoke_pipe_record_admission (const zlink::msg_t &msg_, void *userdata_)
 
 }
 
-template <bool WithAdmission>
+template <bool WithAdmission, bool DeferControl>
 bool zlink::pipe_t::read_internal (msg_t *msg_,
                                    read_admission_fn *admission_,
                                    void *userdata_,
@@ -258,6 +268,8 @@ bool zlink::pipe_t::read_internal (msg_t *msg_,
                   _in_physical_queue, frame_accounted_bytes (msg_),
                   counted_pending_message_ref (*msg_));
             account_inbound_frame (msg_, prefetched_batch_exhausted);
+            if (DeferControl)
+                return true;
             const int rc = msg_->close ();
             zlink_assert (rc == 0);
         } else {
@@ -267,7 +279,8 @@ bool zlink::pipe_t::read_internal (msg_t *msg_,
 
     //  If delimiter was read, start termination process of the pipe.
     if (msg_->is_delimiter ()) {
-        process_delimiter ();
+        if (!DeferControl)
+            process_delimiter ();
         return false;
     }
 

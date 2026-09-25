@@ -234,7 +234,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     void publish_router_route_source (
       const blob_t &router_route_source_routing_id_);
     void invalidate_router_route_binding ();
-    void publish_router_route_binding ();
+    void publish_router_route_binding (uint64_t generation_);
     bool try_copy_router_route_binding (
       unsigned char *routing_id_out_, size_t routing_id_capacity_,
       size_t *routing_id_size_out_, uint64_t *token_out_) const;
@@ -300,6 +300,11 @@ class pipe_t ZLINK_FINAL : public object_t,
 
     //  Reads a message to the underlying pipe.
     bool read (msg_t *msg_);
+    // Route retirement transfers even private control frames to its cold
+    // cleanup batch, so their close and delimiter processing run after the
+    // route lock is released.
+    bool read_for_route_discard (msg_t *msg_);
+    void complete_route_discard_delimiter ();
     typedef int (read_admission_fn) (pipe_t *pipe_, const msg_t &msg_,
                                      void *userdata_);
     enum
@@ -699,7 +704,7 @@ class pipe_t ZLINK_FINAL : public object_t,
                                  uint64_t *msgs_value_,
                                  uint64_t *bytes_value_);
     void record_oversize_message_admission (uint64_t message_bytes_);
-    template <bool WithAdmission>
+    template <bool WithAdmission, bool DeferControl = false>
     bool read_internal (msg_t *msg_, read_admission_fn *admission_,
                         void *userdata_, bool *admission_failed_out_,
                         bool *admission_consumed_out_);

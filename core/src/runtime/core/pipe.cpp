@@ -643,14 +643,11 @@ void zlink::pipe_t::invalidate_router_route_binding ()
                                            std::memory_order_release);
 }
 
-void zlink::pipe_t::publish_router_route_binding ()
+void zlink::pipe_t::publish_router_route_binding (uint64_t generation_)
 {
     publish_router_route_source (_router_socket_routing_id);
-    const uint64_t current =
-      _router_route_binding_token.load (std::memory_order_relaxed);
-    if ((current & 1u) == 0)
-        _router_route_binding_token.store (current + 1,
-                                           std::memory_order_release);
+    zlink_assert (generation_ != 0 && (generation_ & 1u) != 0);
+    _router_route_binding_token.store (generation_, std::memory_order_release);
 }
 
 bool zlink::pipe_t::try_copy_router_route_binding (

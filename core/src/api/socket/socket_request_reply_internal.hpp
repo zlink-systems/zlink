@@ -546,7 +546,9 @@ int recv_router_record (const socket_handle_t &handle_,
                                 zlink_msg_t *terminal_part_out_ = NULL,
                                 bool *terminal_part_returned_out_ = NULL,
                                 uint64_t *transport_pair_id_out_ = NULL,
-                                uint64_t *transport_pair_generation_out_ = NULL);
+                                uint64_t *transport_pair_generation_out_ = NULL,
+                                uint64_t *route_generation_out_ = NULL,
+                                zlink::pipe_t **source_pipe_pin_out_ = NULL);
 // General whole-record DEALER receive for both DATA and REQUEST records.
 int recv_dealer_record (const socket_handle_t &handle_,
                                 zlink_msg_t **parts_out_,

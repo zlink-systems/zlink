@@ -30,7 +30,7 @@ namespace
 {
 const unsigned short public_readiness_bits =
   ZLINK_POLLIN | ZLINK_POLLOUT | ZLINK_POLLERR | ZLINK_POLLPRI
-  | ZLINK_POLLCOMPLETION;
+  | ZLINK_POLLCOMPLETION | ZLINK_POLLROUTE;
 
 int validate_defined_event_bits (short events_)
 {
@@ -44,12 +44,17 @@ int validate_defined_event_bits (short events_)
 }
 }
 
-int validate_socket_poller_event_mask (short events_, bool allow_completion_)
+int validate_socket_poller_event_mask (short events_, bool allow_completion_,
+                                       bool allow_route_)
 {
     if (validate_defined_event_bits (events_) != 0)
         return -1;
     if ((events_ & ZLINK_POLLCOMPLETION) != 0 && !allow_completion_) {
         errno = EINVAL;
+        return -1;
+    }
+    if ((events_ & ZLINK_POLLROUTE) != 0 && !allow_route_) {
+        errno = ENOTSUP;
         return -1;
     }
     if ((events_ & ZLINK_POLLPRI) != 0) {
@@ -65,6 +70,10 @@ int validate_fd_poller_event_mask (short events_)
         return -1;
     if ((events_ & ZLINK_POLLCOMPLETION) != 0) {
         errno = EINVAL;
+        return -1;
+    }
+    if ((events_ & ZLINK_POLLROUTE) != 0) {
+        errno = ENOTSUP;
         return -1;
     }
     return 0;
