@@ -1014,8 +1014,8 @@ owns gate and Actor-claim lifetime. This API document defines no separate eligib
 [Spot direct](02-glossary.en.md#spot-direct) starter method takes a global Spot ID and
 payload and returns a Spot-specific send/request call. Besides metadata and a terminal, this
 call can configure [Instance intent](02-glossary.en.md#instance-intent), an optional stable
-type, and initial Mesh. A call without Instance intent is existing-only and `NotFound` on
-Missing. A call with Instance intent doesn't separate Location resolve from
+type, and initial Mesh. A call without Instance intent is existing-only, and the result for each
+authority state is defined in [Spot address messaging §9](../03-spot-actor/06-spot-address-messaging.en.md#9-failure-and-observability). A call with Instance intent doesn't separate Location resolve from
 [cold activation](02-glossary.en.md#cold-activation) claim — it performs them as one
 terminal operation. If existing authority is present, the stored kind/type and current Mesh
 are used, and the cold-activation option doesn't restrict or move the current owner.
@@ -1083,8 +1083,8 @@ follows.
 |---|---|---|---|---|
 | Actor one-way | `NotFound` | `Unavailable` | N/A | N/A |
 | Actor request | `NotFound` | `Unavailable` | N/A | N/A |
-| Spot one-way | `NotFound` | `Unavailable` | N/A | N/A |
-| Spot request | `NotFound` | `Unavailable` | N/A | N/A |
+| Spot one-way | [Spot address messaging §9](../03-spot-actor/06-spot-address-messaging.en.md#9-failure-and-observability) | `Unavailable` | N/A | N/A |
+| Spot request | [Spot address messaging §9](../03-spot-actor/06-spot-address-messaging.en.md#9-failure-and-observability) | `Unavailable` | N/A | N/A |
 | ActorRef-addressed session bind | `NotFound` | `Unavailable` | `InvalidOperation` | `Unavailable` |
 | ActorRef-addressed destroy | idempotent `false` | `Unavailable` | `InvalidOperation` | `Unavailable` |
 | SpotRef-addressed close | idempotent `false` | `Unavailable` | `InvalidOperation` | `Unavailable` |

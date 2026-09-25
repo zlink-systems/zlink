@@ -345,7 +345,8 @@ static ValueTask<TReply> RequestAsync<TRequest, TReply>(
 ```
 
 이 call도 target node나 endpoint를 지정하지 않는다. `InstanceSpot(...)`을
-생략하면 Ready authority가 없는 request는 `NotFound`로 끝난다. Authority가
+생략하면 Ready authority가 없는 request는 cold activation 없이
+[Spot 주소 메시징 §9](06-spot-address-messaging.ko.md#9-실패와-관측) 표의 결과로 끝난다. Authority가
 이미 있으면 저장된 current [owner route](../00-foundation/02-glossary.ko.md#owner-route)를 사용하므로
 `InMesh(...)`가 기존 Spot을 이동시키지 않는다.
 
@@ -786,7 +787,8 @@ Application callback이 다른 작업의 결과를 기다리는 동안에도 위
 ### 6.1 Target과 request 실패
 
 Instance intent로 cold activation을 시작하지 않는 call에서 target Spot의 Ready
-authority가 없으면 Spot target 오류로 끝난다.
+authority가 없으면 Spot target 오류로 끝난다. Authority 상태별 오류 종류는
+[Spot 주소 메시징 §9](06-spot-address-messaging.ko.md#9-실패와-관측)가 정한다.
 
 `Close`처럼 Spot ID와 `ObjectGeneration`을 함께 지정하여 특정 Spot incarnation을
 변경하는 lifecycle 작업은 Location Store의 current generation도 확인한다. 지정한

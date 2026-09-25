@@ -365,8 +365,8 @@ performs resolve and activation in the following order.
 1. Queries the global Spot ID's current authority.
 2. If Ready authority exists, sends to the current owner using the stored
    kind and stable type.
-3. If authority is Missing and there is no Instance intent, ends with
-   `NotFound`.
+3. If authority is Missing and there is no Instance intent, ends with the
+   result in the §9 table.
 4. If authority is Missing and there is Instance intent, selects an
    eligible Object Mesh. Starting at this step, only descriptors with a live owner lease
    are used to compute candidates —
@@ -611,12 +611,19 @@ The close procedure proceeds in the following order.
 3. Cleans up handler scope, timer, and local activation resource, once.
 4. Releases authority with the same owner/generation fence.
 
+If the transition to `Closing` in step 1 is not committed, authority does not
+change and Close ends with a result listed below. Once the transition to
+`Closing` is committed, authority never returns to `Ready`. If one of steps 2–4
+fails, Close returns that failure to the caller, and the target owner runtime
+continues the remaining steps from the failed step on the same owner and
+generation. A completed step is not repeated.
+
 If that incarnation no longer exists, idempotent `false`; if a different
 generation of the same Spot ID exists, `InvalidOperation`; if sealing for a
 move, `Unavailable`. The framework doesn't re-find the current ref and
 close a new incarnation. An operation accepted before the seal can complete
-on the existing generation, but an operation after the seal ends with a
-closing or stale result.
+on the existing generation. The §9 table decides the result of a new admission that
+arrives after the seal.
 
 **If even one current Actor membership remains on a User Spot, Close ends
 with `false` and keeps admission and authority.** The framework doesn't
@@ -688,10 +695,11 @@ seal is relayed via the committed Message Follow route.
 | Condition | Outcome |
 |---|---|
 | Create and cold activation with no or multiple object-role Mesh candidates | Ends with a §3/§4 typed error (`NotConfigured`/`InvalidOperation`/`NotFound`). |
-| No Ready authority | `NotFound`. |
+| The target authority of a Spot direct send or request without Instance intent is `Missing` or `Creating` | `NotFound`. |
 | The generation of a control addressed by `ActorRef`/`SpotRef` differs from the current generation (a direct message doesn't compare generations, per [08-routing §2.6](08-routing.en.md#26-where-objectgeneration-is-used-and-where-its-not)) | `InvalidOperation`. |
 | The [owner fence](../00-foundation/02-glossary.en.md#owner-fence) differs | `Unavailable`. |
-| New admission requested on a `Closing` or `Draining` owner | Rejected. |
+| New admission requested on an owner whose target authority is `Closing` | `Rejected`. |
+| The runtime is `Draining` and takes no new admission (whatever the target authority state) | `ShuttingDown`. |
 | Ingress arrives on the source route after a relocation seal | Not rejected — retained in the relocation hold. |
 | A message arrives at a `Relocating` unit not yet sealed | Accepted, keeping existing owner admission. |
 | A request failed | Not bypassed by a different Spot ID, MeshName, or owner. |

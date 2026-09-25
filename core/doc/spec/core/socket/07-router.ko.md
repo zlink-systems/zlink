@@ -247,7 +247,7 @@ ZLINK_EXPORT zlink_recv_result_t zlink_router_recv (
 
 `parts_capacity_`가 record의 part 수보다 작으면 record를 소비하지 않고 필요한 수를
 `*part_count_out_`에 쓴 뒤 `ZLINK_RECV_BUFFER_TOO_SMALL`+`ENOBUFS`를 반환한다. 충분한 배열로
-재시도하면 같은 record를 받는다. Reply가 필요한지는 [§2](#2-data와-request-receive)의 output
+재시도하면 같은 record를 받는다(선택에서 물러난 pipe의 record는 [§10.1](#101-선택-route-관찰)의 예외). Reply가 필요한지는 [§2](#2-data와-request-receive)의 output
 조합으로 판단한다. 반환한 payload에는 internal request metadata가 없다.
 
 Output ownership, `NONE`의 `RCVTIMEO`, output 불변과 socket-owned borrowed RID 수명은
@@ -317,6 +317,53 @@ ROUTER의 `ZLINK_POLLIN`은 application queue에 admission된 DATA·REQUEST 또�
 `ZLINK_POLLOUT`과 `ZLINK_POLLCOMPLETION`은 level로 유지되며, RID별 정확한 신호는 그 record의
 token·`peer_rid`다. Core가 접수한 SEND·REQUEST 결과는 `ZLINK_POLLCOMPLETION`과
 `zlink_completion_recv()`로 받는다. Reply submit은 completion을 만들지 않는다.
+
+### 10.1 선택 route 관찰
+
+같은 RID에 transport pipe가 둘 이상 있을 수 있다 — 같은 방향의 재연결과 반대 방향의 standby
+([RID 중복 정책](README.ko.md#rid-중복-정책)). Core는 RID마다 application route를 하나 선택하고,
+application은 그 선택을 다음 snapshot으로만 관찰한다.
+
+```c
+typedef struct zlink_router_route_t {
+  zlink_routing_id_t rid;
+  uint64_t route_generation; /* 0이 아닌 opaque 값. 동등성만 비교한다 */
+} zlink_router_route_t;
+
+ZLINK_EXPORT zlink_config_result_t zlink_router_routes_snapshot(
+  void *router_,
+  zlink_router_route_t *routes_out_,
+  size_t capacity_,
+  size_t *route_count_out_);
+
+ZLINK_EXPORT uint64_t zlink_router_recv_route_generation(void *router_);
+```
+
+- **Snapshot은 선택 route 전체를 원자적으로 반환한다.** RID마다 행 하나이며, admission이 끝난
+  선택 route만 들어간다. 행이 없는 RID에는 선택 route가 없다.
+- **`route_generation`은 같은 RID의 선택이 바뀔 때마다 새 값이 된다.** Handover로 새 pipe가 기존
+  pipe를 인수하거나, 선택 pipe가 끝나 standby가 승격되면 값이 바뀐다. Caller는 값의 크기나 순서를
+  해석하지 않는다.
+- **선택 route가 바뀌면 `ZLINK_POLLROUTE`가 준비된다**([Polling §6](../05-polling.ko.md#6-공개-타입)).
+  이 readiness는 level이며, 그 뒤의 변경까지 반영한 snapshot이 성공할 때 해제된다. Snapshot과 경합한
+  변경이 있으면 readiness가 남는다. Monitor event는 transport 관찰값이며 선택 route의 결과가 아니다.
+  Standby pipe의 `ZLINK_EVENT_CONNECTION_READY`는 선택 route의 준비를 뜻하지 않는다.
+- **선택되지 않은 pipe의 record는 반환하지 않는다.** 선택이 바뀌면 물러난 pipe와 standby pipe의
+  대기 DATA·REQUEST를 그때 record 단위로 버리므로 `ZLINK_POLLIN`은 선택 route의 record만 반영한다.
+  버퍼 부족으로 보류한 record도 그 사이 선택에서 물러났으면 재시도 때 반환하지 않는다 — 이는
+  [같은 record를 다시 받는다는 보장](README.ko.md#zlink_recv-와-zlink_router_recv)의 유일한 예외다. 버린
+  REQUEST에는 reply token을 발급하지 않는다. 두 Core는 [RID 중복 정책](README.ko.md#rid-중복-정책)으로 같은
+  선택에 이르므로, 요청자 Core도 그 pair를 선택에서 물러나게 할 때 그 REQUEST를
+  [completion 표](README.ko.md#completion-pull과-ownership)대로 `ZLINK_REQUEST_NOT_CONNECTED`로 한 번 종결한다.
+- **`zlink_router_recv_route_generation()`은 마지막으로 성공한 `zlink_router_recv()`가 반환한 record의
+  route generation을 돌려준다.** 반환한 RID와 같은 수명(같은 socket의 다음 data recv 진입까지)이다.
+  다음 data recv가 실패했거나 성공한 receive가 없으면 `0`이다. Caller는 record를 처리할 때 이 값을 그 RID의 현재 선택 route
+  generation과 비교해, 반환 뒤에 선택이 바뀐 record를 구분한다.
+- **Socket마다 route 관찰자는 하나만 둔다.** Snapshot 호출과 `ZLINK_POLLROUTE` 처리는 같은 관찰자가
+  한다. 두 thread가 snapshot을 동시에 호출하면 한쪽의 성공이 readiness를 해제할 수 있다.
+- `capacity_`가 선택 route 수보다 작으면 필요한 수를 `*route_count_out_`에 쓰고
+  `ZLINK_CONFIG_BUFFER_TOO_SMALL`을 반환하며 readiness를 해제하지 않는다. 성공하면
+  `*route_count_out_`에 행 수를 쓴다. ROUTER가 아닌 handle은 `ZLINK_CONFIG_NOT_SUPPORTED`다.
 
 ## 11. Receive flow state
 
@@ -395,7 +442,7 @@ test 하나로 이어진다.
 - `zlink_request()`로 시작한 request의 reply와 terminal failure는 data receive record가 아니라 `ZLINK_COMPLETION_REQUEST`로 반환된다.
 - non-blocking receive에 받을 record가 없으면 `ZLINK_RECV_NO_DATA`와 `EAGAIN`이다.
 - receive 성공 시 앞의 `*part_count_out_`개 슬롯 소유권이 caller에게 이동해 `zlink_multipart_close()`로 해제하고, 실패 시 소유권은 이동하지 않는다.
-- `parts_capacity_`가 record의 part 수보다 작으면 필요한 수와 `ZLINK_RECV_BUFFER_TOO_SMALL`+`ENOBUFS`를 반환하고 record를 소비하지 않으며, 충분한 배열로 재시도하면 같은 record를 받는다.
+- `parts_capacity_`가 record의 part 수보다 작으면 필요한 수와 `ZLINK_RECV_BUFFER_TOO_SMALL`+`ENOBUFS`를 반환하고 record를 소비하지 않으며, 충분한 배열로 재시도하면 같은 record를 받는다(선택에서 물러난 pipe의 record는 [§10.1](#101-선택-route-관찰)의 예외).
 - `zlink_router_recv()`에 reply나 error reply가 도착하면 payload를 반환하지 않고 `EPROTO`로 connection을 종료한다.
 - `zlink_router_recv()`가 반환한 DATA 또는 REQUEST payload를 raw send에 다시 사용해도 request-reply 의미가 나타나지 않는다.
 - 공통 `zlink_recv()`에 ROUTER를 넘기면 지원하지 않는 receive surface로 거부한다.
@@ -424,7 +471,7 @@ test 하나로 이어진다.
 - `DONTWAIT`은 admission을 한 번만 시도한다. Backpressure나 준비되지 않은 route(transport pair 미준비, weight `0`)는 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 그 RID의 nonzero wait token을 반환하고, 같은 token·context·`peer_rid`의 WRITABLE record 뒤 caller가 같은 request를 다시 제출한다. Mandatory route가 없는 RID는 `ZLINK_SUBMIT_NOT_CONNECTED`+`EHOSTUNREACH`, ID `0`, token 없음이다.
 - `timeout_ms_ == 0`은 `ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS` 기본값을 사용한다.
 - 유효한 error reply는 errno를 매핑한 non-OK `zlink_request_result_t`와 errno part 뒤의 payload를 completion에 보존하며, malformed errno part는 `ZLINK_REQUEST_PROTOCOL_ERROR`와 payload 없음으로 완료한다.
-- Request timeout은 local admission부터 시작하고 wait token이 유지되는 동안은 시작하지 않으며, admission 뒤 submit 시점 pair가 종료되면 timeout을 기다리지 않고 즉시 `ZLINK_REQUEST_NOT_CONNECTED` completion 하나를 받는다.
+- Request timeout은 local admission부터 시작하고 wait token이 유지되는 동안은 시작하지 않으며, admission 뒤 submit 시점 pair가 종료되거나 선택에서 물러나면 timeout을 기다리지 않고 즉시 `ZLINK_REQUEST_NOT_CONNECTED` completion 하나를 받는다.
 - 공유 completion slot 포화는 flags와 관계없이 즉시 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`, ID `0`, completion 없음으로 실패한다.
 
 **Reply**

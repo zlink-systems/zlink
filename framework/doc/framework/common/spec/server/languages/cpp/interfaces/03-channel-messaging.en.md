@@ -612,11 +612,9 @@ connection set and descriptor are kept separate.
 Automatic RouteMesh compares RID in canonical byte order, and only the
 MeshNode with the smaller RID connects to the counterpart endpoint. A
 manual topology can connect from one or both sides depending on
-application endpoint configuration. If bidirectional connection or
-[automatic discovery](../../../00-foundation/02-glossary.en.md#automatic-discovery)
-contention/a stale snapshot creates a duplicate candidate, handshake
-and admission check the same RID and lifecycle generation and keep
-only one in ready state.
+application endpoint configuration. If bidirectional connection or automatic discovery contention/a stale snapshot produces two pipes
+for the same RID, the common rule in
+[channel topology](../../../02-channel-transport/01-channel-topology.en.md) applies.
 
 A ClientServer client can use manual endpoint and
 [location store](../../../00-foundation/02-glossary.en.md#location-store)

@@ -372,11 +372,9 @@ termination of the current physical connection at the endpoint level, and does
 not create a new connection for the same endpoint before observing that
 endpoint's close snapshot or disconnect event. A successful call does not
 replace observation of the physical close. The `connection_id` of a monitor
-event is for diagnostics and correlation only and is never used as a fence. A
-late event from the previous connection is fenced by the descriptor's RID,
-security identity, and lifecycle generation together with the observation
-order, and cannot change admission or ready state
-of the new connection.
+event is for diagnostics and correlation only and is never used as a fence.
+[Transport liveness §5](05-transport-liveness.en.md#5-ready-and-failure-determination) defines how
+the selected route is determined and how records from a previous connection are handled.
 
 ### ClientServer Direction
 
@@ -407,7 +405,7 @@ sequenceDiagram
   section defines only the command schema and the connection epoch those records ride.
 - The probe, ACK, and timer are handled by the infrastructure reserve and are not delivered to the application queue or a handler.
 - **Both admitted peers probe.** The 5-second probe obligation is bidirectional and begins the moment a connection is admitted, independent of which side dialed. A node that only answers a peer's probe with an ACK but never originates its own probe is non-conforming: the other side would judge it live while it never confirms the reverse direction. The diagram shows one direction for brevity; each admitted peer runs the full probe/ACK cycle toward the other.
-- **Probe and ACK ride the admitted physical connection's current epoch, and that epoch is stable for the connection's lifetime.** A `livenessProbe` and its `livenessAck` are addressed to the peer identity and connection generation that admission established (`scope: admitted-physical-connection-lifetime`). A redundant re-dial or a repeated `hello`/`admit` for a peer that is already admitted on a live physical connection is idempotent: it neither supersedes the admitted connection nor rotates its connection generation. Emitting a probe or ACK stamped with a superseded or not-yet-delivered generation — one the peer's live pipe does not recognize — is a defect; the peer silently drops it as "an ACK from a different connection," and neither side's deadline is refreshed. A new connection generation is minted only when a genuinely new physical connection replaces the admitted one (per the duplicate-connection selection in [13. Mesh Node](../03-spot-actor/03-mesh-node.en.md)), not on every inbound admission record for an already-admitted, unchanged descriptor.
+- **Probe and ACK ride the admitted physical connection's current epoch, and that epoch is stable for the connection's lifetime.** A `livenessProbe` and its `livenessAck` are addressed to the peer identity and connection generation that admission established (`scope: admitted-physical-connection-lifetime`). A redundant re-dial or a repeated `hello`/`admit` for a peer that is already admitted on a live physical connection is idempotent: it neither supersedes the admitted connection nor rotates its connection generation. Emitting a probe or ACK stamped with a superseded or not-yet-delivered generation — one the peer's live pipe does not recognize — is a defect; the peer silently drops it as "an ACK from a different connection," and neither side's deadline is refreshed. A new connection generation is minted only when Core's selected route changes to a new route generation ([Transport liveness §5](05-transport-liveness.en.md#5-ready-and-failure-determination)), not on every inbound admission record for an already-admitted, unchanged descriptor.
 
 ### Classic Fanout Beacon
 

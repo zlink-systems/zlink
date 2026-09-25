@@ -109,6 +109,12 @@ until that DATA record is dequeued. At that point only `ZLINK_POLLIN` may be rea
 socket-local completion queue, the level-triggering and drain-through-`ZLINK_RECV_NO_DATA` rules above
 apply.
 
+A ROUTER can use `ZLINK_POLLROUTE` with both `zlink_poll()` and a poller. It is a level readiness that
+becomes ready when the selected route of an RID changes;
+[ROUTER §10.1](socket/07-router.en.md#101-observing-the-selected-route) defines when it becomes ready and
+when it is cleared. A source that is not a ROUTER and a closed source follow the existing rules for an
+unsupported event and a closed source.
+
 `zlink_poller_wait()` does not remove completions or invoke callbacks. The event
 array does not contain operation payloads, and its capacity is unrelated to the
 number of completions. For each ready socket, the caller repeatedly invokes
@@ -171,7 +177,8 @@ typedef enum zlink_poller_event_flag_e {
   ZLINK_POLLERR        = 4,   // socket close or FD platform error (§3, §5)
   ZLINK_POLLPRI        = 8,   // platform POLLPRI for an FD (§3)
   ZLINK_POLLITEMS_DFLT = 16,  // recommended initial item count; not a readiness bit (§3)
-  ZLINK_POLLCOMPLETION = 32   // socket completion-queue readiness (§4)
+  ZLINK_POLLCOMPLETION = 32,  // socket completion-queue readiness (§4)
+  ZLINK_POLLROUTE      = 64   // ROUTER selected-route change (ROUTER §10.1)
 } zlink_poller_event_flag_e;
 
 #define ZLINK_HAVE_POLLER 1   // public poller API is included in the build

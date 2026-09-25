@@ -135,7 +135,9 @@ event별 `value`의 의미는 다음과 같다.
 Monitor queue는 bounded이며 lossy다. Queue가 가득 차면 event 종류와 관계없이 새로 들어온
 record를 폐기하고, 이미 queue에 있는 record는 유지한다. Event를 aggregate하거나
 종류별로 우선 보존하지 않고, 폐기 수를 세는 공개 counter나 status field도 제공하지
-않는다. Monitor consumer 지연은 raw socket submit을 block하지 않는다.
+않는다. Monitor consumer 지연은 raw socket submit을 block하지 않는다. 따라서 monitor event로
+ROUTER의 RID별 선택 route를 재구성하지 않는다. 선택 route는
+[ROUTER §10.1](socket/07-router.ko.md#101-선택-route-관찰)의 snapshot이 정한다.
 
 thread 규칙은 [§2](#2-monitor-수명과-소비-mode)의 single consumer 규칙을 따른다 — caller가
 recv와 close를 직렬화해 같은 event queue를 하나의 consumer로 사용한다.

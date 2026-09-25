@@ -375,7 +375,8 @@ static ValueTask<TReply> RequestAsync<TRequest, TReply>(
 ```
 
 This call also doesn't specify a target node or endpoint. If `InstanceSpot(...)` is
-omitted, a request with no Ready authority ends with `NotFound`. If authority
+omitted, a request with no Ready authority ends without cold activation, with the result in the
+[Spot address messaging §9](06-spot-address-messaging.en.md#9-failure-and-observability) table. If authority
 already exists, the stored current [owner route](../00-foundation/02-glossary.en.md#owner-route)
 is used, so `InMesh(...)` doesn't move the existing Spot.
 
@@ -854,7 +855,8 @@ waiting for a different task's result.
 ### 6.1 Target and Request Failure
 
 A call that doesn't start cold activation via Instance intent ends with a Spot
-target error if the target Spot has no Ready authority.
+target error if the target Spot has no Ready authority. The error kind for each
+authority state is defined in [Spot address messaging §9](06-spot-address-messaging.en.md#9-failure-and-observability).
 
 A lifecycle operation like `Close`, which specifies a Spot ID and `ObjectGeneration`
 together to change a specific Spot incarnation, also checks the Location Store's

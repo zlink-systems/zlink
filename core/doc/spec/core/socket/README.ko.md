@@ -89,7 +89,8 @@ whole-message 수신은 record를 **원자적으로 한 번에** 소비한다(pa
 part가 된다([Message §4](../02-message.ko.md#4-multipart), [`zlink_multipart_close`](../02-message.ko.md#zlink_multipart_close)로 일괄 close).
 슬롯은 호출 전에 초기화돼 있을 필요가 없다(Core가 채운다). `parts_capacity_`가 record의 part 수보다
 작으면 record를 소비하지 않고 `*part_count_out_`에 필요한 수를 쓴 뒤 `ZLINK_RECV_BUFFER_TOO_SMALL`
-(`errno == ENOBUFS`)을 반환한다. 충분한 배열로 재시도하면 같은 record를 정확히 한 번 받는다.
+(`errno == ENOBUFS`)을 반환한다. 충분한 배열로 재시도하면 같은 record를 정확히 한 번 받는다(ROUTER에서
+선택에서 물러난 pipe의 record는 [ROUTER §10.1](07-router.ko.md#101-선택-route-관찰)의 예외).
 single-consumer·record 원자성·borrowed RID 수명 규칙은 [§2](#2-스레드-안전성)와 아래 함수 절이 정의한다.
 한 socket의 수신 소비자는 하나로 유지하며, 다른 스레드가 동시에 진입하면 `ZLINK_RECV_BUSY`(`errno == EBUSY`)다.
 
@@ -178,7 +179,8 @@ request는 선택된 방향으로 이어지지 않는다. 그 request의 reply�
 transport pair로만 전달되도록 제한되어 있어 request를 완료하지 못한다. Core는 그 pair가
 handover로 물러나는 즉시 해당 request를 `ZLINK_REQUEST_NOT_CONNECTED`(errno `EHOSTUNREACH`)로
 정확히 한 번 종결하며, request의 자기 timeout까지 기다리지 않는다. Caller는 그 completion을
-받은 뒤 handover된 방향으로 다시 보낸다.
+받은 뒤 handover된 방향으로 다시 보낸다. RID마다 어느 pipe가 선택됐는지는
+[ROUTER §10.1](07-router.ko.md#101-선택-route-관찰)의 snapshot으로 관찰한다.
 
 이 옵션은 peer가 광고한 routing id를 관찰할 수 있는 socket에서만 의미가
 있다. STREAM은 server가 연결별 4-byte routing id를 직접 만들기 때문에
@@ -595,7 +597,8 @@ socket 타입은 `ZLINK_RECV_NOT_SUPPORTED`(`errno == ENOTSUP`)다. `parts_out_`
 
 `parts_capacity_`가 record의 part 수보다 작으면 record를 **소비하지 않고** `*part_count_out_`에 필요한
 part 수를 쓴 뒤 `ZLINK_RECV_BUFFER_TOO_SMALL`(`errno == ENOBUFS`)을 반환한다. `parts_out_` 슬롯과
-다른 output은 그대로이므로 충분한 배열로 재시도하면 같은 record를 정확히 한 번 받는다. record 원자성
+다른 output은 그대로이므로 충분한 배열로 재시도하면 같은 record를 정확히 한 번 받는다(ROUTER에서 그
+사이 source pipe가 선택에서 물러난 경우는 [ROUTER §10.1](07-router.ko.md#101-선택-route-관찰)이 정한 예외다). record 원자성
 때문에 부분 record 상태(절반만 채워진 시퀀스)는 존재하지 않는다.
 
 `flags_`는 `NONE` 또는 `DONTWAIT`만 허용하며 알 수 없는 bit는 `ZLINK_RECV_INVALID_STATE`
@@ -1169,7 +1172,7 @@ RID다. Reconnect 뒤 physical connection identity로 바뀌지 않으며 후속
 | 영구적인 peer-type 거절 | 해당 없음; 토큰은 target 제거까지 유지 | `ZLINK_REQUEST_REJECTED` |
 | malformed protocol | 해당 없음; 토큰은 target 제거까지 유지 | `ZLINK_REQUEST_PROTOCOL_ERROR` |
 | accepted 뒤 allocation·runtime failure | 해당 없음; Core가 payload를 보관하지 않음 | `ZLINK_REQUEST_INTERNAL_ERROR` |
-| submit 시점 transport pair의 종료(transient disconnect, HANDOVER로 물러남, REJECT로 닫힘 등 원인 불문) | terminal 없음; 토큰 유지, 같은 target의 재연결이 WRITABLE을 발행 | reply는 submit 시점 pair로만 전달되므로 Core가 그 pair 종료 즉시 `ZLINK_REQUEST_NOT_CONNECTED`(`EHOSTUNREACH`)로 정확히 한 번 종결; caller가 다시 보낸다 |
+| submit 시점 transport pair의 종료 또는 선택에서 물러남(transient disconnect, HANDOVER로 물러남, standby 전환, REJECT로 닫힘 등 원인 불문) | terminal 없음; 토큰 유지, 같은 target의 재연결이 WRITABLE을 발행 | reply는 submit 시점 pair로만 전달되므로 Core가 그 pair가 종료되거나 선택에서 물러나는 즉시 `ZLINK_REQUEST_NOT_CONNECTED`(`EHOSTUNREACH`)로 정확히 한 번 종결; caller가 다시 보낸다 |
 | context termination·socket close | `ZLINK_SEND_TERMINAL`, `ETERM` 또는 `ESHUTDOWN`; 읽지 않은 record는 내부 폐기 | 진행 중 request와 unread record를 내부 폐기하고 새 completion 전달을 보장하지 않음 |
 
 REQUEST reply는 Core가 enqueue 전에 확보한 contiguous `zlink_msg_t[]`에 보관한다. Wire error

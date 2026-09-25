@@ -96,7 +96,8 @@ close with [`zlink_multipart_close`](../02-message.en.md#zlink_multipart_close))
 initialized before the call (Core fills them). When `parts_capacity_` is smaller than the record's
 part count, the record is not consumed, the needed count is written to `*part_count_out_`, and
 `ZLINK_RECV_BUFFER_TOO_SMALL` (`errno == ENOBUFS`) is returned; retrying with a large enough array
-receives the same record exactly once. The single-consumer contract, record atomicity, and
+receives the same record exactly once (on a ROUTER, a record of a pipe that left the selection is the
+exception in [ROUTER §10.1](07-router.en.md#101-observing-the-selected-route)). The single-consumer contract, record atomicity, and
 borrowed-RID lifetime are defined by [§2](#2-thread-safety) and the function sections below. Keep one
 receive consumer per socket; concurrent entry by another thread returns `ZLINK_RECV_BUSY`
 (`errno == EBUSY`).
@@ -197,7 +198,8 @@ through the new direction. Core completes that request exactly once with
 `ZLINK_REQUEST_NOT_CONNECTED` (errno `EHOSTUNREACH`) as soon as its pair is
 superseded by the handover, without waiting for the request's own timeout. The
 caller resubmits through the handed-over direction after receiving that
-completion.
+completion. Which pipe is selected for each RID is observed through the snapshot in
+[ROUTER §10.1](07-router.en.md#101-observing-the-selected-route).
 
 This option is meaningful only for sockets that can observe a peer-advertised
 routing id. STREAM assigns its own 4-byte connection routing ids, so this
@@ -635,7 +637,9 @@ before the call.
 When `parts_capacity_` is smaller than the record's part count, the record is **not consumed**, the
 needed part count is written to `*part_count_out_`, and `ZLINK_RECV_BUFFER_TOO_SMALL`
 (`errno == ENOBUFS`) is returned. The `parts_out_` slots and other outputs are unchanged, so
-retrying with a large enough array receives the same record exactly once. Because of record
+retrying with a large enough array receives the same record exactly once (on a ROUTER, the case
+where the source pipe left the selection in the meantime is the exception defined in
+[ROUTER §10.1](07-router.en.md#101-observing-the-selected-route)). Because of record
 atomicity, no partial-record state (a half-filled sequence) exists.
 
 `flags_` accepts only `NONE` or `DONTWAIT`; an unknown bit returns `ZLINK_RECV_INVALID_STATE`
@@ -1280,7 +1284,7 @@ not a capability for a later send target.
 | Permanent peer-type rejection | not applicable; the token stays until target removal | `ZLINK_REQUEST_REJECTED` |
 | Malformed protocol | not applicable; the token stays until target removal | `ZLINK_REQUEST_PROTOCOL_ERROR` |
 | Allocation or runtime failure after acceptance | not applicable; Core retains no payload | `ZLINK_REQUEST_INTERNAL_ERROR` |
-| Termination of the submit-time transport pair (transient disconnect, HANDOVER supersession, REJECT close — whatever the cause) | no terminal; the token stays and reconnect of the same target publishes WRITABLE | the reply is pinned to the submit-time pair, so Core completes the request exactly once with `ZLINK_REQUEST_NOT_CONNECTED` (`EHOSTUNREACH`) as soon as that pair terminates; the caller resubmits |
+| Termination of the submit-time transport pair or its removal from the selection (transient disconnect, HANDOVER supersession, standby transition, REJECT close — whatever the cause) | no terminal; the token stays and reconnect of the same target publishes WRITABLE | the reply is pinned to the submit-time pair, so Core completes the request exactly once with `ZLINK_REQUEST_NOT_CONNECTED` (`EHOSTUNREACH`) as soon as that pair terminates or leaves the selection; the caller resubmits |
 | Context termination or socket close | `ZLINK_SEND_TERMINAL`, `ETERM` or `ESHUTDOWN`; unread records are discarded internally | internally discard in-progress requests and unread records; no new completion is guaranteed |
 
 Core stores a REQUEST reply in a contiguous `zlink_msg_t[]` allocated before

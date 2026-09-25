@@ -97,6 +97,10 @@ REPLY가 physical head가 아니다. 이때 `ZLINK_POLLIN`만 준비되고 `ZLIN
 준비되지 않을 수 있다. REPLY가 physical head에 도달해 socket-local completion queue로 이동한
 뒤에는 위 level-trigger와 `ZLINK_RECV_NO_DATA`까지 drain하는 규칙을 적용한다.
 
+ROUTER는 `zlink_poll()`과 poller 모두에서 `ZLINK_POLLROUTE`를 쓸 수 있다. RID별 선택 route가 바뀌면
+준비되는 level readiness이며, 준비·해제 규칙은 [ROUTER §10.1](socket/07-router.ko.md#101-선택-route-관찰)이
+정한다. ROUTER가 아닌 source와 close된 source는 지원하지 않는 event와 close된 source의 기존 규칙을 따른다.
+
 `zlink_poller_wait()`는 completion을 제거하거나 callback을 호출하지 않는다. Event array에는
 operation payload를 넣지 않으며 event array 용량과 completion 개수는 관계가 없다. Caller는
 준비된 socket마다 `zlink_completion_recv(..., ZLINK_RECV_FLAGS_DONTWAIT)`를
@@ -155,7 +159,8 @@ typedef enum zlink_poller_event_flag_e {
   ZLINK_POLLERR        = 4,   // socket close 또는 FD platform 오류 (§3, §5)
   ZLINK_POLLPRI        = 8,   // FD의 platform POLLPRI (§3)
   ZLINK_POLLITEMS_DFLT = 16,  // 권장 초기 item 수. readiness bit가 아니다 (§3)
-  ZLINK_POLLCOMPLETION = 32   // socket completion queue readiness (§4)
+  ZLINK_POLLCOMPLETION = 32,  // socket completion queue readiness (§4)
+  ZLINK_POLLROUTE      = 64   // ROUTER 선택 route 변경 (ROUTER §10.1)
 } zlink_poller_event_flag_e;
 
 #define ZLINK_HAVE_POLLER 1   // public poller API가 build에 포함됨

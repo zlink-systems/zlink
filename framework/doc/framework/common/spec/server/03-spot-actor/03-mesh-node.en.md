@@ -334,8 +334,9 @@ The peer handshake exchanges the following information.
 - The immutable `ChannelName` set
 - Security identity
 
-If `MeshName` differs or the trust profiles differ, or it's a duplicate pipe of the same
-lifecycle identity, it isn't admitted.
+If `MeshName` differs or the trust profiles differ, it isn't admitted. When more than one pipe
+exists for the same RID, Core selects one ([Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.en.md#101-observing-the-selected-route)), and the framework
+admits only the handshake received on the selected route.
 
 Lifecycle generation is a non-zero opaque equality token. Which lifecycle is
 newer isn't judged by numeric magnitude.
@@ -346,8 +347,7 @@ following conditions are met.
 
 1. The application configuration expresses intent to connect to that peer.
 2. Authenticated connection handover has completed.
-3. Service liveness confirmation has established that the previous pipe has
-   ended.
+3. Core's selected route has changed to a new route generation.
 
 In automatic RouteMesh, only the MeshNode with the smaller RID initiates the
 connection. If a duplicate candidate arises from manual bidirectional connect or
@@ -390,17 +390,13 @@ sequenceDiagram
     Note over A,B: Physical connection layer — selecting a logical target such as<br/>ChannelName·ActorId·SpotId happens separately on top of this connection
     A->>B: starts connect (if automatic, only the smaller-RID side starts)
     A->>B: handshake: MeshName, RID, lifecycle generation,<br/>descriptor revision, ChannelName set, security identity
-    B->>B: checks MeshName/trust profile match and duplicate lifecycle pipe
+    B->>B: checks MeshName/trust profile match on the handshake of the route Core selected
     alt matches an admission-rejection condition
         B-->>A: admission rejected
     else new lifecycle, or all 3 manual-reconnect conditions are met
         B-->>A: admission accepted
         Note over A,B: this pipe becomes ready
-        alt another candidate connection exists concurrently for the same (MeshName, RID) pair
-            A->>A: selects one ready connection using the 07-channel-topology rule
-            B->>B: applies the same rule independently and converges on the same connection
-            Note over A,B: the remaining candidate is excluded from target selection
-        end
+        Note over A,B: when two pipes exist for the same RID, Core selects one and the framework admits only on the selected route
     end
 ```
 

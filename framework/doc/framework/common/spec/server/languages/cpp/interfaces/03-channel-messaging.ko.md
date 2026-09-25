@@ -557,8 +557,8 @@ ClientServer와 Fanout은 서로 다른 물리 topology이므로 같은 process�
 
 Automatic RouteMesh는 RID를 canonical byte order로 비교하고 더 작은 RID의 MeshNode만 상대 endpoint로
 connect한다. Manual topology는 application endpoint 구성에 따라 한쪽 또는 양쪽에서 connect할 수 있다.
-양쪽 연결이나 [automatic discovery](../../../00-foundation/02-glossary.ko.md#automatic-discovery) 경합·오래된 snapshot으로 중복 후보가 생기면 handshake와 admission이
-같은 RID와 lifecycle generation을 확인해 하나만 ready 상태로 유지한다.
+양쪽 연결이나 automatic discovery 경합·오래된 snapshot으로 같은 RID의 pipe가 둘 생길 때의 처리는
+[channel topology](../../../02-channel-transport/01-channel-topology.ko.md)의 공통 규칙을 따른다.
 
 ClientServer client는 manual endpoint와 [location store](../../../00-foundation/02-glossary.ko.md#location-store) automatic discovery를 함께 사용할 수 있다. 두 source가
 같은 Server RID와 [lifecycle generation](../../../00-foundation/02-glossary.ko.md#lifecycle-generation)을 가리키면 connection intent와 ready target을 하나로 합친다.
