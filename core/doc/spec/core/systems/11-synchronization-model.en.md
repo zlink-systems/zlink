@@ -317,8 +317,9 @@ guarding state.
   debug and sanitizer builds create `mutex_t` in the mode that catches re-entry immediately
   (`ERRORCHECK`); other backends do not provide that detection, so the no-re-entry rule is kept
   there by review and by §8.
-- **Order.** As a design rule, locks are taken only in the order socket turn → the pipe ends that
-  socket owns → context registries. Never the reverse, and never another socket's turn or pipe end
+- **Order.** As a design rule, these three lock classes are taken only in the order socket turn →
+  the pipe ends that socket owns → context registries. §6.1 fixes where the other implementation
+  locks fall in that order. Never the reverse, and never another socket's turn or pipe end
   while holding one socket's turn; a change affecting the other socket is sent as a command. When a
   registry queries a pipe end's value it either releases the registry lock first or reads only
   published values.
@@ -336,6 +337,8 @@ guarding state.
 | Auto-HWM full replan | recalculation lock → state lock / socket-pin lock (released right after pinning) / option lock → socket Auto-HWM lock → monitor lock → pipe endpoint lock |
 | Auto-HWM incremental extension | recalculation lock → state lock → option lock → registry lock → (registry released) pipe endpoint lock → socket Auto-HWM lock → state lock |
 | Detaching the peer pipe end | release this endpoint lock → take the peer endpoint lock |
+| Inproc reconnect and stop | socket turn → reconnect runtime lock → control runtime lock. Stop releases the reconnect runtime lock before waiting for the control task |
+| ROUTER selected-route change | socket turn → ROUTER route lock → part helper lock (when discarding a record held for a too-small buffer) |
 
 The per-message hot-path cost is as follows. A steady public send takes no pipe mutex and uses one
 state-word CAS to acquire and one atomic to release. A steady public receive likewise takes no

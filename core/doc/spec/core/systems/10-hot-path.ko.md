@@ -43,7 +43,7 @@ path다. 이 표는 규범이다: 표의 함수(또는 그 callee)를 고치는 
 
 ## 3. Hot path 안에서 금지되는 동작
 
-Hot path 안의 코드는 다음을 하지 않는다. 예외는 아래 opaque reply token 조회와 §4의 후퇴 경로다.
+Hot path 안의 코드는 다음을 하지 않는다. 예외는 3항의 외부 RID 대상 선택과 opaque reply token 조회, §4의 후퇴 경로다.
 
 1. **Heap 할당.** `std::vector`·`std::string`의 임시 생성, `new`, `make_shared`를 message마다
    하지 않는다. 필요한 버퍼는 socket·load balancer·pipe의 멤버 scratch를 재사용한다.
@@ -51,8 +51,11 @@ Hot path 안의 코드는 다음을 하지 않는다. 예외는 아래 opaque re
    않는다. 선택 시점에 얻은 `pipe_t*`를 같은 send scope 안에서 그대로 사용한다.
 3. **Socket 단위 table 조회와 그 mutex.** Transport pair table, pending queue map, route history
    같은 socket 단위 컨테이너를 message마다 찾지 않는다. Message 경로가 묻는 상태는 §4의 캐시로
-   답한다. Opaque reply token을 해석하는 `checkout_router_reply_target`의 조회와 mutex는
-   예외다. 이 조회는 reply의 대상과 소유권을 확인하며 Core request/reply owner가 담당한다.
+   답한다. 예외는 둘이다. `zlink_send_rid`(ROUTER·STREAM)는 외부 RID로 대상을 처음 고르는 조회를
+   record마다 한 번 socket turn 아래에서 lock 없이 하고, 고른 `pipe_t*`를 같은 send scope의 write까지
+   유지한다. 이미 고른 pipe를 다시 찾는 조회는 하지 않는다. Opaque reply token을 해석하는
+   `checkout_router_reply_target`의 조회와 mutex는 reply의 대상과 소유권을 확인하며 Core
+   request/reply owner가 담당한다.
 4. **조건 없는 부가 작업.** Hold 해제, head 재분류, deferred control flush처럼 "가끔 필요한" 작업은
    먼저 atomic 플래그로 필요 여부를 확인하고, 필요할 때만 lock을 잡는다.
 5. **Reader를 재우는 미리보기.** 수신 경로에서 pipe head를 미리 보는 코드는 prefetch된 범위
@@ -72,7 +75,7 @@ cold path에서만 쓰며, message마다 도는 write·read·flush는 잡지 않
 ## 4. 상태 캐시와 후퇴 경로
 
 Message 경로가 필요로 하는 socket 단위 상태는 상태가 바뀌는 지점에서 pipe에 atomic으로
-게시하고, message 경로는 그 캐시만 읽는다.
+게시하고, 대상을 고른 뒤의 message 경로는 그 캐시만 읽는다.
 
 | 질문 | 캐시 | 게시 지점 |
 |---|---|---|
@@ -116,10 +119,14 @@ throughput과 달리 결정적이라 재측정이 필요 없다. 측정 cell과 
 | `dealer_router_reqrep_inproc` | DEALER request → ROUTER reply → completion, 명령어/request |
 | `pair_inproc` | PAIR 단방향 |
 | `router_router_tcp` | ROUTER↔ROUTER 단방향(count-2 negative control) |
+| `stream_tcp` | STREAM↔STREAM TCP 단방향, 명령어/message |
 
 기준값은 검증된 release 또는 승인된 변경의 값이며, 의도한 비용 증가는 근거와 함께 감독
 판정으로만 갱신한다. 구현 작업이 기준값을 고치지 않는다. valgrind가 없는 환경에서는 test가
 등록되지 않으며, 그 경우 "gate 미실행"이 보고에 남아야 하고 green으로 계산하지 않는다.
+
+같은 변경은 wake 경로 회귀 테스트도 실행한다. 이름이 `test_wake_invariant`로 시작하는 CTest test를
+각각 10회 반복하며, 한 번이라도 실패하면 gate를 통과하지 못한다.
 
 ### 5.2 Release 비교 gate
 

@@ -47,7 +47,7 @@ this tree must update the table.
 
 ## 3. What the hot path must not do
 
-Code on the hot path does none of the following. Exceptions are the opaque reply token lookup below and the fallback path of §4.
+Code on the hot path does none of the following. The exceptions are the external-RID target selection and the opaque reply token lookup in item 3, and the fallback path of §4.
 
 1. **Heap allocation.** No per-message temporary `std::vector` or `std::string`, no `new`, no
    `make_shared`. Buffers that are needed reuse member scratch owned by the socket, the load
@@ -57,9 +57,12 @@ Code on the hot path does none of the following. Exceptions are the opaque reply
    within the same send scope.
 3. **Socket-level table lookups and their mutexes.** Socket-level containers — the transport pair
    table, pending queue maps, route history — are not searched per message. The state the message
-   path asks for is answered by the caches of §4. The lookup and mutex in
-   `checkout_router_reply_target` that resolve an opaque reply token are an exception. The Core
-   request/reply owner uses this lookup to validate the reply target and ownership.
+   path asks for is answered by the caches of §4. There are two exceptions. `zlink_send_rid`
+   (ROUTER/STREAM) looks up the target for an external RID once per record, under the socket turn
+   and without a lock, and keeps the selected `pipe_t*` until the write of the same send scope. A
+   pipe already selected is not looked up again. The lookup and mutex in
+   `checkout_router_reply_target` that resolve an opaque reply token validate the reply target and
+   ownership, and the Core request/reply owner performs them.
 4. **Unconditional side work.** Work that is only occasionally needed — releasing a hold,
    reclassifying a head, flushing deferred controls — first checks an atomic flag and takes a lock
    only when the flag says so.
@@ -81,7 +84,7 @@ flush do not take it.
 ## 4. State caches and the fallback path
 
 Socket-level state that the message path needs is published into the pipe as atomics at the
-point where it changes, and the message path reads only that cache.
+point where it changes, and once the target is selected the message path reads only that cache.
 
 | Question | Cache | Published at |
 |---|---|---|
@@ -128,11 +131,15 @@ The measured cells and their reference values are checked in as
 | `dealer_router_reqrep_inproc` | DEALER request → ROUTER reply → completion, instructions per request |
 | `pair_inproc` | PAIR one-way |
 | `router_router_tcp` | ROUTER↔ROUTER one-way (count-2 negative control) |
+| `stream_tcp` | STREAM↔STREAM TCP one-way, instructions per message |
 
 The reference is the value of a verified release or an approved change; an intended cost increase
 is recorded only by a supervisory decision with its rationale. Implementation work does not edit
 the reference. Where valgrind is unavailable the test is not registered; in that case "gate not
 run" must appear in the report and does not count as green.
+
+The same change also runs the wake-path regression tests. Each CTest test whose name starts with
+`test_wake_invariant` runs 10 times, and a single failure fails the gate.
 
 ### 5.2 Release comparison gate
 
