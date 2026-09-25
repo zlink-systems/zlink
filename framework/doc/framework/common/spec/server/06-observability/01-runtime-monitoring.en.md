@@ -230,7 +230,7 @@ accepting application traffic.
 |---|---|
 | `starting` | Preparing that topology's listener, connections, and registration. |
 | `ready` | The host is `serving` and that topology can process application messages. |
-| `degraded` | Some peers/targets or the Location Store are unavailable, so that topology can't fully provide its functionality. |
+| `degraded` | Some peers/targets are unavailable or the host meets the new-work blocking conditions of [Location runtime §5](../05-location-relocation/01-location-runtime.en.md#5-blocking-a-previous-owners-new-work-when-the-store-connection-drops), so that topology can't fully provide its functionality. |
 | `stopping` | Cleaning up that topology's already-accepted work and connections due to host shutdown. |
 | `stopped` | That topology's work and connection cleanup is finished. |
 | `failed` | An error occurred that prevents continuing to operate that topology. |
@@ -265,10 +265,12 @@ first-message delivery before Spot initialization finishes, and internal
 capacity counters, aren't provided.
 
 **Placement's `IsAvailable` is `true` only when the host is `serving` and is
-an Object Server, placement weight is positive, and there's headroom in
-both Actor/Spot capacity and activation concurrency.** Activation
-concurrency's current value and limit aren't exposed as a separate field
-in public status.
+an Object Server, placement weight is positive, there's headroom in both
+Actor/Spot capacity and activation concurrency, and the host doesn't meet the
+new-work blocking conditions of
+[Location runtime §5](../05-location-relocation/01-location-runtime.en.md#5-blocking-a-previous-owners-new-work-when-the-store-connection-drops).**
+Activation concurrency's current value and limit aren't exposed as a separate
+field in public status.
 
 The [weight](../00-foundation/02-glossary.en.md#weight) used for the new-target selection
 ratio is a signed integer `0..10000`. A value of `0` excludes it from being
