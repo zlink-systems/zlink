@@ -51,21 +51,6 @@ func testPublicRequestRetriesExactPacketAfterWritable(t *testing.T, run int) {
 	if err := dealer.Connect(endpoint); err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
-	// The receive side drives the connect-before-ready WRITABLE if the inproc
-	// pipe has not attached yet; the completed exchange is the readiness barrier.
-	primeDone := make(chan error, 1)
-	go func() {
-		primeDone <- submitNativeSend(context.Background(), dealer.Send().Bytes([]byte("route-prime")))
-	}()
-	var prime Received
-	if ok, err := router.Recv(&prime, RecvFlagsNone); err != nil || !ok {
-		t.Fatalf("prime Recv() = (%v, %v), want (true, nil)", ok, err)
-	}
-	_ = prime.Close()
-	if err := <-primeDone; err != nil {
-		t.Fatalf("prime Submit() error = %v", err)
-	}
-
 	serverPoller, err := NewPoller()
 	if err != nil {
 		t.Fatalf("server NewPoller() error = %v", err)
@@ -79,18 +64,46 @@ func testPublicRequestRetriesExactPacketAfterWritable(t *testing.T, run int) {
 		t.Fatalf("client NewPoller() error = %v", err)
 	}
 	defer clientPoller.Close()
-	if err := clientPoller.AddSocket(dealer, PollOut|PollCompletion, 2); err != nil {
-		t.Fatalf("client AddSocket(PollOut|PollCompletion) error = %v", err)
+	if err := clientPoller.AddSocket(dealer, PollCompletion, 2); err != nil {
+		t.Fatalf("client AddSocket(PollCompletion) error = %v", err)
 	}
-
-	knownEntries := make(map[*completionEntry]bool)
+	clientEvents := make([]PollEvent, 1)
 	requestPayloads := []string{"request-0"}
 	requestResults := []chan requestTestResult{make(chan requestTestResult, 1)}
-	go submitTestRequest(dealer, []byte(requestPayloads[0]), requestResults[0])
-	firstEntry, firstBackpressured := waitForNewRequestSubmission(t, dealer.socketCore.completion, knownEntries)
-	knownEntries[firstEntry] = true
-	if firstBackpressured {
-		t.Fatal("first request was backpressured before the HWM queue contained a request")
+	firstSubmission, err := dealer.Request().Bytes([]byte(requestPayloads[0])).Timeout(5 * time.Second).Submit(context.Background())
+	if err != nil {
+		t.Fatalf("first request Submit() error = %v", err)
+	}
+	go func() {
+		parts, err := firstSubmission.Reply(context.Background())
+		requestResults[0] <- requestTestResult{parts: parts, err: err}
+	}()
+	if firstSubmission.Result() == SubmitBackpressured {
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			readyContext, cancel := context.WithCancel(context.Background())
+			cancel()
+			admissionErr := firstSubmission.Admitted(readyContext)
+			if admissionErr == nil {
+				break
+			}
+			if !errors.Is(admissionErr, context.Canceled) {
+				t.Fatalf("first request Admitted() error = %v", admissionErr)
+			}
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				t.Fatal("first request admission did not complete")
+			}
+			if _, err := clientPoller.Wait(clientEvents, remaining); err != nil {
+				t.Fatalf("first request Poller.Wait() error = %v", err)
+			}
+		}
+	}
+	if err := firstSubmission.Admitted(context.Background()); err != nil {
+		t.Fatalf("first request Admitted() error = %v", err)
+	}
+	if err := clientPoller.ModifySocket(dealer, PollOut|PollCompletion); err != nil {
+		t.Fatalf("client ModifySocket(PollOut|PollCompletion) error = %v", err)
 	}
 	serverEvents := make([]PollEvent, 1)
 	if n, err := serverPoller.Wait(serverEvents, 5*time.Second); err != nil || n != 1 || serverEvents[0].Revents&PollIn == 0 {
@@ -103,11 +116,16 @@ func testPublicRequestRetriesExactPacketAfterWritable(t *testing.T, run int) {
 		done := make(chan requestTestResult, 1)
 		requestPayloads = append(requestPayloads, payload)
 		requestResults = append(requestResults, done)
-		go submitTestRequest(dealer, []byte(payload), done)
-		candidate, backpressured := waitForNewRequestSubmission(t, dealer.socketCore.completion, knownEntries)
-		knownEntries[candidate] = true
-		if backpressured {
-			entry = candidate
+		submission, err := dealer.Request().Bytes([]byte(payload)).Timeout(5 * time.Second).Submit(context.Background())
+		if err != nil {
+			t.Fatalf("request %d Submit() error = %v", requestIndex, err)
+		}
+		go func() {
+			parts, err := submission.Reply(context.Background())
+			done <- requestTestResult{parts: parts, err: err}
+		}()
+		if submission.Result() == SubmitBackpressured {
+			entry = submission.(*requestSubmission).entry
 			break
 		}
 	}
@@ -125,7 +143,6 @@ func testPublicRequestRetriesExactPacketAfterWritable(t *testing.T, run int) {
 		t.Fatal("managed request did not retain the exact logical packet")
 	}
 
-	clientEvents := make([]PollEvent, 1)
 	writableSeen := false
 	for requestIndex := 0; requestIndex+1 < len(requestPayloads); requestIndex++ {
 		reply := fmt.Sprintf("reply-%d", requestIndex)
@@ -345,41 +362,6 @@ func waitForManagedRequestToken(t testing.TB, owner *completionOwner) (*completi
 	}
 	t.Fatal("managed request did not reach a backpressured WRITABLE wait")
 	return nil, 0
-}
-
-func waitForNewRequestSubmission(
-	t testing.TB,
-	owner *completionOwner,
-	known map[*completionEntry]bool,
-) (*completionEntry, bool) {
-	t.Helper()
-	for attempt := 0; attempt < 100_000; attempt++ {
-		var candidate *completionEntry
-		owner.mu.Lock()
-		for _, entry := range owner.entries {
-			if entry.kind != completionRequest || known[entry] {
-				continue
-			}
-			candidate = entry
-			break
-		}
-		owner.mu.Unlock()
-		if candidate != nil {
-			candidate.mu.Lock()
-			published := candidate.published
-			backpressured := false
-			if published {
-				backpressured = candidate.request != nil
-			}
-			candidate.mu.Unlock()
-			if published {
-				return candidate, backpressured
-			}
-		}
-		runtime.Gosched()
-	}
-	t.Fatal("request submission did not publish an admission ID or wait token")
-	return nil, false
 }
 
 func serverReply(t testing.TB, router *RouterSocket, wantRequest, reply string) {
