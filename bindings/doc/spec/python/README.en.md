@@ -57,7 +57,8 @@ The main factories are `create_context()`, `create_pair_socket()`,
 `create_dealer_socket()`, `create_router_socket()`,
 `create_stream_socket()`, `create_pub_socket()`, `create_sub_socket()`,
 `create_poller()`, `create_timer()`, `create_received()`, and the
-`create_message` family. The exact Python signatures are governed jointly
+`create_message` family. `create_poller(context)` creates a poller owned by the given context;
+there is no form without a context. The exact Python signatures are governed jointly
 by the contract module in the same directory and the public header.
 
 ## Byte HWM and Auto-HWM

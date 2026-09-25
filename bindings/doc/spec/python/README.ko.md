@@ -52,6 +52,7 @@ handle, FFI symbol, native struct를 public type으로 노출하지 않는다.
 주요 factory는 `create_context()`, `create_pair_socket()`, `create_dealer_socket()`,
 `create_router_socket()`, `create_stream_socket()`, `create_pub_socket()`, `create_sub_socket()`,
 `create_poller()`, `create_timer()`, `create_received()`와 `create_message` 계열이다.
+`create_poller(context)`는 전달한 context가 소유하는 poller를 만들며, context를 받지 않는 형태는 없다.
 정확한 Python signature는 같은 디렉터리의 contract module과 public header를 함께 기준으로 한다.
 
 ## Byte HWM과 Auto-HWM
