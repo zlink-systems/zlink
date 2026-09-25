@@ -1443,8 +1443,12 @@ void zlink::socket_base_t::process_term_endpoint (std::string *endpoint_)
     if (endpoint_runtime ().endpoints.count (*endpoint_) != 0) {
         std::vector<pipe_t *> terminating_pipes;
         std::vector<pipe_t *> peer_progress_pipes;
+        std::vector<own_t *> bound_children;
+        // A failed connect names its own intent; a bind can share the URI.
         term_endpoint_internal (endpoint_->c_str (), &terminating_pipes,
-                                &peer_progress_pipes);
+                                &peer_progress_pipes, &bound_children,
+                                endpoint_type_connect);
+        zlink_assert (bound_children.empty ());
         zlink_assert (terminating_pipes.empty ());
         zlink_assert (peer_progress_pipes.empty ());
     }

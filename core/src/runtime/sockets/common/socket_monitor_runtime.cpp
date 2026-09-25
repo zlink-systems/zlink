@@ -247,7 +247,8 @@ void zlink::socket_monitor_runtime_t::enqueue_worker_event (
                         || (event_accounted_bytes <= queue_hwm_bytes
                             && queue_accounted_bytes
                                  <= queue_hwm_bytes - event_accounted_bytes);
-    while (!queue_stop && !lossy && !has_capacity) {
+    while (!queue_stop && !lossy.load (std::memory_order_acquire)
+           && !has_capacity) {
         (void) queue_cv.wait (&queue_sync, -1);
         has_capacity = queue_accounted_bytes == 0
                        || (event_accounted_bytes <= queue_hwm_bytes

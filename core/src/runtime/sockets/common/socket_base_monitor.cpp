@@ -357,7 +357,7 @@ int zlink::socket_base_t::monitor (const char *endpoint_,
             publish_errno = ETERM;
         else if (monitor.socket == NULL) {
             monitor.events = events_;
-            monitor.lossy = event_version_ <= 3;
+            monitor.lossy.store (event_version_ <= 3, std::memory_order_release);
             monitor.socket = static_cast<void *> (monitor_socket);
             // Publish the worker-visible socket before adding the task. The
             // control-runtime mutex then carries that initialization to the
@@ -375,7 +375,7 @@ int zlink::socket_base_t::monitor (const char *endpoint_,
                 publish_errno = errno != 0 ? errno : EFAULT;
                 monitor.socket = NULL;
                 monitor.events = 0;
-                monitor.lossy = true;
+                monitor.lossy.store (true, std::memory_order_release);
             }
         }
     }
@@ -829,7 +829,8 @@ bool zlink::socket_base_t::dispatch_monitor_event (void *monitor_socket_,
     zlink_msg_t msg;
     zlink_msg_init_size (&msg, sizeof (wire_event));
     memcpy (zlink_msg_data (&msg), &wire_event, sizeof (wire_event));
-    const int send_flags = monitor_runtime ().lossy ? ZLINK_DONTWAIT : 0;
+    const int send_flags = monitor_runtime ().lossy.load (std::memory_order_acquire)
+                             ? ZLINK_DONTWAIT : 0;
     if (zlink::send_msg_internal (monitor_socket_, &msg, send_flags) == -1) {
         zlink_msg_close (&msg);
         return false;
@@ -895,7 +896,7 @@ zlink::socket_base_t::detach_monitor_socket (bool send_monitor_stopped_event_)
         monitor.stop_task ();
         monitor.socket = NULL;
         monitor.events = 0;
-        monitor.lossy = true;
+        monitor.lossy.store (true, std::memory_order_release);
         release_async_owner =
           monitor.owns_async_command_processing.load (
             std::memory_order_acquire);

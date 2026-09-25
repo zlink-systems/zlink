@@ -1027,7 +1027,9 @@ void zlink::socket_base_t::finish_inproc_endpoint_termination (
 
 int zlink::socket_base_t::term_endpoint_internal (
   const char *endpoint_uri_, std::vector<pipe_t *> *terminating_pipes_,
-  std::vector<pipe_t *> *peer_progress_pipes_)
+  std::vector<pipe_t *> *peer_progress_pipes_,
+  std::vector<own_t *> *bound_children_,
+  endpoint_type_t endpoint_filter_)
 {
     if (unlikely (_ctx_terminated)) {
         errno = ETERM;
@@ -1117,32 +1119,54 @@ int zlink::socket_base_t::term_endpoint_internal (
         return -1;
     }
 
-    fail_public_pending_for_endpoint (resolved_endpoint_uri);
+    size_t matching_endpoints = 0;
+    bool retained_endpoint = false;
+    for (endpoints_t::iterator it = range.first; it != range.second; ++it)
+        if (endpoint_filter_ == endpoint_type_none
+            || it->second.local_type == endpoint_filter_)
+            ++matching_endpoints;
+        else
+            retained_endpoint = true;
+    if (matching_endpoints == 0) {
+        errno = ENOENT;
+        return -1;
+    }
+    bound_children_->reserve (matching_endpoints);
+    // URI-based waiters and route history may also belong to a retained bind.
+    if (!retained_endpoint)
+        fail_public_pending_for_endpoint (resolved_endpoint_uri);
 
-    for (endpoints_t::iterator it = range.first; it != range.second; ++it) {
+    for (endpoints_t::iterator it = range.first; it != range.second;) {
+        endpoints_t::iterator current = it++;
+        if (endpoint_filter_ != endpoint_type_none
+            && current->second.local_type != endpoint_filter_)
+            continue;
         //  A disconnect ends the whole pair. Without this the surviving lane's
         //  session would treat the peer pipe termination as a transport failure
         //  and redial an endpoint the caller has just removed.
-        if (it->second.transport_pair_state)
-            it->second.transport_pair_state->disable_reconnect ();
-        if (it->second.transport_pair_connect_intent)
+        if (current->second.transport_pair_state)
+            current->second.transport_pair_state->disable_reconnect ();
+        if (current->second.transport_pair_connect_intent)
             forget_pending_connect_routing_id (
-              it->second.transport_pair_connect_intent->pair_id);
-        if (it->second.pipe != NULL)
-            it->second.pipe->terminate (false);
-        if (it->second.local_type == endpoint_type_bind)
-            release_endpoint (it->second.endpoint);
-        term_child (it->second.endpoint);
+              current->second.transport_pair_connect_intent->pair_id);
+        if (current->second.pipe != NULL)
+            current->second.pipe->terminate (false);
+        if (current->second.local_type == endpoint_type_bind)
+            bound_children_->push_back (current->second.endpoint);
+        else
+            term_child (current->second.endpoint);
+        endpoint_runtime ().endpoints.erase (current);
     }
 
     for (size_t i = 0, size = endpoint_runtime ().attached_pipe_count (); i != size; ++i) {
         pipe_t *const pipe = endpoint_runtime ().attached_pipe (i);
         if (!pipe)
             continue;
-        if (pipe->get_endpoint_pair ().identifier () == resolved_endpoint_uri)
+        if (pipe->get_endpoint_pair ().identifier () == resolved_endpoint_uri
+            && (endpoint_filter_ == endpoint_type_none
+                || pipe->get_endpoint_pair ().local_type == endpoint_filter_))
             pipe->terminate (false);
     }
-    endpoint_runtime ().endpoints.erase (range.first, range.second);
     return 0;
 }
 
@@ -1154,6 +1178,7 @@ int zlink::socket_base_t::term_endpoint (const char *endpoint_uri_)
 
     std::vector<pipe_t *> terminating_pipes;
     std::vector<pipe_t *> peer_progress_pipes;
+    std::vector<own_t *> bound_children;
     int term_rc = 0;
     int term_errno = 0;
     {
@@ -1162,8 +1187,19 @@ int zlink::socket_base_t::term_endpoint (const char *endpoint_uri_)
         if (unlikely (rc != 0))
             return -1;
         term_rc = term_endpoint_internal (endpoint_uri_, &terminating_pipes,
-                                          &peer_progress_pipes);
+                                          &peer_progress_pipes,
+                                          &bound_children,
+                                          endpoint_type_none);
         term_errno = errno;
+    }
+
+    // The socket still owns these listeners. Release each one without the
+    // turn, then take the turn to request its termination.
+    for (size_t i = 0; i != bound_children.size (); ++i) {
+        own_t *const child = bound_children[i];
+        release_endpoint (child);
+        socket_public_api_lock_scope_t guard (lifecycle_coordinator ());
+        term_child (child);
     }
 
     finish_inproc_endpoint_termination (&terminating_pipes,

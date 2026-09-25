@@ -1015,7 +1015,9 @@ class socket_base_t : public own_t,
       std::vector<pipe_t *> *peer_progress_pipes_);
     int term_endpoint_internal (
       const char *endpoint_uri_, std::vector<pipe_t *> *terminating_pipes_,
-      std::vector<pipe_t *> *peer_progress_pipes_);
+      std::vector<pipe_t *> *peer_progress_pipes_,
+      std::vector<own_t *> *bound_children_,
+      endpoint_type_t endpoint_filter_);
     int bind_inproc_endpoint (const char *endpoint_uri_);
     int bind_transport_listener (const std::string &protocol_,
                                  const std::string &address_,
