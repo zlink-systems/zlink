@@ -131,6 +131,8 @@ poller registration은 최대 하나다. 다른 poller가 이미
 제거하거나 registration을 remove하면 다른 poller가 소유할 수 있으며, 전환 중 queue record와
 readiness는 유실되지 않는다. Application은 socket마다 completion drain owner를 하나만 둔다.
 
+한 socket의 transport completion 진행은 직렬화된 drain 경로 하나를 사용한다. Completion poller를 등록해도 같은 consumer가 `zlink_completion_recv(NONE)`을 직접 호출할 수 있다. 이 호출은 별도 `zlink_poller_wait()` 없이 `RCVTIMEO` 안에서 completion 진행과 대기를 수행한다. `DONTWAIT` receive는 이미 게시된 public queue만 소비하며 새 transport drain turn을 시작하지 않는다.
+
 ## 5. Source 수명과 직렬화
 
 poller에 socket source를 등록하면 Core가 그 socket의 lifetime pin을 획득한다.

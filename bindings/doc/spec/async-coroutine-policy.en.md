@@ -88,17 +88,7 @@ Node, Python, and Rust reply builders also accept no flags.
 The following declarations summarize the complete signatures in each language README. Each README owns
 its language-specific overloads, visibility, and ownership.
 
-Async terminals return a **submission result object** captured at submit time. `SendSubmission` carries
-`result` (a submit-time snapshot, `OK`|`BACKPRESSURED`) and the admission stage; `RequestSubmission` adds
-the reply stage. When `result` is `OK` the admission is already complete (SEND ends there; REQUEST's reply
-completes from the completion queue); when `BACKPRESSURED` the binding resubmits from the staging record owned by
-[submit result projection](README.en.md#submit-result-projection) after WRITABLE and completes admission. Other submit failures (`NOT_CONNECTED`, `NOT_FOUND`, `NOT_ADMITTED`,
-`INVALID_ARGUMENT`, `TERMINATED`, `OUT_OF_MEMORY`, `INTERNAL_ERROR`, …) are raised as exceptions/errors, not
-through the result object (the caller does not watch two places). The object and field names
-(`Submission`, `result`, `admitted`, `reply`) are shared across the seven languages. The structure and join
-rules belong to [the common result projection](README.en.md#submit-result-projection) and
-[async execution model §5](async-execution-model.en.md#5-joining-submit-results-and-completions). Synchronous
-terminals (`submit_sync()`, .NET/C++ `Submit()`/`submit()`) are unchanged.
+`SendSubmission` and `RequestSubmission` stage transitions for `result`, `admitted`, and `reply`, including WRITABLE resubmission, follow [async execution model §5](async-execution-model.en.md#5-joining-submit-results-and-completions). The seven languages share the object and field names; each language README owns its signatures.
 
 <a id="submission-stage-isolation"></a>
 
@@ -207,11 +197,7 @@ item maps to one contract test.
   operation family, and preserves the target in the builder.
 - Send and request terminals expose only the signatures in section 6. They do not expose send/request
   flags, a send timeout, or a request callback terminal.
-- Async terminals return a result object. `result` is a submit-time `OK`|`BACKPRESSURED` snapshot; when `OK`
-  the `admitted` stage is already complete, and when `BACKPRESSURED` `admitted` completes after WRITABLE
-  resubmission. A REQUEST's `reply` completes only after `admitted` succeeds and fails with the same cause
-  when `admitted` fails (exactly once). Contract tests confirm that submit failures other than
-  `OK`|`BACKPRESSURED` surface as exceptions/errors and that `admitted` and `reply` each complete exactly once.
+- Async terminal `result`, `admitted`, and `reply` stage verification refers to [async execution model §5](async-execution-model.en.md#5-joining-submit-results-and-completions).
 - Publish in Go and Python provides publish flags and synchronous submit results on a separate `PublishOp`.
 - The reply terminal has no flags and returns the result of synchronous `NONE` admission.
 

@@ -85,17 +85,7 @@ Python·Rust reply builder도 flags를 받지 않는다.
 다음 선언은 각 언어 README의 전체 signature를 요약한다. 언어별 overload, visibility와 ownership은
 해당 README가 소유한다.
 
-비동기 종결자는 **제출 시점 결과 객체**를 돌려준다. `SendSubmission`은 `result`(제출 시점 스냅샷
-`OK`|`BACKPRESSURED`)와 admission stage를, `RequestSubmission`은 여기에 reply stage를 더한다.
-`result`가 `OK`면 admission은 이미 완료 상태이고(SEND는 이것으로 끝, REQUEST는 reply가 completion에서
-완료된다), `BACKPRESSURED`면 바인딩이 [Submit 결과 투영](README.ko.md#submit-result-projection)의
-staging record로 WRITABLE 재제출을 수행해 admission을 완성한다. 그 밖의
-제출 실패(`NOT_CONNECTED`·`NOT_FOUND`·`NOT_ADMITTED`·`INVALID_ARGUMENT`·`TERMINATED`·`OUT_OF_MEMORY`·
-`INTERNAL_ERROR` 등)는 결과 객체가 아니라 **예외/에러**로 낸다(결과 객체와 예외 두 곳을 보게 하지 않는다).
-객체·필드 이름(`Submission`·`result`·`admitted`·`reply`)은 7언어가 공유한다. 구조와 합류 규칙은
-[공통 결과 투영](README.ko.md#submit-result-projection)과
-[비동기 실행 모델 §5](async-execution-model.ko.md#5-submit-결과와-completion의-합류)가 소유한다. 동기
-종결자(`submit_sync()`, .NET·C++ `Submit()`/`submit()`)는 바뀌지 않는다.
+`SendSubmission`과 `RequestSubmission`의 `result`·`admitted`·`reply` stage 전이와 WRITABLE 재제출 결과는 [비동기 실행 모델 §5](async-execution-model.ko.md#5-submit-결과와-completion의-합류)를 따른다. 객체·필드 이름은 7언어가 공유하며 언어별 signature는 해당 README가 소유한다.
 
 <a id="submission-stage-isolation"></a>
 
@@ -198,10 +188,7 @@ test 하나로 이어진다.
   target을 builder에 보존한다.
 - Send와 request terminal은 §6의 signature만 제공하며 send/request flags, send timeout과 request
   callback terminal을 제공하지 않는다.
-- 비동기 종결자는 결과 객체를 돌려준다. `result`는 제출 시점 `OK`|`BACKPRESSURED` 스냅샷이고, `OK`면
-  `admitted`가 완료 상태, `BACKPRESSURED`면 WRITABLE 재제출 뒤 `admitted`가 완료된다. REQUEST의 `reply`는
-  `admitted` 성공 뒤에만 완료되고 `admitted` 실패 시 같은 원인으로 실패한다(정확히 한 번). `OK`|`BACKPRESSURED`
-  외 제출 실패가 예외/에러로 나오는 것과 `admitted`·`reply`가 각각 한 번만 끝나는 것을 contract test로 확인한다.
+- 비동기 종결자의 `result`·`admitted`·`reply` stage 검증은 [비동기 실행 모델 §5](async-execution-model.ko.md#5-submit-결과와-completion의-합류)를 참조한다.
 - Go·Python publish는 별도 `PublishOp`에서 publish flags와 synchronous submit 결과를 제공한다.
 - Reply terminal은 flags 없이 synchronous `NONE` admission 결과를 반환한다.
 

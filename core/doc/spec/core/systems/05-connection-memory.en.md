@@ -61,29 +61,15 @@ the queue, and a binding or application holding the payload after dequeue does n
 
 ### 3.2 Empty-pipe oversize exception
 
-An empty application pipe admits one complete message larger than the HWM, provided that the
-message does not exceed the socket's maximum message size, and then stops subsequent writes. This
-exception does not apply to an unfinished multipart message.
+Empty-pipe complete-message admission and subsequent write blocking follow [Auto HWM message processing order](06-auto-hwm.en.md#message-processing-sequence).
 
 ### 3.3 Pending-request lifecycle state
 
-Pending-map entries, callbacks, and timeout state grow with the number of live requests. The
-[pending-request admission limit](06-auto-hwm.en.md#pending-request-admission) uses a per-physical-pair
-32 MiB size-weighted work budget and unresolved-request count limit of 16,384 to bound completion
-liveness. Work charge is neither actual allocator bytes nor retained payload bytes and is not
-included in queue-HWM current or snapshot values. Application HWM limits only frames resident in
-the queue and is not reused as a separate lifecycle limit for unresolved correlation.
+Pending-map entries, callbacks, and timeout state grow with the live request count. Per-pair work and count admission limits and reservation release follow [Auto HWM pending-request admission](06-auto-hwm.en.md#pending-request-admission).
 
 ### 3.4 Completion progress lane
 
-The ROUTER-ROUTER [completion progress lane](../glossary.en.md#completion-progress-lane) is a
-separate path that advances terminal replies and error replies and synchronizes receive-flow-state
-frames between peers. Byte HWM, LWM, manual HWM, and Core budget reservation do not apply to this
-lane. Even when an application pipe is full, valid completion records and receive-flow-state frames
-are admitted if the connection remains available and allocation succeeds.
-
-DEALER-ROUTER has no separate connection. Reply and error-reply bytes are included in the accounted
-bytes of the same Application physical queue as DATA and REQUEST and apply HWM and peer PAUSED.
+The ROUTER-ROUTER [completion progress lane](../glossary.en.md#completion-progress-lane) separately carries terminal replies, error replies, and receive-flow-state frames. HWM and accounting for this lane and the DEALER-ROUTER Application queue follow [Auto HWM §2 completion-lane HWM and accounting](06-auto-hwm.en.md#2-auto-hwm-budget-calculation).
 
 The completion lane preserves the `SNDBUF`/`RCVBUF` default of `-1`, leaving OS defaults and
 autotuning unchanged for every transport. When the application supplies a nonnegative value, Core
@@ -132,17 +118,8 @@ maps to one test.
 - The observable items for frame-charge increase, transition and return, and for HWM admission, are owned by [Auto HWM §5](06-auto-hwm.en.md#5-implementation-and-contract-test-verification-requirements). This document does not repeat them.
 
 **Oversize and completion**
-
-- Sending an empty application pipe a complete message that is within the socket's maximum message size but larger than the HWM admits one message and then stops subsequent writes.
-- The empty-pipe oversize exception does not apply to an unfinished multipart message.
-- Even when a ROUTER-ROUTER application pipe is full, a valid reply or error reply is admitted on the
-  Completion lane if the connection remains available and allocation succeeds.
-- RUNNING and PAUSED receive-flow-state frames are synchronized over the single Application
-  connection's Core control path on DEALER-ROUTER and over the Completion lane on ROUTER-ROUTER.
-- Byte HWM, LWM, manual HWM, and Core budget reservation do not apply to the ROUTER-ROUTER
-  completion progress lane.
-- DEALER-ROUTER replies and error replies are included in Application physical-queue bytes and apply
-  HWM and PAUSED. They are not included in Completion current, peak, or pending accounting.
+- Empty-queue oversize and pending-request admission verification refer to [Auto HWM verification](06-auto-hwm.en.md#5-implementation-and-contract-test-verification-requirements).
+- Completion-lane carriage refers to [ZMP request-reply lanes](../protocol/01-zmp.en.md#41-request-reply-lane); HWM and accounting refer to [Auto HWM §2 completion-lane HWM and accounting](06-auto-hwm.en.md#2-auto-hwm-budget-calculation).
 
 **Measurement**
 

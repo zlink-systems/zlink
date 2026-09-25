@@ -39,9 +39,7 @@ PAIR socket은 `parts_` 배열과 `part_count_`를 한 번의 `zlink_send()` 호
 제출한다. [Multipart](../02-message.ko.md#4-multipart) message의 part 순서는 배열 순서와 같다.
 단일 part message도 길이 1인 배열로 제출한다.
 
-Core는 record 전체를 원자적으로 admission한다. 호출이 실패하면 어느 part도 peer에 보이지 않으며,
-caller가 보관한 record 전체를 다시 제출해야 한다. 성공·실패와 관계없이 모든 입력 슬롯은 소비되어
-초기화된 빈 message가 된다.
+Record 원자성, 입력 슬롯 소비와 실패 뒤 전체 record 재제출은 [Socket 공통 whole-message send](README.ko.md#whole-message-send와-pending-admission)를 따른다.
 
 ```mermaid
 sequenceDiagram
@@ -135,34 +133,7 @@ ZLINK_EXPORT zlink_recv_result_t zlink_recv (
 
 ### PAIR의 논리 route와 reconnect
 
-PAIR socket에는 단일 logical route가 있다. `DONTWAIT` 송신은 admission을 한 번만 시도한다.
-즉시 admission되면 `ZLINK_SUBMIT_OK`, ID `0`이며 completion을 만들지 않는다. HWM·byte credit
-때문에 admission하지 못하거나 물리 connection이 아직 준비되지 않았으면
-`ZLINK_SUBMIT_BACKPRESSURED`, `errno == EAGAIN`과 함께 nonzero wait token을
-`completion_id_out_`에 반환한다. Core는 token, target, `user_context_`만 유지하고 payload는
-유지하지 않으므로 호출자는 보관한 record 사본을 다시 제출해야 한다.
-
-단일 logical route에 write credit이 다시 생기면(peer drain, reconnect로 인한 pipe attach) Core는 그
-token으로 `ZLINK_COMPLETION_WRITABLE` record를 정확히 하나 발행한다. 이 record는 같은
-`completion_id`, 같은 `user_context`, `send_result == ZLINK_SEND_ADMITTED`,
-`send_terminal_errno == 0`, 빈 `peer_rid`를 가진다. 읽지 않은 WRITABLE record가 있는 동안
-`ZLINK_POLLOUT`과 `ZLINK_POLLCOMPLETION`은 level로 유지된다. Application은
-`zlink_completion_recv()`로 `NO_DATA`까지 queue를 비운 뒤 같은 record를 `DONTWAIT`로 다시
-제출한다.
-
-Wait token은 다음 중 하나로만 끝난다: 위 WRITABLE record, `zlink_disconnect()`로 endpoint를
-명시적으로 제거할 때의 WRITABLE record(`send_result == ZLINK_SEND_TERMINAL`,
-`send_terminal_errno == ENOENT`), 또는 socket close·context 종료 — 이때 Core는 token을 내부에서
-끝내며 record를 전달하지 않는다. 물리 connection이 끊기는 것만으로는 token이 끝나지
-않으며, 같은 logical route가 다시 연결되면 pipe attach가 WRITABLE record를 발행한다. `NONE`
-송신이 admission을 기다리는 동안 물리 connection이 끊겨도 terminal로 끝내지 않는다. Core는
-같은 PAIR logical route가 다시 연결되면 local queue admission을 다시 시도하며, `NONE`은
-snapshot한 `SNDTIMEO`의 남은 budget만 사용한다.
-
-Admission 뒤에는 application payload의 별도 replay copy를 유지하지 않는다. 따라서 ID `0`이
-반환된 뒤 connection이 끊겨도 새 connection에 같은 record를 다시 보내지 않는다. ID `0`은 local
-queue admission을 뜻하며 peer 수신 확인이 아니다. WRITABLE record는 write credit 알림이며
-record의 admission이 아니다.
+PAIR의 SEND target은 물리 pipe가 바뀌어도 단일 logical route다. Reconnect 후 pipe attach는 이 route의 대기 토큰에 대한 wake edge다. SEND 결과, WRITABLE 재제출, token 수명과 replay 금지는 [Socket 공통 whole-message send](README.ko.md#whole-message-send와-pending-admission)를 따른다.
 
 ## 5. 구현 및 contract test 검증 요구
 
@@ -176,18 +147,8 @@ record의 admission이 아니다.
 - 성공한 수신 뒤 앞의 `*part_count_out_`개 슬롯은 caller가 소유하며 `zlink_multipart_close`로 정확히 한 번 닫는다. 실패하면 슬롯 소유권은 이전되지 않는다.
 - `parts_capacity_`가 record의 part 수보다 작으면 `ZLINK_RECV_BUFFER_TOO_SMALL`+`ENOBUFS`와 필요한 수를 반환하고 record를 소비하지 않으며, 충분한 배열로 재시도하면 같은 record를 받는다.
 
-**Whole-message 송신**
-- 길이 1인 배열을 보내면 수신 측은 part 하나인 record를 받고, multipart 배열을 보내면 같은 순서의 모든 part를 한 번에 받는다.
-- `DONTWAIT`이 즉시 admission되면 ID `0`과 completion 없음이다.
-- `DONTWAIT`이 HWM·byte credit 또는 준비되지 않은 pipe 때문에 거절되면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 nonzero wait token이며, Core는 payload를 유지하지 않고 호출자가 보관한 record 전체를 다시 제출한다.
-- 단일 pipe에 write credit이 생기면 그 token의 `ZLINK_COMPLETION_WRITABLE` record(`ZLINK_SEND_ADMITTED`, 같은 `user_context`, 빈 `peer_rid`)를 정확히 한 번 반환하고, 읽기 전까지 `ZLINK_POLLOUT`과 `ZLINK_POLLCOMPLETION`이 level로 유지된다.
-- Completion reservation이 소진되어 wait token을 만들지 못하면 `ZLINK_SUBMIT_OUT_OF_MEMORY`+`ENOMEM`, ID `0`이다.
-- `ZLINK_RECV_FLAGS_DONTWAIT` 수신에 데이터가 없으면 `ZLINK_RECV_NO_DATA`와 `EAGAIN`을 반환한다.
-
-**Record 원자성과 ownership**
-- 송신이 실패하면 peer는 그 record의 어떤 part도 수신하지 않는다.
-- 성공·실패 모두에서 모든 `parts_` 슬롯은 소비된다 — 반환 뒤 각 `zlink_msg_size`는 `0`이고, 각 슬롯은 다시 초기화하지 않고 close하거나 다음 send에 쓸 수 있다.
-- 실패한 record는 부분 상태 없이 끝나며, 호출 전에 보관한 record 전체를 다시 제출해 재시도할 수 있다.
+**Whole-message 송신과 ownership**
+- PAIR SEND의 결과·record 원자성·입력 소비·WRITABLE 재제출 검증은 [Socket 공통 whole-message send](README.ko.md#whole-message-send와-pending-admission)를 참조한다.
 
 **Logical reconnect와 completion**
 - Wait token이 있는 상태에서 connection을 끊었다가 같은 PAIR logical route를 reconnect하면
