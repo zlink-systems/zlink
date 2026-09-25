@@ -1915,7 +1915,8 @@ var ZlinkStreamConnectorBundle = (() => {
             await queued.callback();
             continue;
           }
-          const { message, signal } = queued;
+          const message = queued.message;
+          const signal = queued.signal;
           const handlers = Array.from(this.handlers.get(message.name));
           for (const handler of handlers) {
             try {
