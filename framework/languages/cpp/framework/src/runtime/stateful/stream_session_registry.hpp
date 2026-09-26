@@ -59,29 +59,6 @@ struct stream_barrier_t
     object_ref_t actor;
 };
 
-struct stream_remote_tenure_t
-{
-    std::string actor_id;
-    std::uint64_t object_generation = 0;
-    std::uint64_t authority_owner_generation = 0;
-    std::string target_node_id;
-    std::uint64_t target_node_generation = 0;
-    std::uint64_t owner_lease_generation = 0;
-    std::uint64_t binding_generation = 0;
-
-    friend bool operator== (const stream_remote_tenure_t &,
-                            const stream_remote_tenure_t &) = default;
-};
-
-struct stream_remote_tenure_proof_t
-{
-    stream_remote_tenure_t tenure;
-    std::string owner_id;
-
-    friend bool operator== (const stream_remote_tenure_proof_t &,
-                            const stream_remote_tenure_proof_t &) = default;
-};
-
 using stream_retained_outbound_t = std::function<void (bool)>;
 
 enum class stream_outbound_admission_kind_t
@@ -94,7 +71,6 @@ struct stream_outbound_admission_t
 {
     stateful_error_t error = stateful_error_t::none;
     stream_outbound_admission_kind_t kind = stream_outbound_admission_kind_t::immediate;
-    std::uint64_t token = 0;
 };
 
 struct stream_route_admission_t
@@ -157,26 +133,19 @@ class stream_session_registry_t
     stateful_error_t commit_barrier (const stream_barrier_t &barrier, const object_ref_t &target);
     stream_route_seal_admission_t seal_remote_route (const std::string &connection_id,
                                                      std::uint64_t binding_generation,
-                                                     const object_ref_t &actor,
-                                                     std::uint64_t target_node_generation,
-                                                     std::uint64_t owner_lease_generation);
+                                                     const std::string &actor_id,
+                                                     std::uint64_t object_generation);
     bool remote_route_seal_ready (const stream_barrier_t &barrier) const;
     bool close_remote_route_seal (const stream_barrier_t &barrier);
     bool remote_route_sealed (const std::string &actor_id) const;
-    std::optional<stream_remote_tenure_proof_t>
-    remote_tenure_proof (const std::string &actor_id,
-                         std::uint64_t binding_generation,
-                         std::uint64_t object_generation,
-                         std::uint64_t authority_owner_generation,
-                         const std::string &target_node_id,
-                         std::uint64_t target_node_generation) const;
-    bool confirm_remote_tenure (const stream_remote_tenure_t &tenure);
-    bool memoize_remote_tenure (stream_remote_tenure_proof_t proof,
-                                std::uint64_t previous_authority_owner_generation);
-    stream_outbound_admission_t
-    admit_outbound (const stream_remote_tenure_t &tenure,
-                    std::optional<stream_remote_tenure_proof_t> first_proof,
-                    stream_retained_outbound_t retained);
+    /* Session-owned push admission (Session-Actor binding §3 item 3, §8.1).
+     * The current binding of `actor_id` must carry the same binding
+     * generation and ObjectGeneration. A sealed or not yet published binding
+     * holds the push until the seal or the publication ends. */
+    stream_outbound_admission_t admit_outbound (const std::string &actor_id,
+                                                std::uint64_t object_generation,
+                                                std::uint64_t binding_generation,
+                                                stream_retained_outbound_t retained);
     std::vector<stream_retained_outbound_t>
     discard_retained_outbound (const std::string &actor_id, std::uint64_t binding_generation);
     std::vector<stream_retained_outbound_t> take_all_retained_outbound ();
@@ -192,7 +161,6 @@ class stream_session_registry_t
                                                   std::uint64_t previous_authority_owner_generation,
                                                   object_ref_t target,
                                                   std::uint64_t target_node_generation,
-                                                  std::uint64_t target_owner_lease_generation,
                                                   route_terminal_commit_t commit_terminal = {});
     stream_route_admission_t
     acknowledge_remote_abort (const std::string &connection_id,
@@ -210,13 +178,6 @@ class stream_session_registry_t
     std::optional<stream_binding_t> current_binding (const std::string &actor_id) const;
 
   private:
-    struct retained_outbound_state_t
-    {
-        std::uint64_t token = 0;
-        stream_remote_tenure_t tenure;
-        stream_retained_outbound_t completion;
-    };
-
     struct session_binding_aggregate_t
     {
         stream_binding_t binding;
@@ -224,9 +185,7 @@ class stream_session_registry_t
         std::shared_ptr<stream_ingress_drain_t> ingress_drain =
           std::make_shared<stream_ingress_drain_t> ();
         std::optional<std::uint64_t> barrier_token;
-        std::optional<stream_remote_tenure_proof_t> pending_remote_tenure;
-        std::deque<retained_outbound_state_t> retained_outbound;
-        std::uint64_t next_outbound_token = 1;
+        std::deque<stream_retained_outbound_t> retained_outbound;
         bool route_publish_pending = false;
     };
 
@@ -254,11 +213,8 @@ class stream_session_registry_t
     session_binding_aggregate_t *current_aggregate_unlocked (const std::string &actor_id);
     const session_binding_aggregate_t *
     current_aggregate_unlocked (const std::string &actor_id) const;
-    static bool exact_tenure_target (const stream_remote_tenure_t &tenure,
-                                     const stream_binding_t &binding);
-    bool memoize_remote_tenure_unlocked (session_binding_aggregate_t &aggregate,
-                                         stream_remote_tenure_proof_t proof,
-                                         std::uint64_t previous_authority_owner_generation);
+    static std::vector<stream_retained_outbound_t>
+    take_retained_outbound_unlocked (session_binding_aggregate_t &aggregate);
     void notify_changed () noexcept;
 
     authority_resolver_t _resolver;

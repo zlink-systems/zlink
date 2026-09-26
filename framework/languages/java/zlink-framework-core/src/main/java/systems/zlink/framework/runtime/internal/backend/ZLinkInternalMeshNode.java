@@ -309,15 +309,6 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     }
 
     /**
-     * Returns whether the exact observed Spot authority and its admitted peer can carry canonical
-     * service-wire actorJoin(28). A false result keeps the caller on the established private
-     * transfer path.
-     */
-    default boolean canRequestCanonicalActorJoin(CanonicalActorJoinRequest request) {
-        return false;
-    }
-
-    /**
      * Sends one canonical actorJoin(28) request to its exact admitted peer. Transfer and relocation
      * bookkeeping deliberately do not appear in this transport boundary (spec 51 section 9).
      */

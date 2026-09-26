@@ -176,23 +176,9 @@ test('Session owner applies an exact relocation without an Actor authority or le
   const snapshot = (await registry.relocationSnapshot(actor.actorId, 'relocation-1'))!;
   assert.equal('actorOwnershipGeneration' in snapshot, false);
   assert.equal('ownerLeaseGeneration' in snapshot, false);
-  await registry.applyRelocation(
-    actor.actorId,
-    'relocation-1',
-    'route-fingerprint',
-    'commit',
-    async () => {
-      assert.equal(await registry.abortSeal(actor.actorId, 'relocation-1'), true);
-    },
-    {
-      actorId: actor.actorId,
-      objectGeneration: 7n,
-      actorNodeRid: 'target-node',
-      actorNodeGeneration: 4n,
-      sessionIdentity: 'session-1',
-      bindingGeneration: 3n
-    }
-  );
+  await registry.applyRelocation(actor.actorId, 'relocation-1', 'route-fingerprint', async () => {
+    assert.equal(await registry.abortSeal(actor.actorId, 'relocation-1'), true);
+  });
   await registry.observeRelocationTerminal(actor.actorId, 'relocation-1', 'route-fingerprint');
 });
 
@@ -1367,7 +1353,7 @@ test('ActorJoin target invalidates a previous-owner Actor route before lifecycle
   ]);
 });
 
-test('target admission opens after bounded publication-clear conflicts and a later cleanup retry clears it', async () => {
+test('target admission opens after one publication-clear conflict and a later cleanup clears it', async () => {
   const events: string[] = [];
   const key = encodeAuthorityKey('actor', 'actor-clear-retry');
   const codec = new ServiceRelocationAuthorityPayloadCodec();
@@ -1398,7 +1384,7 @@ test('target admission opens after bounded publication-clear conflicts and a lat
     },
     storeNow: new Date()
   } as ZLinkAuthoritySnapshot;
-  let conflictsRemaining = 16;
+  let conflictsRemaining = 1;
   let clearAttempts = 0;
   let actorAvailable = false;
   const runtime = new ZLinkHostServiceRelocationRuntime({
@@ -1480,7 +1466,9 @@ test('target admission opens after bounded publication-clear conflicts and a lat
       'the committed Actor must be dispatchable after clear conflicts'
     );
     assert.equal(stage.phase, 'open');
-    assert.equal(clearAttempts, 16);
+    // One CAS against the committed snapshot decides; a conflict is recorded,
+    // not retried (the target owner is the only writer of that row).
+    assert.equal(clearAttempts, 1);
     assert.deepEqual(events, [
       '[zlink.runtime.relocation.publication_clear_failed]',
       'metric:zlink.relocation.publication_clear_failed'
@@ -1489,7 +1477,7 @@ test('target admission opens after bounded publication-clear conflicts and a lat
     await internals.clearTargetRelocationPublication(stage, current);
     assert.equal(
       clearAttempts,
-      17,
+      2,
       'the retained publication must be clearable by follow-up cleanup'
     );
     assert.equal(codec.read(current.payload), undefined);
@@ -1680,7 +1668,7 @@ test('canonical ActorJoin recovery retains the admitted typed reply content type
     formalRemoteActorAdmissions: admissions,
     options: {
       actorTransferRuntime: {
-        async prepareDeferredJoinAccepted(
+        prepareDeferredJoinAccepted(
           _actorId: string,
           _operationId: unknown,
           _actor: unknown,
@@ -2237,7 +2225,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     admissions.complete(relocationId, {
       accepted: true,
       actorRef: sourceActorRef as never,
-      deferredJoinRoot: { reference: 'accepted-root' } as never
+      deferredJoinCompletion: { reference: 'accepted-root' } as never
     });
   }
   assert.notEqual(
@@ -2407,11 +2395,11 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         events.push('onJoined');
       },
       actorTransferRuntime: {
-        async prepareDeferredJoinAccepted() {
+        prepareDeferredJoinAccepted() {
           events.push('recovery:prepared');
           return { reference: 'recovered-root' };
         },
-        async commitAndDeliverDeferredJoinAccepted() {
+        async deliverDeferredJoinAccepted() {
           events.push('accepted:started');
           await acceptedGate;
           events.push('accepted:completed');
@@ -2763,6 +2751,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       deliveryErrors.length = 0;
     },
     async dispose() {
+      sourceSignal.abort(new Error('ActorJoin harness disposed.'));
       releaseAccepted();
       releaseSourceLeave();
       admissions.delete(relocationId);

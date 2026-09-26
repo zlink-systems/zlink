@@ -729,15 +729,17 @@ class provider_location_repository_t final : public location_repository_t
         const auto store_now = std::get<store_missing_t> (existing).store_now;
         if (expires_at <= store_now)
             throw std::invalid_argument ("creation terminal expiry is not in the future");
-        // Convert the provider timestamp once. Preparing the authority/capacity
-        // write consumes this same monotonic retention deadline.
-        const auto terminal_deadline = std::chrono::steady_clock::now () + (expires_at - store_now);
+        const auto terminal_retention =
+          std::chrono::ceil<std::chrono::milliseconds> (expires_at - store_now);
+        if (terminal_retention <= std::chrono::milliseconds::zero ())
+            throw std::invalid_argument (
+              "creation terminal retention elapsed before publication");
         creation_terminal_record_t terminal{publication.operation, publication.terminal_envelope,
                                             expires_at};
         object_complete_creation_result_t result{object_creation_completion_stale_t{}};
         if (const auto *created = std::get_if<object_creation_completed_t> (&request.completion)) {
             const auto committed = commit ({request.key, request.fence, created->ready_payload},
-                                           cancellation, &terminal, terminal_deadline)
+                                           cancellation, &terminal, terminal_retention)
                                      .result ()
                                      .value ();
             if (const auto *value = std::get_if<object_committed_t> (&committed))
@@ -749,7 +751,7 @@ class provider_location_repository_t final : public location_repository_t
                 result = authority_generation_exhausted_t{};
         } else {
             const auto aborted =
-              abort ({request.key, request.fence}, cancellation, &terminal, terminal_deadline)
+              abort ({request.key, request.fence}, cancellation, &terminal, terminal_retention)
                 .result ()
                 .value ();
             if (std::holds_alternative<object_aborted_t> (aborted))
@@ -789,7 +791,7 @@ class provider_location_repository_t final : public location_repository_t
     task_t<object_commit_result_t> commit (object_commit_request_t request,
                                            std::stop_token cancellation,
                                            const creation_terminal_record_t *terminal,
-                                           std::chrono::steady_clock::time_point terminal_deadline)
+                                           std::chrono::milliseconds terminal_retention)
     {
         if (cancellation.stop_requested ())
             return cancelled<object_commit_result_t> ();
@@ -839,7 +841,7 @@ class provider_location_repository_t final : public location_repository_t
             version_condition (target->key, target->provider_version), capacity.condition},
            {store_put_t{authority_key, encode_authority (snapshot), std::nullopt},
             store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt}}},
-          terminal, terminal_deadline);
+          terminal, terminal_retention);
         const auto *applied = std::get_if<store_write_applied_t> (&written);
         if (!applied)
             return completed (object_commit_result_t{
@@ -852,7 +854,7 @@ class provider_location_repository_t final : public location_repository_t
     task_t<object_abort_result_t> abort (object_abort_request_t request,
                                          std::stop_token cancellation,
                                          const creation_terminal_record_t *terminal,
-                                         std::chrono::steady_clock::time_point terminal_deadline)
+                                         std::chrono::milliseconds terminal_retention)
     {
         if (cancellation.stop_requested ())
             return cancelled<object_abort_result_t> ();
@@ -886,7 +888,7 @@ class provider_location_repository_t final : public location_repository_t
             version_condition (target->key, target->provider_version), capacity.condition},
            {store_delete_t{authority_key},
             store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt}}},
-          terminal, terminal_deadline);
+          terminal, terminal_retention);
         if (!std::holds_alternative<store_write_applied_t> (written))
             return completed (object_abort_result_t{
               object_abort_conflict_t{read_authority_value (object_key (request.key))}});
@@ -1966,18 +1968,13 @@ class provider_location_repository_t final : public location_repository_t
 
     store_write_result_t write (store_write_request_t request,
                                 const creation_terminal_record_t *terminal = nullptr,
-                                std::chrono::steady_clock::time_point terminal_deadline = {})
+                                std::chrono::milliseconds terminal_retention = {})
     {
         if (terminal) {
-            const auto retention = std::chrono::ceil<std::chrono::milliseconds> (
-              terminal_deadline - std::chrono::steady_clock::now ());
-            if (retention <= std::chrono::milliseconds::zero ())
-                throw std::invalid_argument (
-                  "creation terminal retention elapsed before publication");
             const auto terminal_key = key_creation_terminal (terminal->operation);
             request.conditions.push_back (missing_condition (terminal_key));
             request.mutations.push_back (
-              store_put_t{terminal_key, terminal->terminal_envelope, retention});
+              store_put_t{terminal_key, terminal->terminal_envelope, terminal_retention});
         }
         auto first = _store->write (request).result ();
         if (first)

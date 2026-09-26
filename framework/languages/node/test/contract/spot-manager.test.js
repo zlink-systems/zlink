@@ -3680,7 +3680,7 @@ test('formal Actor Join runtime port preserves fixture order through target Read
       events.push('ready-handler-completed');
     }
   }
-  let deferredJoinRoot;
+  let deferredJoinCompletion;
   const manager = new framework.DefaultZLinkSpotManager({
     spotFactories: [RoomSpot],
     spotActorSendHandlers: [{
@@ -3696,9 +3696,9 @@ test('formal Actor Join runtime port preserves fixture order through target Read
     }],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
     actorTransferRuntime: {
-      async prepareDeferredJoinAccepted() {
-        deferredJoinRoot = { operation: 'public-join' };
-        return deferredJoinRoot;
+      prepareDeferredJoinAccepted() {
+        deferredJoinCompletion = { operation: 'public-join' };
+        return deferredJoinCompletion;
       },
       async materializeRoutedActor() {
         events.push('target-state-restored');
@@ -3724,11 +3724,8 @@ test('formal Actor Join runtime port preserves fixture order through target Read
       async openRoutedActorSession() {
         events.push('session-route-opened');
       },
-      async recoverDeferredJoinAccepted() {
-        return deferredJoinRoot;
-      },
-      async commitAndDeliverDeferredJoinAccepted(root, joinedActor, _currentRef, execute) {
-        assert.equal(root, deferredJoinRoot);
+      async deliverDeferredJoinAccepted(completion, joinedActor, _currentRef, execute) {
+        assert.equal(completion, deferredJoinCompletion);
         assert.equal(joinedActor, actor);
         await execute(async () => {
           events.push('public-join-completed');

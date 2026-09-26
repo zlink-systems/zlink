@@ -275,8 +275,8 @@ export class ZLinkStreamRuntimeManager {
           const bindingOwner = actorSessionBindingRuntimeOwner(this.options.bindingRuntime);
           registerServiceSessionBindingIngressPort(service, {
             actorSlot: (actorId, sessionRid) => bindingOwner.actorSlot(actorId, sessionRid),
-            retainOutbound: (claim, delivery) =>
-              bindingOwner.admitRelocationOutbound(claim, delivery),
+            retainOutbound: (actorId, delivery) =>
+              bindingOwner.retainRelocationOutbound(actorId, delivery),
             clearOutbound: (actorId, error) => bindingOwner.clearRelocation(actorId, error)
           });
           nativeSessionRoutes.set(meshName, {
@@ -457,8 +457,6 @@ export class ZLinkStreamBindingRuntime {
       relocationSnapshot: (actorId, sealId) => this.routes.relocationSnapshot(actorId, sealId),
       retainRelocationOutbound: (actorId, operation, sealId) =>
         this.routes.retainRelocationOutbound(actorId, operation, sealId),
-      admitRelocationOutbound: (claim, operation) =>
-        this.routes.admitRelocationOutbound(claim, operation),
       discardRelocationOutbound: (actorId, sealId, error) =>
         this.routes.discardRelocationOutbound(actorId, sealId, error),
       applyRelocation: (...args) => this.routes.applyRelocation(...args),

@@ -942,6 +942,16 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                     () ->
                                                             new IllegalStateException(
                                                                     "invalid User Spot authority"));
+                            if (authority.user().isEmpty()
+                                     || snapshot.allocation().objectKind()
+                                             != ZLinkPlacementObjectKind.USER_SPOT) {
+                                throw new systems.zlink.framework.runtime.internal.backend
+                                        .ZLinkUserSpotOperationException(
+                                                107, 33, "User Spot authority kind is stale");
+                            }
+                            // Design principles "제어 결정과 요청 수락의 소유", Spot address
+                            // messaging §7.1: the requester only selects the current owner
+                            // route; the target owner alone judges the fenced Close.
                             ZLinkInternalMeshNode source =
                                     routeMeshNodesByName.get(authority.meshName());
                             if (source == null) {

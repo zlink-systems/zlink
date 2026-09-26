@@ -703,7 +703,6 @@ export class ZLinkFrameworkRuntimeHost
       actorTransferRegistry: this.actorTransferRegistry,
       authorityStore: () => this.locationOwner.currentStores?.locationStore,
       currentOwner: () => this.locationOwner.currentRuntime?.currentOwnerToken,
-      relocationStore: () => this.options.registration.locations.relocationStoreInstance,
       liveDescriptors: (meshName, signal) => {
         const runtime = this.locationOwner.currentRuntime;
         if (runtime === undefined) {

@@ -2,7 +2,6 @@ package systems.zlink.framework.runtime.actors;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActor;
@@ -44,6 +43,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongFunction;
+import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.logging.Logger;
@@ -86,9 +86,10 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             new java.util.LinkedHashMap<>();
     private final java.util.HashMap<SessionRelocationKey, RouteFlight> routeFlights =
             new java.util.HashMap<>();
-    private final java.util.HashMap<String, TargetOutboundBinding> targetOutboundBindings =
-            new java.util.HashMap<>();
-    private final AtomicLong bindingGenerations = new AtomicLong();
+    private final java.util.HashMap<String, PushQueue> pushQueues = new java.util.HashMap<>();
+    // Binding generations are unique across every Session of this Session owner
+    // node lifecycle (Session-Actor binding §4). The node owns the counter.
+    private final LongSupplier bindingGenerations;
     private final java.util.HashMap<String, IngressGate> ingressGates = new java.util.HashMap<>();
     private long nextFallbackIngressSequence = 1;
     private int nextActorSlot = 1;
@@ -278,6 +279,35 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             ZLinkStreamCodec defaultCodec,
             ZLinkMessageFlowTracer flow,
             Duration sessionRelocationSealTimeout) {
+        this(
+                spotNode,
+                stream,
+                sessionRid,
+                actors,
+                serializer,
+                routeReady,
+                localActorDispatcher,
+                nativeSessionRelayAttached,
+                defaultCodec,
+                flow,
+                sessionRelocationSealTimeout,
+                new AtomicLong()::incrementAndGet);
+    }
+
+    public ZLinkSessionActorsRuntime(
+            ZLinkInternalSpotNode spotNode,
+            ZLinkBackendStreamSocket stream,
+            RoutingId sessionRid,
+            ZLinkActorRuntime actors,
+            ZLinkMessageSerializer serializer,
+            Predicate<RoutingId> routeReady,
+            LocalActorDispatcher localActorDispatcher,
+            boolean nativeSessionRelayAttached,
+            ZLinkStreamCodec defaultCodec,
+            ZLinkMessageFlowTracer flow,
+            Duration sessionRelocationSealTimeout,
+            LongSupplier bindingGenerations) {
+        this.bindingGenerations = Objects.requireNonNull(bindingGenerations, "bindingGenerations");
         this.spotNode = spotNode;
         this.stream = stream;
         this.sessionRid = sessionRid;
@@ -408,13 +438,11 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                             bindingRoutes.clear();
                             bindingTransitions.clear();
                             List<SealTerminal> seals = List.copyOf(sealTerminals.values());
-                            targetOutboundBindings
+                            pushQueues
                                     .values()
                                     .forEach(
-                                            binding ->
-                                                    binding.stop(
-                                                            TargetOutboundSettlement.SHUTDOWN));
-                            targetOutboundBindings.clear();
+                                            queue -> queue.stop(TargetOutboundSettlement.SHUTDOWN));
+                            pushQueues.clear();
                             List<RouteFlight> routes = List.copyOf(routeFlights.values());
                             routeFlights.clear();
                             sealTerminals.clear();
@@ -787,7 +815,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         if (generation > 0) {
             return generation;
         }
-        generation = bindingGenerations.incrementAndGet();
+        generation = bindingGenerations.getAsLong();
         if (generation <= 0) {
             throw new ZLinkConfigurationException("Session binding generation is exhausted");
         }
@@ -802,14 +830,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
 
     private BindingCleanup installBindingOnLane(ZLinkBoundActor actor) {
         ActorRef current = actor.ref();
-        ZLinkBackendActorRef backendRef =
-                new ZLinkBackendActorRef(
-                        current.nodeRid(), current.actorId(), current.objectGeneration());
-        long nodeGeneration = spotNode == null ? 0L : spotNode.actorNodeGeneration(backendRef);
-        long authorityGeneration =
-                spotNode == null ? 0L : spotNode.actorAuthorityOwnerGeneration(backendRef);
-        long ownerLeaseGeneration =
-                spotNode == null ? 0L : spotNode.actorAuthorityOwnerLeaseGeneration(backendRef);
         long bindingGeneration = actor.bindingGeneration();
         List<HeldIngress> abandoned = List.of();
         SealTerminal abandonedSeal = null;
@@ -818,9 +838,9 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     "Session is closed while installing an Actor binding");
         }
         bound.add(actor);
-        TargetOutboundBinding previousOutbound = targetOutboundBindings.remove(actor.actorId());
-        if (previousOutbound != null) {
-            previousOutbound.stop(TargetOutboundSettlement.SHUTDOWN);
+        PushQueue previousPushes = pushQueues.remove(actor.actorId());
+        if (previousPushes != null) {
+            previousPushes.stop(TargetOutboundSettlement.SHUTDOWN);
         }
         bindingRoutes.put(
                 actor.actorId(),
@@ -829,9 +849,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                         current.objectGeneration(),
                         current.meshName(),
                         current.nodeRid(),
-                        nodeGeneration,
-                        authorityGeneration,
-                        ownerLeaseGeneration,
                         bindingGeneration,
                         0));
         IngressGate previous =
@@ -891,10 +908,9 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                                     .equals(actor.actorId()));
                             if (!replacementExists) {
                                 bindingRoutes.remove(actor.actorId());
-                                TargetOutboundBinding removedOutbound =
-                                        targetOutboundBindings.remove(actor.actorId());
-                                if (removedOutbound != null) {
-                                    removedOutbound.stop(TargetOutboundSettlement.SHUTDOWN);
+                                PushQueue removedPushes = pushQueues.remove(actor.actorId());
+                                if (removedPushes != null) {
+                                    removedPushes.stop(TargetOutboundSettlement.SHUTDOWN);
                                 }
                                 IngressGate removed = ingressGates.remove(actor.actorId());
                                 if (removed != null) {
@@ -1088,8 +1104,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                         "bound Actor is unavailable: " + actorId));
     }
 
-    private record TargetAuthorityFence(long nodeGeneration, long authorityOwnerGeneration) {}
-
     /**
      * Applies relocation command 42 at this Session owner and answers with command 43. Ported from
      * the C++ session-owner handler
@@ -1159,8 +1173,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                             "Session binding is already sealed by another relocation: "
                                     + command.actor().actor().actorId()));
         }
-        observed = observed.withSealFence(command.actor());
-        bindingRoutes.put(command.actor().actor().actorId(), observed);
         sealed =
                 new ZLinkServiceM6BWireCodec.SessionRelocationSealed(
                         command.relocation(),
@@ -1168,19 +1180,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                         command.actor(),
                         command.session());
         gate.seal = command.relocation();
-        String actorId = command.actor().actor().actorId();
-        TargetOutboundBinding outbound = targetOutboundBindings.get(actorId);
-        if (outbound == null) {
-            outbound = new TargetOutboundBinding(command);
-            targetOutboundBindings.put(actorId, outbound);
-        } else if (!outbound.matchesBinding(command)) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException(
-                            "Session relocation seal differs from the active "
-                                    + "outbound binding: "
-                                    + actorId));
-        }
-        installed = new SealTerminal(command, sealed, outbound);
+        installed = new SealTerminal(command, sealed);
         sealTerminals.put(key, installed);
         installed.armDeadline(() -> expireRelocationSeal(installed), sessionRelocationSealTimeout);
         pruneSpentSealTerminals();
@@ -1225,215 +1225,117 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         return gate != null && command.relocation().equals(gate.seal) && gate.activeIngress == 0;
     }
 
-    /** Returns whether this Session binding is the unique owner for command 36. */
-    public boolean matchesBoundSessionSend(
-            RoutingId sourceNodeRid,
-            long sourceNodeGeneration,
-            ZLinkServiceM6BWireCodec.BoundSessionSend command) {
-        Objects.requireNonNull(sourceNodeRid, "sourceNodeRid");
+    /**
+     * Returns whether command 36 names this Session's current binding. Session-Actor binding §3
+     * item 3 and §8.1: ActorId, ObjectGeneration and binding generation are the only admission
+     * inputs; the fence's node, authority and lease fields are not compared here.
+     */
+    public boolean matchesBoundSessionSend(ZLinkServiceM6BWireCodec.BoundSessionSend command) {
         Objects.requireNonNull(command, "command");
-        return inStateLane(
-                () ->
-                        outboundTargetLocked(sourceNodeRid, sourceNodeGeneration, command) != null
-                                || matchesCurrentBoundSessionSendLocked(
-                                        sourceNodeRid, sourceNodeGeneration, command));
-    }
-
-    /** Admits one immutable command-36 payload into the Session-owned FIFO. */
-    public boolean acceptBoundSessionSend(
-            RoutingId sourceNodeRid,
-            long sourceNodeGeneration,
-            ZLinkServiceM6BWireCodec.BoundSessionSend command,
-            ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
-        Objects.requireNonNull(payload, "payload");
-        CurrentOutboundAdmission admission =
-                inStateLane(
-                        () -> {
-                            TargetOutboundTarget target =
-                                    outboundTargetLocked(
-                                            sourceNodeRid, sourceNodeGeneration, command);
-                            if (target != null) {
-                                return new CurrentOutboundAdmission(
-                                        target,
-                                        target.binding().admit(target.epoch(), command, payload),
-                                        false);
-                            } else if (matchesCurrentBoundSessionSendLocked(
-                                    sourceNodeRid, sourceNodeGeneration, command)) {
-                                return new CurrentOutboundAdmission(null, null, true);
-                            }
-                            return new CurrentOutboundAdmission(null, null, false);
-                        });
-        if (admission.current()) {
-            return deliverCurrentBoundSessionSendLocked(command.actor().actor().actorId(), payload);
-        }
-        if (admission.admission() == null || !admission.admission().admitted()) {
-            return false;
-        }
-        startTargetOutboundDrain(admission.target().binding());
-        return true;
+        return inStateLane(() -> isCurrentPushBindingLocked(command));
     }
 
     /** Admits command 36 without blocking its infrastructure receive owner. */
     public CompletionStage<Boolean> acceptBoundSessionSendAsync(
-            RoutingId sourceNodeRid,
-            long sourceNodeGeneration,
             ZLinkServiceM6BWireCodec.BoundSessionSend command,
             ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
+        Objects.requireNonNull(command, "command");
         Objects.requireNonNull(payload, "payload");
         return stateLane
-                .<AsyncBoundSessionAdmission>runAsync(
-                        () -> {
-                            TargetOutboundTarget target =
-                                    outboundTargetLocked(
-                                            sourceNodeRid, sourceNodeGeneration, command);
-                            if (target != null) {
-                                TargetOutboundAdmission admission =
-                                        target.binding().admit(target.epoch(), command, payload);
-                                return new AsyncBoundSessionAdmission(
-                                        CompletableFuture.completedFuture(admission.admitted()),
-                                        admission.admitted() ? target.binding() : null);
-                            } else if (matchesCurrentBoundSessionSendLocked(
-                                    sourceNodeRid, sourceNodeGeneration, command)) {
-                                return new AsyncBoundSessionAdmission(
-                                        deliverCurrentBoundSessionSendAsync(
-                                                command.actor().actor().actorId(), payload),
-                                        null);
-                            }
-                            return new AsyncBoundSessionAdmission(
-                                    CompletableFuture.completedFuture(false), null);
-                        })
+                .<PushDecision>runAsync(() -> decidePushLocked(command, payload))
                 .thenCompose(
-                        admission -> {
-                            if (admission.drain() != null) {
-                                startTargetOutboundDrain(admission.drain());
+                        decision -> {
+                            if (decision.submitted() != null) {
+                                return decision.submitted();
                             }
-                            return admission.completion();
+                            startPushDrain(decision.queue());
+                            return CompletableFuture.completedFuture(
+                                    decision.admission().admitted());
                         });
     }
 
+    /** Admits command 36 and exposes the settlement of its physical STREAM submission. */
     TargetOutboundAdmission admitBoundSessionSend(
-            RoutingId sourceNodeRid,
-            long sourceNodeGeneration,
             ZLinkServiceM6BWireCodec.BoundSessionSend command,
             ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
+        Objects.requireNonNull(command, "command");
         Objects.requireNonNull(payload, "payload");
-        CurrentOutboundAdmission state =
-                inStateLane(
-                        () -> {
-                            TargetOutboundTarget target =
-                                    outboundTargetLocked(
-                                            sourceNodeRid, sourceNodeGeneration, command);
-                            if (target == null) {
-                                return new CurrentOutboundAdmission(
-                                        null,
-                                        TargetOutboundAdmission.rejected(
-                                                TargetOutboundSettlement.REJECTED),
-                                        false);
-                            }
-                            return new CurrentOutboundAdmission(
-                                    target,
-                                    target.binding().admit(target.epoch(), command, payload),
-                                    false);
-                        });
-        TargetOutboundAdmission admission = state.admission();
-        if (admission.admitted()) {
-            startTargetOutboundDrain(state.target().binding());
-        }
-        return admission;
+        PushDecision decision = inStateLane(() -> decidePushLocked(command, payload));
+        startPushDrain(decision.queue());
+        return decision.admission();
     }
 
-    private record CurrentOutboundAdmission(
-            TargetOutboundTarget target, TargetOutboundAdmission admission, boolean current) {}
-
-    private record AsyncBoundSessionAdmission(
-            CompletionStage<Boolean> completion, TargetOutboundBinding drain) {}
-
-    private TargetOutboundTarget outboundTargetLocked(
-            RoutingId sourceNodeRid,
-            long sourceNodeGeneration,
-            ZLinkServiceM6BWireCodec.BoundSessionSend command) {
-        var target = command.actor();
-        // sourceNodeGeneration is a node lifecycle-generation opaque
-        // equality token (.NET ulong, spec 01-glossary "Lifecycle
-        // generation"): full range, only zero is unassigned. A signed
-        // `<= 0` sentinel wrongly rejects a legitimate negative-as-long
-        // value.
-        if (!sourceNodeRid.equals(target.actor().nodeRid())
-                || sourceNodeGeneration == 0
-                || sourceNodeGeneration != target.targetNodeGeneration()) {
-            return null;
+    /**
+     * The Session owner's single command-36 admission decision (Session-Actor binding §3 item 3,
+     * §8.1). A push for the current binding is submitted to the STREAM connection on this lane
+     * unless the binding is sealed for relocation or earlier held pushes still wait; then it joins
+     * the binding's FIFO, which drains once command 44 commit or abort releases the seal.
+     */
+    private PushDecision decidePushLocked(
+            ZLinkServiceM6BWireCodec.BoundSessionSend command,
+            ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
+        if (!isCurrentPushBindingLocked(command)) {
+            return new PushDecision(
+                    null,
+                    TargetOutboundAdmission.rejected(TargetOutboundSettlement.REJECTED),
+                    null);
         }
-        TargetOutboundBinding binding = targetOutboundBindings.get(target.actor().actorId());
-        if (binding == null || binding.stopped) {
-            return null;
+        String actorId = command.actor().actor().actorId();
+        PushQueue queue = pushQueues.get(actorId);
+        if (!pushHeldLocked(actorId) && (queue == null || queue.entries.isEmpty())) {
+            CompletionStage<Boolean> submitted = deliverBoundSessionPushAsync(actorId, payload);
+            return new PushDecision(
+                    null,
+                    new TargetOutboundAdmission(
+                            true,
+                            submitted.handle(
+                                    (ignored, failure) ->
+                                            failure == null
+                                                    ? TargetOutboundSettlement.DELIVERED
+                                                    : TargetOutboundSettlement.REJECTED)),
+                    submitted);
         }
-        TargetOutboundTarget owner =
-                binding.matchesApplied(sourceNodeRid, sourceNodeGeneration, command)
-                        ? new TargetOutboundTarget(binding, binding.currentEpoch)
-                        : null;
-        for (SealTerminal candidate : sealTerminals.values()) {
-            var seal = candidate.seal();
-            boolean sameIdentity =
-                    seal.actor().actor().actorId().equals(target.actor().actorId())
-                            && seal.actor().actor().generation() == target.actor().generation()
-                            && seal.session().bindingGeneration()
-                                    == command.expectedBindingGeneration();
-            TargetOutboundEpoch epoch = candidate.epoch();
-            boolean producerPending =
-                    !candidate.consumed()
-                            && candidate.completion().isDone()
-                            && epoch.matchesProducerPending(
-                                    sourceNodeRid, sourceNodeGeneration, command);
-            if (!sameIdentity || !producerPending || epoch.binding != binding || epoch.aborted) {
-                continue;
-            }
-            TargetOutboundTarget candidateOwner = new TargetOutboundTarget(binding, epoch);
-            if (owner != null && owner.epoch() != epoch) {
-                return null;
-            }
-            owner = candidateOwner;
+        if (queue == null) {
+            queue = new PushQueue(actorId);
+            pushQueues.put(actorId, queue);
         }
-        return owner;
+        return new PushDecision(queue, queue.admit(payload), null);
     }
 
-    private boolean matchesCurrentBoundSessionSendLocked(
-            RoutingId sourceNodeRid,
-            long sourceNodeGeneration,
-            ZLinkServiceM6BWireCodec.BoundSessionSend command) {
-        if (relocationStopped || sourceNodeGeneration == 0) {
+    private boolean isCurrentPushBindingLocked(ZLinkServiceM6BWireCodec.BoundSessionSend command) {
+        if (relocationStopped) {
             return false;
         }
-        var target = command.actor();
-        String actorId = target.actor().actorId();
-        StoredBindingRoute route = bindingRoutes.get(actorId);
+        var actor = command.actor().actor();
+        StoredBindingRoute route = bindingRoutes.get(actor.actorId());
         return route != null
-                && route.actorId().equals(actorId)
-                && route.objectGeneration() == target.actor().generation()
-                && route.nodeRid().equals(sourceNodeRid)
-                && route.nodeRid().equals(target.actor().nodeRid())
-                && route.nodeGeneration() == sourceNodeGeneration
-                && route.nodeGeneration() == target.targetNodeGeneration()
-                && route.authorityOwnerGeneration() == target.authorityOwnerGeneration()
+                && route.objectGeneration() == actor.generation()
                 && route.bindingGeneration() == command.expectedBindingGeneration();
     }
 
-    private boolean deliverCurrentBoundSessionSendLocked(
-            String actorId, ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
-        List<Message> parts = ZLinkServiceM6AWireCodec.decodeFrameworkMultipart(payload);
-        try {
-            return stream.sendBoundSessionPush(
-                    sessionRid, actorSlotFor(actorId), parts, SendFlags.DONT_WAIT);
-        } finally {
-            parts.forEach(Message::close);
-        }
+    private boolean pushHeldLocked(String actorId) {
+        IngressGate gate = ingressGates.get(actorId);
+        return gate != null && gate.seal != null;
     }
 
-    private CompletionStage<Boolean> deliverCurrentBoundSessionSendAsync(
+    //  submitted is the direct STREAM submission; queue is set when the push joined the FIFO.
+    private record PushDecision(
+            PushQueue queue,
+            TargetOutboundAdmission admission,
+            CompletionStage<Boolean> submitted) {}
+
+    private CompletionStage<Boolean> deliverBoundSessionPushAsync(
             String actorId, ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
-        List<Message> parts = ZLinkServiceM6AWireCodec.decodeFrameworkMultipart(payload);
+        return submitBoundSessionPush(actorId, payload).thenApply(ignored -> true);
+    }
+
+    //  Returns the backend physical-admission stage itself, so a stopped FIFO can cancel it.
+    private CompletionStage<Void> submitBoundSessionPush(
+            String actorId, ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
+        List<Message> parts = List.of();
         try {
-            return stream.sendBoundSessionPushAsync(sessionRid, actorSlotFor(actorId), parts)
-                    .thenApply(ignored -> true);
+            parts = ZLinkServiceM6AWireCodec.decodeFrameworkMultipart(payload);
+            return stream.sendBoundSessionPushAsync(sessionRid, actorSlotFor(actorId), parts);
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         } finally {
@@ -1453,83 +1355,69 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 .actorSlot();
     }
 
-    private void startTargetOutboundDrain(TargetOutboundBinding owner) {
-        TargetOutboundEntry pending =
+    private void startPushDrain(PushQueue owner) {
+        if (owner == null) {
+            return;
+        }
+        PushEntry pending =
                 inStateLane(
                         () -> {
-                            if (owner == null
-                                    || owner.stopped
-                                    || owner.drainRunning
-                                    || !owner.headIsDeliverable()) {
+                            if (owner.drainRunning || !pushDrainable(owner)) {
                                 return null;
                             }
                             owner.drainRunning = true;
-                            return owner.queue.peekFirst();
+                            return owner.entries.peekFirst();
                         });
         if (pending == null) {
             return;
         }
-        CompletionStage<Void> submission;
-        List<Message> parts = List.of();
+        CompletableFuture<Void> physical;
         try {
-            parts = ZLinkServiceM6AWireCodec.decodeFrameworkMultipart(pending.payload());
-            submission =
-                    stream.sendBoundSessionPushAsync(
-                            sessionRid,
-                            actorSlotFor(pending.command.actor().actor().actorId()),
-                            parts);
-        } catch (RuntimeException failure) {
-            submission = CompletableFuture.failedFuture(failure);
-        } finally {
-            parts.forEach(Message::close);
-        }
-        CompletableFuture<Void> resolvedPhysical;
-        try {
-            resolvedPhysical =
+            physical =
                     Objects.requireNonNull(
-                            submission.toCompletableFuture(), "physical STREAM admission future");
+                            submitBoundSessionPush(owner.actorId, pending.payload)
+                                    .toCompletableFuture(),
+                            "physical STREAM admission future");
         } catch (RuntimeException failure) {
-            resolvedPhysical = CompletableFuture.failedFuture(failure);
+            physical = CompletableFuture.failedFuture(failure);
         }
-        CompletableFuture<Void> physical = resolvedPhysical;
+        CompletableFuture<Void> submitted = physical;
         boolean cancel =
                 inStateLane(
                         () -> {
-                            boolean cancelled = owner.stopped || owner.queue.peekFirst() != pending;
+                            boolean cancelled =
+                                    owner.stopped || owner.entries.peekFirst() != pending;
                             if (cancelled) {
                                 owner.drainRunning = false;
                             } else {
-                                owner.physicalDrain = physical;
-                                owner.physicalEntry = pending;
+                                owner.physicalDrain = submitted;
                             }
                             return cancelled;
                         });
         if (cancel) {
-            physical.cancel(false);
+            submitted.cancel(false);
             return;
         }
-        physical.whenComplete(
+        submitted.whenComplete(
                 (ignored, failure) -> {
                     DrainCompletion completion =
                             inStateLane(
                                     () -> {
-                                        if (owner.physicalDrain != physical) {
+                                        if (owner.physicalDrain != submitted) {
                                             return null;
                                         }
                                         owner.physicalDrain = null;
-                                        owner.physicalEntry = null;
                                         owner.drainRunning = false;
                                         TargetOutboundSettlement settlement = null;
-                                        if (owner.queue.peekFirst() == pending) {
-                                            owner.queue.removeFirst();
+                                        if (owner.entries.peekFirst() == pending) {
+                                            owner.entries.removeFirst();
                                             settlement =
                                                     failure == null
                                                             ? TargetOutboundSettlement.DELIVERED
                                                             : TargetOutboundSettlement.REJECTED;
                                         }
                                         return new DrainCompletion(
-                                                settlement,
-                                                !owner.stopped && owner.headIsDeliverable());
+                                                settlement, pushDrainable(owner));
                                     });
                     if (completion == null) {
                         return;
@@ -1538,9 +1426,13 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                         pending.settle(completion.settlement());
                     }
                     if (completion.continueDrain()) {
-                        CompletableFuture.runAsync(() -> startTargetOutboundDrain(owner));
+                        CompletableFuture.runAsync(() -> startPushDrain(owner));
                     }
                 });
+    }
+
+    private boolean pushDrainable(PushQueue owner) {
+        return !owner.stopped && !owner.entries.isEmpty() && !pushHeldLocked(owner.actorId);
     }
 
     private record DrainCompletion(TargetOutboundSettlement settlement, boolean continueDrain) {}
@@ -1614,17 +1506,14 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         private final ZLinkServiceM6BWireCodec.SessionRelocationSealed sealed;
         private final CompletableFuture<ZLinkServiceM6BWireCodec.SessionRelocationSealed>
                 completion = new CompletableFuture<>();
-        private final TargetOutboundEpoch outbound;
         private boolean consumed;
         private CompletableFuture<Void> deadline;
 
         private SealTerminal(
                 ZLinkServiceM6BWireCodec.SessionRelocationSeal seal,
-                ZLinkServiceM6BWireCodec.SessionRelocationSealed sealed,
-                TargetOutboundBinding binding) {
+                ZLinkServiceM6BWireCodec.SessionRelocationSealed sealed) {
             this.seal = seal;
             this.sealed = sealed;
-            this.outbound = new TargetOutboundEpoch(seal, binding);
         }
 
         private ZLinkServiceM6BWireCodec.SessionRelocationSeal seal() {
@@ -1641,10 +1530,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
 
         private boolean consumed() {
             return consumed;
-        }
-
-        private TargetOutboundEpoch epoch() {
-            return outbound;
         }
 
         private void consume() {
@@ -1671,20 +1556,14 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
 
         private void fail(Throwable failure) {
             cancelDeadline();
-            rejectOutbound();
             completion.completeExceptionally(failure);
-        }
-
-        private void rejectOutbound() {
-            outbound.binding.reject(outbound);
         }
     }
 
     enum TargetOutboundSettlement {
         DELIVERED,
         REJECTED,
-        SHUTDOWN,
-        BACKPRESSURED
+        SHUTDOWN
     }
 
     record TargetOutboundAdmission(
@@ -1694,224 +1573,45 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         }
     }
 
-    private enum TargetOutboundEntryState {
-        PENDING,
-        ACCEPTED,
-        SETTLED
-    }
-
-    private static final class TargetOutboundEntry {
-        private final ZLinkServiceM6BWireCodec.BoundSessionSend command;
+    private static final class PushEntry {
         private final ZLinkServiceM6AWireCodec.ApplicationPayload payload;
-        private final TargetOutboundEpoch epoch;
         private final CompletableFuture<TargetOutboundSettlement> settlement =
                 new CompletableFuture<>();
         private final AtomicBoolean settled = new AtomicBoolean();
-        private TargetOutboundEntryState state;
 
-        private TargetOutboundEntry(
-                ZLinkServiceM6BWireCodec.BoundSessionSend command,
-                ZLinkServiceM6AWireCodec.ApplicationPayload payload,
-                TargetOutboundEpoch epoch,
-                TargetOutboundEntryState state) {
-            this.command = Objects.requireNonNull(command, "command");
+        private PushEntry(ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
             this.payload = Objects.requireNonNull(payload, "payload");
-            this.epoch = Objects.requireNonNull(epoch, "epoch");
-            this.state = Objects.requireNonNull(state, "state");
-        }
-
-        private ZLinkServiceM6AWireCodec.ApplicationPayload payload() {
-            return payload;
-        }
-
-        private boolean deliverable() {
-            return state == TargetOutboundEntryState.ACCEPTED && epoch.applied && !epoch.aborted;
-        }
-
-        private boolean accept(
-                ZLinkServiceM6BWireCodec.SessionRelocationRoute route, TargetAuthorityFence fence) {
-            if (!epoch.matchesAccepted(command, route, fence)) {
-                settle(TargetOutboundSettlement.REJECTED);
-                return false;
-            }
-            state = TargetOutboundEntryState.ACCEPTED;
-            return true;
         }
 
         private void settle(TargetOutboundSettlement result) {
             if (settled.compareAndSet(false, true)) {
-                state = TargetOutboundEntryState.SETTLED;
                 settlement.completeAsync(() -> result);
             }
         }
     }
 
-    private static final class TargetOutboundEpoch {
-        private final ZLinkServiceM6BWireCodec.SessionRelocationSeal seal;
-        private final TargetOutboundBinding binding;
-        private ZLinkServiceM6BWireCodec.SessionRelocationRoute appliedRoute;
-        private TargetAuthorityFence acceptedFence;
-        private boolean applied;
-        private boolean aborted;
-
-        private TargetOutboundEpoch(
-                ZLinkServiceM6BWireCodec.SessionRelocationSeal seal,
-                TargetOutboundBinding binding) {
-            this.seal = Objects.requireNonNull(seal, "seal");
-            this.binding = Objects.requireNonNull(binding, "binding");
-        }
-
-        private boolean matchesProducerPending(
-                RoutingId sourceNodeRid,
-                long sourceNodeGeneration,
-                ZLinkServiceM6BWireCodec.BoundSessionSend command) {
-            if (aborted) {
-                return false;
-            }
-            var actor = command.actor();
-            return sourceNodeRid.equals(actor.actor().nodeRid())
-                    && sourceNodeGeneration == actor.targetNodeGeneration()
-                    && actor.authorityOwnerGeneration() > seal.actor().authorityOwnerGeneration()
-                    && actor.ownerLeaseGeneration() > 0;
-        }
-
-        private boolean matchesAccepted(
-                ZLinkServiceM6BWireCodec.BoundSessionSend command,
-                ZLinkServiceM6BWireCodec.SessionRelocationRoute route,
-                TargetAuthorityFence fence) {
-            if (route == null || fence == null) {
-                return false;
-            }
-            var actor = command.actor();
-            return actor.actor().nodeRid().equals(route.targetNodeRid())
-                    && actor.targetNodeGeneration() == route.targetNodeGeneration()
-                    && actor.actor().actorId().equals(route.actor().actorId())
-                    && actor.actor().generation() == route.actor().generation()
-                    && actor.targetNodeGeneration() == fence.nodeGeneration()
-                    && actor.authorityOwnerGeneration() == fence.authorityOwnerGeneration()
-                    && command.expectedBindingGeneration() == route.session().bindingGeneration();
-        }
-    }
-
-    private static final class TargetOutboundBinding {
+    /**
+     * The FIFO of one binding's pushes held behind its relocation seal, or queued behind held
+     * pushes that are still draining, so a later push never overtakes an earlier one.
+     */
+    private static final class PushQueue {
         private final String actorId;
-        private final long objectGeneration;
-        private final RoutingId sessionRid;
-        private final long bindingGeneration;
-        private final ArrayDeque<TargetOutboundEntry> queue = new ArrayDeque<>();
-        private TargetOutboundEpoch currentEpoch;
+        private final ArrayDeque<PushEntry> entries = new ArrayDeque<>();
         private CompletableFuture<Void> physicalDrain;
-        private TargetOutboundEntry physicalEntry;
         private boolean drainRunning;
         private boolean stopped;
 
-        private TargetOutboundBinding(ZLinkServiceM6BWireCodec.SessionRelocationSeal seal) {
-            actorId = seal.actor().actor().actorId();
-            objectGeneration = seal.actor().actor().generation();
-            sessionRid = seal.session().sessionRid();
-            bindingGeneration = seal.session().bindingGeneration();
+        private PushQueue(String actorId) {
+            this.actorId = actorId;
         }
 
-        private boolean matchesBinding(ZLinkServiceM6BWireCodec.SessionRelocationSeal seal) {
-            return actorId.equals(seal.actor().actor().actorId())
-                    && objectGeneration == seal.actor().actor().generation()
-                    && sessionRid.equals(seal.session().sessionRid())
-                    && bindingGeneration == seal.session().bindingGeneration();
-        }
-
-        private boolean matchesApplied(
-                RoutingId sourceNodeRid,
-                long sourceNodeGeneration,
-                ZLinkServiceM6BWireCodec.BoundSessionSend command) {
-            return currentEpoch != null
-                    && currentEpoch.applied
-                    && !currentEpoch.aborted
-                    && sourceNodeRid.equals(command.actor().actor().nodeRid())
-                    && sourceNodeGeneration == command.actor().targetNodeGeneration()
-                    && currentEpoch.matchesAccepted(
-                            command, currentEpoch.appliedRoute, currentEpoch.acceptedFence);
-        }
-
-        private TargetOutboundAdmission admit(
-                TargetOutboundEpoch epoch,
-                ZLinkServiceM6BWireCodec.BoundSessionSend command,
-                ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
+        private TargetOutboundAdmission admit(ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
             if (stopped) {
                 return TargetOutboundAdmission.rejected(TargetOutboundSettlement.SHUTDOWN);
             }
-            TargetOutboundEntryState state =
-                    epoch.acceptedFence == null
-                            ? TargetOutboundEntryState.PENDING
-                            : TargetOutboundEntryState.ACCEPTED;
-            TargetOutboundEntry entry = new TargetOutboundEntry(command, payload, epoch, state);
-            if (state == TargetOutboundEntryState.ACCEPTED) {
-                boolean accepted = entry.accept(epoch.appliedRoute, epoch.acceptedFence);
-                if (!accepted) {
-                    return new TargetOutboundAdmission(false, entry.settlement);
-                }
-            }
-            queue.addLast(entry);
+            PushEntry entry = new PushEntry(payload);
+            entries.addLast(entry);
             return new TargetOutboundAdmission(true, entry.settlement);
-        }
-
-        private void acceptProof(
-                TargetOutboundEpoch epoch,
-                ZLinkServiceM6BWireCodec.SessionRelocationRoute route,
-                TargetAuthorityFence fence) {
-            if (epoch.binding != this || epoch.aborted || !sealMatchesRoute(epoch.seal, route)) {
-                throw new ZLinkConfigurationException(
-                        "target outbound route differs from its Session seal");
-            }
-            if (epoch.acceptedFence != null
-                    && (!epoch.appliedRoute.equals(route) || !epoch.acceptedFence.equals(fence))) {
-                throw new ZLinkConfigurationException(
-                        "target outbound proof changed during route apply");
-            }
-            epoch.appliedRoute = Objects.requireNonNull(route, "route");
-            epoch.acceptedFence = Objects.requireNonNull(fence, "fence");
-            var iterator = queue.iterator();
-            while (iterator.hasNext()) {
-                TargetOutboundEntry entry = iterator.next();
-                if (entry.epoch == epoch
-                        && entry.state == TargetOutboundEntryState.PENDING
-                        && !entry.accept(route, fence)) {
-                    iterator.remove();
-                }
-            }
-        }
-
-        private void apply(TargetOutboundEpoch epoch) {
-            if (epoch.acceptedFence == null || epoch.aborted) {
-                throw new ZLinkConfigurationException("target outbound proof was not accepted");
-            }
-            epoch.applied = true;
-            currentEpoch = epoch;
-        }
-
-        private boolean headIsDeliverable() {
-            return !stopped && !queue.isEmpty() && queue.peekFirst().deliverable();
-        }
-
-        private void reject(TargetOutboundEpoch epoch) {
-            epoch.aborted = true;
-            CompletableFuture<Void> active =
-                    physicalEntry != null && physicalEntry.epoch == epoch ? physicalDrain : null;
-            if (active != null) {
-                physicalDrain = null;
-                physicalEntry = null;
-                drainRunning = false;
-            }
-            var iterator = queue.iterator();
-            while (iterator.hasNext()) {
-                TargetOutboundEntry entry = iterator.next();
-                if (entry.epoch == epoch) {
-                    iterator.remove();
-                    entry.settle(TargetOutboundSettlement.REJECTED);
-                }
-            }
-            if (active != null) {
-                active.cancel(false);
-            }
         }
 
         private void stop(TargetOutboundSettlement result) {
@@ -1921,19 +1621,16 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             stopped = true;
             CompletableFuture<Void> active = physicalDrain;
             physicalDrain = null;
-            physicalEntry = null;
             drainRunning = false;
-            for (TargetOutboundEntry entry : queue) {
+            for (PushEntry entry : entries) {
                 entry.settle(result);
             }
-            queue.clear();
+            entries.clear();
             if (active != null) {
                 active.cancel(false);
             }
         }
     }
-
-    private record TargetOutboundTarget(TargetOutboundBinding binding, TargetOutboundEpoch epoch) {}
 
     private record SessionRelocationKey(
             ZLinkServiceM6BWireCodec.RelocationIdentity relocation,
@@ -1968,7 +1665,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             ZLinkServiceM6BWireCodec.SessionRelocationRoute command,
             StoredBindingRoute sourceRoute,
             RelocationRouteUpdate update,
-            TargetAuthorityFence targetFence,
             ZLinkBoundActor actor,
             ZLinkBackendActorRef sourceActor,
             ZLinkBackendActorRef targetActor,
@@ -2101,16 +1797,12 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         ZLinkBackendActorRef target =
                 new ZLinkBackendActorRef(
                         update.targetNodeRid(), update.actorId(), update.objectGeneration());
-        TargetAuthorityFence targetFence =
-                new TargetAuthorityFence(
-                        update.targetNodeGeneration(), update.targetAuthorityOwnerGeneration());
         ZLinkBoundActor actor = currentBoundActor(update.actorId());
         flight =
                 new RouteFlight(
                         command,
                         observed,
                         update,
-                        targetFence,
                         actor,
                         new ZLinkBackendActorRef(
                                 observed.nodeRid(),
@@ -2156,12 +1848,15 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 || !command.relocation().equals(gate.seal)) {
             return CompletableFuture.completedFuture(null);
         }
-        terminal.rejectOutbound();
         terminal.consume();
         gate.seal = null;
         held = gate.detachHeld();
         recordRouteTerminalLocked(command);
         pruneSpentSealTerminals();
+        PushQueue pushes = pushQueues.get(command.actor().actorId());
+        if (pushes != null) {
+            CompletableFuture.runAsync(() -> startPushDrain(pushes));
+        }
         resumeHeld(held);
         return CompletableFuture.completedFuture(null);
     }
@@ -2195,7 +1890,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 inStateLane(
                         () -> {
                             List<HeldIngress> held = null;
-                            TargetOutboundBinding outboundOwner = null;
+                            PushQueue pushes = null;
                             Throwable failure = null;
                             SessionRelocationKey key = relocationKey(flight.command());
                             StoredBindingRoute current =
@@ -2231,34 +1926,30 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                         + " preparation: "
                                                         + flight.command().actor().actorId());
                             } else {
-                                outboundOwner = seal.epoch().binding;
-                                outboundOwner.acceptProof(
-                                        seal.epoch(), flight.command(), flight.targetFence());
                                 flight.actor().commitPreparedNativeActorRoute(flight.targetActor());
                                 bindingRoutes.put(
                                         flight.command().actor().actorId(),
-                                        current.toTarget(flight.update(), flight.targetFence()));
-                                outboundOwner.apply(seal.epoch());
+                                        current.toTarget(flight.update()));
                                 seal.consume();
                                 gate.seal = null;
                                 held = gate.detachHeld();
                                 recordRouteTerminalLocked(flight.command());
                                 routeFlights.remove(key, flight);
                                 pruneSpentSealTerminals();
+                                pushes = pushQueues.get(flight.command().actor().actorId());
                             }
-                            return new RouteCommitState(held, outboundOwner, failure);
+                            return new RouteCommitState(held, pushes, failure);
                         });
         if (state.failure() != null) {
             compensateRouteFlight(flight, state.failure());
             return;
         }
-        startTargetOutboundDrain(state.outboundOwner());
+        startPushDrain(state.pushes());
         resumeHeld(state.held());
         flight.completion().completeAsync(() -> null);
     }
 
-    private record RouteCommitState(
-            List<HeldIngress> held, TargetOutboundBinding outboundOwner, Throwable failure) {}
+    private record RouteCommitState(List<HeldIngress> held, PushQueue pushes, Throwable failure) {}
 
     private void compensateRouteFlight(RouteFlight flight, Throwable failure) {
         CompletionStage<Void> compensation;
@@ -2335,9 +2026,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             long objectGeneration,
             String meshName,
             RoutingId nodeRid,
-            long nodeGeneration,
-            long authorityOwnerGeneration,
-            long ownerLeaseGeneration,
             long bindingGeneration,
             long lastAcceptedSessionSequence) {
         boolean matchesSource(RelocationRouteUpdate update) {
@@ -2347,16 +2035,12 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     && bindingGeneration == update.bindingGeneration();
         }
 
-        StoredBindingRoute toTarget(
-                RelocationRouteUpdate update, TargetAuthorityFence targetFence) {
+        StoredBindingRoute toTarget(RelocationRouteUpdate update) {
             return new StoredBindingRoute(
                     actorId,
                     objectGeneration,
                     meshName,
                     update.targetNodeRid(),
-                    targetFence.nodeGeneration(),
-                    targetFence.authorityOwnerGeneration(),
-                    0,
                     bindingGeneration,
                     lastAcceptedSessionSequence);
         }
@@ -2367,37 +2051,13 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     objectGeneration,
                     meshName,
                     targetActor.nodeRid(),
-                    nodeGeneration,
-                    authorityOwnerGeneration,
-                    ownerLeaseGeneration,
                     bindingGeneration,
                     lastAcceptedSessionSequence);
         }
 
         StoredBindingRoute withAcceptedHighWater(long highWater) {
             return new StoredBindingRoute(
-                    actorId,
-                    objectGeneration,
-                    meshName,
-                    nodeRid,
-                    nodeGeneration,
-                    authorityOwnerGeneration,
-                    ownerLeaseGeneration,
-                    bindingGeneration,
-                    highWater);
-        }
-
-        StoredBindingRoute withSealFence(ZLinkServiceM6BWireCodec.ActorRouteFence fence) {
-            return new StoredBindingRoute(
-                    actorId,
-                    objectGeneration,
-                    meshName,
-                    nodeRid,
-                    fence.targetNodeGeneration(),
-                    fence.authorityOwnerGeneration(),
-                    fence.ownerLeaseGeneration(),
-                    bindingGeneration,
-                    lastAcceptedSessionSequence);
+                    actorId, objectGeneration, meshName, nodeRid, bindingGeneration, highWater);
         }
     }
 

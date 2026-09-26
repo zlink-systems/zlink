@@ -7,11 +7,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
+import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
+import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkStreamRuntimeBoundSessionSendDemuxTest {
@@ -32,43 +38,60 @@ final class ZLinkStreamRuntimeBoundSessionSendDemuxTest {
     @Test
     void rawCommand36RequiresExactlyOneSessionOwner() {
         AtomicInteger accepted = new AtomicInteger();
-        ZLinkStreamRuntime.BoundSessionSendOwner first = matchingOwner(accepted);
-        ZLinkStreamRuntime.BoundSessionSendOwner second = matchingOwner(accepted);
+        ZLinkStreamRuntime.BoundSessionSendOwner first = owner(true, accepted);
+        ZLinkStreamRuntime.BoundSessionSendOwner second = owner(true, accepted);
 
-        assertFalse(
-                ZLinkStreamRuntime.dispatchBoundSessionSend(
-                        List.of(), TARGET, TARGET_GENERATION, COMMAND, PAYLOAD));
+        assertFalse(dispatch(List.of(), null));
         assertEquals(0, accepted.get());
 
-        assertTrue(
-                ZLinkStreamRuntime.dispatchBoundSessionSend(
-                        List.of(first), TARGET, TARGET_GENERATION, COMMAND, PAYLOAD));
+        assertTrue(dispatch(List.of(first), null));
         assertEquals(1, accepted.get());
 
-        assertFalse(
-                ZLinkStreamRuntime.dispatchBoundSessionSend(
-                        List.of(first, second), TARGET, TARGET_GENERATION, COMMAND, PAYLOAD));
+        assertFalse(dispatch(List.of(first, second), null));
         assertEquals(1, accepted.get(), "an ambiguous command 36 must not enter either owner FIFO");
     }
 
-    private static ZLinkStreamRuntime.BoundSessionSendOwner matchingOwner(AtomicInteger accepted) {
+    @Test
+    void rejectedCommand36IsTracedAndAdmittedOneIsNot() {
+        AtomicInteger accepted = new AtomicInteger();
+        ZLinkMessageFlowTracer flow = flow();
+
+        assertFalse(dispatch(List.of(owner(false, accepted)), flow));
+        assertEquals(1, flow.tracedCount(), "a push refused as not current is traced");
+
+        assertTrue(dispatch(List.of(owner(true, accepted)), flow));
+        assertEquals(1, flow.tracedCount(), "an admitted push adds no rejection trace");
+    }
+
+    private static boolean dispatch(
+            List<? extends ZLinkStreamRuntime.BoundSessionSendOwner> owners,
+            ZLinkMessageFlowTracer flow) {
+        return ZLinkStreamRuntime.dispatchBoundSessionSend(owners, flow, TARGET, COMMAND, PAYLOAD)
+                .toCompletableFuture()
+                .join();
+    }
+
+    private static ZLinkMessageFlowTracer flow() {
+        ZLinkDispatchOptionsRegistration options = new ZLinkDispatchOptionsRegistration();
+        options.messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+        return new ZLinkMessageFlowTracer(
+                options, ZLinkHandlerActivator.reflection(), Runnable::run);
+    }
+
+    private static ZLinkStreamRuntime.BoundSessionSendOwner owner(
+            boolean current, AtomicInteger accepted) {
         return new ZLinkStreamRuntime.BoundSessionSendOwner() {
             @Override
-            public boolean matches(
-                    RoutingId sourceNodeRid,
-                    long sourceNodeGeneration,
-                    ZLinkServiceM6BWireCodec.BoundSessionSend command) {
-                return true;
+            public boolean matches(ZLinkServiceM6BWireCodec.BoundSessionSend command) {
+                return current;
             }
 
             @Override
-            public boolean accept(
-                    RoutingId sourceNodeRid,
-                    long sourceNodeGeneration,
+            public CompletionStage<Boolean> acceptAsync(
                     ZLinkServiceM6BWireCodec.BoundSessionSend command,
                     ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
                 accepted.incrementAndGet();
-                return true;
+                return CompletableFuture.completedFuture(true);
             }
         };
     }

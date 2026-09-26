@@ -106,7 +106,6 @@ import { buildAdvertisedEndpoint } from '../../../contracts/Configuration/Endpoi
 import { ZLinkConfigurationException } from '../../../contracts/Configuration/ConfigurationException';
 import type {
   ZLinkBackendActorRef,
-  ZLinkBackendActorSessionSendFence,
   ZLinkBackendObjectPlacement,
   ZLinkBackendMeshNode
 } from '../contracts';
@@ -1339,14 +1338,12 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     actor: ZLinkBackendActorRef,
     expectedBindingGeneration: bigint,
     parts: MessageLike | readonly MessageLike[],
-    _flags?: number,
-    actorFence?: ZLinkBackendActorSessionSendFence
+    _flags?: number
   ): Promise<SubmitResultValue> {
     return (await this.requireStateful().sendBoundSession(
       actor,
       expectedBindingGeneration,
-      encodeMultipart(parts),
-      actorFence
+      encodeMultipart(parts)
     )) as SubmitResultValue;
   }
 

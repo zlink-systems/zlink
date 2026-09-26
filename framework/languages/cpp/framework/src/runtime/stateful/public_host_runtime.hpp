@@ -335,7 +335,6 @@ struct bound_session_operations_t
       commit_relocation_route;
     std::function<bool (const protocol::session_relocation_route_t &, std::uint64_t)>
       prepare_relocation_target_route;
-    std::function<bool (const protocol::bound_session_send_t &)> confirm_remote_tenure;
     std::function<std::optional<delivery_capability_t> (const protocol::bound_session_send_t &)>
       capture_send;
 };

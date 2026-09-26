@@ -92,16 +92,8 @@ export interface ZLinkActorJoinCoordinator {
    * lookup. This is an internal ordering fence; it is not part of the public
    * actor context contract.
    */
-  beginDeferredJoin?(
-    actor: ZLinkActor,
-    state: ZLinkActorRuntimeState,
-    operationId: import('../../contracts').ZLinkActorJoinOperationId
-  ): void;
-  abortDeferredJoin?(
-    actor: ZLinkActor,
-    state: ZLinkActorRuntimeState,
-    operationId: import('../../contracts').ZLinkActorJoinOperationId
-  ): Promise<void>;
+  beginDeferredJoin?(actor: ZLinkActor, state: ZLinkActorRuntimeState): void;
+  abortDeferredJoin?(actor: ZLinkActor, state: ZLinkActorRuntimeState): Promise<void>;
   joinSpot(
     actor: ZLinkActor,
     state: ZLinkActorRuntimeState,

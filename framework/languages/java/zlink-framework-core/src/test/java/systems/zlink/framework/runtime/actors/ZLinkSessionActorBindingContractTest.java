@@ -344,16 +344,76 @@ final class ZLinkSessionActorBindingContractTest {
     }
 
     @Test
-    void boundSessionSendUsesOnlySourceThreeAndExpectedBinding() {
+    void boundSessionSendAdmitsTheCurrentBindingWhateverItsFenceLifecycleFields() {
         FakeStream stream = new FakeStream();
         ZLinkSessionActorsRuntime runtime =
                 runtime(stream, authoritySpotNode(Map.of(NODE_A, new ActorAuthority(3, 9, 4))));
         runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
-        var payload = outboundPayload("projection-independent");
 
-        assertTrue(
-                runtime.acceptBoundSessionSend(NODE_A, 3, boundSend(NODE_A, 3, 9, 400), payload));
-        assertEquals(List.of("projection-independent"), stream.boundPushes);
+        assertTrue(push(runtime, boundSend(NODE_A, 3, 9, 400), "lease-advanced"));
+        assertTrue(push(runtime, boundSend(NODE_A, 3, 10, 5), "authority-advanced"));
+        assertTrue(push(runtime, boundSend(NODE_B, 8, 11, 6), "route-copy-differs"));
+        assertEquals(
+                List.of("lease-advanced", "authority-advanced", "route-copy-differs"),
+                stream.boundPushes);
+    }
+
+    @Test
+    void boundSessionSendRejectsOnlyAnotherBindingIdentity() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime =
+                runtime(stream, authoritySpotNode(Map.of(NODE_A, new ActorAuthority(3, 9, 4))));
+        runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+
+        assertFalse(
+                push(runtime, boundSend(NODE_A, 3, 9, 4, 7, BINDING_GENERATION + 1), "binding"));
+        assertFalse(push(runtime, boundSend(NODE_A, 3, 9, 4, 8, BINDING_GENERATION), "object"));
+        assertTrue(stream.boundPushes.isEmpty());
+    }
+
+    @Test
+    void sealedBindingHoldsEveryPushUntilTheRouteCommits() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime =
+                runtime(
+                        stream,
+                        authoritySpotNode(
+                                Map.of(
+                                        NODE_A, new ActorAuthority(3, 9, 4),
+                                        NODE_B, new ActorAuthority(4, 9, 4))));
+        runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+        var relocation = relocation();
+        runtime.applyRelocationSealCommand(seal(relocation, 7, NODE_A, 9))
+                .toCompletableFuture()
+                .join();
+
+        assertTrue(push(runtime, boundSend(NODE_A, 3, 9, 4), "source-while-sealed"));
+        assertTrue(push(runtime, boundSend(NODE_B, 4, 9, 4), "target-while-sealed"));
+        assertEquals(List.of(), stream.boundPushes);
+
+        runtime.applyRelocationRouteCommand(route(relocation)).toCompletableFuture().join();
+
+        awaitBoundPushes(stream, 2);
+        assertEquals(List.of("source-while-sealed", "target-while-sealed"), stream.boundPushes);
+    }
+
+    @Test
+    void abortedRelocationSubmitsTheHeldPushesInOrder() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime =
+                runtime(stream, authoritySpotNode(Map.of(NODE_A, new ActorAuthority(3, 9, 4))));
+        runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+        var relocation = relocation();
+        runtime.applyRelocationSealCommand(seal(relocation, 7, NODE_A, 9))
+                .toCompletableFuture()
+                .join();
+
+        assertTrue(push(runtime, boundSend(NODE_B, 4, 10, 5), "held-first"));
+        assertTrue(push(runtime, boundSend(NODE_A, 3, 9, 4), "held-second"));
+        runtime.applyRelocationRouteCommand(abort(relocation)).toCompletableFuture().join();
+
+        awaitBoundPushes(stream, 2);
+        assertEquals(List.of("held-first", "held-second"), stream.boundPushes);
     }
 
     @Test
@@ -366,10 +426,10 @@ final class ZLinkSessionActorBindingContractTest {
 
         CompletionStage<Boolean> first =
                 runtime.acceptBoundSessionSendAsync(
-                        NODE_A, 3, boundSend(NODE_A, 3, 9, 400), outboundPayload("first"));
+                        boundSend(NODE_A, 3, 9, 400), outboundPayload("first"));
         CompletionStage<Boolean> second =
                 runtime.acceptBoundSessionSendAsync(
-                        NODE_A, 3, boundSend(NODE_A, 3, 9, 400), outboundPayload("second"));
+                        boundSend(NODE_A, 3, 9, 400), outboundPayload("second"));
 
         awaitBoundPushAdmissions(stream, 2);
         assertEquals(List.of("first", "second"), stream.boundPushes);
@@ -684,13 +744,38 @@ final class ZLinkSessionActorBindingContractTest {
             long nodeGeneration,
             long authorityOwnerGeneration,
             long ownerLeaseGeneration) {
+        return boundSend(
+                nodeRid,
+                nodeGeneration,
+                authorityOwnerGeneration,
+                ownerLeaseGeneration,
+                7,
+                BINDING_GENERATION);
+    }
+
+    private static ZLinkServiceM6BWireCodec.BoundSessionSend boundSend(
+            RoutingId nodeRid,
+            long nodeGeneration,
+            long authorityOwnerGeneration,
+            long ownerLeaseGeneration,
+            long objectGeneration,
+            long bindingGeneration) {
         return new ZLinkServiceM6BWireCodec.BoundSessionSend(
                 new ZLinkServiceM6BWireCodec.ActorRouteFence(
-                        new ZLinkBackendActorRef(nodeRid, "actor-1", 7),
+                        new ZLinkBackendActorRef(nodeRid, "actor-1", objectGeneration),
                         nodeGeneration,
                         authorityOwnerGeneration,
                         ownerLeaseGeneration),
-                BINDING_GENERATION);
+                bindingGeneration);
+    }
+
+    private static boolean push(
+            ZLinkSessionActorsRuntime runtime,
+            ZLinkServiceM6BWireCodec.BoundSessionSend command,
+            String payload) {
+        return runtime.acceptBoundSessionSendAsync(command, outboundPayload(payload))
+                .toCompletableFuture()
+                .join();
     }
 
     private static systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec
@@ -932,10 +1017,7 @@ final class ZLinkSessionActorBindingContractTest {
                         CompletableFuture.supplyAsync(
                                         () ->
                                                 runtime.acceptBoundSessionSendAsync(
-                                                        NODE_A,
-                                                        3,
-                                                        boundSend(NODE_A, 3, 9, 4),
-                                                        payload))
+                                                        boundSend(NODE_A, 3, 9, 4), payload))
                                 .join();
                 command36Observation =
                         queuedCommand

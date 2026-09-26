@@ -224,11 +224,6 @@ internal readonly record struct ZLinkSessionBindingKey(ZLinkActorId ActorId, str
 internal readonly record struct ZLinkSessionOutboundTenure(
     string ActorId,
     ulong ObjectGeneration,
-    string MeshName,
-    RoutingId TargetNodeRid,
-    ulong TargetNodeGeneration,
-    ulong AuthorityOwnerGeneration,
-    ulong OwnerLeaseGeneration,
     string BindingToken,
     ulong BindingGeneration,
     ulong SessionOwnerNodeGeneration,
@@ -241,7 +236,6 @@ internal enum ZLinkSessionOutboundAdmissionKind
     Retained,
     NoBinding,
     WrongSession,
-    Backpressured,
 }
 
 internal enum ZLinkSessionOutboundDelivery
@@ -302,7 +296,6 @@ internal readonly record struct ZLinkSessionBindingTombstone(
 
 internal sealed class ZLinkSessionActorBindingTable
 {
-    private const int DefaultMaxRetainedOutbound = 4_096;
     private static readonly Action<ILogger, string, string, Exception?> LateSessionRouteUpdate =
         LoggerMessage.Define<string, string>(
             LogLevel.Warning,
@@ -313,7 +306,10 @@ internal sealed class ZLinkSessionActorBindingTable
     private readonly Dictionary<ZLinkSessionBindingKey, ZLinkSessionBindingEntry> _entries = new();
     private readonly Dictionary<ZLinkSessionBindingKey, ZLinkSessionBindingTombstone> _tombstones =
         new();
-    private readonly Dictionary<ZLinkSessionBindingKey, Queue<RetainedOutbound>> _outbound = new();
+    private readonly Dictionary<
+        ZLinkSessionBindingKey,
+        Queue<ZLinkSessionOutboundCapability>
+    > _outbound = new();
     private readonly Dictionary<
         ZLinkSessionBindingKey,
         CanonicalSealTimeoutState
@@ -324,7 +320,6 @@ internal sealed class ZLinkSessionActorBindingTable
     private readonly TimeSpan _canonicalRelocationSealTimeout;
     private readonly TimeProvider _timeProvider;
     private readonly int _maxTombstones;
-    private readonly int _maxRetainedOutbound;
     private readonly ILogger? _logger;
 
     private sealed class CanonicalSealTimeoutState(
@@ -357,7 +352,6 @@ internal sealed class ZLinkSessionActorBindingTable
         TimeSpan canonicalRelocationSealTimeout,
         TimeProvider? timeProvider = null,
         int maxTombstones = 4_096,
-        int maxRetainedOutbound = DefaultMaxRetainedOutbound,
         ILogger? logger = null
     )
     {
@@ -365,8 +359,6 @@ internal sealed class ZLinkSessionActorBindingTable
             tombstoneRetention > TimeSpan.Zero ? tombstoneRetention : TimeSpan.FromSeconds(30);
         _timeProvider = timeProvider ?? TimeProvider.System;
         _maxTombstones = maxTombstones > 0 ? maxTombstones : 4_096;
-        _maxRetainedOutbound =
-            maxRetainedOutbound > 0 ? maxRetainedOutbound : DefaultMaxRetainedOutbound;
         _logger = logger;
         _canonicalRelocationSealTimeout = canonicalRelocationSealTimeout;
         if (
@@ -455,7 +447,7 @@ internal sealed class ZLinkSessionActorBindingTable
         }
 
         List<ZLinkSessionBindingEntry> timedOut = [];
-        List<RetainedOutbound> retained = [];
+        List<ZLinkSessionOutboundCapability> retained = [];
         var ownsTimeout = false;
         await _lane
             .RunAsync(() =>
@@ -501,7 +493,7 @@ internal sealed class ZLinkSessionActorBindingTable
             entry.DrainSignal?.TrySetResult();
             entry.RouteAvailableSignal?.TrySetResult();
         }
-        SettleOutbound(retained, route: null);
+        SettleOutbound(retained, deliver: false);
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
             $"session_relocation_seal_timeout "
                 + $"actor={key.ActorId.Value} "
@@ -545,7 +537,10 @@ internal sealed class ZLinkSessionActorBindingTable
                 entry.Context,
                 ZLinkStreamActorFrames.WithActorSlot(frame, entry.ActorRef.Slot)
             );
-            if (MatchesOutboundTenure(entry.Route, tenure))
+            // 04-session/02-session-actor-binding §3 item 3, §8.1: the current
+            // binding alone admits the push. A sealed binding holds it until
+            // command 44 or the seal timeout settles the seal.
+            if (entry.CanonicalRelocationSeal is null)
             {
                 capability.Settle(deliver: true);
                 return new ZLinkSessionOutboundAdmission(
@@ -553,25 +548,12 @@ internal sealed class ZLinkSessionActorBindingTable
                     capability
                 );
             }
-            if (
-                entry.CanonicalRelocationSeal is null
-                || tenure.TargetNodeRid.IsEmpty
-                || tenure.TargetNodeGeneration == 0
-                || tenure.AuthorityOwnerGeneration == 0
-            )
-                return new ZLinkSessionOutboundAdmission(
-                    ZLinkSessionOutboundAdmissionKind.WrongSession
-                );
             if (!_outbound.TryGetValue(key, out var retained))
             {
-                retained = new Queue<RetainedOutbound>();
+                retained = new Queue<ZLinkSessionOutboundCapability>();
                 _outbound.Add(key, retained);
             }
-            if (retained.Count >= _maxRetainedOutbound)
-                return new ZLinkSessionOutboundAdmission(
-                    ZLinkSessionOutboundAdmissionKind.Backpressured
-                );
-            retained.Enqueue(new RetainedOutbound(tenure, capability));
+            retained.Enqueue(capability);
             return new ZLinkSessionOutboundAdmission(
                 ZLinkSessionOutboundAdmissionKind.Retained,
                 capability
@@ -623,16 +605,7 @@ internal sealed class ZLinkSessionActorBindingTable
         && entry.Context.RoutingId is { } sessionRid
         && sessionRid == tenure.SessionRid;
 
-    private static bool MatchesOutboundTenure(
-        ZLinkSessionBindingRoute route,
-        ZLinkSessionOutboundTenure tenure
-    ) =>
-        string.Equals(route.Ref.ActorId, tenure.ActorId, StringComparison.Ordinal)
-        && route.Ref.ObjectGeneration == tenure.ObjectGeneration
-        && route.AuthorityOwnerGeneration == tenure.AuthorityOwnerGeneration
-        && route.TargetNodeGeneration == tenure.TargetNodeGeneration;
-
-    private List<RetainedOutbound> RemoveOutbound(ZLinkSessionBindingKey key)
+    private List<ZLinkSessionOutboundCapability> RemoveOutbound(ZLinkSessionBindingKey key)
     {
         if (!_outbound.Remove(key, out var outbound))
             return [];
@@ -640,20 +613,13 @@ internal sealed class ZLinkSessionActorBindingTable
     }
 
     private static void SettleOutbound(
-        IEnumerable<RetainedOutbound> retained,
-        ZLinkSessionBindingRoute? route
+        IEnumerable<ZLinkSessionOutboundCapability> retained,
+        bool deliver
     )
     {
-        foreach (var item in retained)
-            item.Capability.Settle(
-                route is { } current && MatchesOutboundTenure(current, item.Tenure)
-            );
+        foreach (var capability in retained)
+            capability.Settle(deliver);
     }
-
-    private readonly record struct RetainedOutbound(
-        ZLinkSessionOutboundTenure Tenure,
-        ZLinkSessionOutboundCapability Capability
-    );
 
     public ValueTask<ZLinkSessionBindingEntry[]> BindAsync(
         ZLinkActorId actorId,
@@ -704,7 +670,7 @@ internal sealed class ZLinkSessionActorBindingTable
                 var replacedKey = new ZLinkSessionBindingKey(actorId, entry.BindingToken);
                 CancelCanonicalSealTimeout(replacedKey);
                 _entries.Remove(replacedKey);
-                SettleOutbound(RemoveOutbound(replacedKey), route: null);
+                SettleOutbound(RemoveOutbound(replacedKey), deliver: false);
                 entry.DrainSignal?.TrySetResult();
                 entry.RouteAvailableSignal?.TrySetResult();
             }
@@ -792,7 +758,7 @@ internal sealed class ZLinkSessionActorBindingTable
             {
                 CancelCanonicalSealTimeout(key);
                 _entries.Remove(key);
-                SettleOutbound(RemoveOutbound(key), route: null);
+                SettleOutbound(RemoveOutbound(key), deliver: false);
                 entry.DrainSignal?.TrySetResult();
                 entry.RouteAvailableSignal?.TrySetResult();
             }
@@ -997,8 +963,7 @@ internal sealed class ZLinkSessionActorBindingTable
     )
     {
         TaskCompletionSource? routeAvailableSignal = null;
-        List<RetainedOutbound> retained = [];
-        ZLinkSessionBindingRoute? retainedRoute = null;
+        List<ZLinkSessionOutboundCapability> retained = [];
         var routed = await _lane
             .RunAsync(() =>
             {
@@ -1091,7 +1056,6 @@ internal sealed class ZLinkSessionActorBindingTable
                         RouteAvailableSignal = null,
                     };
                     retained = RemoveOutbound(key);
-                    retainedRoute = targetRoute;
                 }
                 else
                 {
@@ -1121,7 +1085,6 @@ internal sealed class ZLinkSessionActorBindingTable
                         RouteAvailableSignal = null,
                     };
                     retained = RemoveOutbound(key);
-                    retainedRoute = entry.Route;
                 }
                 routeAvailableSignal = entry.RouteAvailableSignal;
                 return true;
@@ -1129,7 +1092,7 @@ internal sealed class ZLinkSessionActorBindingTable
             .ConfigureAwait(false);
         if (!routed)
             return false;
-        SettleOutbound(retained, retainedRoute);
+        SettleOutbound(retained, deliver: true);
         routeAvailableSignal?.TrySetResult();
         return true;
     }
@@ -1671,7 +1634,7 @@ internal sealed class ZLinkSessionActorBindingTable
             {
                 CancelCanonicalSealTimeout(key);
                 _entries.Remove(key);
-                SettleOutbound(RemoveOutbound(key), route: null);
+                SettleOutbound(RemoveOutbound(key), deliver: false);
                 existing.DrainSignal?.TrySetResult();
                 existing.RouteAvailableSignal?.TrySetResult();
                 afterRemove?.Invoke(existing);
@@ -1823,8 +1786,7 @@ internal sealed class ZLinkSessionActorBindingTable
                 entry.DrainSignal?.TrySetResult();
                 entry.RouteAvailableSignal?.TrySetResult();
             }
-            foreach (var retained in _outbound.Values.SelectMany(static value => value))
-                retained.Capability.Settle(deliver: false);
+            SettleOutbound(_outbound.Values.SelectMany(static value => value), deliver: false);
             _outbound.Clear();
             _entries.Clear();
             _tombstones.Clear();

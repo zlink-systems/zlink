@@ -12,9 +12,12 @@ import { RequestResult, SubmitResult, isZLinkBackendResultError } from '../backe
 import type { ZLinkDispatchErrorReporter } from '../channels/dispatch-error-reporter';
 import {
   ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
+  ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
+  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
   ZLinkDispatchErrorSurface,
   ZLinkDispatchMessageKind
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
+import { flowIfEnabled } from '../diagnostics/message-flow';
 import type {
   RawServiceIngressRecord,
   RawServiceMeshRuntime,
@@ -80,7 +83,6 @@ import {
   type ServiceUserSpotCloseRecord,
   type ServiceUserSpotCreateRecord
 } from './service-stateful-wire-codec';
-import { routingIdsEqual } from '../routing-id';
 import {
   decodeActorJoin28,
   encodeActorJoin28,
@@ -90,6 +92,7 @@ import { canonicalActorJoinHandoffId, routingIdBytes } from './actor-join-recove
 
 import {
   decodeApplicationPayload,
+  decodeApplicationPayloadView,
   encodeApplicationPayload,
   type ServiceApplicationPayload,
   ServiceWireProtocolError
@@ -109,12 +112,6 @@ const ACTOR_ROUTE_NOT_FOUND = 1;
 export interface ServiceSpotMessageFollowSeal {
   readonly key: string;
   readonly serial: bigint;
-}
-
-export interface ServiceBoundSessionSendFence {
-  readonly targetNodeGeneration: bigint;
-  readonly authorityOwnerGeneration: bigint;
-  readonly ownerLeaseGeneration: bigint;
 }
 
 interface ServiceSpotMessageFollowRecord {
@@ -1957,16 +1954,19 @@ export class ServiceStatefulRuntime {
   async sendBoundSession(
     actor: ServiceActorRef,
     expectedBindingGeneration: bigint,
-    payload: ServiceApplicationPayload,
-    senderFence?: ServiceBoundSessionSendFence
+    payload: ServiceApplicationPayload
   ): Promise<number> {
+    // Session–Actor binding §3 item 3: the source sends by binding identity to
+    // the registered route. The header's owner lifecycle fields are this node's
+    // current route values, not send conditions; the Session owner alone
+    // decides whether the binding is current.
     let binding: ServiceSessionBinding;
     try {
       binding = this.registry.validateBoundSession(actor, expectedBindingGeneration);
     } catch {
       return SubmitResult.InvalidState;
     }
-    const actorFence = this.tryBoundSessionSendFence(actor, senderFence);
+    const actorFence = this.tryActorFence(actor);
     if (actorFence === undefined) return SubmitResult.InvalidState;
     const header = encodeBoundSessionSendHeader(actorFence, expectedBindingGeneration);
     return this.submitOneWay(binding.sessionOwnerNodeRid, [
@@ -3665,15 +3665,18 @@ export class ServiceStatefulRuntime {
     record: Extract<ServiceStatefulWireRecord, { readonly kind: 'boundSessionSend' }>,
     payloadFrame: Uint8Array | undefined
   ): Promise<RawServicePumpResult> {
+    // Session–Actor binding §3 item 3, §8.1: this Session owner's binding
+    // record alone decides whether command 36 names the current binding
+    // (ActorId, ObjectGeneration, binding generation; SessionRid is the
+    // record's own). The transport boundary has already authenticated the
+    // source peer, and the header's route fields are not compared here.
+    if (payloadFrame === undefined) return 'protocolError';
     const delivery = this.sessionDeliveries.get(actorKey(record.actor.actor));
     if (
       delivery === undefined ||
-      delivery.binding.bindingGeneration !== record.expectedBindingGeneration ||
-      payloadFrame === undefined ||
-      ingress.sourceNodeGeneration === undefined ||
-      !routingIdsEqual(ingress.sourceRoutingId, record.actor.actor.nodeRid) ||
-      ingress.sourceNodeGeneration !== record.actor.targetNodeGeneration
+      delivery.binding.bindingGeneration !== record.expectedBindingGeneration
     ) {
+      this.traceRejectedBoundSessionSend(ingress, record, payloadFrame);
       return 'protocolError';
     }
     const sessionRid = delivery.binding.sessionRid;
@@ -3697,18 +3700,7 @@ export class ServiceStatefulRuntime {
       }
     };
     const decision = await delivery.bindingIngress?.retainOutbound(
-      {
-        actorId: record.actor.actor.actorId,
-        objectGeneration: record.actor.actor.generation,
-        actorNodeRid: record.actor.actor.nodeRid,
-        actorNodeGeneration: record.actor.targetNodeGeneration,
-        authorityOwnerGeneration: record.actor.authorityOwnerGeneration,
-        ownerLeaseGeneration: record.actor.ownerLeaseGeneration,
-        producerNodeRid: ingress.sourceRoutingId,
-        producerNodeGeneration: ingress.sourceNodeGeneration,
-        sessionIdentity: sessionRid,
-        bindingGeneration: record.expectedBindingGeneration
-      },
+      record.actor.actor.actorId,
       operation
     );
     if (decision === 'retained') return 'application';
@@ -3734,6 +3726,37 @@ export class ServiceStatefulRuntime {
       throw error;
     }
     return 'application';
+  }
+
+  //  Session–Actor binding §3 item 4: a push refused as not current is
+  //  recorded with the closed flow vocabulary (dropped, stream_session, send,
+  //  stale_target) instead of disappearing. Nothing is built while tracing is
+  //  off.
+  private traceRejectedBoundSessionSend(
+    ingress: RawServiceIngressRecord,
+    record: Extract<ServiceStatefulWireRecord, { readonly kind: 'boundSessionSend' }>,
+    payloadFrame: Uint8Array
+  ): void {
+    const tracePoint = flowIfEnabled(this.dispatchErrors?.flow, ZLinkMessageFlowOutcome.Dropped);
+    if (tracePoint === undefined) return;
+    let packetName: string | undefined;
+    try {
+      packetName = decodeApplicationPayloadView(payloadFrame).packetName;
+    } catch (error) {
+      // A malformed payload is still a refused push; it is traced without a
+      // packet name.
+      if (!(error instanceof ServiceWireProtocolError)) throw error;
+    }
+    tracePoint.trace({
+      outcome: ZLinkMessageFlowOutcome.Dropped,
+      surface: ZLinkDispatchErrorSurface.StreamSession,
+      messageKind: ZLinkDispatchMessageKind.Send,
+      ...(packetName === undefined ? {} : { packetName }),
+      ...(this.dispatchErrorMeshName === undefined ? {} : { meshName: this.dispatchErrorMeshName }),
+      sourceRid: ingress.sourceRoutingId,
+      actorId: record.actor.actor.actorId,
+      errorReason: ZLinkDispatchErrorReason.StaleTarget
+    });
   }
 
   private enqueueApplicationFrame(
@@ -5124,34 +5147,6 @@ export class ServiceStatefulRuntime {
     const route = this.tryActorFence(actor);
     if (route === undefined) throw new ServiceStaleGenerationError('actor', actor.actorId);
     return route;
-  }
-
-  private tryBoundSessionSendFence(
-    actor: ServiceActorRef,
-    senderFence: ServiceBoundSessionSendFence | undefined
-  ): ServiceActorRouteFence | undefined {
-    if (
-      senderFence === undefined ||
-      senderFence.targetNodeGeneration !== this.nodeGeneration ||
-      senderFence.authorityOwnerGeneration <= 0n ||
-      senderFence.ownerLeaseGeneration <= 0n
-    ) {
-      return undefined;
-    }
-    const local = actor.nodeRid === this.nodeRid ? this.registry.actor(actor.actorId) : undefined;
-    if (
-      local === undefined ||
-      !sameActorRef(local.ref, actor) ||
-      local.authorityOwnerGeneration !== senderFence.authorityOwnerGeneration
-    ) {
-      return undefined;
-    }
-    return {
-      actor,
-      targetNodeGeneration: senderFence.targetNodeGeneration,
-      authorityOwnerGeneration: senderFence.authorityOwnerGeneration,
-      ownerLeaseGeneration: senderFence.ownerLeaseGeneration
-    };
   }
 
   private tryActorFence(actor: ServiceActorRef): ServiceActorRouteFence | undefined {

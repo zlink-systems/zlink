@@ -2135,8 +2135,6 @@ void app_t::_apply_zlink_framework ()
               try {
                   const auto route = actor_gateway_runtime.bound_session_route (actor);
                   if (!route || !route->session_rid || route->binding_generation == 0
-                      || route->authority_owner_generation == 0
-                      || route->owner_lease_generation == 0
                       || (expected_binding_generation != 0
                           && expected_binding_generation != route->binding_generation)) {
                       co_return result_t<void>::failure (framework_error_kind_t::not_configured,
@@ -2490,9 +2488,6 @@ void app_t::_apply_zlink_framework ()
                                      std::uint64_t target_owner_lease_generation) mutable {
                 return actor_gateway_runtime.prepare_session_relocation_target_route (
                   route, target_owner_lease_generation);
-            },
-            [actor_gateway_runtime] (const runtime::protocol::bound_session_send_t &send) mutable {
-                return actor_gateway_runtime.confirm_session_remote_tenure (send);
             },
             [actor_gateway_runtime,
              stream_runtime] (const runtime::protocol::bound_session_send_t &send) mutable

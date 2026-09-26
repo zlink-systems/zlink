@@ -2540,13 +2540,11 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             sessionNode.setBoundSessionSendHandler(
                     (sourceNodeRid, sourceNodeGeneration, command, payload) -> {
                         boolean accepted =
-                                sessionOwner.matchesBoundSessionSend(
-                                                sourceNodeRid, sourceNodeGeneration, command)
-                                        && sessionOwner.acceptBoundSessionSend(
-                                                sourceNodeRid,
-                                                sourceNodeGeneration,
-                                                command,
-                                                payload);
+                                sessionOwner.matchesBoundSessionSend(command)
+                                        && sessionOwner
+                                                .acceptBoundSessionSendAsync(command, payload)
+                                                .toCompletableFuture()
+                                                .join();
                         return boundPushCalls.incrementAndGet() == 1
                                 ? firstBoundPushSettlement
                                 : CompletableFuture.completedFuture(accepted);
