@@ -76,7 +76,7 @@ func TestRequestSubmitReturnsReply(t *testing.T) {
 	if err := dealer.Connect(endpoint); err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
-	completions := startCompletionPoller(t, dealer)
+	completions := startCompletionPoller(t, ctx, dealer)
 	defer completions.close(t)
 	if err := router.SetReceiveTimeout(5 * time.Second); err != nil {
 		t.Fatalf("SetReceiveTimeout() error = %v", err)

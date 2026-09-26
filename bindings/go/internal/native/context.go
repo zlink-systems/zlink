@@ -94,9 +94,9 @@ const (
 )
 
 func NewContext() (*Context, error) {
-	handle := C.zlink_ctx_new()
+	handle, cerr := C.zlink_ctx_new()
 	if handle == nil {
-		return nil, configErrorFromErrno(currentErrno())
+		return nil, configErrorFromErrno(cgoErrno(cerr))
 	}
 	ctx := &Context{sockets: make(map[*socketCore]struct{})}
 	ctx.handle.Store((*byte)(handle))
@@ -128,7 +128,12 @@ func (c *Context) Close() error {
 	}
 	c.shutdownSocketCompletions()
 	handle := c.raw()
-	if err := closeErrorFromResult(C.zlink_ctx_term(handle)); err != nil {
+	rc, cerr := C.zlink_ctx_shutdown(handle)
+	if err := closeErrorFromCall(rc, cerr); err != nil {
+		return err
+	}
+	rc, cerr = C.zlink_ctx_term(handle)
+	if err := closeErrorFromCall(rc, cerr); err != nil {
 		return err
 	}
 	c.closed.Store(true)
@@ -141,7 +146,8 @@ func (c *Context) Shutdown() error {
 		return nil
 	}
 	c.shutdownSocketCompletions()
-	return closeErrorFromResult(C.zlink_ctx_shutdown(c.raw()))
+	rc, cerr := C.zlink_ctx_shutdown(c.raw())
+	return closeErrorFromCall(rc, cerr)
 }
 
 func (c *Context) registerSocket(socket *socketCore) {
@@ -182,7 +188,8 @@ func (c *Context) RecalculateAutoHwm() error {
 	if c == nil || c.closed.Load() || c.raw() == nil {
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
-	return configErrorFromResult(C.zlink_ctx_auto_hwm_recalculate(c.raw()))
+	nativeResult0, nativeErr0 := C.zlink_ctx_auto_hwm_recalculate(c.raw())
+	return configErrorFromCall(nativeResult0, nativeErr0)
 }
 
 func (c *Context) CoreHwmBudgetSnapshot() (CoreHwmBudgetSnapshot, error) {
@@ -192,7 +199,8 @@ func (c *Context) CoreHwmBudgetSnapshot() (CoreHwmBudgetSnapshot, error) {
 	var raw C.zlink_auto_hwm_budget_snapshot_t
 	raw.abi_version = C.ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1
 	raw.struct_size = C.uint32_t(C.sizeof_zlink_auto_hwm_budget_snapshot_t)
-	if err := configErrorFromResult(C.zlink_ctx_get_auto_hwm_budget_snapshot(c.raw(), &raw)); err != nil {
+	nativeResult1, nativeErr1 := C.zlink_ctx_get_auto_hwm_budget_snapshot(c.raw(), &raw)
+	if err := configErrorFromCall(nativeResult1, nativeErr1); err != nil {
 		return CoreHwmBudgetSnapshot{}, err
 	}
 	var reserved [8]uint64
@@ -219,7 +227,8 @@ func (c *Context) ResetCoreHwmBudgetMetrics() error {
 	if c == nil || c.closed.Load() || c.raw() == nil {
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
-	return configErrorFromResult(C.zlink_ctx_reset_auto_hwm_budget_metrics(c.raw()))
+	nativeResult2, nativeErr2 := C.zlink_ctx_reset_auto_hwm_budget_metrics(c.raw())
+	return configErrorFromCall(nativeResult2, nativeErr2)
 }
 
 func (c *Context) Options() *ContextOptions {
@@ -317,7 +326,8 @@ func (o *ContextOptions) SetThreadNamePrefix(value string) error {
 		ptr = unsafe.Pointer(cstr)
 		n = C.size_t(len(value))
 	}
-	if err := configErrorFromResult(C.zlink_ctx_set_data(ctx.raw(), C.ZLINK_THREAD_NAME_PREFIX, ptr, n)); err != nil {
+	nativeResult3, nativeErr3 := C.zlink_ctx_set_data(ctx.raw(), C.ZLINK_THREAD_NAME_PREFIX, ptr, n)
+	if err := configErrorFromCall(nativeResult3, nativeErr3); err != nil {
 		return err
 	}
 	ctx.optionsMu.Lock()
@@ -486,7 +496,8 @@ func (c *Context) setIntOption(option C.zlink_ctx_option_t, value int) error {
 	if value < math.MinInt32 || value > math.MaxInt32 {
 		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
 	}
-	return configErrorFromResult(ConfigResult(C.zlink_ctx_set(c.raw(), option, C.int(value))))
+	rc, cerr := C.zlink_ctx_set(c.raw(), option, C.int(value))
+	return configErrorFromCall(rc, cerr)
 }
 
 func (c *Context) getIntOption(option C.zlink_ctx_option_t) (int, error) {
@@ -494,9 +505,9 @@ func (c *Context) getIntOption(option C.zlink_ctx_option_t) (int, error) {
 		return 0, &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
 	var result C.zlink_config_result_t
-	value := C.zlink_ctx_get(c.raw(), option, &result)
+	value, cerr := C.zlink_ctx_get(c.raw(), option, &result)
 	if result != 0 {
-		return 0, configErrorFromResult(result)
+		return 0, configErrorFromCall(result, cerr)
 	}
 	return int(value), nil
 }
@@ -506,12 +517,13 @@ func (c *Context) setUint64DataOption(option C.zlink_ctx_option_t, value uint64)
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
 	raw := C.uint64_t(value)
-	return configErrorFromResult(C.zlink_ctx_set_data(
+	nativeResult4, nativeErr4 := C.zlink_ctx_set_data(
 		c.raw(),
 		option,
 		unsafe.Pointer(&raw),
 		C.size_t(unsafe.Sizeof(raw)),
-	))
+	)
+	return configErrorFromCall(nativeResult4, nativeErr4)
 }
 
 func (c *Context) getUint64DataOption(option C.zlink_ctx_option_t) (uint64, error) {
@@ -520,12 +532,13 @@ func (c *Context) getUint64DataOption(option C.zlink_ctx_option_t) (uint64, erro
 	}
 	var raw C.uint64_t
 	size := C.size_t(unsafe.Sizeof(raw))
-	err := configErrorFromResult(C.zlink_ctx_get_data(
+	nativeResult5, nativeErr5 := C.zlink_ctx_get_data(
 		c.raw(),
 		option,
 		unsafe.Pointer(&raw),
 		&size,
-	))
+	)
+	err := configErrorFromCall(nativeResult5, nativeErr5)
 	return uint64(raw), err
 }
 

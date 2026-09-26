@@ -60,7 +60,7 @@ test('observed multipart data survives receive reuse and reply consumption', asy
   const context = zlink.createContext();
   const router = zlink.createRouterSocket(context);
   const dealer = zlink.createDealerSocket(context);
-  const completions = new CompletionPollerDriver(dealer);
+  const completions = new CompletionPollerDriver(context, dealer);
   const received = new zlink.Received();
   try {
     router.bind('inproc://multipart-observed-data');

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
+#include <Runtime/Errors/result_from_errno.hpp>
 #include <zlink/Contracts/Sockets/pubsub_socket_contracts.hpp>
 #include <Runtime/Sockets/detail.hpp>
 #include <Runtime/Sockets/socket_access.hpp>
@@ -39,7 +40,8 @@ make_publish_state (socket_t &socket_,
 // subscription accessor below.
 void throw_last_config_error ()
 {
-    throw config_error_t (detail::config_result_from_errno (zlink_errno ()), zlink_errno ());
+    throw config_error_t (detail::result_from_errno (config_result_t{}, zlink_errno ()),
+                          zlink_errno ());
 }
 
 } // namespace

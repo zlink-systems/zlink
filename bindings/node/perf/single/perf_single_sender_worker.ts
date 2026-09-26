@@ -62,6 +62,12 @@ function signalStatus(port, status: Int32Array, type, code, extra = {}) {
   port.postMessage({ type, ...extra });
 }
 
+/** Publishes the port the socket bound before the `bound` status. */
+function publishBoundPort(status: Int32Array, socket) {
+  const match = /:(\d+)(?:\/.*)?$/.exec(socket.options.lastEndpoint);
+  Atomics.store(status, 1, match ? Number(match[1]) : 0);
+}
+
 function waitForRelease(control: Int32Array) {
   while (Atomics.load(control, 0) === 0) {
     Atomics.wait(control, 0, 0);
@@ -341,6 +347,7 @@ function main() {
         configureTlsServer(socket, transport);
         socket.bind(endpoint);
         trace('pubsub bound');
+        publishBoundPort(status, socket);
         signalStatus(port, status, 'bound', 1);
         // Match C setup_connected_pubsub_pair: both the connecting SUB
         // and the binding PUB must report CONNECTION_READY before the
@@ -375,6 +382,7 @@ function main() {
         ctx.recalculateAutoHwm();
         configureTlsServer(socket, transport);
         socket.bind(endpoint);
+        publishBoundPort(status, socket);
         signalStatus(port, status, 'bound', 1);
         waitForRelease(control);
         runReqRepReplier(socket);

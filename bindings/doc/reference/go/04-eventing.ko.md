@@ -164,8 +164,8 @@ ready, err := poller.Wait(events, time.Second)
 | `AddTimer(timer *Timer, slot uintptr) error` | timer를 socket/fd와 함께 multiplex하도록 등록 |
 | `ModifySocket(socket, events) error` / `ModifyFd(fd, events) error` | 이미 등록된 socket/fd의 감시 event를 교체; `ModifySocket`은 특히 `PollCompletion` flag 변경을 거부한다 — 그 등록 모드는 `RemoveSocket` + `AddSocket`으로만 바꿔야 한다, completion 처리가 Core에서 별도 소유권을 갖기 때문 |
 | `RemoveSocket(socket) error` / `RemoveFd(fd int) error` / `RemoveTimer(timer *Timer) error` | source 등록을 해제 |
-| `Wait(events []PollEvent, timeout time.Duration) (int, error)` | `timeout`까지 block하며 `len(events)`까지 결과를 그 자리에 써 넣음; **`time.Duration`을 받는다**, rust의 raw millisecond `i64`와 다름; native wait이 인터럽트되면(`EINTR`) error가 아니라 `(0, nil)`로 처리한다 |
-| `Size() int` | 현재 등록된 source 개수; 내부 error가 나면 전파하는 대신 `0`을 반환 |
+| `Wait(events []PollEvent, timeout time.Duration) (int, error)` | `timeout`까지 block하며 `len(events)`까지 결과를 그 자리에 써 넣음; **`time.Duration`을 받는다**, rust의 raw millisecond `i64`와 다름; 실패한 wait는 Core의 결과를 담은 `*ConfigError`다(다른 `Wait`가 진행 중이면 `ConfigBusy`, 709) |
+| `Size() (int, error)` | 현재 등록된 source 개수; `Wait`가 진행 중이면 `ConfigBusy`(709) |
 
 **Completion result.** 등록/제거 member는 `error`를 반환한다.
 `Wait`는 `(int, error)`를 반환한다 — ready count.

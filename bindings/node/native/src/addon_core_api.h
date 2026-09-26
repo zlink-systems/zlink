@@ -5,7 +5,6 @@
 #include "addon_common_api.h"
 
 napi_value version (napi_env env, napi_callback_info info);
-napi_value errno_value (napi_env env, napi_callback_info info);
 napi_value strerror_value (napi_env env, napi_callback_info info);
 napi_value has (napi_env env, napi_callback_info info);
 napi_value proxy (napi_env env, napi_callback_info info);

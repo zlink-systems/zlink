@@ -81,7 +81,7 @@ def load_native_library(bind=None):
                 _WINDOWS_DLL_DIRECTORY_HANDLES.append(
                     os.add_dll_directory(str(candidate_path.parent))
                 )
-            lib = ctypes.CDLL(str(candidate_path))
+            lib = ctypes.CDLL(str(candidate_path), use_errno=True)
             if bind is not None:
                 bind(lib)
             return lib

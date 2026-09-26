@@ -172,7 +172,8 @@ type Message struct {
 
 func NewMessage(data []byte) (*Message, error) {
 	m := &Message{}
-	if err := configErrorFromResult(ConfigResult(C.zlink_msg_init_size(&m.msg, C.size_t(len(data))))); err != nil {
+	rc21, errno21 := C.zlink_msg_init_size(&m.msg, C.size_t(len(data)))
+	if err := configErrorFromCall(rc21, errno21); err != nil {
 		return nil, err
 	}
 	if len(data) > 0 {
@@ -187,7 +188,8 @@ func NewMessageWithSize(size int) (*Message, error) {
 		return nil, validationError("message size must be >= 0")
 	}
 	m := &Message{}
-	if err := configErrorFromResult(ConfigResult(C.zlink_msg_init_size(&m.msg, C.size_t(size)))); err != nil {
+	rc22, errno22 := C.zlink_msg_init_size(&m.msg, C.size_t(size))
+	if err := configErrorFromCall(rc22, errno22); err != nil {
 		return nil, err
 	}
 	return m, nil
@@ -199,10 +201,12 @@ func NewMessageString(value string) (*Message, error) {
 
 func (m *Message) clone() (*Message, error) {
 	dup := &Message{}
-	if err := configErrorFromResult(ConfigResult(C.zlink_msg_init(&dup.msg))); err != nil {
+	rc23, errno23 := C.zlink_msg_init(&dup.msg)
+	if err := configErrorFromCall(rc23, errno23); err != nil {
 		return nil, err
 	}
-	if err := configErrorFromResult(ConfigResult(C.zlink_msg_copy(&dup.msg, &m.msg))); err != nil {
+	rc24, errno24 := C.zlink_msg_copy(&dup.msg, &m.msg)
+	if err := configErrorFromCall(rc24, errno24); err != nil {
 		_ = dup.Close()
 		return nil, err
 	}
@@ -224,7 +228,8 @@ func (m *Message) Close() error {
 	if m == nil || m.closed {
 		return nil
 	}
-	if err := configErrorFromResult(ConfigResult(C.zlink_msg_close(&m.msg))); err != nil {
+	rc25, errno25 := C.zlink_msg_close(&m.msg)
+	if err := configErrorFromCall(rc25, errno25); err != nil {
 		return err
 	}
 	m.closed = true

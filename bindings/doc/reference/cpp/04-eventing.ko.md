@@ -99,7 +99,7 @@ size_t count = poller.wait (ready.data (), ready.size (), std::chrono::seconds (
 | `modify_fd(int, poll_event_flag_t)` / `modify(socket_monitor_t&, poll_event_flag_t)` / `modify(socket_t&, poll_event_flag_t)` | — | 이미 등록된 source의 감시 event를 변경 |
 | `remove(socket_monitor_t&)` / `remove(socket_t&)` / `remove(timer_t&)` / `remove_fd(int)` | — | 등록 해제; 각각 `bool` 반환, 등록돼 있었으면 true |
 | `size() const` | — | 현재 등록된 source 개수(`int`) |
-| `close()` | — | poller의 native resource를 해제 |
+| `close()` | — | poller의 native resource를 해제한다. Core가 `EBUSY`를 반환하면 `close_error_t`의 `busy`(401)를 던지고 poller는 유효한 상태로 남는다 |
 | `wait(poll_event_t* events_, size_t capacity_, std::chrono::milliseconds timeout_)` | — | source 하나 이상이 ready 상태이거나 `timeout_`이 지날 때까지 block |
 
 **완료 결과.** 등록/제거 member는 동기다. `wait`는 `timeout_`까지 block하며,

@@ -4,12 +4,13 @@ const zlink = require('@zlink-systems/zlink');
 
 /** Caller-owned public completion poller used by async binding contract tests. */
 export class CompletionPollerDriver {
-  private readonly poller = zlink.createPoller();
+  private readonly poller: any;
   private readonly events: any;
   private closed = false;
 
-  constructor(sockets: any | readonly any[]) {
+  constructor(context: any, sockets: any | readonly any[]) {
     const sources = Array.isArray(sockets) ? sockets : [sockets];
+    this.poller = zlink.createPoller();
     this.events = zlink.createPollEvents(Math.max(1, sources.length));
     try {
       sources.forEach((socket, index) => {

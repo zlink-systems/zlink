@@ -102,7 +102,7 @@ test('public completion owners isolate independent Context shutdown', async () =
       socket.connect(address);
       return socket;
     });
-    const completions = new CompletionPollerDriver(dealers);
+    const completions = new CompletionPollerDriver(ctx, dealers);
     return { ctx, router, dealers, completions };
   });
   const exchange = async (group) => {
@@ -136,7 +136,8 @@ test('public completion owners isolate independent Context shutdown', async () =
       error instanceof zlink.RequestError && error.result === zlink.RequestResult.Terminated);
     groups[0].ctx.shutdown();
     assert.throws(() => groups[0].completions.wait(100), (error: any) =>
-      error instanceof zlink.RecvError && error.result === zlink.RecvResult.Terminated);
+      error instanceof zlink.ConfigError && error.result === zlink.ConfigResult.InternalError
+      && error.nativeErrno === 156384765);
     await rejected;
     await exchange(groups[1]);
     close(groups[0]);

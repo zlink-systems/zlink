@@ -1,6 +1,5 @@
 import errno
 import threading
-import time
 import unittest
 import uuid
 
@@ -94,7 +93,6 @@ class OwnershipContractTests(unittest.TestCase):
                 with zlink.create_pair_socket(context) as receiver:
                     receiver.bind(endpoint)
                     sender.connect(endpoint)
-                    time.sleep(0.05)
                     sender.send().messages(first, second).submit_sync()
 
                     received = zlink.create_received()
@@ -140,7 +138,6 @@ class OwnershipContractTests(unittest.TestCase):
                     router.options.linger_ms = 0
                     router.bind(endpoint)
                     dealer.connect(endpoint)
-                    time.sleep(0.05)
                     failures = []
 
                     def reply_all():
@@ -186,7 +183,6 @@ class OwnershipContractTests(unittest.TestCase):
                     receiver.options.receive_high_water_mark = 1 << 20
                     receiver.bind(endpoint)
                     sender.connect(endpoint)
-                    time.sleep(0.05)
 
                     self.assertFalse(
                         hasattr(sender, "_outbound_record_attempt_gate")

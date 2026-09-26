@@ -125,7 +125,7 @@ test('public completion poller preserves typed request termination during contex
   const ctx = zlink.createContext();
   const router = zlink.createRouterSocket(ctx);
   const dealer = zlink.createDealerSocket(ctx);
-  const completions = new CompletionPollerDriver(dealer);
+  const completions = new CompletionPollerDriver(ctx, dealer);
   const request = new zlink.Received();
   const incoming = new zlink.Received();
   const receiveFailures: unknown[] = [];
@@ -148,7 +148,8 @@ test('public completion poller preserves typed request termination during contex
     request.close();
     ctx.shutdown();
     assert.throws(() => completions.wait(100), (error: any) =>
-      error instanceof zlink.RecvError && error.result === zlink.RecvResult.Terminated);
+      error instanceof zlink.ConfigError && error.result === zlink.ConfigResult.InternalError
+      && error.nativeErrno === 156384765);
     await rejected;
   } finally {
     completions.close(); request.close(); incoming.close(); dealer.close(); router.close(); ctx.close();
@@ -246,6 +247,49 @@ test('readable notifications coexist with public request completion drains', asy
     assert.deepEqual(values, ['data:first', 'data:second']);
   } finally {
     events.close(); poller.close(); request.close(); data.close();
+    dealer.close(); router.close(); ctx.close();
+  }
+});
+
+test('a completion drain that retires the mailbox notification still reports readable progress', async () => {
+  const ctx = zlink.createContext();
+  const router = zlink.createRouterSocket(ctx);
+  const dealer = zlink.createDealerSocket(ctx);
+  const request = new zlink.Received();
+  const data = new zlink.Received();
+  const poller = zlink.createPoller();
+  router.bind('inproc://readable-handler-completion-drain-edge');
+  dealer.connect('inproc://readable-handler-completion-drain-edge');
+  poller.add(dealer, [zlink.PollEventFlag.PollCompletion], 1);
+  const values: string[] = [];
+  let delivered: () => void = () => {};
+  try {
+    dealer.send().message('hello').submit_sync();
+    assert.equal(router.recv(request), true);
+    const peer = request.routingId;
+    request.close();
+    dealer.setReadableHandler(() => {
+      while (dealer.recv(data, zlink.RecvFlags.DontWait)) {
+        values.push(data.parts[0].getString());
+        data.close();
+        delivered();
+      }
+    });
+    // Let the initial drain run and find the pipe empty.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const received = new Promise<void>((resolve) => { delivered = resolve; });
+    // In one JavaScript turn: DATA reaches the dealer, and a completion drain
+    // on the dealer processes its commands before libuv sees the mailbox fd.
+    router.send(peer).message('data').submit_sync();
+    completionOwnerOf(dealer).drain(poller);
+    const outcome = await Promise.race([
+      received.then(() => 'delivered'),
+      delay(2000).then(() => 'no readable notification'),
+    ]);
+    assert.equal(outcome, 'delivered');
+    assert.deepEqual(values, ['data']);
+  } finally {
+    poller.close(); request.close(); data.close();
     dealer.close(); router.close(); ctx.close();
   }
 });

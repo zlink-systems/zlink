@@ -6,7 +6,6 @@ import type {
   ZLinkBackendDealerSocket,
   ZLinkBackendPublisherSocket,
   ZLinkBackendReadablePoller,
-  ZLinkBackendReceived,
   ZLinkBackendRouterSocket,
   ZLinkBackendSocket,
   ZLinkBackendSocketMonitor,
@@ -17,21 +16,12 @@ import type {
   ZLinkMonitoringBackendAdapter,
   ZLinkStreamBackendAdapter
 } from '../contracts';
-import {
-  closeWithBusyRetry,
-  isContextTerminatedError,
-  zlink,
-  type ZLinkBindingModule
-} from './node-backend-adapter-support';
+import { closeBindingHandle, zlink, type ZLinkBindingModule } from './node-backend-adapter-support';
 import { wrapMonitorSocket } from './node-monitor-backend-adapter';
 import { nodeEventLoopPollerOf, wrapSocket } from './node-socket-backend-adapter';
 import { ZLinkNodeMeshBackendAdapter } from './node-mesh-backend-adapter';
 
 export class ZLinkNodeBackendAdapterFactory implements ZLinkBackendAdapterFactory {
-  createReceived(): ZLinkBackendReceived {
-    return new zlink.Received();
-  }
-
   createTopicMessage(): TopicMessage {
     return new zlink.TopicMessage();
   }
@@ -96,7 +86,8 @@ class ZLinkNodeChannelBackendAdapter implements ZLinkChannelBackendAdapter {
 
 class ZLinkNodeStreamBackendAdapter implements ZLinkStreamBackendAdapter {
   createStreamSocket(context: ZLinkBackendContext): ZLinkBackendStreamSocket {
-    const socket = zlink.createStreamSocket(asNodeContext(context));
+    const nodeContext = asNodeContext(context);
+    const socket = zlink.createStreamSocket(nodeContext);
     socket.options.recvMode = zlink.StreamRecvMode.Packet;
     return wrapSocket(socket, true) as unknown as ZLinkBackendStreamSocket;
   }
@@ -148,19 +139,8 @@ class ZLinkNodeBackendContext implements ZLinkBackendContext {
   }
 
   async dispose(): Promise<void> {
-    // Terminal cleanup shuts the context down before terminating it, the same
-    // sequence the .NET reference binding runs inside `Context.Dispose()`
-    // (`zlink_ctx_shutdown` then `zlink_ctx_term`). Without the shutdown signal
-    // termination can block forever waiting on the reaper even after every
-    // socket this runtime owns has been closed.
-    try {
-      this.nativeInstance.shutdown();
-    } catch (error) {
-      if (!isContextTerminatedError(error)) {
-        throw error;
-      }
-    }
-    await closeWithBusyRetry(this.nativeInstance);
+    // Binding Context.close() shuts down and then terminates the native context.
+    closeBindingHandle(this.nativeInstance);
   }
 
   close(): void {

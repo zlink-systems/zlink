@@ -63,10 +63,6 @@ export function isRouteRecvRetryable(error: unknown): boolean {
   );
 }
 
-export function isPollerInterruptedError(error: unknown): boolean {
-  return error instanceof zlink.RecvError && error.nativeErrno === 4;
-}
-
 function isNativeBadAddress(error: { nativeErrno?: unknown; message?: unknown }): boolean {
   return error.nativeErrno === 14 || /Bad address/i.test(String(error.message ?? ''));
 }
@@ -176,32 +172,16 @@ export async function submitBindingRequest(
   }
 }
 
-export async function closeWithBusyRetry(target: { close(): void }): Promise<void> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 8; attempt++) {
-    try {
-      target.close();
-      return;
-    } catch (error) {
-      if (isSuccessfulOrAlreadyShutdownCloseError(error)) {
-        return;
-      }
-      if (!isBusyCloseError(error)) {
-        throw error;
-      }
-      lastError = error;
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    }
+/**
+ * Closes a binding handle once. An already closed or terminated handle counts as
+ * closed. A busy close propagates to the caller.
+ */
+export function closeBindingHandle(target: { close(): void }): void {
+  try {
+    target.close();
+  } catch (error) {
+    if (!isSuccessfulOrAlreadyShutdownCloseError(error)) throw error;
   }
-  throw lastError;
-}
-
-function isBusyCloseError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    'code' in error &&
-    [401, 404].includes((error as { code: number }).code)
-  );
 }
 
 function isSuccessfulOrAlreadyShutdownCloseError(error: unknown): boolean {

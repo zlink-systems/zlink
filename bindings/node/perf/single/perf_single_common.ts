@@ -538,10 +538,26 @@ function parseSingleBinaryArgs(argv) {
   };
 }
 
+/**
+ * The endpoint the sender worker binds. A TCP-family endpoint binds an
+ * OS-assigned port: a port reserved and released earlier can be taken by
+ * another process's connection before the worker binds it.
+ */
+function workerBindEndpoint(endpoint: string): string {
+  return endpoint.replace(/^((?:tcp|tls|ws|wss):\/\/127\.0\.0\.1:)\d+$/, '$1*');
+}
+
+/** The endpoint the worker bound; valid once it reported status 1 (bound). */
+function workerBoundEndpoint(worker: SenderWorker, endpoint: string): string {
+  const port = Atomics.load(senderWorkerState(worker).status, 1);
+  return port > 0 ? endpoint.replace(/:\d+$/, `:${port}`) : endpoint;
+}
+
 function spawnSenderWorker(workerData): SenderWorker {
   const controlBuffer = new SharedArrayBuffer(4);
   const control = new Int32Array(controlBuffer);
-  const statusBuffer = new SharedArrayBuffer(4);
+  // [0] worker status, [1] the TCP port the worker bound (0 when none).
+  const statusBuffer = new SharedArrayBuffer(8);
   const status = new Int32Array(statusBuffer);
   const worker = new Worker(
     path.join(__dirname, 'perf_single_sender_worker.js'),
@@ -625,6 +641,8 @@ module.exports = {
   sendSocketRequired,
   spawnSenderWorker,
   waitForWorkerStatus,
+  workerBindEndpoint,
+  workerBoundEndpoint,
   waitForPostReadySettle,
   waitForMonitorConnectionReady,
 };
@@ -647,6 +665,8 @@ export {
   sendSocketRequired,
   spawnSenderWorker,
   waitForWorkerStatus,
+  workerBindEndpoint,
+  workerBoundEndpoint,
   waitForPostReadySettle,
   waitForMonitorConnectionReady,
 };

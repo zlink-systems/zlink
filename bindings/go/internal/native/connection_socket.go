@@ -126,7 +126,8 @@ func (s *connectionSocket) getPubBoolOption(option C.zlink_pub_option_t) (bool, 
 func (s *connectionSocket) getPubIntOption(option C.zlink_pub_option_t) (int, error) {
 	var raw C.int
 	size := C.size_t(C.sizeof_int)
-	if err := configErrorFromResult(C.zlink_get_pub_option(s.raw(), option, unsafe.Pointer(&raw), &size)); err != nil {
+	nativeResult0, nativeErr0 := C.zlink_get_pub_option(s.raw(), option, unsafe.Pointer(&raw), &size)
+	if err := configErrorFromCall(nativeResult0, nativeErr0); err != nil {
 		return 0, err
 	}
 	return int(raw), nil
@@ -134,7 +135,8 @@ func (s *connectionSocket) getPubIntOption(option C.zlink_pub_option_t) (int, er
 
 func (s *connectionSocket) setPubRoutingIDOption(option C.zlink_pub_option_t, id RoutingID) error {
 	raw := id.toC()
-	return configErrorFromResult(C.zlink_set_pub_option(s.raw(), option, routingIDPointer(&raw), C.size_t(raw.size)))
+	nativeResult1, nativeErr1 := C.zlink_set_pub_option(s.raw(), option, routingIDPointer(&raw), C.size_t(raw.size))
+	return configErrorFromCall(nativeResult1, nativeErr1)
 }
 
 func (s *connectionSocket) setPubBytesOption(option C.zlink_pub_option_t, value []byte) error {
@@ -142,7 +144,8 @@ func (s *connectionSocket) setPubBytesOption(option C.zlink_pub_option_t, value 
 	if len(value) > 0 {
 		ptr = unsafe.Pointer(&value[0])
 	}
-	return configErrorFromResult(C.zlink_set_pub_option(s.raw(), option, ptr, C.size_t(len(value))))
+	nativeResult2, nativeErr2 := C.zlink_set_pub_option(s.raw(), option, ptr, C.size_t(len(value)))
+	return configErrorFromCall(nativeResult2, nativeErr2)
 }
 
 func (s *connectionSocket) getPubBytesOption(option C.zlink_pub_option_t, capHint int) ([]byte, error) {
@@ -151,7 +154,8 @@ func (s *connectionSocket) getPubBytesOption(option C.zlink_pub_option_t, capHin
 	}
 	buf := make([]byte, capHint)
 	size := C.size_t(len(buf))
-	if err := configErrorFromResult(C.zlink_get_pub_option(s.raw(), option, unsafe.Pointer(&buf[0]), &size)); err != nil {
+	nativeResult3, nativeErr3 := C.zlink_get_pub_option(s.raw(), option, unsafe.Pointer(&buf[0]), &size)
+	if err := configErrorFromCall(nativeResult3, nativeErr3); err != nil {
 		return nil, err
 	}
 	return buf[:int(size)], nil
@@ -160,7 +164,8 @@ func (s *connectionSocket) getPubBytesOption(option C.zlink_pub_option_t, capHin
 func (s *connectionSocket) getSubIntOption(option C.zlink_sub_option_t) (int, error) {
 	var raw C.int
 	size := C.size_t(C.sizeof_int)
-	if err := configErrorFromResult(C.zlink_get_sub_option(s.raw(), option, unsafe.Pointer(&raw), &size)); err != nil {
+	nativeResult4, nativeErr4 := C.zlink_get_sub_option(s.raw(), option, unsafe.Pointer(&raw), &size)
+	if err := configErrorFromCall(nativeResult4, nativeErr4); err != nil {
 		return 0, err
 	}
 	return int(raw), nil

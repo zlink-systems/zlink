@@ -49,7 +49,8 @@ enum class connect_result_t : int
     internal_error = 604,
     not_found = 605,
     conflict = 606,
-    busy = 607
+    busy = 607,
+    auth_failed = 608
 };
 
 /// @brief The outcome of reading or applying a configuration option.
@@ -61,7 +62,10 @@ enum class config_result_t : int
     not_supported = 703,
     internal_error = 704,
     invalid_state = 705,
-    not_found = 706
+    not_found = 706,
+    conflict = 707,
+    buffer_too_small = 708,
+    busy = 709
 };
 
 } // namespace zlink

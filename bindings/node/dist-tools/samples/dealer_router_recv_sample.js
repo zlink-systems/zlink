@@ -16,8 +16,8 @@ async function main() {
         try {
             router.bind(endpoint);
             dealer.connect(endpoint);
-            await waitForConnectionReady(routerMonitor, zlink);
-            await waitForConnectionReady(dealerMonitor, zlink);
+            await waitForConnectionReady(ctx, routerMonitor, zlink);
+            await waitForConnectionReady(ctx, dealerMonitor, zlink);
         }
         finally {
             routerMonitor.close();

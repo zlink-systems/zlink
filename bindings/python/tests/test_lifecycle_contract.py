@@ -23,6 +23,8 @@ class _NativeCloseStub:
     def __getattr__(self, name):
         if name == self._method_name:
             return self._close
+        if name == "zlink_ctx_shutdown":
+            return lambda _handle: 0
         if name == "zlink_errno":
             return lambda: errno.EBUSY
         raise AttributeError(name)

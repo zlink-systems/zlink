@@ -4,6 +4,7 @@ package zlink_test
 
 import (
 	"errors"
+	"syscall"
 	"testing"
 	"time"
 
@@ -54,7 +55,7 @@ func TestMonitorPollerLifecycle(t *testing.T) {
 				check(client.Connect(endpoint))
 				check(add())
 				check(modify())
-				if poller.Size() != 1 {
+				if size, err := poller.Size(); err != nil || size != 1 {
 					t.Fatal("expected one registered monitor")
 				}
 				events := make([]zlink.PollEvent, 1)
@@ -93,7 +94,7 @@ func TestMonitorPollerLifecycle(t *testing.T) {
 				check(server.Close())
 				drain(zlink.MonitorEventTypeDisconnected)
 				check(remove())
-				if poller.Size() != 0 {
+				if size, err := poller.Size(); err != nil || size != 0 {
 					t.Fatal("monitor still registered")
 				}
 				replacement, err := ctx.RouterSocket()
@@ -140,25 +141,42 @@ func TestMonitorPollerRejectsInvalidFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer poller.Close()
-	invalid := func(err error) {
+	invalid := func(err error, result zlink.ConfigResult) {
 		t.Helper()
 		var typed *zlink.ConfigError
-		if !errors.As(err, &typed) || typed.Result != zlink.ConfigInvalidArgument {
-			t.Fatalf("expected ConfigInvalidArgument, got %v", err)
+		if !errors.As(err, &typed) || typed.Result != result {
+			t.Fatalf("expected ConfigResult %v, got %v", result, err)
 		}
 	}
-	for _, flags := range []zlink.PollEventFlag{zlink.PollOut, zlink.PollCompletion, zlink.PollIn | zlink.PollOut} {
-		invalid(poller.AddMonitor(monitor, flags, 1))
-		invalid(poller.AddSocket(monitor, flags, 1))
-		if poller.Size() != 0 {
+	for _, test := range []struct {
+		flags       zlink.PollEventFlag
+		result      zlink.ConfigResult
+		nativeErrno syscall.Errno
+	}{
+		{zlink.PollOut, zlink.ConfigNotSupported, syscall.ENOTSUP},
+		{zlink.PollCompletion, zlink.ConfigInvalidArgument, syscall.EINVAL},
+		{zlink.PollIn | zlink.PollOut, zlink.ConfigNotSupported, syscall.ENOTSUP},
+		{zlink.PollIn | zlink.PollCompletion, zlink.ConfigInvalidArgument, syscall.EINVAL},
+		{zlink.PollOut | zlink.PollCompletion, zlink.ConfigInvalidArgument, syscall.EINVAL},
+	} {
+		check := func(err error) {
+			invalid(err, test.result)
+			var typed *zlink.ConfigError
+			if !errors.As(err, &typed) || typed.InternalErrno() != int(test.nativeErrno) {
+				t.Fatalf("expected errno %v, got %v", test.nativeErrno, err)
+			}
+		}
+		check(poller.AddMonitor(monitor, test.flags, 1))
+		check(poller.AddSocket(monitor, test.flags, 1))
+		if size, err := poller.Size(); err != nil || size != 0 {
 			t.Fatal("invalid add registered monitor")
 		}
 		if err := poller.AddMonitor(monitor, zlink.PollIn, 1); err != nil {
 			t.Fatal(err)
 		}
-		invalid(poller.ModifyMonitor(monitor, flags))
-		invalid(poller.ModifySocket(monitor, flags))
-		if poller.Size() != 1 {
+		check(poller.ModifyMonitor(monitor, test.flags))
+		check(poller.ModifySocket(monitor, test.flags))
+		if size, err := poller.Size(); err != nil || size != 1 {
 			t.Fatal("invalid modify lost registration")
 		}
 		if err := poller.RemoveMonitor(monitor); err != nil {

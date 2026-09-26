@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
+#include <Runtime/Errors/result_from_errno.hpp>
 #include <zlink/Contracts/Sockets/socket_contracts.hpp>
 
 #include <Runtime/Native/native_message_guard.hpp>
@@ -139,7 +140,8 @@ void socket_t::set_tls_server (const std::string &cert_,
     const int rc = zlink_set_tls_server (detail::native_handle (*this), cert_.c_str (),
                                          key_.c_str (), require_client_cert_ ? 1 : 0);
     if (rc != 0)
-        throw config_error_t (detail::config_result_from_errno (zlink_errno ()), zlink_errno ());
+        throw config_error_t (detail::result_from_errno (config_result_t{}, zlink_errno ()),
+                              zlink_errno ());
 }
 
 void socket_t::set_tls_client (const std::string &ca_cert_,
@@ -151,7 +153,8 @@ void socket_t::set_tls_client (const std::string &ca_cert_,
     const int rc =
       zlink_set_tls_client (detail::native_handle (*this), ca, hostname, trust_system_ ? 1 : 0);
     if (rc != 0)
-        throw config_error_t (detail::config_result_from_errno (zlink_errno ()), zlink_errno ());
+        throw config_error_t (detail::result_from_errno (config_result_t{}, zlink_errno ()),
+                              zlink_errno ());
 }
 
 void socket_t::set_receive_flow_state (receive_flow_state_t state_)

@@ -1,6 +1,5 @@
 const assert = require('node:assert/strict');
 const { fork } = require('node:child_process');
-const net = require('node:net');
 const path = require('node:path');
 const test = require('node:test');
 const { createClient } = require('redis');
@@ -20,10 +19,6 @@ test(
     const meshName = `m6b-native-${runId}`;
     const keyPrefix = `zlink:test:m6b-node:${runId}:`;
     const targetRoutingId = `m6b-target-${runId}`;
-    const [sourcePort, targetPort] = await Promise.all([
-      reservePort(),
-      reservePort()
-    ]);
     const children = [];
     const redis = createClient({
       url: redisUrl,
@@ -47,7 +42,8 @@ test(
     const target = startChild(children, {
       role: 'target',
       meshName,
-      endpoint: `tcp://127.0.0.1:${targetPort}`,
+      // Each node binds an OS-assigned port and publishes the endpoint it bound.
+      endpoint: 'tcp://127.0.0.1:*',
       routingId: targetRoutingId,
       targetRoutingId,
       keyPrefix,
@@ -59,11 +55,11 @@ test(
     const source = startChild(children, {
       role: 'source',
       meshName,
-      endpoint: `tcp://127.0.0.1:${sourcePort}`,
+      endpoint: 'tcp://127.0.0.1:*',
       routingId: `m6b-source-${runId}`,
       targetRoutingId,
       keyPrefix,
-      targetEndpoint: `tcp://127.0.0.1:${targetPort}`
+      targetEndpoint: targetReady.endpoint
     });
     const sourceReady = await source.ready;
     assert.equal(sourceReady.role, 'source');
@@ -237,18 +233,6 @@ async function stopChild(entry) {
   clearTimeout(timer);
 }
 
-async function reservePort() {
-  const server = net.createServer();
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  const { port } = server.address();
-  await new Promise((resolve, reject) => {
-    server.close((error) => error === undefined ? resolve() : reject(error));
-  });
-  return port;
-}
 
 async function deletePrefix(redis, prefix) {
   const keys = [];

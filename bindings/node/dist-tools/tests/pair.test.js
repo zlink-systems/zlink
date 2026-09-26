@@ -293,6 +293,7 @@ test('poller distinguishes socket and timer events in one buffer', () => {
     ctx.close();
 });
 test('poller runtime surface excludes allocation wait and wrapper lookups', () => {
+    const ctx = zlink.createContext();
     const events = zlink.createPollEvents(1);
     const poller = zlink.createPoller();
     assert.equal(poller.waitMany, undefined);
@@ -302,6 +303,7 @@ test('poller runtime surface excludes allocation wait and wrapper lookups', () =
     assert.throws(() => poller.addFd(0, [zlink.PollEventFlag.PollIn], -1), RangeError);
     poller.close();
     events.close();
+    ctx.close();
 });
 test('recv returns null when no message is available with DontWait', () => {
     const ctx = zlink.createContext();

@@ -168,10 +168,6 @@ export class ZLinkSpotNodeRuntimeManager {
       new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
   }
 
-  createReceived() {
-    return this.options.backendAdapterFactory.createReceived();
-  }
-
   createTopicMessage() {
     return this.options.backendAdapterFactory.createTopicMessage();
   }
@@ -975,7 +971,6 @@ export class ZLinkSpotNodeRuntimeManager {
       entrySpotType: spotNode.entrySpotType,
       nativeSpot: node.entrySpot() as never,
       nativeNode: node as unknown as ZLinkBackendSpotNode,
-      createReceived: () => this.options.backendAdapterFactory.createReceived(),
       createTopicMessage: () => this.options.backendAdapterFactory.createTopicMessage(),
       nodeRid: String(node.status().routingId),
       spotNodeName,

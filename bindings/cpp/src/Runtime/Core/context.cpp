@@ -26,6 +26,19 @@ struct context_t::impl
 {
     void *ctx = nullptr;
     std::string thread_name_prefix;
+
+    close_result_t terminate () noexcept
+    {
+        if (!ctx)
+            return close_result_t::ok;
+        const auto shutdown_result = static_cast<close_result_t> (zlink_ctx_shutdown (ctx));
+        if (shutdown_result != close_result_t::ok)
+            return shutdown_result;
+        const auto term_result = static_cast<close_result_t> (zlink_ctx_term (ctx));
+        if (term_result == close_result_t::ok)
+            ctx = nullptr;
+        return term_result;
+    }
 };
 
 context_t::context_t () : _impl (std::make_unique<impl> ())
@@ -80,12 +93,9 @@ void context_t::shutdown ()
 
 void context_t::term ()
 {
-    if (!_impl || !_impl->ctx)
+    if (!_impl)
         return;
-    void *ctx = _impl->ctx;
-    const auto result = static_cast<close_result_t> (zlink_ctx_term (ctx));
-    detail::throw_if_failed<close_error_t> (result);
-    _impl->ctx = nullptr;
+    detail::throw_if_failed<close_error_t> (_impl->terminate ());
 }
 
 void context_t::recalculate_auto_hwm ()
@@ -163,12 +173,8 @@ void context_t::reset_core_hwm_budget_metrics ()
 
 void context_t::term_noexcept () noexcept
 {
-    if (!_impl || !_impl->ctx)
-        return;
-    void *ctx = _impl->ctx;
-    if (zlink_ctx_term (ctx) == ZLINK_CLOSE_OK) {
-        _impl->ctx = nullptr;
-    }
+    if (_impl)
+        (void) _impl->terminate ();
 }
 
 int context_t::get_option_raw (int option_, int *error_out_) const

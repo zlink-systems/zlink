@@ -261,7 +261,6 @@ export interface ZLinkSpotManagerOptions {
     spotId: RoutingId,
     authority?: ZLinkNativeSpotAuthority
   ) => ZLinkBackendSpot | undefined;
-  readonly createReceived?: () => import('../backend').ZLinkBackendReceived;
   readonly createTopicMessage?: () => import('../backend').ZLinkBackendTopicMessage;
   readonly nativeSpotNodeProvider?: (meshName: string) => ZLinkBackendSpotNode | undefined;
   readonly actorResolver?: (actorId: string) => ZLinkActor | undefined;
@@ -397,7 +396,6 @@ export class DefaultZLinkSpotManager {
       messageSerializers: options.messageSerializers,
       locationClaim: this.locationClaim,
       createNativeSpot: options.createNativeSpot,
-      createReceived: options.createReceived,
       createTopicMessage: options.createTopicMessage,
       nativeSpotNodeProvider: options.nativeSpotNodeProvider,
       actorResolver: options.actorResolver,

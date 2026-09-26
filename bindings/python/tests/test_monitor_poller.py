@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: MPL-2.0
 
+import errno
 import socket
 import uuid
+from unittest.mock import patch
 
 import pytest
 import zlink
+from zlink._runtime.eventing import poller as poller_runtime
 
 
 @pytest.mark.parametrize("transport", ["inproc", "tcp"])
@@ -59,21 +62,93 @@ def test_monitor_poller_lifecycle(transport, monitor_alias):
 
 
 @pytest.mark.parametrize("monitor_alias", [False, True])
-@pytest.mark.parametrize("flags", [zlink.PollEventFlag.POLLOUT,
-                                  zlink.PollEventFlag.POLLCOMPLETION,
-                                  zlink.PollEventFlag.POLLIN | zlink.PollEventFlag.POLLOUT])
-def test_monitor_poller_rejects_invalid_flags(monitor_alias, flags):
+@pytest.mark.parametrize(
+    ("flags", "result", "native_errno"),
+    [
+        (
+            zlink.PollEventFlag.POLLOUT,
+            zlink.ConfigResult.NOT_SUPPORTED,
+            errno.ENOTSUP,
+        ),
+        (
+            zlink.PollEventFlag.POLLCOMPLETION,
+            zlink.ConfigResult.INVALID_ARGUMENT,
+            errno.EINVAL,
+        ),
+        (
+            zlink.PollEventFlag.POLLIN | zlink.PollEventFlag.POLLCOMPLETION,
+            zlink.ConfigResult.INVALID_ARGUMENT,
+            errno.EINVAL,
+        ),
+        (
+            zlink.PollEventFlag.POLLOUT | zlink.PollEventFlag.POLLCOMPLETION,
+            zlink.ConfigResult.INVALID_ARGUMENT,
+            errno.EINVAL,
+        ),
+        (
+            zlink.PollEventFlag.POLLIN | zlink.PollEventFlag.POLLOUT,
+            zlink.ConfigResult.NOT_SUPPORTED,
+            errno.ENOTSUP,
+        ),
+        (
+            zlink.PollEventFlag.POLLPRI,
+            zlink.ConfigResult.NOT_SUPPORTED,
+            errno.ENOTSUP,
+        ),
+    ],
+)
+def test_monitor_poller_forwards_core_event_error(
+    monitor_alias, flags, result, native_errno
+):
     with zlink.create_context() as ctx, zlink.create_dealer_socket(ctx) as socket, \
             socket.monitor_open() as monitor, zlink.create_poller() as poller:
         add = poller.add_monitor if monitor_alias else poller.add_socket
         modify = poller.modify_monitor if monitor_alias else poller.modify_socket
         with pytest.raises(zlink.ConfigError) as error:
             add(monitor, flags, 1)
-        assert error.value.result == zlink.ConfigResult.INVALID_ARGUMENT
+        assert error.value.result == result
+        assert error.value.native_errno == native_errno
         assert poller.size() == 0
         add(monitor, zlink.PollEventFlag.POLLIN, 1)
         with pytest.raises(zlink.ConfigError) as error:
             modify(monitor, flags)
-        assert error.value.result == zlink.ConfigResult.INVALID_ARGUMENT
+        assert error.value.result == result
+        assert error.value.native_errno == native_errno
         assert poller.size() == 1
+        poller.remove_monitor(monitor)
+
+
+def test_monitor_event_error_comes_from_native_add_and_modify():
+    with zlink.create_context() as ctx, zlink.create_dealer_socket(ctx) as socket, \
+            socket.monitor_open() as monitor, zlink.create_poller() as poller:
+        real = poller_runtime.lib()
+        calls = []
+
+        class Native:
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+            def zlink_poller_add(self, *args):
+                calls.append("add")
+                return int(zlink.ConfigResult.NOT_SUPPORTED)
+
+            def zlink_poller_modify(self, *args):
+                calls.append("modify")
+                return int(zlink.ConfigResult.NOT_SUPPORTED)
+
+            def zlink_errno(self):
+                return errno.ENOTSUP
+
+        with patch.object(poller_runtime, "lib", return_value=Native()):
+            with pytest.raises(zlink.ConfigError) as error:
+                poller.add_monitor(monitor, zlink.PollEventFlag.POLLOUT, 1)
+            assert error.value.result == zlink.ConfigResult.NOT_SUPPORTED
+            assert error.value.native_errno == errno.ENOTSUP
+        poller.add_monitor(monitor, zlink.PollEventFlag.POLLIN, 1)
+        with patch.object(poller_runtime, "lib", return_value=Native()):
+            with pytest.raises(zlink.ConfigError) as error:
+                poller.modify_monitor(monitor, zlink.PollEventFlag.POLLOUT)
+            assert error.value.result == zlink.ConfigResult.NOT_SUPPORTED
+            assert error.value.native_errno == errno.ENOTSUP
+        assert calls == ["add", "modify"]
         poller.remove_monitor(monitor)

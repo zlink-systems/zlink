@@ -208,7 +208,21 @@ fn routing_id_max_length() {
 #[test]
 fn version_returns_valid_triple() {
     let (major, minor, patch) = version();
-    let expected = packaged_core_version();
+    let header = if option_env!("ZLINK_CORE_SOURCE") == Some("local") {
+        std::path::PathBuf::from(option_env!("ZLINK_CORE_INCLUDE_DIR").unwrap()).join("zlink.h")
+    } else {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("include/zlink.h")
+    };
+    let selected = std::fs::read_to_string(header).unwrap();
+    let component = |name: &str| -> i32 {
+        selected
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("#define ZLINK_VERSION_{name} ")))
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+    let expected = (component("MAJOR"), component("MINOR"), component("PATCH"));
     assert_eq!((major, minor, patch), expected);
 }
 
@@ -330,6 +344,19 @@ fn poller_modify_transfers_completion_ownership() {
     poller
         .modify_socket(&dealer, POLLIN | POLLCOMPLETION)
         .unwrap();
+}
+
+#[test]
+fn poller_wait_with_no_event_capacity_reports_core_config_error() {
+    let poller = Poller::new().unwrap();
+    let error = poller.wait(&mut [], 0).unwrap_err();
+    match error {
+        ZlinkError::Config(config) => {
+            assert_eq!(config.code(), zlink::ConfigResult::InvalidArgument);
+            assert_eq!(config.native_errno(), libc::EINVAL);
+        }
+        other => panic!("expected Core configuration error, got {other:?}"),
+    }
 }
 
 #[test]

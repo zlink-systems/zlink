@@ -2,6 +2,7 @@
 #ifndef ZLINK_CPP_SOCKETS_DETAIL_HPP_INCLUDED
 #define ZLINK_CPP_SOCKETS_DETAIL_HPP_INCLUDED
 
+#include <Runtime/Errors/result_from_errno.hpp>
 #include <zlink/Contracts/Sockets/message_socket_contracts.hpp>
 #include <zlink/Contracts/Sockets/pubsub_socket_contracts.hpp>
 #include <zlink/Contracts/Errors/errors.hpp>
@@ -100,7 +101,8 @@ inline int recv_single_part_routed_message (void *handle_,
 inline void set_routing_id_or_throw (void *handle_, const routing_id_t &routing_id_)
 {
     if (zlink_set_routing_id (handle_, routing_id_.data (), routing_id_.size ()) != 0)
-        throw config_error_t (config_result_from_errno (zlink_errno ()), zlink_errno ());
+        throw config_error_t (result_from_errno (config_result_t{}, zlink_errno ()),
+                              zlink_errno ());
 }
 
 inline void get_routing_id_or_throw (void *handle_, routing_id_t &routing_id_)
@@ -108,7 +110,8 @@ inline void get_routing_id_or_throw (void *handle_, routing_id_t &routing_id_)
     zlink_routing_id_t native;
     std::memset (&native, 0, sizeof (native));
     if (zlink_get_routing_id (handle_, &native) != 0)
-        throw config_error_t (config_result_from_errno (zlink_errno ()), zlink_errno ());
+        throw config_error_t (result_from_errno (config_result_t{}, zlink_errno ()),
+                              zlink_errno ());
     assign_routing_id_native (routing_id_, native);
 }
 

@@ -27,7 +27,7 @@ func TestReplyTokenRejectsZeroAndDifferentRouterOwner(t *testing.T) {
 	if err := dealer.Connect(endpoint); err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
-	completions := startCompletionPoller(t, dealer)
+	completions := startCompletionPoller(t, ctx, dealer)
 	defer completions.close(t)
 
 	serverDone := make(chan error, 1)
@@ -160,7 +160,7 @@ func TestOwnerlessRequestFailsFastWithoutSubmission(t *testing.T) {
 		t.Fatalf("ownerless request reached peer = (%v, %v), want (false, nil)", ok, err)
 	}
 
-	completions := startCompletionPoller(t, dealer)
+	completions := startCompletionPoller(t, ctx, dealer)
 	defer completions.close(t)
 	serverDone := make(chan error, 1)
 	go func() {
@@ -203,7 +203,7 @@ func TestCanceledRequestLateResultIsCleanedAndOwnerContinues(t *testing.T) {
 	if err := dealer.Connect(endpoint); err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
-	completions := startCompletionPoller(t, dealer)
+	completions := startCompletionPoller(t, ctx, dealer)
 	defer completions.close(t)
 
 	serverDone := make(chan error, 1)

@@ -154,8 +154,8 @@ ready, err := poller.Wait(events, time.Second)
 | `AddTimer(timer *Timer, slot uintptr) error` | registers a timer to be multiplexed alongside sockets/fds |
 | `ModifySocket(socket, events) error` / `ModifyFd(fd, events) error` | replaces the watched events for an already-registered socket/fd; `ModifySocket` rejects a `PollCompletion` flag change specifically — that registration mode must be changed via `RemoveSocket` + `AddSocket` instead, since completion processing has separate ownership in Core |
 | `RemoveSocket(socket) error` / `RemoveFd(fd int) error` / `RemoveTimer(timer *Timer) error` | unregisters the source |
-| `Wait(events []PollEvent, timeout time.Duration) (int, error)` | blocks up to `timeout`, writing up to `len(events)` results in place; **takes `time.Duration`**, unlike rust's raw millisecond `i64`; treats an interrupted native wait (`EINTR`) as `(0, nil)` rather than an error |
-| `Size() int` | the number of currently registered sources; returns `0` on any internal error rather than propagating one |
+| `Wait(events []PollEvent, timeout time.Duration) (int, error)` | blocks up to `timeout`, writing up to `len(events)` results in place; **takes `time.Duration`**, unlike rust's raw millisecond `i64`; a failed wait is a `*ConfigError` with Core's result (`ConfigBusy`, 709, while another `Wait` runs) |
+| `Size() (int, error)` | the number of currently registered sources; `ConfigBusy` (709) while a `Wait` is in progress |
 
 **Completion result.** Registration/removal members return `error`. `Wait` returns `(int, error)`
 — the ready count.

@@ -69,7 +69,7 @@ for (const count of [2, 17]) {
     const context = zlink.createContext();
     const router = zlink.createRouterSocket(context);
     const dealer = zlink.createDealerSocket(context);
-    const completions = new completion_poller_1.CompletionPollerDriver(dealer);
+    const completions = new completion_poller_1.CompletionPollerDriver(context, dealer);
     const received = new zlink.Received();
     try {
         router.bind('inproc://multipart-observed-data');

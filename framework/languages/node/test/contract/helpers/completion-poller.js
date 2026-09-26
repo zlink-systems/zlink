@@ -1,6 +1,6 @@
 const zlink = require('@zlink-systems/zlink');
 
-function ownCompletions(socket) {
+function ownCompletions(context, socket) {
   const poller = zlink.createPoller();
   const events = zlink.createPollEvents(1);
   let closed = false;

@@ -29,7 +29,6 @@ import { routingIdsEqual } from '../routing-id';
 import { ZLinkSpotActorHandlerRegistryRuntime } from '../actors';
 import type {
   ZLinkBackendActorRecvInfo,
-  ZLinkBackendReceived,
   ZLinkBackendSpot,
   ZLinkBackendSpotNode,
   ZLinkBackendTopicMessage
@@ -81,7 +80,6 @@ interface ZLinkEntrySpotActivationOptions {
   readonly actorRequestHandlers?: readonly ZLinkEntrySpotActorRequestHandlerRegistration[];
   readonly nativeSpot: ZLinkBackendSpot;
   readonly nativeNode: ZLinkBackendSpotNode;
-  readonly createReceived: () => ZLinkBackendReceived;
   readonly createTopicMessage: () => ZLinkBackendTopicMessage;
   readonly nodeRid: RoutingId;
   readonly spotNodeName: string;
@@ -382,7 +380,6 @@ export class ZLinkEntrySpotActivation {
   private attachActorJoinDispatch(): void {
     const dispatch = new ZLinkSpotActorJoinDispatch({
       nativeSpot: this.options.nativeSpot,
-      createReceived: this.options.createReceived,
       createTopicMessage: this.options.createTopicMessage,
       serial: this.serial,
       actors: {

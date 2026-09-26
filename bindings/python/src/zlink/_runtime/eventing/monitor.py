@@ -16,7 +16,7 @@ from ..._native.ffi import (
 )
 from ..buffers.payload_buffers import _validated_uint64
 from ..handles.native_support import (
-    _raise_last_error,
+    _raise_config_error_from_errno,
     _raise_result_error,
     _routing_id_bytes,
 )
@@ -75,7 +75,7 @@ class NativeMonitorSocket:
     def __init__(self, handle):
         self._handle = handle
         if not self._handle:
-            _raise_last_error()
+            _raise_config_error_from_errno()
 
     @staticmethod
     def _decode_event(native):

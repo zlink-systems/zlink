@@ -2,8 +2,6 @@
 
 import { Message, type MessageLike } from '../../contracts';
 import {
-  HandlerError,
-  HandlerResult,
   RecvError,
   RecvResult,
   RequestError,
@@ -23,11 +21,12 @@ import { withRuntimeErrorMessage } from '../errors/error_state';
 import {
   isWouldBlock,
   nativeErrorMessage,
-  readErrno,
+  failureErrno,
   submitNativeError,
 } from '../errors/native_errors';
 import type { NativeHandle } from '../native/binding_types';
 import { requireNative } from '../native/native';
+import { getNativeHandle } from '../handles/native_handle';
 import type { OperationPayloadValue } from './send_operation_base';
 import { messagesFromNativeBuffers } from './request_executor';
 
@@ -235,12 +234,15 @@ export class CompletionOwner {
   private readonly readableReady = (status = 0, nativeErrno = 0): void =>
     this.notifyReadable(status, nativeErrno);
   private managedWritableWaitCount = 0;
-  private closed = false;
 
-  constructor(private readonly handle: NativeHandle) {}
+  constructor(private readonly socket: object) {}
+
+  /** The socket's native handle; a closed socket throws before entering Core. */
+  private get handle(): unknown {
+    return getNativeHandle(this.socket as import('../handles/native_handle').NativeHandle);
+  }
 
   setReadableHandler(handler: ZLinkReadableHandler): void {
-    if (this.closed) throw createError('handler', 14, 'socket is closed');
     if (typeof handler !== 'function') {
       throw createError('handler', 22, 'readable handler must be a function');
     }
@@ -250,8 +252,9 @@ export class CompletionOwner {
       this.ensureReadableWatch();
     } catch (error) {
       this.readableHandler = previousHandler;
-      throw withRuntimeErrorMessage(
-        new HandlerError(HandlerResult.InternalError, readErrno()),
+      throw createError(
+        'handler',
+        failureErrno(error),
         nativeErrorMessage(error, 'readable handler registration failed')
       );
     }
@@ -270,7 +273,6 @@ export class CompletionOwner {
     payload: OperationPayloadValue<MessageLike>,
     routingId: Buffer | null
   ): SendSubmission {
-    if (this.closed) throw submitError(SubmitResult.InvalidState, 0, 'socket is closed');
     const token = this.nextToken++;
     let nativePayload: ReturnType<typeof normalizeOperationPayload>;
     try {
@@ -369,7 +371,6 @@ export class CompletionOwner {
     target: Buffer | null,
     timeoutMs: number
   ): RequestSubmission {
-    if (this.closed) throw submitError(SubmitResult.InvalidState, 0, 'socket is closed');
     const token = this.nextToken++;
     let nativePayload: ReturnType<typeof normalizeOperationPayload>;
     try {
@@ -519,7 +520,6 @@ export class CompletionOwner {
   }
 
   transferToPublic(owner: object): boolean {
-    if (this.closed) throw submitError(SubmitResult.InvalidState, 0, 'socket is closed');
     if (this.publicOwner && this.publicOwner !== owner) {
       throw submitError(SubmitResult.InvalidState, 0, 'completion owner already transferred');
     }
@@ -556,14 +556,18 @@ export class CompletionOwner {
     return this.managedWritableWaitCount !== 0;
   }
 
-  failPublicWaitTerminated(caller: object, nativeErrno: number): void {
-    if (this.publicOwner !== caller) return;
+  /**
+   * Ends every pending operation with the lifecycle errno. The context
+   * shutdown calls it with ETERM, because Core then ends the completion pull
+   * with ETERM; a poller wait never ends an operation.
+   */
+  terminatePending(nativeErrno: number): void {
     for (const entry of this.byToken.values()) {
       const admissionPending = this.retries.has(entry.token);
       const error = createError(
         entry.kind === 'request' && !admissionPending ? 'request' : 'submit',
         nativeErrno,
-        'completion poller was terminated'
+        'context was shut down'
       );
       entry.fail(error, admissionPending);
     }
@@ -574,9 +578,16 @@ export class CompletionOwner {
     this.managedWritableWaitCount = 0;
   }
 
+  failPublicWaitTerminated(caller: object, nativeErrno: number): void {
+    if (this.publicOwner === caller) this.terminatePending(nativeErrno);
+  }
+
+  /**
+   * Ends every retained operation after the socket's one successful native
+   * close. The socket's handle record is the only closed decider; a second
+   * call finds nothing left.
+   */
   close(): void {
-    if (this.closed) return;
-    this.closed = true;
     this.publicOwner = null;
     this.readableHandler = null;
     this.receiveError = null;
@@ -592,14 +603,12 @@ export class CompletionOwner {
     this.retries.clear();
     this.writableRetries.length = 0;
     this.managedWritableWaitCount = 0;
-    this.closeReadableWatch();
   }
 
   private register<T>(
     kind: CompletionKind,
     expectsUserContext = true
   ): CompletionEntry<T> {
-    if (this.closed) throw submitError(SubmitResult.InvalidState, 0, 'socket is closed');
     return this.createEntry<T>(kind, this.nextToken++, expectsUserContext);
   }
 
@@ -766,7 +775,7 @@ export class CompletionOwner {
   }
 
   private ensureReadableWatch(): void {
-    if (this.closed || this.readableWatch !== null || this.readableHandler === null) return;
+    if (this.readableWatch !== null || this.readableHandler === null) return;
     this.readableWatch = this.native.socketReadableWatchStart(
       this.handle,
       this.readableReady
@@ -774,7 +783,7 @@ export class CompletionOwner {
   }
 
   private notifyReadable(status: number, watchErrno: number): void {
-    if (this.closed || this.readableWatch === null) return;
+    if (this.readableWatch === null) return;
     if (status < 0) {
       const message = watchErrno === 0
         ? `socket readable watch failed (${status})`
@@ -782,14 +791,18 @@ export class CompletionOwner {
       this.receiveError = watchErrno === 0
         ? withRuntimeErrorMessage(new RecvError(RecvResult.InternalError, status), message)
         : createError('recv', watchErrno, message) as RecvError;
-      this.closeReadableWatch();
+      this.stopReadableWatch();
     }
     // The libuv watch only delivers readiness. The handler's public Poller
     // wait owns any completion drain and may also consume application data.
     this.readableHandler?.();
   }
 
-  private closeReadableWatch(): void {
+  /**
+   * Stops the libuv readable watch, whose callback enters Core on the socket.
+   * The socket stops it when its close is recorded, before the native close.
+   */
+  stopReadableWatch(): void {
     const watch = this.readableWatch;
     this.readableWatch = null;
     if (watch === null) return;
@@ -797,8 +810,8 @@ export class CompletionOwner {
   }
 }
 
-export function installCompletionOwner(socket: object, handle: NativeHandle): CompletionOwner {
-  const owner = new CompletionOwner(handle);
+export function installCompletionOwner(socket: object): CompletionOwner {
+  const owner = new CompletionOwner(socket);
   owners.set(socket, owner);
   return owner;
 }
@@ -809,9 +822,11 @@ export function completionOwnerOf(socket: object): CompletionOwner {
   return owner;
 }
 
+/** Ends the socket's pending operations; see CompletionOwner.terminatePending. */
 export function releaseCompletionOwner(socket: object): void {
   const owner = owners.get(socket);
   if (!owner) return;
+  owner.stopReadableWatch();
   owner.close();
   owners.delete(socket);
 }
