@@ -101,9 +101,8 @@ _connector.On("game.update", (message, _) =>
 ## 일시 정지와 종료
 
 Godot의 `Node.ProcessMode`를 `Disabled`로 바꾸면 `_Process()`가 멈추므로 dispatch도 멈춘다.
-연결은 유지되지만 callback은 queue에 쌓인다. **queue는 `MaxPendingDispatchCallbacks`(기본
-1024)까지만 보관하고, 넘치면 버릴 수 있는 것 중 가장 오래된 것부터 버린다.** 오래 멈춰 둘
-생각이면 연결까지 닫는 편이 낫다. 닫으려면 `Close.Async()`를 명시적으로 호출한다.
+연결은 유지되지만 callback은 queue에 쌓인다. queue에는 상한이 없고 callback을 버리지 않으므로 멈춘
+동안 계속 쌓인다. 오래 멈춰 둘 생각이면 연결까지 닫는 편이 낫다. 닫으려면 `Close.Async()`를 명시적으로 호출한다.
 
 `_ExitTree()`에서 `Close.Async()`와 `DisposeAsync()`를 호출하지 않으면 백그라운드 receive
 loop가 남는다.

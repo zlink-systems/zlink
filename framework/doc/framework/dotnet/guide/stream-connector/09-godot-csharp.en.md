@@ -101,9 +101,8 @@ _connector.On("game.update", (message, _) =>
 ## Pausing And Shutdown
 
 Switching Godot's `Node.ProcessMode` to `Disabled` stops `_Process()`, so dispatch also stops. The
-connection is kept, but callbacks pile up in the queue. **That queue holds up to
-`MaxPendingDispatchCallbacks` (1024 by default), and past that it drops the oldest droppable
-callback first.** For a long pause, closing the connection is the better choice; to do so,
+connection is kept, but callbacks pile up in the queue. That queue has no bound and
+drops no callback, so it keeps growing while paused. For a long pause, closing the connection is the better choice; to do so,
 explicitly call `Close.Async()`.
 
 If `Close.Async()` and `DisposeAsync()` aren't called in `_ExitTree()`, the background receive loop

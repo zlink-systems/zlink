@@ -616,7 +616,8 @@ disconnect 이벤트가 사유를 인자로 함께 전달하는 것은 이 읽�
 `waitFor`·`expectNone`·`waitForSequence` 계열은 등록된 callback이 아니다. 이 표면은 두 dispatch
 mode 모두에서 수신 메시지 큐의 아직 소비하지 않은 packet을 직접 관측하고 소비하므로 `Manual`에서도
 별도의 dispatch pump가 필요하지 않다. `dispatch`는 등록된 push handler, error·disconnect handler, request callback과
-Actor lifecycle callback(§5.6)만 실행한다.
+Actor lifecycle callback(§5.6)만 실행한다. Pending dispatch 수는 지금 등록된 handler로 다음 dispatch pump가
+실행할 callback 수이며 dispatch mode와 무관하다. 등록된 handler가 없는 packet은 세지 않는다.
 
 **handler 등록은 등록을 해제할 수 있는 값을 돌려준다.** push handler와 error·disconnect·connection
 state handler 모두 같다. connector를 닫아야만 등록을 없앨 수 있으면, 화면 하나의 수명에 맞춰

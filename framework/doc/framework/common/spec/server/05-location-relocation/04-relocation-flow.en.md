@@ -267,7 +267,8 @@ is fixed by the batch order even on the new connection. When the verification va
 match, the target proceeds with CAS and queue opening.
 
 The end of the cutover wait never permits CAS or application dispatch without verified
-cutover. The target records a `cutover_timeout` Warning. At the Restore absolute deadline,
+cutover. The target records a `cutover_timeout` Warning. The Restore absolute deadline is the
+[deadline](../00-foundation/02-glossary.en.md#deadline) of the operation that started the relocation. At that deadline,
 the source settles authority using the `Preserve` fence under
 [Location runtime §6.1 and §10](01-location-runtime.en.md#61-read-and-cas). If the source
 fence commits first, a late target CAS fails and the target discards staging. The source
@@ -601,7 +602,7 @@ Confirmed target commit opens its queue; winning source `Preserve` lets the sour
 retained work under [§4.4](#44-ordered-relay-and-one-way-cutover). Both sides retain work
 while the Store result is indeterminate.
 
-If Store failure continues until Restore validity expires, the Session may end through
+If Store failure continues until the Restore deadline, the Session may end through
 its own separate seal timeout. After the Store recovers, a new Session connection
 doesn't restore the previous binding; it performs normal location validation and Actor/
 Spot creation or recovery again. An expired owner lease or terminal relocation state

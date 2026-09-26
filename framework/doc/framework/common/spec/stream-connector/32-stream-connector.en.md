@@ -728,7 +728,10 @@ callback. Since this surface directly observes and consumes an
 unconsumed packet in the receive message queue in both dispatch modes,
 it doesn't need a separate dispatch pump even in `Manual`. `dispatch`
 only runs a registered push handler, error/disconnect handler, request
-callback, and Actor lifecycle callback (§5.6).
+callback, and Actor lifecycle callback (§5.6). The pending dispatch count is
+the number of callbacks the next dispatch pump would run with the handlers
+registered now, in either dispatch mode. Packets with no registered handler are
+not counted.
 
 **Handler registration returns a value that can unregister it.** This
 holds for the push handler and for the error/disconnect/connection
