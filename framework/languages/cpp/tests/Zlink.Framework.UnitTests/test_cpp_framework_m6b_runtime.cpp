@@ -783,6 +783,45 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
       old_spots.cleanup_expired_actor_admissions_at (std::chrono::steady_clock::time_point::max ())
       == 0);
 
+    // A request already admitted by the selected route keeps its completion
+    // result even when the owner's lease is released before the reply deadline.
+    auto timed_out_request = std::async (std::launch::async, [&] {
+        actor_request_call_t request (*second_client, actor_id_t (key.global_id),
+                                      "WithheldAfterOwnerRelease",
+                                      message_t::from (std::string ("request")));
+        return request.timeout (200ms).async<std::string> ().result ();
+    });
+    bool request_admitted = false;
+    const auto admission_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!request_admitted && std::chrono::steady_clock::now () < admission_deadline) {
+        const auto pumped = old_target->native_node ()
+                              .transport ()
+                              .pump_one (mesh::service_liveness_registry_t::clock_t::now ())
+                              .result ()
+                              .value ();
+        assert (pumped != mesh::raw_mesh_pump_result_t::protocol_error);
+        auto claim = old_target->native_node ().transport ().mailbox ().try_claim (
+          mesh::service_mailbox_domain_t::application, 16, 1024 * 1024);
+        if (claim) {
+            for (const auto &record : claim->records) {
+                request_admitted |= protocol::decode_header (record.parts.front ()).kind
+                                    == protocol::command::actorRequest;
+            }
+            assert (old_target->native_node ().transport ().mailbox ().release (*claim));
+        }
+    }
+    assert (request_admitted);
+    (void) store->release_owner_lease (old_owner).result ().value ();
+    const auto completion_deadline = std::chrono::steady_clock::now () + 2s;
+    while (timed_out_request.wait_for (0ms) != std::future_status::ready
+           && std::chrono::steady_clock::now () < completion_deadline) {
+        (void) await_task (source->dispatch_ready (discard));
+    }
+    assert (timed_out_request.wait_for (0ms) == std::future_status::ready);
+    const auto timed_out = timed_out_request.get ();
+    assert (!timed_out);
+    assert (timed_out.error_kind () == framework_error_kind_t::deadline_exceeded);
+
     source->stop ();
     second_client.reset ();
     old_target->stop ();
