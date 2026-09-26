@@ -687,9 +687,10 @@ build_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &st
     // Runtime monitoring §5: report this MeshNode's local activation records.
     placement.capacity.actors.active = hub->node->active_actor_count ();
     placement.capacity.spots.active = hub->node->active_spot_count ();
+    const bool location_unavailable = state->location_store != nullptr && !location_is_healthy;
     const bool placement_available =
       placement.object_role == object_role_t::server && mapped_state == mesh_node_state_t::ready
-      && placement.placement_weight > 0
+      && !location_unavailable && placement.placement_weight > 0
       && placement_capacity_available (placement,
                                        hub->node->activation_admission ().has_headroom ());
 
@@ -698,7 +699,6 @@ build_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &st
           return peer.state == peer_state_t::connecting
                  || peer.state == peer_state_t::not_connected;
       });
-    const bool location_unavailable = state->location_store != nullptr && !location_is_healthy;
     const auto public_state = mapped_state == mesh_node_state_t::ready
                                   && (required_peer_unavailable || location_unavailable)
                                 ? mesh_node_state_t::degraded
@@ -729,6 +729,8 @@ build_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &st
                                                    ? mapped_state == mesh_node_state_t::stopping
                                                        ? topology_reason_t::draining
                                                        : topology_reason_t::runtime_not_ready
+                                                 : location_unavailable
+                                                   ? topology_reason_t::location_unavailable
                                                    : topology_reason_t::capacity_exceeded}},
       .sequence = state->next_sequence (descriptor.mesh_name),
       .observed_at = std::chrono::system_clock::now ()};

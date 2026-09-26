@@ -124,6 +124,58 @@ class monitoring_mesh_store_t final
     std::optional<zlink::framework::mesh_node_descriptor_t> _remote;
 };
 
+class monitoring_location_query_t final : public zlink::framework::location_runtime_query_t
+{
+  public:
+    void set_store_healthy (bool healthy) { _store_healthy.store (healthy); }
+
+    zlink::framework::task_t<zlink::framework::location_runtime_status_t> get_status () override
+    {
+        zlink::framework::location_runtime_status_t status;
+        status.store_healthy = _store_healthy.load ();
+        co_return status;
+    }
+
+    zlink::framework::task_t<
+      zlink::framework::location_page_t<zlink::framework::location_topology_entry_t>>
+    list_topology (zlink::framework::location_topology_filter_t,
+                   zlink::framework::location_page_request_t = {}) override
+    {
+        co_return zlink::framework::location_page_t<zlink::framework::location_topology_entry_t>{};
+    }
+
+    zlink::framework::task_t<
+      zlink::framework::location_page_t<zlink::framework::location_service_summary_t>>
+    list_service_summaries (zlink::framework::location_service_summary_filter_t,
+                            zlink::framework::location_page_request_t = {}) override
+    {
+        co_return zlink::framework::location_page_t<zlink::framework::location_service_summary_t>{};
+    }
+
+    zlink::framework::task_t<std::optional<zlink::framework::location_object_entry_t>>
+    find_actor_location (zlink::framework::actor_id_t) override
+    {
+        co_return std::nullopt;
+    }
+
+    zlink::framework::task_t<std::optional<zlink::framework::location_object_entry_t>>
+    find_spot_location (zlink::framework::spot_id_t) override
+    {
+        co_return std::nullopt;
+    }
+
+    zlink::framework::task_t<
+      zlink::framework::location_page_t<zlink::framework::location_object_entry_t>>
+    list_object_locations (zlink::framework::location_object_filter_t,
+                           zlink::framework::location_page_request_t = {}) override
+    {
+        co_return zlink::framework::location_page_t<zlink::framework::location_object_entry_t>{};
+    }
+
+  private:
+    std::atomic_bool _store_healthy{true};
+};
+
 class faulting_mesh_location_repository_t final
     : public zlink::framework::runtime::in_memory_location_repository_t
 {
@@ -1562,6 +1614,69 @@ void verify_public_runtime_surface ()
     node->stop ();
 }
 
+void verify_location_store_blocks_placement ()
+{
+    auto registration = make_node ("tcp://127.0.0.1:0", "placement-store-node");
+    registration->placement_weight = 100;
+    auto node = std::make_shared<zlink::framework::detail::mesh_node_runtime_t> (registration);
+    node->start ();
+
+    const auto node_status = node->status ();
+    zlink::framework::mesh_node_descriptor_t descriptor;
+    descriptor.mesh_name = "vertical-mesh";
+    descriptor.rid = node_status.routing_id ();
+    descriptor.lifecycle_generation = node_status.lifecycle_generation ();
+    descriptor.object_role = zlink::framework::object_role_t::server;
+    descriptor.state = zlink::framework::framework_runtime_state_t::serving;
+    descriptor.placement_weight = 100;
+    monitoring_mesh_store_t store;
+    store.set_local (descriptor);
+    monitoring_location_query_t location_query;
+    zlink::framework::runtime::route_mesh_runtime_service_t runtime ({node}, &location_query,
+                                                                     &store);
+    runtime.start ();
+
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::vector<zlink::framework::mesh_node_snapshot_t> received;
+    auto observation = runtime.observe (
+      "vertical-mesh", 1,
+      [&] (const zlink::framework::observed_status_t<zlink::framework::mesh_node_snapshot_t>
+             &observed) {
+          {
+              std::lock_guard lock (mutex);
+              received.push_back (observed.status);
+          }
+          changed.notify_one ();
+      });
+    const auto wait_for = [&] (const auto &predicate) {
+        std::unique_lock lock (mutex);
+        return changed.wait_for (
+          lock, 2s, [&] { return !received.empty () && predicate (received.back ()); });
+    };
+
+    assert (wait_for ([] (const auto &snapshot) {
+        return snapshot.state == zlink::framework::mesh_node_state_t::ready
+               && snapshot.placement.is_available;
+    }));
+    location_query.set_store_healthy (false);
+    assert (wait_for ([] (const auto &snapshot) {
+        return snapshot.state == zlink::framework::mesh_node_state_t::degraded
+               && !snapshot.placement.is_available
+               && snapshot.placement.unavailable_reason
+                    == zlink::framework::topology_reason_t::location_unavailable;
+    }));
+    location_query.set_store_healthy (true);
+    assert (wait_for ([] (const auto &snapshot) {
+        return snapshot.state == zlink::framework::mesh_node_state_t::ready
+               && snapshot.placement.is_available;
+    }));
+
+    observation->close ();
+    runtime.stop ();
+    node->stop ();
+}
+
 void verify_automatic_identity_and_port_builder ()
 {
     zlink::framework::zlink_builder_t builder;
@@ -2345,6 +2460,7 @@ int main (int argc, char **argv)
     verify_unselected_object_role_defaults_to_none ();
     verify_automatic_identity_and_port_builder ();
     verify_public_runtime_surface ();
+    verify_location_store_blocks_placement ();
     verify_slow_observer_does_not_block_stop ();
     verify_object_client_registration_boundary ();
     verify_host_shutdown_seal_reaches_raw_mesh ();
