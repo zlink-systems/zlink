@@ -695,7 +695,7 @@ terminal 여부, 종료 사유와 reconnect 조건을 바꾸지 않는다.
 | `Disconnected` — transport 끊김 | 진행 중인 operation 실패 | `Disconnected` | `TransportError` | reconnect option이 켜져 있으면 적용 |
 | `Disconnected` — `close` | 진행 중인 operation과 `close` 뒤에 호출한 connect·Send·Request·대기 표면(§10.1) 실패 | `Closed` | `ClientClose` | 안 함 |
 | `SendFailed` — sequence 고갈 | 해당 operation만 실패 | 유지 | 없음 | 안 함 |
-| `SendFailed` — transport write 실패 | 해당 operation 실패 | transport가 끊겼으면 `Disconnected`, 아니면 유지 | transport가 끊겼으면 `TransportError`, 아니면 없음 | transport가 끊겼고 reconnect option이 켜져 있으면 적용 |
+| `SendFailed` — transport write 실패 | 해당 operation 실패 | 종료 | `TransportError` | reconnect option이 켜져 있으면 적용 |
 | `FrameDecodeFailed` — frame·header | 해당 frame을 전달하지 않고 pending request를 실패시킴 | 종료 | `ProtocolError` | reconnect option이 켜져 있으면 적용 |
 | `FrameDecodeFailed` — Error JSON payload | [§5.2](#52-request-correlation)의 `request_seq` 수신 대상 | 유지 | 없음 | 안 함 |
 | `FrameTooLarge` | 해당 frame을 전달하지 않고 pending request를 실패시킴 | 종료 | `ProtocolError` | reconnect option이 켜져 있으면 적용 |
@@ -704,7 +704,7 @@ terminal 여부, 종료 사유와 reconnect 조건을 바꾸지 않는다.
 | `UserCallbackFailed`, `RemoteError` | 오류 event 또는 관련 callback/request로 전달 | 유지 | 없음 | 안 함 |
 
 연결이 끝나서 실패하는 진행 중 operation은 연결을 끝낸 원인과 관계없이 `Disconnected`로 실패한다. 원인은
-종료 사유(§6.2)로 남는다. transport write 실패로 연결이 끝나면 그 write의 operation만 `SendFailed`로 실패한다.
+종료 사유(§6.2)로 남는다. transport write 실패는 연결을 끝내며, 그 write의 operation만 `SendFailed`로 실패한다.
 
 ### 9.1 닫힌 오류 코드 집합
 
@@ -855,7 +855,7 @@ Unity WebGL UPM package는 새 wire runtime을 만들지 않는다. npm package 
 | **브라우저 번들** | **TypeScript package root 번들에 플랫폼 전용 소켓 module이 포함되지 않는다** |
 | typed request/reply | correlation과 매칭 규칙이 §5.2를 따른다 |
 | error 응답 | `Error` payload가 §5.3의 JSON object이고, `request_seq` 유무에 따라 pending 실패와 stream 오류로 달라진다 |
-| pending request 정리 | timeout·close·disconnect에서 pending이 모두 실패하고 제거된다. 연결이 끝나 실패한 pending은 원인(transport 끊김, `FrameDecodeFailed`, `FrameTooLarge`)과 관계없이 `Disconnected`로 실패한다(§5.2, §9) |
+| pending request 정리 | timeout·close·disconnect에서 pending이 모두 실패하고 제거된다. 연결이 끝나 실패한 pending은 원인(transport 끊김, `FrameDecodeFailed`, `FrameTooLarge`)과 관계없이 `Disconnected`로 실패한다(그 write의 operation은 §9에 따라 `SendFailed`)(§5.2, §9) |
 | payload 한도 | 송신 한도가 **transport write 전에** 적용되고, 수신은 wire payload와 압축 해제 결과를 각각 검사한다(§4.7) |
 | metadata | 한도·중복·빈 key 검증(§4.4) |
 | packet name | UTF-8 길이 제한(§4.2), `$zlink.` prefix 예약(§4.6), 언어별 exact interface의 기본 이름·override 규칙 |
@@ -881,7 +881,7 @@ Unity WebGL UPM package는 새 wire runtime을 만들지 않는다. npm package 
 | **이름 두 형태** | **수신 등록·send·request는 connector·Actor handle 수준에서, 대기 표면은 connector 수준에서 이름 명시 형태와 타입 형태를 모두 제공하고 같은 packet 이름에 닿는다(§5)** |
 | **handler와 종료** | **push·error·끊김·연결 상태·Actor bound·Actor unbound handler와 request callback 모두 등록 순서·callback 실패·완료를 기다리지 않는 규칙을 따르며, 끝나지 않는 handler가 있어도 connector가 그 완료를 기다리지 않는다. `close`로 생기는 연결 상태·끊김 callback은 `Immediate`에서 다른 `Immediate` callback과 같은 경로로, `Manual`에서 `close` 뒤의 다음 dispatch pump에서 실행된다. handler 안에서 호출한 `close`는 종료를 시작한 뒤 돌아온다. 재연결 소진과 transport 오류로 끊길 때도 같은 순서로 실행하고 기다리지 않는다(§7)** |
 | **close와 쓰지 않은 frame** | **상대가 읽지 않아도 `close`가 돌아오고, transport에 쓰지 않았거나 쓰는 중이던 frame의 Send·Request는 `Disconnected`로 실패하며, 완료된 Send의 frame은 transport에 쓰여 있다(§5.2·§7)** |
-| **종료 사유 — 프로토콜 위반과 close 뒤 호출** | **frame·header decode 실패와 수신 한도 초과는 연결을 끝내고 종료 사유를 `ProtocolError`로 남기며, transport read 실패는 `TransportError`로 남는다. `close` 뒤에 호출한 connect·Send·Request·대기 표면은 `Disconnected`로 실패하고, `close`·dispatch·등록 해제·종료 사유 읽기는 실패하지 않는다(§7, §9)** |
+| **종료 사유 — 프로토콜 위반과 close 뒤 호출** | **frame·header decode 실패와 수신 한도 초과는 연결을 끝내고 종료 사유를 `ProtocolError`로 남기며, transport read 실패와 write 실패는 연결을 끝내고 종료 사유를 `TransportError`로 남기며, write 실패에서는 그 write의 operation만 `SendFailed`, 나머지 진행 중 operation은 `Disconnected`로 실패한다. `close` 뒤에 호출한 connect·Send·Request·대기 표면은 `Disconnected`로 실패하고, `close`·dispatch·등록 해제·종료 사유 읽기는 실패하지 않는다(§7, §9)** |
 | **취소** | **queue 대기 중 취소한 operation은 frame을 쓰지 않고, 취소한 Request는 §9 코드가 아닌 언어의 취소 표현으로 끝나며, reply received hook이 실행되지 않는다(§5.2, §5.7)** |
 | **종료 사유 읽기** | **끊긴 뒤 이벤트를 받지 않은 코드도 같은 값을 읽는다. 첫 connect 실패에도 사유가 남고, 재연결해도 지워지지 않는다(§6.2)** |
 
