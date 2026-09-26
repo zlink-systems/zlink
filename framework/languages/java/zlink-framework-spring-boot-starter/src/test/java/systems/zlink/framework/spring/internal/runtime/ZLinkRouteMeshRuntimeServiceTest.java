@@ -399,6 +399,11 @@ final class ZLinkRouteMeshRuntimeServiceTest {
     }
 
     private static final class FakeNode implements ZLinkInternalMeshNode {
+        @Override
+        public String advertisedEndpoint() {
+            return status().localEndpoint();
+        }
+
         private final RoutingId local = RoutingId.from("local");
         private volatile long maxMessageSize;
         private volatile int channelWeight = 7;

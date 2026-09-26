@@ -365,27 +365,15 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                         metadataPolicy.sessionToActorKeys(), metadataPolicy.actorToSessionKeys());
     }
 
-    public String listenerEndpoint(String streamNodeName) {
-        StreamNodeRegistration registration =
-                this.registration.streamNodes().stream()
-                        .filter(value -> value.name().equals(streamNodeName))
-                        .findFirst()
-                        .orElseThrow(
-                                () ->
-                                        new ZLinkConfigurationException(
-                                                "stream node is not configured: "
-                                                        + streamNodeName));
-        ZLinkBackendStreamSocket stream = streamsByName.get(streamNodeName);
-        if (stream == null) {
-            throw new ZLinkConfigurationException("stream node is not started: " + streamNodeName);
-        }
-        String actual = stream.lastEndpoint();
+    /** Returns the advertised endpoint of a bound STREAM listener, or null when it has none. */
+    public String boundListenerEndpoint(StreamNodeRegistration registration) {
+        ZLinkBackendStreamSocket stream = streamsByName.get(registration.name());
+        String actual = stream == null ? null : stream.lastEndpoint();
         if (actual == null || actual.isBlank()) {
             actual = registration.bindEndpoint();
         }
         if (actual == null || actual.isBlank() || actual.endsWith(":0")) {
-            throw new ZLinkConfigurationException(
-                    "stream listener endpoint is not ready: " + streamNodeName);
+            return null;
         }
         return registration.advertisedEndpoint(actual);
     }

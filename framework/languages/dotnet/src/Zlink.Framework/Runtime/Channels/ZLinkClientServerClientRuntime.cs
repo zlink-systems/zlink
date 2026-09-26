@@ -59,9 +59,10 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
 
     internal void RemoveManual(string endpoint) => Remove($"manual:{endpoint}");
 
-    internal void AddLocal(string endpoint, ZLinkClientServerServerIdentity identity)
+    internal async ValueTask AddLocalAsync(ZLinkClientServerServerIdentity identity)
     {
-        var snapshot = AwaitStateLane(identity.ReadAsync());
+        var endpoint = identity.AdvertisedEndpoint;
+        var snapshot = await identity.ReadAsync().ConfigureAwait(false);
         var key = $"local:{identity.ServerRid.ToHex()}:{identity.LifecycleGeneration}";
         AddOrReplace(key, endpoint, LocalDescriptor(identity, endpoint, snapshot));
         identity.SnapshotChanged += changed =>

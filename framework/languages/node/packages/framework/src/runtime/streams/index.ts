@@ -1,3 +1,4 @@
+import type { ZLinkListenerRecords } from '../foundation/listener-records';
 import type {
   ActorRef,
   Type,
@@ -167,6 +168,7 @@ export interface ZLinkStreamSessionNodeRuntimeOptions extends Omit<
 }
 
 export interface ZLinkStreamRuntimeManagerOptions {
+  readonly listenerRecords?: ZLinkListenerRecords;
   readonly registration: ZLinkFrameworkRegistration;
   readonly backendAdapterFactory: ZLinkBackendAdapterFactory;
   readonly context: ZLinkBackendContext;
@@ -185,7 +187,6 @@ export interface ZLinkStreamRuntimeManagerOptions {
 
 interface ZLinkStartedStreamNode {
   readonly meshName?: string;
-  readonly advertisedEndpoint: string;
   readonly runtime: ZLinkStreamSessionNodeRuntimeCore;
   readonly socket: ZLinkBackendStreamSocket;
   readonly monitor: ZLinkBackendSocketMonitor;
@@ -201,10 +202,6 @@ export class ZLinkStreamRuntimeManager {
     this.applicationJobQueue =
       options.applicationJobQueue ??
       new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
-  }
-
-  listenerEndpoint(name: string): string | undefined {
-    return this.nodes.get(name)?.advertisedEndpoint;
   }
 
   start(): void {
@@ -317,13 +314,13 @@ export class ZLinkStreamRuntimeManager {
       runtime.start();
       this.nodes.set(nodeName, {
         meshName: applicationMeshName,
-        advertisedEndpoint,
         runtime,
         socket,
         monitor,
         nativeSessionService,
         nativeSessionServices: [...nativeSessionRoutes.values()].map((route) => route.service)
       });
+      this.options.listenerRecords?.record('stream', nodeName, advertisedEndpoint);
     }
   }
 

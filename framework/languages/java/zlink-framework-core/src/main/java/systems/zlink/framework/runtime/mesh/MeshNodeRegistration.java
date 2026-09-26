@@ -32,7 +32,6 @@ import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactory
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.UserSpotFactoryConfiguration;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
-import systems.zlink.framework.runtime.internal.transport.ZLinkListenerIdentity;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkInstanceSpot;
 import systems.zlink.framework.spots.ZLinkSpot;
@@ -355,10 +354,6 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
                     return null;
                 });
         return this;
-    }
-
-    public String advertisedEndpoint(String actualEndpoint) {
-        return ZLinkListenerIdentity.advertisedEndpoint(actualEndpoint, advertiseHost);
     }
 
     private void updateDefaultEndpoint() {

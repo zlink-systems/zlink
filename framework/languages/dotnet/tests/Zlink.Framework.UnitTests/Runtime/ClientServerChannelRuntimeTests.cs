@@ -965,6 +965,98 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     }
 
     [Fact]
+    public async Task WildcardLocalOnlyClient_ReachesServerThroughAdvertisedEndpoint()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<EchoProbe>();
+        services.AddSingleton(new ServerIdentity("local"));
+        services.AddZLinkFramework(options =>
+        {
+            options.ConfigureNetwork().BindHost = "0.0.0.0";
+            options.AddClientServerChannel("work").Client();
+            options
+                .AddClientServerChannel("work")
+                .Server()
+                .Listen(0)
+                .AddSendHandler<EchoSendHandler, EchoSend>()
+                .AddRequestHandler<EchoHandler, EchoRequest, EchoReply>();
+        });
+        await using var provider = services.BuildServiceProvider();
+        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            var transport = runtime.GetClientServerClientRuntime("work");
+            await WaitUntilAsync(
+                transport,
+                () => transport.ReadyCount == 1,
+                TimeSpan.FromSeconds(5)
+            );
+            Assert.Equal(
+                "local:ping",
+                (
+                    await provider
+                        .GetRequiredService<IZLinkRouteClient>()
+                        .RequestToChannel("work", new EchoRequest("ping"))
+                        .Timeout(TimeSpan.FromSeconds(5))
+                        .Async<EchoReply>()
+                ).Value
+            );
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task WildcardBindWithoutAdvertiseHost_PublishesListenerStatusEndpoint()
+    {
+        var inner = new ZLinkInMemoryProviderLocationStore();
+        var services = new ServiceCollection();
+        services.AddSingleton<EchoProbe>();
+        services.AddSingleton(new ServerIdentity("wildcard"));
+        services.AddZLinkFramework(options =>
+        {
+            options.AddLocationStore(inner);
+            options.ConfigureNetwork().BindHost = "0.0.0.0";
+            options
+                .AddClientServerChannel("work")
+                .Server()
+                .Listen(0)
+                .AddSendHandler<EchoSendHandler, EchoSend>()
+                .AddRequestHandler<EchoHandler, EchoRequest, EchoReply>();
+        });
+        await using var provider = services.BuildServiceProvider();
+        var store = new ZLinkProviderLocationRepository(inner);
+        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+        var locations = provider.GetRequiredService<ZLinkLocationRuntime>();
+        var autoConnect = provider.GetRequiredService<ZLinkLocationAutoConnectHost>();
+
+        await locations.StartAsync(RoutingId.From("wildcard-owner"));
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            await autoConnect.StartAsync(
+                await runtime.EnsureStartedStateAsync(CancellationToken.None)
+            );
+            var descriptor = Assert.Single(
+                (await store.ListClientServersAsync("work", new ZLinkPageRequest(16))).Items
+            );
+            var status = runtime.GetListenerStatus(ZLinkListenerKind.ClientServer, "work");
+
+            Assert.Equal("127.0.0.1", new Uri(descriptor.Endpoint).Host);
+            Assert.Equal(status.Endpoint, descriptor.Endpoint);
+        }
+        finally
+        {
+            await autoConnect.StopAsync();
+            await runtime.StopAsync(CancellationToken.None);
+            await locations.StopAsync();
+        }
+    }
+
+    [Fact]
     public async Task AutoConnectHost_PublishesDescriptorAfterDegradedStartupClaimsLease()
     {
         var inner = new ZLinkInMemoryProviderLocationStore();

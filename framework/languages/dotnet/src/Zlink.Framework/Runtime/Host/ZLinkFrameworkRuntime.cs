@@ -61,6 +61,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     private readonly ZLinkSpotRouteRouterDispatcher _spotRouteRouter;
     private readonly ZLinkSpotRuntimeManager _spots;
     private readonly ZLinkFrameworkComponentStateFactory _stateFactory;
+    private ZLinkListenerRecords _listenerRecords = new();
     private readonly ZLinkStreamRuntimeManager _streams;
     private ZLinkMessageFlowTracer? _flow;
     private ILogger? _actorHandoffLogger;
@@ -1051,7 +1052,10 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             Volatile.Write(ref _lifecyclePhase, (int)ZLinkRuntimeLifecyclePhase.Starting);
             try
             {
-                _state = await _stateFactory.CreateAsync().ConfigureAwait(false);
+                // Each start owns a new record store, published before any listener binds.
+                var listenerRecords = new ZLinkListenerRecords();
+                Volatile.Write(ref _listenerRecords, listenerRecords);
+                _state = await _stateFactory.CreateAsync(listenerRecords).ConfigureAwait(false);
                 // A published relocation is not replayed during process startup.
                 // Recovery remains an explicit same-process operation; a new
                 // process must rediscover the current owner through the normal
@@ -1112,6 +1116,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             _gate.Release();
         }
     }
+
+    internal ZLinkListenerRecords ListenerRecords => Volatile.Read(ref _listenerRecords);
 
     /// <summary>
     /// Stops a runtime after the drain deadline has already expired. Unlike
@@ -1256,6 +1262,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             await CaptureAsync(workerPool.DisposeAsync).ConfigureAwait(false);
         if (logicalMulticastWorkerPool is not null && !logicalMulticastPoolDisposed)
             await CaptureAsync(logicalMulticastWorkerPool.DisposeAsync).ConfigureAwait(false);
+        await ListenerRecords.ClearAsync().ConfigureAwait(false);
         return failures;
 
         async ValueTask CaptureAsync(Func<ValueTask> cleanup)

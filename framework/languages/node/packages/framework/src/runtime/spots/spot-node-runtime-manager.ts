@@ -1,3 +1,4 @@
+import type { ZLinkListenerRecords } from '../foundation/listener-records';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
@@ -101,6 +102,7 @@ const ZLINK_SEND_DONT_WAIT = 1;
 const EMPTY_SPOT_METADATA: ReadonlyMap<string, string> = new Map();
 
 export interface ZLinkSpotNodeRuntimeManagerOptions {
+  readonly listenerRecords?: ZLinkListenerRecords;
   readonly registration: ZLinkFrameworkRegistration;
   readonly primaryMeshName?: string;
   readonly backendAdapterFactory: ZLinkBackendAdapterFactory;
@@ -378,6 +380,10 @@ export class ZLinkSpotNodeRuntimeManager {
         this.meshNodes.set(spotNodeName, node);
         this.meshPumps.set(spotNodeName, pump);
         this.meshCompletions.set(spotNodeName, completions);
+        const listenerEndpoint = node.status().localEndpoint;
+        if (listenerEndpoint.length > 0) {
+          this.options.listenerRecords?.record('routeMesh', spotNodeName, listenerEndpoint);
+        }
       } catch (error) {
         this.entryActivations.delete(spotNodeName);
         this.publishers.get(spotNodeName)?.close();

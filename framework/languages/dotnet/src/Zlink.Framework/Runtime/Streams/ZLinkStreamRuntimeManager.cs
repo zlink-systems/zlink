@@ -72,6 +72,13 @@ internal sealed class ZLinkStreamRuntimeManager(
                 );
                 state.StreamNodes.Add(streamNodeRegistration.StreamNodeName, runtime);
                 runtime.Start();
+                await state
+                    .ListenerRecords.RecordAsync(
+                        ZLinkListenerKind.Stream,
+                        streamNodeRegistration.StreamNodeName,
+                        advertisedEndpoint
+                    )
+                    .ConfigureAwait(false);
             }
             catch (Exception initializationFailure)
             {

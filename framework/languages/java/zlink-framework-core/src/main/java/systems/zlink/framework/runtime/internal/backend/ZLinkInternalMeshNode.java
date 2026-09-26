@@ -66,6 +66,9 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         // endpoint and do not need a separate listener identity.
     }
 
+    /** The endpoint this started node advertises for its bound listener. */
+    String advertisedEndpoint();
+
     void addChannel(String channelName);
 
     void setChannelWeight(String channelName, int weight);

@@ -1,3 +1,4 @@
+import { ZLinkListenerRecords } from '../foundation/listener-records';
 import {
   ZLinkFrameworkRuntimeState,
   type RoutingId,
@@ -170,14 +171,19 @@ export class ZLinkChannelSocketRegistry {
   >();
   private readonly fanoutTopologyHandlers = new Map<string, Set<() => void>>();
 
+  private readonly listenerRecords: ZLinkListenerRecords;
+
   constructor(
     private readonly registration: ZLinkFrameworkRegistration,
     private readonly adapter: ZLinkChannelBackendAdapter,
     private readonly context: ZLinkBackendContext,
     private readonly monitoringAdapter?: ZLinkMonitoringBackendAdapter,
     private readonly oneWayFailureSink?: (error: unknown) => void,
-    private readonly applicationJobQueue?: ApplicationJobQueue
-  ) {}
+    private readonly applicationJobQueue?: ApplicationJobQueue,
+    listenerRecords?: ZLinkListenerRecords
+  ) {
+    this.listenerRecords = listenerRecords ?? new ZLinkListenerRecords();
+  }
 
   async dispose(): Promise<void> {
     const clientServerConnections = [...new Set(this.clientServerConnections.values())];
@@ -306,14 +312,18 @@ export class ZLinkChannelSocketRegistry {
       });
     }
     this.channelRouters.set(channelName, router);
+    const endpoint = advertisedEndpoint(
+      router.lastEndpoint ?? channel.server.bind,
+      channel.server.advertiseHost
+    );
+    this.recordListener('clientServer', channelName, endpoint);
     if (!this.clientServerServerDescriptors.has(channelName)) {
-      const boundEndpoint = router.lastEndpoint ?? channel.server.bind;
       this.clientServerServerDescriptors.set(channelName, {
         channelName,
         serverRid: identity.serverRid,
         lifecycleGeneration: identity.lifecycleGeneration,
         descriptorRevision: 1n,
-        endpoint: advertisedEndpoint(boundEndpoint, channel.server.advertiseHost),
+        endpoint,
         weight: publicWeight,
         state: ZLinkFrameworkRuntimeState.Serving,
         securityIdentity: 'default',
@@ -326,29 +336,21 @@ export class ZLinkChannelSocketRegistry {
   }
 
   clientServerServerIdentity(channelName: string): ZLinkClientServerServerSocketIdentity {
-    const router = this.channelRouter(channelName);
+    this.channelRouter(channelName);
     const identity = this.clientServerIdentities.get(channelName);
-    const channel = this.registration.channels.get(channelName);
-    if (identity === undefined || channel?.server === undefined) {
+    const endpoint = this.listenerRecords.endpoint('clientServer', channelName);
+    if (identity === undefined || endpoint === undefined) {
       throw new ZLinkConfigurationException(`Channel server '${channelName}' is not registered.`);
     }
-    const boundEndpoint = router.lastEndpoint ?? channel.server.bind;
-    if (boundEndpoint === undefined || boundEndpoint.length === 0) {
-      throw new ZLinkConfigurationException(
-        `Channel server '${channelName}' did not report its bound endpoint.`
-      );
-    }
-    return {
-      ...identity,
-      endpoint: advertisedEndpoint(boundEndpoint, channel.server.advertiseHost)
-    };
+    return { ...identity, endpoint };
   }
 
-  clientServerListenerEndpoint(channelName: string): string | undefined {
-    const boundEndpoint = this.channelRouters.get(channelName)?.lastEndpoint;
-    return boundEndpoint === undefined || boundEndpoint.length === 0
-      ? undefined
-      : this.clientServerServerIdentity(channelName).endpoint;
+  fanoutPublisherEndpoint(channelName: string): string | undefined {
+    return this.listenerRecords.endpoint('fanout', channelName);
+  }
+
+  private recordListener(kind: 'clientServer' | 'fanout', name: string, endpoint: string): void {
+    this.listenerRecords.record(kind, name, endpoint);
   }
 
   clientServerServerSocket(channelName: string): ZLinkBackendRouterSocket {
@@ -1619,26 +1621,19 @@ export class ZLinkChannelSocketRegistry {
     applyFanoutPublisherSocketOptions(publisher, channel);
     publisher.bind(channel.publisher.bind);
     this.publishers.set(channelName, publisher);
+    const endpoint = buildAdvertisedEndpoint(
+      publisher.lastEndpoint ?? channel.publisher.bind,
+      channel.publisher.advertiseHost
+    );
+    if (endpoint !== undefined && endpoint.length > 0) {
+      this.recordListener('fanout', channelName, endpoint);
+    }
     this.fanoutPublisherNextBeacon.set(
       channelName,
       performance.now() + CLIENT_SERVER_PROBE_INTERVAL_MS
     );
     this.ensureClientServerLivenessTimer();
     return publisher;
-  }
-
-  fanoutPublisherEndpoint(channelName: string): string | undefined {
-    const channel = this.registration.channels.get(channelName);
-    const publisher = this.publishers.get(channelName);
-    const boundEndpoint = publisher?.lastEndpoint;
-    if (
-      channel?.publisher === undefined ||
-      boundEndpoint === undefined ||
-      boundEndpoint.length === 0
-    ) {
-      return undefined;
-    }
-    return advertisedEndpoint(boundEndpoint, channel.publisher.advertiseHost);
   }
 
   routeRouter(routerChannelId: string): ZLinkBackendRouterSocket {

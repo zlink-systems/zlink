@@ -287,6 +287,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         (meshName, node) -> {
                             node.setPeerAdmissionSealGate(() -> this.meshDrains.isSealed(meshName));
                             this.channels.registerSpotRouterNode(meshName, node.spotNode());
+                            recordMeshListener(meshName, node);
                         });
         if (this.locationStores != null
                 && this.locationStores.unifiedStore() instanceof ZLinkLocationRepository store) {
@@ -408,6 +409,13 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         this.actors);
         this.streams = streamSubsystem.streams();
         if (this.streams != null) {
+            for (var streamNode : this.registration.streamNodes()) {
+                String endpoint = this.streams.boundListenerEndpoint(streamNode);
+                if (endpoint != null) {
+                    this.channels.recordListener(
+                            ZLinkListenerKind.STREAM, streamNode.name(), endpoint);
+                }
+            }
             this.meshNodes
                     .nodesByName()
                     .values()
@@ -517,6 +525,12 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                         + failure.getMessage());
                             }
                         });
+    }
+
+    // ZLinkMeshNodesRuntime.start returns after every node has bound, so the record is written
+    // at the end of that bind. The node owns the bind and computes its advertised endpoint.
+    private void recordMeshListener(String meshName, ZLinkInternalMeshNode node) {
+        channels.recordListener(ZLinkListenerKind.ROUTE_MESH, meshName, node.advertisedEndpoint());
     }
 
     private void completeOwnerBoundStartup() {
@@ -665,47 +679,12 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     /**
-     * Returns the endpoint the current local listener provides to remote processes. The query only
-     * succeeds after the selected listener has completed its bind operation and before the runtime
-     * begins to close.
+     * Returns the endpoint the current local listener provides to remote processes. The query reads
+     * the listener's bound record once; a missing record is a configuration error.
      */
     public ZLinkListenerStatus listenerStatus(ZLinkListenerKind kind, String name) {
-        Objects.requireNonNull(kind, "kind");
-        if (name == null || name.isBlank()) {
-            throw new IllegalArgumentException("name is required");
-        }
-        if (closeGate.closing()) {
-            throw new ZLinkConfigurationException(
-                    "listener is not bound because the framework runtime is closed: " + name);
-        }
-        String endpoint =
-                switch (kind) {
-                    case ROUTE_MESH -> {
-                        MeshNodeRegistration mesh =
-                                registration.meshNodes().stream()
-                                        .filter(value -> value.meshName().equals(name))
-                                        .findFirst()
-                                        .orElseThrow(
-                                                () ->
-                                                        new ZLinkConfigurationException(
-                                                                "RouteMesh is not configured: "
-                                                                        + name));
-                        ZLinkInternalMeshNode node = meshNodes.nodesByName().get(name);
-                        if (node == null) {
-                            throw new ZLinkConfigurationException(
-                                    "RouteMesh is not started: " + name);
-                        }
-                        String actual = node.status().localEndpoint();
-                        if (actual == null || actual.isBlank() || actual.endsWith(":0")) {
-                            throw new ZLinkConfigurationException(
-                                    "RouteMesh listener endpoint is not ready: " + name);
-                        }
-                        yield mesh.advertisedEndpoint(actual);
-                    }
-                    case CLIENT_SERVER, FANOUT -> channels.listenerEndpoint(kind, name);
-                    case STREAM -> streams.listenerEndpoint(name);
-                };
-        return new ZLinkListenerStatus(kind, name, endpoint, Instant.now());
+        return new ZLinkListenerStatus(
+                kind, name, channels.listenerEndpoint(kind, name), Instant.now());
     }
 
     public ZLinkSpotManager spotManager() {
@@ -2060,6 +2039,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         return shutdown.closeAsync()
                 .whenComplete(
                         (ignored, failure) -> {
+                            channels.clearListenerRecords();
                             if (!drainStarted.get() && failure == null) {
                                 drained.complete(new InternalDrained());
                             }

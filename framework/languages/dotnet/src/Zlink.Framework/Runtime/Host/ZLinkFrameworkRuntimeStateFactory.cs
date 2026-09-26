@@ -9,7 +9,9 @@ internal sealed class ZLinkFrameworkComponentStateFactory(
     ZLinkSpotRuntimeManager spots
 )
 {
-    public async ValueTask<ZLinkFrameworkComponentState> CreateAsync()
+    public async ValueTask<ZLinkFrameworkComponentState> CreateAsync(
+        ZLinkListenerRecords listenerRecords
+    )
     {
         var effectiveProcessorCount =
             ZLinkApplicationJobQueueCapacityResolver.ResolveEffectiveProcessorCount(
@@ -48,7 +50,8 @@ internal sealed class ZLinkFrameworkComponentStateFactory(
                 frameworkRuntime.Services,
                 frameworkRuntime.PrepareErrorSink(),
                 frameworkRuntime.ExecutionOwner,
-                applicationJobQueueCapacity
+                applicationJobQueueCapacity,
+                listenerRecords
             );
             await channels.InitializeInboundChannelsAsync(state).ConfigureAwait(false);
             await channels.InitializePublisherChannelsAsync(state).ConfigureAwait(false);

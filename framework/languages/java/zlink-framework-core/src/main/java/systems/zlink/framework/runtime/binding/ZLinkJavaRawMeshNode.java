@@ -7264,6 +7264,15 @@ final class ZLinkJavaRawMeshNode
                 0);
     }
 
+    @Override
+    public String advertisedEndpoint() {
+        ZLinkServiceNodeDescriptor descriptor = localDescriptor;
+        if (descriptor == null) {
+            throw new IllegalStateException("mesh node is not started");
+        }
+        return descriptor.advertisedEndpoint();
+    }
+
     private String advertisedEndpoint(String actualEndpoint) {
         return ZLinkListenerIdentity.advertisedEndpoint(actualEndpoint, advertiseHost);
     }
