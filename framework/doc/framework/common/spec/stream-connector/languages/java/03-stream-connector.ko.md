@@ -637,7 +637,7 @@ class ZLinkStreamTypedSequenceCall<TPayload> {
 
 Kotlin wrapper는 Java connector와 다른 상태 전이나 buffering 정책을 만들면 안 된다. options를
 복사하는 extension은 **현재 정의된 모든 option 값을 보존해야 한다.**
-dispatch mode를 따르는 callback의 `Flow` 표면은 대응하는 Java 등록을 `callbackFlow`로 감싼다 — connector의 `messages(...)`·
+dispatch mode를 따르는 callback의 `Flow` 표면은 대응하는 Java 등록을 감싼다 — connector의 `messages(...)`·
 `errors()`·`actorBound()`·`actorUnbound()`는 `on(...)`·`onErrorReceived(...)`·`onActorBound(...)`·
 `onActorUnbound(...)`를, Actor의 `messages(...)`는 그 Actor handle의 `ZLinkStreamActor.on(...)`을 감싼다. 따라서 manual [dispatch mode](../../../server/00-foundation/02-glossary.ko.md#dispatch-mode)에서는 Java와 마찬가지로
 Kotlin wrapper의 `dispatch().await()`가 호출되어야 collector가 메시지나 error event를 받는다.
