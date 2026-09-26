@@ -173,13 +173,12 @@ ZLINK_EXPORT zlink_close_result_t zlink_ctx_term(void *context_);
 Context를 파괴한다. 이 호출은 context 내에서 생성된 모든 socket이 닫힐 때까지
 blocking될 수 있다. Context에 속한 socket의 blocking 작업은 `zlink_ctx_shutdown`이
 호출되거나 모든 socket이 닫힌 후 `ETERM`을 반환한다. 각 context는 정확히
-한 번만 종료해야 한다.
+한 번만 종료해야 한다. signal이 이 대기를 중단하면 Core가 대기를 이어 가므로, `zlink_ctx_term`은 `EINTR`로 실패하지 않는다.
 
 **반환값:** 성공 시 `ZLINK_CLOSE_OK`, 실패 시 `zlink_close_result_t` 값. `zlink_errno()`는 진단용 내부 errno를 그대로 유지한다.
 
 **에러:**
 - `EFAULT` -- 유효하지 않은 context 핸들.
-- `EINTR` -- signal에 의해 종료가 중단됨; 재시도할 수 있다.
 
 **스레드 안전성:** 모든 스레드에서 안전하게 호출할 수 있지만, context당 정확히
 한 번만 호출해야 한다. 이 호출이 반환된 후에는 context 핸들을 사용하지
@@ -359,7 +358,7 @@ unit test 하나로 이어진다.
 - `zlink_ctx_shutdown`을 호출하면 그 context에 속한 socket의 blocking 작업이 즉시 `ETERM`으로 반환된다.
 - `zlink_ctx_term`은 context당 한 번 성공하고, 그 안의 모든 socket이 닫힐 때까지 blocking될 수 있다.
 - 유효하지 않은 context 핸들로 `zlink_ctx_term`·`zlink_ctx_shutdown`을 호출하면 `EFAULT`다.
-- signal로 `zlink_ctx_term`이 중단되면 `EINTR`이며 재시도할 수 있다.
+- signal이 `zlink_ctx_term`의 대기를 중단하면 Core가 대기를 이어 가므로 `EINTR`로 실패하지 않는다.
 
 **옵션**
 - `zlink_ctx_set`에 알 수 없는 옵션이나 유효하지 않은 값을 주면 `EINVAL`, 유효하지 않은 핸들이면 `EFAULT`(`ZLINK_CONFIG_INVALID_HANDLE`)다.
