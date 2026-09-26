@@ -183,7 +183,7 @@ void zlink::ctx_t::debug_dump_sockets_locked (const char *phase_) const
     fflush (stderr);
 }
 
-int zlink::ctx_t::terminate ()
+void zlink::ctx_t::terminate ()
 {
     //  remove_task() waits for an in-flight auto-HWM task.  That task takes
     //  _slot_sync, so quiesce it before taking the context slot lock for the
@@ -194,8 +194,7 @@ int zlink::ctx_t::terminate ()
 
     if (begin_shutdown_locked (true)) {
         _slot_sync.unlock ();
-        if (wait_for_reaper_done () == -1)
-            return -1;
+        wait_for_reaper_done ();
         _slot_sync.lock ();
         zlink_assert (_socket_registry.empty ());
     }
@@ -209,8 +208,6 @@ int zlink::ctx_t::terminate ()
     //  Context is API-created on heap; shutdown path owns final deletion once
     //  reaper confirms all sockets are gone.
     zlink::release_heap_owned (this);
-
-    return 0;
 }
 
 int zlink::ctx_t::shutdown ()

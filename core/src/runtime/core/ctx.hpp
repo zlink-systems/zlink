@@ -50,7 +50,7 @@ class ctx_t ZLINK_FINAL
     //  no more sockets open it'll cause all the infrastructure to be shut
     //  down. If there are open sockets still, the deallocation happens
     //  after the last one is closed.
-    int terminate ();
+    void terminate ();
 
     // This function starts the terminate process by unblocking any blocking
     // operations currently in progress and stopping any more socket activity
@@ -170,7 +170,7 @@ class ctx_t ZLINK_FINAL
     void teardown_runtime ();
     void flush_pending_inproc_locked ();
     bool begin_shutdown_locked (bool allow_fork_cleanup_);
-    int wait_for_reaper_done ();
+    void wait_for_reaper_done ();
     static int clipped_maxsocket (int max_requested_);
     void debug_dump_sockets_locked (const char *phase_) const;
     static void auto_hwm_recalc_task_main (void *arg_);

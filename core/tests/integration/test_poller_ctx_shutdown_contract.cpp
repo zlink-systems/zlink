@@ -471,10 +471,12 @@ void test_close_after_shutdown_reports_pollerr_once ()
     TEST_ASSERT_EQUAL_INT (1, closed.rc);
     TEST_ASSERT_EQUAL_INT (ZLINK_POLLERR, closed.events);
 
-    const wait_observation_t after = wait_once (poller, 100);
+    //  Only a closed socket that already reported POLLERR is left, so the
+    //  wait does not wait for its timeout (Polling 9).
+    const wait_observation_t after = wait_once (poller, 1000);
     TEST_ASSERT_EQUAL_INT (0, after.rc);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, after.error);
-    TEST_ASSERT_GREATER_OR_EQUAL_INT64 (80, after.elapsed_ms);
+    TEST_ASSERT_LESS_THAN_INT64 (500, after.elapsed_ms);
 
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_poller_remove (poller, socket));
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_poller_destroy (&poller));

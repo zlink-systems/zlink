@@ -16,6 +16,11 @@
 #include <vector>
 
 #include <atomic>
+
+#if !defined(ZLINK_HAVE_WINDOWS)
+#include <pthread.h>
+#include <signal.h>
+#endif
 bool should_run_ctx_destroy_test (const char *name_)
 {
     const char *const selected = getenv ("ZLINK_TEST_CASE");
@@ -453,6 +458,56 @@ void test_zlink_ctx_shutdown_null_fails ()
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_INVALID_HANDLE, rc);
     TEST_ASSERT_EQUAL_INT (EFAULT, errno);
 }
+#if !defined(ZLINK_HAVE_WINDOWS)
+static std::atomic<int> ctx_term_interrupts (0);
+
+static void count_ctx_term_interrupt (int)
+{
+    ctx_term_interrupts.fetch_add (1);
+}
+
+//  A signal that interrupts zlink_ctx_term's wait does not end the call: the
+//  term keeps waiting until the last socket closes, then succeeds.
+void test_ctx_term_resumes_after_signal ()
+{
+    struct sigaction action = {};
+    struct sigaction previous = {};
+    action.sa_handler = count_ctx_term_interrupt;
+    sigemptyset (&action.sa_mask);
+    TEST_ASSERT_EQUAL_INT (0, sigaction (SIGURG, &action, &previous));
+
+    void *ctx = zlink_ctx_new ();
+    TEST_ASSERT_NOT_NULL (ctx);
+    void *socket = zlink_socket (ctx, ZLINK_SOCKET_PAIR);
+    TEST_ASSERT_NOT_NULL (socket);
+
+    std::atomic<bool> done (false);
+    zlink_close_result_t result = ZLINK_CLOSE_INTERNAL_ERROR;
+    std::thread terminator ([&] {
+        result = zlink_ctx_term (ctx);
+        done.store (true);
+    });
+    ctx_term_interrupts.store (0);
+    const pthread_t target = terminator.native_handle ();
+    for (int elapsed = 0; elapsed < 300 && !done.load (); elapsed += 10) {
+        TEST_ASSERT_EQUAL_INT (0, pthread_kill (target, SIGURG));
+        msleep (10);
+    }
+    const bool ended_by_signal = done.load ();
+
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_close (socket));
+    terminator.join ();
+    if (ended_by_signal)
+        (void) zlink_ctx_term (ctx);
+    TEST_ASSERT_EQUAL_INT (0, sigaction (SIGURG, &previous, NULL));
+
+    TEST_ASSERT_TRUE (ctx_term_interrupts.load () > 0);
+    TEST_ASSERT_FALSE_MESSAGE (ended_by_signal,
+                               "zlink_ctx_term ended while a socket was open");
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, result);
+}
+#endif
+
 int main ()
 {
     setup_test_environment ();
@@ -471,6 +526,9 @@ int main ()
     RUN_CTX_DESTROY_TEST (test_zlink_ctx_term_null_fails);
     RUN_CTX_DESTROY_TEST (test_zlink_term_null_fails);
     RUN_CTX_DESTROY_TEST (test_zlink_ctx_shutdown_null_fails);
+#if !defined(ZLINK_HAVE_WINDOWS)
+    RUN_CTX_DESTROY_TEST (test_ctx_term_resumes_after_signal);
+#endif
 #undef RUN_CTX_DESTROY_TEST
     return UNITY_END ();
 }

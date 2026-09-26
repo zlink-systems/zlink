@@ -118,15 +118,12 @@ zlink_close_result_t zlink_ctx_term (void *ctx_)
         return ZLINK_CLOSE_INVALID_HANDLE;
     }
 
-    const int rc = (static_cast<zlink::ctx_t *> (ctx_))->terminate ();
-    const int en = errno;
-
-    if (!rc || en != EINTR) {
-        zlink::shutdown_network ();
-    }
-
-    errno = en;
-    return zlink::close_result_internal::from_rc (rc);
+    //  terminate() waits until every socket is closed; a signal does not end
+    //  that wait, so the call always completes.
+    (static_cast<zlink::ctx_t *> (ctx_))->terminate ();
+    zlink::shutdown_network ();
+    errno = 0;
+    return ZLINK_CLOSE_OK;
 }
 
 zlink_close_result_t zlink_ctx_shutdown (void *ctx_)

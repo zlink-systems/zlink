@@ -107,7 +107,9 @@ class Synchronizer:
         if path not in self.changed:
             self.changed.append(path)
         if self.write:
-            path.write_text(result, encoding="utf-8")
+            # Path.write_text accepts newline= only from Python 3.10.
+            with open(path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(result)
 
     def regex(
         self,

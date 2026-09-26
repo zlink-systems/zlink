@@ -713,7 +713,12 @@ void test_request_reply_timeout_resolution_is_exactly_once_under_race ()
 
 void test_dealer_none_request_waits_for_never_handshaken_router ()
 {
-    const char *const endpoint = endpoint_3 ();
+    // The dealer connects before any router binds. A plain listener holds an
+    // OS-assigned port until just before the router binds it, so a parallel
+    // test cannot be assigned the same port while the dealer waits. The
+    // listener never speaks ZMTP, so the dealer never completes a handshake.
+    char endpoint[MAX_SOCKET_STRING];
+    const fd_t reserved = bind_socket_resolve_port ("127.0.0.1", "0", endpoint);
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
     TEST_ASSERT_NOT_NULL (dealer);
     const int send_timeout_ms = 3000;
@@ -743,6 +748,7 @@ void test_dealer_none_request_waits_for_never_handshaken_router ()
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
     TEST_ASSERT_NOT_NULL (router);
     set_routing_id_text (router, "first-handshake-router");
+    TEST_ASSERT_EQUAL_INT (0, close (reserved));
     TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (router, endpoint));
     submit_thread.join ();
     TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, submit_result);

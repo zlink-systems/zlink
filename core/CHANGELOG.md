@@ -12,6 +12,36 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-09-26
+
+The public C API and ABI are unchanged from 1.8.0
+(`LIBZLINK_ABI_SOVERSION=0`).
+
+### Changed
+
+- `zlink_poller_wait` and `zlink_poll` no longer wait, for any timeout value,
+  when nothing registered can become ready: no registration has non-zero
+  `events`, or every such registration is a closed socket. The call returns a
+  `POLLERR` not yet reported for a closed socket, or `0` with
+  `ZLINK_CONFIG_OK`. This covers a poller with no registered source, which
+  failed with `EFAULT` (`ZLINK_CONFIG_INVALID_HANDLE`) for a negative timeout
+  and slept for a finite one, and a poller whose closed sockets had already
+  reported `POLLERR` (#1087).
+- A signal that interrupts `zlink_poll` or `zlink_poller_wait` no longer ends
+  the call with `EINTR`. The wait continues until an event arrives or the
+  original timeout expires (#1087).
+- A signal that interrupts `zlink_ctx_term` no longer ends the call with
+  `EINTR`. The call keeps waiting until every socket is closed, then
+  succeeds (#1087).
+
+### Fixed
+
+- ROUTER no longer discards the pending DATA and REQUEST records of a selected
+  route that ends without a successor; they stay receivable. They are
+  discarded when another pipe is selected for the same routing id, together
+  with a record of that routing id staged by a receive with too few part
+  slots. This restores the 1.7.0 behavior that 1.8.0 broke (#1087).
+
 ## [1.8.0] - 2026-09-26
 
 The public C API adds ROUTER route publication. Existing symbols and the ABI

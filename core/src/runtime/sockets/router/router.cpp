@@ -69,7 +69,18 @@ void zlink::router_t::publish_route_change (
          standby != _standby_pipes.end (); ++standby) {
         if (!(standby->second < routing_id_)
             && !(routing_id_ < standby->second))
-            (void) discard_route_records (standby->first, discarded_);
+            discard_route_records (standby->first, discarded_);
+    }
+    // An ended route keeps its records, including one staged in the part
+    // helper, until another pipe is selected for its RID.
+    if (lookup_out_pipe (routing_id_)) {
+        const std::map<blob_t, pipe_t *>::iterator ended =
+          _ended_routes.find (routing_id_);
+        if (ended != _ended_routes.end ()) {
+            discard_route_records (ended->second, discarded_);
+            _ended_routes.erase (ended);
+        }
+        discard_staged_record (routing_id_, discarded_);
     }
     _route_revision.fetch_add (1, std::memory_order_release);
     static_cast<mailbox_t *> (get_mailbox ())->signal ();
@@ -127,24 +138,14 @@ bool zlink::router_t::is_selected_pipe (pipe_t *pipe_,
     return token != 0 && (generation_ == 0 || token == generation_);
 }
 
-zlink::socket_base_t *zlink::router_t::discard_route_records (
-  pipe_t *pipe_, route_discard_batch_t *discarded_,
-  pipe_t **staged_route_source_pipe_out_,
-  uint64_t *staged_reply_token_out_, zlink_routing_id_t *staged_reply_rid_out_)
+void zlink::router_t::discard_route_records (
+  pipe_t *pipe_, route_discard_batch_t *discarded_)
 {
-    if (staged_route_source_pipe_out_)
-        *staged_route_source_pipe_out_ = NULL;
-    if (staged_reply_token_out_)
-        *staged_reply_token_out_ = 0;
-    // The route mutex is held by the caller. A selected route loses its
-    // token before queued or prefetched records can be read again.
+    // The route mutex is held by the caller. A selected or ended route loses
+    // its token before queued or prefetched records can be read again.
     const uint64_t generation = pipe_->router_route_binding_token ();
-    if (generation != 0) {
-        const out_pipe_t *const selected =
-          lookup_out_pipe (pipe_->get_routing_id ());
-        zlink_assert (selected && selected->pipe == pipe_);
+    if (generation != 0)
         pipe_->invalidate_router_route_binding ();
-    }
     zlink_assert (!is_selected_pipe (pipe_));
     zlink_assert (discarded_);
     route_discard_batch_t::followup_t followup = {pipe_, false, false};
@@ -171,25 +172,38 @@ zlink::socket_base_t *zlink::router_t::discard_route_records (
         }
         reset_current_in_after_multipart_abort ();
     }
+}
+
+void zlink::router_t::discard_staged_record (const blob_t &routing_id_,
+                                             route_discard_batch_t *discarded_)
+{
+    // The route mutex is held by the caller, which has just selected a new
+    // pipe for this RID. A staged record from this RID therefore came from a
+    // pipe that is no longer selected, even when that pipe has already been
+    // detached from the fair queue.
     const std::shared_ptr<part_helper_internal::handle_state_t> state =
       part_helper_state ();
-    if (!state || generation == 0)
-        return NULL;
+    if (!state)
+        return;
     std::lock_guard<std::mutex> lock (state->mutex);
+    const zlink_routing_id_t &source = state->recv.source_node_rid;
     if (!state->recv.active
         || state->recv.family != part_helper_internal::recv_family_router
-        || state->recv.route_generation != generation)
-        return NULL;
-    zlink_assert (staged_route_source_pipe_out_);
+        || source.size != routing_id_.size ()
+        || memcmp (source.data, routing_id_.data (), source.size) != 0)
+        return;
+    zlink_assert (!discarded_->staged_hold_socket
+                  && !discarded_->staged_route_source_pipe
+                  && discarded_->staged_reply_token == 0);
     if (state->recv.request_seq != 0) {
-        zlink_assert (staged_reply_token_out_ && staged_reply_rid_out_);
-        *staged_reply_token_out_ = state->recv.request_seq;
-        *staged_reply_rid_out_ = state->recv.source_node_rid;
+        discarded_->staged_reply_token = state->recv.request_seq;
+        discarded_->staged_reply_rid = state->recv.source_node_rid;
     }
-    *staged_route_source_pipe_out_ = state->recv.route_source_pipe;
+    discarded_->staged_route_source_pipe = state->recv.route_source_pipe;
     state->recv.route_source_pipe = NULL;
     discarded_->staged_parts.take_from (&state->recv.buffered_parts);
-    return part_helper_internal::reset_recv_sequence (&state->recv);
+    discarded_->staged_hold_socket =
+      part_helper_internal::reset_recv_sequence (&state->recv);
 }
 
 zlink::router_t::route_discard_batch_t::~route_discard_batch_t ()
@@ -224,6 +238,20 @@ void zlink::router_t::finish_route_discard (route_discard_batch_t *batch_)
     }
     batch_->followups.clear ();
     batch_->close_messages ();
+    if (batch_->staged_hold_socket) {
+        batch_->staged_hold_socket->end_public_part_receive_delivery_hold ();
+        batch_->staged_hold_socket = NULL;
+    }
+    if (batch_->staged_route_source_pipe) {
+        batch_->staged_route_source_pipe->release_lifetime_ref ();
+        batch_->staged_route_source_pipe = NULL;
+    }
+    if (batch_->staged_reply_token != 0) {
+        socket_reqrep_internal::revoke_router_reply_target (
+          make_socket_handle (this), &batch_->staged_reply_rid,
+          batch_->staged_reply_token);
+        batch_->staged_reply_token = 0;
+    }
 }
 
 uint64_t zlink::router_t::last_recv_route_generation () const
@@ -363,6 +391,10 @@ void zlink::router_t::xpipe_terminated (pipe_t *pipe_)
             _terminate_current_in = false;
             _more_in = false;
         }
+        const std::map<blob_t, pipe_t *>::iterator ended =
+          _ended_routes.find (pipe_->get_routing_id ());
+        if (ended != _ended_routes.end () && ended->second == pipe_)
+            _ended_routes.erase (ended);
         _fq.pipe_terminated (pipe_);
     }
     finish_route_discard (&discarded);
@@ -372,10 +404,6 @@ void zlink::router_t::xsocket_msg_pipe_terminated (pipe_t *pipe_)
 {
     bool rollback_outbound = false;
     pipe_t *promoted_writable_pipe = NULL;
-    socket_base_t *staged_hold_socket = NULL;
-    pipe_t *staged_route_source_pipe = NULL;
-    uint64_t staged_reply_token = 0;
-    zlink_routing_id_t staged_reply_rid = {};
     route_discard_batch_t discarded;
     {
         std::lock_guard<std::mutex> route_lifecycle_lock (
@@ -422,10 +450,18 @@ void zlink::router_t::xsocket_msg_pipe_terminated (pipe_t *pipe_)
         }
         const bool selected_route_lost = is_selected_pipe (pipe_);
         if (0 == _anonymous_pipes.erase (pipe_)) {
-            if (selected_route_lost)
-                staged_hold_socket = discard_route_records (
-                  pipe_, &discarded, &staged_route_source_pipe, &staged_reply_token,
-                  &staged_reply_rid);
+            // The end of a selected pipe is not a selection. Its records stay
+            // receivable until a successor is selected for this RID.
+            if (selected_route_lost && _fq.has_pipe (pipe_)) {
+                const bool retained =
+                  _ended_routes
+                    .ZLINK_MAP_INSERT_OR_EMPLACE (
+                      blob_t (terminated_routing_id.data (),
+                              terminated_routing_id.size ()),
+                      pipe_)
+                    .second;
+                zlink_assert (retained);
+            }
             erase_out_pipe (pipe_);
             rollback_outbound = true;
             if (pipe_ == _current_out) {
@@ -441,7 +477,7 @@ void zlink::router_t::xsocket_msg_pipe_terminated (pipe_t *pipe_)
             const bool locally_initiated = standby_out->locally_initiated;
             const uint32_t peer_weight = standby_out->weight;
             zlink_assert (!is_selected_pipe (standby_to_promote));
-            (void) discard_route_records (standby_to_promote, &discarded);
+            discard_route_records (standby_to_promote, &discarded);
             erase_out_pipe (standby_to_promote);
             standby_to_promote->set_router_socket_routing_id (
               standby_routing_id);
@@ -461,13 +497,6 @@ void zlink::router_t::xsocket_msg_pipe_terminated (pipe_t *pipe_)
             publish_route_change (terminated_routing_id, &discarded);
     }
     finish_route_discard (&discarded);
-    if (staged_hold_socket)
-        staged_hold_socket->end_public_part_receive_delivery_hold ();
-    if (staged_route_source_pipe)
-        staged_route_source_pipe->release_lifetime_ref ();
-    if (staged_reply_token != 0)
-        socket_reqrep_internal::revoke_router_reply_target (
-          make_socket_handle (this), &staged_reply_rid, staged_reply_token);
     if (rollback_outbound)
         pipe_->rollback ();
     if (promoted_writable_pipe) {

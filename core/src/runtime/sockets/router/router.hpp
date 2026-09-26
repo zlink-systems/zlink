@@ -79,6 +79,11 @@ class router_t : public routing_socket_base_t
     bool has_route_change () const ZLINK_OVERRIDE;
     int routes_snapshot (zlink_router_route_t *routes_, size_t capacity_,
                          size_t *count_);
+    //  True while the pipe holds a route binding token: it is the selected
+    //  pipe of its RID, or the selected pipe that ended without a successor
+    //  and still owns its pending records (see _ended_routes). Only pipes in
+    //  _out_pipes appear in the snapshot. With generation_, the token must
+    //  also equal that generation.
     bool is_selected_pipe (pipe_t *pipe_, uint64_t generation_ = 0,
                            uint64_t *observed_generation_out_ = NULL) const;
     template <typename Action>
@@ -145,6 +150,13 @@ class router_t : public routing_socket_base_t
                             void *observer_userdata_);
     struct route_discard_batch_t
     {
+        route_discard_batch_t () :
+            staged_hold_socket (NULL),
+            staged_route_source_pipe (NULL),
+            staged_reply_token (0),
+            staged_reply_rid ()
+        {
+        }
         ~route_discard_batch_t ();
         void close_messages ();
         struct followup_t
@@ -156,25 +168,22 @@ class router_t : public routing_socket_base_t
         std::deque<msg_t> messages;
         part_helper_internal::recv_part_buffer_t staged_parts;
         std::vector<followup_t> followups;
+        //  The part helper stages at most one record per socket, so one
+        //  discard batch releases at most one staged record.
+        socket_base_t *staged_hold_socket;
+        pipe_t *staged_route_source_pipe;
+        uint64_t staged_reply_token;
+        zlink_routing_id_t staged_reply_rid;
     };
     void finish_route_discard (route_discard_batch_t *batch_);
     struct route_adoption_actions_t
     {
         route_adoption_actions_t () :
-            terminate_pipe (NULL),
-            superseded_pipe (NULL),
-            staged_hold_socket (NULL),
-            staged_route_source_pipe (NULL),
-            staged_reply_token (0),
-            cache_completion (false)
+            terminate_pipe (NULL), superseded_pipe (NULL), cache_completion (false)
         {
         }
         pipe_t *terminate_pipe;
         pipe_t *superseded_pipe;
-        socket_base_t *staged_hold_socket;
-        pipe_t *staged_route_source_pipe;
-        uint64_t staged_reply_token;
-        zlink_routing_id_t staged_reply_rid;
         bool cache_completion;
         route_discard_batch_t discarded;
     };
@@ -192,11 +201,10 @@ class router_t : public routing_socket_base_t
                                route_discard_batch_t *discarded_);
     uint64_t next_route_generation ();
     void discard_unselected_record (msg_t *first_, pipe_t *pipe_);
-    socket_base_t *discard_route_records (
-      pipe_t *pipe_, route_discard_batch_t *discarded_,
-      pipe_t **staged_route_source_pipe_out_ = NULL,
-      uint64_t *staged_reply_token_out_ = NULL,
-      zlink_routing_id_t *staged_reply_rid_out_ = NULL);
+    void discard_route_records (pipe_t *pipe_,
+                                route_discard_batch_t *discarded_);
+    void discard_staged_record (const blob_t &routing_id_,
+                                route_discard_batch_t *discarded_);
     uint64_t recv_selected (msg_t *msg_, pipe_t **pipe_,
                             pipe_t::read_admission_fn *admission_,
                             void *userdata_);
@@ -268,6 +276,21 @@ class router_t : public routing_socket_base_t
     //  id instead of being terminated into a reconnect loop. If the selected
     //  pipe closes, the existing standby is promoted immediately.
     std::map<pipe_t *, blob_t> _standby_pipes;
+
+    //  A selected pipe that ends without a successor leaves the selected
+    //  routes but keeps its binding, so its pending records stay receivable.
+    //  The next selection for the same routing id discards them.
+    //  Invariants, all under _out_pipes_sync:
+    //  - An entry exists only while its RID has no pipe in _out_pipes: it is
+    //    added when the selected pipe ends with no successor and removed by
+    //    the next selection for that RID (publish_route_change).
+    //  - Only a pipe still attached to _fq is added. Such a pipe always gets
+    //    xpipe_terminated, which removes the entry before the pipe is freed.
+    //  - A record already staged in the part helper is not in the pipe; it
+    //    may outlive both the pipe's queue and this entry, holding its own
+    //    lifetime reference. The next selection discards it by RID
+    //    (discard_staged_record), not through this map.
+    std::map<blob_t, pipe_t *> _ended_routes;
 
     //  The pipe we are currently writing to.
     zlink::pipe_t *_current_out;

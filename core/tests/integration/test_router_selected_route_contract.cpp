@@ -428,6 +428,231 @@ void test_route_change_after_snapshot_keeps_pollroute_ready ()
     test_context_socket_close_zero_linger (first_server);
 }
 
+void *dealer_as (const char *rid_, const char *endpoint_)
+{
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    const int zero = 0;
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_set_routing_id (dealer, rid_, strlen (rid_)));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_set_option (dealer, ZLINK_OPT_RECONNECT_IVL, &zero,
+                                             sizeof zero));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_connect (dealer, endpoint_));
+    return dealer;
+}
+
+void dealer_send (void *dealer_, const char *payload_)
+{
+    zlink_msg_t part;
+    const size_t size = strlen (payload_);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init_size (&part, size));
+    memcpy (zlink_msg_data (&part), payload_, size);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK,
+                           zlink_send (dealer_, &part, 1, ZLINK_SEND_FLAGS_NONE,
+                                       NULL, NULL));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
+}
+
+void wait_route_loss (void *socket_)
+{
+    const clock_type::time_point deadline =
+      clock_type::now () + std::chrono::milliseconds (wait_ms);
+    do {
+        zlink_router_route_t rows[2] = {};
+        if (snapshot (socket_, rows, 2) == 0)
+            return;
+        zlink_pollitem_t item = {socket_, 0, ZLINK_POLLROUTE, 0};
+        zlink_config_result_t error = ZLINK_CONFIG_INTERNAL_ERROR;
+        TEST_ASSERT_TRUE (zlink_poll (&item, 1, 10, &error) >= 0);
+    } while (clock_type::now () < deadline);
+    TEST_FAIL_MESSAGE ("route loss was not published");
+}
+
+// A selected pipe that ends without a successor is not a selection change:
+// the records its peer submitted before close stay receivable.
+void test_ended_route_without_successor_keeps_pending_records ()
+{
+    void *server = router ("S");
+    const char *endpoint = "inproc://selected-route-ended-keeps";
+    TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (server, endpoint));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_set_option (server, ZLINK_OPT_RCVTIMEO, &wait_ms,
+                                             sizeof wait_ms));
+    void *dealer = dealer_as ("D", endpoint);
+    dealer_send (dealer, "hello");
+    recv_data (server, "D", "hello");
+    const uint64_t selected = zlink_router_recv_route_generation (server);
+    TEST_ASSERT_NOT_EQUAL (0, selected);
+
+    dealer_send (dealer, "p0");
+    dealer_send (dealer, "p1");
+    dealer_send (dealer, "p2");
+    test_context_socket_close (dealer);
+    wait_route_loss (server);
+
+    recv_data (server, "D", "p0");
+    TEST_ASSERT_EQUAL_UINT64 (selected,
+                              zlink_router_recv_route_generation (server));
+    recv_data (server, "D", "p1");
+    recv_data (server, "D", "p2");
+    no_data (server);
+    test_context_socket_close_zero_linger (server);
+}
+
+// Once another pipe is selected for the RID, the ended pipe's records go.
+void test_ended_route_records_discarded_on_next_selection ()
+{
+    void *server = router ("S");
+    const char *endpoint = "inproc://selected-route-ended-replaced";
+    TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (server, endpoint));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_set_option (server, ZLINK_OPT_RCVTIMEO, &wait_ms,
+                                             sizeof wait_ms));
+    void *first = dealer_as ("D", endpoint);
+    dealer_send (first, "hello");
+    recv_data (server, "D", "hello");
+
+    dealer_send (first, "stale0");
+    dealer_send (first, "stale1");
+    test_context_socket_close (first);
+    wait_route_loss (server);
+
+    void *second = dealer_as ("D", endpoint);
+    dealer_send (second, "fresh");
+    wait_route (server, "D");
+    const uint64_t selected = generation (server, "D");
+    recv_data (server, "D", "fresh");
+    TEST_ASSERT_EQUAL_UINT64 (selected,
+                              zlink_router_recv_route_generation (server));
+    no_data (server);
+    test_context_socket_close_zero_linger (second);
+    test_context_socket_close_zero_linger (server);
+}
+
+void dealer_send_two (void *dealer_, const char *first_, const char *second_)
+{
+    zlink_msg_t parts[2];
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_msg_init_size (&parts[0], strlen (first_)));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_msg_init_size (&parts[1], strlen (second_)));
+    memcpy (zlink_msg_data (&parts[0]), first_, strlen (first_));
+    memcpy (zlink_msg_data (&parts[1]), second_, strlen (second_));
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK,
+                           zlink_send (dealer_, parts, 2, ZLINK_SEND_FLAGS_NONE,
+                                       NULL, NULL));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&parts[0]));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&parts[1]));
+}
+
+//  Stages a two-part record in the part helper with a one-slot receive.
+void stage_two_part_record (void *server_)
+{
+    zlink_pollitem_t item = {server_, 0, ZLINK_POLLIN, 0};
+    zlink_config_result_t error = ZLINK_CONFIG_INTERNAL_ERROR;
+    TEST_ASSERT_EQUAL_INT (1, zlink_poll (&item, 1, wait_ms, &error));
+    zlink_msg_t slot;
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&slot));
+    const zlink_routing_id_t *source = NULL;
+    zlink_reply_token_t token = 0;
+    size_t count = 0;
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_BUFFER_TOO_SMALL,
+                           zlink_router_recv (server_, &source, &token, &slot, 1,
+                                              &count, ZLINK_RECV_FLAGS_DONTWAIT));
+    TEST_ASSERT_EQUAL_UINT64 (2, count);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&slot));
+}
+
+//  A staged record of a pipe that ended without a successor is still the
+//  same record on retry, with the generation it was admitted under.
+void test_ended_route_staged_record_retries_with_old_generation ()
+{
+    void *server = router ("S");
+    const char *endpoint = "inproc://selected-route-ended-staged-retry";
+    TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (server, endpoint));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_set_option (server, ZLINK_OPT_RCVTIMEO, &wait_ms,
+                                             sizeof wait_ms));
+    void *dealer = dealer_as ("D", endpoint);
+    dealer_send (dealer, "hello");
+    recv_data (server, "D", "hello");
+    const uint64_t selected = zlink_router_recv_route_generation (server);
+
+    dealer_send_two (dealer, "ab", "cd");
+    stage_two_part_record (server);
+    test_context_socket_close (dealer);
+    wait_route_loss (server);
+
+    zlink_msg_t parts[2];
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&parts[0]));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&parts[1]));
+    const zlink_routing_id_t *source = NULL;
+    zlink_reply_token_t token = UINT64_MAX;
+    size_t count = 0;
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK,
+                           zlink_router_recv (server, &source, &token, parts, 2,
+                                              &count, ZLINK_RECV_FLAGS_DONTWAIT));
+    TEST_ASSERT_EQUAL_UINT64 (2, count);
+    TEST_ASSERT_NOT_NULL (source);
+    TEST_ASSERT_EQUAL_INT (1, source->size);
+    TEST_ASSERT_EQUAL_MEMORY ("D", source->data, 1);
+    TEST_ASSERT_EQUAL_UINT64 (2, zlink_msg_size (&parts[0]));
+    TEST_ASSERT_EQUAL_MEMORY ("ab", zlink_msg_data (&parts[0]), 2);
+    TEST_ASSERT_EQUAL_MEMORY ("cd", zlink_msg_data (&parts[1]), 2);
+    TEST_ASSERT_EQUAL_UINT64 (selected,
+                              zlink_router_recv_route_generation (server));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&parts[0]));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&parts[1]));
+    no_data (server);
+    test_context_socket_close_zero_linger (server);
+}
+
+//  Once a new pipe is selected for the RID, the staged record of the ended
+//  pipe is gone: the retry finds no data and only new records arrive.
+void test_ended_route_staged_record_dropped_on_next_selection ()
+{
+    void *server = router ("S");
+    const char *endpoint = "inproc://selected-route-ended-staged-dropped";
+    TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (server, endpoint));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_set_option (server, ZLINK_OPT_RCVTIMEO, &wait_ms,
+                                             sizeof wait_ms));
+    void *first = dealer_as ("D", endpoint);
+    dealer_send (first, "hello");
+    recv_data (server, "D", "hello");
+    const uint64_t old_generation = zlink_router_recv_route_generation (server);
+
+    dealer_send_two (first, "ab", "cd");
+    stage_two_part_record (server);
+    test_context_socket_close (first);
+    wait_route_loss (server);
+
+    void *second = dealer_as ("D", endpoint);
+    wait_route (server, "D");
+    const uint64_t new_generation = generation (server, "D");
+    TEST_ASSERT_NOT_EQUAL (old_generation, new_generation);
+
+    zlink_msg_t parts[2];
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&parts[0]));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&parts[1]));
+    const zlink_routing_id_t *source = NULL;
+    zlink_reply_token_t token = 0;
+    size_t count = 0;
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA,
+                           zlink_router_recv (server, &source, &token, parts, 2,
+                                              &count, ZLINK_RECV_FLAGS_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&parts[0]));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&parts[1]));
+
+    dealer_send (second, "fresh");
+    recv_data (server, "D", "fresh");
+    TEST_ASSERT_EQUAL_UINT64 (new_generation,
+                              zlink_router_recv_route_generation (server));
+    no_data (server);
+    test_context_socket_close_zero_linger (second);
+    test_context_socket_close_zero_linger (server);
+}
+
 void test_reciprocal_standby_promotion_loss_and_request_completion ()
 {
     void *a = router ("A");
@@ -552,5 +777,9 @@ int main ()
     RUN_TEST (test_handover_discards_old_records_and_changes_generation);
     RUN_TEST (test_route_change_after_snapshot_keeps_pollroute_ready);
     RUN_TEST (test_reciprocal_standby_promotion_loss_and_request_completion);
+    RUN_TEST (test_ended_route_without_successor_keeps_pending_records);
+    RUN_TEST (test_ended_route_records_discarded_on_next_selection);
+    RUN_TEST (test_ended_route_staged_record_retries_with_old_generation);
+    RUN_TEST (test_ended_route_staged_record_dropped_on_next_selection);
     return UNITY_END ();
 }
