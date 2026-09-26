@@ -839,6 +839,10 @@ reason, or the reconnect condition.
 | `DecompressionFailed` | Only that receive packet or pending request fails | Kept | None | Not done |
 | `UserCallbackFailed`, `RemoteError` | Delivered as an error event or the related callback/request | Kept | None | Not done |
 
+An in-progress operation that fails because the connection ended fails with `Disconnected`, whatever ended the
+connection; the cause remains as the close reason (§6.2). When a transport write failure ends the connection,
+only the operation of that write fails with `SendFailed`.
+
 ### 9.1 The Closed Error Code Set
 
 The **thirteen codes above are all of them.** An implementation neither adds nor
@@ -1018,7 +1022,7 @@ test name differs, the meaning must be the same.
 | **Browser bundle** | **The TypeScript package root bundle doesn't include a platform-only socket module** |
 | Typed request/reply | Correlation and matching rule follows §5.2 |
 | Error response | The `Error` payload is §5.3's JSON object, and splits into pending failure / stream error depending on `request_seq` presence |
-| Pending request cleanup | On timeout/close/disconnect, every pending fails and is removed (§5.2) |
+| Pending request cleanup | On timeout/close/disconnect, every pending fails and is removed. A pending that fails because the connection ended fails with `Disconnected`, whatever the cause (transport drop, `FrameDecodeFailed`, `FrameTooLarge`) (§5.2, §9) |
 | Payload bound | The send bound applies **before the transport write**, and receive checks the wire payload and decompression result each (§4.7) |
 | Metadata | Bound/duplicate/empty-key validation (§4.4) |
 | Packet name | UTF-8 length limit (§4.2), `$zlink.` prefix reservation (§4.6), the per-language exact interface's default name/override rule |

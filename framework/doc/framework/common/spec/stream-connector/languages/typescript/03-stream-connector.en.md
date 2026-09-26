@@ -469,6 +469,11 @@ waitForSequence<T>(nameOrType: string | Function): ZlinkStreamSequenceCall<T>; /
 - **Domain REST polling isn't this surface.** That's the HTTP client's
   job.
 
+### 4.2 Cancellation
+
+The promise of a cancelled operation rejects with the `reason` of its
+`AbortSignal` ([Common Spec §5.2](../../32-stream-connector.en.md#52-request-correlation)).
+
 ## 5. Receive Queue
 
 The receive queue's contract is owned by

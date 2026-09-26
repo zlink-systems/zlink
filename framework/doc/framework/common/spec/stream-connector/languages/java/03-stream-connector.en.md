@@ -518,7 +518,10 @@ The error's meaning is owned by
 as a closed enum. The **dedicated exception type carrying the code**
 that
 [Common Spec §9.2](../../32-stream-connector.en.md#92-delivery--the-receiver-must-be-able-to-read-the-code)
-requires is `ZLinkStreamException`.
+requires is `ZLinkStreamException`. The `CompletableFuture` of an
+operation the caller cancelled ends with `CancellationException`, not
+`ZLinkStreamException`
+([Common Spec §5.2](../../32-stream-connector.en.md#52-request-correlation)).
 
 ```java
 public record ZLinkStreamError(

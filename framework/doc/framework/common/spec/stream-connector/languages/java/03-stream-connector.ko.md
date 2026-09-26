@@ -454,7 +454,9 @@ public enum ZLinkStreamConnectionState {
 
 오류의 의미는 [공통 스펙 §9](../../32-stream-connector.ko.md)가 소유한다. Java는 닫힌 enum으로
 표현한다. [공통 스펙 §9.2](../../32-stream-connector.ko.md#92-전달--받는-쪽이-코드를-읽을-수-있어야-한다)가
-요구하는 **코드를 담는 전용 예외 타입은 `ZLinkStreamException`이다.**
+요구하는 **코드를 담는 전용 예외 타입은 `ZLinkStreamException`이다.** caller가 취소한 operation의
+`CompletableFuture`는 `CancellationException`으로 끝나며 `ZLinkStreamException`이 아니다
+([공통 스펙 §5.2](../../32-stream-connector.ko.md#52-request-correlation)).
 
 ```java
 public record ZLinkStreamError(

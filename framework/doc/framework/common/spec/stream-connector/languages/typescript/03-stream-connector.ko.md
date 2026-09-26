@@ -423,6 +423,11 @@ waitForSequence<T>(nameOrType: string | Function): ZlinkStreamSequenceCall<T>; /
 
 - **도메인 REST 폴링은 이 표면이 아니다.** 그건 HTTP client의 일이다.
 
+### 4.2 취소
+
+취소한 operation의 promise는 그 `AbortSignal`의 `reason`으로 reject한다
+([공통 스펙 §5.2](../../32-stream-connector.ko.md#52-request-correlation)).
+
 ## 5. 수신 큐
 
 수신 큐의 계약은 [공통 스펙 §10](../../32-stream-connector.ko.md#10-수신-메시지-큐)이 소유한다.

@@ -702,6 +702,9 @@ terminal 여부, 종료 사유와 reconnect 조건을 바꾸지 않는다.
 | `DecompressionFailed` | 해당 수신 packet 또는 pending request만 실패 | 유지 | 없음 | 안 함 |
 | `UserCallbackFailed`, `RemoteError` | 오류 event 또는 관련 callback/request로 전달 | 유지 | 없음 | 안 함 |
 
+연결이 끝나서 실패하는 진행 중 operation은 연결을 끝낸 원인과 관계없이 `Disconnected`로 실패한다. 원인은
+종료 사유(§6.2)로 남는다. transport write 실패로 연결이 끝나면 그 write의 operation만 `SendFailed`로 실패한다.
+
 ### 9.1 닫힌 오류 코드 집합
 
 위 표의 **13개가 전부다.** 구현이 코드를 더하거나 빼지 않는다. 언어별 문서는 이름의 표기만
@@ -851,7 +854,7 @@ Unity WebGL UPM package는 새 wire runtime을 만들지 않는다. npm package 
 | **브라우저 번들** | **TypeScript package root 번들에 플랫폼 전용 소켓 module이 포함되지 않는다** |
 | typed request/reply | correlation과 매칭 규칙이 §5.2를 따른다 |
 | error 응답 | `Error` payload가 §5.3의 JSON object이고, `request_seq` 유무에 따라 pending 실패와 stream 오류로 달라진다 |
-| pending request 정리 | timeout·close·disconnect에서 pending이 모두 실패하고 제거된다(§5.2) |
+| pending request 정리 | timeout·close·disconnect에서 pending이 모두 실패하고 제거된다. 연결이 끝나 실패한 pending은 원인(transport 끊김, `FrameDecodeFailed`, `FrameTooLarge`)과 관계없이 `Disconnected`로 실패한다(§5.2, §9) |
 | payload 한도 | 송신 한도가 **transport write 전에** 적용되고, 수신은 wire payload와 압축 해제 결과를 각각 검사한다(§4.7) |
 | metadata | 한도·중복·빈 key 검증(§4.4) |
 | packet name | UTF-8 길이 제한(§4.2), `$zlink.` prefix 예약(§4.6), 언어별 exact interface의 기본 이름·override 규칙 |
