@@ -485,7 +485,7 @@ instance and delivers the failure to the caller.
 | No endpoint | `ZlinkStreamException`'s `ValidationFailed` |
 | Unsupported scheme, URI scheme/`Transport` mismatch | `ZlinkStreamException`'s `ConfigurationError` |
 | A `CompressionCodec` given together with compression turned off | `ZlinkStreamException`'s `ConfigurationError` |
-| An invalid timeout/dispatch queue size/heartbeat/reconnect combination | `ZlinkStreamException`'s `ValidationFailed` |
+| An out-of-range individual timeout, heartbeat, or reconnect value, or dispatch queue size | `ZlinkStreamException`'s `ValidationFailed` |
 
 Every timeout and dispatch queue size option must be **positive**, and the
 preview length **can't be negative.** `MaxAttempts` must be `null` or

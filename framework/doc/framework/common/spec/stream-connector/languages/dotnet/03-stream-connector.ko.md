@@ -411,7 +411,7 @@ public int? MaxAttempts { get; init; } = 3; // null은 무제한
 | endpoint 없음 | `ZlinkStreamException`의 `ValidationFailed` |
 | 지원하지 않는 scheme, URI scheme과 `Transport` 불일치 | `ZlinkStreamException`의 `ConfigurationError` |
 | 압축을 끈 구성에 `CompressionCodec`을 함께 지정 | `ZlinkStreamException`의 `ConfigurationError` |
-| 유효하지 않은 timeout·dispatch queue 크기·heartbeat/reconnect 조합 | `ZlinkStreamException`의 `ValidationFailed` |
+| 범위를 벗어난 개별 timeout·heartbeat·reconnect 값 또는 dispatch queue 크기 | `ZlinkStreamException`의 `ValidationFailed` |
 
 모든 timeout과 dispatch queue 크기 option은 **양수**여야 하고, preview 길이는 **음수일 수 없다.**
 `MaxAttempts`는 `null`이거나 양수여야 한다.
