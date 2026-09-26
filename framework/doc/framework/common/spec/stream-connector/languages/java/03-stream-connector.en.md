@@ -712,7 +712,7 @@ demand a name, the three surfaces are called differently inside one test.
 The Kotlin wrapper must not build a different state transition or
 buffering policy from the Java connector. The extension copying options
 **must preserve every option value currently defined.**
-A `Flow` surface for a dispatch-mode callback wraps the corresponding Java registration with `callbackFlow`:
+A `Flow` surface for a dispatch-mode callback wraps the corresponding Java registration:
 the connector's `messages(...)`, `errors()`, `actorBound()` and `actorUnbound()` wrap `on(...)`,
 `onErrorReceived(...)`, `onActorBound(...)` and `onActorUnbound(...)`, and an Actor's `messages(...)`
 wraps that Actor handle's `ZLinkStreamActor.on(...)`. So in
