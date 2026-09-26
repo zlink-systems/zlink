@@ -59,6 +59,11 @@ final class ZLinkRouteMeshRuntimeOptionsRuntimeTest {
     }
 
     private static final class TestMeshNode implements ZLinkInternalMeshNode {
+        @Override
+        public String advertisedEndpoint() {
+            return status().localEndpoint();
+        }
+
         private final String name;
         private final Map<String, Integer> weights;
         private int placementWeight = 100;

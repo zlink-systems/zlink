@@ -22,7 +22,6 @@ internal sealed class ZLinkClientServerServerIdentity(
     private int _weight = weight;
     private int _servingWeight = weight;
     private ZLinkFrameworkRuntimeState _state = ZLinkFrameworkRuntimeState.Serving;
-    private string _advertisedEndpoint = advertisedEndpoint;
     private IRouterSocket? _router;
     private long _livenessAckCount;
     private long _livenessProbeCount;
@@ -32,6 +31,10 @@ internal sealed class ZLinkClientServerServerIdentity(
     internal ZLinkChannelName ChannelName { get; } =
         ZLinkChannelName.FromBoundary(channelName, nameof(channelName));
     internal RoutingId ServerRid { get; } = serverRid;
+
+    // Fixed at bind from the resolver (spec 04 §3.1); the listener record and every descriptor
+    // read this one value.
+    internal string AdvertisedEndpoint { get; } = advertisedEndpoint;
     internal ulong LifecycleGeneration { get; } = lifecycleGeneration;
     internal string SecurityIdentity { get; } = securityIdentity;
     internal uint NormalizedEffectiveMaxMessageBytes { get; } = normalizedEffectiveMaxMessageBytes;
@@ -42,15 +45,6 @@ internal sealed class ZLinkClientServerServerIdentity(
     internal ValueTask<int> GetAdmittedPeerCountAsync() => _lane.RunAsync(() => _peers.Count);
 
     internal ValueTask<Snapshot> ReadAsync() => _lane.RunAsync(ReadOnLane);
-
-    internal ValueTask SetAdvertisedEndpointAsync(string endpoint)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
-        return _lane.RunAsync(() =>
-        {
-            _advertisedEndpoint = endpoint;
-        });
-    }
 
     internal async ValueTask<Snapshot> MarkDrainingAsync()
     {
@@ -185,7 +179,7 @@ internal sealed class ZLinkClientServerServerIdentity(
             );
     }
 
-    private Snapshot ReadOnLane() => new(_revision, _weight, _state, _advertisedEndpoint);
+    private Snapshot ReadOnLane() => new(_revision, _weight, _state, AdvertisedEndpoint);
 
     private Snapshot MarkDrainingOnLane()
     {

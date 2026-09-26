@@ -75,7 +75,9 @@ final class DefaultZLinkFrameworkOptionsTest {
         var mesh = options.registration().meshNodes().getFirst();
         assertEquals("tcp://0.0.0.0:0", mesh.bindEndpoint());
         assertEquals(
-                "tcp://mesh.example.test:43120", mesh.advertisedEndpoint("tcp://0.0.0.0:43120"));
+                "tcp://mesh.example.test:43120",
+                systems.zlink.framework.runtime.internal.transport.ZLinkListenerIdentity
+                        .advertisedEndpoint("tcp://0.0.0.0:43120", mesh.advertiseHost()));
     }
 
     @Test
@@ -87,7 +89,10 @@ final class DefaultZLinkFrameworkOptionsTest {
 
         var mesh = options.registration().meshNodes().getFirst();
         assertEquals("tcp://0.0.0.0:0", mesh.bindEndpoint());
-        assertEquals("tcp://127.0.0.1:43120", mesh.advertisedEndpoint("tcp://0.0.0.0:43120"));
+        assertEquals(
+                "tcp://127.0.0.1:43120",
+                systems.zlink.framework.runtime.internal.transport.ZLinkListenerIdentity
+                        .advertisedEndpoint("tcp://0.0.0.0:43120", mesh.advertiseHost()));
     }
 
     @Test

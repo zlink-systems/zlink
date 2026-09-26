@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <cerrno>
+#include <memory>
 #include <string>
 
 namespace
@@ -48,7 +49,8 @@ TEST (HttpStartup, OccupiedPortReturnsFailureAndUnhealthy)
     options.endpoints = {{endpoint, {}}};
     health_builder_t health;
     service_provider_t services;
-    runtime::http_host_service_t host (options, health, 1);
+    runtime::http_host_service_t host (options, health, 1,
+                                       std::make_shared<runtime::listener_status_registry_t> ());
 
     const auto result = host.start (services).result ();
     ASSERT_NO_FATAL_FAILURE (expect_bind_failure (result, endpoint));
@@ -74,7 +76,8 @@ TEST (HttpStartup, LaterBindFailureReleasesEarlierListenerBeforeReturning)
     options.endpoints = {{http_uri (first), {}}, {http_uri (second), {}}};
     health_builder_t health;
     service_provider_t services;
-    runtime::http_host_service_t host (options, health, 1);
+    runtime::http_host_service_t host (options, health, 1,
+                                       std::make_shared<runtime::listener_status_registry_t> ());
     reservation.close ();
 
     ASSERT_NO_FATAL_FAILURE (
@@ -110,7 +113,8 @@ TEST (HttpStartup, DuplicateListenerProvesFirstBindWasRolledBack)
     options.endpoints = {{uri, {}}, {uri, {}}};
     health_builder_t health;
     service_provider_t services;
-    runtime::http_host_service_t host (options, health, 1);
+    runtime::http_host_service_t host (options, health, 1,
+                                       std::make_shared<runtime::listener_status_registry_t> ());
     reservation.close ();
 
     // The second bind conflicts with this host's first listener.
@@ -137,7 +141,8 @@ TEST (HttpStartup, SuccessfulStartOwnsThePortUntilDestruction)
     probe.open (endpoint.protocol ());
     boost::system::error_code error;
     {
-        runtime::http_host_service_t host (options, health, 1);
+        runtime::http_host_service_t host (
+          options, health, 1, std::make_shared<runtime::listener_status_registry_t> ());
         ASSERT_TRUE (host.start (services).result ().has_value ());
         EXPECT_EQ (health.report ().status, health_status_t::healthy);
         probe.bind (endpoint, error);

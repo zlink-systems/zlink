@@ -12,7 +12,7 @@ import {
   type ZLinkLocationOptionOverrides
 } from '../../contracts/Locations/Options';
 import type { ZLinkFrameworkRegistration } from '../configuration';
-import { buildAdvertisedEndpoint, ZLinkConfigurationException } from '../configuration';
+import { ZLinkConfigurationException } from '../configuration';
 import type { ZLinkLocationRuntime, ZLinkLocationRuntimeStores } from '../locations';
 import type { ZLinkBackendSubscriberSocket } from '../backend/contracts';
 import { ZLinkChannelSocketRegistry } from './channel-socket-registry';
@@ -142,11 +142,9 @@ export class ZLinkFanoutLocationRuntime {
     const owner = this.requireOwnerToken();
     for (const [channelName, channel] of this.registration.channels) {
       if (channel.publisher === undefined) continue;
-      const publisher = this.sockets.publisher(channelName);
-      const endpoint = advertisedEndpoint(
-        publisher.lastEndpoint ?? channel.publisher.bind ?? '',
-        channel.publisher.advertiseHost
-      );
+      // Opening the publisher binds it and fixes its advertised endpoint.
+      this.sockets.publisher(channelName);
+      const endpoint = this.sockets.fanoutPublisherEndpoint(channelName) ?? '';
       if (endpoint.length === 0) {
         throw new ZLinkConfigurationException(
           `Fanout publisher '${channelName}' did not report a bound endpoint.`
@@ -410,16 +408,6 @@ export class ZLinkFanoutLocationRuntime {
     }, this.options.pollingIntervalMs);
     this.timer.unref();
   }
-}
-
-function advertisedEndpoint(boundEndpoint: string, advertiseHost: string | undefined): string {
-  const result = buildAdvertisedEndpoint(boundEndpoint, advertiseHost);
-  if (result === undefined) {
-    throw new ZLinkConfigurationException(
-      `Fanout publisher bound endpoint '${boundEndpoint}' cannot be advertised.`
-    );
-  }
-  return result;
 }
 
 function fanoutConnectionId(descriptor: ZLinkFanoutPublisherDescriptor): string {

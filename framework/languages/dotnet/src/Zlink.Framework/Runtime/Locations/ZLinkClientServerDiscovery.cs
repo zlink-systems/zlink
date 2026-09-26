@@ -37,21 +37,12 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
                 && state.ClientServerServerBundles.TryGetValue(channelName, out var serverBundle)
             )
             {
-                var router = (IRouterSocket)serverBundle.Socket;
                 var server = new LocalServer(
                     serverBundle.ClientServerServer
                         ?? throw new InvalidOperationException(
                             "ClientServer server identity is not initialized."
-                        ),
-                    AdvertisedEndpoint(
-                        router.Options.LastEndpoint,
-                        registration.Server!.AdvertiseHost
-                    ),
-                    router
+                        )
                 );
-                await server
-                    .Identity.SetAdvertisedEndpointAsync(server.Endpoint)
-                    .ConfigureAwait(false);
                 await PublishAsync(server, ZLinkLocationWriteIntent.NewClaim, cancellationToken)
                     .ConfigureAwait(false);
                 _servers.Add(server);
@@ -202,7 +193,7 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
             server.Identity.ServerRid,
             server.Identity.LifecycleGeneration,
             snapshot.Revision,
-            server.Endpoint,
+            server.Identity.AdvertisedEndpoint,
             snapshot.Weight,
             snapshot.State,
             server.Identity.SecurityIdentity,
@@ -231,25 +222,10 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
         return result;
     }
 
-    private static string AdvertisedEndpoint(string boundEndpoint, string? advertiseHost)
-    {
-        if (string.IsNullOrWhiteSpace(advertiseHost))
-            return ZLinkEndpointNotation.Normalize(boundEndpoint);
-        var endpoint = new Uri(boundEndpoint, UriKind.Absolute);
-        var builder = new UriBuilder(endpoint) { Host = advertiseHost };
-        return ZLinkEndpointNotation.Normalize(builder.Uri.ToString());
-    }
-
-    private sealed class LocalServer(
-        ZLinkClientServerServerIdentity identity,
-        string endpoint,
-        IRouterSocket router
-    )
+    private sealed class LocalServer(ZLinkClientServerServerIdentity identity)
     {
         internal ZLinkClientServerServerIdentity Identity { get; } = identity;
         internal string ChannelName => Identity.ChannelName.Value;
-        internal string Endpoint { get; } = endpoint;
-        internal IRouterSocket Router { get; } = router;
     }
 
     private sealed class ClientLoop(

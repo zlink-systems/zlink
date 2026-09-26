@@ -126,7 +126,7 @@ public final class ZLinkObjectServerDescriptorPublisher {
                 node.status().routingId(),
                 node.status().lifecycleGeneration(),
                 descriptorRevision,
-                configured.advertisedEndpoint(node.status().localEndpoint()),
+                node.advertisedEndpoint(),
                 node.channelWeights(),
                 registration.applicationVersion(),
                 placement.objectCapabilities(),

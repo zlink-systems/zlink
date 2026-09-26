@@ -1,3 +1,4 @@
+import type { ZLinkListenerRecords } from '../foundation/listener-records';
 import type {
   ActorRef,
   Type,
@@ -167,6 +168,7 @@ export interface ZLinkStreamSessionNodeRuntimeOptions extends Omit<
 }
 
 export interface ZLinkStreamRuntimeManagerOptions {
+  readonly listenerRecords?: ZLinkListenerRecords;
   readonly registration: ZLinkFrameworkRegistration;
   readonly backendAdapterFactory: ZLinkBackendAdapterFactory;
   readonly context: ZLinkBackendContext;
@@ -203,10 +205,6 @@ export class ZLinkStreamRuntimeManager {
     this.applicationJobQueue =
       options.applicationJobQueue ??
       new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
-  }
-
-  listenerEndpoint(name: string): string | undefined {
-    return this.nodes.get(name)?.advertisedEndpoint;
   }
 
   start(): void {
@@ -328,6 +326,7 @@ export class ZLinkStreamRuntimeManager {
       });
       node.runtime = runtime;
       runtime.start();
+      this.options.listenerRecords?.record('stream', nodeName, advertisedEndpoint);
     }
   }
 

@@ -2561,7 +2561,10 @@ test('framework runtime host attaches stream SessionRelay to registered SpotNode
     nativeInstance: {},
     routingId: 'game.spot',
     setRoutingId() {},
-    setRouterBind(endpoint) { calls.push(`spot:setRouterBind:${endpoint}`); },
+    setRouterBind(endpoint) {
+      this.boundEndpoint = endpoint;
+      calls.push(`spot:setRouterBind:${endpoint}`);
+    },
     setPubBind() {},
     attachDiscovery() {},
     connectPeer() {},
@@ -2578,7 +2581,9 @@ test('framework runtime host attaches stream SessionRelay to registered SpotNode
       calls.push(`spot:getOrCreateSpot:${spotId}`);
       return { spot: routeSourceSpot, created: true };
     },
-    status() {},
+    status() {
+      return { localEndpoint: this.boundEndpoint };
+    },
     peers() { return []; },
     subjects() { return []; },
     createRouteBridge() {
@@ -2760,7 +2765,10 @@ test('framework runtime host applies formal MeshNode router and peer options', a
     setRoutingId(routingId) { calls.push(`spot:setRoutingId:${routingId}`); },
     setPublisherRoutingId(routingId) { calls.push(`spot:setPublisherRoutingId:${routingId}`); },
     setSubscriberRoutingId(routingId) { calls.push(`spot:setSubscriberRoutingId:${routingId}`); },
-    setRouterBind(endpoint) { calls.push(`spot:setRouterBind:${endpoint}`); },
+    setRouterBind(endpoint) {
+      this.boundEndpoint = endpoint;
+      calls.push(`spot:setRouterBind:${endpoint}`);
+    },
     setPubBind(endpoint) { calls.push(`spot:setPubBind:${endpoint}`); },
     attachDiscovery() {},
     connectPeer(endpoint) { calls.push(`spot:connectPeer:${endpoint}`); },
@@ -2793,7 +2801,9 @@ test('framework runtime host applies formal MeshNode router and peer options', a
       };
     },
     getOrCreateSpot() {},
-    status() {},
+    status() {
+      return { localEndpoint: this.boundEndpoint };
+    },
     peers() { return []; },
     subjects() { return []; },
     createRouteBridge() {
@@ -2913,7 +2923,10 @@ test('framework runtime host lets the formal MeshNode own its accepted route cha
     setRoutingId(routingId) { calls.push(`spot:setRoutingId:${routingId}`); },
     setPublisherRoutingId(routingId) { calls.push(`spot:setPublisherRoutingId:${routingId}`); },
     setSubscriberRoutingId(routingId) { calls.push(`spot:setSubscriberRoutingId:${routingId}`); },
-    setRouterBind(endpoint) { calls.push(`spot:setRouterBind:${endpoint}`); },
+    setRouterBind(endpoint) {
+      this.boundEndpoint = endpoint;
+      calls.push(`spot:setRouterBind:${endpoint}`);
+    },
     setPubBind() {},
     attachDiscovery() {},
     connectPeer() {},
@@ -2930,7 +2943,9 @@ test('framework runtime host lets the formal MeshNode own its accepted route cha
       calls.push(`spot:getOrCreateSpot:${spotId}`);
       return { spot: routeSourceSpot, created: true };
     },
-    status() {},
+    status() {
+      return { localEndpoint: this.boundEndpoint };
+    },
     peers() { return []; },
     subjects() { return []; },
     entrySpot() {
@@ -3071,7 +3086,10 @@ test('framework runtime host drains accepted Spot route channel without route ro
     nativeInstance: {},
     routingId: 'session-node',
     setRoutingId(routingId) { calls.push(`spot:setRoutingId:${routingId}`); },
-    setRouterBind(endpoint) { calls.push(`spot:setRouterBind:${endpoint}`); },
+    setRouterBind(endpoint) {
+      this.boundEndpoint = endpoint;
+      calls.push(`spot:setRouterBind:${endpoint}`);
+    },
     setPubBind() {},
     attachDiscovery() {},
     connectPeer() {},
@@ -3079,7 +3097,9 @@ test('framework runtime host drains accepted Spot route channel without route ro
     createPublisher() { return { close() {} }; },
     createSpot() {},
     getOrCreateSpot() {},
-    status() {},
+    status() {
+      return { localEndpoint: this.boundEndpoint };
+    },
     peers() { return []; },
     subjects() { return []; },
     entrySpot() {
@@ -3253,7 +3273,10 @@ test('framework route transport sends Spot request through accepted Spot route c
     nativeInstance: {},
     routingId: 'session-node',
     setRoutingId(routingId) { calls.push(`spot:setRoutingId:${routingId}`); },
-    setRouterBind(endpoint) { calls.push(`spot:setRouterBind:${endpoint}`); },
+    setRouterBind(endpoint) {
+      this.boundEndpoint = endpoint;
+      calls.push(`spot:setRouterBind:${endpoint}`);
+    },
     setPubBind() {},
     attachDiscovery() {},
     connectPeer() {},
@@ -3264,7 +3287,9 @@ test('framework route transport sends Spot request through accepted Spot route c
       calls.push(`spot:getOrCreateSpot:${spotId}`);
       return { spot: routeSourceSpot, created: true };
     },
-    status() {},
+    status() {
+      return { localEndpoint: this.boundEndpoint };
+    },
     peers() { return []; },
     subjects() { return []; },
     entrySpot() {
@@ -3408,7 +3433,10 @@ test('framework route transport sends Spot request through accepted Spot route c
     nativeInstance: {},
     routingId: 'session-node',
     setRoutingId(routingId) { calls.push(`spot:setRoutingId:${routingId}`); },
-    setRouterBind(endpoint) { calls.push(`spot:setRouterBind:${endpoint}`); },
+    setRouterBind(endpoint) {
+      this.boundEndpoint = endpoint;
+      calls.push(`spot:setRouterBind:${endpoint}`);
+    },
     setPubBind() {},
     attachDiscovery() {},
     connectPeer() {},
@@ -3419,7 +3447,9 @@ test('framework route transport sends Spot request through accepted Spot route c
       calls.push(`spot:getOrCreateSpot:${spotId}`);
       return { spot: routeSourceSpot, created: true };
     },
-    status() {},
+    status() {
+      return { localEndpoint: this.boundEndpoint };
+    },
     peers() { return []; },
     subjects() { return []; },
     entrySpot() {
@@ -3531,7 +3561,10 @@ test('framework runtime host starts router-only SessionRelay SpotNode without Di
     nativeInstance: {},
     routingId: 'session-node',
     setRoutingId(routingId) { calls.push(`spot:setRoutingId:${routingId}`); },
-    setRouterBind(endpoint) { calls.push(`spot:setRouterBind:${endpoint}`); },
+    setRouterBind(endpoint) {
+      this.boundEndpoint = endpoint;
+      calls.push(`spot:setRouterBind:${endpoint}`);
+    },
     setPubBind() {},
     attachDiscovery(discovery) { calls.push(`spot:attachDiscovery:${discovery.channelName}:${discovery.autoConnectType}`); },
     connectPeer() {},
@@ -3542,7 +3575,9 @@ test('framework runtime host starts router-only SessionRelay SpotNode without Di
       calls.push(`spot:getOrCreateSpot:${spotId}`);
       return { spot: routeSourceSpot, created: true };
     },
-    status() {},
+    status() {
+      return { localEndpoint: this.boundEndpoint };
+    },
     peers() { return []; },
     subjects() { return []; },
     entrySpot() {
@@ -3656,7 +3691,10 @@ test('framework runtime host starts a formal MeshNode without Discovery after bi
     setRoutingId(routingId) { calls.push(`spot:setRoutingId:${routingId}`); },
     setPublisherRoutingId(routingId) { calls.push(`spot:setPublisherRoutingId:${routingId}`); },
     setSubscriberRoutingId(routingId) { calls.push(`spot:setSubscriberRoutingId:${routingId}`); },
-    setRouterBind(endpoint) { calls.push(`spot:setRouterBind:${endpoint}`); },
+    setRouterBind(endpoint) {
+      this.boundEndpoint = endpoint;
+      calls.push(`spot:setRouterBind:${endpoint}`);
+    },
     setPubBind(endpoint) { calls.push(`spot:setPubBind:${endpoint}`); },
     attachDiscovery(discovery) { calls.push(`spot:attachDiscovery:${discovery.channelName}:${discovery.autoConnectType}`); },
     connectPeer() {},
@@ -3670,7 +3708,9 @@ test('framework runtime host starts a formal MeshNode without Discovery after bi
       };
     },
     getOrCreateSpot() {},
-    status() {},
+    status() {
+      return { localEndpoint: this.boundEndpoint };
+    },
     peers() { return []; },
     subjects() { return []; },
     entrySpot() {
@@ -3825,7 +3865,10 @@ test('framework runtime host defers Entry Spot lifecycle until Core materializes
     nativeInstance: {},
     routingId: 'node-entry',
     setRoutingId() {},
-    setRouterBind(endpoint) { calls.push(`spot:setRouterBind:${endpoint}`); },
+    setRouterBind(endpoint) {
+      this.boundEndpoint = endpoint;
+      calls.push(`spot:setRouterBind:${endpoint}`);
+    },
     setPubBind() {},
     attachDiscovery() {},
     connectPeer() {},
@@ -3833,7 +3876,9 @@ test('framework runtime host defers Entry Spot lifecycle until Core materializes
     createPublisher() { return { close() {} }; },
     createSpot() { throw new Error('not used'); },
     getOrCreateSpot() {},
-    status() {},
+    status() {
+      return { localEndpoint: this.boundEndpoint };
+    },
     peers() { return []; },
     subjects() { return []; },
     entrySpot() {

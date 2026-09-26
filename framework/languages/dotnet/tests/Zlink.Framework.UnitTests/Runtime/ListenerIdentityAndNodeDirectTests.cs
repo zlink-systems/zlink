@@ -4,7 +4,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Zlink.Framework.AspNetCore;
+using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Configuration;
+using Zlink.Framework.Runtime.Host;
+using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -13,6 +16,7 @@ public sealed class ListenerIdentityAndNodeDirectTests
     [Theory]
     [InlineData("0.0.0.0", "tcp://127.0.0.1:7101")]
     [InlineData("::", "tcp://[::1]:7101")]
+    [InlineData("0:0:0:0:0:0:0:0", "tcp://[::1]:7101")]
     public void Wildcard_bind_without_advertise_host_uses_same_family_loopback(
         string bindHost,
         string expected
@@ -38,6 +42,7 @@ public sealed class ListenerIdentityAndNodeDirectTests
     [Theory]
     [InlineData("0.0.0.0")]
     [InlineData("::")]
+    [InlineData("0:0:0:0:0:0:0:0")]
     public async Task Explicit_wildcard_advertise_host_fails_startup(string advertiseHost)
     {
         var builder = Host.CreateApplicationBuilder();
@@ -137,6 +142,13 @@ public sealed class ListenerIdentityAndNodeDirectTests
                 .Kind
         );
         await host.StopAsync();
+        foreach (var (kind, name) in listeners)
+            Assert.Equal(
+                ZLinkFrameworkErrorKind.NotConfigured,
+                Assert
+                    .Throws<ZLinkFrameworkException>(() => runtime.GetListenerStatus(kind, name))
+                    .Kind
+            );
     }
 
     [Fact]

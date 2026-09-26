@@ -40,10 +40,10 @@ internal static class ZLinkNetworkEndpointResolver
         if (advertiseHost is not null && IsWildcard(advertiseHost))
             throw new ZLinkConfigurationException("AdvertiseHost must not be a wildcard address.");
 
-        advertiseHost ??= bindHost switch
+        advertiseHost ??= WildcardAddress(bindHost) switch
         {
-            "0.0.0.0" => "127.0.0.1",
-            "::" => "::1",
+            { AddressFamily: System.Net.Sockets.AddressFamily.InterNetwork } => "127.0.0.1",
+            { AddressFamily: System.Net.Sockets.AddressFamily.InterNetworkV6 } => "::1",
             _ => bindHost,
         };
 
@@ -51,9 +51,17 @@ internal static class ZLinkNetworkEndpointResolver
         return ZLinkEndpointNotation.Normalize(builder.Uri.ToString());
     }
 
-    public static bool IsWildcard(string host) =>
-        string.Equals(host, "0.0.0.0", StringComparison.Ordinal)
-        || string.Equals(host, "::", StringComparison.Ordinal);
+    public static bool IsWildcard(string host) => WildcardAddress(host) is not null;
+
+    // Every spelling of the unspecified address (0.0.0.0, ::, 0:0:0:0:0:0:0:0, [::]) is the
+    // same wildcard (spec 04 §2.2).
+    private static System.Net.IPAddress? WildcardAddress(string host) =>
+        System.Net.IPAddress.TryParse(host.Trim('[', ']'), out var address)
+        && (
+            address.Equals(System.Net.IPAddress.Any) || address.Equals(System.Net.IPAddress.IPv6Any)
+        )
+            ? address
+            : null;
 
     private static string FormatAuthorityHost(string host) =>
         Uri.CheckHostName(host) == UriHostNameType.IPv6 ? $"[{host}]" : host;

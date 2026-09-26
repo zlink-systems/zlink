@@ -1,3 +1,4 @@
+import { ZLinkListenerRecords } from '../foundation/listener-records';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
@@ -870,20 +871,11 @@ export class ZLinkFrameworkRuntimeHost
     };
   }
 
+  // Bound listener records of the current runtime generation.
+  private listenerRecords = new ZLinkListenerRecords();
+
   getListenerStatus(kind: ZLinkListenerKind, name: string): ZLinkListenerStatus {
-    let endpoint: string | undefined;
-    switch (kind) {
-      case 'routeMesh':
-        endpoint = this.spotNodeRuntime?.meshNode(name)?.status().localEndpoint;
-        break;
-      case 'clientServer':
-      case 'fanout':
-        endpoint = this.channelRuntime?.listenerEndpoint(kind, name);
-        break;
-      case 'stream':
-        endpoint = this.streamRuntime?.listenerEndpoint(name);
-        break;
-    }
+    const endpoint = this.listenerRecords.endpoint(kind, name);
     if (endpoint === undefined || endpoint.length === 0) {
       throw new ZLinkConfigurationException(
         `Listener '${kind}:${name}' is not configured or has not bound.`
@@ -1346,6 +1338,8 @@ export class ZLinkFrameworkRuntimeHost
 
     this.setRuntimeState(ZLinkFrameworkRuntimeState.Preparing);
     this.lifecycleSink?.push('framework:start');
+    const listenerRecords = new ZLinkListenerRecords();
+    this.listenerRecords = listenerRecords;
     const channelAdapter = this.backendAdapterFactory.createChannelAdapter();
     const context = channelAdapter.createContext();
     const coreHwm = this.options.registration.coreHwm;
@@ -1368,13 +1362,14 @@ export class ZLinkFrameworkRuntimeHost
         channelAdapter,
         context,
         this.options.providerResolver,
-        this.createChannelRuntimeOptions()
+        { ...this.createChannelRuntimeOptions(), listenerRecords }
       );
       this.channelRuntime = channelRuntime;
       channelRuntime.prepareMeshDispatch(this.executionState.taskRunner);
-      spotNodeRuntime = new ZLinkSpotNodeRuntimeManager(
-        this.createSpotNodeRuntimeOptions(context, dispatchErrors)
-      );
+      spotNodeRuntime = new ZLinkSpotNodeRuntimeManager({
+        ...this.createSpotNodeRuntimeOptions(context, dispatchErrors),
+        listenerRecords
+      });
       await spotNodeRuntime.start();
       this.spotNodeRuntime = spotNodeRuntime;
       this.registerUserSpotHandlers?.(spotNodeRuntime);
@@ -1410,6 +1405,7 @@ export class ZLinkFrameworkRuntimeHost
         }
       }
       streamRuntime = new ZLinkStreamRuntimeManager({
+        listenerRecords,
         registration: this.options.registration,
         backendAdapterFactory: this.backendAdapterFactory,
         context,
@@ -1539,6 +1535,7 @@ export class ZLinkFrameworkRuntimeHost
       serviceRelocation: this.serviceRelocation,
       ownedStores: registeredRuntimeStores(this.options.registration)
     });
+    this.listenerRecords.clear();
     this.lifecycleSink?.push('framework:stopped');
     if (this.shutdownOperation === undefined) {
       this.setRuntimeState(ZLinkFrameworkRuntimeState.Stopped);

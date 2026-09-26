@@ -208,6 +208,11 @@ class ZLinkMeshNodeRuntimeTest {
     }
 
     private static final class RecordingMeshNode implements ZLinkInternalMeshNode {
+        @Override
+        public String advertisedEndpoint() {
+            return status().localEndpoint();
+        }
+
         private final List<String> calls = new ArrayList<>();
         private long routerHighWaterMark;
         private long routerReceiveHighWaterMark;

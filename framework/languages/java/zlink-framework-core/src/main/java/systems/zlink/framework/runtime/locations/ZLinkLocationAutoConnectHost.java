@@ -128,11 +128,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
             if (node == null) {
                 continue;
             }
-            String endpoint = node.status().localEndpoint();
-            if (endpoint == null || endpoint.isBlank()) {
-                endpoint = mesh.bindEndpoint();
-            }
-            endpoint = mesh.advertisedEndpoint(endpoint);
+            String endpoint = node.advertisedEndpoint();
             Set<String> manual =
                     mesh.peers().stream()
                             .map(MeshNodeRegistration.Peer::endpoint)

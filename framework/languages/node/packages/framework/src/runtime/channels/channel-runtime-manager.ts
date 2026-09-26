@@ -1,3 +1,4 @@
+import type { ZLinkListenerRecords } from '../foundation/listener-records';
 import type { ZLinkLocationOptionOverrides } from '../../contracts/Locations/Options';
 import type { RoutingId } from '../../contracts';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
@@ -62,7 +63,8 @@ export class ZLinkChannelRuntimeManager {
       context,
       options.monitoringAdapter,
       options.oneWayFailureSink,
-      applicationJobQueue
+      applicationJobQueue,
+      options.listenerRecords
     );
     const codecs: ZLinkChannelEnvelopeCodecRegistry = {
       serializers: registration.messageSerializers
@@ -116,12 +118,6 @@ export class ZLinkChannelRuntimeManager {
 
   fanoutTopology(channelName: string) {
     return { descriptors: this.sockets.fanoutActiveTargets(channelName) };
-  }
-
-  listenerEndpoint(kind: 'clientServer' | 'fanout', name: string): string | undefined {
-    return kind === 'clientServer'
-      ? this.sockets.clientServerListenerEndpoint(name)
-      : this.sockets.fanoutPublisherEndpoint(name);
   }
 
   observeClientServerTopology(channelName: string, changed: () => void): () => void {
@@ -439,6 +435,7 @@ function splitMonitoringSocketSourceName(sourceName: string): readonly [string, 
 }
 
 export interface ZLinkChannelRuntimeManagerOptions {
+  readonly listenerRecords?: ZLinkListenerRecords;
   readonly internalRouteSendHandlers?: ReadonlyMap<string, ZLinkRouteRuntimeSendHandler>;
   readonly internalRouteRequestHandlers?: ReadonlyMap<string, ZLinkRouteRuntimeRequestHandler>;
   readonly monitoringAdapter?: ZLinkMonitoringBackendAdapter;

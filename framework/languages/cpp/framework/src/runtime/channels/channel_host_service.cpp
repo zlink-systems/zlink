@@ -574,35 +574,44 @@ task_t<void> channel_host_service_t::start (service_provider_t &services)
     const bool shared_client_server_runtime_active =
       detail::channel_runtime_t::from (_bus).auto_connect_active ();
     _stop.store (false, std::memory_order_release);
-    for (const auto &channel : _channels) {
-        if (!channel.server.enabled || shared_client_server_runtime_active
-            || channel.server.bind_endpoints.empty ()) {
-            continue;
+    try {
+        for (const auto &channel : _channels) {
+            if (!channel.server.enabled || shared_client_server_runtime_active
+                || channel.server.bind_endpoints.empty ()) {
+                continue;
+            }
+            const auto advertise_host = _advertise_hosts.find (channel.name);
+            auto loop = std::make_unique<server_loop_t> (
+              _bus, channel.name, detail::client_server_bind_endpoint (channel.server),
+              advertise_host == _advertise_hosts.end ()
+                ? std::nullopt
+                : std::optional<std::string> (advertise_host->second),
+              channel.server.routing_id, channel.server, services, *_serializers, *_handlers, _stop,
+              _core_context, _application_jobs, _listener_statuses);
+            auto *raw = loop.get ();
+            _loops.push_back (std::move (loop));
+            _threads.emplace_back ([raw] { raw->run (); });
         }
-        const auto advertise_host = _advertise_hosts.find (channel.name);
-        auto loop = std::make_unique<server_loop_t> (
-          _bus, channel.name, detail::client_server_bind_endpoint (channel.server),
-          advertise_host == _advertise_hosts.end ()
-            ? std::nullopt
-            : std::optional<std::string> (advertise_host->second),
-          channel.server.routing_id, channel.server, services, *_serializers, *_handlers, _stop,
-          _core_context, _application_jobs, _listener_statuses);
-        auto *raw = loop.get ();
-        _loops.push_back (std::move (loop));
-        _threads.emplace_back ([raw] { raw->run (); });
+        for (const auto &channel : _channels) {
+            if (!channel.subscriber.enabled || channel.subscriber.discovery
+                || (!channel.subscriber.discovery
+                    && channel.subscriber.connect_endpoints.empty ())) {
+                continue;
+            }
+            auto &bundle = manager.get_or_create_subscriber_bundle (channel.name);
+            auto loop = std::make_unique<subscriber_loop_t> (
+              _bus, channel.name, bundle, channel.subscriber, services, *_serializers, *_handlers,
+              _stop, _core_context, _application_jobs);
+            auto *raw = loop.get ();
+            _subscriber_loops.push_back (std::move (loop));
+            _threads.emplace_back ([raw] { raw->run (); });
+        }
     }
-    for (const auto &channel : _channels) {
-        if (!channel.subscriber.enabled || channel.subscriber.discovery
-            || (!channel.subscriber.discovery && channel.subscriber.connect_endpoints.empty ())) {
-            continue;
-        }
-        auto &bundle = manager.get_or_create_subscriber_bundle (channel.name);
-        auto loop = std::make_unique<subscriber_loop_t> (
-          _bus, channel.name, bundle, channel.subscriber, services, *_serializers, *_handlers,
-          _stop, _core_context, _application_jobs);
-        auto *raw = loop.get ();
-        _subscriber_loops.push_back (std::move (loop));
-        _threads.emplace_back ([raw] { raw->run (); });
+    catch (...) {
+        // A partial start leaves joinable loop threads; stop joins them before the failure
+        // leaves this service.
+        stop ();
+        throw;
     }
     return task_t<void> (result_t<void>::success ());
 }
