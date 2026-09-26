@@ -298,6 +298,9 @@ Orderly close and transport disconnect don't wait 15 seconds. Core does not retu
 of a previous physical connection after the selection changes. Once the framework has observed the
 selection change, a record of the previous generation is no longer evidence, so it can't change the
 new connection's state. A handshake is admitted only after the same comparison.
+This generation comparison applies only to records that change a connection's ready or liveness
+state (`livenessAck` and the service handshake). Records that carry a Spot, Actor, or Channel
+message are not compared and are processed as Core returns them.
 
 One peer's failure doesn't turn the whole host `Error`. Other ready peers and the local
 [Owner](../00-foundation/02-glossary.en.md#owner) — the MeshNode that actually runs the Actor or
