@@ -189,7 +189,7 @@ Actor·Spot capacity projection과 등록한 type별 capability가 포함된다.
 | Node별 Spot limit | 기본값 `0`은 제한 없음이다. 양수 범위는 `1..2^31-1`이며 User Spot과 Instance Spot을 합산한다. 음수는 startup configuration error다. |
 | Spot stable type별 limit | 기본값 `0`은 제한 없음이다. 양수 범위는 `1..2^31-1`이며 해당 User·Instance Spot type에 적용한다. 음수는 startup configuration error다. |
 | Entry Spot | Object Server node마다 하나로 고정하며 configurable Spot limit에서 제외한다. |
-| Pending activation | 기본값 `128`이며 object population이 아니라 동시에 진행되는 activation admission을 제한한다. |
+| Pending activation | 기본값 `128`이며 object population이 아니라 동시에 진행되는 activation admission을 제한한다. Actor 생성, User Spot 생성, Instance Spot cold activation과 relocation target의 Restore만 각각 activation admission 하나로 센다. Target MeshNode가 그 작업을 받은 때부터 그 작업이 Ready 또는 target commit으로 끝나거나 거절·실패·정리로 끝날 때까지 센다. Entry Spot과 Actor Join은 세지 않는다. |
 
 새 object를 만들거나 기존 object를 다른 node로 옮길 때는 Framework가 target
 MeshNode를 선택한다. Placement weight가 `0`인 MeshNode는 이 두 작업의 새 target

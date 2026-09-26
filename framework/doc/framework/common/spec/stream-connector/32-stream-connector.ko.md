@@ -632,8 +632,8 @@ handler가 끝나기를 기다리는 것은 아니다. 종류에 따른 예외�
 끝났는지 보지 않는다. 재연결 시도가 소진되어 끊길 때와 transport 오류로 끊길 때도 같다(§6).
 
 connector가 기다리는 것은 자기 것뿐이다 — transport 종료와 대기 중인 operation의 실패 처리. 종료 작업은
-아직 transport에 쓰지 않은 frame을 쓰지 않고, 그 frame의 operation을 `Disconnected`로 실패시킨다. 전달
-방식은 §9.2가 정한다. transport를 닫을 때 상대가 읽거나 응답하기를 기다리지 않는다. Send의 frame이
+아직 transport에 쓰지 않은 frame을 쓰지 않고, 쓰는 중인 frame의 쓰기가 끝나기를 기다리지 않고
+transport를 닫는다. 두 frame의 operation은 `Disconnected`로 실패한다. 전달 방식은 §9.2가 정한다. transport를 닫을 때 상대가 읽거나 응답하기를 기다리지 않는다. Send의 frame이
 transport에 쓰였는지 확인하려면 `close` 전에 그 Send의 완료를 기다린다(§5.2).
 
 위 목록의 handler·callback 밖에서 호출한 `close`는 종료 작업이 끝난 뒤 돌아온다. 그 안에서 호출한
@@ -872,6 +872,6 @@ Unity WebGL UPM package는 새 wire runtime을 만들지 않는다. npm package 
 | **요청 hook** | **request sending hook이 connector·Actor handle request 모두에서 전송 직전에 등록 순서로 실행되고 추가한 metadata가 frame에 실리며, reply received hook이 성공·실패·timeout·연결 종료마다 한 번 실행되고 결과를 바꾸지 못하며, hook 실패가 request 결과를 바꾸지 않는다(§5.7)** |
 | **이름 두 형태** | **수신 등록·send·request는 connector·Actor handle 수준에서, 대기 표면은 connector 수준에서 이름 명시 형태와 타입 형태를 모두 제공하고 같은 packet 이름에 닿는다(§5)** |
 | **handler와 종료** | **push·error·끊김·연결 상태·Actor bound·Actor unbound handler와 request callback 모두 등록 순서·callback 실패·완료를 기다리지 않는 규칙을 따르며, 끝나지 않는 handler가 있어도 connector가 그 완료를 기다리지 않는다. `close`로 생기는 연결 상태·끊김 callback은 `Immediate`에서 종료 작업이 실행하므로 callback 밖에서 호출한 `close`가 돌아오기 전에, `Manual`에서 `close` 뒤의 다음 dispatch pump에서 실행된다. handler 안에서 호출한 `close`는 종료를 시작한 뒤 돌아온다. 재연결 소진과 transport 오류로 끊길 때도 같은 순서로 실행하고 기다리지 않는다(§7)** |
-| **close와 쓰지 않은 frame** | **상대가 읽지 않아도 `close`가 돌아오고, transport에 쓰지 않은 frame의 Send·Request는 `Disconnected`로 실패하며, 완료된 Send의 frame은 transport에 쓰여 있다(§5.2·§7)** |
+| **close와 쓰지 않은 frame** | **상대가 읽지 않아도 `close`가 돌아오고, transport에 쓰지 않았거나 쓰는 중이던 frame의 Send·Request는 `Disconnected`로 실패하며, 완료된 Send의 frame은 transport에 쓰여 있다(§5.2·§7)** |
 | **종료 사유 읽기** | **끊긴 뒤 이벤트를 받지 않은 코드도 같은 값을 읽는다. 첫 connect 실패에도 사유가 남고, 재연결해도 지워지지 않는다(§6.2)** |
 
