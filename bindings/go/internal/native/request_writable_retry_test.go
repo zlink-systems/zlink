@@ -51,20 +51,40 @@ func testPublicRequestRetriesExactPacketAfterWritable(t *testing.T, run int) {
 	if err := dealer.Connect(endpoint); err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
-	// The receive side drives the connect-before-ready WRITABLE if the inproc
-	// pipe has not attached yet; the completed exchange is the readiness barrier.
+	clientPoller, err := NewPoller()
+	if err != nil {
+		t.Fatalf("client NewPoller() error = %v", err)
+	}
+	defer clientPoller.Close()
+	if err := clientPoller.AddSocket(dealer, PollOut|PollCompletion, 2); err != nil {
+		t.Fatalf("client AddSocket(PollOut|PollCompletion) error = %v", err)
+	}
+	// The admitted prime exchange is the readiness barrier. Before the inproc
+	// pipe attaches the prime waits for its WRITABLE, which the dealer's
+	// completion owner delivers from Wait until the prime is admitted.
+	clientEvents := make([]PollEvent, 1)
 	primeDone := make(chan error, 1)
 	go func() {
 		primeDone <- submitNativeSend(context.Background(), dealer.Send().Bytes([]byte("route-prime")))
 	}()
+	for admitted := false; !admitted; {
+		select {
+		case err := <-primeDone:
+			if err != nil {
+				t.Fatalf("prime Submit() error = %v", err)
+			}
+			admitted = true
+		default:
+			if _, err := clientPoller.Wait(clientEvents, 10*time.Millisecond); err != nil {
+				t.Fatalf("prime WRITABLE Wait() error = %v", err)
+			}
+		}
+	}
 	var prime Received
 	if ok, err := router.Recv(&prime, RecvFlagsNone); err != nil || !ok {
 		t.Fatalf("prime Recv() = (%v, %v), want (true, nil)", ok, err)
 	}
 	_ = prime.Close()
-	if err := <-primeDone; err != nil {
-		t.Fatalf("prime Submit() error = %v", err)
-	}
 
 	serverPoller, err := NewPoller()
 	if err != nil {
@@ -74,15 +94,6 @@ func testPublicRequestRetriesExactPacketAfterWritable(t *testing.T, run int) {
 	if err := serverPoller.AddSocket(router, PollIn, 1); err != nil {
 		t.Fatalf("server AddSocket(PollIn) error = %v", err)
 	}
-	clientPoller, err := NewPoller()
-	if err != nil {
-		t.Fatalf("client NewPoller() error = %v", err)
-	}
-	defer clientPoller.Close()
-	if err := clientPoller.AddSocket(dealer, PollOut|PollCompletion, 2); err != nil {
-		t.Fatalf("client AddSocket(PollOut|PollCompletion) error = %v", err)
-	}
-
 	knownEntries := make(map[*completionEntry]bool)
 	requestPayloads := []string{"request-0"}
 	requestResults := []chan requestTestResult{make(chan requestTestResult, 1)}
@@ -125,7 +136,6 @@ func testPublicRequestRetriesExactPacketAfterWritable(t *testing.T, run int) {
 		t.Fatal("managed request did not retain the exact logical packet")
 	}
 
-	clientEvents := make([]PollEvent, 1)
 	writableSeen := false
 	for requestIndex := 0; requestIndex+1 < len(requestPayloads); requestIndex++ {
 		reply := fmt.Sprintf("reply-%d", requestIndex)

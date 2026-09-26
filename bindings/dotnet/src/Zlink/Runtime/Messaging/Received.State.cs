@@ -8,6 +8,7 @@ public sealed partial class Received
 {
     private bool _closed;
     private ReplyToken? _replyToken;
+    private ulong _routeGeneration;
     private MultipartMessageCollection? _parts;
     private RoutingId? _routingId;
     private RoutingIdSnapshot _routingIdSnapshot;

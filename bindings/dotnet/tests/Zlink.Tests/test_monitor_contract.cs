@@ -18,14 +18,29 @@ public sealed class test_monitor_contract
         using var client = ctx.CreatePairSocket();
         using ISocketMonitor monitor = server.MonitorOpen(SocketEvent.ConnectionReady);
         using IPoller poller = Zlink.CreatePoller();
-        PollEventFlags[] invalidMasks = {
-            PollEventFlags.PollOut, PollEventFlags.PollCompletion,
+        PollEventFlags[] notSupportedMasks = {
+            PollEventFlags.PollOut,
             PollEventFlags.PollIn | PollEventFlags.PollOut,
-            PollEventFlags.PollIn | PollEventFlags.PollCompletion,
-            PollEventFlags.PollErr, PollEventFlags.PollPri,
-            (PollEventFlags)0x4000
+            PollEventFlags.PollErr,
+            PollEventFlags.PollPri
         };
-        foreach (var mask in invalidMasks)
+        PollEventFlags[] invalidCompletionMasks = {
+            PollEventFlags.PollCompletion,
+            PollEventFlags.PollIn | PollEventFlags.PollCompletion,
+            PollEventFlags.PollOut | PollEventFlags.PollCompletion
+        };
+        foreach (var mask in notSupportedMasks)
+        {
+            var error = Assert.Throws<ZlinkConfigException>(() =>
+                poller.Add(monitor, mask, 71));
+            Assert.Equal(ZlinkConfigException.ErrorCode.NotSupported, error.Result);
+            Assert.Equal(0, poller.Size);
+            error = Assert.Throws<ZlinkConfigException>(() =>
+                ZlinkPoll.Poll(new[] { monitor }, new[] { mask },
+                    new PollEventFlags[1], 0));
+            Assert.Equal(ZlinkConfigException.ErrorCode.NotSupported, error.Result);
+        }
+        foreach (var mask in invalidCompletionMasks)
         {
             var error = Assert.Throws<ZlinkConfigException>(() =>
                 poller.Add(monitor, mask, 71));
@@ -36,6 +51,11 @@ public sealed class test_monitor_contract
                     new PollEventFlags[1], 0));
             Assert.Equal(ZlinkConfigException.ErrorCode.InvalidArgument, error.Result);
         }
+        var invalidMask = (PollEventFlags)0x4000;
+        var invalid = Assert.Throws<ZlinkConfigException>(() =>
+            poller.Add(monitor, invalidMask, 71));
+        Assert.Equal(ZlinkConfigException.ErrorCode.InvalidArgument,
+            invalid.Result);
         poller.Add(monitor, PollEventFlags.None, 71);
         var endpoint = transport == "inproc"
             ? $"inproc://monitor-poller-{Guid.NewGuid():N}"
@@ -45,13 +65,24 @@ public sealed class test_monitor_contract
         var events = new PollEvent[1];
         Assert.Equal(0, poller.Wait(events, TimeSpan.Zero));
         poller.Modify(monitor, PollEventFlags.PollIn);
-        foreach (var mask in invalidMasks)
+        foreach (var mask in notSupportedMasks)
+        {
+            var error = Assert.Throws<ZlinkConfigException>(() =>
+                poller.Modify(monitor, mask));
+            Assert.Equal(ZlinkConfigException.ErrorCode.NotSupported, error.Result);
+            Assert.Equal(1, poller.Size);
+        }
+        foreach (var mask in invalidCompletionMasks)
         {
             var error = Assert.Throws<ZlinkConfigException>(() =>
                 poller.Modify(monitor, mask));
             Assert.Equal(ZlinkConfigException.ErrorCode.InvalidArgument, error.Result);
             Assert.Equal(1, poller.Size);
         }
+        invalid = Assert.Throws<ZlinkConfigException>(() =>
+            poller.Modify(monitor, invalidMask));
+        Assert.Equal(ZlinkConfigException.ErrorCode.InvalidArgument,
+            invalid.Result);
         Assert.Equal(1, poller.Wait(events, TimeSpan.FromSeconds(2)));
         Assert.Equal(PollSourceKind.Socket, events[0].SourceKind);
         Assert.Equal((nuint)71, events[0].Slot);

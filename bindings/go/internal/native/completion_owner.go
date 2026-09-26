@@ -442,7 +442,7 @@ func (o *completionOwner) drain(waitForPublish bool) (completionDrainResult, err
 	for {
 		var completion C.zlink_completion_t
 		completion.struct_size = C.uint32_t(C.sizeof_zlink_completion_t)
-		result := C.zlink_completion_recv(
+		result, cerr := C.zlink_completion_recv(
 			o.socket, &completion, C.zlink_recv_flags_t(C.ZLINK_RECV_FLAGS_DONTWAIT))
 		if result == C.ZLINK_RECV_NO_DATA {
 			// A retry can create another completion immediately. It belongs to
@@ -460,7 +460,7 @@ func (o *completionOwner) drain(waitForPublish bool) (completionDrainResult, err
 			}
 			return drained, nil
 		}
-		if err := recvErrorFromResult(result); err != nil {
+		if err := recvErrorFromCall(result, cerr); err != nil {
 			return drained, err
 		}
 
@@ -778,7 +778,8 @@ func adoptCompletionParts(completion *C.zlink_completion_t) ([]*Message, error) 
 	parts := make([]*Message, 0, count)
 	for i := range raw {
 		message := &Message{}
-		if err := configErrorFromResult(C.zlink_msg_adopt(&message.msg, &raw[i])); err != nil {
+		nativeResult0, nativeErr0 := C.zlink_msg_adopt(&message.msg, &raw[i])
+		if err := configErrorFromCall(nativeResult0, nativeErr0); err != nil {
 			MultipartClose(parts)
 			return nil, err
 		}

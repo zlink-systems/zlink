@@ -62,6 +62,32 @@ void router_socket_t::get_routing_id (routing_id_t &routing_id_) const
                                      routing_id_);
 }
 
+std::vector<router_route_t> router_socket_t::routes_snapshot ()
+{
+    void *handle = detail::native_handle (*this);
+    std::vector<zlink_router_route_t> native (8);
+    for (;;) {
+        size_t count = 0;
+        const auto rc =
+          zlink_router_routes_snapshot (handle, native.data (), native.size (), &count);
+        if (rc == ZLINK_CONFIG_BUFFER_TOO_SMALL && count > native.size ()) {
+            // Core keeps POLLROUTE readiness on this result; retry with the
+            // count it reported (the set can grow again before the retry).
+            native.resize (count);
+            continue;
+        }
+        detail::throw_if_failed<config_error_t> (static_cast<config_result_t> (rc),
+                                                 detail::current_errno ());
+        std::vector<router_route_t> routes;
+        routes.reserve (count);
+        for (size_t index = 0; index < count; ++index)
+            routes.push_back (router_route_t{
+              routing_id_t::from (native[index].rid.data, native[index].rid.size),
+              native[index].route_generation});
+        return routes;
+    }
+}
+
 request_operation_t router_socket_t::request (const routing_id_t &routing_id_)
 {
     auto state_ptr = detail::acquire_state ();

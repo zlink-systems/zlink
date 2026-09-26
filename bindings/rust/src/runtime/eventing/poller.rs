@@ -6,12 +6,14 @@ use std::os::windows::io::RawSocket as RawFd;
 use std::sync::Arc;
 
 use crate::SocketMonitor;
-use crate::error::{ConfigError, RecvError};
+use crate::error::{CloseError, ConfigError, RecvError, ZlinkError};
 use crate::ffi;
 use crate::internal::{PollerSocketRegistration, PollerStorage, TimerStorage};
-use crate::native_errors::{check_config_rc, check_recv_rc, last_errno};
+use crate::native_errors::{
+    check_close_rc, check_config_rc, check_recv_rc, config_result_from_native, last_errno,
+};
 use crate::poller_contracts::{
-    POLLCOMPLETION, POLLIN, PollEvent, PollItem, PollSourceKind, Pollable, Poller, Timer,
+    POLLCOMPLETION, PollEvent, PollItem, PollSourceKind, Pollable, Poller, Timer,
 };
 
 pub(crate) fn poller_new() -> Result<Poller, ConfigError> {
@@ -32,6 +34,28 @@ pub(crate) fn poller_new() -> Result<Poller, ConfigError> {
 }
 
 impl PollerStorage {
+    pub(crate) fn close(&mut self) -> Result<(), CloseError> {
+        if self.handle.is_null() {
+            return Ok(());
+        }
+        check_close_rc(unsafe { ffi::zlink_poller_destroy(&mut self.handle) })?;
+        let owner = self as *const Self as usize;
+        for registration in self
+            .sockets
+            .get_mut()
+            .expect("poller sockets")
+            .drain()
+            .map(|(_, value)| value)
+        {
+            if registration.events & POLLCOMPLETION != 0 {
+                if let Some(completion_owner) = registration.completion_owner {
+                    completion_owner.release_public(owner);
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn add_socket(
         &self,
         socket: &dyn Pollable,
@@ -145,7 +169,6 @@ impl PollerStorage {
         events: i16,
         slot: usize,
     ) -> Result<(), ConfigError> {
-        validate_monitor_events(events)?;
         check_config_rc(unsafe {
             ffi::zlink_poller_add(
                 self.handle,
@@ -161,7 +184,6 @@ impl PollerStorage {
         monitor: &SocketMonitor,
         events: i16,
     ) -> Result<(), ConfigError> {
-        validate_monitor_events(events)?;
         check_config_rc(unsafe {
             ffi::zlink_poller_modify(self.handle, monitor_native_handle(monitor), events)
         })
@@ -220,13 +242,7 @@ impl PollerStorage {
         &self,
         events: &mut [PollEvent],
         timeout_ms: i64,
-    ) -> Result<usize, RecvError> {
-        if events.is_empty() {
-            return Err(crate::error::RecvError::new(
-                crate::error::RecvResult::InternalError,
-                libc::EINVAL,
-            ));
-        }
+    ) -> Result<usize, ZlinkError> {
         let raw_events = unsafe { &mut *self.raw_events.get() };
         if raw_events.len() < events.len() {
             raw_events.resize(
@@ -241,24 +257,19 @@ impl PollerStorage {
                 },
             );
         }
+        let mut result = ffi::zlink_config_result_t::ZLINK_CONFIG_OK;
         let rc = unsafe {
             ffi::zlink_poller_wait(
                 self.handle,
                 raw_events.as_mut_ptr(),
                 events.len() as i32,
                 timeout_ms as std::ffi::c_long,
-                std::ptr::null_mut(),
+                &mut result,
             )
         };
         if rc < 0 {
             let errno = last_errno();
-            if errno == libc::EAGAIN || errno == libc::ETIMEDOUT {
-                return Ok(0);
-            }
-            return Err(crate::error::RecvError::new(
-                crate::error::RecvResult::Terminated,
-                errno,
-            ));
+            return Err(ConfigError::new(config_result_from_native(result), errno).into());
         }
         if rc == 0 {
             return Ok(0);
@@ -300,31 +311,27 @@ impl PollerStorage {
         Ok(written)
     }
 
-    pub(crate) fn size(&self) -> i32 {
-        let mut error_out = 0;
-        unsafe { ffi::zlink_poller_size(self.handle, &mut error_out) }
+    pub(crate) fn size(&self) -> Result<i32, ConfigError> {
+        let mut error_out = ffi::zlink_config_result_t::ZLINK_CONFIG_OK;
+        let count = unsafe { ffi::zlink_poller_size(self.handle, &mut error_out) };
+        if count >= 0 {
+            Ok(count)
+        } else {
+            Err(ConfigError::new(
+                config_result_from_native(error_out),
+                last_errno(),
+            ))
+        }
     }
 }
 
 impl Drop for PollerStorage {
     fn drop(&mut self) {
-        let owner = self as *const Self as usize;
-        let registrations = self.sockets.get_mut().expect("poller sockets");
-        for registration in registrations.drain().map(|(_, value)| value) {
-            if registration.events & POLLCOMPLETION != 0 {
-                if let Some(completion_owner) = registration.completion_owner {
-                    completion_owner.release_public(owner);
-                }
-            }
-        }
-        unsafe {
-            let mut h = self.handle;
-            ffi::zlink_poller_destroy(&mut h);
-        }
+        let _ = self.close();
     }
 }
 
-pub fn poll(items: &mut [PollItem], timeout_ms: i64) -> Result<i32, RecvError> {
+pub fn poll(items: &mut [PollItem], timeout_ms: i64) -> Result<i32, ConfigError> {
     const INLINE_POLL_ITEMS: usize = 16;
     let mut inline = [ffi::zlink_pollitem_t {
         socket: std::ptr::null_mut(),
@@ -352,17 +359,18 @@ pub fn poll(items: &mut [PollItem], timeout_ms: i64) -> Result<i32, RecvError> {
         }));
         heap.as_mut_slice()
     };
+    let mut result = ffi::zlink_config_result_t::ZLINK_CONFIG_OK;
     let rc = unsafe {
         ffi::zlink_poll(
             raw.as_mut_ptr(),
             raw.len() as i32,
             timeout_ms as std::ffi::c_long,
-            std::ptr::null_mut(),
+            &mut result,
         )
     };
     if rc < 0 {
-        return Err(crate::error::RecvError::new(
-            crate::error::RecvResult::Terminated,
+        return Err(ConfigError::new(
+            config_result_from_native(result),
             last_errno(),
         ));
     }
@@ -428,16 +436,6 @@ fn timer_native_handle(timer: &Timer) -> *mut c_void {
 
 fn monitor_native_handle(monitor: &SocketMonitor) -> *mut c_void {
     monitor.inner.handle
-}
-
-fn validate_monitor_events(events: i16) -> Result<(), ConfigError> {
-    if events != POLLIN {
-        return Err(ConfigError::new(
-            crate::error::ConfigResult::InvalidArgument,
-            libc::EINVAL,
-        ));
-    }
-    Ok(())
 }
 
 pub(crate) fn pollable_handle(source: &dyn Pollable) -> Result<*mut c_void, ConfigError> {

@@ -70,6 +70,7 @@ pub struct Received {
     routing_id: Option<RoutingId>,
     route: Option<ReceivedRoute>,
     reply_token: Option<ReplyToken>,
+    route_generation: u64,
     receive_scratch: Vec<Message>,
     native_receive_scratch: Vec<crate::ffi::zlink_msg_t>,
 }
@@ -87,6 +88,7 @@ impl Received {
             routing_id: None,
             route: None,
             reply_token: None,
+            route_generation: 0,
             receive_scratch: Vec::new(),
             native_receive_scratch: Vec::new(),
         }
@@ -102,9 +104,11 @@ impl Received {
         self.routing_id = routing_id;
         self.route = None;
         self.reply_token = None;
+        self.route_generation = 0;
         std::mem::swap(&mut self.parts, &mut self.receive_scratch);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn replace_router_parts(
         &mut self,
         handle: *mut c_void,
@@ -113,6 +117,7 @@ impl Received {
         reply_owner: Arc<crate::internal::RouterOwnerTag>,
         routing_id: RoutingId,
         reply_token: u64,
+        route_generation: u64,
     ) {
         self.route = Some(ReceivedRoute {
             handle,
@@ -122,6 +127,7 @@ impl Received {
         self.routing_id = Some(routing_id);
         self.reply_token =
             (reply_token != 0).then(|| ReplyToken::from_native(reply_owner, reply_token));
+        self.route_generation = route_generation;
         std::mem::swap(&mut self.parts, &mut self.receive_scratch);
     }
 
@@ -133,6 +139,13 @@ impl Received {
     }
     pub fn reply_token(&self) -> Option<ReplyToken> {
         self.reply_token.clone()
+    }
+    /// Opaque nonzero generation of the ROUTER route that delivered this
+    /// record, or 0 when the record was not received from a ROUTER. Compare
+    /// it only for equality with a [`crate::RouterRoute::route_generation`]
+    /// from [`crate::RouterSocket::routes_snapshot`] for the same routing id.
+    pub fn route_generation(&self) -> u64 {
+        self.route_generation
     }
     pub fn parts(&self) -> &[Message] {
         &self.parts
@@ -180,6 +193,7 @@ impl Received {
             completion_owner,
         });
         self.routing_id = Some(routing_id);
+        self.route_generation = 0;
     }
 
     pub(crate) fn send_target(&self) -> Option<ReceivedSendTarget> {

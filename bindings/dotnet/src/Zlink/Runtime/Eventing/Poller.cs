@@ -62,7 +62,6 @@ internal sealed class Poller : NativeOwner, IPoller
     {
         EnsureNotDisposed();
         var concreteMonitor = SocketInterop.RequireMonitor(monitor, nameof(monitor));
-        EnumValidation.EnsureMonitorPollEvents(events);
         var rc = NativeMethods.zlink_poller_add(_handle, concreteMonitor.Handle,
             SlotToUserData(slot), (short)events);
         ZlinkException.ThrowConfigIfError(rc);
@@ -139,7 +138,6 @@ internal sealed class Poller : NativeOwner, IPoller
     {
         EnsureNotDisposed();
         var concreteMonitor = SocketInterop.RequireMonitor(monitor, nameof(monitor));
-        EnumValidation.EnsureMonitorPollEvents(events);
         var index = FindMonitor(concreteMonitor);
         if (index < 0)
             throw new ArgumentException("monitor is not registered", nameof(monitor));
@@ -252,13 +250,7 @@ internal sealed class Poller : NativeOwner, IPoller
     public int Wait(Span<PollEvent> destination, TimeSpan timeout)
     {
         EnsureNotDisposed();
-        if (destination.Length == 0)
-            throw new ArgumentException("destination must not be empty.",
-                nameof(destination));
-        if (_items.Count == 0)
-            return 0;
-
-        var capacity = Math.Min(destination.Length, _items.Count);
+        var capacity = Math.Min(destination.Length, Math.Max(1, _items.Count));
         EnsureEventCapacity(capacity);
         var timeoutMs = ToTimeoutMilliseconds(timeout);
         var deadline = timeoutMs > 0

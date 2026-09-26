@@ -110,14 +110,15 @@ pub use monitor_contracts::{
     SocketMonitorEventMask, SocketMonitorOpenOptions,
 };
 pub use poller_contracts::{
-    POLLCOMPLETION, POLLIN, POLLOUT, PollEvent, PollItem, PollSourceKind, Pollable, Poller, Timer,
+    POLLCOMPLETION, POLLIN, POLLOUT, POLLROUTE, PollEvent, PollItem, PollSourceKind, Pollable,
+    Poller, Timer,
 };
 pub use pubsub_socket_contracts::{PubSocket, SubSocket, XPubSocket, XSubSocket};
 pub use results::{
     BindResult, CloseResult, ConfigResult, ConnectResult, HandlerResult, RecvResult, RequestResult,
     SubmitResult,
 };
-pub use routed_socket_contracts::RouterSocket;
+pub use routed_socket_contracts::{RouterRoute, RouterSocket};
 pub use routing_id::RoutingId;
 pub use stream_socket_contract::{StreamPacket, StreamSocket};
 pub use topic_message_contract::TopicMessage;
@@ -150,6 +151,6 @@ pub fn multipart_close(parts: &mut [Message]) {
     runtime::multipart_close(parts);
 }
 
-pub fn poll(items: &mut [PollItem], timeout_ms: i64) -> Result<i32, RecvError> {
+pub fn poll(items: &mut [PollItem], timeout_ms: i64) -> Result<i32, ConfigError> {
     poller::poll(items, timeout_ms)
 }

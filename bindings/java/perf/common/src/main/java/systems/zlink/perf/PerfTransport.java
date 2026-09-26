@@ -186,8 +186,7 @@ final class PerfTransport {
             await(done, label, timeout);
         } else {
             long deadline = System.nanoTime() + Math.max(1L, timeout.toNanos());
-            try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
-                     List.of(activitySocket),
+            try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(List.of(activitySocket),
                      systems.zlink.contracts.eventing.PollEventFlags.POLLIN)) {
                 while (done.getCount() != 0 && System.nanoTime() < deadline) {
                     long remainingMillis = Math.max(1L,

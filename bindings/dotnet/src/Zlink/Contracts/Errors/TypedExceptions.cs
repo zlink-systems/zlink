@@ -255,7 +255,12 @@ public sealed partial class ZlinkRecvException : ZlinkException
         /// <summary>
         ///     An unexpected internal error occurred.
         /// </summary>
-        InternalError = 206
+        InternalError = 206,
+
+        /// <summary>
+        ///     The receive lifecycle state rejected the call, for example after the socket closed.
+        /// </summary>
+        InvalidState = 208
     }
 
     /// <summary>

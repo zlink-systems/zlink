@@ -5,6 +5,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const zlink = require('@zlink-systems/zlink');
 const completion_poller_1 = require("./completion_poller");
+const ETERM = 156384765;
 let sequence = 0;
 function endpoint() {
     return `inproc://node-managed-send-backpressure-${process.pid}-${++sequence}`;
@@ -163,7 +164,7 @@ test('retry completion does not consume a Message wrapper reused by the caller',
     context.options.autoHwmEnabled = false;
     const sender = zlink.createPairSocket(context);
     const receiver = zlink.createPairSocket(context);
-    const completions = new completion_poller_1.CompletionPollerDriver(sender);
+    const completions = new completion_poller_1.CompletionPollerDriver(context, sender);
     const messages = [];
     const sends = [];
     const expected = [];
@@ -238,7 +239,7 @@ test('context shutdown rejects a backpressured managed send as Terminated', asyn
     context.options.autoHwmEnabled = false;
     const sender = zlink.createPairSocket(context);
     const receiver = zlink.createPairSocket(context);
-    const completions = new completion_poller_1.CompletionPollerDriver(sender);
+    const completions = new completion_poller_1.CompletionPollerDriver(context, sender);
     const attempts = [];
     try {
         sender.options.linger = 0;
@@ -268,7 +269,9 @@ test('context shutdown rejects a backpressured managed send as Terminated', asyn
         const pending = attempts.find((attempt) => !attempt.settled);
         assert.ok(pending, 'HWM must leave at least one managed send waiting');
         context.shutdown();
-        assert.throws(() => completions.wait(100), (error) => error instanceof zlink.RecvError && error.result === zlink.RecvResult.Terminated);
+        // Core ends the wait after the shutdown with its configuration result.
+        assert.throws(() => completions.wait(100), (error) => error instanceof zlink.ConfigError && error.result === zlink.ConfigResult.InternalError
+            && error.nativeErrno === ETERM);
         for (let turn = 0; turn < 10_000 && !pending.settled; turn += 1) {
             await yieldToEventLoop();
         }
@@ -289,7 +292,7 @@ test('managed routed send retries the same target and packet after HWM drain', a
     context.options.autoHwmEnabled = false;
     const router = zlink.createRouterSocket(context);
     const dealer = zlink.createDealerSocket(context);
-    const completions = new completion_poller_1.CompletionPollerDriver(router);
+    const completions = new completion_poller_1.CompletionPollerDriver(context, router);
     const peer = zlink.RoutingId.from('node-managed-routed-peer');
     const payloads = [];
     const sends = [];

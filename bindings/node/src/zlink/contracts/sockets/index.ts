@@ -40,7 +40,7 @@ export type {
 export type * from '../messaging/operations';
 export type { PairSocket } from './pair_socket';
 export type { DealerSocket } from './dealer_socket';
-export type { RouterSocket } from './router_socket';
+export type { RouterRoute, RouterSocket } from './router_socket';
 export type {
   PubSocket,
   SubSocket,

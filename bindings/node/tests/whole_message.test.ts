@@ -49,7 +49,7 @@ test('whole-message REQUEST growth preserves the route, reply token, and indepen
   const context = zlink.createContext();
   const router = zlink.createRouterSocket(context);
   const dealer = zlink.createDealerSocket(context);
-  const completions = new CompletionPollerDriver(dealer);
+  const completions = new CompletionPollerDriver(context, dealer);
   const received = new zlink.Received();
   const peer = zlink.RoutingId.from(Buffer.from('whole-message-client'));
   try {

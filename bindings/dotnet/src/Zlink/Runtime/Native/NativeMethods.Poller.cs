@@ -27,40 +27,40 @@ internal static partial class NativeMethods
         SetLastError = true)]
     internal static extern IntPtr zlink_poller_new();
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_poller_destroy(ref IntPtr poller);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_poller_size(IntPtr poller,
         out int errorOut);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_poller_add(IntPtr poller, IntPtr socket,
         IntPtr userData, short events);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_poller_add_fd(IntPtr poller, int fd,
         IntPtr userData, short events);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_poller_add_timer(IntPtr poller,
         IntPtr timer, IntPtr userData);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_poller_modify(IntPtr poller, IntPtr socket,
         short events);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_poller_modify_fd(IntPtr poller, int fd,
         short events);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_poller_remove(IntPtr poller, IntPtr socket);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_poller_remove_fd(IntPtr poller, int fd);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_poller_remove_timer(IntPtr poller,
         IntPtr timer);
 
@@ -77,13 +77,13 @@ internal static partial class NativeMethods
         out int errorOut);
 
     [DllImport(LibraryName, EntryPoint = "zlink_poll",
-        CallingConvention = CallingConvention.Cdecl)]
+        CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_poll(
         [In] [Out] ZlinkPollItemUnix[] items, int nitems, long timeout,
         out int errorOut);
 
     [DllImport(LibraryName, EntryPoint = "zlink_poll",
-        CallingConvention = CallingConvention.Cdecl)]
+        CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_poll(
         [In] [Out] ZlinkPollItemWindows[] items, int nitems, long timeout,
         out int errorOut);
@@ -95,9 +95,10 @@ internal static partial class NativeMethods
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl,
         SetLastError = true)]
-    internal static extern int zlink_has(
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static extern bool zlink_has(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string capability);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern void zlink_sleep(int seconds);
 }

@@ -25,6 +25,10 @@ except ImportError:  # Extension-free installations retain the ctypes path.
     _native_extension = None
 
 
+def _native_errno():
+    return ctypes.get_errno()
+
+
 def _request_result_from_code(code):
     try:
         return RequestResult(int(code))
@@ -39,11 +43,27 @@ def _config_result_from_errno(err):
         return ConfigResult.OK
     if err == _errno.EFAULT:
         return ConfigResult.INVALID_HANDLE
-    if err == _errno.EINVAL:
+    if err in (_errno.EINVAL, _errno.EMSGSIZE):
         return ConfigResult.INVALID_ARGUMENT
     if err in (_errno.ENOTSUP, getattr(_errno, "EOPNOTSUPP", _errno.ENOTSUP)):
         return ConfigResult.NOT_SUPPORTED
-    return ConfigResult.INVALID_ARGUMENT
+    if err in (
+        _errno.EBUSY,
+        _errno.ESTALE,
+        _errno.EALREADY,
+        getattr(_errno, "ESHUTDOWN", 108),
+        _errno.ENOTCONN,
+        _errno.ETIMEDOUT,
+        _errno.EPROTO,
+    ):
+        return ConfigResult.INVALID_STATE
+    if err == _errno.ENOENT:
+        return ConfigResult.NOT_FOUND
+    if err == _errno.EEXIST:
+        return ConfigResult.CONFLICT
+    if err == _errno.ENOBUFS:
+        return ConfigResult.BUFFER_TOO_SMALL
+    return ConfigResult.INTERNAL_ERROR
 
 
 def _raise_zlink_error(error_type, result, native_errno=None):

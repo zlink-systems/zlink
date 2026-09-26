@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import { ReplyToken, RoutingId, type MessageLike } from '../../contracts';
+import type { RouterRoute } from '../../contracts/sockets/router_socket';
 import type {
   ReplyOperation,
   RequestOperation,
@@ -46,6 +47,15 @@ export class RouterSocket extends RoutedMessageSocket {
   getRoutingId(): RoutingId {
     return RoutingId.from(configCall('routing id get failed', () =>
       native.handleGetRoutingId(getNativeHandle(this)) as Buffer));
+  }
+
+  routesSnapshot(): RouterRoute[] {
+    const rows = configCall('router routes snapshot failed', () =>
+      native.routerRoutesSnapshot(getNativeHandle(this)));
+    return rows.map((row) => ({
+      routingId: RoutingId.from(row.routingId ?? Buffer.alloc(0)),
+      routeGeneration: row.routeGeneration,
+    }));
   }
 
   send(peerRid: RoutingId): SendOperation {

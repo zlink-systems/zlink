@@ -4,9 +4,10 @@ use std::ptr;
 use super::{SocketInner, recv_whole_message};
 use crate::core_context::Context;
 use crate::domain::Received;
-use crate::error::{ConfigError, RecvError};
+use crate::error::{ConfigError, ConfigResult, RecvError};
 use crate::ffi;
 use crate::message::RoutingId;
+use crate::routed_socket_contracts::RouterRoute;
 use crate::socket_contracts::RouterSocket;
 
 impl RouterSocket {
@@ -68,6 +69,10 @@ pub(crate) fn recv_router_once(
     )?;
 
     if received {
+        // Core reports the route generation of the record returned by the
+        // last successful zlink_router_recv; read it before any other data
+        // receive.
+        let route_generation = unsafe { ffi::zlink_router_recv_route_generation(handle) };
         out.replace_router_parts(
             handle,
             routed,
@@ -75,9 +80,65 @@ pub(crate) fn recv_router_once(
             reply_owner,
             routing_id,
             reply_token,
+            route_generation,
         );
         Ok(true)
     } else {
         Ok(false)
+    }
+}
+
+fn config_result_from_rc(rc: i32) -> ConfigResult {
+    match rc {
+        0 => ConfigResult::Ok,
+        701 => ConfigResult::InvalidHandle,
+        702 => ConfigResult::InvalidArgument,
+        703 => ConfigResult::NotSupported,
+        705 => ConfigResult::InvalidState,
+        706 => ConfigResult::NotFound,
+        707 => ConfigResult::Conflict,
+        708 => ConfigResult::BufferTooSmall,
+        709 => ConfigResult::Busy,
+        _ => ConfigResult::InternalError,
+    }
+}
+
+/// Reads the ROUTER selected-route snapshot. Core ROUTER §10.1:
+/// BUFFER_TOO_SMALL reports the required row count and keeps POLLROUTE
+/// readiness, so retry with that capacity.
+pub(crate) fn router_routes_snapshot(handle: *mut c_void) -> Result<Vec<RouterRoute>, ConfigError> {
+    let mut capacity: usize = 16;
+    loop {
+        let mut native: Vec<ffi::zlink_router_route_t> = vec![
+            ffi::zlink_router_route_t {
+                rid: ffi::zlink_routing_id_t::empty(),
+                route_generation: 0
+            };
+            capacity
+        ];
+        let mut count: usize = 0;
+        let rc = unsafe {
+            ffi::zlink_router_routes_snapshot(handle, native.as_mut_ptr(), capacity, &mut count)
+        };
+        if rc == ffi::zlink_config_result_t::ZLINK_CONFIG_BUFFER_TOO_SMALL as i32
+            && count > capacity
+        {
+            // Core keeps POLLROUTE readiness on this result; retry with the
+            // count it reported (the set can grow again before the retry).
+            capacity = count;
+            continue;
+        }
+        if rc != 0 {
+            return Err(ConfigError::new(config_result_from_rc(rc), unsafe {
+                ffi::zlink_errno()
+            }));
+        }
+        return Ok(native[..count]
+            .iter()
+            .map(|route| RouterRoute {
+                routing_id: RoutingId::from_raw(route.rid),
+                route_generation: route.route_generation,
+            })
+            .collect());
     }
 }

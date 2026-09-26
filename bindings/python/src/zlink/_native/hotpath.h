@@ -85,6 +85,7 @@
     X(reply_token) \
     X(retain_retry) \
     X(retire_native) \
+    X(route_generation) \
     X(routing_id) \
     X(succeed_send) \
     X(target) \
@@ -941,6 +942,16 @@ static PyObject *receive_into (PyObject *args, int mode)
         || PyObject_SetAttr (out, hp_parts, parts) < 0
         || PyObject_SetAttr (out, hp_routing_id, routing) < 0)
         goto fail;
+    /* Core reports the route generation only on a ROUTER receive (mode 1,
+     * tuple index 5); every other receive resets it to 0 so a reused
+     * Received never carries a stale generation across socket kinds. */
+    PyObject *generation =
+      mode == 1 ? Py_NewRef (PyTuple_GET_ITEM (received, 5)) : PyLong_FromLong (0);
+    if (!generation || PyObject_SetAttr (out, hp_route_generation, generation) < 0) {
+        Py_XDECREF (generation);
+        goto fail;
+    }
+    Py_DECREF (generation);
     if (mode == 2) {
         PyObject *empty = PyUnicode_FromString ("");
         int set = empty ? PyObject_SetAttr (out, hp__topic, empty) : -1;

@@ -233,6 +233,8 @@ public final class ContractAccess {
         void adoptFrom(Received target, Received source);
 
         void setReplyTokenOwner(Received received, Object owner);
+
+        void setRouteGeneration(Received received, long routeGeneration);
     }
 
     public interface SubscriptionEventAccess {
@@ -728,6 +730,11 @@ public final class ContractAccess {
 
     public static void receivedAdoptFrom(Received target, Received source) {
         receivedAccess().adoptFrom(target, source);
+    }
+
+    public static void receivedSetRouteGeneration(Received received,
+                                                  long routeGeneration) {
+        receivedAccess().setRouteGeneration(received, routeGeneration);
     }
 
     public static void receivedSetReplyTokenOwner(Received received,

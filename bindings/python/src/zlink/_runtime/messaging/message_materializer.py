@@ -8,9 +8,9 @@ from ...contracts.sockets.codes import RecvResult, SubmitResult
 from ...contracts.errors.errors import CloseError, ConfigError, RecvError, SubmitError
 from ..._native.ffi import ZlinkMsg, lib
 from ..._runtime.handles.native_support import (
+    _native_errno,
     _init_msg_from_buffer,
     _clone_native_msg,
-    _msg_data_ptr,
     _msg_refcnt,
     _msg_size,
     _msg_to_bytes,
@@ -107,7 +107,7 @@ class ReceivedMessage:
             return
         rc = lib().zlink_msg_close(ctypes.byref(self._msg))
         if rc != 0:
-            _raise_result_error(CloseError, CloseResult, rc, lib().zlink_errno())
+            _raise_result_error(CloseError, CloseResult, rc, _native_errno())
         self._closed = True
 
     def __enter__(self):
@@ -138,14 +138,7 @@ class _BaseReceived:
 
     @staticmethod
     def _build_parts(owner):
-        if _native_extension is not None:
-            return _native_extension.build_received_parts(owner, ReceivedMessage)
-        if owner._part_count == 1:
-            return (ReceivedMessage._from_owner(owner, 0),)
-        return tuple(
-            ReceivedMessage._from_owner(owner, index)
-            for index in range(owner._part_count)
-        )
+        return _native_extension.build_received_parts(owner, ReceivedMessage)
 
     def _close_current_owner(self):
         if self._owner is not None:
@@ -219,6 +212,10 @@ class _BaseReceived:
 
 
 class ReceivedMultipart(_BaseReceived):
+    # HOT PATH: shared default so a fresh ReceivedMultipart()/Received() (no
+    # owner yet) reports 0 without a per-instance assignment in __init__.
+    route_generation = 0
+
     def __init__(
         self,
         owner=None,
@@ -226,6 +223,7 @@ class ReceivedMultipart(_BaseReceived):
         reply_token=None,
         *,
         router_socket=None,
+        route_generation=0,
     ):
         # HOT PATH: ReceivedMultipart() and Received() create empty storage
         # objects that recv_into refills in place through the public
@@ -236,6 +234,7 @@ class ReceivedMultipart(_BaseReceived):
             self.routing_id = None
             self.reply_token = None
             self._router_socket = None
+            self.route_generation = 0
             return
         self._owner = owner
         if owner._part_count == 1:
@@ -245,6 +244,7 @@ class ReceivedMultipart(_BaseReceived):
         self.routing_id = routing_id
         self.reply_token = reply_token
         self._router_socket = router_socket
+        self.route_generation = route_generation
 
     def _adopt_from(self, source):
         """Replace this Received's internal state with the contents of
@@ -258,10 +258,12 @@ class ReceivedMultipart(_BaseReceived):
         self.routing_id = source.routing_id
         self.reply_token = source.reply_token
         self._router_socket = source._router_socket
+        self.route_generation = source.route_generation
         source._clear_owner()
         source.routing_id = None
         source.reply_token = None
         source._router_socket = None
+        source.route_generation = 0
 
     def _replace(
         self,
@@ -270,6 +272,7 @@ class ReceivedMultipart(_BaseReceived):
         reply_token=None,
         *,
         router_socket=None,
+        route_generation=0,
     ):
         try:
             next_parts = (
@@ -286,6 +289,7 @@ class ReceivedMultipart(_BaseReceived):
         self.routing_id = routing_id
         self.reply_token = reply_token
         self._router_socket = router_socket
+        self.route_generation = route_generation
 
 
 class TopicMessage(_BaseReceived):
@@ -406,7 +410,7 @@ class Message:
                 raise ValueError("size must be >= 0")
             rc = lib().zlink_msg_init_size(ctypes.byref(self._msg), size)
         if rc != 0:
-            _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
+            _raise_result_error(ConfigError, ConfigResult, rc, _native_errno())
         self._valid = True
 
     @classmethod
@@ -439,24 +443,7 @@ class Message:
     def data(self):
         if not self._valid:
             return memoryview(b"")
-        if _native_extension is not None:
-            return _native_extension.message_data(self, ctypes.c_ubyte)
-        # Cache the memoryview keyed by (ptr, size). The underlying msg can
-        # only be mutated by close()/_adopt_from()-style transitions, both of
-        # which clear `_valid` and therefore invalidate this cache via the
-        # ``not self._valid`` short-circuit above. Reading `.data` repeatedly
-        # — common when forwarding a payload between parts of a pipeline —
-        # would otherwise allocate a fresh `from_address` view every call.
-        ptr = _msg_data_ptr(self._msg)
-        size = self.size()
-        if not ptr or size <= 0:
-            return memoryview(b"")
-        cache = getattr(self, "_data_view_cache", None)
-        if cache is not None and cache[0] == ptr and cache[1] == size:
-            return cache[2]
-        view = memoryview((ctypes.c_ubyte * size).from_address(ptr)).cast("B")
-        self._data_view_cache = (ptr, size, view)
-        return view
+        return _native_extension.message_data(self, ctypes.c_ubyte)
 
     def to_bytes(self):
         return _msg_to_bytes(self._msg) if self._valid else b""
@@ -514,11 +501,7 @@ class Message:
     def close(self):
         if not self._valid:
             return
-        if _native_extension is not None:
-            rc, native_errno = _native_extension.msg_close(self._msg)
-        else:
-            rc = lib().zlink_msg_close(ctypes.byref(self._msg))
-            native_errno = 0 if rc == 0 else lib().zlink_errno()
+        rc, native_errno = _native_extension.msg_close(self._msg)
         if rc != 0:
             _raise_result_error(CloseError, CloseResult, rc, native_errno)
         self._valid = False

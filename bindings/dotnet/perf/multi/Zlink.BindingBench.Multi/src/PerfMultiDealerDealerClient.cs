@@ -80,8 +80,7 @@ internal static class PerfMultiDealerDealerClient
         }
     }
 
-    private static async Task<bool> RunSendPhaseAsync(PollManager pollManager,
-        List<ISocket> activeClients, int msgSize,
+    private static async Task<bool> RunSendPhaseAsync(PollManager pollManager, List<ISocket> activeClients, int msgSize,
         int durationSeconds, RunnerControlState controlState)
     {
         const uint runId = 1;
@@ -112,7 +111,8 @@ internal static class PerfMultiDealerDealerClient
         Array.Fill(completionMasks, PollEventFlags.PollCompletion);
         // Transfer every socket to one public completion owner before any
         // async send can encounter backpressure.
-        _ = PollSocketEvents(pollManager, activeClients, completionMasks, 0);
+        _ = PollSocketEvents(pollManager, activeClients,
+            completionMasks, 0);
 
         var sendTasks = new Task[activeClients.Count];
         for (int i = 0; i < activeClients.Count; i++)
@@ -120,8 +120,8 @@ internal static class PerfMultiDealerDealerClient
         Task allSends = Task.WhenAll(sendTasks);
         while (!allSends.IsCompleted)
         {
-            _ = PollSocketEvents(pollManager, activeClients, completionMasks,
-                50);
+            _ = PollSocketEvents(pollManager, activeClients,
+                completionMasks, 50);
         }
         await allSends.ConfigureAwait(false);
 

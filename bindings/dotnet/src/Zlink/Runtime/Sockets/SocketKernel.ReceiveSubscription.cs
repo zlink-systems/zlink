@@ -12,7 +12,7 @@ internal sealed partial class SocketKernel : IDisposable
     {
         var allowNoData = (flags & DontWaitFlag) != 0;
         var received = ReceiveParts(flags, true, result,
-            out var routingId, out _, out var topicLength,
+            out var routingId, out _, out _, out var topicLength,
             out var singlePart, out var parts, allowNoData);
         if (!received)
             return false;

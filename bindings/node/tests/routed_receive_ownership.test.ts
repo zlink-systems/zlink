@@ -8,7 +8,7 @@ test('multipart receive reuse preserves captured reply routes and collection ide
   const ctx = zlink.createContext();
   const router = zlink.createRouterSocket(ctx);
   const dealers = [zlink.createDealerSocket(ctx), zlink.createDealerSocket(ctx)];
-  const completions = new CompletionPollerDriver(dealers);
+  const completions = new CompletionPollerDriver(ctx, dealers);
   const received = new zlink.Received();
   const saved: any[] = [];
   const requests: Promise<any>[] = [];

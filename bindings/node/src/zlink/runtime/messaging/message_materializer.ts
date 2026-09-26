@@ -41,6 +41,7 @@ export interface NativeReceivedEnvelope {
   nativeMessage?: unknown;
   routingId?: Buffer | null;
   replyToken?: bigint | null;
+  routeGeneration?: bigint;
 }
 
 type NativeReceivedBufferParts = readonly Buffer[];
@@ -302,7 +303,8 @@ export function materializeRoutedReceivedInto(
       routingId,
       context.replyToken,
       context.replyToken ? context.replyContext : null,
-      context.routingId == null ? null : context.sendContext
+      context.routingId == null ? null : context.sendContext,
+      envelope.routeGeneration ?? 0n
     );
 }
 

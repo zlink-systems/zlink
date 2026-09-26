@@ -111,6 +111,7 @@ class NativeContext:
 
     def close(self):
         if self._handle:
+            self.shutdown()
             rc = lib().zlink_ctx_term(self._handle)
             if rc != 0:
                 _raise_result_error(CloseError, CloseResult, rc, lib().zlink_errno())

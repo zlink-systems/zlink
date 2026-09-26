@@ -15,6 +15,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.internal.ContractAccess;
 import systems.zlink.runtime.messaging.MessageOperations;
 import systems.zlink.runtime.nativeapi.InternalAccess;
+import systems.zlink.runtime.nativeapi.Native;
 import java.util.List;
 import java.util.Objects;
 
@@ -38,6 +39,9 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
     }
     public void setRoutingId(RoutingId rid) { runtime().setRoutingId(rid); }
     public RoutingId getRoutingId() { return runtime().getRoutingId(); }
+    public List<RouterRoute> routesSnapshot() {
+        return Native.routerRoutesSnapshot(handle());
+    }
 
     public SendOperation send(RoutingId rid) {
         Objects.requireNonNull(rid, "rid");

@@ -27,6 +27,8 @@ const {
   waitForPostReadySettle,
   waitForMonitorConnectionReady,
   waitForWorkerStatus,
+  workerBindEndpoint,
+  workerBoundEndpoint,
 } = require('./perf_single_common');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 
@@ -185,11 +187,10 @@ async function runPubSubBenchmark(msgSize, options) {
     // CONNECTION_READY gate never fires (PUBSUB tls/wss hung pre-data).
     configureTlsClient(sub, options.transport);
     sub.setSubscription('');
-    sub.connect(endpoint);
     worker = spawnSenderWorker({
       kind: 'pubsub',
       transport: options.transport,
-      endpoint,
+      endpoint: workerBindEndpoint(endpoint),
       duration: options.duration,
       msgSize,
       runId: options.runId ?? 1,
@@ -202,6 +203,7 @@ async function runPubSubBenchmark(msgSize, options) {
       },
     });
     waitForWorkerStatus(worker, 1);
+    sub.connect(workerBoundEndpoint(worker, endpoint));
     // C setup_connected_pubsub_pair: wait for the subscriber
     // CONNECTION_READY and the post-ready settle BEFORE releasing the
     // publisher's active loop, so the active window starts on a settled

@@ -47,6 +47,8 @@ const nestjs = require('../../packages/nestjs/dist');
 const { waitForClientServerTargets } = require('./helpers/client-server-readiness');
 const { resolveModuleProviders } = require('./helpers/nestjs-test-utils');
 const reservedPorts = new Set();
+// A bind side binds an OS-assigned port; peers use the endpoint it bound.
+const ANY_LOOPBACK_PORT = 'tcp://127.0.0.1:*';
 
 test.afterEach(async () => {
   // Native socket teardown becomes observable to the monitor drain asynchronously.
@@ -1340,18 +1342,28 @@ test('ZLinkChannelClient request/reply round-trips through public binding socket
   const ctx = zlink.createContext();
   const router = zlink.createRouterSocket(ctx);
   const dealer = zlink.createDealerSocket(ctx);
-  const endpoint = `tcp://127.0.0.1:${await reservePort()}`;
   let routerMonitor;
   let dealerMonitor;
-  const completionPoller = ownCompletions(dealer);
+  const completionPoller = ownCompletions(ctx, dealer);
 
   try {
     routerMonitor = router.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
     dealerMonitor = dealer.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
-    router.bind(endpoint);
+    router.bind(ANY_LOOPBACK_PORT);
+    const endpoint = router.options.lastEndpoint;
     dealer.connect(endpoint);
-    await waitForMonitorConnectionReady(routerMonitor, 'channel client router connection', router);
-    await waitForMonitorConnectionReady(dealerMonitor, 'channel client dealer connection', router);
+    await waitForMonitorConnectionReady(
+      ctx,
+      routerMonitor,
+      'channel client router connection',
+      router
+    );
+    await waitForMonitorConnectionReady(
+      ctx,
+      dealerMonitor,
+      'channel client dealer connection',
+      router
+    );
     routerMonitor.close();
     routerMonitor = null;
     dealerMonitor.close();
@@ -2956,8 +2968,9 @@ test('DSC-008 requestToChannel traffic survives location scale-out and scale-in'
 
 test('DSC-009 same routing id different endpoint replaces located provider', async () => {
   const locationStore = new framework.ZLinkInMemoryLocationStore();
-  const providerV1Endpoint = `tcp://127.0.0.1:${await reservePort()}`;
-  const providerV2Endpoint = `tcp://127.0.0.1:${await reservePort()}`;
+  // Location rows only; no socket binds or connects these endpoints.
+  const providerV1Endpoint = 'tcp://127.0.0.1:9431';
+  const providerV2Endpoint = 'tcp://127.0.0.1:9432';
   const providerRid = 'api-a';
 
   const providerV1Lease = await locationStore.claimOwnerLease('provider-v1', 30000);
@@ -3165,121 +3178,170 @@ test('ZLinkFrameworkRuntimeHost uses protobuf codec extension for channels', asy
 });
 
 test('PUB-001 ZLinkFrameworkRuntimeHost delivers the same sequence to three fanout subscribers', async () => {
-  const endpoint = `tcp://127.0.0.1:${await reservePort()}`;
   const topic = 'ProfileChanged';
   const first = [];
   const second = [];
   const third = [];
   const publisherRegistration = framework.createFrameworkRegistration({
     channels: {
-      events: { publisher: { bind: endpoint } }
+      events: { publisher: { bind: ANY_LOOPBACK_PORT } }
     }
   });
-  const createSubscriberRegistration = (calls) => framework.createFrameworkRegistration({
-    channels: {
-      events: {
-        subscriber: { manualConnections: [endpoint] },
-        publishHandlers: [{
-          packetName: 'ProfileChanged',
-          handler: {
-            handle(payload, context) {
-              calls.push({
-                payload,
-                channelName: context.channelName,
-                packetName: context.packetName,
-                topic: context.topic,
-                contentType: context.contentType
-              });
+  const createSubscriberRegistration = (calls, endpoint) =>
+    framework.createFrameworkRegistration({
+      channels: {
+        events: {
+          subscriber: { manualConnections: [endpoint] },
+          publishHandlers: [
+            {
+              packetName: 'ProfileChanged',
+              handler: {
+                handle(payload, context) {
+                  calls.push({
+                    payload,
+                    channelName: context.channelName,
+                    packetName: context.packetName,
+                    topic: context.topic,
+                    contentType: context.contentType
+                  });
+                }
+              }
             }
-          }
-        }]
+          ]
+        }
       }
-    }
+    });
+  const publisherRuntime = new framework.ZLinkFrameworkRuntimeHost({
+    registration: publisherRegistration
   });
-  const publisherRuntime = new framework.ZLinkFrameworkRuntimeHost({ registration: publisherRegistration });
-  const firstRuntime = new framework.ZLinkFrameworkRuntimeHost({ registration: createSubscriberRegistration(first) });
-  const secondRuntime = new framework.ZLinkFrameworkRuntimeHost({ registration: createSubscriberRegistration(second) });
-  const thirdRuntime = new framework.ZLinkFrameworkRuntimeHost({ registration: createSubscriberRegistration(third) });
+  let firstRuntime;
+  let secondRuntime;
+  let thirdRuntime;
 
   try {
     await publisherRuntime.start();
+    const fanout = new framework.DefaultZLinkFanoutClient(
+      publisherRegistration,
+      publisherRuntime.channelTransport
+    );
+    const endpoint = fanout.getListenerStatus('events').endpoint;
+    firstRuntime = new framework.ZLinkFrameworkRuntimeHost({
+      registration: createSubscriberRegistration(first, endpoint)
+    });
+    secondRuntime = new framework.ZLinkFrameworkRuntimeHost({
+      registration: createSubscriberRegistration(second, endpoint)
+    });
+    thirdRuntime = new framework.ZLinkFrameworkRuntimeHost({
+      registration: createSubscriberRegistration(third, endpoint)
+    });
     await firstRuntime.start();
     await secondRuntime.start();
     await thirdRuntime.start();
 
-    const fanout = new framework.DefaultZLinkFanoutClient(publisherRegistration, publisherRuntime.channelTransport);
     const common = await publishUntilCommonFanoutSequence(fanout, topic, first, second, third);
     for (const calls of [first, second, third]) {
-      assert.ok(calls.some((call) =>
-        call.payload.sequence === common &&
-        call.channelName === 'events' &&
-        call.packetName === 'ProfileChanged' &&
-        call.topic === topic &&
-        call.contentType === 'application/json'
-      ));
+      assert.ok(
+        calls.some(
+          (call) =>
+            call.payload.sequence === common &&
+            call.channelName === 'events' &&
+            call.packetName === 'ProfileChanged' &&
+            call.topic === topic &&
+            call.contentType === 'application/json'
+        )
+      );
     }
   } finally {
-    await thirdRuntime.stop();
-    await secondRuntime.stop();
-    await firstRuntime.stop();
+    await thirdRuntime?.stop();
+    await secondRuntime?.stop();
+    await firstRuntime?.stop();
     await publisherRuntime.stop();
   }
 });
 
 test('fanout publisher binds during runtime start before the first publish', async () => {
-  const endpoint = `tcp://127.0.0.1:${await reservePort()}`;
   const calls = [];
   const publisherRegistration = framework.createFrameworkRegistration({
     channels: {
-      events: { publisher: { bind: endpoint } }
+      events: { publisher: { bind: ANY_LOOPBACK_PORT } }
     }
   });
-  const subscriberRegistration = framework.createFrameworkRegistration({
-    channels: {
-      events: {
-        subscriber: { manualConnections: [endpoint] },
-        publishHandlers: [{
-          packetName: 'ProfileChanged',
-          handler: {
-            handle(payload) {
-              calls.push(payload);
-            }
-          }
-        }]
-      }
-    }
+  const publisherRuntime = new framework.ZLinkFrameworkRuntimeHost({
+    registration: publisherRegistration
   });
-  const publisherRuntime = new framework.ZLinkFrameworkRuntimeHost({ registration: publisherRegistration });
-  const subscriberRuntime = new framework.ZLinkFrameworkRuntimeHost({ registration: subscriberRegistration });
+  const fanout = new framework.DefaultZLinkFanoutClient(
+    publisherRegistration,
+    publisherRuntime.channelTransport
+  );
+  let subscriberRuntime;
 
   try {
     await publisherRuntime.start();
+    const endpoint = fanout.getListenerStatus('events').endpoint;
+    const subscriberRegistration = framework.createFrameworkRegistration({
+      channels: {
+        events: {
+          subscriber: { manualConnections: [endpoint] },
+          publishHandlers: [
+            {
+              packetName: 'ProfileChanged',
+              handler: {
+                handle(payload) {
+                  calls.push(payload);
+                }
+              }
+            }
+          ]
+        }
+      }
+    });
+    subscriberRuntime = new framework.ZLinkFrameworkRuntimeHost({
+      registration: subscriberRegistration
+    });
     await subscriberRuntime.start();
     await new Promise((resolve) => setTimeout(resolve, 200));
 
-    const fanout = new framework.DefaultZLinkFanoutClient(publisherRegistration, publisherRuntime.channelTransport);
-    await fanout
-      .publish('events', typedPacket('ProfileChanged', { sequence: 1 }))
-      .submit();
+    await fanout.publish('events', typedPacket('ProfileChanged', { sequence: 1 })).submit();
 
     await waitFor(() => calls.length === 1, 'first fanout publish after runtime start');
     assert.deepEqual(calls[0], { sequence: 1 });
   } finally {
-    await subscriberRuntime.stop();
+    await subscriberRuntime?.stop();
     await publisherRuntime.stop();
   }
 });
 
 test('fanout subscriberConnections changes the live manual receive set', async () => {
-  const firstEndpoint = `tcp://127.0.0.1:${await reservePort()}`;
-  const secondEndpoint = `tcp://127.0.0.1:${await reservePort()}`;
   const calls = [];
   const firstPublisherRegistration = framework.createFrameworkRegistration({
-    channels: { events: { publisher: { bind: firstEndpoint } } }
+    channels: { events: { publisher: { bind: ANY_LOOPBACK_PORT } } }
   });
   const secondPublisherRegistration = framework.createFrameworkRegistration({
-    channels: { events: { publisher: { bind: secondEndpoint } } }
+    channels: { events: { publisher: { bind: ANY_LOOPBACK_PORT } } }
   });
+  const firstPublisherRuntime = new framework.ZLinkFrameworkRuntimeHost({
+    registration: firstPublisherRegistration
+  });
+  const secondPublisherRuntime = new framework.ZLinkFrameworkRuntimeHost({
+    registration: secondPublisherRegistration
+  });
+  const firstFanout = new framework.DefaultZLinkFanoutClient(
+    firstPublisherRegistration,
+    firstPublisherRuntime.channelTransport
+  );
+  const secondFanout = new framework.DefaultZLinkFanoutClient(
+    secondPublisherRegistration,
+    secondPublisherRuntime.channelTransport
+  );
+  await firstPublisherRuntime.start();
+  try {
+    await secondPublisherRuntime.start();
+  } catch (error) {
+    await firstPublisherRuntime.stop();
+    throw error;
+  }
+  const firstEndpoint = firstFanout.getListenerStatus('events').endpoint;
+  const secondEndpoint = secondFanout.getListenerStatus('events').endpoint;
 
   let subscriberConnections;
   const subscriberOptions = framework.createFrameworkOptions((builder) => {
@@ -3287,37 +3349,23 @@ test('fanout subscriberConnections changes the live manual receive set', async (
     channel.connect(firstEndpoint);
     subscriberConnections = channel.subscriberConnections();
   });
-  subscriberOptions.channels.events.publishHandlers = [{
-    packetName: 'ProfileChanged',
-    handler: {
-      handle(payload) {
-        calls.push(payload);
+  subscriberOptions.channels.events.publishHandlers = [
+    {
+      packetName: 'ProfileChanged',
+      handler: {
+        handle(payload) {
+          calls.push(payload);
+        }
       }
     }
-  }];
+  ];
   const subscriberRegistration = framework.createFrameworkRegistration(subscriberOptions);
-  const firstPublisherRuntime = new framework.ZLinkFrameworkRuntimeHost({
-    registration: firstPublisherRegistration
-  });
-  const secondPublisherRuntime = new framework.ZLinkFrameworkRuntimeHost({
-    registration: secondPublisherRegistration
-  });
   const subscriberRuntime = new framework.ZLinkFrameworkRuntimeHost({
     registration: subscriberRegistration
   });
 
   try {
-    await firstPublisherRuntime.start();
     await subscriberRuntime.start();
-    await secondPublisherRuntime.start();
-    const firstFanout = new framework.DefaultZLinkFanoutClient(
-      firstPublisherRegistration,
-      firstPublisherRuntime.channelTransport
-    );
-    const secondFanout = new framework.DefaultZLinkFanoutClient(
-      secondPublisherRegistration,
-      secondPublisherRuntime.channelTransport
-    );
 
     await publishUntilHandled(
       firstFanout,
@@ -3379,13 +3427,8 @@ test('fanout builder and subscriber handle share the manual endpoint set', () =>
 });
 
 test('ZLinkModule route client uses runtime host route transport after bootstrap', async () => {
-  const localEndpoint = `tcp://127.0.0.1:${await reservePort()}`;
-  const remoteEndpoint = `tcp://127.0.0.1:${await reservePort()}`;
   const builder = nestjs.zlinkFramework();
-  const mesh = builder
-    .addRouteMesh('mesh')
-      .listen(localEndpoint)
-      .routingId('node-a');
+  const mesh = builder.addRouteMesh('mesh').listen(ANY_LOOPBACK_PORT).routingId('node-a');
   const module = nestjs.ZLinkModule.forRoot(builder.build());
   const container = await resolveModuleProviders(module, [
     nestjs.ZLINK_FRAMEWORK_RUNTIME,
@@ -3399,7 +3442,11 @@ test('ZLinkModule route client uses runtime host route transport after bootstrap
 
   try {
     await runtime.start();
-    remote = await startRouteMeshPeer('server-direct', remoteEndpoint, localEndpoint);
+    remote = await startRouteMeshPeer(
+      'server-direct',
+      ANY_LOOPBACK_PORT,
+      boundMeshEndpoint(runtime)
+    );
     await waitUntil(() => routeMeshRuntime.isReady('mesh'), 10_000);
     const reply = await routeClient
       .requestToNode('mesh', 'node-b', typedPacket('RoutePing', { value: 'ping' }))
@@ -3407,7 +3454,9 @@ test('ZLinkModule route client uses runtime host route transport after bootstrap
       .submit();
     assert.deepEqual(reply, { value: 'pong' });
 
-    routeClient.sendToNode('mesh', 'node-b', typedPacket('RouteNotice', { value: 'one-way' })).submit();
+    routeClient
+      .sendToNode('mesh', 'node-b', typedPacket('RouteNotice', { value: 'one-way' }))
+      .submit();
     const notice = await remote.next('notice');
     assert.equal(notice.value, 'one-way');
   } finally {
@@ -3422,7 +3471,7 @@ test('ZLinkRoutePacketDispatcher invokes routed send and request handlers', asyn
   const remoteDealer = zlink.createDealerSocket(ctx);
   const endpoint = `inproc://route-dispatch-${process.pid}-${Date.now()}`;
   const events = [];
-  const completionPoller = ownCompletions(remoteDealer);
+  const completionPoller = ownCompletions(ctx, remoteDealer);
 
   try {
     localRouter.setRoutingId(zlink.RoutingId.from('node-a'));
@@ -3758,8 +3807,6 @@ test('ZLinkRoutePacketDispatcher lets route bridge handle SPOT-addressed bridge 
 });
 
 test('ZLinkModule route channel dispatches inbound routed handlers after bootstrap', async () => {
-  const endpoint = `tcp://127.0.0.1:${await reservePort()}`;
-  const remoteEndpoint = `tcp://127.0.0.1:${await reservePort()}`;
   const events = [];
   const filterContexts = [];
   class NodeDirectFilter {
@@ -3787,7 +3834,7 @@ test('ZLinkModule route channel dispatches inbound routed handlers after bootstr
   }
   const mesh = builder
     .addRouteMesh('mesh')
-      .listen(endpoint)
+      .listen(ANY_LOOPBACK_PORT)
       .routingId('node-a');
   mesh.addSendHandler('RouteNotice', RouteNoticeHandler);
   mesh.addRequestHandler('RoutePing', RoutePingHandler);
@@ -3801,7 +3848,11 @@ test('ZLinkModule route channel dispatches inbound routed handlers after bootstr
 
   try {
     await runtime.start();
-    remote = await startRouteMeshPeer('client-direct', remoteEndpoint, endpoint);
+    remote = await startRouteMeshPeer(
+      'client-direct',
+      ANY_LOOPBACK_PORT,
+      boundMeshEndpoint(runtime)
+    );
     await waitForRouteMeshPeerReady(runtime, 'mesh', 'node-b');
     remote.send({ type: 'run', mode: 'direct' });
     const reply = (await remote.next('result')).result;
@@ -3823,8 +3874,6 @@ test('ZLinkModule route channel dispatches inbound routed handlers after bootstr
 });
 
 test('ZLinkModule routeMesh channel option dispatches inbound routed handlers after bootstrap', async () => {
-  const endpoint = `tcp://127.0.0.1:${await reservePort()}`;
-  const remoteEndpoint = `tcp://127.0.0.1:${await reservePort()}`;
   const events = [];
   const filterContexts = [];
   class ChannelOnlyFilter {
@@ -3847,7 +3896,7 @@ test('ZLinkModule routeMesh channel option dispatches inbound routed handlers af
   }
   const mesh = builder
     .addRouteMesh('mesh')
-      .listen(endpoint)
+      .listen(ANY_LOOPBACK_PORT)
       .routingId('node-a');
   mesh.channel('mesh')
     .server()
@@ -3862,7 +3911,11 @@ test('ZLinkModule routeMesh channel option dispatches inbound routed handlers af
 
   try {
     await runtime.start();
-    remote = await startRouteMeshPeer('client-channel', remoteEndpoint, endpoint);
+    remote = await startRouteMeshPeer(
+      'client-channel',
+      ANY_LOOPBACK_PORT,
+      boundMeshEndpoint(runtime)
+    );
     await waitForRouteMeshPeerReady(runtime, 'mesh', 'node-b');
     remote.send({ type: 'run', mode: 'channel' });
     const reply = (await remote.next('result')).result;
@@ -3997,16 +4050,16 @@ test('ZLinkChannelRequestDispatcher invokes request handler and replies through 
   const ctx = zlink.createContext();
   const router = zlink.createRouterSocket(ctx);
   const dealer = zlink.createDealerSocket(ctx);
-  const endpoint = `tcp://127.0.0.1:${await reservePort()}`;
   const filterEvents = [];
   let routerMonitor;
   let dealerMonitor;
-  const completionPoller = ownCompletions(dealer);
+  const completionPoller = ownCompletions(ctx, dealer);
 
   try {
     routerMonitor = router.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
     dealerMonitor = dealer.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
-    router.bind(endpoint);
+    router.bind(ANY_LOOPBACK_PORT);
+    const endpoint = router.options.lastEndpoint;
     dealer.connect(endpoint);
     await waitForMonitorConnectionReady(routerMonitor, 'channel dispatcher router connection', router);
     await waitForMonitorConnectionReady(dealerMonitor, 'channel dispatcher dealer connection', router);
@@ -4649,6 +4702,11 @@ async function recvRoutedEnvelopeMessage(router) {
   assert.fail('router did not receive routed envelope');
 }
 
+/** The endpoint a started runtime's RouteMesh node bound and advertises. */
+function boundMeshEndpoint(runtime) {
+  return runtime.requirePrimaryMeshNode().status().localEndpoint;
+}
+
 async function startRouteMeshPeer(mode, bind, peer) {
   const child = fork(
     path.join(__dirname, 'helpers', 'route-mesh-peer.js'),
@@ -4946,7 +5004,7 @@ async function waitFor(predicate, label) {
   assert.fail(`${label} did not complete`);
 }
 
-async function waitForMonitorConnectionReady(monitor, label, activitySocket) {
+async function waitForMonitorConnectionReady(ctx, monitor, label, activitySocket) {
   const poller = zlink.createPoller();
   const events = zlink.createPollEvents(1);
   poller.add(activitySocket, [zlink.PollEventFlag.PollIn], 0);

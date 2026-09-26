@@ -7,6 +7,10 @@
 #include <string.h>
 
 static _Atomic(void *) fixture_socket;
+static _Atomic(void *) watched_context;
+static _Atomic int override_empty_poller_wait;
+static _Atomic int override_missing_poller_modify;
+static _Atomic int override_poll_failure;
 static zlink_completion_t records[16];
 static size_t read_index, write_index, trace_size;
 static char trace[64];
@@ -29,10 +33,76 @@ void fixture_start(void *socket)
     read_index = write_index = trace_size = 0;
     trace[0] = '\0';
     atomic_store(&fixture_socket, socket);
+    atomic_store(&override_empty_poller_wait, 0);
+    atomic_store(&override_missing_poller_modify, 0);
+    atomic_store(&override_poll_failure, 0);
 }
 
-void fixture_stop(void) { atomic_store(&fixture_socket, NULL); }
+void fixture_stop(void) {
+    atomic_store(&fixture_socket, NULL);
+    atomic_store(&watched_context, NULL);
+    atomic_store(&override_empty_poller_wait, 0);
+    atomic_store(&override_missing_poller_modify, 0);
+    atomic_store(&override_poll_failure, 0);
+}
+void fixture_watch_context(void *context) { atomic_store(&watched_context, context); }
+void fixture_override_empty_poller_wait_once(void) { atomic_store(&override_empty_poller_wait, 1); }
+void fixture_override_missing_poller_modify_once(void) { atomic_store(&override_missing_poller_modify, 1); }
+void fixture_override_poll_failure_once(void) { atomic_store(&override_poll_failure, 1); }
 const char *fixture_trace(void) { return trace; }
+
+int __real_zlink_poll(zlink_pollitem_t *, int, long, zlink_config_result_t *);
+int __wrap_zlink_poll(zlink_pollitem_t *items, int count, long timeout, zlink_config_result_t *error_out)
+{
+    if (atomic_exchange(&override_poll_failure, 0)) {
+        if (error_out != NULL)
+            *error_out = ZLINK_CONFIG_OK;
+        errno = EBUSY;
+        return -1;
+    }
+    return __real_zlink_poll(items, count, timeout, error_out);
+}
+
+int __real_zlink_poller_wait(void *, zlink_poller_event_t *, int, long, zlink_config_result_t *);
+int __wrap_zlink_poller_wait(void *poller, zlink_poller_event_t *events, int capacity, long timeout,
+                             zlink_config_result_t *error_out)
+{
+    if (capacity == 0 && atomic_exchange(&override_empty_poller_wait, 0)) {
+        if (error_out != NULL)
+            *error_out = ZLINK_CONFIG_BUSY;
+        errno = EBUSY;
+        return -1;
+    }
+    return __real_zlink_poller_wait(poller, events, capacity, timeout, error_out);
+}
+
+zlink_config_result_t __real_zlink_poller_modify(void *, void *, short);
+zlink_config_result_t __wrap_zlink_poller_modify(void *poller, void *source, short events)
+{
+    if (atomic_exchange(&override_missing_poller_modify, 0)) {
+        errno = EBUSY;
+        return ZLINK_CONFIG_BUSY;
+    }
+    return __real_zlink_poller_modify(poller, source, events);
+}
+
+int __real_zlink_ctx_shutdown(void *);
+int __wrap_zlink_ctx_shutdown(void *context)
+{
+    const int rc = __real_zlink_ctx_shutdown(context);
+    if (context != NULL && context == atomic_load(&watched_context) && rc == ZLINK_CLOSE_OK)
+        record_call('S');
+    return rc;
+}
+
+int __real_zlink_ctx_term(void *);
+int __wrap_zlink_ctx_term(void *context)
+{
+    const int rc = __real_zlink_ctx_term(context);
+    if (context != NULL && context == atomic_load(&watched_context) && rc == ZLINK_CLOSE_OK)
+        record_call('T');
+    return rc;
+}
 
 static zlink_completion_t *append_record(uint64_t id, uintptr_t context)
 {

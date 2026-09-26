@@ -36,7 +36,7 @@ type completionPollerDriver struct {
 	done   chan error
 }
 
-func startCompletionPoller(t testing.TB, sockets ...zlink.SocketTarget) *completionPollerDriver {
+func startCompletionPoller(t testing.TB, ctx *zlink.Context, sockets ...zlink.SocketTarget) *completionPollerDriver {
 	t.Helper()
 	if len(sockets) == 0 {
 		t.Fatal("completion poller requires at least one socket")

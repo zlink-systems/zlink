@@ -85,6 +85,11 @@ class received_t
         return _reply_token;
     }
 
+    /// Opaque nonzero route generation of the ROUTER route that delivered this
+    /// record; compare it only for equality with routes_snapshot() rows. 0 when
+    /// the record was not received from a ROUTER.
+    uint64_t route_generation () const noexcept { return _route_generation; }
+
     const std::vector<message_t> &parts () const;
     std::vector<message_t> &parts ();
 
@@ -128,6 +133,7 @@ class received_t
 
     std::optional<routing_id_t> _routing_id;
     std::optional<reply_token_t> _reply_token;
+    uint64_t _route_generation = 0;
     detail::lazy_message_parts_t _parts;
     // Send/reply context captured from the receiving socket. The runtime tag
     // keeps completion ownership and reply-token validation socket-local.

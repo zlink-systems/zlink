@@ -151,6 +151,11 @@ class Received(ReceivedMultipart, Protocol):
     reply/send context."""
 
     routing_id: Optional[RoutingId]
+    route_generation: int
+    """Opaque nonzero generation of the ROUTER route that delivered this
+    record, or 0 when the envelope was not received from a ROUTER. Compare it
+    only for equality with a ``RouterRoute.route_generation`` from
+    ``RouterSocket.routes_snapshot()`` for the same routing id."""
 
     @property
     def reply_token(self) -> Optional[ReplyToken]:

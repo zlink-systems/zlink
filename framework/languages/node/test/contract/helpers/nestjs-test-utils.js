@@ -73,6 +73,25 @@ async function resolveModuleProviders(module, requestedTokens) {
   }
 }
 
+/**
+ * A TCP endpoint held by a plain listener for as long as a test needs an
+ * endpoint that nothing else can take and that never completes a ZMTP
+ * handshake. The listener does not keep the process alive.
+ */
+async function holdTcpEndpoint() {
+  const server = net.createServer(socket => socket.destroy());
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  server.unref();
+  const { port } = server.address();
+  return {
+    endpoint: `tcp://127.0.0.1:${port}`,
+    close: () => new Promise((resolve) => server.close(() => resolve()))
+  };
+}
+
 async function reserveTcpEndpoint() {
   const server = net.createServer();
   await new Promise((resolve, reject) => {
@@ -87,6 +106,7 @@ async function reserveTcpEndpoint() {
 }
 
 module.exports = {
+  holdTcpEndpoint,
   providerTokens,
   reserveTcpEndpoint,
   resolveModuleProviders

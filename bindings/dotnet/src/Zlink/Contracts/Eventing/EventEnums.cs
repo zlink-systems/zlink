@@ -450,5 +450,13 @@ public enum PollEventFlags
     ///     consumes WRITABLE internally and exposes a completion event only when
     ///     a request result remains. Successful SEND admission reports no event.
     /// </summary>
-    PollCompletion = 32
+    PollCompletion = 32,
+
+    /// <summary>
+    ///     ROUTER only: the Core-selected route of a routing id changed. The
+    ///     readiness is level and clears when
+    ///     <see cref="IRouterSocket.RoutesSnapshot" /> returns a snapshot that
+    ///     reflects every change. Keep one route observer per socket.
+    /// </summary>
+    PollRoute = 64
 }

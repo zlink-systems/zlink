@@ -24,11 +24,11 @@
     },
     {
       "path": "include/zlink/socket/api.h",
-      "sha256": "ef1b12934329252b50e449054896cc870538cb4b767f8051173c3970495d867b"
+      "sha256": "17d6a4db60eb8c2881ed57af97956abb6615d761fd25f1c5ec131beb83f964dd"
     },
     {
       "path": "include/zlink_enum.h",
-      "sha256": "bf5c8298c86224d9a1864756d30631439cf975006b74c31678191cb7389bf427"
+      "sha256": "4183ceeea0d80df59fb26b68cdc8e1f582dd9c14e942e9e728dcba8e5a283fa8"
     },
     {
       "path": "include/zlink_errno.h",
@@ -64,7 +64,6 @@
     "zlink_ctx_term",
     "zlink_disconnect",
     "zlink_disconnect_rid",
-    "zlink_errno",
     "zlink_fd_t",
     "zlink_get_dealer_option",
     "zlink_get_option",
@@ -110,6 +109,9 @@
     "zlink_reply",
     "zlink_reply_token_t",
     "zlink_router_recv",
+    "zlink_router_recv_route_generation",
+    "zlink_router_route_t",
+    "zlink_router_routes_snapshot",
     "zlink_routing_id_t",
     "zlink_send_complete_result_t",
     "zlink_send_flags_t",

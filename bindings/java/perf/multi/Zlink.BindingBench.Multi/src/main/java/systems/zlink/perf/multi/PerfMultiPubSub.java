@@ -118,8 +118,7 @@ final class PerfMultiPubSub {
 
             List<Socket> pollSockets = new ArrayList<>(subscribers.size());
             pollSockets.addAll(subscribers);
-            try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
-                pollSockets, PollEventFlags.POLLIN)) {
+            try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(pollSockets, PollEventFlags.POLLIN)) {
                 long activeEnd = System.nanoTime()
                     + config.durationSeconds() * 1_000_000_000L;
                 // Match C run_recv_duration: the active deadline ends the

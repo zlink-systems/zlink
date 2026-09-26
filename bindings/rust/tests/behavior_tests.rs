@@ -277,10 +277,7 @@ fn xpub_try_receive_subscription_event_empty() {
 // ---------------------------------------------------------------------------
 
 fn tcp_endpoint() -> String {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
-    format!("tcp://127.0.0.1:{}", port)
+    "tcp://127.0.0.1:0".to_string()
 }
 
 fn write_framed_packet(stream: &mut std::net::TcpStream, body: &[u8]) {
@@ -303,6 +300,7 @@ fn stream_packet_output_resets_and_reuses_without_double_close() {
         .unwrap();
     let monitor = SocketMonitor::open(&stream).unwrap();
     stream.bind(&endpoint).unwrap();
+    let endpoint = stream.last_endpoint().unwrap();
 
     let mut raw = std::net::TcpStream::connect(endpoint.strip_prefix("tcp://").unwrap()).unwrap();
     loop {
@@ -350,6 +348,7 @@ fn stream_backpressure_retries_the_retained_packet_after_writable() {
         .set_receive_timeout(Duration::from_secs(5))
         .unwrap();
     stream.bind(&endpoint).unwrap();
+    let endpoint = stream.last_endpoint().unwrap();
 
     let address = endpoint.strip_prefix("tcp://").unwrap();
     let mut raw = std::net::TcpStream::connect(address).unwrap();
@@ -411,6 +410,7 @@ fn dealer_router_pull_receive_then_send() {
     let router_mon = SocketMonitor::open(&router).unwrap();
     let dealer_mon = SocketMonitor::open(&dealer).unwrap();
     router.bind(&endpoint).unwrap();
+    let endpoint = router.last_endpoint().unwrap();
     dealer.connect(&endpoint).unwrap();
     router_mon.recv().unwrap();
     dealer_mon.recv().unwrap();
@@ -461,6 +461,7 @@ fn pair_pull_receive_then_send() {
     let server_mon = SocketMonitor::open(&server).unwrap();
     let client_mon = SocketMonitor::open(&client).unwrap();
     server.bind(&endpoint).unwrap();
+    let endpoint = server.last_endpoint().unwrap();
     client.connect(&endpoint).unwrap();
     server_mon.recv().unwrap();
     client_mon.recv().unwrap();

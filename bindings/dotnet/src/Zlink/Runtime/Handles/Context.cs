@@ -159,13 +159,13 @@ internal sealed class Context : NativeOwner, IContext
         if (IsClosed)
             return;
 
-        _ = RetryWhileInterrupted(
-            () => NativeMethods.zlink_ctx_shutdown(Handle), out _);
-        var rc = RetryWhileInterrupted(
-            () => NativeMethods.zlink_ctx_term(Handle), out var errno);
+        var shutdown = (CloseResult)NativeMethods.zlink_ctx_shutdown(Handle);
+        if (shutdown != CloseResult.Ok)
+            throw ZlinkException.CreateCloseException(shutdown);
+        var rc = (CloseResult)NativeMethods.zlink_ctx_term(Handle);
+        if (rc != CloseResult.Ok)
+            throw ZlinkException.CreateCloseException(rc);
         MarkClosed();
-        if (rc < 0)
-            throw ZlinkException.CreateCloseException(errno);
         GC.SuppressFinalize(this);
     }
 

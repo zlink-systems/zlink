@@ -20,12 +20,13 @@ type ReplyToken struct {
 }
 
 type Received struct {
-	routingID   RoutingID
-	parts       []*Message
-	nativeParts []C.zlink_msg_t
-	token       ReplyToken
-	reply       func([]*Message) error
-	send        func(context.Context, []sendBuilderPart) (SendSubmission, error)
+	routingID       RoutingID
+	parts           []*Message
+	nativeParts     []C.zlink_msg_t
+	token           ReplyToken
+	reply           func([]*Message) error
+	send            func(context.Context, []sendBuilderPart) (SendSubmission, error)
+	routeGeneration uint64
 }
 
 func (r *Received) RoutingID() RoutingID {
@@ -61,6 +62,7 @@ func (r *Received) beginReceive() []*Message {
 	r.token = ReplyToken{}
 	r.reply = nil
 	r.send = nil
+	r.routeGeneration = 0
 	return previous
 }
 
@@ -70,12 +72,25 @@ func (r *Received) replace(
 	token ReplyToken,
 	reply func([]*Message) error,
 	send func(context.Context, []sendBuilderPart) (SendSubmission, error),
+	routeGeneration uint64,
 ) {
 	r.routingID = routingID
 	r.parts = parts
 	r.token = token
 	r.reply = reply
 	r.send = send
+	r.routeGeneration = routeGeneration
+}
+
+// RouteGeneration returns the opaque nonzero generation of the ROUTER route
+// that delivered this record, or 0 when the record was not received from a
+// ROUTER. Compare it only for equality with a RouterRoute.RouteGeneration
+// from RoutesSnapshot for the same routing id.
+func (r *Received) RouteGeneration() uint64 {
+	if r == nil {
+		return 0
+	}
+	return r.routeGeneration
 }
 
 func (r *Received) ReplyToken() (ReplyToken, bool) {
@@ -161,5 +176,6 @@ func (r *Received) Close() error {
 	r.token = ReplyToken{}
 	r.reply = nil
 	r.send = nil
+	r.routeGeneration = 0
 	return first
 }

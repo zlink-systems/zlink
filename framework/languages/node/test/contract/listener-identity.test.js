@@ -1,27 +1,29 @@
 const assert = require('node:assert/strict');
-const net = require('node:net');
 const test = require('node:test');
-const { once } = require('node:events');
 
 const framework = require('../../packages/framework/dist/internal');
+
+// Each RouteMesh binds an OS-assigned port; peers connect to the endpoint it
+// bound, read from its node status after start.
+const ANY_LOOPBACK_PORT = 'tcp://127.0.0.1:*';
 
 test.afterEach(async () => {
   await new Promise(resolve => setTimeout(resolve, 0));
 });
 
 test('wildcard RouteMesh advertisement admits a loopback RID-fenced peer for node-direct and channel calls', async () => {
-  const localEndpoint = `tcp://127.0.0.1:${await reservePort()}`;
-  const remotePort = await reservePort();
-  const remoteBindEndpoint = `tcp://0.0.0.0:${remotePort}`;
-  const remoteConnectEndpoint = `tcp://127.0.0.1:${remotePort}`;
-  const target = createTargetRuntime(remoteBindEndpoint, { channelServer: true });
-  const caller = createCallerRuntime(localEndpoint, builder => {
-    builder.peerConnections().connect('node-b', remoteConnectEndpoint);
-    builder.channel('mesh').client();
-  });
+  const target = createTargetRuntime('tcp://0.0.0.0:*', { channelServer: true });
+  let caller;
 
   try {
     await target.runtime.start();
+    // A wildcard bind advertises the same-family loopback address.
+    const remoteConnectEndpoint = boundEndpoint(target.runtime);
+    assert.match(remoteConnectEndpoint, /^tcp:\/\/127\.0\.0\.1:\d+$/);
+    caller = createCallerRuntime(ANY_LOOPBACK_PORT, builder => {
+      builder.peerConnections().connect('node-b', remoteConnectEndpoint);
+      builder.channel('mesh').client();
+    });
     await caller.runtime.start();
     await waitForRouteMeshPeerReady(caller.runtime, 'mesh', 'node-b');
 
@@ -38,21 +40,21 @@ test('wildcard RouteMesh advertisement admits a loopback RID-fenced peer for nod
       { value: 'pong' }
     );
   } finally {
-    await caller.runtime.stop();
+    await caller?.runtime.stop();
     await target.runtime.stop();
   }
 });
 
 test('endpoint-only admitted RouteMesh peer is a node-direct target after handshake RID resolution', async () => {
-  const localEndpoint = `tcp://127.0.0.1:${await reservePort()}`;
-  const remoteEndpoint = `tcp://127.0.0.1:${await reservePort()}`;
-  const target = createTargetRuntime(remoteEndpoint);
-  const caller = createCallerRuntime(localEndpoint, builder => {
-    builder.peerConnections().connect(remoteEndpoint);
-  });
+  const target = createTargetRuntime(ANY_LOOPBACK_PORT);
+  let caller;
 
   try {
     await target.runtime.start();
+    const remoteEndpoint = boundEndpoint(target.runtime);
+    caller = createCallerRuntime(ANY_LOOPBACK_PORT, builder => {
+      builder.peerConnections().connect(remoteEndpoint);
+    });
     await caller.runtime.start();
     await waitForRouteMeshPeerReady(caller.runtime, 'mesh', 'node-b');
 
@@ -63,7 +65,7 @@ test('endpoint-only admitted RouteMesh peer is a node-direct target after handsh
       { value: 'pong' }
     );
   } finally {
-    await caller.runtime.stop();
+    await caller?.runtime.stop();
     await target.runtime.stop();
   }
 });
@@ -121,13 +123,9 @@ function typedPacket(packetName, value) {
   return Object.assign(new PacketType(), value);
 }
 
-async function reservePort() {
-  const server = net.createServer();
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const port = server.address().port;
-  await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
-  return port;
+/** The endpoint a started runtime's RouteMesh node bound and advertises. */
+function boundEndpoint(runtime) {
+  return runtime.requirePrimaryMeshNode().status().localEndpoint;
 }
 
 async function waitForRouteMeshPeerReady(runtime, meshName, peerRid) {

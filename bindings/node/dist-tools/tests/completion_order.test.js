@@ -13,7 +13,7 @@ for (const transport of ['inproc', 'tcp']) {
         const ctx = zlink.createContext();
         const router = zlink.createRouterSocket(ctx);
         const dealer = zlink.createDealerSocket(ctx);
-        const completions = new completion_poller_1.CompletionPollerDriver(dealer);
+        const completions = new completion_poller_1.CompletionPollerDriver(ctx, dealer);
         const received = new zlink.Received();
         router.bind(transport === 'tcp' ? 'tcp://127.0.0.1:*' : 'inproc://completion-order');
         dealer.connect(router.options.lastEndpoint);

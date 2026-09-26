@@ -9,9 +9,8 @@ import { createError } from '../errors/error_mapping';
 import {
   closeCall,
   configCall,
-  lastError,
+  failureErrno,
   nativeErrorMessage,
-  readErrno,
 } from '../errors/native_errors';
 import { validateCString } from '../options/validation';
 import { requireNative } from '../native/native';
@@ -87,7 +86,7 @@ function getContextOptionRaw(context: Context, option: number): number {
     ) {
       return -1;
     }
-    throw createError('config', readErrno(), nativeErrorMessage(error, 'context option get failed'));
+    throw createError('config', failureErrno(error), nativeErrorMessage(error, 'context option get failed'));
   }
 }
 
@@ -98,12 +97,13 @@ function getContextOptionRawStrict(context: Context, option: number): number {
     const message = error instanceof Error && error.message
       ? error.message
       : 'ctx_getopt failed';
-    throw createError('config', readErrno(), message);
+    throw createError('config', failureErrno(error), message);
   }
 }
 
 function getContextUInt64(context: Context, option: number, name: string): bigint {
-  const value = requireNative().ctxGetOptData(getNativeHandle(context), option | 0);
+  const value = configCall('context option get failed', () =>
+    requireNative().ctxGetOptData(getNativeHandle(context), option | 0) as Buffer);
   if (value.length !== 8) throw new Error(`${name} option returned an invalid payload`);
   return value.readBigUInt64LE(0);
 }
@@ -116,8 +116,7 @@ export class Context extends NativeHandle {
   readonly options: ContextOptions;
 
   constructor() {
-    super(requireNative().ctxNew());
-    if (!this._native) throw lastError('config', 'context creation failed');
+    super(configCall('context creation failed', () => requireNative().ctxNew()));
     this.options = ContextOptions.create(this);
     const heapLimitBytes = BigInt(Math.trunc(getHeapStatistics().heap_size_limit));
     if (heapLimitBytes > 0n) {
@@ -143,7 +142,8 @@ export class Context extends NativeHandle {
   }
 
   getCoreHwmBudgetSnapshot(): CoreHwmBudgetSnapshot {
-    const snapshot = requireNative().ctxGetAutoHwmBudgetSnapshot(this._native);
+    const snapshot = configCall('context HWM budget snapshot failed', () =>
+      requireNative().ctxGetAutoHwmBudgetSnapshot(this._native));
     const flags = snapshot.flags >>> 0;
     return Object.freeze({
       ...snapshot,
@@ -163,9 +163,8 @@ export class Context extends NativeHandle {
 
   close(): void {
     if (!this._native) return;
-    closeCall('context close failed', () => {
-      requireNative().ctxTerm(this._native);
-    });
+    closeCall('context shutdown failed', () => requireNative().ctxShutdown(this._native));
+    closeCall('context close failed', () => requireNative().ctxTerm(this._native));
     this._native = null;
   }
 }

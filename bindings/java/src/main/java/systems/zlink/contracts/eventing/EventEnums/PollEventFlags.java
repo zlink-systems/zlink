@@ -21,7 +21,12 @@ public enum PollEventFlags {
      * A completion record is available. Ordinary successful sends do not
      * produce one; WRITABLE send recovery is signaled through POLLOUT.
      */
-    POLLCOMPLETION(32);
+    POLLCOMPLETION(32),
+    /**
+     * A ROUTER's selected routes changed; read
+     * {@code RouterSocket.routesSnapshot()}.
+     */
+    POLLROUTE(64);
 
     private final int mask;
 

@@ -385,6 +385,17 @@ pub enum zlink_config_result_t {
     ZLINK_CONFIG_INTERNAL_ERROR = 704,
     ZLINK_CONFIG_INVALID_STATE = 705,
     ZLINK_CONFIG_NOT_FOUND = 706,
+    ZLINK_CONFIG_CONFLICT = 707,
+    ZLINK_CONFIG_BUFFER_TOO_SMALL = 708,
+    ZLINK_CONFIG_BUSY = 709,
+}
+
+/// One selected ROUTER route and its opaque nonzero generation.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct zlink_router_route_t {
+    pub rid: zlink_routing_id_t,
+    pub route_generation: u64,
 }
 
 #[repr(C)]
@@ -740,6 +751,13 @@ unsafe extern "C" {
         part_count_out: *mut usize,
         flags: zlink_recv_flags_t,
     ) -> c_int;
+    pub fn zlink_router_routes_snapshot(
+        router: *mut c_void,
+        routes_out: *mut zlink_router_route_t,
+        capacity: usize,
+        route_count_out: *mut usize,
+    ) -> c_int;
+    pub fn zlink_router_recv_route_generation(router: *mut c_void) -> u64;
     pub fn zlink_recv(
         socket: *mut c_void,
         source_rid_out: *mut *const zlink_routing_id_t,
@@ -815,11 +833,11 @@ unsafe extern "C" {
         items: *mut zlink_pollitem_t,
         nitems: c_int,
         timeout: c_long,
-        error_out: *mut c_int,
+        error_out: *mut zlink_config_result_t,
     ) -> c_int;
     pub fn zlink_poller_new() -> *mut c_void;
     pub fn zlink_poller_destroy(poller_p: *mut *mut c_void) -> c_int;
-    pub fn zlink_poller_size(poller: *mut c_void, error_out: *mut c_int) -> c_int;
+    pub fn zlink_poller_size(poller: *mut c_void, error_out: *mut zlink_config_result_t) -> c_int;
     pub fn zlink_poller_add(
         poller: *mut c_void,
         socket: *mut c_void,
@@ -847,7 +865,7 @@ unsafe extern "C" {
         events: *mut zlink_poller_event_t,
         n_events: c_int,
         timeout: c_long,
-        error_out: *mut c_int,
+        error_out: *mut zlink_config_result_t,
     ) -> c_int;
 
     pub fn zlink_timer_new() -> *mut c_void;

@@ -9,7 +9,6 @@ package native
 import "C"
 
 import (
-	"errors"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -32,10 +31,10 @@ const (
 	MonitorEventHandshakeFailedProtocol MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_HANDSHAKE_FAILED_PROTOCOL)
 	MonitorEventHandshakeFailedAuth     MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_HANDSHAKE_FAILED_AUTH)
 	MonitorEventPeerWeightChanged       MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_PEER_WEIGHT_CHANGED)
-    // MonitorEventSendFlowPaused selects the PAUSED-transition event for an
-    // affected Application pipe (core-byte-hwm-flow-control-plan.ko.md §6).
+	// MonitorEventSendFlowPaused selects the PAUSED-transition event for an
+	// affected Application pipe (core-byte-hwm-flow-control-plan.ko.md §6).
 	MonitorEventSendFlowPaused MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_PAUSED)
-    // MonitorEventSendFlowResumed selects the RUNNING-transition event for an affected Application pipe.
+	// MonitorEventSendFlowResumed selects the RUNNING-transition event for an affected Application pipe.
 	MonitorEventSendFlowResumed MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_RESUMED)
 	// MonitorEventFlowStateStale selects a rejected stale or duplicate flow-state frame event.
 	MonitorEventFlowStateStale MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_FLOW_STATE_STALE)
@@ -213,10 +212,10 @@ type MonitorStatus struct {
 	MinimumCoreMessageChargeBytes    uint64
 	OversizeMessageAdmissionCount    uint64
 	OversizeMessageAdmissionMaxBytes uint64
-    // DEALER/ROUTER receive-flow observation for affected Application pipes.
-    // Control uses the Application connection for count-1 peers and the
-    // Completion connection for count-2 ROUTER-ROUTER peers. Present since ABI 4;
-    // zero on socket types other than DEALER/ROUTER.
+	// DEALER/ROUTER receive-flow observation for affected Application pipes.
+	// Control uses the Application connection for count-1 peers and the
+	// Completion connection for count-2 ROUTER-ROUTER peers. Present since ABI 4;
+	// zero on socket types other than DEALER/ROUTER.
 	FlowPausedConnections  uint64
 	FlowPauseAppliedTotal  uint64
 	FlowResumeAppliedTotal uint64
@@ -308,9 +307,9 @@ func OpenSocketMonitor(socket SocketTarget, options ...MonitorOpenOption) (*Sock
 		events:            C.zlink_socket_monitor_event_mask_t(config.events),
 		monitor_hwm_bytes: C.uint64_t(config.monitorHwmBytes),
 	}
-	handle := C.zlink_socket_monitor_open(socket.raw(), &nativeOptions)
+	handle, cerr := C.zlink_socket_monitor_open(socket.raw(), &nativeOptions)
 	if handle == nil {
-		return nil, configErrorFromErrno(currentErrno())
+		return nil, configErrorFromErrno(cgoErrno(cerr))
 	}
 	monitor := &SocketMonitor{}
 	monitor.handle.Store((*byte)(handle))
@@ -327,28 +326,17 @@ func (m *SocketMonitor) raw() unsafe.Pointer {
 // Recv returns the next monitor event. Returns (nil, *RecvError{Result:RecvNoData})
 // when DONTWAIT finds nothing. Value-return form is allowed for monitor/timer
 // control-plane APIs by doc/spec/bindings/go/README.md §Receive And Subscribe Shape.
-//
-// A blocking recv interrupted by a signal (RecvInternalError with an EINTR
-// errno) is a spurious wakeup, not a caller-visible failure: Poller.Wait
-// treats the same core signal identically (see poller_timer.go), so Recv
-// retries internally instead of surfacing EINTR to the caller.
 func (m *SocketMonitor) Recv(flags RecvFlags) (*MonitorEvent, error) {
 	handle := m.raw()
 	if handle == nil {
 		return nil, &RecvError{Result: RecvInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
 	var raw C.zlink_socket_monitor_event_t
-	for {
-		err := recvErrorFromResult(C.zlink_socket_monitor_recv(handle, &raw, C.zlink_recv_flags_t(flags)))
-		if err == nil {
-			return monitorEventFromC(raw), nil
-		}
-		var recvErr *RecvError
-		if errors.As(err, &recvErr) && recvErr.Result == RecvInternalError && recvErr.internalErrno() == int(C.EINTR) {
-			continue
-		}
+	rc, cerr := C.zlink_socket_monitor_recv(handle, &raw, C.zlink_recv_flags_t(flags))
+	if err := recvErrorFromCall(rc, cerr); err != nil {
 		return nil, err
 	}
+	return monitorEventFromC(raw), nil
 }
 
 func (m *SocketMonitor) Status() (*MonitorStatus, error) {
@@ -357,7 +345,8 @@ func (m *SocketMonitor) Status() (*MonitorStatus, error) {
 		return nil, &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
 	var raw C.zlink_monitor_status_t
-	if err := configErrorFromResult(C.zlink_monitor_status(handle, &raw)); err != nil {
+	rc, cerr := C.zlink_monitor_status(handle, &raw)
+	if err := configErrorFromCall(rc, cerr); err != nil {
 		return nil, err
 	}
 	snapshot := monitorStatusFromC(raw)
@@ -375,7 +364,8 @@ func (m *SocketMonitor) Close() error {
 		return nil
 	}
 	handle := handlePtr
-	if err := closeErrorFromResult(C.zlink_monitor_close(&handle)); err != nil {
+	rc, cerr := C.zlink_monitor_close(&handle)
+	if err := closeErrorFromCall(rc, cerr); err != nil {
 		m.closeMu.Unlock()
 		return err
 	}

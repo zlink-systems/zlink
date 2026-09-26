@@ -12,9 +12,10 @@
 template <napi_callback Callback>
 static napi_value socket_progress_call (napi_env env, napi_callback_info info)
 {
-    // Non-receive socket calls can consume the mailbox notification while
-    // processing commands. Preserve a JS drain before entering Core, including
-    // calls that fail. Receive already observes DATA and never takes this path.
+    // Socket calls other than a DATA receive can consume the mailbox
+    // notification while processing commands; a completion receive does too.
+    // Preserve a JS drain before entering Core, including calls that fail.
+    // A DATA receive already observes DATA and never takes this path.
     socket_readable_watch_progress (env, info);
     return Callback (env, info);
 }
@@ -37,7 +38,6 @@ void define_core_exports (napi_env env, napi_value exports)
 {
     napi_property_descriptor descs[] = {
       ZLINK_METHOD ("version", version),
-      ZLINK_METHOD ("errno", errno_value),
       ZLINK_METHOD ("strerror", strerror_value),
       ZLINK_METHOD ("has", has),
       ZLINK_METHOD ("proxy", proxy),
@@ -89,13 +89,14 @@ void define_core_exports (napi_env env, napi_value exports)
       ZLINK_SOCKET_METHOD ("socketSubmitSend", socket_submit_send),
       ZLINK_SOCKET_METHOD ("socketSubmitRequest", socket_submit_request),
       ZLINK_SOCKET_METHOD ("socketRequestSync", socket_request_sync),
-      ZLINK_METHOD ("socketCompletionRecv", socket_completion_recv),
+      ZLINK_SOCKET_METHOD ("socketCompletionRecv", socket_completion_recv),
       ZLINK_METHOD ("socketReadableWatchStart", socket_readable_watch_start),
       ZLINK_METHOD ("socketReadableWatchStop", socket_readable_watch_stop),
       ZLINK_METHOD ("testCompletionCloseCount", test_completion_close_count),
       ZLINK_SOCKET_METHOD ("socketReply", socket_reply),
       ZLINK_METHOD ("routerRecvMessage", router_recv_message),
       ZLINK_METHOD ("routerRecvMessageNoWait", router_try_recv_message),
+      ZLINK_SOCKET_METHOD ("routerRoutesSnapshot", router_routes_snapshot),
       ZLINK_SOCKET_METHOD ("monitorOpen", monitor_open),
       ZLINK_METHOD ("monitorRecv", monitor_recv),
       ZLINK_METHOD ("monitorRecvNoWait", monitor_try_recv),

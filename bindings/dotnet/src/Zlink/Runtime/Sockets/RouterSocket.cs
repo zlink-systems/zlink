@@ -46,6 +46,11 @@ internal sealed class RouterSocket : RoutedReceivingSocketBase, IRouterSocket
         SocketConnectionOperations.DisconnectRid(Kernel, peerRid);
     }
 
+    public IReadOnlyList<RouterRoute> RoutesSnapshot()
+    {
+        return Kernel.RoutesSnapshot();
+    }
+
     /// <summary>
     ///     Start a request to a specific peer (operation builder).
     /// </summary>

@@ -2,17 +2,15 @@
 
 import {
   PollEventFlag,
-  RecvFlags,
   type PollEventFlagValue,
 } from '../../contracts/sockets/socket_constants';
 import { createError, isTerminationErrno } from '../errors/error_mapping';
 import {
   closeCall,
   configCall,
-  isWouldBlock,
+  failureErrno,
+  failureResult,
   nativeErrorMessage,
-  readErrno,
-  recvNativeError,
 } from '../errors/native_errors';
 import { getNativeHandle } from '../handles/native_handle';
 import { requireNative } from '../native/native';
@@ -59,17 +57,6 @@ function acquireCompletionOwner(owner: CompletionOwner, poller: Poller): boolean
   }
 }
 
-function validateMonitorEvents(events: number): number {
-  if (events !== PollEventFlag.PollIn) {
-    throw createError(
-      'config',
-      22,
-      'socket monitor poll events must contain PollIn only'
-    );
-  }
-  return events;
-}
-
 export class Poller {
   private _native: unknown | null;
   private readonly _socketRegistrations = new Map<BasePollable, SocketRegistration>();
@@ -88,19 +75,12 @@ export class Poller {
       return;
     }
     const events = flagsToMask(eventsOrSlot as readonly PollEventFlagValue[]);
-    this.addSocketInternal(
-      item,
-      item instanceof MonitorSocket ? validateMonitorEvents(events) : events,
-      slot as number
-    );
+    this.addSocketInternal(item, events, slot as number);
   }
 
   modify(socket: BasePollable, events: readonly PollEventFlagValue[]): void {
     const mask = flagsToMask(events);
-    this.modifySocketInternal(
-      socket,
-      socket instanceof MonitorSocket ? validateMonitorEvents(mask) : mask
-    );
+    this.modifySocketInternal(socket, mask);
   }
 
   remove(socket: BasePollable): boolean;
@@ -127,7 +107,7 @@ export class Poller {
       this._fdRegistrations.set(normalizedFd, registration);
       this._registrationsByToken.set(nativeToken, registration);
     } catch (error) {
-      throw createError('config', readErrno(), nativeErrorMessage(error, 'poller fd add failed'));
+      throw createError('config', failureErrno(error), nativeErrorMessage(error, 'poller fd add failed'), failureResult(error));
     }
   }
 
@@ -159,14 +139,15 @@ export class Poller {
   wait(events: PollEvents, timeoutMs: number): number {
     let nativeCount: number;
     try {
-      nativeCount = requireNative().pollerWaitInto(
-        this._native,
-        getNativeHandle(events),
-        events.capacity | 0,
-        timeoutMs | 0
-      ) as number;
+      nativeCount = configCall('poller wait failed', () =>
+        requireNative().pollerWaitInto(
+          this._native,
+          getNativeHandle(events),
+          events.capacity | 0,
+          timeoutMs | 0
+        ) as number);
     } catch (error) {
-      const nativeErrno = readErrno();
+      const nativeErrno = failureErrno(error);
       if (isTerminationErrno(nativeErrno)) {
         for (const registration of this._socketRegistrations.values()) {
           if (registration.transferred) {
@@ -174,11 +155,7 @@ export class Poller {
           }
         }
       }
-      if (isWouldBlock(nativeErrno)) {
-        events.markCombined(0, []);
-        return 0;
-      }
-      throw recvNativeError(error, RecvFlags.None, 'poller wait failed');
+      throw error;
     }
 
     events.markReadyCount(nativeCount | 0);
@@ -270,7 +247,7 @@ export class Poller {
       this._registrationsByToken.set(nativeToken, registration);
     } catch (error) {
       if (acquired) owner!.releasePublic(this);
-      throw createError('config', readErrno(), nativeErrorMessage(error, 'poller socket add failed'));
+      throw createError('config', failureErrno(error), nativeErrorMessage(error, 'poller socket add failed'), failureResult(error));
     }
   }
 
@@ -336,7 +313,7 @@ export class Poller {
       this._timerRegistrations.set(timer, registration);
       this._registrationsByToken.set(nativeToken, registration);
     } catch (error) {
-      throw createError('config', readErrno(), nativeErrorMessage(error, 'poller timer add failed'));
+      throw createError('config', failureErrno(error), nativeErrorMessage(error, 'poller timer add failed'), failureResult(error));
     }
   }
 

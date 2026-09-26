@@ -53,6 +53,8 @@ const (
 	PollErr        PollEventFlag = 4
 	PollPri        PollEventFlag = 8
 	PollCompletion PollEventFlag = 32
+	// PollRoute reports that a ROUTER's selected route changed; read RoutesSnapshot().
+	PollRoute PollEventFlag = 64
 )
 
 // PollSourceKind identifies the kind of source in a PollEvent.
@@ -113,15 +115,15 @@ func completionOwnerOf(socket SocketTarget) *completionOwner {
 }
 
 type Poller struct {
-	handle     unsafe.Pointer
-	mu         sync.Mutex
-	waitMu     sync.Mutex
-	waitEvents []C.zlink_poller_event_t
-	waitSlots  []uintptr
-	sockets    map[uintptr]*pollerEntry
-	fds        map[int]*pollerEntry
-	timers     map[uintptr]*pollerEntry
-	closed     bool
+	handle       unsafe.Pointer
+	mu           sync.Mutex
+	waitBufferMu sync.Mutex
+	waitEvents   []C.zlink_poller_event_t
+	waitSlots    []uintptr
+	sockets      map[uintptr]*pollerEntry
+	fds          map[int]*pollerEntry
+	timers       map[uintptr]*pollerEntry
+	closed       bool
 }
 
 type Timer struct {
@@ -130,9 +132,9 @@ type Timer struct {
 }
 
 func NewTimer() (*Timer, error) {
-	handle := C.zlink_timer_new()
+	handle, cerr := C.zlink_timer_new()
 	if handle == nil {
-		return nil, configErrorFromErrno(currentErrno())
+		return nil, configErrorFromErrno(cgoErrno(cerr))
 	}
 	return &Timer{handle: handle}, nil
 }
@@ -148,14 +150,16 @@ func (t *Timer) Start(intervalNs, repeatCount uint64) error {
 	if t == nil || t.closed || t.handle == nil {
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
-	return configErrorFromResult(C.zlink_timer_start(t.handle, C.uint64_t(intervalNs), C.uint64_t(repeatCount)))
+	nativeResult0, nativeErr0 := C.zlink_timer_start(t.handle, C.uint64_t(intervalNs), C.uint64_t(repeatCount))
+	return configErrorFromCall(nativeResult0, nativeErr0)
 }
 
 func (t *Timer) Stop() error {
 	if t == nil || t.closed || t.handle == nil {
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
-	return configErrorFromResult(C.zlink_timer_stop(t.handle))
+	nativeResult1, nativeErr1 := C.zlink_timer_stop(t.handle)
+	return configErrorFromCall(nativeResult1, nativeErr1)
 }
 
 // Recv drains the next timer fire. Returns (count, true, nil) when data is
@@ -167,11 +171,11 @@ func (t *Timer) Recv() (uint64, bool, error) {
 		return 0, false, &RecvError{Result: RecvTerminated, nativeErrno: int(C.EFAULT)}
 	}
 	var fireCount C.uint64_t
-	rc := C.zlink_timer_recv(t.handle, &fireCount)
+	rc, cerr := C.zlink_timer_recv(t.handle, &fireCount)
 	if rc == C.zlink_recv_result_t(RecvNoData) {
 		return 0, false, nil
 	}
-	if err := recvErrorFromResult(rc); err != nil {
+	if err := recvErrorFromCall(rc, cerr); err != nil {
 		return 0, false, err
 	}
 	return uint64(fireCount), true, nil
@@ -182,7 +186,8 @@ func (t *Timer) Close() error {
 		return nil
 	}
 	handle := t.handle
-	if err := closeErrorFromResult(C.zlink_timer_destroy(&handle)); err != nil {
+	nativeResult2, nativeErr2 := C.zlink_timer_destroy(&handle)
+	if err := closeErrorFromCall(nativeResult2, nativeErr2); err != nil {
 		return err
 	}
 	t.handle = nil
@@ -191,9 +196,9 @@ func (t *Timer) Close() error {
 }
 
 func NewPoller() (*Poller, error) {
-	handle := C.zlink_poller_new()
+	handle, cerr := C.zlink_poller_new()
 	if handle == nil {
-		return nil, configErrorFromErrno(currentErrno())
+		return nil, configErrorFromErrno(cgoErrno(cerr))
 	}
 	return &Poller{
 		handle:  handle,
@@ -210,32 +215,32 @@ func (p *Poller) raw() unsafe.Pointer {
 	return p.handle
 }
 
-func (p *Poller) Size() int {
+func (p *Poller) Size() (int, error) {
 	if p == nil {
-		return 0
+		return 0, &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed || p.handle == nil {
-		return 0
+		return 0, &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
-	var err C.zlink_config_result_t
-	size := C.zlink_poller_size(p.handle, &err)
-	if err != 0 {
-		return 0
+	var result C.zlink_config_result_t
+	size, cerr := C.zlink_poller_size(p.handle, &result)
+	if size < 0 {
+		return 0, configErrorFromCall(result, cerr)
 	}
-	return int(size)
+	return int(size), nil
 }
 
-// AddMonitor registers a borrowed socket monitor with a caller slot. Only PollIn
-// is supported; other readiness flags return ConfigInvalidArgument. After Wait,
-// drain monitor.Recv(RecvFlagsDontWait) until RecvError.Result is RecvNoData.
+// AddMonitor registers a borrowed socket monitor with a caller slot. Core
+// validates the readiness mask. After Wait, drain monitor.Recv(RecvFlagsDontWait)
+// until RecvError.Result is RecvNoData.
 // Remove the monitor before closing it. This is an alias of AddSocket.
 func (p *Poller) AddMonitor(monitor *SocketMonitor, events PollEventFlag, slot uintptr) error {
 	return p.AddSocket(monitor, events, slot)
 }
 
-// ModifyMonitor changes a monitor's PollIn interest; it is an alias of ModifySocket.
+// ModifyMonitor changes a monitor's interest; it is an alias of ModifySocket.
 func (p *Poller) ModifyMonitor(monitor *SocketMonitor, events PollEventFlag) error {
 	return p.ModifySocket(monitor, events)
 }
@@ -245,7 +250,7 @@ func (p *Poller) RemoveMonitor(monitor *SocketMonitor) error {
 	return p.RemoveSocket(monitor)
 }
 
-// AddSocket registers a socket or *SocketMonitor; monitors support only PollIn.
+// AddSocket registers a socket or *SocketMonitor.
 func (p *Poller) AddSocket(socket SocketTarget, events PollEventFlag, slot uintptr) error {
 	if p == nil {
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
@@ -259,12 +264,10 @@ func (p *Poller) AddSocket(socket SocketTarget, events PollEventFlag, slot uintp
 	if err != nil {
 		return err
 	}
-	if _, monitor := socket.(*SocketMonitor); monitor && events & ^PollIn != 0 {
-		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
-	}
+	_, monitor := socket.(*SocketMonitor)
 	entry := p.makeEntry(pollerEntrySocket, socket, raw, 0, nil, slot, events)
 	entry.owner = completionOwnerOf(socket)
-	entry.ownsCompletion = events&PollCompletion != 0
+	entry.ownsCompletion = !monitor && events&PollCompletion != 0
 	if entry.ownsCompletion {
 		if entry.owner == nil {
 			return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
@@ -273,7 +276,8 @@ func (p *Poller) AddSocket(socket SocketTarget, events PollEventFlag, slot uintp
 			return err
 		}
 	}
-	if err := configErrorFromResult(C.zlink_go_poller_add_slot(p.handle, raw, C.uintptr_t(entry.slot), C.short(events))); err != nil {
+	nativeResult3, nativeErr3 := C.zlink_go_poller_add_slot(p.handle, raw, C.uintptr_t(entry.slot), C.short(events))
+	if err := configErrorFromCall(nativeResult3, nativeErr3); err != nil {
 		if entry.ownsCompletion {
 			entry.owner.releasePublic(p)
 		}
@@ -283,7 +287,7 @@ func (p *Poller) AddSocket(socket SocketTarget, events PollEventFlag, slot uintp
 	return nil
 }
 
-// ModifySocket changes the interest of a socket or monitor; monitors support only PollIn.
+// ModifySocket changes the interest of a socket or monitor.
 func (p *Poller) ModifySocket(socket SocketTarget, events PollEventFlag) error {
 	if p == nil {
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
@@ -297,15 +301,10 @@ func (p *Poller) ModifySocket(socket SocketTarget, events PollEventFlag) error {
 	if err != nil {
 		return err
 	}
-	if _, monitor := socket.(*SocketMonitor); monitor && events & ^PollIn != 0 {
-		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
-	}
+	_, monitor := socket.(*SocketMonitor)
 	entry := p.sockets[uintptr(raw)]
-	if entry == nil {
-		return &ConfigError{Result: ConfigNotFound, nativeErrno: int(C.ENOENT)}
-	}
-	hadCompletion := entry.ownsCompletion
-	wantsCompletion := events&PollCompletion != 0
+	hadCompletion := entry != nil && entry.ownsCompletion
+	wantsCompletion := entry != nil && !monitor && events&PollCompletion != 0
 	if !hadCompletion && wantsCompletion {
 		if entry.owner == nil {
 			return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
@@ -314,16 +313,19 @@ func (p *Poller) ModifySocket(socket SocketTarget, events PollEventFlag) error {
 			return err
 		}
 	}
-	if err := configErrorFromResult(C.zlink_poller_modify(p.handle, raw, C.short(events))); err != nil {
+	nativeResult4, nativeErr4 := C.zlink_poller_modify(p.handle, raw, C.short(events))
+	if err := configErrorFromCall(nativeResult4, nativeErr4); err != nil {
 		if !hadCompletion && wantsCompletion {
 			entry.owner.releasePublic(p)
 		}
 		return err
 	}
-	entry.events = events
-	entry.ownsCompletion = wantsCompletion
-	if hadCompletion && !wantsCompletion {
-		entry.owner.releasePublic(p)
+	if entry != nil {
+		entry.events = events
+		entry.ownsCompletion = wantsCompletion
+		if hadCompletion && !wantsCompletion {
+			entry.owner.releasePublic(p)
+		}
 	}
 	return nil
 }
@@ -343,7 +345,8 @@ func (p *Poller) RemoveSocket(socket SocketTarget) error {
 		return err
 	}
 	entry := p.sockets[uintptr(raw)]
-	if err := configErrorFromResult(C.zlink_poller_remove(p.handle, raw)); err != nil {
+	nativeResult5, nativeErr5 := C.zlink_poller_remove(p.handle, raw)
+	if err := configErrorFromCall(nativeResult5, nativeErr5); err != nil {
 		return err
 	}
 	delete(p.sockets, uintptr(raw))
@@ -363,7 +366,8 @@ func (p *Poller) AddFd(fd int, events PollEventFlag, slot uintptr) error {
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
 	entry := p.makeEntry(pollerEntryFD, nil, nil, fd, nil, slot, events)
-	if err := configErrorFromResult(C.zlink_go_poller_add_fd_slot(p.handle, C.zlink_fd_t(fd), C.uintptr_t(entry.slot), C.short(events))); err != nil {
+	nativeResult6, nativeErr6 := C.zlink_go_poller_add_fd_slot(p.handle, C.zlink_fd_t(fd), C.uintptr_t(entry.slot), C.short(events))
+	if err := configErrorFromCall(nativeResult6, nativeErr6); err != nil {
 		return err
 	}
 	p.fds[fd] = entry
@@ -379,7 +383,8 @@ func (p *Poller) ModifyFd(fd int, events PollEventFlag) error {
 	if p.closed || p.handle == nil {
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
-	return configErrorFromResult(C.zlink_poller_modify_fd(p.handle, C.zlink_fd_t(fd), C.short(events)))
+	nativeResult7, nativeErr7 := C.zlink_poller_modify_fd(p.handle, C.zlink_fd_t(fd), C.short(events))
+	return configErrorFromCall(nativeResult7, nativeErr7)
 }
 
 func (p *Poller) RemoveFd(fd int) error {
@@ -391,7 +396,8 @@ func (p *Poller) RemoveFd(fd int) error {
 	if p.closed || p.handle == nil {
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
-	if err := configErrorFromResult(C.zlink_poller_remove_fd(p.handle, C.zlink_fd_t(fd))); err != nil {
+	nativeResult8, nativeErr8 := C.zlink_poller_remove_fd(p.handle, C.zlink_fd_t(fd))
+	if err := configErrorFromCall(nativeResult8, nativeErr8); err != nil {
 		return err
 	}
 	delete(p.fds, fd)
@@ -411,7 +417,8 @@ func (p *Poller) AddTimer(timer *Timer, slot uintptr) error {
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
 	entry := p.makeEntry(pollerEntryTimer, nil, nil, 0, timer, slot, PollIn)
-	if err := configErrorFromResult(C.zlink_go_poller_add_timer_slot(p.handle, timer.handle, C.uintptr_t(entry.slot))); err != nil {
+	nativeResult9, nativeErr9 := C.zlink_go_poller_add_timer_slot(p.handle, timer.handle, C.uintptr_t(entry.slot))
+	if err := configErrorFromCall(nativeResult9, nativeErr9); err != nil {
 		return err
 	}
 	p.timers[uintptr(timer.handle)] = entry
@@ -433,7 +440,8 @@ func (p *Poller) RemoveTimer(timer *Timer) error {
 	if timer.handle == nil {
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
-	if err := configErrorFromResult(C.zlink_poller_remove_timer(p.handle, timer.handle)); err != nil {
+	nativeResult10, nativeErr10 := C.zlink_poller_remove_timer(p.handle, timer.handle)
+	if err := configErrorFromCall(nativeResult10, nativeErr10); err != nil {
 		return err
 	}
 	delete(p.timers, uintptr(timer.handle))
@@ -444,8 +452,6 @@ func (p *Poller) Wait(events []PollEvent, timeout time.Duration) (int, error) {
 	if p == nil {
 		return 0, &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
-	p.waitMu.Lock()
-	defer p.waitMu.Unlock()
 	p.mu.Lock()
 	if p.closed || p.handle == nil {
 		p.mu.Unlock()
@@ -453,36 +459,44 @@ func (p *Poller) Wait(events []PollEvent, timeout time.Duration) (int, error) {
 	}
 	handle := p.handle
 	p.mu.Unlock()
-	if len(events) == 0 {
-		return 0, configErrorFromResult(C.ZLINK_CONFIG_INVALID_ARGUMENT)
-	}
 	ms, err := durationToMillis(timeout)
 	if err != nil {
 		return 0, err
 	}
-	if cap(p.waitEvents) < len(events) {
-		p.waitEvents = make([]C.zlink_poller_event_t, len(events))
+	// The lock owns only the reusable buffers. An overlapping caller uses local
+	// buffers so that Core still decides whether its Wait returns Busy.
+	sharedBuffer := p.waitBufferMu.TryLock()
+	if sharedBuffer {
+		defer p.waitBufferMu.Unlock()
 	}
-	nativeEvents := p.waitEvents[:len(events)]
+	var nativeEvents []C.zlink_poller_event_t
+	if sharedBuffer {
+		if cap(p.waitEvents) < len(events) {
+			p.waitEvents = make([]C.zlink_poller_event_t, len(events))
+		}
+		nativeEvents = p.waitEvents[:len(events)]
+	} else {
+		nativeEvents = make([]C.zlink_poller_event_t, len(events))
+	}
+	var nativeBuffer *C.zlink_poller_event_t
+	if len(nativeEvents) != 0 {
+		nativeBuffer = &nativeEvents[0]
+	}
 	count, errCode, nativeErrno := nativePollerWait(
-		handle, &nativeEvents[0], len(events), int64(ms))
+		handle, nativeBuffer, len(events), int64(ms))
 	if count < 0 {
-		if (errCode == ConfigOK || errCode == ConfigInternalError) && nativeErrno == int(C.EINTR) {
-			return 0, nil
-		}
-		if errCode != ConfigOK {
-			if nativeErrno == 0 {
-				nativeErrno = int(C.EIO)
-			}
-			return 0, &ConfigError{Result: errCode, nativeErrno: nativeErrno}
-		}
-		return 0, configErrorFromErrno(nativeErrno)
+		return 0, &ConfigError{Result: errCode, nativeErrno: nativeErrno}
 	}
 	readyCount := int(count)
-	if cap(p.waitSlots) < readyCount {
-		p.waitSlots = make([]uintptr, readyCount)
+	var slots []uintptr
+	if sharedBuffer {
+		if cap(p.waitSlots) < readyCount {
+			p.waitSlots = make([]uintptr, readyCount)
+		}
+		slots = p.waitSlots[:readyCount]
+	} else {
+		slots = make([]uintptr, readyCount)
 	}
-	slots := p.waitSlots[:readyCount]
 	for i := 0; i < readyCount; i++ {
 		// Slots are opaque integers encoded in native user_data. Remove the
 		// integer-shaped pointer from Go-scanned storage before a completion drain
@@ -531,15 +545,14 @@ func (p *Poller) Close() error {
 	if p == nil {
 		return nil
 	}
-	p.waitMu.Lock()
-	defer p.waitMu.Unlock()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed || p.handle == nil {
 		return nil
 	}
 	handle := p.handle
-	if err := closeErrorFromResult(C.zlink_poller_destroy(&handle)); err != nil {
+	rc, cerr := C.zlink_poller_destroy(&handle)
+	if err := closeErrorFromCall(rc, cerr); err != nil {
 		return err
 	}
 	for _, entry := range p.sockets {
@@ -584,12 +597,9 @@ func Poll(items []PollItem, timeout time.Duration) (int, error) {
 		}
 		rawItems = &converted[0]
 	}
-	count := C.zlink_poll(rawItems, C.int(len(converted)), C.long(ms), &errCode)
+	count, cerr := C.zlink_poll(rawItems, C.int(len(converted)), C.long(ms), &errCode)
 	if count < 0 {
-		if errCode != 0 {
-			return 0, configErrorFromResult(errCode)
-		}
-		return 0, configErrorFromErrno(currentErrno())
+		return 0, &ConfigError{Result: ConfigResult(errCode), nativeErrno: cgoErrno(cerr)}
 	}
 	for i := range items {
 		items[i].REvents = PollEventFlag(converted[i].revents)

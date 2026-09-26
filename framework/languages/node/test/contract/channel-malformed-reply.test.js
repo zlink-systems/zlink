@@ -52,7 +52,7 @@ async function withMalformedChannelReply(endpoint, replyParts, expectedError) {
   const context = zlink.createContext();
   const dealer = zlink.createDealerSocket(context);
   const router = zlink.createRouterSocket(context);
-  const completionPoller = ownCompletions(dealer);
+  const completionPoller = ownCompletions(context, dealer);
   try {
     router.bind(endpoint);
     dealer.connect(endpoint);

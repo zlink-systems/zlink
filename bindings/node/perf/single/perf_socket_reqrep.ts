@@ -21,6 +21,8 @@ const {
   spawnSenderWorker,
   waitForMonitorConnectionReady,
   waitForWorkerStatus,
+  workerBindEndpoint,
+  workerBoundEndpoint,
 } = require('./perf_single_common');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 
@@ -101,14 +103,14 @@ async function runSocketReqRep(msgSize, options, routedClient) {
     worker = spawnSenderWorker({
       kind: 'socket_reqrep_replier',
       transport: options.transport,
-      endpoint,
+      endpoint: workerBindEndpoint(endpoint),
       duration: options.duration,
       msgSize,
       runId: options.runId ?? 1,
       options,
     });
     waitForWorkerStatus(worker, 1);
-    client.connect(endpoint);
+    client.connect(workerBoundEndpoint(worker, endpoint));
     waitForMonitorConnectionReady(clientMonitor);
     releaseSenderWorker(worker);
 

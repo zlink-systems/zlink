@@ -53,4 +53,37 @@ internal sealed partial class SocketKernel : IDisposable
         ZlinkException.ThrowConnectIfError(rc);
     }
 
+    public unsafe IReadOnlyList<RouterRoute> RoutesSnapshot()
+    {
+        // Core ROUTER §10.1: BUFFER_TOO_SMALL reports the required row count
+        // and keeps POLLROUTE readiness, so retry with that capacity.
+        var rows = new ZlinkRouterRoute[InitialRouteSnapshotCapacity];
+        while (true)
+        {
+            int rc;
+            nuint count;
+            fixed (ZlinkRouterRoute* routes = rows)
+                rc = NativeMethods.zlink_router_routes_snapshot(Handle, routes,
+                    (nuint)rows.Length, out count);
+            if ((ConfigResult)rc == ConfigResult.BufferTooSmall
+                && count > (nuint)rows.Length)
+            {
+                rows = new ZlinkRouterRoute[checked((int)count)];
+                continue;
+            }
+            ZlinkException.ThrowConfigIfError(rc);
+            if (count > (nuint)rows.Length)
+                throw ZlinkException.CreateConfigException(
+                    ConfigResult.InternalError);
+            var result = new RouterRoute[(int)count];
+            for (var index = 0; index < result.Length; index++)
+                result[index] = new RouterRoute(
+                    RoutingId.From(NativeHelpers.ReadRoutingId(ref rows[index].Rid)),
+                    rows[index].RouteGeneration);
+            return result;
+        }
+    }
+
+    private const int InitialRouteSnapshotCapacity = 16;
+
 }

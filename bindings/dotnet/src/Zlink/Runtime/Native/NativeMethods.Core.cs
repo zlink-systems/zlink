@@ -73,6 +73,8 @@ internal static partial class NativeMethods
         "zlink_reply",
         "zlink_request",
         "zlink_router_recv",
+        "zlink_router_recv_route_generation",
+        "zlink_router_routes_snapshot",
         "zlink_send",
         "zlink_send_rid",
         "zlink_set_dealer_option",
@@ -131,15 +133,15 @@ internal static partial class NativeMethods
     internal static extern int zlink_ctx_set(IntPtr context, int option,
         int optval);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_ctx_set_data(IntPtr context, int option,
         byte[] optval, nuint optvallen);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_ctx_set_data(IntPtr context, int option,
         in ulong optval, nuint optvallen);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_ctx_get_data(IntPtr context, int option,
         out ulong optval, ref nuint optvallen);
 

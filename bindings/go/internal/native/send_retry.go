@@ -35,9 +35,11 @@ func newSendRetryPayload(parts []sendBuilderPart) (*sendRetryPayload, error) {
 		case part.message == nil || part.message.closed:
 			err = configInvalidArgumentError()
 		default:
-			err = configErrorFromResult(C.zlink_msg_init(&owned.msg))
+			rc41, errno41 := C.zlink_msg_init(&owned.msg)
+			err = configErrorFromCall(rc41, errno41)
 			if err == nil {
-				err = configErrorFromResult(C.zlink_msg_copy(&owned.msg, &part.message.msg))
+				rc42, errno42 := C.zlink_msg_copy(&owned.msg, &part.message.msg)
+				err = configErrorFromCall(rc42, errno42)
 				if err != nil {
 					_ = owned.Close()
 				}

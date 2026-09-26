@@ -9,25 +9,18 @@ package native
 */
 import "C"
 
-import (
-	"runtime"
-	"unsafe"
-)
+import "unsafe"
 
 const nativeRecvInitialCapacity = 8
 
 func recvMultipart(nativeBuffer *[]C.zlink_msg_t, reuse []*Message, flags RecvFlags, recv multipartRecvFunc) ([]*Message, error) {
-	// Keep errno and a possible ENOBUFS retry on the same native thread.
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
 	if len(*nativeBuffer) == 0 {
 		*nativeBuffer = make([]C.zlink_msg_t, nativeRecvInitialCapacity)
 	}
 	native := *nativeBuffer
 	for {
 		var partCount C.size_t
-		result := recv(
+		result, cerr := recv(
 			&native[0], C.size_t(len(native)), &partCount,
 			C.zlink_recv_flags_t(flags),
 		)
@@ -47,7 +40,7 @@ func recvMultipart(nativeBuffer *[]C.zlink_msg_t, reuse []*Message, flags RecvFl
 			*nativeBuffer = native
 			continue
 		}
-		if err := recvErrorFromResult(result); err != nil {
+		if err := recvErrorFromCall(result, cerr); err != nil {
 			return nil, err
 		}
 		if partCount == 0 || partCount > C.size_t(len(native)) {
@@ -67,13 +60,16 @@ func adoptReceivedParts(native []C.zlink_msg_t, count int, reuse []*Message) ([]
 		if msg == nil {
 			msg = &Message{}
 		}
-		if err := configErrorFromResult(C.zlink_msg_init(&msg.msg)); err != nil {
+		rc71, errno71 := C.zlink_msg_init(&msg.msg)
+		if err := configErrorFromCall(rc71, errno71); err != nil {
 			closeMessageSlice(parts)
 			closeNativeMultipart(native, count)
 			return nil, err
 		}
-		if err := configErrorFromResult(C.zlink_msg_move(&msg.msg, &native[i])); err != nil {
-			_ = configErrorFromResult(C.zlink_msg_close(&msg.msg))
+		rc72, errno72 := C.zlink_msg_move(&msg.msg, &native[i])
+		if err := configErrorFromCall(rc72, errno72); err != nil {
+			rc73, errno73 := C.zlink_msg_close(&msg.msg)
+			_ = configErrorFromCall(rc73, errno73)
 			msg.closed = true
 			closeMessageSlice(parts)
 			closeNativeMultipart(native, count)
@@ -98,12 +94,14 @@ func takeParts(ptr *C.zlink_msg_t, partCount C.size_t) ([]*Message, error) {
 	parts := make([]*Message, 0, count)
 	for i := 0; i < count; i++ {
 		msg := &Message{}
-		if err := configErrorFromResult(C.zlink_msg_init(&msg.msg)); err != nil {
+		rc74, errno74 := C.zlink_msg_init(&msg.msg)
+		if err := configErrorFromCall(rc74, errno74); err != nil {
 			closeMessageSlice(parts)
 			C.zlink_multipart_close(ptr, partCount)
 			return nil, err
 		}
-		if err := configErrorFromResult(C.zlink_msg_move(&msg.msg, &raw[i])); err != nil {
+		rc75, errno75 := C.zlink_msg_move(&msg.msg, &raw[i])
+		if err := configErrorFromCall(rc75, errno75); err != nil {
 			_ = msg.Close()
 			closeMessageSlice(parts)
 			C.zlink_multipart_close(ptr, partCount)

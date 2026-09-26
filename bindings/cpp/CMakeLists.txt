@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(zlink_cpp VERSION 1.7.0 LANGUAGES CXX)
+project(zlink_cpp VERSION 1.10.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -526,6 +526,8 @@ if(ZLINK_CPP_BUILD_TESTS)
     test_cpp_contract_behavior.cpp
     test_cpp_contract_optimization_guard.cpp
     test_cpp_contract_flow_state.cpp
+    test_cpp_contract_lifecycle_rules.cpp
+    test_cpp_contract_router_selected_route.cpp
     test_cpp_perf_application_ready_queue.cpp
   )
   foreach(test_source IN LISTS ZLINK_CPP_CONTRACT_TEST_SOURCES)
@@ -556,6 +558,17 @@ if(ZLINK_CPP_BUILD_TESTS)
         "LINKER:--wrap=zlink_request"
         "LINKER:--wrap=zlink_completion_recv")
     endforeach()
+    target_link_options(test_cpp_contract_lifecycle_rules PRIVATE
+      "LINKER:--wrap=zlink_poller_destroy"
+      "LINKER:--wrap=zlink_poller_wait"
+      "LINKER:--wrap=zlink_ctx_shutdown"
+      "LINKER:--wrap=zlink_ctx_term")
+    add_cpp_contract_test(test_cpp_contract_poller_core_results
+      "tests/contract/test_cpp_contract_poller_core_results.cpp")
+    target_link_options(test_cpp_contract_poller_core_results PRIVATE
+      "LINKER:--wrap=zlink_poller_wait")
+    add_cpp_contract_test(test_cpp_contract_poller_wait_allocations
+      "tests/contract/test_cpp_contract_poller_wait_allocations.cpp")
   endif()
 
   add_cpp_binding_executable(

@@ -6,6 +6,11 @@ import (
 )
 
 func TestNativePollerWaitCapturesErrorAtCallBoundary(t *testing.T) {
+	ctx, err := NewContext()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctx.Close()
 	poller, err := NewPoller()
 	if err != nil {
 		t.Fatal(err)

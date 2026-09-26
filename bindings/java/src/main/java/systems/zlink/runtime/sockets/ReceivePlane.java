@@ -6,7 +6,6 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.util.Objects;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
@@ -213,29 +212,24 @@ final class ReceivePlane {
     private Message[] receivePartsOrNull(RecvScratch scratch,
                                          ReceiveFlag flags,
                                          boolean allowNoData) {
-        while (true) {
-            int rc = flags == ReceiveFlag.DONTWAIT
-                ? Native.recvNoWaitCritical(socket.handle(),
-                    scratch.sourceRidOut, scratch.partsOut,
-                    scratch.partCountOut, flags.getValue())
-                : Native.recv(socket.handle(), scratch.sourceRidOut,
-                    scratch.partsOut, scratch.partCountOut, flags.getValue());
-            if (rc == RecvResult.OK.value()) {
-                return InternalAccess.messageFromOwnedMessageVector(
-                    scratch.partsOut.get(ValueLayout.ADDRESS, 0),
-                    scratch.partCountOut.get(ValueLayout.JAVA_LONG, 0));
-            }
-            int errno = Native.errno();
-            if (errno == NativeErrno.EINTR) {
-                continue;
-            }
-            RecvResult result = RecvResult.fromValue(rc);
-            if (allowNoData && (result == RecvResult.NO_DATA
-                || result == RecvResult.BUSY)) {
-                return null;
-            }
-            throw new ZlinkRecvException(result, errno);
+        int rc = flags == ReceiveFlag.DONTWAIT
+            ? Native.recvNoWaitCritical(socket.handle(),
+                scratch.sourceRidOut, scratch.partsOut,
+                scratch.partCountOut, flags.getValue())
+            : Native.recv(socket.handle(), scratch.sourceRidOut,
+                scratch.partsOut, scratch.partCountOut, flags.getValue());
+        if (rc == RecvResult.OK.value()) {
+            return InternalAccess.messageFromOwnedMessageVector(
+                scratch.partsOut.get(ValueLayout.ADDRESS, 0),
+                scratch.partCountOut.get(ValueLayout.JAVA_LONG, 0));
         }
+        int errno = Native.errno();
+        RecvResult result = RecvResult.fromValue(rc);
+        if (allowNoData && (result == RecvResult.NO_DATA
+            || result == RecvResult.BUSY)) {
+            return null;
+        }
+        throw new ZlinkRecvException(result, errno);
     }
 
     private static void populate(Received target, Message[] parts,

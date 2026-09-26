@@ -94,7 +94,7 @@ size_t count = poller.wait (ready.data (), ready.size (), std::chrono::seconds (
 | `modify_fd(int, poll_event_flag_t)` / `modify(socket_monitor_t&, poll_event_flag_t)` / `modify(socket_t&, poll_event_flag_t)` | — | changes the watched events for an already-registered source |
 | `remove(socket_monitor_t&)` / `remove(socket_t&)` / `remove(timer_t&)` / `remove_fd(int)` | — | unregisters the source; each returns `bool`, true when it was registered |
 | `size() const` | — | number of sources currently registered (`int`) |
-| `close()` | — | releases the poller's native resources |
+| `close()` | — | releases the poller's native resources; throws `close_error_t` with `busy` (401) if Core reports `EBUSY`, leaving the poller valid |
 | `wait(poll_event_t* events_, size_t capacity_, std::chrono::milliseconds timeout_)` | — | blocks until at least one source is ready or `timeout_` elapses |
 
 **Completion result.** Registration/removal members are synchronous. `wait` blocks up to

@@ -22,18 +22,19 @@ shared `binding_error_t` base) and calls `.result()`.
 |---|---|---|---|
 | `submit_error_t` | `submit_result_t` (Sockets category) | send/publish/request-submit APIs | `backpressured`(1, ordinary control flow), `not_connected`(2), `not_found`(3), `terminated`(4), `invalid_handle`(5), `invalid_argument`(6), `not_supported`(7), `invalid_state`(8), `thread_violation`(9), `out_of_memory`(10), `seq_exhausted`(11), `internal_error`(12), `not_admitted`(13, ordinary control flow) |
 | `request_error_t` | `request_result_t` (Messaging category) | `submit()` awaitable or blocking request terminal | `timed_out`(101), `not_found`(102), `terminated`(103), `protocol_error`(104), `internal_error`(105), `rejected`(106), `conflict`(107), `busy`(108), `not_connected`(109), `invalid_argument`(110), `invalid_state`(111), `not_supported`(112), `backpressured`(113) |
-| `recv_error_t` | `recv_result_t` (Sockets category) | recv-family APIs | `no_data`(201), `busy`(202), `terminated`(203), `invalid_handle`(204), `not_supported`(205), `internal_error`(206) |
+| `recv_error_t` | `recv_result_t` (Sockets category) | recv-family APIs | `no_data`(201), `busy`(202), `terminated`(203), `invalid_handle`(204), `not_supported`(205), `internal_error`(206), `buffer_too_small`(207), `invalid_state`(208) |
 | `handler_error_t` | `handler_result_t` | retained result family; current public completion/event delivery has no registered handler | `invalid_argument`(301), `busy`(302), `not_supported`(303), `deadlock`(304), `invalid_handle`(305), `internal_error`(306) |
 | `close_error_t` | `close_result_t` | `close()` paths, `context_t::shutdown()` | `busy`(401), `shutdown`(402), `invalid_handle`(403), `internal_error`(404) |
 | `bind_error_t` | `bind_result_t` | `socket_t::bind(...)` | `invalid_argument`(501), `addr_in_use`(502), `not_supported`(503), `invalid_handle`(504), `internal_error`(505) |
-| `connect_error_t` | `connect_result_t` | `connect`/`unbind`/`disconnect`/`disconnect_rid` | `invalid_argument`(601), `not_supported`(602), `invalid_handle`(603), `internal_error`(604), `not_found`(605), `conflict`(606), `busy`(607) |
-| `config_error_t` | `config_result_t` | every socket/context option getter/setter | `invalid_handle`(701), `invalid_argument`(702), `not_supported`(703), `internal_error`(704), `invalid_state`(705), `not_found`(706) |
+| `connect_error_t` | `connect_result_t` | `connect`/`unbind`/`disconnect`/`disconnect_rid` | `invalid_argument`(601), `not_supported`(602), `invalid_handle`(603), `internal_error`(604), `not_found`(605), `conflict`(606), `busy`(607), `auth_failed`(608) |
+| `config_error_t` | `config_result_t` | every socket/context option getter/setter and `poller_t` registration/size operations | `invalid_handle`(701), `invalid_argument`(702), `not_supported`(703), `internal_error`(704), `invalid_state`(705), `not_found`(706), `conflict`(707), `buffer_too_small`(708), `busy`(709) |
 
-**Cross-language asymmetry.** `config_result_t` in this projection has six values, stopping at
-`not_found`(706) — dotnet's `ZlinkConfigException.ErrorCode` additionally defines `Conflict`(707),
-`BufferTooSmall`(708), and `Busy`(709). Whether this projection's `config_result_t` should gain
-those three values is a spec-level question outside this reference's scope, not something this
-document resolves.
+**Mapping to Core results.** Each enum has every value of the
+[Public Result Enum catalog](../../spec/README.ko.md#public-result-enum-카탈로그). A result Core returns
+is passed through as it is; a call that ends without reaching Core, such as a call on a closed
+handle, gives the result Core's errno table gives. For example, setting an option after a user close
+gives `invalid_state`(705)/`ESHUTDOWN`, and after a context close `internal_error`(704)/`ETERM`.
+`poller_t::wait()` failures are reported as `recv_error_t` values; for example, Core `EBUSY` becomes `busy`(202). `poller_t::close()` reports `EBUSY` as `close_error_t` `busy`(401) and leaves the poller valid.
 
 **What each value family actually means.** `submit_error_t`'s `backpressured`/`not_connected`/
 `not_found`/`not_admitted` are ordinary execution flow, not exceptional failures — a caller that

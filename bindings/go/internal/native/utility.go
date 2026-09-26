@@ -52,7 +52,8 @@ func Proxy(frontend SocketTarget, backend SocketTarget, capture SocketTarget) er
 			return err
 		}
 	}
-	return configErrorFromResult(ConfigResult(C.zlink_proxy(frontendHandle, backendHandle, captureHandle)))
+	rc, cerr := C.zlink_proxy(frontendHandle, backendHandle, captureHandle)
+	return configErrorFromCall(rc, cerr)
 }
 
 func socketHandle(socket SocketTarget) (unsafe.Pointer, error) {
@@ -181,10 +182,10 @@ func NewThread(target func()) (*Thread, error) {
 		return nil, &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
 	}
 	state := cgo.NewHandle(&threadState{target: target})
-	handle := C.zlink_thread_start_go(C.uintptr_t(state))
+	handle, cerr := C.zlink_thread_start_go(C.uintptr_t(state))
 	if handle == nil {
 		state.Delete()
-		return nil, &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.zlink_errno())}
+		return nil, &ConfigError{Result: ConfigInvalidHandle, nativeErrno: cgoErrno(cerr)}
 	}
 	return &Thread{handle: handle, state: state}, nil
 }

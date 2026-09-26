@@ -26,11 +26,13 @@ from ..handles.native_support import (
     _validated_c_string_value,
 )
 from ...contracts.errors.errors import (
+    ConfigError,
     ConnectError,
     RecvError,
     SubmitError,
 )
-from ...contracts.errors.codes import ConnectResult
+from ...contracts.errors.codes import ConfigResult, ConnectResult
+from ...contracts.sockets.routed_socket_contracts import RouterRoute
 from ..messaging.message_materializer import (
     Message,
     ReceivedMessage,
@@ -68,6 +70,11 @@ _native_publisher_send_op_func = (
 )
 _native_router_recv_owner_func = (
     getattr(_native_extension, "router_recv_owner", None)
+    if _native_extension is not None
+    else None
+)
+_native_router_routes_snapshot_func = (
+    getattr(_native_extension, "router_routes_snapshot", None)
     if _native_extension is not None
     else None
 )
@@ -487,7 +494,9 @@ class RouterSocket(
         if rc != int(SubmitResult.OK):
             _raise_result_error(SubmitError, SubmitResult, rc, native_errno)
 
-    def _replace_router_received(self, received, owner, routing_id, token_value):
+    def _replace_router_received(
+        self, received, owner, routing_id, token_value, route_generation=0
+    ):
         received._replace(
             owner,
             routing_id=routing_id,
@@ -497,7 +506,29 @@ class RouterSocket(
                 else None
             ),
             router_socket=self,
+            route_generation=route_generation,
         )
+
+    def routes_snapshot(self):
+        """Returns the Core-selected route of every routing id as one atomic
+        snapshot. A routing id without a row has no selected route. A
+        successful snapshot clears ``PollEventFlag.POLLROUTE`` readiness
+        unless a later change raced with it. Call it only from the socket's
+        single route observer.
+
+        :returns: A list of :class:`RouterRoute`.
+        """
+        if _native_router_routes_snapshot_func is None:
+            raise NotImplementedError(
+                "routes_snapshot requires the zlink native extension"
+            )
+        rc, err, rows = _native_router_routes_snapshot_func(int(self._handle))
+        if int(rc) != 0:
+            _raise_result_error(ConfigError, ConfigResult, rc, err)
+        return [
+            RouterRoute(RoutingId.from_(routing), int(generation))
+            for routing, generation in rows
+        ]
 
     def recv_into(self, received, *, flags=0):
         """Receives a routed message into a caller-provided ``Received`` object.
@@ -523,12 +554,12 @@ class RouterSocket(
             )
             if result is False:
                 return False
-            rc, err, routing, token_value, owner = result
+            rc, err, routing, token_value, owner, route_generation = result
             if int(rc) != 0:
                 _raise_result_error(RecvError, RecvResult, rc, err)
             routing_id = RoutingId.from_(routing) if routing is not None else None
             self._replace_router_received(
-                received, owner, routing_id, int(token_value)
+                received, owner, routing_id, int(token_value), int(route_generation)
             )
             return True
         try:

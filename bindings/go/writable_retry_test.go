@@ -252,7 +252,7 @@ func TestOwnerlessBackpressuredSendFailsFast(t *testing.T) {
 	if err := dealer.Connect(endpoint); err != nil {
 		t.Fatalf("dealer Connect() error = %v", err)
 	}
-	setupCompletions := startCompletionPoller(t, dealer)
+	setupCompletions := startCompletionPoller(t, ctx, dealer)
 
 	prime, err := dealer.Send().Bytes([]byte("route-prime")).Submit(context.Background())
 	if err != nil {

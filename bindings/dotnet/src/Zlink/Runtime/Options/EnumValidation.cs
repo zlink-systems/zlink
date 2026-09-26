@@ -10,7 +10,8 @@ internal static class EnumValidation
                                                    | PollEventFlags.PollOut
                                                    | PollEventFlags.PollErr
                                                    | PollEventFlags.PollPri
-                                                   | PollEventFlags.PollCompletion;
+                                                   | PollEventFlags.PollCompletion
+                                                   | PollEventFlags.PollRoute;
 
     internal static void EnsureContextOption(ContextOption option,
         string paramName)
@@ -25,13 +26,6 @@ internal static class EnumValidation
         if (((ulong)events & ~(ulong)ValidSocketEvents) != 0)
             throw new ArgumentOutOfRangeException(paramName, events,
                 "Unknown socket monitor event flag.");
-    }
-
-    internal static void EnsureMonitorPollEvents(PollEventFlags events)
-    {
-        if ((events & ~PollEventFlags.PollIn) != 0)
-            throw new ZlinkConfigException(ConfigResult.InvalidArgument,
-                (int)ErrorCode.EInval);
     }
 
     internal static void EnsurePollEvents(PollEventFlags events, string paramName)
