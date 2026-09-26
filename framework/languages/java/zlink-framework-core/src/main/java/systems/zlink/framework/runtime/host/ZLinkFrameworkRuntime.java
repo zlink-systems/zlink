@@ -57,6 +57,7 @@ import systems.zlink.framework.runtime.mesh.ZLinkMeshNodesRuntime;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.runtime.spots.SpotNodeRegistration;
 import systems.zlink.framework.runtime.spots.ZLinkSpotRuntime;
+import systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireRuntime.RelocationAuthorityErrorException;
 import systems.zlink.framework.runtime.streams.ZLinkStreamRuntime;
 import systems.zlink.framework.spots.ActorSpotHandleResolver;
 import systems.zlink.framework.spots.SpotHandleResolver;
@@ -1058,6 +1059,10 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                                 options.mode(),
                                                                 effectiveTargetVersion,
                                                                 failureReason);
+                                        //  Settled unit authority decides the host state
+                                        //  (spec 30 §13): every unit on the target is
+                                        //  Relocated, a split or an expired source lease is
+                                        //  Error, every unit on the source is Serving.
                                         completeRelocation(
                                                 candidate,
                                                 result,
@@ -1065,7 +1070,14 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                                 == ZLinkFrameworkRelocationOutcome
                                                                         .RELOCATED
                                                         ? ZLinkFrameworkRuntimeState.RELOCATED
-                                                        : ZLinkFrameworkRuntimeState.SERVING);
+                                                        : relocationCause
+                                                                                instanceof
+                                                                                RelocationAuthorityErrorException
+                                                                        && activeTermination.get()
+                                                                                == null
+                                                                ? ZLinkFrameworkRuntimeState.ERROR
+                                                                : ZLinkFrameworkRuntimeState
+                                                                        .SERVING);
                                     });
                         });
         return independentRelocationWaiter(completion);

@@ -544,7 +544,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                                     "publishTarget",
                                     targetFence(fixture.target),
                                     targetAttempt(fixture.target, request.fence()),
-                                    false);
+                                    List.of());
                         } catch (Exception failure) {
                             throw new AssertionError(failure);
                         }

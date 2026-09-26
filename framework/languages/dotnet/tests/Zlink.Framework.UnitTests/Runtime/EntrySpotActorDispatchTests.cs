@@ -2256,6 +2256,86 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task Expired_relocation_source_replies_unavailable_once_on_the_saved_direct_route()
+    {
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(new CapturingSpotNode());
+        try
+        {
+            var actorState = new ZLinkActorRuntimeState(actorRef.ActorId);
+            actorState.BindNativeActorRef(actorRef);
+            var replies = new List<byte[]>();
+            const ulong requestId = 44;
+            var deadlineUnixMs = checked(
+                (ulong)DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeMilliseconds()
+            );
+            var saved = runtime.ActorMessageFollower.PreserveDirectReply(
+                actorRef.NodeRid,
+                actorRef.ActorId,
+                requestId,
+                deadlineUnixMs,
+                parts =>
+                {
+                    replies.Add(parts.Single().AsReadOnlySpan().ToArray());
+                    return SubmitResult.Ok;
+                }
+            );
+            var caller = RoutingId.From("caller-node");
+            using var frame = new ZLinkSpotActorFrame(
+                actorRef,
+                actorRef,
+                caller,
+                RoutingId.From("caller-session"),
+                requestId,
+                ZLinkActorBoundSessionRelay.ActorRecvInfoNoBind,
+                new ZLinkBackendActorRouteContext(
+                    new MeshOperationId(11, requestId),
+                    MessageFollowHopCount: 0,
+                    TargetNodeGeneration: 1,
+                    AuthorityOwnerGeneration: 1,
+                    OwnerLeaseGeneration: 1,
+                    ReplyRequestId: requestId,
+                    ReplyFlags: ZLinkActorBoundSessionRelay.ActorRecvInfoNoBind,
+                    ReplyCapability: saved.Capability,
+                    DeadlineUnixMs: deadlineUnixMs
+                ),
+                new ZlinkStreamHeader(
+                    ZlinkStreamMessageKind.Request,
+                    ZlinkStreamCodec.Raw,
+                    ZlinkStreamHeaderFlags.HasRequestSeq,
+                    new ZlinkStreamRequestSeq(requestId),
+                    "captured-request",
+                    ZlinkStreamMetadata.Empty
+                ),
+                Message.From([1, 2, 3]),
+                1,
+                new ZLinkServiceWireCodec.RequestSourceFence("source", 1, caller, 1)
+            );
+            frame.BindRelocationReplyRoute(requestId);
+            actorState.Handoff.BeginCapture();
+            Assert.Equal(
+                ZLinkActorHandoffCaptureResult.Captured,
+                actorState.Handoff.TryCapture(frame)
+            );
+            actorState.Handoff.SealCapture();
+            _ = actorState.Handoff.FreezeCaptureCommitBoundary();
+
+            await runtime.FailStandaloneActorRelocationSourceAsync(actorState, actorRef);
+            await runtime.FailStandaloneActorRelocationSourceAsync(actorState, actorRef);
+
+            var reply = Assert.Single(replies);
+            Assert.Equal("unavailable", DecodeReplyFrame<ZLinkStreamWireError>(reply).Payload.Code);
+            Assert.Equal(
+                ZLinkActorFrameRoute.Stale,
+                actorState.Handoff.ResolveFrameRoute(actorRef, actorRef, out _)
+            );
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task RemoteActorFrame_BoundSessionWithoutRouteLease_UsesBindingFenceForStaleHandling()
     {
         var node = new CapturingSpotNode();
@@ -8737,7 +8817,10 @@ public sealed partial class EntrySpotActorDispatchTests
     [Fact]
     public async Task MessageFollowLocalReply_BackpressureIsOneShotTerminal()
     {
-        var (runtime, actor) = await CreateStartedRuntimeAsync(new CapturingSpotNode());
+        var node = new CapturingSpotNode();
+        var fallbackReplies = 0;
+        node.BeforeNoBindReply = _ => Interlocked.Increment(ref fallbackReplies);
+        var (runtime, actor) = await CreateStartedRuntimeAsync(node);
         try
         {
             var attempts = 0;
@@ -8778,6 +8861,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 [duplicate]
             );
             Assert.Equal(1, Volatile.Read(ref attempts));
+            Assert.Equal(0, Volatile.Read(ref fallbackReplies));
         }
         finally
         {
@@ -10020,9 +10104,11 @@ public sealed partial class EntrySpotActorDispatchTests
         public async ValueTask<ulong> PublishAsync(
             ZLinkSpotRetireReservation reservation,
             ZLinkAggregateRelocationPublished relocation,
+            DateTimeOffset restoreDeadline,
             CancellationToken cancellationToken
         )
         {
+            _ = restoreDeadline;
             PublishCalls++;
             cancellationToken.ThrowIfCancellationRequested();
             switch (publishMode)

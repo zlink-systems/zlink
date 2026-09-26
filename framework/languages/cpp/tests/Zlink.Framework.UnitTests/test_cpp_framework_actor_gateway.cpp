@@ -2755,7 +2755,8 @@ class fixed_reconcile_authority_store_t final
              std::string,
              std::uint32_t,
              zlink::framework::runtime::stateful::inventory_digest_t,
-             std::vector<std::byte> = {}) override
+             std::vector<std::byte> = {},
+             std::string = {}) override
     {
         return {};
     }
@@ -3446,7 +3447,8 @@ int leave_notification_travels_node_level_and_reaches_source_entry_spot_once ()
                                                       std::string,
                                                       std::uint32_t,
                                                       stateful::inventory_digest_t,
-                                                      std::vector<std::byte> = {}) override
+                                                      std::vector<std::byte> = {},
+                                                      std::string = {}) override
         {
             return {};
         }
@@ -3702,7 +3704,8 @@ int early_zero_generation_leave_waits_for_source_transfer_completion ()
                                                       std::string,
                                                       std::uint32_t,
                                                       stateful::inventory_digest_t,
-                                                      std::vector<std::byte> = {}) override
+                                                      std::vector<std::byte> = {},
+                                                      std::string = {}) override
         {
             return {};
         }

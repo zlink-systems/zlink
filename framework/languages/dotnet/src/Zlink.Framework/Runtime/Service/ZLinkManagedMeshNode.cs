@@ -6947,7 +6947,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
             return;
         }
-        RunInboundOperation(() => ProcessRelocationDataAsync(target, peer, sourceNodeRid, data));
+        //  Relocation flow §4.4: the relay records and the cutover of one
+        //  attempt apply in the receive order of the ordered connection. The
+        //  stage call enters the attempt's state lane here, on the receive
+        //  path, so a cutover received later from the same connection is
+        //  always validated after this record.
+        var staged = ProcessRelocationDataAsync(target, peer, sourceNodeRid, data);
+        RunInboundOperation(() => staged);
     }
 
     private async Task ProcessRelocationDataAsync(

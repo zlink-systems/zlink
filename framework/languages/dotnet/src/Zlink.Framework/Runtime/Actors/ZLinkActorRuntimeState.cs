@@ -1207,11 +1207,12 @@ internal sealed class ZLinkActorRuntimeState(
     {
         var result = RunState(() =>
         {
-            // Once the target authority is committed, a relocation can still
-            // retain the source projection in _boundSession until the session
-            // owner acknowledges the route switch. Outbound pushes must use
-            // the committed target projection during that interval; otherwise
-            // the first target push is fenced as a stale source push.
+            // After the target authority commits, _boundSession keeps the
+            // source projection until the target has submitted the one-way
+            // Session route update (relocation flow §4.6; no reply follows).
+            // Outbound pushes in that interval use the committed target
+            // projection; otherwise the first target push is fenced as a
+            // stale source push.
             if (
                 _pendingSessionRoute is
                 { TargetActor: not null, TargetAuthorityOwnerGeneration: > 0 } pending

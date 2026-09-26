@@ -626,6 +626,12 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     void configure_stateful_dispatch (
       std::function<std::optional<stateful::accepted_record_authority_t> (
         const stateful::accepted_record_authority_query_t &)> resolver);
+    void forward_relocation_application (const stateful::object_ref_t &owner,
+                                         const stateful::turn_record_t &record,
+                                         const std::vector<std::uint8_t> &target_routing_id,
+                                         std::uint64_t target_generation,
+                                         std::uint64_t target_lease_generation,
+                                         std::chrono::milliseconds window);
     void configure_session_relocation_store (
       std::shared_ptr<stateful::relocation_store_port_t> relocations);
     void configure_message_follow_handler (
@@ -913,11 +919,25 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     task_t<void> submit_relocation_session_routes (relocation_attempt_key_t key);
     void start_relocation_session_route_submission (relocation_attempt_key_t key);
     void flush_pending_session_relocation_seals ();
-    bool relocation_target_authority_committed (
-      const relocation_target_attempt_t &attempt) const noexcept;
     bool relocation_target_authority_committed_strict (
       const relocation_target_attempt_t &attempt) const noexcept;
-    bool commit_relocation_target_authority (relocation_target_attempt_t &attempt) noexcept;
+    /* Target authority settlement (01 §10): the original NewOwner CAS commits,
+     * is resubmitted (retry) while the Store names the source at the expected
+     * StoreVersion and the target lease is live, or ends the staging
+     * (discard) on a source Preserve fence or target lease loss. */
+    enum class relocation_target_settlement_t
+    {
+        committed,
+        retry,
+        discard
+    };
+    bool submit_relocation_target_authority (relocation_target_attempt_t &attempt) noexcept;
+    relocation_target_settlement_t
+    commit_relocation_target_authority (relocation_target_attempt_t &attempt) noexcept;
+    static stateful::relocation_authority_fence_t
+    relocation_target_fence (const relocation_target_attempt_t &attempt);
+    relocation_target_settlement_t
+    observe_relocation_target (const stateful::relocation_authority_fence_t &fence) const noexcept;
     bool
     adopt_committed_session_route_authorities (relocation_target_attempt_t &attempt) const noexcept;
     struct relocation_target_attempt_t
@@ -933,7 +953,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
             bool send_attempted = false;
             /* Bounded record of a failed one-way send: this state lives
              * inside _relocation_target_attempts, which is itself bounded
-             * by relocation_attempt_retention, so this is not unbounded
+             * by the attempt authority settlement, so this is not unbounded
              * ad-hoc logging. There is no gated trace/diagnostics sink
              * reachable from public_host_runtime_t (message_flow_tracer_t
              * and dispatch_error_reporter_t both require a
@@ -948,31 +968,23 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         std::vector<protocol::relocation_object_t> wire_objects;
         std::optional<stateful::aggregate_relocation_fence_t> authority_fence;
         std::vector<session_route_state_t> session_routes;
-        bool ready = false;
+        /* The only CAS/dispatch gate (28 §4.4-4.5): set once a received
+         * cutover matched the boundary relay batch that preceded it. */
         bool cutover_received = false;
-        // Starts at the cutover fallback, becomes due on cutover, and advances
-        // at each management attempt without changing Restore's expiry.
+        // The next attempt management tick: before cutover the
+        // RelocationCutoverWaitTimeout Warning and later authority reads that
+        // only end staging; after cutover the next target CAS submission.
         std::chrono::steady_clock::time_point next_finalize_at{};
         bool target_finalized = false;
-        std::chrono::steady_clock::time_point attempt_expires_at{};
-        /* Pre-boundary relay verification: count and running CRC-32C over
-         * the canonical bytes of relocationData records staged before the
-         * cutover, compared against the cutover's boundary declaration. */
-        std::uint64_t boundary_records_received = 0;
-        stateful::relocation_crc32c_accumulator_t boundary_accumulator;
-        std::uint64_t boundary_expected_count = 0;
-        std::uint32_t boundary_expected_checksum = 0;
-        /* 28's "duplicatePayload: may-be-accepted-twice-no-hidden-
-         * delivery-deduplication" means stage_relocated legitimately
-         * succeeds again for a resent relocationData record (e.g. the
-         * source's retransmission-window retry resends the whole boundary
-         * batch ahead of a cutover retry) — staging itself is idempotent
-         * at the ingress layer, but the boundary count/checksum above must
-         * still match the source's one-time manifest exactly, so a
-         * successfully-restaged duplicate must not be counted twice here.
-         * Tracked by content hash since relocationData carries no explicit
-         * per-record ordinal. */
-        std::unordered_set<std::size_t> boundary_record_digests_seen;
+        /* The cutover_timeout Warning was recorded (once per attempt). */
+        bool cutover_warned = false;
+        /* Pre-boundary relay records in receive order, each kept as its own
+         * accepted record (no content deduplication). A retransmitted batch
+         * arrives whole right before its cutover, so the cutover's declared
+         * count selects that batch as the received suffix and replaces any
+         * partial earlier copy (28 §4.4). Records are staged only after the
+         * cutover verifies. */
+        std::vector<std::pair<stateful::object_ref_t, protocol::relocation_data_t>> boundary_batch;
         /* S2 (owner CAS confirmed) for the target-resume interval. */
         std::chrono::steady_clock::time_point authority_committed_at{};
     };
@@ -1021,16 +1033,14 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     bool register_relocation_target_queue (const protocol::relocation_prepare_t &prepare,
                                            const stateful::object_ref_t &target,
                                            const protocol::relocation_object_t &wire_object);
-    std::vector<relocation_target_attempt_t>
-    take_expired_relocation_target_attempts_locked (std::chrono::steady_clock::time_point now);
-    void expire_relocation_target_attempts ();
+    bool stage_relocation_record (const stateful::object_ref_t &target,
+                                  const protocol::relocation_data_t &data);
     void poll_relocation_target_attempts ();
-    void cleanup_expired_relocation_target_attempts (
-      std::vector<relocation_target_attempt_t> attempts) noexcept;
+    void
+    discard_relocation_target_attempts (std::vector<relocation_target_attempt_t> attempts) noexcept;
     std::map<relocation_attempt_key_t, relocation_target_attempt_t> _relocation_target_attempts;
     std::shared_ptr<stateful::authority_relocation_port_t> _relocation_authority;
     std::shared_ptr<stateful::aggregate_authority_port_t> _aggregate_relocation_authority;
-    static constexpr auto relocation_attempt_retention = std::chrono::minutes (5);
     /* Cutover wait measured from the relay-ready reply
      * (relocation_cutover_wait_timeout snapshot, default 1000 ms). */
     std::chrono::milliseconds _relocation_cutover_wait{1000};

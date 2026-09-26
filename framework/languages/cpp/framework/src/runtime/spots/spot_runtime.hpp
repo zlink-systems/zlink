@@ -1858,6 +1858,7 @@ class spot_node_runtime_t
       std::string target_mesh_name,
       std::uint64_t target_node_lifecycle_generation,
       location_owner_token_t target_owner,
+      std::string expected_source_store_version,
       std::uint64_t *committed_previous_authority_owner_generation = nullptr,
       std::uint64_t *committed_target_authority_owner_generation = nullptr);
     result_t<void>

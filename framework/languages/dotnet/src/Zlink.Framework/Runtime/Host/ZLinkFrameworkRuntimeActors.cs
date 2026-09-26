@@ -5771,20 +5771,34 @@ internal sealed partial class ZLinkFrameworkRuntime
             return;
         }
 
-        if (
-            !string.IsNullOrWhiteSpace(replyCapability)
-            && await _actorMessageFollower
-                .TryCompleteLocalDirectReplyAsync(
-                    actor.ActorId,
-                    requestId,
-                    flags,
+        if (!string.IsNullOrWhiteSpace(replyCapability))
+        {
+            if (
+                await _actorMessageFollower
+                    .TryCompleteLocalDirectReplyAsync(
+                        actor.ActorId,
+                        requestId,
+                        flags,
+                        replyCapability,
+                        parts,
+                        ShutdownToken
+                    )
+                    .ConfigureAwait(false)
+            )
+                return;
+            if (
+                _actorMessageFollower.TryResolveReplyRoute(
                     replyCapability,
-                    parts,
-                    ShutdownToken
+                    out var savedReplyNode,
+                    out _
                 )
-                .ConfigureAwait(false)
-        )
-            return;
+                && savedReplyNode == actor.NodeRid
+            )
+            {
+                ZLinkMessageParts.DisposeAll(parts);
+                return;
+            }
+        }
 
         if (
             _actorBoundSessionCoordinator.ReplyNoBind(

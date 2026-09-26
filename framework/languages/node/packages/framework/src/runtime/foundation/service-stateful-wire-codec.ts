@@ -20,6 +20,19 @@ import {
   encodeServiceWireRoutingId
 } from './service-wire-binary-primitives';
 import {
+  decodeActorRequestCommand,
+  decodeActorSendCommand,
+  decodeMetadataFrame,
+  decodeSpotRequestCommand,
+  decodeSpotSendCommand,
+  encodeActorRequestCommand,
+  encodeActorSendCommand,
+  encodeApplicationPayloadEnvelopeV1,
+  encodeSpotRequestCommand,
+  encodeSpotSendCommand,
+  type ServiceWireDecoderContext
+} from '../protocol/service_wire_codec.generated';
+import {
   decodeActorCreate49 as decodeGeneratedActorCreate49,
   decodeActorJoin28,
   decodeRelocationCutover34 as decodeGeneratedRelocationCutover34,
@@ -1015,8 +1028,11 @@ export type ServiceStatefulWireRecord =
   | {
       readonly kind: 'spotSend' | 'spotRequest';
       readonly correlation?: bigint;
+      readonly operation: ServiceWireOperationId;
+      readonly remainingDeadlineMs?: bigint;
+      readonly messageFollowHopCount: number;
       readonly sourceSpotId: string;
-      readonly target: ServiceDirectSpotRouteFence;
+      readonly target: ServiceSpotRouteFence;
     }
   | {
       readonly kind: 'logicalMulticast';
@@ -1027,6 +1043,9 @@ export type ServiceStatefulWireRecord =
   | {
       readonly kind: 'actorSend' | 'actorRequest';
       readonly correlation?: bigint;
+      readonly operation: ServiceWireOperationId;
+      readonly remainingDeadlineMs?: bigint;
+      readonly messageFollowHopCount: number;
       readonly sourceActor?: ServiceActorRef;
       readonly target: ServiceActorRouteFence;
       readonly boundSession?: ServiceBoundSessionSource;
@@ -1137,20 +1156,70 @@ export interface ServiceStatefulReply {
   readonly tail?: ServiceStatefulReplyTail;
 }
 
+const STATEFUL_MESSAGE_CONTEXT: ServiceWireDecoderContext = {
+  effectiveCompleteMessageBytesMinusActualEnvelopeOverhead: 0xffff_fdf6,
+  effectiveCompleteMessageBytes: 0xffff_ffff
+};
+const STATEFUL_HEADER_PAYLOAD = {
+  packetName: 'wire',
+  contentType: 'application/json',
+  payload: Buffer.from('{}')
+};
+
+function generatedSpotFence(target: ServiceSpotRouteFence) {
+  return {
+    spot: { spotId: target.spot.spotId, objectGeneration: target.spot.generation },
+    targetNodeRid: toGeneratedRoutingId(target.targetNodeRid, 'targetNodeRid'),
+    targetNodeGeneration: target.targetNodeGeneration,
+    expectedAuthorityOwnerGeneration: target.authorityOwnerGeneration,
+    expectedOwnerLeaseGeneration: target.ownerLeaseGeneration
+  };
+}
+
+function generatedActorFence(target: ServiceActorRouteFence) {
+  return {
+    actor: { actorId: target.actor.actorId, objectGeneration: target.actor.generation },
+    targetNodeRid: toGeneratedRoutingId(target.actor.nodeRid, 'targetNodeRid'),
+    targetNodeGeneration: target.targetNodeGeneration,
+    expectedAuthorityOwnerGeneration: target.authorityOwnerGeneration,
+    expectedOwnerLeaseGeneration: target.ownerLeaseGeneration
+  };
+}
+
 export function encodeSpotHeader(
   kind: 'spotSend' | 'spotRequest',
   sourceSpotId: string,
   target: ServiceDirectSpotRouteFence,
-  correlation?: bigint
+  correlation?: bigint,
+  operation: ServiceWireOperationId = { high: 0n, low: 1n },
+  remainingDeadlineMs = 1n,
+  messageFollowHopCount = 0,
+  metadataFrame?: Uint8Array
 ): Buffer {
-  return concat(
-    prefix(
-      kind === 'spotSend' ? M6bServiceWireCommand.spotSend : M6bServiceWireCommand.spotRequest
-    ),
-    ...(kind === 'spotRequest' ? [u64(requirePositive(correlation, 'correlation'))] : []),
-    rid(sourceSpotId, 'sourceSpotId'),
-    directSpotFence(target)
-  );
+  const common = {
+    flags: metadataFrame === undefined ? 0 : M6bServiceWireFlag.metadata,
+    operation,
+    messageFollowHopCount,
+    sourceSpotId,
+    targetSpot: generatedSpotFence(target),
+    payload: STATEFUL_HEADER_PAYLOAD,
+    ...(metadataFrame === undefined
+      ? {}
+      : { metadata: decodeMetadataFrame(metadataFrame, STATEFUL_MESSAGE_CONTEXT) })
+  };
+  const frames =
+    kind === 'spotSend'
+      ? encodeSpotSendCommand({ command: kind, ...common }, STATEFUL_MESSAGE_CONTEXT)
+      : encodeSpotRequestCommand(
+          {
+            command: kind,
+            ...common,
+            correlation: requirePositive(correlation, 'correlation'),
+            remainingDeadlineMs
+          },
+          STATEFUL_MESSAGE_CONTEXT
+        );
+  return Buffer.from(frames[0]!);
 }
 
 export function encodeActorHeader(
@@ -1158,28 +1227,48 @@ export function encodeActorHeader(
   target: ServiceActorRouteFence,
   correlation?: bigint,
   sourceActor?: ServiceActorRef,
-  boundSession?: ServiceBoundSessionSource
+  boundSession?: ServiceBoundSessionSource,
+  operation: ServiceWireOperationId = { high: 0n, low: 1n },
+  remainingDeadlineMs = 1n,
+  messageFollowHopCount = 0
 ): Buffer {
   const flags =
     boundSession === undefined
       ? 0
       : M6bServiceWireFlag.boundSession | M6bServiceWireFlag.sourceSpotId;
-  return concat(
-    prefix(
-      kind === 'actorSend' ? M6bServiceWireCommand.actorSend : M6bServiceWireCommand.actorRequest,
-      flags
-    ),
-    ...(kind === 'actorRequest' ? [u64(requirePositive(correlation, 'correlation'))] : []),
-    optionalActor(sourceActor),
-    actorFence(target),
+  const common = {
+    flags,
+    operation,
+    messageFollowHopCount,
+    sourceActor:
+      sourceActor === undefined
+        ? { actorId: null }
+        : { actorId: sourceActor.actorId, generation: sourceActor.generation },
+    targetActor: generatedActorFence(target),
     ...(boundSession === undefined
-      ? []
-      : [
-          rid(boundSession.sessionRid, 'sourceSessionRid'),
-          u64(boundSession.bindingGeneration),
-          u64(boundSession.sequence)
-        ])
-  );
+      ? {}
+      : {
+          boundSessionTail: {
+            sourceSessionRid: toGeneratedRoutingId(boundSession.sessionRid, 'sourceSessionRid'),
+            sourceBindingGeneration: boundSession.bindingGeneration,
+            sourceSessionSequence: boundSession.sequence
+          }
+        }),
+    payload: STATEFUL_HEADER_PAYLOAD
+  };
+  const frames =
+    kind === 'actorSend'
+      ? encodeActorSendCommand({ command: kind, ...common }, STATEFUL_MESSAGE_CONTEXT)
+      : encodeActorRequestCommand(
+          {
+            command: kind,
+            ...common,
+            correlation: requirePositive(correlation, 'correlation'),
+            remainingDeadlineMs
+          },
+          STATEFUL_MESSAGE_CONTEXT
+        );
+  return Buffer.from(frames[0]!);
 }
 
 export function encodeLogicalMulticastHeader(
@@ -1420,7 +1509,11 @@ export function encodeMessageFollowHeader(
   );
 }
 
-export function decodeStatefulHeader(frame: Uint8Array): ServiceStatefulWireRecord {
+export function decodeStatefulHeader(
+  frame: Uint8Array,
+  payloadFrame?: Uint8Array,
+  metadataFrame?: Uint8Array
+): ServiceStatefulWireRecord {
   switch (frame[3]) {
     case M6bServiceWireCommand.userSpotCreate:
       return fromGeneratedUserSpotCreate(decodeGeneratedUserSpotCreate47(frame));
@@ -1428,52 +1521,104 @@ export function decodeStatefulHeader(frame: Uint8Array): ServiceStatefulWireReco
       return fromGeneratedUserSpotClose(decodeGeneratedUserSpotClose48(frame));
     case M6bServiceWireCommand.actorCreate:
       return fromGeneratedActorCreate(decodeGeneratedActorCreate49(frame));
+    case M6bServiceWireCommand.spotSend:
+    case M6bServiceWireCommand.spotRequest:
+    case M6bServiceWireCommand.actorSend:
+    case M6bServiceWireCommand.actorRequest: {
+      const frames = [
+        frame,
+        ...(metadataFrame === undefined ? [] : [metadataFrame]),
+        payloadFrame ??
+          encodeApplicationPayloadEnvelopeV1(STATEFUL_HEADER_PAYLOAD, STATEFUL_MESSAGE_CONTEXT)
+      ];
+      try {
+        if (
+          frame[3] === M6bServiceWireCommand.spotSend ||
+          frame[3] === M6bServiceWireCommand.spotRequest
+        ) {
+          const decoded =
+            frame[3] === M6bServiceWireCommand.spotSend
+              ? decodeSpotSendCommand(frames, STATEFUL_MESSAGE_CONTEXT)
+              : decodeSpotRequestCommand(frames, STATEFUL_MESSAGE_CONTEXT);
+          return {
+            kind: decoded.command,
+            ...(decoded.command === 'spotRequest' ? { correlation: decoded.correlation } : {}),
+            operation: decoded.operation,
+            ...(decoded.command === 'spotRequest'
+              ? { remainingDeadlineMs: decoded.remainingDeadlineMs }
+              : {}),
+            messageFollowHopCount: decoded.messageFollowHopCount,
+            sourceSpotId: decoded.sourceSpotId,
+            target: {
+              spot: {
+                spotId: decoded.targetSpot.spot.spotId,
+                generation: decoded.targetSpot.spot.objectGeneration
+              },
+              targetNodeRid: fromGeneratedRoutingId(
+                decoded.targetSpot.targetNodeRid,
+                'targetNodeRid'
+              ),
+              targetNodeGeneration: decoded.targetSpot.targetNodeGeneration,
+              authorityOwnerGeneration: decoded.targetSpot.expectedAuthorityOwnerGeneration,
+              ownerLeaseGeneration: decoded.targetSpot.expectedOwnerLeaseGeneration
+            }
+          };
+        }
+        const decoded =
+          frame[3] === M6bServiceWireCommand.actorSend
+            ? decodeActorSendCommand(frames, STATEFUL_MESSAGE_CONTEXT)
+            : decodeActorRequestCommand(frames, STATEFUL_MESSAGE_CONTEXT);
+        const source = decoded.sourceActor;
+        return {
+          kind: decoded.command,
+          ...(decoded.command === 'actorRequest' ? { correlation: decoded.correlation } : {}),
+          operation: decoded.operation,
+          ...(decoded.command === 'actorRequest'
+            ? { remainingDeadlineMs: decoded.remainingDeadlineMs }
+            : {}),
+          messageFollowHopCount: decoded.messageFollowHopCount,
+          ...(source.actorId === null
+            ? {}
+            : {
+                sourceActor: {
+                  nodeRid: '',
+                  actorId: source.actorId,
+                  generation: source.generation!
+                }
+              }),
+          target: {
+            actor: {
+              nodeRid: fromGeneratedRoutingId(decoded.targetActor.targetNodeRid, 'targetNodeRid'),
+              actorId: decoded.targetActor.actor.actorId,
+              generation: decoded.targetActor.actor.objectGeneration
+            },
+            targetNodeGeneration: decoded.targetActor.targetNodeGeneration,
+            authorityOwnerGeneration: decoded.targetActor.expectedAuthorityOwnerGeneration,
+            ownerLeaseGeneration: decoded.targetActor.expectedOwnerLeaseGeneration
+          },
+          ...(decoded.boundSessionTail === undefined
+            ? {}
+            : {
+                boundSession: {
+                  sessionRid: fromGeneratedRoutingId(
+                    decoded.boundSessionTail.sourceSessionRid,
+                    'sourceSessionRid'
+                  ),
+                  bindingGeneration: decoded.boundSessionTail.sourceBindingGeneration,
+                  sequence: decoded.boundSessionTail.sourceSessionSequence
+                }
+              })
+        };
+      } catch (error) {
+        throw new ServiceWireProtocolError(
+          error instanceof Error ? error.message : 'Invalid stateful message.'
+        );
+      }
+    }
   }
   const reader = new Reader(frame);
   const command = reader.prefix();
   switch (command.command) {
-    case M6bServiceWireCommand.spotSend:
-    case M6bServiceWireCommand.spotRequest: {
-      requireFlags(command.flags, 0);
-      const request = command.command === M6bServiceWireCommand.spotRequest;
-      const correlation = request ? reader.nonZeroU64('correlation') : undefined;
-      const sourceSpotId = reader.rid('sourceSpotId');
-      const target = reader.directSpotFence();
-      reader.end();
-      return {
-        kind: request ? 'spotRequest' : 'spotSend',
-        ...(correlation === undefined ? {} : { correlation }),
-        sourceSpotId,
-        target
-      };
-    }
-    case M6bServiceWireCommand.actorSend:
-    case M6bServiceWireCommand.actorRequest: {
-      const request = command.command === M6bServiceWireCommand.actorRequest;
-      const hasBinding = command.flags !== 0;
-      requireFlags(
-        command.flags,
-        hasBinding ? M6bServiceWireFlag.boundSession | M6bServiceWireFlag.sourceSpotId : 0
-      );
-      const correlation = request ? reader.nonZeroU64('correlation') : undefined;
-      const sourceActor = reader.optionalActor();
-      const target = reader.actorFence();
-      const boundSession = hasBinding
-        ? {
-            sessionRid: reader.rid('sourceSessionRid'),
-            bindingGeneration: reader.nonZeroU64('sourceBindingGeneration'),
-            sequence: reader.nonZeroU64('sourceSessionSequence')
-          }
-        : undefined;
-      reader.end();
-      return {
-        kind: request ? 'actorRequest' : 'actorSend',
-        ...(correlation === undefined ? {} : { correlation }),
-        ...(sourceActor === undefined ? {} : { sourceActor }),
-        target,
-        ...(boundSession === undefined ? {} : { boundSession })
-      };
-    }
     case M6bServiceWireCommand.logicalMulticast: {
       requireFlags(command.flags, 0);
       const result = {
@@ -2124,20 +2269,6 @@ function actorAuthorityFence(value: ServiceBoundSessionActorAuthority): Buffer {
   );
 }
 
-function spotFence(value: ServiceSpotRouteFence): Buffer {
-  return concat(
-    spotRef(value.spot),
-    rid(value.targetNodeRid, 'targetNodeRid'),
-    u64(value.targetNodeGeneration),
-    u64(value.authorityOwnerGeneration),
-    u64(value.ownerLeaseGeneration)
-  );
-}
-
-function directSpotFence(value: ServiceDirectSpotRouteFence): Buffer {
-  return concat(spotFence(value), text16(value.storeVersion, 'storeVersion'));
-}
-
 function messageFollowRoute(value: ServiceMessageFollowRoute): Buffer {
   const body =
     value.kind === 'actor'
@@ -2203,12 +2334,6 @@ function validateMessageFollowRecord(
 
 function actorRef(value: ServiceActorRef): Buffer {
   return concat(text8(value.actorId, 'actorId'), u64(value.generation));
-}
-
-function optionalActor(value: ServiceActorRef | undefined): Buffer {
-  return value === undefined
-    ? Buffer.of(0)
-    : concat(text8(value.actorId, 'sourceActorId'), u64(value.generation));
 }
 
 function spotRef(value: ServiceSpotRef): Buffer {
@@ -2409,20 +2534,6 @@ class Reader {
     };
   }
 
-  optionalActor(): ServiceActorRef | undefined {
-    const length = this.u8('sourceActorId.length');
-    if (length === 0) return undefined;
-    this.need(length, 'sourceActorId');
-    const bytes = this.bytes.subarray(this.offset, this.offset + length);
-    this.offset += length;
-    const actorId = decodeCanonicalServiceWireText(bytes, 'sourceActorId', fail);
-    return {
-      nodeRid: '',
-      actorId,
-      generation: this.nonZeroU64('sourceActorGeneration')
-    };
-  }
-
   spotRef(): ServiceSpotRef {
     return {
       spotId: this.rid('spotId'),
@@ -2438,24 +2549,6 @@ class Reader {
       targetNodeGeneration: this.nonZeroU64('targetNodeGeneration'),
       authorityOwnerGeneration: this.nonZeroU64('authorityOwnerGeneration'),
       ownerLeaseGeneration: this.nonZeroU64('ownerLeaseGeneration')
-    };
-  }
-
-  spotFence(): ServiceSpotRouteFence {
-    const spot = this.spotRef();
-    return {
-      spot,
-      targetNodeRid: this.rid('targetNodeRid'),
-      targetNodeGeneration: this.nonZeroU64('targetNodeGeneration'),
-      authorityOwnerGeneration: this.nonZeroU64('authorityOwnerGeneration'),
-      ownerLeaseGeneration: this.nonZeroU64('ownerLeaseGeneration')
-    };
-  }
-
-  directSpotFence(): ServiceDirectSpotRouteFence {
-    return {
-      ...this.spotFence(),
-      storeVersion: this.text16('storeVersion')
     };
   }
 

@@ -3267,6 +3267,10 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
       relocation_outcome_t::blocked, relocation_reason_t::relocation_failed};
     std::vector<std::string> readiness_meshes;
     std::map<std::string, std::vector<spot_id_t>> relocated_ready_spots;
+    /* 30 §13: units settled on both sides, or a source owner lease that
+     * expired before its Preserve fence, end the host in Error. */
+    std::size_t committed_units = 0;
+    bool authority_split = false;
 
     auto shutdown_requested = [&] {
         std::lock_guard lock (operation.mutex);
@@ -3296,6 +3300,8 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
         if (result.outcome == relocation_outcome_t::relocated) {
             state.runtime_state.store (framework_runtime_state_t::relocated,
                                        std::memory_order_release);
+        } else if (authority_split) {
+            state.runtime_state.store (framework_runtime_state_t::error, std::memory_order_release);
         } else if (!interrupted) {
             (void) publish_mesh_descriptor_state (state, framework_runtime_state_t::serving);
             state.runtime_state.store (framework_runtime_state_t::serving,
@@ -3471,12 +3477,17 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 }
 
                 const auto moved = co_await node->relocate_application_unit (
-                  std::move (sources), std::move (stable_types), *target, authorities);
+                  std::move (sources), std::move (stable_types), *target, authorities, deadline_at);
                 if (moved.terminal != runtime::stateful::relocation_terminal_t::completed) {
+                    authority_split =
+                      committed_units != 0
+                      || moved.reason
+                           == runtime::stateful::relocation_reason_t::owner_lease_expired;
                     terminal.reason = relocation_reason_t::relocation_failed;
                     complete (terminal);
                     co_return;
                 }
+                ++committed_units;
                 relocated_ready_spots[node->mesh_name ()].push_back (unit.spot_id);
             }
 
@@ -3536,13 +3547,18 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                     co_return;
                 }
 
-                const auto moved =
-                  co_await node->relocate_application_actor (actor, *target, *authority);
+                const auto moved = co_await node->relocate_application_actor (
+                  actor, *target, *authority, deadline_at);
                 if (moved.terminal != runtime::stateful::relocation_terminal_t::completed) {
+                    authority_split =
+                      committed_units != 0
+                      || moved.reason
+                           == runtime::stateful::relocation_reason_t::owner_lease_expired;
                     terminal.reason = relocation_reason_t::relocation_failed;
                     complete (terminal);
                     co_return;
                 }
+                ++committed_units;
             }
         }
         terminal.outcome = relocation_outcome_t::relocated;

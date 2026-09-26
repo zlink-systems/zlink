@@ -740,6 +740,19 @@ export class ZLinkActorHandoffCoordinator {
     pending.reject?.(error);
   }
 
+  /**
+   * Expired-owner terminal of a relocation (spec 28 §4.4): every pending
+   * record without a terminal fails once with `reason`. The handoff stays
+   * active, so the source never dispatches the Actor again.
+   */
+  failPending(actorId: string, reason: unknown): void {
+    const handoff = this.active.get(actorId);
+    if (handoff === undefined) return;
+    for (const pending of handoff.pending.splice(0)) this.failReleasedPending(pending, reason);
+    handoff.snapshotIndex = -1;
+    handoff.pendingBytes = 0;
+  }
+
   cancel(actorId: string): void {
     const handoff = this.active.get(actorId);
     if (handoff === undefined) return;

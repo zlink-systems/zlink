@@ -604,13 +604,6 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             }
             assertEquals(
                     1, targetCommits.get(), "only the target canonical owner may commit authority");
-            if (scenario.dropCutover()) {
-                assertTrue(link.readyTransportSuccessNanos.get() > 0L);
-                assertTrue(
-                        firstCommitNanos.get() - link.readyTransportSuccessNanos.get()
-                                >= TimeUnit.SECONDS.toNanos(1),
-                        "fallback may publish only after the exact 1000ms delay");
-            }
             link.targetCompletion.get(4, TimeUnit.SECONDS);
             assertEquals(
                     List.of("B1", "B2", "D1"),
@@ -952,20 +945,14 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
     }
 
     private enum Scenario {
-        NORMAL(false, LeaveMode.DELIVER),
-        FALLBACK_LEAVE_FAILED_FUTURE(true, LeaveMode.FAILED_FUTURE),
-        FALLBACK_LEAVE_THROW(true, LeaveMode.THROW);
+        NORMAL(LeaveMode.DELIVER),
+        LEAVE_FAILED_FUTURE(LeaveMode.FAILED_FUTURE),
+        LEAVE_THROW(LeaveMode.THROW);
 
-        private final boolean dropCutover;
         private final LeaveMode leaveMode;
 
-        Scenario(boolean dropCutover, LeaveMode leaveMode) {
-            this.dropCutover = dropCutover;
+        Scenario(LeaveMode leaveMode) {
             this.leaveMode = leaveMode;
-        }
-
-        boolean dropCutover() {
-            return dropCutover;
         }
 
         LeaveMode leaveMode() {
@@ -1091,26 +1078,9 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                                 cutover.set(command.clone());
                                             }
                                             CompletionStage<Void> delivered;
-                                            if (sourceSide
-                                                    && code
-                                                            == ServiceWireConstants
-                                                                    .COMMAND_RELOCATION_CUTOVER
-                                                    && scenario.dropCutover()) {
-                                                EVENTS.add("canonical.cutover.dropped");
-                                                delivered =
-                                                        CompletableFuture.failedFuture(
-                                                                new IllegalStateException(
-                                                                        "injected CUTOVER"
-                                                                                + " submission"
-                                                                                + " failure"));
-                                            } else {
-                                                delivered =
-                                                        peer.get()
-                                                                .apply(
-                                                                        descriptor.rid(),
-                                                                        code,
-                                                                        command);
-                                            }
+                                            delivered =
+                                                    peer.get()
+                                                            .apply(descriptor.rid(), code, command);
                                             if (sourceSide
                                                     && code
                                                             == ServiceWireConstants

@@ -277,10 +277,10 @@ final class ServiceWireCodec {
   record ChannelRequestCommand(int flags, NonzeroU64 correlation, Text8 channelName, MetadataFrame metadata, ApplicationPayloadEnvelopeV1 payload) implements ServiceWireCommand { public int id(){return 19;} }
   record ReplyCommand(int flags, NonzeroU64 correlation, RequestTerminalResult terminalResult, FrameworkErrorCode failureCode, RequestSpecificTail tail, ApplicationPayloadEnvelopeV1 payload) implements ServiceWireCommand { public int id(){return 20;} }
   record SpotSendCommand(int flags, OperationId operation, U8 messageFollowHopCount, Text8 sourceSpotId, SpotRouteFence targetSpot, MetadataFrame metadata, ApplicationPayloadEnvelopeV1 payload) implements ServiceWireCommand { public int id(){return 21;} }
-  record SpotRequestCommand(int flags, NonzeroU64 correlation, OperationId operation, U8 messageFollowHopCount, Text8 sourceSpotId, SpotRouteFence targetSpot, MetadataFrame metadata, ApplicationPayloadEnvelopeV1 payload) implements ServiceWireCommand { public int id(){return 22;} }
+  record SpotRequestCommand(int flags, NonzeroU64 correlation, OperationId operation, NonzeroU64 remainingDeadlineMs, U8 messageFollowHopCount, Text8 sourceSpotId, SpotRouteFence targetSpot, MetadataFrame metadata, ApplicationPayloadEnvelopeV1 payload) implements ServiceWireCommand { public int id(){return 22;} }
   record LogicalMulticastCommand(int flags, Text8 channelName, Text8 topic, Text8 sourceSpotId, MetadataFrame metadata, ApplicationPayloadEnvelopeV1 payload) implements ServiceWireCommand { public int id(){return 23;} }
   record ActorSendCommand(int flags, OperationId operation, U8 messageFollowHopCount, OptionalActorRef sourceActor, ActorRouteFence targetActor, OptionalBoundSessionTail boundSessionTail, MetadataFrame metadata, ApplicationPayloadEnvelopeV1 payload) implements ServiceWireCommand { public int id(){return 24;} }
-  record ActorRequestCommand(int flags, NonzeroU64 correlation, OperationId operation, U8 messageFollowHopCount, OptionalActorRef sourceActor, ActorRouteFence targetActor, OptionalBoundSessionTail boundSessionTail, MetadataFrame metadata, ApplicationPayloadEnvelopeV1 payload) implements ServiceWireCommand { public int id(){return 25;} }
+  record ActorRequestCommand(int flags, NonzeroU64 correlation, OperationId operation, NonzeroU64 remainingDeadlineMs, U8 messageFollowHopCount, OptionalActorRef sourceActor, ActorRouteFence targetActor, OptionalBoundSessionTail boundSessionTail, MetadataFrame metadata, ApplicationPayloadEnvelopeV1 payload) implements ServiceWireCommand { public int id(){return 25;} }
   record ActorLookupCommand(int flags, NonzeroU64 correlation, Text8 actorId) implements ServiceWireCommand { public int id(){return 26;} }
   record ActorDestroyCommand(int flags, NonzeroU64 correlation, ActorRouteFence actor) implements ServiceWireCommand { public int id(){return 27;} }
   record ActorJoinCommand(int flags, NonzeroU64 correlation, ActorRouteFence actor, Bool8 entry, SpotRouteFence targetSpot, ApplicationPayloadEnvelopeV1 payload) implements ServiceWireCommand { public int id(){return 28;} }
@@ -3035,12 +3035,13 @@ r.end("spotSend");return new SpotSendCommand(flags, operation, messageFollowHopC
   private static SpotRequestCommand decodeSpotRequestCommand(List<byte[]> frames,DecoderContext c,Reader r,int flags)throws IOException{require((flags&~1)==0&&(flags&0)==0,"spotRequest flags");int next=1;MetadataFrame metadata=null;if((flags&1)!=0){require(frames.size()>next,"spotRequest metadata");metadata=decodeMetadataFrame(frames.get(next++),c);}ApplicationPayloadEnvelopeV1 payload=null;if(frames.size()>next)payload=decodeApplicationPayloadEnvelopeV1(frames.get(next++),c);require(payload!=null,"spotRequest payload");require(frames.size()==next,"spotRequest frames");
         NonzeroU64 correlation = decodeNonzeroU64(r, c, flags);
         OperationId operation = decodeOperationId(r, c, flags);
+        NonzeroU64 remainingDeadlineMs = decodeNonzeroU64(r, c, flags);
         U8 messageFollowHopCount = decodeU8(r, c, flags);
         requireUnsigned(messageFollowHopCount.value(), 1, "0", null, "messageFollowHopCount");
         requireUnsigned(messageFollowHopCount.value(), 1, null, "8", "messageFollowHopCount");
         Text8 sourceSpotId = decodeText8(r, c, flags);
         SpotRouteFence targetSpot = decodeSpotRouteFence(r, c, flags);
-r.end("spotRequest");return new SpotRequestCommand(flags, correlation, operation, messageFollowHopCount, sourceSpotId, targetSpot, metadata, payload);}
+r.end("spotRequest");return new SpotRequestCommand(flags, correlation, operation, remainingDeadlineMs, messageFollowHopCount, sourceSpotId, targetSpot, metadata, payload);}
   private static LogicalMulticastCommand decodeLogicalMulticastCommand(List<byte[]> frames,DecoderContext c,Reader r,int flags)throws IOException{require((flags&~1)==0&&(flags&0)==0,"logicalMulticast flags");int next=1;MetadataFrame metadata=null;if((flags&1)!=0){require(frames.size()>next,"logicalMulticast metadata");metadata=decodeMetadataFrame(frames.get(next++),c);}ApplicationPayloadEnvelopeV1 payload=null;if(frames.size()>next)payload=decodeApplicationPayloadEnvelopeV1(frames.get(next++),c);require(payload!=null,"logicalMulticast payload");require(frames.size()==next,"logicalMulticast frames");
         Text8 channelName = decodeText8(r, c, flags);
         Text8 topic = decodeText8(r, c, flags);
@@ -3059,6 +3060,7 @@ r.end("actorSend");return new ActorSendCommand(flags, operation, messageFollowHo
   private static ActorRequestCommand decodeActorRequestCommand(List<byte[]> frames,DecoderContext c,Reader r,int flags)throws IOException{require((flags&~7)==0&&(flags&0)==0,"actorRequest flags");require(((flags&6)==0)||((flags&6)==6),"actorRequest flag constraint");int next=1;MetadataFrame metadata=null;if((flags&1)!=0){require(frames.size()>next,"actorRequest metadata");metadata=decodeMetadataFrame(frames.get(next++),c);}ApplicationPayloadEnvelopeV1 payload=null;if(frames.size()>next)payload=decodeApplicationPayloadEnvelopeV1(frames.get(next++),c);require(payload!=null,"actorRequest payload");require(frames.size()==next,"actorRequest frames");
         NonzeroU64 correlation = decodeNonzeroU64(r, c, flags);
         OperationId operation = decodeOperationId(r, c, flags);
+        NonzeroU64 remainingDeadlineMs = decodeNonzeroU64(r, c, flags);
         U8 messageFollowHopCount = decodeU8(r, c, flags);
         requireUnsigned(messageFollowHopCount.value(), 1, "0", null, "messageFollowHopCount");
         requireUnsigned(messageFollowHopCount.value(), 1, null, "8", "messageFollowHopCount");
@@ -3066,7 +3068,7 @@ r.end("actorSend");return new ActorSendCommand(flags, operation, messageFollowHo
         ActorRouteFence targetActor = decodeActorRouteFence(r, c, flags);
         OptionalBoundSessionTail boundSessionTail = null;
         if (((flags & 6) == 6)) boundSessionTail = decodeOptionalBoundSessionTail(r, c, flags);
-r.end("actorRequest");return new ActorRequestCommand(flags, correlation, operation, messageFollowHopCount, sourceActor, targetActor, boundSessionTail, metadata, payload);}
+r.end("actorRequest");return new ActorRequestCommand(flags, correlation, operation, remainingDeadlineMs, messageFollowHopCount, sourceActor, targetActor, boundSessionTail, metadata, payload);}
   private static ActorLookupCommand decodeActorLookupCommand(List<byte[]> frames,DecoderContext c,Reader r,int flags)throws IOException{require((flags&~0)==0&&(flags&0)==0,"actorLookup flags");int next=1;require(frames.size()==next,"actorLookup payload");require(frames.size()==next,"actorLookup frames");
         NonzeroU64 correlation = decodeNonzeroU64(r, c, flags);
         Text8 actorId = decodeText8(r, c, flags);
@@ -3300,6 +3302,7 @@ List<byte[]> frames=new ArrayList<>();frames.add(w.result());if((item.flags()&1)
   private static List<byte[]> encodeSpotRequestCommand(SpotRequestCommand item,DecoderContext c,Writer w)throws IOException{require((item.flags()&~1)==0&&(item.flags()&0)==0,"spotRequest flags");
         encodeNonzeroU64(item.correlation(), w, c, item.flags());
         encodeOperationId(item.operation(), w, c, item.flags());
+        encodeNonzeroU64(item.remainingDeadlineMs(), w, c, item.flags());
         encodeU8(item.messageFollowHopCount(), w, c, item.flags());
         encodeText8(item.sourceSpotId(), w, c, item.flags());
         encodeSpotRouteFence(item.targetSpot(), w, c, item.flags());
@@ -3319,6 +3322,7 @@ List<byte[]> frames=new ArrayList<>();frames.add(w.result());if((item.flags()&1)
   private static List<byte[]> encodeActorRequestCommand(ActorRequestCommand item,DecoderContext c,Writer w)throws IOException{require((item.flags()&~7)==0&&(item.flags()&0)==0,"actorRequest flags");require(((item.flags()&6)==0)||((item.flags()&6)==6),"actorRequest flag constraint");
         encodeNonzeroU64(item.correlation(), w, c, item.flags());
         encodeOperationId(item.operation(), w, c, item.flags());
+        encodeNonzeroU64(item.remainingDeadlineMs(), w, c, item.flags());
         encodeU8(item.messageFollowHopCount(), w, c, item.flags());
         encodeOptionalActorRef(item.sourceActor(), w, c, item.flags());
         encodeActorRouteFence(item.targetActor(), w, c, item.flags());

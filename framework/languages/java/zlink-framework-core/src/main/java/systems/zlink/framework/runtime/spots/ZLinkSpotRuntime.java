@@ -1874,6 +1874,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 });
     }
 
+    /** Expired-owner terminal of one relocated object's pending requests (spec 28 §4.4). */
+    CompletionStage<Void> failRelocationRepliesUnavailable(
+            boolean actor, String objectId, long objectGeneration) {
+        return relocationReplyRoutes.failUnavailable(actor, objectId, objectGeneration);
+    }
+
     void bindCanonicalRelocationReplies(
             Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> journal,
             RoutingId targetNodeRid,
@@ -3455,6 +3461,52 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 Message frame = ActorPacketFrames.encodeReply(packetHeader, payload)) {
             frameBytes = frame.toByteArray();
         }
+        return sendRelocatedActorReplyFrame(
+                actorId,
+                actorRef,
+                sourceNodeRid,
+                sourceSessionRid,
+                requestId,
+                flags,
+                noBindRequest,
+                frameBytes);
+    }
+
+    /** Delivers a relocated Actor request's error terminal on its original reply route. */
+    private CompletionStage<Void> failRelocatedActorReply(
+            String actorId,
+            ActorPacketFrames.Header packetHeader,
+            ZLinkBackendActorRef actorRef,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            long requestId,
+            int flags,
+            boolean noBindRequest,
+            ZLinkFrameworkException error) {
+        byte[] frameBytes;
+        try (Message frame = ActorPacketFrames.encodeError(packetHeader, error)) {
+            frameBytes = frame.toByteArray();
+        }
+        return sendRelocatedActorReplyFrame(
+                actorId,
+                actorRef,
+                sourceNodeRid,
+                sourceSessionRid,
+                requestId,
+                flags,
+                noBindRequest,
+                frameBytes);
+    }
+
+    private CompletionStage<Void> sendRelocatedActorReplyFrame(
+            String actorId,
+            ZLinkBackendActorRef actorRef,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            long requestId,
+            int flags,
+            boolean noBindRequest,
+            byte[] frameBytes) {
         if (noBindRequest) {
             try (Message frame = Message.from(frameBytes)) {
                 primaryNode.replyActorNoBind(
@@ -5002,6 +5054,17 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                     headerCopy.flags(),
                                                     noBindRequest,
                                                     parts),
+                                    error ->
+                                            failRelocatedActorReply(
+                                                    actor.context().actorId(),
+                                                    packetHeader,
+                                                    headerCopy.actor(),
+                                                    headerCopy.sourceNodeRid(),
+                                                    headerCopy.sourceSessionRid(),
+                                                    headerCopy.requestId(),
+                                                    headerCopy.flags(),
+                                                    noBindRequest,
+                                                    error),
                                     () -> {});
             ZLinkSpotRelocationReplyRoutes.LazyRegistration registered = relocationReply;
             Supplier<CompletionStage<Void>> operation =

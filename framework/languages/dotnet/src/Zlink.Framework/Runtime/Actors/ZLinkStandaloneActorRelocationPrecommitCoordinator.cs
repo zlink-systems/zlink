@@ -127,15 +127,30 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             prepare,
             targetAuthority,
             checked(captured.AuthorityOwnerGeneration + 1),
+            static () => true,
+            TimeSpan.Zero,
             cancellationToken
         );
 
+    /// <summary>
+    /// Location runtime §10: the target owns its <c>NewOwner</c> CAS. It
+    /// resubmits the same mutation with the same expected source StoreVersion
+    /// and RelocationId after an uncertain response or an auxiliary-row
+    /// conflict while the authority row still holds that source fence and the
+    /// target owner lease is valid. This also covers the same-target
+    /// resubmission after the source lease expired, because the Store fence is
+    /// unchanged. The attempt ends only on a confirmed commit, a changed fence
+    /// (source <c>Preserve</c> or another owner), the end of the target lease,
+    /// or cancellation.
+    /// </summary>
     internal async ValueTask<ZLinkAuthoritySnapshot> CommitTargetAsync(
         ZLinkAuthoritySnapshot captured,
         ZLinkRelocationEnvelope root,
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
         ZLinkActorAuthorityPayload targetAuthority,
         ulong targetAuthorityOwnerGeneration,
+        Func<bool> isTargetLeaseValid,
+        TimeSpan resubmitInterval,
         CancellationToken cancellationToken
     )
     {
@@ -178,29 +193,146 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             state,
             root
         );
-        return await StoreAsync(
-                root.Participants.Single().AuthorityKey,
-                captured,
-                new ZLinkAuthorityMutation.Put(
-                    payload,
-                    ZLinkAuthorityGenerationTransition.NewOwner,
-                    targetOwner,
-                    captured.Allocation with
-                    {
-                        State = ZLinkPlacementAllocationState.Active,
-                        Descriptor = new ZLinkMeshNodeDescriptorKey(
-                            captured.Allocation.Descriptor.MeshName,
-                            prepare.Target.NodeRid
-                        ),
-                        DescriptorLifecycleGeneration = prepare.Target.NodeGeneration,
-                    },
-                    targetAuthorityOwnerGeneration
+        var key = root.Participants.Single().AuthorityKey;
+        var mutation = new ZLinkAuthorityMutation.Put(
+            payload,
+            ZLinkAuthorityGenerationTransition.NewOwner,
+            targetOwner,
+            captured.Allocation with
+            {
+                State = ZLinkPlacementAllocationState.Active,
+                Descriptor = new ZLinkMeshNodeDescriptorKey(
+                    captured.Allocation.Descriptor.MeshName,
+                    prepare.Target.NodeRid
                 ),
-                current =>
-                    MatchesCommitted(current, root.AggregateId, captured, targetOwner, prepare),
+                DescriptorLifecycleGeneration = prepare.Target.NodeGeneration,
+            },
+            targetAuthorityOwnerGeneration
+        );
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!isTargetLeaseValid())
+                throw new ZLinkRelocationTargetSettledException(
+                    "Standalone Actor target owner lease ended before its authority CAS was confirmed."
+                );
+            ZLinkAuthorityCompareExchangeResult? result;
+            try
+            {
+                result = await store
+                    .CompareExchangeAuthorityAsync(
+                        key,
+                        captured.StoreVersion,
+                        mutation,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+            }
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                //  §10: an uncertain response is not guessed; the same key and
+                //  expected version are read again before any resubmission.
+                result = null;
+            }
+            if (result is ZLinkAuthorityCompareExchangeResult.Stored stored)
+                return stored.Snapshot;
+            var current = result switch
+            {
+                ZLinkAuthorityCompareExchangeResult.Conflict conflict => conflict.Current,
+                null => await TryReadAfterUncertainAsync(key, cancellationToken)
+                    .ConfigureAwait(false),
+                _ => throw new InvalidOperationException(
+                    "Authority Store rejected the standalone Actor target CAS."
+                ),
+            };
+            if (current is ZLinkAuthorityReadResult.Found found)
+            {
+                if (
+                    MatchesCommitted(
+                        found.Snapshot,
+                        root.AggregateId,
+                        captured,
+                        targetOwner,
+                        prepare
+                    )
+                )
+                    return found.Snapshot;
+                if (
+                    !StringComparer.Ordinal.Equals(
+                        found.Snapshot.StoreVersion,
+                        captured.StoreVersion
+                    )
+                )
+                    throw new ZLinkRelocationTargetSettledException(
+                        "Standalone Actor target authority CAS lost its expected source fence."
+                    );
+            }
+            else if (current is ZLinkAuthorityReadResult.Missing)
+                throw DataLost("Standalone Actor target CAS lost its source authority.");
+            await Task.Delay(resubmitInterval, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async ValueTask<ZLinkAuthorityReadResult?> TryReadAfterUncertainAsync(
+        ZLinkAuthorityKey key,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            return await store.ReadAuthorityAsync(key, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            //  The Store is still unavailable: the result stays unknown and the
+            //  target keeps the same fence while its lease is valid.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Location runtime §6.1: the source <c>Preserve</c> fence. One CAS on the
+    /// StoreVersion the target's NewOwner CAS expects (the captured source
+    /// attempt) that keeps the source owner and restores its steady payload.
+    /// Returns the preserved record, or <c>null</c> when the record changed
+    /// first (the caller reads it again). A Store failure propagates as an
+    /// indeterminate result.
+    /// </summary>
+    internal async ValueTask<ZLinkAuthoritySnapshot?> TryPreserveSourceAsync(
+        ZLinkAuthorityKey key,
+        ZLinkAuthoritySnapshot captured,
+        Guid relocationId,
+        CancellationToken cancellationToken
+    )
+    {
+        if (
+            !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
+                captured.Payload.Span,
+                out var projection
+            ) || !SameRelocation(projection, relocationId)
+        )
+            throw DataLost("Standalone Actor source Preserve lost its captured source attempt.");
+        var result = await store
+            .CompareExchangeAuthorityAsync(
+                key,
+                captured.StoreVersion,
+                new ZLinkAuthorityMutation.Put(
+                    projection.SteadyAuthorityPayload,
+                    ZLinkAuthorityGenerationTransition.Preserve,
+                    null,
+                    null
+                ),
                 cancellationToken
             )
             .ConfigureAwait(false);
+        return result switch
+        {
+            ZLinkAuthorityCompareExchangeResult.Stored stored => stored.Snapshot,
+            ZLinkAuthorityCompareExchangeResult.Conflict => null,
+            _ => throw new InvalidOperationException(
+                "Authority Store rejected the standalone Actor source Preserve."
+            ),
+        };
     }
 
     internal async ValueTask<ZLinkAuthoritySnapshot> AbortSourceAsync(
@@ -209,7 +341,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
         CancellationToken cancellationToken
     )
     {
-        for (var attempt = 0; attempt < MaxConflictRetries; attempt++)
+        while (true)
         {
             var read = await store.ReadAuthorityAsync(key, cancellationToken).ConfigureAwait(false);
             if (read is not ZLinkAuthorityReadResult.Found found)
@@ -247,11 +379,21 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                     cancellationToken
                 )
                 .ConfigureAwait(false);
-            // A dead source cannot renew its owner lease, so the plain Put is
-            // rejected once recovery runs the abort on another node. Restore
-            // is fenced by the exact recorded owner identity and the same
-            // StoreVersion CAS instead of lease liveness.
             if (result is ZLinkAuthorityCompareExchangeResult.Conflict)
+            {
+                var afterConflict = await store
+                    .ReadAuthorityAsync(key, cancellationToken)
+                    .ConfigureAwait(false);
+                if (
+                    afterConflict is not ZLinkAuthorityReadResult.Found current
+                    || !StringComparer.Ordinal.Equals(
+                        current.Snapshot.StoreVersion,
+                        found.Snapshot.StoreVersion
+                    )
+                )
+                    continue;
+                // The source row is unchanged. Recovery can use its exact
+                // version and owner identity through Restore.
                 result = await store
                     .CompareExchangeAuthorityAsync(
                         key,
@@ -266,6 +408,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                         cancellationToken
                     )
                     .ConfigureAwait(false);
+            }
             if (result is ZLinkAuthorityCompareExchangeResult.Stored stored)
                 return stored.Snapshot;
             if (result is not ZLinkAuthorityCompareExchangeResult.Conflict)
@@ -273,7 +416,6 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                     "Authority Store rejected standalone Actor precommit abort."
                 );
         }
-        throw Moving("precommit abort conflicted after the bounded retry limit");
     }
 
     /// <summary>
@@ -454,23 +596,44 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
         return projection;
     }
 
+    /// <summary>
+    /// Location runtime §10: whether <paramref name="current"/> still is the
+    /// source fence the target's NewOwner CAS expects — the captured source
+    /// attempt of this relocation, or the exact Command 40 StoreVersion of a
+    /// foreign steady source.
+    /// </summary>
+    internal static bool HoldsTargetCommitFence(
+        ZLinkAuthoritySnapshot current,
+        ZLinkRelocationEnvelope root,
+        ZLinkServiceWireCodec.RelocationPrepareRecord prepare
+    ) =>
+        ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(current.Payload.Span, out var canonical)
+            ? SameRelocation(canonical, root.AggregateId) && canonical.Phase == 2
+            : StringComparer.Ordinal.Equals(
+                current.StoreVersion,
+                prepare.Coordinator.ExpectedAuthorityStoreVersion
+            );
+
     private static ZLinkCanonicalRelocationAuthorityProjection RequireTargetCommitPrecondition(
         ZLinkAuthoritySnapshot captured,
         ZLinkRelocationEnvelope root,
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare
     )
     {
+        //  Location runtime §10: a record that no longer is the expected source
+        //  fence (for example the source's Preserve) settles the attempt
+        //  against this target even when its owner matches.
+        if (!HoldsTargetCommitFence(captured, root, prepare))
+            throw new ZLinkRelocationTargetSettledException(
+                "Standalone Actor target cutover no longer holds its expected source fence."
+            );
         if (
             ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
                 captured.Payload.Span,
                 out var canonical
             )
         )
-        {
-            if (SameRelocation(canonical, root.AggregateId) && canonical.Phase == 2)
-                return canonical;
-            throw DataLost("Standalone Actor target cutover changed its durable source attempt.");
-        }
+            return canonical;
 
         var participant = root.Participants.Single();
         if (

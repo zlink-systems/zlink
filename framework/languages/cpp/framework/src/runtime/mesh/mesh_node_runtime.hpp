@@ -207,7 +207,8 @@ class mesh_node_runtime_t
     task_t<runtime::stateful::relocation_result_t>
     relocate_application_actor (const actor_ref_t &actor,
                                 const mesh_node_descriptor_t &target,
-                                const authority_snapshot_t &authority);
+                                const authority_snapshot_t &authority,
+                                std::chrono::steady_clock::time_point restore_deadline);
     bool application_actor_transfer_in_progress (const actor_ref_t &actor) const;
     result_t<void> cleanup_application_actor_stateful (const actor_ref_t &actor);
     result_t<bool> destroy_application_actor (const actor_ref_t &actor);
@@ -215,7 +216,8 @@ class mesh_node_runtime_t
     relocate_application_unit (std::vector<runtime::stateful::object_ref_t> sources,
                                std::vector<std::string> stable_types,
                                const mesh_node_descriptor_t &target,
-                               const std::vector<authority_snapshot_t> &authorities);
+                               const std::vector<authority_snapshot_t> &authorities,
+                               std::chrono::steady_clock::time_point restore_deadline);
     void configure_session_route_owner (
       std::function<std::optional<location_owner_token_t> ()> owner_resolver);
     void configure_bound_session_relocation_resolver (
@@ -547,6 +549,8 @@ class mesh_node_runtime_t
                                                   observed_spot_authority_t observed);
 
   private:
+    bool relocation_source_stopped () const;
+
     //  Coroutine: parameters are taken by value so the frame owns them for
     //  the whole suspended seal exchange (callers pass temporaries).
     task_t<session_relocation_seal_outcome_t> seal_bound_sessions (

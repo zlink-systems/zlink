@@ -1417,14 +1417,16 @@ test('Spot and Actor wire records preserve identity and reject malformed records
   assert.deepEqual(decodeStatefulHeader(spotHeader), {
     kind: 'spotRequest',
     correlation: 11n,
+    operation: { high: 0n, low: 1n },
+    remainingDeadlineMs: 1n,
+    messageFollowHopCount: 0,
     sourceSpotId: 'source',
     target: {
       spot,
       targetNodeRid: 'node-b',
       targetNodeGeneration: 3n,
       authorityOwnerGeneration: 9n,
-      ownerLeaseGeneration: 4n,
-      storeVersion: 'store-v1'
+      ownerLeaseGeneration: 4n
     }
   });
 
@@ -1445,6 +1447,9 @@ test('Spot and Actor wire records preserve identity and reject malformed records
   assert.deepEqual(decodeStatefulHeader(actorHeader), {
     kind: 'actorRequest',
     correlation: 12n,
+    operation: { high: 0n, low: 1n },
+    remainingDeadlineMs: 1n,
+    messageFollowHopCount: 0,
     sourceActor: { nodeRid: '', actorId: source.actorId, generation: source.generation },
     target: {
       actor: target,
@@ -1563,6 +1568,13 @@ test('outbound stateful routes use resolved authority generations and never obje
     ownerLeaseGeneration: 17n,
     storeVersion: 'store-v1'
   };
+  const wireRoute = (route: typeof firstRoute) => ({
+    spot: route.spot,
+    targetNodeRid: route.targetNodeRid,
+    targetNodeGeneration: route.targetNodeGeneration,
+    authorityOwnerGeneration: route.authorityOwnerGeneration,
+    ownerLeaseGeneration: route.ownerLeaseGeneration
+  });
   assert.equal(
     await runtime.sendToSpot(
       'source',
@@ -1578,7 +1590,7 @@ test('outbound stateful routes use resolved authority generations and never obje
   const firstSpotHeader = decodeStatefulHeader(sent.at(-1)!.parts[0]!);
   assert.equal(firstSpotHeader.kind, 'spotSend');
   if (firstSpotHeader.kind === 'spotSend') {
-    assert.deepEqual(firstSpotHeader.target, firstRoute);
+    assert.deepEqual(firstSpotHeader.target, wireRoute(firstRoute));
   }
   const advancedRoute = { ...firstRoute, storeVersion: 'store-v2' };
   runtime.rememberSpotRoute(advancedRoute);
@@ -1586,7 +1598,7 @@ test('outbound stateful routes use resolved authority generations and never obje
   const advancedSpotHeader = decodeStatefulHeader(sent.at(-1)!.parts[0]!);
   assert.equal(advancedSpotHeader.kind, 'spotSend');
   if (advancedSpotHeader.kind === 'spotSend') {
-    assert.equal(advancedSpotHeader.target.storeVersion, 'store-v2');
+    assert.deepEqual(advancedSpotHeader.target, wireRoute(advancedRoute));
   }
   const reactivatedRoute = {
     ...advancedRoute,
@@ -1600,7 +1612,7 @@ test('outbound stateful routes use resolved authority generations and never obje
   const reactivatedHeader = decodeStatefulHeader(sent.at(-1)!.parts[0]!);
   assert.equal(reactivatedHeader.kind, 'spotSend');
   if (reactivatedHeader.kind === 'spotSend') {
-    assert.deepEqual(reactivatedHeader.target, reactivatedRoute);
+    assert.deepEqual(reactivatedHeader.target, wireRoute(reactivatedRoute));
   }
   const successorRoute = {
     spot: reactivatedRoute.spot,
@@ -1625,7 +1637,7 @@ test('outbound stateful routes use resolved authority generations and never obje
   assert.equal(successorHeader.kind, 'spotSend');
   if (successorHeader.kind === 'spotSend') {
     assert.equal(successorHeader.target.targetNodeRid, 'node-c');
-    assert.deepEqual(successorHeader.target, successorRoute);
+    assert.deepEqual(successorHeader.target, wireRoute(successorRoute));
   }
   runtime.close();
 });
@@ -2433,8 +2445,15 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
   );
   assert.equal(relayedHeader.kind, 'spotSend');
   if (relayedHeader.kind === 'spotSend') {
-    assert.deepEqual(relayedHeader.target, target);
+    assert.deepEqual(relayedHeader.target, {
+      spot: target.spot,
+      targetNodeRid: target.targetNodeRid,
+      targetNodeGeneration: target.targetNodeGeneration,
+      authorityOwnerGeneration: target.authorityOwnerGeneration,
+      ownerLeaseGeneration: target.ownerLeaseGeneration
+    });
     assert.equal(relayedHeader.sourceSpotId, 'source-spot');
+    assert.equal(relayedHeader.messageFollowHopCount, 1);
   }
   const sendFollow = decodeStatefulHeader(
     relayed.find((record) => record.target === 'caller')!.parts[0]!
