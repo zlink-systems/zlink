@@ -5,7 +5,10 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -41,6 +44,37 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
         assertTrue(backend.admitted);
         owner.drainDurableBacklog(backlog).toCompletableFuture().join();
         assertEquals(List.of("prepare", "publish", "open"), backend.operations);
+    }
+
+    @Test
+    void relocationTargetRestoreHoldsOneActivationAdmissionUntilCommitOrDiscard() {
+        var admission = new ZLinkActivationAdmission(1);
+        var owner = new ZLinkStandaloneActorRelocationStagingOwner(new FakeBackend(), admission);
+        UUID relocationId = UUID.randomUUID();
+        byte[] root =
+                ZLinkCanonicalActorRelocationEnvelope.encode(
+                        relocationId, "actor-a", 7, 11, true, new byte[] {4, 5}, List.of());
+
+        // MeshNode §5.1: the Restore holds one admission from reception to target commit.
+        var staged = owner.stage(request(relocationId, true), root).toCompletableFuture().join();
+        assertEquals(1, admission.snapshot().active());
+        var full =
+                assertThrows(
+                        java.util.concurrent.CompletionException.class,
+                        () ->
+                                owner.stage(request(relocationId, true), root)
+                                        .toCompletableFuture()
+                                        .join());
+        assertEquals(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                assertInstanceOf(ZLinkFrameworkException.class, full.getCause()).kind());
+        owner.publishHidden(owner.closeDurableBacklog(staged, root, actorReplayer(owner, staged)), 0);
+        assertEquals(0, admission.snapshot().active());
+
+        var discarded = owner.stage(request(relocationId, true), root).toCompletableFuture().join();
+        assertEquals(1, admission.snapshot().active());
+        owner.discard(discarded).toCompletableFuture().join();
+        assertEquals(0, admission.snapshot().active());
     }
 
     @Test

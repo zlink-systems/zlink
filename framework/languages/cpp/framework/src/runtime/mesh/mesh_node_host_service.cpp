@@ -910,11 +910,25 @@ mesh_node_host_service_t::create_actor (bool exclusive,
             std::optional<zlink::message_t> raw_request;
             if (request)
                 raw_request = detail::message_to_raw (*request, *_serializers);
-            const auto created =
-              (*target_runtime)
-                ->create_application_actor (stable_type, std::string (actor_id.value ()),
-                                            raw_request, winner->fence.object_generation,
-                                            winner->fence.authority_owner_generation, timeout);
+            // MeshNode §5.1: the target MeshNode holds one activation admission for this Actor
+            // creation until Ready, rejection or failure.
+            std::shared_ptr<void> activation_admission;
+            const auto created = [&] {
+                try {
+                    activation_admission =
+                      (*target_runtime)
+                        ->activation_admission ()
+                        .enter_scoped (detail::activation_admission_t::actor_key (
+                          std::string (actor_id.value ())));
+                }
+                catch (const framework_exception_t &error) {
+                    return detail::result_access_t::failure<actor_ref_t> (error);
+                }
+                return (*target_runtime)
+                  ->create_application_actor (stable_type, std::string (actor_id.value ()),
+                                              raw_request, winner->fence.object_generation,
+                                              winner->fence.authority_owner_generation, timeout);
+            }();
             if (!created) {
                 const auto failed_envelope = actor_terminal_envelope (
                   terminal_codec::request_terminal_result_t::internalError,
@@ -2076,6 +2090,18 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                       return;
                   }
                   const auto creation_request = zlink::message_t::from (*creation_bytes);
+                  // MeshNode §5.1: this MeshNode holds one activation admission for the Actor
+                  // creation until Ready, rejection or failure.
+                  std::shared_ptr<void> activation_admission;
+                  try {
+                      activation_admission = node->activation_admission ().enter_scoped (
+                        detail::activation_admission_t::actor_key (request.actor_id));
+                  }
+                  catch (const framework_exception_t &) {
+                      (void) publish (std::nullopt, std::nullopt, std::nullopt);
+                      completion (failed ());
+                      return;
+                  }
                   const auto created = node->create_application_actor (
                     request.stable_type, request.actor_id, creation_request,
                     request.reservation.object_generation,
@@ -2089,8 +2115,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   const auto joined = node->submit_application_actor_entry_spot_join (
                     actor, node_rid_t::from_string (status.routing_id ().to_string ()),
                     creation_request, timeout,
-                    [request, actor, completion,
-                     publish] (result_t<detail::actor_join_reply_t> joined) mutable {
+                    [request, actor, completion, publish,
+                     activation_admission] (result_t<detail::actor_join_reply_t> joined) mutable {
                         host::actor_create_operation_result_t result;
                         result.reply.header = {
                           request.correlation, 105u,
@@ -2098,6 +2124,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                             protocol::framework_error_code::actorCreateFailed)};
                         if (!joined) {
                             (void) publish (std::nullopt, std::nullopt, std::nullopt);
+                            activation_admission.reset ();
                             completion (std::move (result));
                             return;
                         }
@@ -2129,6 +2156,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                 protocol::framework_error_code::actorCreateFailed)};
                             result.application_reply.reset ();
                         }
+                        activation_admission.reset ();
                         completion (std::move (result));
                     });
                   if (!joined) {
@@ -2189,7 +2217,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
             descriptor.placement_weight = node->placement_weight ();
             descriptor.capacity.actors.limit = node->actor_limit ();
             descriptor.capacity.spots.limit = node->spot_limit ();
-            descriptor.activation_concurrency.limit = node->activation_concurrency_limit ();
+            descriptor.activation_concurrency.limit = node->activation_admission ().limit ();
             descriptor.state = framework_runtime_state_t::serving;
             descriptor.security_identity = "default";
             descriptor.owner_id = owner ? owner->owner_id : std::string{};

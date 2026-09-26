@@ -793,7 +793,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                         targetSpots.primaryNode(),
                         targetSpots.actorSessions(),
                         targetAdapters,
-                        targetSpots);
+                        targetSpots,
+                        MESH);
         var staged =
                 owner.stage(
                                 request,

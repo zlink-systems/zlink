@@ -560,7 +560,7 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
         host.awaitClosing(
                 closingCallback(
                         () ->
-                                context.enqueueDispatch(
+                                context.enqueueLifecycle(
                                         () ->
                                                 host.runWithOutbound(
                                                         context.dispatchOutbound(),

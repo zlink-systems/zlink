@@ -146,7 +146,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                 SourceEntrySpot.start.complete(null);
                 store.deleteApplied.get(5, TimeUnit.SECONDS);
 
-                assertEquals(0, target.activeSpotCount());
+                assertEquals(0, target.activeSpotCount("game"));
                 SourceEntrySpot.afterCloseStart.complete(null);
                 assertEquals(
                         "echo:hello|echo:again|echo:after-close",

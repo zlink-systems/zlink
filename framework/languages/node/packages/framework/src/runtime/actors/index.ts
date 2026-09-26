@@ -687,9 +687,25 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
       if (request !== undefined && createRequest.nativeRequest !== undefined) {
         state.setCreateRequestPayload(createRequest.nativeRequest.data());
       }
-      const operation = state.getOrStartCreation(actorType, failIfExists, () =>
-        this.creation.createActor(actorId, actorType, state, createRequest, claimLocation, signal)
-      );
+      const operation = state.getOrStartCreation(actorType, failIfExists, async () => {
+        const meshName = state.meshName ?? this.options.actorMeshNameProvider?.(actorType);
+        const release =
+          meshName === undefined
+            ? undefined
+            : await this.options.activationAdmission?.acquire(meshName, signal);
+        try {
+          return await this.creation.createActor(
+            actorId,
+            actorType,
+            state,
+            createRequest,
+            claimLocation,
+            signal
+          );
+        } finally {
+          release?.();
+        }
+      });
       if (operation.created) {
         void operation.task.then(
           (result) => {

@@ -1309,7 +1309,7 @@ void verify_public_runtime_surface ()
       "client-only", zlink::framework::detail::mesh_channel_registration_t{100, {}, true, false});
     registration->actor_limit = 0;
     registration->spot_limit = 17;
-    registration->activation_concurrency_limit = 5;
+    registration->spot_state->activation_admission->set_limit (5);
     registration->placement_weight = 42;
     auto node = std::make_shared<zlink::framework::detail::mesh_node_runtime_t> (registration);
     node->start ();
@@ -1345,8 +1345,10 @@ void verify_public_runtime_surface ()
     assert (first.mesh_name == "vertical-mesh");
     assert (first.state == zlink::framework::mesh_node_state_t::ready);
     assert (first.is_ready);
-    assert (first.placement.active_actor_count == 4);
-    assert (first.placement.active_spot_count == 3);
+    // Status counts come from this MeshNode's activation records, not from the
+    // Location Store projection (runtime monitoring §5): nothing is active here.
+    assert (first.placement.active_actor_count == 0);
+    assert (first.placement.active_spot_count == 0);
     assert (first.placement.is_available);
     assert (first.channels.size () == 2);
     const auto client_only_initial =
@@ -1368,10 +1370,10 @@ void verify_public_runtime_surface ()
     assert (!runtime->snapshot ("vertical-mesh").channels.front ().is_ready);
     channel_options.weight (100);
     assert (channel_options.weight () == 100);
-    runtime_options.placement_weight (0);
-    assert (runtime_options.placement_weight () == 0);
-    runtime_options.placement_weight (100);
-    assert (runtime_options.placement_weight () == 100);
+    runtime_options.mesh ("vertical-mesh").placement_weight (0);
+    assert (runtime_options.mesh ("vertical-mesh").placement_weight () == 0);
+    runtime_options.mesh ("vertical-mesh").placement_weight (100);
+    assert (runtime_options.mesh ("vertical-mesh").placement_weight () == 100);
 
     std::mutex event_mutex;
     std::condition_variable event_ready;
@@ -1483,8 +1485,9 @@ void verify_public_runtime_surface ()
     }));
 
     unavailable.placement_weight = 100;
-    unavailable.capacity.actors.limit = 6;
-    unavailable.capacity.spots.limit = 4;
+    // The reserved slots alone exhaust both limits (MeshNode §5.1).
+    unavailable.capacity.actors.limit = 2;
+    unavailable.capacity.spots.limit = 1;
     ++unavailable.descriptor_revision;
     (void) monitoring_store.update_mesh_node (unavailable,
                                               zlink::framework::location_write_intent_t::renew);

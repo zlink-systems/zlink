@@ -328,6 +328,7 @@ public sealed class RelocationBehaviorConformanceTests
             );
             Assert.Equal(before.Count, GetTargetAttemptState(target.Runtime).Count);
             transport.ReleaseCutoverSend.TrySetResult();
+            await transport.CutoverSendSubmitted.Task.WaitAsync(TimeSpan.FromSeconds(3));
             await trace.WaitAsync("targetLifecycleStarted");
 
             using var drainCancellation = new CancellationTokenSource();
@@ -1627,10 +1628,22 @@ internal sealed class RelocationBehaviorTrace
         );
     }
 
-    internal async Task WaitAsync(string name) =>
-        await _signals
-            .GetOrAdd(name, static _ => Signal())
-            .Task.WaitAsync(TimeSpan.FromSeconds(15));
+    internal async Task WaitAsync(string name)
+    {
+        try
+        {
+            await _signals
+                .GetOrAdd(name, static _ => Signal())
+                .Task.WaitAsync(TimeSpan.FromSeconds(15));
+        }
+        catch (TimeoutException failure)
+        {
+            throw new TimeoutException(
+                $"Timed out waiting for '{name}'. Observed: {string.Join(", ", Events)}",
+                failure
+            );
+        }
+    }
 
     internal async Task WaitForTargetAuthorityAsync() =>
         await TargetAuthorityObserved.Task.WaitAsync(TimeSpan.FromSeconds(15));

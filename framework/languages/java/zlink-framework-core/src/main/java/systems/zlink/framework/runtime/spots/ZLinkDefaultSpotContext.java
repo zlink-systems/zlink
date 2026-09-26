@@ -199,6 +199,19 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
     public CompletionStage<Void> enqueueDispatch(
             long payloadBytes, Supplier<CompletionStage<Void>> operation) {
         host.ensureOwnerAdmissionOpen();
+        return enqueueAccepted(payloadBytes, operation);
+    }
+
+    /**
+     * Runs a lifecycle callback of this Entry Spot, such as {@code onClosing}. Cleanup of accepted
+     * work runs even after the owner admission deadline (Location runtime §5).
+     */
+    CompletionStage<Void> enqueueLifecycle(Supplier<CompletionStage<Void>> operation) {
+        return enqueueAccepted(0, operation);
+    }
+
+    private CompletionStage<Void> enqueueAccepted(
+            long payloadBytes, Supplier<CompletionStage<Void>> operation) {
         return dispatchQueue.enqueueWithPayloadBytes(
                 payloadBytes,
                 () ->

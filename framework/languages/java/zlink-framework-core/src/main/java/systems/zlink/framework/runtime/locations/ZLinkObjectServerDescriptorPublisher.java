@@ -39,7 +39,13 @@ public final class ZLinkObjectServerDescriptorPublisher {
     }
 
     public CompletionStage<Void> publish(ZLinkFrameworkRuntimeState state) {
-        ZLinkLocationOwnerToken owner = runtime.currentOwnerToken();
+        ZLinkLocationOwnerToken owner;
+        try {
+            owner = runtime.currentOwnerToken();
+        } catch (IllegalStateException ownerAdmissionClosed) {
+            // Location runtime §5: an expired owner does not publish a descriptor.
+            return CompletableFuture.failedFuture(ownerAdmissionClosed);
+        }
         long currentLeaseGeneration = owner.leaseGeneration();
         long previousLeaseGeneration = lastPublishedLeaseGeneration.get();
         ZLinkLocationWriteIntent intent =
@@ -95,7 +101,11 @@ public final class ZLinkObjectServerDescriptorPublisher {
     }
 
     public CompletionStage<Void> remove() {
-        ZLinkLocationOwnerToken owner = runtime.currentOwnerToken();
+        var admitted = runtime.admittedOwnerToken();
+        if (admitted.isEmpty()) {
+            return CompletableFuture.completedFuture(null);
+        }
+        ZLinkLocationOwnerToken owner = admitted.get();
         List<CompletionStage<?>> removals = new ArrayList<>();
         for (MeshNodeRegistration configured : registration.meshNodes()) {
             ZLinkInternalMeshNode node = nodes.get(configured.meshName());

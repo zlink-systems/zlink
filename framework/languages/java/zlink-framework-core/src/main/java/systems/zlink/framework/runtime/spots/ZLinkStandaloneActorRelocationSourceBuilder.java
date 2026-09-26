@@ -739,10 +739,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
     }
 
     private boolean hasCapacity(ZLinkMeshNodeDescriptor candidate) {
-        return hasCapacity(candidate.capacity().actors(), 1)
-                && (candidate.activationConcurrency().limit() == 0
-                        || candidate.activationConcurrency().active()
-                                < candidate.activationConcurrency().limit());
+        return candidate.capacity().actors().hasRoomFor(1)
+                && candidate.activationConcurrency().hasRoom();
     }
 
     private ZLinkSpotRetireControl.StageRequest stageRequest(
@@ -941,11 +939,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                             route.sessionRid(),
                             route.bindingGeneration());
                 });
-    }
-
-    private static boolean hasCapacity(ZLinkCapacityUsage usage, int required) {
-        return usage.limit() == 0
-                || (long) usage.active() + usage.reserved() + required <= usage.limit();
     }
 
     static final class PreparedSource {

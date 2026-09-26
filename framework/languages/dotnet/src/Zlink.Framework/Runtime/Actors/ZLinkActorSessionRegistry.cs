@@ -134,6 +134,19 @@ internal sealed class ZLinkActorSessionRegistry(
         return AwaitStateLane(_lane.RunAsync(() => _states.Values.ToArray()));
     }
 
+    /// <summary>Actors activated on the named MeshNode, counted without copying the registry.</summary>
+    public int CountActive(string meshName)
+    {
+        return AwaitStateLane(
+            _lane.RunAsync(() =>
+                _states.Values.Count(state =>
+                    state.Actor is not null
+                    && StringComparer.Ordinal.Equals(state.MeshName, meshName)
+                )
+            )
+        );
+    }
+
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 

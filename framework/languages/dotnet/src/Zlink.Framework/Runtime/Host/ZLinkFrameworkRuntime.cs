@@ -684,6 +684,20 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             .ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Actors activated on the named MeshNode in this process (runtime monitoring §5).
+    /// Host-wide drain remainder counts stay in <see cref="GetDrainRemainderCounts"/>.
+    /// </summary>
+    internal int GetActiveActorCount(string meshName) =>
+        _actorSessionManager.CountActiveActors(meshName);
+
+    /// <summary>
+    /// Location runtime §5: the host's single new-work decision (local admission deadline and
+    /// host execution combination). A host without a Location Store has no such block.
+    /// </summary>
+    internal bool IsOwnerAdmissionOpen =>
+        _locationRuntime is null || _locationRuntime.IsOwnerAdmissionOpen;
+
     internal ZLinkDrainRemainderCounts GetDrainRemainderCounts()
     {
         var actors = _actorSessionManager
@@ -856,14 +870,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         var admission = AwaitStateLane(
             _stateLane.RunAsync(() =>
             {
-                if (
-                    _drainAdmission.IsSealed
-                    || (
-                        ownsObjectWork
-                        && _locationRuntime is not null
-                        && !_locationRuntime.IsOwnerAdmissionOpen
-                    )
-                )
+                if (_drainAdmission.IsSealed || (ownsObjectWork && !IsOwnerAdmissionOpen))
                 {
                     return (
                         Admitted: (ZLinkFrameworkComponentState?)null,
@@ -1358,8 +1365,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             : Volatile.Read(ref _lifecyclePhase) != (int)ZLinkRuntimeLifecyclePhase.Running
                 ? $"lifecycle phase is {(ZLinkRuntimeLifecyclePhase)Volatile.Read(ref _lifecyclePhase)}"
             : _state is null ? "runtime state is not created"
-            : _locationRuntime is not null && !_locationRuntime.IsOwnerAdmissionOpen
-                ? "owner admission is closed"
+            : !IsOwnerAdmissionOpen ? "owner admission is closed"
             : null;
         if (refusal is not null)
             throw new InvalidOperationException(

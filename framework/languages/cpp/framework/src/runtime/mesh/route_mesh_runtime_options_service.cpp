@@ -19,6 +19,28 @@ framework_exception_t runtime_options_error (std::string message)
 
 } // namespace
 
+class route_mesh_runtime_options_service_t::mesh_options_t final
+    : public mesh_placement_runtime_options_t
+{
+  public:
+    explicit mesh_options_t (std::shared_ptr<detail::mesh_node_runtime_t> node) :
+        _node (std::move (node))
+    {
+    }
+
+    int placement_weight () const override { return _node->placement_weight (); }
+
+    void placement_weight (int value) override
+    {
+        if (value < 0 || value > 10000)
+            throw runtime_options_error ("placement weight must be in range 0..10000");
+        _node->set_placement_weight (value);
+    }
+
+  private:
+    std::shared_ptr<detail::mesh_node_runtime_t> _node;
+};
+
 class route_mesh_runtime_options_service_t::channel_options_t final
     : public mesh_channel_runtime_options_t
 {
@@ -51,10 +73,10 @@ class route_mesh_runtime_options_service_t::channel_options_t final
 };
 
 route_mesh_runtime_options_service_t::route_mesh_runtime_options_service_t (
-  std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> nodes) :
-    _nodes (std::move (nodes))
+  std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> nodes)
 {
-    for (const auto &node : _nodes) {
+    for (const auto &node : nodes) {
+        _meshes.emplace (node->mesh_name (), std::make_unique<mesh_options_t> (node));
         for (const auto &[channel_name, _] : node->channel_weights ()) {
             if (!_channels
                    .emplace (channel_name, std::make_unique<channel_options_t> (node, channel_name))
@@ -67,19 +89,13 @@ route_mesh_runtime_options_service_t::route_mesh_runtime_options_service_t (
 
 route_mesh_runtime_options_service_t::~route_mesh_runtime_options_service_t () = default;
 
-int route_mesh_runtime_options_service_t::placement_weight () const
+mesh_placement_runtime_options_t &route_mesh_runtime_options_service_t::mesh (std::string mesh_name)
 {
-    if (_nodes.empty ())
-        throw runtime_options_error ("RouteMesh is not configured");
-    return _nodes.front ()->placement_weight ();
-}
-
-void route_mesh_runtime_options_service_t::placement_weight (int value)
-{
-    if (value < 0 || value > 10000)
-        throw runtime_options_error ("placement weight must be in range 0..10000");
-    for (const auto &node : _nodes)
-        node->set_placement_weight (value);
+    const auto found = _meshes.find (mesh_name);
+    if (found == _meshes.end ())
+        throw framework_exception_t (framework_error_kind_t::not_configured,
+                                     "RouteMesh is not configured: " + mesh_name);
+    return *found->second;
 }
 
 mesh_channel_runtime_options_t &

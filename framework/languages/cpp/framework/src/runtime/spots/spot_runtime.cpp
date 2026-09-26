@@ -6618,6 +6618,11 @@ bool spot_node_runtime_t::restore_spot_relocation_state (
   const runtime::stateful::object_ref_t &target,
   std::stop_token cancellation)
 {
+    // MeshNode §5.1: a relocation target's Restore holds one activation admission until the
+    // target commit or abort (commit_/abort_relocation_materialization) or its failure here.
+    const auto admission_key = activation_admission_t::spot_key (target.key);
+    if (!_state->activation_admission->try_enter (admission_key))
+        return false;
     std::uint64_t reservation = 0;
     std::shared_ptr<std::promise<void>> completion;
     try {
@@ -6644,8 +6649,10 @@ bool spot_node_runtime_t::restore_spot_relocation_state (
                 return true;
             })
             .get ();
-        if (!admitted)
+        if (!admitted) {
+            _state->activation_admission->leave (admission_key);
             return false;
+        }
         if (frozen.application_state.size () > max_spot_relocation_state_bytes)
             throw std::length_error ("Spot relocation state exceeds 64 MiB");
         std::function<task_t<void> (void *)> staged_restore;
@@ -6712,9 +6719,12 @@ bool spot_node_runtime_t::restore_spot_relocation_state (
                   framework_exception_t (framework_error_kind_t::internal_failure,
                                          "Relocation Spot activation was rejected")));
         }
+        if (!created)
+            _state->activation_admission->leave (admission_key);
         return created;
     }
     catch (...) {
+        _state->activation_admission->leave (admission_key);
         if (reservation != 0) {
             const auto error = std::current_exception ();
             const auto owned = _state->lane
@@ -6950,6 +6960,35 @@ bool spot_node_runtime_t::materialize_relocation_state (
     if (target.kind != runtime::stateful::object_kind_t::actor)
         return restore_spot_relocation_state (frozen, target, cancellation);
 
+    // MeshNode §5.1: a standalone Actor Restore holds one activation admission until the
+    // target commit or abort. An Actor restored into a Spot whose own Restore holds an
+    // admission belongs to that Spot's Restore.
+    auto &admission = *_state->activation_admission;
+    if (target_spot && admission.holds (activation_admission_t::spot_key (target_spot->key)))
+        return materialize_actor_relocation_state (frozen, target, target_spot, cancellation);
+    const auto admission_key = activation_admission_t::actor_key (target.key);
+    if (!admission.try_enter (admission_key))
+        return false;
+    bool materialized = false;
+    try {
+        materialized =
+          materialize_actor_relocation_state (frozen, target, target_spot, cancellation);
+    }
+    catch (...) {
+        admission.leave (admission_key);
+        throw;
+    }
+    if (!materialized)
+        admission.leave (admission_key);
+    return materialized;
+}
+
+bool spot_node_runtime_t::materialize_actor_relocation_state (
+  const runtime::stateful::frozen_object_state_t &frozen,
+  const runtime::stateful::object_ref_t &target,
+  const std::optional<runtime::stateful::object_ref_t> &target_spot,
+  std::stop_token cancellation)
+{
     detail::spot_node_builder_state_t::actor_factory_registration_t factory;
     std::shared_ptr<spot_context_state_t> context;
     actor_gateway_runtime_t *actor_gateway = nullptr;
@@ -7367,6 +7406,7 @@ bool spot_node_runtime_t::materialize_relocation_state (
 bool spot_node_runtime_t::commit_relocation_materialization (
   const std::vector<runtime::stateful::object_ref_t> &targets)
 {
+    end_relocation_activation_admissions (targets);
     std::vector<std::shared_ptr<spot_context_state_t>> ready;
     std::vector<std::pair<std::string, runtime::stateful::object_ref_t>> actor_fences;
     struct actor_join_completion_record_t
@@ -7695,6 +7735,7 @@ bool spot_node_runtime_t::commit_relocation_materialization (
 void spot_node_runtime_t::abort_relocation_materialization (
   const std::vector<runtime::stateful::object_ref_t> &targets) noexcept
 {
+    end_relocation_activation_admissions (targets);
     std::vector<std::shared_ptr<spot_context_state_t>> spots;
     try {
         _state->lane
@@ -7755,6 +7796,15 @@ void spot_node_runtime_t::abort_relocation_materialization (
         catch (...) {
         }
     }
+}
+
+void spot_node_runtime_t::end_relocation_activation_admissions (
+  const std::vector<runtime::stateful::object_ref_t> &targets) noexcept
+{
+    for (const auto &target : targets)
+        _state->activation_admission->leave (target.kind == runtime::stateful::object_kind_t::actor
+                                               ? activation_admission_t::actor_key (target.key)
+                                               : activation_admission_t::spot_key (target.key));
 }
 
 result_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot (
@@ -11691,6 +11741,15 @@ spot_node_runtime_t::create_spot_context (std::string spot_name,
             return result;
         })
         .get ();
+
+    // MeshNode §5.1: creating a User Spot or cold-activating an Instance Spot holds one
+    // activation admission until this activation ends. The Entry Spot never enters, and a
+    // relocation target's Restore holds its admission from restore_spot_relocation_state.
+    const auto activation_admission =
+      plan.entry_spot || staged_restore
+        ? std::shared_ptr<void>{}
+        : _state->activation_admission->enter_scoped (
+            activation_admission_t::spot_key (std::string (spot_id)));
 
     context_state->last_application_work_completed_ns.store (
       std::chrono::duration_cast<std::chrono::nanoseconds> (

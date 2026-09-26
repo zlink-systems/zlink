@@ -50,7 +50,7 @@ internal sealed class ZLinkSpotNodeCatalog(
         timerScheduler
     );
     private readonly ZLinkActivationConcurrencyAdmission _activationAdmission =
-        activationAdmission ?? new(registration.MaxPendingActivations);
+        activationAdmission ?? new(registration.ActivationConcurrencyLimit);
     private readonly ZLinkSpotRetireScheduler? _retireScheduler = CreateRetireScheduler(
         services,
         runtime,
@@ -69,6 +69,9 @@ internal sealed class ZLinkSpotNodeCatalog(
 
     public IReadOnlyCollection<ZLinkSpotActivation> Spots =>
         AwaitStateLane(SnapshotActivationsAsync());
+
+    /// <summary>Spots activated on this MeshNode, counted without copying the catalog.</summary>
+    internal int ActiveSpotCount => AwaitStateLane(_lane.RunAsync(() => _spots.Count));
 
     internal void StartIdleEviction()
     {
@@ -729,13 +732,14 @@ internal sealed class ZLinkSpotNodeCatalog(
     {
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
-        await _lane
+        var admission = await _lane
             .RunAsync(() =>
             {
                 EnsureSpotTypeRegisteredLocked(spotType);
                 EnsureLocalSpotCapacityLocked(spotType);
-                BeginCreationLocked();
+                var lease = BeginCreationLocked();
                 IncrementGeneratedSpotCreationLocked(spotType);
+                return lease;
             })
             .ConfigureAwait(false);
 
@@ -808,7 +812,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                     EndCreationLocked(out drained);
                 })
                 .ConfigureAwait(false);
-            _activationAdmission.Release();
+            admission.Release();
             drained?.TrySetResult();
         }
     }
@@ -823,6 +827,7 @@ internal sealed class ZLinkSpotNodeCatalog(
         ArgumentNullException.ThrowIfNull(request);
         PendingSpotCreation pending;
         var owner = false;
+        ZLinkActivationConcurrencyAdmission.Lease? admission = null;
         cancellationToken.ThrowIfCancellationRequested();
         var start = await _lane
             .RunAsync(() =>
@@ -853,7 +858,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                 else
                 {
                     EnsureLocalSpotCapacityLocked(spotType);
-                    BeginCreationLocked();
+                    admission = BeginCreationLocked();
                     pending = new PendingSpotCreation(spotType);
                     _pending.Add(requestedSpotId, pending);
                     return ((ZLinkSpotCreateResult?)null, (PendingSpotCreation?)pending, true);
@@ -873,6 +878,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                     requestedSpotId,
                     request,
                     pending,
+                    admission!,
                     runtime.ShutdownToken,
                     claimLegacyLocation: true
                 );
@@ -891,6 +897,7 @@ internal sealed class ZLinkSpotNodeCatalog(
         string requestedSpotId,
         ZLinkMessage request,
         PendingSpotCreation pending,
+        ZLinkActivationConcurrencyAdmission.Lease admission,
         CancellationToken cancellationToken,
         bool claimLegacyLocation
     )
@@ -989,6 +996,7 @@ internal sealed class ZLinkSpotNodeCatalog(
         }
         finally
         {
+            admission.Release();
             await EndCreationAsync().ConfigureAwait(false);
         }
     }
@@ -1005,6 +1013,7 @@ internal sealed class ZLinkSpotNodeCatalog(
     {
         ArgumentNullException.ThrowIfNull(request);
         var pending = new PendingSpotCreation(spotType);
+        ZLinkActivationConcurrencyAdmission.Lease? admission = null;
         cancellationToken.ThrowIfCancellationRequested();
         var existingPrepared = await _lane
             .RunAsync(() =>
@@ -1025,7 +1034,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                     );
 
                 EnsureLocalSpotCapacityLocked(spotType);
-                BeginCreationLocked();
+                admission = BeginCreationLocked();
                 _pending.Add(requestedSpotId, pending);
                 return null;
             })
@@ -1077,7 +1086,8 @@ internal sealed class ZLinkSpotNodeCatalog(
                 })
                 .ConfigureAwait(false);
             await EndCreationAsync().ConfigureAwait(false);
-            return new PreparedReservedSpot(activation, false, response);
+            // The admission stays with the prepared Spot until publication or discard.
+            return new PreparedReservedSpot(activation, false, response, Admission: admission);
         }
         catch
         {
@@ -1092,6 +1102,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                 await activation.DisposeAsync().ConfigureAwait(false);
             else if (nativeSpot is not null)
                 await nativeSpot.DisposeAsync().ConfigureAwait(false);
+            admission!.Release();
             await EndCreationAsync().ConfigureAwait(false);
             throw;
         }
@@ -1114,6 +1125,7 @@ internal sealed class ZLinkSpotNodeCatalog(
             );
 
         var pending = new PendingSpotCreation(factory.SpotType);
+        ZLinkActivationConcurrencyAdmission.Lease? admission = null;
         var existingPrepared = await _lane
             .RunAsync(() =>
             {
@@ -1136,7 +1148,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                     );
 
                 EnsureLocalSpotCapacityLocked(factory.SpotType);
-                BeginCreationLocked();
+                admission = BeginCreationLocked();
                 _pending.Add(requestedSpotId, pending);
                 return null;
             })
@@ -1176,7 +1188,8 @@ internal sealed class ZLinkSpotNodeCatalog(
                 })
                 .ConfigureAwait(false);
             await EndCreationAsync().ConfigureAwait(false);
-            return new PreparedReservedSpot(activation, false, null, stableType);
+            // The admission stays with the prepared Spot until publication or discard.
+            return new PreparedReservedSpot(activation, false, null, stableType, admission);
         }
         catch
         {
@@ -1191,12 +1204,38 @@ internal sealed class ZLinkSpotNodeCatalog(
                 await activation.DisposeAsync().ConfigureAwait(false);
             else if (nativeSpot is not null)
                 await nativeSpot.DisposeAsync().ConfigureAwait(false);
+            admission!.Release();
             await EndCreationAsync().ConfigureAwait(false);
             throw;
         }
     }
 
     internal async ValueTask PublishReservedAsync(
+        PreparedReservedSpot prepared,
+        string stableType,
+        ulong objectGeneration,
+        ulong authorityOwnerGeneration,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            await PublishReservedCoreAsync(
+                    prepared,
+                    stableType,
+                    objectGeneration,
+                    authorityOwnerGeneration,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            prepared.Admission?.Release();
+        }
+    }
+
+    private async ValueTask PublishReservedCoreAsync(
         PreparedReservedSpot prepared,
         string stableType,
         ulong objectGeneration,
@@ -1281,6 +1320,18 @@ internal sealed class ZLinkSpotNodeCatalog(
 
     internal async ValueTask PublishRelocatedReservedAsync(PreparedReservedSpot prepared)
     {
+        try
+        {
+            await PublishRelocatedReservedCoreAsync(prepared).ConfigureAwait(false);
+        }
+        finally
+        {
+            prepared.Admission?.Release();
+        }
+    }
+
+    private async ValueTask PublishRelocatedReservedCoreAsync(PreparedReservedSpot prepared)
+    {
         if (prepared.Existing)
             return;
         await _lane
@@ -1316,6 +1367,29 @@ internal sealed class ZLinkSpotNodeCatalog(
         AwaitStateLane(PublishRelocatedReservedAsync(prepared));
 
     internal async ValueTask PublishInstanceReservedAsync(
+        PreparedReservedSpot prepared,
+        ulong objectGeneration,
+        ulong authorityOwnerGeneration,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            await PublishInstanceReservedCoreAsync(
+                    prepared,
+                    objectGeneration,
+                    authorityOwnerGeneration,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            prepared.Admission?.Release();
+        }
+    }
+
+    private async ValueTask PublishInstanceReservedCoreAsync(
         PreparedReservedSpot prepared,
         ulong objectGeneration,
         ulong authorityOwnerGeneration,
@@ -1428,10 +1502,17 @@ internal sealed class ZLinkSpotNodeCatalog(
     {
         if (prepared.Existing)
             return;
-        await _lane
-            .RunAsync(() => _preparedSpotTypes.Remove(prepared.Activation.SpotId))
-            .ConfigureAwait(false);
-        await prepared.Activation.DisposeAsync().ConfigureAwait(false);
+        try
+        {
+            await _lane
+                .RunAsync(() => _preparedSpotTypes.Remove(prepared.Activation.SpotId))
+                .ConfigureAwait(false);
+            await prepared.Activation.DisposeAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            prepared.Admission?.Release();
+        }
     }
 
     internal ValueTask<ReservedSpotCloseReadiness> CloseReadinessAsync(string spotId) =>
@@ -1928,11 +2009,12 @@ internal sealed class ZLinkSpotNodeCatalog(
             );
     }
 
-    private void BeginCreationLocked()
+    private ZLinkActivationConcurrencyAdmission.Lease BeginCreationLocked()
     {
         EnsureCreationAdmissionOpenLocked();
-        _activationAdmission.Acquire($"SPOT node '{registration.SpotNodeName}'");
+        var admission = _activationAdmission.Acquire($"SPOT node '{registration.SpotNodeName}'");
         _activeCreations++;
+        return admission;
     }
 
     private void EnsureCreationAdmissionOpenLocked()
@@ -1950,7 +2032,6 @@ internal sealed class ZLinkSpotNodeCatalog(
             })
             .ConfigureAwait(false);
 
-        _activationAdmission.Release();
         drained?.TrySetResult();
     }
 
@@ -2042,7 +2123,8 @@ internal sealed record PreparedReservedSpot(
     ZLinkSpotActivation Activation,
     bool Existing,
     ZLinkSpotCreateResponse? Response,
-    string? InstanceStableType = null
+    string? InstanceStableType = null,
+    ZLinkActivationConcurrencyAdmission.Lease? Admission = null
 )
 {
     internal Type SpotType => Activation.Spot.GetType();

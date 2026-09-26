@@ -12,7 +12,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
-import systems.zlink.framework.locations.ZLinkCapacityUsage;
+import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 import systems.zlink.framework.locations.ZLinkObjectCapability;
 import systems.zlink.framework.locations.ZLinkPageRequest;
@@ -182,6 +182,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     private final Map<String, Duration> instanceSpotIdleTimeouts = new HashMap<>();
     private final List<ZLinkInternalMeshNode> routeMeshNodes;
     private final Map<String, ZLinkInternalMeshNode> routeMeshNodesByName;
+    private final Map<String, ZLinkActivationAdmission> activationAdmissions;
     private volatile ZLinkLocationRepository userSpotAuthorityStore;
     private volatile ZLinkLocationRepository userSpotLocationStore;
     private volatile systems.zlink.framework.runtime.locations.ZLinkLocationRuntime
@@ -419,6 +420,13 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         this.frameworkRegistration = registration;
         this.routeMeshNodes = List.copyOf(meshNodes.values());
         this.routeMeshNodesByName = Map.copyOf(meshNodes);
+        Map<String, ZLinkActivationAdmission> admissions = new HashMap<>();
+        for (var meshRegistration : registration.meshNodes()) {
+            admissions.put(
+                    meshRegistration.meshName(),
+                    new ZLinkActivationAdmission(meshRegistration.activationConcurrency()));
+        }
+        this.activationAdmissions = Map.copyOf(admissions);
         this.channels = channels;
         this.serializer = Objects.requireNonNull(serializer, "serializer");
         this.routeMessages = new ZLinkSpotRouteMessages(this.serializer);
@@ -589,11 +597,19 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                     meshNode.registerInstanceSpotType(
                                             factory.stableType(),
                                             (stableType, route, backendSpot) ->
-                                                    activateInstanceSpotTarget(
-                                                            nodeRegistration.meshName(),
-                                                            factory,
-                                                            route,
-                                                            backendSpot)));
+                                                    activationAdmission(
+                                                                    nodeRegistration.meshName())
+                                                            .admit(
+                                                                    "Instance Spot '"
+                                                                            + route.targetSpotId()
+                                                                            + "'",
+                                                                    () ->
+                                                                            activateInstanceSpotTarget(
+                                                                                    nodeRegistration
+                                                                                            .meshName(),
+                                                                                    factory,
+                                                                                    route,
+                                                                                    backendSpot))));
             if (!nodeRegistration.entrySpots().isEmpty()
                     || !nodeRegistration.actorFactories().isEmpty()) {
                 ZLinkBackendSpot entryBackendSpot = node.entrySpot();
@@ -685,8 +701,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         initializedSpotRelocationCoordinationModes);
         this.spotLifecycle =
                 new ZLinkSpotLifecycle(
-                        primaryNode,
-                        primaryNodeSourceName,
+                        nodesByName::get,
                         handlerExecutor,
                         spotLocations,
                         initializedSpotTypes,
@@ -738,7 +753,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             authorityStore,
                             spotLifecycle,
                             serializer,
-                            registration.relocatableSpotFactories());
+                            registration.relocatableSpotFactories(),
+                            activationAdmission(registration.meshName()));
             meshNode.setUserSpotOperationHandler(handler);
         }
     }
@@ -1441,7 +1457,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     static boolean hasCapacity(ZLinkMeshNodeDescriptor node, ZLinkObjectCapability capability) {
-        return hasRoom(node.capacity().spots())
+        return node.capacity().spots().hasRoomFor(1)
                 && node.capacity().spotTypes().stream()
                         .filter(
                                 type ->
@@ -1449,7 +1465,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                 && type.stableType()
                                                         .equals(capability.stableType()))
                         .findFirst()
-                        .map(type -> hasRoom(type.usage()))
+                        .map(type -> type.usage().hasRoomFor(1))
                         .orElse(false);
     }
 
@@ -1475,10 +1491,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         } catch (RuntimeException transientStatusFailure) {
             return false;
         }
-    }
-
-    private static boolean hasRoom(ZLinkCapacityUsage usage) {
-        return usage.limit() == 0 || (long) usage.active() + usage.reserved() < usage.limit();
     }
 
     private static ZLinkMeshNodeDescriptorKey descriptorKey(ZLinkMeshNodeDescriptor node) {
@@ -1806,8 +1818,17 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return spotLifecycle.userSpotCount();
     }
 
-    public int activeInstanceSpotCount() {
-        return instanceSpotActivations.size();
+    /** User and Instance Spots activated on the named MeshNode in this process. */
+    public int activeSpotCount(String meshName) {
+        int userSpots = spotLifecycle.userSpotCount(meshName);
+        int instanceSpots =
+                (int)
+                        instanceSpotActivations.values().stream()
+                                .filter(
+                                        activation ->
+                                                meshName.equals(activation.context.meshName()))
+                                .count();
+        return userSpots + instanceSpots;
     }
 
     public List<String> activeUserSpotIds() {
@@ -2100,6 +2121,15 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         actorAdmissions.cancelLocalJoin(actor);
                     }
                 });
+    }
+
+    /** The activation admission record of the named MeshNode (MeshNode §5.1). */
+    public ZLinkActivationAdmission activationAdmission(String meshName) {
+        ZLinkActivationAdmission admission = activationAdmissions.get(meshName);
+        if (admission == null) {
+            throw new ZLinkConfigurationException("RouteMesh is not configured: " + meshName);
+        }
+        return admission;
     }
 
     public Map<String, ZLinkInternalSpotNode> nodesByName() {
@@ -2789,7 +2819,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                             == systems.zlink.framework.runtime.internal.locations
                                                     .ZLinkPlacementAllocationState.ACTIVE) {
                                 return activationFactory
-                                        .activateInstance(meshName, factory.spotType(), backendSpot)
+                                        .activateInstance(
+                                                meshName,
+                                                route.targetNodeRid(),
+                                                factory.spotType(),
+                                                backendSpot)
                                         .thenAccept(
                                                 activation -> {
                                                     activation.setAuthorityFence(
@@ -2839,7 +2873,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                     snapshot.ownerId(),
                                                     snapshot.ownerLeaseGeneration()));
                             return activationFactory
-                                    .activateInstance(meshName, factory.spotType(), backendSpot)
+                                    .activateInstance(
+                                            meshName,
+                                            route.targetNodeRid(),
+                                            factory.spotType(),
+                                            backendSpot)
                                     .thenCompose(
                                             activation -> {
                                                 byte[] ready =
@@ -3701,8 +3739,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         if (instance != null) {
             return instance.context.meshName();
         }
-        return spotLocations.meshNameForSpot(
-                spotId, primaryNode.routingId(), spotLifecycle.hasUserSpot(spotId));
+        SpotActivation user = spotLifecycle.spotActivationFor(spotId);
+        if (user != null) {
+            return spotLocations.meshName(user.context.nodeRid());
+        }
+        return spotLocations.entrySpotMeshName(spotId);
     }
 
     Object spotSurfaceFor(String spotId) {

@@ -6,6 +6,7 @@ using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
+using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.Runtime.Host;
 
@@ -1659,29 +1660,40 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             actorState = actorSessions.GetOrCreateState(targetAuthority.ActorId);
             if (actorState.Actor is null)
             {
-                await actorSessions
-                    .PrepareForTransferredActivationAsync(actorState, cancellationToken)
-                    .ConfigureAwait(false);
-                await actorSessions
-                    .RelocateAndBindActorAsync(
-                        targetAuthority.ActorId,
-                        targetAuthority.StableType,
-                        relocation,
-                        ZLinkActorRelocationRegistry.ValidateIncomingPayload(
-                            relocation,
+                // The committed target's Restore holds one admission until the Actor is Ready.
+                var admission = localNode.ActivationAdmission.Acquire(
+                    $"ACTOR '{targetAuthority.ActorId}' relocation recovery"
+                );
+                try
+                {
+                    await actorSessions
+                        .PrepareForTransferredActivationAsync(actorState, cancellationToken)
+                        .ConfigureAwait(false);
+                    await actorSessions
+                        .RelocateAndBindActorAsync(
+                            targetAuthority.ActorId,
                             targetAuthority.StableType,
-                            relocation.PolicyKind == 2
-                                ? ZLinkRemoteActorJoinPackets.SnapshotRelocationContentType
-                                : ZLinkRemoteActorJoinPackets.RecreateRelocationContentType,
-                            participant.ApplicationState
-                        ),
-                        participant.ObjectGeneration,
-                        authority.Snapshot.AuthorityOwnerGeneration,
-                        ZLinkActorClaimMode.StagedRelocation,
-                        publishActorRef: false,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
+                            relocation,
+                            ZLinkActorRelocationRegistry.ValidateIncomingPayload(
+                                relocation,
+                                targetAuthority.StableType,
+                                relocation.PolicyKind == 2
+                                    ? ZLinkRemoteActorJoinPackets.SnapshotRelocationContentType
+                                    : ZLinkRemoteActorJoinPackets.RecreateRelocationContentType,
+                                participant.ApplicationState
+                            ),
+                            participant.ObjectGeneration,
+                            authority.Snapshot.AuthorityOwnerGeneration,
+                            ZLinkActorClaimMode.StagedRelocation,
+                            publishActorRef: false,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                }
+                finally
+                {
+                    admission.Release();
+                }
             }
             else if (
                 !StringComparer.Ordinal.Equals(actorState.ActorType, targetAuthority.StableType)
@@ -2151,14 +2163,21 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             );
         }
 
+        // The relocation unit holds one activation admission from receipt until its target
+        // commit or abort (MeshNode §5.1).
+        var admission = node.ActivationAdmission.Acquire(
+            $"ACTOR '{targetAuthority.ActorId}' relocation"
+        );
         var actorState = actorSessions.GetOrCreateState(targetAuthority.ActorId);
-        await actorSessions
-            .PrepareForTransferredActivationAsync(actorState, cancellationToken)
-            .ConfigureAwait(false);
+        var preparedTransfer = false;
         var created = false;
         var attached = false;
         try
         {
+            await actorSessions
+                .PrepareForTransferredActivationAsync(actorState, cancellationToken)
+                .ConfigureAwait(false);
+            preparedTransfer = true;
             var creation = await actorSessions
                 .RelocateAndBindActorAsync(
                     targetAuthority.ActorId,
@@ -2217,7 +2236,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 targetActivation,
                 remoteJoinRequest,
                 remoteJoinRecovery,
-                created
+                created,
+                admission
             );
             if (!slot.TrySetStage(stage))
                 throw new InvalidOperationException(
@@ -2227,7 +2247,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         }
         catch
         {
-            if (remoteJoinRequest is not null)
+            if (remoteJoinRequest is not null && preparedTransfer)
                 await runtime
                     .AbortCanonicalRoutedActorJoinTargetAsync(
                         remoteJoinRecovery!.TargetSpotId,
@@ -2242,6 +2262,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 await actorSessions
                     .RollbackTransferredActorAsync(targetAuthority.ActorId, CancellationToken.None)
                     .ConfigureAwait(false);
+            admission.Release();
             throw;
         }
     }
@@ -2315,6 +2336,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
     {
         if (stage.AuthorityPublished)
             return;
+        // The target commit ends the Restore (MeshNode §5.1).
+        stage.Admission.Release();
         var actorRef =
             stage.ActorState.NativeActorRef
             ?? throw DataLost("Standalone Actor target native reference is unavailable.");
@@ -2945,6 +2968,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
     {
         if (!slot.TryRemoveStage(stage))
             return;
+        stage.Admission.Release();
         CloseTargetAttemptIfEmpty(key, slot);
     }
 
@@ -3321,10 +3345,12 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         ZLinkSpotActivation? targetActivation,
         ZLinkRemoteActorJoinRequest? remoteJoinRequest,
         ZLinkActorRelocationRecoveryRecord? remoteJoinRecovery,
-        bool createdTransferredActor
+        bool createdTransferredActor,
+        ZLinkActivationConcurrencyAdmission.Lease admission
     )
     {
         private readonly ZLinkStateLane _lane = new();
+        internal ZLinkActivationConcurrencyAdmission.Lease Admission { get; } = admission;
         private readonly List<ZLinkActorHandoffFrame> _acceptedFrames = [.. acceptedFrames];
         private TargetReadySubmissionPhase _readySubmissionPhase;
         internal ZLinkServiceWireCodec.RelocationPrepareRecord Prepare { get; } = prepare;

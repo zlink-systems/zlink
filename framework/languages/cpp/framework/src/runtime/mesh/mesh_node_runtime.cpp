@@ -4365,9 +4365,19 @@ std::int32_t mesh_node_runtime_t::spot_limit () const
     return _state->lane.run ([&] { return _state->spot_limit; }).get ();
 }
 
-std::int32_t mesh_node_runtime_t::activation_concurrency_limit () const
+std::uint64_t mesh_node_runtime_t::active_actor_count () const
 {
-    return _state->lane.run ([&] { return _state->activation_concurrency_limit; }).get ();
+    return spot_node_runtime_t (_state->spot_state).local_actor_refs ().size ();
+}
+
+std::uint64_t mesh_node_runtime_t::active_spot_count () const
+{
+    return spot_node_runtime_t (_state->spot_state).active_user_spot_count ();
+}
+
+activation_admission_t &mesh_node_runtime_t::activation_admission () const
+{
+    return *_state->spot_state->activation_admission;
 }
 
 void mesh_node_runtime_t::set_placement_weight (int weight)
@@ -4849,7 +4859,7 @@ mesh_node_builder_t &mesh_node_builder_t::set_activation_concurrency (std::int32
 {
     if (limit <= 0)
         throw detail::configuration_error ("Activation concurrency limit must be positive");
-    _state->lane.run ([&] { _state->activation_concurrency_limit = limit; }).get ();
+    _state->spot_state->activation_admission->set_limit (limit);
     return *this;
 }
 

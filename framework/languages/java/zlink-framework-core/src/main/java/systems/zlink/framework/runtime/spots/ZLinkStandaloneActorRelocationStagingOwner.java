@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.spots;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
@@ -10,6 +11,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapterRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -31,24 +33,40 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
     private static final ZLinkRelocationCancellation NOT_CANCELLED = () -> false;
 
     private final Backend backend;
+    private final ZLinkActivationAdmission activationAdmission;
 
     ZLinkStandaloneActorRelocationStagingOwner(
             ZLinkInternalSpotNode targetNode,
             ZLinkActorSessionCoordinator actors,
             ZLinkRelocationAdapterRegistry adapters,
-            ZLinkSpotRuntime spots) {
+            ZLinkSpotRuntime spots,
+            String meshName) {
         backend =
                 new ProductionBackend(
                         Objects.requireNonNull(targetNode, "targetNode"),
                         Objects.requireNonNull(actors, "actors"),
                         Objects.requireNonNull(adapters, "adapters"),
                         Objects.requireNonNull(spots, "spots"));
+        activationAdmission = spots.activationAdmission(meshName);
     }
 
-    ZLinkStandaloneActorRelocationStagingOwner(Backend backend) {
+    /** A staging owner over a test backend, bounded by {@code activationAdmission}. */
+    ZLinkStandaloneActorRelocationStagingOwner(
+            Backend backend, ZLinkActivationAdmission activationAdmission) {
         this.backend = Objects.requireNonNull(backend, "backend");
+        this.activationAdmission =
+                Objects.requireNonNull(activationAdmission, "activationAdmission");
     }
 
+    /** A staging owner over a test backend whose MeshNode limit is never reached. */
+    ZLinkStandaloneActorRelocationStagingOwner(Backend backend) {
+        this(backend, new ZLinkActivationAdmission(Integer.MAX_VALUE));
+    }
+
+    /**
+     * Restores the Actor as this MeshNode's relocation target. The Restore holds one activation
+     * admission until the Actor is published (target commit) or discarded (MeshNode §5.1).
+     */
     CompletionStage<Staged> stage(Request request, byte[] root) {
         Objects.requireNonNull(request, "request");
         var decoded =
@@ -61,6 +79,14 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                     new IllegalArgumentException(
                             "Actor relocation root differs from the authority fence"));
         }
+        ZLinkActivationAdmission.Permit permit;
+        try {
+            permit =
+                    activationAdmission.acquire(
+                            "Actor relocation target '" + request.actorId() + "'");
+        } catch (ZLinkFrameworkException full) {
+            return CompletableFuture.failedFuture(full);
+        }
         return backend.prepare(request, decoded.state(), NOT_CANCELLED)
                 .thenCompose(
                         prepared ->
@@ -68,7 +94,17 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                                         .thenApply(
                                                 ignored ->
                                                         new Staged(
-                                                                this, request, decoded, prepared)));
+                                                                this,
+                                                                request,
+                                                                decoded,
+                                                                prepared,
+                                                                permit)))
+                .whenComplete(
+                        (staged, failure) -> {
+                            if (failure != null) {
+                                permit.close();
+                            }
+                        });
     }
 
     DurableBacklog closeDurableBacklog(
@@ -314,7 +350,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                     "direct Join durable backlog publication fence is invalid");
         }
         backend.publish(staged.actor(), staged.request(), targetOwnerGeneration);
-        staged.published = true;
+        staged.markPublished();
     }
 
     void prepareDirectJoinBoundSession(
@@ -448,13 +484,13 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
     private void publish(Staged staged) {
         requireActive(staged);
         backend.publish(staged.actor(), staged.request());
-        staged.published = true;
+        staged.markPublished();
     }
 
     private void publish(Staged staged, long targetOwnerGeneration) {
         requireActive(staged);
         backend.publish(staged.actor(), staged.request(), targetOwnerGeneration);
-        staged.published = true;
+        staged.markPublished();
     }
 
     void openAdmission(Staged staged) {
@@ -489,6 +525,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                             }
                             staged.ingressClosed = true;
                             staged.terminal = true;
+                            staged.restorePermit.close();
                             List<PendingIngress> captured =
                                     new ArrayList<>(
                                             staged.relayedIngress.size()
@@ -571,6 +608,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         private final Request request;
         private final ZLinkCanonicalActorRelocationEnvelope.Decoded decoded;
         private final Object actor;
+        private final ZLinkActivationAdmission.Permit restorePermit;
         private final List<PendingIngress> relayedIngress = new ArrayList<>();
         private final List<PendingIngress> pendingIngress = new ArrayList<>();
         private final ZLinkStateLane stateLane = new ZLinkStateLane();
@@ -588,11 +626,19 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                 ZLinkStandaloneActorRelocationStagingOwner owner,
                 Request request,
                 ZLinkCanonicalActorRelocationEnvelope.Decoded decoded,
-                Object actor) {
+                Object actor,
+                ZLinkActivationAdmission.Permit restorePermit) {
             this.owner = owner;
             this.request = request;
             this.decoded = decoded;
             this.actor = actor;
+            this.restorePermit = restorePermit;
+        }
+
+        /** The target commit ends the Restore and returns its activation admission. */
+        private void markPublished() {
+            published = true;
+            restorePermit.close();
         }
 
         Request request() {
