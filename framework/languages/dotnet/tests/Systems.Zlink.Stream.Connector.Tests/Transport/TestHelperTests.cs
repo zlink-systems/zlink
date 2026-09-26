@@ -15,6 +15,9 @@ public sealed partial class StreamConnectorTests
         var sendUnexpected = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
+        var releaseServer = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var server = Task.Run(async () =>
         {
             using var tcp = await listener.AcceptTcpClientAsync();
@@ -36,6 +39,7 @@ public sealed partial class StreamConnectorTests
                     .ToArray(),
                 "unexpected"u8.ToArray()
             );
+            await releaseServer.Task;
         });
 
         await using var connector = ZlinkStreamConnectorFactory.Create(
@@ -59,8 +63,15 @@ public sealed partial class StreamConnectorTests
 
         // A wait surface reports its violations as ValidationFailed carried by
         // ZlinkStreamException (stream-connector spec §10.1, §9.2).
-        var arrived = await Assert.ThrowsAsync<ZlinkStreamException>(() => unexpected);
-        Assert.Equal(ZlinkStreamErrorCode.ValidationFailed, arrived.Error.Code);
+        try
+        {
+            var arrived = await Assert.ThrowsAsync<ZlinkStreamException>(() => unexpected);
+            Assert.Equal(ZlinkStreamErrorCode.ValidationFailed, arrived.Error.Code);
+        }
+        finally
+        {
+            releaseServer.TrySetResult();
+        }
         await server;
     }
 
@@ -72,6 +83,9 @@ public sealed partial class StreamConnectorTests
         var endpoint = (IPEndPoint)listener.LocalEndpoint;
         var headerCodec = new ZlinkStreamHeaderCodec();
         var sendOutOfOrder = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseServer = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         var server = Task.Run(async () =>
@@ -113,6 +127,7 @@ public sealed partial class StreamConnectorTests
                     .ToArray(),
                 "second"u8.ToArray()
             );
+            await releaseServer.Task;
         });
 
         await using var connector = ZlinkStreamConnectorFactory.Create(
@@ -142,8 +157,15 @@ public sealed partial class StreamConnectorTests
             .AsTask();
         sendOutOfOrder.SetResult();
 
-        var violation = await Assert.ThrowsAsync<ZlinkStreamException>(() => outOfOrder);
-        Assert.Equal(ZlinkStreamErrorCode.ValidationFailed, violation.Error.Code);
+        try
+        {
+            var violation = await Assert.ThrowsAsync<ZlinkStreamException>(() => outOfOrder);
+            Assert.Equal(ZlinkStreamErrorCode.ValidationFailed, violation.Error.Code);
+        }
+        finally
+        {
+            releaseServer.TrySetResult();
+        }
         await server;
     }
 

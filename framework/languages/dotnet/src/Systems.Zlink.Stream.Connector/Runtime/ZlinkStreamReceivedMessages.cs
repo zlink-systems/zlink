@@ -16,20 +16,13 @@ internal sealed class ZlinkStreamReceivedMessages
 
     private readonly Dictionary<
         string,
-        List<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>
+        LinkedList<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>
     > _messages = new(StringComparer.Ordinal);
 
     private readonly Dictionary<string, int> _counts = new(StringComparer.Ordinal);
     private TaskCompletionSource<bool> _arrived = new(
         TaskCreationOptions.RunContinuationsAsynchronously
     );
-
-    /// <summary>
-    ///     Advances on every change to the history. A wait picks its message from a copy
-    ///     taken under the lock and takes it only while this value still matches, so the
-    ///     predicate never runs with the lock held.
-    /// </summary>
-    private long _version;
 
     /// <summary>
     ///     Generation of the connection a wait observes: the one
@@ -58,17 +51,7 @@ internal sealed class ZlinkStreamReceivedMessages
         }
     }
 
-    /// <summary>
-    ///     Counts one arrival. Called for every received message, including the ones an
-    ///     <c>On</c> handler takes and therefore never enter the unread history.
-    /// </summary>
-    public void CountArrival(string name)
-    {
-        lock (_gate)
-        {
-            _counts[name] = _counts.GetValueOrDefault(name) + 1;
-        }
-    }
+    private void CountLocked(string name) => _counts[name] = _counts.GetValueOrDefault(name) + 1;
 
     /// <summary>
     ///     Rebaselines the history on a connection that is established: every counter
@@ -98,8 +81,11 @@ internal sealed class ZlinkStreamReceivedMessages
             _establishedGeneration = connectionGeneration;
             _connectionGeneration = connectionGeneration;
             _counts.Clear();
+            // Clearing each list detaches its nodes, so a dispatch entry that still holds
+            // one sees its message as taken.
+            foreach (var messages in _messages.Values)
+                messages.Clear();
             _messages.Clear();
-            _version++;
             arrived = _arrived;
             _arrived = new TaskCompletionSource<bool>(
                 TaskCreationOptions.RunContinuationsAsynchronously
@@ -140,19 +126,28 @@ internal sealed class ZlinkStreamReceivedMessages
         arrived.TrySetResult(true);
     }
 
-    public void Record(ZlinkStreamMessage<ZlinkStreamEncodedPayload> message)
+    /// <summary>
+    ///     Keeps an arrival in the receive queue and counts it in the same step, so a counted
+    ///     message is already observable to a wait (stream-connector spec §10). It stays until
+    ///     a handler's dispatch or a wait takes it; the returned node names it for the
+    ///     dispatch.
+    /// </summary>
+    public LinkedListNode<ZlinkStreamMessage<ZlinkStreamEncodedPayload>> Record(
+        ZlinkStreamMessage<ZlinkStreamEncodedPayload> message
+    )
     {
         TaskCompletionSource<bool> arrived;
+        LinkedListNode<ZlinkStreamMessage<ZlinkStreamEncodedPayload>> node;
         lock (_gate)
         {
             if (!_messages.TryGetValue(message.Name, out var messages))
             {
-                messages = [];
+                messages = new LinkedList<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>();
                 _messages.Add(message.Name, messages);
             }
 
-            messages.Add(message);
-            _version++;
+            node = messages.AddLast(message);
+            CountLocked(message.Name);
             arrived = _arrived;
             _arrived = new TaskCompletionSource<bool>(
                 TaskCreationOptions.RunContinuationsAsynchronously
@@ -160,6 +155,31 @@ internal sealed class ZlinkStreamReceivedMessages
         }
 
         arrived.TrySetResult(true);
+        return node;
+    }
+
+    /// <summary>Whether no dispatch or wait has taken the message at <paramref name="node" />.</summary>
+    public bool IsUnread(LinkedListNode<ZlinkStreamMessage<ZlinkStreamEncodedPayload>> node)
+    {
+        lock (_gate)
+            return node.List is not null;
+    }
+
+    /// <summary>
+    ///     Takes the message at <paramref name="node" /> for a dispatch, or returns
+    ///     <see langword="false" /> when a wait or the next connection took it first.
+    /// </summary>
+    public bool TryTake(LinkedListNode<ZlinkStreamMessage<ZlinkStreamEncodedPayload>> node)
+    {
+        lock (_gate)
+        {
+            if (node.List is not { } messages)
+                return false;
+            messages.Remove(node);
+            if (messages.Count == 0)
+                _messages.Remove(node.Value.Name);
+            return true;
+        }
     }
 
     /// <summary>
@@ -195,9 +215,18 @@ internal sealed class ZlinkStreamReceivedMessages
             observedGeneration = _connectionGeneration;
         }
 
+        // The last message this wait examined and rejected. The next scan continues after it,
+        // so each unread message meets the predicate once while messages keep arriving.
+        LinkedListNode<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>? examined = null;
         while (!timeoutSource.IsCancellationRequested)
         {
-            var pending = TryTakeOrWait(name, predicate, observedGeneration, timeoutSource.Token);
+            var pending = TryTakeOrWait(
+                name,
+                predicate,
+                observedGeneration,
+                ref examined,
+                timeoutSource.Token
+            );
             if (pending.Message is not null)
                 return pending.Message;
 
@@ -213,6 +242,7 @@ internal sealed class ZlinkStreamReceivedMessages
                         observedGeneration = _connectionGeneration;
                     }
 
+                    examined = null;
                     continue;
                 }
 
@@ -239,63 +269,79 @@ internal sealed class ZlinkStreamReceivedMessages
         return null;
     }
 
+    /// <summary>
+    ///     Takes the first unread message after <paramref name="examined" /> that matches, or
+    ///     returns the arrival to wait for when none does.
+    /// </summary>
+    /// <remarks>
+    ///     The predicate is caller code, and on the typed surface it decodes the payload
+    ///     first. It runs outside the lock the receive path takes for every arrival, so a
+    ///     slow predicate delays this wait and nothing else. An arrival appends after the
+    ///     scan position and does not restart the scan. Only another wait taking the message
+    ///     at that position does, because the position then has no successor to continue
+    ///     from.
+    /// </remarks>
     private PendingMessage TryTakeOrWait(
         string name,
         Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool>? predicate,
         long observedGeneration,
+        ref LinkedListNode<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>? examined,
         CancellationToken cancellationToken
     )
     {
+        LinkedListNode<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>? cursor;
+        lock (_gate)
+        {
+            if (_connectionGeneration != observedGeneration)
+                return PendingMessage.ConnectionEnded;
+
+            cursor = NextCandidateLocked(name, examined);
+            if (cursor is null)
+                return new PendingMessage(null, _arrived.Task.WaitAsync(cancellationToken), false);
+        }
+
         while (true)
         {
-            long observedVersion;
-            TaskCompletionSource<bool> arrived;
-            ZlinkStreamMessage<ZlinkStreamEncodedPayload>[] candidates;
+            var matches = predicate is null || predicate(cursor.Value);
             lock (_gate)
             {
                 if (_connectionGeneration != observedGeneration)
                     return PendingMessage.ConnectionEnded;
 
-                observedVersion = _version;
-                arrived = _arrived;
-                candidates = _messages.TryGetValue(name, out var messages) ? [.. messages] : [];
-            }
+                // A node still in a list is still unread; another wait may have taken it
+                // while the predicate ran.
+                if (cursor.List is { } messages)
+                {
+                    if (matches)
+                    {
+                        messages.Remove(cursor);
+                        if (messages.Count == 0)
+                            _messages.Remove(name);
+                        return new PendingMessage(cursor.Value, null, false);
+                    }
 
-            // The predicate is caller code, and on the typed surface it decodes the
-            // payload first. It runs here, outside the lock the receive path takes for
-            // every arrival, so a slow predicate delays this wait and nothing else.
-            var index = IndexOfMatch(candidates, predicate);
-            if (index < 0)
-                return new PendingMessage(null, arrived.Task.WaitAsync(cancellationToken), false);
+                    examined = cursor;
+                }
 
-            lock (_gate)
-            {
-                // The history changed while the predicate ran, so the copy the choice was
-                // made from no longer describes it. Choose again from what is there now.
-                if (_version != observedVersion)
-                    continue;
-
-                var messages = _messages[name];
-                var message = messages[index];
-                messages.RemoveAt(index);
-                if (messages.Count == 0)
-                    _messages.Remove(name);
-                _version++;
-                return new PendingMessage(message, null, false);
+                cursor = NextCandidateLocked(name, examined);
+                if (cursor is null)
+                    return new PendingMessage(
+                        null,
+                        _arrived.Task.WaitAsync(cancellationToken),
+                        false
+                    );
             }
         }
     }
 
-    private static int IndexOfMatch(
-        ZlinkStreamMessage<ZlinkStreamEncodedPayload>[] candidates,
-        Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool>? predicate
+    private LinkedListNode<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>? NextCandidateLocked(
+        string name,
+        LinkedListNode<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>? examined
     )
     {
-        for (var index = 0; index < candidates.Length; index++)
-            if (predicate is null || predicate(candidates[index]))
-                return index;
-
-        return -1;
+        if (examined?.List is not null)
+            return examined.Next;
+        return _messages.TryGetValue(name, out var messages) ? messages.First : null;
     }
 
     private readonly record struct PendingMessage(

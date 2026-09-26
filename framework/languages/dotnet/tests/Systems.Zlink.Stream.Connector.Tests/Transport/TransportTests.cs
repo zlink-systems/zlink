@@ -52,9 +52,9 @@ public sealed partial class StreamConnectorTests
         using var canceled = new CancellationTokenSource();
         canceled.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
-            await connection.CloseAsync(canceled.Token)
-        );
+        // Close aborts the socket without a close handshake, so there is nothing for the
+        // canceled token to stop (stream-connector spec §7).
+        await connection.CloseAsync(canceled.Token);
 
         Assert.Equal(WebSocketState.Closed, client.State);
         await server.Task.WaitAsync(TimeSpan.FromSeconds(5));

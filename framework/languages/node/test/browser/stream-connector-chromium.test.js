@@ -157,10 +157,13 @@ function startStreamServer(endpoint, cert, privateKey) {
     output += chunk;
   });
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`Stream server start timeout: ${output}`)),
-      10_000
-    );
+    // A server that never reports ready is stopped here: the caller has no
+    // handle to it yet, so the test cleanup cannot reach it.
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      stopChild(child).finally(() => reject(new Error(`Stream server start timeout: ${output}`)));
+    }, 10_000);
     const check = () => {
       const readyLine = output
         .split('\n')
@@ -174,7 +177,7 @@ function startStreamServer(endpoint, cert, privateKey) {
     };
     child.stdout.on('data', check);
     child.once('exit', (code) => {
-      if (!output.includes('"event":"ready"')) {
+      if (!timedOut && !output.includes('"event":"ready"')) {
         clearTimeout(timer);
         reject(new Error(`Stream server exited ${code}: ${output}`));
       }

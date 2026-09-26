@@ -178,13 +178,18 @@ int main (int argc, char **argv)
             bob.dispatch ();
             std::this_thread::sleep_for (std::chrono::milliseconds (1));
         }
-        check (bob_pushes.empty (), "unsubscribed Bob received ChatNotify");
+        check (bob_pushes.empty (), "Bob without a handler received ChatNotify");
+        /* stream-connector §10: a push no handler took stays queued until a handler
+         * or a wait surface takes it, so the handler Bob registers now also
+         * receives the push that arrived while he had none. */
         auto bob_chat =
           bob.on ("ChatNotify", [&] (const packet_t &packet) { bob_pushes.push_back (packet); });
         alice.send_json ("ChatMsg", R"({"text":"hello"})");
         dispatch_until (alice, bob,
-                        [&] { return alice_pushes.size () == 2 && bob_pushes.size () == 1; });
-        for (const auto *push : {&alice_pushes[1], &bob_pushes[0]}) {
+                        [&] { return alice_pushes.size () == 2 && bob_pushes.size () == 2; });
+        check (nlohmann::json::parse (payload (bob_pushes[0])).at ("text") == "unsubscribed",
+               "queued ChatNotify did not reach the later handler");
+        for (const auto *push : {&alice_pushes[1], &bob_pushes[1]}) {
             check (push->name == "ChatNotify", "push lost ChatNotify name");
             const auto notification = nlohmann::json::parse (payload (*push));
             check (notification.at ("actorId") == alice_join.at ("actorId")
@@ -198,7 +203,7 @@ int main (int argc, char **argv)
         check (!bob_chat.active (), "unsubscribe left handle active");
         alice.send_json ("ChatMsg", R"({"text":"after unsubscribe"})");
         dispatch_until (alice, bob, [&] { return alice_pushes.size () == 3; });
-        check (bob_pushes.size () == 1, "unsubscribed callback ran");
+        check (bob_pushes.size () == 2, "unsubscribed callback ran");
 
         std::vector<reply_context_t> rejoin_hooks;
         auto rejoin_hook = alice.on_reply_received (

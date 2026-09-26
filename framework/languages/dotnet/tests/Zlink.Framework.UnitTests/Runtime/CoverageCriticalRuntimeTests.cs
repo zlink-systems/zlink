@@ -1,10 +1,16 @@
 using System.Buffers.Binary;
 using K4os.Compression.LZ4;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Codecs;
+using Zlink.Framework.Runtime.Configuration;
+using Zlink.Framework.Runtime.Diagnostics;
+using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Host;
+using Zlink.Framework.Runtime.Streams;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
@@ -127,6 +133,173 @@ public sealed class CoverageCriticalRuntimeTests
 
         Assert.Same(startTask, completed);
         await Assert.ThrowsAnyAsync<Exception>(async () => await startTask);
+    }
+
+    /// <summary>
+    ///     A STREAM node whose port is already taken fails startup with the bind error, and
+    ///     the startup rollback releases the socket it created, so the runtime context
+    ///     terminates instead of waiting for a socket nobody owns.
+    /// </summary>
+    [Fact]
+    public async Task StreamNodeBindOnBusyPortFailsStartupAndReleasesTheContext()
+    {
+        using var occupied = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        occupied.Start();
+        var port = ((System.Net.IPEndPoint)occupied.LocalEndpoint).Port;
+        var builder = Host.CreateApplicationBuilder();
+        builder.Services.AddZLinkFramework(options =>
+            options
+                .AddStreamNode("stream-busy")
+                .Bind($"tcp://127.0.0.1:{port}")
+                .AddSession<StartupFailureTestSession>()
+        );
+
+        var host = builder.Build();
+        var startTask = host.StartAsync();
+        var completed = await Task.WhenAny(startTask, Task.Delay(TimeSpan.FromSeconds(10)));
+
+        Assert.Same(startTask, completed);
+        var failure = await Assert.ThrowsAnyAsync<Exception>(async () => await startTask);
+        Assert.IsType<Systems.Zlink.ZlinkBindException>(failure);
+        var dispose = Task.Run(() => host.Dispose());
+        Assert.Same(dispose, await Task.WhenAny(dispose, Task.Delay(TimeSpan.FromSeconds(10))));
+    }
+
+    /// <summary>
+    ///     Startup owns a STREAM socket until the node that takes it exists. When creating
+    ///     the node fails, startup disposes the socket, so the runtime context does not wait
+    ///     for a socket nobody owns.
+    /// </summary>
+    [Fact]
+    public async Task StreamNodeCreationFailureDisposesTheSocketItWasGiven()
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        registration.StreamNodes.Add(
+            "stream-a",
+            new ZLinkStreamNodeRegistration { StreamNodeName = "stream-a" }
+        );
+        var socket = new DisposalRecordingStreamSocket();
+        // No ZLinkFrameworkRuntime is registered, so creating the node fails after the
+        // socket exists.
+        using var services = new ServiceCollection().BuildServiceProvider();
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        await using var state = new ZLinkFrameworkComponentState(
+            new StreamSocketRuntimeContext(socket),
+            registration,
+            services,
+            errorSink,
+            new object(),
+            ZLinkApplicationJobQueueCapacityResolver.Resolve(
+                ZLinkApplicationJobQueueProfile.Balanced,
+                int.MaxValue,
+                1
+            )
+        );
+        var manager = new ZLinkStreamRuntimeManager(
+            services,
+            new MonitorlessBackendAdapterFactory(),
+            registration
+        );
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await manager.InitializeStreamNodesAsync(state)
+        );
+
+        Assert.Equal(1, socket.DisposeCount);
+        Assert.Empty(state.StreamNodes);
+    }
+
+    private sealed class MonitorlessBackendAdapterFactory : IZLinkBackendAdapterFactory
+    {
+        public IZLinkBackendRuntimeContext CreateRuntimeContext() =>
+            throw new NotSupportedException();
+
+        public IZLinkMonitoringBackendAdapter CreateMonitoringAdapter() => null!;
+    }
+
+    private sealed class StreamSocketRuntimeContext(IZLinkBackendStreamSocket socket)
+        : IZLinkBackendRuntimeContext
+    {
+        public void ConfigureCoreHwm(
+            AutoHwmProfile profile,
+            ulong memoryLimitBytes,
+            ulong budgetBytes
+        ) { }
+
+        public CoreHwmBudgetSnapshot GetCoreHwmBudgetSnapshot() =>
+            throw new NotSupportedException();
+
+        public void ResetCoreHwmBudgetMetrics() => throw new NotSupportedException();
+
+        public void ConfigureApplicationJobQueue(ZLinkApplicationJobQueue applicationJobQueue) { }
+
+        public IDealerSocket CreateDealerSocket() => throw new NotSupportedException();
+
+        public IRouterSocket CreateRouterSocket() => throw new NotSupportedException();
+
+        public IPubSocket CreatePublisherSocket() => throw new NotSupportedException();
+
+        public ISubSocket CreateSubscriberSocket() => throw new NotSupportedException();
+
+        public IZLinkBackendSpotNode CreateSpotNode(string meshName) =>
+            throw new NotSupportedException();
+
+        public IZLinkBackendStreamSocket CreateStreamSocket(
+            string standaloneMeshName,
+            IZLinkBackendSpotNode? actorDispatchNode = null
+        ) => socket;
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class DisposalRecordingStreamSocket : IZLinkBackendStreamSocket
+    {
+        public int DisposeCount { get; private set; }
+
+        public void Bind(string endpoint) => throw new NotSupportedException();
+
+        public void SetTlsServer(string certPath, string keyPath, bool requireClientCert) =>
+            throw new NotSupportedException();
+
+        public bool RecvPacket(
+            out ZLinkBackendStreamReceive? received,
+            RecvFlags flags = RecvFlags.None
+        ) => throw new NotSupportedException();
+
+        public Task SendAsync(
+            RoutingId routingId,
+            Message payload,
+            CancellationToken cancellationToken = default
+        ) => throw new NotSupportedException();
+
+        public void DisconnectPeer(RoutingId routingId) => throw new NotSupportedException();
+
+        public ValueTask BindActorAsync(
+            RoutingId sessionRid,
+            ZLinkBackendActorRef actor,
+            TimeSpan timeout,
+            CancellationToken cancellationToken
+        ) => throw new NotSupportedException();
+
+        public ValueTask UnbindActorAsync(
+            RoutingId sessionRid,
+            string actorId,
+            TimeSpan timeout,
+            CancellationToken cancellationToken
+        ) => throw new NotSupportedException();
+
+        public bool SendBoundActor(
+            RoutingId sessionRid,
+            string actorId,
+            IReadOnlyList<Message> parts,
+            SendFlags flags
+        ) => throw new NotSupportedException();
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCount++;
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed record CompressionProbe(string Text);

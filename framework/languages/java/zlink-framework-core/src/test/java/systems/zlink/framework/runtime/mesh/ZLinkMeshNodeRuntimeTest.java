@@ -100,14 +100,17 @@ class ZLinkMeshNodeRuntimeTest {
         registration.peerConnections().connect(RoutingId.from("game-2"), "inproc://game-2");
 
         RecordingMeshNode node = new RecordingMeshNode();
-        try (ZLinkMeshNodeRuntime ignored =
-                ZLinkMeshNodeRuntime.start(
-                        registration,
-                        (context, meshName) -> {
-                            assertEquals("game", meshName);
-                            return node;
-                        },
-                        new RecordingContext())) {
+        try (ZLinkMeshNodesRuntime nodes = new ZLinkMeshNodesRuntime()) {
+            nodes.start(
+                    List.of(registration),
+                    (context, meshName) -> {
+                        assertEquals("game", meshName);
+                        return node;
+                    },
+                    new RecordingContext(),
+                    ignored -> null,
+                    false,
+                    null);
             assertEquals(
                     List.of(
                             "routing-id:" + registration.routingId(),
@@ -135,9 +138,14 @@ class ZLinkMeshNodeRuntimeTest {
         registration.configureSpotPublisher().setSendHighWaterMark(91);
 
         RecordingMeshNode node = new RecordingMeshNode();
-        try (ZLinkMeshNodeRuntime ignored =
-                ZLinkMeshNodeRuntime.start(
-                        registration, (context, meshName) -> node, new RecordingContext())) {
+        try (ZLinkMeshNodesRuntime nodes = new ZLinkMeshNodesRuntime()) {
+            nodes.start(
+                    List.of(registration),
+                    (context, meshName) -> node,
+                    new RecordingContext(),
+                    ignored -> null,
+                    false,
+                    null);
             assertEquals(7L, node.routerHighWaterMark);
             assertEquals(11L, node.routerReceiveHighWaterMark);
             assertEquals(7, node.pendingAdmissionCapacity);
@@ -171,13 +179,14 @@ class ZLinkMeshNodeRuntimeTest {
                     }
                 };
 
-        try (ZLinkMeshNodeRuntime ignored =
-                ZLinkMeshNodeRuntime.start(
-                        registration,
-                        (context, meshName) -> node,
-                        new RecordingContext(),
-                        true,
-                        receiver)) {
+        try (ZLinkMeshNodesRuntime nodes = new ZLinkMeshNodesRuntime()) {
+            nodes.start(
+                    List.of(registration),
+                    (context, meshName) -> node,
+                    new RecordingContext(),
+                    ignored -> receiver,
+                    true,
+                    null);
             assertTrue(
                     node.calls.indexOf("application-receiver") < node.calls.indexOf("spot-node"));
             assertTrue(node.calls.indexOf("dispatch") < node.calls.indexOf("start"));

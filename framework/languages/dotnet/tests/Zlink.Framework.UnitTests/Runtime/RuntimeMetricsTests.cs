@@ -780,7 +780,7 @@ public sealed class RuntimeMetricsTests
 
         var sample = Assert.Single(samples);
         Assert.Equal("tcp", sample["transport"]);
-        Assert.Equal("server_shutdown", sample["close_reason"]);
+        Assert.Equal("server_drain", sample["close_reason"]);
     }
 
     [Fact]

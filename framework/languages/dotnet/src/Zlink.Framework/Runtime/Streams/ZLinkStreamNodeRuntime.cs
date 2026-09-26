@@ -38,7 +38,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         string nodeName,
         IServiceProvider services,
         IZLinkBackendStreamSocket socket,
-        IZLinkBackendSocketMonitor monitor,
+        IZLinkBackendSocketMonitor? monitor,
         Type? headerSessionType,
         ZLinkRuntimeTaskRunner taskRunner,
         string transport,
@@ -88,11 +88,24 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
 
     public IZLinkBackendStreamSocket Socket { get; }
 
-    public IZLinkBackendSocketMonitor Monitor { get; }
+    public IZLinkBackendSocketMonitor? Monitor { get; private set; }
 
-    internal string? BoundEndpoint { get; }
+    internal string? BoundEndpoint { get; private set; }
 
-    internal string? AdvertisedEndpoint { get; }
+    internal string? AdvertisedEndpoint { get; private set; }
+
+    /// <summary>
+    ///     Records the endpoint the node's socket bound. Startup creates the node as soon as
+    ///     its socket exists, so the node owns the socket through every later step.
+    /// </summary>
+    internal void SetEndpoints(string boundEndpoint, string advertisedEndpoint)
+    {
+        BoundEndpoint = boundEndpoint;
+        AdvertisedEndpoint = advertisedEndpoint;
+    }
+
+    /// <summary>Hands the socket monitor opened during startup to the node that owns it.</summary>
+    internal void AttachMonitor(IZLinkBackendSocketMonitor monitor) => Monitor = monitor;
 
     internal int SessionCount => AwaitStateLane(_sessions.GetCountAsync());
 
@@ -136,7 +149,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         await CaptureAsync(() => DisposeSessionsAsync(sessions)).ConfigureAwait(false);
         await CaptureAsync(_sessionIngress.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(_controlIngress.DisposeAsync).ConfigureAwait(false);
-        await CaptureAsync(Monitor.DisposeAsync).ConfigureAwait(false);
+        if (Monitor is { } monitor)
+            await CaptureAsync(monitor.DisposeAsync).ConfigureAwait(false);
 
         if (_monitorLoop is not null)
             try
@@ -754,7 +768,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         {
             try
             {
-                if (!Monitor.TryRecv(out var monitorEvent))
+                if (!Monitor!.TryRecv(out var monitorEvent))
                 {
                     await backoff.NoDataAsync(cancellationToken).ConfigureAwait(false);
                     continue;

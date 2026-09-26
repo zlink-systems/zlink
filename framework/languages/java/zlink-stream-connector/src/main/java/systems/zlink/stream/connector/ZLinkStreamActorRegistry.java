@@ -69,11 +69,6 @@ final class ZLinkStreamActorRegistry {
         return actor.slot();
     }
 
-    synchronized List<DefaultActor.HandlerRegistration> handlers(int slot, String name) {
-        DefaultActor actor = bySlot.get(slot);
-        return actor == null ? List.of() : List.copyOf(actor.handlers(name));
-    }
-
     void bound(byte[] payload) {
         ByteBuffer buffer = ByteBuffer.wrap(payload);
         require(buffer, 4, "Actor bound control");
@@ -274,6 +269,7 @@ final class ZLinkStreamActorRegistry {
             HandlerRegistration registration = new HandlerRegistration(handler);
             handlers.computeIfAbsent(name, ignored -> new CopyOnWriteArrayList<>())
                     .add(registration);
+            connector.handlerRegistered();
             return () -> {
                 registration.close();
                 handlers.getOrDefault(name, List.of()).remove(registration);

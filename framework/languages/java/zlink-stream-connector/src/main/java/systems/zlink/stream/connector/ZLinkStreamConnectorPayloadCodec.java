@@ -74,9 +74,12 @@ final class ZLinkStreamConnectorPayloadCodec {
                     "stream payload decompression failed",
                     failure);
         }
+        //  Spec 32 4.7, 9: the decompressed payload is compared with the
+        //  receive limit too, and over it is FrameTooLarge. A custom codec
+        //  may not apply the limit it is given, so the result is checked here.
         if (decoded.length > configuration.limits().receivePayload()) {
             throw ZLinkStreamException.of(
-                    ZLinkStreamErrorCode.DECOMPRESSION_FAILED,
+                    ZLinkStreamErrorCode.FRAME_TOO_LARGE,
                     "decompressed stream payload exceeds maximum stream payload size");
         }
         return decoded;

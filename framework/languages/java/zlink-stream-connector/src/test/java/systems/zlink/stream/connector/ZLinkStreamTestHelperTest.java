@@ -66,8 +66,7 @@ final class ZLinkStreamTestHelperTest {
             assertThrows(CompletionException.class, timedOut::join);
 
             send(server, "Late", "after-timeout");
-            TcpStreamConnectorTestServer.awaitCondition(
-                    () -> connector.pendingDispatchCount() == 1);
+            TcpStreamConnectorTestServer.awaitCondition(() -> connector.receivedCount("Late") == 1);
 
             var message =
                     connector
@@ -100,7 +99,7 @@ final class ZLinkStreamTestHelperTest {
 
             send(server, "Cancelled", "after-cancel");
             TcpStreamConnectorTestServer.awaitCondition(
-                    () -> connector.pendingDispatchCount() == 1);
+                    () -> connector.receivedCount("Cancelled") == 1);
 
             var message =
                     connector
@@ -133,7 +132,7 @@ final class ZLinkStreamTestHelperTest {
 
             send(server, "Cancelled", "after-cancel");
             TcpStreamConnectorTestServer.awaitCondition(
-                    () -> connector.pendingDispatchCount() == 1);
+                    () -> connector.receivedCount("Cancelled") == 1);
 
             var message =
                     connector
@@ -168,7 +167,7 @@ final class ZLinkStreamTestHelperTest {
 
             send(server, "Cancelled", "after-cancel");
             TcpStreamConnectorTestServer.awaitCondition(
-                    () -> connector.pendingDispatchCount() == 1);
+                    () -> connector.receivedCount("Cancelled") == 1);
 
             var message =
                     connector
@@ -221,7 +220,26 @@ final class ZLinkStreamTestHelperTest {
                             .toCompletableFuture();
             send(server, "Notice", "second");
 
-            assertThrows(CompletionException.class, outOfOrder::join);
+            CompletionException wrongOrder =
+                    assertThrows(CompletionException.class, outOfOrder::join);
+            assertEquals(
+                    ZLinkStreamErrorCode.VALIDATION_FAILED,
+                    ((ZLinkStreamException) wrongOrder.getCause()).errorCode());
+            assertTrue(
+                    wrongOrder.getCause().getMessage().contains("out of the expected sequence"),
+                    wrongOrder.getCause().getMessage());
+
+            var absent =
+                    connector
+                            .waitForSequence("Absent")
+                            .expect(message -> true)
+                            .timeout(Duration.ofMillis(30))
+                            .submit()
+                            .toCompletableFuture();
+            CompletionException timedOut = assertThrows(CompletionException.class, absent::join);
+            assertEquals(
+                    ZLinkStreamErrorCode.VALIDATION_FAILED,
+                    ((ZLinkStreamException) timedOut.getCause()).errorCode());
         }
     }
 

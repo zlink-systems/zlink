@@ -7,6 +7,7 @@
 
 #include <boost/asio.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -36,18 +37,12 @@ class actor_access_t
 class shared_runtime_t;
 bool configure_shared_runtime_worker_count (std::size_t worker_count);
 
-struct pending_send_t
-{
-    packet_t packet;
-    std::function<void (result_t<void>)> callback;
-    std::optional<actor_binding_ref_t> actor_binding;
-};
-
 struct pending_write_t
 {
     std::vector<std::uint8_t> frame;
     std::function<void (result_t<void>)> callback;
     std::uint64_t write_id = 0;
+    bool ready = true;
 };
 
 struct pending_request_t
@@ -67,12 +62,10 @@ struct pending_request_t
  *
  *     transport_mutex  ->  lifecycle_mutex
  *                      ->  delivery_mutex
- *                      ->  received_counts_mutex
  *
- * transport_mutex is the only outer lock. lifecycle_mutex, delivery_mutex and
- * received_counts_mutex are leaves: none of them is ever held while another of
- * the three is taken, and none of them is ever held while transport_mutex is
- * taken. Acquiring them in any other order would close a cycle.
+ * transport_mutex is the only outer lock. lifecycle_mutex and delivery_mutex
+ * are leaves: neither is ever held while the other is taken, and neither is
+ * ever held while transport_mutex is taken. Acquiring them in any other order would close a cycle.
  *
  * No user code runs under any of these locks. A wait predicate, a packet
  * handler, a state handler or an error handler can call back into the
@@ -89,12 +82,33 @@ struct dispatch_envelope_t
 {
     packet_t packet;
     std::optional<std::uint16_t> actor_slot;
+    std::function<void ()> actor_event;
+    /* Position in the connector's one arrival order (connector_state_t::
+     * next_arrival), taken when the frame is decoded. */
+    std::uint64_t arrival = 0;
+};
+
+/* A queued Manual callback (stream-connector §7). `callbacks` is the number of
+ * handler calls `run` makes with the handlers registered at the moment it is
+ * asked; the pending dispatch count sums it. */
+struct delivery_t
+{
+    std::uint64_t arrival = 0;
+    std::function<void ()> run;
+    std::function<std::size_t ()> callbacks;
 };
 
 struct packet_handler_entry_t
 {
     std::uint64_t id = 0;
     std::function<void (const dispatch_envelope_t &)> handler;
+    /* Set for an Actor handle handler: it takes only packets for that slot. */
+    std::optional<std::uint16_t> actor_slot;
+
+    bool takes (const dispatch_envelope_t &envelope) const noexcept
+    {
+        return !actor_slot || actor_slot == envelope.actor_slot;
+    }
 };
 
 template <typename THandler> struct handler_entry_t
@@ -103,6 +117,9 @@ template <typename THandler> struct handler_entry_t
     THandler handler;
 };
 
+using actor_handlers_t =
+  std::vector<handler_entry_t<std::function<void (const std::shared_ptr<actor_t> &)>>>;
+
 struct pending_wait_t
 {
     std::uint64_t wait_id = 0;
@@ -110,6 +127,11 @@ struct pending_wait_t
     std::function<bool (const packet_t &)> predicate;
     std::function<void (result_t<packet_t>)> callback;
     std::shared_ptr<boost::asio::steady_timer> timeout_timer;
+    // The synchronous wait_for sets this, like pending_request_t: its callback
+    // only resolves the promise its caller blocks on, so it runs where the
+    // result is decided instead of on the delivery strand, which that caller
+    // may be holding.
+    bool deliver_direct = false;
 };
 
 class connector_state_t : public std::enable_shared_from_this<connector_state_t>
@@ -130,18 +152,24 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
      * before it concludes "no wait matches", so a wait registered during the
      * unlocked evaluation is not missed. */
     std::uint64_t pending_waits_version = 0;
-    std::deque<pending_send_t> pending_sends;
-    std::deque<pending_write_t> pending_writes;
+    /* stream-connector §5.2: the accepted writes of the connection that have not
+     * started, in acceptance order. One write runs at a time (active_write);
+     * the next starts when it completes. */
+    std::deque<pending_write_t> write_queue;
     std::optional<pending_write_t> active_write;
     std::vector<std::uint8_t> inbound_buffer;
     std::deque<dispatch_envelope_t> dispatch_queue;
-    /* Bumped whenever dispatch_queue is dropped wholesale (a new connection,
-     * or close). A scan that evaluates user predicates outside transport_mutex
+    /* Bumped whenever dispatch_queue is dropped wholesale (a new connection is
+     * established). A scan that evaluates user predicates outside transport_mutex
      * re-reads this before putting the packets it did not take back, so a
      * connection boundary crossed during the scan still drops them
      * (stream-connector §10). */
     std::uint64_t dispatch_queue_generation = 0;
-    std::deque<std::function<void ()>> delivery_queue;
+    std::deque<delivery_t> delivery_queue;
+    /* stream-connector §7: a Manual pump runs queued packets and callbacks in
+     * one arrival order. A packet takes its number when it is decoded, a
+     * callback when it is queued; the pump runs both queues by it. */
+    std::atomic_uint64_t next_arrival{1};
     std::vector<packet_t> sent_packets;
     std::map<std::string, std::vector<packet_handler_entry_t>> packet_handlers;
     std::vector<handler_entry_t<std::function<void (const connection_state_changed_t &)>>>
@@ -155,30 +183,25 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
       disconnected_handlers;
     std::vector<std::pair<std::uint16_t, std::shared_ptr<actor_t>>> actors_by_slot;
     std::map<std::string, std::shared_ptr<actor_t>, std::less<>> actors_by_id;
-    std::vector<handler_entry_t<std::function<void (const std::shared_ptr<actor_t> &)>>>
-      actor_bound_handlers;
-    std::vector<handler_entry_t<std::function<void (const std::shared_ptr<actor_t> &)>>>
-      actor_unbound_handlers;
+    actor_handlers_t actor_bound_handlers;
+    actor_handlers_t actor_unbound_handlers;
     std::atomic_uint64_t next_subscription_id{1};
     /* Per-name receive counts for the current connection (stream-connector
-     * §10). Guarded by its own mutex because the frame decode paths that
-     * update it do not all hold transport_mutex. */
-    /* Lock order: leaf. Taken under transport_mutex, never the other way, and
-     * never while lifecycle_mutex or delivery_mutex is held. */
-    mutable std::mutex received_counts_mutex;
+     * §10). Guarded by transport_mutex, like dispatch_queue: a packet is
+     * counted in the step that queues or hands it off. */
     std::map<std::string, std::size_t, std::less<>> received_counts;
-    bool connect_started = false;
     codec_t default_codec = codec_t::json;
     std::set<codec_t> enabled_codecs{codec_t::json};
     std::shared_ptr<const compression_codec_t> compression_codec;
     bool lz4_enabled = false;
+    /* Set once by the close that starts the close work (stream-connector §7);
+     * every later close finds it set. */
     std::atomic_bool close_requested{false};
-    bool send_in_progress = false;
-    bool write_in_progress = false;
+    /* The close work has finished. Guarded by lifecycle_mutex; a close called
+     * outside a callback waits on lifecycle_changed for it. */
+    bool close_completed = false;
     std::uint64_t next_write_id = 1;
-    bool request_pump_scheduled = false;
     bool read_in_progress = false;
-    std::optional<error_t> inbound_error;
     // Last error that drove a disconnect/close transition. Synchronous waiters
     // that observe the transport already down report this instead of a generic
     // "not connected" when the pump consumed the inbound error first.
@@ -226,6 +249,69 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
     std::condition_variable state_changed;
 };
 
+/* A handler event captures the ids of the handlers registered when it is
+ * scheduled and resolves them again when it runs: a handler removed in
+ * between does not run, and one added in between does not see the earlier
+ * event (stream-connector §7). The caller holds lifecycle_mutex. */
+template <typename TEntry>
+std::vector<std::uint64_t> registered_handler_ids_locked (const std::vector<TEntry> &registry)
+{
+    std::vector<std::uint64_t> ids;
+    ids.reserve (registry.size ());
+    for (const auto &entry : registry) {
+        ids.push_back (entry.id);
+    }
+    return ids;
+}
+
+/* Takes lifecycle_mutex; the handlers are invoked after it is released. */
+template <typename TEntry>
+std::vector<TEntry> registered_handlers (connector_state_t &state,
+                                         std::vector<TEntry> connector_state_t::*registry,
+                                         const std::vector<std::uint64_t> &ids)
+{
+    std::vector<TEntry> handlers;
+    std::lock_guard<std::mutex> lock (state.lifecycle_mutex);
+    for (const auto &entry : state.*registry) {
+        if (std::find (ids.begin (), ids.end (), entry.id) != ids.end ()) {
+            handlers.push_back (entry);
+        }
+    }
+    return handlers;
+}
+
+/* The number of handlers registered_handlers would return now: the pending
+ * dispatch count of one handler event (stream-connector §7). */
+template <typename TEntry>
+std::function<std::size_t ()> registered_handler_count (
+  const std::shared_ptr<connector_state_t> &state,
+  std::vector<TEntry> connector_state_t::*registry,
+  std::vector<std::uint64_t> ids)
+{
+    return [weak = std::weak_ptr<connector_state_t> (state), registry, ids = std::move (ids)] {
+        const auto locked = weak.lock ();
+        return locked ? registered_handlers (*locked, registry, ids).size () : std::size_t{0};
+    };
+}
+
+void publish_error (connector_state_t &state, error_t error) noexcept;
+
+/* stream-connector §7, §9: a registered handler or callback that fails reaches
+ * the error handlers as UserCallbackFailed; the next handler still runs. */
+template <typename TCallback>
+void invoke_user_callback (connector_state_t &state, const char *failure, TCallback &&callback)
+{
+    try {
+        std::forward<TCallback> (callback) ();
+    }
+    catch (const std::exception &error) {
+        publish_error (state, {error_code_t::user_callback_failed, error.what ()});
+    }
+    catch (...) {
+        publish_error (state, {error_code_t::user_callback_failed, failure});
+    }
+}
+
 class connector_runtime_t
 {
   public:
@@ -241,9 +327,9 @@ class connector_runtime_t
     std::shared_ptr<connector_state_t> _state;
 };
 
-result_t<void> submit_send (std::shared_ptr<connector_state_t> state,
-                            packet_t packet,
-                            std::optional<actor_binding_ref_t> actor_binding = std::nullopt);
+void submit_send (std::shared_ptr<connector_state_t> state,
+                  packet_t packet,
+                  std::optional<actor_binding_ref_t> actor_binding = std::nullopt);
 void submit_send_async (std::shared_ptr<connector_state_t> state,
                         packet_t packet,
                         std::function<void (result_t<void>)> callback,
@@ -252,29 +338,62 @@ void start_read_loop (std::shared_ptr<connector_state_t> state);
 void start_heartbeat_monitor (std::shared_ptr<connector_state_t> state);
 void stop_heartbeat_monitor (std::shared_ptr<connector_state_t> state);
 void schedule_reconnect (std::shared_ptr<connector_state_t> state);
-void resume_pending_writes_after_connect (std::shared_ptr<connector_state_t> state);
-std::function<void (result_t<void>)>
-take_active_write_callback (std::shared_ptr<connector_state_t> state);
 result_t<void> dispatch_pending (std::shared_ptr<connector_state_t> state);
-result_t<packet_t> receive_next (std::shared_ptr<connector_state_t> state,
-                                 std::chrono::milliseconds timeout);
 result_t<packet_t> wait_for_packet (std::shared_ptr<connector_state_t> state,
                                     std::string packet_name,
                                     std::function<bool (const packet_t &)> predicate,
                                     std::chrono::milliseconds timeout);
-/* Routes a packet injected through connector_runtime_t::receive_packet. Takes
- * transport_mutex itself and runs the immediate-mode handlers after releasing
- * it, so the caller must hold no connector lock. */
+/* Routes a packet injected through connector_runtime_t::receive_packet the way
+ * the read pump routes a received one. The caller holds no connector lock. */
 void deliver_received_packet (connector_state_t &state, packet_t packet);
 /* Appends to dispatch_queue. The caller must already hold transport_mutex. */
 void enqueue_received_message (connector_state_t &state, dispatch_envelope_t envelope);
-void schedule_delivery (std::shared_ptr<connector_state_t> state, std::function<void ()> callback);
-void schedule_lifecycle_delivery (std::shared_ptr<connector_state_t> state,
-                                  std::function<void ()> callback);
-void publish_error (connector_state_t &state, error_t error) noexcept;
+/* Runs `callback` on the delivery strand inside a callback_scope_t: one
+ * callback of the connector at a time, never on the calling thread. */
+void run_on_delivery_strand (std::shared_ptr<connector_state_t> state,
+                             std::function<void ()> callback);
+/* Immediate: run_on_delivery_strand. Manual: queued for the next dispatch pump
+ * (stream-connector §7). `callbacks` counts the handler calls `callback` makes
+ * (delivery_t); without it the delivery is one callback. */
+void schedule_delivery (std::shared_ptr<connector_state_t> state,
+                        std::function<void ()> callback,
+                        std::function<std::size_t ()> callbacks = {});
+/* Marks the current thread as running user callbacks of `state` (stream-connector
+ * §7 handlers and callbacks) for the scope's lifetime. A close called inside
+ * one of them starts the close work and returns instead of waiting for it. */
+class callback_scope_t
+{
+  public:
+    explicit callback_scope_t (const connector_state_t &state) noexcept;
+    ~callback_scope_t ();
+    callback_scope_t (const callback_scope_t &) = delete;
+    callback_scope_t &operator= (const callback_scope_t &) = delete;
+    static bool running_callback_of (const connector_state_t &state) noexcept;
+
+  private:
+    const connector_state_t *_previous;
+};
 void close_bound_actors (const std::shared_ptr<connector_state_t> &state);
-/* Counts one received application packet by name (stream-connector §10). */
-void note_received_packet (connector_state_t &state, const packet_t &packet);
+/* Queues the bound or unbound callbacks (`registry`) of one Actor event for the
+ * handlers `handler_ids` registered when it happened (stream-connector §5.6). */
+void schedule_actor_delivery (const std::shared_ptr<connector_state_t> &state,
+                              actor_handlers_t connector_state_t::*registry,
+                              std::vector<std::uint64_t> handler_ids,
+                              std::shared_ptr<actor_t> actor);
+/* Counts one received application packet by name (stream-connector §10). The
+ * caller holds transport_mutex and hands the packet to its consumer in the
+ * same critical section, so the count and the packet become observable
+ * together. */
+void count_received_locked (connector_state_t &state, const packet_t &packet);
+/* The number of registered packet handlers that take `envelope` now: the one
+ * test every dispatch step applies and the count pending dispatch reports
+ * (stream-connector §7, §10). lifecycle_mutex nests under a held
+ * transport_mutex. */
+std::size_t packet_handler_count (connector_state_t &state, const dispatch_envelope_t &envelope);
+/* Immediate: hands the queued packets a newly registered handler takes to the
+ * delivery strand. No effect in Manual, where the next pump takes them. The
+ * caller holds no connector lock. */
+void deliver_queued_to_handlers (const std::shared_ptr<connector_state_t> &state);
 /* Randomized reconnect wait: a value between 50% and 100% of the base delay
  * (stream-connector §6). */
 std::chrono::milliseconds jittered_delay (std::chrono::milliseconds base);
@@ -294,17 +413,37 @@ post_runtime_operation_after (const std::shared_ptr<connector_state_t> &state,
 void change_state (std::shared_ptr<connector_state_t> state,
                    connection_state_t next,
                    std::optional<error_t> error = std::nullopt);
-/* Removes every registered wait and hands back its callback, timers cancelled
+/* Removes every registered wait and hands it back, timers cancelled
  * and pending_waits_version bumped. The caller must hold transport_mutex and
  * owns the delivery. */
-std::vector<std::function<void (result_t<packet_t>)>>
-take_pending_waits_locked (connector_state_t &state);
-/* Ends the connection with `error`: publishes it, moves the state to
- * disconnected and releases the waits that observed the connection as
- * disconnected, delivered like any other completion (stream-connector
- * §10.1.1). The caller owns what follows - closing the transport, failing the
- * writes and requests, the reconnect. Must be called with no connector lock
- * held. */
-void connection_ended (const std::shared_ptr<connector_state_t> &state, const error_t &error);
+std::vector<pending_wait_t> take_pending_waits_locked (connector_state_t &state);
+/* The operations accepted on a connection that have not completed: the write
+ * callbacks (active and queued), the pending request sequences and the waits.
+ * Taking them empties the write queues, so a frame not yet written is never
+ * written. */
+struct connection_operations_t
+{
+    std::vector<std::function<void (result_t<void>)>> writes;
+    std::vector<std::uint64_t> requests;
+    std::vector<pending_wait_t> waits;
+};
+/* Caller holds transport_mutex. */
+connection_operations_t take_connection_operations_locked (connector_state_t &state);
+/* Fails every taken operation as Disconnected with `message`, delivered like
+ * any other completion. Called with no connector lock held. */
+void fail_connection_operations (const std::shared_ptr<connector_state_t> &state,
+                                 connection_operations_t operations,
+                                 const std::string &message);
+/* Ends `observed_connection` with `error` when it is still the current
+ * connection, and returns false without any effect otherwise: a failure
+ * observed on a replaced connection does not end its replacement. On the
+ * current connection it publishes the error, moves the state to disconnected,
+ * fails every write and request accepted on the connection and releases the
+ * waits that observed it as disconnected, delivered like any other completion
+ * (stream-connector §10.1.1). On true the caller closes the transport and
+ * schedules the reconnect. Must be called with no connector lock held. */
+bool connection_ended (const std::shared_ptr<connector_state_t> &state,
+                       const error_t &error,
+                       const std::shared_ptr<stream_connection_t> &observed_connection);
 
 } // namespace zlink::stream_connector::detail

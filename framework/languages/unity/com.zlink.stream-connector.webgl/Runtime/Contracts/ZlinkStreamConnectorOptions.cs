@@ -35,8 +35,6 @@ namespace Systems.Zlink.Stream.Connector.Contracts
 
         public int MaxReceivePayloadSize { get; init; } = 64 * 1024;
 
-        public int MaxPendingDispatchCallbacks { get; init; } = 1024;
-
         /// <summary>
         ///     Ignored on WebGL. The browser owns TLS verification for <c>wss://</c> and
         ///     offers no way to skip it, so setting this to <c>true</c> is rejected as a

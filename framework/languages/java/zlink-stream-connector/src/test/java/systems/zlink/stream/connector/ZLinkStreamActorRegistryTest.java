@@ -14,13 +14,52 @@ import java.lang.reflect.Field;
 import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkStreamActorRegistryTest {
+    @Test
+    void closeNotifiesActorUnboundBeforeConnectionStateAndDisconnected() throws Exception {
+        try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
+            ZLinkStreamConnector connector =
+                    ZLinkStreamConnectorFactory.create(
+                            server.options(ZLinkStreamDispatchMode.MANUAL));
+            ConnectorTestAwait.await(connector.connect());
+            ConnectorTestAwait.await(connector.dispatch());
+            registry(connector).bound(boundControl(7, "player-a"));
+
+            List<String> order = new ArrayList<>();
+            connector.onActorUnbound(
+                    actor -> {
+                        order.add("unbound");
+                        return CompletableFuture.completedFuture(null);
+                    });
+            connector.onConnectionStateChanged(
+                    state -> {
+                        if (state == ZLinkStreamConnectionState.CLOSED) {
+                            order.add("state");
+                        }
+                        return CompletableFuture.completedFuture(null);
+                    });
+            connector.onDisconnected(
+                    event -> {
+                        order.add("disconnected");
+                        return CompletableFuture.completedFuture(null);
+                    });
+
+            ConnectorTestAwait.await(connector.close());
+            ConnectorTestAwait.await(connector.dispatch());
+
+            assertEquals(List.of("unbound", "state", "disconnected"), order);
+        }
+    }
+
     @Test
     void boundAndUnboundOwnTheSnapshotCallbacksAndClosedHandleValidation() throws Exception {
         ZLinkStreamConnector connector = connector();
@@ -49,16 +88,12 @@ final class ZLinkStreamActorRegistryTest {
         registry.unbound(unboundControl(7));
         assertTrue(connector.actors().isEmpty());
         assertFalse(actor.isBound());
-        ZLinkStreamException closedFailure =
-                assertThrows(ZLinkStreamException.class, () -> actor.send(payload()).submit());
-        assertEquals(ZLinkStreamErrorCode.VALIDATION_FAILED, closedFailure.errorCode());
+        assertEquals(ZLinkStreamErrorCode.VALIDATION_FAILED, sendFailure(actor));
         connector.dispatch().submit().toCompletableFuture().join();
         assertSame(actor, unbound.join());
         registry.bound(boundControl(7, "player-b"));
         assertTrue(connector.actor("player-b").orElseThrow().isBound());
-        ZLinkStreamException failure =
-                assertThrows(ZLinkStreamException.class, () -> actor.send(payload()).submit());
-        assertEquals(ZLinkStreamErrorCode.VALIDATION_FAILED, failure.errorCode());
+        assertEquals(ZLinkStreamErrorCode.VALIDATION_FAILED, sendFailure(actor));
         ZLinkStreamException rawTypedFailure =
                 assertThrows(ZLinkStreamException.class, () -> actor.send((Object) payload()));
         assertEquals(ZLinkStreamErrorCode.VALIDATION_FAILED, rawTypedFailure.errorCode());
@@ -217,6 +252,47 @@ final class ZLinkStreamActorRegistryTest {
         return (ZLinkStreamActorRegistry) field.get(connector);
     }
 
+    /**
+     * Spec 32 5.6, 7, 10: an Actor handle receive registration follows the same rule as the
+     * connector one. A packet no handler takes stays queued, and a handle handler registered after
+     * it arrived receives it at the next dispatch, in both dispatch modes.
+     */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(ZLinkStreamDispatchMode.class)
+    void anActorHandlerRegisteredAfterThePacketArrivedReceivesIt(ZLinkStreamDispatchMode mode)
+            throws Exception {
+        try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
+            ZLinkStreamConnector connector =
+                    ZLinkStreamConnectorFactory.create(server.options(mode));
+            try {
+                ConnectorTestAwait.await(connector.connect());
+                server.sendAsync(
+                                controlHeader(ZLinkStreamActorRegistry.BOUND),
+                                boundControl(7, "player-a"))
+                        .join();
+                TcpStreamConnectorTestServer.awaitCondition(
+                        () -> connector.actor("player-a").isPresent());
+                ZLinkStreamActor actor = connector.actor("player-a").orElseThrow();
+                server.sendAsync(actorPacketHeader(7, "Late"), new byte[] {9}).join();
+                TcpStreamConnectorTestServer.awaitCondition(
+                        () -> connector.receivedCount("Late") == 1);
+
+                CompletableFuture<String> received = new CompletableFuture<>();
+                actor.on(
+                        "Late",
+                        message -> {
+                            received.complete(message.actorId());
+                            return CompletableFuture.completedFuture(null);
+                        });
+                ConnectorTestAwait.await(connector.dispatch());
+
+                assertEquals("player-a", received.get(5, TimeUnit.SECONDS));
+            } finally {
+                ConnectorTestAwait.await(connector.close());
+            }
+        }
+    }
+
     private static byte[] boundControl(int slot, String actorId) {
         byte[] id = actorId.getBytes(StandardCharsets.UTF_8);
         return ByteBuffer.allocate(4 + id.length)
@@ -259,5 +335,12 @@ final class ZLinkStreamActorRegistryTest {
     private static ZLinkStreamEncodedPayload payload() {
         return new ZLinkStreamEncodedPayload(
                 "Ping", Message.from(new byte[] {1}), Map.of(), ZLinkStreamCodec.RAW);
+    }
+
+    /** Spec 32 9.2: a Send that is not accepted fails its stage; submit() does not throw. */
+    private static ZLinkStreamErrorCode sendFailure(ZLinkStreamActor actor) {
+        CompletableFuture<Void> send = actor.send(payload()).submit().toCompletableFuture();
+        CompletionException failure = assertThrows(CompletionException.class, send::join);
+        return ((ZLinkStreamException) failure.getCause()).errorCode();
     }
 }

@@ -1,12 +1,8 @@
-import {
-  Disposable,
-  ZlinkStreamEncodedPayload,
-  ZlinkStreamErrorCode,
-  ZlinkStreamMessage
-} from '../Contracts';
+import { Disposable, ZlinkStreamEncodedPayload, ZlinkStreamMessage } from '../Contracts';
 import { validateName } from './Protocol/ZlinkStreamPacketNameValidator';
 import type { ZlinkStreamConnectorEvents } from './ZlinkStreamConnectorEvents';
 import { subscription } from './ZlinkStreamSupport';
+import { zlinkStreamActorBinding } from './ZlinkStreamActors';
 
 type EncodedMessageHandler = (
   message: ZlinkStreamMessage<ZlinkStreamEncodedPayload>,
@@ -24,14 +20,27 @@ interface QueuedMessage {
   readonly kind: 'message';
   readonly message: ZlinkStreamMessage<ZlinkStreamEncodedPayload>;
   readonly signal?: AbortSignal;
+  indexed?: boolean;
 }
 
 interface QueuedCallback {
   readonly kind: 'callback';
   readonly callback: () => Promise<void> | void;
+  /** The handler calls `callback` makes if the pump ran it now. */
+  readonly callbacks: () => number;
+  indexed?: boolean;
 }
 
 type QueuedDispatch = QueuedMessage | QueuedCallback;
+
+/**
+ * A registered push handler. `actor` is set for an Actor handle's handler,
+ * which receives only the packets carrying that Actor's slot.
+ */
+interface RegisteredHandler {
+  readonly handle: EncodedMessageHandler;
+  readonly actor?: object;
+}
 
 /**
  * A registered wait surface plus what to call when the connection it is
@@ -45,17 +54,28 @@ interface RegisteredObserver {
   readonly onConnectionEnded: () => void;
 }
 
+function receives(
+  registration: RegisteredHandler,
+  message: ZlinkStreamMessage<ZlinkStreamEncodedPayload>
+): boolean {
+  return (
+    registration.actor === undefined ||
+    registration.actor ===
+      (message as { [zlinkStreamActorBinding]?: object })[zlinkStreamActorBinding]
+  );
+}
+
 export class ZlinkStreamReceivedMessages {
-  private readonly handlers = new Map<string, Set<EncodedMessageHandler>>();
+  private readonly handlers = new Map<string, Set<RegisteredHandler>>();
   private readonly observers = new Map<string, Set<RegisteredObserver>>();
   // A handler can be registered after messages for another name arrive, so the
   // queue is not a simple FIFO. Tombstones let us remove a deliverable entry
   // without shifting every later message on the hot receive path.
   private readonly queue: Array<QueuedDispatch | undefined> = [];
+  private readonly deliverable: number[] = [];
   private queueHead = 0;
   private queuedCount = 0;
-  private drainTask: Promise<void> | undefined;
-  // True for as long as `drain` is on the stack, handler awaits included. It
+  // True for as long as `pump` is on the stack. It
   // marks the execution context a registered handler runs in, so a `dispatch`
   // made from inside a handler is recognised as re-entry rather than a fresh
   // pump. It is not a lock: a single event loop admits no second thread, and
@@ -77,19 +97,37 @@ export class ZlinkStreamReceivedMessages {
     private readonly deliverOnArrival: boolean
   ) {}
 
-  on(name: string, handler: EncodedMessageHandler): Disposable {
+  /**
+   * @param actor The Actor handle that registers the handler, if any. Its
+   *   handler receives only that Actor's packets.
+   */
+  on(name: string, handler: EncodedMessageHandler, actor?: object): Disposable {
     validateName(name);
     let set = this.handlers.get(name);
     if (set === undefined) {
       set = new Set();
       this.handlers.set(name, set);
     }
-    set.add(handler);
-    if (this.deliverOnArrival && this.hasQueuedMessage(name)) {
-      queueMicrotask(() => this.scheduleDrain());
+    const registration: RegisteredHandler = { handle: handler, actor };
+    set.add(registration);
+    let newlyDeliverable = false;
+    for (let index = this.queueHead; index < this.queue.length; index += 1) {
+      const queued = this.queue[index];
+      if (
+        queued?.kind === 'message' &&
+        queued.indexed !== true &&
+        queued.message.name === name &&
+        receives(registration, queued.message)
+      ) {
+        this.indexDeliverable(index);
+        newlyDeliverable = true;
+      }
+    }
+    if (this.deliverOnArrival && newlyDeliverable) {
+      queueMicrotask(() => this.pump());
     }
     return subscription(() => {
-      set.delete(handler);
+      set.delete(registration);
       if (set.size === 0 && this.handlers.get(name) === set) {
         this.handlers.delete(name);
       }
@@ -172,6 +210,11 @@ export class ZlinkStreamReceivedMessages {
     this.queue.push(...submittedCallbacks);
     this.queueHead = 0;
     this.queuedCount = submittedCallbacks.length;
+    this.deliverable.length = 0;
+    for (let index = 0; index < this.queue.length; index += 1) {
+      this.queue[index]!.indexed = false;
+      this.indexDeliverable(index);
+    }
   }
 
   /**
@@ -204,36 +247,85 @@ export class ZlinkStreamReceivedMessages {
     }
     this.queue.push({ kind: 'message', message, signal });
     this.queuedCount += 1;
+    this.indexDeliverable(this.queue.length - 1);
     if (this.deliverOnArrival) {
-      this.scheduleDrain();
+      this.pump();
     }
   }
 
-  enqueueCallback(callback: () => Promise<void> | void): void {
-    this.queue.push({ kind: 'callback', callback });
+  /**
+   * @param callbacks The number of handler calls `callback` makes when it runs
+   *   with the handlers registered at that moment; a callback that runs a set
+   *   of handlers reads the set's size. One callback by default.
+   */
+  enqueueCallback(callback: () => Promise<void> | void, callbacks: () => number = () => 1): void {
+    this.queue.push({ kind: 'callback', callback, callbacks });
     this.queuedCount += 1;
+    this.indexDeliverable(this.queue.length - 1);
     if (this.deliverOnArrival) {
-      this.scheduleDrain();
+      this.pump();
     }
   }
 
   /**
    * Runs the registered handlers the receive path left queued. `Manual` calls
-   * this from `dispatch`; `Immediate` has already drained on arrival.
+   * this from `dispatch`; `Immediate` drains on arrival.
    *
-   * A handler that calls `dispatch` arrives back here from inside the drain it
-   * was started by. `scheduleDrain` would find `drainTask` already set and
-   * return, and the await below would then be the drain waiting on itself —
-   * a deadlock with neither timeout nor error. The drain loop already takes
-   * every message a handler exists for, so there is nothing a second drain
-   * would deliver and returning is the whole of the correct behaviour.
+   * The drain is synchronous: the connector does not wait for a handler
+   * (spec stream-connector 32 §7), so nothing inside it awaits. A handler that
+   * calls `dispatch` arrives back here from inside the drain it was started by;
+   * the running loop already takes every deliverable entry, so returning is the
+   * whole of the correct behaviour.
    */
-  async pump(): Promise<void> {
+  pump(): void {
     if (this.draining) {
       return;
     }
-    this.scheduleDrain();
-    await this.drainTask;
+    this.draining = true;
+    try {
+      for (
+        let index = this.findDeliverableIndex();
+        index >= 0;
+        index = this.findDeliverableIndex()
+      ) {
+        const queued = this.queue[index];
+        if (queued === undefined) continue;
+        this.removeAt(index);
+        if (queued.kind === 'callback') {
+          this.events.runUserCallback(queued.callback, 'Connector callback failed.');
+          continue;
+        }
+        const { message, signal } = queued;
+        const handlers = this.receiversOf(message);
+        for (const handler of handlers) {
+          this.events.runUserCallback(
+            () => handler.handle(message, signal),
+            'Typed message handler failed.',
+            signal
+          );
+        }
+      }
+    } finally {
+      this.draining = false;
+    }
+  }
+
+  /**
+   * True while a registered callback runs from {@link pump}: the execution
+   * context spec stream-connector 32 §7 calls "inside a handler".
+   */
+  get dispatching(): boolean {
+    return this.draining;
+  }
+
+  get pendingCallbacks(): number {
+    let count = 0;
+    for (let index = this.queueHead; index < this.queue.length; index += 1) {
+      const queued = this.queue[index];
+      if (queued?.kind === 'callback' && queued.callbacks() > 0) count += 1;
+      if (queued?.kind === 'message' && this.receiversOf(queued.message).length > 0) count += 1;
+    }
+    return count;
   }
 
   private offerQueued(name: string, registration: RegisteredObserver): void {
@@ -315,24 +407,70 @@ export class ZlinkStreamReceivedMessages {
   }
 
   private findDeliverableIndex(): number {
-    for (let index = this.queueHead; index < this.queue.length; index += 1) {
+    while (this.deliverable.length > 0) {
+      const index = this.deliverable[0];
       const queued = this.queue[index];
-      if (
-        queued !== undefined &&
-        (queued.kind === 'callback' || (this.handlers.get(queued.message.name)?.size ?? 0) > 0)
-      ) {
+      if (this.isDeliverable(queued)) {
         return index;
       }
+      if (queued !== undefined) queued.indexed = false;
+      this.removeDeliverable();
     }
     return -1;
   }
 
-  private hasQueuedMessage(name: string): boolean {
-    for (let index = this.queueHead; index < this.queue.length; index += 1) {
-      const queued = this.queue[index];
-      if (queued?.kind === 'message' && queued.message.name === name) return true;
+  private indexDeliverable(index: number): void {
+    const queued = this.queue[index];
+    if (queued === undefined || !this.isDeliverable(queued) || queued.indexed === true) return;
+    queued.indexed = true;
+    let position = this.deliverable.length;
+    this.deliverable.push(index);
+    while (position > 0) {
+      const parent = Math.floor((position - 1) / 2);
+      if (this.deliverable[parent] <= index) break;
+      this.deliverable[position] = this.deliverable[parent];
+      position = parent;
     }
-    return false;
+    this.deliverable[position] = index;
+  }
+
+  private isDeliverable(queued: QueuedDispatch | undefined): boolean {
+    return (
+      queued?.kind === 'callback' ||
+      (queued?.kind === 'message' && this.receiversOf(queued.message).length > 0)
+    );
+  }
+
+  /**
+   * Spec stream-connector 32 §7 and §10: the handlers that receive `message`
+   * are the connector handlers for its name and the handle handlers of the
+   * Actor it carries. A packet no handler receives stays in the queue for the
+   * wait surfaces. This is the one place that decides it.
+   */
+  private receiversOf(message: ZlinkStreamMessage<ZlinkStreamEncodedPayload>): RegisteredHandler[] {
+    const set = this.handlers.get(message.name);
+    if (set === undefined) return [];
+    return Array.from(set).filter((registration) => receives(registration, message));
+  }
+
+  private removeDeliverable(): void {
+    if (this.deliverable.length === 0) return;
+    const last = this.deliverable.pop()!;
+    if (this.deliverable.length === 0) return;
+    let position = 0;
+    for (;;) {
+      const left = position * 2 + 1;
+      if (left >= this.deliverable.length) break;
+      const right = left + 1;
+      const child =
+        right < this.deliverable.length && this.deliverable[right] < this.deliverable[left]
+          ? right
+          : left;
+      if (this.deliverable[child] >= last) break;
+      this.deliverable[position] = this.deliverable[child];
+      position = child;
+    }
+    this.deliverable[position] = last;
   }
 
   private advanceHead(): void {
@@ -345,11 +483,19 @@ export class ZlinkStreamReceivedMessages {
     if (this.queuedCount === 0) {
       this.queue.length = 0;
       this.queueHead = 0;
+      this.deliverable.length = 0;
       return;
     }
     if (this.queueHead >= 1024 && this.queueHead * 2 >= this.queue.length) {
       this.queue.splice(0, this.queueHead);
       this.queueHead = 0;
+      this.deliverable.length = 0;
+      for (let index = 0; index < this.queue.length; index += 1) {
+        const queued = this.queue[index];
+        if (queued === undefined) continue;
+        queued.indexed = false;
+        this.indexDeliverable(index);
+      }
     }
   }
 }

@@ -28,19 +28,72 @@ internal sealed class ZlinkStreamReceiveDispatcher(
             return;
         }
 
+        if (header.Kind == ZlinkStreamMessageKind.Response)
+        {
+            var request = pending.TakeReply(header);
+            if (request is null)
+                return;
+
+            try
+            {
+                var decoded = frameSender.DecompressIfNeeded(header, frame.Payload);
+                request.Complete(
+                    new ZlinkStreamPendingCompletion(header, frame with { Payload = decoded }, null)
+                );
+            }
+            catch (ZlinkStreamException failure)
+            {
+                request.Complete(
+                    new ZlinkStreamPendingCompletion(
+                        header,
+                        frame,
+                        failure.Error.Code == ZlinkStreamErrorCode.DecompressionFailed
+                            ? failure.Error
+                            : new ZlinkStreamError(
+                                ZlinkStreamErrorCode.Disconnected,
+                                "Connection ended before the reply completed."
+                            )
+                    )
+                );
+                if (failure.Error.Code != ZlinkStreamErrorCode.DecompressionFailed)
+                    throw;
+            }
+            return;
+        }
+
         var actor = header.ActorSlot is { } actorSlot ? actors.Resolve(actorSlot) : null;
 
-        if (pending.TryComplete(header, frame, ParseErrorPayload))
+        // The receive path decompresses every payload here, once. A payload that does not
+        // decompress fails only its packet - the pending request it answers, or else the
+        // error event - and the connection stays (stream-connector spec §9). A result over
+        // the receive limit is FrameTooLarge and ends the connection in the receive loop.
+        ReadOnlyMemory<byte> payload;
+        try
+        {
+            payload = frameSender.DecompressIfNeeded(header, frame.Payload);
+        }
+        catch (ZlinkStreamException failure)
+            when (failure.Error.Code == ZlinkStreamErrorCode.DecompressionFailed)
+        {
+            var request = pending.TakeReply(header);
+            if (request is not null)
+                request.Complete(new ZlinkStreamPendingCompletion(header, frame, failure.Error));
+            else
+                await callbacks
+                    .PublishErrorAsync(failure.Error, cancellationToken)
+                    .ConfigureAwait(false);
             return;
+        }
 
-        if (header.Kind == ZlinkStreamMessageKind.Response)
-            return;
-
+        frame = frame with { Payload = payload };
         if (header.Kind == ZlinkStreamMessageKind.Error)
         {
-            await callbacks
-                .PublishErrorAsync(ParseErrorPayload(frame.Payload), cancellationToken)
-                .ConfigureAwait(false);
+            var error = ParseErrorPayload(frame.Payload);
+            var request = pending.TakeReply(header);
+            if (request is not null)
+                request.Complete(new ZlinkStreamPendingCompletion(header, frame, error));
+            else
+                await callbacks.PublishErrorAsync(error, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -99,12 +152,11 @@ internal sealed class ZlinkStreamReceiveDispatcher(
 
     private async ValueTask DispatchTypedHandlersAsync(
         ZlinkStreamHeader header,
-        ReadOnlyMemory<byte> wirePayload,
+        ReadOnlyMemory<byte> payload,
         ZlinkStreamActor? actor,
         CancellationToken cancellationToken
     )
     {
-        var payload = frameSender.DecompressIfNeeded(header, wirePayload);
         var payloadObject = new ZlinkStreamEncodedPayload(header.Codec, payload);
         var message = new ZlinkStreamMessage<ZlinkStreamEncodedPayload>(
             header.Name,
@@ -113,38 +165,75 @@ internal sealed class ZlinkStreamReceiveDispatcher(
             actor?.ActorId
         );
 
-        // Counted on arrival, before any surface takes it: the value must not depend on
-        // whether a handler is registered or on the dispatch mode (spec §10).
-        receivedMessages.CountArrival(header.Name);
-        var handlers = typedHandlers.Snapshot(header.Name);
-        if (handlers.Count == 0)
-            receivedMessages.Record(message);
+        // The packet enters the receive queue and is counted in the same step that hands it
+        // to the dispatch mode, so a counted message is already observable to Dispatch and
+        // WaitFor (spec §10). Its handlers - the connector's and, for a packet of an Actor,
+        // that Actor handle's - are decided when it is dispatched (spec §5.6, §7).
+        var entry = new MessageEntry(typedHandlers, actor, receivedMessages, callbacks);
+        await callbacks
+            .DispatchEntriesAsync(
+                [entry],
+                cancellationToken,
+                () => entry.Node = receivedMessages.Record(message)
+            )
+            .ConfigureAwait(false);
+    }
 
-        foreach (var handler in handlers)
-            await callbacks
-                .DispatchUserCallbackAsync(
-                    dispatchedToken => handler.Invoke(message, dispatchedToken),
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
+    /// <summary>
+    ///     A received packet in the dispatch queue. It goes to the handlers registered when
+    ///     it is dispatched; with none it stays queued, and a wait may take it meanwhile.
+    /// </summary>
+    private sealed class MessageEntry(
+        ZlinkStreamTypedHandlerRegistry handlers,
+        ZlinkStreamActor? actor,
+        ZlinkStreamReceivedMessages receivedMessages,
+        ZlinkStreamConnectorCallbacks callbacks
+    ) : ZlinkStreamDispatchEntry
+    {
+        public LinkedListNode<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>? Node { get; set; }
 
-        if (actor is not null)
-            await callbacks
-                .DispatchUserCallbackAsync(
-                    async dispatchedToken =>
-                    {
-                        foreach (var handler in actor.Handlers(header.Name))
-                            await callbacks
-                                .InvokeUserCallbackInlineAsync(
-                                    handlerToken => handler.Invoke(message, handlerToken),
-                                    dispatchedToken
-                                )
-                                .ConfigureAwait(false);
-                    },
-                    cancellationToken,
-                    reportErrors: false
-                )
-                .ConfigureAwait(false);
+        public override bool ReportErrors => false;
+
+        public override int PendingCallbacks =>
+            Node is { } node && receivedMessages.IsUnread(node)
+                ? Registered(node.Value.Name).Count
+                : 0;
+
+        public override Func<CancellationToken, ValueTask>? Take(out bool keep)
+        {
+            var node = Node!;
+            var registered = Registered(node.Value.Name);
+            if (registered.Count == 0)
+            {
+                keep = receivedMessages.IsUnread(node);
+                return null;
+            }
+
+            keep = false;
+            if (!receivedMessages.TryTake(node))
+                return null;
+
+            var message = node.Value;
+            return async token =>
+            {
+                foreach (var handler in registered)
+                    await callbacks
+                        .InvokeUserCallbackInlineAsync(t => handler.Invoke(message, t), token)
+                        .ConfigureAwait(false);
+            };
+        }
+
+        /// <summary>The connector handlers, then the Actor handle handlers, registered now.</summary>
+        private IReadOnlyList<ZlinkStreamTypedHandlerRegistry.TypedHandler> Registered(string name)
+        {
+            var connectorHandlers = handlers.Snapshot(name);
+            if (actor is null)
+                return connectorHandlers;
+            var actorHandlers = actor.Handlers(name);
+            if (actorHandlers.Count == 0)
+                return connectorHandlers;
+            return [.. connectorHandlers, .. actorHandlers];
+        }
     }
 
     private static ZlinkStreamError ParseErrorPayload(ReadOnlyMemory<byte> payload)
@@ -152,8 +241,8 @@ internal sealed class ZlinkStreamReceiveDispatcher(
         try
         {
             var dto = JsonSerializer.Deserialize<WireError>(payload.Span, JsonOptions);
-            if (dto is null || string.IsNullOrWhiteSpace(dto.Code))
-                throw new JsonException("Remote stream error code is required.");
+            if (dto is null || string.IsNullOrWhiteSpace(dto.Code) || dto.Message is null)
+                throw new JsonException("Remote stream error code and message are required.");
             return new ZlinkStreamError(
                 ZlinkStreamErrorCode.RemoteError,
                 string.IsNullOrWhiteSpace(dto.Message) ? dto.Code : $"{dto.Code}: {dto.Message}"

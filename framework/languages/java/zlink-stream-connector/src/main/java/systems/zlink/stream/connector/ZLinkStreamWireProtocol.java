@@ -207,14 +207,16 @@ final class ZLinkStreamWireProtocol {
 
     static Frame decodeFrame(byte[] frame, int maxPayloadSize) {
         if (frame.length < 6) {
-            throw new IllegalArgumentException("frame prefix is incomplete");
+            throw ZLinkStreamException.of(
+                    ZLinkStreamErrorCode.FRAME_DECODE_FAILED, "frame prefix is incomplete");
         }
         ByteBuffer buffer = ByteBuffer.wrap(frame);
         int headerLength = Short.toUnsignedInt(buffer.getShort());
         int payloadLength = buffer.getInt();
         int bodyLength = checkedBodyLength(headerLength, payloadLength, maxPayloadSize);
         if (frame.length != 6L + bodyLength) {
-            throw new IllegalArgumentException("frame length does not match prefix");
+            throw ZLinkStreamException.of(
+                    ZLinkStreamErrorCode.FRAME_DECODE_FAILED, "frame length does not match prefix");
         }
         byte[] header = new byte[headerLength];
         byte[] payload = new byte[payloadLength];
@@ -223,16 +225,21 @@ final class ZLinkStreamWireProtocol {
         return new Frame(header, payload);
     }
 
+    /**
+     * Checks a received frame prefix against the receive limit. Spec 32 9: a payload over the limit
+     * is {@code FrameTooLarge}; a u32 length that does not fit an {@code int} is over it too.
+     */
     static int checkedBodyLength(int headerLength, int payloadLength, int maxPayloadSize) {
-        if (payloadLength < 0) {
-            throw new IllegalArgumentException("negative payload length");
-        }
-        if (payloadLength > maxPayloadSize) {
-            throw new IllegalArgumentException("payload exceeds max receive payload size");
+        if (payloadLength < 0 || payloadLength > maxPayloadSize) {
+            throw ZLinkStreamException.of(
+                    ZLinkStreamErrorCode.FRAME_TOO_LARGE,
+                    "payload exceeds max receive payload size");
         }
         long bodyLength = (long) headerLength + payloadLength;
         if (bodyLength > Integer.MAX_VALUE) {
-            throw new IllegalArgumentException("frame body length exceeds supported size");
+            throw ZLinkStreamException.of(
+                    ZLinkStreamErrorCode.FRAME_TOO_LARGE,
+                    "frame body length exceeds supported size");
         }
         return (int) bodyLength;
     }

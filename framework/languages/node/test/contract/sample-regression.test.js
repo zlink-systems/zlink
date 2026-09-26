@@ -2155,9 +2155,11 @@ test('node sample wrappers delegate shared mechanics and sample-specific orchest
 
 test('node shared sample runner isolates Redis and application ports without Docker volumes', () => {
   const runner = readSourceText(path.join(samplesRoot, 'run-sample.mjs'));
+  const portLease = readSourceText(path.join(samplesRoot, 'port-lease.mjs'));
 
-  assert.match(runner, /const redisPortRange = \{ min: 28000, max: 28099 \}/);
-  assert.match(runner, /const applicationPortRange = \{ min: 28100, max: 29999 \}/);
+  assert.match(runner, /from '\.\/port-lease\.mjs'/);
+  assert.match(portLease, /export const redisPortRange = \{ min: 28000, max: 28099 \}/);
+  assert.match(portLease, /export const applicationPortRange = \{ min: 28100, max: 29999 \}/);
   assert.match(runner, /const dockerCommandTimeoutMs = 10_000/);
   assert.match(runner, /'create', '--name', name, '--tmpfs', '\/data', '-p', `127\.0\.0\.1:\$\{port\}:6379`/);
   assert.match(runner, /\.NetworkSettings\.Ports \"6379\/tcp\"/);
@@ -2173,9 +2175,9 @@ test('node shared sample runner isolates Redis and application ports without Doc
   assert.match(runner, /removeRedisAttempt\(redisContainer, ''\)/);
   assert.match(runner, /reserveBrowserSafePort/);
   assert.match(runner, /reserveLeasedPort\(applicationPortRange, 'application'\)/);
-  assert.match(runner, /path\.join\(os\.tmpdir\(\), 'zlink-sample-port-leases'\)/);
-  assert.match(runner, /fs\.openSync\(leasePath, 'wx', 0o600\)/);
-  assert.match(runner, /for \(const leasePath of portLeases\.values\(\)\) fs\.rmSync/);
+  assert.match(portLease, /path\.join\(os\.tmpdir\(\), 'zlink-sample-port-leases'\)/);
+  assert.match(portLease, /fs\.linkSync\(draft, leasePath\)/);
+  assert.match(runner, /for \(const leasePath of portLeases\.values\(\)\) releaseLeaseFile\(leasePath\)/);
   assert.match(runner, /printLogs\(\)/);
   const signalHandlerOffset = runner.indexOf("for (const signal of ['SIGINT', 'SIGTERM'])");
   const mainInvocationOffset = runner.indexOf('await main();');

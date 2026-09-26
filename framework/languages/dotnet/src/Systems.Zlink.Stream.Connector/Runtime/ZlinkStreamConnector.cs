@@ -41,11 +41,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         ZlinkStreamConnectorOptionsValidator.Validate(options);
         _taskRunner = new ZlinkStreamTaskRunner(_lifetimeCts.Token);
         _receivedMessages = new ZlinkStreamReceivedMessages();
-        _callbacks = new ZlinkStreamConnectorCallbacks(
-            _taskRunner,
-            options.DispatchMode,
-            options.MaxPendingDispatchCallbacks
-        );
+        _callbacks = new ZlinkStreamConnectorCallbacks(_taskRunner, options.DispatchMode);
         _actors = new ZlinkStreamActors(this, _callbacks);
         _headerCodec = new ZlinkStreamHeaderCodec();
         _compressionCodec = CreateCompressionCodec(options);
@@ -62,6 +58,11 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             {
                 await _actors.ConnectionEndedAsync().ConfigureAwait(false);
                 _receivedMessages.ConnectionEnded();
+            },
+            async () =>
+            {
+                _oneWaySubmits.Complete();
+                await _oneWaySubmits.WaitForCompletionAsync().ConfigureAwait(false);
             }
         );
         _frameSender = new ZlinkStreamFrameSender(
@@ -73,9 +74,8 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         );
         _oneWaySubmits = new ZlinkStreamOneWaySubmitQueue(
             _taskRunner,
-            _callbacks,
-            (frame, cancellationToken) =>
-                ((IZlinkStreamConnectorInternal)this).SendFrameAsync(frame, cancellationToken)
+            () => _lifecycle.Connection,
+            SendFrameAsync
         );
         _receiveDispatcher = new ZlinkStreamReceiveDispatcher(
             _headerCodec,
@@ -204,10 +204,13 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
     {
         if (handler is null)
             throw new ArgumentNullException(nameof(handler));
-        ThrowIfClosed();
+        ThrowIfDisposed();
         ValidateName(name);
 
-        return _typedHandlers.Add(name, handler);
+        var registration = _typedHandlers.Add(name, handler);
+        // Packets already queued for this name now have a handler (stream-connector spec §10).
+        _callbacks.HandlerRegistered();
+        return registration;
     }
 
     public IZlinkStreamWaitCall WaitFor(string name)
@@ -238,7 +241,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         CancellationToken cancellationToken
     )
     {
-        ThrowIfDisposed();
+        ThrowIfClosed();
         ValidateName(name);
         return _receivedMessages.WaitForAsync(name, predicate, timeout, cancellationToken);
     }
@@ -265,7 +268,8 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         return frame;
     }
 
-    async ValueTask IZlinkStreamConnectorInternal.SendFrameAsync(
+    private async ValueTask SendFrameAsync(
+        IZlinkStreamConnection connection,
         ZlinkStreamOutboundFrame frame,
         CancellationToken cancellationToken
     )
@@ -273,14 +277,26 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         try
         {
             await _frameSender
-                .SendPacketAsync(frame.HeaderBytes, frame.PayloadBytes, cancellationToken)
+                .SendPacketAsync(
+                    connection,
+                    frame.HeaderBytes,
+                    frame.PayloadBytes,
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
         }
         catch (ZlinkStreamException ex)
         {
-            await _lifecycle
-                .HandleTransportErrorAsync(ex.Error, cancellationToken)
-                .ConfigureAwait(false);
+            if (
+                !await _lifecycle
+                    .HandleTransportErrorAsync(ex.Error, cancellationToken, connection)
+                    .ConfigureAwait(false)
+            )
+                throw Error(
+                    ZlinkStreamErrorCode.Disconnected,
+                    "The connection ended while this frame was being written.",
+                    ex
+                );
             throw;
         }
     }
@@ -291,7 +307,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
     )
     {
         ThrowIfDisposed();
-        return _oneWaySubmits.SubmitAsync(frame, cancellationToken);
+        return _oneWaySubmits.SendAsync(frame, cancellationToken);
     }
 
     async ValueTask<ZlinkStreamEncodedPayload> IZlinkStreamConnectorInternal.RequestEncodedAsync(
@@ -420,14 +436,9 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
     private async Task FinalizeAfterStartAsync(Task started)
     {
         await started.ConfigureAwait(false);
-        _oneWaySubmits.Complete();
         try
         {
-            // A successful one-way terminal means the frame entered this bounded
-            // queue. Dispose must let every accepted frame finish writing before
-            // it closes the transport that owns those writes.
-            await _oneWaySubmits.WaitForCompletionAsync().ConfigureAwait(false);
-            await _lifecycle.CloseAsync(CancellationToken.None).ConfigureAwait(false);
+            await CloseCoreAsync(CancellationToken.None).ConfigureAwait(false);
         }
         finally
         {
@@ -459,7 +470,8 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
 
     private async ValueTask DispatchCoreAsync(CancellationToken cancellationToken = default)
     {
-        ThrowIfDisposed();
+        // Dispatch does not fail after close (stream-connector spec §12): Manual mode runs
+        // the callbacks of the close here, and a disposed connector has none left to run.
         await _callbacks.DispatchAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -489,11 +501,9 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
                 )
                 .ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (ZlinkStreamException ex)
         {
-            var error = ex is ZlinkStreamException streamError
-                ? streamError.Error
-                : new ZlinkStreamError(ZlinkStreamErrorCode.SendFailed, ex.Message, ex);
+            // A caller cancellation is not caught here, so it does not run this hook (§5.7).
             await _callbacks
                 .NotifyReplyReceivedAsync(
                     new ZlinkStreamReplyReceivedContext(
@@ -501,7 +511,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
                         actorId,
                         false,
                         null,
-                        error,
+                        ex.Error,
                         TimeSpan.FromSeconds(
                             (Stopwatch.GetTimestamp() - started) / (double)Stopwatch.Frequency
                         )
@@ -574,8 +584,9 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(
                 cancellationToken
             );
-            timeoutCts.CancelAfter(timeout);
-            await _oneWaySubmits.SendAsync(frame, timeoutCts.Token).ConfigureAwait(false);
+            await _oneWaySubmits
+                .SubmitRequestAsync(frame, timeoutCts.Token, () => timeoutCts.CancelAfter(timeout))
+                .ConfigureAwait(false);
 
             var pendingCompletion = await _pending
                 .WaitAsync(pending, timeoutCts.Token)
@@ -584,12 +595,9 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             if (pendingCompletion.Error is { } remoteError)
                 return new ZlinkStreamRequestCompletion(null, remoteError, replyHeader.Metadata);
 
-            var replyBody = _frameSender.DecompressIfNeeded(
-                replyHeader,
-                pendingCompletion.Frame.Payload
-            );
+            // The receive path already decompressed the reply.
             return new ZlinkStreamRequestCompletion(
-                new ZlinkStreamEncodedPayload(replyHeader.Codec, replyBody),
+                new ZlinkStreamEncodedPayload(replyHeader.Codec, pendingCompletion.Frame.Payload),
                 null,
                 replyHeader.Metadata
             );
@@ -606,14 +614,12 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
 
     private string ResolveName(Type payloadType)
     {
-        ThrowIfClosed();
         var name = _nameResolver.Resolve(payloadType);
         return name;
     }
 
     private string? ResolveNameOrDefault(ZlinkStreamEncodedPayload payload)
     {
-        ThrowIfClosed();
         if (payload.MessageType is null)
             return null;
 

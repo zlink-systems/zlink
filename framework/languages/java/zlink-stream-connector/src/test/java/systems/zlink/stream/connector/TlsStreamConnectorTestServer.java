@@ -84,6 +84,11 @@ final class TlsStreamConnectorTestServer implements Closeable {
                 true);
     }
 
+    /** The server stops reading, as a peer that no longer takes frames off the socket. */
+    void stopReading() {
+        awaitClientChannel().config().setAutoRead(false);
+    }
+
     CompletableFuture<TcpStreamConnectorTestServer.ReceivedFrame> readFrameAsync() {
         synchronized (this) {
             if (!frames.isEmpty()) {
