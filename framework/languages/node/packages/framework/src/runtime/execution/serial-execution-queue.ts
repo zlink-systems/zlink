@@ -175,8 +175,13 @@ export class ZLinkSerialExecutionQueue {
 
   /** Stops new submissions while allowing the accepted FIFO to finish. */
   close(): Promise<void> {
-    this.closed = true;
+    this.closeAdmission();
     return this.whenIdle();
+  }
+
+  /** Stops admission within the lifecycle operation that owns this queue's close. */
+  closeAdmission(): void {
+    this.closed = true;
   }
 
   private admit<T>(

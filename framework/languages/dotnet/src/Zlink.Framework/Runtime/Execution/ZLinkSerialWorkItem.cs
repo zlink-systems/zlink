@@ -40,6 +40,8 @@ internal sealed class ZLinkSerialWorkItem
     public Task Completion => _completion.Task;
 
     internal ZLinkSerialWorkItem? Next { get; set; }
+    internal ZLinkSerialWorkItem? LifecycleOwner { get; set; }
+    internal ZLinkSerialWorkItem? ReadyContinuation { get; set; }
 
     public ulong AcceptedSequence { get; }
     public ReadOnlyMemory<byte> AcceptedPayload
@@ -72,6 +74,33 @@ internal sealed class ZLinkSerialWorkItem
             throw new InvalidOperationException(
                 "ZLink serial work already has a terminal release callback."
             );
+    }
+
+    internal void AddTerminalRelease(Action release)
+    {
+        ArgumentNullException.ThrowIfNull(release);
+        var current =
+            Volatile.Read(ref _terminalRelease)
+            ?? throw new InvalidOperationException("The work item has no terminal owner.");
+        if (
+            Volatile.Read(ref _terminalReleased) != 0
+            || Interlocked.CompareExchange(
+                ref _terminalRelease,
+                () =>
+                {
+                    try
+                    {
+                        release();
+                    }
+                    finally
+                    {
+                        current();
+                    }
+                },
+                current
+            ) != current
+        )
+            throw new InvalidOperationException("The work item terminal release has changed.");
     }
 
     public ZLinkAcceptedWorkRecord CreateAcceptedRecord()

@@ -413,60 +413,6 @@ std::vector<std::byte> closing_user_spot_authority_payload (const stateful::obje
        .node_generation = target.node_lifecycle_generation});
 }
 
-struct instance_closing_state_t
-{
-    std::string stable_type;
-    std::string spot_id;
-    std::uint64_t object_generation = 0;
-    std::uint64_t authority_owner_generation = 0;
-};
-
-std::vector<std::byte> encode_instance_closing_state (const instance_closing_state_t &state)
-{
-    const std::string value = "zlink:instance-spot:closing:v1\n" + state.stable_type + "\n"
-                              + state.spot_id + "\n" + std::to_string (state.object_generation)
-                              + "\n" + std::to_string (state.authority_owner_generation);
-    std::vector<std::byte> result;
-    result.reserve (value.size ());
-    for (const auto character : value)
-        result.push_back (static_cast<std::byte> (static_cast<unsigned char> (character)));
-    return result;
-}
-
-std::optional<instance_closing_state_t>
-decode_instance_closing_state (const std::vector<std::byte> &payload)
-{
-    std::string value;
-    value.reserve (payload.size ());
-    for (const auto character : payload)
-        value.push_back (static_cast<char> (std::to_integer<unsigned char> (character)));
-    constexpr std::string_view prefix = "zlink:instance-spot:closing:v1\n";
-    if (value.rfind (prefix, 0) != 0)
-        return std::nullopt;
-    std::vector<std::string> fields;
-    std::size_t begin = prefix.size ();
-    while (begin <= value.size ()) {
-        const auto end = value.find ('\n', begin);
-        fields.push_back (
-          value.substr (begin, end == std::string::npos ? std::string::npos : end - begin));
-        if (end == std::string::npos)
-            break;
-        begin = end + 1;
-    }
-    if (fields.size () != 4 || fields[0].empty () || fields[1].empty ())
-        return std::nullopt;
-    try {
-        const auto object_generation = std::stoull (fields[2]);
-        const auto owner_generation = std::stoull (fields[3]);
-        if (object_generation == 0 || owner_generation == 0)
-            return std::nullopt;
-        return instance_closing_state_t{fields[0], fields[1], object_generation, owner_generation};
-    }
-    catch (...) {
-        return std::nullopt;
-    }
-}
-
 std::uint64_t unix_milliseconds_now ()
 {
     return static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (
@@ -1246,7 +1192,8 @@ stateful::raw_relocation_replay_coordinator_t &public_host_runtime_t::relocation
 
 void public_host_runtime_t::configure_user_spot_operations (
   std::shared_ptr<zlink::framework::location_repository_t> store,
-  user_spot_materializer_t materializer)
+  user_spot_materializer_t materializer,
+  user_spot_closer_t closer)
 {
     if (!store || !materializer)
         throw std::invalid_argument (
@@ -1257,6 +1204,7 @@ void public_host_runtime_t::configure_user_spot_operations (
               throw std::logic_error ("User Spot operations must be configured before start");
           _user_spot_store = std::move (store);
           _user_spot_materializer = std::move (materializer);
+          _user_spot_closer = std::move (closer);
           _route_cache_lane.run ([this] { _spot_route_fences.clear (); }).get ();
       })
       .get ();
@@ -1333,15 +1281,84 @@ void public_host_runtime_t::configure_instance_spot_operations (
       .get ();
 }
 
-std::optional<instance_spot_close_completion_t>
+namespace
+{
+
+using close_completion_t = std::shared_ptr<detail::task_completion_source_t<spot_close_commit_t>>;
+
+void complete_close_step (const close_completion_t &completion, spot_close_commit_t commit)
+{
+    completion->complete (result_t<spot_close_commit_t>::success (std::move (commit)));
+}
+
+spot_close_commit_t close_step_failure (framework_error_kind_t kind, const char *message)
+{
+    return {result_t<bool>::failure (kind, message), {}};
+}
+
+template <typename T> result_t<bool> close_store_failure (const result_t<T> &failed)
+{
+    return result_t<bool>::failure (failed.error_kind (), failed.error ()
+                                                            ? failed.error ()->what ()
+                                                            : "Location Store operation failed");
+}
+
+/* Step 4: deletes the Closing authority with the same owner and generation
+ * fence (the Closing StoreVersion). `after_delete` runs once the row is gone. */
+std::function<task_t<bool> ()>
+release_closing_authority (std::shared_ptr<zlink::framework::location_repository_t> store,
+                           authority_key_t authority_key,
+                           std::string closing_version,
+                           std::function<result_t<bool> ()> before_delete,
+                           std::function<void ()> after_delete)
+{
+    return [store = std::move (store), authority_key = std::move (authority_key),
+            closing_version = std::move (closing_version),
+            before_delete = std::move (before_delete), after_delete = std::move (after_delete)] () {
+        auto completion = std::make_shared<detail::task_completion_source_t<bool>> ();
+        auto output = completion->task ();
+        if (before_delete) {
+            auto ready = before_delete ();
+            if (!ready) {
+                completion->complete (std::move (ready));
+                return output;
+            }
+        }
+        after_close_step (
+          store->compare_exchange_authority (authority_key, closing_version, authority_delete_t{}),
+          {}, [completion, after_delete] (result_t<authority_compare_exchange_result_t> deleted) {
+              if (!deleted) {
+                  completion->complete (close_store_failure (deleted));
+                  return;
+              }
+              if (!std::holds_alternative<authority_deleted_t> (deleted.value ())) {
+                  completion->complete (result_t<bool>::failure (
+                    framework_error_kind_t::internal_failure, "Spot authority release failed"));
+                  return;
+              }
+              if (after_delete)
+                  after_delete ();
+              completion->complete (result_t<bool>::success (true));
+          });
+        return output;
+    };
+}
+
+} // namespace
+
+task_t<spot_close_commit_t>
 public_host_runtime_t::begin_instance_spot_close (const std::string &stable_type,
                                                   const std::string &spot_id,
                                                   std::uint64_t object_generation,
                                                   std::uint64_t authority_owner_generation)
 {
+    auto completion = std::make_shared<detail::task_completion_source_t<spot_close_commit_t>> ();
+    auto output = completion->task ();
     if (stable_type.empty () || spot_id.empty () || object_generation == 0
-        || authority_owner_generation == 0)
-        return std::nullopt;
+        || authority_owner_generation == 0) {
+        complete_close_step (completion, {});
+        return output;
+    }
 
     std::shared_ptr<zlink::framework::location_repository_t> store;
     std::function<std::optional<location_owner_token_t> ()> instance_owner_resolver;
@@ -1352,103 +1369,297 @@ public_host_runtime_t::begin_instance_spot_close (const std::string &stable_type
       })
       .get ();
     const auto instance_owner = instance_owner_resolver ? instance_owner_resolver () : std::nullopt;
-    if (!store || !instance_owner)
-        return std::nullopt;
+    if (!store || !instance_owner) {
+        complete_close_step (completion, {});
+        return output;
+    }
 
     const auto authority_key = spot_authority_key (spot_id);
-    const auto current = store->read_authority (authority_key).result ().value ();
-    const auto *snapshot = std::get_if<authority_snapshot_t> (&current);
-    if (!snapshot || snapshot->allocation.state != placement_allocation_state_t::active
-        || snapshot->allocation.object_kind != placement_object_kind_t::instance_spot
-        || snapshot->allocation.stable_type != stable_type
-        || snapshot->object_generation != object_generation
-        || snapshot->authority_owner_generation != authority_owner_generation
-        || snapshot->allocation.target.owner.owner_id != instance_owner->owner_id
-        || snapshot->allocation.target.owner.lease_generation != instance_owner->lease_generation)
-        return std::nullopt;
-
     const auto local = status ();
-    if (snapshot->allocation.target.mesh_name != _options.mesh.descriptor.mesh_name
-        || snapshot->allocation.target.node_rid.value ()
-             != node_rid_t::from_string (local.routing_id ().to_string ()).value ()
-        || snapshot->allocation.target.node_lifecycle_generation != local.lifecycle_generation ())
-        return std::nullopt;
-
-    const auto ready = decode_instance_spot_authority_payload (snapshot->payload);
-    if (!ready || ready->state != instance_spot_authority_state_t::ready
-        || ready->stable_type != stable_type || ready->spot_id != spot_id
-        || ready->owner_id != instance_owner->owner_id
-        || ready->owner_lease_generation
-             != static_cast<std::uint64_t> (instance_owner->lease_generation)
-        || ready->mesh_name != snapshot->allocation.target.mesh_name
-        || ready->node_rid.value () != snapshot->allocation.target.node_rid.value ()
-        || ready->node_generation != snapshot->allocation.target.node_lifecycle_generation
-        || ready->activation_recovery)
-        return std::nullopt;
-
-    const auto sealed =
-      store
-        ->compare_exchange_authority (
-          authority_key, snapshot->store_version,
-          authority_put_t{encode_instance_closing_state (instance_closing_state_t{
-            stable_type, spot_id, object_generation, authority_owner_generation})})
-        .result ()
-        .value ();
-    const auto *closing = std::get_if<authority_stored_t> (&sealed);
-    if (!closing)
-        return std::nullopt;
-
-    const auto ready_payload = snapshot->payload;
-    const auto closing_version = closing->snapshot.store_version;
-    auto completed = std::make_shared<std::atomic_bool> (false);
-    return instance_spot_close_completion_t{
-      [store = std::move (store), authority_key, ready_payload, closing_version,
-       completed = std::move (completed)] (bool local_closed) {
-          if (completed->exchange (true, std::memory_order_acq_rel)) {
-              return false;
+    const auto mesh_name = _options.mesh.descriptor.mesh_name;
+    after_close_step (
+      store->read_authority (authority_key), {},
+      [completion, store, authority_key, stable_type, spot_id, object_generation,
+       authority_owner_generation, instance_owner = *instance_owner, local,
+       mesh_name] (result_t<authority_read_result_t> current) {
+          if (!current) {
+              complete_close_step (completion, {close_store_failure (current), {}});
+              return;
           }
-          if (!local_closed) {
-              (void) store
-                ->compare_exchange_authority (authority_key, closing_version,
-                                              authority_put_t{ready_payload})
-                .result ();
-              return false;
+          const auto *snapshot = std::get_if<authority_snapshot_t> (&current.value ());
+          if (!snapshot || snapshot->allocation.state != placement_allocation_state_t::active
+              || snapshot->allocation.object_kind != placement_object_kind_t::instance_spot
+              || snapshot->allocation.stable_type != stable_type
+              || snapshot->object_generation != object_generation
+              || snapshot->authority_owner_generation != authority_owner_generation
+              || snapshot->allocation.target.owner.owner_id != instance_owner.owner_id
+              || snapshot->allocation.target.owner.lease_generation
+                   != instance_owner.lease_generation
+              || snapshot->allocation.target.mesh_name != mesh_name
+              || snapshot->allocation.target.node_rid.value ()
+                   != node_rid_t::from_string (local.routing_id ().to_string ()).value ()
+              || snapshot->allocation.target.node_lifecycle_generation
+                   != local.lifecycle_generation ()) {
+              complete_close_step (completion, {});
+              return;
           }
 
-          const auto deleted =
-            store->compare_exchange_authority (authority_key, closing_version, authority_delete_t{})
-              .result ()
-              .value ();
-          return std::holds_alternative<authority_deleted_t> (deleted);
-      }};
+          // A Close that committed Closing for this owner and generation
+          // resumes from its remaining steps (Spot address messaging §7).
+          if (const auto closing = decode_instance_closing_state (snapshot->payload);
+              closing && closing->stable_type == stable_type && closing->spot_id == spot_id
+              && closing->object_generation == object_generation
+              && closing->authority_owner_generation == authority_owner_generation) {
+              complete_close_step (completion,
+                                   {result_t<bool>::success (true),
+                                    release_closing_authority (store, authority_key,
+                                                               snapshot->store_version, {}, {})});
+              return;
+          }
+
+          const auto ready = decode_instance_spot_authority_payload (snapshot->payload);
+          if (!ready || ready->state != instance_spot_authority_state_t::ready
+              || ready->stable_type != stable_type || ready->spot_id != spot_id
+              || ready->owner_id != instance_owner.owner_id
+              || ready->owner_lease_generation
+                   != static_cast<std::uint64_t> (instance_owner.lease_generation)
+              || ready->mesh_name != snapshot->allocation.target.mesh_name
+              || ready->node_rid.value () != snapshot->allocation.target.node_rid.value ()
+              || ready->node_generation != snapshot->allocation.target.node_lifecycle_generation
+              || ready->activation_recovery) {
+              complete_close_step (completion, {});
+              return;
+          }
+          after_close_step (
+            store->compare_exchange_authority (
+              authority_key, snapshot->store_version,
+              authority_put_t{encode_instance_closing_state (instance_closing_state_t{
+                stable_type, spot_id, object_generation, authority_owner_generation})}),
+            {},
+            [completion, store,
+             authority_key] (result_t<authority_compare_exchange_result_t> sealed) {
+                if (!sealed) {
+                    complete_close_step (completion, {close_store_failure (sealed), {}});
+                    return;
+                }
+                const auto *closing = std::get_if<authority_stored_t> (&sealed.value ());
+                if (!closing) {
+                    complete_close_step (completion, {});
+                    return;
+                }
+                complete_close_step (
+                  completion, {result_t<bool>::success (true),
+                               release_closing_authority (
+                                 store, authority_key, closing->snapshot.store_version, {}, {})});
+            });
+      });
+    return output;
 }
 
 bool public_host_runtime_t::evict_instance_spot (const std::string &stable_type,
                                                  const std::string &spot_id,
                                                  std::uint64_t object_generation,
                                                  std::uint64_t authority_owner_generation,
-                                                 std::function<bool ()> close_local)
+                                                 std::function<void ()> close_local)
 {
     if (!close_local)
         return false;
-
-    auto completion = begin_instance_spot_close (stable_type, spot_id, object_generation,
-                                                 authority_owner_generation);
-    if (!completion)
+    /* Idle cleanup calls this from its maintenance thread after it sealed the
+     * activation and re-checked serial quiescence (Object lifecycle §5), so
+     * the local close cannot be refused once Closing is committed and no path
+     * returns the authority to Ready. */
+    const auto begun = begin_instance_spot_close (stable_type, spot_id, object_generation,
+                                                  authority_owner_generation)
+                         .result ();
+    if (!begun || !begun.value ().release)
         return false;
-
-    bool local_closed = false;
     try {
-        local_closed = close_local ();
+        close_local ();
     }
     catch (...) {
-        /* try_close_idle marks the local context closed before invoking the
-         * application callback. A callback exception therefore still leaves
-         * the local instance unavailable and the sealed authority must not be
-         * reopened. */
-        local_closed = true;
+        /* commit_idle_close marks the local context closed before invoking
+         * the application callback, so the activation is gone either way. */
     }
-    return (*completion) (local_closed);
+    const auto released = begun.value ().release ().result ();
+    return released && released.value ();
+}
+
+task_t<spot_close_commit_t>
+public_host_runtime_t::begin_user_spot_close (protocol::user_spot_close_fence_t target)
+{
+    auto completion = std::make_shared<detail::task_completion_source_t<spot_close_commit_t>> ();
+    auto output = completion->task ();
+    std::shared_ptr<zlink::framework::location_repository_t> store;
+    std::function<std::optional<location_owner_token_t> ()> owner_resolver;
+    _lifecycle_configuration_lane
+      .run ([&] {
+          store = _user_spot_store;
+          owner_resolver = _session_route_owner_resolver;
+      })
+      .get ();
+    if (!store) {
+        complete_close_step (completion,
+                             close_step_failure (framework_error_kind_t::not_configured,
+                                                 "User Spot close requires a Location Store"));
+        return output;
+    }
+    const auto authority_key = spot_authority_key (target.spot_id);
+    auto self = shared_from_this ();
+    after_close_step (
+      store->read_authority (authority_key), {},
+      [self, completion, store, owner_resolver, authority_key,
+       target = std::move (target)] (result_t<authority_read_result_t> read) {
+          const auto moving = [] {
+              return close_step_failure (framework_error_kind_t::unavailable,
+                                         "User Spot owner is moving");
+          };
+          if (!read) {
+              complete_close_step (completion, {close_store_failure (read), {}});
+              return;
+          }
+          const auto *snapshot = std::get_if<authority_snapshot_t> (&read.value ());
+          if (!snapshot) {
+              complete_close_step (completion, {});
+              return;
+          }
+          if (snapshot->object_generation != target.object_generation) {
+              complete_close_step (completion,
+                                   close_step_failure (framework_error_kind_t::invalid_operation,
+                                                       "User Spot generation is stale"));
+              return;
+          }
+          // The one classification of a Close request (§7.1, §9): another
+          // ObjectGeneration is InvalidOperation; any other owner fence field,
+          // including this runtime's Mesh, node and current owner lease, or an
+          // allocation that is not active is a moving owner (Unavailable).
+          const auto local = self->status ();
+          const auto owner = owner_resolver ? owner_resolver () : std::nullopt;
+          // A local owner request carries no StoreVersion; command 48 always does.
+          if (snapshot->authority_owner_generation != target.authority_owner_generation
+              || (!target.expected_store_version.empty ()
+                  && snapshot->store_version != target.expected_store_version)
+              || snapshot->allocation.object_kind != placement_object_kind_t::user_spot
+              || snapshot->allocation.state != placement_allocation_state_t::active
+              || snapshot->allocation.target.node_rid.value ()
+                   != node_rid_t::from_string (
+                        zlink::routing_id_t::from (target.target_node_routing_id).to_string ())
+                        .value ()
+              || snapshot->allocation.target.node_lifecycle_generation
+                   != target.target_node_generation
+              || snapshot->allocation.target.mesh_name != self->_options.mesh.descriptor.mesh_name
+              || snapshot->allocation.target.node_rid.value ()
+                   != node_rid_t::from_string (local.routing_id ().to_string ()).value ()
+              || snapshot->allocation.target.node_lifecycle_generation
+                   != local.lifecycle_generation ()
+              || (owner
+                  && (snapshot->allocation.target.owner.owner_id != owner->owner_id
+                      || snapshot->allocation.target.owner.lease_generation
+                           != owner->lease_generation))) {
+              complete_close_step (completion, moving ());
+              return;
+          }
+          const stateful::object_ref_t exact_ref{
+            stateful::object_kind_t::user_spot,
+            target.spot_id,
+            target.object_generation,
+            target.authority_owner_generation,
+            snapshot->allocation.target.mesh_name,
+            std::string (snapshot->allocation.target.node_rid.value ())};
+          const auto ready_payload = ready_user_spot_authority_payload (
+            exact_ref, snapshot->allocation.stable_type, snapshot->allocation.target);
+          const auto closing_payload = closing_user_spot_authority_payload (
+            exact_ref, snapshot->allocation.stable_type, snapshot->allocation.target);
+
+          // Step 4 releases the local object record, then the authority row.
+          const auto release_from = [self, store, authority_key, key = exact_ref.key] (
+                                      std::string closing_version, stateful::object_ref_t ref) {
+              return release_closing_authority (
+                store, authority_key, std::move (closing_version),
+                [self, ref] {
+                    // The record that the Closing commit sealed is found by its
+                    // exact ref, so a resumed Close retries a failed release.
+                    const auto token = self->_objects.closing_spot_token (ref);
+                    if (token
+                        && self->_objects.commit_close_spot (*token)
+                             != stateful::stateful_error_t::none)
+                        return result_t<bool>::failure (framework_error_kind_t::internal_failure,
+                                                        "User Spot record release failed");
+                    return result_t<bool>::success (true);
+                },
+                [self, key] {
+                    self->_spot_actor_index_lane.run ([&] { self->_spots.erase (key); }).get ();
+                });
+          };
+
+          if (snapshot->payload == closing_payload) {
+              // Closing is committed for this owner and generation: a later
+              // Close resumes the remaining steps without repeating the
+              // completed ones.
+              complete_close_step (completion, {result_t<bool>::success (true),
+                                                release_from (snapshot->store_version, exact_ref)});
+              return;
+          }
+          if (snapshot->payload != ready_payload) {
+              complete_close_step (completion, moving ());
+              return;
+          }
+          const auto local_object =
+            self->_objects.find (stateful::object_kind_t::user_spot, exact_ref.key);
+          if (!local_object || *local_object != exact_ref) {
+              complete_close_step (completion, moving ());
+              return;
+          }
+          auto [close_error, token] = self->_objects.begin_close_spot (exact_ref);
+          if (close_error == stateful::stateful_error_t::generation_stale) {
+              complete_close_step (completion,
+                                   close_step_failure (framework_error_kind_t::invalid_operation,
+                                                       "User Spot generation is stale"));
+              return;
+          }
+          if (close_error != stateful::stateful_error_t::none) {
+              complete_close_step (completion, moving ());
+              return;
+          }
+          // Actor membership keeps admission and authority (§7).
+          if (!token) {
+              complete_close_step (completion, {});
+              return;
+          }
+          after_close_step (
+            store->compare_exchange_authority (authority_key, snapshot->store_version,
+                                               authority_put_t{closing_payload}),
+            {},
+            [self, completion, exact_ref, release_from, moving,
+             token = *token] (result_t<authority_compare_exchange_result_t> sealed) {
+                const auto *closing =
+                  sealed ? std::get_if<authority_stored_t> (&sealed.value ()) : nullptr;
+                if (!closing) {
+                    (void) self->_objects.abort_close_spot (token);
+                    complete_close_step (
+                      completion,
+                      sealed ? moving () : spot_close_commit_t{close_store_failure (sealed), {}});
+                    return;
+                }
+                complete_close_step (completion,
+                                     {result_t<bool>::success (true),
+                                      release_from (closing->snapshot.store_version, exact_ref)});
+            });
+      });
+    return output;
+}
+
+task_t<spot_close_commit_t>
+public_host_runtime_t::begin_local_user_spot_close (const std::string &spot_id,
+                                                    std::uint64_t object_generation,
+                                                    std::uint64_t authority_owner_generation)
+{
+    const auto local = status ();
+    return begin_user_spot_close (protocol::user_spot_close_fence_t{spot_id,
+                                                                    object_generation,
+                                                                    local.routing_id ().to_bytes (),
+                                                                    local.lifecycle_generation (),
+                                                                    authority_owner_generation,
+                                                                    {}});
 }
 
 void public_host_runtime_t::configure_session_route_owner (
@@ -3865,6 +4076,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
 {
     std::shared_ptr<zlink::framework::location_repository_t> store;
     user_spot_materializer_t materializer;
+    user_spot_closer_t user_spot_closer;
     actor_create_operation_target_t actor_create_target;
     actor_join_operation_target_t actor_join_target;
     instance_spot_activation_materializer_t instance_materializer;
@@ -3879,6 +4091,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
       .run ([&] {
           store = _user_spot_store;
           materializer = _user_spot_materializer;
+          user_spot_closer = _user_spot_closer;
           actor_create_target = _actor_create_target;
           actor_join_target = _actor_join_target;
           instance_materializer = _instance_spot_materializer;
@@ -4906,9 +5119,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                       .run ([&] {
                           const auto now = unix_milliseconds_now ();
                           std::erase_if (_user_spot_terminals, [this, now] (const auto &entry) {
-                              return user_spot_operation_replay_expired (
-                                entry.second.deadline_unix_ms, now,
-                                _options.user_spot_operation_replay_retention);
+                              return !entry.second.header.empty ()
+                                     && user_spot_operation_replay_expired (
+                                       entry.second.deadline_unix_ms, now,
+                                       _options.user_spot_operation_replay_retention);
                           });
                           const auto found = _user_spot_terminals.find (operation_key);
                           if (found != _user_spot_terminals.end ())
@@ -5169,51 +5383,87 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                 const auto operation_key =
                   user_spot_operation_key (request.source_node_routing_id,
                                            request.source_node_generation, request.operation);
+                /* One operation ID has one terminal result (§7.1). The table
+                 * decides in one lane turn whether this record replays the
+                 * terminal, joins the running operation, or starts it. */
+                enum class admission_t
+                {
+                    start,
+                    replay,
+                    joined,
+                    expired
+                };
                 std::optional<user_spot_terminal_record_t> cached;
-                _user_spot_terminal_lane
-                  .run ([&] {
-                      const auto now = unix_milliseconds_now ();
-                      std::erase_if (_user_spot_terminals, [this, now] (const auto &entry) {
-                          return user_spot_operation_replay_expired (
-                            entry.second.deadline_unix_ms, now,
-                            _options.user_spot_operation_replay_retention);
-                      });
-                      const auto found = _user_spot_terminals.find (operation_key);
-                      if (found != _user_spot_terminals.end ())
-                          cached = found->second;
-                  })
-                  .get ();
-                if (cached) {
-                    if (cached->kind != protocol::command::userSpotClose
-                        || cached->request_fingerprint != request_fingerprint)
-                        throw protocol::service_wire_error_t (
-                          "user spot operation identity was reused with a different request");
+                const auto admission =
+                  _user_spot_terminal_lane
+                    .run ([&] {
+                        const auto now = unix_milliseconds_now ();
+                        std::erase_if (_user_spot_terminals, [this, now] (const auto &entry) {
+                            return !entry.second.header.empty ()
+                                   && user_spot_operation_replay_expired (
+                                     entry.second.deadline_unix_ms, now,
+                                     _options.user_spot_operation_replay_retention);
+                        });
+                        const auto found = _user_spot_terminals.find (operation_key);
+                        if (found != _user_spot_terminals.end ()) {
+                            if (found->second.kind != protocol::command::userSpotClose
+                                || found->second.request_fingerprint != request_fingerprint)
+                                throw protocol::service_wire_error_t (
+                                  "user spot operation identity was reused with a different "
+                                  "request");
+                            if (found->second.header.empty ()) {
+                                found->second.waiting.emplace_back (mailbox_record,
+                                                                    request.correlation);
+                                return admission_t::joined;
+                            }
+                            cached = found->second;
+                            return admission_t::replay;
+                        }
+                        if (request.deadline_unix_ms <= now)
+                            return admission_t::expired;
+                        _user_spot_terminals.insert_or_assign (
+                          operation_key,
+                          user_spot_terminal_record_t{protocol::command::userSpotClose,
+                                                      request.deadline_unix_ms,
+                                                      request_fingerprint,
+                                                      {},
+                                                      std::nullopt,
+                                                      {}});
+                        return admission_t::start;
+                    })
+                    .get ();
+                if (admission == admission_t::joined)
+                    continue;
+                if (admission == admission_t::replay) {
                     auto reply = protocol::decode_user_spot_close_reply (cached->header);
                     reply.header.correlation = request.correlation;
                     (void) _transport->reply_user_spot_close (mailbox_record, reply);
                     continue;
                 }
-                if (request.deadline_unix_ms <= unix_milliseconds_now ()) {
+                if (admission == admission_t::expired) {
                     protocol::user_spot_close_reply_t reply{{request.correlation, 101, 0}, false};
                     (void) _transport->reply_user_spot_close (mailbox_record, reply);
                     continue;
                 }
-                auto terminal = [&] (std::uint32_t terminal_result, std::uint32_t failure_code,
-                                     bool closed) {
-                    protocol::user_spot_close_reply_t reply{
-                      {request.correlation, terminal_result, failure_code}, closed};
-                    user_spot_terminal_record_t stored{
-                      protocol::command::userSpotClose, request.deadline_unix_ms,
-                      request_fingerprint,
-                      protocol::encode_user_spot_close_reply (request.correlation, terminal_result,
-                                                              failure_code, closed),
-                      std::nullopt};
+                auto terminal = [this, transport = _transport, mailbox_record, operation_key,
+                                 correlation = request.correlation] (std::uint32_t terminal_result,
+                                                                     std::uint32_t failure_code,
+                                                                     bool closed) {
+                    std::vector<std::pair<mesh::service_mailbox_record_t, std::uint64_t>> waiting;
                     _user_spot_terminal_lane
                       .run ([&] {
-                          _user_spot_terminals.insert_or_assign (operation_key, std::move (stored));
+                          auto &stored = _user_spot_terminals[operation_key];
+                          stored.header = protocol::encode_user_spot_close_reply (
+                            correlation, terminal_result, failure_code, closed);
+                          waiting = std::exchange (stored.waiting, {});
                       })
                       .get ();
-                    (void) _transport->reply_user_spot_close (mailbox_record, reply);
+                    waiting.emplace (waiting.begin (), mailbox_record, correlation);
+                    for (const auto &[record, record_correlation] : waiting) {
+                        protocol::user_spot_close_reply_t reply{
+                          {record_correlation, terminal_result, failure_code}, closed};
+                        (void) transport->reply_user_spot_close (record, reply);
+                    }
                 };
                 if (!store) {
                     terminal (
@@ -5222,131 +5472,49 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                       false);
                     continue;
                 }
-                const auto &global_id = request.target.spot_id;
-                const auto read =
-                  store->read_authority (spot_authority_key (global_id)).result ().value ();
-                const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
-                if (!snapshot) {
-                    terminal (0, 0, false);
-                    continue;
-                }
-                const auto &target = request.target;
-                if (snapshot->object_generation != target.object_generation) {
-                    terminal (107,
-                              static_cast<std::uint32_t> (
-                                protocol::framework_error_code::spotGenerationStale),
-                              false);
-                    continue;
-                }
-                if (snapshot->authority_owner_generation != target.authority_owner_generation
-                    || snapshot->store_version != target.expected_store_version
-                    || snapshot->allocation.object_kind != placement_object_kind_t::user_spot
-                    || snapshot->allocation.state != placement_allocation_state_t::active
-                    || snapshot->allocation.target.node_rid.value ()
-                         != node_rid_t::from_string (
-                              zlink::routing_id_t::from (target.target_node_routing_id)
-                                .to_string ())
-                              .value ()
-                    || snapshot->allocation.target.node_lifecycle_generation
-                         != target.target_node_generation) {
-                    terminal (
-                      107, static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving),
-                      false);
-                    continue;
-                }
-                const stateful::object_ref_t exact_ref{
-                  stateful::object_kind_t::user_spot,
-                  target.spot_id,
-                  target.object_generation,
-                  target.authority_owner_generation,
-                  snapshot->allocation.target.mesh_name,
-                  std::string (snapshot->allocation.target.node_rid.value ())};
-                if (snapshot->payload
-                    != ready_user_spot_authority_payload (
-                      exact_ref, snapshot->allocation.stable_type, snapshot->allocation.target)) {
-                    terminal (
-                      107, static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving),
-                      false);
-                    continue;
-                }
-                const auto local =
-                  _objects.find (stateful::object_kind_t::user_spot, exact_ref.key);
-                if (!local || *local != exact_ref) {
-                    terminal (
-                      107, static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving),
-                      false);
-                    continue;
-                }
-                const auto authority_key = spot_authority_key (global_id);
-                const auto sealed =
-                  store
-                    ->compare_exchange_authority (
-                      authority_key, snapshot->store_version,
-                      authority_put_t{closing_user_spot_authority_payload (
-                        exact_ref, snapshot->allocation.stable_type, snapshot->allocation.target)})
-                    .result ()
-                    .value ();
-                const auto *closing = std::get_if<authority_stored_t> (&sealed);
-                if (!closing) {
-                    terminal (
-                      107, static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving),
-                      false);
-                    continue;
-                }
-                const auto rollback_closing = [&] {
-                    return std::holds_alternative<authority_stored_t> (
-                      store
-                        ->compare_exchange_authority (authority_key,
-                                                      closing->snapshot.store_version,
-                                                      authority_put_t{snapshot->payload})
-                        .result ()
-                        .value ());
+                // The owner runtime checks the authority and runs every Close
+                // step on the Spot lifecycle lane (Spot address messaging §7.1).
+                auto begin = [this, target = request.target] {
+                    return begin_user_spot_close (target);
                 };
-                const auto [close_error, close_token] = _objects.begin_close_spot (exact_ref);
-                if (close_error == stateful::stateful_error_t::generation_stale) {
-                    (void) rollback_closing ();
-                    terminal (107,
-                              static_cast<std::uint32_t> (
-                                protocol::framework_error_code::spotGenerationStale),
-                              false);
-                    continue;
+                auto done = [terminal] (result_t<bool> result) {
+                    if (result) {
+                        terminal (0, 0, result.value ());
+                        return;
+                    }
+                    switch (result.error_kind ()) {
+                        case framework_error_kind_t::invalid_operation:
+                            terminal (107,
+                                      static_cast<std::uint32_t> (
+                                        protocol::framework_error_code::spotGenerationStale),
+                                      false);
+                            return;
+                        case framework_error_kind_t::unavailable:
+                            terminal (107,
+                                      static_cast<std::uint32_t> (
+                                        protocol::framework_error_code::spotMoving),
+                                      false);
+                            return;
+                        default:
+                            terminal (105,
+                                      static_cast<std::uint32_t> (
+                                        protocol::framework_error_code::requestFailed),
+                                      false);
+                            return;
+                    }
+                };
+                // The started operation settles its terminal record once, also
+                // when the Close cannot be scheduled.
+                try {
+                    if (user_spot_closer)
+                        user_spot_closer (request.target.spot_id, begin, done);
+                    else
+                        run_authority_close (begin, done, {});
                 }
-                if (close_error == stateful::stateful_error_t::moving) {
-                    (void) rollback_closing ();
-                    terminal (
-                      107, static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving),
-                      false);
-                    continue;
+                catch (const std::exception &error) {
+                    done (result_t<bool>::failure (framework_error_kind_t::internal_failure,
+                                                   error.what ()));
                 }
-                if (close_error == stateful::stateful_error_t::not_found || !close_token) {
-                    (void) rollback_closing ();
-                    terminal (
-                      107, static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving),
-                      false);
-                    continue;
-                }
-                if (_objects.commit_close_spot (*close_token) != stateful::stateful_error_t::none) {
-                    (void) rollback_closing ();
-                    terminal (
-                      105,
-                      static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed),
-                      false);
-                    continue;
-                }
-                const auto deleted =
-                  store
-                    ->compare_exchange_authority (authority_key, closing->snapshot.store_version,
-                                                  authority_delete_t{})
-                    .result ()
-                    .value ();
-                if (!std::holds_alternative<authority_deleted_t> (deleted)) {
-                    terminal (
-                      107, static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving),
-                      false);
-                    continue;
-                }
-                _spot_actor_index_lane.run ([&] { _spots.erase (exact_ref.key); }).get ();
-                terminal (0, 0, true);
             }
             catch (const protocol::service_wire_error_t &) {
                 if (mailbox_record.reply_token && mailbox_record.correlation)

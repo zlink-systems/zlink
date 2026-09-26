@@ -321,6 +321,8 @@ class stateful_object_runtime_t
     std::pair<stateful_error_t, std::optional<spot_close_token_t>>
     begin_close_spot (const object_ref_t &spot);
     stateful_error_t commit_close_spot (const spot_close_token_t &token);
+    // The token of the Close that sealed this exact record, if it has not ended.
+    std::optional<spot_close_token_t> closing_spot_token (const object_ref_t &spot);
     stateful_error_t abort_close_spot (const spot_close_token_t &token);
 
     stateful_error_t

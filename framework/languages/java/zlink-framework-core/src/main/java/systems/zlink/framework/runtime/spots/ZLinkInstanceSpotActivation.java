@@ -507,7 +507,6 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                                                                                             .get());
                                                                                     return null;
                                                                                 }))),
-                                        host.infrastructureExecutor(),
                                         failure ->
                                                 host.reportSpotClosingFailure(
                                                         context.spotId(), failure)));

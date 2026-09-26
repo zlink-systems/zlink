@@ -185,19 +185,15 @@ public static class OrderWorkflowServerHostFactory
 
                 // .NET host relocation includes active Instance Spots.  If normal
                 // placement co-locates this runner fixture with the checkpoint
-                // order, retire that ordinary routing endpoint first; its durable
-                // state is replayed by the relocated User Spot.
+                // order, request that ordinary routing endpoint to close. Close
+                // and relocation then follow their authority commit order.
                 if (anchor.Spot.NodeRid == location.NodeRid)
                 {
-                    var orderSpot = await spotClient
+                    _ = await spotClient
                         .RequestToSpot(orderId, new CloseOrderWorkflowForPlannedRelocationReq())
                         .InstanceSpot(SampleNames.OrderWorkflowSpotType)
                         .InMesh(SampleNames.MeshName)
                         .Async<CloseOrderWorkflowForPlannedRelocationRes>(cancellationToken);
-                    if (!orderSpot.Closed)
-                        return Results.Ok(
-                            new PlannedRelocationRes(false, "OrderNotClosed", "None")
-                        );
                 }
 
                 var started = await spotClient

@@ -594,10 +594,7 @@ void test_relocation_ready_completion_runs_once_on_spot_turn (test_context_t &te
     const auto deferred = state->run_serial_sync ("defer-relocation", [&] {
         context.relocation_ready ().defer ();
         try {
-            const auto closed = context.close ().result ();
-            close_rejected =
-              !closed
-              && closed.error_kind () == zlink::framework::framework_error_kind_t::not_configured;
+            context.close ();
         }
         catch (const zlink::framework::framework_exception_t &error) {
             close_rejected =

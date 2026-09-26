@@ -69,6 +69,38 @@ internal sealed class ZLinkSerialWorkQueue : IEnumerable<ZLinkSerialWorkItem>
         return true;
     }
 
+    public bool TryDequeueContinuation(out ZLinkSerialWorkItem item)
+    {
+        EnsureConsistentState();
+        ZLinkSerialWorkItem? previous = null;
+        var current = _head;
+        while (current is not null)
+        {
+            var next = ReferenceEquals(current.Next, current) ? null : current.Next;
+            if (!current.ReservationHeld)
+            {
+                if (previous is null)
+                    _head = next;
+                else
+                    previous.Next = next ?? previous;
+                if (ReferenceEquals(_tail, current))
+                    _tail = previous;
+                current.Next = null;
+                Count--;
+                unchecked
+                {
+                    _version++;
+                }
+                item = current;
+                return true;
+            }
+            previous = current;
+            current = next;
+        }
+        item = null!;
+        return false;
+    }
+
     public void Clear()
     {
         EnsureConsistentState();

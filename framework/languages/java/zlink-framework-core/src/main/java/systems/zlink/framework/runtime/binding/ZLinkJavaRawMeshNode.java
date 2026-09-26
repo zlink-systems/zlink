@@ -3650,33 +3650,43 @@ final class ZLinkJavaRawMeshNode
         Objects.requireNonNull(intent, "intent");
         if (targetNodeRid.equals(routingId)) {
             long localGeneration = lifecycleGeneration();
-            if (intent.target().targetNodeGeneration() != localGeneration
-                    || userSpotOperationHandler == null) {
+            if (userSpotOperationHandler == null) {
                 return CompletableFuture.failedFuture(
-                        new IllegalStateException(
-                                "local User Spot close handler or lifecycle is unavailable"
-                                        + " [expectedGeneration="
-                                        + intent.target().targetNodeGeneration()
-                                        + ", localGeneration="
-                                        + localGeneration
-                                        + ", handler="
-                                        + (userSpotOperationHandler != null)
-                                        + "]"));
+                        new IllegalStateException("local User Spot close handler is unavailable"));
+            }
+            if (intent.target().targetNodeGeneration() != localGeneration) {
+                return CompletableFuture.failedFuture(
+                        userSpotCloseTargetMoved(
+                                intent.target().targetNodeGeneration(), localGeneration));
             }
             long operation = allocateCorrelation();
-            return userSpotOperationHandler.close(
-                    new ZLinkInternalMeshNode.UserSpotCloseRequest(
-                            routingId, localGeneration, 0, operation, intent));
+            return userSpotOperationHandler
+                    .close(
+                            new ZLinkInternalMeshNode.UserSpotCloseRequest(
+                                    routingId, localGeneration, 0, operation, intent))
+                    .exceptionallyCompose(
+                            failure -> {
+                                UserSpotTerminalReply reply = terminalFailure(failure);
+                                return CompletableFuture.failedFuture(
+                                        userSpotCloseFailure(
+                                                reply.terminalResult(),
+                                                reply.failureCode(),
+                                                unwrap(failure)));
+                            });
         }
         Optional<ZLinkServiceTopologyRegistry.Peer> peer =
                 topology == null ? Optional.empty() : topology.peer(targetNodeRid);
         if (peer.isEmpty()
                 || localDescriptor == null
-                || !intent.target().targetNodeRid().equals(targetNodeRid)
-                || intent.target().targetNodeGeneration()
-                        != peer.orElseThrow().descriptor().lifecycleGeneration()) {
+                || !intent.target().targetNodeRid().equals(targetNodeRid)) {
             return CompletableFuture.failedFuture(
                     new IllegalStateException("remote User Spot close target is not connected"));
+        }
+        long peerGeneration = peer.orElseThrow().descriptor().lifecycleGeneration();
+        if (intent.target().targetNodeGeneration() != peerGeneration) {
+            return CompletableFuture.failedFuture(
+                    userSpotCloseTargetMoved(
+                            intent.target().targetNodeGeneration(), peerGeneration));
         }
         long correlation = allocateCorrelation();
         ZLinkServiceOperationRegistry.Operation<ZLinkInternalMeshNode.UserSpotCloseResponse>
@@ -3915,13 +3925,7 @@ final class ZLinkJavaRawMeshNode
                 //  authoritative ownership-aware translator instead of
                 //  collapsing to a generic rejection
                 //  (spec 32-framework-error-model:81-118, 99-108).
-                throw new ZLinkFrameworkException(
-                        ZLinkBackendRequestResult.fromWireTerminal(reply.terminalResult())
-                                .toFrameworkErrorKind(reply.failureCode()),
-                        "remote User Spot close failed: terminal="
-                                + reply.terminalResult()
-                                + " failureCode="
-                                + reply.failureCode());
+                throw userSpotCloseFailure(reply.terminalResult(), reply.failureCode(), null);
             }
             if (reply.closed() == null) {
                 throw new ZLinkFrameworkException(
@@ -3946,6 +3950,36 @@ final class ZLinkJavaRawMeshNode
         } catch (RuntimeException failure) {
             operations.completeExceptionally(operationId, failure);
         }
+    }
+
+    /** Classifies a User Spot Close terminal the same way for a remote reply and a local owner. */
+    private static ZLinkFrameworkException userSpotCloseFailure(
+            int terminalResult, int failureCode, Throwable cause) {
+        return new ZLinkFrameworkException(
+                ZLinkBackendRequestResult.fromWireTerminal(terminalResult)
+                        .toFrameworkErrorKind(failureCode),
+                "User Spot close failed: terminal="
+                        + terminalResult
+                        + " failureCode="
+                        + failureCode,
+                cause);
+    }
+
+    /**
+     * A target lifecycle that differs from the Close fence is an owner fence change: SpotMoving
+     * (terminal 107, failure 34), translated like every other User Spot Close terminal.
+     */
+    private static ZLinkFrameworkException userSpotCloseTargetMoved(
+            long expectedGeneration, long currentGeneration) {
+        return userSpotCloseFailure(
+                107,
+                34,
+                new IllegalStateException(
+                        "User Spot close target lifecycle changed [expectedGeneration="
+                                + expectedGeneration
+                                + ", currentGeneration="
+                                + currentGeneration
+                                + "]"));
     }
 
     CompletionStage<Void> sendBoundSession(

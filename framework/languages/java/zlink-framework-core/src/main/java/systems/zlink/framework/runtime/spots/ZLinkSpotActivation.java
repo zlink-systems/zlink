@@ -623,18 +623,22 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
             return CompletableFuture.completedFuture(null);
         }
         return closingCallback(
-                () ->
-                        context.enqueueLifecycle(
-                                () ->
-                                        host.runWithOutbound(
-                                                context.dispatchOutbound(),
-                                                () ->
-                                                        ZLinkHandlerStages.fromStageSupplier(
-                                                                () ->
-                                                                        spot.onClosing(
-                                                                                new ZLinkSpotClosingContext(
-                                                                                        reason,
-                                                                                        deadline))))));
+                () -> {
+                    Supplier<CompletionStage<Void>> callback =
+                            () ->
+                                    host.runWithOutbound(
+                                            context.dispatchOutbound(),
+                                            () ->
+                                                    ZLinkHandlerStages.fromStageSupplier(
+                                                            () ->
+                                                                    spot.onClosing(
+                                                                            new ZLinkSpotClosingContext(
+                                                                                    reason,
+                                                                                    deadline))));
+                    return context.isCurrentSpotTurn()
+                            ? context.runLifecycleExecution(callback)
+                            : context.enqueueLifecycle(callback);
+                });
     }
 
     private void closeResources() {

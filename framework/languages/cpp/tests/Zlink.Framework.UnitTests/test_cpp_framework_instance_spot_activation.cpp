@@ -133,8 +133,10 @@ class traced_instance_spot_t final : public zlink::framework::instance_spot_t
 class close_after_reply_instance_spot_t final : public zlink::framework::instance_spot_t
 {
   public:
-    explicit close_after_reply_instance_spot_t (zlink::framework::instance_spot_context_t context) :
-        _context (std::move (context))
+    close_after_reply_instance_spot_t (
+      zlink::framework::instance_spot_context_t context,
+      std::shared_ptr<std::optional<zlink::framework::task_t<bool>>> close_result) :
+        _context (std::move (context)), _close_result (std::move (close_result))
     {
     }
 
@@ -152,27 +154,26 @@ class close_after_reply_instance_spot_t final : public zlink::framework::instanc
 
     zlink::framework::task_t<reply_t> on_request (const request_t &request)
     {
-        const auto closed = co_await _context.close ();
-        if (!closed) {
-            throw std::runtime_error ("Instance Spot close was not admitted");
-        }
+        _close_result->emplace (_context.close ());
         co_return reply_t{request.value + 1};
     }
 
   private:
     zlink::framework::instance_spot_context_t _context;
+    std::shared_ptr<std::optional<zlink::framework::task_t<bool>>> _close_result;
 };
 
-TEST (ZLinkFrameworkInstanceSpotActivation,
-      CloseFromRequestKeepsAcceptedTurnAliveUntilReplyCompletes)
+TEST (ZLinkFrameworkInstanceSpotActivation, CloseFromRequestReturnsReplyBeforeCloseCompletes)
 {
     zlink::framework::serializer_registry_t serializers;
     zlink::framework::zlink_builder_t builder;
+    auto close_result = std::make_shared<std::optional<zlink::framework::task_t<bool>>> ();
     builder.add_route_mesh ("instance-close-after-reply")
       .add_instance_spot_factory<close_after_reply_instance_spot_t> (
         "closing-player",
-        [] (zlink::framework::instance_spot_context_t context) {
-            return std::make_shared<close_after_reply_instance_spot_t> (std::move (context));
+        [close_result] (zlink::framework::instance_spot_context_t context) {
+            return std::make_shared<close_after_reply_instance_spot_t> (std::move (context),
+                                                                        close_result);
         },
         [] (auto &factory) { factory.disable_relocation (); });
     auto runtime =
@@ -203,6 +204,10 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       zlink::framework::detail::encoded_payload_from_raw (first.value ()));
     EXPECT_EQ (42, reply.value);
     accepted_turn_terminal ();
+    ASSERT_TRUE (close_result->has_value ());
+    const auto closed = close_result->value ().result ();
+    ASSERT_TRUE (closed);
+    EXPECT_TRUE (closed.value ());
 
     const auto second =
       runtime

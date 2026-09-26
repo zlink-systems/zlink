@@ -64,7 +64,6 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkObjectConflict;
 import systems.zlink.framework.runtime.internal.locations.ZLinkObjectReservationRequest;
 import systems.zlink.framework.runtime.internal.locations.ZLinkObjectReserved;
 import systems.zlink.framework.runtime.internal.locations.ZLinkObjectTypeMismatch;
-import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityExhausted;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkMeshMessageMetrics;
@@ -185,6 +184,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     private record RetainedClose(ZLinkSpotCloseCoordinator coordinator, Object commandFence) {}
 
     private final Map<ClosingFence, RetainedClose> closingCoordinators = new ConcurrentHashMap<>();
+    private final Map<String, ZLinkUserSpotOperationHandler> userSpotOperationHandlers =
+            new ConcurrentHashMap<>();
     private final Map<String, Duration> instanceSpotIdleTimeouts = new HashMap<>();
     private final List<ZLinkInternalMeshNode> routeMeshNodes;
     private final Map<String, ZLinkInternalMeshNode> routeMeshNodesByName;
@@ -747,7 +748,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             if (registration.relocatableSpotFactories().isEmpty()) {
                 continue;
             }
-            ZLinkInternalMeshNode.UserSpotOperationHandler handler =
+            ZLinkUserSpotOperationHandler handler =
                     new ZLinkUserSpotOperationHandler(
                             registration.meshName(),
                             meshNode,
@@ -757,6 +758,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             serializer,
                             registration.relocatableSpotFactories());
             meshNode.setUserSpotOperationHandler(handler);
+            userSpotOperationHandlers.put(registration.meshName(), handler);
         }
     }
 
@@ -890,23 +892,48 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     public CompletionStage<Boolean> close(SpotRef spot) {
         rejectAfterRelocationReady("User Spot close");
         Objects.requireNonNull(spot, "spot");
-        ZLinkLocationRepository store = requireUserSpotAuthorityStore();
-        String key =
-                systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
-                        spot.spotId());
-        return store.read(key, () -> false)
-                .handle(
-                        (read, readFailure) -> {
-                            if (readFailure != null) {
-                                throw new ZLinkSpotCloseCoordinator.UncertainCommitFailure(
-                                        readFailure, readFailure);
-                            }
-                            return read;
-                        })
+        return closeSpot(spot.spotId(), spot.objectGeneration());
+    }
+
+    @Override
+    CompletionStage<Boolean> closeSpot(String spotId, long objectGeneration) {
+        return closeIntent(spotId, objectGeneration)
                 .thenCompose(
+                        target -> {
+                            if (target.isEmpty()) {
+                                return CompletableFuture.completedFuture(false);
+                            }
+                            CloseIntent close = target.orElseThrow();
+                            return close.source()
+                                    .requestUserSpotClose(
+                                            close.intent().target().targetNodeRid(),
+                                            close.intent(),
+                                            defaultRequestTimeout)
+                                    .thenApply(ZLinkInternalMeshNode.UserSpotCloseResponse::closed);
+                        });
+    }
+
+    private record CloseIntent(
+            String meshName,
+            ZLinkInternalMeshNode source,
+            ZLinkInternalMeshNode.UserSpotCloseIntent intent) {}
+
+    /**
+     * Reads the current owner of {@code spot} and builds the fenced Close request for it. The
+     * target owner alone decides generation, owner fence, membership and moving results; the source
+     * only reports an absent row as the idempotent {@code false}.
+     */
+    private CompletionStage<Optional<CloseIntent>> closeIntent(
+            String spotId, long objectGeneration) {
+        ZLinkLocationRepository store = requireUserSpotAuthorityStore();
+        return store.read(
+                        systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
+                                spotId),
+                        () -> false)
+                .thenApply(
                         read -> {
                             if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
-                                return CompletableFuture.completedFuture(false);
+                                return Optional.empty();
                             }
                             var authority =
                                     userSpotAuthorities
@@ -915,71 +942,30 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                     () ->
                                                             new IllegalStateException(
                                                                     "invalid User Spot authority"));
-                            if (authority.user().isEmpty()
-                                    || snapshot.allocation().objectKind()
-                                            != ZLinkPlacementObjectKind.USER_SPOT) {
-                                return CompletableFuture.failedFuture(
-                                        new systems.zlink.framework.runtime.internal.backend
-                                                .ZLinkUserSpotOperationException(
-                                                107, 33, "User Spot authority kind is stale"));
-                            }
-                            if ((authority.state()
-                                                    != systems.zlink.framework.runtime.locations
-                                                            .ZLinkServiceAuthorityPayloadCodec.State
-                                                            .READY
-                                            && authority.state()
-                                                    != systems.zlink.framework.runtime.locations
-                                                            .ZLinkServiceAuthorityPayloadCodec.State
-                                                            .CLOSING)
-                                    || snapshot.allocation().state()
-                                            != ZLinkPlacementAllocationState.ACTIVE) {
-                                return CompletableFuture.failedFuture(
-                                        new systems.zlink.framework.runtime.internal.backend
-                                                .ZLinkUserSpotOperationException(
-                                                107, 34, "User Spot is moving"));
-                            }
-                            if (snapshot.objectGeneration() != spot.objectGeneration()) {
-                                return CompletableFuture.failedFuture(
-                                        new systems.zlink.framework.runtime.internal.backend
-                                                .ZLinkUserSpotOperationException(
-                                                107, 33, "User Spot generation is stale"));
-                            }
-                            if (!authority.meshName().equals(spot.meshName())
-                                    || !authority.nodeRid().equals(spot.nodeRid())) {
-                                return CompletableFuture.failedFuture(
-                                        new systems.zlink.framework.runtime.internal.backend
-                                                .ZLinkUserSpotOperationException(
-                                                107, 34, "User Spot is moving"));
-                            }
                             ZLinkInternalMeshNode source =
                                     routeMeshNodesByName.get(authority.meshName());
                             if (source == null) {
-                                return CompletableFuture.failedFuture(
-                                        new IllegalStateException(
-                                                "Object client Mesh is not configured: "
-                                                        + authority.meshName()));
+                                throw new IllegalStateException(
+                                        "Object client Mesh is not configured: "
+                                                + authority.meshName());
                             }
                             long deadline =
                                     System.currentTimeMillis() + defaultRequestTimeout.toMillis();
-                            var intent =
-                                    new ZLinkInternalMeshNode.UserSpotCloseIntent(
-                                            new systems.zlink.framework.runtime.internal.service
-                                                    .ZLinkServiceM6BWireCodec.UserSpotCloseFence(
-                                                    spot.spotId(),
-                                                    spot.objectGeneration(),
-                                                    authority.nodeRid(),
-                                                    authority.nodeGeneration(),
-                                                    snapshot.authorityOwnerGeneration(),
-                                                    snapshot.storeVersion()),
-                                            deadline);
-                            CompletionStage<ZLinkInternalMeshNode.UserSpotCloseResponse>
-                                    targetClose =
-                                            source.requestUserSpotClose(
-                                                    authority.nodeRid(),
-                                                    intent,
-                                                    defaultRequestTimeout);
-                            return targetClose.thenApply(
-                                    ZLinkInternalMeshNode.UserSpotCloseResponse::closed);
+                            return Optional.of(
+                                    new CloseIntent(
+                                            authority.meshName(),
+                                            source,
+                                            new ZLinkInternalMeshNode.UserSpotCloseIntent(
+                                                    new systems.zlink.framework.runtime.internal
+                                                            .service.ZLinkServiceM6BWireCodec
+                                                            .UserSpotCloseFence(
+                                                            spotId,
+                                                            objectGeneration,
+                                                            authority.nodeRid(),
+                                                            authority.nodeGeneration(),
+                                                            snapshot.authorityOwnerGeneration(),
+                                                            snapshot.storeVersion()),
+                                                    deadline)));
                         });
     }
 
@@ -4408,11 +4394,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     private ZLinkActorRuntime actorAdmissionsRuntime() {
         return actorAdmissions.runtime();
-    }
-
-    @Override
-    CompletionStage<Boolean> closeSpot(String spotId) {
-        return spotLifecycle.close(spotId);
     }
 
     @Override

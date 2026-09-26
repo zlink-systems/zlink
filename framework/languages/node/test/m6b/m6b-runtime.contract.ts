@@ -124,6 +124,7 @@ import { ZLinkRuntimeRouteTransport } from '../../packages/framework/src/runtime
 import type {
   ZLinkInstanceSpot,
   ZLinkInstanceSpotContext,
+  ZLinkSpotContext,
   ZLinkSpotPacketHandler
 } from '../../packages/framework/src/contracts';
 import {
@@ -168,6 +169,13 @@ function hostApplicationJobQueue(): ApplicationJobQueue {
     resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 2_048n }, () => 1n)
   );
 }
+
+test('Spot context Close returns completion results in both context contracts', async () => {
+  const userClose: ZLinkSpotContext['close'] = async () => true;
+  const instanceClose: ZLinkInstanceSpotContext['close'] = async () => false;
+  assert.equal(await userClose(), true);
+  assert.equal(await instanceClose(), false);
+});
 
 test('M6B command and flag constants match the generated service wire schema', async () => {
   for (const name of Object.keys(M6bServiceWireCommand) as Array<

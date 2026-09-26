@@ -333,10 +333,6 @@ final class ZLinkSpotLifecycle {
         ZLinkRuntimeMetrics.increment("zlink.spot.closed", Map.of("kind", "user"));
     }
 
-    Executor closeExecutor() {
-        return backendExecutor;
-    }
-
     CompletionStage<Void> completeRelocationSource(
             String spotId, long objectGeneration, Instant deadline) {
         requireSpotId(spotId);
@@ -411,10 +407,18 @@ final class ZLinkSpotLifecycle {
             barriers.add(pending.handle((ignored, failure) -> (Void) null).toCompletableFuture());
         }
         for (EntrySpotActivation activation : entrySpots) {
-            barriers.add(activation.context.awaitAllLanes().toCompletableFuture());
+            barriers.add(
+                    activation
+                            .context
+                            .awaitAllLanes(ZLinkSerialExecutionQueue.Quiescence.ALL)
+                            .toCompletableFuture());
         }
         for (SpotActivation activation : spots.values()) {
-            barriers.add(activation.context.awaitAllLanes().toCompletableFuture());
+            barriers.add(
+                    activation
+                            .context
+                            .awaitAllLanes(ZLinkSerialExecutionQueue.Quiescence.ALL)
+                            .toCompletableFuture());
         }
         return CompletableFuture.allOf(barriers.toArray(CompletableFuture[]::new));
     }

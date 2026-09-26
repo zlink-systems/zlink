@@ -49,12 +49,14 @@ public final class ZLinkSerialExecutionQueue {
     private long nextSequence = 1L;
     private long nextRelocationSerial = 1L;
     private Entry active;
+    private Entry suspendedLifecycle;
     private boolean drainScheduled;
-    private int suspendedContinuations;
+    private int suspendedApplicationContinuations;
+    private int suspendedLifecycleContinuations;
     private long turnClaimedAtNanos;
     private RelocationState relocation;
     private boolean relocated;
-    private final List<CompletableFuture<Void>> quiescenceWaiters = new ArrayList<>();
+    private final List<QuiescenceWaiter> quiescenceWaiters = new ArrayList<>();
 
     public ZLinkSerialExecutionQueue() {
         this(ZLinkExecutionLanePolicy.generic());
@@ -457,6 +459,39 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     private Entry takeNext() {
+        if (suspendedLifecycle != null) {
+            Entry ownerContinuation = null;
+            Entry applicationContinuation = null;
+            for (Entry candidate : continuationPending) {
+                if (candidate.origin == suspendedLifecycle) {
+                    if (ownerContinuation == null) {
+                        ownerContinuation = candidate;
+                    }
+                } else if (applicationContinuation == null) {
+                    applicationContinuation = candidate;
+                }
+                if (ownerContinuation != null && applicationContinuation != null) {
+                    break;
+                }
+            }
+            if (ownerContinuation != null
+                    && ((applicationContinuation == null && applicationPending.isEmpty())
+                            || lifecycleStreak < lifecycleBurstLimit)) {
+                lifecycleStreak++;
+                continuationPending.remove(ownerContinuation);
+                return ownerContinuation;
+            }
+            if (applicationContinuation != null) {
+                lifecycleStreak = 0;
+                continuationPending.remove(applicationContinuation);
+                return applicationContinuation;
+            }
+            if (!applicationPending.isEmpty()) {
+                lifecycleStreak = 0;
+                return applicationPending.removeFirst();
+            }
+            return null;
+        }
         boolean lifecycleReady = !lifecyclePending.isEmpty();
         boolean applicationReady = !applicationPending.isEmpty();
         boolean continuationReady = !continuationPending.isEmpty();
@@ -487,9 +522,14 @@ public final class ZLinkSerialExecutionQueue {
         if (drainScheduled || active != null || !hasPending()) {
             return false;
         }
+        if (suspendedLifecycle != null
+                && continuationPending.isEmpty()
+                && applicationPending.isEmpty()) {
+            return false;
+        }
         if (!lifecyclePending.isEmpty()
                 && lifecyclePending.peekFirst().relocationBoundary != null
-                && suspendedContinuations != 0
+                && suspendedContinuations() != 0
                 && continuationPending.isEmpty()) {
             return false;
         }
@@ -527,20 +567,55 @@ public final class ZLinkSerialExecutionQueue {
     private void drainBatch(Entry first) {
         Entry entry = first;
         while (entry != null) {
-            CompletableFuture<Void> invocation =
-                    invokeInline(
-                                    entry.operation,
-                                    entry.result,
-                                    entry.flow,
-                                    entry.applicationJobOwnership)
-                            .toCompletableFuture();
+            CompletableFuture<Void> invocation = invokeInline(entry).toCompletableFuture();
             if (!invocation.isDone()) {
                 Entry suspended = entry;
-                invocation.whenComplete((ignored, error) -> finish(suspended, false));
+                invocation.whenComplete(
+                        (ignored, error) -> {
+                            if (suspended.lane == Lane.LIFECYCLE && !suspended.result.isDone()) {
+                                suspendLifecycle(suspended);
+                            } else {
+                                finish(suspended, false);
+                            }
+                        });
+                return;
+            }
+            if (entry.lane == Lane.LIFECYCLE && !entry.result.isDone()) {
+                suspendLifecycle(entry);
                 return;
             }
             entry = finish(entry, true);
         }
+    }
+
+    private void suspendLifecycle(Entry entry) {
+        boolean scheduleDrain;
+        synchronized (this) {
+            if (active != entry || suspendedLifecycle != null) {
+                throw new IllegalStateException("lifecycle suspension is inconsistent");
+            }
+            active = null;
+            suspendedLifecycle = entry;
+            scheduleDrain = requestDrainLocked();
+        }
+        entry.result.whenComplete((ignored, failure) -> finishSuspendedLifecycle(entry));
+        scheduleDrainIfNeeded(scheduleDrain);
+    }
+
+    private void finishSuspendedLifecycle(Entry entry) {
+        boolean scheduleDrain;
+        List<CompletableFuture<Void>> quiescent;
+        synchronized (this) {
+            if (suspendedLifecycle != entry) {
+                return;
+            }
+            suspendedLifecycle = null;
+            release(entry);
+            scheduleDrain = requestDrainLocked();
+            quiescent = takeQuiescenceWaitersIfReady();
+        }
+        scheduleDrainIfNeeded(scheduleDrain);
+        quiescent.forEach(waiter -> waiter.complete(null));
     }
 
     private Entry takeNextForDrainLocked() {
@@ -549,11 +624,14 @@ public final class ZLinkSerialExecutionQueue {
         }
         if (!lifecyclePending.isEmpty()
                 && lifecyclePending.peekFirst().relocationBoundary != null
-                && suspendedContinuations != 0
+                && suspendedContinuations() != 0
                 && continuationPending.isEmpty()) {
             return null;
         }
         Entry entry = takeNext();
+        if (entry == null) {
+            return null;
+        }
         active = entry;
         if (turnClaimedAtNanos == 0) {
             turnClaimedAtNanos = System.nanoTime();
@@ -596,16 +674,36 @@ public final class ZLinkSerialExecutionQueue {
         return next;
     }
 
+    /** Which accepted work a quiescence waiter waits for. */
+    public enum Quiescence {
+        /** Every accepted turn and yielded continuation of both lanes. */
+        ALL,
+        /**
+         * Every accepted application turn and its continuations. Lifecycle work, including the
+         * lifecycle item that waits, is not part of this boundary.
+         */
+        APPLICATION
+    }
+
     /**
      * Completes after every accepted turn and every yielded continuation has reached its terminal
      * boundary. The caller must seal external admission before using this as a lifecycle barrier.
      */
-    public synchronized CompletionStage<Void> awaitQuiescence() {
-        if (isQuiescent()) {
+    public CompletionStage<Void> awaitQuiescence() {
+        return awaitQuiescence(Quiescence.ALL);
+    }
+
+    /**
+     * Completes when the accepted work that {@code scope} names has reached its terminal boundary.
+     * The caller must seal external admission before using this as a lifecycle barrier.
+     */
+    public synchronized CompletionStage<Void> awaitQuiescence(Quiescence scope) {
+        Objects.requireNonNull(scope, "scope");
+        if (isQuiescent(scope)) {
             return CompletableFuture.completedFuture(null);
         }
         CompletableFuture<Void> waiter = new CompletableFuture<>();
-        quiescenceWaiters.add(waiter);
+        quiescenceWaiters.add(new QuiescenceWaiter(scope, waiter));
         return waiter;
     }
 
@@ -710,7 +808,7 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     private Optional<RelocationSeal> sealNowLocked() {
-        if (suspendedContinuations != 0
+        if (suspendedContinuations() != 0
                 || !continuationPending.isEmpty()
                 || applicationPending.stream().anyMatch(entry -> !entry.hasRelocationRecord())) {
             return Optional.empty();
@@ -844,11 +942,7 @@ public final class ZLinkSerialExecutionQueue {
                 && relocation.seal == seal;
     }
 
-    private CompletionStage<Void> invokeInline(
-            Supplier<CompletionStage<Void>> operation,
-            CompletableFuture<Void> result,
-            ZLinkFlowContext.State flow,
-            ZLinkApplicationJobContext.QueuedOwnership applicationJobOwnership) {
+    private CompletionStage<Void> invokeInline(Entry entry) {
         CompletableFuture<Void> gate = new CompletableFuture<>();
         CompletableFuture<Void> invocationReturned = new CompletableFuture<>();
         ZLinkSerialExecutionQueue previous = CURRENT.get();
@@ -860,19 +954,28 @@ public final class ZLinkSerialExecutionQueue {
         try (var serial =
                         systems.zlink.framework.runtime.internal.handlers
                                 .ZLinkSuspendInvocationContext.enterSerialExecutionTurn(
-                                new SerialTurnCarrier(new SerialTurn(this, gate)));
+                                new SerialTurnCarrier(new SerialTurn(this, gate, entry)));
                 ZLinkFlowContext.Scope ignored =
-                        flow == null ? () -> {} : ZLinkFlowContext.enter(flow);
+                        entry.flow == null ? () -> {} : ZLinkFlowContext.enter(entry.flow);
                 ZLinkApplicationJobContext.Scope applicationJob =
-                        ZLinkApplicationJobContext.enterQueued(applicationJobOwnership)) {
+                        ZLinkApplicationJobContext.enterQueued(entry.applicationJobOwnership)) {
             CompletionStage<Void> execution =
-                    Objects.requireNonNull(operation.get(), "operation result");
+                    Objects.requireNonNull(entry.operation.get(), "operation result");
+            // A relocation boundary is itself the turn a relocation seal owns; it stays active
+            // until released instead of returning the turn.
+            if (lanePolicy instanceof ZLinkExecutionLanePolicy.Spot
+                    && entry.lane == Lane.LIFECYCLE
+                    && entry.relocationBoundary == null
+                    && !execution.toCompletableFuture().isDone()
+                    && !gate.isDone()) {
+                execution = yieldCurrent(execution);
+            }
             execution.whenComplete(
                     (value, error) -> {
                         if (error != null) {
-                            result.completeExceptionally(error);
+                            entry.result.completeExceptionally(error);
                         } else {
-                            result.complete(null);
+                            entry.result.complete(null);
                         }
                         if (!lanePolicy.releasesGateOnIncompleteStage()) {
                             gate.complete(null);
@@ -883,7 +986,7 @@ public final class ZLinkSerialExecutionQueue {
                 gate.complete(null);
             }
         } catch (RuntimeException error) {
-            result.completeExceptionally(error);
+            entry.result.completeExceptionally(error);
             gate.complete(null);
         } finally {
             if (previous == null) {
@@ -997,12 +1100,13 @@ public final class ZLinkSerialExecutionQueue {
                     });
             return managed;
         }
-        queue.suspendContinuation();
+        queue.suspendContinuation(turn.entry);
         stage.whenComplete(
                 (value, error) -> {
                     try {
                         CompletionStage<Void> continuation =
                                 queue.enqueueContinuation(
+                                        turn.entry,
                                         () -> {
                                             updateCarrier(serialContext, currentTurn());
                                             try (var serial =
@@ -1059,6 +1163,18 @@ public final class ZLinkSerialExecutionQueue {
         return managed;
     }
 
+    /**
+     * Returns a stage that completes when the turn running on the current serial queue ends by any
+     * path. A turn that yielded ends with its last continuation.
+     */
+    public static CompletionStage<Void> currentTurnCompletion() {
+        SerialTurn turn = currentTurn();
+        if (turn == null || turn.entry == null) {
+            throw new IllegalStateException("operation requires a serial handler turn");
+        }
+        return turn.entry.turnOrigin().result.handle((ignored, failure) -> null);
+    }
+
     public static <T> CompletionStage<T> yieldCurrent(CompletionStage<T> stage) {
         Objects.requireNonNull(stage, "stage");
         SerialTurn turn = currentTurn();
@@ -1084,13 +1200,14 @@ public final class ZLinkSerialExecutionQueue {
                         stage.toCompletableFuture().cancel(false);
                     }
                 });
-        queue.suspendContinuation();
+        queue.suspendContinuation(turn.entry);
         gate.complete(null);
         stage.whenComplete(
                 (value, error) -> {
                     try {
                         CompletionStage<Void> continuation =
                                 queue.enqueueContinuation(
+                                        turn.entry,
                                         () -> {
                                             updateCarrier(serialContext, currentTurn());
                                             try (var serial =
@@ -1137,21 +1254,41 @@ public final class ZLinkSerialExecutionQueue {
         return managed;
     }
 
-    private synchronized void suspendContinuation() {
-        if (suspendedContinuations == Integer.MAX_VALUE) {
+    private synchronized void suspendContinuation(Entry turn) {
+        if (suspendedContinuations() == Integer.MAX_VALUE) {
             throw new IllegalStateException("suspended continuation count exhausted");
         }
-        suspendedContinuations++;
+        if (isLifecycleTurn(turn)) {
+            suspendedLifecycleContinuations++;
+        } else {
+            suspendedApplicationContinuations++;
+        }
     }
 
-    private CompletionStage<Void> enqueueContinuation(Supplier<CompletionStage<Void>> operation) {
+    private int suspendedContinuations() {
+        return suspendedApplicationContinuations + suspendedLifecycleContinuations;
+    }
+
+    private static boolean isLifecycleTurn(Entry turn) {
+        return turn != null && turn.turnOrigin().lane == Lane.LIFECYCLE;
+    }
+
+    private CompletionStage<Void> enqueueContinuation(
+            Entry origin, Supplier<CompletionStage<Void>> operation) {
         CompletionStage<Void> result;
         boolean scheduleDrain = false;
         synchronized (this) {
-            if (suspendedContinuations <= 0) {
-                throw new IllegalStateException("suspended continuation count is inconsistent");
+            if (isLifecycleTurn(origin)) {
+                if (suspendedLifecycleContinuations <= 0) {
+                    throw new IllegalStateException("suspended continuation count is inconsistent");
+                }
+                suspendedLifecycleContinuations--;
+            } else {
+                if (suspendedApplicationContinuations <= 0) {
+                    throw new IllegalStateException("suspended continuation count is inconsistent");
+                }
+                suspendedApplicationContinuations--;
             }
-            suspendedContinuations--;
             if (nextSequence == Long.MAX_VALUE) {
                 throw new IllegalStateException("queue sequence exhausted");
             }
@@ -1166,6 +1303,7 @@ public final class ZLinkSerialExecutionQueue {
                             null,
                             Lane.APPLICATION,
                             true);
+            continuation.origin = origin == null ? null : origin.turnOrigin();
             outstanding++;
             if (relocation != null) {
                 holdRelocationEntry(continuation);
@@ -1179,21 +1317,36 @@ public final class ZLinkSerialExecutionQueue {
         return result;
     }
 
-    private boolean isQuiescent() {
-        return outstanding == 0
-                && suspendedContinuations == 0
-                && active == null
-                && !hasPending()
-                && (relocation == null
-                        || (relocation.captured.isEmpty() && relocation.held.isEmpty()));
+    private boolean isQuiescent(Quiescence scope) {
+        boolean relocationDrained =
+                relocation == null || (relocation.captured.isEmpty() && relocation.held.isEmpty());
+        if (scope == Quiescence.ALL) {
+            return outstanding == 0
+                    && suspendedContinuations() == 0
+                    && active == null
+                    && !hasPending()
+                    && relocationDrained;
+        }
+        return applicationPending.isEmpty()
+                && suspendedApplicationContinuations == 0
+                && (active == null || isLifecycleTurn(active))
+                && continuationPending.stream().allMatch(ZLinkSerialExecutionQueue::isLifecycleTurn)
+                && relocationDrained;
     }
 
     private List<CompletableFuture<Void>> takeQuiescenceWaitersIfReady() {
-        if (!isQuiescent() || quiescenceWaiters.isEmpty()) {
+        if (quiescenceWaiters.isEmpty()) {
             return List.of();
         }
-        List<CompletableFuture<Void>> ready = List.copyOf(quiescenceWaiters);
-        quiescenceWaiters.clear();
+        List<CompletableFuture<Void>> ready = new ArrayList<>();
+        quiescenceWaiters.removeIf(
+                waiter -> {
+                    if (!isQuiescent(waiter.scope())) {
+                        return false;
+                    }
+                    ready.add(waiter.completion());
+                    return true;
+                });
         return ready;
     }
 
@@ -1288,12 +1441,17 @@ public final class ZLinkSerialExecutionQueue {
     private static SerialTurn currentTurn() {
         ZLinkSerialExecutionQueue queue = CURRENT.get();
         CompletableFuture<Void> gate = CURRENT_GATE.get();
-        if (queue != null && gate != null) {
-            return new SerialTurn(queue, gate);
-        }
         Object propagated =
                 systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
                         .currentSerialExecutionTurn();
+        if (queue != null && gate != null) {
+            if (propagated instanceof SerialTurnCarrier carrier
+                    && carrier.turn.queue == queue
+                    && carrier.turn.gate == gate) {
+                return carrier.turn;
+            }
+            return new SerialTurn(queue, gate, null);
+        }
         return propagated instanceof SerialTurnCarrier carrier ? carrier.turn : null;
     }
 
@@ -1303,12 +1461,15 @@ public final class ZLinkSerialExecutionQueue {
         }
     }
 
+    private record QuiescenceWaiter(Quiescence scope, CompletableFuture<Void> completion) {}
+
     private enum Lane {
         APPLICATION,
         LIFECYCLE
     }
 
-    private record SerialTurn(ZLinkSerialExecutionQueue queue, CompletableFuture<Void> gate) {}
+    private record SerialTurn(
+            ZLinkSerialExecutionQueue queue, CompletableFuture<Void> gate, Entry entry) {}
 
     private static final class SerialTurnCarrier {
         private volatile SerialTurn turn;
@@ -1516,6 +1677,12 @@ public final class ZLinkSerialExecutionQueue {
         private final RelocationBoundary relocationBoundary;
         private final Lane lane;
         private final boolean continuation;
+        // The first entry of the turn this continuation resumes; null for that first entry.
+        private Entry origin;
+
+        private Entry turnOrigin() {
+            return origin == null ? this : origin;
+        }
 
         private Entry(
                 long sequence,

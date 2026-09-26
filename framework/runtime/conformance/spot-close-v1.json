@@ -1,0 +1,118 @@
+{
+  "fixture": "zlink.framework.spot-close",
+  "version": 1,
+  "specClauses": [
+    "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md#7-close와-generation-경계",
+    "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md#9-실패와-관측",
+    "framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md#7-lane-분리와-우선순위-구현"
+  ],
+  "closeSteps": [
+    "closingCommitted",
+    "admissionSealed",
+    "acceptedTurnsDrained",
+    "onClosing",
+    "localResourcesReleased",
+    "authorityReleased"
+  ],
+  "invariants": {
+    "contextCloseReturnsValue": true,
+    "onClosingCallsPerAcceptedClose": 1,
+    "onClosingFailureChangesCloseResult": false,
+    "managerCloseResubmitsToNewOwner": false,
+    "closeRetargetsCurrentIncarnation": false
+  },
+  "scenarios": [
+    {
+      "name": "close-absent-incarnation-is-false",
+      "given": {
+        "runtime": "Ready",
+        "authority": "Missing"
+      },
+      "act": "managerClose",
+      "expect": {
+        "result": false,
+        "onClosingCalls": 0
+      }
+    },
+    {
+      "name": "close-other-generation-is-invalid-operation",
+      "given": {
+        "runtime": "Ready",
+        "authority": "Ready",
+        "closeGeneration": "previous"
+      },
+      "act": "managerClose",
+      "expect": {
+        "result": "InvalidOperation",
+        "authority": "Ready",
+        "onClosingCalls": 0
+      }
+    },
+    {
+      "name": "close-with-membership-is-false-and-keeps-authority",
+      "given": {
+        "runtime": "Ready",
+        "authority": "Ready",
+        "members": 1
+      },
+      "act": "managerClose",
+      "expect": {
+        "result": false,
+        "authority": "Ready",
+        "admission": "open",
+        "onClosingCalls": 0
+      }
+    },
+    {
+      "name": "close-after-accepted-join-observes-its-membership",
+      "given": {
+        "runtime": "Ready",
+        "authority": "Ready",
+        "members": 0
+      },
+      "act": "joinAcceptedThenManagerClose",
+      "expect": {
+        "result": false,
+        "authority": "Ready",
+        "admission": "open",
+        "onClosingCalls": 0,
+        "order": [
+          "joinCompleted",
+          "closeCompleted"
+        ]
+      }
+    },
+    {
+      "name": "failure-before-closing-commit-keeps-authority",
+      "given": {
+        "runtime": "Ready",
+        "authority": "Ready",
+        "closingCommit": "ownerFenceMismatch"
+      },
+      "act": "managerClose",
+      "expect": {
+        "result": "Unavailable",
+        "authority": "Ready",
+        "admission": "open",
+        "onClosingCalls": 0
+      }
+    },
+    {
+      "name": "on-closing-failure-is-diagnostic-and-cleanup-continues",
+      "given": {
+        "runtime": "Ready",
+        "authority": "Ready",
+        "onClosing": "throws"
+      },
+      "act": "managerClose",
+      "expect": {
+        "result": true,
+        "authority": "Missing",
+        "onClosingCalls": 1,
+        "diagnostics": [
+          "onClosingFailed"
+        ]
+      }
+    }
+  ]
+}

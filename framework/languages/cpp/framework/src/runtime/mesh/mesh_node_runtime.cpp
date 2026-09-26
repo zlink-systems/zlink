@@ -831,7 +831,8 @@ void mesh_node_runtime_t::start ()
     if (_spot_route_fence_resolver)
         node->configure_spot_route_fence_resolver (_spot_route_fence_resolver);
     if (_user_spot_store && _user_spot_materializer) {
-        node->configure_user_spot_operations (_user_spot_store, _user_spot_materializer);
+        node->configure_user_spot_operations (_user_spot_store, _user_spot_materializer,
+                                              _user_spot_closer);
     }
     if (_actor_create_target)
         node->configure_actor_create_operations (_actor_create_target);
@@ -985,12 +986,15 @@ void mesh_node_runtime_t::start ()
 }
 
 void mesh_node_runtime_t::configure_user_spot_operations (
-  std::shared_ptr<location_repository_t> store, host::user_spot_materializer_t materializer)
+  std::shared_ptr<location_repository_t> store,
+  host::user_spot_materializer_t materializer,
+  host::user_spot_closer_t closer)
 {
     if (_node)
         throw configuration_error ("User Spot operations must be configured before MeshNode start");
     _user_spot_store = std::move (store);
     _user_spot_materializer = std::move (materializer);
+    _user_spot_closer = std::move (closer);
 }
 
 void mesh_node_runtime_t::configure_spot_route_fence_resolver (

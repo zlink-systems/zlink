@@ -1318,6 +1318,42 @@ test('ZLinkActorContext delegates join calls to coordinator with timeout', async
   replyMessage.close();
 });
 
+test('Entry Spot Join keeps its request Message until the target submission consumes it', async () => {
+  const replyMessage = zlink.Message.from('joined');
+  const consumed = [];
+  class PlayerActor {
+    constructor(actorId, context) {
+      this.actorId = actorId;
+      this.context = context;
+    }
+  }
+  const joinCoordinator = {
+    async joinEntrySpot(_actor, _state, _nodeRid, request) {
+      // Target resolution completes asynchronously before submission reads
+      // the payload; the Join operation still owns the Message here.
+      await new Promise((resolve) => setImmediate(resolve));
+      consumed.push(request.data().toString());
+      return {
+        accepted: true,
+        actor: { nodeRid: 'node-b', actorId: 'alice', generation: 1n },
+        reply: replyMessage
+      };
+    }
+  };
+  const manager = createActorManager({
+    actorFactories: new Map([['player', class { create(context) { return new PlayerActor(context.actorId, context); } }]]),
+    joinCoordinator
+  });
+  const actor = await manager.getOrCreateActor('alice', 'player');
+  const result = await submitDeferredActorJoin(
+    actor,
+    actor.context.joinEntrySpot(encodedMessage('entry-payload')).timeout(50)
+  );
+  assert.equal(result.status, 'accepted');
+  assert.deepEqual(consumed, ['entry-payload']);
+  replyMessage.close();
+});
+
 test('SpotWide actor join defer yields the current Spot turn while waiting', async () => {
   const events = [];
   let releaseJoin;

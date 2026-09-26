@@ -57,6 +57,12 @@ export interface ZLinkSpotRuntimeOptionsFactoryOptions {
     spotId: string,
     onCommitted: () => void
   ) => Promise<{ release(): Promise<void> } | undefined>;
+  readonly beginUserClosingAuthority: (
+    meshName: string,
+    spotId: string,
+    objectGeneration: bigint,
+    onCommitted: () => void
+  ) => Promise<{ release(): Promise<void> } | undefined>;
   readonly createLocationSpotRouteResolver: () => ZLinkSpotRouteResolver | undefined;
   readonly boundSessionRelay: ZLinkBoundSessionRelay;
   readonly actorHandoff: ZLinkActorHandoffCoordinator;
@@ -155,6 +161,13 @@ export class ZLinkSpotRuntimeOptionsFactory {
         this.options.beginInstanceIdleClosingAuthority(meshName, String(spotId), onCommitted),
       beginInstanceClosingAuthority: (meshName, spotId, onCommitted) =>
         this.options.beginInstanceClosingAuthority(meshName, String(spotId), onCommitted),
+      beginUserClosingAuthority: (meshName, spotId, objectGeneration, onCommitted) =>
+        this.options.beginUserClosingAuthority(
+          meshName,
+          String(spotId),
+          objectGeneration,
+          onCommitted
+        ),
       instanceSpotApplicationTargetProvider: (meshName, spotId) =>
         this.options
           .spotNodeRuntime()

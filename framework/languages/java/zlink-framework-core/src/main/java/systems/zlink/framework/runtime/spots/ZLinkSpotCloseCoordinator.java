@@ -1,10 +1,11 @@
 package systems.zlink.framework.runtime.spots;
 
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.Executor;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -43,21 +44,17 @@ final class ZLinkSpotCloseCoordinator {
 
     private final Supplier<CompletionStage<Boolean>> commit;
     private final List<Step> steps;
-    private final Executor ownerExecutor;
     private final Consumer<Throwable> closingFailure;
+    // -1 until the Closing transition is committed; then the index of the next step to run.
     private int next = -1;
-    private boolean running;
     private CompletableFuture<Boolean> attempt;
-    private Throwable callbackFailure;
 
     ZLinkSpotCloseCoordinator(
             Supplier<CompletionStage<Boolean>> commit,
             List<Step> steps,
-            Executor ownerExecutor,
             Consumer<Throwable> closingFailure) {
         this.commit = Objects.requireNonNull(commit, "commit");
         this.steps = List.copyOf(steps);
-        this.ownerExecutor = Objects.requireNonNull(ownerExecutor, "ownerExecutor");
         this.closingFailure = Objects.requireNonNull(closingFailure, "closingFailure");
     }
 
@@ -75,23 +72,20 @@ final class ZLinkSpotCloseCoordinator {
         return next == steps.size();
     }
 
-    synchronized CompletionStage<Boolean> close() {
-        if (running) {
-            return attempt;
+    /** Starts this Close and shares its final result with callers of the same generation. */
+    CompletionStage<Boolean> close() {
+        CompletableFuture<Boolean> started;
+        synchronized (this) {
+            if (attempt != null) {
+                return attempt;
+            }
+            attempt = started = new CompletableFuture<>();
         }
-        if (finished()) {
-            return callbackFailure == null
-                    ? CompletableFuture.completedFuture(true)
-                    : CompletableFuture.failedFuture(callbackFailure);
-        }
-        running = true;
-        attempt = new CompletableFuture<>();
-        CompletableFuture<Boolean> result = attempt;
-        advance(result, false);
-        return result;
+        advance(started);
+        return started;
     }
 
-    private void advance(CompletableFuture<Boolean> result, boolean background) {
+    private void advance(CompletableFuture<Boolean> result) {
         int position;
         synchronized (this) {
             position = next;
@@ -101,28 +95,25 @@ final class ZLinkSpotCloseCoordinator {
             try {
                 committed = commit.get();
             } catch (Throwable failure) {
-                fail(result, failure, background);
+                end(result, null, failure);
                 return;
             }
-            committed.whenComplete(
-                    (value, failure) -> {
-                        if (failure != null) {
-                            fail(result, failure, background);
-                        } else if (!Boolean.TRUE.equals(value)) {
-                            finish(result, false);
-                        } else {
-                            markCommitted();
-                            advance(result, background);
-                        }
-                    });
+            ZLinkSerialExecutionQueue.yieldCurrent(committed)
+                    .whenComplete(
+                            (value, failure) -> {
+                                if (failure != null) {
+                                    end(result, null, failure);
+                                } else if (!Boolean.TRUE.equals(value)) {
+                                    end(result, false, null);
+                                } else {
+                                    markCommitted();
+                                    advance(result);
+                                }
+                            });
             return;
         }
         if (position == steps.size()) {
-            if (callbackFailure == null) {
-                finish(result, true);
-            } else {
-                fail(result, callbackFailure, true);
-            }
+            end(result, true, null);
             return;
         }
         Step step = steps.get(position);
@@ -132,57 +123,33 @@ final class ZLinkSpotCloseCoordinator {
         } catch (Throwable failure) {
             operation = CompletableFuture.failedFuture(failure);
         }
-        operation.whenComplete(
-                (ignored, failure) -> {
-                    if (failure != null && !step.onClosing()) {
-                        fail(result, failure, background);
-                        return;
-                    }
-                    synchronized (this) {
-                        if (failure != null) {
-                            callbackFailure = failure;
-                        }
-                        next = position + 1;
-                    }
-                    if (failure != null) {
-                        try {
-                            closingFailure.accept(failure);
-                        } catch (Throwable diagnosticsFailure) {
-                            failure.addSuppressed(diagnosticsFailure);
-                        }
-                    }
-                    advance(result, background);
-                });
-    }
-
-    private synchronized void finish(CompletableFuture<Boolean> result, boolean value) {
-        running = false;
-        attempt = null;
-        result.complete(value);
-    }
-
-    private void fail(CompletableFuture<Boolean> result, Throwable failure, boolean background) {
-        boolean resume;
-        synchronized (this) {
-            running = false;
-            attempt = null;
-            resume = next >= 0 && next < steps.size() && !background;
-        }
-        result.completeExceptionally(failure);
-        if (resume) {
-            ownerExecutor.execute(
-                    () -> {
-                        CompletableFuture<Boolean> continuation;
-                        synchronized (this) {
-                            if (running || finished()) {
+        ZLinkSerialExecutionQueue.yieldCurrent(operation)
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null && !step.onClosing()) {
+                                end(result, null, failure);
                                 return;
                             }
-                            running = true;
-                            continuation = new CompletableFuture<>();
-                            attempt = continuation;
-                        }
-                        advance(continuation, true);
-                    });
+                            if (failure != null) {
+                                // OnClosing failure is diagnostics only; cleanup continues.
+                                try {
+                                    closingFailure.accept(failure);
+                                } catch (Throwable diagnosticsFailure) {
+                                    failure.addSuppressed(diagnosticsFailure);
+                                }
+                            }
+                            synchronized (this) {
+                                next = position + 1;
+                            }
+                            advance(result);
+                        });
+    }
+
+    private void end(CompletableFuture<Boolean> result, Boolean value, Throwable failure) {
+        if (failure == null) {
+            result.complete(value);
+        } else {
+            result.completeExceptionally(failure);
         }
     }
 }

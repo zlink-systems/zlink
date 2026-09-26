@@ -742,6 +742,23 @@ stateful_error_t stateful_object_runtime_t::commit_close_spot (const spot_close_
       .get ();
 }
 
+std::optional<spot_close_token_t>
+stateful_object_runtime_t::closing_spot_token (const object_ref_t &spot)
+{
+    return _lane
+      .run ([&, this] () -> std::optional<spot_close_token_t> {
+          const auto record = _objects.find (key_for (spot));
+          if (record == _objects.end () || !same_exact_ref (record->second.reference, spot)
+              || record->second.state != object_state_t::closing)
+              return std::nullopt;
+          const auto closing = _spot_closes.find (record->second.barrier_generation);
+          if (closing == _spot_closes.end ())
+              return std::nullopt;
+          return closing->second;
+      })
+      .get ();
+}
+
 stateful_error_t stateful_object_runtime_t::abort_close_spot (const spot_close_token_t &token)
 {
     return _lane

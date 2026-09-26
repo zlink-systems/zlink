@@ -29,6 +29,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
     private final String meshName;
     private final RoutingId nodeRid;
     private final ZLinkBackendSpot backendSpot;
+    private final long objectGeneration;
     private final DefaultSpotOutbound outbound;
     private final ZLinkHandlerInstanceOwner handlerInstances;
     private final ZLinkSerialExecutionQueue dispatchQueue;
@@ -55,6 +56,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
         this.meshName = Objects.requireNonNull(meshName, "meshName");
         this.nodeRid = Objects.requireNonNull(nodeRid, "nodeRid");
         this.backendSpot = Objects.requireNonNull(backendSpot, "backendSpot");
+        this.objectGeneration = backendSpot.lifecycleGeneration();
         this.dispatchQueue =
                 new ZLinkSerialExecutionQueue(
                         host.serialExecutor(), ZLinkExecutionLanePolicy.spot());
@@ -163,7 +165,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
 
     @Override
     public long objectGeneration() {
-        return backendSpot.lifecycleGeneration();
+        return objectGeneration;
     }
 
     @Override
@@ -205,7 +207,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
     public CompletionStage<Void> enqueueDispatch(
             long payloadBytes, Supplier<CompletionStage<Void>> operation) {
         host.ensureOwnerAdmissionOpen();
-        return dispatchQueue.enqueue(operation);
+        return dispatchQueue.enqueue(() -> runLifecycleExecution(operation));
     }
 
     @Override

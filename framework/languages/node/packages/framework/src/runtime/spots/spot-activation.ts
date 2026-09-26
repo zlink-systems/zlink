@@ -31,6 +31,10 @@ import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
 import { throwIfAborted } from '../abort';
 import { ZLinkConfigurationException } from '../configuration';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 import type {
   ZLinkBackendReceived,
   ZLinkBackendSpot,
@@ -140,11 +144,11 @@ export interface ZLinkSpotActivationLifecycleOptions {
     signal?: AbortSignal,
     meshName?: string
   ) => Promise<void>;
-  readonly closeSpot: (
-    meshName: string,
-    spotId: RoutingId,
-    signal?: AbortSignal,
-    reason?: ZLinkSpotCloseReason
+  /** Starts a context Close request after its calling turn has ended. */
+  readonly requestContextClose: (
+    activation: ZLinkSpotActivation,
+    objectGeneration: bigint,
+    signal?: AbortSignal
   ) => Promise<boolean>;
   readonly isSpotClosing: (activation: ZLinkSpotActivation) => boolean;
   readonly registerActivation: (activation: ZLinkSpotActivation) => void;
@@ -180,7 +184,7 @@ export class ZLinkSpotActivationLifecycle {
       actorDispatchDisposed: boolean;
       nativeDisposed: boolean;
       locationReleased: boolean;
-      inFlight?: Promise<void>;
+      inFlight?: Promise<unknown>;
     }
   >();
 
@@ -263,7 +267,7 @@ export class ZLinkSpotActivationLifecycle {
       providerResolver: this.options.providerResolver,
       runtimeEventPublisher: this.options.runtimeEventPublisher,
       workerRuntime: this.options.workerRuntime,
-      close: this.contextClose(meshName, spotId, () => activation)
+      close: this.contextClose(objectGeneration, () => activation)
     };
     const context =
       objectKind === 'user_spot'
@@ -318,6 +322,7 @@ export class ZLinkSpotActivationLifecycle {
           objectKind === 'user_spot'
             ? {
                 kind: 'user',
+                objectGeneration,
                 executionMode,
                 relocationCoordinationMode:
                   this.options.userSpotRelocationCoordinationMode?.(
@@ -402,7 +407,7 @@ export class ZLinkSpotActivationLifecycle {
       providerResolver: this.options.providerResolver,
       runtimeEventPublisher: this.options.runtimeEventPublisher,
       workerRuntime: this.options.workerRuntime,
-      close: this.contextClose(meshName, spotId, () => activation)
+      close: this.contextClose(objectGeneration, () => activation)
     });
     instance = await createFreshProviderInstance(
       implementation,
@@ -489,18 +494,6 @@ export class ZLinkSpotActivationLifecycle {
         `Instance Spot '${String(activation.spotId)}' cleanup failed.`
       );
     }
-  }
-
-  resourcesReleased(activation: ZLinkSpotActivation): boolean {
-    const state = this.cleanupStates.get(activation);
-    return (
-      state?.timersDisposed === true &&
-      state.serialDisposed === true &&
-      state.handlersDisposed === true &&
-      state.actorDispatchDisposed === true &&
-      state.nativeDisposed === true &&
-      state.locationReleased === true
-    );
   }
 
   async create<TSpot extends ZLinkSpot>(
@@ -613,7 +606,7 @@ export class ZLinkSpotActivationLifecycle {
       ensureOperationAllowed: () => activation?.ensureContextOperationAllowed(),
       leaveActor: (actor, contextSignal) =>
         this.options.leaveActor(spotId, actor, contextSignal, meshName),
-      close: this.contextClose(meshName, spotId, () => activation)
+      close: this.contextClose(spotGeneration, () => activation)
     });
     try {
       spot = await createFreshProviderInstance(spotType, this.options.providerResolver, context);
@@ -630,6 +623,7 @@ export class ZLinkSpotActivationLifecycle {
         spotId,
         domain: {
           kind: 'user',
+          objectGeneration: spotGeneration,
           executionMode,
           relocationCoordinationMode:
             this.options.userSpotRelocationCoordinationMode?.(meshName, spotType) ??
@@ -744,7 +738,7 @@ export class ZLinkSpotActivationLifecycle {
       ensureOperationAllowed: () => activation?.ensureContextOperationAllowed(),
       leaveActor: (actor, contextSignal) =>
         this.options.leaveActor(spotId, actor, contextSignal, meshName),
-      close: this.contextClose(meshName, spotId, () => activation)
+      close: this.contextClose(objectGeneration, () => activation)
     });
     spot = await createFreshProviderInstance(spotType, this.options.providerResolver, context);
     Object.defineProperty(spot, 'context', {
@@ -757,6 +751,7 @@ export class ZLinkSpotActivationLifecycle {
       spotId,
       domain: {
         kind: 'user',
+        objectGeneration,
         executionMode,
         relocationCoordinationMode:
           this.options.userSpotRelocationCoordinationMode?.(meshName, spotType) ??
@@ -783,29 +778,18 @@ export class ZLinkSpotActivationLifecycle {
   }
 
   private contextClose(
-    meshName: string,
-    spotId: RoutingId,
+    objectGeneration: bigint,
     activationProvider: () => ZLinkSpotActivation | undefined
   ): (signal?: AbortSignal) => Promise<boolean> {
-    return async (signal) => {
+    return (signal) => {
       const activation = activationProvider();
-      // Native callbacks can cross a promise boundary that does not retain
-      // the serial turn context. Queue the close before calling the manager
-      // so the callback never waits for work behind its own serial turn.
-      if (activation?.serial.isExecuting === true && !activation.serial.isCurrentTurn) {
-        activation.requestClose();
-        const retry = activation.serial.post(() =>
-          this.options.closeSpot(meshName, spotId, signal)
+      if (activation === undefined) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.InvalidOperation,
+          'Spot context Close requires its active generation.'
         );
-        this.options.detachedTaskRunner?.runDetached(`spot close ${String(spotId)}`, async () => {
-          await retry;
-        });
-        if (this.options.detachedTaskRunner === undefined) {
-          void retry.catch(() => undefined);
-        }
-        return true;
       }
-      return await this.options.closeSpot(meshName, spotId, signal);
+      return this.options.requestContextClose(activation, objectGeneration, signal);
     };
   }
 
@@ -825,18 +809,20 @@ export class ZLinkSpotActivationLifecycle {
     }
   }
 
+  /** Returns the OnClosing failure, which cleanup records and does not rethrow. */
   async cleanupClosedActivation(
     activation: ZLinkSpotActivation,
     reason = ZLinkSpotCloseReason.ExplicitClose,
     deadline?: Date
-  ): Promise<void> {
-    await this.cleanupActivation(
+  ): Promise<unknown> {
+    return await this.cleanupActivation(
       activation,
       activation.meshName,
       true,
       undefined,
       reason,
-      deadline
+      deadline,
+      true
     );
   }
 
@@ -961,8 +947,9 @@ export class ZLinkSpotActivationLifecycle {
     notifyClosing: boolean,
     signal?: AbortSignal,
     reason = ZLinkSpotCloseReason.ExplicitClose,
-    deadline?: Date
-  ): Promise<void> {
+    deadline?: Date,
+    owningLifecycle = false
+  ): Promise<unknown> {
     throwIfAborted(signal);
     const state = this.cleanupStates.get(activation) ?? {
       closingAttempted: false,
@@ -981,7 +968,8 @@ export class ZLinkSpotActivationLifecycle {
       notifyClosing,
       reason,
       state,
-      deadline
+      deadline,
+      owningLifecycle
     ).finally(() => {
       state.inFlight = undefined;
     });
@@ -1002,9 +990,11 @@ export class ZLinkSpotActivationLifecycle {
       nativeDisposed: boolean;
       locationReleased: boolean;
     },
-    deadline?: Date
-  ): Promise<void> {
+    deadline?: Date,
+    owningLifecycle = false
+  ): Promise<unknown> {
     const errors: unknown[] = [];
+    let closingFailure: unknown;
     const cleanup = async (operation: () => Promise<void> | void, completed: () => void) => {
       try {
         await operation();
@@ -1016,13 +1006,19 @@ export class ZLinkSpotActivationLifecycle {
     if (notifyClosing && !state.closingAttempted) {
       state.closingAttempted = true;
       try {
-        await invokeSpotClosing(activation.spot.onClosing?.bind(activation.spot), reason, deadline);
+        // OnClosing is user code: it runs as a Framework turn through the
+        // execution gate while the Close lifecycle item keeps its FIFO slot.
+        await activation.serial.postBarrierTurn(() =>
+          invokeSpotClosing(activation.spot.onClosing?.bind(activation.spot), reason, deadline)
+        );
       } catch (error) {
+        // An OnClosing failure is diagnostic and cleanup continues. It is
+        // returned so host shutdown can classify its teardown outcome.
         this.options.closeErrorSink?.reportRuntimeTaskException(
           `spot ${String(activation.spotId)} onClosing`,
           error
         );
-        errors.push(error);
+        closingFailure = error;
       }
     }
     if (!state.timersDisposed) {
@@ -1033,9 +1029,12 @@ export class ZLinkSpotActivationLifecycle {
         }
       );
     }
-    if (!state.serialDisposed) {
+    if (!state.serialDisposed && state.timersDisposed) {
       await cleanup(
-        () => activation.serialExecutor.close(),
+        () =>
+          owningLifecycle
+            ? activation.serialExecutor.closeChildren()
+            : activation.serialExecutor.close(),
         () => {
           state.serialDisposed = true;
         }
@@ -1084,6 +1083,7 @@ export class ZLinkSpotActivationLifecycle {
     if (errors.length > 1) {
       throw new AggregateError(errors, `Spot '${activation.spotId}' cleanup failed.`);
     }
+    return closingFailure;
   }
 
   private decodeCreateReply(reply: unknown): unknown {

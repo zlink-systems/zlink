@@ -24,6 +24,7 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
     private readonly Dictionary<Type, object> _fallbackInstances = new();
     private readonly ZLinkStateLane _lane = new();
     private bool _disposed;
+    private readonly List<object> _undisposed = [];
     private Task? _disposeTask;
 
     internal IServiceProvider Services { get; } = services;
@@ -241,27 +242,35 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
                 "This service provider doesn't support keyed services."
             );
 
+    // Disposal releases the owned instances in reverse creation order. Callers
+    // that arrive while a release runs share it. An instance whose disposal
+    // failed stays owned, and the next DisposeAsync call releases only those,
+    // so a failed release is never the terminal result (spec
+    // 06-spot-address-messaging §7 step 3 resume).
     public ValueTask DisposeAsync()
     {
         var result = AwaitStateLane(
             _lane.RunAsync(() =>
             {
-                if (_disposeTask is null)
+                if (!_disposed)
                 {
                     _disposed = true;
-                    var instances = _fallbackInstances.Values.Reverse().ToArray();
+                    _undisposed.AddRange(_fallbackInstances.Values.Reverse());
                     _fallbackInstances.Clear();
-                    var completion = new TaskCompletionSource(
-                        TaskCreationOptions.RunContinuationsAsynchronously
-                    );
-                    _disposeTask = completion.Task;
-                    return (Task: _disposeTask, Completion: completion, Instances: instances);
                 }
-                return (
-                    Task: _disposeTask,
-                    Completion: (TaskCompletionSource?)null,
-                    Instances: (object[]?)null
+                if (_disposeTask is { IsCompleted: false } || _undisposed.Count == 0)
+                    return (
+                        Task: _disposeTask ?? Task.CompletedTask,
+                        Completion: (TaskCompletionSource?)null,
+                        Instances: (object[]?)null
+                    );
+                var instances = _undisposed.ToArray();
+                _undisposed.Clear();
+                var completion = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously
                 );
+                _disposeTask = completion.Task;
+                return (Task: _disposeTask, Completion: completion, Instances: instances);
             })
         );
         if (result.Completion is not null)
@@ -272,7 +281,9 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 
-    private static void StartDisposeCore(TaskCompletionSource completion, object[] instances)
+    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+
+    private void StartDisposeCore(TaskCompletionSource completion, object[] instances)
     {
         if (ExecutionContext.IsFlowSuppressed())
         {
@@ -284,37 +295,35 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
             _ = DisposeCoreAsync(completion, instances);
     }
 
-    private static async Task DisposeCoreAsync(TaskCompletionSource completion, object[] instances)
+    private async Task DisposeCoreAsync(TaskCompletionSource completion, object[] instances)
     {
-        try
-        {
-            List<Exception>? failures = null;
-            foreach (var instance in instances)
-                try
-                {
-                    if (instance is IAsyncDisposable asyncDisposable)
-                        await asyncDisposable.DisposeAsync().ConfigureAwait(false);
-                    else if (instance is IDisposable disposable)
-                        disposable.Dispose();
-                }
-                catch (Exception exception)
-                {
-                    (failures ??= []).Add(exception);
-                }
+        List<Exception>? failures = null;
+        List<object>? failed = null;
+        foreach (var instance in instances)
+            try
+            {
+                if (instance is IAsyncDisposable asyncDisposable)
+                    await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+                else if (instance is IDisposable disposable)
+                    disposable.Dispose();
+            }
+            catch (Exception exception)
+            {
+                (failed ??= []).Add(instance);
+                (failures ??= []).Add(exception);
+            }
 
-            if (failures is { Count: 1 })
-                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
-            if (failures is { Count: > 1 })
-                throw new AggregateException(failures);
+        // Failed instances stay owned before the result is visible, so the
+        // next caller retries them.
+        if (failed is not null)
+            AwaitStateLane(_lane.RunAsync(() => _undisposed.AddRange(failed)));
+        if (failures is null)
             completion.TrySetResult();
-        }
-        catch (OperationCanceledException exception)
-        {
-            completion.TrySetCanceled(exception.CancellationToken);
-        }
-        catch (Exception exception)
-        {
-            completion.TrySetException(exception);
-        }
+        else if (failures is [var failure] && failure is OperationCanceledException canceled)
+            completion.TrySetCanceled(canceled.CancellationToken);
+        else if (failures is [var single])
+            completion.TrySetException(single);
+        else
+            completion.TrySetException(new AggregateException(failures));
     }
 }

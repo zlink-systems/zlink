@@ -94,14 +94,15 @@ internal sealed class PlayerQuestSpot(
 internal sealed class ClosePlayerQuestHandler
     : IZLinkSpotPacketHandler<PlayerQuestSpot, ClosePlayerQuestMsg>
 {
-    public async ValueTask HandleAsync(
+    public ValueTask HandleAsync(
         PlayerQuestSpot spot,
         ClosePlayerQuestMsg message,
         CancellationToken cancellationToken
     )
     {
         _ = message;
-        await spot.Context.CloseAsync(cancellationToken);
+        _ = spot.Context.CloseAsync(cancellationToken);
+        return ValueTask.CompletedTask;
     }
 }
 

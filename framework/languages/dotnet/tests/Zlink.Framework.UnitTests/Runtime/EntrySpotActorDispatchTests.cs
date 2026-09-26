@@ -153,6 +153,19 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public void SpotContextClose_ReturnsCompletionResult()
+    {
+        Assert.Equal(
+            typeof(ValueTask<bool>),
+            typeof(IZLinkSpotContext).GetMethod("CloseAsync")?.ReturnType
+        );
+        Assert.Equal(
+            typeof(ValueTask<bool>),
+            typeof(IZLinkInstanceSpotContext).GetMethod("CloseAsync")?.ReturnType
+        );
+    }
+
+    [Fact]
     public async Task EntrySpot_Identity_Is_FrameworkIssued_After_Node_Bind()
     {
         var services = new ServiceCollection().BuildServiceProvider();
@@ -5163,6 +5176,34 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task LocalSpotClose_RejectsAStaleObjectGeneration()
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            node,
+            userSpotType: typeof(EmptyUserSpot)
+        );
+        try
+        {
+            var created = await runtime.CreateAsync<EmptyUserSpot>();
+            var staleGeneration = created.Spot.ObjectGeneration == 1 ? 2UL : 1UL;
+            // The manager hands the owner node the SpotRef generation; the owner
+            // never closes another incarnation of the same Spot ID (spec §7).
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await runtime
+                    .GetSpotNodeRuntime("entry")
+                    .CloseAsync(created.Spot.SpotId, staleGeneration, CancellationToken.None)
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, error.Kind);
+            Assert.True(await runtime.CloseAsync(created.Spot));
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task PerActor_relocation_destination_requires_exact_published_shell()
     {
         var node = new CapturingSpotNode();
@@ -5288,6 +5329,81 @@ public sealed partial class EntrySpotActorDispatchTests
             Assert.True((await join.WaitAsync(TimeSpan.FromSeconds(5))).Accepted);
             Assert.False(await close.WaitAsync(TimeSpan.FromSeconds(5)));
             Assert.NotNull(await catalog.GetAsync(created.Spot.SpotId, CancellationToken.None));
+        }
+        finally
+        {
+            probe.Release.TrySetResult();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task JoinActorAsync_RetainsLifecycleOwnerThroughJoinedCallback()
+    {
+        var probe = new BlockingActorJoinProbe();
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            userSpotType: typeof(BlockingActorJoinSpot),
+            blockingActorJoinProbe: probe
+        );
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            var created = await runtime.CreateAsync<BlockingActorJoinSpot>();
+            var activation = Assert.Single(
+                runtime.GetSpotNodeRuntime("entry").Catalog.Spots,
+                candidate => candidate.SpotId == created.Spot.SpotId
+            );
+            var join = activation
+                .JoinActorAsync(actor, ZLinkMessage.Empty, CancellationToken.None)
+                .AsTask();
+            await probe.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            probe.Release.TrySetResult();
+            Assert.True((await join.WaitAsync(TimeSpan.FromSeconds(5))).Accepted);
+            Assert.True(probe.ActorJoinWasLifecycle);
+            Assert.True(probe.JoinedWasLifecycle);
+        }
+        finally
+        {
+            probe.Release.TrySetResult();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task LeaveActorFromContextAsync_EndsAfterMembershipResultIsDecided()
+    {
+        var probe = new BlockingActorJoinProbe();
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            userSpotType: typeof(BlockingActorJoinSpot),
+            blockingActorJoinProbe: probe
+        );
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            var created = await runtime.CreateAsync<BlockingActorJoinSpot>();
+            var activation = Assert.Single(
+                runtime.GetSpotNodeRuntime("entry").Catalog.Spots,
+                candidate => candidate.SpotId == created.Spot.SpotId
+            );
+            probe.Release.TrySetResult();
+            Assert.True(
+                (
+                    await activation.JoinActorAsync(
+                        actor,
+                        ZLinkMessage.Empty,
+                        CancellationToken.None
+                    )
+                ).Accepted
+            );
+            Assert.Equal(1, activation.JoinedActorCount);
+            await activation.LeaveActorFromContextAsync(actor, CancellationToken.None);
+            // Gate §7: the leave lifecycle item ends when its membership result
+            // is decided, so a later lifecycle item (Close) reads it.
+            Assert.Equal(0, activation.JoinedActorCount);
         }
         finally
         {
@@ -10362,15 +10478,17 @@ public sealed partial class EntrySpotActorDispatchTests
             _ = actorId;
             _ = request;
             _ = cancellationToken;
+            probe.ActorJoinWasLifecycle = ZLinkSerialTurn.Current?.LifecycleOwner is not null;
             probe.Started.TrySetResult();
             await probe.Release.Task.ConfigureAwait(false);
             return ZLinkSpotActorJoinResult.Accept();
         }
 
-        public ValueTask OnJoinedActorAsync(
-            ProbeActor actor,
-            CancellationToken cancellationToken
-        ) => ValueTask.CompletedTask;
+        public ValueTask OnJoinedActorAsync(ProbeActor actor, CancellationToken cancellationToken)
+        {
+            probe.JoinedWasLifecycle = ZLinkSerialTurn.Current?.LifecycleOwner is not null;
+            return ValueTask.CompletedTask;
+        }
 
         public ValueTask OnLeaveActorAsync(ProbeActor actor, CancellationToken cancellationToken) =>
             ValueTask.CompletedTask;
@@ -10378,6 +10496,10 @@ public sealed partial class EntrySpotActorDispatchTests
 
     private sealed class BlockingActorJoinProbe
     {
+        public bool ActorJoinWasLifecycle { get; set; }
+
+        public bool JoinedWasLifecycle { get; set; }
+
         public TaskCompletionSource Started { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 

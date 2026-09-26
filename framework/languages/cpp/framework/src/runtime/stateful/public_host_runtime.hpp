@@ -17,6 +17,7 @@
 #include <zlink/Contracts/Messaging/message.hpp>
 #include <zlink/Contracts/Sockets/results.hpp>
 #include <zlink/framework/contracts/actors/actor.hpp>
+#include <zlink/framework/contracts/dispatch/task.hpp>
 #include <zlink/framework/contracts/errors/result.hpp>
 #include <zlink/framework/contracts/locations/options.hpp>
 
@@ -250,7 +251,64 @@ struct user_spot_materialize_result_t
 using user_spot_materializer_t = std::function<user_spot_materialize_result_t (
   const stateful::object_ref_t &, const std::string &, const std::vector<std::byte> &)>;
 
-using instance_spot_close_completion_t = std::function<bool (bool)>;
+/* Close step 1 of one authority kind (Spot address messaging §7). An empty
+ * `release` means step 1 ended the Close with `result` and left the authority
+ * unchanged. Otherwise `Closing` is committed and `release` performs step 4
+ * with the same owner and generation fence. Both steps complete when their
+ * Location Store operations complete; a caller does not wait for them. */
+struct spot_close_commit_t
+{
+    result_t<bool> result = result_t<bool>::success (false);
+    std::function<task_t<bool> ()> release;
+};
+using spot_close_begin_t = std::function<task_t<spot_close_commit_t> ()>;
+using spot_close_done_t = std::function<void (result_t<bool>)>;
+/* The owner runtime runs a Close for one local User Spot on that Spot's
+ * lifecycle lane and reports its result through `done`. */
+using user_spot_closer_t =
+  std::function<void (const std::string &, spot_close_begin_t, spot_close_done_t)>;
+
+/* Continues a Close step when `task` completes. `resume` returns the
+ * continuation to the Spot lifecycle turn that waits for the step, which
+ * returned its turn meanwhile; without it the step continues where the task
+ * completes. */
+template <typename T, typename Next>
+void after_close_step (task_t<T> task, detail::task_scheduler_t resume, Next next)
+{
+    auto observed = std::make_shared<task_t<T>> (std::move (task));
+    detail::observe_task_terminal (
+      *observed, [observed, resume = std::move (resume),
+                  next = std::move (next)] (const result_t<T> &value) mutable {
+          auto run = [next, value] () mutable { next (std::move (value)); };
+          if (resume)
+              resume (std::move (run));
+          else
+              run ();
+      });
+}
+
+/* Close steps 1 and 4 for an authority whose local activation is absent. */
+inline void run_authority_close (spot_close_begin_t begin,
+                                 spot_close_done_t done,
+                                 detail::task_scheduler_t resume)
+{
+    after_close_step (
+      begin (), resume, [done, resume] (result_t<spot_close_commit_t> commit) mutable {
+          if (!commit) {
+              done (result_t<bool>::failure (commit.error_kind (), commit.error ()
+                                                                     ? commit.error ()->what ()
+                                                                     : "Spot Close step 1 failed"));
+              return;
+          }
+          if (!commit.value ().release) {
+              done (commit.value ().result);
+              return;
+          }
+          after_close_step (
+            commit.value ().release (), resume,
+            [done] (result_t<bool> released) mutable { done (std::move (released)); });
+      });
+}
 
 struct bound_session_bind_operation_result_t
 {
@@ -577,7 +635,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     stateful::raw_relocation_replay_coordinator_t &relocation_wire () noexcept;
     void
     configure_user_spot_operations (std::shared_ptr<zlink::framework::location_repository_t> store,
-                                    user_spot_materializer_t materializer);
+                                    user_spot_materializer_t materializer,
+                                    user_spot_closer_t closer = {});
     void configure_spot_route_fence_resolver (spot_route_fence_resolver_t resolver);
     using peer_readiness_resolver_t = std::function<bool (const zlink::routing_id_t &)>;
     void configure_peer_readiness_resolver (peer_readiness_resolver_t resolver);
@@ -611,7 +670,12 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       std::shared_ptr<stateful::relocation_store_port_t> relocations,
       std::function<std::optional<location_owner_token_t> ()> owner,
       instance_spot_activation_materializer_t materializer);
-    std::optional<instance_spot_close_completion_t>
+    // Step 1 of a Close that the local User Spot owner requests itself.
+    task_t<spot_close_commit_t>
+    begin_local_user_spot_close (const std::string &spot_id,
+                                 std::uint64_t object_generation,
+                                 std::uint64_t authority_owner_generation);
+    task_t<spot_close_commit_t>
     begin_instance_spot_close (const std::string &stable_type,
                                const std::string &spot_id,
                                std::uint64_t object_generation,
@@ -620,7 +684,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                               const std::string &spot_id,
                               std::uint64_t object_generation,
                               std::uint64_t authority_owner_generation,
-                              std::function<bool ()> close_local);
+                              std::function<void ()> close_local);
     void configure_session_route_owner (
       std::function<std::optional<location_owner_token_t> ()> owner_resolver);
     void configure_stateful_dispatch (
@@ -762,6 +826,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     friend class actor_transfer_token_t;
     friend class ::zlink::framework::detail::spot_node_runtime_t;
 
+    task_t<spot_close_commit_t> begin_user_spot_close (protocol::user_spot_close_fence_t target);
+
     spot_handle_t bind_relocation_spot (stateful::object_ref_t object);
     stateful::stateful_error_t
     advance_local_actor_authority (const stateful::object_ref_t &committed);
@@ -844,6 +910,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     std::unique_ptr<stateful::host_maintenance_runtime_t> _termination;
     std::shared_ptr<zlink::framework::location_repository_t> _user_spot_store;
     user_spot_materializer_t _user_spot_materializer;
+    user_spot_closer_t _user_spot_closer;
     spot_route_fence_resolver_t _spot_route_fence_resolver;
     peer_readiness_resolver_t _peer_readiness_resolver;
     struct cached_spot_route_fence_t
@@ -1040,8 +1107,12 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         protocol::command kind = protocol::command::userSpotCreate;
         std::uint64_t deadline_unix_ms = 0;
         std::vector<std::uint8_t> request_fingerprint;
+        // Empty while the operation runs; its one terminal result afterwards.
         std::vector<std::uint8_t> header;
         std::optional<protocol::application_payload_t> application_reply;
+        // Retransmissions of the running operation, with their correlations.
+        // They receive the same terminal result (§7.1 operation ID).
+        std::vector<std::pair<mesh::service_mailbox_record_t, std::uint64_t>> waiting;
     };
     std::map<std::string, user_spot_terminal_record_t> _user_spot_terminals;
     std::function<void ()> _maintenance_started;

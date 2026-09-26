@@ -31,10 +31,7 @@ class VerifyExpectedVersionFenceHandler implements ZLinkSpotRequestHandler<
     const result = this.workflow.verifyExpectedVersionFence(request, this.role);
     // Each probe is a separate workflow instance so the next probe can be
     // placed on another process and exercise the event-store version fence.
-    const closed = await spot.context.close();
-    if (!closed) {
-      throw new Error('ShoppingMall expected-version probe could not close its Instance Spot.');
-    }
+    void spot.context.close();
     return result;
   }
 }

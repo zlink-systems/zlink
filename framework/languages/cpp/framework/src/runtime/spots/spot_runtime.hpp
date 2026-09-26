@@ -54,14 +54,22 @@ namespace service = zlink::framework::runtime::host;
 
 class actor_dispatch_admission_token_t;
 class spot_context_state_t;
+class spot_node_builder_state_t;
 
 extern thread_local constinit const spot_context_state_t *current_callback_context;
 
+// Records a Close outcome that has no caller, such as an OnClosing failure.
+void report_spot_close_diagnostic (const std::shared_ptr<spot_node_builder_state_t> &owner,
+                                   std::string_view spot_id,
+                                   std::string_view result,
+                                   std::exception_ptr error = {}) noexcept;
+
 using instance_spot_idle_eviction_callback_t = std::function<bool (
-  const spot_id_t &, std::string_view, std::uint64_t, std::uint64_t, std::function<bool ()>)>;
-using instance_spot_close_begin_callback_t =
-  std::function<std::optional<service::instance_spot_close_completion_t> (
-    const spot_id_t &, std::string_view, std::uint64_t, std::uint64_t)>;
+  const spot_id_t &, std::string_view, std::uint64_t, std::uint64_t, std::function<void ()>)>;
+using instance_spot_close_begin_callback_t = std::function<task_t<service::spot_close_commit_t> (
+  const spot_id_t &, std::string_view, std::uint64_t, std::uint64_t)>;
+using user_spot_close_begin_callback_t = std::function<task_t<service::spot_close_commit_t> (
+  const spot_id_t &, std::uint64_t, std::uint64_t)>;
 
 class spot_node_builder_state_t
 {
@@ -112,6 +120,7 @@ class spot_node_builder_state_t
     std::function<task_t<bool> (spot_ref_t)> close_user_spot;
     instance_spot_idle_eviction_callback_t admit_instance_spot_idle_eviction;
     instance_spot_close_begin_callback_t begin_instance_spot_close;
+    user_spot_close_begin_callback_t begin_user_spot_close;
     std::shared_ptr<channel_runtime_state_t> channel_runtime;
     dispatch_options_t dispatch;
     runtime::location_lifecycle_t *location_lifecycle = nullptr;
@@ -318,6 +327,7 @@ class spot_node_builder_state_t
         std::uint64_t completion_operation_id_high = 0;
         std::uint64_t completion_operation_id_low = 0;
         std::vector<std::uint8_t> admission_reply;
+        std::shared_ptr<actor_join_lifecycle_reservation_t> lifecycle_reservation;
     };
     std::map<std::string, actor_join_relocation_recovery_t> actor_join_relocation_recoveries;
     // Message Follow relays messages that reach the committed source route
@@ -891,6 +901,8 @@ class spot_serial_executor_t
 
 class spot_context_state_t : public std::enable_shared_from_this<spot_context_state_t>
 {
+    friend class ::zlink::framework::spot_context_t;
+
   private:
     template <typename Work> decltype (auto) state_sync (Work &&work) const
     {
@@ -949,7 +961,8 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
             .run ([this, &owner] {
                 if (close_reservation != 0)
                     return std::make_pair (close_reservation, false);
-                return std::make_pair (reserve_close_core (*owner, false), true);
+                return std::make_pair (
+                  reserve_close_core (*owner, close_reservation_kind_t::teardown), true);
             })
             .get ();
         std::exception_ptr detach_error;
@@ -961,111 +974,37 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
             detach_error = std::current_exception ();
         }
         if (reservation.second) {
-            owner->lane
-              .run ([this, token = reservation.first] { clear_close_reservation_core (token); })
-              .get ();
+            // A Close that merged into this teardown finds no incarnation left.
+            auto merged = owner->lane
+                            .run ([this, token = reservation.first] {
+                                clear_close_reservation_core (token);
+                                return std::exchange (merged_close_results, {});
+                            })
+                            .get ();
+            for (auto &waiter : merged)
+                waiter (result_t<bool>::success (false));
         }
         if (detach_error)
             std::rethrow_exception (detach_error);
     }
 
-    bool close_now ()
-    {
-        auto owner = state_lane_owner ();
-        if (!owner)
-            return false;
+    /* Close steps 1-4 (Spot address messaging §7) for this activation. The
+     * caller runs it on the Spot lifecycle lane. `begin` is step 1 of the
+     * Spot's authority kind; without it the Spot's own authority step is used
+     * and a node-local Spot has none. While a Location Store step runs the
+     * Close item returns its turn and `resume` returns the continuation to it
+     * through the gate (gate §7). `done` receives the Close result once. */
+    void close_now (service::spot_close_begin_t begin,
+                    service::spot_close_done_t done,
+                    detail::task_scheduler_t resume);
 
-        const auto start = owner->lane
-                             .run ([this, &owner] {
-                                 if (node.get () != owner.get () || closed || actor_count != 0) {
-                                     return close_start_t{};
-                                 }
-                                 close_start_t result;
-                                 if (close_reservation != 0) {
-                                     if (close_reservation_is_idle)
-                                         return result;
-                                     result.token = close_reservation;
-                                     result.existing = true;
-                                     return result;
-                                 }
-                                 result.token = reserve_close_core (*owner, false);
-                                 result.spot_id = spot_id;
-                                 result.spot_name = spot_name;
-                                 result.object_generation = object_generation;
-                                 result.authority_owner_generation = authority_owner_generation;
-                                 result.begin_instance_close = owner->begin_instance_spot_close;
-                                 result.requires_instance_close =
-                                   is_instance_spot () && bool (result.begin_instance_close);
-                                 return result;
-                             })
-                             .get ();
-        if (start.token == 0)
-            return false;
-        if (start.existing) {
-            return state_sync ([this] { return close_requested; });
-        }
+    /* Runs a Close on this Spot's lifecycle lane after the lifecycle work
+     * accepted before it (Spot address messaging §7). */
+    void request_close (service::spot_close_begin_t begin, service::spot_close_done_t done);
 
-        std::optional<service::instance_spot_close_completion_t> completion;
-        try {
-            if (start.requires_instance_close) {
-                completion = start.begin_instance_close (start.spot_id, start.spot_name,
-                                                         start.object_generation,
-                                                         start.authority_owner_generation);
-            }
-        }
-        catch (...) {
-            owner->lane.run ([this, token = start.token] { clear_close_reservation_core (token); })
-              .get ();
-            throw;
-        }
-        if (start.requires_instance_close && !completion) {
-            owner->lane.run ([this, token = start.token] { clear_close_reservation_core (token); })
-              .get ();
-            return false;
-        }
-
-        const auto decision =
-          owner->lane
-            .run ([this, &owner, token = start.token, &completion] {
-                if (close_reservation != token || close_reservation_is_idle
-                    || node.get () != owner.get () || closed || actor_count != 0) {
-                    if (callback_depth == 0 && !close_requested)
-                        callback_admission_closed = false;
-                    clear_close_reservation_core (token);
-                    return close_decision_t{};
-                }
-                callback_admission_closed = true;
-                if (callback_depth != 0) {
-                    close_requested = true;
-                    if (completion)
-                        pending_instance_spot_close_completion = std::move (*completion);
-                    return close_decision_t{true, false};
-                }
-                close_requested = false;
-                closed = true;
-                return close_decision_t{false, true};
-            })
-            .get ();
-        if (decision.deferred)
-            return true;
-        if (!decision.committed) {
-            if (completion) {
-                (void) (*completion) (false);
-            }
-            return false;
-        }
-
-        try {
-            close_application_then_release_location (owner, spot_close_reason_t::explicit_close,
-                                                     start.token);
-        }
-        catch (...) {
-            if (completion)
-                (void) (*completion) (true);
-            throw;
-        }
-        return completion ? (*completion) (true) : true;
-    }
+    /* Step 1 of a Close that only releases the local activation: a node-local
+     * Spot, or operational cleanup whose authority another owner holds. */
+    static service::spot_close_begin_t local_close_step ();
 
     struct timer_fire_state_snapshot_t
     {
@@ -1168,14 +1107,27 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     // Actor membership publication must reject/retry while this is non-zero.
     std::uint64_t close_reservation = 0;
     std::uint64_t next_close_reservation = 1;
-    bool close_reservation_is_idle = false;
+    // What holds close_reservation: idle cleanup, a Spot Close (§7), or
+    // operational teardown that detaches the application instance.
+    enum class close_reservation_kind_t
+    {
+        none,
+        idle,
+        explicit_close,
+        teardown
+    };
+    close_reservation_kind_t close_reservation_kind = close_reservation_kind_t::none;
     const spot_context_t *close_registered_context = nullptr;
     std::atomic<std::int64_t> last_application_work_completed_ns{0};
     // The node state lane owns lifecycle admission and close/eviction state.
     // A token acquired in a node turn can therefore retain this depth through
     // queue wait, Yield, and handler terminal without a second owner claim.
     std::size_t callback_depth = 0;
-    service::instance_spot_close_completion_t pending_instance_spot_close_completion;
+    // Continues a Close whose seal found an accepted callback still running;
+    // the last leave returns it to the Close's lifecycle turn (§7 step 2).
+    std::function<void ()> pending_close_finish;
+    // Close requests that merged into the running Close receive its result.
+    std::vector<service::spot_close_done_t> merged_close_results;
 
     bool has_active_callback () const
     {
@@ -1251,8 +1203,9 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
                 return std::uint64_t{0};
             }
             if (close_reservation != 0)
-                return close_reservation_is_idle ? close_reservation : std::uint64_t{0};
-            return reserve_close_core (*owner, true);
+                return close_reservation_kind == close_reservation_kind_t::idle ? close_reservation
+                                                                                : std::uint64_t{0};
+            return reserve_close_core (*owner, close_reservation_kind_t::idle);
         });
     }
 
@@ -1261,7 +1214,8 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
         try {
             if (auto owner = state_lane_owner ()) {
                 state_sync ([this, token] {
-                    if (!closed && close_reservation == token && close_reservation_is_idle) {
+                    if (!closed && close_reservation == token
+                        && close_reservation_kind == close_reservation_kind_t::idle) {
                         clear_close_reservation_core (token);
                         idle_eviction_in_progress = false;
                         if (!close_requested)
@@ -1274,98 +1228,72 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
         }
     }
 
-    bool try_close_idle (std::uint64_t expected_reservation = 0)
+    /* Idle cleanup re-checks the sealed activation's serial quiescence and age
+     * before any authority write (Object lifecycle §5). After this returns
+     * true nothing can enter the activation, so committing the idle Close
+     * cannot be refused once the authority is Closing. */
+    bool idle_close_ready (std::uint64_t reservation)
     {
         auto owner = state_lane_owner ();
         if (!owner)
             return false;
-
-        const auto start =
+        const auto sealed =
           owner->lane
-            .run ([this, &owner, expected_reservation] {
-                auto token = expected_reservation;
-                if (token == 0) {
-                    if (close_reservation != 0) {
-                        if (!close_reservation_is_idle)
-                            return idle_close_start_t{};
-                        token = close_reservation;
-                    } else {
-                        token = reserve_close_core (*owner, true);
-                    }
-                }
-                if (token == 0 || close_reservation != token || !close_reservation_is_idle
-                    || node.get () != owner.get () || closed || actor_count != 0
-                    || !lifecycle_domain.allows_idle_eviction ()) {
-                    return idle_close_start_t{};
-                }
-                if (callback_depth != 0 || close_requested
-                    || (callback_admission_closed && !idle_eviction_in_progress)) {
-                    return idle_close_start_t{token, false};
-                }
-                callback_admission_closed = true;
-                idle_eviction_in_progress = true;
-                return idle_close_start_t{token, idle_age_allows_close_core (*owner)};
+            .run ([this, &owner, reservation] {
+                return reservation != 0 && close_reservation == reservation
+                       && close_reservation_kind == close_reservation_kind_t::idle
+                       && node.get () == owner.get () && !closed && actor_count == 0
+                       && lifecycle_domain.allows_idle_eviction () && callback_depth == 0
+                       && !close_requested && callback_admission_closed && idle_eviction_in_progress
+                       && idle_age_allows_close_core (*owner);
             })
             .get ();
-        if (start.token == 0 || !start.age_allows_close) {
-            if (start.token != 0)
-                cancel_idle_close_reservation (start.token);
-            return false;
-        }
+        return sealed && idle_quiescent ();
+    }
 
-        if (!idle_quiescent ()) {
-            cancel_idle_close_reservation (start.token);
-            return false;
-        }
-
+    /* Local steps of an idle Close whose authority is Closing. */
+    void commit_idle_close (std::uint64_t reservation)
+    {
+        auto owner = state_lane_owner ();
+        if (!owner)
+            return;
         const auto committed =
           owner->lane
-            .run ([this, &owner, token = start.token] {
-                if (close_reservation != token || !close_reservation_is_idle
-                    || node.get () != owner.get () || closed || actor_count != 0
-                    || !lifecycle_domain.allows_idle_eviction ()
-                    || !idle_age_allows_close_core (*owner) || callback_depth != 0
-                    || !callback_admission_closed || !idle_eviction_in_progress) {
+            .run ([this, reservation] {
+                if (close_reservation != reservation
+                    || close_reservation_kind != close_reservation_kind_t::idle || closed)
                     return false;
-                }
                 closed = true;
                 return true;
             })
             .get ();
-        if (!committed) {
-            cancel_idle_close_reservation (start.token);
-            return false;
-        }
-
-        close_application_then_release_location (owner, spot_close_reason_t::idle_evicted,
-                                                 start.token);
-        return true;
+        if (committed)
+            close_application_then_release_location (owner, spot_close_reason_t::idle_evicted,
+                                                     reservation);
     }
 
   private:
-    struct close_decision_t
+    enum class close_path_t
     {
-        bool deferred = false;
-        bool committed = false;
+        not_executed, // not the current activation or has Actor membership: `false`
+        merged,       // joins the Close that is already running
+        start,        // steps 1-4
+        failed        // a prior Close sealed this activation but failed
     };
 
     struct close_start_t
     {
+        close_path_t path = close_path_t::not_executed;
         std::uint64_t token = 0;
-        spot_id_t spot_id;
-        std::string spot_name;
-        std::uint64_t object_generation = 0;
-        std::uint64_t authority_owner_generation = 0;
-        instance_spot_close_begin_callback_t begin_instance_close;
-        bool requires_instance_close = false;
-        bool existing = false;
+        service::spot_close_begin_t authority_begin;
     };
 
-    struct idle_close_start_t
-    {
-        std::uint64_t token = 0;
-        bool age_allows_close = false;
-    };
+    /* Steps 2-4 after step 1 committed `Closing`. */
+    void run_local_close_steps (const std::shared_ptr<spot_node_builder_state_t> &owner,
+                                std::uint64_t token,
+                                std::function<task_t<bool> ()> release,
+                                service::spot_close_done_t done,
+                                detail::task_scheduler_t resume);
 
     struct application_detach_work_t
     {
@@ -1381,7 +1309,8 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
         return node;
     }
 
-    std::uint64_t reserve_close_core (spot_node_builder_state_t &owner, bool idle)
+    std::uint64_t reserve_close_core (spot_node_builder_state_t &owner,
+                                      close_reservation_kind_t kind)
     {
         auto token = next_close_reservation++;
         if (token == 0) {
@@ -1390,7 +1319,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
         if (next_close_reservation == 0)
             next_close_reservation = 1;
         close_reservation = token;
-        close_reservation_is_idle = idle;
+        close_reservation_kind = kind;
         const auto found = owner.spot_contexts_by_id.find (std::string (spot_id));
         close_registered_context =
           found == owner.spot_contexts_by_id.end () ? nullptr : std::addressof (found->second);
@@ -1402,7 +1331,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
         if (token == 0 || close_reservation != token)
             return;
         close_reservation = 0;
-        close_reservation_is_idle = false;
+        close_reservation_kind = close_reservation_kind_t::none;
         close_registered_context = nullptr;
     }
 
@@ -1492,8 +1421,12 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
         catch (...) {
             closing_error = std::current_exception ();
         }
-
         const auto rid = std::string (spot_id);
+        // An OnClosing failure is a diagnostic; cleanup continues and the Close
+        // result does not change (Spot address messaging §7 step 3).
+        if (closing_error)
+            report_spot_close_diagnostic (owner, rid, "on_closing_failed", closing_error);
+
         auto *location_lifecycle =
           owner->lane
             .run ([this, &owner, token] {
@@ -1533,8 +1466,6 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
               clear_close_reservation_core (token);
           })
           .get ();
-        if (closing_error)
-            std::rethrow_exception (closing_error);
     }
 };
 
@@ -1640,6 +1571,10 @@ class spot_node_runtime_t
     std::optional<spot_info_t> find_spot (spot_id_t spot_id) const;
     std::vector<spot_info_t> list_spots () const;
     task_t<bool> close_spot (spot_id_t spot_id);
+    // Runs a remote User Spot Close (command 48) for the local owner activation.
+    void close_user_spot_owner (const std::string &spot_id,
+                                service::spot_close_begin_t begin,
+                                service::spot_close_done_t done);
     bool close_all_user_spots ();
     node_rid_t node_rid () const;
     std::optional<std::string> spot_name_for (spot_id_t spot_id) const;

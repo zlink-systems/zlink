@@ -67,6 +67,10 @@ export class ZLinkSpotSerialTurnExecutor {
     return this.scheduler.close();
   }
 
+  closeAdmission(): void {
+    this.scheduler.closeAdmission();
+  }
+
   /** Distinguishes a gate-owning turn from a suspended AsyncLocalStorage tail. */
   isActiveTurn(turn: ZLinkSpotSerialTurn, turnId: number): boolean {
     return (
@@ -280,6 +284,15 @@ export class ZLinkSpotSerialTurnExecutor {
     resume: () => void,
     reject: (reason: unknown) => void
   ): boolean {
+    if (!turn.resumeExecutionClaim()) {
+      reject(
+        createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.SpotMoving,
+          'The yielded Spot turn cannot resume after its execution unit was sealed.'
+        )
+      );
+      return true;
+    }
     void this.enqueueContinuationTurn(async () => {
       this.resumedOwnerTurn = turn;
       try {

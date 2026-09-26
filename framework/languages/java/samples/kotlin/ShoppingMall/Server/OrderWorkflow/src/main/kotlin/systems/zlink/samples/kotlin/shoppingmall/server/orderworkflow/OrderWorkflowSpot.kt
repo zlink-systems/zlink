@@ -18,7 +18,8 @@ class OrderWorkflowSpot(private val instanceContext: ZLinkInstanceSpotContext) :
     // --8<-- [start:doc-sm-close-terminal]
     fun closeIfTerminal(state: OrderState): CompletionStage<Void> =
         if (isTerminal(state)) {
-            instanceContext.close().thenApply<Void> { null }
+            instanceContext.close()
+            java.util.concurrent.CompletableFuture.completedFuture<Void>(null)
         } else {
             java.util.concurrent.CompletableFuture.completedFuture<Void>(null)
         }

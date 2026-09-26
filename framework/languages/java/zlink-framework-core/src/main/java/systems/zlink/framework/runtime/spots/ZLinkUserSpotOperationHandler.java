@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.spots;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.messaging.ZLinkMessage;
@@ -132,6 +133,45 @@ final class ZLinkUserSpotOperationHandler
     public CompletionStage<ZLinkInternalMeshNode.UserSpotCloseResponse> close(
             ZLinkInternalMeshNode.UserSpotCloseRequest request) {
         var fence = request.intent().target();
+        SpotActivation activation = lifecycle.spotActivationFor(fence.spotId());
+        if (activation == null) {
+            return closeOnLifecycle(fence)
+                    .thenApply(ZLinkInternalMeshNode.UserSpotCloseResponse::new);
+        }
+        CompletableFuture<ZLinkInternalMeshNode.UserSpotCloseResponse> result =
+                new CompletableFuture<>();
+        activation
+                .context
+                .enqueueLifecycle(
+                        () ->
+                                closeOnLifecycle(fence)
+                                        .handle(
+                                                (closed, failure) -> {
+                                                    if (failure == null) {
+                                                        result.complete(
+                                                                new ZLinkInternalMeshNode
+                                                                        .UserSpotCloseResponse(
+                                                                        closed));
+                                                    } else {
+                                                        result.completeExceptionally(failure);
+                                                    }
+                                                    return null;
+                                                }))
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null) {
+                                result.completeExceptionally(failure);
+                            }
+                        });
+        return result;
+    }
+
+    /**
+     * Runs the target owner's Close for {@code fence}. The caller runs this on the User Spot
+     * lifecycle lane when the activation exists, so a Join or leave accepted earlier on that lane
+     * has decided its membership before the membership check here.
+     */
+    CompletionStage<Boolean> closeOnLifecycle(ZLinkServiceM6BWireCodec.UserSpotCloseFence fence) {
         ZLinkSpotCloseCoordinator retained =
                 runtime.closingCoordinator(
                         fence.spotId(),
@@ -139,7 +179,7 @@ final class ZLinkUserSpotOperationHandler
                         fence.authorityOwnerGeneration(),
                         fence);
         if (retained != null) {
-            return retained.close().thenApply(ZLinkInternalMeshNode.UserSpotCloseResponse::new);
+            return retained.close();
         }
         String key = ZLinkAuthorityKeyCodec.spot(fence.spotId());
         return authorityStore
@@ -147,31 +187,31 @@ final class ZLinkUserSpotOperationHandler
                 .thenCompose(
                         read -> {
                             if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
-                                return CompletableFuture.completedFuture(
-                                        new ZLinkInternalMeshNode.UserSpotCloseResponse(false));
+                                return CompletableFuture.completedFuture(false);
                             }
                             var authority =
                                     authorities
                                             .decode(snapshot.payload())
                                             .orElseThrow(
-                                                    () -> stale("invalid User Spot authority"));
-                            require(
-                                    authority.user().isPresent()
-                                            && authority.spotId().equals(fence.spotId())
-                                            && authority.meshName().equals(meshName)
-                                            && authority.nodeRid().equals(node.status().routingId())
-                                            && authority.nodeGeneration()
-                                                    == node.status().lifecycleGeneration()
-                                            && snapshot.allocation().state()
-                                                    == ZLinkPlacementAllocationState.ACTIVE
-                                            && snapshot.allocation().objectKind()
-                                                    == ZLinkPlacementObjectKind.USER_SPOT
-                                            && snapshot.objectGeneration()
-                                                    == fence.objectGeneration()
-                                            && snapshot.authorityOwnerGeneration()
-                                                    == fence.authorityOwnerGeneration()
-                                            && snapshot.storeVersion().equals(fence.storeVersion()),
-                                    "stale User Spot close fence");
+                                                    () -> moving("invalid User Spot authority"));
+                            if (snapshot.objectGeneration() != fence.objectGeneration()) {
+                                throw stale("User Spot generation is stale");
+                            }
+                            if (authority.user().isEmpty()
+                                    || !authority.spotId().equals(fence.spotId())
+                                    || snapshot.allocation().objectKind()
+                                            != ZLinkPlacementObjectKind.USER_SPOT
+                                    || !authority.meshName().equals(meshName)
+                                    || !authority.nodeRid().equals(node.status().routingId())
+                                    || authority.nodeGeneration()
+                                            != node.status().lifecycleGeneration()
+                                    || snapshot.allocation().state()
+                                            != ZLinkPlacementAllocationState.ACTIVE
+                                    || snapshot.authorityOwnerGeneration()
+                                            != fence.authorityOwnerGeneration()
+                                    || !snapshot.storeVersion().equals(fence.storeVersion())) {
+                                throw moving("User Spot owner fence has changed");
+                            }
                             if (authority.state()
                                     == ZLinkServiceAuthorityPayloadCodec.State.CLOSING) {
                                 ZLinkSpotCloseCoordinator closing =
@@ -185,20 +225,17 @@ final class ZLinkUserSpotOperationHandler
                                             FAILURE_SPOT_MOVING,
                                             "Closing User Spot is missing its owner coordinator");
                                 }
-                                return closing.close()
-                                        .thenApply(
-                                                ZLinkInternalMeshNode.UserSpotCloseResponse::new);
+                                return closing.close();
                             }
-                            require(
-                                    authority.state()
-                                            == ZLinkServiceAuthorityPayloadCodec.State.READY,
-                                    "stale User Spot close fence");
+                            if (authority.state()
+                                    != ZLinkServiceAuthorityPayloadCodec.State.READY) {
+                                throw moving("User Spot is moving");
+                            }
                             ZLinkSpotLifecycle.CloseReadiness readiness =
                                     lifecycle.closeReadiness(
                                             fence.spotId(), fence.objectGeneration());
                             if (readiness == ZLinkSpotLifecycle.CloseReadiness.HAS_ACTORS) {
-                                return CompletableFuture.completedFuture(
-                                        new ZLinkInternalMeshNode.UserSpotCloseResponse(false));
+                                return CompletableFuture.completedFuture(false);
                             }
                             if (readiness == ZLinkSpotLifecycle.CloseReadiness.LOCAL_MISSING) {
                                 return failed(
@@ -290,7 +327,7 @@ final class ZLinkUserSpotOperationHandler
                                                                                                                         .storeVersion())) {
                                                                                             return CompletableFuture
                                                                                                     .failedFuture(
-                                                                                                            stale(
+                                                                                                            moving(
                                                                                                                     "User Spot authority changed before Closing"));
                                                                                         }
                                                                                         return authorityStore
@@ -308,7 +345,7 @@ final class ZLinkUserSpotOperationHandler
                                                                                                                     instanceof
                                                                                                                     ZLinkAuthorityStored
                                                                                                                             stored)) {
-                                                                                                                throw stale(
+                                                                                                                throw moving(
                                                                                                                         "User Spot authority changed before Closing");
                                                                                                             }
                                                                                                             closingVersion
@@ -398,9 +435,13 @@ final class ZLinkUserSpotOperationHandler
                                                                                     }),
                                                                     ZLinkSpotCloseCoordinator.Step
                                                                             .operation(
-                                                                                    activation
+                                                                                    () ->
+                                                                                            activation
                                                                                                     .context
-                                                                                            ::awaitAllLanes),
+                                                                                                    .awaitAllLanes(
+                                                                                                            ZLinkSerialExecutionQueue
+                                                                                                                    .Quiescence
+                                                                                                                    .APPLICATION)),
                                                                     ZLinkSpotCloseCoordinator.Step
                                                                             .onClosing(
                                                                                     () ->
@@ -511,7 +552,7 @@ final class ZLinkUserSpotOperationHandler
                                                                                                                                             .authorityOwnerGeneration(),
                                                                                                                                     activation
                                                                                                                                             .existingCloseCoordinator());
-                                                                                                                    throw stale(
+                                                                                                                    throw moving(
                                                                                                                             "User Spot authority changed while closing");
                                                                                                                 }
                                                                                                                 return authorityStore
@@ -527,7 +568,7 @@ final class ZLinkUserSpotOperationHandler
                                                                                                                                     if (!(deleted
                                                                                                                                             instanceof
                                                                                                                                             ZLinkAuthorityDeleted)) {
-                                                                                                                                        throw stale(
+                                                                                                                                        throw moving(
                                                                                                                                                 "User Spot authority changed while closing");
                                                                                                                                     }
                                                                                                                                     return null;
@@ -547,7 +588,6 @@ final class ZLinkUserSpotOperationHandler
                                                                                                                                         .existingCloseCoordinator());
                                                                                                                 return null;
                                                                                                             }))),
-                                                            lifecycle.closeExecutor(),
                                                             failure ->
                                                                     activation.host
                                                                             .reportSpotClosingFailure(
@@ -574,8 +614,7 @@ final class ZLinkUserSpotOperationHandler
                                                             fence.authorityOwnerGeneration(),
                                                             coordinator);
                                                 }
-                                            })
-                                    .thenApply(ZLinkInternalMeshNode.UserSpotCloseResponse::new);
+                                            });
                         });
     }
 
@@ -725,6 +764,11 @@ final class ZLinkUserSpotOperationHandler
         if (!condition) {
             throw stale(message);
         }
+    }
+
+    private static ZLinkUserSpotOperationException moving(String message) {
+        return new ZLinkUserSpotOperationException(
+                TERMINAL_INVALID_STATE, FAILURE_SPOT_MOVING, message);
     }
 
     private static ZLinkUserSpotOperationException stale(String message) {

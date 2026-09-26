@@ -25,6 +25,7 @@ import type { ZLinkTimerRelocationState } from './spot-timer';
 export type ZLinkSpotActivationDomain =
   | {
       readonly kind: 'user';
+      readonly objectGeneration?: bigint;
       readonly executionMode: ZLinkUserSpotExecutionMode;
       readonly relocationCoordinationMode: ZLinkSpotRelocationCoordinationMode;
     }
@@ -113,7 +114,7 @@ export class ZLinkSpotActivation {
   }
 
   get objectGeneration(): bigint | undefined {
-    return this.domain.kind === 'instance' ? this.domain.objectGeneration : undefined;
+    return this.domain.objectGeneration;
   }
 
   get executionMode(): ZLinkUserSpotExecutionMode {
@@ -261,8 +262,8 @@ export class ZLinkSpotActivation {
     return this.serialExecutor.admitActorDurablePrefix(actorId, records);
   }
 
-  sealExecution(): ZLinkExecutionBarrierSeal {
-    return this.executionBarrier.seal();
+  sealExecution(drainsYieldedTurns = false): ZLinkExecutionBarrierSeal {
+    return this.executionBarrier.seal(drainsYieldedTurns);
   }
 
   waitForExecutionQuiescence(seal: ZLinkExecutionBarrierSeal, signal?: AbortSignal): Promise<void> {

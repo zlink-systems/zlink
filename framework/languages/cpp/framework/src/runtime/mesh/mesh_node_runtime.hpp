@@ -183,7 +183,8 @@ class mesh_node_runtime_t
     void bind_descriptor_publisher (
       std::function<void (const std::map<std::string, int> &, int, std::uint64_t)> publisher);
     void configure_user_spot_operations (std::shared_ptr<location_repository_t> store,
-                                         host::user_spot_materializer_t materializer);
+                                         host::user_spot_materializer_t materializer,
+                                         host::user_spot_closer_t closer = {});
     void configure_spot_route_fence_resolver (
       host::spot_route_fence_resolver_t resolver,
       std::chrono::milliseconds route_cache_max_age,
@@ -597,6 +598,7 @@ class mesh_node_runtime_t
     serializer_registry_t *_serializers = nullptr;
     std::shared_ptr<location_repository_t> _user_spot_store;
     host::user_spot_materializer_t _user_spot_materializer;
+    host::user_spot_closer_t _user_spot_closer;
     host::spot_route_fence_resolver_t _spot_route_fence_resolver;
     std::function<std::optional<runtime::spot_address_t> (const actor_ref_t &)>
       _actor_route_resolver;

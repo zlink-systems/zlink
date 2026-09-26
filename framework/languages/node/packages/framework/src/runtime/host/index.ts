@@ -245,6 +245,7 @@ export class ZLinkFrameworkRuntimeHost
   private actorManager?: DefaultZLinkActorManager;
   private actorPlacement?: ZLinkActorPlacementCoordinator;
   private spotManager?: DefaultZLinkSpotManager;
+  private userSpotCoordinator?: ZLinkUserSpotCreationCoordinator;
   private ownerLeaseRecoveryRuntime?: ZLinkLocationRuntime;
   private ownerLeaseRecoveryHandler?: () => void;
   private registerUserSpotHandlers?: (runtime: ZLinkSpotNodeRuntimeManager) => void;
@@ -2027,6 +2028,19 @@ export class ZLinkFrameworkRuntimeHost
             spotId,
             onCommitted
           ) ?? Promise.resolve(undefined),
+        beginUserClosingAuthority: async (meshName, spotId, objectGeneration, onCommitted) => {
+          const coordinator = this.userSpotCoordinator;
+          const nodeRid = this.spotNodeRuntime?.meshNode(meshName)?.status().routingId;
+          if (coordinator === undefined || nodeRid === undefined) {
+            throw new ZLinkConfigurationException(
+              'User Spot context Close requires its authority coordinator.'
+            );
+          }
+          return await coordinator.beginOwnerClose(
+            { spotId: spotId as never, objectGeneration, meshName, nodeRid },
+            onCommitted
+          );
+        },
         createLocationSpotRouteResolver: () => this.createLocationSpotRouteResolver(),
         boundSessionRelay: this.boundSessionRelay,
         actorHandoff: this.actorHandoff,
@@ -2152,7 +2166,7 @@ export class ZLinkFrameworkRuntimeHost
         };
       }
     });
-    const coordinator = new ZLinkUserSpotCreationCoordinator({
+    const coordinator = (this.userSpotCoordinator = new ZLinkUserSpotCreationCoordinator({
       store: locationStore,
       publishReadyRoute: (meshName, route) => {
         this.cachedLocationSpotRouteResolver?.invalidate?.(route.spot.spotId);
@@ -2260,7 +2274,7 @@ export class ZLinkFrameworkRuntimeHost
             localStatus.lifecycleGeneration === selected.lifecycleGeneration
         };
       }
-    });
+    }));
     const factories = new Map(
       [...this.options.registration.spotNodes].map(([meshName, node]) => [
         meshName,

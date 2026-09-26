@@ -188,6 +188,7 @@
         <Compile Include="Runtime/ReconciliationRunnerTests.cs"/>
         <Compile Include="Runtime/RelocationRuntimeTests.cs"/>
         <Compile Include="Runtime/RelocationBehaviorConformanceTests.cs"/>
+        <Compile Include="Runtime/SpotCloseConformanceTests.cs"/>
         <Compile Include="Runtime/RelocationTreeParallelIoTests.cs"/>
         <Compile Include="Runtime/StandaloneActorRelocationRuntimeTests.cs"/>
         <Compile Include="Runtime/StandaloneActorRelocationPrecommitTests.cs"/>
