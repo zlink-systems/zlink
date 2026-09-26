@@ -8261,6 +8261,40 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task ExpiredDeferredJoinReleasesActorBarrierBeforeShutdown()
+    {
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(new CapturingSpotNode());
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            var join = new ZLinkDeferredActorJoin(
+                runtime,
+                runtime.GetOrCreateActorState(actor.ActorId),
+                actor,
+                actorRef.Generation,
+                "missing-spot",
+                ZLinkMessage.Empty,
+                TimeSpan.Zero
+            );
+            join.ReserveBarrier();
+            join.Activate();
+
+            var completion = await actor.JoinCompletion.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(
+                ZLinkFrameworkErrorKind.DeadlineExceeded,
+                Assert.IsType<ZLinkActorJoinCompletion.Failed>(completion).Kind
+            );
+        }
+        finally
+        {
+            await runtime
+                .StopAsync(CancellationToken.None)
+                .AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(2));
+        }
+    }
+
+    [Fact]
     public async Task OneHandlerCompletes65DeferredActorJoinsWhoseRequestsTotalMoreThan8MiB()
     {
         var node = new CapturingSpotNode();

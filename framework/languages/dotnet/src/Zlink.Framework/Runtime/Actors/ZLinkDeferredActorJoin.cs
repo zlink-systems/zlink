@@ -343,6 +343,7 @@ internal sealed class ZLinkDeferredActorJoin(
         }
         finally
         {
+            barrier?.Discard();
             var replay = actorState.Handoff.EndDeferredJoinCapture();
             actorState.ReleaseDeferredJoinBarrier();
             ReplayDeferredJoinFrames(replay);
