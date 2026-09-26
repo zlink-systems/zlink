@@ -7958,15 +7958,12 @@ const frames: Uint8Array[] = [writer.result()];
 return frames; }
 export function validateSpotSendCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
-export type SpotRequestCommand = { readonly command: "spotRequest"; readonly flags: number; readonly correlation: NonzeroU64; readonly operation: OperationId; readonly remainingDeadlineMs: NonzeroU64; readonly messageFollowHopCount: U8; readonly sourceSpotId: Text8; readonly targetSpot: SpotRouteFence; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
+export type SpotRequestCommand = { readonly command: "spotRequest"; readonly flags: number; readonly correlation: NonzeroU64; readonly operation: OperationId; readonly messageFollowHopCount: U8; readonly sourceSpotId: Text8; readonly targetSpot: SpotRouteFence; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
 export function decodeSpotRequestCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): SpotRequestCommand { if (!frames.length) fail("spotRequest frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 22) fail("spotRequest header"); const flags = Number(reader.u(1)); if ((flags & ~1) !== 0 || (flags & 0) !== 0) fail("spotRequest flags"); const value: any = { command: "spotRequest", flags };
   value["correlation"] = readNonzeroU64(reader, context, value, flags);
 
 
   value["operation"] = readOperationId(reader, context, value, flags);
-
-
-  value["remainingDeadlineMs"] = readNonzeroU64(reader, context, value, flags);
 
 
   value["messageFollowHopCount"] = readU8(reader, context, value, flags);
@@ -7993,10 +7990,6 @@ export function encodeSpotRequestCommand(value: SpotRequestCommand, context: Ser
 
 
   writeOperationId(value["operation"], writer, context, value, value.flags);
-  if (value["remainingDeadlineMs"] === undefined) fail("remainingDeadlineMs required");
-
-
-  writeNonzeroU64(numeric(value["remainingDeadlineMs"]), writer, context, value, value.flags);
   if (value["messageFollowHopCount"] === undefined) fail("messageFollowHopCount required");
   if (numeric(value["messageFollowHopCount"]) < 0n || numeric(value["messageFollowHopCount"]) > 8n) fail("messageFollowHopCount constraint");
 
@@ -8107,16 +8100,13 @@ const frames: Uint8Array[] = [writer.result()];
 return frames; }
 export function validateActorSendCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
-export type ActorRequestCommand = { readonly command: "actorRequest"; readonly flags: number; readonly correlation: NonzeroU64; readonly operation: OperationId; readonly remainingDeadlineMs: NonzeroU64; readonly messageFollowHopCount: U8; readonly sourceActor: OptionalActorRef; readonly targetActor: ActorRouteFence; readonly boundSessionTail?: OptionalBoundSessionTail; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
+export type ActorRequestCommand = { readonly command: "actorRequest"; readonly flags: number; readonly correlation: NonzeroU64; readonly operation: OperationId; readonly messageFollowHopCount: U8; readonly sourceActor: OptionalActorRef; readonly targetActor: ActorRouteFence; readonly boundSessionTail?: OptionalBoundSessionTail; readonly metadata?: MetadataFrame; readonly payload: ApplicationPayloadEnvelopeV1; };
 export function decodeActorRequestCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ActorRequestCommand { if (!frames.length) fail("actorRequest frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 25) fail("actorRequest header"); const flags = Number(reader.u(1)); if ((flags & ~7) !== 0 || (flags & 0) !== 0) fail("actorRequest flags");
 if ((flags & 6) !== 0 && (flags & 6) !== 6) fail("actorRequest flags"); const value: any = { command: "actorRequest", flags };
   value["correlation"] = readNonzeroU64(reader, context, value, flags);
 
 
   value["operation"] = readOperationId(reader, context, value, flags);
-
-
-  value["remainingDeadlineMs"] = readNonzeroU64(reader, context, value, flags);
 
 
   value["messageFollowHopCount"] = readU8(reader, context, value, flags);
@@ -8149,10 +8139,6 @@ if ((value.flags & 6) !== 0 && (value.flags & 6) !== 6) fail("actorRequest flags
 
 
   writeOperationId(value["operation"], writer, context, value, value.flags);
-  if (value["remainingDeadlineMs"] === undefined) fail("remainingDeadlineMs required");
-
-
-  writeNonzeroU64(numeric(value["remainingDeadlineMs"]), writer, context, value, value.flags);
   if (value["messageFollowHopCount"] === undefined) fail("messageFollowHopCount required");
   if (numeric(value["messageFollowHopCount"]) < 0n || numeric(value["messageFollowHopCount"]) > 8n) fail("messageFollowHopCount constraint");
 

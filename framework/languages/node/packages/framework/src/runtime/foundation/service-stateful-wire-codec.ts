@@ -1029,7 +1029,6 @@ export type ServiceStatefulWireRecord =
       readonly kind: 'spotSend' | 'spotRequest';
       readonly correlation?: bigint;
       readonly operation: ServiceWireOperationId;
-      readonly remainingDeadlineMs?: bigint;
       readonly messageFollowHopCount: number;
       readonly sourceSpotId: string;
       readonly target: ServiceSpotRouteFence;
@@ -1044,7 +1043,6 @@ export type ServiceStatefulWireRecord =
       readonly kind: 'actorSend' | 'actorRequest';
       readonly correlation?: bigint;
       readonly operation: ServiceWireOperationId;
-      readonly remainingDeadlineMs?: bigint;
       readonly messageFollowHopCount: number;
       readonly sourceActor?: ServiceActorRef;
       readonly target: ServiceActorRouteFence;
@@ -1192,7 +1190,6 @@ export function encodeSpotHeader(
   target: ServiceDirectSpotRouteFence,
   correlation?: bigint,
   operation: ServiceWireOperationId = { high: 0n, low: 1n },
-  remainingDeadlineMs = 1n,
   messageFollowHopCount = 0,
   metadataFrame?: Uint8Array
 ): Buffer {
@@ -1214,8 +1211,7 @@ export function encodeSpotHeader(
           {
             command: kind,
             ...common,
-            correlation: requirePositive(correlation, 'correlation'),
-            remainingDeadlineMs
+            correlation: requirePositive(correlation, 'correlation')
           },
           STATEFUL_MESSAGE_CONTEXT
         );
@@ -1229,7 +1225,6 @@ export function encodeActorHeader(
   sourceActor?: ServiceActorRef,
   boundSession?: ServiceBoundSessionSource,
   operation: ServiceWireOperationId = { high: 0n, low: 1n },
-  remainingDeadlineMs = 1n,
   messageFollowHopCount = 0
 ): Buffer {
   const flags =
@@ -1263,8 +1258,7 @@ export function encodeActorHeader(
           {
             command: kind,
             ...common,
-            correlation: requirePositive(correlation, 'correlation'),
-            remainingDeadlineMs
+            correlation: requirePositive(correlation, 'correlation')
           },
           STATEFUL_MESSAGE_CONTEXT
         );
@@ -1544,9 +1538,6 @@ export function decodeStatefulHeader(
             kind: decoded.command,
             ...(decoded.command === 'spotRequest' ? { correlation: decoded.correlation } : {}),
             operation: decoded.operation,
-            ...(decoded.command === 'spotRequest'
-              ? { remainingDeadlineMs: decoded.remainingDeadlineMs }
-              : {}),
             messageFollowHopCount: decoded.messageFollowHopCount,
             sourceSpotId: decoded.sourceSpotId,
             target: {
@@ -1573,9 +1564,6 @@ export function decodeStatefulHeader(
           kind: decoded.command,
           ...(decoded.command === 'actorRequest' ? { correlation: decoded.correlation } : {}),
           operation: decoded.operation,
-          ...(decoded.command === 'actorRequest'
-            ? { remainingDeadlineMs: decoded.remainingDeadlineMs }
-            : {}),
           messageFollowHopCount: decoded.messageFollowHopCount,
           ...(source.actorId === null
             ? {}

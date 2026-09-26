@@ -1318,17 +1318,10 @@ export class ServiceStatefulRuntime {
       });
       return pending;
     }
-    const header = encodeSpotHeader(
-      'spotRequest',
-      sourceSpotId,
-      target,
-      pending.id,
-      {
-        high: this.nodeGeneration,
-        low: this.nextMessageFollowOperation++
-      },
-      BigInt(Math.max(1, Math.ceil(timeoutMs)))
-    );
+    const header = encodeSpotHeader('spotRequest', sourceSpotId, target, pending.id, {
+      high: this.nodeGeneration,
+      low: this.nextMessageFollowOperation++
+    });
     this.submitRequest(
       pending,
       target.targetNodeRid,
@@ -1394,8 +1387,7 @@ export class ServiceStatefulRuntime {
             ...boundSession,
             sequence: this.nextSessionSequence++
           },
-      { high: this.nodeGeneration, low: this.nextMessageFollowOperation++ },
-      BigInt(Math.max(1, Math.ceil(timeoutMs)))
+      { high: this.nodeGeneration, low: this.nextMessageFollowOperation++ }
     );
     this.submitRequest(
       pending,
@@ -4952,7 +4944,6 @@ export class ServiceStatefulRuntime {
               state.target,
               current.wire.correlation,
               current.wire.operation,
-              BigInt(Math.max(1, Math.ceil(state.expiresAtMs - performance.now()))),
               current.wire.messageFollowHopCount + 1,
               metadata ? current.ingress.parts[1] : undefined
             ),

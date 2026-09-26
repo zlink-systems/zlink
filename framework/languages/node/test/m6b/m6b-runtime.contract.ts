@@ -1418,7 +1418,6 @@ test('Spot and Actor wire records preserve identity and reject malformed records
     kind: 'spotRequest',
     correlation: 11n,
     operation: { high: 0n, low: 1n },
-    remainingDeadlineMs: 1n,
     messageFollowHopCount: 0,
     sourceSpotId: 'source',
     target: {
@@ -1448,7 +1447,6 @@ test('Spot and Actor wire records preserve identity and reject malformed records
     kind: 'actorRequest',
     correlation: 12n,
     operation: { high: 0n, low: 1n },
-    remainingDeadlineMs: 1n,
     messageFollowHopCount: 0,
     sourceActor: { nodeRid: '', actorId: source.actorId, generation: source.generation },
     target: {

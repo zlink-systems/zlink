@@ -59,6 +59,7 @@ test('stateful commands 21, 22, 24, and 25 use generated wire bytes', () => {
   for (const [header, decode, encode] of cases) {
     const frames = [header, payload];
     const decoded = decode(frames, context) as never;
+    assert.equal(Object.hasOwn(decoded, 'remainingDeadlineMs'), false);
     assert.deepEqual(
       encode(decoded, context).map((frame) => Buffer.from(frame)),
       frames
@@ -66,7 +67,7 @@ test('stateful commands 21, 22, 24, and 25 use generated wire bytes', () => {
   }
 });
 
-test('Spot request metadata, operation, deadline and Follow hop use generated framing', () => {
+test('Spot request metadata, operation and Follow hop use generated framing without a deadline field', () => {
   const metadata = encodeMetadataFrame({ entries: [{ key: 'trace', value: 'java' }] }, context);
   const header = encodeSpotHeader(
     'spotRequest',
@@ -74,7 +75,6 @@ test('Spot request metadata, operation, deadline and Follow hop use generated fr
     spot,
     13n,
     { high: 3n, low: 8n },
-    5000n,
     2,
     metadata
   );
@@ -82,7 +82,7 @@ test('Spot request metadata, operation, deadline and Follow hop use generated fr
   const decoded = decodeSpotRequestCommand(frames, context);
   assert.equal(decoded.flags, 1);
   assert.deepEqual(decoded.operation, { high: 3n, low: 8n });
-  assert.equal(decoded.remainingDeadlineMs, 5000n);
+  assert.equal(Object.hasOwn(decoded, 'remainingDeadlineMs'), false);
   assert.equal(decoded.messageFollowHopCount, 2);
   assert.deepEqual(
     encodeSpotRequestCommand(decoded, context).map((frame) => Buffer.from(frame)),

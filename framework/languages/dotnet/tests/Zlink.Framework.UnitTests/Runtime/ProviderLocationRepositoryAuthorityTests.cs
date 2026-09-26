@@ -14,6 +14,23 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class ProviderLocationRepositoryAuthorityTests
 {
+    [Fact]
+    public async Task InMemoryProviderRoundsFractionalMillisecondRetentionUp()
+    {
+        var provider = new ZLinkInMemoryProviderLocationStore(new ManualTimeProvider());
+        var key = new ZLinkStoreKey("retention:fractional");
+        var applied = Assert.IsType<ZLinkStoreWriteResult.Applied>(
+            await provider.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [],
+                    [new ZLinkStoreMutation.Put(key, new byte[] { 1 }, TimeSpan.FromTicks(15_000))]
+                )
+            )
+        );
+        var found = Assert.IsType<ZLinkStoreReadResult.Found>(await provider.ReadAsync(key));
+        Assert.Equal(TimeSpan.FromMilliseconds(2), found.Value.ExpiresAt - applied.StoreNow);
+    }
+
     private static readonly ZLinkStoreKey OwnerCounterKey = new("zlink:v11:owner-counter");
     private static readonly ZLinkStoreKey ObjectCounterKey = new("zlink:v11:object-counter");
     private static readonly ZLinkStoreKey AuthorityOwnerCounterKey = new(

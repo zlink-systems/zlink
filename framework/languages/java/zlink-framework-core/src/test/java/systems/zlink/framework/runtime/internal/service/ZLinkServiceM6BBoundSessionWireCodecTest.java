@@ -12,22 +12,27 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
-import java.nio.ByteBuffer;
 import java.util.Arrays;
 
 final class ZLinkServiceM6BBoundSessionWireCodecTest {
     private final ZLinkServiceM6BWireCodec codec = new ZLinkServiceM6BWireCodec();
 
     @Test
-    void requestHeadersKeepTheSchemaFieldAsALocalRelayWindow() {
+    void requestHeadersAddOnlyCorrelationToSendHeaders() {
         var spotRoute =
                 new ZLinkServiceM6BWireCodec.SpotRouteFence(
                         "room", 2, RoutingId.from("target"), 3, 4, 5);
         byte[] spot = codec.encodeSpotHeader(true, 0, 7L, 11, 12, 0, "source", spotRoute);
         byte[] actor = codec.encodeActorHeader(true, 0, 7L, 11, 12, 0, null, route());
 
-        assertEquals(30_000L, ByteBuffer.wrap(spot, 29, Long.BYTES).getLong());
-        assertEquals(30_000L, ByteBuffer.wrap(actor, 29, Long.BYTES).getLong());
+        assertEquals(
+                codec.encodeSpotHeader(false, 0, null, 11, 12, 0, "source", spotRoute).length
+                        + Long.BYTES,
+                spot.length);
+        assertEquals(
+                codec.encodeActorHeader(false, 0, null, 11, 12, 0, null, route()).length
+                        + Long.BYTES,
+                actor.length);
         assertEquals(0, codec.decodeSpotHeader(spot).messageFollowHopCount());
         assertEquals(0, codec.decodeActorHeader(actor).messageFollowHopCount());
     }

@@ -565,7 +565,7 @@ public sealed partial class ZLinkRedisLocationStore
                     args.Add(Guid.NewGuid().ToString("N"));
                     args.Add(
                         put.Retention is { } retention
-                            ? checked((long)Math.Ceiling(retention.TotalMilliseconds))
+                            ? Zlink.Framework.Internal.ZLinkStoreRetention.ToMilliseconds(retention)
                             : -1
                     );
                     break;

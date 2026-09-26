@@ -22,7 +22,6 @@ import java.util.Objects;
  */
 public final class ZLinkServiceM6BWireCodec {
     private static final int PREFIX_BYTES = 5;
-    private static final long LOCAL_RELAY_WINDOW_MS = 30_000;
 
     public byte[] encodeSpotHeader(
             boolean request,
@@ -54,9 +53,6 @@ public final class ZLinkServiceM6BWireCodec {
         }
         writer.bits64(operationHigh);
         writer.bits64(operationLow);
-        if (request) {
-            writer.nonzero(LOCAL_RELAY_WINDOW_MS, "remainingDeadlineMs");
-        }
         writer.u8(messageFollowHopCount);
         writer.text8(sourceSpotId, "sourceSpotId");
         writer.text8(target.spotId(), "targetSpotId");
@@ -87,9 +83,6 @@ public final class ZLinkServiceM6BWireCodec {
         long operationLow = reader.bits64("operation.low");
         if (operationHigh == 0 && operationLow == 0) {
             throw protocol("Spot operation id is zero");
-        }
-        if (request) {
-            reader.nonzeroU64("remainingDeadlineMs");
         }
         int messageFollowHopCount = reader.u8("messageFollowHopCount");
         if (messageFollowHopCount > 8) {
@@ -171,9 +164,6 @@ public final class ZLinkServiceM6BWireCodec {
         }
         writer.bits64(operationHigh);
         writer.bits64(operationLow);
-        if (request) {
-            writer.nonzero(LOCAL_RELAY_WINDOW_MS, "remainingDeadlineMs");
-        }
         writer.u8(messageFollowHopCount);
         if (sourceActor == null) {
             writer.u8(0);
@@ -218,9 +208,6 @@ public final class ZLinkServiceM6BWireCodec {
         long operationLow = reader.bits64("operation.low");
         if (operationHigh == 0 && operationLow == 0) {
             throw protocol("Actor operation id is zero");
-        }
-        if (request) {
-            reader.nonzeroU64("remainingDeadlineMs");
         }
         int messageFollowHopCount = reader.u8("messageFollowHopCount");
         if (messageFollowHopCount > 8) {

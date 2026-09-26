@@ -701,13 +701,13 @@ internal static class ServiceWireCodec
 
     internal sealed record SpotSend21(byte Flags,OperationId Operation,U8 MessageFollowHopCount,Text8 SourceSpotId,SpotRouteFence TargetSpot,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
-    internal sealed record SpotRequest22(byte Flags,NonzeroU64 Correlation,OperationId Operation,NonzeroU64 RemainingDeadlineMs,U8 MessageFollowHopCount,Text8 SourceSpotId,SpotRouteFence TargetSpot,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
+    internal sealed record SpotRequest22(byte Flags,NonzeroU64 Correlation,OperationId Operation,U8 MessageFollowHopCount,Text8 SourceSpotId,SpotRouteFence TargetSpot,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
     internal sealed record LogicalMulticast23(byte Flags,Text8 ChannelName,Text8 Topic,Text8 SourceSpotId,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
     internal sealed record ActorSend24(byte Flags,OperationId Operation,U8 MessageFollowHopCount,OptionalActorRef SourceActor,ActorRouteFence TargetActor,OptionalBoundSessionTail? BoundSessionTail,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
-    internal sealed record ActorRequest25(byte Flags,NonzeroU64 Correlation,OperationId Operation,NonzeroU64 RemainingDeadlineMs,U8 MessageFollowHopCount,OptionalActorRef SourceActor,ActorRouteFence TargetActor,OptionalBoundSessionTail? BoundSessionTail,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
+    internal sealed record ActorRequest25(byte Flags,NonzeroU64 Correlation,OperationId Operation,U8 MessageFollowHopCount,OptionalActorRef SourceActor,ActorRouteFence TargetActor,OptionalBoundSessionTail? BoundSessionTail,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
     internal sealed record ActorLookup26(byte Flags,NonzeroU64 Correlation,Text8 ActorId);
 
@@ -6124,7 +6124,6 @@ internal static class ServiceWireCodec
         if((flags&~1)!=0||(flags&0)!=0)throw Error("flags");
         var Correlation = ReadNonzeroU64(body, context);
         var Operation = ReadOperationId(body, context);
-        var RemainingDeadlineMs = ReadNonzeroU64(body, context);
         var MessageFollowHopCount = ReadU8(body, context);
         if (MessageFollowHopCount.Value < 0) throw Error("messageFollowHopCount: minimum");
         if (MessageFollowHopCount.Value > 8) throw Error("messageFollowHopCount: maximum");
@@ -6138,7 +6137,7 @@ internal static class ServiceWireCodec
         if(index>=frames.Count)throw Error("payload required");
         if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new SpotRequest22(flags,Correlation,Operation,RemainingDeadlineMs,MessageFollowHopCount,SourceSpotId,TargetSpot,metadata,payload!);
+        var value=new SpotRequest22(flags,Correlation,Operation,MessageFollowHopCount,SourceSpotId,TargetSpot,metadata,payload!);
         return value;
     }
     internal static SpotRequest22 DecodeSpotRequest22(byte[] frame,DecodeContext context)=>DecodeSpotRequest22(new[]{frame},context);
@@ -6151,7 +6150,6 @@ internal static class ServiceWireCodec
         body.U8(1);body.U8(22);body.U8(value.Flags);
         WriteNonzeroU64(body, value.Correlation, context);
         WriteOperationId(body, value.Operation, context);
-        WriteNonzeroU64(body, value.RemainingDeadlineMs, context);
         if (value.MessageFollowHopCount.Value < 0) throw Error("messageFollowHopCount: minimum");
         if (value.MessageFollowHopCount.Value > 8) throw Error("messageFollowHopCount: maximum");
         WriteU8(body, value.MessageFollowHopCount, context);
@@ -6275,7 +6273,6 @@ internal static class ServiceWireCodec
         var fc=((flags&2)!=0?1:0)+((flags&4)!=0?1:0);if(fc!=0&&fc!=2)throw Error("flag constraint");
         var Correlation = ReadNonzeroU64(body, context);
         var Operation = ReadOperationId(body, context);
-        var RemainingDeadlineMs = ReadNonzeroU64(body, context);
         var MessageFollowHopCount = ReadU8(body, context);
         if (MessageFollowHopCount.Value < 0) throw Error("messageFollowHopCount: minimum");
         if (MessageFollowHopCount.Value > 8) throw Error("messageFollowHopCount: maximum");
@@ -6295,7 +6292,7 @@ internal static class ServiceWireCodec
         if(index>=frames.Count)throw Error("payload required");
         if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new ActorRequest25(flags,Correlation,Operation,RemainingDeadlineMs,MessageFollowHopCount,SourceActor,TargetActor,BoundSessionTail,metadata,payload!);
+        var value=new ActorRequest25(flags,Correlation,Operation,MessageFollowHopCount,SourceActor,TargetActor,BoundSessionTail,metadata,payload!);
         return value;
     }
     internal static ActorRequest25 DecodeActorRequest25(byte[] frame,DecodeContext context)=>DecodeActorRequest25(new[]{frame},context);
@@ -6309,7 +6306,6 @@ internal static class ServiceWireCodec
         body.U8(1);body.U8(25);body.U8(value.Flags);
         WriteNonzeroU64(body, value.Correlation, context);
         WriteOperationId(body, value.Operation, context);
-        WriteNonzeroU64(body, value.RemainingDeadlineMs, context);
         if (value.MessageFollowHopCount.Value < 0) throw Error("messageFollowHopCount: minimum");
         if (value.MessageFollowHopCount.Value > 8) throw Error("messageFollowHopCount: maximum");
         WriteU8(body, value.MessageFollowHopCount, context);

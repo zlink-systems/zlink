@@ -255,10 +255,10 @@ function encodeWrite(request: ZLinkStoreWriteRequest): EncodedWrite {
     const key = requireKey(mutation.key);
     encodedBytes += Buffer.byteLength(key, 'utf8');
     if (mutation.kind === 'delete') return ['delete', keyIndex.get(key), key];
-    requireValue(mutation.bytes, mutation.retentionMs);
+    const retentionMs = requireValue(mutation.bytes, mutation.retentionMs);
     encodedBytes += mutation.bytes.byteLength;
     putBytes.push(Buffer.from(mutation.bytes));
-    return ['put', keyIndex.get(key), key, mutation.retentionMs ?? false];
+    return ['put', keyIndex.get(key), key, retentionMs ?? false];
   });
   if (encodedBytes > MAX_WRITE_BYTES) {
     throw new RangeError('Location Store write exceeds 4 MiB encoded input.');
@@ -309,13 +309,19 @@ function requireCursor(cursor: ZLinkStoreScanCursor): string {
   return value;
 }
 
-function requireValue(bytes: Uint8Array, retentionMs: number | undefined): void {
+function requireValue(bytes: Uint8Array, retentionMs: number | undefined): number | undefined {
   if (bytes.byteLength > MAX_VALUE_BYTES) {
     throw new RangeError('Location Store value exceeds 1 MiB.');
   }
-  if (retentionMs !== undefined && (!Number.isSafeInteger(retentionMs) || retentionMs < 1)) {
-    throw new RangeError('Location Store retention must be a positive safe integer.');
+  if (
+    retentionMs !== undefined &&
+    (!Number.isFinite(retentionMs) ||
+      retentionMs <= 0 ||
+      !Number.isSafeInteger(Math.ceil(retentionMs)))
+  ) {
+    throw new RangeError('Location Store retention must round to a positive safe integer.');
   }
+  return retentionMs === undefined ? undefined : Math.ceil(retentionMs);
 }
 
 function parseCursor(cursor: ZLinkStoreScanCursor): {
