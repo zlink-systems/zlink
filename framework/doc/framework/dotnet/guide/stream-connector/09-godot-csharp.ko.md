@@ -79,7 +79,8 @@ public partial class ZlinkStreamClientNode : Node
 ```
 
 `_Process()`에서 `Dispatch.Async()`를 호출하지 않으면 handler와 event는 실행되지 않는다.
-`PendingDispatchCount`로 아직 처리하지 않은 callback 수를 확인한다.
+`PendingDispatchCount`로 지금 등록된 handler로 다음 dispatch가 실행할 callback 수를
+확인한다.
 
 ## Godot signal로 연결하기
 
@@ -100,10 +101,10 @@ _connector.On("game.update", (message, _) =>
 
 ## 일시 정지와 종료
 
-Godot의 `Node.ProcessMode`를 `Disabled`로 바꾸면 `_Process()`가 멈추므로 dispatch도 멈춘다.
-연결은 유지되지만 callback은 queue에 쌓인다. **queue는 `MaxPendingDispatchCallbacks`(기본
-1024)까지만 보관하고, 넘치면 버릴 수 있는 것 중 가장 오래된 것부터 버린다.** 오래 멈춰 둘
-생각이면 연결까지 닫는 편이 낫다. 닫으려면 `Close.Async()`를 명시적으로 호출한다.
+Godot의 `Node.ProcessMode`를 `Disabled`로 바꾸면 `_Process()`가 멈추므로 dispatch도 멈춘다. 연결은
+유지되지만 callback은 queue에 쌓인다. **queue에는 상한이 없고 callback을 버리지 않으므로, dispatch가
+멈춰 있는 동안 queue가 계속 늘어난다.** 오래 멈춰 둘 생각이면 연결까지 닫는 편이 낫다. 닫으려면
+`Close.Async()`를 명시적으로 호출한다.
 
 `_ExitTree()`에서 `Close.Async()`와 `DisposeAsync()`를 호출하지 않으면 백그라운드 receive
 loop가 남는다.

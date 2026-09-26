@@ -1,9 +1,13 @@
 namespace Systems.Zlink.Stream.Connector.Runtime;
 
+/// <summary>
+///     Records which connector's handler or callback the current flow is running, so that
+///     <c>Close</c> and <c>DisposeAsync</c> can tell a call from inside one of them
+///     (stream-connector spec §7).
+/// </summary>
 internal static class ZlinkStreamCallbackExecutionContext
 {
     private static readonly AsyncLocal<Lease?> CallbackAmbient = new();
-    private static readonly AsyncLocal<Lease?> WorkerAmbient = new();
 
     public static bool IsActiveCallbackFor(object callbackOwner)
     {
@@ -11,61 +15,22 @@ internal static class ZlinkStreamCallbackExecutionContext
         return lease is { Active: true } && ReferenceEquals(lease.CallbackOwner, callbackOwner);
     }
 
-    public static ZlinkStreamLifecycleWorkKind? CurrentWorkerCallbackKindFor(object workerOwner)
-    {
-        var lease = CallbackAmbient.Value;
-        return lease is { Active: true } && ReferenceEquals(lease.WorkerOwner, workerOwner)
-            ? lease.WorkKind
-            : null;
-    }
-
-    public static IDisposable EnterWorker(object owner, ZlinkStreamLifecycleWorkKind workKind)
-    {
-        return Enter(WorkerAmbient, Lease.ForWorker(owner, workKind));
-    }
-
     public static IDisposable EnterCallback(object callbackOwner)
     {
-        var worker = WorkerAmbient.Value;
-        var current = worker is { Active: true }
-            ? Lease.ForCallback(callbackOwner, worker.WorkerOwner, worker.WorkKind)
-            : Lease.ForCallback(callbackOwner, null, null);
-        return Enter(CallbackAmbient, current);
+        var current = new Lease(callbackOwner);
+        var previous = CallbackAmbient.Value;
+        CallbackAmbient.Value = current;
+        return new Scope(previous, current);
     }
 
-    private static IDisposable Enter(AsyncLocal<Lease?> ambient, Lease current)
+    private sealed class Lease(object callbackOwner)
     {
-        var previous = ambient.Value;
-        ambient.Value = current;
-        return new Scope(ambient, previous, current);
-    }
-
-    private sealed class Lease(
-        object? callbackOwner,
-        object? workerOwner,
-        ZlinkStreamLifecycleWorkKind? workKind
-    )
-    {
-        public object? CallbackOwner { get; } = callbackOwner;
-
-        public object? WorkerOwner { get; } = workerOwner;
-
-        public ZlinkStreamLifecycleWorkKind? WorkKind { get; } = workKind;
+        public object CallbackOwner { get; } = callbackOwner;
 
         public bool Active { get; set; } = true;
-
-        public static Lease ForCallback(
-            object callbackOwner,
-            object? workerOwner,
-            ZlinkStreamLifecycleWorkKind? workKind
-        ) => new(callbackOwner, workerOwner, workKind);
-
-        public static Lease ForWorker(object workerOwner, ZlinkStreamLifecycleWorkKind workKind) =>
-            new(null, workerOwner, workKind);
     }
 
-    private sealed class Scope(AsyncLocal<Lease?> ambient, Lease? previous, Lease current)
-        : IDisposable
+    private sealed class Scope(Lease? previous, Lease current) : IDisposable
     {
         private int _disposed;
 
@@ -74,16 +39,8 @@ internal static class ZlinkStreamCallbackExecutionContext
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
                 return;
             current.Active = false;
-            if (ReferenceEquals(ambient.Value, current))
-                ambient.Value = previous;
+            if (ReferenceEquals(CallbackAmbient.Value, current))
+                CallbackAmbient.Value = previous;
         }
     }
-}
-
-internal enum ZlinkStreamLifecycleWorkKind
-{
-    ActiveConnect,
-    Receive,
-    Heartbeat,
-    CloseCompletion,
 }

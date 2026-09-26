@@ -89,9 +89,9 @@ public sealed class ZlinkStreamClientBehaviour : MonoBehaviour
 ```
 
 If `Dispatch.Async()` isn't called in `Update()`, the handler and events don't run. Check
-`PendingDispatchCount` to see how many callbacks haven't been processed yet. **The pending
-queue holds up to `MaxPendingDispatchCallbacks` (1024 by default), and past that it drops the
-oldest droppable callback first.**
+`PendingDispatchCount` to see how many callbacks the next dispatch runs with the handlers registered
+now. **The pending queue has no upper limit and drops no callback: every callback waits for the next
+`Dispatch.Async()`.**
 
 ## Handling A Pause
 

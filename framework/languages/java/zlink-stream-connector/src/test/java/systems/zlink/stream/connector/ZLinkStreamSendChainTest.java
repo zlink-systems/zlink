@@ -139,4 +139,54 @@ final class ZLinkStreamSendChainTest {
         assertNull(afterReset.join());
         abandoned.completeExceptionally(new IOException("the connection went away"));
     }
+
+    @Test
+    void resetFailsOldQueuedWritesWithoutSubmittingThemOnTheNextConnection() {
+        ZLinkStreamSendChain chain = new ZLinkStreamSendChain();
+        CompletableFuture<Void> firstGate = new CompletableFuture<>();
+        AtomicInteger oldWrites = new AtomicInteger();
+        chain.enqueue(() -> firstGate);
+        CompletableFuture<Void> oldQueued =
+                chain.enqueue(
+                        () -> {
+                            oldWrites.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        });
+
+        chain.reset();
+        chain.enqueue(() -> CompletableFuture.completedFuture(null)).join();
+        firstGate.complete(null);
+
+        assertEquals(0, oldWrites.get());
+        assertTrue(oldQueued.isCompletedExceptionally());
+    }
+
+    /** Queued writes retain their admission order while a preceding write is in progress. */
+    @Test
+    void writesBeyondTheQueueSlotsWaitAndStartInAcceptanceOrder() {
+        ZLinkStreamSendChain chain = new ZLinkStreamSendChain();
+        CompletableFuture<Void> firstGate = new CompletableFuture<>();
+        List<Integer> started = new ArrayList<>();
+        List<CompletableFuture<Void>> publications = new ArrayList<>();
+        publications.add(chain.enqueue(() -> firstGate));
+        for (int index = 1; index <= 4097; index++) {
+            int position = index;
+            publications.add(
+                    chain.enqueue(
+                            () -> {
+                                started.add(position);
+                                return CompletableFuture.completedFuture(null);
+                            }));
+        }
+        assertEquals(List.of(), started);
+        assertTrue(publications.stream().noneMatch(CompletableFuture::isDone));
+
+        firstGate.complete(null);
+        CompletableFuture.allOf(publications.toArray(CompletableFuture[]::new)).join();
+        List<Integer> expected = new ArrayList<>();
+        for (int index = 1; index <= 4097; index++) {
+            expected.add(index);
+        }
+        assertEquals(expected, started);
+    }
 }

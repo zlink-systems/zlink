@@ -6,6 +6,13 @@ internal sealed class ZLinkStreamRuntimeManager(
     ZLinkFrameworkRegistration registration
 )
 {
+    /// <summary>
+    ///     Creates each STREAM node. The node is recorded in <paramref name="state" /> as soon
+    ///     as its socket exists and receives the monitor and endpoints as they are created, so
+    ///     the state's startup rollback and shutdown dispose a partly started node the same
+    ///     way as a running one. Until the node exists, this method owns the socket and
+    ///     disposes it when creating the node fails.
+    /// </summary>
     public async ValueTask InitializeStreamNodesAsync(ZLinkFrameworkComponentState state)
     {
         if (registration.StreamNodes.Count == 0)
@@ -15,86 +22,68 @@ internal sealed class ZLinkStreamRuntimeManager(
 
         foreach (var streamNodeRegistration in registration.StreamNodes.Values)
         {
-            IZLinkBackendStreamSocket? socket = null;
-            IZLinkBackendSocketMonitor? monitor = null;
-            ZLinkStreamNodeRuntime? runtime = null;
+            var socket = state.Context.CreateStreamSocket(
+                streamNodeRegistration.StreamNodeName,
+                actorDispatchNode: null
+            );
+            ZLinkStreamNodeRuntime runtime;
             try
             {
-                socket = state.Context.CreateStreamSocket(
-                    streamNodeRegistration.StreamNodeName,
-                    actorDispatchNode: null
-                );
-                if (streamNodeRegistration.TlsServer is { } tlsServer)
-                    socket.SetTlsServer(
-                        tlsServer.CertPath,
-                        tlsServer.KeyPath,
-                        tlsServer.RequireClientCert
-                    );
-
-                socket.ApplySocketConfig(streamNodeRegistration.SocketConfig);
-                var bindEndpoint = ZLinkNetworkEndpointResolver.Bind(
-                    streamNodeRegistration.BindEndpoint,
-                    streamNodeRegistration.ListenPort,
-                    streamNodeRegistration.BindHost,
-                    registration.NetworkOptions
-                );
-                socket.Bind(bindEndpoint);
-                var boundEndpoint = socket.GetLastEndpoint();
-                if (string.IsNullOrWhiteSpace(boundEndpoint))
-                {
-                    if (streamNodeRegistration.ListenPort == 0)
-                        throw new ZLinkConfigurationException(
-                            $"STREAM node '{streamNodeRegistration.StreamNodeName}' did not report the endpoint selected for port 0."
-                        );
-                    boundEndpoint = bindEndpoint;
-                }
-                var advertisedEndpoint = ZLinkNetworkEndpointResolver.Advertise(
-                    boundEndpoint,
-                    streamNodeRegistration.AdvertiseHost,
-                    streamNodeRegistration.BindHost,
-                    registration.NetworkOptions
-                );
-                monitor = monitoringAdapter.OpenSocketMonitor(socket);
-
                 runtime = new ZLinkStreamNodeRuntime(
                     streamNodeRegistration.StreamNodeName,
                     services,
                     socket,
-                    monitor,
+                    monitor: null,
                     streamNodeRegistration.HeaderSessionType,
                     state.TaskRunner,
                     streamNodeRegistration.TlsServer is null ? "tcp" : "tls",
                     actorDispatchEnabled: streamNodeRegistration.ActorDispatchEnabled,
-                    boundEndpoint: boundEndpoint,
-                    advertisedEndpoint: advertisedEndpoint,
                     maxMessageSize: streamNodeRegistration.SocketConfig.MaxMessageSize,
                     applicationJobQueue: state.ApplicationJobQueue
                 );
-                state.StreamNodes.Add(streamNodeRegistration.StreamNodeName, runtime);
-                runtime.Start();
             }
-            catch (Exception initializationFailure)
+            catch
             {
-                state.StreamNodes.Remove(streamNodeRegistration.StreamNodeName);
-                var failures = new ZLinkFailureCollector(initializationFailure);
-                if (runtime is not null)
-                {
-                    await failures.CaptureAsync(runtime.DisposeAsync).ConfigureAwait(false);
-                }
-                else
-                {
-                    if (monitor is not null)
-                        await failures.CaptureAsync(monitor.DisposeAsync).ConfigureAwait(false);
-
-                    if (socket is not null)
-                        await failures.CaptureAsync(socket.DisposeAsync).ConfigureAwait(false);
-                }
-
-                failures.ThrowIfAny();
-                throw new InvalidOperationException(
-                    "Unreachable after startup cleanup failure propagation."
-                );
+                await socket.DisposeAsync().ConfigureAwait(false);
+                throw;
             }
+            state.StreamNodes.Add(streamNodeRegistration.StreamNodeName, runtime);
+
+            if (streamNodeRegistration.TlsServer is { } tlsServer)
+                socket.SetTlsServer(
+                    tlsServer.CertPath,
+                    tlsServer.KeyPath,
+                    tlsServer.RequireClientCert
+                );
+
+            socket.ApplySocketConfig(streamNodeRegistration.SocketConfig);
+            var bindEndpoint = ZLinkNetworkEndpointResolver.Bind(
+                streamNodeRegistration.BindEndpoint,
+                streamNodeRegistration.ListenPort,
+                streamNodeRegistration.BindHost,
+                registration.NetworkOptions
+            );
+            socket.Bind(bindEndpoint);
+            var boundEndpoint = socket.GetLastEndpoint();
+            if (string.IsNullOrWhiteSpace(boundEndpoint))
+            {
+                if (streamNodeRegistration.ListenPort == 0)
+                    throw new ZLinkConfigurationException(
+                        $"STREAM node '{streamNodeRegistration.StreamNodeName}' did not report the endpoint selected for port 0."
+                    );
+                boundEndpoint = bindEndpoint;
+            }
+            runtime.SetEndpoints(
+                boundEndpoint,
+                ZLinkNetworkEndpointResolver.Advertise(
+                    boundEndpoint,
+                    streamNodeRegistration.AdvertiseHost,
+                    streamNodeRegistration.BindHost,
+                    registration.NetworkOptions
+                )
+            );
+            runtime.AttachMonitor(monitoringAdapter.OpenSocketMonitor(socket));
+            runtime.Start();
         }
     }
 }

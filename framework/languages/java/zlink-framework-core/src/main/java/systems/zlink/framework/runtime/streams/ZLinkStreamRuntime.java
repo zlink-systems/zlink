@@ -87,6 +87,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final ZLinkMessageSerializer serializer;
     private final ZLinkActorRuntime actors;
     private final Map<String, ZLinkInternalMeshNode> meshNodes;
+    private final Map<String, ZLinkInternalSpotNode> spotNodes;
+    private final ZLinkStreamBackendAdapter streamAdapter;
     private final ZLinkHandlerActivator handlerFactory;
     private final Executor handlerExecutor;
     private final Executor serialExecutor;
@@ -287,16 +289,27 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                             thread.setDaemon(true);
                             return thread;
                         });
-        ZLinkStreamBackendAdapter streamAdapter =
-                backendFactory.createStreamAdapter(adapterOptions);
+        this.streamAdapter = backendFactory.createStreamAdapter(adapterOptions);
+        this.spotNodes = spotNodes;
         this.context = Objects.requireNonNull(context, "context");
         this.ownsContext = ownsContext;
+    }
+
+    /**
+     * Opens each STREAM node and starts receiving.
+     *
+     * <p>The runtime is already recorded by its owner when this runs, and each socket is recorded
+     * in {@code streams} the moment it exists. A failure here leaves a partial set of sockets that
+     * the owner's close ({@link #closeAsync()}) releases like any other.
+     */
+    public ZLinkStreamRuntime start() {
         for (StreamNodeRegistration streamNode : registration.streamNodes()) {
             String actorMeshName =
                     streamNode.actorDispatchEnabled() ? resolveActorDispatchMeshName() : null;
             ZLinkInternalMeshNode meshNode =
                     actorMeshName == null ? null : meshNodes.get(actorMeshName);
             ZLinkBackendStreamSocket stream = streamAdapter.createStreamSocket(context, meshNode);
+            streams.add(stream);
             if (streamNode.tlsServer() != null) {
                 stream.setTlsServer(
                         streamNode.tlsServer().certificatePath(),
@@ -314,7 +327,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                             reportTransportError(streamNode, routingId, nativeCode, message));
             stream.startSessionService();
             ZLinkInternalSpotNode spotNode = resolveSessionRelayNode(spotNodes);
-            streams.add(stream);
             streamsByName.put(streamNode.name(), stream);
             streamSessionRelayAttached.put(streamNode.name(), spotNode != null);
             if (spotNode != null) {
@@ -324,6 +336,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
         receiveLoops.forEach(StreamReceiveLoop::start);
         livenessExecutor.scheduleAtFixedRate(this::checkSessionLiveness, 1L, 1L, TimeUnit.SECONDS);
+        return this;
     }
 
     private String resolveActorDispatchMeshName() {
@@ -1380,7 +1393,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                     return null;
                 });
         sessionContexts.forEach(ZLinkStreamSessionContextState::closeReplyRetries);
-        String closeReason = draining ? "server_shutdown" : "transport_error";
+        String closeReason = draining ? "server_drain" : "transport_error";
         for (int index = 0; index < activeSessions.size(); index++) {
             recordSessionClosed(activeSessions.get(index), closeReason);
         }

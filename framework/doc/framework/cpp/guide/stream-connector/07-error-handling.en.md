@@ -101,14 +101,19 @@ handling.
 | `configuration_error` · `ValidationFailed` | fails | kept | no |
 | `request_timeout` | only that request fails | kept | no |
 | `ConnectTimeout` · `TlsValidationFailed` | connect fails | disconnected | applies the attempt policy |
-| `disconnected` · `send_failed` | the call in progress fails | disconnected if the transport dropped | applies it when enabled |
-| `FrameDecodeFailed` (frame or header) · `FrameTooLarge` | the frame is not delivered and pending requests fail | ends | applies it when enabled |
+| `disconnected` — transport dropped | the call in progress fails | disconnected; the close reason is a transport error | applies it when enabled |
+| `disconnected` caused by close | the call in progress fails, and so do connect, send, request and the waits called after close | closed; the close reason is client close | no |
+| `send_failed` — request sequence exhausted | only that call fails | kept | no |
+| `send_failed` — transport write failed | only that write's call fails with `send_failed`; other calls in progress fail with `Disconnected` | ends; close reason is `TransportError` | applies it when enabled |
+| `FrameDecodeFailed` (frame or header) · `FrameTooLarge` | the frame is not delivered and pending requests fail | ends; the close reason is a protocol error | applies it when enabled |
 | `CompressionFailed` | only that send fails | kept | no |
 | `DecompressionFailed` | only that received packet or pending request fails | kept | no |
 | `UserCallbackFailed` · `RemoteError` | delivered as an error event or to the related call | kept | no |
 
-Where the connection ends, the close reason is recorded as a transport error. Reading the close
-reason is covered by [Connection Lifecycle](06-lifecycle.en.md).
+Where the connection ends, the close reason is client close when close ended it, a protocol error
+when a frame could not be read or was over the receive limit, and a transport error otherwise. After
+close, closing again, `dispatch()`, removing a registration and reading the close reason do not
+fail. Reading the close reason is covered by [Connection Lifecycle](06-lifecycle.en.md).
 
 ## 5. Common Handling
 

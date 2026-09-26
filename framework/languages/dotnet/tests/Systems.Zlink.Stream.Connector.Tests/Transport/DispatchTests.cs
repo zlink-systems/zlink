@@ -353,7 +353,7 @@ public sealed partial class StreamConnectorTests
     }
 
     [Fact]
-    public async Task ManualDispatchCallbackQueueWaitsForCapacityWithoutDroppingCallbacks()
+    public async Task ManualDispatchAcceptsAllCallbacksBeforeThePumpRuns()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -387,7 +387,6 @@ public sealed partial class StreamConnectorTests
             {
                 Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
                 Heartbeat = DisabledHeartbeat(),
-                MaxPendingDispatchCallbacks = 2,
             }
         );
         var handled = new List<byte>();
@@ -402,11 +401,99 @@ public sealed partial class StreamConnectorTests
 
         await connector.Connect.Async();
         await server;
-        await WaitUntilAsync(() => connector.PendingDispatchCount == 2, TimeSpan.FromSeconds(15));
+        await WaitUntilAsync(() => connector.PendingDispatchCount == 3, TimeSpan.FromSeconds(15));
         await connector.Dispatch.Async();
 
         Assert.Equal([1, 2, 3], handled);
         Assert.Equal(0, connector.PendingDispatchCount);
+    }
+
+    [Fact]
+    public async Task ManualCallbackAdmissionDoesNotWaitForDispatchPump()
+    {
+        using var shutdown = new CancellationTokenSource();
+        var taskRunner = new ZlinkStreamTaskRunner(shutdown.Token);
+        var callbacks = new ZlinkStreamConnectorCallbacks(
+            taskRunner,
+            ZlinkStreamDispatchMode.Manual
+        );
+        var order = new List<int>();
+
+        await callbacks.DispatchUserCallbackAsync(
+            _ =>
+            {
+                order.Add(1);
+                return ValueTask.CompletedTask;
+            },
+            CancellationToken.None
+        );
+        await callbacks
+            .DispatchUserCallbackAsync(
+                _ =>
+                {
+                    order.Add(2);
+                    return ValueTask.CompletedTask;
+                },
+                CancellationToken.None
+            )
+            .AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(2, callbacks.PendingDispatchCount);
+        await callbacks.DispatchAsync(CancellationToken.None);
+        Assert.Equal([1, 2], order);
+        callbacks.Complete();
+        shutdown.Cancel();
+        await taskRunner.StopAndDrainAsync();
+    }
+
+    [Theory]
+    [InlineData(ZlinkStreamDispatchMode.Manual)]
+    [InlineData(ZlinkStreamDispatchMode.Immediate)]
+    public async Task AsyncHandlerCompletionDoesNotBlockLaterCallbacks(
+        ZlinkStreamDispatchMode dispatchMode
+    )
+    {
+        using var shutdown = new CancellationTokenSource();
+        var taskRunner = new ZlinkStreamTaskRunner(shutdown.Token);
+        var callbacks = new ZlinkStreamConnectorCallbacks(taskRunner, dispatchMode);
+        var releaseFirst = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var secondRan = false;
+        var change = new ZlinkStreamConnectionStateChanged(
+            ZlinkStreamConnectionState.Disconnected,
+            ZlinkStreamConnectionState.Connecting
+        );
+        callbacks.AddConnectionStateChanged((_, _) => new ValueTask(releaseFirst.Task));
+        callbacks.AddConnectionStateChanged(
+            (_, _) =>
+            {
+                secondRan = true;
+                return ValueTask.CompletedTask;
+            }
+        );
+
+        var notification = callbacks
+            .NotifyConnectionStateChangedAsync(change, CancellationToken.None)
+            .AsTask();
+        try
+        {
+            await notification.WaitAsync(TimeSpan.FromSeconds(5));
+            if (dispatchMode == ZlinkStreamDispatchMode.Manual)
+                await callbacks
+                    .DispatchAsync(CancellationToken.None)
+                    .AsTask()
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(secondRan);
+        }
+        finally
+        {
+            releaseFirst.TrySetResult();
+            callbacks.Complete();
+            shutdown.Cancel();
+            await taskRunner.StopAndDrainAsync();
+        }
     }
 
     [Fact]
@@ -416,8 +503,7 @@ public sealed partial class StreamConnectorTests
         var taskRunner = new ZlinkStreamTaskRunner(shutdown.Token);
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
-            ZlinkStreamDispatchMode.Manual,
-            1
+            ZlinkStreamDispatchMode.Manual
         );
         var order = new List<string>();
         Task? secondAdmission = null;
@@ -461,7 +547,7 @@ public sealed partial class StreamConnectorTests
     }
 
     [Fact]
-    public async Task ManualRequestCompletionsAreNotCountedByCallbackQueueLimit()
+    public async Task ManualRequestCompletionsAreQueuedBeforeThePumpRuns()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -492,7 +578,6 @@ public sealed partial class StreamConnectorTests
             {
                 Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
                 Heartbeat = DisabledHeartbeat(),
-                MaxPendingDispatchCallbacks = 1,
             }
         );
         var callbackThread = new TaskCompletionSource<int>(
@@ -577,7 +662,6 @@ public sealed partial class StreamConnectorTests
             {
                 Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
                 Heartbeat = DisabledHeartbeat(),
-                MaxPendingDispatchCallbacks = 1,
             }
         );
         var callbackThread = new TaskCompletionSource<int>(
@@ -634,7 +718,6 @@ public sealed partial class StreamConnectorTests
             {
                 Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
                 Heartbeat = DisabledHeartbeat(),
-                MaxPendingDispatchCallbacks = 1,
             }
         );
         var callback = new TaskCompletionSource<(int Thread, ZlinkStreamResult Result)>(
@@ -685,7 +768,6 @@ public sealed partial class StreamConnectorTests
                 Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
                 Heartbeat = DisabledHeartbeat(),
                 DispatchMode = ZlinkStreamDispatchMode.Manual,
-                MaxPendingDispatchCallbacks = 1,
             }
         );
         var callbackCount = 0;
@@ -766,5 +848,60 @@ public sealed partial class StreamConnectorTests
 
         Assert.Equal(0, connector.PendingDispatchCount);
         await server;
+    }
+
+    /// <summary>
+    ///     Stream-connector spec §10: an arrival a handler takes is counted in the step that
+    ///     hands it to the dispatch mode. The step's record runs after every callback of the
+    ///     arrival is queued, so a counted message is already there for <c>Dispatch</c>.
+    /// </summary>
+    [Fact]
+    public async Task ReceivedCountIsNotVisibleBeforeTheArrivalIsHandedToDispatch()
+    {
+        using var shutdown = new CancellationTokenSource();
+        var taskRunner = new ZlinkStreamTaskRunner(shutdown.Token);
+        var callbacks = new ZlinkStreamConnectorCallbacks(
+            taskRunner,
+            ZlinkStreamDispatchMode.Manual
+        );
+        var received = new ZlinkStreamReceivedMessages();
+        received.ResetForConnection(1);
+        var queuedWhenCounted = -1;
+        var handled = 0;
+
+        await callbacks.DispatchUserCallbacksAsync(
+            [
+                _ =>
+                {
+                    handled++;
+                    return ValueTask.CompletedTask;
+                },
+                _ =>
+                {
+                    handled++;
+                    return ValueTask.CompletedTask;
+                },
+            ],
+            CancellationToken.None,
+            reportErrors: true,
+            () =>
+            {
+                queuedWhenCounted = callbacks.PendingDispatchCount;
+                received.Record(
+                    new ZlinkStreamMessage<ZlinkStreamEncodedPayload>(
+                        "handed.off",
+                        ZlinkStreamMetadata.Empty,
+                        new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, Array.Empty<byte>()),
+                        null
+                    )
+                );
+            }
+        );
+
+        Assert.Equal(2, queuedWhenCounted);
+        Assert.Equal(1, received.Count("handed.off"));
+        await callbacks.DispatchAsync(CancellationToken.None);
+        Assert.Equal(2, handled);
+        shutdown.Cancel();
     }
 }

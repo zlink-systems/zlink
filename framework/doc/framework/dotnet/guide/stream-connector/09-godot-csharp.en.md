@@ -79,7 +79,8 @@ public partial class ZlinkStreamClientNode : Node
 ```
 
 If `Dispatch.Async()` isn't called in `_Process()`, the handler and events don't run. Check
-`PendingDispatchCount` to see how many callbacks haven't been processed yet.
+`PendingDispatchCount` to see how many callbacks the next dispatch runs with the handlers registered
+now.
 
 ## Wiring Up With A Godot Signal
 
@@ -101,10 +102,9 @@ _connector.On("game.update", (message, _) =>
 ## Pausing And Shutdown
 
 Switching Godot's `Node.ProcessMode` to `Disabled` stops `_Process()`, so dispatch also stops. The
-connection is kept, but callbacks pile up in the queue. **That queue holds up to
-`MaxPendingDispatchCallbacks` (1024 by default), and past that it drops the oldest droppable
-callback first.** For a long pause, closing the connection is the better choice; to do so,
-explicitly call `Close.Async()`.
+connection is kept, but callbacks pile up in the queue. **That queue has no upper limit and drops no
+callback, so it keeps growing while dispatch is stopped.** For a long pause, closing the connection
+is the better choice; to do so, explicitly call `Close.Async()`.
 
 If `Close.Async()` and `DisposeAsync()` aren't called in `_ExitTree()`, the background receive loop
 is left behind.

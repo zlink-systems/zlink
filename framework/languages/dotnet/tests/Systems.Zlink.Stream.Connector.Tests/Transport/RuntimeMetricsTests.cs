@@ -179,12 +179,10 @@ public sealed partial class StreamConnectorTests
                 try
                 {
                     using var webSocket = await context.WebSockets.AcceptWebSocketAsync();
-                    var close = await webSocket.ReceiveAsync(new byte[1], CancellationToken.None);
-                    Assert.Equal(WebSocketMessageType.Close, close.MessageType);
-                    await webSocket.CloseOutputAsync(
-                        WebSocketCloseStatus.NormalClosure,
-                        "closed",
-                        CancellationToken.None
+                    // The client closes by aborting the socket, without a close handshake
+                    // (stream-connector spec §7), so the peer sees the connection end.
+                    await Assert.ThrowsAsync<WebSocketException>(async () =>
+                        await webSocket.ReceiveAsync(new byte[1], CancellationToken.None)
                     );
                     webSocketServer.TrySetResult();
                 }

@@ -62,14 +62,9 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     //  it starts empty, is filled the first time a connection ends (a failed
     //  first connect included) and is never cleared by a later reconnect, so
     //  code that missed the disconnect event still reads the last reason.
-    //  `stagedCloseReason` holds the reason a specific ending already knows
-    //  (client close, heartbeat timeout, a server `session-closing`) until
-    //  the disconnect is published; anything else ends as TRANSPORT_ERROR.
+    //  Each ending names its reason where it is detected and hands it to
+    //  notifyDisconnected.
     private final AtomicReference<ZLinkStreamCloseReason> lastCloseReason = new AtomicReference<>();
-    //  Three threads stage a reason (heartbeat, receive, application) and
-    //  two consume it, so the read-and-clear has to be one step.
-    private final AtomicReference<ZLinkStreamCloseReason> stagedCloseReason =
-            new AtomicReference<>();
 
     DefaultZLinkStreamConnector(ZLinkStreamConnectorOptions options) {
         this.configuration = ZLinkStreamConnectorConfiguration.from(options);
@@ -97,8 +92,8 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
                         pendingRequests,
                         receiveDispatcher,
                         this::publishError,
+                        actorRegistry::connectionEnded,
                         this::notifyDisconnected,
-                        this::stageCloseReason,
                         this::recordConnectAttemptFailure,
                         this::sendControl,
                         sendChain::reset);
@@ -126,7 +121,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
 
     @Override
     public int pendingDispatchCount() {
-        return dispatchQueue.size();
+        return dispatchQueue.pendingCallbacks();
     }
 
     @Override
@@ -146,11 +141,6 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     }
 
     private CompletionStage<Void> closeInternal() {
-        //  A connector that never left CREATED was never connected, so
-        //  closing it is not an ending that 6.2 records.
-        if (state() != ZLinkStreamConnectionState.CREATED) {
-            stagedCloseReason.set(ZLinkStreamCloseReason.CLIENT_CLOSE);
-        }
         try {
             return lifecycle.close().whenComplete((ignored, failure) -> timeouts.shutdown());
         } catch (RuntimeException error) {
@@ -185,7 +175,19 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
         requirePacketName(name);
         Objects.requireNonNull(handler, "handler");
         handlers.computeIfAbsent(name, ignored -> new CopyOnWriteArrayList<>()).add(handler);
+        handlerRegistered();
         return () -> handlers.getOrDefault(name, List.of()).remove(handler);
+    }
+
+    /**
+     * Spec 32 7, 10: a receive handler was registered on the connector or an Actor handle, so
+     * packets already queued may now have one. In Immediate the registration is their dispatch
+     * point; in Manual they wait for the next pump.
+     */
+    void handlerRegistered() {
+        if (configuration.dispatchMode() == ZLinkStreamDispatchMode.IMMEDIATE) {
+            dispatchQueue.drainAsync();
+        }
     }
 
     CompletionStage<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> awaitMessage(
@@ -270,27 +272,36 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
             ZLinkStreamEncodedPayload payload,
             boolean compress,
             ZLinkStreamActorRegistry.DefaultActor actor) {
-        Integer actorSlot = actorSlot(actor);
-        ensureConnected();
-        byte[] body = payloadCodec.encode(payload, compress);
-        //  Spec 27 §2: a one-way Send has no reply, so no correlation_id is
-        //  created and header flag 0x08 stays clear.
-        ZLinkStreamWireProtocol.Header header =
-                new ZLinkStreamWireProtocol.Header(
-                        ZLinkStreamWireProtocol.KIND_SEND,
-                        ZLinkStreamConnectorPayloadCodec.toWireCodec(payload.codec()),
-                        (payload.metadata().isEmpty()
-                                        ? 0
-                                        : ZLinkStreamWireProtocol.FLAG_HAS_METADATA)
-                                | (compress ? ZLinkStreamWireProtocol.FLAG_PAYLOAD_COMPRESSED : 0),
-                        null,
-                        payload.packetName(),
-                        payload.metadata(),
-                        null,
-                        null,
-                        0,
-                        actorSlot);
-        return sendFrame(header, body);
+        //  Spec 32 9.2: submit() is the asynchronous surface, so a Send that
+        //  is not accepted - no connection, an unbound Actor, a payload the
+        //  codec rejects - fails its stage, as a Request does, and does not
+        //  throw.
+        try {
+            Integer actorSlot = actorSlot(actor);
+            byte[] body = payloadCodec.encode(payload, compress);
+            //  Spec 27 §2: a one-way Send has no reply, so no correlation_id is
+            //  created and header flag 0x08 stays clear.
+            ZLinkStreamWireProtocol.Header header =
+                    new ZLinkStreamWireProtocol.Header(
+                            ZLinkStreamWireProtocol.KIND_SEND,
+                            ZLinkStreamConnectorPayloadCodec.toWireCodec(payload.codec()),
+                            (payload.metadata().isEmpty()
+                                            ? 0
+                                            : ZLinkStreamWireProtocol.FLAG_HAS_METADATA)
+                                    | (compress
+                                            ? ZLinkStreamWireProtocol.FLAG_PAYLOAD_COMPRESSED
+                                            : 0),
+                            null,
+                            payload.packetName(),
+                            payload.metadata(),
+                            null,
+                            null,
+                            0,
+                            actorSlot);
+            return sendFrame(header, body);
+        } catch (RuntimeException failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
     }
 
     CompletionStage<ZLinkStreamEncodedPayload> submitRequest(
@@ -303,7 +314,6 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
             Duration timeout,
             boolean compress,
             ZLinkStreamActorRegistry.DefaultActor actor) {
-        ensureConnected();
         long start = System.nanoTime();
         CompletableFuture<ZLinkStreamEncodedPayload> result = new CompletableFuture<>();
         String actorId = actor == null ? null : actor.actorId();
@@ -320,6 +330,15 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
                         result.complete(reply);
                     } else {
                         result.completeExceptionally(failure);
+                    }
+                    //  Spec 32 5.7: a request the caller cancelled ended with
+                    //  its cancellation, not a result the connector decided,
+                    //  so the reply received hook does not run for it.
+                    if (result.isCancelled()) {
+                        if (reply != null) {
+                            reply.payload().close();
+                        }
+                        return;
                     }
                     publishReplyReceived(
                             payload.packetName(),
@@ -349,7 +368,15 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
             ZLinkStreamEncodedPayload outgoing =
                     new ZLinkStreamEncodedPayload(
                             payload.packetName(), payload.payload(), metadata, payload.codec());
-            sendRequestFrame(outgoing, timeout, compress, actor).whenComplete(complete);
+            CompletableFuture<ZLinkStreamEncodedPayload> pending =
+                    sendRequestFrame(outgoing, timeout, compress, actor).toCompletableFuture();
+            pending.whenComplete(complete);
+            result.whenComplete(
+                    (ignored, failure) -> {
+                        if (result.isCancelled()) {
+                            pending.cancel(false);
+                        }
+                    });
         } catch (RuntimeException failure) {
             complete.accept(null, failure);
         }
@@ -364,7 +391,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
         Integer actorSlot = actorSlot(actor);
         long requestSeq = nextRequestSeq();
         CompletableFuture<ZLinkStreamEncodedPayload> pending =
-                pendingRequests.add(requestSeq, payload.packetName(), timeout, timeouts);
+                pendingRequests.add(requestSeq, payload.packetName());
 
         try {
             byte[] body = payloadCodec.encode(payload, compress);
@@ -387,7 +414,10 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
                             0,
                             actorSlot);
 
-            sendFrame(header, body)
+            sendFrame(
+                            header,
+                            body,
+                            () -> pendingRequests.startTimeout(requestSeq, timeout, timeouts))
                     .whenComplete(
                             (ignored, ex) -> {
                                 if (ex != null) {
@@ -424,17 +454,9 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
                 && cause.getCause() != null) {
             cause = cause.getCause();
         }
+        //  Every request failure the connector decides carries its code.
         ZLinkStreamError error =
-                cause == null
-                        ? null
-                        : cause instanceof ZLinkStreamException stream
-                                ? stream.error()
-                                : new ZLinkStreamError(
-                                        ZLinkStreamErrorCode.DISCONNECTED,
-                                        cause.getMessage() == null
-                                                ? cause.getClass().getSimpleName()
-                                                : cause.getMessage(),
-                                        cause);
+                cause == null ? null : ZLinkStreamPendingRequests.coded(cause).error();
         dispatchRequestCallback(
                 () -> {
                     for (ZLinkStreamReplyReceivedHandler handler : registered) {
@@ -485,6 +507,11 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     }
 
     private CompletionStage<Void> sendFrame(ZLinkStreamWireProtocol.Header header, byte[] payload) {
+        return sendFrame(header, payload, null);
+    }
+
+    private CompletionStage<Void> sendFrame(
+            ZLinkStreamWireProtocol.Header header, byte[] payload, Runnable onAccepted) {
         //  The wire codec is internal and reports structural problems with
         //  plain exceptions. This is the connector boundary, so a rejection
         //  the caller can act on (metadata limits, correlation id, send
@@ -515,8 +542,9 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
                         + payload.length
                         + " correlation="
                         + header.correlationId());
-        CompletableFuture<Void> publication = sendChain.enqueue(() -> writeFrame(frame));
-        return publication.whenComplete(
+        CompletableFuture<Void> publication =
+                lifecycle.enqueueFrame(sendChain, frame, onAccepted).toCompletableFuture();
+        publication.whenComplete(
                 (ignored, ex) -> {
                     if (ex == null) {
                         trace(
@@ -546,10 +574,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
                                         + ex);
                     }
                 });
-    }
-
-    private CompletionStage<Void> writeFrame(byte[] frame) {
-        return lifecycle.writeAsync(frame);
+        return publication;
     }
 
     private CompletionStage<Void> sendControl(String name) {
@@ -567,19 +592,12 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
         return sendFrame(header, new byte[0]);
     }
 
-    private void ensureConnected() {
-        if (!isConnected()) {
-            throw ZLinkStreamException.disconnected("connector is not connected");
-        }
-    }
-
     private Integer actorSlot(ZLinkStreamActorRegistry.DefaultActor actor) {
         return actor == null ? null : actorRegistry.currentSlot(actor);
     }
 
-    private void notifyDisconnected() {
-        actorRegistry.connectionEnded();
-        ZLinkStreamCloseReason reason = takeCloseReason();
+    private void notifyDisconnected(ZLinkStreamCloseReason reason) {
+        lastCloseReason.set(reason);
         ZLinkStreamDisconnected event = new ZLinkStreamDisconnected(reason);
         //  disconnectedHandlers is a CopyOnWriteArrayList: its iterator is
         //  already the snapshot a callback that registers or removes a
@@ -593,30 +611,17 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
         }
     }
 
-    private void stageCloseReason(ZLinkStreamCloseReason reason) {
-        stagedCloseReason.set(reason);
-    }
-
     /**
      * Records why a connect attempt failed even though no connection had been established, so spec
-     * 32 6.2's "a failed first connect also leaves a reason" holds. Spec 32 9's impact table maps
-     * ConnectTimeout and TlsValidationFailed to TransportError.
+     * 32 6.2's "a failed first connect also leaves a reason" holds. A connect attempt fails at the
+     * transport, where spec 32 9's impact table also puts ConnectTimeout and TlsValidationFailed.
      */
     private void recordConnectAttemptFailure() {
-        takeCloseReason();
-    }
-
-    private ZLinkStreamCloseReason takeCloseReason() {
-        ZLinkStreamCloseReason staged = stagedCloseReason.getAndSet(null);
-        ZLinkStreamCloseReason reason =
-                staged == null ? ZLinkStreamCloseReason.TRANSPORT_ERROR : staged;
-        lastCloseReason.set(reason);
-        return reason;
+        lastCloseReason.set(ZLinkStreamCloseReason.TRANSPORT_ERROR);
     }
 
     private void onSessionClosing(ZLinkStreamCloseReason reason) {
-        stageCloseReason(reason);
-        lifecycle.serverClosing();
+        lifecycle.serverClosing(reason);
     }
 
     private void publishError(ZLinkStreamError error) {
@@ -721,9 +726,14 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
 
     private static long nextRequestSeq(AtomicLong source) {
         while (true) {
-            long value = source.incrementAndGet();
-            if (value != 0) {
-                return value;
+            long previous = source.get();
+            if (previous == -1L) {
+                throw ZLinkStreamException.of(
+                        ZLinkStreamErrorCode.SEND_FAILED, "request sequence is exhausted");
+            }
+            long next = previous + 1;
+            if (source.compareAndSet(previous, next)) {
+                return next;
             }
         }
     }

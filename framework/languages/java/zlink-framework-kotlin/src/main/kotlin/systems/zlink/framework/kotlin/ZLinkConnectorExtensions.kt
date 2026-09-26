@@ -7,10 +7,8 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 import kotlin.reflect.KClass
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.buffer
-import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.future.await
 import systems.zlink.framework.kotlin.stream.ZLinkKotlinRequestCall as ZLinkKotlinStreamRequestCall
 import systems.zlink.stream.connector.ZLinkStreamActor
@@ -40,6 +38,30 @@ import systems.zlink.stream.connector.ZLinkStreamWaitCall
 import systems.zlink.stream.connector.ZLinkTypedStreamSendCall
 
 fun ZLinkStreamConnector.kotlin(): ZLinkKotlinStreamConnector = ZLinkKotlinStreamConnector(this)
+
+/**
+ * Bridges one connector callback registration to a Flow without dropping items. Items the collector
+ * has not taken when collection ends are passed to [release].
+ */
+@PublishedApi
+internal fun <T> ownedCallbackFlow(
+    register: (accept: (T) -> Unit) -> AutoCloseable,
+    release: (T) -> Unit,
+): Flow<T> = flow {
+    val items = Channel<T>(Channel.UNLIMITED, onUndeliveredElement = release)
+    val registration = register { item -> if (items.trySend(item).isFailure) release(item) }
+    try {
+        for (item in items) {
+            emit(item)
+        }
+    } finally {
+        try {
+            registration.close()
+        } finally {
+            items.cancel()
+        }
+    }
+}
 
 fun ZLinkStreamConnectorOptions.withDefaultStreamCompression(): ZLinkStreamConnectorOptions =
     withStreamCompression(ZLinkStreamCompressionCodecs.lz4())
@@ -197,44 +219,42 @@ class ZLinkKotlinStreamConnector(@PublishedApi internal val inner: ZLinkStreamCo
     fun messages(packetName: String): Flow<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> =
         inner.messages(packetName)
 
-    inline fun <reified TPayload> messages(): Flow<ZLinkStreamMessage<TPayload>> = callbackFlow {
-        val registration =
-            inner.on(TPayload::class.java) { message ->
-                if (trySend(message).isFailure) {
-                    (message.payload() as? ZLinkStreamEncodedPayload)?.payload()?.close()
+    inline fun <reified TPayload> messages(): Flow<ZLinkStreamMessage<TPayload>> =
+        ownedCallbackFlow(
+            register = { accept ->
+                inner.on(TPayload::class.java) { message ->
+                    accept(message)
+                    CompletableFuture.completedFuture(null)
                 }
-                CompletableFuture.completedFuture(null)
-            }
-        awaitClose { registration.close() }
-    }
+            },
+            release = { message ->
+                (message.payload() as? ZLinkStreamEncodedPayload)?.payload()?.close()
+            },
+        )
 
     fun <TPayload : Any> messages(
         packetName: String,
         payloadType: KClass<TPayload>,
-    ): Flow<ZLinkStreamMessage<TPayload>> = callbackFlow {
-        val registration =
-            inner.on(packetName, payloadType.java) { message ->
-                if (trySend(message).isFailure) {
-                    (message.payload() as? ZLinkStreamEncodedPayload)?.payload()?.close()
+    ): Flow<ZLinkStreamMessage<TPayload>> =
+        ownedCallbackFlow(
+            register = { accept ->
+                inner.on(packetName, payloadType.java) { message ->
+                    accept(message)
+                    CompletableFuture.completedFuture(null)
                 }
-                CompletableFuture.completedFuture(null)
-            }
-        awaitClose { registration.close() }
-    }
+            },
+            release = { message ->
+                (message.payload() as? ZLinkStreamEncodedPayload)?.payload()?.close()
+            },
+        )
 
     fun errors(): Flow<ZLinkStreamError> = inner.errors()
 
     fun repliesReceived(): Flow<ZLinkStreamReplyReceivedContext> =
-        callbackFlow {
-                val registration =
-                    inner.onReplyReceived { context ->
-                        if (trySend(context).isFailure) {
-                            context.reply()?.payload()?.payload()?.close()
-                        }
-                    }
-                awaitClose { registration.close() }
-            }
-            .buffer(Channel.UNLIMITED)
+        ownedCallbackFlow(
+            register = { accept -> inner.onReplyReceived { context -> accept(context) } },
+            release = { context -> context.reply()?.payload()?.payload()?.close() },
+        )
 
     fun actors(): List<ZLinkKotlinStreamActor> = inner.actors().map(::wrapActor)
 
@@ -242,26 +262,26 @@ class ZLinkKotlinStreamConnector(@PublishedApi internal val inner: ZLinkStreamCo
         inner.actor(actorId).orElse(null)?.let(::wrapActor)
 
     fun actorBound(): Flow<ZLinkKotlinStreamActor> =
-        callbackFlow {
-                val registration =
-                    inner.onActorBound { actor ->
-                        trySend(wrapActor(actor))
-                        CompletableFuture.completedFuture(null)
-                    }
-                awaitClose { registration.close() }
-            }
-            .buffer(Channel.UNLIMITED)
+        ownedCallbackFlow(
+            register = { accept ->
+                inner.onActorBound { actor ->
+                    accept(wrapActor(actor))
+                    CompletableFuture.completedFuture(null)
+                }
+            },
+            release = {},
+        )
 
     fun actorUnbound(): Flow<ZLinkKotlinStreamActor> =
-        callbackFlow {
-                val registration =
-                    inner.onActorUnbound { actor ->
-                        trySend(wrapActor(actor))
-                        CompletableFuture.completedFuture(null)
-                    }
-                awaitClose { registration.close() }
-            }
-            .buffer(Channel.UNLIMITED)
+        ownedCallbackFlow(
+            register = { accept ->
+                inner.onActorUnbound { actor ->
+                    accept(wrapActor(actor))
+                    CompletableFuture.completedFuture(null)
+                }
+            },
+            release = {},
+        )
 }
 
 class ZLinkKotlinStreamActor
@@ -301,41 +321,44 @@ internal constructor(@PublishedApi internal val inner: ZLinkStreamActor) {
         ZLinkKotlinStreamRequestCall(inner.request(payload), replyType)
 
     fun messages(packetName: String): Flow<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> =
-        callbackFlow {
-            val registration =
+        ownedCallbackFlow(
+            register = { accept ->
                 inner.on(packetName) { message ->
-                    if (trySend(message).isFailure) {
-                        message.payload().payload().close()
-                    }
+                    accept(message)
                     CompletableFuture.completedFuture(null)
                 }
-            awaitClose { registration.close() }
-        }
+            },
+            release = { message -> message.payload().payload().close() },
+        )
 
-    inline fun <reified TPayload> messages(): Flow<ZLinkStreamMessage<TPayload>> = callbackFlow {
-        val registration =
-            inner.on(TPayload::class.java) { message ->
-                if (trySend(message).isFailure) {
-                    (message.payload() as? ZLinkStreamEncodedPayload)?.payload()?.close()
+    inline fun <reified TPayload> messages(): Flow<ZLinkStreamMessage<TPayload>> =
+        ownedCallbackFlow(
+            register = { accept ->
+                inner.on(TPayload::class.java) { message ->
+                    accept(message)
+                    CompletableFuture.completedFuture(null)
                 }
-                CompletableFuture.completedFuture(null)
-            }
-        awaitClose { registration.close() }
-    }
+            },
+            release = { message ->
+                (message.payload() as? ZLinkStreamEncodedPayload)?.payload()?.close()
+            },
+        )
 
     fun <TPayload : Any> messages(
         packetName: String,
         payloadType: KClass<TPayload>,
-    ): Flow<ZLinkStreamMessage<TPayload>> = callbackFlow {
-        val registration =
-            inner.on(packetName, payloadType.java) { message ->
-                if (trySend(message).isFailure) {
-                    (message.payload() as? ZLinkStreamEncodedPayload)?.payload()?.close()
+    ): Flow<ZLinkStreamMessage<TPayload>> =
+        ownedCallbackFlow(
+            register = { accept ->
+                inner.on(packetName, payloadType.java) { message ->
+                    accept(message)
+                    CompletableFuture.completedFuture(null)
                 }
-                CompletableFuture.completedFuture(null)
-            }
-        awaitClose { registration.close() }
-    }
+            },
+            release = { message ->
+                (message.payload() as? ZLinkStreamEncodedPayload)?.payload()?.close()
+            },
+        )
 }
 
 inline fun <reified TReply : Any> ZLinkKotlinStreamActor.request(
@@ -476,24 +499,24 @@ object ZLinkKotlinStreamAssert {
 
 fun ZLinkStreamConnector.messages(
     packetName: String
-): Flow<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> = callbackFlow {
-    val registration =
-        on(packetName) { message ->
-            if (trySend(message).isFailure) {
-                // Cancellation closes the Flow channel before the connector can
-                // remove this callback. Release the message that was handed to us
-                // instead of turning normal cancellation into a callback failure.
-                message.payload().payload().close()
+): Flow<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> =
+    ownedCallbackFlow(
+        register = { accept ->
+            on(packetName) { message ->
+                accept(message)
+                CompletableFuture.completedFuture(null)
             }
-            CompletableFuture.completedFuture(null)
-        }
-    awaitClose { registration.close() }
-}
+        },
+        release = { message -> message.payload().payload().close() },
+    )
 
-fun ZLinkStreamConnector.errors(): Flow<ZLinkStreamError> = callbackFlow {
-    val registration = onErrorReceived { error ->
-        trySend(error)
-        CompletableFuture.completedFuture(null)
-    }
-    awaitClose { registration.close() }
-}
+fun ZLinkStreamConnector.errors(): Flow<ZLinkStreamError> =
+    ownedCallbackFlow(
+        register = { accept ->
+            onErrorReceived { error ->
+                accept(error)
+                CompletableFuture.completedFuture(null)
+            }
+        },
+        release = {},
+    )

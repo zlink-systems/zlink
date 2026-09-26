@@ -134,7 +134,8 @@ class send_call_t
     /// Marks the outbound packet for compression when compression is available.
     send_call_t &compress ();
 
-    /// Gives the packet to the connector for delivery.
+    /// Gives the packet to the connector for delivery. A send failure is reported
+    /// through the connector error event.
     void submit ();
 
   private:

@@ -9,7 +9,6 @@
 #include "runtime/streams/stream_host_service.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 
-#include "loopback_tcp_endpoint.hpp"
 
 #include <boost/asio/error.hpp>
 #include <boost/asio/io_context.hpp>
@@ -42,7 +41,22 @@
 
 namespace
 {
-using zlink::framework::tests::reserve_loopback_tcp_port;
+/* A test listener binds port 0 and connects to the port the OS assigned. A
+ * port reserved in advance and released before the bind can be taken by
+ * another process in between (EADDRINUSE). */
+std::uint16_t
+bound_stream_port (const zlink::framework::runtime::listener_status_registry_t &statuses,
+                   const std::string &stream_name)
+{
+    const auto status = statuses.find (zlink::framework::listener_kind_t::stream, stream_name);
+    if (!status) {
+        return 0;
+    }
+    const auto separator = status->endpoint.rfind (':');
+    return separator == std::string::npos
+             ? 0
+             : static_cast<std::uint16_t> (std::stoi (status->endpoint.substr (separator + 1)));
+}
 
 class sample_session_t final : public zlink::framework::packet_stream_session_t
 {
@@ -1713,7 +1727,8 @@ int main ()
     }
 
 #ifdef ZLINK_FRAMEWORK_STREAM_TEST_WITH_OPENSSL
-    const auto mutual_tls_port = reserve_loopback_tcp_port ();
+    auto mutual_tls_statuses =
+      std::make_shared<zlink::framework::runtime::listener_status_registry_t> ();
     zlink::framework::service_collection_t mutual_tls_services;
     zlink::framework::handler_registry_t mutual_tls_handlers;
     zlink::framework::serializer_registry_t mutual_tls_serializers;
@@ -1721,7 +1736,7 @@ int main ()
     zlink::framework::zlink_framework_options_t mutual_tls_options (
       mutual_tls_services, mutual_tls_handlers, mutual_tls_serializers, mutual_tls_zlink);
     mutual_tls_options.add_stream_node ("mutual-tls-listener")
-      .bind ("tls://127.0.0.1:" + std::to_string (mutual_tls_port))
+      .bind ("tls://127.0.0.1:0")
       .set_tls_server (ZLINK_FRAMEWORK_STREAM_TEST_CERT, ZLINK_FRAMEWORK_STREAM_TEST_KEY, true)
       .register_session ("mutual-tls-listener-session");
     mutual_tls_options.apply ();
@@ -1733,8 +1748,9 @@ int main ()
       {{"mutual-tls-listener-session",
         [&mutual_tls_session] (zlink::framework::service_provider_t &)
           -> zlink::framework::packet_stream_session_t & { return mutual_tls_session; }}},
-      std::chrono::milliseconds{30'000});
+      std::chrono::milliseconds{30'000}, nullptr, {}, mutual_tls_statuses);
     mutual_tls_host.start (mutual_tls_provider);
+    const auto mutual_tls_port = bound_stream_port (*mutual_tls_statuses, "mutual-tls-listener");
     boost::asio::io_context mutual_tls_io;
     boost::asio::ssl::context mutual_tls_client_context (boost::asio::ssl::context::tls_client);
     mutual_tls_client_context.set_verify_mode (boost::asio::ssl::verify_none);
@@ -1863,8 +1879,8 @@ int main ()
         return 28;
     }
 
-    const auto transport_port = reserve_loopback_tcp_port ();
-    const auto transport_endpoint = "tcp://127.0.0.1:" + std::to_string (transport_port);
+    auto transport_statuses =
+      std::make_shared<zlink::framework::runtime::listener_status_registry_t> ();
     zlink::framework::service_collection_t transport_services;
     zlink::framework::handler_registry_t transport_handlers;
     zlink::framework::serializer_registry_t transport_serializers;
@@ -1880,7 +1896,7 @@ int main ()
       transport_services, transport_handlers, transport_serializers, transport_zlink);
     auto transport_stream_options = transport_options.add_stream_node ("transport-stream");
     transport_stream_options.configure_socket ().max_message_size = 0;
-    transport_stream_options.bind (transport_endpoint).register_session ("transport-session");
+    transport_stream_options.bind ("tcp://127.0.0.1:0").register_session ("transport-session");
     transport_options.apply ();
     std::mutex stale_diagnostics_mutex;
     std::vector<zlink::framework::message_dispatch_error_event_t> stale_dispatch_errors;
@@ -1906,8 +1922,10 @@ int main ()
       {{"transport-session",
         [&transport_session] (zlink::framework::service_provider_t &)
           -> zlink::framework::packet_stream_session_t & { return transport_session; }}},
-      std::chrono::milliseconds{30'000});
+      std::chrono::milliseconds{30'000}, nullptr, {}, transport_statuses);
     transport_host.start (transport_provider);
+    const auto transport_port = bound_stream_port (*transport_statuses, "transport-stream");
+    const auto transport_endpoint = "tcp://127.0.0.1:" + std::to_string (transport_port);
 
     auto graceful_client = connect_loopback (transport_port);
     if (!graceful_client || !transport_session.wait_connected (1)
@@ -2134,14 +2152,14 @@ int main ()
 
     transport_host.stop ();
 
-    const auto limited_port = reserve_loopback_tcp_port ();
-    const auto limited_endpoint = "tcp://127.0.0.1:" + std::to_string (limited_port);
+    auto limited_statuses =
+      std::make_shared<zlink::framework::runtime::listener_status_registry_t> ();
     zlink::framework::zlink_builder_t limited_zlink;
     zlink::framework::zlink_framework_options_t limited_options (
       transport_services, transport_handlers, transport_serializers, limited_zlink);
     auto limited_stream_options = limited_options.add_stream_node ("limited-stream");
     limited_stream_options.configure_socket ().max_message_size = 128;
-    limited_stream_options.bind (limited_endpoint).register_session ("limited-session");
+    limited_stream_options.bind ("tcp://127.0.0.1:0").register_session ("limited-session");
     limited_options.apply ();
     auto limited_runtime = zlink::framework::detail::stream_runtime_t::from (limited_zlink);
     const auto limited_snapshots = limited_runtime.snapshots ();
@@ -2154,8 +2172,9 @@ int main ()
       {{"limited-session",
         [&limited_session] (zlink::framework::service_provider_t &)
           -> zlink::framework::packet_stream_session_t & { return limited_session; }}},
-      std::chrono::milliseconds{30'000});
+      std::chrono::milliseconds{30'000}, nullptr, {}, limited_statuses);
     limited_host.start (transport_provider);
+    const auto limited_port = bound_stream_port (*limited_statuses, "limited-stream");
     auto limited_client = connect_loopback (limited_port);
     if (!limited_client || !limited_session.wait_connected (1)) {
         close_native_client (limited_client);
@@ -2175,13 +2194,13 @@ int main ()
         return 48;
     }
 
-    const auto rejected_port = reserve_loopback_tcp_port ();
-    const auto rejected_endpoint = "tcp://127.0.0.1:" + std::to_string (rejected_port);
+    auto rejected_statuses =
+      std::make_shared<zlink::framework::runtime::listener_status_registry_t> ();
     zlink::framework::zlink_builder_t rejected_zlink;
     zlink::framework::zlink_framework_options_t rejected_options (
       transport_services, transport_handlers, transport_serializers, rejected_zlink);
     rejected_options.add_stream_node ("rejected-stream")
-      .bind (rejected_endpoint)
+      .bind ("tcp://127.0.0.1:0")
       .register_session ("rejected-session");
     rejected_options.apply ();
     rejected_connected_session_t rejected_session;
@@ -2191,8 +2210,9 @@ int main ()
       {{"rejected-session",
         [&rejected_session] (zlink::framework::service_provider_t &)
           -> zlink::framework::packet_stream_session_t & { return rejected_session; }}},
-      std::chrono::milliseconds{30'000});
+      std::chrono::milliseconds{30'000}, nullptr, {}, rejected_statuses);
     rejected_host.start (transport_provider);
+    const auto rejected_port = bound_stream_port (*rejected_statuses, "rejected-stream");
     auto rejected_client = connect_loopback (rejected_port);
     if (!rejected_client || !rejected_session.wait_until_actor_manager_is_detached ()) {
         close_native_client (rejected_client);
@@ -2206,8 +2226,7 @@ int main ()
      * lifecycle thread. Closing the Core socket is not itself a portable
      * cross-thread poller wake-up, so stop must still join the listener within
      * the bounded poll interval. */
-    const auto core_mesh_port = reserve_loopback_tcp_port ();
-    const auto core_stream_port = reserve_loopback_tcp_port ();
+    auto core_statuses = std::make_shared<zlink::framework::runtime::listener_status_registry_t> ();
     zlink::framework::service_collection_t core_services;
     zlink::framework::handler_registry_t core_handlers;
     zlink::framework::serializer_registry_t core_serializers;
@@ -2225,9 +2244,9 @@ int main ()
                                                               core_serializers, core_zlink);
     core_options.add_route_mesh ("core-stream-mesh")
       .set_routing_id (zlink::routing_id_t::from ("core-stream-node"))
-      .listen ("tcp://127.0.0.1:" + std::to_string (core_mesh_port));
+      .listen ("tcp://127.0.0.1:0");
     core_options.add_stream_node ("core-stream")
-      .bind ("tcp://127.0.0.1:" + std::to_string (core_stream_port))
+      .bind ("tcp://127.0.0.1:0")
       .register_session ("core-session");
     core_options.apply ();
     for (const auto &registration :
@@ -2257,8 +2276,9 @@ int main ()
           -> zlink::framework::packet_stream_session_t & {
             return provider.get_required<shutdown_failure_session_t> ();
         }}},
-      std::chrono::milliseconds{30'000}, core_mesh);
+      std::chrono::milliseconds{30'000}, core_mesh, {}, core_statuses);
     core_host.start (core_provider);
+    const auto core_stream_port = bound_stream_port (*core_statuses, "core-stream");
 
     zlink::stream_connector::connector_options_t core_connector_options;
     core_connector_options.endpoint = "tcp://127.0.0.1:" + std::to_string (core_stream_port);
@@ -2345,8 +2365,8 @@ int main ()
      * protocol close ends the stream, and (c) keep the session close
      * idempotent when the deferred error_reply_failed close and the
      * protocol_error close target the same peer. */
-    const auto error_close_mesh_port = reserve_loopback_tcp_port ();
-    const auto error_close_stream_port = reserve_loopback_tcp_port ();
+    auto error_close_statuses =
+      std::make_shared<zlink::framework::runtime::listener_status_registry_t> ();
     zlink::framework::service_collection_t error_close_services;
     zlink::framework::handler_registry_t error_close_handlers;
     zlink::framework::serializer_registry_t error_close_serializers;
@@ -2364,9 +2384,9 @@ int main ()
       error_close_services, error_close_handlers, error_close_serializers, error_close_zlink);
     error_close_options.add_route_mesh ("error-close-mesh")
       .set_routing_id (zlink::routing_id_t::from ("error-close-node"))
-      .listen ("tcp://127.0.0.1:" + std::to_string (error_close_mesh_port));
+      .listen ("tcp://127.0.0.1:0");
     error_close_options.add_stream_node ("error-close-stream")
-      .bind ("tcp://127.0.0.1:" + std::to_string (error_close_stream_port))
+      .bind ("tcp://127.0.0.1:0")
       .register_session ("error-close-session");
     error_close_options.apply ();
     for (const auto &registration :
@@ -2396,8 +2416,10 @@ int main ()
           -> zlink::framework::packet_stream_session_t & {
             return provider.get_required<core_error_close_session_t> ();
         }}},
-      std::chrono::milliseconds{30'000}, error_close_mesh);
+      std::chrono::milliseconds{30'000}, error_close_mesh, {}, error_close_statuses);
     error_close_host.start (error_close_provider);
+    const auto error_close_stream_port =
+      bound_stream_port (*error_close_statuses, "error-close-stream");
 
     const auto fail_error_close = [&] (int code) {
         zlink::framework::runtime::stream_host_core_test_faults ()

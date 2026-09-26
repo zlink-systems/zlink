@@ -20,11 +20,8 @@ internal sealed class ZlinkStreamPendingRequests
         return pending;
     }
 
-    public bool TryComplete(
-        ZlinkStreamHeader header,
-        ZlinkStreamFrame frame,
-        Func<ReadOnlyMemory<byte>, ZlinkStreamError> parseError
-    )
+    /// <summary>Takes the request answered by this reply before its payload is decoded.</summary>
+    public PendingRequest? TakeReply(ZlinkStreamHeader header)
     {
         if (
             header.RequestSeq is not { } requestSeq
@@ -34,18 +31,10 @@ internal sealed class ZlinkStreamPendingRequests
             )
             || !_pending.TryRemove(requestSeq.Value, out var pending)
         )
-            return false;
+            return null;
 
-        // Stream connector spec 5.2: a pending request is matched by request_seq alone.
-        // New replies use an empty name; a legacy peer's non-empty name is ignored here.
-        pending.Complete(
-            new ZlinkStreamPendingCompletion(
-                header,
-                frame,
-                header.Kind == ZlinkStreamMessageKind.Error ? parseError(frame.Payload) : null
-            )
-        );
-        return true;
+        // Stream connector spec §5.2: request_seq alone matches a reply.
+        return pending;
     }
 
     public ValueTask<ZlinkStreamPendingCompletion> WaitAsync(
@@ -74,9 +63,16 @@ internal sealed class ZlinkStreamPendingRequests
     {
         while (true)
         {
-            var value = unchecked((ulong)Interlocked.Increment(ref _nextRequestSeq));
-            if (value != 0)
-                return new ZlinkStreamRequestSeq(value);
+            var current = Volatile.Read(ref _nextRequestSeq);
+            if (current == -1)
+                throw ZlinkStreamConnector.Error(
+                    ZlinkStreamErrorCode.SendFailed,
+                    "Request sequence is exhausted."
+                );
+
+            var next = unchecked(current + 1);
+            if (Interlocked.CompareExchange(ref _nextRequestSeq, next, current) == current)
+                return new ZlinkStreamRequestSeq(unchecked((ulong)next));
         }
     }
 

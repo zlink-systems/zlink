@@ -102,14 +102,19 @@ handling.
 | `configurationError` · `validationFailed` | fails | kept | no |
 | `requestTimeout` | only that request fails | kept | no |
 | `connectTimeout` · `TlsValidationFailed` | connect fails | disconnected | applies the attempt policy |
-| `disconnected` · `SendFailed` | the call in progress fails | disconnected if the transport dropped | applies it when enabled |
-| `FrameDecodeFailed` (frame or header) · `FrameTooLarge` | the frame is not delivered and pending requests fail | ends | applies it when enabled |
+| `disconnected` — transport dropped | the call in progress fails | disconnected; the close reason is a transport error | applies it when enabled |
+| `disconnected` caused by close | the call in progress fails | closed; the close reason is client close | no |
+| `SendFailed` — request sequence exhausted | only that call fails | kept | no |
+| `SendFailed` — transport write failed | only that write's call fails with `SendFailed`; other calls in progress fail with `Disconnected` | ends; close reason is `TransportError` | applies it when enabled |
+| `FrameDecodeFailed` (frame or header) · `FrameTooLarge` | the frame is not delivered and pending requests fail | ends; the close reason is a protocol error | applies it when enabled |
 | `CompressionFailed` | only that send fails | kept | no |
 | `DecompressionFailed` | only that received packet or pending request fails | kept | no |
 | `userCallbackFailed` · `RemoteError` | delivered as an error event or to the related call | kept | no |
 
-Where the connection ends, the close reason is recorded as a transport error. Reading the close
-reason is covered by [Connection Lifecycle](06-lifecycle.en.md).
+A call in progress that fails because the connection ended fails with `disconnected` whatever ended
+it, and the cause remains in the close reason. When a transport write failure ends the connection,
+only the call of that write fails with `SendFailed`. Reading the close reason is
+covered by [Connection Lifecycle](06-lifecycle.en.md).
 
 ## 5. Common Handling
 
@@ -122,8 +127,8 @@ sent again. The server may have processed it already and only the answer was lat
 must not be processed twice is made recognizable on the server side.
 
 **Receive limit exceeded.** A received payload over the receive limit is not delivered and the
-connection ends. If the server is configured to send larger packets, raise the receive limit in
-[Connector Options](03-connector-options.en.md).
+connection ends with the close reason protocol error. If the server is configured to send larger
+packets, raise the receive limit in [Connector Options](03-connector-options.en.md).
 
 **Server error answer.** An error answer from the server fails that request, and one that matches no
 request is delivered as an error event. The connection is kept, so other packets are unaffected.

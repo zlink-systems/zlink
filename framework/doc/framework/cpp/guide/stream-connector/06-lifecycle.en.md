@@ -43,8 +43,10 @@ dropped" changes the reconnection decision.
 
 ## 2. Connecting and Closing
 
-The connect call completes once the connection and the receive path are ready. The close call drains
-frames that have not gone out, closes the transport, and then fails the requests that were waiting.
+The connect call completes once the connection and the receive path are ready. The close call closes
+the transport without writing frames that have not gone out, and fails their Sends and Requests,
+together with the requests waiting for a reply, with `disconnected`. To know that a Send's frame was
+written, wait for that Send to complete before closing.
 
 ```cpp
 auto connected = connector.connect ();
@@ -140,13 +142,19 @@ reconnecting does not clear it: the value keeps the reason of the last ending.
 
 ## 7. What Closing Waits For
 
-The close call waits for **the connector's own work only**: draining frames that have not gone out,
-closing the transport, and failing the requests that were waiting. When that is done, it returns.
+The close call waits for **the connector's own work only**: closing the transport and failing the
+operations that were waiting. It does not write frames that have not gone out, and it does not wait
+for the peer to read or respond. A close called outside a handler returns once that work is done. A
+close called inside a handler returns right after starting it, so a handler never waits for the
+close of the path that runs it.
 
-**The connector does not wait for a handler to finish.** It runs the disconnect handler and returns
-without observing whether that handler completed, and reconnection behaves the same way. That is why
-one handler that never finishes cannot block the close. Work inside a handler that must be finished
-is awaited outside the handler.
+**The connector does not wait for a handler to finish.** The connection state and disconnect
+handlers that result from closing follow the dispatch mode. In `Immediate` the close work puts them
+in the same order as every other callback and does not wait for them; callbacks run one at a time, so
+they run after a handler that is still running. In `Manual` they run at the next dispatch pump after
+the close. Either way the close does not observe whether they completed, and reconnection behaves the
+same way. That is why one handler that never finishes cannot block the close. Work inside a handler
+that must be finished is awaited outside the handler.
 
 ## 8. Next Chapters
 

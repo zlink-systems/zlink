@@ -310,6 +310,10 @@ public sealed partial class StreamConnectorTests
         await server;
 
         Assert.Equal(ZlinkStreamErrorCode.FrameDecodeFailed, observed.Code);
+        await WaitUntilAsync(
+            () => connector.State == ZlinkStreamConnectionState.Disconnected,
+            TimeSpan.FromSeconds(5)
+        );
         Assert.Equal(ZlinkStreamCloseReason.ProtocolError, connector.CloseReason);
     }
 
@@ -475,7 +479,7 @@ public sealed partial class StreamConnectorTests
     }
 
     [Fact]
-    public async Task ManualQueueKeepsBoundBeforeFirstActorPacketWhenCapacityIsFull()
+    public async Task ManualQueueKeepsBoundBeforeFirstActorPacket()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -520,7 +524,6 @@ public sealed partial class StreamConnectorTests
                 Heartbeat = DisabledHeartbeat(),
                 Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
                 DispatchMode = ZlinkStreamDispatchMode.Manual,
-                MaxPendingDispatchCallbacks = 1,
             }
         );
         var events = new List<string>();
@@ -541,7 +544,7 @@ public sealed partial class StreamConnectorTests
         );
 
         await connector.Connect.Async();
-        await WaitUntilAsync(() => connector.PendingDispatchCount == 1, TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(() => connector.PendingDispatchCount >= 1, TimeSpan.FromSeconds(5));
         await connector.Dispatch.Async();
         if (events.Count < 2)
         {
@@ -593,7 +596,7 @@ public sealed partial class StreamConnectorTests
     }
 
     [Fact]
-    public async Task ActorRequestPreservesConnectorRequestBackpressure()
+    public async Task ActorRequestPreservesConnectorRequestQueueTimeout()
     {
         var connection = new BlockingWriteConnection();
         await using var connector = new ZlinkStreamConnector(
@@ -631,12 +634,14 @@ public sealed partial class StreamConnectorTests
             await connector
                 .Request(new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, new byte[] { 2 }))
                 .PacketName("connector.full")
+                .Timeout(TimeSpan.FromMilliseconds(100))
                 .Async()
         );
         var actorFailure = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
             await actor
                 .Request(new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, new byte[] { 2 }))
                 .PacketName("actor.full")
+                .Timeout(TimeSpan.FromMilliseconds(100))
                 .Async()
         );
 

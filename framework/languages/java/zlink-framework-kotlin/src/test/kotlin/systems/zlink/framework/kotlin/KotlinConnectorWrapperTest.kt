@@ -1,5 +1,6 @@
 package systems.zlink.framework.kotlin
 
+import java.lang.reflect.Proxy
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URI
@@ -11,6 +12,7 @@ import java.time.Duration.ofSeconds
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +36,7 @@ import systems.zlink.framework.streams.ZLinkStreamCompressionCodec as FrameworkS
 import systems.zlink.stream.connector.ZLinkStreamCloseReason
 import systems.zlink.stream.connector.ZLinkStreamCompression
 import systems.zlink.stream.connector.ZLinkStreamCompressionCodec
+import systems.zlink.stream.connector.ZLinkStreamConnector
 import systems.zlink.stream.connector.ZLinkStreamConnectorFactory
 import systems.zlink.stream.connector.ZLinkStreamConnectorOptions
 import systems.zlink.stream.connector.ZLinkStreamDispatchMode
@@ -42,10 +45,57 @@ import systems.zlink.stream.connector.ZLinkStreamError
 import systems.zlink.stream.connector.ZLinkStreamErrorCode
 import systems.zlink.stream.connector.ZLinkStreamException
 import systems.zlink.stream.connector.ZLinkStreamMessage
+import systems.zlink.stream.connector.ZLinkStreamMessageHandler
 import systems.zlink.stream.connector.ZLinkStreamPacketNameResolver
 import systems.zlink.stream.connector.ZLinkTypedStreamRequestCall
 
 final class KotlinConnectorWrapperTest {
+    @Test
+    fun cancellingMessageFlowReleasesBufferedPayloads() = runBlocking {
+        val registered = AtomicReference<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>>()
+        val connector =
+            Proxy.newProxyInstance(
+                ZLinkStreamConnector::class.java.classLoader,
+                arrayOf(ZLinkStreamConnector::class.java),
+            ) { _, method, arguments ->
+                if (method.name == "on") {
+                    @Suppress("UNCHECKED_CAST")
+                    registered.set(
+                        arguments[1] as ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>
+                    )
+                    AutoCloseable {}
+                } else {
+                    error("Unexpected connector call: ${method.name}")
+                }
+            } as ZLinkStreamConnector
+        val first = CompletableDeferred<Unit>()
+        val held = CompletableDeferred<Unit>()
+        val collector =
+            launch(start = CoroutineStart.UNDISPATCHED) {
+                connector.messages("Burst").collect { message ->
+                    first.complete(Unit)
+                    held.await()
+                    message.payload().payload().close()
+                }
+            }
+        withTimeout(1_000) { while (registered.get() == null) yield() }
+        val payloads = (1..5).map { Message.from(byteArrayOf(it.toByte())) }
+        payloads.forEach { payload ->
+            registered
+                .get()
+                .handleAsync(
+                    ZLinkStreamMessage(
+                        "Burst",
+                        ZLinkStreamEncodedPayload("Burst", payload, mapOf()),
+                        mapOf(),
+                    )
+                )
+        }
+        withTimeout(1_000) { first.await() }
+        collector.cancelAndJoin()
+        assertTrue(payloads.drop(1).all { it.toByteArray().isEmpty() })
+    }
+
     @Test
     fun kotlinCompressionDslConfiguresFrameworkAndConnectorOptions() {
         val codec = PrefixCompressionCodec("kotlin:")
@@ -495,6 +545,62 @@ final class KotlinConnectorWrapperTest {
     }
 
     @Test
+    fun connectorMessageFlowKeepsAcceptedPacketsWhileCollectorIsBehind() = runBlocking {
+        TcpServer().use { server ->
+            val connector = ZLinkStreamConnectorFactory.create(options(server.endpoint())).kotlin()
+            val eventCount = 80
+            try {
+                connector.connect().await()
+                val first = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                val all = CompletableDeferred<List<Int>>()
+                val values = mutableListOf<Int>()
+                val collector =
+                    launch(start = CoroutineStart.UNDISPATCHED) {
+                        connector.messages("Burst").collect { message ->
+                            if (values.isEmpty()) {
+                                first.complete(Unit)
+                                release.await()
+                            }
+                            values.add(message.payload().payload().toByteArray()[0].toInt())
+                            message.payload().payload().close()
+                            if (values.size == eventCount) all.complete(values.toList())
+                        }
+                    }
+                try {
+                    yield()
+                    server.sendFrame(
+                        Frame(1, requestSeq = null, name = "Burst", payload = byteArrayOf(1))
+                    )
+                    withTimeout(1_000) { while (connector.receivedCount("Burst") < 1) yield() }
+                    connector.dispatch().await()
+                    withTimeout(1_000) { first.await() }
+                    for (value in 2..eventCount) {
+                        server.sendFrame(
+                            Frame(
+                                1,
+                                requestSeq = null,
+                                name = "Burst",
+                                payload = byteArrayOf(value.toByte()),
+                            )
+                        )
+                    }
+                    withTimeout(2_000) {
+                        while (connector.receivedCount("Burst") < eventCount) yield()
+                    }
+                    connector.dispatch().await()
+                    release.complete(Unit)
+                    assertEquals((1..eventCount).toList(), withTimeout(2_000) { all.await() })
+                } finally {
+                    collector.cancelAndJoin()
+                }
+            } finally {
+                connector.close().await()
+            }
+        }
+    }
+
+    @Test
     fun actorMessagesAndCallsUseOnlyTheirActorSlot() = runBlocking {
         TcpServer().use { server ->
             val connector = ZLinkStreamConnectorFactory.create(options(server.endpoint())).kotlin()
@@ -845,7 +951,7 @@ final class KotlinConnectorWrapperTest {
                     )
                 )
                 withTimeout(1_000) {
-                    while (connector.pendingDispatchCount == 0) {
+                    while (connector.receivedCount("Late") == 0) {
                         yield()
                     }
                 }
@@ -885,7 +991,7 @@ final class KotlinConnectorWrapperTest {
                     )
                 )
                 withTimeout(1_000) {
-                    while (connector.pendingDispatchCount == 0) {
+                    while (connector.receivedCount("Cancelled") == 0) {
                         yield()
                     }
                 }

@@ -72,11 +72,8 @@ export class BrowserWebSocketConnection implements ZlinkStreamConnection {
     if (this.closed || this.socket.readyState !== 1) {
       throw connectorError(ZlinkStreamErrorCode.Disconnected, 'Remote stream is not connected.');
     }
-    try {
-      this.socket.send(frame);
-    } catch (cause) {
-      throw connectorError(ZlinkStreamErrorCode.SendFailed, 'Send failed.', cause);
-    }
+    // The write queue names a failed write (spec stream-connector 32 §9).
+    this.socket.send(frame);
   }
 
   async read(signal?: AbortSignal): Promise<Uint8Array | undefined> {
@@ -96,18 +93,19 @@ export class BrowserWebSocketConnection implements ZlinkStreamConnection {
     }
   }
 
+  /**
+   * Spec stream-connector 32 §7: closing does not wait for the peer to read or
+   * answer. `WebSocket.close` sends the close frame after the data already
+   * handed to `send`, so a frame whose write completed is not torn.
+   */
   async close(signal?: AbortSignal): Promise<void> {
     throwIfAborted(signal);
+    this.removeListeners();
     if (!this.closed) {
       this.closed = true;
       this.socket.close();
-      this.wakeReader();
     }
-    try {
-      await waitForClose(this.socket, signal);
-    } finally {
-      this.removeListeners();
-    }
+    this.wakeReader();
   }
 
   private readonly onMessage = (event: BrowserWebSocketEventMap['message']): void => {
@@ -204,23 +202,6 @@ export class BrowserWebSocketConnection implements ZlinkStreamConnection {
   }
 }
 
-function waitForClose(socket: BrowserWebSocket, signal: AbortSignal | undefined): Promise<void> {
-  if (socket.readyState === 3) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const onClose = () => finish();
-    const onAbort = () =>
-      finish(connectorError(ZlinkStreamErrorCode.Disconnected, 'Close canceled.'));
-    const finish = (error?: Error) => {
-      socket.removeEventListener('close', onClose);
-      signal?.removeEventListener('abort', onAbort);
-      if (error === undefined) resolve();
-      else reject(error);
-    };
-    socket.addEventListener('close', onClose, { once: true });
-    signal?.addEventListener('abort', onAbort, { once: true });
-  });
-}
-
 async function waitForOpen(
   socket: BrowserWebSocket,
   connectTimeoutMs: number,
@@ -239,7 +220,7 @@ async function waitForOpen(
       finish(connectorError(ZlinkStreamErrorCode.ConnectTimeout, 'Connect failed.'));
     const onAbort = () =>
       finish(connectorError(ZlinkStreamErrorCode.Disconnected, 'Connect canceled.'));
-    const finish = (error?: Error) => {
+    const finish = (error?: unknown) => {
       clearTimeout(timeout);
       socket.removeEventListener('open', onOpen);
       socket.removeEventListener('close', onClose);

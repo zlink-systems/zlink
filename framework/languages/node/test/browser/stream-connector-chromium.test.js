@@ -1,7 +1,6 @@
 const assert = require('node:assert/strict');
 const childProcess = require('node:child_process');
 const http = require('node:http');
-const net = require('node:net');
 const path = require('node:path');
 const test = require('node:test');
 const { build } = require('esbuild');
@@ -23,6 +22,7 @@ test('actual Chromium uses ws/wss, reconnect, drain, and browser trust', { timeo
   let browser;
   let context;
   let secureContext;
+  const leases = new Map();
   t.after(async () => {
     await cleanup(t, 'browser context', () => closeContext(context));
     await cleanup(t, 'secure browser context', () => closeContext(secureContext));
@@ -32,8 +32,19 @@ test('actual Chromium uses ws/wss, reconnect, drain, and browser trust', { timeo
     await cleanup(t, 'wss server', () => stopStreamServer(wssServer));
     await cleanup(t, 'untrusted wss server', () => stopStreamServer(untrustedWssServer));
     await cleanup(t, 'static server', () => closeServer(staticServer?.server));
+    for (const leasePath of leases.values()) releasePortLease(leasePath);
   });
-  const [wsPort, wssPort, untrustedWssPort] = await freePorts(3);
+  // The sample runners' lease module: the ports stay leased until cleanup, so
+  // no other runner or test on the host takes one while a server restarts.
+  const { applicationPortRange, leaseLoopbackPort, releasePortLease } = await import(
+    '../../samples/port-lease.mjs'
+  );
+  while (leases.size < 3) {
+    const lease = await leaseLoopbackPort(applicationPortRange, { exclude: leases });
+    if (lease === undefined) throw new Error('Unable to lease 3 loopback ports.');
+    leases.set(lease.port, lease.leasePath);
+  }
+  const [wsPort, wssPort, untrustedWssPort] = leases.keys();
   staticServer = await startStaticServer();
   wsServer = await startStreamServer(`ws://127.0.0.1:${wsPort}`);
   wssServer = await startStreamServer(`wss://127.0.0.1:${wssPort}`, certificate, key);
@@ -131,7 +142,13 @@ function startStreamServer(endpoint, cert, privateKey) {
   child.stdout.on('data', (chunk) => { output += chunk; });
   child.stderr.on('data', (chunk) => { output += chunk; });
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Stream server start timeout: ${output}`)), 10_000);
+    // A server that never reports ready is stopped here: the caller has no
+    // handle to it yet, so the test cleanup cannot reach it.
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      stopChild(child).finally(() => reject(new Error(`Stream server start timeout: ${output}`)));
+    }, 10_000);
     const check = () => {
       if (!output.includes('"event":"ready"')) return;
       clearTimeout(timer);
@@ -141,7 +158,7 @@ function startStreamServer(endpoint, cert, privateKey) {
     };
     child.stdout.on('data', check);
     child.once('exit', (code) => {
-      if (!output.includes('"event":"ready"')) {
+      if (!timedOut && !output.includes('"event":"ready"')) {
         clearTimeout(timer);
         reject(new Error(`Stream server exited ${code}: ${output}`));
       }
@@ -179,15 +196,4 @@ async function cleanup(t, resource, action) {
   } catch (error) {
     t.diagnostic(`${resource} cleanup failed: ${error.message}`);
   }
-}
-
-async function freePorts(count) {
-  const servers = await Promise.all(Array.from({ length: count }, () => new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => resolve(server));
-  })));
-  const ports = servers.map((server) => server.address().port);
-  await Promise.all(servers.map((server) => new Promise((resolve) => server.close(resolve))));
-  return ports;
 }
