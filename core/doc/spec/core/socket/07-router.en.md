@@ -220,7 +220,7 @@ returns `ZLINK_RECV_NO_DATA` and `EAGAIN`.
 
 When `parts_capacity_` is smaller than the record's part count, the call does not consume the record,
 writes the needed count to `*part_count_out_`, and returns `ZLINK_RECV_BUFFER_TOO_SMALL` with
-`ENOBUFS`. Retrying with a large enough array returns the same record(except a record of a pipe that left the selection — [§10.1](#101-observing-the-selected-route)). Use the output combinations in
+`ENOBUFS`. Retrying with a large enough array returns the same record (except a record of a pipe that left the selection — [§10.1](#101-observing-the-selected-route)). Use the output combinations in
 [section 2](#2-data-and-request-receive) to determine whether a reply is required. The returned
 payload contains no internal request metadata.
 
@@ -296,9 +296,13 @@ ZLINK_EXPORT uint64_t zlink_router_recv_route_generation(void *router_);
   succeeds. If a change races with the snapshot, the readiness remains. Monitor events are transport
   observations, not the result of the route selection. `ZLINK_EVENT_CONNECTION_READY` on a standby
   pipe does not mean that the selected route is ready.
-- **Records from a pipe that is not selected are not returned.** When the selection changes, Core
-  discards the pending DATA and REQUEST records of the replaced pipe and of standby pipes as whole
-  records at that moment, so `ZLINK_POLLIN` reflects only records of the selected route. A record held
+- **Once another pipe becomes selected, records from the pipe that left the selection are not returned.**
+  In this document a pipe leaves the selection when another pipe becomes selected for the same RID. Core
+  then discards the pending DATA and REQUEST records of the replaced pipe and of standby pipes as whole
+  records, so `ZLINK_POLLIN` reflects only records of the selected route and of a selected pipe that ended
+  with no successor selection. When the selected pipe ends with no successor selection, the RID's
+  snapshot row disappears but that pipe's pending records are not discarded and remain receivable; they
+  are discarded by the rule above when another pipe later becomes selected for that RID. A record held
   back because the buffer was too small is not returned on retry if its pipe left the selection in the
   meantime — the only exception to
   [receiving the same record again](README.en.md#zlink_recv-and-zlink_router_recv). No reply token is
@@ -311,7 +315,9 @@ ZLINK_EXPORT uint64_t zlink_router_recv_route_generation(void *router_);
   data recv on the same socket). It is `0` if the next data recv failed or there was no successful
   receive. When the caller processes
   the record, it compares this value with the current selected route generation of that RID to recognize
-  a record whose route changed after it was returned.
+  a record whose route changed after it was returned. If the RID has no selected-route row, the record
+  was left by a pipe that ended with no successor selection and was not discarded by a selection change;
+  the reply result for such a REQUEST follows [§9](#9-raw-reply-submit).
 - **Keep one route observer per socket.** The same observer calls the snapshot and handles
   `ZLINK_POLLROUTE`. If two threads call the snapshot at the same time, the success of one can clear
   the readiness.
@@ -405,7 +411,8 @@ and status snapshots. Each item maps to one test.
   which releases them with `zlink_multipart_close()`; on failure, ownership does not move.
 - If `parts_capacity_` is too small, the call returns the needed count and
   `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS` without consuming the record. A retry with a large
-  enough array returns the same record(except a record of a pipe that left the selection — [§10.1](#101-observing-the-selected-route)).
+  enough array returns the same record (except a record of a pipe that left the selection — [§10.1](#101-observing-the-selected-route)).
+- After a DEALER sends three records and closes, the ROUTER receives all three; once another pipe becomes selected for that RID, the ended pipe's remaining records are not received.
 - A reply or error reply received through `zlink_router_recv()` returns no payload and terminates the connection with `EPROTO`.
 - Raw-sending a DATA or REQUEST payload returned by `zlink_router_recv()` does not restore request-reply semantics.
 - Passing a ROUTER to the common `zlink_recv()` surface is rejected as unsupported.

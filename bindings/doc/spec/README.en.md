@@ -1725,7 +1725,7 @@ Every data-path function (`send`, `recv`, `request`, `reply`,
   code` (an exception object for exception languages, a return error
   value for return-based languages).
 - For the full enum definition, see
-  [errno-map.md](https://zlink-systems.github.io/zlink/spec/core/04-errno-map/).
+  [Core errors](../../../core/doc/spec/core/03-errors.en.md).
 
 #### Per-Function Error Type Hierarchy
 
@@ -1916,7 +1916,7 @@ For raw `DealerSocket`/`RouterSocket`, the request start point is `request`/`req
 #### Shared
 
 - For the full `zlink_request_result_t` definition, see
-  [errno-map.md](https://zlink-systems.github.io/zlink/spec/core/04-errno-map/).
+  [Core errors](../../../core/doc/spec/core/03-errors.en.md).
 - Because Go / Rust have no exceptions, suspension failures use their
   return-based error representation.
 
@@ -2945,7 +2945,7 @@ Codes split into two layers.
 1. **Public result enum codes (0–709)** — the return enum value of a
    public C API function. A binding faces these directly and must
    expose them as a per-language error type. See
-   [core/errno-map.md](https://zlink-systems.github.io/zlink/spec/core/04-errno-map/)
+   [Core errors](../../../core/doc/spec/core/03-errors.en.md)
    for the full definition.
 2. **Internal errno** — the internal raw errno looked up with
    `zlink_errno()`. Used to look up the detailed cause behind a coarse
@@ -2956,26 +2956,27 @@ Codes split into two layers.
 
 A binding must map **every value, without omission**, of the 8 enums
 below into a per-language representation. OK (0) is shared by every enum
-and is not treated as an error.
+and is not treated as an error. Which errno each value comes from is owned by
+Core [result and errno mapping](../../../core/doc/spec/core/03-errors.en.md#result-and-errno-mapping).
 
 ##### `zlink_submit_result_t` (send, request submit, reply submit)
 
-| Value | Constant | Internal errno | Category | Meaning |
-|----|------|-----------|------|------|
-| 0 | `OK` | — | success | submit succeeded |
-| 1 | `BACKPRESSURED` | `EAGAIN` | control flow | the send queue is saturated (HWM) |
-| 2 | `NOT_CONNECTED` | `ENOTCONN`, `EHOSTUNREACH` | control flow | the target peer/path is not connected |
-| 3 | `NOT_FOUND` | `ENOENT` | control flow | the target peer/route does not exist |
-| 13 | `NOT_ADMITTED` | `ECONNREFUSED` family | control flow | Admission refusal returned by Core. Flag-specific weight-`0` results follow [Core whole-message send](../../../core/doc/spec/core/socket/README.en.md#whole-message-send-and-pending-admission) and [Request and reply](../../../core/doc/spec/core/socket/README.en.md#request-and-reply). |
-| 4 | `TERMINATED` | `ETERM` | runtime/lifecycle | the context has terminated |
-| 5 | `INVALID_HANDLE` | `EFAULT` | caller contract violation | a NULL handle / invalid pointer |
-| 6 | `INVALID_ARGUMENT` | `EINVAL` | caller contract violation | an invalid argument |
-| 7 | `NOT_SUPPORTED` | `ENOTSUP` | caller contract violation | not supported on that socket type |
-| 8 | `INVALID_STATE` | `EFSM`, `EBUSY` | caller contract violation | a socket/handle state error |
-| 9 | `THREAD_VIOLATION` | `EMTHREAD` | caller contract violation | accessed from the wrong thread |
-| 10 | `OUT_OF_MEMORY` | `ENOMEM` | internal failure | a memory allocation failure |
-| 11 | `SEQ_EXHAUSTED` | `EBUSY` | internal failure | the request seq space is exhausted |
-| 12 | `INTERNAL_ERROR` | `EPROTO`, and so on | internal failure | an internal submit failure (see `zlink_errno()` for detail) |
+| Value | Constant | Category | Meaning |
+|----|------|------|------|
+| 0 | `OK` | success | submit succeeded |
+| 1 | `BACKPRESSURED` | control flow | the send queue is saturated (HWM) |
+| 2 | `NOT_CONNECTED` | control flow | the target peer/path is not connected |
+| 3 | `NOT_FOUND` | control flow | the target peer/route does not exist |
+| 13 | `NOT_ADMITTED` | control flow | Admission refusal returned by Core. Flag-specific weight-`0` results follow [Core whole-message send](../../../core/doc/spec/core/socket/README.en.md#whole-message-send-and-pending-admission) and [Request and reply](../../../core/doc/spec/core/socket/README.en.md#request-and-reply). |
+| 4 | `TERMINATED` | runtime/lifecycle | the context has terminated |
+| 5 | `INVALID_HANDLE` | caller contract violation | a NULL handle / invalid pointer |
+| 6 | `INVALID_ARGUMENT` | caller contract violation | an invalid argument |
+| 7 | `NOT_SUPPORTED` | caller contract violation | not supported on that socket type |
+| 8 | `INVALID_STATE` | caller contract violation | a socket/handle state error |
+| 9 | `THREAD_VIOLATION` | caller contract violation | accessed from the wrong thread |
+| 10 | `OUT_OF_MEMORY` | internal failure | a memory allocation failure |
+| 11 | `SEQ_EXHAUSTED` | internal failure | the request seq space is exhausted |
+| 12 | `INTERNAL_ERROR` | internal failure | an internal submit failure (see `zlink_errno()` for detail) |
 
 This enum is shared by the submit function family; that does not make every
 value applicable to every function. `BACKPRESSURED` applies to HWM-managed
@@ -2987,98 +2988,98 @@ Completion connection and does not return HWM backpressure.
 
 ##### `zlink_request_result_t` (REQUEST completion)
 
-| Value | Constant | Internal errno | Meaning |
-|----|------|-----------|------|
-| 0 | `OK` | `0` | successfully received the reply payload |
-| 101 | `TIMED_OUT` | `ETIMEDOUT` | reply did not arrive within `timeout_ms` |
-| 102 | `NOT_FOUND` | `ENOENT` | target not found; completed with an error reply |
-| 103 | `TERMINATED` | `ETERM`, `ESHUTDOWN` | the owner lifecycle ended |
-| 104 | `PROTOCOL_ERROR` | `EPROTO`, `ENOCOMPATPROTO` | the reply metadata or error-reply payload is malformed or incompatible |
-| 105 | `INTERNAL_ERROR` | `EIO`, unclassified errno | an internal request failure without another public bucket |
-| 106 | `REJECTED` | `EACCES`, `ECONNREFUSED`, `ECANCELED` | the target or admission path rejected the request |
-| 107 | `CONFLICT` | `ESTALE`, `EEXIST` | a conflict on the request target or state |
-| 108 | `BUSY` | `EBUSY` | the request-processing path is temporarily busy |
-| 109 | `NOT_CONNECTED` | `ENOTCONN`, `EHOSTUNREACH` | the target peer/path is not connected |
-| 110 | `INVALID_ARGUMENT` | `EINVAL`, `EFAULT` | a request argument or metadata error |
-| 111 | `INVALID_STATE` | `EFSM`, `EALREADY` | the handle state cannot accept a request |
-| 112 | `NOT_SUPPORTED` | `ENOTSUP`, `EOPNOTSUPP` | request is not supported on this target |
-| 113 | `BACKPRESSURED` | `EAGAIN`, `ENOBUFS` | the request-processing path cannot proceed because capacity is unavailable |
+| Value | Constant | Meaning |
+|----|------|------|
+| 0 | `OK` | successfully received the reply payload |
+| 101 | `TIMED_OUT` | reply did not arrive within `timeout_ms` |
+| 102 | `NOT_FOUND` | target not found; completed with an error reply |
+| 103 | `TERMINATED` | the owner lifecycle ended |
+| 104 | `PROTOCOL_ERROR` | the reply metadata or error-reply payload is malformed or incompatible |
+| 105 | `INTERNAL_ERROR` | an internal request failure without another public bucket |
+| 106 | `REJECTED` | the target or admission path rejected the request |
+| 107 | `CONFLICT` | a conflict on the request target or state |
+| 108 | `BUSY` | the request-processing path is temporarily busy |
+| 109 | `NOT_CONNECTED` | the target peer/path is not connected |
+| 110 | `INVALID_ARGUMENT` | a request argument or metadata error |
+| 111 | `INVALID_STATE` | the handle state cannot accept a request |
+| 112 | `NOT_SUPPORTED` | request is not supported on this target |
+| 113 | `BACKPRESSURED` | the request-processing path cannot proceed because capacity is unavailable |
 
 ##### `zlink_recv_result_t` (recv, subscribe, subscription event, monitor recv, timer recv)
 
-| Value | Constant | Internal errno | Meaning |
-|----|------|-----------|------|
-| 0 | `OK` | — | receive succeeded |
-| 201 | `NO_DATA` | `EAGAIN` | non-blocking recv has no data / the source is exhausted |
-| 202 | `BUSY` | `EBUSY` | a handler is already attached |
-| 203 | `TERMINATED` | `ETERM` | the context has terminated |
-| 204 | `INVALID_HANDLE` | `EFAULT` | a NULL / invalid handle |
-| 205 | `NOT_SUPPORTED` | `ENOTSUP` | recv is not supported on this socket type |
-| 206 | `INTERNAL_ERROR` | `EPROTO`, and so on | an internal recv failure (see `zlink_errno()` for detail) |
-| 207 | `BUFFER_TOO_SMALL` | `ENOBUFS` | caller output capacity is insufficient |
-| 208 | `INVALID_STATE` | `EINVAL`, `ESTALE`, `ESHUTDOWN` | receive lifecycle state error |
+| Value | Constant | Meaning |
+|----|------|------|
+| 0 | `OK` | receive succeeded |
+| 201 | `NO_DATA` | non-blocking recv has no data / the source is exhausted |
+| 202 | `BUSY` | a handler is already attached |
+| 203 | `TERMINATED` | the context has terminated |
+| 204 | `INVALID_HANDLE` | a NULL / invalid handle |
+| 205 | `NOT_SUPPORTED` | recv is not supported on this socket type |
+| 206 | `INTERNAL_ERROR` | an internal recv failure (see `zlink_errno()` for detail) |
+| 207 | `BUFFER_TOO_SMALL` | caller output capacity is insufficient |
+| 208 | `INVALID_STATE` | receive lifecycle state error |
 
 ##### `zlink_handler_result_t` (handler registration)
 
-| Value | Constant | Internal errno | Meaning |
-|----|------|-----------|------|
-| 0 | `OK` | — | handler registration succeeded |
-| 301 | `INVALID_ARGUMENT` | `EINVAL` | a NULL handler |
-| 302 | `BUSY` | `EBUSY` | a handler is already attached |
-| 303 | `NOT_SUPPORTED` | `ENOTSUP` | an unsupported subject |
-| 304 | `DEADLOCK` | `EDEADLK` | reentrant handler replacement in callback scope |
-| 305 | `INVALID_HANDLE` | `EFAULT` | a NULL / invalid handle |
-| 306 | `INTERNAL_ERROR` | `EPROTO`, and so on | an internal handler-registration failure (see `zlink_errno()` for detail) |
+| Value | Constant | Meaning |
+|----|------|------|
+| 0 | `OK` | handler registration succeeded |
+| 301 | `INVALID_ARGUMENT` | a NULL handler |
+| 302 | `BUSY` | a handler is already attached |
+| 303 | `NOT_SUPPORTED` | an unsupported subject |
+| 304 | `DEADLOCK` | reentrant handler replacement in callback scope |
+| 305 | `INVALID_HANDLE` | a NULL / invalid handle |
+| 306 | `INTERNAL_ERROR` | an internal handler-registration failure (see `zlink_errno()` for detail) |
 
 ##### `zlink_close_result_t` (close, destroy)
 
-| Value | Constant | Internal errno | Meaning |
-|----|------|-----------|------|
-| 0 | `OK` | — | close/destroy succeeded |
-| 401 | `BUSY` | `EBUSY` | an in-flight callback / API call |
-| 402 | `SHUTDOWN` | `ESHUTDOWN` | already closed |
-| 403 | `INVALID_HANDLE` | `EFAULT` | a NULL / invalid handle |
-| 404 | `INTERNAL_ERROR` | `EPROTO`, and so on | an internal close failure (see `zlink_errno()` for detail) |
+| Value | Constant | Meaning |
+|----|------|------|
+| 0 | `OK` | close/destroy succeeded |
+| 401 | `BUSY` | an in-flight callback / API call |
+| 402 | `SHUTDOWN` | already closed |
+| 403 | `INVALID_HANDLE` | a NULL / invalid handle |
+| 404 | `INTERNAL_ERROR` | an internal close failure (see `zlink_errno()` for detail) |
 
 ##### `zlink_bind_result_t` (bind)
 
-| Value | Constant | Internal errno | Meaning |
-|----|------|-----------|------|
-| 0 | `OK` | — | bind succeeded |
-| 501 | `INVALID_ARGUMENT` | `EINVAL` | an invalid endpoint |
-| 502 | `ADDR_IN_USE` | `EADDRINUSE` | the address is already in use |
-| 503 | `NOT_SUPPORTED` | `ENOTSUP` | an unsupported transport |
-| 504 | `INVALID_HANDLE` | `EFAULT` | a NULL / invalid handle |
-| 505 | `INTERNAL_ERROR` | `EPROTO`, and so on | an internal bind failure (see `zlink_errno()` for detail) |
+| Value | Constant | Meaning |
+|----|------|------|
+| 0 | `OK` | bind succeeded |
+| 501 | `INVALID_ARGUMENT` | an invalid endpoint |
+| 502 | `ADDR_IN_USE` | the address is already in use |
+| 503 | `NOT_SUPPORTED` | an unsupported transport |
+| 504 | `INVALID_HANDLE` | a NULL / invalid handle |
+| 505 | `INTERNAL_ERROR` | an internal bind failure (see `zlink_errno()` for detail) |
 
 ##### `zlink_connect_result_t` (connect, disconnect, unbind)
 
-| Value | Constant | Internal errno | Meaning |
-|----|------|-----------|------|
-| 0 | `OK` | — | connect/disconnect/unbind succeeded |
-| 601 | `INVALID_ARGUMENT` | `EINVAL` | an invalid endpoint |
-| 602 | `NOT_SUPPORTED` | `ENOTSUP` | an unsupported transport |
-| 603 | `INVALID_HANDLE` | `EFAULT` | a NULL / invalid handle |
-| 604 | `INTERNAL_ERROR` | `EPROTO`, and so on | an internal connect/disconnect failure (see `zlink_errno()` for detail) |
-| 605 | `NOT_FOUND` | `ENOENT` | the endpoint or peer routing id does not exist |
-| 606 | `CONFLICT` | `EADDRINUSE` | the peer routing id conflicts with two or more pipes |
-| 607 | `BUSY` | `EBUSY` | the lifecycle owner rejected a manual change |
-| 608 | `AUTH_FAILED` | `EACCES` | transport peer authentication failed |
+| Value | Constant | Meaning |
+|----|------|------|
+| 0 | `OK` | connect/disconnect/unbind succeeded |
+| 601 | `INVALID_ARGUMENT` | an invalid endpoint |
+| 602 | `NOT_SUPPORTED` | an unsupported transport |
+| 603 | `INVALID_HANDLE` | a NULL / invalid handle |
+| 604 | `INTERNAL_ERROR` | an internal connect/disconnect failure (see `zlink_errno()` for detail) |
+| 605 | `NOT_FOUND` | the endpoint or peer routing id does not exist |
+| 606 | `CONFLICT` | the peer routing id conflicts with two or more pipes |
+| 607 | `BUSY` | the lifecycle owner rejected a manual change |
+| 608 | `AUTH_FAILED` | transport peer authentication failed |
 
 ##### `zlink_config_result_t` (option set/get, message lifecycle, snapshot, poller mutation, proxy, timer config)
 
-| Value | Constant | Internal errno | Meaning |
-|----|------|-----------|------|
-| 0 | `OK` | — | configuration succeeded |
-| 701 | `INVALID_HANDLE` | `EFAULT` | a NULL / invalid handle |
-| 702 | `INVALID_ARGUMENT` | `EINVAL`, `EBUSY` | an invalid argument, or a config-layer conflict |
-| 703 | `NOT_SUPPORTED` | `ENOTSUP` | an unsupported option |
-| 704 | `INTERNAL_ERROR` | `EPROTO`, and so on | an internal config failure (see `zlink_errno()` for detail) |
-| 705 | `INVALID_STATE` | `EBUSY`, `ESHUTDOWN` | the lifecycle state rejects the config |
-| 706 | `NOT_FOUND` | `ENOENT` | the local lookup target does not exist |
-| 707 | `CONFLICT` | `EEXIST` | duplicate identity, endpoint, or registration value |
-| 708 | `BUFFER_TOO_SMALL` | `ENOBUFS` | caller output capacity is insufficient; no partial output |
-| 709 | `BUSY` | `EBUSY` | the same mutable object is used concurrently |
+| Value | Constant | Meaning |
+|----|------|------|
+| 0 | `OK` | configuration succeeded |
+| 701 | `INVALID_HANDLE` | a NULL / invalid handle |
+| 702 | `INVALID_ARGUMENT` | an invalid argument, or a config-layer conflict |
+| 703 | `NOT_SUPPORTED` | an unsupported option |
+| 704 | `INTERNAL_ERROR` | an internal config failure (see `zlink_errno()` for detail) |
+| 705 | `INVALID_STATE` | the lifecycle state rejects the config |
+| 706 | `NOT_FOUND` | the local lookup target does not exist |
+| 707 | `CONFLICT` | duplicate identity, endpoint, or registration value |
+| 708 | `BUFFER_TOO_SMALL` | caller output capacity is insufficient; no partial output |
+| 709 | `BUSY` | the same mutable object is used concurrently |
 
 ##### Non-OK Value Total
 

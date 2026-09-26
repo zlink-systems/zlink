@@ -267,7 +267,8 @@ ZLINK_EXPORT int zlink_poller_wait(
 `zlink_poller_size()`는 성공 시 현재 등록 count를, 실패 시 `-1`을 반환한다.
 `zlink_poller_wait()`는 성공 시 기록한 event 수를, timeout이면 `0`, 실패하면
 `-1`을 반환한다. `timeout_ms < 0`은 모두 무기한 대기로 정규화한다. `events == NULL`이거나
-`event_capacity <= 0`이면 `EINVAL`로 실패한다. `zlink_poller_size()`와 `zlink_poller_wait()`의 `error_out`은 NULL을
+`event_capacity <= 0`이면 `EINVAL`로 실패한다. 등록된 source가 없으면 `timeout_ms`와 관계없이 기다리지 않고 `0`을
+반환한다([`zlink_poll`](#zlink_poll)의 `item_count == 0`과 같다). `zlink_poller_size()`와 `zlink_poller_wait()`의 `error_out`은 NULL을
 허용하는 선택 output이다.
 
 같은 source를 두 번 add하면 `ZLINK_CONFIG_CONFLICT`/`EEXIST`다. timer는 한 번에 poller 하나에만
@@ -343,6 +344,7 @@ array)만으로 다음을 확인한다. 각 항목은 unit test 하나로 이어
 - `zlink_poller_new`의 allocation 실패는 `NULL`/`ENOMEM`이고, `zlink_poller_destroy`가 성공하면 caller pointer가 NULL이 된다.
 - `zlink_poller_size`는 등록 count 또는 실패 `-1`을 반환한다.
 - `zlink_poller_wait`는 event count, timeout `0`, 실패 `-1`을 반환하며 `events == NULL` 또는 `event_capacity <= 0`은 `EINVAL`이다.
+- 등록된 source가 없는 poller의 `zlink_poller_wait`는 `timeout_ms`와 관계없이 즉시 `0`을 반환한다.
 - `zlink_poll`·`zlink_poller_size`·`zlink_poller_wait`의 `error_out`은 NULL을 허용하는 선택 output이다.
 
 <!-- zlink-nav:start -->

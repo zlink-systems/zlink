@@ -1475,7 +1475,7 @@ Actor의 공개 service 계약은 [Framework API](../../../framework/doc/framewo
 - 바인딩은 이 코드를 언어별 에러 타입의 `int code` 에 포함시킨다
   (exception 언어는 예외 객체, return-based 언어는 반환 에러 값).
 - 전체 enum 정의는
-  [errno-map.md](https://zlink-systems.github.io/zlink/ko/spec/core/04-errno-map/) 를 참조한다.
+  [Core errors](../../../core/doc/spec/core/03-errors.ko.md)를 참조한다.
 
 #### 함수별 에러 타입 계층
 
@@ -1649,7 +1649,7 @@ Raw `DealerSocket` / `RouterSocket`의 작업 시작점은 `request` /
 #### 공통
 
 - `zlink_request_result_t` 전체 정의는
-  [errno-map.md](https://zlink-systems.github.io/zlink/ko/spec/core/04-errno-map/) 를 참조한다.
+  [Core errors](../../../core/doc/spec/core/03-errors.ko.md)를 참조한다.
 - Go / Rust 는 exception 이 없으므로 suspension 결과의 실패를 return-based로 처리한다.
 
 ## 도메인 객체 정책
@@ -2580,7 +2580,7 @@ zlink 에서 사용하는 코드와 의미. 바인딩은 이 코드를 언어별
 
 1. **Public result enum 코드 (0–709)** — 공개 C API 함수의 반환 enum 값.
    바인딩이 직접 마주하고 언어별 에러 타입으로 노출해야 하는 값이다.
-   전체 정의는 [core/errno-map.md](https://zlink-systems.github.io/zlink/ko/spec/core/04-errno-map/) 참조.
+   전체 정의는 [Core errors](../../../core/doc/spec/core/03-errors.ko.md) 참조.
 2. **Internal errno** — `zlink_errno()` 로 조회되는 내부 raw errno.
    `INTERNAL_ERROR` 같은 coarse bucket 의 상세 원인 조회용. 바인딩은 이 값을
    `internalErrno` / `internal_errno` 필드로 노출한다 (디버깅 전용).
@@ -2588,26 +2588,27 @@ zlink 에서 사용하는 코드와 의미. 바인딩은 이 코드를 언어별
 #### Public Result Enum 카탈로그
 
 바인딩은 아래 8 개 enum 의 **모든 값을 누락 없이** 언어별 표현으로 매핑해야
-한다. OK (0) 는 모든 enum 에 공통이며 에러로 취급하지 않는다.
+한다. OK (0) 는 모든 enum 에 공통이며 에러로 취급하지 않는다. 각 값이 어떤 errno에서 오는지는
+Core [result와 errno 대응](../../../core/doc/spec/core/03-errors.ko.md#result와-errno-대응)이 소유한다.
 
 ##### `zlink_submit_result_t` (send, request submit, reply submit)
 
-| 값 | 상수 | 내부 errno | 분류 | 의미 |
-|----|------|-----------|------|------|
-| 0 | `OK` | — | 성공 | 제출 성공 |
-| 1 | `BACKPRESSURED` | `EAGAIN` | 제어 흐름 | send 큐 포화 (HWM) |
-| 2 | `NOT_CONNECTED` | `ENOTCONN`, `EHOSTUNREACH` | 제어 흐름 | 대상 peer/경로 미연결 |
-| 3 | `NOT_FOUND` | `ENOENT` | 제어 흐름 | 대상 peer/route 없음 |
-| 13 | `NOT_ADMITTED` | `ECONNREFUSED` 계열 | 제어 흐름 | Core가 반환한 admission 거절. Weight `0`의 flag별 결과는 [Core whole-message send](../../../core/doc/spec/core/socket/README.ko.md#whole-message-send와-pending-admission)와 [Request와 reply](../../../core/doc/spec/core/socket/README.ko.md#request와-reply)를 따른다. |
-| 4 | `TERMINATED` | `ETERM` | 런타임/생명주기 | context 종료됨 |
-| 5 | `INVALID_HANDLE` | `EFAULT` | caller 계약 위반 | NULL handle / invalid pointer |
-| 6 | `INVALID_ARGUMENT` | `EINVAL` | caller 계약 위반 | 잘못된 인자 |
-| 7 | `NOT_SUPPORTED` | `ENOTSUP` | caller 계약 위반 | 해당 소켓 타입에서 지원 안 함 |
-| 8 | `INVALID_STATE` | `EFSM`, `EBUSY` | caller 계약 위반 | 소켓/handle 상태 오류 |
-| 9 | `THREAD_VIOLATION` | `EMTHREAD` | caller 계약 위반 | 잘못된 스레드에서 접근 |
-| 10 | `OUT_OF_MEMORY` | `ENOMEM` | 내부 실패 | 메모리 할당 실패 |
-| 11 | `SEQ_EXHAUSTED` | `EBUSY` | 내부 실패 | request seq 공간 고갈 |
-| 12 | `INTERNAL_ERROR` | `EPROTO` 등 | 내부 실패 | 내부 submit 실패 (상세는 `zlink_errno()`) |
+| 값 | 상수 | 분류 | 의미 |
+|----|------|------|------|
+| 0 | `OK` | 성공 | 제출 성공 |
+| 1 | `BACKPRESSURED` | 제어 흐름 | send 큐 포화 (HWM) |
+| 2 | `NOT_CONNECTED` | 제어 흐름 | 대상 peer/경로 미연결 |
+| 3 | `NOT_FOUND` | 제어 흐름 | 대상 peer/route 없음 |
+| 13 | `NOT_ADMITTED` | 제어 흐름 | Core가 반환한 admission 거절. Weight `0`의 flag별 결과는 [Core whole-message send](../../../core/doc/spec/core/socket/README.ko.md#whole-message-send와-pending-admission)와 [Request와 reply](../../../core/doc/spec/core/socket/README.ko.md#request와-reply)를 따른다. |
+| 4 | `TERMINATED` | 런타임/생명주기 | context 종료됨 |
+| 5 | `INVALID_HANDLE` | caller 계약 위반 | NULL handle / invalid pointer |
+| 6 | `INVALID_ARGUMENT` | caller 계약 위반 | 잘못된 인자 |
+| 7 | `NOT_SUPPORTED` | caller 계약 위반 | 해당 소켓 타입에서 지원 안 함 |
+| 8 | `INVALID_STATE` | caller 계약 위반 | 소켓/handle 상태 오류 |
+| 9 | `THREAD_VIOLATION` | caller 계약 위반 | 잘못된 스레드에서 접근 |
+| 10 | `OUT_OF_MEMORY` | 내부 실패 | 메모리 할당 실패 |
+| 11 | `SEQ_EXHAUSTED` | 내부 실패 | request seq 공간 고갈 |
+| 12 | `INTERNAL_ERROR` | 내부 실패 | 내부 submit 실패 (상세는 `zlink_errno()`) |
 
 이 enum은 submit 함수군이 공유하지만 모든 값이 모든 함수에 적용된다는 뜻은 아니다.
 `BACKPRESSURED`는 HWM-managed send, publish와 request submit에 적용한다. Raw
@@ -2617,98 +2618,98 @@ Completion connection에 한 번 제출하므로 HWM backpressure를 반환하�
 
 ##### `zlink_request_result_t` (REQUEST completion)
 
-| 값 | 상수 | 내부 errno | 의미 |
-|----|------|-----------|------|
-| 0 | `OK` | `0` | reply payload 수신 성공 |
-| 101 | `TIMED_OUT` | `ETIMEDOUT` | `timeout_ms` 내 reply 미도착 |
-| 102 | `NOT_FOUND` | `ENOENT` | 대상 없음, 에러 reply 로 완료 |
-| 103 | `TERMINATED` | `ETERM`, `ESHUTDOWN` | owner lifecycle 종료 |
-| 104 | `PROTOCOL_ERROR` | `EPROTO`, `ENOCOMPATPROTO` | reply metadata 또는 error reply payload가 잘못되거나 호환되지 않음 |
-| 105 | `INTERNAL_ERROR` | `EIO`, 분류되지 않은 errno | 다른 public bucket이 없는 내부 request 실패 |
-| 106 | `REJECTED` | `EACCES`, `ECONNREFUSED`, `ECANCELED` | 대상 또는 admission이 request를 거절 |
-| 107 | `CONFLICT` | `ESTALE`, `EEXIST` | request 대상 또는 상태 충돌 |
-| 108 | `BUSY` | `EBUSY` | request 처리 경로가 일시적으로 바쁨 |
-| 109 | `NOT_CONNECTED` | `ENOTCONN`, `EHOSTUNREACH` | 대상 peer/경로 미연결 |
-| 110 | `INVALID_ARGUMENT` | `EINVAL`, `EFAULT` | request 인자 또는 metadata 오류 |
-| 111 | `INVALID_STATE` | `EFSM`, `EALREADY` | request를 받을 수 없는 handle 상태 |
-| 112 | `NOT_SUPPORTED` | `ENOTSUP`, `EOPNOTSUPP` | request 미지원 대상 |
-| 113 | `BACKPRESSURED` | `EAGAIN`, `ENOBUFS` | request 처리 경로가 수용 공간 부족으로 진행되지 못함 |
+| 값 | 상수 | 의미 |
+|----|------|------|
+| 0 | `OK` | reply payload 수신 성공 |
+| 101 | `TIMED_OUT` | `timeout_ms` 내 reply 미도착 |
+| 102 | `NOT_FOUND` | 대상 없음, 에러 reply 로 완료 |
+| 103 | `TERMINATED` | owner lifecycle 종료 |
+| 104 | `PROTOCOL_ERROR` | reply metadata 또는 error reply payload가 잘못되거나 호환되지 않음 |
+| 105 | `INTERNAL_ERROR` | 다른 public bucket이 없는 내부 request 실패 |
+| 106 | `REJECTED` | 대상 또는 admission이 request를 거절 |
+| 107 | `CONFLICT` | request 대상 또는 상태 충돌 |
+| 108 | `BUSY` | request 처리 경로가 일시적으로 바쁨 |
+| 109 | `NOT_CONNECTED` | 대상 peer/경로 미연결 |
+| 110 | `INVALID_ARGUMENT` | request 인자 또는 metadata 오류 |
+| 111 | `INVALID_STATE` | request를 받을 수 없는 handle 상태 |
+| 112 | `NOT_SUPPORTED` | request 미지원 대상 |
+| 113 | `BACKPRESSURED` | request 처리 경로가 수용 공간 부족으로 진행되지 못함 |
 
 ##### `zlink_recv_result_t` (recv, subscribe, subscription event, monitor recv, timer recv)
 
-| 값 | 상수 | 내부 errno | 의미 |
-|----|------|-----------|------|
-| 0 | `OK` | — | 수신 성공 |
-| 201 | `NO_DATA` | `EAGAIN` | non-blocking recv 데이터 없음 / source 고갈 |
-| 202 | `BUSY` | `EBUSY` | handler 이미 attach 됨 |
-| 203 | `TERMINATED` | `ETERM` | context 종료됨 |
-| 204 | `INVALID_HANDLE` | `EFAULT` | NULL / invalid handle |
-| 205 | `NOT_SUPPORTED` | `ENOTSUP` | recv 미지원 소켓 타입 |
-| 206 | `INTERNAL_ERROR` | `EPROTO` 등 | 내부 recv 실패 (상세는 `zlink_errno()`) |
-| 207 | `BUFFER_TOO_SMALL` | `ENOBUFS` | caller output capacity 부족 |
-| 208 | `INVALID_STATE` | `EINVAL`, `ESTALE`, `ESHUTDOWN` | receive lifecycle state 오류 |
+| 값 | 상수 | 의미 |
+|----|------|------|
+| 0 | `OK` | 수신 성공 |
+| 201 | `NO_DATA` | non-blocking recv 데이터 없음 / source 고갈 |
+| 202 | `BUSY` | handler 이미 attach 됨 |
+| 203 | `TERMINATED` | context 종료됨 |
+| 204 | `INVALID_HANDLE` | NULL / invalid handle |
+| 205 | `NOT_SUPPORTED` | recv 미지원 소켓 타입 |
+| 206 | `INTERNAL_ERROR` | 내부 recv 실패 (상세는 `zlink_errno()`) |
+| 207 | `BUFFER_TOO_SMALL` | caller output capacity 부족 |
+| 208 | `INVALID_STATE` | receive lifecycle state 오류 |
 
 ##### `zlink_handler_result_t` (handler 등록)
 
-| 값 | 상수 | 내부 errno | 의미 |
-|----|------|-----------|------|
-| 0 | `OK` | — | handler 등록 성공 |
-| 301 | `INVALID_ARGUMENT` | `EINVAL` | NULL handler |
-| 302 | `BUSY` | `EBUSY` | handler 이미 attach 됨 |
-| 303 | `NOT_SUPPORTED` | `ENOTSUP` | 미지원 subject |
-| 304 | `DEADLOCK` | `EDEADLK` | callback 범위의 reentrant handler 교체 |
-| 305 | `INVALID_HANDLE` | `EFAULT` | NULL / invalid handle |
-| 306 | `INTERNAL_ERROR` | `EPROTO` 등 | 내부 handler 등록 실패 (상세는 `zlink_errno()`) |
+| 값 | 상수 | 의미 |
+|----|------|------|
+| 0 | `OK` | handler 등록 성공 |
+| 301 | `INVALID_ARGUMENT` | NULL handler |
+| 302 | `BUSY` | handler 이미 attach 됨 |
+| 303 | `NOT_SUPPORTED` | 미지원 subject |
+| 304 | `DEADLOCK` | callback 범위의 reentrant handler 교체 |
+| 305 | `INVALID_HANDLE` | NULL / invalid handle |
+| 306 | `INTERNAL_ERROR` | 내부 handler 등록 실패 (상세는 `zlink_errno()`) |
 
 ##### `zlink_close_result_t` (close, destroy)
 
-| 값 | 상수 | 내부 errno | 의미 |
-|----|------|-----------|------|
-| 0 | `OK` | — | close/destroy 성공 |
-| 401 | `BUSY` | `EBUSY` | in-flight callback / API 호출 |
-| 402 | `SHUTDOWN` | `ESHUTDOWN` | 이미 close 됨 |
-| 403 | `INVALID_HANDLE` | `EFAULT` | NULL / invalid handle |
-| 404 | `INTERNAL_ERROR` | `EPROTO` 등 | 내부 close 실패 (상세는 `zlink_errno()`) |
+| 값 | 상수 | 의미 |
+|----|------|------|
+| 0 | `OK` | close/destroy 성공 |
+| 401 | `BUSY` | in-flight callback / API 호출 |
+| 402 | `SHUTDOWN` | 이미 close 됨 |
+| 403 | `INVALID_HANDLE` | NULL / invalid handle |
+| 404 | `INTERNAL_ERROR` | 내부 close 실패 (상세는 `zlink_errno()`) |
 
 ##### `zlink_bind_result_t` (bind)
 
-| 값 | 상수 | 내부 errno | 의미 |
-|----|------|-----------|------|
-| 0 | `OK` | — | bind 성공 |
-| 501 | `INVALID_ARGUMENT` | `EINVAL` | 잘못된 endpoint |
-| 502 | `ADDR_IN_USE` | `EADDRINUSE` | 주소 이미 사용 중 |
-| 503 | `NOT_SUPPORTED` | `ENOTSUP` | 미지원 transport |
-| 504 | `INVALID_HANDLE` | `EFAULT` | NULL / invalid handle |
-| 505 | `INTERNAL_ERROR` | `EPROTO` 등 | 내부 bind 실패 (상세는 `zlink_errno()`) |
+| 값 | 상수 | 의미 |
+|----|------|------|
+| 0 | `OK` | bind 성공 |
+| 501 | `INVALID_ARGUMENT` | 잘못된 endpoint |
+| 502 | `ADDR_IN_USE` | 주소 이미 사용 중 |
+| 503 | `NOT_SUPPORTED` | 미지원 transport |
+| 504 | `INVALID_HANDLE` | NULL / invalid handle |
+| 505 | `INTERNAL_ERROR` | 내부 bind 실패 (상세는 `zlink_errno()`) |
 
 ##### `zlink_connect_result_t` (connect, disconnect, unbind)
 
-| 값 | 상수 | 내부 errno | 의미 |
-|----|------|-----------|------|
-| 0 | `OK` | — | connect/disconnect/unbind 성공 |
-| 601 | `INVALID_ARGUMENT` | `EINVAL` | 잘못된 endpoint |
-| 602 | `NOT_SUPPORTED` | `ENOTSUP` | 미지원 transport |
-| 603 | `INVALID_HANDLE` | `EFAULT` | NULL / invalid handle |
-| 604 | `INTERNAL_ERROR` | `EPROTO` 등 | 내부 connect/disconnect 실패 (상세는 `zlink_errno()`) |
-| 605 | `NOT_FOUND` | `ENOENT` | endpoint 또는 peer routing id 없음 |
-| 606 | `CONFLICT` | `EADDRINUSE` | peer routing id가 둘 이상의 pipe와 충돌 |
-| 607 | `BUSY` | `EBUSY` | lifecycle owner가 수동 변경을 거절 |
-| 608 | `AUTH_FAILED` | `EACCES` | transport peer 인증 실패 |
+| 값 | 상수 | 의미 |
+|----|------|------|
+| 0 | `OK` | connect/disconnect/unbind 성공 |
+| 601 | `INVALID_ARGUMENT` | 잘못된 endpoint |
+| 602 | `NOT_SUPPORTED` | 미지원 transport |
+| 603 | `INVALID_HANDLE` | NULL / invalid handle |
+| 604 | `INTERNAL_ERROR` | 내부 connect/disconnect 실패 (상세는 `zlink_errno()`) |
+| 605 | `NOT_FOUND` | endpoint 또는 peer routing id 없음 |
+| 606 | `CONFLICT` | peer routing id가 둘 이상의 pipe와 충돌 |
+| 607 | `BUSY` | lifecycle owner가 수동 변경을 거절 |
+| 608 | `AUTH_FAILED` | transport peer 인증 실패 |
 
 ##### `zlink_config_result_t` (option set/get, message lifecycle, snapshot, poller mutation, proxy, timer config)
 
-| 값 | 상수 | 내부 errno | 의미 |
-|----|------|-----------|------|
-| 0 | `OK` | — | 설정 성공 |
-| 701 | `INVALID_HANDLE` | `EFAULT` | NULL / invalid handle |
-| 702 | `INVALID_ARGUMENT` | `EINVAL`, `EBUSY` | 잘못된 인자 또는 config 계층 conflict |
-| 703 | `NOT_SUPPORTED` | `ENOTSUP` | 미지원 옵션 |
-| 704 | `INTERNAL_ERROR` | `EPROTO` 등 | 내부 config 실패 (상세는 `zlink_errno()`) |
-| 705 | `INVALID_STATE` | `EBUSY`, `ESHUTDOWN` | lifecycle 상태가 config를 거절 |
-| 706 | `NOT_FOUND` | `ENOENT` | local lookup 대상 없음 |
-| 707 | `CONFLICT` | `EEXIST` | 중복 identity, endpoint 또는 등록 값 |
-| 708 | `BUFFER_TOO_SMALL` | `ENOBUFS` | caller output capacity 부족, partial output 없음 |
-| 709 | `BUSY` | `EBUSY` | 같은 mutable object를 동시에 사용함 |
+| 값 | 상수 | 의미 |
+|----|------|------|
+| 0 | `OK` | 설정 성공 |
+| 701 | `INVALID_HANDLE` | NULL / invalid handle |
+| 702 | `INVALID_ARGUMENT` | 잘못된 인자 또는 config 계층 conflict |
+| 703 | `NOT_SUPPORTED` | 미지원 옵션 |
+| 704 | `INTERNAL_ERROR` | 내부 config 실패 (상세는 `zlink_errno()`) |
+| 705 | `INVALID_STATE` | lifecycle 상태가 config를 거절 |
+| 706 | `NOT_FOUND` | local lookup 대상 없음 |
+| 707 | `CONFLICT` | 중복 identity, endpoint 또는 등록 값 |
+| 708 | `BUFFER_TOO_SMALL` | caller output capacity 부족, partial output 없음 |
+| 709 | `BUSY` | 같은 mutable object를 동시에 사용함 |
 
 ##### Non-OK 값 총합
 

@@ -289,7 +289,9 @@ returns `NULL` and sets `errno` to `ENOMEM`. On successful completion,
 on failure. `zlink_poller_wait()` returns the number of events written on
 success, `0` on timeout, and `-1` on failure. Every `timeout_ms < 0` is
 normalized to an indefinite wait. If `events == NULL` or
-`event_capacity <= 0`, it fails with `EINVAL`. The `error_out` parameters of
+`event_capacity <= 0`, it fails with `EINVAL`. With no registered source it
+returns `0` without waiting, regardless of `timeout_ms` (as [`zlink_poll`](#zlink_poll)
+does for `item_count == 0`). The `error_out` parameters of
 `zlink_poller_size()` and `zlink_poller_wait()` are optional outputs that may be
 NULL.
 
@@ -365,6 +367,7 @@ and event-array contents. Each item maps to one unit test.
 - Allocation failure in `zlink_poller_new` returns `NULL`/`ENOMEM`, and successful `zlink_poller_destroy` sets the caller pointer to NULL.
 - `zlink_poller_size` returns the registration count or `-1` on failure.
 - `zlink_poller_wait` returns an event count, `0` on timeout, and `-1` on failure; `events == NULL` or `event_capacity <= 0` returns `EINVAL`.
+- `zlink_poller_wait` on a poller with no registered source returns `0` at once regardless of `timeout_ms`.
 - The `error_out` parameters of `zlink_poll`, `zlink_poller_size`, and `zlink_poller_wait` are optional outputs that may be NULL.
 
 <!-- zlink-nav:start -->
