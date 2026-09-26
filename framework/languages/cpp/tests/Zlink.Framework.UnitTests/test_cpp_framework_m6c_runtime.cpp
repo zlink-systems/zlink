@@ -2837,7 +2837,6 @@ void test_relocation_target_cutover_and_authority_settlement (test_context_t &te
         const auto deadline = std::chrono::steady_clock::now () + limit;
         while (!done () && std::chrono::steady_clock::now () < deadline) {
             const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-            (void) source.drain_monitor_events (now);
             (void) await_task (source.pump_one (now));
             std::this_thread::yield ();
         }
@@ -3176,8 +3175,6 @@ void test_boundary_application_preserves_original_reply (test_context_t &test)
         const auto deadline = std::chrono::steady_clock::now () + 5s;
         while (!done () && std::chrono::steady_clock::now () < deadline) {
             const auto now = std::chrono::steady_clock::now ();
-            (void) source.drain_monitor_events (now);
-            (void) target.drain_monitor_events (now);
             (void) await_task (source.pump_one (now));
             (void) await_task (target.pump_one (now));
             std::this_thread::yield ();
