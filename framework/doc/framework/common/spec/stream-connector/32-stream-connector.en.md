@@ -364,13 +364,17 @@ When all usable `u64` values are exhausted, a new Request is not admitted. §9 o
   requests complete as failure and are removed from the map.** They are not
   automatically resent after reconnection (§6).
 - An outbound operation is accepted when it passes connection-state and input validation and is
-  registered in the connector's send order, before it waits for room in the frame write queue.
-- Each connection's frame write queue has a fixed capacity of 4,096 operations. When it is full,
-  later accepted operations wait for a place in that queue, subject to their
-  applicable timeout or cancellation.
-- The write queue preserves acceptance order, including operations waiting for room. It completes
+  registered in the connector's send order.
+- One frame write queue per connection keeps accepted operations in acceptance order and completes
   each frame write before starting the next, so a later accepted operation cannot overtake an
-  earlier operation's frame write.
+  earlier operation's frame write. The queue has no size bound; a waiting operation is subject to
+  its applicable timeout or cancellation.
+- When the caller cancels an operation, the operation ends as cancelled, not as a failure.
+  Cancellation is not delivered as a §9 error code and §9.2 does not apply to it; its
+  representation is owned by the language documents. Cancelling while queued writes no frame.
+  Cancelling after the frame write started does not interrupt that write, and removes a Request
+  from the pending map. An operation's outcome is whichever comes first: the result the connector
+  settles or the cancellation.
 - A Request timeout starts at operation acceptance and covers queue wait, frame write, and reply
   wait. Expiry during queue wait fails the Request without writing its frame. §9 owns its error
   classification.
@@ -464,8 +468,8 @@ identifier into the payload for that.
 - The handle's send and request carry that Actor's `actor_slot`, and a
   receive registration on the handle is given only the messages whose
   counterpart is that Actor. Send and request on a closed handle are
-  `ValidationFailed`; otherwise the timeout, cancellation and backpressure
-  meanings are those of the connector-level builders. Actor lifecycle
+  `ValidationFailed`; otherwise the timeout and cancellation semantics match
+  the connector-level builders. Actor lifecycle
   callbacks and a handle's receive registrations follow §7's dispatch mode,
   registration order, deregistration, callback failure and "doesn't wait for
   completion" rules as they are.
@@ -486,7 +490,7 @@ mode (§7). The reply received hook follows the dispatch mode like any other cal
 | Hook | When it runs | What it receives |
 |---|---|---|
 | request sending | just before the request frame is built | the request packet name, the `actor_id` when sent through an Actor handle, a way to add metadata |
-| reply received | when the request ends (reply, failure, timeout, connection end) | the request packet name, `actor_id`, whether it succeeded, the reply message on success, the error (§9) on failure, the elapsed time |
+| reply received | when the connector settles the request result (reply, failure, timeout, connection end); not run for a request the caller cancelled | the request packet name, `actor_id`, whether it succeeded, the reply message on success, the error (§9) on failure, the elapsed time |
 
 - **Metadata the request sending hook adds is carried by that request.** It is validated like
   any other metadata (§4.4).
@@ -559,7 +563,7 @@ state.
 | `Connecting` | The caller waits until the already-in-progress connection attempt finishes. |
 | `Connected` | Since already connected, the call completes immediately as success. |
 | `Reconnecting` | The caller waits for the result of the in-progress automatic reconnect. |
-| `Closed` | Since a closed connector can't reconnect, the call fails with an error. |
+| `Closed` | A closed connector doesn't reconnect. §9 sets the call's failure code. |
 
 **Reconnect and pending request:**
 
@@ -630,7 +634,7 @@ the same across every language.**
 Once the connection drops, the connector exposes a **close reason.**
 The value set is a **closed set** aligned with the server-side
 `close_reason`
-([runtime-metrics §4](../server/06-observability/02-runtime-metrics.en.md#6-object-count-capacity-and-relocation-instruments)),
+([runtime-metrics §6](../server/06-observability/02-runtime-metrics.en.md#6-object-count-capacity-and-relocation-instruments)),
 and the wire encoding is owned by §4.6's `session-closing` control
 packet.
 
@@ -748,7 +752,7 @@ connection state handler, request callback and Actor lifecycle callback —
 is the connector's work;
 waiting for it to finish is not. No kind is an exception. The connection state and disconnect
 callbacks that result from `close` follow the dispatch mode like any other
-callback: in `Immediate` the close work runs those handlers, and in `Manual` they
+callback: in `Immediate` they run on the same path as other `Immediate` callbacks, and in `Manual` they
 run at the next dispatch pump after `close`. Either way `close` does not look
 at whether the handlers finished. Disconnecting after the reconnect attempts
 are used up and disconnecting on a transport error are the same (§6).
@@ -825,12 +829,12 @@ reason, or the reconnect condition.
 | `RequestTimeout` | Only that request fails | Kept | None | Not done |
 | `ConnectTimeout`, `TlsValidationFailed` | Connect failure | `Disconnected` | `TransportError` | Applies the reconnect option's attempt policy |
 | `Disconnected` — transport dropped | The in-progress operation fails | `Disconnected` | `TransportError` | Applied if the reconnect option is on |
-| `Disconnected` — `close` | The in-progress operation fails | `Disconnected` | `ClientClose` | Not done |
+| `Disconnected` — `close` | The in-progress operation fails, and so does a connect, Send, Request or wait surface (§10.1) called after `close` | `Closed` | `ClientClose` | Not done |
 | `SendFailed` — sequence exhaustion | Only that operation fails | Kept | None | Not done |
 | `SendFailed` — transport write failure | That operation fails | `Disconnected` if the transport dropped; otherwise kept | `TransportError` if the transport dropped; otherwise none | Applied only if the transport dropped and the reconnect option is on |
-| `FrameDecodeFailed` — frame/header | That frame isn't delivered, and the pending request fails | Ended | `TransportError` | Applied if the reconnect option is on |
+| `FrameDecodeFailed` — frame/header | That frame isn't delivered, and the pending request fails | Ended | `ProtocolError` | Applied if the reconnect option is on |
 | `FrameDecodeFailed` — Error JSON payload | The `request_seq` recipient defined by [§5.2](#52-request-correlation) | Kept | None | Not done |
-| `FrameTooLarge` | That frame isn't delivered, and the pending request fails | Ended | `TransportError` | Applied if the reconnect option is on |
+| `FrameTooLarge` | That frame isn't delivered, and the pending request fails | Ended | `ProtocolError` | Applied if the reconnect option is on |
 | `CompressionFailed` | Only that send operation fails | Kept | None | Not done |
 | `DecompressionFailed` | Only that receive packet or pending request fails | Kept | None | Not done |
 | `UserCallbackFailed`, `RemoteError` | Delivered as an error event or the related callback/request | Kept | None | Not done |
@@ -1033,11 +1037,13 @@ test name differs, the meaning must be the same.
 | **Actor lifecycle control** | **A malformed bound/unbound payload, a bound announcement for an already open slot, a bound announcement for an `actor_id` already in use, and an unbound announcement for a slot missing from the table all end the connection as `FrameDecodeFailed` (§4.6, §5.6, §9)** |
 | **Actor table** | **`$zlink.actor.bound` arrives before the first packet carrying that slot, a received message's `actor_id` is resolved through the table, and a frame without a slot carries no `actor_id` (§5.6)** |
 | **Actor handle** | **`actors` is a read-only snapshot taken at the call and a closed handle still reads its `actor_id`. The list and the lookup are updated before the bound callback, which runs before that Actor's first packet callback, and a dropped transport closes every open handle in issue order with its unbound callback before the disconnected callback (§5.6, §7)** |
-| **Actor handle send and receive** | **A handle's send and request carry that slot and a handle's receive registration gets only that Actor's messages. Send/request on a closed handle are `ValidationFailed`, and an open handle gives the same timeout, cancellation and backpressure results as the connector-level builders (§5.6)** |
+| **Actor handle send and receive** | **A handle's send and request carry that slot and a handle's receive registration gets only that Actor's messages. Send/request on a closed handle are `ValidationFailed`, and an open handle gives the same timeout and cancellation results as the connector-level builders (§5.6)** |
 | **Actor language projection** | **The .NET typed extensions, the Java named typed overload, the C++ templates and subscriptions, the TypeScript Disposable, and the Unity WebGL JSON boundary round trip are observable on the public surface (§5.6, language documents)** |
 | **No flow sent** | **Outbound frames carry no flow field and no flag `0x10`, inbound flow fields are dropped after the structural check, and a one-way `Send` has no correlation id (§5.5)** |
 | **Request hooks** | **The request sending hook runs just before sending, in registration order, for both connector and Actor handle requests, and the metadata it adds is in the frame; the reply received hook runs once per success, failure, timeout and connection end and cannot change the outcome; a hook failure does not change the request result (§5.7)** |
 | **Both name forms** | **Receive registration, send and request at the connector and Actor handle levels, and the wait surfaces at the connector level, offer the named form and the type form, and both reach the same packet name (§5)** |
-| **Handlers and close** | **Push, error, disconnect, connection state, Actor bound and Actor unbound handlers and request callbacks all follow the registration order, callback failure and no-waiting rules, and the connector does not wait for a handler that never finishes. The connection state and disconnect callbacks that result from `close` are run by the close work in `Immediate`, so before a `close` called outside a callback returns, and at the next dispatch pump after `close` in `Manual`. A `close` called inside a handler returns after starting close. Disconnecting after the reconnect attempts are used up and on a transport error runs them in the same order and does not wait (§7)** |
+| **Handlers and close** | **Push, error, disconnect, connection state, Actor bound and Actor unbound handlers and request callbacks all follow the registration order, callback failure and no-waiting rules, and the connector does not wait for a handler that never finishes. The connection state and disconnect callbacks that result from `close` run on the same path as other `Immediate` callbacks in `Immediate`, and at the next dispatch pump after `close` in `Manual`. A `close` called inside a handler returns after starting close. Disconnecting after the reconnect attempts are used up and on a transport error runs them in the same order and does not wait (§7)** |
 | **Close and unwritten frames** | **`close` returns even when the peer does not read; Sends and Requests whose frames were not written, or were still being written, to the transport fail with `Disconnected`, and a completed Send's frame has been written to the transport (§5.2, §7)** |
+| **Close reason — protocol violation and calls after close** | **A frame or header decode failure and an oversized frame end the connection with close reason `ProtocolError`; a transport read failure leaves `TransportError`. A connect, Send, Request or wait surface called after `close` fails with `Disconnected`; `close`, dispatch, unregistration and reading the close reason do not fail (§7, §9)** |
+| **Cancellation** | **An operation cancelled while queued writes no frame; a cancelled Request ends with the language's cancellation representation rather than a §9 code, and the reply received hook does not run (§5.2, §5.7)** |
 | **Close reason read surface** | **Code that did not receive the event reads the same value. A failed first connect still leaves a reason, and reconnecting does not clear it (§6.2)** |

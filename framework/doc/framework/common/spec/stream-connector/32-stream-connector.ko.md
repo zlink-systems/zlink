@@ -317,12 +317,16 @@ response에만** 들어간다.
 - **request timeout·close·disconnect가 발생하면 pending request는 실패로 완료하고 map에서
   제거한다.** 재연결 후 자동 재전송하지 않는다(§6).
 - Outbound operation은 연결 상태와 입력 검증을 통과해 connector의 송신 순서에 등록될 때
-  수락한다. 이 수락은 frame을 write queue에 넣을 자리를 기다리기 전에 일어난다.
-- 연결마다 frame write queue의 크기는 operation 4,096개로 고정한다. Queue가 차면 뒤에 수락한
-  operation은 자리를 기다리며, 각자의 timeout이나 취소를 따른다.
-- Write queue는 자리를 기다리는 operation까지 수락 순서대로 유지하고 frame write를 하나씩
+  수락한다.
+- 연결마다 frame write queue 하나가 수락한 operation을 수락 순서대로 유지하고 frame write를 하나씩
   완료한 뒤 다음 write를 시작한다. 따라서 뒤에 수락한 operation은 먼저 수락한 operation의
-  frame write를 앞지르지 않는다.
+  frame write를 앞지르지 않는다. Queue에는 크기 상한이 없으며, 기다리는 operation은 각자의
+  timeout이나 취소를 따른다.
+- caller가 operation을 취소하면 그 operation은 실패가 아니라 취소로 끝난다. 취소는 §9의 오류 코드로
+  전달하지 않으며 §9.2의 적용 대상이 아니다. 취소의 표현은 언어 문서가 소유한다. Queue 대기 중에
+  취소하면 frame을 쓰지 않는다. frame write가 시작된 뒤의 취소는 그 write를 중단하지 않고, Request는
+  pending map에서 제거한다. 한 operation의 결과는 connector가 정한 결과와 취소 가운데 먼저 일어난
+  하나다.
 - Request timeout은 operation 수락 때 시작해 queue 대기, frame write와 reply 대기를 모두
   포함한다. Queue 대기 중 만료되면 frame을 쓰지 않고 실패로 완료한다. 오류 분류는 §9가 정한다.
 - `Send`는 그 frame을 transport에 쓴 뒤 완료한다.
@@ -397,7 +401,7 @@ application이 payload에 식별자를 넣어 구분하지 않는다.
   unbound callback을 queue에 넣은 뒤 connection state와 disconnected callback을 queue에 넣는다.
 - handle의 send·request는 그 Actor의 `actor_slot`을 실어 보내고, handle의 수신 등록에는 그 Actor가
   상대인 message만 전달된다. 닫힌 handle의 send·request는 `ValidationFailed`이며, 그 밖의
-  timeout·cancellation·backpressure 의미는 connector 수준 builder와 같다. Actor lifecycle callback과
+  timeout·cancellation 의미는 connector 수준 builder와 같다. Actor lifecycle callback과
   handle의 수신 등록은 §7의 dispatch mode, 등록 순서, 등록 해제, callback 실패와 "완료를 기다리지
   않는다" 규칙을 그대로 따른다.
 - connector 수준의 send·request·수신 등록은 slot 없이 동작하며 Actor를 하나만 bind하는 application은
@@ -416,7 +420,7 @@ Send와 push 수신에는 적용하지 않는다.
 | hook | 호출 시점 | 받는 값 |
 |---|---|---|
 | request sending | request frame을 만들기 직전 | 요청 packet 이름, Actor handle로 보냈으면 그 `actor_id`, metadata 추가 수단 |
-| reply received | request가 끝났을 때(reply, 실패, timeout, 연결 종료) | 요청 packet 이름, `actor_id`, 성공 여부, 성공이면 reply message, 실패면 오류(§9), 경과 시간 |
+| reply received | connector가 request 결과를 정했을 때(reply, 실패, timeout, 연결 종료). caller가 취소해 끝낸 request에는 실행하지 않는다 | 요청 packet 이름, `actor_id`, 성공 여부, 성공이면 reply message, 실패면 오류(§9), 경과 시간 |
 
 - **request sending hook이 추가한 metadata는 그 request에 실린다.** 검증은 다른 metadata와 같다(§4.4).
 - **reply received hook은 결과를 읽기만 한다.** hook은 reply나 오류를 바꾸거나 막지 못한다.
@@ -484,7 +488,7 @@ await connector.Close.Async(cancellationToken);    // callback 밖에서는 공�
 | `Connecting` | Caller는 이미 진행 중인 연결 시도가 끝날 때까지 기다린다. |
 | `Connected` | 이미 연결되어 있으므로 호출은 성공으로 즉시 완료된다. |
 | `Reconnecting` | Caller는 진행 중인 자동 reconnect 결과를 기다린다. |
-| `Closed` | 닫힌 connector를 다시 연결할 수 없으므로 호출은 오류로 실패한다. |
+| `Closed` | 닫힌 connector는 다시 연결하지 않는다. 호출의 실패 코드는 §9가 정한다. |
 
 **재연결과 pending request:**
 
@@ -540,7 +544,7 @@ await connector.Close.Async(cancellationToken);    // callback 밖에서는 공�
 ### 6.2 종료 사유
 
 연결이 끊기면 connector는 **종료 사유**를 노출한다. 값 집합은 서버 측 `close_reason`
-([runtime-metrics §4](../server/06-observability/02-runtime-metrics.ko.md#6-object-수capacity와-relocation-계기))과 정합하는 **닫힌 집합**이며, wire 인코딩은
+([runtime-metrics §6](../server/06-observability/02-runtime-metrics.ko.md#6-object-수capacity와-relocation-계기))과 정합하는 **닫힌 집합**이며, wire 인코딩은
 §4.6의 `session-closing` control packet이 소유한다.
 
 | 사유 | 의미 |
@@ -627,8 +631,8 @@ state handler 모두 같다. connector를 닫아야만 등록을 없앨 수 있�
 **connector는 handler의 완료를 기다리지 않는다.** 등록된 handler — push handler, error handler,
 끊김 handler, 연결 상태 handler, request callback과 Actor lifecycle callback — 를 실행하는 것은 connector의 일이지만 그
 handler가 끝나기를 기다리는 것은 아니다. 종류에 따른 예외는 없다. `close`로 생기는 연결 상태 callback과
-끊김 callback도 다른 callback과 같이 dispatch mode를 따른다. `Immediate`에서는 종료 작업이 그 handler를
-실행하고, `Manual`에서는 `close` 뒤의 다음 dispatch pump에서 실행한다. 어느 경우든 `close`는 handler가
+끊김 callback도 다른 callback과 같이 dispatch mode를 따른다. `Immediate`에서는 다른
+`Immediate` callback과 같은 경로로 실행하고, `Manual`에서는 `close` 뒤의 다음 dispatch pump에서 실행한다. 어느 경우든 `close`는 handler가
 끝났는지 보지 않는다. 재연결 시도가 소진되어 끊길 때와 transport 오류로 끊길 때도 같다(§6).
 
 connector가 기다리는 것은 자기 것뿐이다 — transport 종료와 대기 중인 operation의 실패 처리. 종료 작업은
@@ -688,12 +692,12 @@ terminal 여부, 종료 사유와 reconnect 조건을 바꾸지 않는다.
 | `RequestTimeout` | 해당 request만 실패 | 유지 | 없음 | 안 함 |
 | `ConnectTimeout`, `TlsValidationFailed` | connect 실패 | `Disconnected` | `TransportError` | reconnect option의 시도 정책을 적용 |
 | `Disconnected` — transport 끊김 | 진행 중인 operation 실패 | `Disconnected` | `TransportError` | reconnect option이 켜져 있으면 적용 |
-| `Disconnected` — `close` | 진행 중인 operation 실패 | `Disconnected` | `ClientClose` | 안 함 |
+| `Disconnected` — `close` | 진행 중인 operation과 `close` 뒤에 호출한 connect·Send·Request·대기 표면(§10.1) 실패 | `Closed` | `ClientClose` | 안 함 |
 | `SendFailed` — sequence 고갈 | 해당 operation만 실패 | 유지 | 없음 | 안 함 |
 | `SendFailed` — transport write 실패 | 해당 operation 실패 | transport가 끊겼으면 `Disconnected`, 아니면 유지 | transport가 끊겼으면 `TransportError`, 아니면 없음 | transport가 끊겼고 reconnect option이 켜져 있으면 적용 |
-| `FrameDecodeFailed` — frame·header | 해당 frame을 전달하지 않고 pending request를 실패시킴 | 종료 | `TransportError` | reconnect option이 켜져 있으면 적용 |
+| `FrameDecodeFailed` — frame·header | 해당 frame을 전달하지 않고 pending request를 실패시킴 | 종료 | `ProtocolError` | reconnect option이 켜져 있으면 적용 |
 | `FrameDecodeFailed` — Error JSON payload | [§5.2](#52-request-correlation)의 `request_seq` 수신 대상 | 유지 | 없음 | 안 함 |
-| `FrameTooLarge` | 해당 frame을 전달하지 않고 pending request를 실패시킴 | 종료 | `TransportError` | reconnect option이 켜져 있으면 적용 |
+| `FrameTooLarge` | 해당 frame을 전달하지 않고 pending request를 실패시킴 | 종료 | `ProtocolError` | reconnect option이 켜져 있으면 적용 |
 | `CompressionFailed` | 해당 송신 operation만 실패 | 유지 | 없음 | 안 함 |
 | `DecompressionFailed` | 해당 수신 packet 또는 pending request만 실패 | 유지 | 없음 | 안 함 |
 | `UserCallbackFailed`, `RemoteError` | 오류 event 또는 관련 callback/request로 전달 | 유지 | 없음 | 안 함 |
@@ -866,12 +870,14 @@ Unity WebGL UPM package는 새 wire runtime을 만들지 않는다. npm package 
 | **Actor lifecycle control** | **잘못된 bound·unbound payload, 이미 열린 slot의 bound, 이미 쓰는 `actor_id`의 bound, 표에 없는 slot의 unbound가 모두 `FrameDecodeFailed`로 연결을 끝낸다(§4.6, §5.6, §9)** |
 | **Actor 대응표** | **`$zlink.actor.bound`가 그 slot을 싣는 첫 packet보다 먼저 도착하고, 수신 message의 `actor_id`가 표로 해석되며, slot이 없는 frame은 `actor_id`가 비어 있다(§5.6)** |
 | **Actor handle** | **`actors`가 호출 시점의 read-only snapshot이고 닫힌 handle에서도 `actor_id`를 읽는다. 목록과 조회가 bound·unbound에 따라 먼저 갱신되고, bound callback이 그 Actor의 첫 packet callback보다 먼저 실행되며, 연결이 끊기면 발급 순서대로 handle을 닫고 unbound callback을 disconnect callback보다 먼저 실행한다(§5.6, §7)** |
-| **Actor handle 송수신** | **handle의 send·request가 그 slot을 싣고, handle 수신 등록이 그 Actor의 message만 받는다. 닫힌 handle의 send·request는 `ValidationFailed`이고, 열린 handle은 connector 수준 builder와 같은 timeout·cancellation·backpressure 결과를 낸다(§5.6)** |
+| **Actor handle 송수신** | **handle의 send·request가 그 slot을 싣고, handle 수신 등록이 그 Actor의 message만 받는다. 닫힌 handle의 send·request는 `ValidationFailed`이고, 열린 handle은 connector 수준 builder와 같은 timeout·cancellation 결과를 낸다(§5.6)** |
 | **Actor 언어 투영** | **.NET typed 확장, Java named typed overload, C++ template과 subscription, TypeScript Disposable, Unity WebGL JSON 경계 왕복을 public 표면으로 관찰한다(§5.6, 언어 문서)** |
 | **flow 비전송** | **outbound frame에 flow 필드와 flag `0x10`이 없고, inbound flow 필드는 구조 검사 뒤 버려지며, one-way `Send`에 correlation id가 없다(§5.5)** |
 | **요청 hook** | **request sending hook이 connector·Actor handle request 모두에서 전송 직전에 등록 순서로 실행되고 추가한 metadata가 frame에 실리며, reply received hook이 성공·실패·timeout·연결 종료마다 한 번 실행되고 결과를 바꾸지 못하며, hook 실패가 request 결과를 바꾸지 않는다(§5.7)** |
 | **이름 두 형태** | **수신 등록·send·request는 connector·Actor handle 수준에서, 대기 표면은 connector 수준에서 이름 명시 형태와 타입 형태를 모두 제공하고 같은 packet 이름에 닿는다(§5)** |
-| **handler와 종료** | **push·error·끊김·연결 상태·Actor bound·Actor unbound handler와 request callback 모두 등록 순서·callback 실패·완료를 기다리지 않는 규칙을 따르며, 끝나지 않는 handler가 있어도 connector가 그 완료를 기다리지 않는다. `close`로 생기는 연결 상태·끊김 callback은 `Immediate`에서 종료 작업이 실행하므로 callback 밖에서 호출한 `close`가 돌아오기 전에, `Manual`에서 `close` 뒤의 다음 dispatch pump에서 실행된다. handler 안에서 호출한 `close`는 종료를 시작한 뒤 돌아온다. 재연결 소진과 transport 오류로 끊길 때도 같은 순서로 실행하고 기다리지 않는다(§7)** |
+| **handler와 종료** | **push·error·끊김·연결 상태·Actor bound·Actor unbound handler와 request callback 모두 등록 순서·callback 실패·완료를 기다리지 않는 규칙을 따르며, 끝나지 않는 handler가 있어도 connector가 그 완료를 기다리지 않는다. `close`로 생기는 연결 상태·끊김 callback은 `Immediate`에서 다른 `Immediate` callback과 같은 경로로, `Manual`에서 `close` 뒤의 다음 dispatch pump에서 실행된다. handler 안에서 호출한 `close`는 종료를 시작한 뒤 돌아온다. 재연결 소진과 transport 오류로 끊길 때도 같은 순서로 실행하고 기다리지 않는다(§7)** |
 | **close와 쓰지 않은 frame** | **상대가 읽지 않아도 `close`가 돌아오고, transport에 쓰지 않았거나 쓰는 중이던 frame의 Send·Request는 `Disconnected`로 실패하며, 완료된 Send의 frame은 transport에 쓰여 있다(§5.2·§7)** |
+| **종료 사유 — 프로토콜 위반과 close 뒤 호출** | **frame·header decode 실패와 수신 한도 초과는 연결을 끝내고 종료 사유를 `ProtocolError`로 남기며, transport read 실패는 `TransportError`로 남는다. `close` 뒤에 호출한 connect·Send·Request·대기 표면은 `Disconnected`로 실패하고, `close`·dispatch·등록 해제·종료 사유 읽기는 실패하지 않는다(§7, §9)** |
+| **취소** | **queue 대기 중 취소한 operation은 frame을 쓰지 않고, 취소한 Request는 §9 코드가 아닌 언어의 취소 표현으로 끝나며, reply received hook이 실행되지 않는다(§5.2, §5.7)** |
 | **종료 사유 읽기** | **끊긴 뒤 이벤트를 받지 않은 코드도 같은 값을 읽는다. 첫 connect 실패에도 사유가 남고, 재연결해도 지워지지 않는다(§6.2)** |
 

@@ -226,7 +226,7 @@ typedef enum zlink_config_result_t {
 `CONFLICT` represents a duplicate name, duplicate binding, or process-local identity
 collision. `BUFFER_TOO_SMALL` means that query or retain output capacity is insufficient
 and no partial caller-owned output was written. `BUSY` means that the same mutable batch
-or configuration object was used concurrently.
+or configuration object was used concurrently, or that a poller was used while its wait was active.
 
 ### 4.6 Receive flow state configuration result
 

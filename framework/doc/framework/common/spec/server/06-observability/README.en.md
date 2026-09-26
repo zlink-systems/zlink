@@ -118,7 +118,7 @@ The cost rule for turning this record on and off is defined by
 | The progress and result of individual host operations (relocation, shutdown) | [Host Relocation and Shutdown](../05-location-relocation/05-host-relocation-flow.en.md) |
 | The ownership and size of metadata the application sends with a message | [Message Model](../00-foundation/05-message-model.en.md) |
 | Transport connection liveness and peer deadline | [Transport Connection Liveness](../02-channel-transport/05-transport-liveness.en.md) |
-| The definition of the STREAM connection close reason (`close_reason`) | [Session "STREAM Server Session"](../04-session/01-stream-session.en.md) |
+| The definition of the STREAM connection close reason (`close_reason`) | [Runtime metrics §6](02-runtime-metrics.en.md#6-object-count-capacity-and-relocation-instruments) |
 
 ---
 
