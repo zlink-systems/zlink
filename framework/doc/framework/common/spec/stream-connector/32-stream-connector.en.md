@@ -755,8 +755,9 @@ are used up and disconnecting on a transport error are the same (§6).
 
 What the connector waits for is its own — closing the transport and
 failing the operations that are waiting. The close work does not write
-frames not yet written to the transport, and fails their operations with
-`Disconnected`; §9.2 owns how that failure is delivered. Closing the
+frames not yet written to the transport, and closes the transport without
+waiting for a frame already being written to finish. The operations of both
+frames fail with `Disconnected`; §9.2 owns how that failure is delivered. Closing the
 transport does not wait for the peer to read or respond. To know that a
 Send's frame was written to the transport, wait for that Send to complete
 before `close` (§5.2).
@@ -1038,5 +1039,5 @@ test name differs, the meaning must be the same.
 | **Request hooks** | **The request sending hook runs just before sending, in registration order, for both connector and Actor handle requests, and the metadata it adds is in the frame; the reply received hook runs once per success, failure, timeout and connection end and cannot change the outcome; a hook failure does not change the request result (§5.7)** |
 | **Both name forms** | **Receive registration, send and request at the connector and Actor handle levels, and the wait surfaces at the connector level, offer the named form and the type form, and both reach the same packet name (§5)** |
 | **Handlers and close** | **Push, error, disconnect, connection state, Actor bound and Actor unbound handlers and request callbacks all follow the registration order, callback failure and no-waiting rules, and the connector does not wait for a handler that never finishes. The connection state and disconnect callbacks that result from `close` are run by the close work in `Immediate`, so before a `close` called outside a callback returns, and at the next dispatch pump after `close` in `Manual`. A `close` called inside a handler returns after starting close. Disconnecting after the reconnect attempts are used up and on a transport error runs them in the same order and does not wait (§7)** |
-| **Close and unwritten frames** | **`close` returns even when the peer does not read; Sends and Requests whose frames were not written to the transport fail with `Disconnected`, and a completed Send's frame has been written to the transport (§5.2, §7)** |
+| **Close and unwritten frames** | **`close` returns even when the peer does not read; Sends and Requests whose frames were not written, or were still being written, to the transport fail with `Disconnected`, and a completed Send's frame has been written to the transport (§5.2, §7)** |
 | **Close reason read surface** | **Code that did not receive the event reads the same value. A failed first connect still leaves a reason, and reconnecting does not clear it (§6.2)** |

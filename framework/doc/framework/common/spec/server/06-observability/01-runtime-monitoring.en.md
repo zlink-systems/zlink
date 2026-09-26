@@ -235,6 +235,20 @@ accepting application traffic.
 | `stopped` | That topology's work and connection cleanup is finished. |
 | `failed` | An error occurred that prevents continuing to operate that topology. |
 
+A RouteMesh peer, a ClientServer target, an automatic fanout publisher, and placement carry a reason
+only when that item is unavailable. Each reports as its reason the first of the following conditions
+that applies.
+
+| Condition | Reason |
+|---|---|
+| The host state is `preparing`, `stopped`, or `error` | `runtime_not_ready` |
+| The host state is `relocating`, `relocated`, or `draining`, or that peer, target, or publisher is `draining` | `draining` |
+| The host meets the new-work blocking conditions of [Location runtime §5](../05-location-relocation/01-location-runtime.en.md#5-blocking-a-previous-owners-new-work-when-the-store-connection-drops) | `location_unavailable` |
+| The RouteMesh peer is `connecting` or `not_connected` | `no_ready_peer` |
+| The ClientServer target or automatic fanout publisher is not ready | `no_ready_target` |
+| Placement weight is `0`, or there is no capacity or activation concurrency headroom | `capacity_exceeded` |
+| The item is unavailable for any other reason | `internal_failure` |
+
 A RouteMesh peer provides a node's transport identity,
 [Routing ID](../00-foundation/02-glossary.en.md#routing-id), as the Node RID value.
 Endpoint, descriptor revision, and connection generation aren't provided.
