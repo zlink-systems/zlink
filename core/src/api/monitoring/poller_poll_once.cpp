@@ -66,7 +66,7 @@ int zlink_poll (zlink_pollitem_t *items_,
                 return -1;
             }
             if (validate_socket_poller_event_mask (
-                  items_[i].events, false,
+                  items_[i].events, handle.socket->is_monitor_socket (), false,
                   socket_type (handle) == ZLINK_CORE_SOCKET_ROUTER) != 0) {
                 if (error_out_)
                     *error_out_ = zlink::config_result_internal::from_errno (errno);

@@ -98,8 +98,8 @@
         <file src="..\\..\\bin\\x64\\Debug\\$(package.platformtoolset)\\static\\$(package.target).lib" target="build\\native\\bin\\$(package.target)-x64-$(package.platformtoolset)-mt-sgd-$(package.pathversion).lib" />
 
         <!-- x64 Static link time code generation libraries (.ltcg.lib) -->
-        <file src="..\\..\\bin\\Win32\\Release\\$(package.platformtoolset)\\ltcg\\$(package.target).lib" target="build\\native\\bin\\$(package.target)-x64-$(package.platformtoolset)-mt-s-$(package.pathversion).ltcg.lib" />
-        <file src="..\\..\\bin\\Win32\\Debug\\$(package.platformtoolset)\\ltcg\\$(package.target).lib" target="build\\native\\bin\\$(package.target)-x64-$(package.platformtoolset)-mt-sgd-$(package.pathversion).ltcg.lib" />
+        <file src="..\\..\\bin\\x64\\Release\\$(package.platformtoolset)\\ltcg\\$(package.target).lib" target="build\\native\\bin\\$(package.target)-x64-$(package.platformtoolset)-mt-s-$(package.pathversion).ltcg.lib" />
+        <file src="..\\..\\bin\\x64\\Debug\\$(package.platformtoolset)\\ltcg\\$(package.target).lib" target="build\\native\\bin\\$(package.target)-x64-$(package.platformtoolset)-mt-sgd-$(package.pathversion).ltcg.lib" />
     </files>
 <!--
 #################################################################

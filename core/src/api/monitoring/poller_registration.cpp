@@ -44,13 +44,18 @@ int validate_defined_event_bits (short events_)
 }
 }
 
-int validate_socket_poller_event_mask (short events_, bool allow_completion_,
-                                       bool allow_route_)
+int validate_socket_poller_event_mask (short events_, bool is_monitor_,
+                                       bool allow_completion_, bool allow_route_)
 {
     if (validate_defined_event_bits (events_) != 0)
         return -1;
-    if ((events_ & ZLINK_POLLCOMPLETION) != 0 && !allow_completion_) {
+    if ((events_ & ZLINK_POLLCOMPLETION) != 0
+        && (is_monitor_ || !allow_completion_)) {
         errno = EINVAL;
+        return -1;
+    }
+    if (is_monitor_ && (events_ & ~ZLINK_POLLIN) != 0) {
+        errno = ENOTSUP;
         return -1;
     }
     if ((events_ & ZLINK_POLLROUTE) != 0 && !allow_route_) {
