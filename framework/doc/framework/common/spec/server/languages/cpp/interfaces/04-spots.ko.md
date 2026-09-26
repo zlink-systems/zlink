@@ -600,11 +600,12 @@ private:
 object의 read-only member로 move하고 `context()`에서 그 handle을 반환한다. Default construction, copy와
 assignment로 identity를 만들거나 교체할 수 없다.
 
-`route_mesh_runtime_options_t`는 public DI singleton이다. 등록되지 않은 [ChannelName](../../../00-foundation/02-glossary.ko.md#channelname)을 조회하면 구성
-오류로 실패한다. 실행 중에는 ChannelName weight만 변경할 수 있다. 최대 메시지 크기는 startup 뒤
-변경할 수 없다. [Weight](../../../00-foundation/02-glossary.ko.md#weight)는 0부터 10000까지이고 기본값은 100이다. 범위
-밖 값은 startup 설정과 runtime 변경에서 configuration error다. 0은 해당 membership을 새 select-one과
-Logical Multicast remote target에서 제외한다.
+`route_mesh_runtime_options_t`는 public DI singleton이다. 등록되지 않은 `mesh_name` 또는 [ChannelName](../../../00-foundation/02-glossary.ko.md#channelname)을
+조회하면 configuration error다. 실행 중에는 `mesh(mesh_name).placement_weight()`와 `channel(channel_name).weight()`를
+변경할 수 있다. 두 weight는 독립적이며, placement weight는 새 object의 placement target 선택에만 사용한다. 최대
+메시지 크기는 startup 뒤 변경할 수 없다. [Weight](../../../00-foundation/02-glossary.ko.md#weight)는 0부터 10000까지이고
+기본값은 100이다. 범위 밖 값은 startup 설정과 runtime 변경에서 configuration error다. Channel weight 0은 해당
+membership을 새 select-one과 Logical Multicast remote target에서 제외한다.
 
 Spot과 Entry Spot은 activation scope가 수명을 소유한다. 기본 생성 가능한 타입은 타입만
 등록한다. 생성자 의존성이 있거나 application이 생성 방법을 결정해야 하는 타입은 factory

@@ -669,12 +669,13 @@ can't be created or replaced through default construction, copy, or
 assignment.
 
 `route_mesh_runtime_options_t` is a public DI singleton. Looking up an
-unregistered [ChannelName](../../../00-foundation/02-glossary.en.md#channelname)
-fails as a configuration error. Only the ChannelName weight can be
-changed while running. The maximum message size can't be changed after
+unregistered `mesh_name` or [ChannelName](../../../00-foundation/02-glossary.en.md#channelname)
+is a configuration error. At runtime, `mesh(mesh_name).placement_weight()` and
+`channel(channel_name).weight()` can be changed independently. Placement weight is
+used only to select a placement target for a new object. The maximum message size can't be changed after
 startup. [Weight](../../../00-foundation/02-glossary.en.md#weight) is 0 through
 10000, defaulting to 100. A value outside the range is a configuration
-error in both startup config and runtime change. 0 excludes that
+error in both startup config and runtime change. A Channel weight of 0 excludes that
 membership from a new select-one and Logical Multicast remote target.
 
 A Spot and Entry Spot have their lifetime owned by the activation
