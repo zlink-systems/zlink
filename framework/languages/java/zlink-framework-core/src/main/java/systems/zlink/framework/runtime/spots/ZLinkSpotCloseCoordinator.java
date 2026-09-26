@@ -146,6 +146,13 @@ final class ZLinkSpotCloseCoordinator {
     }
 
     private void end(CompletableFuture<Boolean> result, Boolean value, Throwable failure) {
+        if (failure != null) {
+            synchronized (this) {
+                if (attempt == result) {
+                    attempt = null;
+                }
+            }
+        }
         if (failure == null) {
             result.complete(value);
         } else {

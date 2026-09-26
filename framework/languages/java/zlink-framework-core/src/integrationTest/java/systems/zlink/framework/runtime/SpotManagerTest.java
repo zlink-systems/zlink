@@ -180,7 +180,7 @@ final class SpotManagerTest {
     }
 
     @Test
-    void userCloseReleaseFailureRetainsClosingAndResumesSameCommand() throws Exception {
+    void userCloseReleaseFailureRetainsClosingAndResumesOnReentry() throws Exception {
         Zlink.version();
         String suffix = Long.toUnsignedString(System.nanoTime(), 36);
         var backing = new ZLinkInMemoryLocationStore();
@@ -268,6 +268,7 @@ final class SpotManagerTest {
                                     .close(created.spot())
                                     .toCompletableFuture()
                                     .get(5, TimeUnit.SECONDS));
+            CompletionStage<Boolean> resumed = runtime.spotManager().close(created.spot());
             secondFailure.get(5, TimeUnit.SECONDS);
             var spotsField = ZLinkFrameworkRuntime.class.getDeclaredField("spots");
             spotsField.setAccessible(true);
@@ -289,7 +290,8 @@ final class SpotManagerTest {
                     new IllegalStateException("injected second User authority release failure"));
             assertThrows(
                     java.util.concurrent.ExecutionException.class,
-                    () -> backgroundAttempt.get(5, TimeUnit.SECONDS));
+                    () -> resumed.toCompletableFuture().get(5, TimeUnit.SECONDS));
+            assertTrue(backgroundAttempt.isCompletedExceptionally());
             assertTrue(
                     runtime.spotManager()
                             .close(created.spot())

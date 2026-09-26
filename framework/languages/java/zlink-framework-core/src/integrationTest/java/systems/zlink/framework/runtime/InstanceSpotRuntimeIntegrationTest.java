@@ -395,11 +395,20 @@ final class InstanceSpotRuntimeIntegrationTest {
                                 close.invoke(
                                         spots, spotId, EchoInstanceSpot.generations.getFirst());
                 if (failureStage.equals("double-release")) {
-                    store.deleteFailedTwice.get(5, TimeUnit.SECONDS);
+                    store.deleteFailed.get(5, TimeUnit.SECONDS);
                     assertThrows(
                             java.util.concurrent.ExecutionException.class,
                             () -> closing.toCompletableFuture().get(5, TimeUnit.SECONDS));
                     assertEquals(0, target.activeSpotCount());
+                    @SuppressWarnings("unchecked")
+                    CompletionStage<Boolean> second =
+                            (CompletionStage<Boolean>)
+                                    close.invoke(
+                                            spots, spotId, EchoInstanceSpot.generations.getFirst());
+                    store.deleteFailedTwice.get(5, TimeUnit.SECONDS);
+                    assertThrows(
+                            java.util.concurrent.ExecutionException.class,
+                            () -> second.toCompletableFuture().get(5, TimeUnit.SECONDS));
                     @SuppressWarnings("unchecked")
                     CompletionStage<Boolean> resumed =
                             (CompletionStage<Boolean>)
@@ -461,9 +470,24 @@ final class InstanceSpotRuntimeIntegrationTest {
                 } else if (failureStage.equals("commit-applied-failure")) {
                     store.putAppliedThenFailed.get(5, TimeUnit.SECONDS);
                 }
-                assertThrows(
-                        java.util.concurrent.ExecutionException.class,
-                        () -> closing.toCompletableFuture().get(5, TimeUnit.SECONDS));
+                if (failureStage.equals("callback")) {
+                    // Spot address messaging §7: OnClosing failure is diagnostic; Close continues.
+                    assertTrue(closing.toCompletableFuture().get(5, TimeUnit.SECONDS));
+                } else {
+                    assertThrows(
+                            java.util.concurrent.ExecutionException.class,
+                            () -> closing.toCompletableFuture().get(5, TimeUnit.SECONDS));
+                    if (!failCommit) {
+                        @SuppressWarnings("unchecked")
+                        CompletionStage<Boolean> resumed =
+                                (CompletionStage<Boolean>)
+                                        close.invoke(
+                                                spots,
+                                                spotId,
+                                                EchoInstanceSpot.generations.getFirst());
+                        assertTrue(resumed.toCompletableFuture().get(5, TimeUnit.SECONDS));
+                    }
+                }
                 if (!failCommit) {
                     store.deleteApplied.get(5, TimeUnit.SECONDS);
                     assertEquals(0, target.activeSpotCount());
