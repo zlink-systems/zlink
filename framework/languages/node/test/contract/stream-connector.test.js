@@ -358,6 +358,27 @@ test('stream connector send builder writes a dotnet-compatible send frame once',
   );
 });
 
+test('transport write failure ends the connection and preserves the send failure', async () => {
+  const transportFactory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory,
+    reconnect: { enabled: false },
+    heartbeat: { enabled: false }
+  });
+  await instance.connect();
+  transportFactory.connection.write = async () => { throw new Error('write failed'); };
+
+  await assert.rejects(
+    () => instance.send({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array([1]) })
+      .packetName('WriteFailure').submit(),
+    error => error.error?.code === connector.ZlinkStreamErrorCode.SendFailed
+  );
+  assert.equal(instance.state, connector.ZlinkStreamConnectionState.Disconnected);
+  assert.equal(instance.closeReason, 'TransportError');
+  assert.equal(transportFactory.connection.closed, true);
+});
+
 test('stream connector disconnected send fails before transport write', async () => {
   const transportFactory = new MemoryTransportFactory();
   const instance = createStreamConnector({

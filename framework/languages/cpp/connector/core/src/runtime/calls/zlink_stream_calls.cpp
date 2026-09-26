@@ -1071,7 +1071,10 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
         for (auto request_seq : request_ids) {
             complete_pending_request (
               state, request_seq,
-              result_t<request_reply_t>::failure (transport_error->code, transport_error->message));
+              result_t<request_reply_t>::failure (transport_error->code == error_code_t::send_failed
+                                                    ? error_code_t::disconnected
+                                                    : transport_error->code,
+                                                  transport_error->message));
         }
         schedule_reconnect (state);
     } else if (reschedule) {
@@ -1171,6 +1174,8 @@ void finish_async_write (std::shared_ptr<connector_state_t> state,
                          result_t<void> result)
 {
     std::function<void (result_t<void>)> callback;
+    std::vector<std::function<void (result_t<void>)>> waiting_callbacks;
+    std::optional<error_t> write_failure;
     {
         std::lock_guard<std::mutex> lock (state->transport_mutex);
         if (!state->active_write || state->active_write->write_id != write_id) {
@@ -1183,6 +1188,13 @@ void finish_async_write (std::shared_ptr<connector_state_t> state,
             result = result_t<void>::failure (error_code_t::disconnected,
                                               "stream connector connection was replaced");
         }
+        if (!result && result.error ()->code == error_code_t::send_failed) {
+            write_failure = *result.error ();
+            while (!state->pending_writes.empty ()) {
+                waiting_callbacks.push_back (std::move (state->pending_writes.front ().callback));
+                state->pending_writes.pop_front ();
+            }
+        }
         callback = std::move (state->active_write->callback);
         state->active_write.reset ();
         state->write_in_progress = false;
@@ -1190,6 +1202,14 @@ void finish_async_write (std::shared_ptr<connector_state_t> state,
     }
     if (callback) {
         callback (std::move (result));
+    }
+    if (write_failure) {
+        for (auto &waiting : waiting_callbacks)
+            if (waiting)
+                waiting (result_t<void>::failure (error_code_t::disconnected,
+                                                  "transport write ended the connection"));
+        process_inbound_buffer (std::move (state), write_failure);
+        return;
     }
     kick_async_write (std::move (state), "completion");
 }

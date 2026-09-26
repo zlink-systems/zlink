@@ -75,6 +75,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -143,12 +144,16 @@ final class ZLinkStreamRuntimeIngressTest {
                         ZLinkStreamHeaderCodec.encode(request),
                         "{}".getBytes(StandardCharsets.UTF_8)));
         Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
-        List<String> lines = Collections.synchronizedList(new ArrayList<>());
+        List<String> lines = new CopyOnWriteArrayList<>();
+        CountDownLatch replied = new CountDownLatch(1);
         Handler handler =
                 new Handler() {
                     @Override
                     public void publish(LogRecord record) {
                         lines.add(record.getMessage());
+                        if (record.getMessage().contains(" phase=replied")) {
+                            replied.countDown();
+                        }
                     }
 
                     @Override
@@ -179,11 +184,7 @@ final class ZLinkStreamRuntimeIngressTest {
                                                         && line.contains(identity)),
                         () -> "missing session on " + phase + ": " + lines);
             }
-            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-            while (lines.stream().noneMatch(line -> line.contains(" phase=replied"))
-                    && System.nanoTime() < deadline) {
-                Thread.sleep(1);
-            }
+            assertTrue(replied.await(5, TimeUnit.SECONDS));
             assertTrue(
                     lines.stream()
                             .anyMatch(

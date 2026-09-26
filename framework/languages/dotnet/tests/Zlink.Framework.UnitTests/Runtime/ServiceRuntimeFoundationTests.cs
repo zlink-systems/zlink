@@ -889,62 +889,33 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
-    public void AdmissionGuard_SelectsOnePhysicalConnectionForExactPeerIncarnation()
+    public void AdmissionGuard_KeepsTheConnectIntentForOneLogicalPeerIncarnation()
     {
-        var smaller = RoutingId.From("mesh-a");
-        var larger = RoutingId.From("mesh-z");
-
+        // Core selects the physical route of the RID (Core ROUTER §10.1). The
+        // guard only merges two logical peer objects of the same incarnation:
+        // the object that owns the connect intent survives, independent of the
+        // RID order or of which physical pipe Core selected.
+        var outbound = ZLinkServiceConnectionDirection.Outbound;
+        var inbound = ZLinkServiceConnectionDirection.Inbound;
         Assert.Equal(
             ZLinkServiceDuplicateConnectionDecision.KeepCurrent,
-            ZLinkServiceAdmissionGuard.SelectConnection(
-                smaller,
-                larger,
-                currentLifecycleGeneration: 17,
-                ZLinkServiceConnectionDirection.Outbound,
-                "out:tcp://mesh-z:0001",
-                incomingLifecycleGeneration: 17,
-                ZLinkServiceConnectionDirection.Inbound,
-                "in:tcp://mesh-z:0002"
-            )
+            ZLinkServiceAdmissionGuard.SelectConnection(17, outbound, 17, inbound)
         );
         Assert.Equal(
             ZLinkServiceDuplicateConnectionDecision.UseIncoming,
-            ZLinkServiceAdmissionGuard.SelectConnection(
-                larger,
-                smaller,
-                currentLifecycleGeneration: 17,
-                ZLinkServiceConnectionDirection.Outbound,
-                "out:tcp://mesh-a:0002",
-                incomingLifecycleGeneration: 17,
-                ZLinkServiceConnectionDirection.Inbound,
-                "in:tcp://mesh-a:0001"
-            )
+            ZLinkServiceAdmissionGuard.SelectConnection(17, inbound, 17, outbound)
         );
         Assert.Equal(
             ZLinkServiceDuplicateConnectionDecision.KeepCurrent,
-            ZLinkServiceAdmissionGuard.SelectConnection(
-                smaller,
-                larger,
-                currentLifecycleGeneration: 17,
-                ZLinkServiceConnectionDirection.Outbound,
-                "out:tcp://mesh-z:0001",
-                incomingLifecycleGeneration: 17,
-                ZLinkServiceConnectionDirection.Outbound,
-                "out:tcp://mesh-z:0002"
-            )
+            ZLinkServiceAdmissionGuard.SelectConnection(17, outbound, 17, outbound)
+        );
+        Assert.Equal(
+            ZLinkServiceDuplicateConnectionDecision.KeepCurrent,
+            ZLinkServiceAdmissionGuard.SelectConnection(17, inbound, 17, inbound)
         );
         Assert.Equal(
             ZLinkServiceDuplicateConnectionDecision.NotDuplicate,
-            ZLinkServiceAdmissionGuard.SelectConnection(
-                smaller,
-                larger,
-                currentLifecycleGeneration: 17,
-                ZLinkServiceConnectionDirection.Outbound,
-                "out:tcp://mesh-z:0001",
-                incomingLifecycleGeneration: 19,
-                ZLinkServiceConnectionDirection.Inbound,
-                "in:tcp://mesh-z:0002"
-            )
+            ZLinkServiceAdmissionGuard.SelectConnection(17, outbound, 19, inbound)
         );
     }
 

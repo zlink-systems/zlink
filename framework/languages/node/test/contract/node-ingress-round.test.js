@@ -12,12 +12,12 @@ for (const [size, clockStep, expected] of [[1, 0, 64], [2 * 1024 * 1024, 0, 2], 
   test(`raw ingress round bounds all peers: ${size} bytes, ${clockStep}ms per record`, async t => {
     let received = 0;
     let closed = 0;
-    let monitorDrains = 0;
+    let routeSnapshots = 0;
     const payload = Buffer.alloc(size); // malformed control still consumes ordinary ingress budget
     const router = {
       setRoutingId() {}, setReceiveFlowState() {}, bind() {}, close() {},
       localEndpoint: () => 'inproc://round',
-      monitor: () => ({ drain() { monitorDrains++; return 0; }, close() {} }),
+      routesSnapshot() { routeSnapshots++; return []; },
       receive() {
         const peer = `peer-${received++ % 2}`;
         return { sourceRid: peer, sourceRoute: Buffer.from(peer), parts: [payload], close() { closed++; } };
@@ -35,13 +35,13 @@ for (const [size, clockStep, expected] of [[1, 0, 64], [2 * 1024 * 1024, 0, 2], 
       applicationJobQueue: new ApplicationJobQueue(resolveApplicationJobQueueConfiguration())
     });
     runtime.start();
-    monitorDrains = 0;
+    routeSnapshots = 0;
     t.mock.method(performance, 'now', () => received * clockStep);
     try {
       assert.equal(await runtime.pumpBatch(), true);
       assert.equal(received, expected);
       assert.equal(closed, expected);
-      assert.equal(monitorDrains, 1, 'monitor work belongs to the round, not each record');
+      assert.equal(routeSnapshots, 1, 'route observation belongs to the round, not each record');
     } finally {
       runtime.close();
     }

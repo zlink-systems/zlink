@@ -1,3 +1,4 @@
+import { ZlinkStreamErrorCode, ZlinkStreamException } from '../Contracts';
 import type {
   ZlinkStreamConnection,
   ZlinkStreamEncodedPayload,
@@ -5,7 +6,7 @@ import type {
   ZlinkStreamMessageKind
 } from '../Contracts';
 import type { ZlinkStreamFrameProtocol } from './Protocol/ZlinkStreamFrameProtocol';
-import { throwIfAborted } from './ZlinkStreamSupport';
+import { connectorError, throwIfAborted } from './ZlinkStreamSupport';
 
 export class ZlinkStreamFrameSender {
   private readonly pendingWrites = new Set<Promise<void>>();
@@ -61,10 +62,23 @@ export class ZlinkStreamFrameSender {
     frame: Uint8Array,
     signal?: AbortSignal
   ): Promise<void> {
-    const write = connection.write(frame, signal);
+    let write: Promise<void>;
+    try {
+      write = connection.write(frame, signal);
+    } catch (cause) {
+      throw connectorError(ZlinkStreamErrorCode.SendFailed, 'Transport write failed.', cause);
+    }
     this.pendingWrites.add(write);
     try {
       await write;
+    } catch (cause) {
+      if (
+        cause instanceof ZlinkStreamException &&
+        cause.error.code === ZlinkStreamErrorCode.SendFailed
+      ) {
+        throw cause;
+      }
+      throw connectorError(ZlinkStreamErrorCode.SendFailed, 'Transport write failed.', cause);
     } finally {
       this.pendingWrites.delete(write);
     }

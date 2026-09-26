@@ -2,6 +2,11 @@ export interface ZLinkRawReceivedRecord {
   readonly sourceRid: string;
   readonly sourceRoute: Uint8Array;
   readonly requestSeq?: bigint;
+  /**
+   * Core selected-route generation of the ROUTER route that delivered this
+   * record (Core ROUTER §10.1); 0n for a non-ROUTER receive. Equality only.
+   */
+  readonly routeGeneration: bigint;
   readonly reply?: (parts: readonly Uint8Array[]) => void;
   readonly parts: readonly Buffer[];
   /** Releases the ordinary Framework-owned receive record exactly once. */
@@ -37,6 +42,12 @@ export interface ZLinkRawMonitorPort {
   close(): void;
 }
 
+/** One row of the ROUTER selected-route snapshot (Core ROUTER §10.1). */
+export interface ZLinkRawRouterRoute {
+  readonly routingId: string;
+  readonly routeGeneration: bigint;
+}
+
 export interface ZLinkRawRouterPort extends ZLinkRawSocketPort {
   disconnectRid?(routingId: string): void;
   localEndpoint(): string;
@@ -49,6 +60,8 @@ export interface ZLinkRawRouterPort extends ZLinkRawSocketPort {
     timeoutMs: number
   ): Promise<readonly Buffer[]>;
   receive(dontWait?: boolean): ZLinkRawReceivedRecord | undefined;
+  /** The selected route of every RID. The socket's one route observer calls it. */
+  routesSnapshot(): readonly ZLinkRawRouterRoute[];
 }
 
 export interface ZLinkRawDealerPort extends ZLinkRawSocketPort {

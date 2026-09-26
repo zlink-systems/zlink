@@ -165,7 +165,21 @@ final class ZLinkStreamConnectionLifecycle {
             return CompletableFuture.failedFuture(
                     ZLinkStreamException.disconnected("connector is not connected"));
         }
-        return current.writeAsync(frame);
+        return current.writeAsync(frame)
+                .handle(
+                        (ignored, failure) -> {
+                            if (failure == null) return (Void) null;
+                            if (handleReceiveFailure(
+                                    current,
+                                    ZLinkStreamException.disconnected("transport write failed"))) {
+                                throw ZLinkStreamException.of(
+                                        ZLinkStreamErrorCode.SEND_FAILED,
+                                        "Transport write failed.",
+                                        failure);
+                            }
+                            throw ZLinkStreamException.disconnected(
+                                    "connection ended before the write completed");
+                        });
     }
 
     AutoCloseable onConnectionStateChanged(ZLinkStreamConnectionStateHandler handler) {
@@ -355,10 +369,10 @@ final class ZLinkStreamConnectionLifecycle {
                         });
     }
 
-    private void handleReceiveFailure(ZLinkStreamTransportConnection failed, Throwable ex) {
+    private boolean handleReceiveFailure(ZLinkStreamTransportConnection failed, Throwable ex) {
         synchronized (connectionAttemptLock) {
             if (connection != failed || state != ZLinkStreamConnectionState.CONNECTED) {
-                return;
+                return false;
             }
             //  The receive loop thread and the heartbeat thread both reach
             //  this for the same ending. Claiming the connection under the
@@ -381,6 +395,7 @@ final class ZLinkStreamConnectionLifecycle {
             transitionTo(ZLinkStreamConnectionState.DISCONNECTED);
         }
         disconnectedNotifier.run();
+        return true;
     }
 
     private CompletionStage<Void> startConnectionAttempt(

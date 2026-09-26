@@ -2622,6 +2622,7 @@ int main ()
         };
         zlink::stream_connector::connector_options_t async_send_options;
         async_send_options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
+        async_send_options.reconnect.enabled = false;
         auto async_send_state =
           std::make_shared<zlink::stream_connector::detail::connector_state_t> (async_send_options);
         async_send_state->state = zlink::stream_connector::connection_state_t::connected;
@@ -2656,8 +2657,14 @@ int main ()
                 !result
                 && result.error_code () == zlink::stream_connector::error_code_t::send_failed;
           });
-        if (!eventually ([&] { return async_write_failure_seen.load (); })
-            || !async_write_failure_state->sent_packets.empty ()) {
+        if (!eventually ([&] {
+                return async_write_failure_seen.load ()
+                       && async_write_failure_state->state
+                            == zlink::stream_connector::connection_state_t::disconnected;
+            })
+            || !async_write_failure_state->sent_packets.empty ()
+            || async_write_failure_state->last_close_reason
+                 != zlink::stream_connector::close_reason_t::transport_error) {
             return 158;
         }
 

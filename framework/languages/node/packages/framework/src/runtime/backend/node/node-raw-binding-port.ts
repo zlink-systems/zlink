@@ -33,6 +33,7 @@ import type {
   ZLinkRawMonitorRecord,
   ZLinkRawReceivedRecord,
   ZLinkRawRouterPort,
+  ZLinkRawRouterRoute,
   ZLinkRawSocketPort
 } from '../raw-binding-port';
 export type {
@@ -43,6 +44,7 @@ export type {
   ZLinkRawMonitorRecord,
   ZLinkRawReceivedRecord,
   ZLinkRawRouterPort,
+  ZLinkRawRouterRoute,
   ZLinkRawSocketPort
 } from '../raw-binding-port';
 
@@ -131,8 +133,11 @@ abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSock
   private readonly eventLoopPoller: ZLinkNodeEventLoopPoller;
   private closed = false;
 
-  protected constructor(protected readonly socket: TSocket) {
-    this.eventLoopPoller = new ZLinkNodeEventLoopPoller(socket, true, () => {});
+  protected constructor(
+    protected readonly socket: TSocket,
+    pollRoute = false
+  ) {
+    this.eventLoopPoller = new ZLinkNodeEventLoopPoller(socket, true, () => {}, pollRoute);
   }
 
   setReadableHandler(handler: () => void): void {
@@ -236,7 +241,7 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
   }
 
   constructor(socket: RouterSocket, receiveTimeoutMs?: number) {
-    super(socket);
+    super(socket, true);
     socket.options.handover = true;
     socket.options.mandatory = true;
     socket.options.probe = true;
@@ -289,6 +294,14 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     } catch (error) {
       throw translateBindingResultError(error);
     }
+  }
+
+  routesSnapshot(): readonly ZLinkRawRouterRoute[] {
+    this.requireOpen();
+    return this.socket.routesSnapshot().map((route) => ({
+      routingId: route.routingId.toString(),
+      routeGeneration: route.routeGeneration
+    }));
   }
 
   receive(dontWait = false): ZLinkRawReceivedRecord | undefined {
@@ -450,6 +463,7 @@ function receiveRecord(
     return {
       sourceRid,
       sourceRoute,
+      routeGeneration: received.routeGeneration,
       ...(requestSeq === undefined ? {} : { requestSeq }),
       ...(receivedReply === undefined
         ? {}

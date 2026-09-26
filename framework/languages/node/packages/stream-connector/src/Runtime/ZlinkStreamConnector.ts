@@ -10,6 +10,7 @@ import {
   ZlinkStreamEncodedPayload,
   ZlinkStreamError,
   ZlinkStreamErrorCode,
+  ZlinkStreamException,
   ZlinkStreamExpectNoneCall,
   zlinkStreamJsonCodec,
   ZlinkStreamMessage,
@@ -462,18 +463,29 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     correlationId?: string,
     actorSlot?: number
   ): Promise<void> {
-    await this.frameSender.send(
-      this.lifecycle.connectionForSend(),
-      kind,
-      name,
-      payload,
-      metadata,
-      compress,
-      requestSeq,
-      signal,
-      correlationId,
-      actorSlot
-    );
+    const connection = this.lifecycle.connectionForSend();
+    try {
+      await this.frameSender.send(
+        connection,
+        kind,
+        name,
+        payload,
+        metadata,
+        compress,
+        requestSeq,
+        signal,
+        correlationId,
+        actorSlot
+      );
+    } catch (cause) {
+      if (
+        cause instanceof ZlinkStreamException &&
+        cause.error.code === ZlinkStreamErrorCode.SendFailed
+      ) {
+        await this.lifecycle.transportWriteFailed(connection);
+      }
+      throw cause;
+    }
   }
 
   /**

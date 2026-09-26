@@ -317,6 +317,57 @@ final class ZLinkStreamConnectorTest {
                 "the reentered frame must start after the active write returns");
     }
 
+    @Test
+    void transportWriteFailureEndsConnectionWithSendFailed() throws Exception {
+        DefaultZLinkStreamConnector connector =
+                new DefaultZLinkStreamConnector(
+                        options(
+                                URI.create("tcp://127.0.0.1:1"),
+                                ZLinkStreamDispatchMode.IMMEDIATE,
+                                64 * 1024,
+                                64 * 1024,
+                                false,
+                                false,
+                                ZLinkStreamCompression.NONE));
+        Field lifecycleField = DefaultZLinkStreamConnector.class.getDeclaredField("lifecycle");
+        lifecycleField.setAccessible(true);
+        Object lifecycle = lifecycleField.get(connector);
+        AtomicBoolean closed = new AtomicBoolean();
+        ZLinkStreamTransportConnection transport =
+                (ZLinkStreamTransportConnection)
+                        Proxy.newProxyInstance(
+                                ZLinkStreamTransportConnection.class.getClassLoader(),
+                                new Class<?>[] {ZLinkStreamTransportConnection.class},
+                                (proxy, method, arguments) -> {
+                                    if (method.getName().equals("writeAsync")) {
+                                        return CompletableFuture.failedFuture(
+                                                new java.io.IOException("write failed"));
+                                    }
+                                    if (method.getName().equals("close")) {
+                                        closed.set(true);
+                                    }
+                                    return method.getName().equals("isOpen") ? !closed.get() : null;
+                                });
+        setField(lifecycle, "connection", transport);
+        setField(lifecycle, "state", ZLinkStreamConnectionState.CONNECTED);
+
+        CompletionException failure =
+                assertThrows(
+                        CompletionException.class,
+                        () ->
+                                invokeSendFrame(connector, "write-failure")
+                                        .toCompletableFuture()
+                                        .join());
+        assertEquals(
+                ZLinkStreamErrorCode.SEND_FAILED,
+                ((ZLinkStreamException) failure.getCause()).errorCode());
+        assertTrue(closed.get());
+        assertEquals(ZLinkStreamConnectionState.DISCONNECTED, connector.state());
+        assertEquals(
+                java.util.Optional.of(ZLinkStreamCloseReason.TRANSPORT_ERROR),
+                connector.closeReason());
+    }
+
     private static CompletionStage<Void> invokeSendFrame(
             DefaultZLinkStreamConnector connector, String name) throws Exception {
         Method method =

@@ -1685,15 +1685,15 @@ void verify_host_shutdown_seal_reaches_raw_mesh ()
     const auto deadline = std::chrono::steady_clock::now () + 2s;
     while (ready == 0 && std::chrono::steady_clock::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-        transport.drain_monitor_events (now).result ().value ();
-        ready += remote.drain_monitor_events (now).result ().value ();
+        transport.observe_routes ();
+        ready += remote.observe_routes ();
         std::this_thread::sleep_for (1ms);
     }
     assert (ready != 0);
     const auto quiet_until = std::chrono::steady_clock::now () + 200ms;
     while (std::chrono::steady_clock::now () < quiet_until) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-        transport.drain_monitor_events (now).result ().value ();
+        transport.observe_routes ();
         assert (remote.pump_one (now).result ().value () == mesh::raw_mesh_pump_result_t::no_data);
         std::this_thread::sleep_for (1ms);
     }

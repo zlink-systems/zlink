@@ -440,8 +440,8 @@ export class ZlinkStreamConnectorLifecycle {
     const generation = this.connectionGeneration;
     try {
       await this.frameSender.sendControl(this.connectionForSend(), ZLINK_STREAM_HEARTBEAT_PING);
-    } catch (cause) {
-      const error = toStreamError(cause, ZlinkStreamErrorCode.SendFailed, 'Heartbeat send failed.');
+    } catch {
+      const error = { code: ZlinkStreamErrorCode.Disconnected, message: 'Heartbeat send failed.' };
       await this.disconnectForTransportFailure(error, connection, generation);
     }
   }
@@ -472,6 +472,14 @@ export class ZlinkStreamConnectorLifecycle {
     });
     await this.disconnectTask;
     await this.announceDisconnect(error);
+  }
+
+  async transportWriteFailed(connection: ZlinkStreamConnection): Promise<void> {
+    await this.disconnectForTransportFailure(
+      { code: ZlinkStreamErrorCode.Disconnected, message: 'Transport write ended the connection.' },
+      connection,
+      this.connectionGeneration
+    );
   }
 
   private isCurrentConnection(

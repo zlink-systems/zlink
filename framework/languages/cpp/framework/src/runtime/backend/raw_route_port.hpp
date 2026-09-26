@@ -35,6 +35,9 @@ struct raw_received_t
     raw_bytes_t source_routing_id;
     std::optional<zlink::reply_token_t> reply_token;
     raw_message_t parts;
+    // Opaque nonzero generation of the Core selected route that delivered
+    // this record (Core ROUTER §10.1); compared only for equality.
+    std::uint64_t route_generation = 0;
 };
 
 enum class raw_request_result_t

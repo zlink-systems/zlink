@@ -18,7 +18,6 @@ import { ZLinkNodeRawBindingPort } from '../../packages/framework/src/runtime/ba
 import type {
   ZLinkRawBindingPort,
   ZLinkRawHostPort,
-  ZLinkRawMonitorRecord,
   ZLinkRawRouterPort
 } from '../../packages/framework/src/runtime/backend/raw-binding-port';
 import { ZLinkNodeRawMeshBackend } from '../../packages/framework/src/runtime/backend/node/node-raw-mesh-backend';
@@ -283,7 +282,7 @@ test('RouteMesh hello advertises the configured host instead of the bind host', 
       assert.equal(endpoint, 'tcp://127.0.0.2:0');
     },
     localEndpoint: () => 'tcp://127.0.0.2:28730',
-    monitor: () => ({ drain: () => 0, statusReady: () => false, close() {} }),
+    routesSnapshot: () => [],
     connectToRoutingId(routingId: string, endpoint: string) {
       assert.equal(routingId, 'peer-node');
       assert.equal(endpoint, 'tcp://127.0.0.1:28731');
@@ -406,9 +405,11 @@ test('topology snapshots fence reconnect and exclude retiring placement targets'
   assert.equal(topology.selectChannel('alpha')?.descriptor.nodeRoutingId, 'peer');
   assert.equal(topology.selectPlacement()?.descriptor.nodeRoutingId, 'peer');
 
-  assert.equal(topology.admit(peer, 'connection-b'), 'staleDescriptor');
-  assert.equal(topology.disconnect('peer', 'connection-b'), false);
-  assert.equal(topology.peer('peer')?.connectionId, 'connection-a');
+  // An admission on the route Core selected after connection-a replaces it; a
+  // late disconnect of the replaced route does not remove the new admission.
+  assert.equal(topology.admit(peer, 'connection-b'), 'admitted');
+  assert.equal(topology.disconnect('peer', 'connection-a'), false);
+  assert.equal(topology.peer('peer')?.connectionId, 'connection-b');
 
   const conflicting = { ...peer, state: 'retiring' as const };
   assert.equal(topology.admit(conflicting, 'connection-b'), 'staleDescriptor');
@@ -426,12 +427,17 @@ test('RouteMesh admission classifies stale and conflicting descriptor revisions 
     descriptorRevision: 2n,
     state: 'serving' as const
   };
-  assert.equal(runtime.topology.admit(current, 'connection-a'), 'admitted');
+  assert.equal(runtime.topology.admit(current, 'route:7'), 'admitted');
+  (runtime as unknown as { selectedRoutes: Map<string, bigint> }).selectedRoutes.set(
+    current.nodeRoutingId,
+    7n
+  );
   const processReceived = (
     runtime as unknown as {
       processReceived(
         record: {
           sourceRid: string;
+          routeGeneration: bigint;
           parts: readonly Buffer[];
         },
         nowMs: number
@@ -443,6 +449,7 @@ test('RouteMesh admission classifies stale and conflicting descriptor revisions 
     await processReceived(
       {
         sourceRid: current.nodeRoutingId,
+        routeGeneration: 7n,
         parts: [
           encodeRouteMeshAdmission(M6aServiceWireCommand.update, {
             ...current,
@@ -458,6 +465,7 @@ test('RouteMesh admission classifies stale and conflicting descriptor revisions 
     await processReceived(
       {
         sourceRid: current.nodeRoutingId,
+        routeGeneration: 7n,
         parts: [
           encodeRouteMeshAdmission(M6aServiceWireCommand.update, {
             ...current,
@@ -627,12 +635,13 @@ test('topology admission fences expected identity, immutable revisions, duplicat
     assert.equal(topology.admit(revision, 'pipe-z'), 'invalidDescriptor');
   }
 
-  // Both endpoints rank the connection initiated by the smaller RID first.
-  assert.equal(topology.admit(peer, 'pipe-a', undefined, 'initiator:local'), 'admitted');
+  // Core selects the one route per RID. An admission on the route that
+  // replaced it wins, and a late disconnect of the replaced route is ignored.
+  assert.equal(topology.admit(peer, 'pipe-a'), 'admitted');
   assert.equal(topology.peer('peer')?.connectionId, 'pipe-a');
-  assert.equal(topology.admit(peer, 'pipe-0', undefined, 'initiator:peer'), 'staleDescriptor');
-  assert.equal(topology.disconnect('peer', 'pipe-z'), false);
-  assert.equal(topology.peer('peer')?.connectionId, 'pipe-a');
+  assert.equal(topology.admit(peer, 'pipe-0'), 'admitted');
+  assert.equal(topology.disconnect('peer', 'pipe-a'), false);
+  assert.equal(topology.peer('peer')?.connectionId, 'pipe-0');
 });
 
 test('topology treats lifecycle generation as an opaque equality token', () => {
@@ -655,91 +664,7 @@ test('topology treats lifecycle generation as an opaque equality token', () => {
   assert.equal(topology.peer('peer')?.connectionId, 'current-connection');
 });
 
-test('raw monitor preserves each physical candidate direction through admission and disconnect fencing', async () => {
-  const runtime = rawServiceRuntime({ descriptor: descriptor('local') });
-  const peer = { ...descriptor('peer'), state: 'serving' as const };
-  const internal = runtime as unknown as {
-    expectedPeers: Map<
-      string,
-      {
-        meshName: string;
-        nodeRoutingId: string;
-        endpoint: string;
-        securityIdentity: string;
-      }
-    >;
-    connectionCandidates: Map<
-      string,
-      Map<
-        string,
-        {
-          connectionId: string;
-          direction: string;
-          discriminator: string;
-        }
-      >
-    >;
-    connectionIds: Map<string, string>;
-    monitorEvents: Array<{
-      event: number;
-      value: number;
-      routingId: string;
-      localAddress: string;
-      remoteAddress: string;
-    }>;
-  };
-  internal.expectedPeers.set('peer', {
-    meshName: peer.meshName,
-    nodeRoutingId: peer.nodeRoutingId,
-    endpoint: peer.advertisedEndpoint,
-    securityIdentity: peer.securityIdentity
-  });
-  internal.monitorEvents.push(
-    {
-      event: 0x1000,
-      value: 11,
-      routingId: 'peer',
-      localAddress: 'tcp://ephemeral:41001',
-      remoteAddress: peer.advertisedEndpoint
-    },
-    {
-      event: 0x1000,
-      value: 22,
-      routingId: 'peer',
-      localAddress: runtime.topology.localDescriptor().advertisedEndpoint,
-      remoteAddress: 'tcp://peer-ephemeral:42001'
-    }
-  );
-
-  assert.equal(await runtime.drainMonitorEvents(), 2);
-  const candidates = [...internal.connectionCandidates.get('peer')!.values()];
-  assert.deepEqual(
-    candidates.map((candidate) => [candidate.direction, candidate.discriminator]),
-    [
-      ['outbound', 'initiator:local'],
-      ['inbound', 'initiator:peer']
-    ]
-  );
-  const inbound = candidates[1]!;
-  assert.equal(
-    runtime.topology.admit(peer, inbound.connectionId, undefined, inbound.discriminator),
-    'admitted'
-  );
-
-  internal.monitorEvents.push({
-    event: 0x0200,
-    value: 11,
-    routingId: 'peer',
-    localAddress: 'tcp://ephemeral:41001',
-    remoteAddress: peer.advertisedEndpoint
-  });
-  assert.equal(await runtime.drainMonitorEvents(), 1);
-  assert.equal(runtime.topology.peer('peer')?.connectionId, inbound.connectionId);
-  assert.equal(internal.connectionCandidates.get('peer')?.size, 1);
-  assert.equal(internal.connectionIds.get('peer'), inbound.connectionId);
-});
-
-test('raw monitor admits a discovered same-RID replacement only after its exact lifecycle fence', async () => {
+test('raw runtime admits a discovered same-RID replacement only after its exact lifecycle fence', async () => {
   const runtime = rawServiceRuntime({ descriptor: descriptor('local') });
   const old = {
     ...descriptor('peer', 'tcp://old-peer:41001'),
@@ -753,10 +678,10 @@ test('raw monitor admits a discovered same-RID replacement only after its exact 
     lifecycleGeneration: 3n,
     descriptorRevision: 1n
   };
-  const oldConnection = 'old-physical-pair';
+  const oldConnection = 'route:1';
+  const replacementConnection = 'route:2';
   const disconnectedEndpoints: string[] = [];
   const disconnectedRids: string[] = [];
-  const helloTargets: string[] = [];
   const internal = runtime as unknown as {
     expectedPeers: Map<
       string,
@@ -768,21 +693,6 @@ test('raw monitor admits a discovered same-RID replacement only after its exact 
         lifecycleGeneration: bigint;
       }
     >;
-    connectionCandidates: Map<
-      string,
-      Map<
-        string,
-        {
-          connectionId: string;
-          direction: string;
-          discriminator: string;
-          localAddress: string;
-          remoteAddress: string;
-        }
-      >
-    >;
-    connectionIds: Map<string, string>;
-    monitorEvents: ZLinkRawMonitorRecord[];
     router: {
       send(targetRid: string, parts: readonly Uint8Array[]): Promise<void>;
       disconnectRid(routingId: string): void;
@@ -790,13 +700,7 @@ test('raw monitor admits a discovered same-RID replacement only after its exact 
     };
     admitPeer(
       descriptor: ServiceNodeDescriptor,
-      connection: {
-        connectionId: string;
-        direction: string;
-        discriminator: string;
-        localAddress: string;
-        remoteAddress: string;
-      },
+      connectionId: string,
       nowMs: number,
       expected: {
         endpoint: string;
@@ -806,9 +710,7 @@ test('raw monitor admits a discovered same-RID replacement only after its exact 
     ): string;
   };
   internal.router = {
-    async send(targetRid): Promise<void> {
-      helloTargets.push(targetRid);
-    },
+    async send(): Promise<void> {},
     disconnectRid(routingId): void {
       disconnectedRids.push(routingId);
     },
@@ -816,26 +718,7 @@ test('raw monitor admits a discovered same-RID replacement only after its exact 
       disconnectedEndpoints.push(endpoint);
     }
   };
-  internal.connectionCandidates.set(
-    old.nodeRoutingId,
-    new Map([
-      [
-        oldConnection,
-        {
-          connectionId: oldConnection,
-          direction: 'outbound',
-          discriminator: 'initiator:local',
-          localAddress: 'tcp://local:40001',
-          remoteAddress: old.advertisedEndpoint
-        }
-      ]
-    ])
-  );
-  internal.connectionIds.set(old.nodeRoutingId, oldConnection);
-  assert.equal(
-    runtime.topology.admit(old, oldConnection, undefined, 'initiator:local'),
-    'admitted'
-  );
+  assert.equal(runtime.topology.admit(old, oldConnection), 'admitted');
   runtime.liveness.admit(old.nodeRoutingId, oldConnection, 1);
   assert.equal(runtime.liveness.requestProbe(old.nodeRoutingId, oldConnection, 1), true);
   const oldProbe = runtime.liveness.tick(1).probes[0]!;
@@ -856,155 +739,30 @@ test('raw monitor admits a discovered same-RID replacement only after its exact 
   assert.deepEqual(disconnectedRids, []);
   assert.equal(runtime.topology.peer(old.nodeRoutingId)?.connectionId, oldConnection);
   assert.equal(runtime.liveness.isReady(old.nodeRoutingId, oldConnection), true);
-  internal.monitorEvents.push({
-    event: 0x1000,
-    value: 1n,
-    routingId: old.nodeRoutingId,
-    localAddress: 'tcp://local:40002',
-    remoteAddress: replacement.advertisedEndpoint,
-    connectionId: 202n,
-    flags: 1
-  });
 
-  assert.equal(await runtime.drainMonitorEvents(), 1);
-  assert.deepEqual(helloTargets, [old.nodeRoutingId]);
-  assert.deepEqual(disconnectedEndpoints, []);
-  assert.equal(runtime.topology.peer(old.nodeRoutingId)?.connectionId, oldConnection);
-  assert.equal(runtime.liveness.isReady(old.nodeRoutingId, oldConnection), true);
-
-  const replacementCandidate = [
-    ...internal.connectionCandidates.get(old.nodeRoutingId)!.values()
-  ].find((candidate) => candidate.connectionId !== oldConnection)!;
   const expected = internal.expectedPeers.get(old.nodeRoutingId)!;
-  assert.equal(internal.admitPeer(replacement, replacementCandidate, 2, expected), 'admitted');
+  assert.equal(internal.admitPeer(replacement, replacementConnection, 2, expected), 'admitted');
   assert.equal(
     runtime.topology.peer(old.nodeRoutingId)?.descriptor.lifecycleGeneration,
     replacement.lifecycleGeneration
   );
-  assert.equal(
-    runtime.topology.peer(old.nodeRoutingId)?.connectionId,
-    replacementCandidate.connectionId
-  );
-  assert.equal(
-    runtime.liveness.isReady(old.nodeRoutingId, replacementCandidate.connectionId),
-    false
-  );
+  assert.equal(runtime.topology.peer(old.nodeRoutingId)?.connectionId, replacementConnection);
+  assert.equal(runtime.liveness.isReady(old.nodeRoutingId, replacementConnection), false);
   assert.equal(runtime.liveness.isReady(old.nodeRoutingId, oldConnection), false);
-  // Core owns physical replacement through REJECT/HANDOVER. Framework must
-  // preserve the replacement intent while applying the descriptor fence.
+  // Core owns physical replacement. Framework keeps the replacement intent
+  // while applying the descriptor fence.
   assert.deepEqual(disconnectedEndpoints, []);
   assert.deepEqual(disconnectedRids, []);
 
-  const lateOldCandidate = {
-    ...replacementCandidate,
-    connectionId: 'late-old-physical-pair'
-  };
-  assert.equal(internal.admitPeer(old, lateOldCandidate, 3, expected), 'invalidDescriptor');
+  assert.equal(internal.admitPeer(old, 'route:3', 3, expected), 'invalidDescriptor');
   assert.equal(
     runtime.topology.peer(old.nodeRoutingId)?.descriptor.lifecycleGeneration,
     replacement.lifecycleGeneration
   );
-  assert.equal(
-    runtime.topology.peer(old.nodeRoutingId)?.connectionId,
-    replacementCandidate.connectionId
-  );
+  assert.equal(runtime.topology.peer(old.nodeRoutingId)?.connectionId, replacementConnection);
   assert.deepEqual(disconnectedEndpoints, []);
   assert.deepEqual(disconnectedRids, []);
   assert.deepEqual(internal.expectedPeers.get(old.nodeRoutingId), expected);
-});
-
-test('raw monitor ignores a late disconnect from the superseded physical connection', async () => {
-  const runtime = rawServiceRuntime({ descriptor: descriptor('local') });
-  const peer = { ...descriptor('peer'), state: 'serving' as const };
-  const internal = runtime as unknown as {
-    connectionIds: Map<string, string>;
-    monitorEvents: Array<{
-      event: number;
-      value: number;
-      routingId: string;
-      localAddress: string;
-      remoteAddress: string;
-    }>;
-  };
-  const currentConnection = JSON.stringify([22, 'local', 'remote']);
-  internal.connectionIds.set('peer', currentConnection);
-  assert.equal(runtime.topology.admit(peer, currentConnection), 'admitted');
-  internal.monitorEvents.push({
-    event: 0x0200,
-    value: 11,
-    routingId: 'peer',
-    localAddress: 'local',
-    remoteAddress: 'remote'
-  });
-
-  assert.equal(await runtime.drainMonitorEvents(), 1);
-  assert.equal(runtime.topology.peer('peer')?.connectionId, currentConnection);
-  assert.equal(internal.connectionIds.get('peer'), currentConnection);
-});
-
-test('raw monitor consumes logical ready edges and peer termination, ignoring ready-count snapshots', async () => {
-  const runtime = rawServiceRuntime({ descriptor: descriptor('local') });
-  const peer = { ...descriptor('peer-paired'), state: 'serving' as const };
-  const internal = runtime as unknown as {
-    connectionCandidates: Map<string, Map<string, { connectionId: string }>>;
-    monitorEvents: ZLinkRawMonitorRecord[];
-  };
-  // Core aggregates the ROUTER lanes into one logical ready edge. Monitor
-  // records expose a connection ID for correlation, not a transport-pair API.
-  internal.monitorEvents.push(
-    {
-      event: 0x1000,
-      value: 1n,
-      routingId: peer.nodeRoutingId,
-      localAddress: 'tcp://local:41001',
-      remoteAddress: peer.advertisedEndpoint,
-      connectionId: 101n,
-      transportLane: 0,
-      flags: 1
-    },
-    {
-      event: 0x1000,
-      value: 1n,
-      routingId: peer.nodeRoutingId,
-      localAddress: 'tcp://local:41001',
-      remoteAddress: peer.advertisedEndpoint,
-      connectionId: 102n,
-      transportLane: 1,
-      flags: 0
-    }
-  );
-
-  assert.equal(await runtime.drainMonitorEvents(), 2);
-  assert.equal(internal.connectionCandidates.get(peer.nodeRoutingId)?.size, 1);
-  const connectionId = [...internal.connectionCandidates.get(peer.nodeRoutingId)!.keys()][0]!;
-  assert.equal(runtime.topology.admit(peer, connectionId), 'admitted');
-
-  internal.monitorEvents.push({
-    event: 0x0200,
-    value: 3n,
-    routingId: peer.nodeRoutingId,
-    localAddress: 'tcp://local:41001',
-    remoteAddress: peer.advertisedEndpoint,
-    connectionId: 101n,
-    transportLane: 0,
-    flags: 0
-  });
-  assert.equal(await runtime.drainMonitorEvents(), 1);
-  assert.equal(runtime.topology.peer(peer.nodeRoutingId), undefined);
-
-  internal.monitorEvents.push({
-    event: 0x0200,
-    value: 4n,
-    routingId: peer.nodeRoutingId,
-    localAddress: 'tcp://completion-local:51001',
-    remoteAddress: 'tcp://completion-remote:52001',
-    connectionId: 102n,
-    transportLane: 1,
-    flags: 0
-  });
-  assert.equal(await runtime.drainMonitorEvents(), 1);
-  assert.equal(runtime.topology.peer(peer.nodeRoutingId), undefined);
-  assert.equal(internal.connectionCandidates.has(peer.nodeRoutingId), false);
 });
 
 test('raw disconnect fences a late lifecycle generation after peer replacement', () => {
@@ -2035,8 +1793,8 @@ test('one-sided endpoint-only client upgrades the provisional route before Ready
   try {
     client.connectPeerEndpoint(providerDescriptor.advertisedEndpoint);
     await pollUntil(async () => {
-      await provider.drainMonitorEvents();
-      await client.drainMonitorEvents();
+      await provider.observeSelectedRoutes();
+      await client.observeSelectedRoutes();
       await provider.pumpOne();
       await client.pumpOne();
       await provider.tickLiveness();
@@ -2058,8 +1816,8 @@ test('one-sided endpoint-only client upgrades the provisional route before Ready
       2_000
     );
     await pollUntil(async () => {
-      await provider.drainMonitorEvents();
-      await client.drainMonitorEvents();
+      await provider.observeSelectedRoutes();
+      await client.observeSelectedRoutes();
       await provider.pumpOne();
       await client.pumpOne();
       return provider.mailbox.pendingMessages('application') > 0;
@@ -2118,7 +1876,7 @@ async function verifyBilateralEndpointRequests(
   const right = rawServiceRuntime({ descriptor: rightDescriptor });
   const progress = async (): Promise<void> => {
     for (const runtime of [right, left]) await runtime.announceExpectedPeers();
-    for (const runtime of [right, left]) await runtime.drainMonitorEvents();
+    for (const runtime of [right, left]) await runtime.observeSelectedRoutes();
     for (const runtime of [right, left]) await runtime.pumpOne();
     for (const runtime of [left, right]) await runtime.tickLiveness();
   };
@@ -2136,11 +1894,7 @@ async function verifyBilateralEndpointRequests(
         await progress();
         return (
           left.isPeerRouteReady(rightDescriptor.nodeRoutingId) &&
-          right.isPeerRouteReady(leftDescriptor.nodeRoutingId) &&
-          left.topology.peer(rightDescriptor.nodeRoutingId)?.connectionDiscriminator ===
-            `initiator:${leftDescriptor.nodeRoutingId}` &&
-          right.topology.peer(leftDescriptor.nodeRoutingId)?.connectionDiscriminator ===
-            `initiator:${leftDescriptor.nodeRoutingId}`
+          right.isPeerRouteReady(leftDescriptor.nodeRoutingId)
         );
       });
       assert.equal(
@@ -2151,13 +1905,15 @@ async function verifyBilateralEndpointRequests(
         right.topology.peer(leftDescriptor.nodeRoutingId)?.descriptor.nodeRoutingId,
         leftDescriptor.nodeRoutingId
       );
+      // Core selects the one route per RID; each side's admission belongs to
+      // the route it observed, not to a direction the Framework preferred.
       assert.equal(
-        left.topology.peer(rightDescriptor.nodeRoutingId)?.connectionDiscriminator,
-        `initiator:${leftDescriptor.nodeRoutingId}`
+        left.topology.peer(rightDescriptor.nodeRoutingId)?.connectionId,
+        observedRouteConnection(left, rightDescriptor.nodeRoutingId)
       );
       assert.equal(
-        right.topology.peer(leftDescriptor.nodeRoutingId)?.connectionDiscriminator,
-        `initiator:${leftDescriptor.nodeRoutingId}`
+        right.topology.peer(leftDescriptor.nodeRoutingId)?.connectionId,
+        observedRouteConnection(right, leftDescriptor.nodeRoutingId)
       );
       const pending = source.requestToNode(
         targetRid,
@@ -2326,8 +2082,7 @@ test('channel send reports a selected target submit failure as NotConnected', as
   try {
     const target = {
       descriptor: { ...descriptor('m6a-transport-target'), state: 'serving' as const },
-      connectionId: 'transport-target-connection',
-      connectionDiscriminator: 'transport-target-discriminator'
+      connectionId: 'transport-target-connection'
     };
     runtime.topology.selectChannel = () => target;
     (
@@ -2382,6 +2137,14 @@ test('completion send admission applies only to operations with a reply route', 
   assert.equal(operationRequiresReply(OperationKind.ActorJoin), false);
   assert.equal(operationRequiresReply(OperationKind.UserSpotCreate), false);
 });
+
+function observedRouteConnection(runtime: RawServiceMeshRuntime, nodeRoutingId: string): string {
+  const generation = (
+    runtime as unknown as { selectedRoutes: Map<string, bigint> }
+  ).selectedRoutes.get(nodeRoutingId);
+  assert.notEqual(generation, undefined);
+  return `route:${generation!.toString()}`;
+}
 
 async function pollUntil(condition: () => boolean | Promise<boolean>): Promise<void> {
   const deadline = performance.now() + 2_000;

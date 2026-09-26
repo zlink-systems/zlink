@@ -2135,8 +2135,8 @@ void verify_actor_create_replays_after_reciprocal_handover ()
     assert (source.connect_peer (target.endpoint (), target_descriptor));
     const auto pump = [&] {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-        (void) source.drain_monitor_events (now);
-        (void) target.drain_monitor_events (now);
+        (void) source.observe_routes ();
+        (void) target.observe_routes ();
         assert (await_task (source.pump_one (now)) != mesh::raw_mesh_pump_result_t::protocol_error);
         assert (await_task (target.pump_one (now)) != mesh::raw_mesh_pump_result_t::protocol_error);
     };
@@ -4129,8 +4129,8 @@ void verify_raw_spot_and_actor_routing ()
             || !target.topology ().peer (source_descriptor.node_routing_id))
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-        (void) source.drain_monitor_events (now);
-        (void) target.drain_monitor_events (now);
+        (void) source.observe_routes ();
+        (void) target.observe_routes ();
         (void) source.pump_one (now).result ().value ();
         (void) target.pump_one (now).result ().value ();
         std::this_thread::sleep_for (1ms);
@@ -4783,8 +4783,8 @@ void verify_node_request_requires_remote_admission ()
             || !target.topology ().peer (source_descriptor.node_routing_id))
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-        (void) source.drain_monitor_events (now);
-        (void) target.drain_monitor_events (now);
+        (void) source.observe_routes ();
+        (void) target.observe_routes ();
         const auto source_pump = source.pump_one (now).result ().value ();
         const auto target_pump = target.pump_one (now).result ().value ();
         assert (source_pump != mesh::raw_mesh_pump_result_t::protocol_error);
@@ -4812,8 +4812,8 @@ void verify_node_request_requires_remote_admission ()
     std::optional<mesh::service_mailbox_claim_t> claim;
     while (!claim && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-        (void) source.drain_monitor_events (now);
-        (void) target.drain_monitor_events (now);
+        (void) source.observe_routes ();
+        (void) target.observe_routes ();
         const auto source_pump = source.pump_one (now).result ().value ();
         const auto target_pump = target.pump_one (now).result ().value ();
         assert (source_pump != mesh::raw_mesh_pump_result_t::protocol_error);
@@ -4873,7 +4873,7 @@ void verify_unadmitted_request_is_rejected_without_framework_queue ()
     const auto deadline = std::chrono::steady_clock::now () + 2s;
     while (pumped == mesh::raw_mesh_pump_result_t::no_data
            && std::chrono::steady_clock::now () < deadline) {
-        (void) target.drain_monitor_events (mesh::service_liveness_registry_t::clock_t::now ());
+        (void) target.observe_routes ();
         pumped =
           target.pump_one (mesh::service_liveness_registry_t::clock_t::now ()).result ().value ();
     }
@@ -4916,8 +4916,8 @@ void verify_queued_owner_accepts_request_without_blocking_other_owner ()
             || !target.topology ().peer (source_descriptor.node_routing_id))
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-        (void) source.drain_monitor_events (now);
-        (void) target.drain_monitor_events (now);
+        (void) source.observe_routes ();
+        (void) target.observe_routes ();
         assert (source.pump_one (now).result ().value ()
                 != mesh::raw_mesh_pump_result_t::protocol_error);
         assert (target.pump_one (now).result ().value ()
@@ -5043,8 +5043,8 @@ void verify_raw_terminal_reply_relay ()
             || !target.topology ().peer (source_descriptor.node_routing_id))
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-        (void) source.drain_monitor_events (now);
-        (void) target.drain_monitor_events (now);
+        (void) source.observe_routes ();
+        (void) target.observe_routes ();
         (void) await_task (source.pump_one (now));
         (void) await_task (target.pump_one (now));
         std::this_thread::sleep_for (1ms);
@@ -5224,8 +5224,8 @@ void verify_durable_reply_relay_single_winner ()
             || !target.topology ().peer (source_descriptor.node_routing_id))
            && std::chrono::steady_clock::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-        (void) source.drain_monitor_events (now);
-        (void) target.drain_monitor_events (now);
+        (void) source.observe_routes ();
+        (void) target.observe_routes ();
         (void) await_task (source.pump_one (now));
         (void) await_task (target.pump_one (now));
     }
@@ -6308,7 +6308,7 @@ void verify_remote_user_spot_create_close_terminal_once ()
            && std::chrono::steady_clock::now () < deadline) {
         (void) source->dispatch_ready (dispatch);
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-        (void) target->transport ().drain_monitor_events (now);
+        (void) target->transport ().observe_routes ();
         assert (target->transport ().pump_one (now).result ().value ()
                 != mesh::raw_mesh_pump_result_t::protocol_error);
     }

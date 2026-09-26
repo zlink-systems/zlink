@@ -98,7 +98,7 @@ mesh_options (std::string rid, std::string endpoint, framework::dispatch_options
 void pump (mesh::raw_mesh_node_owner_t &node)
 {
     const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-    ASSERT_TRUE (node.drain_monitor_events (now).result ());
+    (void) node.observe_routes ();
     const auto pumped = node.pump_one (now).result ();
     ASSERT_TRUE (pumped);
     EXPECT_NE (pumped.value (), mesh::raw_mesh_pump_result_t::protocol_error);
@@ -307,7 +307,7 @@ TEST (ListenerIdentity, ExpectedRouteMismatchWritesAdmissionWarning)
           for (const auto &field : record.fields)
               fields.emplace (field.key, field.value);
           return fields["reason"] == "expected_route_mismatch"
-                 && fields["intent_endpoint"] == intent_endpoint
+                 && fields["intent_endpoint"] == expected.advertised_endpoint
                  && fields["advertised_endpoint"].starts_with ("tcp://127.0.0.1:");
       });
     EXPECT_NE (found, records.end ());

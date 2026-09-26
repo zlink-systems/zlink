@@ -3662,8 +3662,8 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
         while (connected && !source.topology ().peer (target_descriptor.node_routing_id)
                && std::chrono::steady_clock::now () < connect_deadline) {
             const auto now = runtime::mesh::service_liveness_registry_t::clock_t::now ();
-            (void) source.drain_monitor_events (now);
-            (void) target_owner.drain_monitor_events (now);
+            (void) source.observe_routes ();
+            (void) target_owner.observe_routes ();
             (void) source.pump_one (now).result ();
             (void) target_owner.pump_one (now).result ();
             std::this_thread::sleep_for (1ms);

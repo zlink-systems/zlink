@@ -195,8 +195,8 @@ bool pump_until (mesh::raw_mesh_node_owner_t &first,
     const auto deadline = std::chrono::steady_clock::now () + timeout;
     while (!ready () && std::chrono::steady_clock::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-        (void) await_task (first.drain_monitor_events (now));
-        (void) await_task (second.drain_monitor_events (now));
+        (void) first.observe_routes ();
+        (void) second.observe_routes ();
         (void) await_task (first.pump_one (now));
         (void) await_task (second.pump_one (now));
         std::this_thread::yield ();
@@ -253,8 +253,8 @@ void verify_topology_metrics_and_selection_reasons ()
     const auto connected_deadline = std::chrono::steady_clock::now () + 2s;
     while (std::chrono::steady_clock::now () < connected_deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-        (void) await_task (source.drain_monitor_events (now));
-        (void) await_task (target.drain_monitor_events (now));
+        (void) source.observe_routes ();
+        (void) target.observe_routes ();
         const auto connected =
           find_sample (provider, "zlink.mesh_node.peers.connected", peer_labels);
         if (connected && connected->value == 1)
@@ -337,6 +337,13 @@ void verify_topology_metrics_and_selection_reasons ()
 
     require (!source.disconnect_peer (target_descriptor.node_routing_id, target.endpoint ()),
              "sole-peer endpoint was unexpectedly retained after disconnect");
+    // Transport connection is Core's selected route: the disconnected RID leaves
+    // the count once the route observer sees Core drop that route.
+    (void) pump_until (source, target, [&] {
+        const auto connected =
+          find_sample (provider, "zlink.mesh_node.peers.connected", peer_labels);
+        return connected && connected->value == 0;
+    });
     require_metric (provider, "zlink.mesh_node.peers.connected", "gauge", "{peer}", peer_labels, 0);
     require_metric (provider, "zlink.mesh_node.peers.ready", "gauge", "{peer}", peer_labels, 0);
     require_metric (provider, "zlink.mesh_node.peers.configured", "gauge", "{peer}", peer_labels,

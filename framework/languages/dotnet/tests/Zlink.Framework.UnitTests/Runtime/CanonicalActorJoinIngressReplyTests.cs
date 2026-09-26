@@ -640,9 +640,9 @@ public sealed class CanonicalActorJoinIngressReplyTests
         Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
 
         await runtime.SendPriorHelloAsync();
-        // The old Hello's Admit follows the current logical RID route. Consume
-        // that DATA before waiting for a REPLY, which cannot overtake it.
-        using var priorAdmission = await ReceiveAsync(runtime.Source);
+        // Core ROUTER §10.1 does not return records of a route it no longer
+        // selects: the prior pair's Hello neither reaches admission nor
+        // produces an Admit, and the current peer stays admitted.
         await Task.Delay(150);
         Assert.Equal(protocolErrors, monitor.Status().ProtocolErrors);
         Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
@@ -738,6 +738,27 @@ public sealed class CanonicalActorJoinIngressReplyTests
         {
             await runtime.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
         }
+    }
+
+    [Fact]
+    public async Task RouteAdmission_ReplacedSelectedRouteEndsAdmissionUntilNewHandshake()
+    {
+        await using var runtime = await ConnectedRuntime.CreateAsync(_ => SubmitResult.Ok);
+        Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
+
+        await runtime.HandoverAsync(
+            admitReplacement: async (replacement, sourceEndpoint) =>
+            {
+                // Core selected a new route for the same RID (Core ROUTER
+                // §10.1). The admission of the replaced route does not carry
+                // over: readiness ends before the new route's handshake.
+                await WaitUntilAsync(() => runtime.Target.Status().AdmittedPeerCount == 0);
+                await SendHelloAsync(replacement, sourceEndpoint);
+                return await ReceiveAsync(replacement);
+            }
+        );
+
+        await WaitUntilAsync(() => runtime.Target.Status().AdmittedPeerCount == 1);
     }
 
     [Fact]

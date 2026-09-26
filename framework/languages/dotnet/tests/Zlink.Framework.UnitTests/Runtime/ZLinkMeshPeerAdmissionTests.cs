@@ -19,8 +19,7 @@ public sealed class ZLinkMeshPeerAdmissionTests
             [endpointMatch, identityMatch],
             sourceRid,
             ServiceWireConstants.Command.Admit,
-            identityMatch.Endpoint,
-            ZLinkServiceConnectionDirection.Outbound
+            identityMatch.Endpoint
         );
 
         Assert.Same(identityMatch, selected);
@@ -49,8 +48,7 @@ public sealed class ZLinkMeshPeerAdmissionTests
                 [outbound],
                 sourceRid,
                 ServiceWireConstants.Command.Admit,
-                outbound.Endpoint,
-                ZLinkServiceConnectionDirection.Inbound
+                outbound.Endpoint
             )
         );
         Assert.Null(
@@ -59,8 +57,7 @@ public sealed class ZLinkMeshPeerAdmissionTests
                 [],
                 sourceRid,
                 ServiceWireConstants.Command.Admit,
-                outbound.Endpoint,
-                ZLinkServiceConnectionDirection.Inbound
+                outbound.Endpoint
             )
         );
     }
@@ -74,8 +71,7 @@ public sealed class ZLinkMeshPeerAdmissionTests
             [Peer(1, "tcp://first", expectedRid: null), Peer(2, "tcp://second", expectedRid: null)],
             RoutingId.From("remote-node"),
             ServiceWireConstants.Command.Admit,
-            "tcp://unconfigured",
-            ZLinkServiceConnectionDirection.Outbound
+            "tcp://unconfigured"
         );
 
         Assert.Null(selected);
@@ -116,8 +112,7 @@ public sealed class ZLinkMeshPeerAdmissionTests
             [admitted],
             sourceRid,
             ServiceWireConstants.Command.Hello,
-            admitted.Endpoint,
-            ZLinkServiceConnectionDirection.Outbound
+            admitted.Endpoint
         );
 
         Assert.Same(admitted, selected);
@@ -136,81 +131,59 @@ public sealed class ZLinkMeshPeerAdmissionTests
             [outbound],
             sourceRid,
             ServiceWireConstants.Command.Hello,
-            outbound.Endpoint,
-            ZLinkServiceConnectionDirection.Outbound
+            outbound.Endpoint
         );
 
         Assert.Same(outbound, selected);
     }
 
     [Fact]
-    public void Hello_on_inbound_candidate_does_not_reuse_outbound_intent()
+    public void Admission_does_not_bind_an_unconfigured_endpoint_to_the_sole_unknown_intent()
     {
-        var sourceRid = RoutingId.From("remote-node");
-        var outbound = Peer(1, "tcp://remote", sourceRid);
+        // An intent without an expected RID is identified only by the endpoint
+        // echoed in the handshake. A handshake from another node on its own
+        // selected route must not claim that intent.
         var matcher = new ZLinkMeshPeerAdmission();
+        var unknown = Peer(1, "tcp://configured", expectedRid: null);
 
-        var selected = matcher.FindForAdmission(
-            new Dictionary<RoutingId, ZLinkMeshPeer>(),
-            [outbound],
-            sourceRid,
-            ServiceWireConstants.Command.Hello,
-            outbound.Endpoint,
-            ZLinkServiceConnectionDirection.Inbound
-        );
-
-        Assert.Null(selected);
-    }
-
-    [Fact]
-    public void Ready_candidate_uses_configured_endpoint_for_outbound_direction()
-    {
-        var sourceRid = RoutingId.From("remote-node");
-        var outbound = Peer(1, "tcp://remote", sourceRid);
-
-        Assert.Same(
-            outbound,
-            ZLinkMeshPeerAdmission.FindReadyOutboundCandidate([outbound], outbound.Endpoint)
-        );
         Assert.Null(
-            ZLinkMeshPeerAdmission.FindReadyOutboundCandidate([outbound], "tcp://different")
+            matcher.FindForAdmission(
+                new Dictionary<RoutingId, ZLinkMeshPeer>(),
+                [unknown],
+                RoutingId.From("other-node"),
+                ServiceWireConstants.Command.Admit,
+                "tcp://other-node"
+            )
+        );
+        Assert.Same(
+            unknown,
+            matcher.FindForAdmission(
+                new Dictionary<RoutingId, ZLinkMeshPeer>(),
+                [unknown],
+                RoutingId.From("configured-node"),
+                ServiceWireConstants.Command.Admit,
+                unknown.Endpoint
+            )
         );
     }
 
     [Fact]
-    public void Handshake_candidate_prefers_direction_and_falls_back_to_unilateral_connection()
+    public void Selected_routes_report_missing_and_replaced_routes_as_ended()
     {
-        var sourceRid = RoutingId.From("remote-node");
-        var candidates = new ZLinkMeshConnectionCandidates();
-        candidates.Ready(sourceRid, 11, ZLinkServiceConnectionDirection.Outbound, "tcp://outbound");
+        var kept = RoutingId.From("kept");
+        var replaced = RoutingId.From("replaced");
+        var removed = RoutingId.From("removed");
+        var added = RoutingId.From("added");
+        var routes = new ZLinkMeshSelectedRoutes();
 
-        var unilateral = candidates.ForHandshake(
-            sourceRid,
-            ZLinkServiceConnectionDirection.Inbound
+        Assert.Empty(routes.Apply([new(kept, 1), new(replaced, 2), new(removed, 3)]));
+
+        var ended = routes.Apply([new(kept, 1), new(replaced, 9), new(added, 4)]);
+
+        Assert.Equal(
+            new[] { replaced, removed }.OrderBy(static rid => rid.ToHex()),
+            ended.OrderBy(static rid => rid.ToHex())
         );
-        Assert.NotNull(unilateral);
-        Assert.Equal(ZLinkServiceConnectionDirection.Outbound, unilateral.Direction);
-
-        candidates.Ready(sourceRid, 13, ZLinkServiceConnectionDirection.Inbound, "tcp://inbound");
-        var bilateral = candidates.ForHandshake(sourceRid, ZLinkServiceConnectionDirection.Inbound);
-        Assert.NotNull(bilateral);
-        Assert.Equal(13UL, bilateral.ConnectionId);
-        Assert.Equal(ZLinkServiceConnectionDirection.Inbound, bilateral.Direction);
-    }
-
-    [Fact]
-    public void Handshake_candidate_is_pending_until_admission_consumes_it()
-    {
-        var sourceRid = RoutingId.From("remote-node");
-        var candidates = new ZLinkMeshConnectionCandidates();
-        candidates.Ready(sourceRid, 11, ZLinkServiceConnectionDirection.Inbound, "tcp://inbound");
-
-        var pending = candidates.ForHandshake(sourceRid, ZLinkServiceConnectionDirection.Inbound);
-
-        Assert.NotNull(pending);
-        Assert.True(candidates.Consume(sourceRid, pending.ConnectionId));
-        Assert.Null(candidates.ForHandshake(sourceRid, ZLinkServiceConnectionDirection.Inbound));
-        Assert.False(candidates.Consume(sourceRid, pending.ConnectionId));
     }
 
     private static ZLinkMeshPeer Peer(ulong intent, string endpoint, RoutingId? expectedRid) =>
