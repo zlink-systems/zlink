@@ -3,6 +3,7 @@ const test = require('node:test');
 
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
+const { RequestResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 const {
   ZLinkSpotNativeActorJoinAdmission
 } = require('../../packages/framework/dist/runtime/spots/spot-native-actor-join-admission');
@@ -2230,6 +2231,58 @@ test('remote actor join retains the complete Ready authority snapshot for packet
     ownerLeaseGeneration: 7n,
     authorityStoreVersion: 'store-6'
   });
+});
+
+test('remote actor join keeps a timed-out completion when the peer is no longer ready', async () => {
+  class PlayerActor {
+    constructor(actorId, context) {
+      this.actorId = actorId;
+      this.context = context;
+    }
+  }
+  class PlayerFactory {
+    create(context) {
+      return new PlayerActor(context.actorId, context);
+    }
+  }
+  const node = createMockSpotNode({
+    routingId: rid('node-source'),
+    createActor(actorId) {
+      return { nodeRid: rid('node-source'), actorId, generation: 1n };
+    },
+    joinActor(_actorRef, _targetNodeRid, _targetSpotId, _request, callback) {
+      callback(
+        { result: RequestResult.TimedOut, failureErrno: 0, joinResultCode: 0, actor: null },
+        []
+      );
+      return true;
+    }
+  });
+  const manager = createActorManager({
+    actorFactories: new Map([['player', PlayerFactory]]),
+    joinCoordinator: new framework.ZLinkActorNativeJoinCoordinator({
+      node,
+      completionTableProvider: () => node.completionTable,
+      spotRouteResolver: {
+        async resolve(spotId) {
+          return {
+            routerChannelId: 'play.route',
+            targetNodeRid: rid('node-target'),
+            spotId,
+            spotKind: framework.ZLinkSpotKind.User,
+            targetSpotGeneration: 9n,
+            targetNodeGeneration: 4n
+          };
+        }
+      }
+    })
+  });
+  const actor = await manager.getOrCreateActor('alice', 'player');
+
+  await assert.rejects(
+    submitDeferredActorJoin(actor, actor.context.joinSpot('room-target', encodedMessage('join'))),
+    { kind: framework.ZLinkFrameworkErrorKind.DeadlineExceeded }
+  );
 });
 
 test('remote relocation failures before READY preserve source ownership and never bind the target', async () => {
@@ -5434,7 +5487,7 @@ function createMockSpotNode(overrides) {
 function legacyJoinCompletion(result, parts, spotId) {
   return {
     terminalResult: result.result,
-    failureErrno: result.result === 0 ? 0 : 1,
+    failureErrno: result.failureErrno ?? (result.result === 0 ? 0 : 1),
     operationKind: 7,
     kindData: {
       kind: 'actorJoinCompletion',
