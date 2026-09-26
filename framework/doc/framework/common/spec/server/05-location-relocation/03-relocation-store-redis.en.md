@@ -67,6 +67,8 @@ provider's responsibilities.
 | `Renew` | Recomputes the retention period based on the provider clock. |
 | `Delete` | Removes the specified reference. Succeeds even if the reference doesn't exist. |
 
+Millisecond conversion of retention follows [Location Store §3](02-location-store-redis.en.md#3-key-value-version-and-clock).
+
 The provider abstraction package boundary that the SPI type and interface follow is defined by
 [Location Runtime §2.1](01-location-runtime.en.md#21-package-principles-shared-by-the-two-spis).
 
