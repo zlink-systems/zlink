@@ -236,7 +236,7 @@ boundary 전 relay 구간을 폐기하고 재전송된 batch 전체로 한 번�
 부분 병합이 아니라 전체 교체이므로, 새 connection에서도 구간 안의 순서가 batch 순서로
 확정된다. 확인 값이 일치하면 target은 CAS와 queue 개방을 진행한다.
 
-대기 시간이 끝나도 검증된 cutover 없이 CAS나 application dispatch를 시작하지 않는다. Target은 `cutover_timeout` Warning을 기록한다. Restore absolute deadline은 그 relocation을 시작한 operation의 [deadline](../00-foundation/02-glossary.ko.md#deadline)이다. 늦은 cutover와 duplicate cutover는 Store가 승인한 authority를 다시 바꾸지 않는다.
+대기 시간이 끝나도 검증된 cutover 없이 CAS나 application dispatch를 시작하지 않는다. Target은 `cutover_timeout` Warning을 기록한다. 늦은 cutover와 duplicate cutover는 Store가 승인한 authority를 다시 바꾸지 않는다.
 
 Source는 이 경계 뒤에도 이전 주소로 늦게 도착하는 message를 받을 수 있다. Owner 변경 전에는
 temporary queue로 relay하고, owner 변경 뒤에는 이전 owner가 그 message를 새 owner에게 대신
@@ -474,7 +474,7 @@ Target은 예상한 source owner와 generation을 조건으로 주고, 자기 no
 |---|---|
 | 변경 성공 | Target이 owner다. Target queue를 열고 source로 되돌리지 않는다. |
 | 조건 불일치 | [Location runtime §6.1·§10](01-location-runtime.ko.md#61-read와-cas)의 authority settlement로 판정한다. Source `Preserve` fence가 이겼으면 target staging을 정리하고 source가 보관 작업을 재개한다. |
-| Store가 retry 가능한 실패를 반환 | Target queue는 닫아 두고 일반 재시도와 source lease 만료 뒤 예외를 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)에 맡긴다. |
+| Store가 retry 가능한 실패를 반환 | Target dispatch는 닫아 두며, target CAS 재제출과 종료는 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. |
 | Target이 CAS 응답을 받지 못함 | Target CAS 재제출과 그 종료는 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. |
 | 다른 valid owner나 generation이 확인됨 | Stale relocation으로 즉시 종료하고 준비한 target object와 queue를 제거한다. |
 | Source Restore deadline에 CAS 결과가 불확정 | Source `Preserve`와 target CAS 재제출은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. |
@@ -540,7 +540,7 @@ Relay 수신 준비 reply 이전의 명시적 실패는 기존 source 복원 절
 cutover submit 결과만으로 source dispatch를 열지 않는다. Restore absolute deadline에
 source는 `Preserve` fence로 판정하며, target CAS 재제출은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. Target commit이면 target queue를 열고, source fence가 이기면 source가 [§4.4](#44-ordered-relay와-one-way-cutover)의 보관 작업을 직접 처리한다. 불확정이면 양쪽이 작업을 보관한다.
 
-Store 장애가 Restore deadline까지 계속되면 Session은 별도의 seal timeout으로 종료될 수 있다.
+Store 장애가 Restore 유효시간까지 계속되면 Session은 별도의 seal timeout으로 종료될 수 있다.
 Store가 정상화된 뒤 새 Session connection은 이전 binding을 복원하지 않고 일반 location
 validation과 Actor·Spot 생성 또는 복구 절차를 다시 수행한다. 만료된 owner lease나 terminal
 relocation state를 새 연결의 authority로 사용하지 않는다.

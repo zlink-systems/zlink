@@ -95,7 +95,7 @@ public interface ZLinkInstanceSpotContext {
  ZLinkSpotOutbound outbound();
  <T> ZLinkWorkerCall<T> runCpuWorker(ZLinkWorkerTask<T> work);
  <T> ZLinkWorkerCall<T> runIoWorker(ZLinkIoWorkerTask<T> work);
- void close();
+ CompletionStage<Boolean> close();
  CompletionStage<ZLinkTimer> addTimer(
  String name,
  Duration period,
@@ -121,7 +121,7 @@ public interface ZLinkSpotContext {
  <T> ZLinkWorkerCall<T> runIoWorker(ZLinkIoWorkerTask<T> work);
  ZLinkSpotRelocationReadyCall relocationReady();
  CompletionStage<Void> leaveActor(ZLinkActor actor);
- void close();
+ CompletionStage<Boolean> close();
  CompletionStage<ZLinkTimer> addTimer(
  String name,
  Duration period,
@@ -256,12 +256,12 @@ tick sequence, 다음 예정 시각과 아직 실행하지 않은 pending tick�
 logical timer registration을 복원하므로 application이 timer를 다시 등록하지 않는다. 현재 실행 중인 timer callback만 source에서
 완료하고, target Ready 전에는 복원한 tick을 application handler에 제출하지 않는다.
 
-Manager의 User Spot `close(spotRef)`는 active Actor membership이 있으면 `false`를 반환한다. Spot state, admission과 authority는
+User Spot의 `close()`는 active Actor membership이 있으면 `false`를 반환한다. Spot state, admission과 authority는
 바꾸지 않고 `onClosing`을 호출하거나 Actor를 자동 leave·destroy하지 않는다. Caller는 Actor를 명시적으로
 leave 또는 destroy한 뒤 다시 close한다. Manager에서 Spot이 missing인 경우도 `false`이므로 caller는 사전 read
 없이 두 경우를 구분하지 않는다. Host `Shutdown`은 Actor barrier를 끝낸 뒤 Spot cleanup을 수행한다.
 Manager의 `find`와 `close`도 User Spot만 대상으로 한다. Instance Spot이 자신의 lifecycle을 끝내는 public 표면은
-`ZLinkInstanceSpotContext.close()`이며, 결과가 없는 요청이다([Spot 주소 메시징 §7](../../../03-spot-actor/06-spot-address-messaging.ko.md#7-close와-generation-경계)).
+`ZLinkInstanceSpotContext.close()`이며 이 context 내부 close 계약은 유지한다.
 
 다음 예제에서 `spotClient`는 `ZLinkSpotOutbound`이고 `cartId`는 호출할 global SpotId다. Instance
 intent를 명시했으므로 Spot이 없을 때만 cold activation에 필요한 stable type과 최초 Mesh를 사용한다.
@@ -363,7 +363,7 @@ public interface systems.zlink.framework.spots.ZLinkInstanceSpotContext {
  public abstract systems.zlink.framework.spots.ZLinkSpotOutbound outbound();
  public default <T> systems.zlink.framework.spots.ZLinkWorkerCall<T> runCpuWorker(systems.zlink.framework.spots.ZLinkWorkerTask<T>);
  public default <T> systems.zlink.framework.spots.ZLinkWorkerCall<T> runIoWorker(systems.zlink.framework.spots.ZLinkIoWorkerTask<T>);
- public abstract void close();
+ public abstract java.util.concurrent.CompletionStage<java.lang.Boolean> close();
  public abstract java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkTimer> addTimer(java.lang.String, java.time.Duration, java.lang.Class<?>, systems.zlink.framework.spots.ZLinkTimerOptions);
 }
 public interface systems.zlink.framework.spots.ZLinkInstanceSpotHandlerRegistry {
@@ -459,7 +459,7 @@ public interface systems.zlink.framework.spots.ZLinkSpotContext {
  public default <T> systems.zlink.framework.spots.ZLinkWorkerCall<T> runCpuWorker(systems.zlink.framework.spots.ZLinkWorkerTask<T>);
  public default <T> systems.zlink.framework.spots.ZLinkWorkerCall<T> runIoWorker(systems.zlink.framework.spots.ZLinkIoWorkerTask<T>);
  public abstract java.util.concurrent.CompletionStage<java.lang.Void> leaveActor(systems.zlink.framework.actors.ZLinkActor);
- public abstract void close();
+ public abstract java.util.concurrent.CompletionStage<java.lang.Boolean> close();
  public abstract java.util.concurrent.CompletionStage<systems.zlink.framework.spots.ZLinkTimer> addTimer(java.lang.String, java.time.Duration, java.lang.Class<?>, systems.zlink.framework.spots.ZLinkTimerOptions);
 }
 public final class systems.zlink.framework.spots.ZLinkSpotCreateResult extends java.lang.Record {

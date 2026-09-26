@@ -308,8 +308,8 @@ local·remote bounded resource의 오류 선택은 [Framework 오류 모델 §5]
 
 | lane | 담는 것 |
 |---|---|
-| [application lane](../00-foundation/02-glossary.ko.md#application-lane) | 업무 payload, timer callback, session 연결 수립·오류·연결 종료 callback |
-| [lifecycle lane](../00-foundation/02-glossary.ko.md#lifecycle-lane) | join·leave·relocation·session binding 교체·lifecycle control |
+| [application lane](../00-foundation/02-glossary.ko.md#application-lane) | 업무 payload, timer callback |
+| [lifecycle lane](../00-foundation/02-glossary.ko.md#lifecycle-lane) | join·leave·relocation·lifecycle control |
 
 **두 lane에는 각자의 상한이 없다.** lane을 나누는 것은 순서와 우선순위를 가르기 위한
 것이며, 얼마나 쌓였는지는 host의 job 수 하나로 센다

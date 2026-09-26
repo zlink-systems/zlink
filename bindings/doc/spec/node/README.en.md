@@ -457,7 +457,7 @@ factories and public contract methods.
   `createXPubSocket()`, `createXSubSocket()`, and `createStreamSocket()`
   create runtime socket implementations.
 Public Spot and Actor creation, including service-owned timers, is specified by the [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md). This binding specification defines creation of Core raw sockets, monitors, pollers, and generic timers.
-- `Context.createPoller()` creates a poller owned by that context; `createTimer()` creates a timer.
+- `createPoller()` and `createTimer()` create eventing resources.
 - `Pollable` is `BaseSocket | SocketMonitor | Timer | number`, and `Poller.add/modify/remove`
   provide `SocketMonitor` overloads (common spec "Monitor sources in `Poller`"). Only
   `PollEventFlag.PollIn` is valid for a socket monitor; any other readiness mask is rejected

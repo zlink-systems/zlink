@@ -571,28 +571,6 @@ Instance Spot, an application handler or timer requests local `Close` from
 its own lifecycle context. Host shutdown and `Relocate` can clean up or
 move an Instance Spot via a separate operational lifecycle.
 
-**`Close` on a Spot context is a request that returns no result.** It is called only from
-a handler or timer turn. The call registers a Close request with the context's captured
-generation. Duplicate calls in the same turn and later calls for that generation join an
-already registered or running Close. The request starts in the Spot's
-[lifecycle lane](../01-execution/02-handler-turn-and-execution-gate.en.md#execution-lanes)
-after the requesting turn ends, whether normally, by exception, by cancellation, or with a
-reply failure. That turn is excluded from Close's wait for accepted turns.
-
-Close and relocation follow the authority-commit order of
-[Host relocation §12](../05-location-relocation/05-host-relocation-flow.en.md#12-moving-pending-messages-timers-and-sessions).
-If relocation wins, the registered context request is neither run nor resubmitted, and its
-moving result is recorded in diagnostics. If `Closing` wins, Close finishes and the Spot is
-not moved. If the idle-cleanup seal in [Object lifecycle §5](09-object-lifecycle.en.md#5-when-to-clean-up-an-active-object-and-what-bounds-it)
-or the host-shutdown seal in [Host relocation §14](../05-location-relocation/05-host-relocation-flow.en.md#14-the-race-between-shutdown-and-relocate)
-wins first, the registered context request is not run and its result is recorded in
-diagnostics. A pending request remains until it runs or its superseding-seal result is
-recorded.
-
-Manager `Close` returns its result to its caller. A Manager `Close` that ends with a moving result is not automatically resubmitted to a new owner. Context `Close` returns no result;
-`false`, failure, joined, and unrun requests are each recorded in diagnostics.
-`OnClosing(ExplicitClose)` indicates cleanup started, not that authority release completed.
-
 The close procedure proceeds in the following order.
 
 1. Verifies expected owner and ObjectGeneration and transitions authority to
