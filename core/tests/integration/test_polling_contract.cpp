@@ -130,6 +130,83 @@ void test_poller_socket_registration_error_contracts ()
     test_context_socket_close_zero_linger (pair);
 }
 
+void test_monitor_poller_supports_readable_only ()
+{
+    void *socket = test_context_socket (ZLINK_SOCKET_PAIR);
+    zlink_socket_monitor_open_options_t options = {};
+    options.events = ZLINK_SOCKET_MONITOR_EVENT_LISTENING;
+    void *monitor = zlink_socket_monitor_open (socket, &options);
+    void *poller = zlink_poller_new ();
+    TEST_ASSERT_NOT_NULL (monitor);
+    TEST_ASSERT_NOT_NULL (poller);
+
+    const short unsupported[] = {ZLINK_POLLOUT};
+    const short invalid_completion[] = {
+      ZLINK_POLLCOMPLETION,
+      static_cast<short> (ZLINK_POLLIN | ZLINK_POLLCOMPLETION),
+      static_cast<short> (ZLINK_POLLOUT | ZLINK_POLLCOMPLETION)};
+    for (size_t i = 0; i != sizeof (unsupported) / sizeof (unsupported[0]); ++i) {
+        errno = 0;
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_CONFIG_NOT_SUPPORTED,
+          zlink_poller_add (poller, monitor, monitor, unsupported[i]));
+        TEST_ASSERT_EQUAL_INT (ENOTSUP, errno);
+        TEST_ASSERT_EQUAL_INT (0, zlink_poller_size (poller, NULL));
+    }
+    for (size_t i = 0;
+         i != sizeof (invalid_completion) / sizeof (invalid_completion[0]); ++i) {
+        errno = 0;
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_CONFIG_INVALID_ARGUMENT,
+          zlink_poller_add (poller, monitor, monitor, invalid_completion[i]));
+        TEST_ASSERT_EQUAL_INT (EINVAL, errno);
+        TEST_ASSERT_EQUAL_INT (0, zlink_poller_size (poller, NULL));
+    }
+
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK, zlink_poller_add (poller, monitor, monitor, ZLINK_POLLIN));
+    TEST_ASSERT_EQUAL_INT (1, zlink_poller_size (poller, NULL));
+    for (size_t i = 0; i != sizeof (unsupported) / sizeof (unsupported[0]); ++i) {
+        errno = 0;
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_CONFIG_NOT_SUPPORTED,
+          zlink_poller_modify (poller, monitor, unsupported[i]));
+        TEST_ASSERT_EQUAL_INT (ENOTSUP, errno);
+        TEST_ASSERT_EQUAL_INT (1, zlink_poller_size (poller, NULL));
+    }
+    for (size_t i = 0;
+         i != sizeof (invalid_completion) / sizeof (invalid_completion[0]); ++i) {
+        errno = 0;
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_CONFIG_INVALID_ARGUMENT,
+          zlink_poller_modify (poller, monitor, invalid_completion[i]));
+        TEST_ASSERT_EQUAL_INT (EINVAL, errno);
+        TEST_ASSERT_EQUAL_INT (1, zlink_poller_size (poller, NULL));
+    }
+
+    zlink_pollitem_t item = {monitor, 0, ZLINK_POLLOUT, 0};
+    zlink_config_result_t error = ZLINK_CONFIG_OK;
+    TEST_ASSERT_EQUAL_INT (-1, zlink_poll (&item, 1, 0, &error));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_NOT_SUPPORTED, error);
+    TEST_ASSERT_EQUAL_INT (ENOTSUP, errno);
+    item.events = ZLINK_POLLCOMPLETION;
+    TEST_ASSERT_EQUAL_INT (-1, zlink_poll (&item, 1, 0, &error));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_INVALID_ARGUMENT, error);
+    TEST_ASSERT_EQUAL_INT (EINVAL, errno);
+
+    char endpoint[MAX_SOCKET_STRING];
+    bind_loopback_ipv4 (socket, endpoint, sizeof (endpoint));
+    zlink_poller_event_t ready = {};
+    TEST_ASSERT_EQUAL_INT (1, zlink_poller_wait (poller, &ready, 1, 1000, NULL));
+    TEST_ASSERT_EQUAL_PTR (monitor, ready.socket);
+    TEST_ASSERT_EQUAL_INT (ZLINK_POLLIN, ready.events);
+
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_poller_remove (poller, monitor));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_poller_destroy (&poller));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&monitor));
+    test_context_socket_close_zero_linger (socket);
+}
+
 #if defined(ZLINK_HAVE_WINDOWS)
 void test_poller_fd_mask_and_registration_error_contracts ()
 {
@@ -553,6 +630,7 @@ int main ()
     UNITY_BEGIN ();
     RUN_TEST (test_poll_timeout_and_socket_mask_validation);
     RUN_TEST (test_poller_socket_registration_error_contracts);
+    RUN_TEST (test_monitor_poller_supports_readable_only);
     RUN_TEST (test_poller_fd_mask_and_registration_error_contracts);
     RUN_TEST (test_timer_event_hides_internal_fd_and_reports_registration_errors);
     RUN_TEST (test_poller_without_sources_returns_without_waiting);

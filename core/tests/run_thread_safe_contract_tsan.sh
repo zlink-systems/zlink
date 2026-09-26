@@ -52,7 +52,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" \
+cmake -S "${ROOT_DIR}/core" -B "${BUILD_DIR}" \
   "${GENERATOR_ARGS[@]}" \
   -DBUILD_TESTS=ON \
   -DBUILD_STATIC=ON \

@@ -265,6 +265,10 @@ class socket_base_t : public own_t,
     //  Returns false if object is not a socket.
     bool check_tag () const;
     int socket_type () const;
+    bool is_monitor_socket () const
+    {
+        return options.physical_queue_class == physical_queue_class_monitor;
+    }
     void set_public_handle (socket_public_handle_t *handle_)
     {
         _public_handle = handle_;
