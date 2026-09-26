@@ -1434,15 +1434,9 @@ and input limits of provider functions are defined by
 [Location Store](02-location-store-redis.en.md) and
 [Relocation Store](03-relocation-store-redis.en.md).
 
-On a transient error or indeterminate response, the target resubmits CAS with the same expected source fence and `RelocationId`. It creates no separate timeout and does not restart or extend the Restore absolute deadline.
+On a transient error or indeterminate response, the target resubmits its original `NewOwner` CAS (the §8.1 whole-unit batch for `SpotWide`) with the same expected source fence, `RelocationId` and expected `StoreVersion`. Command 40 carries no Restore deadline, so the target keeps no Restore deadline and no separate timeout. Resubmission ends only on confirmed commit, a definitive `Conflict`, a confirmed source `Preserve`, or target lease expiry; source lease expiry does not end it. Confirmed target commit with that `RelocationId` opens target dispatch; the other three discard staging. Dispatch remains closed until commit is confirmed, and an earlier read naming the source alone does not discard staging.
 
-Restore expiry ends ordinary new target CAS submissions and starts source settlement with the `Preserve` fence in §6.1. This section owns the same-target exception after source lease expiry. The source conditions `Preserve` on the `StoreVersion` expected
-by the target's `NewOwner` CAS. A confirmed source `Preserve` success proves the target's
-late CAS cannot commit; the source remains owner and resumes its retained work under
-[common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
-If the target with this `RelocationId` is already owner, the source adopts its route and
-the target opens its staged queue. An indeterminate `Preserve` result repeats under this section's Store-failure policy without a new timer while the source lease is valid. Source lease expiry ends source work under the expired-owner terminal in [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). After expiry, if a Store read still names the expired source at the target's original expected `StoreVersion` and the target verified the complete relay and cutover, only that same target with a valid lease may resubmit its original `NewOwner` CAS (the §8.1 whole-unit batch for `SpotWide`) with the same `RelocationId` and expected `StoreVersion`. An indeterminate response follows this section's Store-failure policy for the same authority. Confirmed target commit with that `RelocationId` opens target dispatch; a definitive `Conflict` that excludes this target commit after reconciliation discards staging. Target lease expiry before commit confirmation also discards staging. Dispatch remains closed until target commit is confirmed. A confirmed source `Preserve` fence discards staging; an earlier read naming source alone does not. The source may resume dispatch only
-while its owner lease remains valid under §5.
+At its Restore deadline the source runs the §6.1 `Preserve` conditioned on the `StoreVersion` expected by the target's `NewOwner` CAS. A confirmed source `Preserve` success proves the target's late CAS cannot commit; the source remains owner, resumes its retained work under [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover), and resumes dispatch only while its owner lease remains valid under §5. If the target with this `RelocationId` is already owner, the source adopts its route. An indeterminate `Preserve` result repeats under this section's Store-failure policy without a new timer while the source lease is valid. Source lease expiry ends source work under the expired-owner terminal in [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
 
 During `StoreFailureGrace`, the last fully-read descriptor list is kept. The connection
 intents for the targets in that list (including targets not yet connected) are kept and
@@ -1618,7 +1612,7 @@ store record golden fixture. Each item maps to one test.
 **Store Failure And Interoperability**
 
 - During the Store failure grace period, only new discovery connections are blocked, and
-  the owner deadline isn't extended. Ordinary relocation CAS resubmissions end at Restore expiry. The same-target exception after source lease expiry and staging terminals follow §10; no Session update is sent before target commit is confirmed.
+  the owner deadline isn't extended. Relocation CAS resubmission terminals and staging terminals follow §10; no Session update is sent before target commit is confirmed.
 - A descriptor isn't used as a candidate for automatic discovery, new-object placement,
   Instance Spot cold activation, initial relocation target selection, select-one target
   selection, or manual object-peer combination when its exact owner-lease read returns

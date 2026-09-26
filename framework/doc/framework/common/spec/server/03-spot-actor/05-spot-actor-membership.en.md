@@ -948,7 +948,7 @@ source state before reopening source admission. After that boundary,
 source resumption follows the `Preserve` fence in [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover)** — this is the
 common authority rule, and it applies to both Actor Join and User Spot aggregate
 relocation (§7). After cutover, an indeterminate Location Store result is settled by the authority
-read for the same `RelocationId` under [Location runtime §10](../05-location-relocation/01-location-runtime.en.md#10-when-a-store-response-isnt-received). The same-target CAS exception and staging terminals after Restore expiry follow [Location runtime §10](../05-location-relocation/01-location-runtime.en.md#10-when-a-store-response-isnt-received).
+read for the same `RelocationId` under [Location runtime §10](../05-location-relocation/01-location-runtime.en.md#10-when-a-store-response-isnt-received). Target CAS resubmission and staging terminals follow [Location runtime §10](../05-location-relocation/01-location-runtime.en.md#10-when-a-store-response-isnt-received).
 
 If `Capture` fails, no Restore request is sent and the source is kept. If
 `Restore` fails, the target staging instance and temporary queue are

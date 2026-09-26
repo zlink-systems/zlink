@@ -281,10 +281,9 @@ Entry Spot은 Object Server node마다 하나로 고정하며 configurable Spot 
 reservation과 authority를 같은 transaction에서 확정하며 descriptor count는 후보 선택용 projection이다.
 받아 줄 수 있는 후보가 없으면 `Unavailable`로 끝난다.
 
-기존 pending activation `128`
-제한은 object population limit이 아니라 동시에 진행되는 activation을 보호하는 별도 admission 제한이다.
-Activation concurrency 기본값은 node당 `128`이고 양수만 허용한다. Permit은 factory와 initialization이
-끝나면 반환하며 active·reserved population count를 바꾸지 않는다.
+Pending activation 제한은 object population limit이 아니라 동시에 진행되는 activation을 보호하는 별도
+admission 제한이며 active·reserved population count를 바꾸지 않는다. 세는 작업, 세는 구간, 기본값과 허용 범위는
+[MeshNode §5.1](../03-spot-actor/03-mesh-node.ko.md#51-weight와-capacity)이 정한다.
 
 하나의 object를 만들거나 relocation할 때 필요한 모든 capacity는 하나의 typed bundle로 예약한다.
 Actor bundle에는 Actor slot 하나가 들어간다. Spot bundle에는 Spot 전체 slot 하나와, stable type limit을

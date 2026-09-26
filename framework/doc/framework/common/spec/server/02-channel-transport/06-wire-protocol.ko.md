@@ -649,7 +649,7 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
   사용한 적이 없다. Relocation Store에 남은 책임은 Instance Spot cold activation envelope(§8)와
   relocation 후 pending request terminal record뿐이며, 이 두 경로는 이 절과 무관하게 Store 자체의
   `relocation-manifest-v1`·`relocation-root-pointer` format과 CAS 규율을 그대로 사용한다.
-- Target의 CAS 오류와 불확정 응답은 [Location runtime §10](../05-location-relocation/01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)의 같은 `RelocationId` authority read로 수렴한다. Restore 만료 뒤 같은 target의 CAS 예외와 staging terminal은 [Location runtime §10](../05-location-relocation/01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다.
+- Target의 CAS 오류와 불확정 응답은 [Location runtime §10](../05-location-relocation/01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)의 같은 `RelocationId` authority read로 수렴한다. Target CAS 재제출과 staging terminal은 [Location runtime §10](../05-location-relocation/01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다.
 - CAS가 성공하면 source로 되돌리지 않는다.
 
 ## 10. Relocation, Actor membership과 Ready
