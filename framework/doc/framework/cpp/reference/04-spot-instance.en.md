@@ -323,7 +323,7 @@ Spot.
 
 ```cpp
 co_await context_.leave_actor(actor);        // User Spot: only removes the member Actor
-context_.close();                            // User/Instance Spot: registers a close request
+bool closed = co_await context_.close();     // User/Instance Spot: closes this Spot itself
 co_await entry_context_.destroy_actor(actor); // Entry Spot: destroys the Actor entirely
 ```
 
@@ -331,8 +331,9 @@ co_await entry_context_.destroy_actor(actor); // Entry Spot: destroys the Actor 
 (`leave_actor`/`destroy_actor`).
 
 **Completion result.** `leave_actor` (`spot_context_t` only) only releases member Actor
-membership and does not destroy the Actor itself. Context `close()` registers a no-result request ([common Spot messaging §7](../../common/spec/server/03-spot-actor/06-spot-address-messaging.en.md#7-close-and-the-generation-boundary)).
-Only manager `close(spot_ref)` returns a result.
+membership and does not destroy the Actor itself. `close` (`spot_context_t`/
+`instance_spot_context_t`) uses the same completion kinds as the manager's `close(spot_ref)`
+(the earlier entry in the spot-instance category), but targets this Spot itself.
 `destroy_actor` (`entry_spot_context_t` only) destroys the Actor entirely — unlike `leave_actor`,
 it removes the Actor itself rather than releasing membership.
 

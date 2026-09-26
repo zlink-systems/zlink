@@ -263,7 +263,7 @@ replacement, not per-record deduplication or partial merge, so the order inside 
 is fixed by the batch order even on the new connection. When the verification values
 match, the target proceeds with CAS and queue opening.
 
-The end of the cutover wait never permits CAS or application dispatch without verified cutover. The target records a `cutover_timeout` Warning. The Restore absolute deadline is the [deadline](../00-foundation/02-glossary.en.md#deadline) of the operation that started the relocation. A late or duplicate cutover does not change the authority approved by the Store.
+The end of the cutover wait never permits CAS or application dispatch without verified cutover. The target records a `cutover_timeout` Warning. A late or duplicate cutover does not change the authority approved by the Store.
 
 The source can still receive a message that arrives late at the old address after this
 boundary. Before owner change it relays it to the temporary queue; after owner change it
@@ -519,7 +519,7 @@ as new values.
 |---|---|
 | Change succeeds | The target is owner. It opens the target queue and doesn't roll back to source. |
 | Condition mismatch | Authority is settled under [Location runtime §6.1 and §10](01-location-runtime.en.md#61-read-and-cas). If source `Preserve` won, target staging is removed and the source resumes retained work. |
-| Store returns a retryable failure | Target dispatch stays closed; ordinary retries and the post-source-lease exception follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). |
+| Store returns a retryable failure | Target dispatch stays closed; target CAS resubmission and its terminals follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). |
 | Target receives no CAS response | Target CAS resubmission and its terminals follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). |
 | A different valid owner or generation is confirmed | Ends the relocation immediately as stale and removes the prepared target object and queue. |
 | CAS result is indeterminate at the source Restore deadline | Source `Preserve` and target CAS resubmission follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). |
@@ -593,7 +593,7 @@ Confirmed target commit opens its queue; winning source `Preserve` lets the sour
 retained work under [§4.4](#44-ordered-relay-and-one-way-cutover). Both sides retain work
 while the Store result is indeterminate.
 
-If Store failure continues until the Restore deadline, the Session may end through
+If Store failure continues until Restore validity expires, the Session may end through
 its own separate seal timeout. After the Store recovers, a new Session connection
 doesn't restore the previous binding; it performs normal location validation and Actor/
 Spot creation or recovery again. An expired owner lease or terminal relocation state

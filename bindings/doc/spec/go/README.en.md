@@ -64,9 +64,8 @@ capability does not get that method.
 ## Context and resource lifetime
 
 - The Context `NewContext` creates is the owner of its sockets and context-wide options.
-- Closing a Context with `Close` closes its still-open resources as the [common lifecycle rule](../async-execution-model.en.md#4-pollers-and-completion-drain) defines.
-- `NewPoller(ctx *Context) (*Poller, error)` creates a poller owned by `ctx`; there is no `NewPoller` without a context.
-- The caller closes Context, socket, monitor, poller, timer, and utility resources with `Close` or the matching close method once done. Retention of a busy poller follows the [common lifecycle rule](../async-execution-model.en.md#4-pollers-and-completion-drain).
+- Context `Close` follows the [common lifecycle rule](../async-execution-model.en.md#4-pollers-and-completion-drain).
+- Context, socket, monitor, poller, timer, and utility resources are owned by the caller, who calls `Close` or the matching close method once done.
 - Calling Close repeatedly on the same resource does not re-release an already-closed state.
 
 A context option sets the I/O thread count and socket defaults. Public `uint64`

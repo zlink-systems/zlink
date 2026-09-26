@@ -163,11 +163,11 @@ A STREAM packet is first dispatched to the session's typed handler
 registry. The framework resolves the packet's `actor_slot`
 ([Stream Connector common spec §4.2](../../stream-connector/32-stream-connector.en.md#42-header))
 against the current bindings and puts that Actor into the dispatch context —
-no slot means no Actor. This resolution happens once, when the packet enters the
-session's application lane, so a later binding replacement does not change the
-Actor of a packet already accepted. **A packet carrying a slot that is not a current
-binding (one that arrives late, after the unbind) is not delivered to the
-session handler.** A `Request` ends with an `Error` reply on the same sequence
+no slot means no Actor. This resolution happens once, when the packet's handler turn
+starts, and its result holds for that turn. The connection established callback completes
+before the connection's first packet callback, and the connection closed callback completes
+after the packet callbacks already accepted. **A packet whose slot has no current binding when its
+handler turn starts is not delivered to the session handler.** A `Request` ends with an `Error` reply on the same sequence
 (`InvalidOperation`), recorded as `zlink.dispatch_error` with `surface=stream`,
 `message_kind=request`, `outcome=failed`, `reason=stale_target`, `action=reply_error`. A `Send` is
 dropped and recorded in message-flow with `surface=stream`, `message_kind=send`,
@@ -708,12 +708,6 @@ The session owner serializes the same session's handler turn, binding
 mutation, close, and relocation barrier. Once submitted to the Actor, the
 Actor queue owns the order. Session turn and Actor turn aren't merged via a
 shared lock or callback stack.
-
-[Execution contract §7](../01-execution/02-handler-turn-and-execution-gate.en.md#execution-lanes) defines the lane of
-session callbacks. The connection established, error and connection closed callbacks enter the same
-application lane as packet callbacks in arrival order, so the connection established callback runs
-before the connection's first packet callback and the connection closed callback runs after the
-packet callbacks already accepted.
 
 Request and binding-operation completion, binding update, relocation
 barrier, and disconnect cleanup proceed on an infrastructure task. This

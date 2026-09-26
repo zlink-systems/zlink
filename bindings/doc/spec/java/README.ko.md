@@ -429,6 +429,7 @@ factory가 생성해야 한다.
 필수 root factory 메서드:
 
 - `Zlink.createContext()`
+- `Zlink.createPoller()`
 - `Zlink.createTimer()`
 
 `Zlink`는 version, capability 조회, strerror, proxy, shutdown, sleep, auto-HWM
@@ -450,7 +451,6 @@ factory가 생성해야 한다.
 - `createXPubSocket()`
 - `createXSubSocket()`
 - `createStreamSocket()`
-- `createPoller()`
 
 모든 factory는 public contract interface 또는 concrete 값 타입을 반환한다.
 `NativeContext`, `NativeRouterSocket` 같은 runtime 클래스를

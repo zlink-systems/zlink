@@ -125,13 +125,13 @@ export interface ZLinkSpotContext<
  readonly handlers: ZLinkSpotHandlerRegistry;
  relocationReady(): ZLinkSpotRelocationReadyCall;
  leaveActor(actor: TActor, signal?: AbortSignal): Promise<void>;
- close(): void;
+ close(signal?: AbortSignal): Promise<boolean>;
 }
 
 export interface ZLinkInstanceSpotContext
  extends ZLinkSpotCommonContext<ZLinkInstanceSpot> {
  readonly handlers: ZLinkInstanceSpotHandlerRegistry;
- close(): void;
+ close(signal?: AbortSignal): Promise<boolean>;
 }
 ```
 

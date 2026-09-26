@@ -76,12 +76,16 @@ C의 raw readiness, `zlink_completion_recv()`와 record 수명은
   제출하면 바인딩은 **submit 시점에 진행 불가를 즉시 typed 오류(`InvalidState`)로 거부**하며,
   조용히 hang하거나 백그라운드 drain을 만들지 않는다. 오사용을 지연이 아니라 최전방에서 막기
   위해서다.
-- **고수준 바인딩은 native handle을 인자로 Core를 호출하는 동안 그 handle의 진입 기록을 유지한다.** 바인딩은 handle(context·socket·monitor·poller)마다 진행 중인 native 호출 수와 닫힘 여부를 원자적 값 하나로 기록하며, 이 값을 진입 기록이라 한다. 기록은 native 호출의 시작부터 반환까지만 포함하고, 언어 callback과 terminal 완료는 기록 밖에서 실행한다. 진입과 반환은 각각 lock 없는 원자적 갱신 한 번이다. 닫힘이 기록된 뒤의 호출은 Core에 들어가지 않으며, 사용자 close 뒤이면 `ESHUTDOWN`, context close 뒤이면 `ETERM`을 [Public Result Enum 카탈로그](README.ko.md#public-result-enum-카탈로그)의 해당 결과로 투영한 오류로 끝난다. 사용자 close·destroy는 닫힘을 기록하고, 같은 원자적 갱신에서 진행 중인 호출 수가 0이었을 때만 native close·destroy를 호출한다. 성공하면 registration과 operation state를 정확히 한 번 해제한다. 진행 중인 호출이 있었거나 Core가 `EBUSY`를 반환하면 native close를 다시 호출하지 않고, 닫힘 기록을 유지한 채 소유 context가 [§6](#6-caller-wait-cancellation)의 lifecycle cleanup을 위해 handle, registration, operation state를 보관한다. Binding context close는 context와 그 context에 속한 모든 handle에 닫힘을 기록하고 `zlink_ctx_shutdown`을 호출한다. 모든 진입 기록의 호출 수가 0이 되면 아직 닫히지 않은 socket·monitor를 닫고 소유한 poller를 파괴하며, 보관된 handle도 여기에 포함된다. 그 뒤에만 `zlink_ctx_term`을 호출한다. 마지막 native 호출이 반환하면서 대기 중인 context close에 알리며, 바인딩은 close 재시도나 호출 수 확인을 시간 간격을 두고 반복하지 않는다. `zlink_ctx_shutdown`이 poller wait를 끝내는 조건은 [Core Polling §5](../../../core/doc/spec/core/05-polling.ko.md#5-source-수명과-직렬화)가 정하며, 소유 poller의 `wait()`가 진행 중이면 context close는 그 `wait()`가 반환할 때까지 기다린다. 언어 runtime이 close와 다른 native 호출의 동시 실행을 구조적으로 배제하면(한 thread만 Core를 호출하는 runtime, 호출 중인 객체를 파괴할 수 없는 소유권 모델) 진입 기록 없이 위 결과를 만족한다.
-- **Public poller는 생성할 때 전달한 binding context가 파괴될 때까지 소유한다.** 다른 binding context의 socket을 등록하면 poller를 바꾸지 않고 `InvalidState`를 반환한다. 등록 항목이 없거나 모두 제거된 뒤에도 소유 context는 바뀌지 않는다.
 - **Blocking terminal(동기 request 등)은 호출 thread에서 자신의 completion을 in-line으로
   drain해 완료하며, 별도 drain thread나 지속 owner를 만들지 않는다.** 소켓이 이미 public poller
   owner를 가진 동안에는 같은 실행 thread에서 `wait()`와 blocking terminal을 직렬로 호출하지
   않는다(아래).
+- **Binding context close는 `zlink_ctx_shutdown`을 호출한 뒤 `zlink_ctx_term`을 호출한다.** 두 호출의
+  효과는 [Core Context §3](../../../core/doc/spec/core/01-context.ko.md#3-수명과-종료)이 정한다.
+- **명시적 Poller close에서 native destroy가 `ZLINK_CLOSE_BUSY`/`EBUSY`를 반환하면 binding은 공개 typed
+  `Busy` 오류를 보고하고 poller를 유효하게 유지한다.** 이 결과는 `wait()` 진행 중 destroy에 대한
+  [Core Polling §7](../../../core/doc/spec/core/05-polling.ko.md#7-함수)의 판정이다. 호출자는 `wait()` 종료 뒤
+  close를 다시 호출할 수 있다.
 
 고수준 `PollCompletion`은 native queue에서 한 건 이상을 꺼내 live waiter를 끝내거나 detached
 state를 정리한 뒤 반환하는 completion progress event다. 반환할 때 queue가 이미 비어 있을 수
@@ -164,13 +168,6 @@ C의 raw completion 관측은
   백그라운드 drain을 시작하지 않는다.** owner를 등록한 뒤 같은 제출은 정상 완료한다.
 - Blocking terminal은 poller owner 없이도 호출 thread의 in-line drain만으로 자신의 completion을
   한 번 받아 완료하며, 별도 thread를 만들지 않는다.
-- 사용자가 닫지 않은 socket과 monitor가 남은 context를 close하면 그 handle 때문에 대기하지 않고 반환한다. 이후 그 socket과 monitor는 닫힌 상태를 보고하며, 뒤이은 close는 native handle을 다시 해제하지 않고 성공한다.
-- Poller `wait()` 중 poller를 파괴하면 native destroy를 호출하지 않고 소유 context가 handle과 state를 보관한다. Context close는 shutdown, 진입 기록의 호출 수 0 대기, close/destroy, `zlink_ctx_term` 순서를 따르며 registration과 operation state를 정확히 한 번 해제한다.
-- Poller를 생성할 때 전달한 context와 다른 context의 socket을 등록하면 `InvalidState`를 반환하며 등록 항목과 소유 context는 바뀌지 않는다. Socket을 등록한 적이 없거나 모든 socket을 제거한 poller도 활성 `wait()` 중 파괴하면 생성 시 전달한 context가 보관한다.
-- 다른 thread가 blocking receive 중인 socket을 close하면 close는 그 receive를 기다리지 않고 반환한다. 이후 그 socket의 호출은 `ESHUTDOWN` 투영 오류로 끝나고, context close는 그 receive를 `ETERM`으로 끝낸 뒤 native close를 한 번 실행한다.
-- 여러 thread가 socket·monitor·poller 호출을 반복하는 동안 context close를 실행하면 각 호출은 성공하거나 `ETERM` 투영 오류로 끝나며, AddressSanitizer 빌드에서 해제된 handle 접근이 보고되지 않는다. Context close가 반환한 뒤의 호출은 `ETERM` 투영 오류로 끝난다.
-- Poller를 파괴하고 새 poller를 만든 뒤 파괴한 poller 객체로 `wait()`나 등록을 호출하면 `ESHUTDOWN` 투영 오류로 끝나고, 새 poller의 등록과 event는 바뀌지 않는다.
-- Poller `wait()`가 완료시킨 terminal의 continuation에서 context close를 호출해도 context close는 반환한다.
 
 
 **Submit과 completion 경합**

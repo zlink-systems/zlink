@@ -479,25 +479,6 @@ Spot manager의 public `Close`는 User Spot의 `SpotRef`를 받는다. Instance 
 application handler나 timer가 자신의 lifecycle context에서 local `Close`를 요청한다. Host
 shutdown과 `Relocate`는 별도 운영 lifecycle로 Instance Spot을 정리하거나 이동할 수 있다.
 
-**Spot context의 `Close`는 결과를 반환하지 않는 요청이다.** Handler나 timer turn에서만
-호출한다. 호출 시 context의 generation을 붙여 Close 요청을 등록하며, 같은 turn의 중복 호출과
-나중에 도착한 같은 generation의 요청은 이미 등록됐거나 진행 중인 Close에 합친다. 요청은
-호출한 turn이 정상 종료·예외·취소·reply 실패 중 어느 경로로 끝나든, 그 뒤 Spot의
-[lifecycle lane](../01-execution/02-handler-turn-and-execution-gate.ko.md#execution-lanes)에서 시작한다.
-호출한 turn은 Close의 accepted-turn 대기에 포함하지 않는다.
-
-Close와 relocation의 순서는 [Host relocation §12](../05-location-relocation/05-host-relocation-flow.ko.md#12-대기-중인-message-timer와-session을-옮긴다)의
-authority commit 순서를 따른다. Relocation이 이기면 등록한 context 요청은 실행하거나
-다시 제출하지 않고 moving 결과를 diagnostics에 기록한다. `Closing`이 이기면 Close를 끝내고
-Spot을 이전하지 않는다. Idle cleanup의 seal([Object lifecycle §5](09-object-lifecycle.ko.md#5-활성-객체를-언제-정리하고-무엇으로-막는가))과
-host shutdown의 seal([Host relocation §14](../05-location-relocation/05-host-relocation-flow.ko.md#14-shutdown과-relocate의-경쟁))이
-먼저 확정되면 등록한 context 요청은 실행하지 않고 그 결과를 diagnostics에 남긴다. Pending
-요청은 실행되거나 seal에 의해 대체된 결과가 기록될 때까지 버리지 않는다.
-
-Manager `Close`는 결과를 caller에게 반환한다. Manager `Close`가 moving 결과로 끝나도 Framework는 같은 `Close`를 새 owner에게 자동 재제출하지 않는다. Context `Close`는 결과가 없으므로 `false`,
-실패, 합쳐진 요청과 실행되지 않은 요청을 각각 diagnostics에 기록한다.
-`OnClosing(ExplicitClose)`은 cleanup 시작을 뜻하며 authority 해제 완료를 뜻하지 않는다.
-
 Close 절차는 다음 순서로 진행한다.
 
 1. Expected owner와 ObjectGeneration을 검증해 authority를 `Closing`으로 전이한다.

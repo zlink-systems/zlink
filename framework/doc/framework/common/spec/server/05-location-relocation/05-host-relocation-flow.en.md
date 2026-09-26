@@ -744,7 +744,7 @@ at a previous owner are defined by
 The application must rebind an Actor newly created under the same ActorId.
 
 An Instance Spot's `Close` and relocation are ordered within the same authority commit.
-If `Closing` comes first, close finishes and it isn't moved. If relocation comes first, a late `Close` is a moving result. Manager `Close` resubmission follows [Spot address messaging §7](../03-spot-actor/06-spot-address-messaging.en.md#7-close-and-the-generation-boundary).
+If `Closing` comes first, close finishes and it isn't moved. If relocation comes first, a late `Close` is a moving result and isn't automatically resubmitted.
 
 ## 13. Relocate Completion and Failure
 

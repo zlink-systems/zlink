@@ -444,6 +444,7 @@ runtime implementations is not part of the target API.
 Required root factory methods:
 
 - `Zlink.createContext()`
+- `Zlink.createPoller()`
 - `Zlink.createTimer()`
 
 `Zlink` may also own public static helpers such as version, capability,
@@ -465,7 +466,6 @@ Required context factory methods:
 - `createXPubSocket()`
 - `createXSubSocket()`
 - `createStreamSocket()`
-- `createPoller()`
 
 Every factory returns a public contract interface or concrete value type. It
 never returns `NativeContext`, `NativeRouterSocket`, or any

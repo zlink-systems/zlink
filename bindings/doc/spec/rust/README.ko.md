@@ -290,7 +290,7 @@ Trait는 호출자에게 대체 가능한 동작이나 generic bound가 필요�
   `create_xpub_socket()`, `create_xsub_socket()`, `create_stream_socket()`은
   네이티브 기반 socket 구현을 생성한다.
 공개 Spot과 Actor 생성 및 service 소유 timer는 [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md)가 규정한다. 이 binding spec은 Core raw socket, monitor, poller, 일반 timer의 생성을 정의한다.
-- `Poller::new(&Context)`는 인자로 받은 context가 소유하는 poller를, `Timer::new(...)`는 timer를 생성한다.
+- `Poller::new(...)`, `Timer::new(...)`는 eventing 리소스를 생성한다.
 - `Poller`는 `add_monitor(&self, monitor: &SocketMonitor, events: i16, slot: usize) -> Result<(), ConfigError>`,
   `modify_monitor(&self, monitor: &SocketMonitor, events: i16) -> Result<(), ConfigError>`,
   `remove_monitor(&self, monitor: &SocketMonitor) -> Result<(), ConfigError>`로 socket monitor를 source로

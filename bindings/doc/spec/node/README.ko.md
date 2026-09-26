@@ -426,7 +426,7 @@ operation을 따라 짓는다. `router_socket.ts`, `poller.ts`, `timer.ts`를 �
   `createXPubSocket()`, `createXSubSocket()`, `createStreamSocket()`는 런타임 소켓
   구현을 생성한다.
 공개 Spot과 Actor 생성 및 service 소유 timer는 [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md)가 규정한다. 이 binding spec은 Core raw socket, monitor, poller, 일반 timer의 생성을 정의한다.
-- `Context.createPoller()`는 그 context가 소유하는 poller를, `createTimer()`는 timer를 생성한다.
+- `createPoller()`, `createTimer()`는 eventing 리소스를 생성한다.
 - `Pollable`은 `BaseSocket | SocketMonitor | Timer | number`이며 `Poller.add/modify/remove`는
   `SocketMonitor` overload를 제공한다(공통 spec "`Poller`의 monitor source"). socket monitor에는
   `PollEventFlag.PollIn`만 유효하고 다른 readiness mask는 typed `ConfigResult.InvalidArgument`로

@@ -499,14 +499,16 @@ public interface IZLinkSpotContext : IZLinkSpotCommonContext
         IZLinkActor actor,
         CancellationToken cancellationToken = default);
 
-    void Close();
+    ValueTask<bool> CloseAsync(
+        CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkInstanceSpotContext : IZLinkSpotCommonContext
 {
     IZLinkInstanceSpotHandlerRegistry Handlers { get; } // Direct handler만 등록
 
-    void Close();
+    ValueTask<bool> CloseAsync(
+        CancellationToken cancellationToken = default);
 }
 ```
 
