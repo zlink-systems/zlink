@@ -213,9 +213,10 @@ public final class Message implements AutoCloseable {
         message.closed = false;
         int rc = NATIVE_ACCESS.init(message.msg);
         if (rc != 0) {
+            int errno = ContractAccess.nativeErrno();
             message.retireWrapperSlot();
-            throw ZlinkException.fromLastError(
-                systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw ZlinkException.fromErrno(
+                systems.zlink.contracts.errors.ErrorCategory.CONFIG, errno);
         }
         message.valid = true;
         message.recvArmed = true;
@@ -228,8 +229,9 @@ public final class Message implements AutoCloseable {
         this(true);
         int rc = ContractAccess.nativeMessageInit(msg);
         if (rc != 0) {
+            int errno = ContractAccess.nativeErrno();
             releaseOwnedResources();
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw ZlinkException.fromErrno(systems.zlink.contracts.errors.ErrorCategory.CONFIG, errno);
         }
         valid = true;
         recvArmed = true;
@@ -243,8 +245,9 @@ public final class Message implements AutoCloseable {
             throw new IllegalArgumentException("size must be >= 0");
         int rc = ContractAccess.nativeMessageInitSize(msg, size);
         if (rc != 0) {
+            int errno = ContractAccess.nativeErrno();
             releaseOwnedResources();
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw ZlinkException.fromErrno(systems.zlink.contracts.errors.ErrorCategory.CONFIG, errno);
         }
         valid = true;
         recvArmed = false;
@@ -315,8 +318,8 @@ public final class Message implements AutoCloseable {
         int size = cachedSize;
         int rc = ContractAccess.nativeMessageMove(dest.msg, msg);
         if (rc != 0)
-            throw ZlinkException.fromLastError(
-                systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw ZlinkException.fromErrno(
+                systems.zlink.contracts.errors.ErrorCategory.CONFIG, ContractAccess.nativeErrno());
 
         dest.valid = true;
         dest.recvArmed = false;
@@ -367,9 +370,10 @@ public final class Message implements AutoCloseable {
             true);
         int rc = ContractAccess.nativeMessageInitSize(msg.msg, length);
         if (rc != 0) {
+            int errno = ContractAccess.nativeErrno();
             ContractAccess.nativeMessageCloseScope(msg.scope);
             msg.closed = true;
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw ZlinkException.fromErrno(systems.zlink.contracts.errors.ErrorCategory.CONFIG, errno);
         }
         msg.valid = true;
         msg.recvArmed = false;
@@ -388,19 +392,28 @@ public final class Message implements AutoCloseable {
             true);
         int rc = ContractAccess.nativeMessageInit(msg.msg);
         if (rc != 0) {
+            int errno = ContractAccess.nativeErrno();
             ContractAccess.nativeMessageCloseScope(msg.scope);
             msg.closed = true;
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw ZlinkException.fromErrno(systems.zlink.contracts.errors.ErrorCategory.CONFIG, errno);
         }
         rc = ContractAccess.nativeMessageCopy(msg.msg, source.msg);
         if (rc != 0) {
+            int errno = ContractAccess.nativeErrno();
+            ZlinkException failure = ZlinkException.fromErrno(
+                systems.zlink.contracts.errors.ErrorCategory.CONFIG, errno);
             try {
                 ContractAccess.nativeMessageClose(msg.msg);
-            } catch (RuntimeException ignored) {
+            } catch (RuntimeException cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
             }
-            ContractAccess.nativeMessageCloseScope(msg.scope);
+            try {
+                ContractAccess.nativeMessageCloseScope(msg.scope);
+            } catch (RuntimeException cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
             msg.closed = true;
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw failure;
         }
         msg.valid = true;
         msg.recvArmed = false;
@@ -693,14 +706,14 @@ public final class Message implements AutoCloseable {
         if (valid) {
             int closeRc = ContractAccess.nativeMessageClose(msg);
             if (closeRc != 0)
-                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+                throw ZlinkException.fromErrno(systems.zlink.contracts.errors.ErrorCategory.CONFIG, ContractAccess.nativeErrno());
             valid = false;
         }
         int rc = size == 0 ? ContractAccess.nativeMessageInit(msg)
             : ContractAccess.nativeMessageInitSize(msg, size);
         if (rc != 0) {
-            throw ZlinkException.fromLastError(
-                systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw ZlinkException.fromErrno(
+                systems.zlink.contracts.errors.ErrorCategory.CONFIG, ContractAccess.nativeErrno());
         }
         valid = true;
         recvArmed = false;
@@ -785,22 +798,26 @@ public final class Message implements AutoCloseable {
         requireValidNativeOwnership();
         int rc = ContractAccess.nativeMessageInit(destination);
         if (rc != 0)
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw ZlinkException.fromErrno(systems.zlink.contracts.errors.ErrorCategory.CONFIG, ContractAccess.nativeErrno());
         rc = ContractAccess.nativeMessageCopy(destination, msg);
-        if (rc != 0)
+        if (rc != 0) {
+            int errno = ContractAccess.nativeErrno();
+            ZlinkException failure = ZlinkException.fromErrno(
+                systems.zlink.contracts.errors.ErrorCategory.CONFIG, errno);
             try {
                 ContractAccess.nativeMessageClose(destination);
-            } catch (RuntimeException ignored) {
+            } catch (RuntimeException cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
             }
-        if (rc != 0)
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw failure;
+        }
     }
 
     void moveTo(Object destination) {
         requireValidNativeOwnership();
         int rc = ContractAccess.nativeMessageMove(destination, msg);
         if (rc != 0)
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw ZlinkException.fromErrno(systems.zlink.contracts.errors.ErrorCategory.CONFIG, ContractAccess.nativeErrno());
         valid = false;
         recvArmed = false;
         clearPayloadCache();
@@ -810,11 +827,18 @@ public final class Message implements AutoCloseable {
         requireValidNativeOwnership();
         int rc = ContractAccess.nativeMessageInit(destination);
         if (rc != 0)
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw ZlinkException.fromErrno(systems.zlink.contracts.errors.ErrorCategory.CONFIG, ContractAccess.nativeErrno());
         rc = ContractAccess.nativeMessageMove(destination, msg);
         if (rc != 0) {
-            ContractAccess.nativeMessageClose(destination);
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            int errno = ContractAccess.nativeErrno();
+            ZlinkException failure = ZlinkException.fromErrno(
+                systems.zlink.contracts.errors.ErrorCategory.CONFIG, errno);
+            try {
+                ContractAccess.nativeMessageClose(destination);
+            } catch (RuntimeException cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
+            throw failure;
         }
         valid = false;
         recvArmed = false;
@@ -826,7 +850,7 @@ public final class Message implements AutoCloseable {
         prepareForReceive();
         int rc = ContractAccess.nativeMessageMove(msg, source);
         if (rc != 0)
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw ZlinkException.fromErrno(systems.zlink.contracts.errors.ErrorCategory.CONFIG, ContractAccess.nativeErrno());
         valid = true;
         recvArmed = false;
         more = moreFlag;
@@ -842,12 +866,12 @@ public final class Message implements AutoCloseable {
         if (valid) {
             int rc = ContractAccess.nativeMessageClose(msg);
             if (rc != 0)
-                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+                throw ZlinkException.fromErrno(systems.zlink.contracts.errors.ErrorCategory.CONFIG, ContractAccess.nativeErrno());
             valid = false;
         }
         int rc = ContractAccess.nativeMessageInit(msg);
         if (rc != 0)
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw ZlinkException.fromErrno(systems.zlink.contracts.errors.ErrorCategory.CONFIG, ContractAccess.nativeErrno());
         valid = true;
         recvArmed = true;
         more = false;
@@ -872,8 +896,9 @@ public final class Message implements AutoCloseable {
             target = new Message(true);
             int initRc = ContractAccess.nativeMessageInit(target.msg);
             if (initRc != 0) {
+                int errno = ContractAccess.nativeErrno();
                 target.releaseOwnedResources();
-                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+                throw ZlinkException.fromErrno(systems.zlink.contracts.errors.ErrorCategory.CONFIG, errno);
             }
             target.valid = true;
             target.recvArmed = true;
@@ -938,7 +963,7 @@ public final class Message implements AutoCloseable {
         target.prepareForReceive();
         int rc = ContractAccess.nativeMessageMove(target.msg, msg);
         if (rc != 0)
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw ZlinkException.fromErrno(systems.zlink.contracts.errors.ErrorCategory.CONFIG, ContractAccess.nativeErrno());
         target.valid = true;
         target.recvArmed = false;
         target.more = moreFlag;

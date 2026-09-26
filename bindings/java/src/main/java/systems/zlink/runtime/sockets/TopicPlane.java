@@ -13,7 +13,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.SubscriptionEntry;
@@ -23,7 +22,6 @@ import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.contracts.sockets.SendResult;
 import systems.zlink.runtime.nativeapi.InternalAccess;
 import systems.zlink.runtime.nativeapi.Native;
-import systems.zlink.runtime.nativeapi.NativeErrno;
 import systems.zlink.runtime.nativeapi.NativeLayouts;
 import systems.zlink.runtime.nativeapi.NativeRoutingIds;
 import systems.zlink.runtime.nativeapi.RecvScratch;
@@ -111,22 +109,12 @@ final class TopicPlane {
         socket.ensureOpen();
         socket.prepareRecvLikeOperation();
         RecvScratch scratch = socket.recvScratch();
-        int rc = NativeErrno.retryWhileInterrupted(() -> {
-            resetSubscriptionScratch(scratch);
-            return Native.subscriptionEvent(socket.handle(),
-                scratch.routingIdOut, scratch.subscribedOut,
-                scratch.topicOut, scratch.topicLenOut, flags.getValue());
-        }, result -> result != 0);
-        if (rc != 0) {
-            int errno = Native.errno();
-            if (flags == ReceiveFlag.DONTWAIT
-                && (errno == NativeErrno.EAGAIN
-                    || errno == NativeErrno.EWOULDBLOCK_WIN)) {
-                throw new ZlinkRecvException(RecvResult.NO_DATA, errno);
-            }
-            throw ZlinkException.fromErrno(
-                systems.zlink.contracts.errors.ErrorCategory.RECV, errno);
-        }
+        resetSubscriptionScratch(scratch);
+        int rc = Native.subscriptionEvent(socket.handle(),
+            scratch.routingIdOut, scratch.subscribedOut,
+            scratch.topicOut, scratch.topicLenOut, flags.getValue());
+        if (rc != RecvResult.OK.value())
+            throw new ZlinkRecvException(RecvResult.fromValue(rc), Native.errno());
         return subscriptionEventFromNative(scratch);
     }
 
@@ -134,22 +122,19 @@ final class TopicPlane {
         socket.ensureOpen();
         socket.prepareRecvLikeOperation();
         RecvScratch scratch = socket.recvScratch();
-        int rc = NativeErrno.retryWhileInterrupted(() -> {
-            resetSubscriptionScratch(scratch);
-            return Native.subscriptionEvent(socket.handle(),
-                scratch.routingIdOut, scratch.subscribedOut, scratch.topicOut,
-                scratch.topicLenOut, ReceiveFlag.DONTWAIT.getValue());
-        }, result -> result != 0);
+        resetSubscriptionScratch(scratch);
+        int rc = Native.subscriptionEvent(socket.handle(),
+            scratch.routingIdOut, scratch.subscribedOut, scratch.topicOut,
+            scratch.topicLenOut, ReceiveFlag.DONTWAIT.getValue());
         if (rc == 0) {
             return Optional.of(subscriptionEventFromNative(scratch));
         }
         int errno = Native.errno();
-        if (errno == NativeErrno.EAGAIN
-            || errno == NativeErrno.EWOULDBLOCK_WIN) {
+        RecvResult result = RecvResult.fromValue(rc);
+        if (result == RecvResult.NO_DATA) {
             return Optional.empty();
         }
-        throw ZlinkException.fromLastError(
-            systems.zlink.contracts.errors.ErrorCategory.RECV);
+        throw new ZlinkRecvException(result, errno);
     }
 
     private TopicMessage subscribeInternal(ReceiveFlag flags,
@@ -157,47 +142,41 @@ final class TopicPlane {
         socket.ensureOpen();
         socket.prepareRecvLikeOperation();
         RecvScratch scratch = socket.recvScratch();
-        while (true) {
-            scratch.topicLenOut.set(ValueLayout.JAVA_LONG, 0,
-                RecvScratch.TOPIC_CAPACITY);
-            int rc = Native.subscribe(socket.handle(), scratch.sourceRidOut,
-                scratch.partsOut, scratch.partCountOut, scratch.topicOut,
-                scratch.topicLenOut, flags.getValue());
-            if (rc == RecvResult.OK.value()) {
-                Message[] parts =
-                    InternalAccess.messageFromOwnedMessageVector(
-                        scratch.partsOut.get(ValueLayout.ADDRESS, 0),
-                        scratch.partCountOut.get(ValueLayout.JAVA_LONG, 0));
-                boolean adopted = false;
-                try {
-                    RoutingId routingId = NativeRoutingIds.readOut(
-                        scratch.sourceRidOut);
-                    int topicLength =
-                        NativeSocketRuntime.normalizeTopicLength(
-                            scratch.topicOut, RecvScratch.TOPIC_CAPACITY,
-                            scratch.topicLenOut.get(ValueLayout.JAVA_LONG, 0));
-                    TopicMessage result = ContractAccess.topicMessage(
-                        routingId, decodeReceivedTopicString(
-                            scratch.topicOut, topicLength), parts);
-                    adopted = true;
-                    return result;
-                } finally {
-                    if (!adopted) {
-                        Message.closeAll(parts);
-                    }
+        scratch.topicLenOut.set(ValueLayout.JAVA_LONG, 0,
+            RecvScratch.TOPIC_CAPACITY);
+        int rc = Native.subscribe(socket.handle(), scratch.sourceRidOut,
+            scratch.partsOut, scratch.partCountOut, scratch.topicOut,
+            scratch.topicLenOut, flags.getValue());
+        if (rc == RecvResult.OK.value()) {
+            Message[] parts =
+                InternalAccess.messageFromOwnedMessageVector(
+                    scratch.partsOut.get(ValueLayout.ADDRESS, 0),
+                    scratch.partCountOut.get(ValueLayout.JAVA_LONG, 0));
+            boolean adopted = false;
+            try {
+                RoutingId routingId = NativeRoutingIds.readOut(
+                    scratch.sourceRidOut);
+                int topicLength =
+                    NativeSocketRuntime.normalizeTopicLength(
+                        scratch.topicOut, RecvScratch.TOPIC_CAPACITY,
+                        scratch.topicLenOut.get(ValueLayout.JAVA_LONG, 0));
+                TopicMessage result = ContractAccess.topicMessage(
+                    routingId, decodeReceivedTopicString(
+                        scratch.topicOut, topicLength), parts);
+                adopted = true;
+                return result;
+            } finally {
+                if (!adopted) {
+                    Message.closeAll(parts);
                 }
             }
-            int errno = Native.errno();
-            if (errno == NativeErrno.EINTR) {
-                continue;
-            }
-            if (allowNoData && (errno == NativeErrno.EAGAIN
-                || errno == NativeErrno.EWOULDBLOCK_WIN)) {
-                return null;
-            }
-            throw ZlinkException.fromLastError(
-                systems.zlink.contracts.errors.ErrorCategory.RECV);
         }
+        int errno = Native.errno();
+        RecvResult result = RecvResult.fromValue(rc);
+        if (allowNoData && result == RecvResult.NO_DATA) {
+            return null;
+        }
+        throw new ZlinkRecvException(result, errno);
     }
 
     // Non-allocating subscribe hot path for the DONT_WAIT single-part case
@@ -216,52 +195,47 @@ final class TopicPlane {
             topicMessageAccess = access;
         }
         RecvScratch scratch = socket.recvScratch();
-        while (true) {
-            scratch.topicLenOut.set(ValueLayout.JAVA_LONG, 0,
-                RecvScratch.TOPIC_CAPACITY);
-            int rc = Native.subscribe(socket.handle(), scratch.sourceRidOut,
-                scratch.partsOut, scratch.partCountOut, scratch.topicOut,
-                scratch.topicLenOut, ReceiveFlag.DONTWAIT.getValue());
-            int errno = rc == RecvResult.OK.value() ? 0 : Native.errno();
-            if (rc == RecvResult.OK.value()) {
-                Message[] parts =
-                    InternalAccess.messageFromOwnedMessageVector(
-                        scratch.partsOut.get(ValueLayout.ADDRESS, 0),
-                        scratch.partCountOut.get(ValueLayout.JAVA_LONG, 0));
-                boolean adopted = false;
-                try {
-                    RoutingId routingId = NativeRoutingIds.readOut(
-                        scratch.sourceRidOut);
-                    int topicLength = NativeSocketRuntime.normalizeTopicLength(
-                        scratch.topicOut, RecvScratch.TOPIC_CAPACITY,
-                        scratch.topicLenOut.get(ValueLayout.JAVA_LONG, 0));
-                    String topicId = decodeReceivedTopicString(
-                        scratch.topicOut, topicLength);
-                    if (parts.length == 1) {
-                        access.adoptSingle(result, routingId, topicId,
-                            parts[0]);
-                    } else {
-                        TopicMessage fresh = ContractAccess.topicMessage(
-                            routingId, topicId, parts);
-                        ContractAccess.topicMessageAdoptFrom(result, fresh);
-                    }
-                    adopted = true;
-                    return true;
-                } finally {
-                    if (!adopted) {
-                        Message.closeAll(parts);
-                    }
+        scratch.topicLenOut.set(ValueLayout.JAVA_LONG, 0,
+            RecvScratch.TOPIC_CAPACITY);
+        int rc = Native.subscribe(socket.handle(), scratch.sourceRidOut,
+            scratch.partsOut, scratch.partCountOut, scratch.topicOut,
+            scratch.topicLenOut, ReceiveFlag.DONTWAIT.getValue());
+        int errno = rc == RecvResult.OK.value() ? 0 : Native.errno();
+        if (rc == RecvResult.OK.value()) {
+            Message[] parts =
+                InternalAccess.messageFromOwnedMessageVector(
+                    scratch.partsOut.get(ValueLayout.ADDRESS, 0),
+                    scratch.partCountOut.get(ValueLayout.JAVA_LONG, 0));
+            boolean adopted = false;
+            try {
+                RoutingId routingId = NativeRoutingIds.readOut(
+                    scratch.sourceRidOut);
+                int topicLength = NativeSocketRuntime.normalizeTopicLength(
+                    scratch.topicOut, RecvScratch.TOPIC_CAPACITY,
+                    scratch.topicLenOut.get(ValueLayout.JAVA_LONG, 0));
+                String topicId = decodeReceivedTopicString(
+                    scratch.topicOut, topicLength);
+                if (parts.length == 1) {
+                    access.adoptSingle(result, routingId, topicId,
+                        parts[0]);
+                } else {
+                    TopicMessage fresh = ContractAccess.topicMessage(
+                        routingId, topicId, parts);
+                    ContractAccess.topicMessageAdoptFrom(result, fresh);
+                }
+                adopted = true;
+                return true;
+            } finally {
+                if (!adopted) {
+                    Message.closeAll(parts);
                 }
             }
-            if (errno == NativeErrno.EINTR) {
-                continue;
-            }
-            if (errno == NativeErrno.EAGAIN
-                || errno == NativeErrno.EWOULDBLOCK_WIN) {
-                return false;
-            }
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.RECV);
         }
+        RecvResult failure = RecvResult.fromValue(rc);
+        if (failure == RecvResult.NO_DATA) {
+            return false;
+        }
+        throw new ZlinkRecvException(failure, errno);
     }
 
     private static String decodeTopicString(MemorySegment topicOut,

@@ -68,10 +68,12 @@ final class PerfRouterRouter {
             receiver.bind(PerfUtil.bindEndpoint(endpoint, config.transport()));
             sender.connect(PerfUtil.connectedEndpoint(receiver, endpoint,
                 config.transport()));
-            PerfUtil.waitForMonitorEventWithActivity(receiverMonitor, receiver,
-                READY_EVENT, 1, readyTimeout, "router/router receiver ready");
-            PerfUtil.waitForMonitorEventWithActivity(senderMonitor, sender,
-                READY_EVENT, 1, readyTimeout, "router/router sender ready");
+            PerfUtil.waitForMonitorEventWithActivity(receiverMonitor,
+                receiver, READY_EVENT, 1, readyTimeout,
+                "router/router receiver ready");
+            PerfUtil.waitForMonitorEventWithActivity(senderMonitor,
+                sender, READY_EVENT, 1, readyTimeout,
+                "router/router sender ready");
             RoutingId targetRoute = performRouterRouterHandshake(receiver, sender,
                 ROUTER1, ROUTER2,
                 Duration.ofMillis(config.connectReadyTimeoutMs()));
@@ -83,8 +85,7 @@ final class PerfRouterRouter {
             long activeEnd = System.nanoTime()
                 + config.durationSeconds() * 1_000_000_000L;
             Thread receiverThread = new Thread(() -> {
-                try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
-                         List.of(receiver), PollEventFlags.POLLIN);
+                try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(List.of(receiver), PollEventFlags.POLLIN);
                      Received received = new Received()) {
                     while (true) {
                         pollSet.poll(-1);

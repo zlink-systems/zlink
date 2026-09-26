@@ -115,9 +115,8 @@ internal static class PerfDealerDealer
     }
 
     private static (bool Ok, long Received,
-        List<double> LatencySamples) RunActivePhase(IDealerSocket sender,
-        IDealerSocket receiver, byte[] payload, int msgSize,
-        int durationSeconds, int recvTimeoutMs, int latencyCap)
+        List<double> LatencySamples) RunActivePhase(IDealerSocket sender, IDealerSocket receiver, byte[] payload,
+        int msgSize, int durationSeconds, int recvTimeoutMs, int latencyCap)
     {
         _ = recvTimeoutMs;
         long deadlineTicks = DeadlineTicksFromSeconds(durationSeconds);

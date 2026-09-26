@@ -4,6 +4,7 @@ package systems.zlink.perf.multi;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.contracts.errors.ZlinkRecvException;
@@ -28,7 +29,8 @@ final class PerfMultiRoutedRelay {
     private PerfMultiRoutedRelay() {
     }
 
-    static void run(RouterSocket server, AtomicBoolean stopRequested) {
+    static void run(RouterSocket server,
+                    AtomicBoolean stopRequested) {
         // Reply admission is asynchronous. A blocking submit is a `NONE FINAL`
         // send that only waits out its SNDTIMEO snapshot and then reports
         // BACKPRESSURED/EAGAIN (core socket spec, part send and pending
@@ -42,8 +44,7 @@ final class PerfMultiRoutedRelay {
                 PendingReply::close,
                 cause -> isStaleRoute(cause) || stopRequested.get());
         try (Received received = new Received();
-             PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
-                 List.of(server), PollEventFlags.POLLIN,
+             PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(List.of(server), PollEventFlags.POLLIN,
                  PollEventFlags.POLLCOMPLETION)) {
             while (!stopRequested.get() && !replies.hasFailure()) {
                 int readyCount = pollSet.poll(50);

@@ -68,8 +68,9 @@ internal static class PerfMultiDealerDealerServer
 
     private static (double throughput, double latencyNs, double latencyP95Ns,
         double latencyP99Ns, long measureCount)
-        RunReceivePhase(IDealerSocket server, int msgSize, int latencySampleCap,
-            int durationSeconds, RunnerControlState controlState)
+        RunReceivePhase(IDealerSocket server, int msgSize,
+            int latencySampleCap, int durationSeconds,
+            RunnerControlState controlState)
     {
         const uint expectedRunId = 1;
         var latSamples = new LatencySampleBuffer(latencySampleCap);
@@ -82,8 +83,8 @@ internal static class PerfMultiDealerDealerServer
         // the size process closes. The .NET runner has one process per size,
         // but keeps the same cleanup boundary so later client stop-token sends
         // do not race an early server close.
-        if (!ReceiveActiveWindow(server, received, msgSize, expectedRunId,
-                PerfPhase.Active, latSamples, ref measureCount,
+        if (!ReceiveActiveWindow(server, received, msgSize,
+                expectedRunId, PerfPhase.Active, latSamples, ref measureCount,
                 durationSeconds, controlState))
         {
             return (0.0, 0.0, 0.0, 0.0, 0);
@@ -102,11 +103,10 @@ internal static class PerfMultiDealerDealerServer
         return (throughput, latencyNs, latencyP95Ns, latencyP99Ns, measureCount);
     }
 
-    private static bool ReceiveActiveWindow(IDealerSocket server,
-        Received received, int msgSize, uint expectedRunId,
-        PerfPhase expectedPhase, LatencySampleBuffer latSamples,
-        ref long messageCount, int durationSeconds,
-        RunnerControlState controlState)
+    private static bool ReceiveActiveWindow(IDealerSocket server, Received received, int msgSize,
+        uint expectedRunId, PerfPhase expectedPhase,
+        LatencySampleBuffer latSamples, ref long messageCount,
+        int durationSeconds, RunnerControlState controlState)
     {
         using var activeTimer = Zlink.CreateTimer();
         using var poller = Zlink.CreatePoller();

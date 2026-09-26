@@ -33,8 +33,8 @@ internal static class PerfMultiRouterRouterServer
         PrintAutoHwmSnapshot(server, "server", options.Transport, size);
         WriteStdoutLine($"READY,{endpoint}");
 
-        return await PerfMultiRoutedRelayServer.RunAsync(server, pollManager,
-            pollTimeoutMs, Math.Max(1000, sndTimeoutMs * 4))
+        return await PerfMultiRoutedRelayServer.RunAsync(server,
+            pollManager, pollTimeoutMs, Math.Max(1000, sndTimeoutMs * 4))
             .ConfigureAwait(false);
     }
 }

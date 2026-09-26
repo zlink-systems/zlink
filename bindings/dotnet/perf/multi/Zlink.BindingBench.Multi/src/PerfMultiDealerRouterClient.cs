@@ -165,8 +165,8 @@ internal static class PerfMultiDealerRouterClient
                 : Math.Min(50,
                     PerfMultiAdmissionSignal.RemainingTimeoutMilliseconds(
                         benchDeadlineTicks));
-            int readyCount = PollSocketEvents(pollManager, sockets, eventMasks,
-                completionWaitMs);
+            int readyCount = PollSocketEvents(pollManager, sockets,
+                eventMasks, completionWaitMs);
             if (readyCount <= 0)
                 continue;
 
@@ -182,8 +182,8 @@ internal static class PerfMultiDealerRouterClient
         // deadline while the binding runtime completes async admissions.
         await replies.WaitAsync(drainDeadlineTicks,
             () => HasPendingAdmissions(slots),
-            timeoutMs => PollSocketEvents(pollManager, sockets, eventMasks,
-                timeoutMs),
+            timeoutMs => PollSocketEvents(pollManager, sockets,
+                eventMasks, timeoutMs),
             readyCount =>
             {
                 for (int i = 0; i < readyCount; i++)

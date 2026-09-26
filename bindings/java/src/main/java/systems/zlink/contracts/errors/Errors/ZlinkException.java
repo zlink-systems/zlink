@@ -140,14 +140,15 @@ public abstract sealed class ZlinkException extends RuntimeException
 
     private static RecvResult mapRecvResult(int errno) {
         return switch (errno) {
-            case NativeErrorCodes.EFAULT, NativeErrorCodes.EBADF ->
-                RecvResult.INVALID_HANDLE;
-            case NativeErrorCodes.EAGAIN, NativeErrorCodes.EWOULDBLOCK_WIN ->
-                RecvResult.NO_DATA;
-            case NativeErrorCodes.EINTR -> RecvResult.BUSY;
-            case NativeErrorCodes.ENOTCONN, NativeErrorCodes.ENOTCONN_WIN ->
-                RecvResult.TERMINATED;
+            case NativeErrorCodes.EFAULT -> RecvResult.INVALID_HANDLE;
+            case NativeErrorCodes.EAGAIN, NativeErrorCodes.EWOULDBLOCK_WIN,
+                 NativeErrorCodes.ETIMEDOUT -> RecvResult.NO_DATA;
+            case NativeErrorCodes.EBUSY -> RecvResult.BUSY;
+            case NativeErrorCodes.ETERM -> RecvResult.TERMINATED;
             case NativeErrorCodes.ENOTSUP -> RecvResult.NOT_SUPPORTED;
+            case NativeErrorCodes.ENOBUFS -> RecvResult.BUFFER_TOO_SMALL;
+            case NativeErrorCodes.EINVAL, NativeErrorCodes.ESTALE,
+                 NativeErrorCodes.ESHUTDOWN -> RecvResult.INVALID_STATE;
             default -> RecvResult.INTERNAL_ERROR;
         };
     }
@@ -176,13 +177,11 @@ public abstract sealed class ZlinkException extends RuntimeException
 
     private static CloseResult mapCloseResult(int errno) {
         return switch (errno) {
-            case NativeErrorCodes.EFAULT, NativeErrorCodes.EBADF ->
+            case NativeErrorCodes.EFAULT, NativeErrorCodes.ESTALE ->
                 CloseResult.INVALID_HANDLE;
-            case NativeErrorCodes.EAGAIN, NativeErrorCodes.EWOULDBLOCK_WIN ->
-                CloseResult.BUSY;
-            case NativeErrorCodes.ENOTCONN, NativeErrorCodes.ENOTCONN_WIN ->
-                CloseResult.SHUTDOWN;
-            default -> CloseResult.BUSY;
+            case NativeErrorCodes.EBUSY, NativeErrorCodes.EDEADLK -> CloseResult.BUSY;
+            case NativeErrorCodes.ESHUTDOWN -> CloseResult.SHUTDOWN;
+            default -> CloseResult.INTERNAL_ERROR;
         };
     }
 
@@ -205,6 +204,7 @@ public abstract sealed class ZlinkException extends RuntimeException
                 ConfigResult.INVALID_HANDLE;
             case NativeErrorCodes.EINVAL -> ConfigResult.INVALID_ARGUMENT;
             case NativeErrorCodes.ENOTSUP -> ConfigResult.NOT_SUPPORTED;
+            case NativeErrorCodes.EBUSY, NativeErrorCodes.ESHUTDOWN -> ConfigResult.INVALID_STATE;
             default -> ConfigResult.INTERNAL_ERROR;
         };
     }

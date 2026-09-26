@@ -30,13 +30,7 @@ exception below (`public final`).
 | `ZlinkCloseException` | `CloseResult` | `close()` paths, `Context.shutdown()` | `BUSY`(401), `SHUTDOWN`(402), `INVALID_HANDLE`(403), `INTERNAL_ERROR`(404) |
 | `ZlinkBindException` | `BindResult` | `Socket.bind(...)` | `INVALID_ARGUMENT`(501), `ADDR_IN_USE`(502), `NOT_SUPPORTED`(503), `INVALID_HANDLE`(504), `INTERNAL_ERROR`(505) |
 | `ZlinkConnectException` | `ConnectResult` | `connect`/`unbind`/`disconnect`/`disconnectRid` | `INVALID_ARGUMENT`(601), `NOT_SUPPORTED`(602), `INVALID_HANDLE`(603), `INTERNAL_ERROR`(604), `NOT_FOUND`(605), `CONFLICT`(606), `BUSY`(607) |
-| `ZlinkConfigException` | `ConfigResult` | every socket/context option getter/setter | `INVALID_HANDLE`(701), `INVALID_ARGUMENT`(702), `NOT_SUPPORTED`(703), `INTERNAL_ERROR`(704), `INVALID_STATE`(705), `NOT_FOUND`(706) |
-
-**Cross-language asymmetry.** `ConfigResult` in this binding has six values, stopping at
-`NOT_FOUND`(706) — matching cpp's `config_result_t`, but dotnet's `ZlinkConfigException.ErrorCode`
-additionally defines `Conflict`(707), `BufferTooSmall`(708), and `Busy`(709). Whether this
-binding's `ConfigResult` should gain those three values is a spec-level question outside this
-reference's scope.
+| `ZlinkConfigException` | `ConfigResult` | every socket/context option getter/setter | `INVALID_HANDLE`(701), `INVALID_ARGUMENT`(702), `NOT_SUPPORTED`(703), `INTERNAL_ERROR`(704), `INVALID_STATE`(705), `NOT_FOUND`(706), `CONFLICT`(707), `BUFFER_TOO_SMALL`(708), `BUSY`(709) |
 
 **What each value family actually means.** `SubmitResult`'s `BACKPRESSURED`/`NOT_CONNECTED`/
 `NOT_FOUND`/`NOT_ADMITTED` are ordinary execution flow, not exceptional failures — a caller that
@@ -71,8 +65,8 @@ exception is that exception's own public constructor taking its result enum
 | --- | --- |
 | `getCode()` | `int`, the zlink result code that classifies the failure |
 | `getNativeErrno()` | `int`, the underlying native errno, or `0` when none |
-| `fromLastError(String operation)` / `fromLastError(ErrorCategory)` | static factory; builds the correctly-typed exception from the current native errno and an `ErrorCategory` (`CONFIG`/`BIND`/`CONNECT`/`CLOSE`/`HANDLER`/`RECV`/`REQUEST`/`SUBMIT`); the `String operation` overload infers the category from the operation name |
-| `fromErrno(String operation, int errno)` / `fromErrno(ErrorCategory, int errno)` | static factory; same mapping as `fromLastError` but from an explicit `errno` instead of reading the current native one |
+| `fromLastError(String operation)` / `fromLastError(ErrorCategory)` | static factory; reads the current native errno and infers or accepts the error category |
+| `fromErrno(String operation, int errno)` / `fromErrno(ErrorCategory, int errno)` | static factory; builds the correctly-typed exception from the `errno` collected when the native call returned and an `ErrorCategory` (`CONFIG`/`BIND`/`CONNECT`/`CLOSE`/`HANDLER`/`RECV`/`REQUEST`/`SUBMIT`); the `String operation` overload infers the category from the operation name |
 
 **Completion result.** N/A — this is the exception hierarchy itself. `TypedZlinkException` (the
 intermediate sealed class) is package-private — application code can catch/reference
@@ -82,9 +76,10 @@ intermediate sealed class) is package-private — application code can catch/ref
 enum-typed `getResult()`, or catch the shared `ZlinkException` base when only `getCode()`/
 `getNativeErrno()` are needed generically across exception types. No-data and transient
 back-pressure are never reported as an ordinary exception — see the Sockets/Messaging categories'
-`boolean`-returning `recv`/`submit` conventions instead. Use `ZlinkException.fromErrno(...)`/
-`fromLastError(...)` only when implementing a custom native interop path that needs to construct a
-correctly-typed exception from a raw errno — ordinary application code never needs to call these,
+`boolean`-returning `recv`/`submit` conventions instead. Use `ZlinkException.fromErrno(...)` only
+when implementing a custom native interop path that needs to construct a correctly-typed exception
+from a raw errno; that errno must be the one collected when the failing native call returned, not a
+value read by a later call. Ordinary application code never needs to call it,
 since every built-in API already throws the correctly-typed exception itself.
 
 ---

@@ -130,8 +130,7 @@ internal static class PerfReqRep
                 return 2;
             }
 
-            RoutingId? targetRoutingId = CompleteRouterRouterHandshake(
-                client, server, readyTimeoutMs);
+            RoutingId? targetRoutingId = CompleteRouterRouterHandshake(client, server, readyTimeoutMs);
             if (!targetRoutingId.HasValue)
             {
                 DebugLog("single_router_router_reqrep_error:route_probe_failed");
@@ -182,8 +181,9 @@ internal static class PerfReqRep
 
     private static (long completed, List<double> latencySamples)
         RunDealerRouterActive(
-        IDealerSocket client, IRouterSocket server, int msgSize,
-        int durationSeconds, int latencyCap, ulong appliedSendHwmBytes)
+        IDealerSocket client, IRouterSocket server,
+        int msgSize, int durationSeconds, int latencyCap,
+        ulong appliedSendHwmBytes)
     {
         Exception? serverError = null;
         long serverReceived = 0;
@@ -209,8 +209,7 @@ internal static class PerfReqRep
         Exception? requestError = null;
         try
         {
-            result = RunRequestLoop(
-                client,
+            result = RunRequestLoop(client,
                 msgSize,
                 durationSeconds,
                 latencyCap,
@@ -255,8 +254,7 @@ internal static class PerfReqRep
         return result;
     }
 
-    private static RoutingId? CompleteRouterRouterHandshake(
-        IRouterSocket client, IRouterSocket server, int timeoutMs)
+    private static RoutingId? CompleteRouterRouterHandshake(IRouterSocket client, IRouterSocket server, int timeoutMs)
     {
         byte[] ping = "PING"u8.ToArray();
         byte[] pong = "PONG"u8.ToArray();
@@ -331,8 +329,8 @@ internal static class PerfReqRep
 
     private static (long completed, List<double> latencySamples)
         RunRouterRouterActive(
-        IRouterSocket client, IRouterSocket server, RoutingId targetRid,
-        int msgSize, int durationSeconds, int latencyCap,
+        IRouterSocket client, IRouterSocket server,
+        RoutingId targetRid, int msgSize, int durationSeconds, int latencyCap,
         ulong appliedSendHwmBytes)
     {
         Exception? serverError = null;
@@ -359,8 +357,7 @@ internal static class PerfReqRep
         Exception? requestError = null;
         try
         {
-            result = RunRequestLoop(
-                client,
+            result = RunRequestLoop(client,
                 msgSize,
                 durationSeconds,
                 latencyCap,
@@ -401,9 +398,8 @@ internal static class PerfReqRep
         return result;
     }
 
-    private static (long completed, List<double> latencySamples) RunRequestLoop(
-        ISocket requester, int msgSize, int durationSeconds, int latencyCap,
-        ulong appliedSendHwmBytes,
+    private static (long completed, List<double> latencySamples) RunRequestLoop(ISocket requester, int msgSize, int durationSeconds,
+        int latencyCap, ulong appliedSendHwmBytes,
         Func<Message, RequestSubmission> submit)
     {
         int payloadSize = Math.Max(msgSize, PerfMetricHeaderSize);

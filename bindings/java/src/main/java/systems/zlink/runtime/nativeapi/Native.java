@@ -257,8 +257,6 @@ public final class Native {
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
     private static final MethodHandle MH_MONITOR_CLOSE = downcall("zlink_monitor_close",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
-    private static final MethodHandle MH_ERRNO = downcallCritical("zlink_errno",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT));
     private static final MethodHandle MH_STRERROR = downcall("zlink_strerror",
             FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
     private static final MethodHandle MH_HAS = downcall("zlink_has",
@@ -413,9 +411,8 @@ public final class Native {
         }
     }
 
-    public static int ctxGet(MemorySegment ctx, int option) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment errorOut = arena.allocate(ValueLayout.JAVA_INT);
+    public static int ctxGet(MemorySegment ctx, int option, MemorySegment errorOut) {
+        try {
             return (int) MH_CTX_GET.invokeExact(ctx, option, errorOut);
         } catch (Throwable t) {
             throw new RuntimeException("zlink_ctx_get failed", t);
@@ -1116,12 +1113,12 @@ public final class Native {
         }
     }
 
+    /**
+     * The errno that the most recent Core downcall on this thread returned with, captured by the
+     * downcall itself; no second native call reads it afterwards.
+     */
     public static int errno() {
-        try {
-            return (int) MH_ERRNO.invokeExact();
-        } catch (Throwable t) {
-            throw new RuntimeException("zlink_errno failed", t);
-        }
+        return NativeSymbols.capturedErrno();
     }
 
     public static String strerror(int errnum) {
@@ -1367,8 +1364,8 @@ public final class Native {
         return NativePollerSymbols.pollerDestroy(pollerPtr);
     }
 
-    public static int pollerSize(MemorySegment poller) {
-        return NativePollerSymbols.pollerSize(poller);
+    public static int pollerSize(MemorySegment poller, MemorySegment errorOut) {
+        return NativePollerSymbols.pollerSize(poller, errorOut);
     }
 
     public static int pollerAdd(MemorySegment poller, MemorySegment socket,
@@ -1427,19 +1424,10 @@ public final class Native {
     }
 
     public static int pollerWait(MemorySegment poller, MemorySegment events,
-                                 int count, int timeoutMs) {
-        return NativePollerSymbols.pollerWait(poller, events, count, timeoutMs);
-    }
-
-    public static int pollerWait(MemorySegment poller, MemorySegment events,
                                  int count, int timeoutMs,
                                  MemorySegment errorOut) {
         return NativePollerSymbols.pollerWait(poller, events, count, timeoutMs,
             errorOut);
     }
 
-    public static int pollerWait(MemorySegment poller, MemorySegment event,
-                                 int timeoutMs) {
-        return NativePollerSymbols.pollerWait(poller, event, timeoutMs);
-    }
 }

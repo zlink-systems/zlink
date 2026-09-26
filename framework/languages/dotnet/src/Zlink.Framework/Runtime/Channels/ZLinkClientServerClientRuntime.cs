@@ -931,31 +931,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             await _lane.DisposeAsync().ConfigureAwait(false);
         }
 
-        private async ValueTask DisposeSocketAsync()
-        {
-            while (true)
-            {
-                try
-                {
-                    await Socket.DisposeAsync().ConfigureAwait(false);
-                    return;
-                }
-                catch (ZlinkCloseException exception)
-                    when (exception.Result
-                            is ZlinkCloseException.ErrorCode.Busy
-                                or ZlinkCloseException.ErrorCode.Ok
-                    )
-                {
-                    // Binding cancellation completes the managed request
-                    // before Core has delivered its terminal callback. Core
-                    // retains the socket until that bounded request completes.
-                    // Older local Core packages report this close race with
-                    // errno 0, which the binding projects as Ok despite the
-                    // failed close. Join either form before disposing context.
-                    await Task.Delay(TimeSpan.FromMilliseconds(10)).ConfigureAwait(false);
-                }
-            }
-        }
+        private ValueTask DisposeSocketAsync() => Socket.DisposeAsync();
 
         private static async Task IgnoreCancellationAsync(Task task)
         {

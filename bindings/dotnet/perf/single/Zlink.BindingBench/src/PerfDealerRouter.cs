@@ -67,8 +67,8 @@ internal static class PerfDealerRouter
             receiver.Bind(endpoint);
             endpoint = receiver.Options.LastEndpoint;
             sender.Connect(endpoint);
-            if (!(WaitForConnectionReadyWithActivity(receiverMonitor, receiver,
-                    readyTimeoutMs)
+            if (!(WaitForConnectionReadyWithActivity(receiverMonitor,
+                    receiver, readyTimeoutMs)
                 && WaitForConnectionReady(senderMonitor, readyTimeoutMs)))
             {
                 DebugLog("single_dealer_router_error:connection_not_ready");
@@ -131,8 +131,7 @@ internal static class PerfDealerRouter
     }
 
     private static (bool Ok, long Received,
-        List<double> LatencySamples) RunActivePhase(IDealerSocket sender,
-        IRouterSocket receiver,
+        List<double> LatencySamples) RunActivePhase(IDealerSocket sender, IRouterSocket receiver,
         byte[] payload, int msgSize, int durationSeconds, int recvTimeoutMs,
         int latencyCap)
     {

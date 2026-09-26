@@ -69,17 +69,18 @@ internal static class PerfRouterRouter
             receiver.Bind(endpoint);
             endpoint = receiver.Options.LastEndpoint;
             sender.Connect(endpoint);
-            if (!(WaitForConnectionReadyWithActivity(receiverMonitor, receiver,
-                    readyTimeoutMs, acceptAccepted: false)
-                && WaitForConnectionReadyWithActivity(senderMonitor, sender,
-                    readyTimeoutMs, acceptAccepted: false)))
+            if (!(WaitForConnectionReadyWithActivity(receiverMonitor,
+                    receiver, readyTimeoutMs, acceptAccepted: false)
+                && WaitForConnectionReadyWithActivity(senderMonitor,
+                    sender, readyTimeoutMs, acceptAccepted: false)))
             {
                 DebugLog("single_router_router_error:connection_not_ready");
                 TryCleanup(sender, receiver, endpoint);
                 return 2;
             }
 
-            var handshake = CompleteHandshake(sender, receiver, readyTimeoutMs);
+            var handshake = CompleteHandshake(sender, receiver,
+                readyTimeoutMs);
             if (!handshake.Ok)
             {
                 TryCleanup(sender, receiver, endpoint);
@@ -136,8 +137,8 @@ internal static class PerfRouterRouter
     }
 
     private static (bool Ok, RoutingId TargetRoutingId)
-        CompleteHandshake(IRouterSocket sender, IRouterSocket receiver,
-            int timeoutMs)
+        CompleteHandshake(IRouterSocket sender,
+            IRouterSocket receiver, int timeoutMs)
     {
         byte[] ping = "PING"u8.ToArray();
         byte[] pong = "PONG"u8.ToArray();

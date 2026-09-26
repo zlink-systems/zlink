@@ -350,8 +350,8 @@ public final class PerfUtil {
         SocketMonitor monitor, Socket activitySocket,
         systems.zlink.contracts.eventing.MonitorEventType expectedEvent,
         int expectedCount, Duration timeout, String label) {
-        PerfTransport.waitForMonitorEventWithActivity(monitor, activitySocket,
-            expectedEvent, expectedCount, timeout, label);
+        PerfTransport.waitForMonitorEventWithActivity(monitor,
+            activitySocket, expectedEvent, expectedCount, timeout, label);
     }
 
     public static boolean recvNoWait(

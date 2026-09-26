@@ -1,6 +1,8 @@
 package systems.zlink.contract;
 
 import systems.zlink.TestSupport;
+import systems.zlink.contracts.errors.ConfigResult;
+import systems.zlink.contracts.errors.ZlinkConfigException;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
@@ -298,7 +300,13 @@ public class SocketPollingContractTest {
 
     @Test
     public void pollerRejectsEmptyReusableEventBuffer() {
-        assertThrows(IllegalArgumentException.class, () -> new PollEvents(0));
+        TestSupport.assumeNative();
+        try (Poller poller = Zlink.createPoller()) {
+            PollEvents events = new PollEvents(0);
+            ZlinkConfigException failure = assertThrows(ZlinkConfigException.class,
+                () -> poller.wait(events, Duration.ZERO));
+            assertEquals(ConfigResult.INVALID_ARGUMENT, failure.getResult());
+        }
     }
 
     @Test

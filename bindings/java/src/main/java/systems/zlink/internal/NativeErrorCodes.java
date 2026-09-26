@@ -20,6 +20,8 @@ public final class NativeErrorCodes {
     public static final int EHOSTUNREACH = 113;
     public static final int ESHUTDOWN = 108;
     public static final int ETIMEDOUT = 110;
+    public static final int ENOBUFS = 105;
+    public static final int ESTALE = 116;
     public static final int ECANCELED = 125;
     /** Linux zlink context-termination errno, not part of POSIX errno.h. */
     public static final int ETERM = 156384765;

@@ -96,8 +96,7 @@ final class PerfPubSub {
                 // C parity: wait through the public poller, then drain every
                 // currently available publication with DONT_WAIT. The loop
                 // ends purely on the wire-level stop token.
-                try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
-                         List.of(sub), PollEventFlags.POLLIN);
+                try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(List.of(sub), PollEventFlags.POLLIN);
                      TopicMessage received = new TopicMessage()) {
                     boolean stop = false;
                     while (!stop) {

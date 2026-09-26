@@ -103,9 +103,10 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
                         ref src[i]);
                     if (rc != 0)
                     {
+                        var errno = NativeMethods.GetLastPInvokeError();
                         msg.Dispose();
                         throw ZlinkException.CreateConfigException(
-                            NativeMethods.GetLastPInvokeError());
+                            errno);
                     }
 
                     msg._knownSize = -1;
