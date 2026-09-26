@@ -54,30 +54,32 @@ test('owner-local work waits for terminal progress and does not block another ow
   const otherOwner = scheduler([], options);
   const started = deferred<void>();
   const terminal = deferred<void>();
+  const order: string[] = [];
   const first = serial.submit(
     async () => {
+      order.push('first-started');
       started.resolve();
       await terminal.promise;
+      order.push('first-terminal');
     },
     { payloadBytes: 128 }
   );
   await started.promise;
-  assert.deepEqual(serial.snapshot(), {
-    applicationMessages: 1,
-    applicationBytes: 0,
-    lifecycleMessages: 0,
-    lifecycleBytes: 0
+  const queued = serial.submit(() => {
+    order.push('following');
+    return 'following';
   });
-  const queued = serial.submit(() => 'following');
-  assert.equal(await otherOwner.submit(() => 'other'), 'other');
+  assert.equal(
+    await otherOwner.submit(() => {
+      order.push('other');
+      return 'other';
+    }),
+    'other'
+  );
+  assert.deepEqual(order, ['first-started', 'other']);
   terminal.resolve();
   await Promise.all([first, queued]);
-  assert.deepEqual(serial.snapshot(), {
-    applicationMessages: 0,
-    applicationBytes: 0,
-    lifecycleMessages: 0,
-    lifecycleBytes: 0
-  });
+  assert.deepEqual(order, ['first-started', 'other', 'first-terminal', 'following']);
   assert.equal(await serial.submit(() => 'following'), 'following');
 });
 
@@ -90,10 +92,13 @@ test('a transferred record remains queued until terminal completion', async () =
   const localTerminal = deferred<void>();
   const transferredStarted = deferred<void>();
   const transferredTerminal = deferred<void>();
+  const order: string[] = [];
   const local = serial.submit(
     async () => {
+      order.push('local-started');
       localStarted.resolve();
       await localTerminal.promise;
+      order.push('local-terminal');
     },
     { payloadBytes: 32, metadataBytes: 16 }
   );
@@ -101,34 +106,26 @@ test('a transferred record remains queued until terminal completion', async () =
 
   const transferred = serial.submitPreAdmitted(
     async () => {
+      order.push('transferred-started');
       transferredStarted.resolve();
       await transferredTerminal.promise;
+      order.push('transferred-terminal');
     },
     { payloadBytes: 48, metadataBytes: 16 }
   );
-  assert.deepEqual(serial.snapshot(), {
-    applicationMessages: 2,
-    applicationBytes: 0,
-    lifecycleMessages: 0,
-    lifecycleBytes: 0
-  });
+  assert.deepEqual(order, ['local-started']);
   localTerminal.resolve();
   await local;
   await transferredStarted.promise;
-  assert.deepEqual(serial.snapshot(), {
-    applicationMessages: 1,
-    applicationBytes: 0,
-    lifecycleMessages: 0,
-    lifecycleBytes: 0
-  });
+  assert.deepEqual(order, ['local-started', 'local-terminal', 'transferred-started']);
   transferredTerminal.resolve();
   await transferred;
-  assert.deepEqual(serial.snapshot(), {
-    applicationMessages: 0,
-    applicationBytes: 0,
-    lifecycleMessages: 0,
-    lifecycleBytes: 0
-  });
+  assert.deepEqual(order, [
+    'local-started',
+    'local-terminal',
+    'transferred-started',
+    'transferred-terminal'
+  ]);
 });
 
 test('durable readiness yields to lifecycle arbitration without claiming the serial owner', async () => {

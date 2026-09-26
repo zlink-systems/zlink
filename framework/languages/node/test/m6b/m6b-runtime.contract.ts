@@ -30,6 +30,13 @@ import {
   type ReceiveRecord
 } from '../../packages/framework/src/runtime/foundation/service-runtime-contracts';
 import { ZLinkNodeRawMeshBackend } from '../../packages/framework/src/runtime/backend/node/node-raw-mesh-backend';
+import { registerServiceSessionBindingIngressPort } from '../../packages/framework/src/runtime/foundation/service-session-binding-ingress-port';
+import {
+  decodeStreamWireFrame,
+  decodeStreamWireHeader,
+  encodeStreamWireFrame,
+  encodeStreamWireHeader
+} from '@zlink-systems/stream-wire';
 import { ZLinkNodeRawBindingPort } from '../../packages/framework/src/runtime/backend/node/node-raw-binding-port';
 import { ZLinkActorRuntimeOptionsFactory } from '../../packages/framework/src/runtime/host/actor-runtime-options-factory';
 import type {
@@ -4370,7 +4377,10 @@ test('durable sender owns deadline settlement while the registry retains identit
   const concurrentlyRegistered = operations.register(10, 'sender');
   clock.fireAll();
   assert.equal(operations.isPending(pending.id), true);
-  assert.equal(registry.size, 1);
+  // Registration has no capacity limit since dfef9dea7d: both sender-owned
+  // operations stay registered until their sender settles them.
+  assert.equal(operations.isPending(concurrentlyRegistered.id), true);
+  assert.equal(registry.size, 2);
   const exhausted = new Error('sender classified exhaustion');
   const rejected = assert.rejects(pending.promise, (error) => error === exhausted);
   assert.equal(operations.fail(pending.id, exhausted), true);
@@ -5931,31 +5941,28 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     const sessionService = backend.createStreamSessionService(
       createFakeStream(delivered, streamState)
     );
+    // Since #933 every bound-session STREAM frame carries the Actor slot the
+    // Session binding owner issued; this raw harness stands in for that owner.
+    registerServiceSessionBindingIngressPort(sessionService, {
+      actorSlot: async () => 1,
+      retainOutbound: async () => 'passThrough',
+      clearOutbound: async () => {}
+    });
     sessionService.start();
     const bindOperation = sessionService.bindActor('session-a', actor, 2_000);
     const bindCompletion = await drainOne(backend, ReadyDomain.Infrastructure);
     assert.deepEqual(bindCompletion.operationId, bindOperation);
     assert.equal(bindCompletion.terminalResult, RequestResult.Ok);
     const binding = sessionService.bindings('session-a')[0]!;
-    const actorFence = {
-      targetNodeGeneration: backend.status().lifecycleGeneration,
-      authorityOwnerGeneration: actor.generation,
-      ownerLeaseGeneration: 37n
-    };
     assert.equal(
       await backend.sendActorBoundSession(
         actor,
         binding.bindingGeneration,
-        Buffer.from('session-message'),
-        undefined,
-        actorFence
+        boundSessionFrame('session-message')
       ),
       SubmitResult.Ok
     );
-    assert.deepEqual(
-      delivered.map((value) => value.toString()),
-      ['session-message']
-    );
+    assert.deepEqual(delivered.map(deliveredBoundSessionText), ['session-message']);
 
     // The binding async terminal owns the exact WRITABLE wait and resubmit.
     streamState.backpressured = true;
@@ -5964,26 +5971,21 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
       .sendActorBoundSession(
         actor,
         binding.bindingGeneration,
-        Buffer.from('backpressured-session-message'),
-        undefined,
-        actorFence
+        boundSessionFrame('backpressured-session-message')
       )
       .finally(() => {
         pendingSettled = true;
       });
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(pendingSettled, false);
-    assert.deepEqual(
-      delivered.map((value) => value.toString()),
-      ['session-message']
-    );
+    assert.deepEqual(delivered.map(deliveredBoundSessionText), ['session-message']);
     streamState.backpressured = false;
     streamState.releaseWritable?.();
     assert.equal(await pendingSend, SubmitResult.Ok);
-    assert.deepEqual(
-      delivered.map((value) => value.toString()),
-      ['session-message', 'backpressured-session-message']
-    );
+    assert.deepEqual(delivered.map(deliveredBoundSessionText), [
+      'session-message',
+      'backpressured-session-message'
+    ]);
 
     // A typed capacity terminal is preserved without deleting the session.
     streamState.nextSubmitError = new SubmitError(SubmitResult.Backpressured);
@@ -5991,9 +5993,7 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
       await backend.sendActorBoundSession(
         actor,
         binding.bindingGeneration,
-        Buffer.from('capacity-terminal'),
-        undefined,
-        actorFence
+        boundSessionFrame('capacity-terminal')
       ),
       SubmitResult.Backpressured
     );
@@ -6001,16 +6001,15 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
       await backend.sendActorBoundSession(
         actor,
         binding.bindingGeneration,
-        Buffer.from('resumed-session-message'),
-        undefined,
-        actorFence
+        boundSessionFrame('resumed-session-message')
       ),
       SubmitResult.Ok
     );
-    assert.deepEqual(
-      delivered.map((value) => value.toString()),
-      ['session-message', 'backpressured-session-message', 'resumed-session-message']
-    );
+    assert.deepEqual(delivered.map(deliveredBoundSessionText), [
+      'session-message',
+      'backpressured-session-message',
+      'resumed-session-message'
+    ]);
 
     // Each typed close terminal requests the existing monitor-driven lifecycle.
     for (const terminal of [
@@ -6023,9 +6022,7 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
         await backend.sendActorBoundSession(
           actor,
           binding.bindingGeneration,
-          Buffer.from(`close-terminal-${terminal}`),
-          undefined,
-          actorFence
+          boundSessionFrame(`close-terminal-${terminal}`)
         ),
         terminal
       );
@@ -6039,9 +6036,7 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
       backend.sendActorBoundSession(
         actor,
         binding.bindingGeneration,
-        Buffer.from('unknown-error-message'),
-        undefined,
-        actorFence
+        boundSessionFrame('unknown-error-message')
       ),
       (error) => error === unknownDeliveryError
     );
@@ -6050,9 +6045,7 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
       await backend.sendActorBoundSession(
         actor,
         binding.bindingGeneration,
-        Buffer.from('after-unknown-message'),
-        undefined,
-        actorFence
+        boundSessionFrame('after-unknown-message')
       ),
       SubmitResult.Ok
     );
@@ -7162,6 +7155,27 @@ interface FakeStreamState {
   disconnectCount: number;
   nextSubmitError?: Error;
   releaseWritable?: () => void;
+}
+
+function boundSessionFrame(text: string): Buffer {
+  return Buffer.from(
+    encodeStreamWireFrame(
+      encodeStreamWireHeader({
+        kind: 1,
+        codec: 0,
+        flags: 0,
+        name: 'SessionMessage',
+        metadata: new Map()
+      }),
+      Buffer.from(text)
+    )
+  );
+}
+
+function deliveredBoundSessionText(frame: Buffer): string {
+  const decoded = decodeStreamWireFrame(frame);
+  assert.equal(decodeStreamWireHeader(decoded.header).actorSlot, 1);
+  return Buffer.from(decoded.payload).toString();
 }
 
 function createFakeStream(

@@ -1,6 +1,6 @@
 import type { ActorRef, RoutingId, ZLinkActor, ZLinkActorJoinOperationId } from '../../contracts';
 import type { ZLinkRemoteBoundSessionTarget } from '../actors/actor-runtime-state';
-import type { ZLinkDeferredJoinAcceptedRoot } from '../actors/deferred-join-accepted-journal';
+import type { ZLinkDeferredJoinCompletion } from '../actors/deferred-join-completion';
 import type { ZLinkActorRequestTerminal } from './spot-actor-packet-dispatch';
 
 const ADMISSION_RETENTION_MS = 30_000;
@@ -57,7 +57,7 @@ export interface ZLinkFormalRemoteActorAdmissionOutcome {
   readonly actorRef: ActorRef;
   readonly reply?: Buffer;
   readonly replyContentType?: string;
-  readonly deferredJoinRoot?: ZLinkDeferredJoinAcceptedRoot;
+  readonly deferredJoinCompletion?: ZLinkDeferredJoinCompletion;
 }
 
 export interface ZLinkFormalRemoteActorAdmissionFailure {
@@ -282,9 +282,9 @@ export class ZLinkFormalRemoteActorAdmissionRegistry {
       ...(outcome.replyContentType === undefined
         ? {}
         : { replyContentType: outcome.replyContentType }),
-      ...(outcome.deferredJoinRoot === undefined
+      ...(outcome.deferredJoinCompletion === undefined
         ? {}
-        : { deferredJoinRoot: outcome.deferredJoinRoot })
+        : { deferredJoinCompletion: outcome.deferredJoinCompletion })
     };
     entry.resolveResult(entry.result);
     if (!outcome.accepted) {
@@ -314,7 +314,7 @@ export class ZLinkFormalRemoteActorAdmissionRegistry {
     entry.actor = actor;
   }
 
-  attachDeferredJoinRoot(transferId: string, root: ZLinkDeferredJoinAcceptedRoot): void {
+  attachDeferredJoinCompletion(transferId: string, root: ZLinkDeferredJoinCompletion): void {
     const entry = this.admissions.get(transferId);
     if (
       entry === undefined ||
@@ -325,7 +325,7 @@ export class ZLinkFormalRemoteActorAdmissionRegistry {
     ) {
       throw new Error(`Remote actor admission '${transferId}' cannot attach deferred recovery.`);
     }
-    entry.result = { ...entry.result, deferredJoinRoot: root };
+    entry.result = { ...entry.result, deferredJoinCompletion: root };
   }
 
   abort(transferId: string): void {

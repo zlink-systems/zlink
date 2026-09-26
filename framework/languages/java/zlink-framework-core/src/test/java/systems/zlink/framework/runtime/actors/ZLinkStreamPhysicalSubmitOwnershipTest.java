@@ -281,9 +281,9 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
         runtime.applyRelocationSealCommand(seal(relocation)).toCompletableFuture().join();
         ZLinkServiceM6BWireCodec.BoundSessionSend target = targetBoundSend();
         ZLinkSessionActorsRuntime.TargetOutboundAdmission first =
-                runtime.admitBoundSessionSend(NODE_B, 4, target, outboundPayload("first"));
+                runtime.admitBoundSessionSend(target, outboundPayload("first"));
         ZLinkSessionActorsRuntime.TargetOutboundAdmission second =
-                runtime.admitBoundSessionSend(NODE_B, 4, target, outboundPayload("second"));
+                runtime.admitBoundSessionSend(target, outboundPayload("second"));
 
         runtime.applyRelocationRouteCommand(route(relocation)).toCompletableFuture().join();
 
@@ -318,8 +318,7 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
         ZLinkServiceM6BWireCodec.RelocationIdentity relocation = relocation();
         runtime.applyRelocationSealCommand(seal(relocation)).toCompletableFuture().join();
         ZLinkSessionActorsRuntime.TargetOutboundAdmission admission =
-                runtime.admitBoundSessionSend(
-                        NODE_B, 4, targetBoundSend(), outboundPayload("pending"));
+                runtime.admitBoundSessionSend(targetBoundSend(), outboundPayload("pending"));
         runtime.applyRelocationRouteCommand(route(relocation)).toCompletableFuture().join();
 
         runtime.notifyDisconnectedAll(Duration.ofSeconds(1)).toCompletableFuture().join();
@@ -349,9 +348,9 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
         runtime.applyRelocationSealCommand(seal(relocation)).toCompletableFuture().join();
         ZLinkServiceM6BWireCodec.BoundSessionSend target = targetBoundSend();
         ZLinkSessionActorsRuntime.TargetOutboundAdmission failed =
-                runtime.admitBoundSessionSend(NODE_B, 4, target, outboundPayload("failed"));
+                runtime.admitBoundSessionSend(target, outboundPayload("failed"));
         ZLinkSessionActorsRuntime.TargetOutboundAdmission next =
-                runtime.admitBoundSessionSend(NODE_B, 4, target, outboundPayload("next"));
+                runtime.admitBoundSessionSend(target, outboundPayload("next"));
         AtomicInteger settlements = new AtomicInteger();
         failed.settlement().whenComplete((ignored, failure) -> settlements.incrementAndGet());
         runtime.applyRelocationRouteCommand(route(relocation)).toCompletableFuture().join();

@@ -1,5 +1,5 @@
 import type { RoutingId, ZLinkActor } from '../../contracts';
-import type { ZLinkDeferredJoinAcceptedRoot } from '../actors';
+import type { ZLinkDeferredJoinCompletion } from '../actors';
 import type { ZLinkActorHandoffPacket } from '../actors/actor-handoff';
 import { ZLinkStateLane } from '../execution/state-lane';
 
@@ -8,7 +8,7 @@ export interface ZLinkFormalRemoteActorTransfer {
   readonly spotId: RoutingId;
   readonly transferId: string;
   readonly handoffBacklog: readonly ZLinkActorHandoffPacket[];
-  readonly deferredJoinRoot?: ZLinkDeferredJoinAcceptedRoot;
+  readonly deferredJoinCompletion?: ZLinkDeferredJoinCompletion;
   readonly targetLifecycleCompleted: Promise<void>;
   readonly sourceLeaveSubmitted: Promise<boolean>;
 }
@@ -43,7 +43,7 @@ export class ZLinkFormalRemoteActorTransferRegistry {
     readonly spotId: RoutingId;
     readonly transferId: string;
     readonly handoffBacklog: readonly ZLinkActorHandoffPacket[];
-    readonly deferredJoinRoot?: ZLinkDeferredJoinAcceptedRoot;
+    readonly deferredJoinCompletion?: ZLinkDeferredJoinCompletion;
   }): ZLinkFormalRemoteActorTransfer {
     const existingByActor = this.transfers.get(input.actor.context.actorId)?.transfer;
     if (existingByActor !== undefined) {

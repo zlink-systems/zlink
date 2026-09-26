@@ -69,12 +69,9 @@ export {
   type ZLinkRemoteBoundSessionTarget
 } from './actor-runtime-state';
 export {
-  isDeferredJoinAcceptedRootPublication,
-  ZLinkDeferredJoinAcceptedJournal,
-  type ZLinkDeferredJoinAcceptedRoot,
-  type ZLinkDeferredJoinRootIdentity,
-  type ZLinkDeferredJoinDeliveryCursor
-} from './deferred-join-accepted-journal';
+  createDeferredJoinCompletion,
+  type ZLinkDeferredJoinCompletion
+} from './deferred-join-completion';
 export {
   decodeActorAuthorityIdentity,
   decodeRelocatingActorAuthorityIdentity,

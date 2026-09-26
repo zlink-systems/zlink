@@ -312,6 +312,51 @@ test('stream session node runtime dispatches framed packets through one session 
   ]);
 });
 
+test('session error and disconnect follow accepted packet callbacks', async () => {
+  const socket = new FakeStreamSocket();
+  const events = [];
+  let firstStarted;
+  let releaseFirst;
+  let disconnected;
+  const firstStartedPromise = new Promise((resolve) => { firstStarted = resolve; });
+  const firstTerminal = new Promise((resolve) => { releaseFirst = resolve; });
+  const disconnectedPromise = new Promise((resolve) => { disconnected = resolve; });
+  const runtime = createStreamRuntime({
+    socket,
+    headerDecoder: (header) => ({ name: header.getString() }),
+    sessionFactory(context) {
+      return {
+        context,
+        async onConnected() { events.push('connected'); },
+        async onDispatch(header) {
+          events.push(header.packetName);
+          if (header.packetName === 'First') {
+            firstStarted();
+            await firstTerminal;
+          }
+        },
+        async onError() { events.push('error'); },
+        async onDisconnected() {
+          events.push('disconnected');
+          disconnected();
+        }
+      };
+    }
+  });
+
+  runtime.start();
+  runtime.markConnected('session-ordered', 'tcp://local', 'tcp://remote');
+  socket.emitPacket('session-ordered', fakeHeader({ name: 'First' }), fakeJsonMessage('one'));
+  await firstStartedPromise;
+  const session = runtime.findSession('session-ordered');
+  session.enqueuePacket(fakeJsonMessage('two'), streamHeader({ name: 'Second' }));
+  session.enqueueDisconnected(new Error('closed'));
+  releaseFirst();
+  await disconnectedPromise;
+  assert.deepEqual(events, ['connected', 'First', 'Second', 'error', 'disconnected']);
+  await runtime.dispose();
+});
+
 test('stream session dispatch resolves only current Actor slots for sends and requests', async (t) => {
   const socket = new FakeStreamSocket();
   const dispatches = [];
@@ -937,7 +982,7 @@ test('stream session runtime closes application-idle sessions with idle_timeout'
   await runtime.dispose();
 });
 
-test('stream session node runtime serializes dispatch and disconnect callbacks per session', async () => {
+test('stream session node runtime completes accepted packets before disconnect', async () => {
   const socket = new FakeStreamSocket();
   const events = [];
   let releaseFirst;
@@ -983,9 +1028,9 @@ test('stream session node runtime serializes dispatch and disconnect callbacks p
   assert.deepEqual(events, [
     ['dispatch:start', 'First', 'one'],
     ['dispatch:end', 'First'],
-    ['disconnected', 'session-serial'],
     ['dispatch:start', 'Second', 'two'],
-    ['dispatch:end', 'Second']
+    ['dispatch:end', 'Second'],
+    ['disconnected', 'session-serial']
   ]);
 });
 

@@ -1518,16 +1518,8 @@ public_host_runtime_t::admit_session_relocation_seal (
         return *existing_result;
 
     const auto session_id = zlink::routing_id_t::from (seal.session_routing_id).to_hex ();
-    const stateful::object_ref_t actor{
-      stateful::object_kind_t::actor,
-      seal.actor.actor_id,
-      seal.actor.object_generation,
-      seal.actor.authority_owner_generation,
-      {},
-      zlink::routing_id_t::from (seal.actor.target_node_routing_id).to_string ()};
-    const auto admission = _sessions.seal_remote_route (session_id, seal.binding_generation, actor,
-                                                        seal.actor.target_node_generation,
-                                                        seal.actor.owner_lease_generation);
+    const auto admission = _sessions.seal_remote_route (
+      session_id, seal.binding_generation, seal.actor.actor_id, seal.actor.object_generation);
     if ((admission.error != stateful::stateful_error_t::none
          && admission.error != stateful::stateful_error_t::backpressured)
         || !admission.binding || admission.barrier.token == 0) {
@@ -2464,21 +2456,10 @@ task_t<zlink::submit_result_t> public_host_runtime_t::send_bound_session (
   const std::vector<zlink::message_t> &parts,
   zlink::framework::detail::backend::raw_send_stage_trace_t trace)
 {
+    /* Session-Actor binding §3 item 3: the push source sends by SessionRid
+     * and binding generation to the registered route. The Session owner
+     * alone decides whether that binding is current. */
     const auto local = status ();
-    const auto target_node =
-      zlink::routing_id_t::from (std::string (actor.node_rid ().value ())).to_bytes ();
-    if (target_node != local.routing_id ().to_bytes ()) {
-        trace_mesh_host ("bound-session-send-rejected",
-                         "reason=actor-node-mismatch actor="
-                           + std::string (actor.actor_id ().value ()));
-        co_return zlink::submit_result_t::not_found;
-    }
-    if (authority_owner_generation == 0) {
-        trace_mesh_host ("bound-session-send-rejected",
-                         "reason=bound-route-fence-mismatch actor="
-                           + std::string (actor.actor_id ().value ()));
-        co_return zlink::submit_result_t::not_found;
-    }
     co_return co_await _transport->send_bound_session_result (
       session_owner.to_bytes (),
       protocol::bound_session_send_t{
@@ -4391,11 +4372,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         }
                         const auto target_node =
                           zlink::routing_id_t::from (route.route.target_node_routing_id);
-                        auto target_proof = _sessions.remote_tenure_proof (
-                          route.actor.actor_id, route.binding_generation,
-                          route.actor.object_generation,
-                          route.route.target_authority_owner_generation, target_node.to_string (),
-                          route.route.target_node_generation);
                         auto target = current->actor;
                         target.node_id = target_node.to_string ();
                         target.authority_owner_generation =
@@ -4415,9 +4391,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                           session_id, route.binding_generation, route.actor.actor_id,
                           route.actor.object_generation,
                           route.route.previous_authority_owner_generation, std::move (target),
-                          route.route.target_node_generation,
-                          target_proof ? target_proof->tenure.owner_lease_generation : 0,
-                          std::move (commit_projection));
+                          route.route.target_node_generation, std::move (commit_projection));
                     } else {
                         admission = _sessions.acknowledge_remote_abort (
                           session_id, route.binding_generation, route.actor.actor_id,
@@ -4436,12 +4410,14 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                               sealed->second.consumed = true;
                       })
                       .get ();
+                    /* Commit and abort both open the held pushes: commit to the
+                     * target route, abort to the source route (Session-Actor
+                     * binding §8.1). */
                     for (auto &settle : admission.retained_outbound) {
                         if (!settle)
                             continue;
                         try {
-                            settle (route.route.action
-                                    == protocol::session_relocation_route_action_t::commit);
+                            settle (true);
                         }
                         catch (...) {
                         }
@@ -5394,44 +5370,6 @@ bool public_host_runtime_t::dispatch_bound_session_send (
     const auto application =
       protocol::decode_application_payload (mailbox_record.parts.back (), capture_flow ());
     auto parts = protocol::decode_application_parts (application);
-    const auto target_node = zlink::routing_id_t::from (record.actor.target_node_routing_id);
-    const stateful::stream_remote_tenure_t tenure{record.actor.actor_id,
-                                                  record.actor.object_generation,
-                                                  record.actor.authority_owner_generation,
-                                                  target_node.to_string (),
-                                                  record.actor.target_node_generation,
-                                                  record.actor.owner_lease_generation,
-                                                  record.expected_binding_generation};
-    auto proof = _sessions.remote_tenure_proof (
-      tenure.actor_id, tenure.binding_generation, tenure.object_generation,
-      tenure.authority_owner_generation, tenure.target_node_id, tenure.target_node_generation);
-    std::optional<stateful::stream_remote_tenure_proof_t> first_proof;
-    const auto current = _sessions.current_binding (tenure.actor_id);
-    const auto current_tenure =
-      current && current->binding_generation == tenure.binding_generation
-      && current->actor.object_generation == tenure.object_generation
-      && current->actor.authority_owner_generation == tenure.authority_owner_generation
-      && current->actor.node_id == tenure.target_node_id
-      && current->target_node_generation == tenure.target_node_generation;
-    if (current_tenure && tenure.owner_lease_generation != 0
-        && current->owner_lease_generation != tenure.owner_lease_generation) {
-        /* OwnerLeaseGeneration is route state, not a push-admission input.
-         * Refresh the Session-owned route before delivery so a later command
-         * 44 seals the fence actually used by this binding. */
-        if (!_sessions.confirm_remote_tenure (tenure))
-            return false;
-        try {
-            if (operations.confirm_remote_tenure)
-                (void) operations.confirm_remote_tenure (record);
-        }
-        catch (...) {
-        }
-    }
-    if (!current_tenure && !proof) {
-        if (!current || !retain_mailbox_reservation || !release_mailbox_reservation)
-            return false;
-        first_proof = stateful::stream_remote_tenure_proof_t{tenure, target_node.to_string ()};
-    }
     const auto execute_delivery = [operations,
                                    record] (std::vector<zlink::message_t> admitted_parts) {
         if (operations.capture_send) {
@@ -5459,8 +5397,11 @@ bool public_host_runtime_t::dispatch_bound_session_send (
               }
           }
       };
-    const auto admitted =
-      _sessions.admit_outbound (tenure, std::move (first_proof), std::move (retained_delivery));
+    const auto admitted = _sessions.admit_outbound (
+      record.actor.actor_id, record.actor.object_generation, record.expected_binding_generation,
+      retain_mailbox_reservation
+        ? stateful::stream_retained_outbound_t (std::move (retained_delivery))
+        : stateful::stream_retained_outbound_t{});
     if (admitted.error != stateful::stateful_error_t::none)
         return false;
     if (admitted.kind == stateful::stream_outbound_admission_kind_t::retained) {

@@ -2812,14 +2812,18 @@ public sealed partial class EntrySpotActorDispatchTests
     // ZLinkActorBoundSessionCoordinator call sites. Per
     // 04-session/02-session-actor-binding.ko.md §8.1, a Retained admission is
     // an *acceptance* (the aggregate holds the frame until route commit) and
-    // must never be reported as a failed/not-found submit. This test pins
-    // an actor outbound push whose tenure is stale against the sealed table
-    // route: AdmitOutboundAsync must retain it, the async entry point must
-    // report Submitted (not TargetNotFound), hard-cap overload must preserve
-    // Backpressured, and held frames must reach the session's stream once the
-    // relocation route commits.
-    [Fact]
-    public async Task ActorBoundSessionOutboundSendDuringRelocationSealPreservesAdmissionOutcomesAsync()
+    // must never be reported as a failed/not-found submit. §3 item 3 and §8.1
+    // also fix that the sealed binding alone decides: every push of the
+    // current binding is held whatever owner authority generation the Actor
+    // side carries (11 = source route, 99 = committed target), no
+    // relocation-specific count limit returns Backpressured, and held frames
+    // reach the session's stream once the relocation route commits.
+    [Theory]
+    [InlineData(11UL)]
+    [InlineData(99UL)]
+    public async Task ActorBoundSessionOutboundSendDuringRelocationSealPreservesAdmissionOutcomesAsync(
+        ulong actorAuthorityOwnerGeneration
+    )
     {
         var node = new CapturingSpotNode();
         var (runtime, _) = await CreateStartedRuntimeAsync(node, includeActorFactory: false);
@@ -2857,11 +2861,9 @@ public sealed partial class EntrySpotActorDispatchTests
                 sessionOwnerLeaseGeneration: 8
             );
 
-            // The actor-side outbound snapshot already carries the
-            // AuthorityOwnerGeneration the relocation target will commit to
-            // (99). Until the seal commits, the table's Route still says 11,
-            // so AdmitOutboundAsync must not match Immediate — it must
-            // Retain.
+            // The table's Route says 11 until the seal commits. The Actor-side
+            // owner authority generation is not an admission field, so the
+            // sealed binding holds the push for either value.
             _ = runtime.BindActorSession(
                 actorId,
                 sessionNodeRid: node.RoutingId,
@@ -2869,7 +2871,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 bindingToken: bindingToken,
                 bindingGeneration: 6,
                 objectGeneration: 5,
-                authorityOwnerGeneration: 99,
+                authorityOwnerGeneration: actorAuthorityOwnerGeneration,
                 meshName: "entry",
                 targetNodeGeneration: 2,
                 ownerLeaseGeneration: 17,
@@ -2930,12 +2932,11 @@ public sealed partial class EntrySpotActorDispatchTests
             // Not delivered yet: the frame is held until the seal commits.
             Assert.Empty(stream.Writes);
 
-            // The retained queue is bounded at 4,096 frames. Fill the rest of
-            // that production queue, then prove the hard-overload admission
-            // remains Backpressured instead of falling through to
-            // TargetNotFound.
-            const int retainedOutboundCapacity = 4_096;
-            for (var retained = 1; retained < retainedOutboundCapacity; retained++)
+            // The old relocation-only limit was 4,096 retained frames. Held
+            // pushes beyond it stay accepted: only ordinary message limits
+            // apply during the seal (§8.1, relocation-flow §5.3).
+            const int heldPushCount = 4_097;
+            for (var retained = 1; retained < heldPushCount; retained++)
             {
                 using var retainedPayload = Message.From(sendFrame);
                 var retainedResult = await runtime.SendActorBoundSessionIfCurrentAsync(
@@ -2945,17 +2946,6 @@ public sealed partial class EntrySpotActorDispatchTests
                     CancellationToken.None
                 );
                 Assert.Equal(ZLinkOneWaySubmitStatus.Submitted, retainedResult.Status);
-            }
-
-            using (var overflowPayload = Message.From(sendFrame))
-            {
-                var overflowResult = await runtime.SendActorBoundSessionIfCurrentAsync(
-                    actorId,
-                    bindingToken,
-                    new[] { overflowPayload },
-                    CancellationToken.None
-                );
-                Assert.Equal(ZLinkOneWaySubmitStatus.Backpressured, overflowResult.Status);
             }
             Assert.Empty(stream.Writes);
 
@@ -2980,7 +2970,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 )
             );
 
-            Assert.Equal(retainedOutboundCapacity, stream.Writes.Count);
+            Assert.Equal(heldPushCount, stream.Writes.Count);
             Assert.All(stream.Writes, written => Assert.Equal(sendBody, written));
 
             // The adjacent Immediate path has the same contract: a local
@@ -2994,7 +2984,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 CancellationToken.None
             );
             Assert.Equal(ZLinkOneWaySubmitStatus.Backpressured, refusedResult.Status);
-            Assert.Equal(retainedOutboundCapacity, stream.Writes.Count);
+            Assert.Equal(heldPushCount, stream.Writes.Count);
         }
         finally
         {
@@ -8100,6 +8090,46 @@ public sealed partial class EntrySpotActorDispatchTests
         finally
         {
             await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    // A deferred Join runs as its reserved barrier's turn (execution gate §6–7).
+    // A deadline that elapsed before the barrier ran completes the Join inside
+    // that turn and releases it, so the runtime stop that follows can drain it.
+    [Fact]
+    public async Task DeferredJoinWhoseDeadlineElapsedReleasesItsBarrierTurn()
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        var stopped = false;
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            using (var handler = ZLinkDeferredActorJoinHandlerScope.Open())
+            {
+                actor
+                    .Context.JoinSpot("elapsed-target", ZLinkMessage.Empty)
+                    .Timeout(TimeSpan.FromMilliseconds(1))
+                    .Defer();
+                Thread.Sleep(TimeSpan.FromMilliseconds(20));
+                handler.Complete();
+            }
+
+            var completion = await actor.JoinCompletion.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(
+                ZLinkFrameworkErrorKind.DeadlineExceeded,
+                Assert.IsType<ZLinkActorJoinCompletion.Failed>(completion).Kind
+            );
+            await runtime
+                .StopAsync(CancellationToken.None)
+                .AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            stopped = true;
+        }
+        finally
+        {
+            if (!stopped)
+                _ = runtime.StopAsync(CancellationToken.None);
         }
     }
 

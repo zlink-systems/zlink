@@ -5925,10 +5925,139 @@ bool verify_remote_actor_completion_keeps_session_ref_until_route_ack ()
            && route->second.spot_id == "target-spot";
 }
 
+// Handler turn and execution gate §5, §7: work a handler defers to its
+// terminal keeps the lifecycle FIFO position accepted at registration. It
+// never runs ahead of lifecycle work accepted before it.
+int verify_deferred_work_keeps_lifecycle_fifo_position ()
+{
+    using namespace zlink::framework::runtime;
+    offload_executor_t executor (1);
+    serial_execution_queue_t queue (executor);
+    std::mutex events_mutex;
+    std::vector<std::string> events;
+    const auto record = [&] (std::string event) {
+        std::lock_guard lock (events_mutex);
+        events.push_back (std::move (event));
+    };
+    const auto deferred_phase = [] {
+        const auto turn = zlink::framework::detail::capture_current_serial_turn ();
+        return turn && turn->is_after_active_phase ();
+    };
+    const serial_work_options_t lifecycle{serial_work_lane_t::lifecycle};
+
+    queue.run ("handler", [&] {
+        queue.post ("older-lifecycle", [&] { record ("older-lifecycle"); }, lifecycle);
+        if (!zlink::framework::detail::defer_current_serial_turn (
+              [&] { record (deferred_phase () ? "join" : "join-in-handler-phase"); }))
+            throw std::runtime_error ("join was not deferred");
+        if (!queue.try_post_deferred ("cleanup", [&] { record ("cleanup"); }))
+            throw std::runtime_error ("cleanup was not deferred");
+        queue.post ("newer-lifecycle", [&] { record ("newer-lifecycle"); }, lifecycle);
+        record ("handler");
+    });
+    queue.drain ();
+    {
+        std::lock_guard lock (events_mutex);
+        if (events
+            != std::vector<std::string>{"handler", "older-lifecycle", "join", "cleanup",
+                                        "newer-lifecycle"}) {
+            for (const auto &event : events)
+                std::cerr << "deferred order: " << event << '\n';
+            return 1;
+        }
+        events.clear ();
+    }
+
+    queue.run ("failed-handler", [&] {
+        queue.post ("older-lifecycle", [&] { record ("older-lifecycle"); }, lifecycle);
+        if (!zlink::framework::detail::defer_current_serial_turn (
+              [&] { record ("join-must-not-run"); }, [&] { record ("join-discarded"); }))
+            throw std::runtime_error ("join was not deferred");
+        if (!queue.try_post_deferred ("cleanup", [&] { record ("cleanup"); }))
+            throw std::runtime_error ("cleanup was not deferred");
+        throw std::runtime_error ("handler failed after defer");
+    });
+    queue.drain ();
+    {
+        std::lock_guard lock (events_mutex);
+        if (events != std::vector<std::string>{"join-discarded", "older-lifecycle", "cleanup"}) {
+            for (const auto &event : events)
+                std::cerr << "failed deferred order: " << event << '\n';
+            return 2;
+        }
+    }
+    return 0;
+}
+
+// Handler turn and execution gate §5: a Join deferred before a Yield activates
+// when the last awaited continuation ends normally, not at the Yield, and is
+// discarded when the handler fails after the Yield.
+int verify_deferred_join_waits_for_handler_terminal_across_yield ()
+{
+    using namespace zlink::framework::runtime;
+    offload_executor_t executor (1);
+    serial_execution_queue_t queue (executor);
+    std::mutex events_mutex;
+    std::vector<std::string> events;
+    const auto record = [&] (std::string event) {
+        std::lock_guard lock (events_mutex);
+        events.push_back (std::move (event));
+    };
+    const auto yielding_handler = [&] (bool fail_after_yield) {
+        queue.post_async ("yielding-handler", [&, fail_after_yield] (auto complete) {
+            if (!zlink::framework::detail::defer_current_serial_turn (
+                  [&] { record ("join"); }, [&] { record ("join-discarded"); }))
+                throw std::runtime_error ("join was not deferred");
+            auto plan = zlink::framework::detail::prepare_serial_turn_await (true);
+            if (!plan)
+                throw std::runtime_error ("turn was not released");
+            record ("yield");
+            plan->scheduler ([&, turn = plan->turn, fail_after_yield] {
+                record ("continuation");
+                if (fail_after_yield)
+                    turn->cancel_deferred ();
+            });
+            complete ([] {});
+        });
+        queue.drain ();
+    };
+    yielding_handler (false);
+    {
+        std::lock_guard lock (events_mutex);
+        if (events != std::vector<std::string>{"yield", "continuation", "join"}) {
+            for (const auto &event : events)
+                std::cerr << "yield deferred order: " << event << '\n';
+            return 3;
+        }
+        events.clear ();
+    }
+    yielding_handler (true);
+    {
+        std::lock_guard lock (events_mutex);
+        if (events != std::vector<std::string>{"yield", "continuation", "join-discarded"}) {
+            for (const auto &event : events)
+                std::cerr << "failed yield deferred order: " << event << '\n';
+            return 4;
+        }
+    }
+    return 0;
+}
+
 } // namespace
 
 int main ()
 {
+    if (const auto failed = verify_deferred_work_keeps_lifecycle_fifo_position (); failed != 0) {
+        std::cerr << "verify_deferred_work_keeps_lifecycle_fifo_position failed: " << failed
+                  << '\n';
+        return 230 + failed;
+    }
+    if (const auto failed = verify_deferred_join_waits_for_handler_terminal_across_yield ();
+        failed != 0) {
+        std::cerr << "verify_deferred_join_waits_for_handler_terminal_across_yield failed: "
+                  << failed << '\n';
+        return 235 + failed;
+    }
     zlink::framework::runtime::configure_handler_coroutine_executor (4);
     struct executor_shutdown_t
     {

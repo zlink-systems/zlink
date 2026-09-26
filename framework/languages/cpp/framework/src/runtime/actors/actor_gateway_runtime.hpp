@@ -390,7 +390,6 @@ class actor_gateway_runtime_t
     bool prepare_session_relocation_target_route (
       const runtime::protocol::session_relocation_route_t &route,
       std::uint64_t target_owner_lease_generation);
-    bool confirm_session_remote_tenure (const runtime::protocol::bound_session_send_t &send);
     void unbind_session_stream (std::string actor_id,
                                 std::string session_id = {},
                                 std::uint64_t binding_token = 0);

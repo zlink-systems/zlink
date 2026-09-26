@@ -1822,11 +1822,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                                     await _standaloneActorRelocationRuntime
                                         .RecoverPublishedAsync(candidate, retryToken)
                                         .ConfigureAwait(false);
-                                    await RecoverCanonicalRemoteJoinCompletionAsync(
-                                            candidate,
-                                            retryToken
-                                        )
-                                        .ConfigureAwait(false);
                                 },
                                 exception =>
                                     ZLinkFrameworkDebugLog.SpotDiscovery(
@@ -1858,597 +1853,6 @@ internal sealed partial class ZLinkFrameworkRuntime
         throw new InvalidOperationException(
             "Published Actor relocation recovery could not be scheduled."
         );
-    }
-
-    private async ValueTask RecoverCanonicalRemoteJoinCompletionAsync(
-        ZLinkRelocationRecoveryCandidate candidate,
-        CancellationToken cancellationToken
-    )
-    {
-        var participant = candidate.Envelope.Participants.Single();
-        var canonical = ZLinkCanonicalParticipantRecoveryCodec.Decode(
-            participant.RecoveryPayload.Span
-        );
-        var sourceFence = ZLinkActorRelocationSourceFenceCodec.Decode(
-            canonical.MembershipMutation.Span
-        );
-        //  Printed before the branch, with the values it tests: an absent
-        //  trace inside the branch would not say whether recovery metadata was
-        //  missing or the path was never reached.
-        ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"recovery_metadata operation_empty={canonical.OperationRecovery.IsEmpty} "
-                + $"legacy_empty={sourceFence.LegacyRemoteJoinRecovery.IsEmpty}"
-        );
-        if (canonical.OperationRecovery.IsEmpty && sourceFence.LegacyRemoteJoinRecovery.IsEmpty)
-            return;
-        ZLinkActorRelocationRecoveryRecord recovery;
-        try
-        {
-            recovery = ZLinkActorRemoteJoinRecoveryCodec.Decode(
-                canonical.OperationRecovery.Span,
-                sourceFence.LegacyRemoteJoinRecovery.Span
-            );
-        }
-        catch (Exception error) when (error is InvalidDataException)
-        {
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.DataLost,
-                "Canonical Actor Join recovery metadata is malformed.",
-                retryAdvice: ZLinkRetryAdvice.DoNotRetry,
-                error
-            );
-        }
-        var wire = recovery.Request;
-        //  Only one call separates this from the completion delivery, so a
-        //  trace on each side of it isolates the stall.
-        ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"recovery_validating actor={wire.ActorId} handoff={wire.HandoffId}"
-        );
-        await ValidateCanonicalRemoteJoinRecoveryAsync(
-                candidate,
-                participant,
-                canonical,
-                sourceFence,
-                recovery,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        //  End of the recovery path: this is what delivers the Accepted
-        //  completion spec 15 requires after a post-commit source failure.
-        ZLinkFrameworkDebugLog.SpotDiscovery($"recovery_completing candidate={candidate}");
-        await CompleteRoutedActorHandoffAsync(
-                recovery.TargetSpotId,
-                new ZLinkRemoteActorHandoffCompletionRequest(
-                    wire.ActorId,
-                    wire.HandoffId,
-                    wire.SourceSpotId,
-                    wire.SourceNodeRid,
-                    recovery.TargetSpotId,
-                    [],
-                    recovery.OperationIdHigh,
-                    recovery.OperationIdLow,
-                    recovery.ReplyContentType,
-                    recovery.Reply,
-                    wire.BoundSessionNodeRid,
-                    wire.BoundSessionRid,
-                    wire.BoundSessionBindingToken,
-                    wire.BoundSessionBindingGeneration,
-                    wire.BoundSessionObjectGeneration,
-                    wire.BoundSessionAuthorityOwnerGeneration,
-                    wire.BoundSessionMeshName,
-                    wire.BoundSessionTargetNodeGeneration,
-                    wire.BoundSessionOwnerLeaseGeneration,
-                    wire.BoundSessionOwnerNodeGeneration,
-                    wire.BoundSessionAcceptedHighWater,
-                    wire.BoundSessionSessionOwnerId,
-                    wire.BoundSessionSessionOwnerLeaseGeneration
-                ),
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-    }
-
-    private async ValueTask ValidateCanonicalRemoteJoinRecoveryAsync(
-        ZLinkRelocationRecoveryCandidate candidate,
-        ZLinkRelocationParticipantEnvelope participant,
-        ZLinkCanonicalParticipantRecovery canonical,
-        ZLinkActorRelocationSourceFence sourceFence,
-        ZLinkActorRelocationRecoveryRecord recovery,
-        CancellationToken cancellationToken
-    )
-    {
-        var wire = recovery.Request;
-        var actorKey = ZLinkActorAuthorityPayloadCodec.AuthorityKey(wire.ActorId);
-        //  This validation throws into a detached recovery task, where the
-        //  exception reaches no caller. Name it before letting it propagate.
-        try
-        {
-            ValidateCanonicalRemoteJoinRecoveryIdentity(
-                candidate,
-                participant,
-                canonical,
-                sourceFence,
-                recovery
-            );
-        }
-        catch (Exception identityFailure)
-        {
-            ZLinkFrameworkDebugLog.SpotDiscovery($"recovery_identity_failed {identityFailure}");
-            throw;
-        }
-        var matchingAuthorities = candidate
-            .Authorities.Where(entry => entry.Key == actorKey)
-            .ToArray();
-        //  Printed before the guard with the value it tests.
-        ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"recovery_authorities count={matchingAuthorities.Length}"
-        );
-        if (matchingAuthorities.Length != 1)
-            throw RemoteJoinRecoveryMismatch(wire.ActorId, "published Actor authority cardinality");
-        var authority = matchingAuthorities[0];
-        var targetRid = RoutingId.From(recovery.TargetNodeRid);
-        var aggregateBytes = candidate.Envelope.AggregateId.ToByteArray(bigEndian: true);
-        if (
-            authority.Snapshot.ObjectGeneration != participant.ObjectGeneration
-            || authority.Snapshot.AuthorityOwnerGeneration
-                != recovery.TargetAuthorityOwnerGeneration
-            || authority.Snapshot.Allocation.ObjectKind != ZLinkPlacementObjectKind.Actor
-            || !string.Equals(
-                authority.Snapshot.Allocation.StableType,
-                wire.ActorType,
-                StringComparison.Ordinal
-            )
-            || authority.Snapshot.Allocation.Descriptor.Rid != targetRid
-            || authority.Snapshot.Allocation.DescriptorLifecycleGeneration
-                != recovery.TargetNodeGeneration
-            || !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                authority.Snapshot.Payload.Span,
-                out var publication
-            )
-            || publication.RelocationReference != candidate.Reference.Reference
-            || publication.RelocationChecksumCrc32c != candidate.Reference.ChecksumCrc32c
-            || publication.RelocationHigh
-                != System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(
-                    aggregateBytes.AsSpan(0, 8)
-                )
-            || publication.RelocationLow
-                != System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(
-                    aggregateBytes.AsSpan(8, 8)
-                )
-            || !string.Equals(
-                publication.State.TargetNodeRid,
-                targetRid.ToHex(),
-                StringComparison.Ordinal
-            )
-            || publication.State.TargetNodeGeneration != recovery.TargetNodeGeneration
-            || authority.Snapshot.OwnerId != publication.TargetOwnerId
-            || authority.Snapshot.OwnerLeaseGeneration <= 0
-            || checked((ulong)authority.Snapshot.OwnerLeaseGeneration)
-                != publication.TargetOwnerLeaseGeneration
-            || !ZLinkActorAuthorityPayloadCodec.TryDecode(
-                publication.SteadyAuthorityPayload.Span,
-                out var steady
-            )
-            || steady.ActorId != wire.ActorId
-            || steady.StableType != wire.ActorType
-            || steady.CurrentSpotId != recovery.TargetSpotId
-            || steady.CurrentSpotGeneration != recovery.TargetSpotGeneration
-            || steady.NodeRid != targetRid
-            || steady.NodeGeneration != recovery.TargetNodeGeneration
-            || steady.OwnerId != publication.TargetOwnerId
-            || steady.OwnerLeaseGeneration != publication.TargetOwnerLeaseGeneration
-        )
-            throw RemoteJoinRecoveryMismatch(
-                wire.ActorId,
-                "published Actor authority or target owner fence"
-            );
-
-        if (
-            ResolveActorHandoffTarget(recovery.TargetSpotId) is not { } target
-            || target.NodeRid != targetRid
-        )
-            throw RemoteJoinRecoveryMismatch(wire.ActorId, "target Spot runtime fence");
-        var targetNodeGeneration = GetSpotNodeRuntime(target.NodeRid)
-            .Node.MeshStatus()
-            .LifecycleGeneration;
-        var targetSpotGeneration =
-            target.UserSpot?.ObjectGeneration ?? target.EntrySpot?.ObjectGeneration ?? 0;
-        if (
-            targetNodeGeneration != recovery.TargetNodeGeneration
-            || targetSpotGeneration != recovery.TargetSpotGeneration
-        )
-            throw RemoteJoinRecoveryMismatch(wire.ActorId, "target Spot generation");
-        if (target.EntrySpot is not null)
-        {
-            if (wire.TargetSpotAuthorityOwnerGeneration != targetNodeGeneration)
-                throw RemoteJoinRecoveryMismatch(wire.ActorId, "target Entry Spot owner fence");
-            return;
-        }
-
-        var locationStore =
-            Registration.Locations.ResolveStore()
-            ?? throw new ZLinkConfigurationException(
-                "Actor relocation recovery requires a Location Store."
-            );
-        var targetSpot = await locationStore
-            .ReadAuthorityAsync(
-                ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(recovery.TargetSpotId),
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        if (
-            targetSpot is not ZLinkAuthorityReadResult.Found targetFound
-            || targetFound.Snapshot.ObjectGeneration != recovery.TargetSpotGeneration
-            || targetFound.Snapshot.AuthorityOwnerGeneration
-                != wire.TargetSpotAuthorityOwnerGeneration
-            || targetFound.Snapshot.Allocation.ObjectKind != ZLinkPlacementObjectKind.UserSpot
-            || targetFound.Snapshot.Allocation.Descriptor.Rid != targetRid
-            || targetFound.Snapshot.Allocation.DescriptorLifecycleGeneration
-                != recovery.TargetNodeGeneration
-        )
-            throw RemoteJoinRecoveryMismatch(wire.ActorId, "target User Spot authority fence");
-    }
-
-    internal static void ValidateCanonicalRemoteJoinRecoveryIdentity(
-        ZLinkRelocationRecoveryCandidate candidate,
-        ZLinkRelocationParticipantEnvelope participant,
-        ZLinkCanonicalParticipantRecovery canonical,
-        ZLinkActorRelocationSourceFence sourceFence,
-        ZLinkActorRelocationRecoveryRecord recovery
-    )
-    {
-        var wire = recovery.Request;
-        var actorKey = ZLinkActorAuthorityPayloadCodec.AuthorityKey(wire.ActorId);
-        var handoffMatches =
-            Guid.TryParseExact(wire.HandoffId, "N", out var handoffId)
-            && handoffId == candidate.Envelope.AggregateId;
-        //  A canonical authority row persists no inventory digest: decoding it
-        //  synthesizes the all-zero placeholder (see
-        //  ZLinkRelocationAuthorityPayloadCodec.TryDecode), while the immutable
-        //  root's envelope carries the real digest. Requiring byte equality here
-        //  failed every canonical remote Join recovery as DataLost, which
-        //  permanently killed the aggregate's recovery watch. The row already
-        //  pins the root through its reference and CRC32C (checked when the
-        //  root is read back), so the digest comparison applies only when the
-        //  reference actually carries one — mirroring ValidateRoot and the Spot
-        //  retire normalizer, which skip the digest for canonical publications.
-        var referenceDigestIsSentinel = !candidate.Reference.InventoryDigest.Span.ContainsAnyExcept(
-            (byte)0
-        );
-        RoutingId sourceNodeRid;
-        try
-        {
-            sourceNodeRid = RoutingId.From(wire.SourceNodeRid);
-        }
-        catch (Exception error) when (error is ArgumentException)
-        {
-            throw RemoteJoinRecoveryMismatch(wire.ActorId, "source node identity", error);
-        }
-        //  One compound guard covers a dozen axes; print them so a mismatch
-        //  names the axis instead of the whole condition.
-        ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"recovery_identity handoff_matches={handoffMatches} "
-                + $"key={participant.AuthorityKey == actorKey} "
-                + $"kind={participant.ObjectKind} "
-                + $"obj_gen={participant.ObjectGeneration}/{wire.ActorGeneration} "
-                + $"auth_gen={participant.AuthorityOwnerGeneration}/{wire.ActorAuthorityOwnerGeneration} "
-                + $"canon_key={canonical.AuthorityKey == participant.AuthorityKey} "
-                + $"canon_obj_gen={canonical.ObjectGeneration}/{participant.ObjectGeneration} "
-                + $"canon_auth_gen={canonical.AuthorityOwnerGeneration}/{participant.AuthorityOwnerGeneration} "
-                + $"stable_type={canonical.StableType}/{wire.ActorType} "
-                + $"reloc_ref={wire.RelocationReference} crc={wire.RelocationChecksumCrc32c} "
-                + $"agg_id={wire.RelocationAggregateId == candidate.Envelope.AggregateId} "
-                + $"agg_gen={wire.RelocationAggregateGeneration}/{candidate.Envelope.AggregateGeneration} "
-                + $"digest_len={wire.RelocationInventoryDigest.Length} "
-                + $"digest_zero={!wire.RelocationInventoryDigest.Any(static v => v != 0)} "
-                + $"src_rid={sourceNodeRid == sourceFence.NodeRid} "
-                + $"env_ref_id={candidate.Envelope.AggregateId == candidate.Reference.AggregateId} "
-                + $"env_ref_gen={candidate.Envelope.AggregateGeneration == candidate.Reference.AggregateGeneration} "
-                + $"env_ref_digest={candidate.Envelope.InventoryDigest.Span.SequenceEqual(candidate.Reference.InventoryDigest.Span)} "
-                + $"ref_digest_sentinel={referenceDigestIsSentinel} "
-                + $"env_digest={Convert.ToHexString(candidate.Envelope.InventoryDigest.Span)[..16]} "
-                + $"ref_digest={Convert.ToHexString(candidate.Reference.InventoryDigest.Span)[..16]} "
-                + $"env_len={candidate.Envelope.InventoryDigest.Length} ref_len={candidate.Reference.InventoryDigest.Length}"
-        );
-        if (
-            participant.AuthorityKey != actorKey
-            || participant.ObjectKind != ZLinkPlacementObjectKind.Actor
-            || participant.ObjectGeneration != wire.ActorGeneration
-            || participant.AuthorityOwnerGeneration != wire.ActorAuthorityOwnerGeneration
-            || canonical.AuthorityKey != participant.AuthorityKey
-            || canonical.ObjectKind != participant.ObjectKind
-            || canonical.ObjectGeneration != participant.ObjectGeneration
-            || canonical.AuthorityOwnerGeneration != participant.AuthorityOwnerGeneration
-            || !string.Equals(canonical.StableType, wire.ActorType, StringComparison.Ordinal)
-            || !string.Equals(wire.RelocationReference, "pending", StringComparison.Ordinal)
-            || wire.RelocationChecksumCrc32c != 0
-            || wire.RelocationAggregateId != candidate.Envelope.AggregateId
-            || wire.RelocationAggregateGeneration != candidate.Envelope.AggregateGeneration
-            || wire.RelocationInventoryDigest.Length != 32
-            || wire.RelocationInventoryDigest.Any(static value => value != 0)
-            || !handoffMatches
-            || sourceNodeRid != sourceFence.NodeRid
-            || candidate.Envelope.AggregateId != candidate.Reference.AggregateId
-            || candidate.Envelope.AggregateGeneration != candidate.Reference.AggregateGeneration
-            || !referenceDigestIsSentinel
-                && !candidate.Envelope.InventoryDigest.Span.SequenceEqual(
-                    candidate.Reference.InventoryDigest.Span
-                )
-        )
-            throw RemoteJoinRecoveryMismatch(wire.ActorId, "participant or aggregate identity");
-    }
-
-    private static ZLinkFrameworkException RemoteJoinRecoveryMismatch(
-        string actorId,
-        string field,
-        Exception? error = null
-    ) =>
-        new(
-            ZLinkFrameworkErrorKind.DataLost,
-            $"Actor '{actorId}' canonical Join recovery mismatches its {field}.",
-            retryAdvice: ZLinkRetryAdvice.DoNotRetry,
-            innerException: error
-        );
-
-    // Kept as a small reconciliation primitive for protocol tests and
-    // same-process callers. Runtime startup and Actor activation no longer
-    // schedule this operation from durable completion state.
-    internal static async ValueTask RunDeferredJoinCompletionRecoveryAsync(
-        Func<CancellationToken, ValueTask> recover,
-        Action<Exception> report,
-        CancellationToken cancellationToken
-    )
-    {
-        ArgumentNullException.ThrowIfNull(recover);
-        ArgumentNullException.ThrowIfNull(report);
-        await ZLinkReconciliationRunner
-            .RunAsync(
-                recover,
-                report,
-                cancellationToken,
-                static exception =>
-                    exception is OperationCanceledException
-                    || exception is ZLinkRelocationDataLostException
-                    || exception
-                        is ZLinkFrameworkException { RetryAdvice: ZLinkRetryAdvice.DoNotRetry }
-            )
-            .ConfigureAwait(false);
-    }
-
-    internal async ValueTask RecoverPublishedRelocationsAsync(CancellationToken cancellationToken)
-    {
-        if (
-            Registration.Locations.ResolveStore() is not { } locationStore
-            || Registration.Locations.ResolveRelocationStore() is not { } relocationStore
-        )
-            return;
-        await new ZLinkRelocationStartupRecovery(locationStore, relocationStore)
-            .RecoverAsync(
-                async (candidate, token) =>
-                {
-                    if (
-                        candidate.Authorities.Any(static entry =>
-                            entry.Snapshot.Allocation.ObjectKind
-                                is ZLinkPlacementObjectKind.UserSpot
-                                    or ZLinkPlacementObjectKind.InstanceSpot
-                        )
-                    )
-                    {
-                        if (
-                            Services.GetService(typeof(ZLinkSpotRetireTargetRuntime))
-                            is ZLinkSpotRetireTargetRuntime spotRecovery
-                        )
-                            await spotRecovery
-                                .RecoverPublishedAsync(candidate, token)
-                                .ConfigureAwait(false);
-                        return;
-                    }
-                    var actorAuthority = candidate.Authorities.SingleOrDefault(static entry =>
-                        entry.Snapshot.Allocation.ObjectKind == ZLinkPlacementObjectKind.Actor
-                    );
-                    if (actorAuthority is null)
-                        return; // User Spot aggregate recovery is owned by its target bridge.
-                    if (candidate.Authorities.Count != 1)
-                        throw new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.DataLost,
-                            "Standalone Actor relocation root contains another authority.",
-                            retryAdvice: ZLinkRetryAdvice.DoNotRetry
-                        );
-                    if (ZLinkStandaloneActorRelocationRuntime.OwnsRecovery(candidate))
-                    {
-                        await _standaloneActorRelocationRuntime
-                            .RecoverPublishedAsync(candidate, token)
-                            .ConfigureAwait(false);
-                        await RecoverCanonicalRemoteJoinCompletionAsync(candidate, token)
-                            .ConfigureAwait(false);
-                        return;
-                    }
-                    if (
-                        !ZLinkRelocationAuthorityPayloadCodec.TryDecode(
-                            actorAuthority.Snapshot.Payload.Span,
-                            out var publication
-                        )
-                        || !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
-                            publication.ApplicationPayload.Span,
-                            out var actorPayload
-                        )
-                    )
-                        throw new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.DataLost,
-                            $"Actor authority '{actorAuthority.Key.Value}' has an invalid relocation payload.",
-                            retryAdvice: ZLinkRetryAdvice.DoNotRetry
-                        );
-                    var state = _state;
-                    var localNode = state is null
-                        ? null
-                        : AwaitStateLane(
-                            state.RunStateAsync(() =>
-                                state.SpotNodes.Values.SingleOrDefault(node =>
-                                    node.Node.RoutingId == actorPayload.NodeRid
-                                )
-                            )
-                        );
-                    if (
-                        localNode is null
-                        || actorPayload.NodeGeneration
-                            != localNode.Node.MeshStatus().LifecycleGeneration
-                    )
-                        return;
-
-                    var templateParticipant = candidate.Envelope.Participants.Single();
-                    ZLinkActorRelocationRecoveryRecord recovery;
-                    try
-                    {
-                        recovery =
-                            System.Text.Json.JsonSerializer.Deserialize<ZLinkActorRelocationRecoveryRecord>(
-                                templateParticipant.RecoveryPayload.Span
-                            ) ?? throw new System.Text.Json.JsonException();
-                    }
-                    catch (Exception error)
-                        when (error is System.Text.Json.JsonException or NotSupportedException)
-                    {
-                        throw new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.DataLost,
-                            "Actor relocation recovery metadata is malformed.",
-                            retryAdvice: ZLinkRetryAdvice.DoNotRetry,
-                            error
-                        );
-                    }
-                    var wire = recovery.Request with
-                    {
-                        RelocationReference = candidate.Reference.Reference,
-                        RelocationChecksumCrc32c = candidate.Reference.ChecksumCrc32c,
-                        RelocationAggregateId = candidate.Reference.AggregateId,
-                        RelocationAggregateGeneration = candidate.Reference.AggregateGeneration,
-                        RelocationInventoryDigest = candidate.Reference.InventoryDigest.ToArray(),
-                        HandoffFrames = [],
-                    };
-                    if (
-                        !recovery
-                            .TargetNodeRid.AsSpan()
-                            .SequenceEqual(actorPayload.NodeRid.ToBytes())
-                        || recovery.TargetNodeGeneration != actorPayload.NodeGeneration
-                        || recovery.TargetSpotGeneration != actorPayload.CurrentSpotGeneration
-                        || recovery.TargetAuthorityOwnerGeneration
-                            != actorAuthority.Snapshot.AuthorityOwnerGeneration
-                    )
-                        throw new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.DataLost,
-                            $"Actor '{wire.ActorId}' durable target fence does not match its published authority.",
-                            retryAdvice: ZLinkRetryAdvice.DoNotRetry
-                        );
-                    ZLinkActorRelocationRegistry.TryResolve(
-                        Registration,
-                        wire.ActorType,
-                        actorPayload.NodeRid,
-                        out var recoveredRelocation
-                    );
-                    if (recoveredRelocation is null)
-                        throw new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.Rejected,
-                            $"Actor type '{wire.ActorType}' relocation policy is not registered on the recovery target."
-                        );
-                    await _actorHandoffAdmissions
-                        .RegisterRecoveredReservationAsync(
-                            wire,
-                            recovery.TargetSpotId,
-                            DateTimeOffset.UtcNow + Registration.DefaultRequestTimeout
-                        )
-                        .ConfigureAwait(false);
-                    await JoinRoutedActorAsync(recovery.TargetSpotId, wire, token)
-                        .ConfigureAwait(false);
-                    await CompleteRoutedActorHandoffAsync(
-                            recovery.TargetSpotId,
-                            new ZLinkRemoteActorHandoffCompletionRequest(
-                                wire.ActorId,
-                                wire.HandoffId,
-                                wire.SourceSpotId,
-                                wire.SourceNodeRid,
-                                recovery.TargetSpotId,
-                                [],
-                                recovery.OperationIdHigh,
-                                recovery.OperationIdLow,
-                                recovery.ReplyContentType,
-                                recovery.Reply,
-                                wire.BoundSessionNodeRid,
-                                wire.BoundSessionRid,
-                                wire.BoundSessionBindingToken,
-                                wire.BoundSessionBindingGeneration,
-                                wire.BoundSessionObjectGeneration,
-                                wire.BoundSessionAuthorityOwnerGeneration,
-                                wire.BoundSessionMeshName,
-                                wire.BoundSessionTargetNodeGeneration,
-                                wire.BoundSessionOwnerLeaseGeneration,
-                                wire.BoundSessionOwnerNodeGeneration,
-                                wire.BoundSessionAcceptedHighWater,
-                                wire.BoundSessionSessionOwnerId,
-                                wire.BoundSessionSessionOwnerLeaseGeneration
-                            ),
-                            token
-                        )
-                        .ConfigureAwait(false);
-                },
-                async (entry, token) =>
-                {
-                    if (entry.Snapshot.Allocation.ObjectKind != ZLinkPlacementObjectKind.Actor)
-                        return;
-                    if (
-                        !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                            entry.Snapshot.Payload.Span,
-                            out var preparing
-                        )
-                        || preparing.Phase != 1
-                        || !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
-                            entry.Snapshot.Payload.Span,
-                            out var actorPayload
-                        )
-                    )
-                        throw new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.DataLost,
-                            $"Actor authority '{entry.Key.Value}' has an invalid Preparing marker.",
-                            retryAdvice: ZLinkRetryAdvice.DoNotRetry
-                        );
-                    var recoveryFence = new ZLinkStandaloneActorRelocationTakeoverCoordinator(
-                        this,
-                        Registration
-                    );
-                    if (
-                        await recoveryFence
-                            .HasLiveRemoteRecoveryOwnerAsync(
-                                preparing,
-                                actorPayload.MeshName,
-                                token
-                            )
-                            .ConfigureAwait(false)
-                    )
-                        return;
-                    await new ZLinkStandaloneActorRelocationPrecommitCoordinator(locationStore)
-                        .AbortPreparingAsync(
-                            entry.Key,
-                            DecodeCanonicalRelocationId(preparing),
-                            token
-                        )
-                        .ConfigureAwait(false);
-                },
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-    }
-
-    private static Guid DecodeCanonicalRelocationId(
-        ZLinkCanonicalRelocationAuthorityProjection projection
-    )
-    {
-        Span<byte> bytes = stackalloc byte[16];
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(
-            bytes[..8],
-            projection.RelocationHigh
-        );
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(
-            bytes[8..],
-            projection.RelocationLow
-        );
-        return new Guid(bytes, bigEndian: true);
     }
 
     private async ValueTask RollbackPreparedTransferredActorAsync(
@@ -5250,8 +4654,9 @@ internal sealed partial class ZLinkFrameworkRuntime
     )
     {
         var delivery = await _actorBoundSessionCoordinator
-            .AdmitRemoteSessionFrameAsync(identity, frame, sourceNodeRid, cancellationToken)
+            .AdmitRemoteSessionFrameAsync(identity, frame, cancellationToken)
             .ConfigureAwait(false);
+        TraceRejectedSessionPush(identity, delivery);
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"session_push_delivery_result actor={identity.ActorId} "
                 + $"result={delivery} source_node={sourceNodeRid}"
@@ -5265,16 +4670,41 @@ internal sealed partial class ZLinkFrameworkRuntime
     )
     {
         var delivery = await _actorBoundSessionCoordinator
-            .AdmitRemoteSessionFrameOneWayAsync(
-                identity,
-                identity.Frame,
-                sourceNodeRid,
-                cancellationToken
-            )
+            .AdmitRemoteSessionFrameOneWayAsync(identity, identity.Frame, cancellationToken)
             .ConfigureAwait(false);
+        TraceRejectedSessionPush(identity, delivery);
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"session_push_one_way_admission actor={identity.ActorId} "
                 + $"result={delivery} source_node={sourceNodeRid}"
+        );
+    }
+
+    // 04-session/02-session-actor-binding §3 item 4: a push the Session owner
+    // does not admit is recorded with the closed flow vocabulary.
+    private void TraceRejectedSessionPush(
+        ZLinkRemoteSessionPushRelay identity,
+        ZLinkActorBoundSessionCoordinator.RemotePushDelivery delivery
+    )
+    {
+        if (
+            delivery
+                is not (
+                    ZLinkActorBoundSessionCoordinator.RemotePushDelivery.NoBinding
+                    or ZLinkActorBoundSessionCoordinator.RemotePushDelivery.WrongSession
+                )
+            || !Flow.CaptureEnabled
+        )
+            return;
+        Flow.TraceDispatchError(
+            new ZLinkDispatchFailure(
+                ZLinkDispatchErrorSurface.StreamSession,
+                ZLinkDispatchMessageKind.Send,
+                ZLinkDispatchErrorReason.StaleTarget,
+                ZLinkDispatchErrorAction.Drop,
+                null,
+                ActorId: identity.ActorId,
+                StreamSessionId: identity.SessionRid
+            )
         );
     }
 
@@ -5340,18 +4770,10 @@ internal sealed partial class ZLinkFrameworkRuntime
         byte[] frame
     )
     {
+        // 04-session/02-session-actor-binding §3 item 3: the registered binding
+        // is the only send condition; the Session owner judges currency.
         var nodeRuntime = GetMeshNodeRuntime(session.MeshName.Value);
-        var actorRef =
-            GetOrCreateActorState(actorId).NativeActorRef
-            ?? throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
-                $"Actor '{actorId}' session route has no local Actor ref."
-            );
-        if (actorRef.Generation != session.ObjectGeneration)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.InvalidOperation,
-                $"Actor '{actorId}' session route ObjectGeneration is stale."
-            );
+        var actorNodeRid = nodeRuntime.Node.RoutingId;
         var sessionNodeRid =
             session.SessionNodeRid
             ?? throw new ZLinkFrameworkException(
@@ -5362,7 +4784,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             actorId,
             session.ObjectGeneration,
             session.MeshName.Value,
-            actorRef.NodeRid.ToHex(),
+            actorNodeRid.ToHex(),
             session.TargetNodeGeneration,
             session.AuthorityOwnerGeneration,
             session.OwnerLeaseGeneration,
@@ -5383,12 +4805,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             typeof(ZLinkRemoteSessionPushRelay),
             Registration.Codecs
         );
-        return new RemoteSessionPushSubmission(
-            nodeRuntime,
-            actorRef.NodeRid,
-            sessionNodeRid,
-            parts
-        );
+        return new RemoteSessionPushSubmission(nodeRuntime, actorNodeRid, sessionNodeRid, parts);
     }
 
     private readonly record struct RemoteSessionPushSubmission(

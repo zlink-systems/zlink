@@ -103,7 +103,7 @@
         <Compile Include="Runtime/DurableAuthorityGoldenConformanceTests.cs"/>
         <Compile Include="Runtime/AuthorityRelocationStateGoldenConformanceTests.cs"/>
         <Compile Include="Runtime/DeferredActorJoinContractTests.cs"/>
-        <Compile Include="Runtime/DeferredActorJoinDurabilityTests.cs"/>
+        <Compile Include="Runtime/ActorRelocationCompletionOrderingTests.cs"/>
         <Compile Include="Runtime/DirectReplyCompletionRegistryTests.cs"/>
         <Compile Include="Runtime/DescriptorOwnerLeaseSelectionTests.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.cs"/>

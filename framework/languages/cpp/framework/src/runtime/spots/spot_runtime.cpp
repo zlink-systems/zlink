@@ -2486,6 +2486,10 @@ void spot_context_state_t::run_serial_task_async (
                         settle (final_result);
                     };
                     if (turn && turn->released ()) {
+                        // After a Yield the continuation turn ends only a queue
+                        // turn; the callback terminal settles deferred work here.
+                        if (!value)
+                            turn->cancel_deferred ();
                         finish ();
                     } else {
                         complete (std::move (finish));
@@ -4250,6 +4254,10 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                                 return;
                             }
                             if (turn && turn->released ()) {
+                                // A handler that failed after its Yield discards the
+                                // work it deferred (handler turn §5).
+                                if (!result)
+                                    turn->cancel_deferred ();
                                 // Yield already completed the inner SpotWide turn. The
                                 // preclaimed mesh path is still nested in its Actor turn,
                                 // so route terminal settlement through the wrapper that

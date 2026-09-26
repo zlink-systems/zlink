@@ -1061,7 +1061,7 @@ test('old route disconnect after relocation terminal permits a late same-seal re
   // seal -> apply(commit) -> terminal: the seal reaches the bounded terminal
   // retention (spec 48 §137) that a late same-seal relay is meant to find.
   await bindings.sealRelocation(claim, fence);
-  await bindings.applyRelocation('actor-reconnect', 'seal-1', 'fingerprint-1', 'commit', async () => {});
+  await bindings.applyRelocation('actor-reconnect', 'seal-1', 'fingerprint-1', async () => {});
   await bindings.observeRelocationTerminal('actor-reconnect', 'seal-1', 'fingerprint-1');
   assert.equal((await bindings.relocationSnapshot('actor-reconnect', 'seal-1'))?.phase, 'terminal');
 

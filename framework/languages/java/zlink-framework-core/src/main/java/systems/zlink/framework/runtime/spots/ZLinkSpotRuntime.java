@@ -64,7 +64,6 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkObjectConflict;
 import systems.zlink.framework.runtime.internal.locations.ZLinkObjectReservationRequest;
 import systems.zlink.framework.runtime.internal.locations.ZLinkObjectReserved;
 import systems.zlink.framework.runtime.internal.locations.ZLinkObjectTypeMismatch;
-import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityExhausted;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkMeshMessageMetrics;
@@ -829,29 +828,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                 .ZLinkUserSpotOperationException(
                                                 107, 33, "User Spot authority kind is stale"));
                             }
-                            if (authority.state()
-                                            != systems.zlink.framework.runtime.locations
-                                                    .ZLinkServiceAuthorityPayloadCodec.State.READY
-                                    || snapshot.allocation().state()
-                                            != ZLinkPlacementAllocationState.ACTIVE) {
-                                return CompletableFuture.failedFuture(
-                                        new systems.zlink.framework.runtime.internal.backend
-                                                .ZLinkUserSpotOperationException(
-                                                107, 34, "User Spot is moving"));
-                            }
-                            if (snapshot.objectGeneration() != spot.objectGeneration()) {
-                                return CompletableFuture.failedFuture(
-                                        new systems.zlink.framework.runtime.internal.backend
-                                                .ZLinkUserSpotOperationException(
-                                                107, 33, "User Spot generation is stale"));
-                            }
-                            if (!authority.meshName().equals(spot.meshName())
-                                    || !authority.nodeRid().equals(spot.nodeRid())) {
-                                return CompletableFuture.failedFuture(
-                                        new systems.zlink.framework.runtime.internal.backend
-                                                .ZLinkUserSpotOperationException(
-                                                107, 34, "User Spot is moving"));
-                            }
+                            //  Design principles "제어 결정과 요청 수락의 소유", Spot address
+                            //  messaging §7.1: the requester only selects the current owner
+                            //  route; the target owner alone judges the fenced Close.
                             ZLinkInternalMeshNode source =
                                     routeMeshNodesByName.get(authority.meshName());
                             if (source == null) {

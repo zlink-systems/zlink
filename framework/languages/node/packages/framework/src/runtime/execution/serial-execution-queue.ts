@@ -138,20 +138,6 @@ export class ZLinkSerialExecutionQueue {
     return this.admit(operation, options, context);
   }
 
-  snapshot(): {
-    readonly applicationMessages: number;
-    readonly applicationBytes: number;
-    readonly lifecycleMessages: number;
-    readonly lifecycleBytes: number;
-  } {
-    return {
-      applicationMessages: this.application.records.length,
-      applicationBytes: 0,
-      lifecycleMessages: this.lifecycle.records.length,
-      lifecycleBytes: 0
-    };
-  }
-
   get hasPendingWork(): boolean {
     return (
       this.draining || this.application.records.length > 0 || this.lifecycle.records.length > 0

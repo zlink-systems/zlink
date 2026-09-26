@@ -55,8 +55,8 @@ export class ZLinkSessionSerialExecutor {
     }
     const boundWork = bindApplicationJobPermit(work);
     return hasApplicationJobPermit()
-      ? this.scheduler.submitPreAdmitted(boundWork, { lane: 'lifecycle' })
-      : this.scheduler.submit(boundWork, { lane: 'lifecycle' });
+      ? this.scheduler.submitPreAdmitted(boundWork, { lane: 'application' })
+      : this.scheduler.submit(boundWork, { lane: 'application' });
   }
 
   private submit(

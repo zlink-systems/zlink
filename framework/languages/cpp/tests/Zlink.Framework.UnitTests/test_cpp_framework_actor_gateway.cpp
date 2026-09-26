@@ -3964,8 +3964,8 @@ int rebound_session_keeps_prior_ingress_exact_fence ()
         || rebound.binding_generation == first.binding_generation) {
         return 3;
     }
-    const auto seal = sessions.seal_remote_route (connection.connection_id,
-                                                  rebound.binding_generation, actor, 11, 13);
+    const auto seal = sessions.seal_remote_route (
+      connection.connection_id, rebound.binding_generation, actor.key, actor.object_generation);
     if (seal.error != stateful_error_t::backpressured
         || sessions.remote_route_seal_ready (seal.barrier)) {
         return 4;
@@ -4001,13 +4001,11 @@ int reconnect_binding_publish_holds_new_route_push ()
 
     std::atomic_int settled{0};
     std::atomic_bool delivered{false};
-    const stream_remote_tenure_t new_tenure{
-      actor.key, actor.object_generation,       actor.authority_owner_generation, actor.node_id, 13,
-      17,        new_binding.binding_generation};
-    const auto held = sessions.admit_outbound (new_tenure, std::nullopt, [&] (bool accepted) {
-        delivered.store (accepted, std::memory_order_release);
-        settled.fetch_add (1, std::memory_order_acq_rel);
-    });
+    const auto held = sessions.admit_outbound (
+      actor.key, actor.object_generation, new_binding.binding_generation, [&] (bool accepted) {
+          delivered.store (accepted, std::memory_order_release);
+          settled.fetch_add (1, std::memory_order_acq_rel);
+      });
     if (held.error != stateful_error_t::none
         || held.kind != stream_outbound_admission_kind_t::retained
         || settled.load (std::memory_order_acquire) != 0)
@@ -4022,10 +4020,10 @@ int reconnect_binding_publish_holds_new_route_push ()
         || !delivered.load (std::memory_order_acquire))
         return 5;
 
-    const stream_remote_tenure_t stale_tenure{
-      actor.key, actor.object_generation,       actor.authority_owner_generation, actor.node_id, 13,
-      17,        old_binding.binding_generation};
-    return sessions.admit_outbound (stale_tenure, std::nullopt, [] (bool) {}).error
+    return sessions
+                 .admit_outbound (actor.key, actor.object_generation,
+                                  old_binding.binding_generation, [] (bool) {})
+                 .error
                == stateful_error_t::conflict
              ? 0
              : 6;

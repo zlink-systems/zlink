@@ -1470,40 +1470,24 @@ final class ZLinkJavaRawMeshNode
                                         peerRoutingId, peer.connectionId(), isReadyPeer(peer)));
     }
 
-    @Override
-    public boolean canRequestCanonicalActorJoin(
-            ZLinkInternalMeshNode.CanonicalActorJoinRequest request) {
+    boolean canRequestCanonicalActorJoin(ZLinkInternalMeshNode.CanonicalActorJoinRequest request) {
         Objects.requireNonNull(request, "request");
         if (!hasCompleteCanonicalActorJoinFence(request)) {
             return false;
         }
         Optional<ZLinkServiceTopologyRegistry.Peer> peer =
                 topology == null ? Optional.empty() : topology.peer(request.targetNodeRid());
-        if (peer.isEmpty()
-                || !isReadyPeer(peer.orElseThrow())
-                || peer.orElseThrow().descriptor().lifecycleGeneration()
-                        != request.targetNodeGeneration()
-                || !peer.orElseThrow()
+        // Route selection only. The receiving Spot owner alone checks the Spot
+        // authority and lease fence carried by command 28 (design principles
+        // "제어 결정과 요청 수락의 소유", Actor membership §4).
+        return peer.isPresent()
+                && isReadyPeer(peer.orElseThrow())
+                && peer.orElseThrow().descriptor().lifecycleGeneration()
+                        == request.targetNodeGeneration()
+                && peer.orElseThrow()
                         .descriptor()
                         .protocolCapabilities()
-                        .contains(ServiceWireConstants.REQUIRED_CAPABILITY)) {
-            return false;
-        }
-        // The caller's Location resolver supplied this exact route fence.
-        // Require it to still be the observed route remembered by the raw
-        // Spot boundary; capability alone must not promote an unobserved
-        // target into canonical command 28.
-        ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) spotNode();
-        return spots.spotAuthorityOwnerGeneration(
-                                request.targetNodeRid(),
-                                request.targetSpotId(),
-                                request.targetSpotGeneration())
-                        == request.targetAuthorityOwnerGeneration()
-                && spots.spotAuthorityOwnerLeaseGeneration(
-                                request.targetNodeRid(),
-                                request.targetSpotId(),
-                                request.targetSpotGeneration())
-                        == request.targetOwnerLeaseGeneration();
+                        .contains(ServiceWireConstants.REQUIRED_CAPABILITY);
     }
 
     @Override

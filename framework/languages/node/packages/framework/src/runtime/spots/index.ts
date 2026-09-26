@@ -72,7 +72,7 @@ import { ZLinkWorkerRuntime } from '../workers';
 import {
   type ZLinkActorHandoffPrefixAdmission,
   type ZLinkActorHandoffPrefixRecord,
-  type ZLinkDeferredJoinAcceptedRoot,
+  type ZLinkDeferredJoinCompletion,
   type ZLinkRemoteBoundSessionTarget
 } from '../actors';
 import type { ZLinkLocationLifecycle } from '../locations';
@@ -2027,7 +2027,7 @@ export class DefaultZLinkSpotManager {
     let ownedCallbackRequest: Message | undefined;
     let materialized = false;
     let reply: Message | undefined;
-    let deferredJoinRoot: ZLinkDeferredJoinAcceptedRoot | undefined;
+    let deferredJoinCompletion: ZLinkDeferredJoinCompletion | undefined;
     let preparedTransferState: Message | undefined;
     let admissionOutcome: ZLinkFormalRemoteActorAdmissionResult | undefined;
     let accepted = false;
@@ -2176,8 +2176,8 @@ export class DefaultZLinkSpotManager {
                 transferRequest.completionOperationId !== undefined &&
                 this.options.actorTransferRuntime !== undefined
               ) {
-                deferredJoinRoot =
-                  await this.options.actorTransferRuntime.prepareDeferredJoinAccepted(
+                deferredJoinCompletion =
+                  this.options.actorTransferRuntime.prepareDeferredJoinAccepted(
                     actorId,
                     transferRequest.completionOperationId,
                     actorRef,
@@ -2187,7 +2187,7 @@ export class DefaultZLinkSpotManager {
               admissionOutcome = {
                 accepted: this.options.dispatchEntryActorJoin !== undefined,
                 actorRef,
-                ...(deferredJoinRoot === undefined ? {} : { deferredJoinRoot })
+                ...(deferredJoinCompletion === undefined ? {} : { deferredJoinCompletion })
               };
             } else if (activation === undefined) {
               admissionOutcome = { accepted: false, actorRef };
@@ -2220,8 +2220,8 @@ export class DefaultZLinkSpotManager {
                   transferRequest.completionOperationId !== undefined &&
                   this.options.actorTransferRuntime !== undefined
                 ) {
-                  deferredJoinRoot =
-                    await this.options.actorTransferRuntime.prepareDeferredJoinAccepted(
+                  deferredJoinCompletion =
+                    this.options.actorTransferRuntime.prepareDeferredJoinAccepted(
                       actorId,
                       transferRequest.completionOperationId,
                       actorRef,
@@ -2240,7 +2240,7 @@ export class DefaultZLinkSpotManager {
                 admissionOutcome = {
                   accepted: response.accepted,
                   actorRef,
-                  ...(deferredJoinRoot === undefined ? {} : { deferredJoinRoot }),
+                  ...(deferredJoinCompletion === undefined ? {} : { deferredJoinCompletion }),
                   ...(encodedReply === undefined
                     ? {}
                     : {
@@ -2277,7 +2277,7 @@ export class DefaultZLinkSpotManager {
         if ('error' in admissionOutcome) {
           throw admissionOutcome.error;
         }
-        deferredJoinRoot = admissionOutcome.deferredJoinRoot;
+        deferredJoinCompletion = admissionOutcome.deferredJoinCompletion;
       }
       if (
         actor === undefined &&
@@ -2361,7 +2361,7 @@ export class DefaultZLinkSpotManager {
           transferRequest?.completionOperationId !== undefined &&
           this.options.actorTransferRuntime !== undefined
         ) {
-          deferredJoinRoot = await this.options.actorTransferRuntime.prepareDeferredJoinAccepted(
+          deferredJoinCompletion = this.options.actorTransferRuntime.prepareDeferredJoinAccepted(
             actorId,
             transferRequest.completionOperationId,
             actorRef,
@@ -2433,7 +2433,7 @@ export class DefaultZLinkSpotManager {
         // A lightweight Core actor-join notification can create the Actor
         // before the formal transfer request reaches this branch. Preserve
         // the full relocation fence in that race so a later Session bind
-        // refresh cannot erase the seal or accepted journal.
+        // refresh cannot erase the seal.
         this.options.actorTransferRuntime.rememberRoutedActorTransferTarget(
           actorId,
           transferRequest.remoteBoundSessionTarget
@@ -2451,7 +2451,7 @@ export class DefaultZLinkSpotManager {
           spotId,
           transferId: transferRequest.transferId,
           handoffBacklog: transferRequest.handoffBacklog,
-          deferredJoinRoot
+          deferredJoinCompletion
         });
         if (isRemoteCommit && admissionRecord !== undefined) {
           this.formalRemoteActorAdmissions.markCommitted(transferRequest.transferId, actor);
@@ -2558,9 +2558,6 @@ export class DefaultZLinkSpotManager {
       if (control.canonicalActorJoin !== undefined) {
         this.formalRemoteActorAdmissions.fail(control.canonicalActorJoin.handoffId, error);
       }
-      if (deferredJoinRoot !== undefined && targetCommitPublished !== true) {
-        await this.options.actorTransferRuntime?.discardDeferredJoinAccepted(deferredJoinRoot);
-      }
       if (targetCommitPublished !== true) {
         this.formalRemoteTransfers.delete(actorId);
       }
@@ -2664,8 +2661,8 @@ export class DefaultZLinkSpotManager {
           await activation.spot.onJoinedActor(actor);
         };
         const completePublicJoin = async (): Promise<void> => {
-          const deferredJoinRoot = pendingTransfer?.deferredJoinRoot;
-          if (deferredJoinRoot !== undefined) {
+          const deferredJoinCompletion = pendingTransfer?.deferredJoinCompletion;
+          if (deferredJoinCompletion !== undefined) {
             const currentRef =
               this.options.actorTransferRuntime === undefined
                 ? null
@@ -2675,8 +2672,8 @@ export class DefaultZLinkSpotManager {
                 `Actor '${actor.context.actorId}' has no target ref for deferred Join completion.`
               );
             }
-            await this.options.actorTransferRuntime?.commitAndDeliverDeferredJoinAccepted(
-              deferredJoinRoot,
+            await this.options.actorTransferRuntime?.deliverDeferredJoinAccepted(
+              deferredJoinCompletion,
               actor,
               currentRef,
               (operation) =>
@@ -2842,7 +2839,10 @@ export class DefaultZLinkSpotManager {
       await activation.serial.execute(() => activation.spot.onJoinedActor(actor));
     }
     await submitSourceLeave(admission.admission.actorRef.nodeRid);
-    if (outcome.deferredJoinRoot !== undefined && this.options.actorTransferRuntime !== undefined) {
+    if (
+      outcome.deferredJoinCompletion !== undefined &&
+      this.options.actorTransferRuntime !== undefined
+    ) {
       const submitMailbox = targetsEntry
         ? <T>(operation: () => Promise<T>): Promise<T> => operation()
         : <T>(operation: () => Promise<T>): Promise<T> => {
@@ -2852,8 +2852,8 @@ export class DefaultZLinkSpotManager {
             }
             return activation.executeActor(actor.context.actorId, operation);
           };
-      await this.options.actorTransferRuntime.commitAndDeliverDeferredJoinAccepted(
-        outcome.deferredJoinRoot,
+      await this.options.actorTransferRuntime.deliverDeferredJoinAccepted(
+        outcome.deferredJoinCompletion,
         actor,
         actorRef,
         submitMailbox,
@@ -2866,9 +2866,8 @@ export class DefaultZLinkSpotManager {
 
   async restoreCanonicalActorJoinRecovery(
     recovery: CanonicalActorJoinRecovery,
-    signal?: AbortSignal,
-    canonicalInventoryDigest?: string
-  ): Promise<ZLinkDeferredJoinAcceptedRoot | undefined> {
+    signal?: AbortSignal
+  ): Promise<void> {
     throwIfAborted(signal);
     const admission = this.formalRemoteActorAdmissions.get(recovery.request.handoffId);
     if (admission === undefined) {
@@ -2930,24 +2929,24 @@ export class DefaultZLinkSpotManager {
     }
     // Command 28 carries a present reply in one outer framework-multipart
     // part. The accepted target admission still owns the inner typed content
-    // type, which the durable completion must retain for application decode.
+    // type, which the process-local completion keeps for application decode.
     const admittedContentType =
       admittedReply.byteLength === 0 ? recovery.replyContentType : outcome.replyContentType;
     const transfer = this.options.actorTransferRuntime;
     if (transfer === undefined) {
       throw new Error('Canonical Actor Join recovery requires the Actor transfer runtime.');
     }
-    const deferred = await transfer.prepareDeferredJoinAccepted(
+    const deferred = transfer.prepareDeferredJoinAccepted(
       recovery.request.actorId,
       recovery.operationId,
       admitted.actorRef,
       recovery.reply,
-      admittedContentType,
-      signal,
-      canonicalInventoryDigest
+      admittedContentType
     );
-    this.formalRemoteActorAdmissions.attachDeferredJoinRoot(recovery.request.handoffId, deferred);
-    return deferred;
+    this.formalRemoteActorAdmissions.attachDeferredJoinCompletion(
+      recovery.request.handoffId,
+      deferred
+    );
   }
 
   private encodeMeshActorReply(
