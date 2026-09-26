@@ -2,6 +2,7 @@
 #pragma once
 
 #include "actor_transfer_coordinator.hpp"
+#include "activation_admission.hpp"
 #include "runtime/actors/actor_serial_executor.hpp"
 #include "runtime/protocol/actor_join_recovery_codec.hpp"
 #include "runtime/channels/channel_runtime.hpp"
@@ -108,6 +109,9 @@ class spot_node_builder_state_t
     };
     std::map<std::string, pending_spot_creation_t> pending_spot_creations_by_id;
     std::uint64_t next_pending_spot_creation_reservation = 1;
+    // MeshNode §5.1: this MeshNode's one activation admission record.
+    std::shared_ptr<activation_admission_t> activation_admission =
+      std::make_shared<activation_admission_t> ();
     std::weak_ptr<service::mesh_node_t> native_node;
     std::function<task_t<spot_create_result_t> (bool,
                                                 std::optional<spot_id_t>,
@@ -2535,6 +2539,13 @@ class spot_node_runtime_t
                                  callback, std::addressof (actor));
     }
 
+    bool materialize_actor_relocation_state (
+      const runtime::stateful::frozen_object_state_t &frozen,
+      const runtime::stateful::object_ref_t &target,
+      const std::optional<runtime::stateful::object_ref_t> &target_spot,
+      std::stop_token cancellation);
+    void end_relocation_activation_admissions (
+      const std::vector<runtime::stateful::object_ref_t> &targets) noexcept;
     local_spot_create_result_t
     create_spot_context (std::string spot_name,
                          spot_id_t spot_id,

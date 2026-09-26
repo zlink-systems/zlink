@@ -89,6 +89,7 @@ import type {
   ZLinkSpotBoundSessionRuntime
 } from './spot-runtime-ports';
 import { createAbortError } from '../abort';
+import type { ZLinkActivationConcurrency } from '../activation-admission';
 import type { ServiceMessageFollowRecord } from '../foundation/service-stateful-wire-codec';
 import {
   ApplicationJobQueue,
@@ -132,10 +133,8 @@ export interface ZLinkSpotNodeRuntimeManagerOptions {
     record: ReceiveRecord
   ) => void | Promise<void>;
   readonly messageFollowReceiver?: (record: ServiceMessageFollowRecord) => void;
-  readonly instanceActivationConcurrencyProvider?: (meshName: string) => {
-    readonly active: number;
-    readonly limit: number;
-  };
+  /** MeshNode §5.1 activation admission record; the descriptor projects it for placement. */
+  readonly activationConcurrency?: (meshName: string) => ZLinkActivationConcurrency;
 }
 
 export class ZLinkSpotNodeRuntimeManager {
@@ -490,15 +489,9 @@ export class ZLinkSpotNodeRuntimeManager {
               };
             })
         },
-        activationConcurrency: {
-          active:
-            this.options.instanceActivationConcurrencyProvider?.(meshName).active ??
-            current?.activationConcurrency.active ??
-            0,
-          limit:
-            this.options.instanceActivationConcurrencyProvider?.(meshName).limit ??
-            registration.activationConcurrencyLimit ??
-            128
+        activationConcurrency: this.options.activationConcurrency?.(meshName) ?? {
+          active: 0,
+          limit: registration.activationConcurrencyLimit ?? 128
         },
         channelWeights: Object.fromEntries(
           this.serverChannels(meshName).map(([channelName, channel]) => [

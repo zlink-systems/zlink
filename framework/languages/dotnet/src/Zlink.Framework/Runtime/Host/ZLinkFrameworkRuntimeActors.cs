@@ -621,6 +621,9 @@ internal sealed partial class ZLinkFrameworkRuntime
         var ownsImport = false;
         var createdTransferredActor = false;
         var authorityCommitted = actorState.Handoff.IsAuthorityCommitted(request.HandoffId);
+        // A hosting handoff's Restore holds one activation admission on the target MeshNode
+        // until its authority commit or rejection (MeshNode §5.1).
+        Spots.ZLinkActivationConcurrencyAdmission.Lease? admission = null;
         try
         {
             if (!actorState.Handoff.IsKnown(request.HandoffId))
@@ -645,6 +648,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                 return await import.Preparation.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
             ownsImport = true;
+            admission = GetActorSpotNodeRuntime(stableType)
+                ?.ActivationAdmission.Acquire($"ACTOR '{request.ActorId}' handoff");
 
             await _actorSessionManager
                 .PrepareForTransferredActivationAsync(actorState, cancellationToken)
@@ -728,6 +733,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 committedAuthority.OwnerLeaseGeneration
             );
             authorityCommitted = true;
+            admission?.Release();
             var reply = ZLinkRemoteActorJoinPackets.CreateJoinReply(true, actorRef);
             var recovery = durable.Recovery;
             var completionRequest = new ZLinkRemoteActorHandoffCompletionRequest(
@@ -793,6 +799,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         }
         catch (Exception commitFailure)
         {
+            admission?.Release();
             if (authorityCommitted || actorState.Handoff.IsAuthorityCommitted(request.HandoffId))
                 throw;
 

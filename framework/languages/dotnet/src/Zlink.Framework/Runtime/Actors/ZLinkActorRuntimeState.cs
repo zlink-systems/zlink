@@ -97,6 +97,9 @@ internal sealed class ZLinkActorRuntimeState(
 
     public IZLinkActor? Actor { get; private set; }
 
+    /// <summary>MeshNode that activated this Actor in the current process.</summary>
+    internal string? MeshName => Activation?.MeshName ?? Context?.MeshName;
+
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 
@@ -1430,7 +1433,7 @@ internal sealed class ZLinkActorRuntimeState(
     {
         if (Actor is null || Volatile.Read(ref _actorMetricActive) != 0)
             return;
-        var meshName = Activation?.MeshName ?? Context?.MeshName;
+        var meshName = MeshName;
         if (string.IsNullOrWhiteSpace(meshName))
             return;
         if (Interlocked.CompareExchange(ref _actorMetricActive, 1, 0) != 0)

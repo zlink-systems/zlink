@@ -145,6 +145,7 @@ import type {
   ZLinkSpotBoundSessionRuntime
 } from './spot-runtime-ports';
 import type { ZLinkRuntimeAdmissionGate } from '../admission';
+import type { ZLinkActivationAdmission } from '../activation-admission';
 import type { ZLinkDetachedTaskRunner } from './spot-actor-join-dispatch';
 import type { ZLinkLocalSpotCreateResult } from './spot-manager-internal-contracts';
 export type { ZLinkLocalSpotCreateResult } from './spot-manager-internal-contracts';
@@ -290,8 +291,7 @@ export interface ZLinkSpotManagerOptions {
   readonly metrics?: import('../diagnostics').ZLinkRuntimeMetrics;
   readonly admission?: ZLinkRuntimeAdmissionGate;
   readonly statefulExecutionAllowed?: () => boolean;
-  readonly activationConcurrencyLimitProvider?: (meshName: string) => number;
-  readonly onInstanceActivationConcurrencyChanged?: (meshName: string) => void;
+  readonly activationAdmission?: ZLinkActivationAdmission;
 }
 
 interface ZLinkTargetSpotCloseOperation {
@@ -499,14 +499,6 @@ export class DefaultZLinkSpotManager {
     return this.activations.list(meshName).length;
   }
 
-  instanceActivationConcurrency(meshName: string): {
-    readonly active: number;
-    readonly limit: number;
-  } {
-    const limit = this.options.activationConcurrencyLimitProvider?.(meshName) ?? 128;
-    return { active: this.instanceActivationGates.get(meshName)?.active ?? 0, limit };
-  }
-
   resolveRelocationActivation(
     meshName: string,
     spotId: RoutingId
@@ -577,7 +569,7 @@ export class DefaultZLinkSpotManager {
       await awaitWithAbort(existing, signal);
       return;
     }
-    const release = await this.acquireInstanceActivation(meshName, signal);
+    const release = await this.options.activationAdmission?.acquire(meshName, signal);
     try {
       await this.materializeInstanceCore(
         meshName,
@@ -588,7 +580,7 @@ export class DefaultZLinkSpotManager {
         signal
       );
     } finally {
-      release();
+      release?.();
     }
   }
 
@@ -719,73 +711,6 @@ export class DefaultZLinkSpotManager {
       await pending;
       return;
     }
-  }
-
-  private async acquireInstanceActivation(
-    meshName: string,
-    signal?: AbortSignal
-  ): Promise<() => void> {
-    let gate = this.instanceActivationGates.get(meshName);
-    if (gate === undefined) {
-      gate = {
-        meshName,
-        limit: this.options.activationConcurrencyLimitProvider?.(meshName) ?? 128,
-        active: 0,
-        waiters: [],
-        waiterHead: 0
-      };
-      this.instanceActivationGates.set(meshName, gate);
-    }
-    if (signal?.aborted === true) throw signal.reason;
-    if (gate.active < gate.limit) {
-      gate.active += 1;
-      this.options.onInstanceActivationConcurrencyChanged?.(meshName);
-      return () => this.releaseInstanceActivation(gate!);
-    }
-    return new Promise<() => void>((resolve, reject) => {
-      const waiter = { resolve, reject, signal, abort: undefined as (() => void) | undefined };
-      const slot = gate!.waiters.length;
-      waiter.abort = () => {
-        if (gate!.waiters[slot] === waiter) gate!.waiters[slot] = undefined;
-        reject(signal?.reason);
-      };
-      signal?.addEventListener('abort', waiter.abort, { once: true });
-      gate!.waiters.push(waiter);
-    });
-  }
-
-  private releaseInstanceActivation(gate: {
-    readonly meshName: string;
-    readonly limit: number;
-    active: number;
-    readonly waiters: Array<
-      | {
-          resolve: (release: () => void) => void;
-          reject: (error: unknown) => void;
-          signal?: AbortSignal;
-          abort?: () => void;
-        }
-      | undefined
-    >;
-    waiterHead: number;
-  }): void {
-    while (gate.waiterHead < gate.waiters.length) {
-      const waiter = gate.waiters[gate.waiterHead];
-      gate.waiters[gate.waiterHead] = undefined;
-      gate.waiterHead += 1;
-      if (gate.waiterHead >= gate.waiters.length) {
-        gate.waiters.length = 0;
-        gate.waiterHead = 0;
-      }
-      if (waiter === undefined) continue;
-      if (waiter.abort !== undefined) waiter.signal?.removeEventListener('abort', waiter.abort);
-      waiter.resolve(() => this.releaseInstanceActivation(gate));
-      return;
-    }
-    gate.waiters.length = 0;
-    gate.waiterHead = 0;
-    gate.active -= 1;
-    this.options.onInstanceActivationConcurrencyChanged?.(gate.meshName);
   }
 
   isInstanceMaterialized(meshName: string, instanceType: string, spotId: RoutingId): boolean {
@@ -1107,6 +1032,7 @@ export class DefaultZLinkSpotManager {
     throwIfAborted(args.signal);
     const operation = this.activations.getOrBegin(meshName, spotType, spotId, async () => {
       this.options.admission?.requireRequest('SPOT create', meshName);
+      const release = await this.options.activationAdmission?.acquire(meshName, args.signal);
       const ownedRequest =
         args.request === undefined
           ? RuntimeMessage.from(Buffer.alloc(0))
@@ -1122,6 +1048,7 @@ export class DefaultZLinkSpotManager {
         );
       } finally {
         ownedRequest.close();
+        release?.();
       }
     });
     return await awaitWithAbort(operation.ready, args.signal);

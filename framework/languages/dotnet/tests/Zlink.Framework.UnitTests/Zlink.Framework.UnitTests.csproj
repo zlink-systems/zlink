@@ -199,6 +199,7 @@
         <Compile Include="Runtime/RouteMeshReceiveFlowTests.cs"/>
         <Compile Include="Runtime/RouteMeshRuntimeServiceTests.cs"/>
         <Compile Include="Runtime/RuntimeConformanceFixtureTests.cs"/>
+        <Compile Include="Runtime/ActivationAdmissionRelocationRestoreTests.cs"/>
         <Compile Include="Runtime/RuntimeConcurrencyBoundaryTests.cs"/>
         <Compile Include="Runtime/RuntimeMetricsTests.cs"/>
         <Compile Include="Runtime/UnhandledDispatchPolicyTests.cs"/>

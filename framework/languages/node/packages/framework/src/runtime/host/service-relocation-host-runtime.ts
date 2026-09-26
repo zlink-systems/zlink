@@ -36,6 +36,7 @@ import type { ZLinkDomainLocationStore as ZLinkLocationStore } from '../location
 import type { ZLinkTrackedInstanceAuthority } from '../locations/spot-location-claims';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import type { ZLinkRuntimeEventPublisher, ZLinkRuntimeMetrics } from '../diagnostics';
+import type { ZLinkActivationAdmission } from '../activation-admission';
 import type { ZLinkFrameworkRegistration } from '../configuration';
 import type { ZLinkBackendMeshNode, ZLinkMeshCompletionTable } from '../backend';
 import { ReceiveKind, type ReceiveRecord } from '../foundation/service-runtime-contracts';
@@ -212,6 +213,7 @@ interface ZLinkHostRelocationOptions {
   readonly reconcileStatefulAuthorityRoutes?: (signal?: AbortSignal) => Promise<void>;
   readonly runtimeEventPublisher?: ZLinkRuntimeEventPublisher;
   readonly metrics?: ZLinkRuntimeMetrics;
+  readonly activationAdmission?: ZLinkActivationAdmission;
 }
 
 interface RelocationTargetRequirement {
@@ -243,6 +245,8 @@ interface LocalStage {
   readonly boundaryRelay: ServiceMaintenanceRelocationData[];
   fallback?: ReturnType<typeof setTimeout>;
   finalize?: Promise<void>;
+  /** The Restore's activation admission (MeshNode §5.1); held until target commit or abort. */
+  readonly releaseActivation: () => void;
 }
 
 interface TargetPayloadAssembly {
@@ -2733,6 +2737,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       request.nodeInternalBoundSessions
     );
     validatePrepareEnvelope(request, inventoryEnvelope);
+    const releaseActivation =
+      (await this.options.activationAdmission?.acquire(meshName, signal)) ?? (() => undefined);
     let materialized:
       (Pick<LocalStage, 'owner' | 'staging'> & { readonly target: LocalTargetPort }) | undefined;
     let reservation: TargetRelocationReservation | undefined;
@@ -2762,10 +2768,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         phase: 'ready',
         lane: Promise.resolve(),
         cutoverReceived: false,
-        boundaryRelay: []
+        boundaryRelay: [],
+        releaseActivation
       };
       this.targetStages.set(stagingId, stage);
     } catch (error) {
+      releaseActivation();
       if (reservation !== undefined) {
         await this.abortTargetReservation(reservation, signal).catch(() => undefined);
       }
@@ -2926,6 +2934,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         throw new Error(`Relocation '${stagingId}' target staging lost the authority settlement.`);
       }
       authorityCommitted = true;
+      stage.releaseActivation();
       resumeStartedAt = performance.now();
       stage.phase = 'committed';
       await stage.owner.normalize(stage.staging, authority, signal);
@@ -3773,6 +3782,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
 
   private async abortTargetStage(stage: LocalStage, signal?: AbortSignal): Promise<void> {
     if (stage.fallback !== undefined) clearTimeout(stage.fallback);
+    stage.releaseActivation();
     const failures: unknown[] = [];
     try {
       await this.abortTargetReservation(stage.offer.reservation, signal);

@@ -54,21 +54,30 @@ public record ZLinkMeshNodeMonitoringProjection(
                 Optional.empty());
     }
 
-    public ZLinkMeshNodeMonitoringProjection withActiveObjectCounts(
-            int activeActors, int activeSpots) {
+    /**
+     * Replaces the active counts and the activation concurrency with this process's records of the
+     * reporting MeshNode (runtime monitoring §5); the Store projection never supplies them.
+     */
+    public ZLinkMeshNodeMonitoringProjection withLocalActivationRecords(
+            int activeActors, int activeSpots, ZLinkActivationConcurrency activation) {
         if (activeActors < 0 || activeSpots < 0) {
             throw new IllegalArgumentException("active object counts must be non-negative");
         }
+        Objects.requireNonNull(activation, "activation");
         ZLinkPlacementCapacity capacity = objectCapacity;
         return new ZLinkMeshNodeMonitoringProjection(
                 descriptorRevision,
                 objectRole,
                 placementWeight,
                 new ZLinkPlacementCapacity(
-                        new ZLinkCapacityUsage(activeActors, 0, capacity.actors().limit()),
-                        new ZLinkCapacityUsage(activeSpots, 0, capacity.spots().limit()),
+                        new ZLinkCapacityUsage(
+                                activeActors,
+                                capacity.actors().reserved(),
+                                capacity.actors().limit()),
+                        new ZLinkCapacityUsage(
+                                activeSpots, capacity.spots().reserved(), capacity.spots().limit()),
                         capacity.spotTypes()),
-                activationConcurrency,
+                activation,
                 objectCapabilities,
                 placementReservationFailureCount,
                 lastPlacementReservationFailure);

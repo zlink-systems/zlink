@@ -155,7 +155,9 @@ public final class ZLinkUserSpotRetireRuntime {
             if (node == null || relocatableSpots.isEmpty() && relocatableActors.isEmpty()) {
                 continue;
             }
-            var staging = new ZLinkUserSpotAggregateStagingOwner(spots, adapters);
+            var staging =
+                    new ZLinkUserSpotAggregateStagingOwner(
+                            spots, adapters, registration.meshName());
             var peerClient = new ZLinkSessionRelocationPeerClient(node);
             var relocationReplyClient = ZLinkSpotRetireControl.client(node);
             var target =
@@ -201,7 +203,11 @@ public final class ZLinkUserSpotRetireRuntime {
                             relocationReplyClient,
                             locations,
                             new ZLinkStandaloneActorRelocationStagingOwner(
-                                    node.spotNode(), spots.actorSessions(), adapters, spots),
+                                    node.spotNode(),
+                                    spots.actorSessions(),
+                                    adapters,
+                                    spots,
+                                    registration.meshName()),
                             actorJoin);
             var relocationClient =
                     new ZLinkCanonicalRelocationStateMachine(

@@ -135,7 +135,6 @@ struct mesh_node_builder_state_t
     std::int32_t actor_limit = 0;
     std::int32_t spot_limit = 0;
     std::chrono::milliseconds instance_spot_idle_timeout{0};
-    std::int32_t activation_concurrency_limit = 128;
     std::map<std::string, mesh_channel_registration_t> channels;
     std::function<void (const std::string &)> channel_name_observer;
     route_handler_registry_t handlers;
@@ -483,7 +482,11 @@ class mesh_node_runtime_t
     void set_placement_weight (int weight);
     std::int32_t actor_limit () const;
     std::int32_t spot_limit () const;
-    std::int32_t activation_concurrency_limit () const;
+    /* Actors and Spots activated on this MeshNode in this process (runtime monitoring §5). */
+    std::uint64_t active_actor_count () const;
+    std::uint64_t active_spot_count () const;
+    /* MeshNode §5.1: this MeshNode's one activation admission record. */
+    detail::activation_admission_t &activation_admission () const;
     void application_work_enqueued () noexcept;
     void application_work_started () noexcept;
     void application_work_finished () noexcept;

@@ -560,6 +560,14 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                 .toList());
     }
 
+    /** Actors activated on the named MeshNode in this process. */
+    public int activeActorCount(String meshName) {
+        return (int)
+                actorRegistry.entries().stream()
+                        .filter(entry -> meshName.equals(entry.context().meshName()))
+                        .count();
+    }
+
     public CompletionStage<Integer> handoffActorsToEntrySpot(
             String actorType, String routeChannelName, RoutingId targetNodeRid) {
         if (actorType == null

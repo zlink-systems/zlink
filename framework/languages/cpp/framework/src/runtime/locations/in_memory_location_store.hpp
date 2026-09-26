@@ -516,7 +516,7 @@ class in_memory_location_repository_t : public location_repository_t
                         authority_compare_exchange_result_t{authority_conflict_t{found->second}});
                   const auto target_descriptor =
                     live_target_descriptor (retarget->target, found->second.allocation.object_kind,
-                                            found->second.allocation.stable_type, now);
+                                            found->second.allocation.stable_type, now, false);
                   if (!target_descriptor
                       || (!same_target (found->second.allocation.target, retarget->target)
                           && !capacity_available (*target_descriptor, retarget->target,
@@ -706,7 +706,7 @@ class in_memory_location_repository_t : public location_repository_t
                     std::get_if<object_creation_completed_t> (&request.completion)) {
                   const auto descriptor = live_target_descriptor (
                     request.fence.target, reservation->second.request.key.kind,
-                    reservation->second.request.intent.stable_type, now);
+                    reservation->second.request.intent.stable_type, now, false);
                   if (!descriptor
                       || !capacity_bundle_present (_pending_by_placement, request.fence.target,
                                                    request.fence.capacity_bundle))
@@ -770,7 +770,7 @@ class in_memory_location_repository_t : public location_repository_t
                     object_reserve_result_t{object_already_exists_t{authority->second}});
               }
               const auto target_descriptor = live_target_descriptor (
-                request.target, request.key.kind, request.intent.stable_type, now);
+                request.target, request.key.kind, request.intent.stable_type, now, true);
               if (!target_descriptor)
                   return completed (
                     object_reserve_result_t{object_reserve_conflict_t{authority_missing_t{now}}});
@@ -848,7 +848,7 @@ class in_memory_location_repository_t : public location_repository_t
               const auto now = clock_t::now ();
               const auto descriptor =
                 live_target_descriptor (request.fence.target, reservation->second.request.key.kind,
-                                        reservation->second.request.intent.stable_type, now);
+                                        reservation->second.request.intent.stable_type, now, false);
               if (!descriptor
                   || !capacity_bundle_present (_pending_by_placement, request.fence.target,
                                                request.fence.capacity_bundle))
@@ -983,7 +983,7 @@ class in_memory_location_repository_t : public location_repository_t
                 request.target_descriptor_lifecycle_generation, request.target_owner};
               const auto target_descriptor = live_target_descriptor (
                 target, placement_object_kind_t::user_spot,
-                request.capacity_bundle.spot_type->stable_type, clock_t::now ());
+                request.capacity_bundle.spot_type->stable_type, clock_t::now (), true);
               if (!target_descriptor
                   || !capacity_available (*target_descriptor, target, request.capacity_bundle))
                   return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
@@ -1048,7 +1048,7 @@ class in_memory_location_repository_t : public location_repository_t
                 aggregate->second.request.capacity_bundle.spot_type
                   ? aggregate->second.request.capacity_bundle.spot_type->stable_type
                   : std::string{},
-                now);
+                now, true);
               if (!target_descriptor
                   || !capacity_bundle_present (_pending_by_placement, target,
                                                aggregate->second.request.capacity_bundle))
@@ -1244,10 +1244,14 @@ class in_memory_location_repository_t : public location_repository_t
                && generation->second == token.lease_generation;
     }
 
+    // MeshNode §5.1: placement weight 0 excludes the node only from a new target selection
+    // (a new reservation or a new-owner aggregate); it does not cancel a reservation or an
+    // authority the node already holds.
     const mesh_node_descriptor_t *live_target_descriptor (const object_creation_target_t &target,
                                                           placement_object_kind_t kind,
                                                           const std::string &stable_type,
-                                                          clock_t::time_point now) const
+                                                          clock_t::time_point now,
+                                                          bool new_target_selection) const
     {
         const auto found = _mesh_nodes.find (
           mesh_node_key (target.mesh_name, std::string (target.node_rid.value ())));
@@ -1258,7 +1262,8 @@ class in_memory_location_repository_t : public location_repository_t
             || descriptor.owner_id != target.owner.owner_id
             || descriptor.lease_generation != target.owner.lease_generation
             || descriptor.state != framework_runtime_state_t::serving
-            || descriptor.object_role != object_role_t::server || descriptor.placement_weight == 0
+            || descriptor.object_role != object_role_t::server
+            || (new_target_selection && descriptor.placement_weight == 0)
             || !owner_token_is_live (target.owner, now))
             return nullptr;
         const auto capability = find_capability (descriptor, kind, stable_type);

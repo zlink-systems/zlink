@@ -1600,6 +1600,7 @@ class spot_handler_registry_t
     };
 
     friend class spot_context_t;
+    friend class spot_node_builder_t;
     friend class detail::spot_node_runtime_t;
     friend class detail::spot_route_internal_dispatcher_t;
     explicit spot_handler_registry_t (std::shared_ptr<detail::spot_context_state_t> state);
@@ -2140,6 +2141,12 @@ class spot_node_builder_t
                   "Spot factory must return a Spot that exposes the provided Context");
             }
             instance->configure ();
+            // Spot model §3.2: an Entry or User Spot that names an Actor type supports that
+            // Actor's membership whether or not it registers an Actor handler.
+            if constexpr (detail::entry_spot_type<TSpot> || detail::user_spot_type<TSpot>)
+                instance->context ()
+                  .handlers ()
+                  .template register_actor_admission<TSpot, typename TSpot::actor_type> ();
             return std::static_pointer_cast<void> (std::move (instance));
         };
         if constexpr (std::is_same_v<TContext, entry_spot_context_t>) {

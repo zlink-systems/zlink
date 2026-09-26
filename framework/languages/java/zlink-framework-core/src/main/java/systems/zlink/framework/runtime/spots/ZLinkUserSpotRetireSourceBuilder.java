@@ -1013,16 +1013,14 @@ final class ZLinkUserSpotRetireSourceBuilder {
     }
 
     private static boolean hasCapacity(Inventory inventory, ZLinkMeshNodeDescriptor candidate) {
-        return hasCapacity(candidate.capacity().spots(), 1)
-                && hasCapacity(candidate.capacity().actors(), inventory.actors().size())
+        return candidate.capacity().spots().hasRoomFor(1)
+                && candidate.capacity().actors().hasRoomFor(inventory.actors().size())
                 && hasTypeCapacity(
                         candidate,
                         ZLinkPlacementObjectKind.USER_SPOT,
                         inventory.spot().stableType(),
                         1)
-                && (candidate.activationConcurrency().limit() == 0
-                        || candidate.activationConcurrency().active()
-                                < candidate.activationConcurrency().limit());
+                && candidate.activationConcurrency().hasRoom();
     }
 
     private static boolean hasCapability(ZLinkMeshNodeDescriptor target, Owned participant) {
@@ -1038,11 +1036,6 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                 == isSnapshot(participant.policy()));
     }
 
-    private static boolean hasCapacity(ZLinkCapacityUsage usage, int required) {
-        return usage.limit() == 0
-                || (long) usage.active() + usage.reserved() + required <= usage.limit();
-    }
-
     private static boolean hasTypeCapacity(
             ZLinkMeshNodeDescriptor target,
             ZLinkPlacementObjectKind kind,
@@ -1051,7 +1044,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
         return target.capacity().spotTypes().stream()
                 .filter(type -> type.objectKind() == kind && type.stableType().equals(stableType))
                 .findFirst()
-                .map(type -> hasCapacity(type.usage(), required))
+                .map(type -> type.usage().hasRoomFor(required))
                 .orElse(true);
     }
 

@@ -92,6 +92,10 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
         return enqueueDispatch(() -> host.runWithOutbound(outbound, operation));
     }
 
+    /**
+     * Runs {@code onClosing} of this already activated Instance Spot. Closing is cleanup of accepted
+     * work, so it runs even after the owner admission deadline (Location runtime §5).
+     */
     CompletionStage<Void> runClosing(Supplier<CompletionStage<Void>> operation) {
         return runClosing(dispatchQueue.isCurrent(), operation);
     }

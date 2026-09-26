@@ -1,5 +1,9 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Zlink.Framework.AspNetCore;
+using Zlink.Framework.Contracts.Messaging;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -630,6 +634,392 @@ public sealed class RuntimeConformanceFixtureTests
 
     private static TaskCompletionSource Signal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    [Fact]
+    public async Task Route_mesh_placement_counts_follow_the_reporting_mesh_node()
+    {
+        using var document = Load("route-mesh-placement-v1.json");
+        var fixture = document.RootElement;
+        Assert.Equal(
+            "zlink.framework.route-mesh-placement",
+            fixture.GetProperty("fixture").GetString()
+        );
+        Assert.Equal(1, fixture.GetProperty("version").GetInt32());
+        var lease = fixture.GetProperty("ownerLease");
+        // Every scenario runs so one report names all divergent scenarios.
+        var failures = new List<string>();
+        foreach (var scenario in fixture.GetProperty("scenarios").EnumerateArray())
+        {
+            try
+            {
+                await RunPlacementScenarioAsync(lease, scenario);
+            }
+            catch (Exception error)
+            {
+                failures.Add($"{scenario.GetProperty("name").GetString()}: {error.Message}");
+            }
+        }
+        Assert.True(failures.Count == 0, string.Join(Environment.NewLine, failures));
+    }
+
+    private static async Task RunPlacementScenarioAsync(JsonElement lease, JsonElement scenario)
+    {
+        var name = scenario.GetProperty("name").GetString()!;
+        var suffix = Guid.NewGuid().ToString("N");
+        var nodes = scenario.GetProperty("meshNodes").EnumerateArray().ToArray();
+        Assert.True(nodes.Length <= PlacementSpotTypes.Length, name);
+        Assert.True(
+            nodes.Count(static node => node.GetProperty("instanceSpotFactory").GetBoolean()) <= 1,
+            name
+        );
+        var services = new ServiceCollection();
+        services.AddZLinkFramework(options =>
+        {
+            options.UseTestLocationStore();
+            if (nodes.Any(static node => node.GetProperty("instanceSpotFactory").GetBoolean()))
+                options.AddRelocationStore(new InMemoryRelocationStore());
+            var locations = options.ConfigureLocations();
+            locations.PollingInterval = TimeSpan.FromMilliseconds(10);
+            locations.OwnerLeaseRenewInterval = Millis(lease, "renewIntervalMs");
+            locations.OwnerLeaseRenewTimeout = Millis(lease, "renewTimeoutMs");
+            locations.OwnerLeaseTtl = Millis(lease, "ttlMs");
+            locations.OwnerLeaseFencingMargin = Millis(lease, "fencingMarginMs");
+            for (var index = 0; index < nodes.Length; index++)
+            {
+                var meshName = nodes[index].GetProperty("meshName").GetString()!;
+                Assert.Equal("disabled", nodes[index].GetProperty("spotRelocation").GetString());
+                var objects = options
+                    .AddRouteMesh(meshName)
+                    .Listen($"inproc://placement-{meshName}-{suffix}")
+                    .SetActorLimit(nodes[index].GetProperty("actorLimit").GetInt32())
+                    .SetSpotLimit(nodes[index].GetProperty("spotLimit").GetInt32())
+                    .SetActivationConcurrency(
+                        nodes[index].GetProperty("activationConcurrency").GetInt32()
+                    )
+                    .Objects()
+                    .Server();
+                PlacementSpotTypes[index](objects, $"placement-spot-{meshName}");
+                if (nodes[index].GetProperty("actorFactory").GetBoolean())
+                    objects.AddActorFactory<PlacementActor, PlacementActorFactory>(
+                        "placement-actor",
+                        static factory => factory.DisableRelocation()
+                    );
+                if (nodes[index].GetProperty("instanceSpotFactory").GetBoolean())
+                    objects.AddInstanceSpotFactory<PlacementInstanceSpot>(
+                        "placement-instance",
+                        static factory => factory.DisableRelocation()
+                    );
+            }
+        });
+        await using var provider = services.BuildServiceProvider();
+        var hosted = provider
+            .GetServices<IHostedService>()
+            .Single(static service => service is ZLinkFrameworkHostedService);
+        await hosted.StartAsync(CancellationToken.None);
+        var held = new List<(PlacementHold Hold, Task Operation)>();
+        try
+        {
+            var spots = provider.GetRequiredService<IZLinkSpotManager>();
+            var actors = provider.GetRequiredService<IZLinkActorManager>();
+            var spotClient = provider.GetRequiredService<IZLinkSpotClient>();
+            var actorIndex = 0;
+            var instanceIndex = 0;
+            string? lastActorId = null;
+            string? lastSpotId = null;
+            foreach (var entry in scenario.GetProperty("objects").EnumerateArray())
+            {
+                var meshName = entry.GetProperty("meshName").GetString()!;
+                var kind = entry.GetProperty("kind").GetString()!;
+                var hold = entry.GetProperty("hold").GetBoolean() ? new PlacementHold(kind) : null;
+                for (var count = 0; count < entry.GetProperty("count").GetInt32(); count++)
+                {
+                    PlacementHold.Current = hold;
+                    Task operation;
+                    switch (kind)
+                    {
+                        case "actor":
+                            var actorId = $"{name}-actor-{actorIndex++}";
+                            lastActorId = actorId;
+                            operation = actors
+                                .Create(actorId, "placement-actor")
+                                .InMesh(meshName)
+                                .Timeout(TimeSpan.FromSeconds(10))
+                                .Async()
+                                .AsTask();
+                            break;
+                        case "userSpot":
+                            operation = CreateUserSpotAsync(
+                                spots,
+                                meshName,
+                                spotId => lastSpotId = spotId
+                            );
+                            break;
+                        case "instanceSpot":
+                            operation = spotClient
+                                .SendToSpot(
+                                    $"{name}-instance-{instanceIndex++}",
+                                    new PlacementPing(name)
+                                )
+                                .InstanceSpot("placement-instance")
+                                .InMesh(meshName)
+                                .Async()
+                                .AsTask();
+                            break;
+                        case "actorJoin":
+                            operation = JoinSpotAsync(
+                                PlacementActor.Get(
+                                    lastActorId ?? throw new InvalidOperationException(name)
+                                ),
+                                lastSpotId ?? throw new InvalidOperationException(name)
+                            );
+                            break;
+                        default:
+                            throw new InvalidOperationException($"{name}: object kind {kind}");
+                    }
+                    if (hold is null)
+                    {
+                        await WithinAsync(operation, $"{name}: {kind}");
+                        continue;
+                    }
+                    // The held operation stays in flight while the expectations are checked.
+                    await WithinAsync(
+                        Task.WhenAny(hold.Entered.Task, operation),
+                        $"{name}: held {kind}"
+                    );
+                    Assert.True(hold.Entered.Task.IsCompleted, $"{name}: {kind} did not start");
+                    held.Add((hold, operation));
+                }
+            }
+            var runtimeOptions = provider.GetRequiredService<IZLinkRouteMeshRuntimeOptions>();
+            foreach (var node in nodes)
+                runtimeOptions.Mesh(node.GetProperty("meshName").GetString()!).PlacementWeight =
+                    node.GetProperty("placementWeightAfterStartup").GetInt32();
+            var runtime = provider.GetRequiredService<IZLinkRouteMeshRuntime>();
+            foreach (var expected in scenario.GetProperty("expected").EnumerateArray())
+            {
+                var meshName = expected.GetProperty("meshName").GetString()!;
+                var expectedAvailable = expected.GetProperty("isAvailable").GetBoolean();
+                var expectedState =
+                    expected.GetProperty("state").GetString() == "degraded"
+                        ? ZLinkTopologyState.Degraded
+                        : ZLinkTopologyState.Ready;
+                using var observationTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                await using var observer = runtime
+                    .ObserveAsync(meshName, observationTimeout.Token)
+                    .GetAsyncEnumerator(observationTimeout.Token);
+                Assert.True(await observer.MoveNextAsync(), $"{name}:{meshName}: no status observed");
+                var status = observer.Current.Status;
+                while (status.Placement.IsAvailable != expectedAvailable || status.State != expectedState)
+                {
+                    Assert.True(await observer.MoveNextAsync(), $"{name}:{meshName}: observation ended");
+                    status = observer.Current.Status;
+                }
+                var label = $"{name}:{meshName}";
+                Assert.True(
+                    expected.GetProperty("activeActorCount").GetInt32()
+                        == status.Placement.ActiveActorCount,
+                    $"{label}:activeActorCount={status.Placement.ActiveActorCount}"
+                );
+                Assert.True(
+                    expected.GetProperty("activeSpotCount").GetInt32()
+                        == status.Placement.ActiveSpotCount,
+                    $"{label}:activeSpotCount={status.Placement.ActiveSpotCount}"
+                );
+                Assert.True(
+                    expectedAvailable == status.Placement.IsAvailable,
+                    $"{label}:isAvailable={status.Placement.IsAvailable}"
+                );
+                Assert.True(expectedState == status.State, $"{label}:state={status.State}");
+            }
+        }
+        finally
+        {
+            PlacementHold.Current = null;
+            foreach (var (hold, _) in held)
+                hold.Release.TrySetResult();
+            foreach (var (hold, operation) in held)
+                await WithinAsync(operation, $"{name}: released {hold.Kind}");
+            await hosted.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private static async Task WithinAsync(Task operation, string label)
+    {
+        try
+        {
+            await operation.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        catch (TimeoutException error)
+        {
+            throw new TimeoutException($"{label} did not complete.", error);
+        }
+    }
+
+    private static async Task CreateUserSpotAsync(
+        IZLinkSpotManager spots,
+        string meshName,
+        Action<string> created
+    )
+    {
+        var result = await spots
+            .Create($"placement-spot-{meshName}")
+            .InMesh(meshName)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Async();
+        created(result.Spot.SpotId);
+    }
+
+    private static async Task JoinSpotAsync(PlacementActor actor, string spotId)
+    {
+        var joined = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        actor.JoinCompleted = joined;
+        // Stands in for the Framework-managed handler turn that owns a deferred Join.
+        using (var handler = ZLinkDeferredActorJoinHandlerScope.Open())
+        {
+            actor.Context.JoinSpot(spotId).Timeout(TimeSpan.FromSeconds(10)).Defer();
+            handler.Complete();
+        }
+        await joined.Task;
+    }
+
+    private static TimeSpan Millis(JsonElement lease, string field) =>
+        TimeSpan.FromMilliseconds(lease.GetProperty(field).GetInt32());
+
+    // Spot factory types are unique per host, so each fixture MeshNode gets its own type.
+    private static readonly Action<IZLinkMeshObjectServerBuilder, string>[] PlacementSpotTypes =
+    [
+        static (objects, stableType) =>
+            objects.AddSpotFactory<FirstPlacementSpot>(
+                stableType,
+                static factory => factory.DisableRelocation()
+            ),
+        static (objects, stableType) =>
+            objects.AddSpotFactory<SecondPlacementSpot>(
+                stableType,
+                static factory => factory.DisableRelocation()
+            ),
+    ];
+
+    /// <summary>
+    /// Keeps one fixture operation in flight: the matching hook signals <see cref="Entered"/>
+    /// and waits for <see cref="Release"/>.
+    /// </summary>
+    private sealed class PlacementHold(string kind)
+    {
+        private static PlacementHold? _current;
+
+        internal static PlacementHold? Current
+        {
+            get => Volatile.Read(ref _current);
+            set => Volatile.Write(ref _current, value);
+        }
+
+        internal TaskCompletionSource Entered { get; } = Signal();
+
+        internal TaskCompletionSource Release { get; } = Signal();
+
+        internal static async ValueTask WaitAsync(string kind)
+        {
+            if (Current is not { } hold || hold.Kind != kind)
+                return;
+            hold.Entered.TrySetResult();
+            await hold.Release.Task.ConfigureAwait(false);
+        }
+
+        internal string Kind { get; } = kind;
+    }
+
+    private abstract class PlacementSpot(IZLinkSpotContext context) : IZLinkSpot<PlacementActor>
+    {
+        public IZLinkSpotContext Context { get; } = context;
+
+        public async ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(
+            ZLinkMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            await PlacementHold.WaitAsync("userSpot");
+            return ZLinkSpotCreateResponse.Accept();
+        }
+
+        public async ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
+            string actorId,
+            ZLinkMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            await PlacementHold.WaitAsync("actorJoin");
+            return ZLinkSpotActorJoinResult.Accept();
+        }
+
+        public ValueTask OnJoinedActorAsync(
+            PlacementActor actor,
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
+
+        public ValueTask OnLeaveActorAsync(
+            PlacementActor actor,
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
+    }
+
+    private sealed class FirstPlacementSpot(IZLinkSpotContext context) : PlacementSpot(context);
+
+    private sealed class SecondPlacementSpot(IZLinkSpotContext context) : PlacementSpot(context);
+
+    private sealed class PlacementInstanceSpot(IZLinkInstanceSpotContext context)
+        : IZLinkInstanceSpot
+    {
+        public IZLinkInstanceSpotContext Context { get; } = context;
+
+        public ValueTask OnInitializeAsync(CancellationToken cancellationToken) =>
+            PlacementHold.WaitAsync("instanceSpot");
+    }
+
+    private sealed record PlacementPing(string Value);
+
+    private sealed class PlacementActor(IZLinkActorContext context) : IZLinkActor
+    {
+        private static readonly ConcurrentDictionary<string, PlacementActor> Created = new();
+
+        public IZLinkActorContext Context { get; } = context;
+
+        internal TaskCompletionSource? JoinCompleted { get; set; }
+
+        internal static PlacementActor Get(string actorId) => Created[actorId];
+
+        internal static PlacementActor Register(PlacementActor actor)
+        {
+            Created[actor.Context.ActorId] = actor;
+            return actor;
+        }
+
+        public ValueTask OnJoinCompletedAsync(
+            ZLinkActorJoinCompletion completion,
+            CancellationToken cancellationToken
+        )
+        {
+            if (completion is ZLinkActorJoinCompletion.Accepted)
+                JoinCompleted?.TrySetResult();
+            else
+                JoinCompleted?.TrySetException(
+                    new InvalidOperationException($"Actor join completed as {completion}.")
+                );
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class PlacementActorFactory : IZLinkActorFactory<PlacementActor>
+    {
+        public async ValueTask<PlacementActor> CreateAsync(
+            IZLinkActorContext context,
+            CancellationToken cancellationToken = default
+        )
+        {
+            await PlacementHold.WaitAsync("actor");
+            return PlacementActor.Register(new PlacementActor(context));
+        }
+    }
 
     private static JsonDocument Load(string name)
     {

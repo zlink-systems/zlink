@@ -851,12 +851,18 @@ public_host_runtime_t::public_host_runtime_t (host_options_t options) :
      * relocation replay wire; the host outlives the coordinator it owns. */
     _relocation_wire->set_flow_capture_provider ([this] { return capture_flow (); });
     const auto &descriptor = _options.mesh.descriptor;
-    _objects.replace_placement_candidates ({stateful::placement_candidate_t{
-      descriptor.mesh_name,
-      std::string (descriptor.node_routing_id.begin (), descriptor.node_routing_id.end ()),
-      _options.object_stable_types, descriptor.placement_weight, descriptor.active_capacity_limit,
-      descriptor.active_capacity_used, descriptor.pending_capacity_limit,
-      descriptor.pending_capacity_used}});
+    // This host's own object record is not a new target selection: the node placement weight
+    // belongs to Framework placement (MeshNode §5.1), so the local candidate keeps the default
+    // weight and weight 0 never blocks this node's own objects such as its Entry Spot.
+    _objects.replace_placement_candidates (
+      {stateful::placement_candidate_t{.mesh_name = descriptor.mesh_name,
+                                       .node_id = std::string (descriptor.node_routing_id.begin (),
+                                                               descriptor.node_routing_id.end ()),
+                                       .stable_types = _options.object_stable_types,
+                                       .active_capacity = descriptor.active_capacity_limit,
+                                       .active_count = descriptor.active_capacity_used,
+                                       .pending_capacity = descriptor.pending_capacity_limit,
+                                       .pending_count = descriptor.pending_capacity_used}});
 }
 
 public_host_runtime_t::~public_host_runtime_t ()

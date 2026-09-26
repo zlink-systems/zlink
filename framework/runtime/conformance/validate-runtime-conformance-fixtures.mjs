@@ -3467,4 +3467,102 @@ for (const scenario of spotClose.scenarios) {
     assert.ok(scenario.expect.onClosingCalls <= spotClose.invariants.onClosingCallsPerAcceptedClose);
 }
 
+const placement = await readFixture('./route-mesh-placement-v1.json');
+assert.equal(placement.fixture, 'zlink.framework.route-mesh-placement');
+assert.equal(placement.version, 1);
+assert.deepEqual(placement.rules, {
+  activeCountSource: 'reportingMeshNodeActivationRecords',
+  locationStoreProjectionIsActiveCountSource: false,
+  hostWideDrainRemainderIsSeparateFact: true,
+  limitZeroMeansUnlimited: true,
+  capacityCountsActivePlusReserved: true,
+  isAvailableCapacity: 'activationConcurrencyAndActorOrSpotHeadroom',
+  isAvailableRequiresRelocationCapability: false,
+  isAvailableRequiresPositivePlacementWeight: true,
+  activationAdmissionOperations: [
+    'actorCreate', 'userSpotCreate', 'instanceSpotColdActivation', 'relocationTargetRestore'
+  ],
+  activationAdmissionExcludes: ['entrySpot', 'actorJoin']
+});
+{
+  // Location runtime §5: renew interval + renew timeout < owner lease TTL - fencing margin.
+  const lease = placement.ownerLease;
+  for (const value of Object.values(lease)) assert.ok(Number.isInteger(value) && value > 0);
+  assert.ok(lease.renewIntervalMs + lease.renewTimeoutMs < lease.ttlMs - lease.fencingMarginMs);
+}
+uniqueNames(placement.scenarios, 'name');
+const placementHeadroom = (active, limit) => limit === 0 || active < limit;
+for (const scenario of placement.scenarios) {
+  assert.equal(scenario.locationStore, 'available', scenario.name);
+  uniqueNames(scenario.meshNodes, 'meshName');
+  assert.ok(scenario.meshNodes.length >= 2, `${scenario.name}: two MeshNodes on one host`);
+  const nodes = new Map(scenario.meshNodes.map((node) => [node.meshName, node]));
+  const counts = new Map(scenario.meshNodes.map(({ meshName }) => [
+    meshName, { actor: 0, userSpot: 0, instanceSpot: 0, actorJoin: 0, held: 0 }
+  ]));
+  // MeshNode §5.1: Actor create, User Spot create and Instance Spot cold activation hold one
+  // activation admission until Ready; an Actor Join and the Entry Spot hold none.
+  const heldAdmission = { actor: true, userSpot: true, instanceSpot: true, actorJoin: false };
+  for (const node of scenario.meshNodes) {
+    assert.equal(node.spotRelocation, 'disabled', `${scenario.name}: ${node.meshName}`);
+    // Applied through the runtime options after startup (MeshNode §5.1 runtime change).
+    assert.ok(Number.isInteger(node.placementWeightAfterStartup)
+      && node.placementWeightAfterStartup >= 0 && node.placementWeightAfterStartup <= 10_000);
+    for (const limit of [node.actorLimit, node.spotLimit])
+      assert.ok(Number.isInteger(limit) && limit >= 0, `${scenario.name}: ${node.meshName}`);
+    assert.equal(typeof node.actorFactory, 'boolean');
+    assert.equal(typeof node.instanceSpotFactory, 'boolean');
+    assert.ok(Number.isInteger(node.activationConcurrency) && node.activationConcurrency >= 1);
+  }
+  // One host hosts Actors on at most one MeshNode, the first one with an Actor factory.
+  assert.ok(scenario.meshNodes.filter(({ actorFactory }) => actorFactory).length <= 1);
+  for (const { kind, meshName, count, hold } of scenario.objects) {
+    const node = nodes.get(meshName);
+    assert.ok(node, `${scenario.name}: ${meshName}`);
+    assert.ok(Object.hasOwn(heldAdmission, kind), `${scenario.name}: ${kind}`);
+    assert.equal(typeof hold, 'boolean', `${scenario.name}: ${kind} hold`);
+    assert.ok(kind !== 'actor' || node.actorFactory, `${scenario.name}: ${meshName} actor factory`);
+    assert.ok(kind !== 'instanceSpot' || node.instanceSpotFactory, `${scenario.name}: instance factory`);
+    assert.ok(Number.isInteger(count) && count > 0, `${scenario.name}: ${meshName} count`);
+    const record = counts.get(meshName);
+    if (hold) {
+      // A held operation has not reached Ready, so it is not an active object.
+      if (heldAdmission[kind]) record.held += count;
+    } else {
+      record[kind] += count;
+    }
+    if (kind === 'actorJoin') {
+      assert.ok(record.actor > 0 && record.userSpot > 0, `${scenario.name}: join needs Actor and Spot`);
+      continue;
+    }
+    const limit = kind === 'actor' ? node.actorLimit : node.spotLimit;
+    assert.ok(limit === 0 || record[kind] <= limit, `${scenario.name}: ${kind} limit`);
+  }
+  assert.ok(
+    [...counts.values()].some(({ actor, userSpot, instanceSpot, held }) =>
+      actor + userSpot + instanceSpot + held === 0),
+    `${scenario.name}: objects must stay on a subset of MeshNodes`
+  );
+  assert.deepEqual(
+    scenario.expected.map(({ meshName }) => meshName),
+    scenario.meshNodes.map(({ meshName }) => meshName),
+    scenario.name
+  );
+  for (const expected of scenario.expected) {
+    const node = nodes.get(expected.meshName);
+    const count = counts.get(expected.meshName);
+    const label = `${scenario.name}: ${expected.meshName}`;
+    assert.equal(expected.activeActorCount, count.actor, `${label}: activeActorCount`);
+    assert.equal(
+      expected.activeSpotCount, count.userSpot + count.instanceSpot, `${label}: activeSpotCount`
+    );
+    const available = node.placementWeightAfterStartup > 0
+      && (placementHeadroom(count.actor, node.actorLimit)
+        || placementHeadroom(count.userSpot + count.instanceSpot, node.spotLimit))
+      && count.held < node.activationConcurrency;
+    assert.equal(expected.isAvailable, available, `${label}: isAvailable`);
+    assert.equal(expected.state, 'ready', `${label}: state`);
+  }
+}
+
 console.log('runtime conformance fixtures: PASS');

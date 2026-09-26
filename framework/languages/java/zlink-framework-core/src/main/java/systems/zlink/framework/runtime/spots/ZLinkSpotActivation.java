@@ -31,6 +31,7 @@ import java.util.function.Supplier;
 
 final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
     private final ZLinkSpot<?> spot;
+    private volatile String meshName;
 
     SpotActivation(
             ZLinkSpotRuntime host,
@@ -44,6 +45,15 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
 
     ZLinkSpot<?> spot() {
         return spot;
+    }
+
+    /** Records the MeshNode that admitted this User Spot activation (runtime monitoring §5). */
+    void admittedBy(String meshName) {
+        this.meshName = java.util.Objects.requireNonNull(meshName, "meshName");
+    }
+
+    String meshName() {
+        return meshName;
     }
 
     @Override

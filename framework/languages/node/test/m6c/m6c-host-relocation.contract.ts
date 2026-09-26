@@ -53,6 +53,7 @@ import {
 } from '../../packages/framework/src/runtime/foundation/service-wire-constants.generated';
 import type { CanonicalActorJoinRecovery } from '../../packages/framework/src/runtime/foundation/actor-join-recovery-codec';
 import { DefaultZLinkSpotManager } from '../../packages/framework/src/runtime/spots';
+import { ZLinkActivationAdmission } from '../../packages/framework/src/runtime/activation-admission';
 import { ZLinkFormalRemoteActorAdmissionRegistry } from '../../packages/framework/src/runtime/spots/formal-remote-actor-admission-registry';
 import {
   ZLinkFrameworkErrorKind,
@@ -1326,7 +1327,8 @@ test('ActorJoin target invalidates a previous-owner Actor route before lifecycle
     phase: 'ready',
     lane: Promise.resolve(),
     cutoverReceived: true,
-    boundaryRelay: []
+    boundaryRelay: [],
+    releaseActivation: () => undefined
   };
   const originalWarn = console.warn;
   console.warn = () => events.push('sourceLeave:warning');
@@ -1454,7 +1456,8 @@ test('target admission opens after one publication-clear conflict and a later cl
     phase: 'ready',
     lane: Promise.resolve(),
     cutoverReceived: true,
-    boundaryRelay: []
+    boundaryRelay: [],
+    releaseActivation: () => undefined
   };
   const originalWarn = console.warn;
   console.warn = (marker) => events.push(String(marker));
@@ -1963,6 +1966,59 @@ test(
   }
 );
 
+test('a relocation target Restore holds one activation admission from Prepare until target commit', async () => {
+  // MeshNode §5.1 Pending activation: the target MeshNode counts the Restore from the moment it
+  // receives the Prepare until the target commit, in the same record placement reads.
+  let events: string[] = [];
+  const activationAdmission = new ZLinkActivationAdmission(
+    () => 1,
+    (meshName) => {
+      const current = activationAdmission.current(meshName);
+      assert.equal(activationAdmission.hasHeadroom(meshName), current.active === 0);
+      events.push(`activation:${meshName}:${current.active}/${current.limit}`);
+    }
+  );
+  const harness = createActorJoinHostHarness({ holdAccepted: true, activationAdmission });
+  events = harness.events;
+  try {
+    await harness.relocate();
+    harness.releaseAccepted();
+    await harness.targetIdle();
+    assert.deepEqual(
+      harness.events.filter(
+        (value) => value.startsWith('activation:') || value === 'cas' || value === 'dispatch:open'
+      ),
+      ['activation:mesh-a:1/1', 'cas', 'activation:mesh-a:0/1', 'dispatch:open']
+    );
+    assert.deepEqual(activationAdmission.current('mesh-a'), { active: 0, limit: 1 });
+  } finally {
+    await harness.dispose();
+  }
+});
+
+test('a relocation target Restore that fails releases its activation admission', async () => {
+  const activationAdmission = new ZLinkActivationAdmission(() => 1);
+  const harness = createActorJoinHostHarness({ activationAdmission });
+  let heldDuringRestore: unknown;
+  harness.targetActorManager.prepareRelocationActor = async () => {
+    heldDuringRestore = activationAdmission.current('mesh-a');
+    throw new Error('Target factory failed for this test.');
+  };
+  const originalWarn = console.warn;
+  const originalError = console.error;
+  console.warn = () => {};
+  console.error = () => {};
+  try {
+    await assert.rejects(harness.relocate());
+    assert.deepEqual(heldDuringRestore, { active: 1, limit: 1 });
+    assert.deepEqual(activationAdmission.current('mesh-a'), { active: 0, limit: 1 });
+  } finally {
+    console.warn = originalWarn;
+    console.error = originalError;
+    await harness.dispose();
+  }
+});
+
 test('ActorJoin source profile reaches the existing Message Follow terminal after leave submit failure', async () => {
   const harness = createActorJoinHostHarness({
     sourceLeaveResult: SubmitResult.NotConnected
@@ -1997,6 +2053,7 @@ interface ActorJoinHarnessOptions {
   readonly sourceLeaveResult?: number;
   readonly dropCutover?: boolean;
   readonly canonicalRecovery?: boolean;
+  readonly activationAdmission?: ZLinkActivationAdmission;
 }
 
 function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
@@ -2580,6 +2637,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   } as never);
   targetRuntime = new ZLinkHostServiceRelocationRuntime({
     ...common,
+    activationAdmission: options.activationAdmission,
     currentOwner: () => ({ ownerId: 'target-owner', leaseGeneration: 14n }),
     localDescriptor: () => targetDescriptor,
     meshNode: () => targetNode,

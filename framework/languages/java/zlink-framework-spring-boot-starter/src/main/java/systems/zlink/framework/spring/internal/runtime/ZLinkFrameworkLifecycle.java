@@ -34,7 +34,6 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationResult;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
-import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.host.ZLinkFrameworkRuntimeBootstrap;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
@@ -47,8 +46,6 @@ import systems.zlink.framework.spots.ZLinkSpotRequestCall;
 import systems.zlink.framework.spots.ZLinkSpotSendCall;
 
 import java.time.Duration;
-import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -373,25 +370,12 @@ public final class ZLinkFrameworkLifecycle
         return requireRuntime().channelRuntimeOptions().routeMeshChannel(channelName);
     }
 
-    Map<String, ZLinkInternalMeshNode> monitoringMeshNodes() {
-        return requireRuntime().meshNodesForInternalMonitoring();
-    }
-
     ZLinkRouteMeshRuntimeOptions routeMeshRuntimeOptions() {
         return (ZLinkRouteMeshRuntimeOptions) requireRuntime().routeMeshRuntime();
     }
 
     public ZLinkLocationRuntimeQuery monitoringLocationRuntimeQuery() {
         return requireRuntime().monitoringLocationRuntimeQuery();
-    }
-
-    systems.zlink.framework.runtime.internal.monitoring.ZLinkMeshNodeMonitoringProjection
-            monitoringMeshNodeProjection(String meshName, RoutingId rid) {
-        return requireRuntime().monitoringMeshNodeProjection(meshName, rid);
-    }
-
-    List<String> monitoringMeshNodeChannelNames(String meshName) {
-        return requireRuntime().monitoringMeshNodeChannelNames(meshName);
     }
 
     public boolean stopSpotRuntime() {

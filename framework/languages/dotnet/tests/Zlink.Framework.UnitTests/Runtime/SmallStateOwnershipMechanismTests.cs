@@ -31,15 +31,17 @@ public sealed class SmallStateOwnershipMechanismTests
         var observed = new List<int>();
         var admission = new ZLinkActivationConcurrencyAdmission(1, observed.Add);
 
-        admission.Acquire("actor-a");
+        var lease = admission.Acquire("actor-a");
         var exhausted = Assert.Throws<ZLinkFrameworkException>(() => admission.Acquire("actor-b"));
-        admission.Release();
+        lease.Release();
+        // The operation that ends a lease may race another cleanup path; a second release of
+        // the same lease does not touch the record.
+        lease.Release();
 
         Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, exhausted.Kind);
         Assert.Equal(ZLinkRetryAdvice.RetryAfterBackoff, exhausted.RetryAdvice);
         Assert.Equal(0, admission.Active);
         Assert.Equal([1, 0], observed);
-        Assert.Throws<InvalidOperationException>(admission.Release);
     }
 
     [Fact]

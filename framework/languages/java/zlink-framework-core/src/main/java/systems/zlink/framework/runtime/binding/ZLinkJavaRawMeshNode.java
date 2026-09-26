@@ -2598,6 +2598,10 @@ final class ZLinkJavaRawMeshNode
             byte[] metadata,
             List<Message> parts,
             long deadlineNanos) {
+        if (route.targetNodeRid().equals(routingId)) {
+            return dispatchLocalInstanceSpot(route, stableType, sourceSpotId, metadata, parts, false)
+                    .thenAccept(replyParts -> replyParts.forEach(Message::close));
+        }
         Optional<ZLinkServiceTopologyRegistry.Peer> peer =
                 topology == null ? Optional.empty() : topology.peer(route.targetNodeRid());
         if (peer.isPresent()
@@ -2655,6 +2659,9 @@ final class ZLinkJavaRawMeshNode
             byte[] metadata,
             List<Message> parts,
             long deadlineNanos) {
+        if (route.targetNodeRid().equals(routingId)) {
+            return dispatchLocalInstanceSpot(route, stableType, sourceSpotId, metadata, parts, true);
+        }
         Optional<ZLinkServiceTopologyRegistry.Peer> peer =
                 topology == null ? Optional.empty() : topology.peer(route.targetNodeRid());
         if (peer.isPresent()
@@ -2780,6 +2787,75 @@ final class ZLinkJavaRawMeshNode
                             }
                         });
         return operation.completion();
+    }
+
+    /**
+     * Delivers an Instance Spot message whose target is this MeshNode, like Actor and User Spot
+     * create do for a local target. The message takes the same activation path as a remote one
+     * (Location runtime §7.1). A send completes once the Instance Spot accepts it; a request
+     * completes with its reply.
+     */
+    private CompletionStage<List<Message>> dispatchLocalInstanceSpot(
+            ZLinkServiceM6BWireCodec.InstanceRouteFence route,
+            String stableType,
+            String sourceSpotId,
+            byte[] metadata,
+            List<Message> parts,
+            boolean request) {
+        if (closed.get()
+                || localDescriptor == null
+                || route.targetNodeGeneration() != localDescriptor.lifecycleGeneration()) {
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("local Instance Spot target is not available"));
+        }
+        int flags =
+                metadata == null || metadata.length == 0 ? 0 : ServiceWireConstants.FLAG_METADATA;
+        var header =
+                new ZLinkServiceM6BWireCodec.InstanceSpotMessage(
+                        flags,
+                        route,
+                        stableType,
+                        localDescriptor.lifecycleGeneration(),
+                        routingId,
+                        sourceSpotId,
+                        request,
+                        0,
+                        0,
+                        null);
+        List<Message> messages =
+                parts.stream().map(part -> Message.from(part.toByteArray())).toList();
+        CompletableFuture<List<Message>> completion = new CompletableFuture<>();
+        boolean accepted;
+        try {
+            accepted =
+                    ((ZLinkJavaRawSpotNode) spotNode())
+                            .enqueueRemoteInstanceSpot(
+                                    routingId,
+                                    header,
+                                    flags == 0 ? new byte[0] : metadata.clone(),
+                                    messages,
+                                    applicationContentType(messages),
+                                    replyParts -> {
+                                        if (!completion.complete(replyParts)) {
+                                            replyParts.forEach(Message::close);
+                                        }
+                                    },
+                                    failure -> {
+                                        if (!request) {
+                                            recordInstanceActivationDrop(failure);
+                                        }
+                                        completion.completeExceptionally(unwrap(failure));
+                                    });
+        } catch (RuntimeException failure) {
+            messages.forEach(Message::close);
+            return CompletableFuture.failedFuture(failure);
+        }
+        if (!accepted) {
+            messages.forEach(Message::close);
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("local Instance Spot target rejected the message"));
+        }
+        return request ? completion : CompletableFuture.completedFuture(List.of());
     }
 
     private CompletionStage<Void> awaitInstanceSpotTargetConnection(

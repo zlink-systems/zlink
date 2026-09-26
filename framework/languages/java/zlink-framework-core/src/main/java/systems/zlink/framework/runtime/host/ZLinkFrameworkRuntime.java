@@ -310,10 +310,18 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         this.meshNodes.nodesByName(),
                         () -> {
                             if (this.objectDescriptors != null) {
-                                this.objectDescriptors
-                                        .publish(this.runtimeState.get())
-                                        .toCompletableFuture()
-                                        .join();
+                                try {
+                                    this.objectDescriptors
+                                            .publish(this.runtimeState.get())
+                                            .toCompletableFuture()
+                                            .join();
+                                } catch (CompletionException failure) {
+                                    Throwable cause = unwrapCompletionFailure(failure);
+                                    if (cause instanceof RuntimeException runtimeFailure) {
+                                        throw runtimeFailure;
+                                    }
+                                    throw failure;
+                                }
                             }
                         });
         runtimeHandlers.add(ZLinkRouteMeshRuntimeOptions.class, this.routeMeshRuntimeOptions);
@@ -729,10 +737,6 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         return meshNodes.nodesByName().get(meshName);
     }
 
-    public Map<String, ZLinkInternalMeshNode> meshNodesForInternalMonitoring() {
-        return meshNodes.nodesByName();
-    }
-
     public ZLinkLocationRuntimeQuery monitoringLocationRuntimeQuery() {
         if (locationRuntimeQuery == null) {
             throw new ZLinkConfigurationException("Location runtime is not configured");
@@ -776,7 +780,10 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         if (descriptor.rid().equals(rid)) {
                             return systems.zlink.framework.runtime.internal.monitoring
                                     .ZLinkMeshNodeMonitoringProjection.fromDescriptor(descriptor)
-                                    .withActiveObjectCounts(activeActorCount(), activeSpotCount());
+                                    .withLocalActivationRecords(
+                                            activeActorCount(meshName),
+                                            activeSpotCount(meshName),
+                                            activationConcurrency(configured));
                         }
                     }
                     continuation = page.continuationToken();
@@ -788,15 +795,45 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         }
         return systems.zlink.framework.runtime.internal.monitoring.ZLinkMeshNodeMonitoringProjection
                 .fromRegistration(
-                        configured, node.status().descriptorRevision(), node.placementWeight());
+                        configured, node.status().descriptorRevision(), node.placementWeight())
+                .withLocalActivationRecords(
+                        activeActorCount(meshName),
+                        activeSpotCount(meshName),
+                        activationConcurrency(configured));
     }
 
-    public int activeActorCount() {
-        return actors == null ? 0 : actors.activeActorIds().size();
+    /**
+     * The MeshNode's activation admission record (MeshNode §5.1). Without a Spot runtime no
+     * activation can be admitted, so the record stays at zero.
+     */
+    private systems.zlink.framework.locations.ZLinkActivationConcurrency activationConcurrency(
+            MeshNodeRegistration configured) {
+        return spots == null
+                ? new systems.zlink.framework.locations.ZLinkActivationConcurrency(
+                        0, configured.activationConcurrency())
+                : spots.activationAdmission(configured.meshName()).snapshot();
     }
 
-    public int activeSpotCount() {
-        return spots == null ? 0 : spots.activeUserSpotCount() + spots.activeInstanceSpotCount();
+    systems.zlink.framework.locations.ZLinkActivationConcurrency activationConcurrency(
+            String meshName) {
+        return activationConcurrency(
+                registration.meshNodes().stream()
+                        .filter(candidate -> candidate.meshName().equals(meshName))
+                        .findFirst()
+                        .orElseThrow(
+                                () ->
+                                        new ZLinkConfigurationException(
+                                                "RouteMesh is not configured: " + meshName)));
+    }
+
+    /** Actors activated on the named MeshNode in this process (runtime monitoring §5). */
+    public int activeActorCount(String meshName) {
+        return actors == null ? 0 : actors.activeActorCount(meshName);
+    }
+
+    /** Spots activated on the named MeshNode in this process (runtime monitoring §5). */
+    public int activeSpotCount(String meshName) {
+        return spots == null ? 0 : spots.activeSpotCount(meshName);
     }
 
     public List<String> monitoringMeshNodeChannelNames(String meshName) {

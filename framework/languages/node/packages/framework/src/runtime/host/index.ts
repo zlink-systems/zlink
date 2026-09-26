@@ -166,6 +166,7 @@ import { ZLinkChannelRuntimeOptionsFactory } from './channel-runtime-options-fac
 import { ZLinkSpotNodeRuntimeOptionsFactory } from './spot-node-runtime-options-factory';
 import { rollbackRuntimeStart, stopRuntimeParts } from './runtime-shutdown';
 import { ZLinkRuntimeAdmissionGate } from '../admission';
+import { ZLinkActivationAdmission } from '../activation-admission';
 import { ZLinkRetiringRollbackError, ZLinkRouteMeshRuntimeCoordinator } from './route-mesh-runtime';
 import { ServiceRelocationAuthorityError } from '../foundation/service-relocation-coordinator';
 import { ZLinkConfigurationException } from '../../contracts/Configuration/ConfigurationException';
@@ -261,6 +262,19 @@ export class ZLinkFrameworkRuntimeHost
   private readonly metricRegistrations: import('../diagnostics').ZLinkRuntimeMetricRegistration[] =
     [];
   private readonly admission = new ZLinkRuntimeAdmissionGate(() => this.ownerAdmissionOpen());
+  private readonly activationAdmission = new ZLinkActivationAdmission(
+    (meshName) =>
+      this.options.registration.spotNodes.get(meshName)?.activationConcurrencyLimit ?? 128,
+    (meshName) => {
+      void this.spotNodeRuntime
+        ?.publishMeshNodeState(
+          this.runtimeState,
+          this.executionState?.abortController.signal,
+          meshName
+        )
+        .catch(() => undefined);
+    }
+  );
   private cachedLocationSpotRouteResolver?: ZLinkSpotRouteResolver;
   private actorClientLocationResolver?: ZLinkStoreLocationResolvers;
   // Shared, runtime-mutable message-flow mode cell — installed once so
@@ -799,7 +813,8 @@ export class ZLinkFrameworkRuntimeHost
       reconcileStatefulAuthorityRoutes: (signal) =>
         this.statefulAuthorityRoutes?.reconcile(signal) ?? Promise.resolve(),
       runtimeEventPublisher: this.runtimeEventPublisher,
-      metrics: this.metrics
+      metrics: this.metrics,
+      activationAdmission: this.activationAdmission
     });
     this.actorTransferAuthorityRuntime = new ZLinkActorTransferAuthorityRuntime({
       store: () => this.locationOwner.actorTransferStore() as never,
@@ -832,6 +847,7 @@ export class ZLinkFrameworkRuntimeHost
       },
       hostState: () => this.runtimeState,
       admission: this.admission,
+      activationAdmission: this.activationAdmission,
       publishRetiring: (meshName, signal) => this.publishMeshRetiring(meshName, signal),
       rollbackRetiring: (meshName, signal) => this.publishMeshServing(meshName, signal),
       publishDraining: (meshName, signal) => this.publishMeshDraining(meshName, signal),
@@ -1509,7 +1525,7 @@ export class ZLinkFrameworkRuntimeHost
           reserved: capacity.reserved,
           limit: capacity.limit
         })),
-        activation: descriptor?.activationConcurrency ?? { active: 0, limit: 0 },
+        activation: this.activationAdmission.current(meshName),
         instanceSpots: []
       });
     }
@@ -1982,11 +1998,13 @@ export class ZLinkFrameworkRuntimeHost
     | 'boundSessionFactory'
     | 'shutdownSignal'
     | 'admission'
+    | 'activationAdmission'
     | 'placementCreate'
   > {
     this.ensureLocationRuntime();
     return {
       ...this.actorRuntimeOptionsFactory().createActorManagerOptions(),
+      activationAdmission: this.activationAdmission,
       placementCreate: async (actorId, actorType, createOnly, call, signal) => {
         const placement = this.actorPlacement;
         if (placement === undefined) {
@@ -2083,17 +2101,7 @@ export class ZLinkFrameworkRuntimeHost
         admission: this.admission,
         statefulExecutionAllowed: () => this.ownerAdmissionOpen()
       }).create(this.actorTransferRuntime),
-      activationConcurrencyLimitProvider: (meshName: string) =>
-        this.options.registration.spotNodes.get(meshName)?.activationConcurrencyLimit ?? 128,
-      onInstanceActivationConcurrencyChanged: (meshName: string) => {
-        void this.spotNodeRuntime
-          ?.publishMeshNodeState(
-            this.runtimeState,
-            this.executionState?.abortController.signal,
-            meshName
-          )
-          .catch(() => undefined);
-      }
+      activationAdmission: this.activationAdmission
     };
   }
 
@@ -2720,15 +2728,7 @@ export class ZLinkFrameworkRuntimeHost
           record,
           this.executionState?.abortController.signal
         ),
-      instanceActivationConcurrencyProvider: (meshName: string) => {
-        return (
-          this.spotManager?.instanceActivationConcurrency(meshName) ?? {
-            active: 0,
-            limit:
-              this.options.registration.spotNodes.get(meshName)?.activationConcurrencyLimit ?? 128
-          }
-        );
-      }
+      activationConcurrency: (meshName: string) => this.activationAdmission.current(meshName)
     };
   }
 
