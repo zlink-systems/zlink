@@ -148,8 +148,9 @@ remove하거나 close할 때까지 이후 wait도 같다. 그 socket의 읽지 �
 않고 fd·timer source는 shutdown의 영향을 받지 않으므로, 그런 socket source가 없는 poller의 wait는 event나
 timeout까지 계속된다.
 
-poller 하나의 add, modify, remove와 wait는 caller가 직렬화한다. 서로 다른 poller는
-동시에 사용할 수 있다. wait가 반환한 event array는 caller-owned이며 Core 내부
+poller 하나의 size, add, modify, remove와 wait는 Core가 직렬화한다. wait가 active인 poller에 대한 size,
+add·modify·remove(`_fd`·`_timer` 변형 포함)와 wait는 registration을 바꾸지 않고 `ZLINK_CONFIG_BUSY`/`EBUSY`로
+실패한다. 서로 다른 poller는 동시에 사용할 수 있다. wait가 반환한 event array는 caller-owned이며 Core 내부
 pointer를 포함하지 않는다.
 
 ## 6. 공개 타입
@@ -336,14 +337,13 @@ array)만으로 다음을 확인한다. 각 항목은 unit test 하나로 이어
 
 **수명**
 - poller destroy 중 wait가 active이면 `ZLINK_CLOSE_BUSY`/`EBUSY`다.
+- wait가 active인 poller에 대한 size, add·modify·remove(`_fd`·`_timer` 변형 포함)와 wait는 `ZLINK_CONFIG_BUSY`/`EBUSY`로 실패하고 registration은 변하지 않는다.
 
 **poller 함수 반환과 output**
 - `zlink_poller_new`의 allocation 실패는 `NULL`/`ENOMEM`이고, `zlink_poller_destroy`가 성공하면 caller pointer가 NULL이 된다.
 - `zlink_poller_size`는 등록 count 또는 실패 `-1`을 반환한다.
 - `zlink_poller_wait`는 event count, timeout `0`, 실패 `-1`을 반환하며 `events == NULL` 또는 `event_capacity <= 0`은 `EINVAL`이다.
 - `zlink_poll`·`zlink_poller_size`·`zlink_poller_wait`의 `error_out`은 NULL을 허용하는 선택 output이다.
-
-poller 하나의 add·modify·remove와 wait를 caller가 직렬화하는 것은 caller의 사용 전제이며([§5](#5-source-수명과-직렬화)), 서로 다른 poller의 동시 사용은 허용된다.
 
 <!-- zlink-nav:start -->
 [Core 스펙 목차](README.ko.md) | [이전: Events](04-events.ko.md) | [다음: Monitoring](06-monitoring.ko.md)

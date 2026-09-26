@@ -219,7 +219,7 @@ typedef enum zlink_config_result_t {
 
 `CONFLICT`는 중복 이름, 중복 binding과 process-local identity 충돌이다. `BUFFER_TOO_SMALL`은 query 또는
 retain output capacity가 작으며 caller-owned output을 일부 기록하지 않았음을 뜻한다. `BUSY`는 같은 mutable
-batch나 configuration object를 동시에 사용한 경우다.
+batch나 configuration object를 동시에 사용했거나, wait가 active인 poller를 사용한 경우다.
 
 ### 4.6 Receive flow state 설정 결과
 

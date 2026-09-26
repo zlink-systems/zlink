@@ -166,9 +166,11 @@ waits end the same way until that source is removed or closed. Unread completion
 to a context and fd and timer sources are not affected by shutdown, so the wait of a poller with no such
 socket source continues until an event or its timeout.
 
-The caller serializes add, modify, remove, and wait on one poller. Different
-pollers can be used concurrently. An event array returned by wait is caller-owned
-and contains no pointer to Core storage.
+Core serializes size, add, modify, remove and wait on one poller. While a wait is
+active on a poller, size, add, modify and remove (including the `_fd` and `_timer`
+variants) and wait on that poller fail with `ZLINK_CONFIG_BUSY`/`EBUSY` and leave
+its registrations unchanged. Different pollers can be used concurrently. An event
+array returned by wait is caller-owned and contains no pointer to Core storage.
 
 ## 6. Public types
 
@@ -356,6 +358,7 @@ and event-array contents. Each item maps to one unit test.
 **Lifetime**
 
 - Destroying a poller while a wait is active returns `ZLINK_CLOSE_BUSY`/`EBUSY`.
+- While a wait is active on a poller, size, add, modify and remove (including the `_fd` and `_timer` variants) and wait fail with `ZLINK_CONFIG_BUSY`/`EBUSY`, and registrations remain unchanged.
 
 **Poller function returns and outputs**
 
@@ -363,10 +366,6 @@ and event-array contents. Each item maps to one unit test.
 - `zlink_poller_size` returns the registration count or `-1` on failure.
 - `zlink_poller_wait` returns an event count, `0` on timeout, and `-1` on failure; `events == NULL` or `event_capacity <= 0` returns `EINVAL`.
 - The `error_out` parameters of `zlink_poll`, `zlink_poller_size`, and `zlink_poller_wait` are optional outputs that may be NULL.
-
-Caller serialization of add, modify, remove, and wait on one poller is a usage
-precondition ([§5](#5-source-lifetime-and-serialization)); concurrent use of
-different pollers is allowed.
 
 <!-- zlink-nav:start -->
 [Core Spec Index](README.en.md) | [Previous: Events](04-events.en.md) | [Next: Monitoring](06-monitoring.en.md)

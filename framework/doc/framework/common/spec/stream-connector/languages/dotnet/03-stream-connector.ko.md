@@ -356,7 +356,7 @@ scheme → transport 매핑은 [공통 스펙 §3.1](../../32-stream-connector.k
 
 수신 한도 위반의 terminal 여부, 종료 사유와 reconnect 조건은
 [공통 스펙 §9](../../32-stream-connector.ko.md#9-오류-의미)이 소유한다. `.NET`은 그 오류를
-`ZlinkStreamErrorCode.FrameTooLarge`, 종료 사유를 `ZlinkStreamCloseReason.TransportError`로 표현한다.
+`ZlinkStreamErrorCode.FrameTooLarge`로 표현한다.
 
 ## 11. Flow
 

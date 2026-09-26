@@ -105,7 +105,7 @@ Application에 error kind만 돌려주고 원인을 버리는 종결은 만들�
 | Host relocation·shutdown 개별 operation의 진행과 결과 | [Host relocation 전체 흐름](../05-location-relocation/05-host-relocation-flow.ko.md) |
 | Application이 message와 함께 보내는 metadata의 소유권과 크기 | [Message model](../00-foundation/05-message-model.ko.md) |
 | Transport 연결의 liveness와 peer deadline | [Transport connection liveness](../02-channel-transport/05-transport-liveness.ko.md) |
-| STREAM 연결 close 사유(`close_reason`)의 정의 | [Session 「STREAM 서버 session」](../04-session/01-stream-session.ko.md) |
+| STREAM 연결 close 사유(`close_reason`)의 정의 | [Runtime metrics §6](02-runtime-metrics.ko.md#6-object-수capacity와-relocation-계기) |
 
 ---
 

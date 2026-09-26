@@ -423,8 +423,7 @@ wire value.**
 Whether a receive bound violation is terminal, the close reason, and
 the reconnect condition is owned by
 [Common Spec §9](../../32-stream-connector.en.md#9-error-meaning).
-`.NET` expresses that error as `ZlinkStreamErrorCode.FrameTooLarge`,
-and the close reason as `ZlinkStreamCloseReason.TransportError`.
+`.NET` expresses that error as `ZlinkStreamErrorCode.FrameTooLarge`.
 
 ## 11. Flow
 

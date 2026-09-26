@@ -278,7 +278,7 @@ using its ID is called an
 | `policy` | `recreate|snapshot` |
 | Relocation `outcome` | `completed|aborted|failed|shutdown` |
 | `transport` | One of the allowed values fixed at startup registration. |
-| `close_reason` | `client_close|idle_timeout|heartbeat_timeout|server_shutdown|protocol_error|transport_error` |
+| `close_reason` | `client_close|idle_timeout|heartbeat_timeout|server_drain|protocol_error|transport_error` |
 
 ## 7. Instance Spot Activation Instruments
 
