@@ -135,7 +135,7 @@ try {
     $playAConfig = Join-Path $RunDir "play-a.properties"
     $playBConfig = Join-Path $RunDir "play-b.properties"
 
-    Set-ZlinkSampleUtf8File -Path $apiAConfig -Value @(
+    Set-ZlinkSampleProperties -Path $apiAConfig -Value @(
         "sample.nodeId=api-a",
         "sample.apiBindUrl=http://127.0.0.1:$ApiAHttpPort",
         "sample.apiPublicUrl=http://127.0.0.1:$ApiAHttpPort",
@@ -164,7 +164,7 @@ try {
         -replace 'sample\.apiPublicUrl=.*', "sample.apiPublicUrl=http://127.0.0.1:$ApiBHttpPort" `
         -replace 'sample\.apiChannelEndpoint=.*', "sample.apiChannelEndpoint=tcp://127.0.0.1:$ApiBChannelPort" `
         -replace 'sample\.routeEndpoint=.*', "sample.routeEndpoint=tcp://127.0.0.1:$UnusedRouteBPort"
-    Set-ZlinkSampleUtf8File -Path $apiBConfig -Value $apiBContent
+    Set-ZlinkSampleProperties -Path $apiBConfig -Value $apiBContent
 
     Copy-Item $apiAConfig $playAConfig
     Copy-Item $apiAConfig $playBConfig
@@ -177,11 +177,11 @@ try {
         -replace 'sample\.spotPubSubEndpoint=.*', "sample.spotPubSubEndpoint=tcp://127.0.0.1:$PlayBPubPort" `
         -replace 'sample\.peerSpotEndpoint=.*', "sample.peerSpotEndpoint=tcp://127.0.0.1:$PlayASpotPort" `
         -replace 'sample\.peerSpotPubSubEndpoint=.*', "sample.peerSpotPubSubEndpoint=tcp://127.0.0.1:$PlayAPubPort"
-    Set-ZlinkSampleUtf8File -Path $playBConfig -Value $playBContent
+    Set-ZlinkSampleProperties -Path $playBConfig -Value $playBContent
     $playAContent = (Get-Content $playAConfig) `
         -replace 'sample\.nodeId=.*', "sample.nodeId=play-a" `
         -replace 'sample\.routeEndpoint=.*', "sample.routeEndpoint=tcp://127.0.0.1:$PlayASpotPort"
-    Set-ZlinkSampleUtf8File -Path $playAConfig -Value $playAContent
+    Set-ZlinkSampleProperties -Path $playAConfig -Value $playAContent
 
     Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -SettingsPath "standalone.settings.gradle.kts" -Arguments @("--no-daemon", ":Server:installDist", ":Client:installDist", "--quiet")
 

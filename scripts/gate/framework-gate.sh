@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Serialized framework gate on the current core/build-dev + local packages: 7 samples per language,
-# node npm test (incl. M6A), java core/contract tests, dotnet sample-regression + unit tests.
+# node npm test (incl. M6A), all JVM test source sets, dotnet sample-regression + unit tests.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh" || exit $?
 cd "$Z" || exit
 require_quiet || exit 2
@@ -31,7 +31,10 @@ done
 TMPDIR=/dev/shm/zlink-tmp-node run node-npmtest framework/languages/node npm test
 run node-unity-bundle-check . git diff --quiet -- framework/languages/unity
 TMPDIR=/dev/shm/zlink-tmp-node run node-sample-tests framework/languages/node npm run test:samples
-TMPDIR=/dev/shm/zlink-tmp-java run java-coretest framework/languages/java ./gradlew --no-daemon :zlink-framework-core:test contractTest --continue
+# Node npm test builds the connector dist consumed by JavaNodeStreamInteropTest;
+# its standalone Gradle test task also declares that build prerequisite.
+redis-cli -h 127.0.0.1 -p 6379 ping | grep -qx PONG || { echo "Redis is required for JVM location tests" >&2; exit 1; }
+ZLINK_REDIS_LOCATION_ENDPOINT=redis://127.0.0.1:6379 TMPDIR=/dev/shm/zlink-tmp-java run java-tests framework/languages/java ./gradlew --no-daemon test contractTest fakeBackendTest integrationTest sampleTest consumerTest m5FoundationTest --continue
 ( dotnet_env; run dotnet-sampleregression framework/languages/dotnet dotnet test tests/Zlink.Framework.SampleRegressionTests )
 ( dotnet_env; run dotnet-unit-main framework/languages/dotnet dotnet test tests/Zlink.Framework.UnitTests --filter 'FullyQualifiedName!~CanonicalActorJoinIngressReplyTests' --blame-hang --blame-hang-timeout 10m )
 ( dotnet_env; run dotnet-unit-join framework/languages/dotnet dotnet test tests/Zlink.Framework.UnitTests --filter 'FullyQualifiedName~CanonicalActorJoinIngressReplyTests' --blame-hang --blame-hang-timeout 10m )

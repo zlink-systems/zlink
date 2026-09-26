@@ -45,14 +45,14 @@ extern int ZlinkStreamIsConnected(int handle);
 extern int ZlinkStreamGetState(int handle);
 extern int ZlinkStreamGetCloseReason(int handle);
 extern int ZlinkStreamGetPendingDispatchCount(int handle);
-extern int ZlinkStreamGetDiagnosticsLevel(int handle);
-extern int ZlinkStreamSetDiagnosticsLevel(int handle, int level);
+extern void ZlinkStreamSetReplyReceivedInterest(int handle, int interested);
 
 #define EVENT_CALL_COMPLETED 1
 #define EVENT_MESSAGE 2
 #define EVENT_ERROR_RECEIVED 3
 #define EVENT_DISCONNECTED 4
 #define EVENT_STATE_CHANGED 5
+#define EVENT_REPLY_RECEIVED 8
 
 #define MAX_EVENTS_PER_PUMP 256
 /* ZlinkStreamPump's two negative results; see the jslib header. */
@@ -158,6 +158,10 @@ static char pumpFailureText[512];
 static int disconnectCount = 0;
 static int errorCount = 0;
 static int stateChangeCount = 0;
+/* This harness's own _replyReceivedHandlers count (ZlinkStreamWebGlConnector.cs),
+   the one decision point for ZlinkStreamSetReplyReceivedInterest. */
+static int replyReceivedHooks = 0;
+static int replyReceivedRuns = 0;
 
 static char violations[1024];
 static char handlerLog[16384];
@@ -348,6 +352,22 @@ static void transferEvent(Event *event) {
       return;
     }
 
+    case EVENT_REPLY_RECEIVED: {
+      /* Only arrives at all while zlh_register_reply_received_hook has raised
+         interest (ZlinkStreamSetReplyReceivedInterest) - see
+         ZlinkStreamRuntime.jspre's setReplyReceivedInterest, which does not
+         subscribe otherwise. ZlinkStreamWebGlConnector.cs's RouteReplyReceived
+         queues a dispatch item per registered onReplyReceived hook; spec 32
+         section 5.7: the hook follows dispatch mode like any other callback. */
+      Item *item = (Item *)hmalloc(sizeof(Item));
+      item->kind = EVENT_REPLY_RECEIVED;
+      item->message = NULL;
+      item->text = event->text;
+      event->text = NULL;
+      enqueueItem(item);
+      return;
+    }
+
     default: {
       Item *item = (Item *)hmalloc(sizeof(Item));
       item->kind = event->type;
@@ -443,6 +463,8 @@ void zlh_reset(void) {
   disconnectCount = 0;
   errorCount = 0;
   stateChangeCount = 0;
+  replyReceivedHooks = 0;
+  replyReceivedRuns = 0;
   violations[0] = '\0';
   handlerLog[0] = '\0';
   stateLog[0] = '\0';
@@ -491,21 +513,45 @@ int zlh_pump(void) {
 }
 
 /*
- * One Unity Update(): keep a Dispatch call in flight so the transport advances,
- * then pump the boundary and transfer what came back. Handlers do not run here;
- * zlh_run_dispatch_queue is the explicit Dispatch step.
+ * Starts (or renews) the keep-alive Dispatch call, unconditionally: no
+ * IsConnected check. ZlinkStreamWebGlConnector.cs's RunDispatchAsync - the
+ * explicit Dispatch step - calls StartAdvanceIfIdle the same way, because
+ * Close() queues its terminal connection-state and disconnected callbacks
+ * through this same Dispatch (spec 32 section 7), and they only reach the
+ * sink once a Dispatch call runs after they were queued. The reference JS
+ * harness (test/contract/helpers/unity-webgl-jslib-client.js) matches this
+ * split: its dispatch() starts its advance unconditionally, while its
+ * wait/drive loops start one only when connected.
+ */
+static void startAdvance(void) {
+  if (advanceCallId == 0 || slot(advanceCallId)->id != advanceCallId ||
+      slot(advanceCallId)->state != 0) {
+    if (advanceCallId != 0 && slot(advanceCallId)->id == advanceCallId)
+      releaseCall(slot(advanceCallId));
+    advanceCallId = registerCall();
+    ZlinkStreamDispatch(connector, advanceCallId);
+  }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void zlh_start_advance(void) {
+  if (!connector) return;
+  startAdvance();
+}
+
+/*
+ * One Unity Update(): keep a Dispatch call in flight while connected so the
+ * transport advances, then pump the boundary and transfer what came back.
+ * Handlers do not run here; zlh_run_dispatch_queue is the explicit Dispatch
+ * step. Matches ZlinkStreamWebGlConnector.cs's wait/drive paths (DriveAsync,
+ * WaitForEncodedAsync), which start the advance call only while IsConnected -
+ * unlike RunDispatchAsync (see zlh_start_advance above), a frame before
+ * Connect or after Close only pumps.
  */
 EMSCRIPTEN_KEEPALIVE
 int zlh_frame(void) {
   if (!connector) return 0;
-  /* Dispatch only advances a live transport, so a frame before Connect or
-     after Close only pumps - the same rule the managed connector follows. */
-  if (ZlinkStreamIsConnected(connector) == 1 &&
-      (advanceCallId == 0 || slot(advanceCallId)->id != advanceCallId ||
-       slot(advanceCallId)->state != 0)) {
-    advanceCallId = registerCall();
-    ZlinkStreamDispatch(connector, advanceCallId);
-  }
+  if (ZlinkStreamIsConnected(connector) == 1) startAdvance();
   return zlh_pump();
 }
 
@@ -631,6 +677,34 @@ void zlh_register_handler(const char *name) {
   if (observer) observer->hasHandler = 1;
 }
 
+/*
+ * Stands in for ZlinkStreamWebGlConnector.cs's OnReplyReceived: adds to this
+ * harness's own hook count and, only on the 0->1 transition, tells the JS
+ * boundary interest turned on. That transition is the one decision point;
+ * every registration after the first does not call it again.
+ */
+EMSCRIPTEN_KEEPALIVE
+void zlh_register_reply_received_hook(void) {
+  if (!connector) return;
+  replyReceivedHooks += 1;
+  if (replyReceivedHooks == 1) ZlinkStreamSetReplyReceivedInterest(connector, 1);
+}
+
+/*
+ * Stands in for disposing the IDisposable OnReplyReceived returns: removes one
+ * hook and, only on the 1->0 transition, tells the JS boundary interest turned
+ * off.
+ */
+EMSCRIPTEN_KEEPALIVE
+void zlh_unregister_reply_received_hook(void) {
+  if (!connector || replyReceivedHooks == 0) return;
+  replyReceivedHooks -= 1;
+  if (replyReceivedHooks == 0) ZlinkStreamSetReplyReceivedInterest(connector, 0);
+}
+
+EMSCRIPTEN_KEEPALIVE
+int zlh_reply_received_runs(void) { return replyReceivedRuns; }
+
 EMSCRIPTEN_KEEPALIVE
 int zlh_pending_dispatch(void) {
   int count = 0;
@@ -667,6 +741,9 @@ int zlh_run_dispatch_queue(void) {
       hfree(item->text);
     } else if (item->kind == EVENT_DISCONNECTED) {
       disconnectCount += 1;
+      hfree(item->text);
+    } else if (item->kind == EVENT_REPLY_RECEIVED) {
+      replyReceivedRuns += 1;
       hfree(item->text);
     } else {
       errorCount += 1;
@@ -719,12 +796,6 @@ int zlh_state(void) { return ZlinkStreamGetState(connector); }
 
 EMSCRIPTEN_KEEPALIVE
 int zlh_close_reason(void) { return ZlinkStreamGetCloseReason(connector); }
-
-EMSCRIPTEN_KEEPALIVE
-int zlh_diagnostics_level(void) { return ZlinkStreamGetDiagnosticsLevel(connector); }
-
-EMSCRIPTEN_KEEPALIVE
-int zlh_set_diagnostics_level(int level) { return ZlinkStreamSetDiagnosticsLevel(connector, level); }
 
 EMSCRIPTEN_KEEPALIVE
 void zlh_unobserve(const char *name) { ZlinkStreamUnobserve(connector, name); }

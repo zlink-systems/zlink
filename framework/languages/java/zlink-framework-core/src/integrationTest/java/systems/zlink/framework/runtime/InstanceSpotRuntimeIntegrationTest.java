@@ -33,8 +33,6 @@ import systems.zlink.framework.spots.ZLinkSpotClosingContext;
 import systems.zlink.framework.spots.ZLinkSpotPacketHandler;
 import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
 
-import java.io.IOException;
-import java.net.ServerSocket;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -55,15 +53,15 @@ final class InstanceSpotRuntimeIntegrationTest {
         EchoInstanceSpot.closes.set(null);
         SourceEntrySpot.reset();
         String suffix = Long.toUnsignedString(System.nanoTime(), 36);
-        String sourceEndpoint = tcpEndpoint();
-        String targetEndpoint = tcpEndpoint();
         var store = new ZLinkInMemoryLocationStore();
 
         var targetOptions = new DefaultZLinkFrameworkOptions();
         targetOptions.addLocationStore(store);
         targetOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
         var targetNode = targetOptions.addRouteMesh("game");
-        targetNode.listen(targetEndpoint).setRoutingId(RoutingId.from("instance-target-" + suffix));
+        targetNode
+                .listen("tcp://127.0.0.1:0")
+                .setRoutingId(RoutingId.from("instance-target-" + suffix));
         targetNode
                 .objects()
                 .server()
@@ -76,7 +74,9 @@ final class InstanceSpotRuntimeIntegrationTest {
         sourceOptions.addLocationStore(store);
         sourceOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
         var sourceNode = sourceOptions.addRouteMesh("game");
-        sourceNode.listen(sourceEndpoint).setRoutingId(RoutingId.from("instance-source-" + suffix));
+        sourceNode
+                .listen("tcp://127.0.0.1:0")
+                .setRoutingId(RoutingId.from("instance-source-" + suffix));
         sourceNode.objects().client();
         sourceNode.objects().server().addEntrySpot(SourceEntrySpot.class);
 
@@ -108,8 +108,6 @@ final class InstanceSpotRuntimeIntegrationTest {
         SourceEntrySpot.afterCloseStart = new CompletableFuture<>();
         String suffix = Long.toUnsignedString(System.nanoTime(), 36);
         String spotId = "close-order-" + suffix;
-        String sourceEndpoint = tcpEndpoint();
-        String targetEndpoint = tcpEndpoint();
         var store = new GatedDeleteStore(new ZLinkInMemoryLocationStore(), spotId);
 
         var targetOptions = new DefaultZLinkFrameworkOptions();
@@ -117,7 +115,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         targetOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
         var targetNode = targetOptions.addRouteMesh("game");
         targetNode
-                .listen(targetEndpoint)
+                .listen("tcp://127.0.0.1:0")
                 .setRoutingId(RoutingId.from("close-order-target-" + suffix));
         targetNode
                 .objects()
@@ -132,7 +130,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         sourceOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
         var sourceNode = sourceOptions.addRouteMesh("game");
         sourceNode
-                .listen(sourceEndpoint)
+                .listen("tcp://127.0.0.1:0")
                 .setRoutingId(RoutingId.from("close-order-source-" + suffix));
         sourceNode.objects().client();
         sourceNode.objects().server().addEntrySpot(SourceEntrySpot.class);
@@ -173,8 +171,6 @@ final class InstanceSpotRuntimeIntegrationTest {
         EchoInstanceSpot.idleEvicted = new CompletableFuture<>();
         IdleSourceEntrySpot.reset();
         String suffix = Long.toUnsignedString(System.nanoTime(), 36);
-        String sourceEndpoint = tcpEndpoint();
-        String targetEndpoint = tcpEndpoint();
         var store = new ZLinkInMemoryLocationStore();
         String spotId = "idle-" + suffix;
         IdleSourceEntrySpot.store = store;
@@ -185,7 +181,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         targetOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
         var targetNode = targetOptions.addRouteMesh("game");
         targetNode
-                .listen(targetEndpoint)
+                .listen("tcp://127.0.0.1:0")
                 .setRoutingId(RoutingId.from("instance-idle-target-" + suffix))
                 .setInstanceSpotIdleTimeout(Duration.ofMillis(100));
         targetNode
@@ -201,7 +197,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         sourceOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
         var sourceNode = sourceOptions.addRouteMesh("game");
         sourceNode
-                .listen(sourceEndpoint)
+                .listen("tcp://127.0.0.1:0")
                 .setRoutingId(RoutingId.from("instance-idle-source-" + suffix));
         sourceNode.objects().client();
         sourceNode.objects().server().addEntrySpot(IdleSourceEntrySpot.class);
@@ -495,12 +491,6 @@ final class InstanceSpotRuntimeIntegrationTest {
                                                     awaitAuthorityMissing(
                                                             store, spotId, deadlineNanos));
                         });
-    }
-
-    private static String tcpEndpoint() throws IOException {
-        try (ServerSocket socket = new ServerSocket(0)) {
-            return "tcp://127.0.0.1:" + socket.getLocalPort();
-        }
     }
 
     private static final class GatedDeleteStore implements ZLinkLocationStore {

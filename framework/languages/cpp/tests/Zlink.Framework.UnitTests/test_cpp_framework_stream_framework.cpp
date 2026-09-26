@@ -5,11 +5,11 @@
 
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
+#include "runtime/diagnostics/listener_status_registry.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/streams/stream_host_service.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 
-#include "loopback_tcp_endpoint.hpp"
 
 #include <boost/asio/error.hpp>
 #include <boost/asio/io_context.hpp>
@@ -2271,6 +2271,8 @@ int main ()
         }}},
       std::chrono::milliseconds{30'000}, core_mesh, {}, core_listeners);
     core_host.start (core_provider);
+    const auto core_stream_endpoint =
+      core_listeners->find (zlink::framework::listener_kind_t::stream, "core-stream")->endpoint;
 
     zlink::stream_connector::connector_options_t core_connector_options;
     core_connector_options.endpoint =

@@ -1,7 +1,5 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Net;
-using System.Net.Sockets;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Text.Json;
@@ -1904,7 +1902,7 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
                 pollingInterval ?? TimeSpan.FromMilliseconds(10);
             var objects = options
                 .AddRouteMesh(MeshName)
-                .Listen(ReserveTcpEndpoint())
+                .Listen("tcp://127.0.0.1:0")
                 .SetRoutingIdPrefix($"behavior-{node}")
                 .SetActorLimit(100)
                 .SetSpotLimit(100)
@@ -1949,15 +1947,6 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
     }
 
     internal Task StopAsync() => _hosted.StopAsync(CancellationToken.None);
-
-    private static string ReserveTcpEndpoint()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return $"tcp://127.0.0.1:{port}";
-    }
 }
 
 internal sealed record BehaviorNode(string Name);

@@ -13,9 +13,8 @@
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 #include "runtime/streams/stream_host_service.hpp"
+#include "runtime/diagnostics/listener_status_registry.hpp"
 #include "runtime/streams/stream_runtime.hpp"
-
-#include "loopback_tcp_endpoint.hpp"
 
 #include <zlink/framework/contracts/configuration/zlink_builder.hpp>
 #include <zlink/framework/contracts/configuration/framework_options.hpp>
@@ -842,6 +841,9 @@ void verify_actor_route_resolver_preserves_unavailable ()
         }}},
       30s, service.nodes ().front (), {}, stream_listeners);
     assert (stream_host.start (provider).result ());
+    const auto stream_endpoint =
+      stream_listeners->find (zlink::framework::listener_kind_t::stream, "expired-actor-stream")
+        ->endpoint;
     zlink::stream_connector::connector_options_t connector_options;
     connector_options.endpoint = zlink::framework::tests::listener_endpoint (
       *stream_listeners, listener_kind_t::stream, "expired-actor-stream");
@@ -1936,6 +1938,9 @@ int run_cross_process_delivery ()
         close (reciprocal_child_ready_pipe[1]);
         close (reciprocal_child_stop_pipe[0]);
         close (reciprocal_child_stop_pipe[1]);
+        close (reciprocal_endpoint_pipe[0]);
+        close (reciprocal_endpoint_pipe[1]);
+        close (child_peer_pipe[1]);
         close (formal_descriptor_pipe[0]);
         close (formal_ack_pipe[0]);
         close (reciprocal_child_endpoint_pipe[0]);
@@ -1962,6 +1967,16 @@ int run_cross_process_delivery ()
             _exit (14);
         node.connect_peer (zlink::routing_id_t::from (std::string ("vertical-c")),
                            *reciprocal_endpoint);
+
+        std::uint32_t peer_size = 0;
+        if (read (child_peer_pipe[0], &peer_size, sizeof (peer_size)) != sizeof (peer_size))
+            _exit (14);
+        std::string peer_endpoint (peer_size, '\0');
+        if (read (child_peer_pipe[0], peer_endpoint.data (), peer_endpoint.size ())
+            != static_cast<ssize_t> (peer_endpoint.size ()))
+            _exit (14);
+        close (child_peer_pipe[0]);
+        node.connect_peer (zlink::routing_id_t::from (std::string ("vertical-c")), peer_endpoint);
 
         const bool multi_peer_admitted = wait_until_admitted_count (node, 2);
         const char reciprocal_ready = multi_peer_admitted ? 1 : 0;
@@ -2041,6 +2056,7 @@ int run_cross_process_delivery ()
     close (completion_ack_pipe[0]);
     close (spot_request_ack_pipe[1]);
     close (reciprocal_ready_pipe[1]);
+    close (child_peer_pipe[0]);
     close (formal_descriptor_pipe[1]);
     close (formal_ack_pipe[1]);
     close (reciprocal_endpoint_pipe[0]);
@@ -2057,6 +2073,8 @@ int run_cross_process_delivery ()
     const pid_t reciprocal_child = fork ();
     assert (reciprocal_child >= 0);
     if (reciprocal_child == 0) {
+        close (child_peer_pipe[1]);
+        close (reciprocal_endpoint_pipe[0]);
         close (reciprocal_child_ready_pipe[0]);
         close (reciprocal_child_stop_pipe[1]);
         close (reciprocal_child_endpoint_pipe[0]);
@@ -2078,6 +2096,7 @@ int run_cross_process_delivery ()
         reciprocal_node.stop ();
         _exit (ready == 1 && stop == 1 ? 0 : 13);
     }
+    close (reciprocal_endpoint_pipe[1]);
     close (reciprocal_child_ready_pipe[1]);
     close (reciprocal_child_stop_pipe[0]);
     close (reciprocal_child_endpoint_pipe[1]);

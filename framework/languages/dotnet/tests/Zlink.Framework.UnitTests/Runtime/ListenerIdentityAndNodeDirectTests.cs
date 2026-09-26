@@ -1,7 +1,5 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Net;
-using System.Net.Sockets;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -84,24 +82,80 @@ public sealed class ListenerIdentityAndNodeDirectTests
         });
         using var host = builder.Build();
 
+        var runtime = host.Services.GetRequiredService<IZLinkFrameworkRuntime>();
+        var listeners = new (ZLinkListenerKind Kind, string Name)[]
+        {
+            (ZLinkListenerKind.RouteMesh, "listener-mesh"),
+            (ZLinkListenerKind.ClientServer, "listener-client-server"),
+            (ZLinkListenerKind.Fanout, "listener-fanout"),
+            (ZLinkListenerKind.Stream, "listener-stream"),
+        };
+        foreach (var (kind, name) in listeners)
+            Assert.Equal(
+                ZLinkFrameworkErrorKind.NotConfigured,
+                Assert
+                    .Throws<ZLinkFrameworkException>(() => runtime.GetListenerStatus(kind, name))
+                    .Kind
+            );
+
         await host.StartAsync();
+        foreach (var (kind, name) in listeners)
+        {
+            var status = runtime.GetListenerStatus(kind, name);
+            Assert.Equal(kind, status.Kind);
+            Assert.Equal(name, status.Name);
+            Assert.Equal("127.0.0.1", new Uri(status.Endpoint).Host);
+            Assert.InRange(new Uri(status.Endpoint).Port, 1, 65535);
+            Assert.InRange(
+                status.ObservedAt,
+                DateTimeOffset.UtcNow.AddMinutes(-1),
+                DateTimeOffset.UtcNow
+            );
+            Assert.Equal(
+                ZLinkFrameworkErrorKind.NotConfigured,
+                Assert
+                    .Throws<ZLinkFrameworkException>(() =>
+                        runtime.GetListenerStatus(kind, "unknown-listener")
+                    )
+                    .Kind
+            );
+        }
+        Assert.Equal(
+            ZLinkFrameworkErrorKind.NotConfigured,
+            Assert
+                .Throws<ZLinkFrameworkException>(() =>
+                    runtime.GetListenerStatus((ZLinkListenerKind)int.MaxValue, "listener-mesh")
+                )
+                .Kind
+        );
+        Assert.Equal(
+            ZLinkFrameworkErrorKind.NotConfigured,
+            Assert
+                .Throws<ZLinkFrameworkException>(() =>
+                    runtime.GetListenerStatus(ZLinkListenerKind.RouteMesh, "")
+                )
+                .Kind
+        );
         await host.StopAsync();
     }
 
     [Fact]
     public async Task Wildcard_listener_advertises_loopback_to_expected_route_and_node_direct_succeeds()
     {
-        var port = ReserveTcpPort();
         var targetRid = RoutingId.From("wildcard-target");
-        using var target = BuildMeshHost(
-            RoutingId.From("wildcard-target"),
-            port,
-            bindHost: "0.0.0.0"
-        );
+        using var target = BuildMeshHost(RoutingId.From("wildcard-target"), 0, bindHost: "0.0.0.0");
         await target.StartAsync();
+        var targetEndpoint = Assert.IsType<string>(
+            target
+                .Services.GetRequiredService<ZLinkFrameworkRuntime>()
+                .GetMeshNodeRuntime("listener-node-direct")
+                .Node.MeshStatus()
+                .LocalEndpoint
+        );
+        var port = new Uri(targetEndpoint).Port;
         using var source = BuildMeshHost(
             RoutingId.From("wildcard-source"),
-            ReserveTcpPort(),
+            0,
             expectedPeerRid: targetRid,
             peerEndpoint: $"tcp://127.0.0.1:{port}"
         );
@@ -126,14 +180,20 @@ public sealed class ListenerIdentityAndNodeDirectTests
     [Fact]
     public async Task Endpoint_only_admitted_peer_is_a_node_direct_target()
     {
-        var port = ReserveTcpPort();
         var targetRid = RoutingId.From("endpoint-only-target");
-        using var target = BuildMeshHost(targetRid, port);
+        using var target = BuildMeshHost(targetRid, 0);
         await target.StartAsync();
+        var targetEndpoint = Assert.IsType<string>(
+            target
+                .Services.GetRequiredService<ZLinkFrameworkRuntime>()
+                .GetMeshNodeRuntime("listener-node-direct")
+                .Node.MeshStatus()
+                .LocalEndpoint
+        );
         using var source = BuildMeshHost(
             RoutingId.From("endpoint-only-source"),
-            ReserveTcpPort(),
-            peerEndpoint: $"tcp://127.0.0.1:{port}"
+            0,
+            peerEndpoint: targetEndpoint
         );
         await source.StartAsync();
         try
@@ -245,20 +305,6 @@ public sealed class ListenerIdentityAndNodeDirectTests
             await Task.Delay(10);
         }
         Assert.Fail("The expected runtime condition was not reached.");
-    }
-
-    private static int ReserveTcpPort()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        try
-        {
-            return ((IPEndPoint)listener.LocalEndpoint).Port;
-        }
-        finally
-        {
-            listener.Stop();
-        }
     }
 
     public sealed record ProbeRequest(string Value);

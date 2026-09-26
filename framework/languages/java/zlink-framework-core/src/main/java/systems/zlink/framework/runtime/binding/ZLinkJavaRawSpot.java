@@ -241,13 +241,25 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot, ZLinkJavaAdmissionBack
     }
 
     CompletionStage<Void> enqueueRoute(ZLinkBackendReceived received) {
-        if (closed.get()) {
-            received.close();
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("target Spot is closed"));
+        synchronized (this) {
+            if (closed.get()) {
+                received.close();
+                return CompletableFuture.failedFuture(
+                        new IllegalStateException("target Spot is closed"));
+            }
+            routes.add(received);
         }
-        routes.add(received);
         return raise(ZLinkBackendSpotDispatchEvent.ROUTED_READABLE);
+    }
+
+    @Override
+    public synchronized void sealInstanceSpotAdmission() {
+        closed.set(true);
+    }
+
+    @Override
+    public synchronized void restoreInstanceSpotAdmission() {
+        closed.set(false);
     }
 
     boolean enqueueTopic(ZLinkBackendTopicMessage message) {
@@ -310,8 +322,12 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot, ZLinkJavaAdmissionBack
 
     @Override
     public void close() {
-        if (!closed.compareAndSet(false, true)) {
-            return;
+        synchronized (this) {
+            if (owner.localSpot(spotId) != this) {
+                return;
+            }
+            closed.set(true);
+            owner.removeSpot(this);
         }
         ZLinkBackendReceived route;
         while ((route = routes.poll()) != null) {
@@ -329,7 +345,6 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot, ZLinkJavaAdmissionBack
             }
         }
         lifecycles.clear();
-        owner.removeSpot(this);
     }
 
     static List<Message> copy(List<Message> parts) {

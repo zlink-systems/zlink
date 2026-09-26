@@ -30,7 +30,6 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
     private ScheduledFuture<?> idleCheck;
     private long idleTimeoutNanos;
     private long lastActivityNanos = System.nanoTime();
-    private boolean closeStarted;
     private String expectedOwnerId;
     private long expectedOwnerLeaseGeneration = -1;
     private long expectedAuthorityOwnerGeneration = -1;
@@ -77,10 +76,12 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
     }
 
     CompletionStage<Void> handleDispatchEvent(ZLinkBackendSpotDispatchInfo info) {
-        return onStateLane(() -> handleDispatchEventOnLane(info))
-                .thenCompose(
-                        dispatch ->
-                                dispatch ? drainRoutes() : CompletableFuture.completedFuture(null))
+        return onStateLane(
+                        () ->
+                                handleDispatchEventOnLane(info)
+                                        ? drainRoutes()
+                                        : CompletableFuture.<Void>completedFuture(null))
+                .thenCompose(stage -> stage)
                 .whenComplete(
                         (ignored, failure) -> {
                             if (failure == null) {
@@ -94,9 +95,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
     }
 
     private boolean handleDispatchEventOnLane(ZLinkBackendSpotDispatchInfo info) {
-        if (host.isClosing()
-                || closeStarted
-                || info.event() != ZLinkBackendSpotDispatchEvent.ROUTED_READABLE) {
+        if (info.event() != ZLinkBackendSpotDispatchEvent.ROUTED_READABLE) {
             return false;
         }
         // The route drain only reads frames and submits each payload after its
@@ -214,7 +213,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
         ScheduledFuture<?> discarded =
                 inStateLane(
                         () -> {
-                            if (idleTimeoutNanos <= 0 || closeStarted || resourcesClosed) {
+                            if (idleTimeoutNanos <= 0 || closeFuture != null || resourcesClosed) {
                                 return scheduled;
                             }
                             ScheduledFuture<?> previous = idleCheck;
@@ -227,7 +226,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
     }
 
     private boolean canScheduleIdleCheckOnLane() {
-        if (idleTimeoutNanos <= 0 || closeStarted || resourcesClosed) {
+        if (idleTimeoutNanos <= 0 || closeFuture != null || resourcesClosed) {
             return false;
         }
         return true;
@@ -267,7 +266,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
         return timeout > 0
                 && !host.isClosing()
                 && !host.isRelocating()
-                && !closeStarted
+                && closeFuture == null
                 && System.nanoTime() - lastActivityNanos >= timeout
                 && !hasActiveRouteReceives()
                 && !context.hasActiveTimers();
@@ -306,7 +305,8 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                 closeRouteReceived(received);
                 continue;
             }
-            tail = tail.thenCompose(ignored -> dispatchSpotRouteHandler(received, packet));
+            CompletionStage<Void> dispatched = dispatchSpotRouteHandler(received, packet);
+            tail = tail.thenCombine(dispatched, (ignored, done) -> null);
         }
         return tail;
     }
@@ -338,7 +338,8 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
     void close(ZLinkSpotCloseReason reason, Instant deadline) {
         inStateLane(
                 () -> {
-                    closeStarted = true;
+                    backendSpot.sealInstanceSpotAdmission();
+                    drainRoutes();
                     return null;
                 });
         try {
@@ -378,7 +379,6 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                             if (retryIdle) {
                                 return new CloseStart(null, null, true, null);
                             }
-                            closeStarted = true;
                             ScheduledFuture<?> previous = idleCheck;
                             idleCheck = null;
                             CompletableFuture<Boolean> result = new CompletableFuture<>();
@@ -395,6 +395,12 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
             rescheduleIdleCheck();
             return CompletableFuture.completedFuture(false);
         }
+        inStateLane(
+                () -> {
+                    backendSpot.sealInstanceSpotAdmission();
+                    drainRoutes();
+                    return null;
+                });
         CompletableFuture<Boolean> result = start.result();
         CompletionStage<Boolean> seal;
         try {
@@ -409,34 +415,42 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                 host.discardInstanceSpotActivation(this);
                                 return CompletableFuture.completedFuture(false);
                             }
-                            CompletionStage<Throwable> callback;
-                            try {
-                                callback =
-                                        closingCallback(
-                                                        () ->
-                                                                context.runLifecycleExecution(
-                                                                        () ->
-                                                                                spot.onClosing(
-                                                                                        new ZLinkSpotClosingContext(
-                                                                                                reason,
-                                                                                                Instant
-                                                                                                        .now()))))
-                                                .handle((ignored, failure) -> failure);
-                            } catch (RuntimeException failure) {
-                                callback = CompletableFuture.completedFuture(failure);
-                            }
-                            return callback.thenCompose(
-                                    failure ->
-                                            host.completeInstanceSpotClose(this)
-                                                    .thenApply(
-                                                            closed -> {
-                                                                closeResources();
-                                                                if (failure != null) {
-                                                                    throw new CompletionException(
-                                                                            failure);
-                                                                }
-                                                                return closed;
-                                                            }));
+                            return host.admitNewApplicationJob(
+                                            () -> CompletableFuture.completedFuture(null))
+                                    .thenCompose(
+                                            ignored -> {
+                                                try {
+                                                    return closingCallback(
+                                                                    () ->
+                                                                            context.runClosing(
+                                                                                    () ->
+                                                                                            context
+                                                                                                    .runLifecycleExecution(
+                                                                                                            () ->
+                                                                                                                    spot
+                                                                                                                            .onClosing(
+                                                                                                                                    new ZLinkSpotClosingContext(
+                                                                                                                                            reason,
+                                                                                                                                            Instant
+                                                                                                                                                    .now())))))
+                                                            .handle((done, failure) -> failure);
+                                                } catch (RuntimeException failure) {
+                                                    return CompletableFuture.completedFuture(
+                                                            failure);
+                                                }
+                                            })
+                                    .thenCompose(
+                                            failure ->
+                                                    host.completeInstanceSpotClose(this)
+                                                            .thenApply(
+                                                                    closed -> {
+                                                                        closeResources();
+                                                                        if (failure != null) {
+                                                                            throw new CompletionException(
+                                                                                    failure);
+                                                                        }
+                                                                        return closed;
+                                                                    }));
                         })
                 .whenComplete(
                         (closed, failure) -> {
@@ -445,7 +459,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                         () -> {
                                             if (closeFuture == result) {
                                                 closeFuture = null;
-                                                closeStarted = false;
+                                                backendSpot.restoreInstanceSpotAdmission();
                                             }
                                             return null;
                                         });
@@ -471,7 +485,6 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                 return null;
                             }
                             resourcesClosed = true;
-                            closeStarted = true;
                             ScheduledFuture<?> previous = idleCheck;
                             idleCheck = null;
                             return new CloseResources(previous);

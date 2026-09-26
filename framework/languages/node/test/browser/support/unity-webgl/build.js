@@ -60,15 +60,19 @@ function findEmscripten() {
  *    for the plugins. The plugins get HEAPU8, UTF8ToString, stringToUTF8,
  *    lengthBytesUTF8 and wasmTable from the link, and _malloc and _free from
  *    their own __deps.
- *  - -O1: the highest level at which the plugins both link and run. -O2 and
- *    above link (the committed bundle is built for es2019 so that emscripten
- *    3.1.38's parser and its pre-ES2020 terser converter both accept it), but
- *    that level also runs JSDCE, whose VariableDeclarator handler reads
- *    `node.id.name` and so registers a binding called `undefined` for every
- *    destructuring declaration. With no reference to the identifier `undefined`
- *    in that scope the binding looks unused, and the cleanup deletes every
- *    declarator whose id.name is undefined - that is, the destructuring
- *    declarations themselves. See the -O2 tests for what is and is not fixed.
+ *  - -O1: the level the interactive tests below actually load into the browser
+ *    and exercise, and this build's default. -O2 and above link too (the
+ *    committed bundle is built for es2019 so that emscripten 3.1.38's parser
+ *    and its pre-ES2020 terser converter both accept it), and that level's
+ *    JSDCE stage - whose VariableDeclarator handler reads `node.id.name`, so
+ *    it registers a binding called `undefined` for every destructuring
+ *    declaration, and deletes every declarator whose id.name is undefined
+ *    when nothing in that scope references the identifier `undefined` - no
+ *    longer has a destructuring declaration in the bundle it can delete (see
+ *    the -O2 destructuring-count test). That test is a regression guard, not
+ *    proof -O2 runs correctly end to end: it only counts what the pass leaves
+ *    behind in the static output, so -O1 stays the default until something
+ *    runs the boundary itself, in the browser, at -O2.
  */
 const OPTIMIZATION = process.env.ZLINK_EMSCRIPTEN_OPT ?? '-O1';
 

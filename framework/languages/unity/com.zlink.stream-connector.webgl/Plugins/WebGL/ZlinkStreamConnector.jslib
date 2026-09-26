@@ -255,6 +255,13 @@ mergeInto(LibraryManager.library, {
 
   ZlinkStreamGetPendingDispatchCount: function (handle) {
     return ZlinkStreamWebGlRuntime.pendingDispatchCount(handle);
+  },
+
+  // C#'s _replyReceivedHandlers count is the one decision point for this call
+  // (ZlinkStreamWebGlConnector.cs's OnReplyReceived hook registration and its
+  // Dispose); see ZlinkStreamRuntime.jspre's setReplyReceivedInterest for why.
+  ZlinkStreamSetReplyReceivedInterest: function (handle, interested) {
+    ZlinkStreamWebGlRuntime.setReplyReceivedInterest(handle, interested);
   }
 
 });

@@ -92,7 +92,9 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
 
     CompletionStage<Void> runClosing(Supplier<CompletionStage<Void>> operation) {
         timers.freeze();
-        return awaitQuiescence().thenCompose(ignored -> runLifecycle(operation));
+        return infrastructureQueue
+                .awaitQuiescence()
+                .thenCompose(ignored -> runLifecycle(operation));
     }
 
     void closeResources() {
@@ -218,7 +220,8 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
 
     @Override
     public CompletionStage<Boolean> close() {
-        return host.closeInstanceSpot(spotId(), objectGeneration());
+        return ZLinkSerialExecutionQueue.yieldCurrent(
+                host.closeInstanceSpot(spotId(), objectGeneration()));
     }
 
     @Override

@@ -529,6 +529,50 @@ final class ZLinkDefaultSpotContextTest {
     }
 
     @Test
+    void instanceClosingDrainsAcceptedTurnWhenInitiatorYields() throws Exception {
+        ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+        try (ZLinkWorkerPool workerPool = new ZLinkWorkerPool(0, 1, Duration.ofSeconds(1))) {
+            TestHost host = new TestHost(executor);
+            DefaultInstanceSpotContext context = host.instanceContext(workerPool);
+            CompletableFuture<Void> firstStarted = new CompletableFuture<>();
+            CompletableFuture<Void> beginClose = new CompletableFuture<>();
+            CompletableFuture<Void> secondStarted = new CompletableFuture<>();
+            CompletableFuture<Void> secondRelease = new CompletableFuture<>();
+            CopyOnWriteArrayList<String> events = new CopyOnWriteArrayList<>();
+
+            CompletionStage<Void> first =
+                    context.enqueueDispatch(
+                            () -> {
+                                firstStarted.complete(null);
+                                beginClose.join();
+                                return ZLinkSerialExecutionQueue.yieldCurrent(
+                                        context.runClosing(
+                                                () -> {
+                                                    events.add("closing");
+                                                    return CompletableFuture.completedFuture(null);
+                                                }));
+                            });
+            firstStarted.get(2, TimeUnit.SECONDS);
+            CompletionStage<Void> second =
+                    context.enqueueDispatch(
+                            () -> {
+                                events.add("accepted");
+                                secondStarted.complete(null);
+                                return secondRelease;
+                            });
+            beginClose.complete(null);
+            secondStarted.get(2, TimeUnit.SECONDS);
+            assertEquals(List.of("accepted"), events);
+            secondRelease.complete(null);
+            CompletableFuture.allOf(first.toCompletableFuture(), second.toCompletableFuture())
+                    .get(2, TimeUnit.SECONDS);
+            assertEquals(List.of("accepted", "closing"), events);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void spotWideYieldReleasesSharedGateButRetainsActorQueueClaim() throws Exception {
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         try {

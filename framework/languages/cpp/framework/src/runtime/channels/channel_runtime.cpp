@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -829,6 +830,14 @@ channel_runtime_t::server_peer_weight_override (const std::string &channel_name)
 channel_runtime_t channel_runtime_t::from (const message_bus_t &bus)
 {
     return channel_runtime_t (bus._state);
+}
+
+const std::string &client_server_bind_endpoint (const channel_capability_snapshot_t &server)
+{
+    if (server.bind_endpoints.size () != 1) {
+        throw std::invalid_argument ("ClientServer server requires one bind endpoint");
+    }
+    return server.bind_endpoints.front ();
 }
 
 } // namespace zlink::framework::detail

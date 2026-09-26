@@ -11,6 +11,7 @@ import systems.zlink.contracts.core.Zlink;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.monitoring.ZLinkPeerState;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
@@ -26,8 +27,6 @@ import systems.zlink.framework.spots.ZLinkSpotCreateState;
 import systems.zlink.framework.spots.ZLinkSpotTimerHandler;
 import systems.zlink.framework.spots.ZLinkTimerTick;
 
-import java.io.IOException;
-import java.net.ServerSocket;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -46,7 +45,6 @@ final class SpotManagerTest {
         Zlink.version();
         RemoteCreateSpot.reset();
         String suffix = Long.toUnsignedString(System.nanoTime(), 36);
-        String targetEndpoint = tcpEndpoint();
         RoutingId targetRid = RoutingId.from("remote-create-target-" + suffix);
         var store = new ZLinkInMemoryLocationStore();
 
@@ -54,7 +52,7 @@ final class SpotManagerTest {
         targetOptions.addLocationStore(store);
         targetOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
         var targetNode = targetOptions.addRouteMesh("game");
-        targetNode.listen(targetEndpoint).setRoutingId(targetRid);
+        targetNode.listen("tcp://127.0.0.1:0").setRoutingId(targetRid);
         targetNode
                 .objects()
                 .server()
@@ -63,37 +61,40 @@ final class SpotManagerTest {
                         RemoteCreateSpot.class,
                         factory -> factory.disableRelocation());
 
-        var sourceOptions = new DefaultZLinkFrameworkOptions();
-        sourceOptions.addLocationStore(store);
-        sourceOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
-        var sourceNode = sourceOptions.addRouteMesh("game");
-        sourceNode
-                .listen(tcpEndpoint())
-                .setRoutingId(RoutingId.from("remote-create-source-" + suffix));
-        sourceNode.objects().client();
-        // This deliberately begins as the generic endpoint peer which the
-        // User-Spot route replaces with the descriptor-fenced RID peer.
-        sourceNode.peerConnections().connect(targetEndpoint);
-
         try (ZLinkFrameworkRuntime target =
-                        RuntimeTestSupport.startFramework(
-                                targetOptions, new ZLinkJavaBackendAdapterFactory());
-                ZLinkFrameworkRuntime source =
-                        RuntimeTestSupport.startFramework(
-                                sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
-            waitForPeer(source, targetRid, 3_000);
+                RuntimeTestSupport.startFramework(
+                        targetOptions, new ZLinkJavaBackendAdapterFactory())) {
+            String targetEndpoint =
+                    target.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "game").endpoint();
+            var sourceOptions = new DefaultZLinkFrameworkOptions();
+            sourceOptions.addLocationStore(store);
+            sourceOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
+            var sourceNode = sourceOptions.addRouteMesh("game");
+            sourceNode
+                    .listen("tcp://127.0.0.1:0")
+                    .setRoutingId(RoutingId.from("remote-create-source-" + suffix));
+            sourceNode.objects().client();
+            // This deliberately begins as the generic endpoint peer which the
+            // User-Spot route replaces with the descriptor-fenced RID peer.
+            sourceNode.peerConnections().connect(targetEndpoint);
 
-            ZLinkSpotCreateResult created =
-                    source.spotManager()
-                            .create("RemoteCreateSpot")
-                            .request(ZLinkMessage.of("remote-create"))
-                            .submit()
-                            .toCompletableFuture()
-                            .get(5, TimeUnit.SECONDS);
+            try (ZLinkFrameworkRuntime source =
+                    RuntimeTestSupport.startFramework(
+                            sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
+                waitForPeer(source, targetRid, 3_000);
 
-            assertEquals(ZLinkSpotCreateState.CREATED, created.state());
-            assertEquals(1, RemoteCreateSpot.createCalls.get());
-            assertEquals("remote-create", RemoteCreateSpot.request.get());
+                ZLinkSpotCreateResult created =
+                        source.spotManager()
+                                .create("RemoteCreateSpot")
+                                .request(ZLinkMessage.of("remote-create"))
+                                .submit()
+                                .toCompletableFuture()
+                                .get(5, TimeUnit.SECONDS);
+
+                assertEquals(ZLinkSpotCreateState.CREATED, created.state());
+                assertEquals(1, RemoteCreateSpot.createCalls.get());
+                assertEquals("remote-create", RemoteCreateSpot.request.get());
+            }
         }
     }
 
@@ -262,7 +263,6 @@ final class SpotManagerTest {
         Zlink.version();
         DiagnosticPublishingSpot.createdContext.set(null);
         String suffix = Long.toUnsignedString(System.nanoTime(), 36);
-        String targetEndpoint = tcpEndpoint();
         RoutingId targetRid = RoutingId.from("multicast-target-" + suffix);
         CompletableFuture<String> dispatchError = new CompletableFuture<>();
         Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
@@ -289,64 +289,69 @@ final class SpotManagerTest {
         DefaultZLinkFrameworkOptions targetOptions = new DefaultZLinkFrameworkOptions();
         targetOptions.addLocationStore(store);
         var targetNode = targetOptions.addRouteMesh("game");
-        targetNode.listen(targetEndpoint).setRoutingId(targetRid);
+        targetNode.listen("tcp://127.0.0.1:0").setRoutingId(targetRid);
         targetNode.channelName("events").server().setWeight(10_000);
         targetNode.objects().server();
 
-        DefaultZLinkFrameworkOptions sourceOptions = new DefaultZLinkFrameworkOptions();
-        sourceOptions.addLocationStore(store);
-        sourceOptions.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
-        var sourceNode = sourceOptions.addRouteMesh("game");
-        sourceNode.listen(tcpEndpoint()).setRoutingId(RoutingId.from("multicast-source-" + suffix));
-        sourceNode.channelName("events").server().setWeight(10_000);
-        sourceNode.peerConnections().connect(targetEndpoint);
-        sourceNode
-                .objects()
-                .server()
-                .addSpotFactory(
-                        "DiagnosticPublishingSpot",
-                        DiagnosticPublishingSpot.class,
-                        factory -> factory.disableRelocation());
-
         try (ZLinkFrameworkRuntime target =
-                        RuntimeTestSupport.startFramework(
-                                targetOptions, new ZLinkJavaBackendAdapterFactory());
-                ZLinkFrameworkRuntime source =
-                        RuntimeTestSupport.startFramework(
-                                sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
-            waitForPeer(source, targetRid, 3_000);
-            ZLinkSpotCreateResult created =
-                    source.spotManager()
-                            .create("DiagnosticPublishingSpot")
-                            .submit()
-                            .toCompletableFuture()
-                            .get(3, TimeUnit.SECONDS);
-            target.close();
+                RuntimeTestSupport.startFramework(
+                        targetOptions, new ZLinkJavaBackendAdapterFactory())) {
+            String targetEndpoint =
+                    target.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "game").endpoint();
+            DefaultZLinkFrameworkOptions sourceOptions = new DefaultZLinkFrameworkOptions();
+            sourceOptions.addLocationStore(store);
+            sourceOptions.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+            var sourceNode = sourceOptions.addRouteMesh("game");
+            sourceNode
+                    .listen("tcp://127.0.0.1:0")
+                    .setRoutingId(RoutingId.from("multicast-source-" + suffix));
+            sourceNode.channelName("events").server().setWeight(10_000);
+            sourceNode.peerConnections().connect(targetEndpoint);
+            sourceNode
+                    .objects()
+                    .server()
+                    .addSpotFactory(
+                            "DiagnosticPublishingSpot",
+                            DiagnosticPublishingSpot.class,
+                            factory -> factory.disableRelocation());
 
-            DiagnosticPublishingSpot.createdContext
-                    .get()
-                    .outbound()
-                    .publish("events", "orders", "gone-target")
-                    .submit()
-                    .toCompletableFuture()
-                    .get(3, TimeUnit.SECONDS);
+            try (ZLinkFrameworkRuntime source =
+                    RuntimeTestSupport.startFramework(
+                            sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
+                waitForPeer(source, targetRid, 3_000);
+                ZLinkSpotCreateResult created =
+                        source.spotManager()
+                                .create("DiagnosticPublishingSpot")
+                                .submit()
+                                .toCompletableFuture()
+                                .get(3, TimeUnit.SECONDS);
+                target.close();
 
-            String record = dispatchError.get(3, TimeUnit.SECONDS);
-            assertTrue(record.contains("event_id=zlink.dispatch_error"));
-            assertTrue(record.contains("surface=spot"));
-            assertTrue(record.contains("kind=send"));
-            assertTrue(record.contains("outcome=failed"));
-            assertTrue(record.contains("action=drop"));
-            assertTrue(record.contains("reason=stale_target"));
-            assertTrue(record.contains("target_rid=" + targetRid));
-            assertTrue(record.contains("topic=orders"));
-            assertTrue(record.contains("channel=events"));
-            assertTrue(record.contains("mesh=game"));
-            assertFalse(record.contains(" phase="));
-            assertFalse(record.contains(" source_rid="));
-            assertFalse(record.contains(" packet="));
-            assertFalse(record.contains("error_type="));
-            assertFalse(record.contains("error_message="));
+                DiagnosticPublishingSpot.createdContext
+                        .get()
+                        .outbound()
+                        .publish("events", "orders", "gone-target")
+                        .submit()
+                        .toCompletableFuture()
+                        .get(3, TimeUnit.SECONDS);
+
+                String record = dispatchError.get(3, TimeUnit.SECONDS);
+                assertTrue(record.contains("event_id=zlink.dispatch_error"));
+                assertTrue(record.contains("surface=spot"));
+                assertTrue(record.contains("kind=send"));
+                assertTrue(record.contains("outcome=failed"));
+                assertTrue(record.contains("action=drop"));
+                assertTrue(record.contains("reason=stale_target"));
+                assertTrue(record.contains("target_rid=" + targetRid));
+                assertTrue(record.contains("topic=orders"));
+                assertTrue(record.contains("channel=events"));
+                assertTrue(record.contains("mesh=game"));
+                assertFalse(record.contains(" phase="));
+                assertFalse(record.contains(" source_rid="));
+                assertFalse(record.contains(" packet="));
+                assertTrue(record.contains("error_type="));
+                assertTrue(record.contains("error_message="));
+            }
         } finally {
             logger.removeHandler(handler);
         }
@@ -489,12 +494,6 @@ final class SpotManagerTest {
             Thread.sleep(10);
         }
         throw new AssertionError("generic peer never reached READY before replacement");
-    }
-
-    private static String tcpEndpoint() throws IOException {
-        try (ServerSocket socket = new ServerSocket(0)) {
-            return "tcp://127.0.0.1:" + socket.getLocalPort();
-        }
     }
 
     public static final class PublishingSpot implements ZLinkSpot<ZLinkActor> {

@@ -35,6 +35,8 @@ import type {
   ZLinkClientServerRuntime,
   ZLinkFanoutRuntime,
   ZLinkFrameworkRuntime,
+  ZLinkListenerKind,
+  ZLinkListenerStatus,
   ZLinkFrameworkLifecycleOptions,
   ZLinkFrameworkRelocationOptions,
   ZLinkFrameworkRelocationResult,
@@ -866,6 +868,28 @@ export class ZLinkFrameworkRuntimeHost
       sequence: this.runtimeSequence,
       observedAt: new Date()
     };
+  }
+
+  getListenerStatus(kind: ZLinkListenerKind, name: string): ZLinkListenerStatus {
+    let endpoint: string | undefined;
+    switch (kind) {
+      case 'routeMesh':
+        endpoint = this.spotNodeRuntime?.meshNode(name)?.status().localEndpoint;
+        break;
+      case 'clientServer':
+      case 'fanout':
+        endpoint = this.channelRuntime?.listenerEndpoint(kind, name);
+        break;
+      case 'stream':
+        endpoint = this.streamRuntime?.listenerEndpoint(name);
+        break;
+    }
+    if (endpoint === undefined || endpoint.length === 0) {
+      throw new ZLinkConfigurationException(
+        `Listener '${kind}:${name}' is not configured or has not bound.`
+      );
+    }
+    return { kind, name, endpoint, observedAt: new Date() };
   }
 
   observe(signal?: AbortSignal): AsyncIterable<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>> {

@@ -115,7 +115,7 @@ try {
     $ApiConfig = Join-Path $RunDir "api.properties"
     $SessionConfig = Join-Path $RunDir "session.properties"
     $SupportConfig = Join-Path $RunDir "support.properties"
-    Set-ZlinkSampleUtf8File -Path $ApiConfig -Value @(
+    Set-ZlinkSampleProperties -Path $ApiConfig -Value @(
         "sample.redisEndpoint=$RedisEndpoint",
         "sample.redisKeyPrefix=$RedisKeyPrefix",
         "sample.logDirectory=$SampleLogDir",
@@ -123,14 +123,14 @@ try {
         "sample.apiSpotRouterEndpoint=$ApiRouterEndpoint",
         "sample.apiHttpEndpoint=$ApiHttpEndpoint"
     )
-    Set-ZlinkSampleUtf8File -Path $SessionConfig -Value @(
+    Set-ZlinkSampleProperties -Path $SessionConfig -Value @(
         "sample.redisEndpoint=$RedisEndpoint",
         "sample.redisKeyPrefix=$RedisKeyPrefix",
         "sample.logDirectory=$SampleLogDir",
         "sample.sessionRouterEndpoint=$SessionRouterEndpoint",
         "sample.streamEndpoint=$StreamEndpoint"
     )
-    Set-ZlinkSampleUtf8File -Path $SupportConfig -Value @(
+    Set-ZlinkSampleProperties -Path $SupportConfig -Value @(
         "sample.redisEndpoint=$RedisEndpoint",
         "sample.redisKeyPrefix=$RedisKeyPrefix",
         "sample.logDirectory=$SampleLogDir",

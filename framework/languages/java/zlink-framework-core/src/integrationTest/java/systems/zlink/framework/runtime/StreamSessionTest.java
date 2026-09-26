@@ -18,6 +18,7 @@ import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.handlers.ZLinkPacket;
 import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
 import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
@@ -40,8 +41,8 @@ import systems.zlink.framework.streams.ZLinkStreamError;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
 import java.io.InputStream;
-import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.EnumSet;
@@ -82,19 +83,18 @@ final class StreamSessionTest {
     void streamNodeDispatchesTcpRequestAndReplies() throws Exception {
         Zlink.version();
         EchoSession.reset();
-        int port = reservePort();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         {
             var stream = options.addStreamNode("gateway");
-            stream.bind("tcp://127.0.0.1:" + port);
+            stream.bind("tcp://127.0.0.1:0");
             stream.registerSession(EchoSession.class);
         }
         ;
 
-        try (ZLinkFrameworkRuntime ignored =
+        try (ZLinkFrameworkRuntime runtime =
                         RuntimeTestSupport.startFramework(
                                 options, new ZLinkJavaBackendAdapterFactory());
-                Socket client = new Socket("127.0.0.1", port)) {
+                Socket client = new Socket("127.0.0.1", streamPort(runtime))) {
             client.setSoTimeout(3000);
             client.getOutputStream().write(frame(requestHeader(7L, "Ping"), bytes("ping")));
             client.getOutputStream().flush();
@@ -120,25 +120,23 @@ final class StreamSessionTest {
     void streamNodeFailureRepliesErrorAndDoesNotBlockLaterRequests() throws Exception {
         Zlink.version();
         RecoveringSession.reset();
-        int port = reservePort();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         {
             var stream = options.addStreamNode("gateway");
-            stream.bind("tcp://127.0.0.1:" + port);
+            stream.bind("tcp://127.0.0.1:0");
             stream.registerSession(RecoveringSession.class);
         }
         ;
 
-        try (ZLinkFrameworkRuntime ignored =
+        try (ZLinkFrameworkRuntime runtime =
                         RuntimeTestSupport.startFramework(
                                 options, new ZLinkJavaBackendAdapterFactory());
-                Socket client = new Socket("127.0.0.1", port)) {
+                Socket client = new Socket("127.0.0.1", streamPort(runtime))) {
             client.setSoTimeout(3000);
 
             client.getOutputStream().write(frame(requestHeader(11L, "MustFail"), bytes("bad")));
             client.getOutputStream().flush();
-            assertErrorReply(
-                    client.getInputStream(), 11L, "IllegalStateException", "public failure");
+            assertErrorReply(client.getInputStream(), 11L, "internal_failure", "public failure");
 
             client.getOutputStream().write(frame(requestHeader(12L, "Ping"), bytes("again")));
             client.getOutputStream().flush();
@@ -149,7 +147,6 @@ final class StreamSessionTest {
     @Test
     void streamActorGatewayRelaysRequestAndReplies() throws Exception {
         Zlink.version();
-        int port = reservePort();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addHandlersFromPackageOf(StreamSessionTest.class);
         options.addLocationStore(new ZLinkInMemoryLocationStore());
@@ -168,20 +165,21 @@ final class StreamSessionTest {
         }
         {
             var stream = options.addStreamNode("gateway");
-            stream.bind("tcp://127.0.0.1:" + port);
+            stream.bind("tcp://127.0.0.1:0");
             stream.enableActorDispatch();
             stream.registerSession(ActorRelaySession.class);
         }
         ;
 
-        try (ZLinkFrameworkRuntime ignored =
+        try (ZLinkFrameworkRuntime runtime =
                         RuntimeTestSupport.startFramework(
                                 options, new ZLinkJavaBackendAdapterFactory());
-                Socket client = new Socket("127.0.0.1", port)) {
+                Socket client = new Socket("127.0.0.1", streamPort(runtime))) {
             client.setSoTimeout(3000);
 
             client.getOutputStream().write(frame(requestHeader(1L, "Bind"), bytes("\"player-1\"")));
             client.getOutputStream().flush();
+            assertBoundControl(client.getInputStream(), "player-1");
             assertReply(client.getInputStream(), 1L, "\"bound\"");
 
             client.getOutputStream()
@@ -500,10 +498,9 @@ final class StreamSessionTest {
         }
     }
 
-    private static int reservePort() throws Exception {
-        try (ServerSocket server = new ServerSocket(0)) {
-            return server.getLocalPort();
-        }
+    private static int streamPort(ZLinkFrameworkRuntime runtime) {
+        return URI.create(runtime.listenerStatus(ZLinkListenerKind.STREAM, "gateway").endpoint())
+                .getPort();
     }
 
     private static byte[] requestHeader(long requestSeq, String packetName) {
@@ -550,6 +547,22 @@ final class StreamSessionTest {
         assertEquals(0xF2, Byte.toUnsignedInt(header[0]));
         assertEquals(requestSeq, ByteBuffer.wrap(header, 4, Long.BYTES).getLong());
         assertEquals(expectedBody, new String(body, StandardCharsets.UTF_8));
+    }
+
+    private static void assertBoundControl(InputStream input, String actorId) throws Exception {
+        byte[] prefix = readExact(input, 6);
+        ByteBuffer sizes = ByteBuffer.wrap(prefix);
+        byte[] headerBytes = readExact(input, Short.toUnsignedInt(sizes.getShort()));
+        byte[] body = readExact(input, sizes.getInt());
+        ZLinkStreamHeader header = ZLinkStreamHeaderCodec.decodeOrPlain(headerBytes);
+        assertEquals(ZLinkStreamMessageKind.CONTROL, header.kind());
+        assertEquals("$zlink.actor.bound", header.packetName());
+        ByteBuffer payload = ByteBuffer.wrap(body);
+        assertEquals(1, Byte.toUnsignedInt(payload.get()));
+        assertTrue(Short.toUnsignedInt(payload.getShort()) > 0);
+        int idLength = Byte.toUnsignedInt(payload.get());
+        assertEquals(idLength, payload.remaining());
+        assertEquals(actorId, new String(body, 4, idLength, StandardCharsets.UTF_8));
     }
 
     private static void assertErrorReply(

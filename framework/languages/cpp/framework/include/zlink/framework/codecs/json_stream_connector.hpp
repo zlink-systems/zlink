@@ -27,7 +27,7 @@ template <typename T> struct codec_traits
 
     static T decode (const std::vector<std::uint8_t> &payload)
     {
-#if ZLINK_STREAM_CONNECTOR_HAS_EXCEPTIONS
+#if ZLINK_HAS_EXCEPTIONS
         return zlink::detail::json_profile::parse (payload.begin (), payload.end ())
           .template get<T> ();
 #else

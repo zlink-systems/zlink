@@ -36,14 +36,6 @@
 #include <thread>
 #include <vector>
 
-#ifdef _WIN32
-#include <process.h>
-#else
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#endif
-
 namespace
 {
 
@@ -75,7 +67,6 @@ using zlink::framework::runtime::location_runtime_t;
 using zlink::framework::runtime::store_location_resolvers_t;
 using zlink::framework::runtime::store_location_runtime_query_t;
 
-std::uint16_t bindable_loopback_port (std::uint16_t base_port);
 
 location_owner_token_t live_owner_token (zlink::framework::location_repository_t &store,
                                          const std::string &owner_id)
@@ -585,16 +576,19 @@ class stream_roundtrip_client_t final : public zlink::framework::hosted_service_
 {
   public:
     stream_roundtrip_client_t (zlink::framework::app_t &app,
-                               std::string endpoint,
                                zlink::framework::detail::stream_runtime_t runtime) :
-        _app (&app), _endpoint (std::move (endpoint)), _runtime (std::move (runtime))
+        _app (&app), _runtime (std::move (runtime))
     {
     }
-    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &) override
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &services) override
     {
         for (int attempt = 0; attempt < 80; ++attempt) {
             try {
-                run_once ();
+                const auto endpoint = services.get_required<zlink::framework::framework_runtime_t> ()
+                                        .listener_status (zlink::framework::listener_kind_t::stream,
+                                                          "stream-node")
+                                        .endpoint;
+                run_once (endpoint);
                 observed = true;
                 break;
             }
@@ -704,9 +698,9 @@ class stream_roundtrip_client_t final : public zlink::framework::hosted_service_
         return zlink::message_t::from (payload_bytes);
     }
 
-    void run_once ()
+    void run_once (const std::string &bound_endpoint)
     {
-        const auto endpoint = parse_endpoint (_endpoint);
+        const auto endpoint = parse_endpoint (bound_endpoint);
         boost::asio::io_context io;
         boost::asio::ip::tcp::resolver resolver (io);
         boost::asio::ip::tcp::socket socket (io);
@@ -727,7 +721,6 @@ class stream_roundtrip_client_t final : public zlink::framework::hosted_service_
     }
 
     zlink::framework::app_t *_app;
-    std::string _endpoint;
     zlink::framework::detail::stream_runtime_t _runtime;
 };
 
@@ -1261,8 +1254,7 @@ std::string target_id_selected_from_range (std::string prefix,
 }
 
 descriptor_owner_lease_result_t run_descriptor_owner_lease_selection (
-  std::optional<zlink::framework::tests::owner_lease_time_store_t::lease_view_t> lease_view,
-  unsigned port_hint)
+  std::optional<zlink::framework::tests::owner_lease_time_store_t::lease_view_t> lease_view)
 {
     using zlink::framework::runtime::provider_location_repository_t;
     using zlink::framework::tests::owner_lease_time_store_t;
@@ -1321,8 +1313,6 @@ descriptor_owner_lease_result_t run_descriptor_owner_lease_selection (
     auto relocation_store =
       std::make_shared<zlink::framework::runtime::in_memory_relocation_store_t> ();
     descriptor_owner_lease_client_t *client = nullptr;
-    const auto endpoint =
-      std::string ("tcp://127.0.0.1:") + std::to_string (bindable_loopback_port (port_hint));
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
         options.add_location_store (public_store);
         options.add_relocation_store (relocation_store);
@@ -1330,7 +1320,7 @@ descriptor_owner_lease_result_t run_descriptor_owner_lease_selection (
           .set_object_role (zlink::framework::object_role_t::server)
           .set_routing_id (zlink::routing_id_t::from ("zzz-live-target"))
           .set_placement_weight (1)
-          .listen (endpoint)
+          .listen ("tcp://127.0.0.1:0")
           .add_spot_factory<local_user_spot_t> (
             "room",
             [] (zlink::framework::spot_context_t context) {
@@ -1712,43 +1702,6 @@ bool wait_until (const std::function<bool ()> &predicate)
         std::this_thread::sleep_for (std::chrono::milliseconds (25));
     }
     return predicate ();
-}
-
-std::uint32_t current_process_id () noexcept
-{
-#ifdef _WIN32
-    return static_cast<std::uint32_t> (_getpid ());
-#else
-    return static_cast<std::uint32_t> (getpid ());
-#endif
-}
-
-std::uint16_t bindable_loopback_port (std::uint16_t base_port)
-{
-    const auto offset = static_cast<std::uint16_t> ((current_process_id () % 1000U) * 11U);
-    const auto first = static_cast<std::uint16_t> (base_port + offset);
-#ifdef _WIN32
-    return first;
-#else
-    for (std::uint16_t attempt = 0; attempt < 200; ++attempt) {
-        const auto candidate = static_cast<std::uint16_t> (first + attempt * 13U);
-        const int descriptor = ::socket (AF_INET, SOCK_STREAM, 0);
-        if (descriptor < 0) {
-            return first;
-        }
-        sockaddr_in address{};
-        address.sin_family = AF_INET;
-        address.sin_port = htons (candidate);
-        address.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
-        const bool bindable =
-          ::bind (descriptor, reinterpret_cast<sockaddr *> (&address), sizeof (address)) == 0;
-        ::close (descriptor);
-        if (bindable) {
-            return candidate;
-        }
-    }
-    return first;
-#endif
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers, EncodesCanonicalAuthorityKeys)
@@ -2625,7 +2578,6 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
     auto store = std::make_shared<in_memory_location_store_t> ();
     auto app = zlink::framework::app_t::create ();
     auto_connect_request_client_t *client = nullptr;
-    const auto port = bindable_loopback_port (29700);
 
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
         options.add_location_store (store);
@@ -2633,7 +2585,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
         options.add_client_server_channel ("orders")
           .server ()
           .set_bind_host ("127.0.0.1")
-          .listen (port)
+          .listen (0)
           .add_handler_group ("orders");
         options.add_client_server_channel ("orders").client ();
     });
@@ -2748,15 +2700,13 @@ TEST (ZLinkFrameworkStoreLocationResolvers, PublicSpotManagerUsesLocationReserva
     auto store = std::make_shared<in_memory_location_store_t> ();
     auto app = zlink::framework::app_t::create ();
     user_spot_manager_client_t *client = nullptr;
-    const auto endpoint =
-      std::string ("tcp://127.0.0.1:") + std::to_string (bindable_loopback_port (29702));
 
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
         options.add_location_store (store);
         auto node = options.add_route_mesh ("spot-mesh");
         node.set_object_role (zlink::framework::object_role_t::server)
           .set_routing_id (zlink::routing_id_t::from ("spot-local-node"))
-          .listen (endpoint)
+          .listen ("tcp://127.0.0.1:0")
           .add_spot_factory<local_user_spot_t> (
             "room",
             [] (zlink::framework::spot_context_t context) {
@@ -2779,15 +2729,13 @@ TEST (ZLinkFrameworkStoreLocationResolvers, SuccessiveUserSpotAcceptsItsCurrentA
     auto store = std::make_shared<in_memory_location_store_t> ();
     auto app = zlink::framework::app_t::create ();
     successive_user_spot_delivery_client_t *client = nullptr;
-    const auto endpoint =
-      std::string ("tcp://127.0.0.1:") + std::to_string (bindable_loopback_port (29723));
 
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
         options.add_location_store (store);
         options.add_route_mesh ("spot-fence-mesh")
           .set_object_role (zlink::framework::object_role_t::server)
           .set_routing_id (zlink::routing_id_t::from ("spot-fence-node"))
-          .listen (endpoint)
+          .listen ("tcp://127.0.0.1:0")
           .add_spot_factory<local_user_spot_t> (
             "room",
             [] (zlink::framework::spot_context_t context) {
@@ -2808,7 +2756,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
       ExpiredDescriptorOwnerIsSkippedForUserAndInstanceSpotTargets)
 {
     using lease_view_t = zlink::framework::tests::owner_lease_time_store_t::lease_view_t;
-    const auto result = run_descriptor_owner_lease_selection (lease_view_t::expired, 29720);
+    const auto result = run_descriptor_owner_lease_selection (lease_view_t::expired);
 
     EXPECT_EQ (0, result.app_result);
     EXPECT_EQ (std::optional<std::string> ("zzz-live-target"), result.user_target)
@@ -2824,7 +2772,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
 TEST (ZLinkFrameworkStoreLocationResolvers,
       LiveDescriptorOwnerRemainsEligibleForUserAndInstanceSpotTargets)
 {
-    const auto result = run_descriptor_owner_lease_selection (std::nullopt, 29721);
+    const auto result = run_descriptor_owner_lease_selection (std::nullopt);
 
     EXPECT_EQ (0, result.app_result);
     EXPECT_EQ (std::optional<std::string> ("zzz-live-target"), result.user_target)
@@ -2840,7 +2788,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
 {
     using zlink::framework::framework_error_kind_t;
     using lease_view_t = zlink::framework::tests::owner_lease_time_store_t::lease_view_t;
-    const auto result = run_descriptor_owner_lease_selection (lease_view_t::missing_expiry, 29722);
+    const auto result = run_descriptor_owner_lease_selection (lease_view_t::missing_expiry);
 
     EXPECT_EQ (0, result.app_result);
     EXPECT_FALSE (result.user_target.has_value ());
@@ -2860,8 +2808,6 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ContextOnlySpotFactoryReceivesExactF
     auto store = std::make_shared<in_memory_location_store_t> ();
     auto app = zlink::framework::app_t::create ();
     user_spot_manager_client_t *client = nullptr;
-    const auto endpoint =
-      std::string ("tcp://127.0.0.1:") + std::to_string (bindable_loopback_port (29705));
     std::string observed_mesh;
     std::string observed_node;
     std::string observed_spot;
@@ -2873,7 +2819,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ContextOnlySpotFactoryReceivesExactF
         auto node = options.add_route_mesh ("context-mesh");
         node.set_object_role (zlink::framework::object_role_t::server)
           .set_routing_id (zlink::routing_id_t::from ("context-node"))
-          .listen (endpoint)
+          .listen ("tcp://127.0.0.1:0")
           .add_spot_factory<context_owned_user_spot_t> (
             "room",
             [&] (zlink::framework::spot_context_t context) {
@@ -2908,8 +2854,6 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
     auto public_store = std::make_shared<in_memory_location_store_t> ();
     auto app = zlink::framework::app_t::create ();
     generated_user_spot_collision_client_t *client = nullptr;
-    const auto endpoint =
-      std::string ("tcp://127.0.0.1:") + std::to_string (bindable_loopback_port (29703));
 
     app.advanced ().services ().add_factory<zlink::framework::location_repository_t> (
       [store] (zlink::framework::service_provider_t &) {
@@ -2921,7 +2865,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
         auto node = options.add_route_mesh ("spot-collision-mesh");
         node.set_object_role (zlink::framework::object_role_t::server)
           .set_routing_id (zlink::routing_id_t::from ("spot-collision-node"))
-          .listen (endpoint)
+          .listen ("tcp://127.0.0.1:0")
           .add_spot_factory<occupied_user_spot_t> (
             "occupied",
             [] (zlink::framework::spot_context_t context) {
@@ -2951,8 +2895,6 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
     auto public_store = std::make_shared<in_memory_location_store_t> ();
     auto app = zlink::framework::app_t::create ();
     source_cleanup_client_t *client = nullptr;
-    const auto endpoint =
-      std::string ("tcp://127.0.0.1:") + std::to_string (bindable_loopback_port (29704));
 
     app.advanced ().services ().add_factory<zlink::framework::location_repository_t> (
       [store] (zlink::framework::service_provider_t &) {
@@ -2964,7 +2906,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
         auto node = options.add_route_mesh ("source-cleanup-mesh");
         node.set_object_role (zlink::framework::object_role_t::server)
           .set_routing_id (zlink::routing_id_t::from ("source-cleanup-node"))
-          .listen (endpoint)
+          .listen ("tcp://127.0.0.1:0")
           .add_spot_factory<failing_user_spot_t> (
             "failing",
             [] (zlink::framework::spot_context_t context) {
@@ -3171,8 +3113,6 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AppFanoutPublishUsesLocationAutoConn
     automatic_handler_scope_filter_t::reject_requests.store (false);
     automatic_handler_scope_filter_t::last_filter_dependency.store (nullptr);
     automatic_handler_scope_filter_t::blocked_fanout_dispatches.store (0);
-    const auto endpoint =
-      std::string ("tcp://127.0.0.1:") + std::to_string (bindable_loopback_port (29800));
 
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
         options.add_location_store (store);
@@ -3184,7 +3124,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AppFanoutPublishUsesLocationAutoConn
         options.use_filter<automatic_handler_scope_filter_t> ();
         options.add_fanout_channel ("events")
           .set_routing_id (zlink::routing_id_t::from ("events-publisher"))
-          .enable_publisher (endpoint)
+          .enable_publisher ("tcp://127.0.0.1:0")
           .enable_subscriber ()
           .use_handler_group ("events");
     });
@@ -3562,16 +3502,14 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostUsesRouteMeshInitiato
 TEST (ZLinkFrameworkStoreLocationResolvers, AppStreamHostStartsAndStopsTcpListener)
 {
     auto app = zlink::framework::app_t::create ();
-    const auto endpoint =
-      std::string ("tcp://127.0.0.1:") + std::to_string (bindable_loopback_port (29600));
 
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
         options.add_stream_node ("stream-node")
-          .bind (endpoint)
+          .bind ("tcp://127.0.0.1:0")
           .register_session<echo_stream_session_t> ();
     });
     auto client = std::make_unique<stream_roundtrip_client_t> (
-      app, endpoint, zlink::framework::detail::stream_runtime_t::from (app.advanced ().zlink ()));
+      app, zlink::framework::detail::stream_runtime_t::from (app.advanced ().zlink ()));
     auto *client_ptr = client.get ();
     app.add_hosted_service (std::move (client));
 

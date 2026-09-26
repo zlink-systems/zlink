@@ -1,5 +1,3 @@
-using System.Net;
-using System.Net.Sockets;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -8,6 +6,7 @@ using Systems.Zlink.Stream.Connector.Runtime;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Messaging;
+using Zlink.Framework.Runtime.Host;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -16,7 +15,6 @@ public sealed class StreamFlowEndToEndTests
     [Fact]
     public async Task Connector_Request_Starts_Server_Flow_At_Stream_Ingress()
     {
-        var port = FindFreeTcpPort();
         var builder = Host.CreateApplicationBuilder();
         var flowLogs = new FlowLoggerProvider();
         builder.Logging.AddProvider(flowLogs);
@@ -25,7 +23,7 @@ public sealed class StreamFlowEndToEndTests
             options.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             options
                 .AddStreamNode("flow.stream")
-                .Bind($"tcp://127.0.0.1:{port}")
+                .Bind("tcp://127.0.0.1:0")
                 .AddSession<FlowSession>();
         });
         using var host = builder.Build();
@@ -33,10 +31,19 @@ public sealed class StreamFlowEndToEndTests
         try
         {
             await host.StartAsync();
+            var endpoint = Assert.IsType<string>(
+                (
+                    await host
+                        .Services.GetRequiredService<ZLinkFrameworkRuntime>()
+                        .GetStartedStateForRoutingAsync(CancellationToken.None)
+                )
+                    .StreamNodes.Values.Single()
+                    .BoundEndpoint
+            );
             await using var connector = ZlinkStreamConnectorFactory.Create(
                 new ZlinkStreamConnectorOptions
                 {
-                    Endpoint = new Uri($"tcp://127.0.0.1:{port}"),
+                    Endpoint = new Uri(endpoint),
                     DispatchMode = ZlinkStreamDispatchMode.Immediate,
                     Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
                     Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
@@ -127,13 +134,6 @@ public sealed class StreamFlowEndToEndTests
         return line.Split(' ', StringSplitOptions.RemoveEmptyEntries)
             .FirstOrDefault(token => token.StartsWith(prefix, StringComparison.Ordinal))
             ?[prefix.Length..];
-    }
-
-    private static int FindFreeTcpPort()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
     private sealed record FlowRequest(string Value);

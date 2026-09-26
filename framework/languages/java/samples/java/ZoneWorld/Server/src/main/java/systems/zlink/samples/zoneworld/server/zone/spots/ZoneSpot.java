@@ -185,7 +185,8 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
                 .entrySet()
                 .removeIf(
                         entry ->
-                                tick - entry.getValue().tick() > ZoneWorldSpec.BORDER_EXPIRY_TICKS);
+                                tick - entry.getValue().receivedAtTick()
+                                        >= ZoneWorldSpec.BORDER_EXPIRY_TICKS);
         return publishBorders()
                 .thenCompose(
                         ignored -> {
@@ -333,10 +334,10 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
 
     public void applyBorder(Messages.ZoneBorderEvent event) {
         BorderSnapshot current = borderSnapshots.get(event.fromZoneId());
-        if (current == null || event.tick() >= current.tick()) {
+        if (current == null || event.tick() > current.tick()) {
             borderSnapshots.put(
                     event.fromZoneId(),
-                    new BorderSnapshot(event.tick(), List.copyOf(event.players())));
+                    new BorderSnapshot(event.tick(), tick, List.copyOf(event.players())));
         }
     }
 
@@ -421,5 +422,6 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
         // --8<-- [end:doc-zw-border-publish]
     }
 
-    private record BorderSnapshot(long tick, List<Messages.PlayerView> players) {}
+    private record BorderSnapshot(
+            long tick, long receivedAtTick, List<Messages.PlayerView> players) {}
 }

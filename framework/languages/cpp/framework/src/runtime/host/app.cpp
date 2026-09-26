@@ -701,6 +701,11 @@ class public_framework_runtime_t final : public framework_runtime_t
         return *status;
     }
 
+    std::vector<http_listener_status_t> http_listener_statuses () const override
+    {
+        return _listeners->http_listeners ();
+    }
+
     std::unique_ptr<runtime_observation_t> observe (
       std::size_t capacity,
       std::function<void (const observed_status_t<framework_runtime_status_t> &)> observer) override
@@ -2629,7 +2634,8 @@ void app_t::_apply_zlink_framework ()
     if (detail::has_inbound_channel (channel_snapshot)) {
         add_hosted_service (std::make_unique<runtime::channel_host_service_t> (
           _state->zlink.message_bus (), channel_snapshot, _state->handlers, _state->serializers,
-          _state->application_job_queue));
+          options.runtime_client_server_advertise_hosts (), _state->application_job_queue,
+          _state->listener_statuses));
     }
     if (!stream_snapshot.empty ()) {
         detail::configure_stream_dispatch_executor ();
@@ -2645,7 +2651,8 @@ void app_t::_apply_zlink_framework ()
     }
     if (!http_snapshot.endpoints.empty ()) {
         add_hosted_service (std::make_unique<runtime::http_host_service_t> (
-          http_snapshot, _state->health, options.handler_coroutine_workers ()));
+          http_snapshot, _state->health, options.handler_coroutine_workers (),
+          _state->listener_statuses));
     }
     detail::configure_handler_invocation_executor ();
     if (_state->framework_hosted_service_position) {

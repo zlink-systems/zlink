@@ -38,6 +38,20 @@ import java.util.zip.GZIPOutputStream;
 
 final class HttpClientContractTest {
 
+    @Test
+    void serverClientHasOnlyTheManagedConstructionSurface() throws Exception {
+        assertThrows(
+                NoSuchMethodException.class,
+                () -> ZLinkHttpServerClient.class.getMethod("create", ZLinkHttpClient.class));
+        assertThrows(
+                NoSuchMethodException.class,
+                () ->
+                        ZLinkHttpServerClient.class.getConstructor(
+                                ZLinkHttpClient.class,
+                                ZLinkHttpExecutionTurn.class,
+                                java.util.function.Consumer.class));
+    }
+
     private record Player(int id, String name) {}
 
     private record CreateGameReq(String name) {}
@@ -100,13 +114,7 @@ final class HttpClientContractTest {
                         exchange ->
                                 TestSupport.respond(exchange, 200, "{\"id\":7,\"name\":\"p\"}"));
         try (ZLinkHttpClient client = ZLinkHttpClient.create(server.baseUrl()).build()) {
-            ZLinkHttpServerClient serverClient =
-                    new ZLinkHttpServerClient(
-                            client,
-                            turn,
-                            error -> {
-                                throw new AssertionError(error);
-                            });
+            ZLinkHttpServerClient serverClient = new ZLinkHttpServerClient(client, turn);
             assertEquals(
                     7,
                     serverClient
@@ -671,12 +679,8 @@ final class HttpClientContractTest {
 
     @Test
     void connectionRefusedIsUnavailable() throws Exception {
-        int port;
-        try (ServerSocket unused = new ServerSocket(0, 0, InetAddress.getLoopbackAddress())) {
-            port = unused.getLocalPort();
-        }
         try (ZLinkHttpClient client =
-                ZLinkHttpClient.create("http://127.0.0.1:" + port)
+                ZLinkHttpClient.create("http://127.0.0.1:0")
                         .timeout(Duration.ofSeconds(1))
                         .build()) {
             CompletionException ex =

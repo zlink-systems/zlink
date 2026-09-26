@@ -1814,6 +1814,13 @@ public static class Scenarios
         var targetNodeId = nodes
             .Nodes.Single(node => node.Zones.Contains(pair.TargetZoneId, StringComparer.Ordinal))
             .NodeId;
+        var droppedWait = ops
+            .Connector.WaitFor<NodeStatusNotify>()
+            .Where(message => message.Payload.NodeId == targetNodeId && !message.Payload.Connected)
+            .Timeout(TimeSpan.FromSeconds(60))
+            .Async(ct);
+        Console.WriteLine($"scenario ZW-B4 armed node={targetNodeId}");
+        await droppedWait;
         var expiredWait = source
             .Connector.WaitFor<ZoneStateNotify>()
             .Where(message =>
@@ -1822,8 +1829,6 @@ public static class Scenarios
             )
             .Timeout(TimeSpan.FromSeconds(60))
             .Async(ct);
-        Console.WriteLine($"scenario ZW-B4 armed node={targetNodeId}");
-
         var expired = (await expiredWait).Payload;
         ZlinkStreamAssert.Ensure(
             expired.Players.All(player => player.PlayerId != targetId),

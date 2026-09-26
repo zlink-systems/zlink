@@ -1,6 +1,4 @@
 using System.Buffers.Binary;
-using System.Net;
-using System.Net.Sockets;
 using K4os.Compression.LZ4;
 using Microsoft.Extensions.Hosting;
 using Systems.Zlink.Stream.Connector.Contracts;
@@ -106,13 +104,12 @@ public sealed class CoverageCriticalRuntimeTests
     [Fact]
     public async Task FrameworkHostStartupFailureDisposesCreatedStreamRuntime()
     {
-        var firstEndpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddZLinkFramework(options =>
         {
             options
                 .AddStreamNode("stream-a")
-                .Bind(firstEndpoint)
+                .Bind("tcp://127.0.0.1:0")
                 .AddSession<StartupFailureTestSession>();
             //  같은 host 안에서 같은 session type을 두 node에 등록하면 등록 검증이 먼저
             //  거부하므로(STREAM 서버 session §3.2), 두 번째 node는 다른 type을 쓴다.
@@ -130,20 +127,6 @@ public sealed class CoverageCriticalRuntimeTests
 
         Assert.Same(startTask, completed);
         await Assert.ThrowsAnyAsync<Exception>(async () => await startTask);
-    }
-
-    private static int FindFreeTcpPort()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        try
-        {
-            return ((IPEndPoint)listener.LocalEndpoint).Port;
-        }
-        finally
-        {
-            listener.Stop();
-        }
     }
 
     private sealed record CompressionProbe(string Text);
