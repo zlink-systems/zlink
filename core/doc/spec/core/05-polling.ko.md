@@ -40,6 +40,9 @@ readiness를 기다리는 방법은 두 가지다.
 - **재사용 poller** — [`zlink_poller_*`](#poller-함수) 함수는 poller 객체에 source를
   등록해 두고 `zlink_poller_wait`로 반복해서 기다린다.
 
+두 방법 모두 signal이 대기를 중단하면 Core가 남은 timeout으로 대기를 이어 가므로, `zlink_poll`과
+`zlink_poller_wait`는 `EINTR`로 실패하지 않는다.
+
 ## 3. Source 종류와 readiness
 
 각 source 종류가 `ZLINK_POLLIN`과 `ZLINK_POLLOUT`으로 알리는 readiness는 다음과 같다.
@@ -320,6 +323,7 @@ array)만으로 다음을 확인한다. 각 항목은 unit test 하나로 이어
 - FD의 platform `POLLPRI`는 `ZLINK_POLLPRI`로, 그 밖의 platform 오류 bit는 `ZLINK_POLLERR`로 변환된다.
 - event의 `socket`·`fd`·`timer` field는 각각 SOCKET·FD·TIMER source에서만 유효하고, `user_data`는 등록 시 받은 pointer를 그대로 돌려준다.
 - wait가 반환한 event array는 caller-owned이며 Core 내부 pointer를 포함하지 않는다.
+- POSIX에서 `SA_RESTART` 없이 설치한 signal이 `zlink_poll`·`zlink_poller_wait`의 대기를 중단해도 호출은 `EINTR`로 실패하지 않는다. 남은 timeout 안에 readiness가 생기면 그 event를 반환하고, 생기지 않으면 원래 timeout이 지난 뒤 `0`을 반환한다.
 
 **completion polling**
 - Completion record가 하나 이상 있으면 wait가 `ZLINK_POLLCOMPLETION`을 반환하며, wait·add·modify·
