@@ -266,7 +266,9 @@ admission을 descriptor의 RID·security identity·lifecycle generation으로 �
 Orderly close와 transport disconnect는 15초를 기다리지 않는다. 이전 physical
 connection의 record는 선택이 바뀐 뒤 Core가 반환하지 않는다. Framework가 선택 변경을 관찰한 뒤에는
 이전 generation의 record가 증거가 되지 않으므로 새 connection의 상태를 바꾸지 못한다. Handshake도 같은
-비교를 거친 뒤에만 admission한다.
+비교를 거친 뒤에만 admission한다. 이 generation 비교는 connection의 ready·liveness 상태를 바꾸는
+record(`livenessAck`와 service handshake)에만 적용한다. Spot·Actor·Channel message를 담은 record는 비교하지
+않고 Core가 반환한 대로 처리한다.
 
 Peer 하나의 실패는 host 전체를 `Error`로 바꾸지 않는다. 다른 ready peer와, 현재 이
 host에서 Actor·Spot을 실제로 실행하며 그 application queue를 관리하는 local

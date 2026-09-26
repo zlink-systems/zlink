@@ -57,7 +57,12 @@ configuration exception. Neither of these is turned into a remote error reply.
 
 A Framework failure discovered while waiting on outbound queue acceptance, route resolution,
 or a remote reply is delivered as a per-language Framework exception or as a `result`'s
-`ErrorKind`.
+`ErrorKind`. A failed binding submit result or request completion result maps to the
+kind of the same meaning — `NOT_FOUND` to `NotFound`, `NOT_CONNECTED` and `NOT_ADMITTED` to
+`Unavailable`, a `BACKPRESSURED` that ends as a failure and `TIMED_OUT` to `DeadlineExceeded`,
+`TERMINATED` to `ShuttingDown`, `PROTOCOL_ERROR` to `ProtocolError`, and anything else to
+`InternalFailure`. A `BACKPRESSURED` result that the Framework waits on is not a failure
+([Submit and Completion §15](../01-execution/01-submit-and-completion.en.md#15-consuming-binding-send-terminals-implementation)).
 
 ## 4. `Send` Completion and Failure
 

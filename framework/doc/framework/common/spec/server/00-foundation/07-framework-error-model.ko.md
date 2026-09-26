@@ -53,7 +53,11 @@ log와 trace에 기록한다.
 configuration exception으로 전달한다. 이런 오류를 remote error reply로 바꾸지 않는다.
 
 Outbound queue 수락, route resolve 또는 remote reply를 기다리는 중에 확인한 Framework
-실패는 언어별 Framework exception이나 `result`의 `ErrorKind`로 전달한다.
+실패는 언어별 Framework exception이나 `result`의 `ErrorKind`로 전달한다. Binding submit 결과와 request completion 결과의 실패는
+같은 뜻의 kind로 옮긴다 — `NOT_FOUND`는 `NotFound`, `NOT_CONNECTED`와 `NOT_ADMITTED`는 `Unavailable`, 실패로 끝난
+`BACKPRESSURED`와 `TIMED_OUT`은 `DeadlineExceeded`, `TERMINATED`는 `ShuttingDown`, `PROTOCOL_ERROR`는
+`ProtocolError`, 그 밖은 `InternalFailure`다. Framework가 기다리는 `BACKPRESSURED` 결과는 실패가 아니다
+([Submit과 완료 §15](../01-execution/01-submit-and-completion.ko.md#15-binding-send-terminal-소비-구현)).
 
 ## 4. Send 완료와 실패
 
