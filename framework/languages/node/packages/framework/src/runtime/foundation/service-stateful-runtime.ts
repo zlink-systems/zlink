@@ -4848,7 +4848,7 @@ export class ServiceStatefulRuntime {
     return spot;
   }
 
-  private validateDirectSpotFence(fence: ServiceDirectSpotRouteFence): ServiceSpotState {
+  private validateDirectSpotFence(fence: ServiceSpotRouteFence): ServiceSpotState {
     if (
       fence.targetNodeRid !== this.nodeRid ||
       fence.targetNodeGeneration !== this.nodeGeneration
