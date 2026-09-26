@@ -87,6 +87,7 @@ Store의 등록 예제는 [Location runtime §2](01-location-runtime.ko.md#2-역
 | Value | 최대 1 MiB인 bytes다. Commit 뒤에는 해당 version이 교체되거나 삭제될 때까지 변경되지 않는다. Expiry가 없으면 explicit delete까지 유지한다. |
 | Version | Provider가 발급하는 opaque UTF-8 `1..4096` bytes다. Framework는 값의 크기나 내부 구성을 해석하지 않는다. |
 | `StoreNow` | Read, commit과 scan page가 기준으로 삼는 provider wall clock이다. TTL과 expiry correctness는 이 시각만 사용한다. |
+| Retention | Provider는 retention을 밀리초 단위로 적용하며, 밀리초 미만의 나머지가 있으면 올림한다. 반환하는 expiry는 저장된 값에 적용된 retention을 기준으로 계산한 만료 시각이다. |
 
 Exact read는 `Missing(StoreNow)` 또는 `Found(bytes, version, optional expiry, StoreNow)`를
 반환한다. 만료된 value는 `Missing`으로 반환한다. Provider는 consumer가 read result를 사용하는
