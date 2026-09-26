@@ -223,13 +223,14 @@ class CreationTerminalTest : public ::testing::TestWithParam<completion_kind_t>
         const auto *raw_terminal = std::get_if<store_found_t> (&raw);
         ASSERT_NE (raw_terminal, nullptr);
         EXPECT_EQ (raw_terminal->value.bytes, publication.terminal_envelope);
+        ASSERT_TRUE (raw_terminal->value.expires_at);
         provider_location_repository_t reopened (provider);
         const auto stored =
           reopened.read_creation_terminal (publication.operation).result ().value ();
         ASSERT_TRUE (stored);
         EXPECT_EQ (stored->terminal_envelope, publication.terminal_envelope);
         EXPECT_EQ (stored->expires_at, std::chrono::time_point_cast<std::chrono::milliseconds> (
-                                         publication.operation_deadline + 5min));
+                                         *raw_terminal->value.expires_at));
         const auto authority_result =
           reopened.read_authority (actor_authority_key (reserve_request.key.global_id))
             .result ()

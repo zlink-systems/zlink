@@ -10,7 +10,6 @@ import {
   ZlinkStreamEncodedPayload,
   ZlinkStreamError,
   ZlinkStreamErrorCode,
-  ZlinkStreamException,
   ZlinkStreamExpectNoneCall,
   zlinkStreamJsonCodec,
   ZlinkStreamMessage,

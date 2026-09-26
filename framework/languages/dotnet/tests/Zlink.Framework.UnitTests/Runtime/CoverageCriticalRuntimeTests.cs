@@ -193,7 +193,8 @@ public sealed class CoverageCriticalRuntimeTests
                 ZLinkApplicationJobQueueProfile.Balanced,
                 int.MaxValue,
                 1
-            )
+            ),
+            new ZLinkListenerRecords()
         );
         var manager = new ZLinkStreamRuntimeManager(
             services,

@@ -1,4 +1,3 @@
-import { ZlinkStreamErrorCode, ZlinkStreamException } from '../Contracts';
 import type {
   ZlinkStreamConnection,
   ZlinkStreamEncodedPayload,

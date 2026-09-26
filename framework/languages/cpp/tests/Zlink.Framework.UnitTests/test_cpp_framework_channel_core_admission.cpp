@@ -256,13 +256,7 @@ TEST (ChannelCoreAdmission, ClientRequestWaitsOnCoreAdmissionNotFrameworkReadine
     auto context = std::make_shared<zlink::context_t> ();
     const std::string channel = "core-admission-late";
 
-    std::string endpoint;
-    {
-        zlink::router_socket_t probe (*context);
-        probe.bind ("tcp://127.0.0.1:*");
-        endpoint = probe.options ().last_endpoint ();
-        probe.close ();
-    }
+    const std::string endpoint = unique_inproc_endpoint ();
 
     zlink::framework::serializer_registry_t serializers;
     add_serializers (serializers);

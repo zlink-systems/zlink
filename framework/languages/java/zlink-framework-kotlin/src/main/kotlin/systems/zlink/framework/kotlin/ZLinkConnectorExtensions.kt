@@ -6,9 +6,7 @@ import java.util.WeakHashMap
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 import kotlin.reflect.KClass
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.future.await
 import systems.zlink.framework.kotlin.stream.ZLinkKotlinRequestCall as ZLinkKotlinStreamRequestCall
 import systems.zlink.stream.connector.ZLinkStreamActor
@@ -38,30 +36,6 @@ import systems.zlink.stream.connector.ZLinkStreamWaitCall
 import systems.zlink.stream.connector.ZLinkTypedStreamSendCall
 
 fun ZLinkStreamConnector.kotlin(): ZLinkKotlinStreamConnector = ZLinkKotlinStreamConnector(this)
-
-/**
- * Bridges one connector callback registration to a Flow without dropping items. Items the collector
- * has not taken when collection ends are passed to [release].
- */
-@PublishedApi
-internal fun <T> ownedCallbackFlow(
-    register: (accept: (T) -> Unit) -> AutoCloseable,
-    release: (T) -> Unit,
-): Flow<T> = flow {
-    val items = Channel<T>(Channel.UNLIMITED, onUndeliveredElement = release)
-    val registration = register { item -> if (items.trySend(item).isFailure) release(item) }
-    try {
-        for (item in items) {
-            emit(item)
-        }
-    } finally {
-        try {
-            registration.close()
-        } finally {
-            items.cancel()
-        }
-    }
-}
 
 fun ZLinkStreamConnectorOptions.withDefaultStreamCompression(): ZLinkStreamConnectorOptions =
     withStreamCompression(ZLinkStreamCompressionCodecs.lz4())

@@ -504,14 +504,6 @@ export class ZlinkStreamConnectorLifecycle {
     await this.announceDisconnect(error);
   }
 
-  async transportWriteFailed(connection: ZlinkStreamConnection): Promise<void> {
-    await this.disconnectForTransportFailure(
-      { code: ZlinkStreamErrorCode.Disconnected, message: 'Transport write ended the connection.' },
-      connection,
-      this.connectionGeneration
-    );
-  }
-
   private isCurrentConnection(
     connection: ZlinkStreamConnection | undefined,
     generation: number

@@ -9,6 +9,7 @@
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/streams/stream_host_service.hpp"
 #include "runtime/streams/stream_runtime.hpp"
+#include "../support/loopback_tcp_endpoint.hpp"
 
 
 #include <boost/asio/error.hpp>

@@ -1340,16 +1340,12 @@ test('ZLinkChannelClient request/reply round-trips through public binding socket
     const endpoint = router.options.lastEndpoint;
     dealer.connect(endpoint);
     await waitForMonitorConnectionReady(
-      ctx,
       routerMonitor,
-      'channel client router connection',
-      router
+      'channel client router connection'
     );
     await waitForMonitorConnectionReady(
-      ctx,
       dealerMonitor,
-      'channel client dealer connection',
-      router
+      'channel client dealer connection'
     );
     routerMonitor.close();
     routerMonitor = null;
@@ -3226,7 +3222,7 @@ test('PUB-001 ZLinkFrameworkRuntimeHost delivers the same sequence to three fano
       publisherRegistration,
       publisherRuntime.channelTransport
     );
-    const endpoint = fanout.getListenerStatus('events').endpoint;
+    const endpoint = publisherRuntime.getListenerStatus('fanout', 'events').endpoint;
     firstRuntime = new framework.ZLinkFrameworkRuntimeHost({
       registration: createSubscriberRegistration(first, endpoint)
     });
@@ -3279,7 +3275,7 @@ test('fanout publisher binds during runtime start before the first publish', asy
 
   try {
     await publisherRuntime.start();
-    const endpoint = fanout.getListenerStatus('events').endpoint;
+    const endpoint = publisherRuntime.getListenerStatus('fanout', 'events').endpoint;
     const subscriberRegistration = framework.createFrameworkRegistration({
       channels: {
         events: {
@@ -3342,8 +3338,8 @@ test('fanout subscriberConnections changes the live manual receive set', async (
     await firstPublisherRuntime.stop();
     throw error;
   }
-  const firstEndpoint = firstFanout.getListenerStatus('events').endpoint;
-  const secondEndpoint = secondFanout.getListenerStatus('events').endpoint;
+  const firstEndpoint = firstPublisherRuntime.getListenerStatus('fanout', 'events').endpoint;
+  const secondEndpoint = secondPublisherRuntime.getListenerStatus('fanout', 'events').endpoint;
 
   let subscriberConnections;
   const subscriberOptions = framework.createFrameworkOptions((builder) => {
@@ -4063,8 +4059,8 @@ test('ZLinkChannelRequestDispatcher invokes request handler and replies through 
     router.bind(ANY_LOOPBACK_PORT);
     const endpoint = router.options.lastEndpoint;
     dealer.connect(endpoint);
-    await waitForMonitorConnectionReady(routerMonitor, 'channel dispatcher router connection', router);
-    await waitForMonitorConnectionReady(dealerMonitor, 'channel dispatcher dealer connection', router);
+    await waitForMonitorConnectionReady(routerMonitor, 'channel dispatcher router connection');
+    await waitForMonitorConnectionReady(dealerMonitor, 'channel dispatcher dealer connection');
     routerMonitor.close();
     routerMonitor = null;
     dealerMonitor.close();
@@ -5006,28 +5002,20 @@ async function waitFor(predicate, label) {
   assert.fail(`${label} did not complete`);
 }
 
-async function waitForMonitorConnectionReady(ctx, monitor, label, activitySocket) {
-  const poller = zlink.createPoller();
-  const events = zlink.createPollEvents(1);
-  poller.add(activitySocket, [zlink.PollEventFlag.PollIn], 0);
+async function waitForMonitorConnectionReady(monitor, label) {
   const deadline = Date.now() + 1000;
-  try {
-    while (Date.now() < deadline) {
-      try {
-        const event = monitor.recv(zlink.RecvFlags.DontWait);
-        if (event?.event === zlink.MonitorEventType.ConnectionReady) {
-          return;
-        }
-      } catch (error) {
-        if (!(error instanceof zlink.RecvError && error.result === zlink.RecvResult.NoData)) {
-          throw error;
-        }
+  while (Date.now() < deadline) {
+    try {
+      const event = monitor.recv(zlink.RecvFlags.DontWait);
+      if (event?.event === zlink.MonitorEventType.ConnectionReady) {
+        return;
       }
-      poller.wait(events, Math.min(10, deadline - Date.now()));
+    } catch (error) {
+      if (!(error instanceof zlink.RecvError && error.result === zlink.RecvResult.NoData)) {
+        throw error;
+      }
     }
-  } finally {
-    events.close();
-    poller.close();
+    await new Promise((resolve) => setImmediate(resolve));
   }
   assert.fail(`${label} did not complete`);
 }
