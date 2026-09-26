@@ -8659,25 +8659,18 @@ spot_node_runtime_t::reserve_actor_join_barrier (const actor_ref_t &actor_ref)
                                                  std::move (settle_reservation)));
 }
 
-result_t<void>
+task_t<result_t<void>>
 spot_node_runtime_t::deliver_actor_join_completion (const actor_ref_t &actor_ref,
                                                     const actor_join_completion_t &completion,
                                                     std::optional<spot_id_t> source_spot_id)
 {
-    std::mutex mutex;
-    std::condition_variable settled;
-    std::optional<result_t<void>> result;
-    deliver_actor_join_completion_async (actor_ref, completion, std::move (source_spot_id),
-                                         [&] (result_t<void> value) {
-                                             {
-                                                 std::lock_guard lock (mutex);
-                                                 result.emplace (std::move (value));
-                                             }
-                                             settled.notify_all ();
-                                         });
-    std::unique_lock lock (mutex);
-    settled.wait (lock, [&] { return result.has_value (); });
-    return std::move (*result);
+    detail::task_completion_source_t<result_t<void>> settled;
+    auto task = settled.task ();
+    deliver_actor_join_completion_async (
+      actor_ref, completion, std::move (source_spot_id), [settled] (result_t<void> value) mutable {
+          settled.complete (result_t<result_t<void>>::success (std::move (value)));
+      });
+    co_return co_await task;
 }
 
 void spot_node_runtime_t::deliver_actor_join_completion_async (

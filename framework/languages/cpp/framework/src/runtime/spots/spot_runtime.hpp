@@ -1858,7 +1858,7 @@ class spot_node_runtime_t
     reserve_actor_join_barrier (const actor_ref_t &actor_ref);
     std::pair<std::uint64_t, std::uint64_t>
     actor_join_operation_id (std::string_view transfer_id) const;
-    result_t<void>
+    task_t<result_t<void>>
     deliver_actor_join_completion (const actor_ref_t &actor_ref,
                                    const actor_join_completion_t &completion,
                                    std::optional<spot_id_t> source_spot_id = std::nullopt);

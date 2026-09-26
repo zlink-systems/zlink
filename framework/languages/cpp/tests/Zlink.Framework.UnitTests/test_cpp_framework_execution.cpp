@@ -7310,6 +7310,9 @@ int main ()
                                                   zlink::framework::spot_id_t ("source-spot"));
 
         int completion_callback_count = 0;
+        auto suspended_completion =
+          std::make_shared<zlink::framework::detail::task_completion_source_t<void>> ();
+        std::promise<void> suspended_completion_entered;
         bool fail_completion_once = false;
         auto completion_error_kind = zlink::framework::framework_error_kind_t::internal_failure;
         bool completion_retryable = true;
@@ -7319,7 +7322,7 @@ int main ()
         completion_factory.actor_type = std::type_index (typeid (int));
         completion_factory.on_join_completed =
           [&] (void *actor, zlink::framework::detail::actor_join_completion_outcome_t outcome,
-               std::uint64_t, std::uint64_t, const zlink::framework::actor_ref_t *,
+               std::uint64_t operation_high, std::uint64_t, const zlink::framework::actor_ref_t *,
                const std::optional<zlink::framework::message_t> &,
                zlink::framework::framework_error_kind_t error_kind, bool retryable) {
               if (actor != completion_instance.get ()) {
@@ -7331,6 +7334,10 @@ int main ()
               completion_outcomes.push_back (outcome);
               completion_error_kind = error_kind;
               completion_retryable = retryable;
+              if (operation_high == 97) {
+                  suspended_completion_entered.set_value ();
+                  return suspended_completion->task ();
+              }
               if (fail_completion_once) {
                   fail_completion_once = false;
                   return zlink::framework::task_t<void> (zlink::framework::result_t<void>::failure (
@@ -7340,6 +7347,23 @@ int main ()
               return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
           };
         completion_state->actor_factories.emplace ("player", std::move (completion_factory));
+
+        const zlink::framework::actor_join_completion_t suspended_result =
+          zlink::framework::actor_join_rejected_t{97, 101, std::nullopt};
+        auto entered = suspended_completion_entered.get_future ();
+        auto delivery = std::async (std::launch::async, [&] {
+            return completion_runtime.deliver_actor_join_completion (
+              completion_actor, suspended_result, zlink::framework::spot_id_t ("source-spot"));
+        });
+        entered.wait ();
+        const bool returned_before_callback =
+          delivery.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
+        suspended_completion->complete (zlink::framework::result_t<void>::success ());
+        if (!returned_before_callback || !delivery.get ().result ().value ()) {
+            return 75;
+        }
+        completion_callback_count = 0;
+        completion_outcomes.clear ();
 
         const auto first_operation = completion_runtime.actor_join_operation_id ("transfer-1");
         const auto repeated_operation = completion_runtime.actor_join_operation_id ("transfer-1");
@@ -7353,10 +7377,16 @@ int main ()
           zlink::framework::actor_join_rejected_t{
             first_operation.first, first_operation.second,
             zlink::framework::message_t::from (std::string ("rejected"))};
-        if (!completion_runtime.deliver_actor_join_completion (
-              completion_actor, rejected_completion, zlink::framework::spot_id_t ("source-spot"))
-            || !completion_runtime.deliver_actor_join_completion (
-              completion_actor, rejected_completion, zlink::framework::spot_id_t ("source-spot"))
+        if (!completion_runtime
+               .deliver_actor_join_completion (completion_actor, rejected_completion,
+                                               zlink::framework::spot_id_t ("source-spot"))
+               .result ()
+               .value ()
+            || !completion_runtime
+                  .deliver_actor_join_completion (completion_actor, rejected_completion,
+                                                  zlink::framework::spot_id_t ("source-spot"))
+                  .result ()
+                  .value ()
             || completion_callback_count != 1
             || completion_outcomes
                  != std::vector{
@@ -7369,10 +7399,16 @@ int main ()
           zlink::framework::actor_join_failed_t{
             second_operation.first, second_operation.second,
             zlink::framework::framework_error_kind_t::internal_failure};
-        if (completion_runtime.deliver_actor_join_completion (
-              completion_actor, failed_completion, zlink::framework::spot_id_t ("source-spot"))
-            || !completion_runtime.deliver_actor_join_completion (
-              completion_actor, failed_completion, zlink::framework::spot_id_t ("source-spot"))
+        if (completion_runtime
+              .deliver_actor_join_completion (completion_actor, failed_completion,
+                                              zlink::framework::spot_id_t ("source-spot"))
+              .result ()
+              .value ()
+            || !completion_runtime
+                  .deliver_actor_join_completion (completion_actor, failed_completion,
+                                                  zlink::framework::spot_id_t ("source-spot"))
+                  .result ()
+                  .value ()
             || completion_callback_count != 3
             || completion_outcomes.back ()
                  != zlink::framework::detail::actor_join_completion_outcome_t::failed
@@ -7401,8 +7437,11 @@ int main ()
           zlink::framework::actor_join_rejected_t{
             successor_operation.first, successor_operation.second,
             zlink::framework::message_t::from (std::string ("successor"))};
-        if (!completion_runtime.deliver_actor_join_completion (
-              completion_actor, successor_completion, zlink::framework::spot_id_t ("source-spot"))
+        if (!completion_runtime
+               .deliver_actor_join_completion (completion_actor, successor_completion,
+                                               zlink::framework::spot_id_t ("source-spot"))
+               .result ()
+               .value ()
             || completion_callback_count != 4
             || completion_outcomes.back ()
                  != zlink::framework::detail::actor_join_completion_outcome_t::rejected) {

@@ -536,11 +536,11 @@ class mesh_node_runtime_t
     prepare_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state);
     task_t<actor_join_reply_t>
     finalize_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state);
-    result_t<void> deliver_remote_actor_join (const remote_actor_join_state_t &state,
-                                              const result_t<actor_join_reply_t> &joined);
-    result_t<actor_join_reply_t> fail_remote_actor_join (const remote_actor_join_state_t &state,
-                                                         const result_t<actor_join_reply_t> &failed,
-                                                         std::string message);
+    task_t<result_t<void>> deliver_remote_actor_join (const remote_actor_join_state_t &state,
+                                                      const result_t<actor_join_reply_t> &joined);
+    task_t<actor_join_reply_t> fail_remote_actor_join (const remote_actor_join_state_t &state,
+                                                       const result_t<actor_join_reply_t> &failed,
+                                                       std::string message);
     task_t<bool> abort_remote_actor_join_seal (std::shared_ptr<remote_actor_join_state_t> state);
     task_t<actor_join_reply_t>
     complete_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state);
