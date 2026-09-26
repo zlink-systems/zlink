@@ -790,9 +790,9 @@ reason, or the reconnect condition.
 | `Disconnected` — transport dropped | The in-progress operation fails | `Disconnected` | `TransportError` | Applied if the reconnect option is on |
 | `SendFailed` — transport write failure | The operation of that write fails with `SendFailed`; other in-progress operations fail with `Disconnected` | Ended | `TransportError` | Applied if the reconnect option is on |
 | `Disconnected` — `close` | The in-progress operation fails | `Disconnected` | `ClientClose` | Not done |
-| `FrameDecodeFailed` — frame/header | That frame isn't delivered, and the pending request fails | Ended | `TransportError` | Applied if the reconnect option is on |
+| `FrameDecodeFailed` — frame/header | That frame isn't delivered, and the pending request fails | Ended | `ProtocolError` | Applied if the reconnect option is on |
 | `FrameDecodeFailed` — Error JSON payload | The `request_seq` recipient defined by [§5.2](#52-request-correlation) | Kept | None | Not done |
-| `FrameTooLarge` | That frame isn't delivered, and the pending request fails | Ended | `TransportError` | Applied if the reconnect option is on |
+| `FrameTooLarge` | That frame isn't delivered, and the pending request fails | Ended | `ProtocolError` | Applied if the reconnect option is on |
 | `CompressionFailed` | Only that send operation fails | Kept | None | Not done |
 | `DecompressionFailed` | Only that receive packet or pending request fails | Kept | None | Not done |
 | `UserCallbackFailed`, `RemoteError` | Delivered as an error event or the related callback/request | Kept | None | Not done |

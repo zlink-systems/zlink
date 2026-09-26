@@ -662,9 +662,9 @@ terminal 여부, 종료 사유와 reconnect 조건을 바꾸지 않는다.
 | `Disconnected` — transport 끊김 | 진행 중인 operation 실패 | `Disconnected` | `TransportError` | reconnect option이 켜져 있으면 적용 |
 | `SendFailed` — transport write 실패 | 그 write의 operation은 `SendFailed`, 나머지 진행 중 operation은 `Disconnected`로 실패 | 종료 | `TransportError` | reconnect option이 켜져 있으면 적용 |
 | `Disconnected` — `close` | 진행 중인 operation 실패 | `Disconnected` | `ClientClose` | 안 함 |
-| `FrameDecodeFailed` — frame·header | 해당 frame을 전달하지 않고 pending request를 실패시킴 | 종료 | `TransportError` | reconnect option이 켜져 있으면 적용 |
+| `FrameDecodeFailed` — frame·header | 해당 frame을 전달하지 않고 pending request를 실패시킴 | 종료 | `ProtocolError` | reconnect option이 켜져 있으면 적용 |
 | `FrameDecodeFailed` — Error JSON payload | [§5.2](#52-request-correlation)의 `request_seq` 수신 대상 | 유지 | 없음 | 안 함 |
-| `FrameTooLarge` | 해당 frame을 전달하지 않고 pending request를 실패시킴 | 종료 | `TransportError` | reconnect option이 켜져 있으면 적용 |
+| `FrameTooLarge` | 해당 frame을 전달하지 않고 pending request를 실패시킴 | 종료 | `ProtocolError` | reconnect option이 켜져 있으면 적용 |
 | `CompressionFailed` | 해당 송신 operation만 실패 | 유지 | 없음 | 안 함 |
 | `DecompressionFailed` | 해당 수신 packet 또는 pending request만 실패 | 유지 | 없음 | 안 함 |
 | `UserCallbackFailed`, `RemoteError` | 오류 event 또는 관련 callback/request로 전달 | 유지 | 없음 | 안 함 |
