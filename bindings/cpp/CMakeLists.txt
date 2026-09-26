@@ -527,6 +527,7 @@ if(ZLINK_CPP_BUILD_TESTS)
     test_cpp_contract_optimization_guard.cpp
     test_cpp_contract_flow_state.cpp
     test_cpp_contract_lifecycle_rules.cpp
+    test_cpp_contract_router_selected_route.cpp
     test_cpp_perf_application_ready_queue.cpp
   )
   foreach(test_source IN LISTS ZLINK_CPP_CONTRACT_TEST_SOURCES)

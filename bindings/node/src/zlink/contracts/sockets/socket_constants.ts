@@ -84,7 +84,8 @@ export const PollEventFlag = Object.freeze({
   PollOut: 2,
   PollErr: 4,
   PollPri: 8,
-  PollCompletion: 32
+  PollCompletion: 32,
+  PollRoute: 64
 } as const);
 export type PollEventFlagValue =
   typeof PollEventFlag[keyof typeof PollEventFlag];

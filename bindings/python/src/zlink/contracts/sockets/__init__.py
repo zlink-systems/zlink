@@ -2,7 +2,7 @@
 
 from .message_socket_contracts import DealerSocket, PairSocket
 from .pubsub_socket_contracts import PubSocket, SubSocket, XPubSocket, XSubSocket
-from .routed_socket_contracts import RouterSocket
+from .routed_socket_contracts import RouterRoute, RouterSocket
 from .socket_options import (
     CommonSocketOptions,
     DealerSocketOptions,
@@ -26,6 +26,7 @@ __all__ = [
     "SubSocket",
     "XPubSocket",
     "XSubSocket",
+    "RouterRoute",
     "RouterSocket",
     "StreamSocket",
 ]

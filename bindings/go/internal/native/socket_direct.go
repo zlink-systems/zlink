@@ -34,6 +34,6 @@ func (s *directSocket) Recv(out *Received, flags RecvFlags) (bool, error) {
 		}
 		return false, err
 	}
-	out.replace(routingIDFromCPtr(sourceRID), parts, ReplyToken{}, nil, nil)
+	out.replace(routingIDFromCPtr(sourceRID), parts, ReplyToken{}, nil, nil, 0)
 	return true, nil
 }

@@ -45,7 +45,7 @@ final class NativeRouterReceiveSupport implements AutoCloseable {
     }
 
     private record NativeRecord(byte[] routingIdBytes, Message[] parts,
-                                long replyTokenValue) {
+                                long replyTokenValue, long routeGeneration) {
     }
 
     NativeRouterReceiveSupport(RouterSocket socket) {
@@ -104,6 +104,8 @@ final class NativeRouterReceiveSupport implements AutoCloseable {
                     record.routingIdBytes(), parts, record.replyTokenValue(),
                     record.replyTokenValue() != 0L, sender, null);
             }
+            ContractAccess.receivedSetRouteGeneration(target,
+                record.routeGeneration());
             adopted = true;
             return true;
         } finally {
@@ -149,6 +151,8 @@ final class NativeRouterReceiveSupport implements AutoCloseable {
                 scratch.sourceNodeRidOut, scratch.replyTokenValueOut,
                 scratch.partsOut, scratch.partCountOut, flags.value());
         if (rc == RecvResult.OK.value()) {
+            long routeGeneration = Native.routerRecvRouteGeneration(
+                InternalAccess.socketHandle(socket));
             Message[] parts =
                 InternalAccess.messageFromOwnedMessageVector(
                     scratch.partsOut.get(ValueLayout.ADDRESS, 0),
@@ -156,7 +160,7 @@ final class NativeRouterReceiveSupport implements AutoCloseable {
             return new NativeRecord(
                 NativeRoutingIds.readBytesOut(scratch.sourceNodeRidOut),
                 parts, scratch.replyTokenValueOut.get(
-                    ValueLayout.JAVA_LONG, 0));
+                    ValueLayout.JAVA_LONG, 0), routeGeneration);
         }
         int errno = Native.errno();
         RecvResult result = RecvResult.fromValue(rc);
@@ -181,6 +185,8 @@ final class NativeRouterReceiveSupport implements AutoCloseable {
                 received = InternalAccess.received(rid, record.parts(), true,
                     token, true, replySender(rid, token), null);
             }
+            ContractAccess.receivedSetRouteGeneration(received,
+                record.routeGeneration());
             adopted = true;
             return received;
         } finally {

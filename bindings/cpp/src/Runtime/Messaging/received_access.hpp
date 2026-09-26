@@ -15,6 +15,7 @@ struct received_access_t
     {
         received_._routing_id.reset ();
         received_._reply_token.reset ();
+        received_._route_generation = 0;
         clear_context (received_);
         return received_._parts;
     }
@@ -38,8 +39,10 @@ struct received_access_t
 
     static void commit_receive_metadata (
       received_t &received_, routing_id_t source_rid_, bool has_reply_token_,
-      uint64_t reply_token_value_, const std::shared_ptr<const void> &reply_owner_)
+      uint64_t reply_token_value_, const std::shared_ptr<const void> &reply_owner_,
+      uint64_t route_generation_)
     {
+        received_._route_generation = route_generation_;
         received_._routing_id = zlink::detail::routing_id_empty (source_rid_)
                                   ? std::nullopt
                                   : std::optional<routing_id_t> (std::move (source_rid_));
@@ -56,6 +59,7 @@ struct received_access_t
     {
         received_._routing_id = std::move (routing_id_);
         received_._reply_token = std::move (reply_token_);
+        received_._route_generation = 0;
         received_._parts.replace (parts_);
         clear_context (received_);
     }
@@ -66,6 +70,7 @@ struct received_access_t
     {
         received_._routing_id = std::move (routing_id_);
         received_._reply_token = std::move (reply_token_);
+        received_._route_generation = 0;
         received_._parts.replace (std::move (part_));
         clear_context (received_);
     }

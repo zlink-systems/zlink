@@ -68,4 +68,13 @@ public interface IRouterSocket : IConnectableRoutedMessageSocket
     /// </summary>
     ReplyOperation Reply(RoutingId rid, ReplyToken replyToken);
 
+    /// <summary>
+    ///     Returns the Core-selected route of every routing id as one atomic
+    ///     snapshot. A routing id without a row has no selected route. A
+    ///     successful snapshot clears <see cref="PollEventFlags.PollRoute" />
+    ///     readiness unless a later change raced it. Call it only from the
+    ///     socket's single route observer.
+    /// </summary>
+    IReadOnlyList<RouterRoute> RoutesSnapshot();
+
 }

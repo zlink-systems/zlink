@@ -140,6 +140,8 @@ const (
 	PollPri = impl.PollPri
 	// PollCompletion reports completion-queue data; WRITABLE advances a retry rather than reporting send success.
 	PollCompletion = impl.PollCompletion
+	// PollRoute reports that a ROUTER's selected route changed; read RouterSocket.RoutesSnapshot.
+	PollRoute = impl.PollRoute
 	// PollSourceSocket identifies a socket as the source of a poll event.
 	PollSourceSocket = impl.PollSourceSocket
 	// PollSourceFD identifies a raw file descriptor as the source of a poll event.

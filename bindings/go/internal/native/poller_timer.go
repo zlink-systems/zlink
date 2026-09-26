@@ -53,6 +53,8 @@ const (
 	PollErr        PollEventFlag = 4
 	PollPri        PollEventFlag = 8
 	PollCompletion PollEventFlag = 32
+	// PollRoute reports that a ROUTER's selected route changed; read RoutesSnapshot().
+	PollRoute PollEventFlag = 64
 )
 
 // PollSourceKind identifies the kind of source in a PollEvent.

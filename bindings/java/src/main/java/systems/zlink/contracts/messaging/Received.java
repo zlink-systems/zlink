@@ -36,6 +36,7 @@ public final class Received implements AutoCloseable {
     // Callers may pass the same Received instance to multiple recv calls. The
     // binding refills internal state in place, avoiding a per-recv envelope.
     private long replyTokenValue;
+    private long routeGeneration;
     private boolean hasReplyToken;
     private ReplyToken replyToken;
     private BiConsumer<List<Message>, SendFlags> replySender;
@@ -194,6 +195,12 @@ public final class Received implements AutoCloseable {
             }
 
             @Override
+            public void setRouteGeneration(Received received,
+                                           long routeGeneration) {
+                received.routeGeneration = routeGeneration;
+            }
+
+            @Override
             public void setReplyTokenOwner(Received received, Object owner) {
                 received.replyToken = received.hasReplyToken
                     ? ContractAccess.replyToken(owner,
@@ -210,6 +217,7 @@ public final class Received implements AutoCloseable {
      */
     public Received() {
         this.replyTokenValue = 0L;
+        this.routeGeneration = 0L;
         this.hasReplyToken = false;
         this.replySender = null;
         this.sendSubmitter = null;
@@ -315,6 +323,7 @@ public final class Received implements AutoCloseable {
         routingId = null;
         this.routingIdBytes = routingIdBytes;
         this.replyTokenValue = replyTokenValue;
+        this.routeGeneration = 0L;
         this.hasReplyToken = hasReplyToken;
         this.replySender = replySender;
         sendSubmitter = null;
@@ -360,6 +369,7 @@ public final class Received implements AutoCloseable {
         this.closed = false;
 
         this.replyTokenValue = source.replyTokenValue;
+        this.routeGeneration = source.routeGeneration;
         this.hasReplyToken = source.hasReplyToken;
         this.replySender = source.replySender;
         this.sendSubmitter = source.sendSubmitter;
@@ -374,6 +384,7 @@ public final class Received implements AutoCloseable {
 
         // Detach source so its own close() / finalizer is a no-op.
         source.replyTokenValue = 0L;
+        source.routeGeneration = 0L;
         source.hasReplyToken = false;
         source.replySender = null;
         source.sendSubmitter = null;
@@ -420,6 +431,7 @@ public final class Received implements AutoCloseable {
         this.routingId = routingId;
         this.routingIdBytes = null;
         this.replyTokenValue = replyTokenValue;
+        this.routeGeneration = 0L;
         this.hasReplyToken = hasReplyToken;
         this.replySender = replySender;
         this.sendSubmitter = null;
@@ -449,6 +461,7 @@ public final class Received implements AutoCloseable {
         this.routingId = null;
         this.routingIdBytes = routingIdBytes;
         this.replyTokenValue = replyTokenValue;
+        this.routeGeneration = 0L;
         this.hasReplyToken = hasReplyToken;
         this.replySender = replySender;
         this.sendSubmitter = null;
@@ -476,6 +489,7 @@ public final class Received implements AutoCloseable {
         this.routingId = routingId;
         this.routingIdBytes = null;
         this.replyTokenValue = replyTokenValue;
+        this.routeGeneration = 0L;
         this.hasReplyToken = hasReplyToken;
         this.replySender = replySender;
         this.sendSubmitter = null;
@@ -500,6 +514,7 @@ public final class Received implements AutoCloseable {
         this.routingId = null;
         this.routingIdBytes = routingIdBytes;
         this.replyTokenValue = replyTokenValue;
+        this.routeGeneration = 0L;
         this.hasReplyToken = hasReplyToken;
         this.replySender = replySender;
         this.sendSubmitter = null;
@@ -518,6 +533,7 @@ public final class Received implements AutoCloseable {
         this.routingId = null;
         this.routingIdBytes = routingIdBytes;
         this.replyTokenValue = replyTokenValue;
+        this.routeGeneration = 0L;
         this.hasReplyToken = hasReplyToken;
         this.replySender = replySender;
         this.sendSubmitter = null;
@@ -536,6 +552,7 @@ public final class Received implements AutoCloseable {
         this.routingId = routingId;
         this.routingIdBytes = null;
         this.replyTokenValue = replyTokenValue;
+        this.routeGeneration = 0L;
         this.hasReplyToken = hasReplyToken;
         this.replySender = replySender;
         this.sendSubmitter = null;
@@ -578,6 +595,16 @@ public final class Received implements AutoCloseable {
     public Optional<ReplyToken> replyToken() {
         ensureOpen();
         return Optional.ofNullable(replyToken);
+    }
+
+    /**
+     * Returns the opaque nonzero generation of the ROUTER route that delivered
+     * this record, or 0 when the record did not come from a ROUTER. Compare it
+     * only for equality with {@code RouterSocket.routesSnapshot()} rows.
+     */
+    public long routeGeneration() {
+        ensureOpen();
+        return routeGeneration;
     }
 
     /** Returns whether exactly one payload part was received. */

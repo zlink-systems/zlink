@@ -64,6 +64,7 @@ napi_value test_completion_close_count (napi_env env, napi_callback_info info);
 napi_value socket_reply (napi_env env, napi_callback_info info);
 napi_value router_recv_message (napi_env env, napi_callback_info info);
 napi_value router_try_recv_message (napi_env env, napi_callback_info info);
+napi_value router_routes_snapshot (napi_env env, napi_callback_info info);
 
 napi_value monitor_open (napi_env env, napi_callback_info info);
 napi_value monitor_recv (napi_env env, napi_callback_info info);

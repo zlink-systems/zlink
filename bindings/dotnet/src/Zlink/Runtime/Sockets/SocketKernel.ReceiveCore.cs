@@ -12,23 +12,25 @@ internal sealed partial class SocketKernel
         out Message? singlePart, out MultipartMessageCollection? parts,
         bool allowNoData = false)
     {
-        return ReceiveParts(flags, false, null, out _, out _, out _,
+        return ReceiveParts(flags, false, null, out _, out _, out _, out _,
             out singlePart, out parts, allowNoData);
     }
 
     private bool ReceiveRoutedParts(int flags,
         out RoutingIdSnapshot routingId, out ulong replyToken,
+        out ulong routeGeneration,
         out Message? singlePart, out MultipartMessageCollection? parts,
         bool allowNoData = false)
     {
         return ReceiveParts(flags, true, null, out routingId, out replyToken,
-            out _, out singlePart, out parts, allowNoData);
+            out routeGeneration, out _, out singlePart, out parts, allowNoData);
     }
 
     private unsafe bool ReceiveParts(int flags, bool captureRoutingId,
         TopicMessage? subscription, out RoutingIdSnapshot routingId,
-        out ulong replyToken, out int topicLength, out Message? singlePart,
-        out MultipartMessageCollection? parts, bool allowNoData)
+        out ulong replyToken, out ulong routeGeneration, out int topicLength,
+        out Message? singlePart, out MultipartMessageCollection? parts,
+        bool allowNoData)
     {
         var nativeParts = ArrayPool<ZlinkMsg>.Shared.Rent(
             NativeMessageParts.StackPartLimit);
@@ -37,6 +39,7 @@ internal sealed partial class SocketKernel
         var adoptedCount = 0;
         routingId = default;
         replyToken = 0;
+        routeGeneration = 0;
         topicLength = 0;
         singlePart = null;
         parts = null;
@@ -107,6 +110,13 @@ internal sealed partial class SocketKernel
                 if (count == 0 || count > (nuint)nativeParts.Length)
                     throw new ZlinkRecvException(RecvResult.InternalError);
                 nativeCount = (int)count;
+                // Core ROUTER §10.1: the generation belongs to the record the
+                // last successful router receive returned; read it before any
+                // other receive can replace it.
+                if (subscription == null && captureRoutingId
+                    && _policy.UsesRouterRoutedReceiveEnvelope)
+                    routeGeneration =
+                        NativeMethods.zlink_router_recv_route_generation(Handle);
                 // Basic receive deliberately avoids allocating or copying RID metadata.
                 if (captureRoutingId || subscription != null)
                     routingId = RoutingIdSnapshot.FromPointer(sourceRoutingId);

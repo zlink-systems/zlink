@@ -535,12 +535,19 @@ int router_recv_message_value (napi_env env,
       });
     if (rc != ZLINK_RECV_OK)
         return rc;
+    // Core keeps this value only until the next data receive on the socket.
+    const uint64_t route_generation = zlink_router_recv_route_generation (router);
     copy_routing_id (&peer_rid, peer_rid_ptr);
     *out = create_router_recv_message_value (
       env, peer_rid, reply_token, parts.data (), parts.size (),
       prefer_managed_parts, routing_id_storage);
     parts.close ();
-    return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
+    if (!*out)
+        return ZLINK_RECV_INTERNAL_ERROR;
+    napi_value generation;
+    napi_create_bigint_uint64 (env, route_generation, &generation);
+    napi_set_named_property (env, *out, "routeGeneration", generation);
+    return ZLINK_RECV_OK;
 }
 
 napi_value create_subscription_event_value (napi_env env,
@@ -3033,6 +3040,41 @@ napi_value socket_reply (napi_env env, napi_callback_info info)
     consume_native_message_value (env, argv[3]);
     napi_value out;
     napi_get_undefined (env, &out);
+    return out;
+}
+
+napi_value router_routes_snapshot (napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    size_t argc = 1;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    void *router = NULL;
+    napi_get_value_external (env, argv[0], &router);
+    std::vector<zlink_router_route_t> routes (8);
+    size_t count = 0;
+    for (;;) {
+        const zlink_config_result_t rc = zlink_router_routes_snapshot (
+          router, routes.data (), routes.size (), &count);
+        if (rc == ZLINK_CONFIG_OK)
+            break;
+        if (rc != ZLINK_CONFIG_BUFFER_TOO_SMALL)
+            return throw_last_error (env, "routerRoutesSnapshot failed");
+        // Core reports the current route count; the snapshot is taken again
+        // with that capacity and readiness is released only by the success.
+        routes.resize (count);
+    }
+    napi_value out;
+    napi_create_array_with_length (env, count, &out);
+    for (size_t i = 0; i < count; ++i) {
+        napi_value row;
+        napi_create_object (env, &row);
+        napi_set_named_property (env, row, "routingId",
+                                 create_routing_id_value (env, routes[i].rid));
+        napi_value generation;
+        napi_create_bigint_uint64 (env, routes[i].route_generation, &generation);
+        napi_set_named_property (env, row, "routeGeneration", generation);
+        napi_set_element (env, out, static_cast<uint32_t> (i), row);
+    }
     return out;
 }
 

@@ -58,6 +58,14 @@ public sealed partial class Received : IDisposable
     public ReplyToken? ReplyToken => _replyToken;
 
     /// <summary>
+    ///     Gets the Core-selected route generation of the ROUTER record, or 0
+    ///     when this envelope is not a ROUTER record. The value is an opaque
+    ///     equality token; compare it only with a generation from
+    ///     <see cref="IRouterSocket.RoutesSnapshot" /> for the same routing id.
+    /// </summary>
+    public ulong RouteGeneration => _routeGeneration;
+
+    /// <summary>
     ///     Gets the envelope kind.
     /// </summary>
     public ReceivedMessageType MessageType { get; private set; } =

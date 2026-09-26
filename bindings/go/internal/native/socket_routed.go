@@ -59,7 +59,10 @@ func (s *routedSocket) recvInto(out *Received, flags RecvFlags) error {
 		return err
 	}
 
-	s.replaceRoutedReceived(out, routingIDFromCPtr(sourceRID), parts, uint64(replyToken))
+	// Core reports the route generation of the record returned by the last
+	// successful zlink_router_recv; read it before any other data receive.
+	routeGeneration := uint64(C.zlink_router_recv_route_generation(s.raw()))
+	s.replaceRoutedReceived(out, routingIDFromCPtr(sourceRID), parts, uint64(replyToken), routeGeneration)
 	return nil
 }
 
@@ -68,6 +71,7 @@ func (s *routedSocket) replaceRoutedReceived(
 	routingID RoutingID,
 	parts []*Message,
 	tokenValue uint64,
+	routeGeneration uint64,
 ) {
 	var token ReplyToken
 	var reply func([]*Message) error
@@ -81,7 +85,7 @@ func (s *routedSocket) replaceRoutedReceived(
 			return submitManagedSend(ctx, s.socketCore, &routingID, builderParts)
 		}
 	}
-	out.replace(routingID, parts, token, reply, send)
+	out.replace(routingID, parts, token, reply, send, routeGeneration)
 }
 
 func (s *routedSocket) Recv(out *Received, flags RecvFlags) (bool, error) {
@@ -113,4 +117,41 @@ func (s *RouterSocket) Reply(rid RoutingID, token ReplyToken) ReplyOp {
 	return newReplyBuilder(func(parts []*Message) error {
 		return s.reply(rid, token, parts...)
 	})
+}
+
+// RouterRoute is one selected ROUTER route: the peer routing id and the
+// opaque nonzero generation of the route Core selected for it. Compare
+// generations only for equality.
+type RouterRoute struct {
+	RoutingID       RoutingID
+	RouteGeneration uint64
+}
+
+// RoutesSnapshot returns every selected route atomically, one row per
+// routing id. A successful call clears PollRoute readiness unless a later
+// change raced with it. Keep one route observer per socket.
+func (s *RouterSocket) RoutesSnapshot() ([]RouterRoute, error) {
+	const initialCapacity = 16
+	native := make([]C.zlink_router_route_t, initialCapacity)
+	for {
+		var count C.size_t
+		rc, cerr := C.zlink_router_routes_snapshot(s.raw(), &native[0], C.size_t(len(native)), &count)
+		if ConfigResult(rc) == ConfigBufferTooSmall && int(count) > len(native) {
+			// Core keeps POLLROUTE readiness on this result; retry with the
+			// count it reported (the set can grow again before the retry).
+			native = make([]C.zlink_router_route_t, int(count))
+			continue
+		}
+		if err := configErrorFromCall(rc, cerr); err != nil {
+			return nil, err
+		}
+		routes := make([]RouterRoute, int(count))
+		for i := 0; i < int(count); i++ {
+			routes[i] = RouterRoute{
+				RoutingID:       routingIDFromC(native[i].rid),
+				RouteGeneration: uint64(native[i].route_generation),
+			}
+		}
+		return routes, nil
+	}
 }

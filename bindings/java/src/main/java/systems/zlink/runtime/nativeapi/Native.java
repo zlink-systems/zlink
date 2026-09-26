@@ -4,12 +4,17 @@ import systems.zlink.contracts.eventing.MonitorEvent;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.contracts.sockets.RecvResult;
+import systems.zlink.contracts.sockets.RouterRoute;
+import systems.zlink.contracts.errors.ConfigResult;
+import systems.zlink.contracts.errors.ZlinkConfigException;
 import systems.zlink.contracts.errors.ZlinkException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
+import java.util.ArrayList;
+import java.util.List;
 public final class Native {
     private static final int SEND_DONT_WAIT = 1;
     private static final ThreadLocal<NativeMultipartScratch>
@@ -342,6 +347,15 @@ public final class Native {
         FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
           ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS,
           ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+
+    private static final MethodHandle MH_ROUTER_RECV_ROUTE_GENERATION =
+      downcallCritical(
+        "zlink_router_recv_route_generation",
+        FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+    private static final MethodHandle MH_ROUTER_ROUTES_SNAPSHOT = downcall(
+      "zlink_router_routes_snapshot",
+      FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+        ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
 
     private Native() {}
 
@@ -1351,6 +1365,71 @@ public final class Native {
             throw new RuntimeException("zlink_router_recv (critical) failed", t);
         }
     }
+
+    /**
+     * Route generation of the record returned by the last successful
+     * zlink_router_recv on this socket. Read it before any other receive.
+     */
+    public static long routerRecvRouteGeneration(MemorySegment router) {
+        try {
+            return (long) MH_ROUTER_RECV_ROUTE_GENERATION.invokeExact(router);
+        } catch (Throwable t) {
+            throw new RuntimeException(
+                "zlink_router_recv_route_generation failed", t);
+        }
+    }
+
+    /**
+     * Reads the ROUTER selected-route snapshot. Core ROUTER §10.1:
+     * BUFFER_TOO_SMALL reports the required row count and keeps POLLROUTE
+     * readiness, so retry with that capacity.
+     */
+    public static List<RouterRoute> routerRoutesSnapshot(
+            MemorySegment router) {
+        long capacity = INITIAL_ROUTE_SNAPSHOT_CAPACITY;
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment countOut = arena.allocate(ValueLayout.JAVA_LONG);
+            for (;;) {
+                MemorySegment rows = arena.allocate(
+                    NativeLayouts.ROUTER_ROUTE_LAYOUT, capacity);
+                int rc = (int) MH_ROUTER_ROUTES_SNAPSHOT.invokeExact(router,
+                    rows, capacity, countOut);
+                long count = countOut.get(ValueLayout.JAVA_LONG, 0);
+                if (rc == ConfigResult.BUFFER_TOO_SMALL.value()
+                    && count > capacity) {
+                    capacity = count;
+                    continue;
+                }
+                if (rc != ConfigResult.OK.value()) {
+                    throw new ZlinkConfigException(ConfigResult.fromValue(rc),
+                        errno());
+                }
+                if (count > capacity) {
+                    throw new ZlinkConfigException(
+                        ConfigResult.INTERNAL_ERROR);
+                }
+                long stride = NativeLayouts.ROUTER_ROUTE_LAYOUT.byteSize();
+                List<RouterRoute> routes = new ArrayList<>((int) count);
+                for (long index = 0; index < count; index++) {
+                    MemorySegment row = rows.asSlice(index * stride, stride);
+                    routes.add(new RouterRoute(
+                        NativeRoutingIds.read(row.asSlice(
+                            NativeLayouts.ROUTER_ROUTE_RID_OFFSET,
+                            NativeLayouts.ROUTING_ID_LAYOUT.byteSize())),
+                        row.get(ValueLayout.JAVA_LONG,
+                            NativeLayouts.ROUTER_ROUTE_GENERATION_OFFSET)));
+                }
+                return List.copyOf(routes);
+            }
+        } catch (ZlinkConfigException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw new RuntimeException("zlink_router_routes_snapshot failed",
+                t);
+        }
+    }
+
+    private static final long INITIAL_ROUTE_SNAPSHOT_CAPACITY = 16;
 
     public static int pollRaw(MemorySegment items, int count, int timeoutMs) {
         return NativePollerSymbols.pollRaw(items, count, timeoutMs);

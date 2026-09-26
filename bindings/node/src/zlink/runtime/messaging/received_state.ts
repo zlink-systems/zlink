@@ -23,6 +23,7 @@ interface ReceivedState {
   parts: Message[];
   routingId: RoutingId | null;
   replyToken: ReplyToken | null;
+  routeGeneration: bigint;
   _replyContext: ReplyContext | null;
   _sendContext: SendContext | null;
 }
@@ -52,7 +53,8 @@ export function replaceReceived(
   routingId: RoutingId | null = null,
   replyToken: ReplyToken | null = null,
   replyContext: ReplyContext | null = null,
-  sendContext: SendContext | null = null
+  sendContext: SendContext | null = null,
+  routeGeneration = 0n
 ): void {
   const state = target as unknown as ReceivedState;
   // Caller-provided receive storage is reused in perf and long-running
@@ -66,6 +68,7 @@ export function replaceReceived(
   state.parts = Object.isFrozen(parts) ? parts : freezeOwnedMessageParts(parts);
   state.routingId = routingId;
   state.replyToken = replyToken;
+  state.routeGeneration = routeGeneration;
   state._replyContext = replyContext;
   state._sendContext = sendContext;
 }

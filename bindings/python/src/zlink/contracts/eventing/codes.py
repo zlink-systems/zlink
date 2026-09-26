@@ -54,6 +54,7 @@ class PollEventFlag(IntFlag):
     POLLPRI = 8
     POLLITEMS_DFLT = 16
     POLLCOMPLETION = 32
+    POLLROUTE = 64
 
 class PollSourceKind(IntEnum):
     """Whether a poll event came from a socket, a file descriptor, or a timer."""

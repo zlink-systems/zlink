@@ -22,6 +22,9 @@ pub const POLLOUT: i16 = 2;
 /// for both WRITABLE admission retries and its terminal result; SEND
 /// backpressure is resumed by WRITABLE on [`POLLOUT`].
 pub const POLLCOMPLETION: i16 = 32;
+/// Poll event flag: a ROUTER's selected route changed; read
+/// `RouterSocket::routes_snapshot`.
+pub const POLLROUTE: i16 = 64;
 
 /// A built-in socket source that can be registered with a [`Poller`].
 ///

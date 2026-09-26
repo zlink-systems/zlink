@@ -212,6 +212,10 @@ class _BaseReceived:
 
 
 class ReceivedMultipart(_BaseReceived):
+    # HOT PATH: shared default so a fresh ReceivedMultipart()/Received() (no
+    # owner yet) reports 0 without a per-instance assignment in __init__.
+    route_generation = 0
+
     def __init__(
         self,
         owner=None,
@@ -219,6 +223,7 @@ class ReceivedMultipart(_BaseReceived):
         reply_token=None,
         *,
         router_socket=None,
+        route_generation=0,
     ):
         # HOT PATH: ReceivedMultipart() and Received() create empty storage
         # objects that recv_into refills in place through the public
@@ -229,6 +234,7 @@ class ReceivedMultipart(_BaseReceived):
             self.routing_id = None
             self.reply_token = None
             self._router_socket = None
+            self.route_generation = 0
             return
         self._owner = owner
         if owner._part_count == 1:
@@ -238,6 +244,7 @@ class ReceivedMultipart(_BaseReceived):
         self.routing_id = routing_id
         self.reply_token = reply_token
         self._router_socket = router_socket
+        self.route_generation = route_generation
 
     def _adopt_from(self, source):
         """Replace this Received's internal state with the contents of
@@ -251,10 +258,12 @@ class ReceivedMultipart(_BaseReceived):
         self.routing_id = source.routing_id
         self.reply_token = source.reply_token
         self._router_socket = source._router_socket
+        self.route_generation = source.route_generation
         source._clear_owner()
         source.routing_id = None
         source.reply_token = None
         source._router_socket = None
+        source.route_generation = 0
 
     def _replace(
         self,
@@ -263,6 +272,7 @@ class ReceivedMultipart(_BaseReceived):
         reply_token=None,
         *,
         router_socket=None,
+        route_generation=0,
     ):
         try:
             next_parts = (
@@ -279,6 +289,7 @@ class ReceivedMultipart(_BaseReceived):
         self.routing_id = routing_id
         self.reply_token = reply_token
         self._router_socket = router_socket
+        self.route_generation = route_generation
 
 
 class TopicMessage(_BaseReceived):

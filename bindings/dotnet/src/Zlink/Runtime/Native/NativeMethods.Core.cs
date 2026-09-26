@@ -73,6 +73,8 @@ internal static partial class NativeMethods
         "zlink_reply",
         "zlink_request",
         "zlink_router_recv",
+        "zlink_router_recv_route_generation",
+        "zlink_router_routes_snapshot",
         "zlink_send",
         "zlink_send_rid",
         "zlink_set_dealer_option",

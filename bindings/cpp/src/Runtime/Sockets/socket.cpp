@@ -266,9 +266,13 @@ int socket_t::receive_impl (
         return rc;
     }
 
+    // Core reports the route generation of the record returned by the last
+    // successful zlink_router_recv; read it before any other data receive.
+    const uint64_t route_generation =
+      use_router_recv ? zlink_router_recv_route_generation (detail::native_handle (*this)) : 0;
     detail::received_access_t::commit_receive_metadata (
       received_, std::move (envelope.source_rid), envelope.has_reply_token,
-      envelope.reply_token, _runtime ? _runtime->reply_owner : nullptr);
+      envelope.reply_token, _runtime ? _runtime->reply_owner : nullptr, route_generation);
     if (attach_routed_send_context_ && received_.routing_id ().has_value ())
         detail::received_access_t::set_socket_rid_send_context (received_,
                                                                 detail::native_handle (*this),

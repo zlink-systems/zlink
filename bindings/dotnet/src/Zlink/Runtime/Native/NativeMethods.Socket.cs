@@ -60,6 +60,16 @@ internal static partial class NativeMethods
         out IntPtr sourceNodeRoutingId, out ulong replyToken,
         ref ZlinkMsg parts, nuint partsCapacity, out nuint partCount, int flags);
 
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern ulong zlink_router_recv_route_generation(
+        IntPtr router);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl,
+        SetLastError = true)]
+    internal static extern unsafe int zlink_router_routes_snapshot(
+        IntPtr router, ZlinkRouterRoute* routes, nuint capacity,
+        out nuint routeCount);
+
     [LibraryImport(LibraryName, SetLastError = true)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static unsafe partial int zlink_send_rid(IntPtr handle,

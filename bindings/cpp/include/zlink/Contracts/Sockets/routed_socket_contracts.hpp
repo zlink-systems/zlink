@@ -3,8 +3,19 @@
 
 #include "message_socket_contracts.hpp"
 
+#include <cstdint>
+#include <vector>
+
 namespace zlink
 {
+
+/// @brief One selected ROUTER route: the peer routing id and the opaque nonzero
+/// generation of the route Core selected for it. Compare generations only for equality.
+struct router_route_t
+{
+    routing_id_t routing_id;
+    uint64_t route_generation = 0;
+};
 
 /// @brief Routes messages to peers addressed by routing id; the request/reply server side.
 class router_socket_t : public routed_message_socket_t
@@ -30,6 +41,11 @@ class router_socket_t : public routed_message_socket_t
     void set_routing_id (const routing_id_t &routing_id_);
 
     void get_routing_id (routing_id_t &routing_id_) const;
+
+    /// Returns every selected route atomically, one row per routing id. A
+    /// successful call clears poll_event_flag_t::pollroute readiness unless a
+    /// later change raced with it. Keep one route observer per socket.
+    std::vector<router_route_t> routes_snapshot ();
 
     router_socket_options_t options () { return router_socket_options_t (*this); }
 

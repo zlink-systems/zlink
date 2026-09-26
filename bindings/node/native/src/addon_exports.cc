@@ -96,6 +96,7 @@ void define_core_exports (napi_env env, napi_value exports)
       ZLINK_SOCKET_METHOD ("socketReply", socket_reply),
       ZLINK_METHOD ("routerRecvMessage", router_recv_message),
       ZLINK_METHOD ("routerRecvMessageNoWait", router_try_recv_message),
+      ZLINK_SOCKET_METHOD ("routerRoutesSnapshot", router_routes_snapshot),
       ZLINK_SOCKET_METHOD ("monitorOpen", monitor_open),
       ZLINK_METHOD ("monitorRecv", monitor_recv),
       ZLINK_METHOD ("monitorRecvNoWait", monitor_try_recv),

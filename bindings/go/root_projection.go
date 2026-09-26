@@ -58,6 +58,7 @@ type (
 	SubSocket           = impl.SubSocket
 	DealerSocket        = impl.DealerSocket
 	RouterSocket        = impl.RouterSocket
+	RouterRoute         = impl.RouterRoute
 	XPubSocket          = impl.XPubSocket
 	XSubSocket          = impl.XSubSocket
 	StreamSocket        = impl.StreamSocket
@@ -180,6 +181,7 @@ const (
 	PollErr                  = impl.PollErr
 	PollPri                  = impl.PollPri
 	PollCompletion           = impl.PollCompletion
+	PollRoute                = impl.PollRoute
 	PollSourceSocket         = impl.PollSourceSocket
 	PollSourceFD             = impl.PollSourceFD
 	PollSourceTimer          = impl.PollSourceTimer

@@ -1554,8 +1554,13 @@ static PyObject *py_router_recv_owner (PyObject *self, PyObject *args)
         Py_INCREF (Py_None);
         Py_INCREF (Py_None);
         Py_INCREF (Py_None);
-        return Py_BuildValue ("iiNNN", rc, err, Py_None, Py_None, Py_None);
+        Py_INCREF (Py_None);
+        return Py_BuildValue ("iiNNNN", rc, err, Py_None, Py_None, Py_None, Py_None);
     }
+
+    /* Core reports the route generation of the record returned by the last
+     * successful zlink_router_recv; read it before any other data receive. */
+    const uint64_t route_generation = zlink_router_recv_route_generation (handle);
 
     PyObject *owner_obj = build_native_parts_owner (&received);
     if (!owner_obj) {
@@ -1579,7 +1584,80 @@ static PyObject *py_router_recv_owner (PyObject *self, PyObject *args)
         Py_DECREF (owner_obj);
         return NULL;
     }
-    return Py_BuildValue ("iiNNN", rc, err, routing_obj, reply_token_obj, owner_obj);
+    PyObject *generation_obj = PyLong_FromUnsignedLongLong (route_generation);
+    if (!generation_obj) {
+        Py_DECREF (reply_token_obj);
+        Py_DECREF (routing_obj);
+        Py_DECREF (owner_obj);
+        return NULL;
+    }
+    return Py_BuildValue ("iiNNNN", rc, err, routing_obj, reply_token_obj, owner_obj,
+                          generation_obj);
+}
+
+static PyObject *py_router_routes_snapshot (PyObject *self, PyObject *args)
+{
+    unsigned long long handle_value = 0;
+    (void) self;
+    if (!PyArg_ParseTuple (args, "K", &handle_value))
+        return NULL;
+    void *handle = (void *) (uintptr_t) handle_value;
+
+    size_t capacity = 16;
+    zlink_router_route_t *routes =
+      (zlink_router_route_t *) PyMem_Malloc (capacity * sizeof (zlink_router_route_t));
+    if (!routes) {
+        PyErr_NoMemory ();
+        return NULL;
+    }
+    zlink_config_result_t rc;
+    size_t count = 0;
+    for (;;) {
+        rc = zlink_router_routes_snapshot (handle, routes, capacity, &count);
+        if (rc != ZLINK_CONFIG_BUFFER_TOO_SMALL || count <= capacity)
+            break;
+        /* Core keeps POLLROUTE readiness on this result; retry with the
+         * count it reported (the set can grow again before the retry). */
+        zlink_router_route_t *grown = (zlink_router_route_t *) PyMem_Realloc (
+          routes, count * sizeof (zlink_router_route_t));
+        if (!grown) {
+            PyMem_Free (routes);
+            PyErr_NoMemory ();
+            return NULL;
+        }
+        routes = grown;
+        capacity = count;
+    }
+
+    const int err = rc == ZLINK_CONFIG_OK ? 0 : zlink_errno ();
+    if (rc != ZLINK_CONFIG_OK) {
+        PyMem_Free (routes);
+        Py_INCREF (Py_None);
+        return Py_BuildValue ("iiN", (int) rc, err, Py_None);
+    }
+
+    PyObject *rows = PyList_New ((Py_ssize_t) count);
+    if (!rows) {
+        PyMem_Free (routes);
+        return NULL;
+    }
+    for (size_t index = 0; index < count; ++index) {
+        PyObject *rid = PyBytes_FromStringAndSize (
+          (const char *) routes[index].rid.data, (Py_ssize_t) routes[index].rid.size);
+        PyObject *generation =
+          rid ? PyLong_FromUnsignedLongLong (routes[index].route_generation) : NULL;
+        PyObject *row = generation ? PyTuple_Pack (2, rid, generation) : NULL;
+        Py_XDECREF (rid);
+        Py_XDECREF (generation);
+        if (!row) {
+            PyMem_Free (routes);
+            Py_DECREF (rows);
+            return NULL;
+        }
+        PyList_SET_ITEM (rows, (Py_ssize_t) index, row);
+    }
+    PyMem_Free (routes);
+    return Py_BuildValue ("iiN", (int) rc, err, rows);
 }
 
 static PyObject *py_subscribe_parts (PyObject *self, PyObject *args)
@@ -1890,6 +1968,8 @@ static PyMethodDef zlink_native_methods[] = {
    "Receive multipart payload parts as a native bytes owner."},
   {"router_recv_owner", py_router_recv_owner, METH_VARARGS,
    "Receive routed multipart payload parts as a native owner."},
+  {"router_routes_snapshot", py_router_routes_snapshot, METH_VARARGS,
+   "Read the ROUTER selected-route snapshot."},
   {"subscribe_parts", py_subscribe_parts, METH_VARARGS,
    "Receive topic multipart payload parts through zlink_subscribe."},
   {"subscribe_owner", py_subscribe_owner, METH_VARARGS,
