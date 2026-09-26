@@ -399,7 +399,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                     assertThrows(
                             java.util.concurrent.ExecutionException.class,
                             () -> closing.toCompletableFuture().get(5, TimeUnit.SECONDS));
-                    assertEquals(0, target.activeSpotCount());
+                    assertEquals(0, target.activeSpotCount("game"));
                     @SuppressWarnings("unchecked")
                     CompletionStage<Boolean> second =
                             (CompletionStage<Boolean>)
@@ -424,7 +424,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                     assertThrows(
                             java.util.concurrent.ExecutionException.class,
                             () -> closing.toCompletableFuture().get(5, TimeUnit.SECONDS));
-                    assertEquals(1, target.activeSpotCount());
+                    assertEquals(1, target.activeSpotCount("game"));
                     @SuppressWarnings("unchecked")
                     CompletionStage<Boolean> resumed =
                             (CompletionStage<Boolean>)
@@ -437,7 +437,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                 }
                 if (failureStage.equals("cas-window")) {
                     store.closingApplied.get(5, TimeUnit.SECONDS);
-                    assertEquals(1, target.activeSpotCount());
+                    assertEquals(1, target.activeSpotCount("game"));
                     SourceEntrySpot.probeStart.complete(null);
                     Throwable rejected = SourceEntrySpot.probeFailure.get(5, TimeUnit.SECONDS);
                     assertTrue(rejected instanceof ZLinkFrameworkException);
@@ -451,7 +451,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                 }
                 if (failureStage.equals("window")) {
                     store.deleteAttempted.get(5, TimeUnit.SECONDS);
-                    assertEquals(0, target.activeSpotCount());
+                    assertEquals(0, target.activeSpotCount("game"));
                     SourceEntrySpot.probeStart.complete(null);
                     Throwable rejected = SourceEntrySpot.probeFailure.get(5, TimeUnit.SECONDS);
                     assertTrue(rejected instanceof ZLinkFrameworkException);
@@ -490,7 +490,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                 }
                 if (!failCommit) {
                     store.deleteApplied.get(5, TimeUnit.SECONDS);
-                    assertEquals(0, target.activeSpotCount());
+                    assertEquals(0, target.activeSpotCount("game"));
                     assertEquals(1, EchoInstanceSpot.closingCalls.get());
                     if (completedBackendOperation != null) {
                         assertEquals(1, completedBackendOperation.get());
@@ -499,7 +499,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                         assertTrue(diagnostic.get(5, TimeUnit.SECONDS).contains(spotId));
                     }
                 } else {
-                    assertEquals(1, target.activeSpotCount());
+                    assertEquals(1, target.activeSpotCount("game"));
                     assertEquals(0, EchoInstanceSpot.closingCalls.get());
                     SourceEntrySpot.probeStart.complete(null);
                     assertTrue(
