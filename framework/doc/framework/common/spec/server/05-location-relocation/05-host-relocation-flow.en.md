@@ -712,7 +712,7 @@ Source resumption and target cutover verification after relay-ready follow [comm
 
 Once the Location Store records the target as the current processing node, it isn't
 rolled back to the source. If the target runtime is still running, a failed stage can be
-retried. The same-target exception and staging terminals after Restore expiry follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). If the source or target process terminates, a different
+retried. Target CAS resubmission and staging terminals follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). If the source or target process terminates, a different
 runtime doesn't take over this relocation. If the target terminates after commit, it
 isn't rolled back to the source — that object is left unavailable. Automatic recovery
 afterward isn't part of the contract. The source sends one-way cutover, waits for no

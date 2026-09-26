@@ -778,7 +778,7 @@ application은 다음 round나 match를 여기서 시작할 수 있다.
 **Relay-ready reply가 accepted 상태가 되기 전 명시적 failure는 `Aborted` CAS, route와 source
 location snapshot 취소 확인, relocation reservation·target staging 정리와 source 상태 복원을
 끝낸 뒤 source admission을 다시 연다. 이 경계 뒤에는 cutover submit 성공·실패와 관계없이
-source 재개는 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 `Preserve` fence를 따른다** — 공통 authority 규칙이며 Actor Join, User Spot aggregate relocation(§7) 모두에 적용된다. Cutover 뒤 Location Store 변경 결과가 불명확하면 [Location runtime §10](../05-location-relocation/01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)의 같은 `RelocationId` authority read로 결과를 확정한다. Restore 만료 뒤 같은 target의 CAS 예외와 staging terminal은 [Location runtime §10](../05-location-relocation/01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다.
+source 재개는 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 `Preserve` fence를 따른다** — 공통 authority 규칙이며 Actor Join, User Spot aggregate relocation(§7) 모두에 적용된다. Cutover 뒤 Location Store 변경 결과가 불명확하면 [Location runtime §10](../05-location-relocation/01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)의 같은 `RelocationId` authority read로 결과를 확정한다. Target CAS 재제출과 staging terminal은 [Location runtime §10](../05-location-relocation/01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다.
 
 `Capture`가 실패하면 Restore 요청을 보내지 않고 source를 유지한다. `Restore`가
 실패하면 target staging instance와 temporary queue를 폐기한다. 같은 source와 target process가

@@ -297,9 +297,7 @@ match is called a [CAS](../00-foundation/02-glossary.en.md#compare-and-set). The
 required owner and membership value in one CAS. If any single condition differs, no
 value changes and the target queue doesn't open either.
 
-Target CAS resubmission, its deadline, and indeterminate-response settlement follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received).
-
-Location runtime [§10](01-location-runtime.en.md#10-when-a-store-response-isnt-received) owns source `Preserve` after Restore expiry and the same-target exception after source lease expiry. Confirmed target commit opens its queue; a winning source fence removes staging. Retention and terminals while authority is indeterminate follow [§4.4](#44-ordered-relay-and-one-way-cutover) and §10. No Session route update precedes confirmed target commit.
+Target CAS resubmission, its terminals, indeterminate-response settlement and the source's Restore-deadline `Preserve` follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). No Session route update precedes confirmed target commit.
 
 For an Actor relocation unit, only the prepared target Actor is removed. For a Spot
 relocation unit, the prepared target Spot scope and every staging Actor included in that
@@ -376,15 +374,14 @@ sequenceDiagram
     end
     A->>B: [send] cutover · includes record count and checksum
     B->>B: [local] verify the complete pre-boundary relay batch
-    loop until target is confirmed as owner or Restore validity expires
+    loop until target commit or a Location runtime §10 terminal
         B->>L: [request] CAS or confirm authority under Location runtime §10
         L-->>B: [reply] success · retryable failure · current owner
     end
-    opt target authority still unconfirmed at Restore expiry
+    opt target authority still unconfirmed at the source Restore deadline
         A->>L: [request] Preserve with StoreVersion expected by target CAS
         L-->>A: [reply] source fence won · target committed · indeterminate
     end
-    Note over B,L: same-target exception after source lease expiry belongs to Location runtime §10
     alt target confirmed as owner
         B->>B: [local] merge saved work, pre-boundary relay, then remaining temporary work in order
         B->>B: [local] switch regular route · finish lifecycle · open dispatch
@@ -531,9 +528,9 @@ as new values.
 | Change succeeds | The target is owner. It opens the target queue and doesn't roll back to source. |
 | Condition mismatch | Authority is settled under [Location runtime §6.1 and §10](01-location-runtime.en.md#61-read-and-cas). If source `Preserve` won, target staging is removed and the source resumes retained work. |
 | Store returns a retryable failure | Target dispatch stays closed; ordinary retries and the post-source-lease exception follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). |
-| Target receives no CAS response | Same-`RelocationId` result confirmation and the post-Restore exception follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). |
+| Target receives no CAS response | Target CAS resubmission and its terminals follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). |
 | A different valid owner or generation is confirmed | Ends the relocation immediately as stale and removes the prepared target object and queue. |
-| CAS result is indeterminate at Restore expiry | Source `Preserve`, target CAS settlement, and the post-source-lease exception follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). |
+| CAS result is indeterminate at the source Restore deadline | Source `Preserve` and target CAS resubmission follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). |
 
 Cutover and the Session route update have no completion reply. Source and Session owner
 don't write the Location Store on the target's behalf.
@@ -587,8 +584,8 @@ defined by [Complete Host Relocation Flow](05-host-relocation-flow.en.md).
 | Chunk assembly result doesn't match the Restore request's checksum | Source | Target doesn't start restoration, sends an explicit failure reply, and removes the chunks being assembled. Source restores the queue from the memory payload and fails the operation. No retry. |
 | A Restore request with the same relocation identity arrives with a length or checksum different from the first | Source | Target neither reuses nor overwrites the existing assembly and ends with an explicit conflict failure. Source restores as with the explicit failure above. |
 | Target CAS fails on condition mismatch after the ready-to-receive-relay reply | Source owner fenced by `Preserve`, or another confirmed authority | If the source fence won, target staging is removed and the source resumes retained work (§4.4). |
-| Target receives no CAS response | Owner confirmed by Store read, or UNKNOWN | Source fencing and the exceptional post-Restore target CAS follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). The queue stays closed until target commit is confirmed. |
-| Authority is indeterminate at Restore expiry | Settlement pending | Source fencing and target progress after source lease expiry follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). Dispatch remains closed until target commit is confirmed. |
+| Target receives no CAS response | Owner confirmed by Store read, or UNKNOWN | Source fencing and target CAS resubmission follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). The queue stays closed until target commit is confirmed. |
+| Authority is indeterminate at the source Restore deadline | Settlement pending | Source fencing and target CAS resubmission follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). Dispatch remains closed until target commit is confirmed. |
 | Connection breaks and cutover is lost, source process still running | Follows the cutover retransmission outcome in [§4.4](#44-ordered-relay-and-one-way-cutover) | Whole-batch resend and replacement follow [§4.4](#44-ordered-relay-and-one-way-cutover). |
 | Neither cutover nor retransmission arrives by the cutover-wait Warning threshold | Source authority retained, dispatch sealed | Target records a Warning. On successful source `Preserve`, it removes staging and the source processes retained work (§4.4). |
 | Target process terminates after CAS succeeds | Target authority is kept, but the object is unavailable | Doesn't roll back to source or automatically resume on another target. |
@@ -599,7 +596,7 @@ defined by [Complete Host Relocation Flow](05-host-relocation-flow.en.md).
 
 An explicit failure before the ready-to-receive-relay reply uses the existing source
 restoration path. A cutover-submit result alone does not reopen source dispatch. At the
-Restore absolute deadline, ordinary new target CAS ends and the source settles with `Preserve`. The same-target exception after source lease expiry follows [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received).
+Restore absolute deadline the source settles with `Preserve`; target CAS resubmission follows [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received).
 Confirmed target commit opens its queue; winning source `Preserve` lets the source process
 retained work under [§4.4](#44-ordered-relay-and-one-way-cutover). Both sides retain work
 while the Store result is indeterminate.
@@ -769,7 +766,7 @@ test.
 - Source and Session owner don't change the Location Store owner.
 - On a CAS conflict, the target doesn't run the target queue's message or a one-way
   handler.
-- Retries before Restore expiry and the same-target exception after source lease expiry follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received).
+- Target CAS resubmission and its terminals follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received).
 - While authority is UNKNOWN, target dispatch and Session route update remain closed until §10 confirmation or terminal.
 
 **Backlog order and message completion meaning**

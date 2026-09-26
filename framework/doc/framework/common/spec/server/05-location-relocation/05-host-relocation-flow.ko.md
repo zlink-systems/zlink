@@ -643,8 +643,8 @@ queue의 record로 request의 terminal 결과를 만들거나 one-way message를
 Relay-ready 뒤의 source 재개와 target cutover 검증은 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)가 정하고, authority 판정과 staging terminal은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다.
 
 Location Store가 target을 현재 처리 node로 기록한 뒤에는 source로 되돌리지 않는다. Target
-runtime이 계속 실행 중이면 실패한 단계를 다시 시도할 수 있다. Restore 만료 뒤 같은 target의 예외와 staging terminal은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. Source `Preserve`와 target CAS는
-[Location runtime §6.1·§10](01-location-runtime.ko.md#61-read와-cas)으로 확정한다. Source나 target process가 종료되면 다른
+runtime이 계속 실행 중이면 실패한 단계를 다시 시도할 수 있다. Target CAS 재제출과 staging terminal은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다.
+Source나 target process가 종료되면 다른
 runtime이 이 relocation을 이어받지 않는다. Commit 뒤 target이 종료되면 source로 되돌리지
 않고 해당 object를 unavailable 상태로 둔다. 이후 자동 복구는 계약에 포함하지 않는다. Source는
 one-way cutover 뒤 완료 reply를 기다리지 않고 Message Follow로 전환한다. Target은 CAS와

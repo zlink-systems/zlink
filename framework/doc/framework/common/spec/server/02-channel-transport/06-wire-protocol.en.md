@@ -721,7 +721,7 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
   store's own `relocation-manifest-v1`/`relocation-root-pointer` formats and CAS
   discipline, unchanged by this section.
 - Target CAS errors and indeterminate responses converge by the same-`RelocationId`
-  authority read under [Location runtime §10](../05-location-relocation/01-location-runtime.en.md#10-when-a-store-response-isnt-received). The same-target CAS exception and staging terminals after Restore expiry follow [Location runtime §10](../05-location-relocation/01-location-runtime.en.md#10-when-a-store-response-isnt-received).
+  authority read under [Location runtime §10](../05-location-relocation/01-location-runtime.en.md#10-when-a-store-response-isnt-received). Target CAS resubmission and staging terminals follow [Location runtime §10](../05-location-relocation/01-location-runtime.en.md#10-when-a-store-response-isnt-received).
 - After successful CAS, the move isn't rolled back to the source.
 
 ## 10. Relocation, Actor Membership, and Ready

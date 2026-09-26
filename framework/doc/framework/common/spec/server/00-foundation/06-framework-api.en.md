@@ -319,11 +319,10 @@ factory finishes. The Location Store confirms reservation and authority in the s
 transaction, and descriptor count is a projection for candidate selection. If no candidate
 can take it, the call ends with `Unavailable`.
 
-The existing pending-activation
-`128` limit isn't an object population limit — it's a separate admission limit protecting
-concurrently in-flight activations. The activation concurrency default is `128` per node,
-and only a positive value is allowed. The permit is returned once factory and
-initialization finish, and doesn't change the active/reserved population count.
+The pending-activation limit isn't an object population limit — it's a separate admission
+limit protecting concurrently in-flight activations, and it doesn't change the active/reserved
+population count. [MeshNode §5.1](../03-spot-actor/03-mesh-node.en.md#51-weight-and-capacity)
+sets which work it counts, the counted interval, the default and the allowed range.
 
 All the capacity needed to create or relocate one object is reserved as a single typed
 bundle. An Actor bundle contains one Actor slot. A Spot bundle contains one overall Spot

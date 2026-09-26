@@ -205,7 +205,7 @@ Actor/Spot capacity projection, and capability per registered type.
 | Per-node Spot limit | Default `0` means no limit. If positive, the range is `1..2^31-1`, summing User Spot and Instance Spot. A negative value is a startup configuration error. |
 | Per-Spot-stable-type limit | Default `0` means no limit. If positive, the range is `1..2^31-1`, applying to that User/Instance Spot type. A negative value is a startup configuration error. |
 | Entry Spot | Fixed at one per Object Server node, excluded from the configurable Spot limit. |
-| Pending activation | Default `128`; limits concurrently in-progress activation admission, not object population. Only Actor creation, User Spot creation, Instance Spot cold activation and a relocation target's Restore each count as one activation admission. The target MeshNode counts it from when it receives that work until the work ends in Ready or target commit, or in rejection, failure or cleanup. Entry Spot and Actor Join are not counted. |
+| Pending activation | Default `128`; only a positive value is allowed. Limits concurrently in-progress activation admission, not object population. Only Actor creation, User Spot creation, Instance Spot cold activation and the target Restore of one relocation unit each count as one activation admission. The target MeshNode counts it from when it receives that work until the work ends in Ready or target commit, or in rejection, failure or cleanup. Entry Spot and Actor Join are not counted. A MeshNode with no headroom accepts no new activation admission. |
 
 When creating a new object or moving an existing object to a different node,
 the framework selects the target MeshNode. A MeshNode with placement weight
@@ -216,7 +216,7 @@ operation that selects a new target, so it isn't blocked by this weight
 alone. Changing weight to `0` doesn't cancel a reservation already confirmed.
 
 The framework first checks the configured Actor/Spot limit by summing active
-count and reserved slots, then applies weight. A limit of `0` skips the
+count and reserved slots, and pending-activation headroom, then applies weight. A limit of `0` skips the
 check. If no node satisfies the capacity condition, it's `Unavailable`.
 The descriptor's count is a projection for candidate selection — the
 Location Store's atomic reservation is the final judgment. The sum of

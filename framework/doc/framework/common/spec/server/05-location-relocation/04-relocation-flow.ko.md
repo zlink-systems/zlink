@@ -268,9 +268,7 @@ Message Follow와 route cache는 이 CAS를 대신 실행하지 않는다.
 membership을 모두 바꾼다. 조건 하나라도 다르면 아무 값도 변경하지 않고 target queue도 열지
 않는다.
 
-Target CAS의 재제출, deadline과 응답 불확정 판정은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)이 정한다.
-
-Restore 만료 뒤 source `Preserve`와 source lease 만료 뒤 같은 target의 예외는 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)이 소유한다. Target commit이 확인되면 queue를 열고, source fence가 이기면 staging을 정리한다. 불확정 상태의 보관·terminal은 [§4.4](#44-ordered-relay와-one-way-cutover)와 §10을 따른다. Commit 확인 전에는 Session route update를 보내지 않는다.
+Target CAS의 재제출·종료·응답 불확정 판정과 source의 Restore deadline `Preserve`는 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)이 정한다. Commit 확인 전에는 Session route update를 보내지 않는다.
 
 Actor relocation unit이면 준비한 target Actor만 제거한다. Spot relocation unit이면 target에
 준비한 Spot scope와 그 unit에 포함된 staging Actor를 함께 제거한다. Source `Preserve` fence가 성공하면 [§4.4](#44-ordered-relay와-one-way-cutover)에 따라 source
@@ -341,15 +339,14 @@ sequenceDiagram
     end
     A->>B: [send] cutover · record 수와 checksum 포함
     B->>B: [local] boundary 전 relay batch 전체와 확인 값 대조
-    loop target이 owner로 기록됐는지 확인 또는 Restore 유효시간 만료까지
+    loop target commit 또는 Location runtime §10의 종료 조건까지
         B->>L: [request] Location runtime §10에 따른 CAS 또는 authority 확인
         L-->>B: [reply] success · retryable failure · current owner
     end
-    opt Restore 유효시간에 target authority가 아직 확인되지 않음
+    opt source Restore deadline에 target authority가 아직 확인되지 않음
         A->>L: [request] target CAS가 기대한 StoreVersion으로 Preserve
         L-->>A: [reply] source fence 성공 · target commit · 불확정
     end
-    Note over B,L: source lease 만료 뒤 같은 target 예외는 Location runtime §10
     alt target이 owner로 기록됨
         B->>B: [local] saved work·boundary 전 relay·나머지 temporary 순서로 병합
         B->>B: [local] regular route 전환 · lifecycle 완료 · dispatch 개방
@@ -486,9 +483,9 @@ Target은 예상한 source owner와 generation을 조건으로 주고, 자기 no
 | 변경 성공 | Target이 owner다. Target queue를 열고 source로 되돌리지 않는다. |
 | 조건 불일치 | [Location runtime §6.1·§10](01-location-runtime.ko.md#61-read와-cas)의 authority settlement로 판정한다. Source `Preserve` fence가 이겼으면 target staging을 정리하고 source가 보관 작업을 재개한다. |
 | Store가 retry 가능한 실패를 반환 | Target queue는 닫아 두고 일반 재시도와 source lease 만료 뒤 예외를 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)에 맡긴다. |
-| Target이 CAS 응답을 받지 못함 | 같은 `RelocationId`의 결과 확인과 Restore 만료 뒤 예외는 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. |
+| Target이 CAS 응답을 받지 못함 | Target CAS 재제출과 그 종료는 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. |
 | 다른 valid owner나 generation이 확인됨 | Stale relocation으로 즉시 종료하고 준비한 target object와 queue를 제거한다. |
-| Restore 유효시간에 CAS 결과가 불확정 | Source `Preserve`와 target CAS의 판정 및 source lease 만료 뒤 target 예외는 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. |
+| Source Restore deadline에 CAS 결과가 불확정 | Source `Preserve`와 target CAS 재제출은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. |
 
 Cutover와 Session route update에는 완료 reply가 없다. Source와 Session owner는 Location
 Store를 대신 사용하지 않는다.
@@ -537,8 +534,8 @@ Session owner가 검증하는 값, seal과 route 전환의 정확한 시점·tim
 | Chunk 조립 결과가 Restore 요청의 checksum과 다름 | Source | Target은 복원을 시작하지 않고 명시적 실패 reply를 보내며 조립 중인 chunk를 제거한다. Source는 memory의 payload로 queue를 복원하고 operation을 실패로 끝낸다. 재시도하지 않는다. |
 | 같은 relocation identity의 Restore 요청에 처음과 다른 길이나 checksum이 도착 | Source | Target은 기존 조립을 재사용하지도 덮어쓰지도 않고 명시적 conflict 실패로 끝낸다. Source는 위 명시적 실패와 같이 복원한다. |
 | Relay 수신 준비 reply 뒤 target CAS가 조건 불일치로 실패 | `Preserve` fence로 확정한 source owner 또는 다른 authority | Source fence가 이겼으면 target staging을 정리하고 source가 보관 작업을 재개한다(§4.4). |
-| Target이 CAS 응답을 받지 못함 | Store를 다시 읽어 확인한 owner 또는 UNKNOWN | Restore 만료 뒤 source fence와 target의 예외적 CAS 제출은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. Target commit 확인 전에는 queue를 열지 않는다. |
-| Restore 유효시간에 authority가 불확정 | Settlement 대기 | Source fence와 source lease 만료 뒤 target 진행은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. Dispatch는 target commit 확인 전까지 닫는다. |
+| Target이 CAS 응답을 받지 못함 | Store를 다시 읽어 확인한 owner 또는 UNKNOWN | Source fence와 target CAS 재제출은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. Target commit 확인 전에는 queue를 열지 않는다. |
+| Source Restore deadline에 authority가 불확정 | Settlement 대기 | Source fence와 target CAS 재제출은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. Dispatch는 target commit 확인 전까지 닫는다. |
 | Connection이 끊겨 cutover가 유실됨, source process는 실행 중 | [§4.4](#44-ordered-relay와-one-way-cutover)의 cutover 재전송 결과 | Whole-batch 재전송과 교체는 [§4.4](#44-ordered-relay와-one-way-cutover)를 따른다. |
 | Relay 준비 reply 뒤 cutover 대기 Warning 시한 동안 cutover와 재전송이 모두 오지 않음 | Source authority 유지, dispatch 봉인 | Target은 Warning을 기록한다. Source `Preserve` fence가 성공하면 target staging을 정리하고 source가 보관 작업을 처리한다(§4.4). |
 | CAS 성공 뒤 target process 종료 | Target authority를 유지하지만 object는 unavailable | Source로 rollback하거나 다른 target에서 자동 재개하지 않는다. |
@@ -549,7 +546,7 @@ Session owner가 검증하는 값, seal과 route 전환의 정확한 시점·tim
 
 Relay 수신 준비 reply 이전의 명시적 실패는 기존 source 복원 절차를 따른다. 그 뒤의
 cutover submit 결과만으로 source dispatch를 열지 않는다. Restore absolute deadline에
-일반적인 새 target CAS는 끝나고 source는 `Preserve` fence로 판정한다. Source lease 만료 뒤 같은 target의 예외는 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. Target commit이면 target queue를 열고, source fence가 이기면 source가 [§4.4](#44-ordered-relay와-one-way-cutover)의 보관 작업을 직접 처리한다. 불확정이면 양쪽이 작업을 보관한다.
+source는 `Preserve` fence로 판정하며, target CAS 재제출은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. Target commit이면 target queue를 열고, source fence가 이기면 source가 [§4.4](#44-ordered-relay와-one-way-cutover)의 보관 작업을 직접 처리한다. 불확정이면 양쪽이 작업을 보관한다.
 
 Store 장애가 Restore 유효시간까지 계속되면 Session은 별도의 seal timeout으로 종료될 수 있다.
 Store가 정상화된 뒤 새 Session connection은 이전 binding을 복원하지 않고 일반 location
@@ -689,7 +686,7 @@ target·source의 request·reply·send 결과, 반환하는 Error·Warning log)�
   relay batch·cutover 검증 뒤에만 가능하다. Cutover 대기 Warning은 이 조건을 바꾸지 않는다.
 - Source와 Session owner가 Location Store owner를 변경하지 않는다.
 - CAS conflict에서는 target queue의 message와 one-way handler를 실행하지 않는다.
-- Restore 만료 전 재시도와 source lease 만료 뒤 같은 target 예외는 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다.
+- Target CAS 재제출과 그 종료는 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다.
 - Authority가 UNKNOWN이면 §10의 확인·terminal까지 target dispatch와 Session route update를 시작하지 않는다.
 
 **Backlog 순서와 message 완료 의미**
