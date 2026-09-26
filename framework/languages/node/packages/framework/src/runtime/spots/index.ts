@@ -327,26 +327,6 @@ export class DefaultZLinkSpotManager {
     string,
     Map<string, Promise<ZLinkSpotActivation>>
   >();
-  private readonly instanceActivationGates = new Map<
-    string,
-    {
-      readonly meshName: string;
-      readonly limit: number;
-      active: number;
-      //  Tombstone slots + head cursor keep abort O(1) and admit O(1) amortized
-      //  instead of indexOf/splice + shift scans under a cancellation storm.
-      readonly waiters: Array<
-        | {
-            resolve: (release: () => void) => void;
-            reject: (error: unknown) => void;
-            signal?: AbortSignal;
-            abort?: () => void;
-          }
-        | undefined
-      >;
-      waiterHead: number;
-    }
-  >();
   private readonly closeOperations = new Map<string, ZLinkTargetSpotCloseOperation>();
   private readonly pendingInstanceTerminals = new Map<string, number>();
   private readonly pendingInstanceTerminalGenerations = new Map<string, Map<string, number>>();
