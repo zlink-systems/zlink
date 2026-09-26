@@ -99,6 +99,7 @@ Registration examples for both Stores are kept only in
 | Value | Bytes, at most 1 MiB. Unchanged after commit until that version is replaced or deleted. With no expiry, kept until explicit delete. |
 | Version | Opaque UTF-8 `1..4096` bytes the provider issues. The framework doesn't interpret the value's size or internal makeup. |
 | `StoreNow` | The provider wall clock that read, commit, and scan pages use as reference. TTL and expiry correctness only use this time. |
+| Retention | The provider applies retention in whole milliseconds, rounding any sub-millisecond remainder up. A returned expiry is the expiration time calculated from the retention applied to the stored value. |
 
 An exact read returns `Missing(StoreNow)` or
 `Found(bytes, version, optional expiry, StoreNow)`. An expired value is

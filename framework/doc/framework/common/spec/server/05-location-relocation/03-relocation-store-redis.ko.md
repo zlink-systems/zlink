@@ -59,6 +59,8 @@ Relocation Store SPI가 제공하는 operation과 provider의 책임은 다음 �
 | `Renew` | Provider clock을 기준으로 보존 기간을 다시 계산한다. |
 | `Delete` | 지정한 reference를 제거한다. Reference가 없어도 성공한다. |
 
+Retention의 밀리초 변환은 [Location Store §3](02-location-store-redis.ko.md#3-key-value-version과-clock)을 따른다.
+
 SPI type과 interface가 따르는 provider abstraction package 경계는
 [Location runtime §2.1](01-location-runtime.ko.md#21-두-spi가-공유하는-provider-package-원칙)이
 정의한다.
