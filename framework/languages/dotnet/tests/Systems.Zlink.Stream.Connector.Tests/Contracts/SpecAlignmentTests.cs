@@ -93,11 +93,10 @@ public sealed partial class StreamConnectorTests
     [Fact]
     public async Task AFailedFirstConnectLeavesATransportErrorCloseReason()
     {
-        var port = GetFreeTcpPort();
         await using var connector = ZlinkStreamConnectorFactory.Create(
             new ZlinkStreamConnectorOptions
             {
-                Endpoint = new Uri($"tcp://127.0.0.1:{port}"),
+                Endpoint = new Uri("tcp://127.0.0.1:0"),
                 Heartbeat = DisabledHeartbeat(),
                 ConnectTimeout = TimeSpan.FromMilliseconds(200),
                 Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },

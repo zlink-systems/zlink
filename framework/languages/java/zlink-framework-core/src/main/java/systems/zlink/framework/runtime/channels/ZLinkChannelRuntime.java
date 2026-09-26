@@ -177,8 +177,16 @@ public final class ZLinkChannelRuntime
         return fanoutRuntime;
     }
 
-    public String listenerEndpoint(ZLinkListenerKind kind, String channelName) {
-        return sockets.listenerEndpoint(kind, channelName);
+    public String listenerEndpoint(ZLinkListenerKind kind, String name) {
+        return sockets.listenerEndpoint(kind, name);
+    }
+
+    public void recordListener(ZLinkListenerKind kind, String name, String endpoint) {
+        sockets.recordListener(kind, name, endpoint);
+    }
+
+    public void clearListenerRecords() {
+        sockets.clearListenerRecords();
     }
 
     public void setHostStateSupplier(Supplier<ZLinkFrameworkRuntimeState> hostState) {

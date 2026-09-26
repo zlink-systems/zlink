@@ -45,7 +45,7 @@ public final class ZLinkUserSpotRetireRuntime {
     private final Map<String, ActorLane> actorLanes;
     private final List<ZLinkCanonicalRelocationStateMachine> stateMachines;
 
-    public static final class RelocationBlockedException extends IllegalStateException {
+    public static class RelocationBlockedException extends IllegalStateException {
         private final ZLinkFrameworkRelocationReason reason;
 
         public RelocationBlockedException(ZLinkFrameworkRelocationReason reason, String message) {
@@ -55,6 +55,18 @@ public final class ZLinkUserSpotRetireRuntime {
 
         public ZLinkFrameworkRelocationReason reason() {
             return reason;
+        }
+    }
+
+    /**
+     * A relocation whose settled unit authority leaves the host split — some units committed on the
+     * target while others stayed on the source — or whose source owner lease expired before the
+     * {@code Preserve} fence. The host enters {@code Error} with {@code Blocked/RelocationFailed}
+     * (spec 30 §13).
+     */
+    public static final class RelocationAuthorityErrorException extends RelocationBlockedException {
+        public RelocationAuthorityErrorException(String message) {
+            super(ZLinkFrameworkRelocationReason.RELOCATION_FAILED, message);
         }
     }
 
@@ -143,7 +155,9 @@ public final class ZLinkUserSpotRetireRuntime {
             if (node == null || relocatableSpots.isEmpty() && relocatableActors.isEmpty()) {
                 continue;
             }
-            var staging = new ZLinkUserSpotAggregateStagingOwner(spots, adapters);
+            var staging =
+                    new ZLinkUserSpotAggregateStagingOwner(
+                            spots, adapters, registration.meshName());
             var peerClient = new ZLinkSessionRelocationPeerClient(node);
             var relocationReplyClient = ZLinkSpotRetireControl.client(node);
             var target =
@@ -189,7 +203,11 @@ public final class ZLinkUserSpotRetireRuntime {
                             relocationReplyClient,
                             locations,
                             new ZLinkStandaloneActorRelocationStagingOwner(
-                                    node.spotNode(), spots.actorSessions(), adapters, spots),
+                                    node.spotNode(),
+                                    spots.actorSessions(),
+                                    adapters,
+                                    spots,
+                                    registration.meshName()),
                             actorJoin);
             var relocationClient =
                     new ZLinkCanonicalRelocationStateMachine(
@@ -502,12 +520,16 @@ public final class ZLinkUserSpotRetireRuntime {
     }
 
     //  Mirrors Task.WhenAll: every unit runs to a terminal state and the first
-    //  failure is the reported one. Later failures are attached to it.
+    //  failure is the reported one. Later failures are attached to it. A unit
+    //  completes normally only after its target commit is confirmed, so a
+    //  failure beside a completed unit leaves authority on both sides (spec 30 §13).
     private static CompletionStage<Void> awaitAllUnits(List<CompletionStage<Void>> units) {
         if (units.isEmpty()) {
             return CompletableFuture.completedFuture(null);
         }
         AtomicReference<Throwable> firstFailure = new AtomicReference<>();
+        java.util.concurrent.atomic.AtomicInteger committed =
+                new java.util.concurrent.atomic.AtomicInteger();
         CompletableFuture<?>[] settled =
                 units.stream()
                         .map(
@@ -515,6 +537,9 @@ public final class ZLinkUserSpotRetireRuntime {
                                         unit.toCompletableFuture()
                                                 .handle(
                                                         (ignored, failure) -> {
+                                                            if (failure == null) {
+                                                                committed.incrementAndGet();
+                                                            }
                                                             if (failure != null
                                                                     && !firstFailure.compareAndSet(
                                                                             null, failure)) {
@@ -531,9 +556,24 @@ public final class ZLinkUserSpotRetireRuntime {
                 .thenCompose(
                         ignored -> {
                             Throwable failure = firstFailure.get();
-                            return failure == null
-                                    ? CompletableFuture.completedFuture(null)
-                                    : CompletableFuture.<Void>failedFuture(failure);
+                            if (failure == null) {
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            Throwable cause = failure;
+                            while (cause instanceof java.util.concurrent.CompletionException
+                                    && cause.getCause() != null) {
+                                cause = cause.getCause();
+                            }
+                            if (committed.get() == 0
+                                    || cause instanceof RelocationAuthorityErrorException) {
+                                return CompletableFuture.<Void>failedFuture(failure);
+                            }
+                            var split =
+                                    new RelocationAuthorityErrorException(
+                                            "Relocation units committed on both source and"
+                                                    + " target");
+                            split.initCause(cause);
+                            return CompletableFuture.<Void>failedFuture(split);
                         });
     }
 
@@ -606,6 +646,7 @@ public final class ZLinkUserSpotRetireRuntime {
                                                     timeout.compareTo(CONTROL_TIMEOUT) < 0
                                                             ? timeout
                                                             : CONTROL_TIMEOUT,
+                                                    deadline,
                                                     () -> source.cleanupLocal(deadline)),
                                             cancellation);
                         })
@@ -644,6 +685,7 @@ public final class ZLinkUserSpotRetireRuntime {
                                             timeout.compareTo(CONTROL_TIMEOUT) < 0
                                                     ? timeout
                                                     : CONTROL_TIMEOUT,
+                                            deadline,
                                             cancellation);
                         });
     }

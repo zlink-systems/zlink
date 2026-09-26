@@ -599,6 +599,11 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
 
     private static final class FakeMeshNode extends FakeBackendObject
             implements ZLinkInternalMeshNode {
+        @Override
+        public String advertisedEndpoint() {
+            return status().localEndpoint();
+        }
+
         private final String meshName;
         private RoutingId routingId = RoutingId.from("fake-mesh-node");
         private String endpoint = "";

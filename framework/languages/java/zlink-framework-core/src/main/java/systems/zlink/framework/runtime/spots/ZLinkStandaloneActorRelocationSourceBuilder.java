@@ -739,10 +739,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
     }
 
     private boolean hasCapacity(ZLinkMeshNodeDescriptor candidate) {
-        return hasCapacity(candidate.capacity().actors(), 1)
-                && (candidate.activationConcurrency().limit() == 0
-                        || candidate.activationConcurrency().active()
-                                < candidate.activationConcurrency().limit());
+        return candidate.capacity().actors().hasRoomFor(1)
+                && candidate.activationConcurrency().hasRoom();
     }
 
     private ZLinkSpotRetireControl.StageRequest stageRequest(
@@ -941,11 +939,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                             route.sessionRid(),
                             route.bindingGeneration());
                 });
-    }
-
-    private static boolean hasCapacity(ZLinkCapacityUsage usage, int required) {
-        return usage.limit() == 0
-                || (long) usage.active() + usage.reserved() + required <= usage.limit();
     }
 
     static final class PreparedSource {
@@ -1264,6 +1257,50 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             }
             relocationReplies.closeActorTimersAfterRelocation(owned.actorId());
             return actors.completeRelocationSource(List.of(owned.actorId()));
+        }
+
+        /**
+         * Expired-owner terminal (spec 28 §4.4): the source owner lease expired before its {@code
+         * Preserve} fence, so the Actor permanently stops dispatch and Store changes, keeps no
+         * Message Follow and discards its retained work.
+         */
+        CompletionStage<Void> discardAfterSourceLeaseExpiry() {
+            systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit
+                            .Commit
+                    retained;
+            try {
+                retained =
+                        inStateLane(
+                                () -> {
+                                    if (terminal || committed) {
+                                        throw new IllegalStateException(
+                                                "Actor relocation source is already settled");
+                                    }
+                                    committed = true;
+                                    if (relocationCommit == null) {
+                                        relocationCommit =
+                                                actors.retainActorRelocationCommit(
+                                                                owned.actorId(), seal)
+                                                        .orElseThrow(
+                                                                () ->
+                                                                        new IllegalStateException(
+                                                                                "Actor relocation"
+                                                                                        + " source"
+                                                                                        + " queue was"
+                                                                                        + " lost"));
+                                    }
+                                    return relocationCommit;
+                                });
+            } catch (RuntimeException failure) {
+                return failed(failure);
+            }
+            actors.abortRelocationMessageFollow(sourceRoute());
+            retained.complete();
+            return relocationReplies
+                    .failRelocationRepliesUnavailable(
+                            true, owned.actorId(), owned.snapshot().objectGeneration())
+                    .thenCompose(ignored -> cleanupLocal())
+                    .thenCompose(ignored -> discardInitialAfterCommit());
         }
 
         CompletionStage<Void> abort() {

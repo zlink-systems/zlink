@@ -360,7 +360,7 @@ Changes placement weight or channel weight without redeploying.
 ```cpp
 // instance injected from DI
 zlink::framework::route_mesh_runtime_options_t &placement = route_mesh_runtime_options;
-placement.placement_weight (50); // lowers the share of new Actor/Spot placement routed to this node
+placement.mesh ("play").placement_weight (50); // lowers the share of new Actor/Spot placement routed to the play MeshNode
 placement.channel ("play.api").weight (0); // excludes this Channel Server from selection
 ```
 
@@ -368,11 +368,11 @@ placement.channel ("play.api").weight (0); // excludes this Channel Server from 
 
 | Property | Default | Meaning |
 | --- | --- | --- |
-| `route_mesh_runtime_options_t::placement_weight()`/`(value)` | The value at registration time | The node-level Actor/Spot placement weight |
+| `route_mesh_runtime_options_t::mesh(name).placement_weight()`/`(value)` | The value at registration time | The MeshNode-level Actor/Spot placement weight |
 | `route_mesh_runtime_options_t::channel(name).weight()`/`(value)` | The value at registration time | The ChannelName-level Server selection weight |
 
 **Completion result.** A synchronous get/set. It applies immediately with no separate completion
-signal. Querying an unregistered ChannelName is a configuration error.
+signal. Querying an unregistered MeshName or ChannelName is a configuration error.
 
 **When to use.** Use this to adjust placement or traffic share while running. Transport options,
 including `max_message_size`, cannot be changed through this path — configure them only before

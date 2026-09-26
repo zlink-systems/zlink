@@ -151,14 +151,14 @@ try {
         $path = Join-Path $RunDir "$Name.properties"
         $content = @(
             "sample.instanceName=$Instance",
-            "sample.logDirectory=$($LogDir.Replace('\', '/'))",
+            "sample.logDirectory=$LogDir",
             "sample.$EndpointKey=$Endpoint",
             "sample.httpEndpoint=$HttpEndpoint",
             "sample.redisEndpoint=$($redis.Endpoint)",
             "sample.redisKeyPrefix=$redisPrefix",
             "sample.spotRouterEndpoint=$Router"
         )
-        Set-ZlinkSampleUtf8File -Path $path -Value $content
+        Set-ZlinkSampleProperties -Path $path -Value $content
         Protect-ConfigFile $path
         return $path
     }
@@ -170,8 +170,8 @@ try {
             "sample.apiAHttpEndpoint=$apiAHttp",
             "sample.apiBHttpEndpoint=$apiBHttp",
             "sample.scenario=$Scenario"
-        ) + $(if ($ReleaseFile) { "sample.ownerUnavailableReleaseFile=$($ReleaseFile.Replace('\', '/'))" })
-        Set-ZlinkSampleUtf8File -Path $path -Value $content
+        ) + $(if ($ReleaseFile) { "sample.ownerUnavailableReleaseFile=$ReleaseFile" })
+        Set-ZlinkSampleProperties -Path $path -Value $content
         Protect-ConfigFile $path
         return $path
     }

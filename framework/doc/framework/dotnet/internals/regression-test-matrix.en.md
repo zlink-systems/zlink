@@ -171,7 +171,7 @@ interference; a shorter single run is not sufficient evidence.
 | Entry Spot packet callback concurrency | `integration-single-process` | the Entry Spot's ordinary packet handler uses the same registration surface as a user Spot but is not serialized against the Entry Spot's entire execution line |
 | `OnInitializeAsync(...)` handler resolve | `integration-single-process` | the per-spot separate DI scope works normally |
 | `OnClosingAsync(...)` normal close callback | `integration-single-process` | called exactly once, in the spot execution context, when `CloseAsync(...)` is called |
-| `IZLinkSpotContext.CloseAsync(...)` self close | `integration-single-process` | requesting closure of the current Spot during a timer/handler run proceeds with close after the current callback, and disappears from manager lookups |
+| `IZLinkSpotContext.CloseAsync(...)` self close | `integration-single-process` | requesting closure during a timer/handler run proceeds after the callback and completes when the close result is settled |
 | `CloseAsync(...)` with joined actors | `integration-single-process` | a user Spot with joined actors remaining rejects close, returning `false` |
 | local spot publish | `integration-single-process` | the subscriber receives it normally |
 | SPOT timer metadata | `integration-single-process` | the timer handler receives the callback number, scheduled/start time, delay, and skip metadata |

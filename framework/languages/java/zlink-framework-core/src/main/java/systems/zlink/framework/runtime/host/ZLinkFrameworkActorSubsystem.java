@@ -151,7 +151,8 @@ final class ZLinkFrameworkActorSubsystem {
                                     meshNode,
                                     locationStore,
                                     actors,
-                                    serializer);
+                                    serializer,
+                                    spots.activationAdmission(meshActorNode.meshName()));
                     meshNode.setActorCreateOperationHandler(creation);
                     actors.setCreationSubmitter(creation);
                     actors.setEntrySpotTargetSelector(creation::selectEntrySpotTarget);

@@ -29,6 +29,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
     private final String meshName;
     private final RoutingId nodeRid;
     private final ZLinkBackendSpot backendSpot;
+    private final long objectGeneration;
     private final DefaultSpotOutbound outbound;
     private final ZLinkHandlerInstanceOwner handlerInstances;
     private final ZLinkSerialExecutionQueue dispatchQueue;
@@ -55,6 +56,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
         this.meshName = Objects.requireNonNull(meshName, "meshName");
         this.nodeRid = Objects.requireNonNull(nodeRid, "nodeRid");
         this.backendSpot = Objects.requireNonNull(backendSpot, "backendSpot");
+        this.objectGeneration = backendSpot.lifecycleGeneration();
         this.dispatchQueue =
                 new ZLinkSerialExecutionQueue(
                         host.serialExecutor(), ZLinkExecutionLanePolicy.spot());
@@ -90,15 +92,46 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
         return enqueueDispatch(() -> host.runWithOutbound(outbound, operation));
     }
 
+    /**
+     * Runs {@code onClosing} of this already activated Instance Spot. Closing is cleanup of accepted
+     * work, so it runs even after the owner admission deadline (Location runtime §5).
+     */
     CompletionStage<Void> runClosing(Supplier<CompletionStage<Void>> operation) {
+        return runClosing(dispatchQueue.isCurrent(), operation);
+    }
+
+    boolean isCurrentDispatchTurn() {
+        return dispatchQueue.isCurrent();
+    }
+
+    CompletionStage<Void> runClosing(
+            boolean initiatedInsideTurn, Supplier<CompletionStage<Void>> operation) {
+        sealTimerAdmission();
+        CompletionStage<Void> acceptedTurns =
+                initiatedInsideTurn ? infrastructureQueue.awaitQuiescence() : awaitQuiescence();
+        return acceptedTurns.thenCompose(ignored -> runLifecycle(operation));
+    }
+
+    void sealTimerAdmission() {
         timers.freeze();
-        return awaitQuiescence().thenCompose(ignored -> runLifecycle(operation));
+    }
+
+    void closeTimers() {
+        timers.close();
+    }
+
+    void closeHandlerInstances() {
+        handlerInstances.close();
+    }
+
+    void closeBackendSpot() {
+        backendSpot.close();
     }
 
     void closeResources() {
-        timers.close();
-        handlerInstances.close();
-        backendSpot.close();
+        closeTimers();
+        closeHandlerInstances();
+        closeBackendSpot();
     }
 
     CompletionStage<Void> awaitQuiescence() {
@@ -136,7 +169,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
 
     @Override
     public long objectGeneration() {
-        return backendSpot.lifecycleGeneration();
+        return objectGeneration;
     }
 
     @Override
@@ -178,7 +211,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
     public CompletionStage<Void> enqueueDispatch(
             long payloadBytes, Supplier<CompletionStage<Void>> operation) {
         host.ensureOwnerAdmissionOpen();
-        return dispatchQueue.enqueue(operation);
+        return dispatchQueue.enqueue(() -> runLifecycleExecution(operation));
     }
 
     @Override
@@ -218,7 +251,8 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
 
     @Override
     public CompletionStage<Boolean> close() {
-        return host.closeInstanceSpot(spotId(), objectGeneration());
+        return ZLinkSerialExecutionQueue.yieldCurrent(
+                host.closeInstanceSpot(spotId(), objectGeneration()));
     }
 
     @Override

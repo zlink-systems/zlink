@@ -329,6 +329,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
     public async ValueTask<ulong> PublishAsync(
         ZLinkSpotRetireReservation reservation,
         ZLinkAggregateRelocationPublished relocation,
+        DateTimeOffset restoreDeadline,
         CancellationToken cancellationToken
     )
     {
@@ -337,6 +338,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     ?? throw new ZLinkConfigurationException("Location Store is not registered."),
                 reservation,
                 relocation,
+                restoreDeadline,
                 cancellationToken
             )
             .ConfigureAwait(false);
@@ -359,10 +361,10 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         IZLinkLocationRepository store,
         ZLinkSpotRetireReservation reservation,
         ZLinkAggregateRelocationPublished relocation,
+        DateTimeOffset restoreDeadline,
         CancellationToken cancellationToken
     )
     {
-        var deadline = Stopwatch.GetElapsedTime(0) + registration.DefaultRequestTimeout;
         var spot = relocation.Envelope.Participants.Single(static participant =>
             participant.ObjectKind
                 is ZLinkPlacementObjectKind.UserSpot
@@ -371,9 +373,21 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var read = await store
-                .ReadAuthorityAsync(spot.AuthorityKey, cancellationToken)
-                .ConfigureAwait(false);
+            ZLinkAuthorityReadResult? read = null;
+            try
+            {
+                read = await store
+                    .ReadAuthorityAsync(spot.AuthorityKey, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+                // The Store response is indeterminate; the next read owns the decision.
+            }
+            catch (ZLinkFrameworkException)
+            {
+                // A Store read failure cannot decide the relocation authority.
+            }
             if (
                 read is ZLinkAuthorityReadResult.Found found
                 && found.Snapshot.Allocation.Descriptor == reservation.TargetDescriptor
@@ -401,47 +415,52 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 )
             )
                 return found.Snapshot.AuthorityOwnerGeneration;
-            if (Stopwatch.GetElapsedTime(0) >= deadline)
-            {
-                var relocationStore =
-                    registration.Locations.ResolveRelocationStore()
-                    ?? throw new ZLinkConfigurationException("Relocation Store is not registered.");
-                var exact = await new ZLinkRelocationStartupRecovery(store, relocationStore)
-                    .TryReadExactPublishedAsync(relocation.Envelope, CancellationToken.None)
-                    .ConfigureAwait(false);
-                if (exact is not null)
-                    return exact
-                        .Authorities.Single(authority => authority.Key == spot.AuthorityKey)
-                        .Snapshot.AuthorityOwnerGeneration;
-                var kind = spot.ObjectKind;
-                if (kind == ZLinkPlacementObjectKind.UserSpot)
-                {
-                    var abort = await store
-                        .AbortAggregateAsync(relocation.Fence, CancellationToken.None)
-                        .ConfigureAwait(false);
-                    if (
-                        abort
-                        is ZLinkAggregateAbortResult.Aborted
-                            or ZLinkAggregateAbortResult.AlreadyAborted
+            if (
+                read is ZLinkAuthorityReadResult.Missing
+                || read is ZLinkAuthorityReadResult.Found changed
+                    && (
+                        changed.Snapshot.ObjectGeneration != spot.ObjectGeneration
+                        || changed.Snapshot.AuthorityOwnerGeneration
+                            != spot.AuthorityOwnerGeneration
+                        || changed.Snapshot.OwnerId != reservation.Inventory.SourceOwner.OwnerId
+                        || changed.Snapshot.OwnerLeaseGeneration
+                            != reservation.Inventory.SourceOwner.LeaseGeneration
                     )
-                        throw new ZLinkCanonicalRelocationDurablyAbortedException(
-                            "The target did not publish before the durable aggregate abort won."
-                        );
-                    exact = await new ZLinkRelocationStartupRecovery(store, relocationStore)
-                        .TryReadExactPublishedAsync(relocation.Envelope, CancellationToken.None)
-                        .ConfigureAwait(false);
-                    if (exact is not null)
-                        return exact
-                            .Authorities.Single(authority => authority.Key == spot.AuthorityKey)
-                            .Snapshot.AuthorityOwnerGeneration;
-                }
+            )
+                throw new ZLinkRelocationDataLostException(
+                    "SPOT relocation authority changed to an unrelated owner."
+                );
+            if (
+                runtime?.LocationLifecycle is { } lifecycle
+                && !lifecycle.IsOwnerLeaseValid(reservation.Inventory.SourceOwner)
+            )
                 throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.DeadlineExceeded,
-                    "Canonical relocation publication could not be reconciled.",
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    "The source owner lease expired before SPOT relocation settled.",
                     ZLinkRetryAdvice.RetryAfterBackoff
                 );
+            if (DateTimeOffset.UtcNow >= restoreDeadline)
+            {
+                ZLinkAggregateAbortResult? abort = null;
+                try
+                {
+                    abort = await store
+                        .AbortAggregateAsync(relocation.Fence, CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                catch (IOException) { }
+                catch (ZLinkFrameworkException) { }
+                if (
+                    abort
+                    is ZLinkAggregateAbortResult.Aborted
+                        or ZLinkAggregateAbortResult.AlreadyAborted
+                )
+                    throw new ZLinkCanonicalRelocationDurablyAbortedException(
+                        "The target did not publish before the durable aggregate abort won."
+                    );
             }
-            await Task.Delay(1, cancellationToken).ConfigureAwait(false);
+            await Task.Delay(registration.Locations.Options.PollingInterval, cancellationToken)
+                .ConfigureAwait(false);
         }
     }
 
@@ -985,10 +1004,9 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         return source.StableType;
     }
 
-    internal void ScheduleCanonicalCutoverFallback(
-        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
-        RoutingId sourceNodeRid
-    ) => _ = RunCanonicalCutoverFallbackAsync(prepare, sourceNodeRid);
+    internal void ScheduleCanonicalCutoverWarning(
+        ZLinkServiceWireCodec.RelocationPrepareRecord prepare
+    ) => _ = RunCanonicalCutoverWarningAsync(prepare);
 
     internal async ValueTask AbortCanonicalPreparedTargetAsync(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
@@ -1013,9 +1031,14 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         await AbortTargetStageAsync(stage).ConfigureAwait(false);
     }
 
-    private async Task RunCanonicalCutoverFallbackAsync(
-        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
-        RoutingId sourceNodeRid
+    /// <summary>
+    /// Relocation flow §4.4: <c>RelocationCutoverWaitTimeout</c> is only a
+    /// Warning threshold. The target records <c>cutover_timeout</c> and keeps
+    /// waiting for the verified cutover or the authority settlement; it never
+    /// starts the CAS or dispatch from this timer.
+    /// </summary>
+    private async Task RunCanonicalCutoverWarningAsync(
+        ZLinkServiceWireCodec.RelocationPrepareRecord prepare
     )
     {
         try
@@ -1025,45 +1048,109 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     runtime.ShutdownToken
                 )
                 .ConfigureAwait(false);
-            var fence = new ZLinkAggregateFence(
-                DecodeRelocationId(prepare.RelocationId),
-                prepare.TargetAttemptGeneration
-            );
-            if (
-                !_staged.TryGetValue(fence, out var entry)
-                || entry is not TargetStage stage
-                || Volatile.Read(ref stage.AuthorityPublished) != 0
+        }
+        catch (OperationCanceledException) when (runtime.ShutdownToken.IsCancellationRequested)
+        {
+            return;
+        }
+        var fence = new ZLinkAggregateFence(
+            DecodeRelocationId(prepare.RelocationId),
+            prepare.TargetAttemptGeneration
+        );
+        if (
+            !_staged.TryGetValue(fence, out var entry)
+            || entry is not TargetStage stage
+            || Volatile.Read(ref stage.AuthorityPublished) != 0
+        )
+            return;
+        ZLinkFrameworkDebugLog.SpotDiscovery("cutover_timeout object=spot");
+        ZLinkRuntimeMetrics.RecordRelocationCutoverTimeout(
+            prepare.Object.Kind == 3 ? "instance_spot" : "user_spot"
+        );
+        //  Location runtime §10: from here the target also reads its source
+        //  fence. Only a confirmed source Preserve (the fence moved to another
+        //  owner) or the end of the target's own lease discards the staging;
+        //  elapsed time alone never does.
+        var authorityStore =
+            registration.Locations.ResolveStore()
+            ?? throw new ZLinkConfigurationException("Location Store is not registered.");
+        try
+        {
+            while (
+                _staged.TryGetValue(fence, out var current)
+                && ReferenceEquals(current, stage)
+                && Volatile.Read(ref stage.AuthorityPublished) == 0
             )
-                return;
-            ZLinkFrameworkDebugLog.SpotDiscovery("cutover_timeout object=spot");
-            //  Spec 28 §4.4/25 §5: fallback proceeds to the CAS without
-            //  boundary completeness verification and is counted.
-            ZLinkRuntimeMetrics.RecordRelocationCutoverTimeout(
-                prepare.Object.Kind == 3 ? "instance_spot" : "user_spot"
-            );
-            await CutoverCanonicalInboundAsync(
-                    new ZLinkServiceWireCodec.RelocationCutoverRecord(
-                        prepare.RelocationId,
-                        prepare.TargetAttemptGeneration,
-                        prepare.Coordinator,
-                        prepare.InitiatorRole,
-                        prepare.Object,
-                        0,
-                        0
-                    ),
-                    sourceNodeRid,
-                    verifyBoundary: false,
-                    runtime.ShutdownToken
-                )
-                .ConfigureAwait(false);
+            {
+                //  The publish gate orders this read after any running target
+                //  commit of the same stage, so the target never reads its own
+                //  commit in progress as a moved fence.
+                bool settled;
+                await stage.PublishGate.WaitAsync(runtime.ShutdownToken).ConfigureAwait(false);
+                try
+                {
+                    settled =
+                        Volatile.Read(ref stage.AuthorityPublished) == 0
+                        && (
+                            !IsStageOwnerLeaseValid(stage)
+                            || await ReadStageFenceAsync(
+                                    stage,
+                                    authorityStore,
+                                    runtime.ShutdownToken
+                                )
+                                .ConfigureAwait(false)
+                                == ZLinkRelocationTargetFenceReading.FenceChanged
+                        );
+                }
+                finally
+                {
+                    stage.PublishGate.Release();
+                }
+                if (settled)
+                {
+                    _ = await DiscardUnpublishedStageAsync(fence, stage, runtime.ShutdownToken)
+                        .ConfigureAwait(false);
+                    return;
+                }
+                await Task.Delay(
+                        registration.Locations.Options.PollingInterval,
+                        runtime.ShutdownToken
+                    )
+                    .ConfigureAwait(false);
+            }
         }
         catch (OperationCanceledException) when (runtime.ShutdownToken.IsCancellationRequested) { }
-        catch (Exception error)
+        catch (ZLinkRelocationDataLostException exception)
         {
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"location_update_failed object=spot error={error.GetType().Name}"
-            );
+            ZLinkFrameworkDebugLog.TaskFailure("canonical-relocation-target-fence", exception);
         }
+    }
+
+    /// <summary>
+    /// Discards an unpublished target staging after its authority settled
+    /// against this target: a source abort, a confirmed source Preserve, a
+    /// definitive commit conflict, or the end of the target lease.
+    /// </summary>
+    private ValueTask<bool> DiscardUnpublishedStageAsync(
+        ZLinkAggregateFence fence,
+        TargetStage stage,
+        CancellationToken cancellationToken
+    )
+    {
+        var authorityStore =
+            registration.Locations.ResolveStore()
+            ?? throw new ZLinkConfigurationException("Location Store is not registered.");
+        return stage.RunAbortCleanupAsync(
+            () =>
+                TryCleanupExpiredStageAsync(
+                    stage,
+                    () => ReconcileStageAuthorityAsync(stage, CancellationToken.None),
+                    () => authorityStore.AbortAggregateAsync(fence, CancellationToken.None),
+                    () => TryCompleteStage(fence, stage, TargetStageTerminalOutcome.Aborted),
+                    () => runtime.AbortInboundSpotAggregateAsync(stage)
+                ),
+            cancellationToken
+        );
     }
 
     internal ValueTask AppendCanonicalInboundDataAsync(
@@ -1085,22 +1172,9 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         return stage.AppendCanonicalInboundDataAsync(data);
     }
 
-    internal ValueTask CutoverCanonicalInboundAsync(
+    internal async ValueTask CutoverCanonicalInboundAsync(
         ZLinkServiceWireCodec.RelocationCutoverRecord cutover,
         RoutingId sourceNodeRid,
-        CancellationToken cancellationToken
-    ) =>
-        CutoverCanonicalInboundAsync(
-            cutover,
-            sourceNodeRid,
-            verifyBoundary: true,
-            cancellationToken
-        );
-
-    private async ValueTask CutoverCanonicalInboundAsync(
-        ZLinkServiceWireCodec.RelocationCutoverRecord cutover,
-        RoutingId sourceNodeRid,
-        bool verifyBoundary,
         CancellationToken cancellationToken
     )
     {
@@ -1126,6 +1200,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             return;
         }
 
+        Exception? settledAgainstTarget = null;
         await stage.PublishGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -1136,14 +1211,34 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 );
                 return;
             }
-            if (verifyBoundary)
-                stage.ValidateBoundary(cutover);
+            //  Relocation flow §4.5: the target CAS runs only after the
+            //  received cutover verifies the whole boundary batch.
+            stage.ValidateBoundary(cutover);
             await CommitWireTargetAggregateAsync(stage, cancellationToken).ConfigureAwait(false);
             Volatile.Write(ref stage.AuthorityPublished, 1);
+        }
+        catch (ZLinkRelocationTargetSettledException exception)
+        {
+            settledAgainstTarget = exception;
         }
         finally
         {
             stage.PublishGate.Release();
+        }
+        if (settledAgainstTarget is not null)
+        {
+            //  Location runtime §10: a definitive conflict, a changed source
+            //  fence or the end of the target lease discards the staging.
+            _ = await DiscardUnpublishedStageAsync(
+                    new ZLinkAggregateFence(
+                        DecodeRelocationId(cutover.RelocationId),
+                        cutover.TargetAttemptGeneration
+                    ),
+                    stage,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(settledAgainstTarget);
         }
         //  Spec 25 §5: target-local S2 (CAS confirmed) → S3 (dispatch open).
         var resumeStartedTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -1244,22 +1339,101 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             })
             .ToArray();
         var coordinator = new ZLinkAggregateRelocationCoordinator(authorityStore, relocationStore);
-        _ = await coordinator
-            .PublishAsync(
-                new ZLinkAggregateRelocationRequest(
-                    stage.Envelope.AggregateId,
-                    stage.Envelope.AggregateGeneration,
-                    stage.TargetAttemptGeneration,
-                    participants,
-                    new ZLinkMeshNodeDescriptorKey(stage.TargetMeshName, stage.Node.Node.RoutingId),
-                    stage.TargetNodeLifecycleGeneration,
-                    new ZLinkCapacityVector(0, 0, null),
-                    targetOwner,
-                    stage.Envelope
-                ),
-                cancellationToken
-            )
-            .ConfigureAwait(false);
+        var request = new ZLinkAggregateRelocationRequest(
+            stage.Envelope.AggregateId,
+            stage.Envelope.AggregateGeneration,
+            stage.TargetAttemptGeneration,
+            participants,
+            new ZLinkMeshNodeDescriptorKey(stage.TargetMeshName, stage.Node.Node.RoutingId),
+            stage.TargetNodeLifecycleGeneration,
+            new ZLinkCapacityVector(0, 0, null),
+            targetOwner,
+            stage.Envelope
+        );
+        //  Location runtime §10: the target owns its whole-unit NewOwner
+        //  commit. It resubmits the same request (same RelocationId and
+        //  expected source StoreVersion) after an indeterminate result while
+        //  its owner lease is valid. A definitive conflict, a changed source
+        //  fence (source Preserve or another owner) or the end of the target
+        //  lease ends the attempt, and the caller discards the staging.
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsStageOwnerLeaseValid(stage))
+                throw new ZLinkRelocationTargetSettledException(
+                    "The relocation target owner lease ended before its authority commit was confirmed."
+                );
+            try
+            {
+                _ = await coordinator
+                    .PublishAsync(request, cancellationToken)
+                    .ConfigureAwait(false);
+                return;
+            }
+            catch (Exception error)
+                when (error
+                        is not (
+                            ZLinkRelocationTargetSettledException
+                            or ZLinkRelocationDataLostException
+                            or ZLinkAuthorityGenerationExhaustedException
+                        )
+                    && !cancellationToken.IsCancellationRequested
+                )
+            {
+                //  Indeterminate: the same key and expected version are read
+                //  again before any resubmission (location runtime §10).
+                switch (
+                    await ReadStageFenceAsync(stage, authorityStore, cancellationToken)
+                        .ConfigureAwait(false)
+                )
+                {
+                    case ZLinkRelocationTargetFenceReading.TargetCommitted:
+                        return;
+                    case ZLinkRelocationTargetFenceReading.FenceChanged:
+                        throw new ZLinkRelocationTargetSettledException(
+                            "The relocation target authority commit lost its expected source fence.",
+                            error
+                        );
+                }
+            }
+            await Task.Delay(registration.Locations.Options.PollingInterval, cancellationToken)
+                .ConfigureAwait(false);
+        }
+    }
+
+    private ZLinkLocationOwnerToken StageOwner(TargetStage stage) =>
+        new(
+            runtime.LocationLifecycle?.OwnerToken.OwnerId ?? string.Empty,
+            checked((long)stage.TargetOwnerLeaseGeneration)
+        );
+
+    private bool IsStageOwnerLeaseValid(TargetStage stage) =>
+        runtime.LocationLifecycle?.IsOwnerLeaseValid(StageOwner(stage)) == true;
+
+    /// <summary>
+    /// Reads the Spot participant's source fence: the exact StoreVersion the
+    /// whole-unit NewOwner commit expects (its source recovery record).
+    /// </summary>
+    private ValueTask<ZLinkRelocationTargetFenceReading> ReadStageFenceAsync(
+        TargetStage stage,
+        IZLinkLocationRepository authorityStore,
+        CancellationToken cancellationToken
+    )
+    {
+        var spot = stage.Envelope.Participants.Single(static participant =>
+            participant.ObjectKind
+                is ZLinkPlacementObjectKind.UserSpot
+                    or ZLinkPlacementObjectKind.InstanceSpot
+        );
+        return ZLinkRelocationTargetFence.ReadAsync(
+            authorityStore,
+            spot.AuthorityKey,
+            ZLinkCanonicalParticipantRecoveryCodec
+                .Decode(stage.SourceRecoveries[spot.AuthorityKey].Span)
+                .ExpectedStoreVersion,
+            StageOwner(stage),
+            cancellationToken
+        );
     }
 
     private static Guid DecodeRelocationId(ZLinkServiceWireCodec.RelocationWireId relocationId)
@@ -1770,21 +1944,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             || Volatile.Read(ref stage.Published) != 0
         )
             return false;
-        var authorityStore =
-            registration.Locations.ResolveStore()
-            ?? throw new ZLinkConfigurationException("Location Store is not registered.");
-        return await stage
-            .RunAbortCleanupAsync(
-                () =>
-                    TryCleanupExpiredStageAsync(
-                        stage,
-                        () => ReconcileStageAuthorityAsync(stage, CancellationToken.None),
-                        () => authorityStore.AbortAggregateAsync(fence, CancellationToken.None),
-                        () => TryCompleteStage(fence, stage, TargetStageTerminalOutcome.Aborted),
-                        () => runtime.AbortInboundSpotAggregateAsync(stage)
-                    ),
-                cancellationToken
-            )
+        return await DiscardUnpublishedStageAsync(fence, stage, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -2513,16 +2673,16 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         return remove();
     }
 
+    //  Location runtime §10: an unpublished stage is never discarded because
+    //  time passed; only its authority settlement discards it
+    //  (DiscardUnpublishedStageAsync). Retention bounds only published stages.
     private static bool IsCleanupCandidate(TargetStage stage, TimeSpan now) =>
         stage.ExpiresAt <= now
-        && (
-            Volatile.Read(ref stage.AuthorityPublished) == 0
-            || Volatile.Read(ref stage.Published) != 0
-                // Session route convergence runs detached after admission
-                // opens; an expired but unconverged stage must survive so the
-                // reconciliation poller can keep re-driving the route commit.
-                && Volatile.Read(ref stage.SessionRoutesConverged) != 0
-        );
+        && Volatile.Read(ref stage.Published) != 0
+        // Session route convergence runs detached after admission
+        // opens; an expired but unconverged stage must survive so the
+        // reconciliation poller can keep re-driving the route commit.
+        && Volatile.Read(ref stage.SessionRoutesConverged) != 0;
 
     internal void CompleteStage(TargetStage stage, TargetStageTerminalOutcome outcome)
     {

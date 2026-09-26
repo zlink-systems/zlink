@@ -358,7 +358,6 @@ int run_message_follow_host ()
     bool received = false;
     while (std::chrono::steady_clock::now () < deadline) {
         const auto now = runtime::mesh::service_liveness_registry_t::clock_t::now ();
-        (void) owner.drain_monitor_events (now);
         (void) owner.pump_one (now);
         (void) owner.tick_liveness (now);
 
@@ -1279,7 +1278,7 @@ class user_spot_target_service_t final : public fw::hosted_service_t
          * admission rather than a local self-join. A cell that wants the
          * opposite -- the create itself travelling to this node -- starts the
          * target with --placement-weight 100 and the source with 0. */
-        runtime_options.placement_weight (_placement_weight);
+        runtime_options.mesh (_mesh_name).placement_weight (_placement_weight);
         sink.append ("user-spot-created|spot=" + _spot_id + "|nodeRid=" + target_node_rid
                      + "|state=" + state_name);
         write_ready ();
@@ -1467,7 +1466,7 @@ class user_spot_source_service_t final : public fw::hosted_service_t
          * Store before the call returns, and the same Store answers the
          * placement query below, so there is no window to race with. */
         if (_placement_weight != 100) {
-            runtime_options.placement_weight (_placement_weight);
+            runtime_options.mesh (_mesh_name).placement_weight (_placement_weight);
             sink.append ("user-spot-source-placement-weight|weight="
                          + std::to_string (_placement_weight));
         }

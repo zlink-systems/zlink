@@ -68,7 +68,7 @@ void LogCallbackException (const char *Message)
 
 template <typename Callback> void InvokeCallback (Callback &&Call)
 {
-#if ZLINK_STREAM_CONNECTOR_HAS_EXCEPTIONS
+#if ZLINK_HAS_EXCEPTIONS
     try {
         Call ();
     }

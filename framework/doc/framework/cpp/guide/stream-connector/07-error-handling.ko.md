@@ -95,14 +95,18 @@ auto errors = connector.on_error ([] (const sc::error_t &error) {
 | `configuration_error` · `ValidationFailed` | 실패 | 유지 | 하지 않는다 |
 | `request_timeout` | 그 request만 실패 | 유지 | 하지 않는다 |
 | `ConnectTimeout` · `TlsValidationFailed` | 연결 실패 | 끊김 | 시도 정책을 적용한다 |
-| `disconnected` · `send_failed` | 진행 중인 호출 실패 | transport가 끊겼으면 끊김 | 켜져 있으면 적용한다 |
-| `FrameDecodeFailed`(frame·header) · `FrameTooLarge` | 그 frame을 전달하지 않고 대기 중인 request를 실패시킴 | 종료 | 켜져 있으면 적용한다 |
+| `disconnected` — transport 끊김 | 진행 중인 호출 실패 | 끊김, 종료 사유는 transport 오류 | 켜져 있으면 적용한다 |
+| 종료로 생긴 `disconnected` | 진행 중인 호출과 종료 뒤에 호출한 connect·send·request·대기 실패 | 종료, 종료 사유는 client가 닫음 | 하지 않는다 |
+| `send_failed` — request sequence 고갈 | 그 호출만 실패 | 유지 | 하지 않는다 |
+| `send_failed` — transport 쓰기 실패 | 그 쓰기의 호출만 `send_failed`로 실패하고 나머지 진행 중인 호출은 `Disconnected`로 실패 | 종료, 종료 사유는 `TransportError` | 켜져 있으면 적용한다 |
+| `FrameDecodeFailed`(frame·header) · `FrameTooLarge` | 그 frame을 전달하지 않고 대기 중인 request를 실패시킴 | 종료, 종료 사유는 프로토콜 오류 | 켜져 있으면 적용한다 |
 | `CompressionFailed` | 그 송신만 실패 | 유지 | 하지 않는다 |
 | `DecompressionFailed` | 그 수신 packet 또는 대기 중인 request만 실패 | 유지 | 하지 않는다 |
 | `UserCallbackFailed` · `RemoteError` | 오류 이벤트나 관련 호출로 전달 | 유지 | 하지 않는다 |
 
-연결이 끝나는 쪽은 종료 사유가 transport 오류로 남는다. 종료 사유를 읽는 방법은
-[연결 생명주기](06-lifecycle.ko.md)가 다룬다.
+연결이 끝나는 행의 종료 사유는 종료로 끝났으면 client가 닫음이고, 읽을 수 없는 frame이나 수신 한도를
+넘은 frame으로 끝났으면 프로토콜 오류이며, 그 밖에는 transport 오류다. 종료 뒤에도 종료, `dispatch()`,
+등록 해제와 종료 사유 읽기는 실패하지 않는다. 종료 사유를 읽는 방법은 [연결 생명주기](06-lifecycle.ko.md)가 다룬다.
 
 ## 5. 자주 만나는 처리
 

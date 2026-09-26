@@ -54,30 +54,32 @@ test('owner-local work waits for terminal progress and does not block another ow
   const otherOwner = scheduler([], options);
   const started = deferred<void>();
   const terminal = deferred<void>();
+  const order: string[] = [];
   const first = serial.submit(
     async () => {
+      order.push('first-started');
       started.resolve();
       await terminal.promise;
+      order.push('first-terminal');
     },
     { payloadBytes: 128 }
   );
   await started.promise;
-  assert.deepEqual(serial.snapshot(), {
-    applicationMessages: 1,
-    applicationBytes: 0,
-    lifecycleMessages: 0,
-    lifecycleBytes: 0
+  const queued = serial.submit(() => {
+    order.push('following');
+    return 'following';
   });
-  const queued = serial.submit(() => 'following');
-  assert.equal(await otherOwner.submit(() => 'other'), 'other');
+  assert.equal(
+    await otherOwner.submit(() => {
+      order.push('other');
+      return 'other';
+    }),
+    'other'
+  );
+  assert.deepEqual(order, ['first-started', 'other']);
   terminal.resolve();
   await Promise.all([first, queued]);
-  assert.deepEqual(serial.snapshot(), {
-    applicationMessages: 0,
-    applicationBytes: 0,
-    lifecycleMessages: 0,
-    lifecycleBytes: 0
-  });
+  assert.deepEqual(order, ['first-started', 'other', 'first-terminal', 'following']);
   assert.equal(await serial.submit(() => 'following'), 'following');
 });
 
@@ -90,10 +92,13 @@ test('a transferred record remains queued until terminal completion', async () =
   const localTerminal = deferred<void>();
   const transferredStarted = deferred<void>();
   const transferredTerminal = deferred<void>();
+  const order: string[] = [];
   const local = serial.submit(
     async () => {
+      order.push('local-started');
       localStarted.resolve();
       await localTerminal.promise;
+      order.push('local-terminal');
     },
     { payloadBytes: 32, metadataBytes: 16 }
   );
@@ -101,34 +106,26 @@ test('a transferred record remains queued until terminal completion', async () =
 
   const transferred = serial.submitPreAdmitted(
     async () => {
+      order.push('transferred-started');
       transferredStarted.resolve();
       await transferredTerminal.promise;
+      order.push('transferred-terminal');
     },
     { payloadBytes: 48, metadataBytes: 16 }
   );
-  assert.deepEqual(serial.snapshot(), {
-    applicationMessages: 2,
-    applicationBytes: 0,
-    lifecycleMessages: 0,
-    lifecycleBytes: 0
-  });
+  assert.deepEqual(order, ['local-started']);
   localTerminal.resolve();
   await local;
   await transferredStarted.promise;
-  assert.deepEqual(serial.snapshot(), {
-    applicationMessages: 1,
-    applicationBytes: 0,
-    lifecycleMessages: 0,
-    lifecycleBytes: 0
-  });
+  assert.deepEqual(order, ['local-started', 'local-terminal', 'transferred-started']);
   transferredTerminal.resolve();
   await transferred;
-  assert.deepEqual(serial.snapshot(), {
-    applicationMessages: 0,
-    applicationBytes: 0,
-    lifecycleMessages: 0,
-    lifecycleBytes: 0
-  });
+  assert.deepEqual(order, [
+    'local-started',
+    'local-terminal',
+    'transferred-started',
+    'transferred-terminal'
+  ]);
 });
 
 test('durable readiness yields to lifecycle arbitration without claiming the serial owner', async () => {
@@ -246,6 +243,75 @@ test('application and lifecycle lanes preserve FIFO order', async () => {
     selected.filter((value) => value.startsWith('lifecycle')),
     ['lifecycle-a', 'lifecycle-b']
   );
+});
+
+test('a suspended lifecycle result retains FIFO while application and continuation work run', async () => {
+  const serial = scheduler([], { ownerTimeBudget: 0, lifecycleBurstLimit: 1 });
+  const started = deferred<void>();
+  const terminal = deferred<void>();
+  const events: string[] = [];
+  let idle = false;
+  const first = serial.submitLifecycleOperation(async () => {
+    events.push('lifecycle-first');
+    started.resolve();
+    await terminal.promise;
+    events.push('lifecycle-first-terminal');
+  });
+  await started.promise;
+  void serial.whenIdle().then(() => {
+    idle = true;
+  });
+  const second = serial.submitLifecycleOperation(() => events.push('lifecycle-second'));
+  const application = serial.submit(() => events.push('application'));
+  const continuation = serial.submitContinuation(() => events.push('continuation'));
+  await Promise.all([application, continuation]);
+  assert.deepEqual(events, ['lifecycle-first', 'application', 'continuation']);
+  assert.equal(idle, false);
+  assert.equal(serial.hasPendingWork, true);
+  terminal.resolve();
+  await Promise.all([first, second, serial.whenIdle()]);
+  assert.equal(idle, true);
+  assert.deepEqual(events, [
+    'lifecycle-first',
+    'application',
+    'continuation',
+    'lifecycle-first-terminal',
+    'lifecycle-second'
+  ]);
+});
+
+test('a yielded lifecycle turn resumes before its lifecycle successor', async () => {
+  const serial = new ZLinkSpotSerialTurnExecutor(true, undefined, {
+    ownerTimeBudget: 0,
+    lifecycleBurstLimit: 1
+  });
+  const started = deferred<void>();
+  const ready = deferred<void>();
+  const events: string[] = [];
+  const first = serial.execute(
+    async () => {
+      events.push('lifecycle-start');
+      started.resolve();
+      await serial.yieldPromise(ready.promise);
+      events.push('lifecycle-resume');
+    },
+    { lane: 'lifecycle' }
+  );
+  await started.promise;
+  const successor = serial.execute(() => events.push('lifecycle-successor'), {
+    lane: 'lifecycle'
+  });
+  const application = serial.execute(() => events.push('application'));
+  await application;
+  assert.deepEqual(events, ['lifecycle-start', 'application']);
+  ready.resolve();
+  await Promise.all([first, successor]);
+  assert.deepEqual(events, [
+    'lifecycle-start',
+    'application',
+    'lifecycle-resume',
+    'lifecycle-successor'
+  ]);
 });
 
 test('an empty scheduler schedules new work without polling', async () => {

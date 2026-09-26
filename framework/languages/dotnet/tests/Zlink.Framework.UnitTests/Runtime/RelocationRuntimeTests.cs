@@ -1205,10 +1205,51 @@ public sealed class RelocationRuntimeTests
                     owner
                 ),
                 sourcePublication,
+                DateTimeOffset.UtcNow.AddMinutes(1),
                 cancellation.Token
             )
         );
         Assert.Single(store.Events);
+    }
+
+    [Fact]
+    public async Task SpotSourceKeepsTheAuthorityDecisionAfterAnIndeterminateRead()
+    {
+        var (stage, candidate) = CreateCanonicalPublishedReconciliationFixture();
+        var participant = Assert.Single(stage.Envelope.Participants);
+        var snapshot = candidate.Authorities[0].Snapshot;
+        var store = new RecordingAuthorityStore { ReadFailuresRemaining = 1 };
+        store.Seed(participant.AuthorityKey, snapshot);
+        using var services = new ServiceCollection().BuildServiceProvider();
+        var target = new ZLinkSpotRetireTargetRuntime(
+            services,
+            null!,
+            new ZLinkFrameworkRegistration()
+        );
+        var sourcePublication = new ZLinkAggregateRelocationPublished(
+            new ZLinkAggregateFence(stage.Envelope.AggregateId, 1),
+            new ZLinkRelocationStored("source-staging-root", 19, default, DateTimeOffset.UtcNow),
+            stage.Envelope
+        );
+        var owner = new ZLinkLocationOwnerToken(snapshot.OwnerId, snapshot.OwnerLeaseGeneration);
+
+        Assert.Equal(
+            stage.TargetAuthorityOwnerGeneration,
+            await target.ReconcilePublishedAuthorityAsync(
+                store,
+                new ZLinkSpotRetireReservation(
+                    null!,
+                    snapshot.Allocation.Descriptor,
+                    snapshot.Allocation.DescriptorLifecycleGeneration,
+                    new ZLinkCapacityVector(0, 0, null),
+                    owner
+                ),
+                sourcePublication,
+                DateTimeOffset.UtcNow.AddMinutes(1),
+                CancellationToken.None
+            )
+        );
+        Assert.Equal(2, store.Events.Count);
     }
 
     [Fact]
@@ -3889,7 +3930,7 @@ public sealed class RelocationRuntimeTests
             new ZLinkLocationOwnerToken("aggregate-target", 17)
         );
 
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        await Assert.ThrowsAsync<ZLinkRelocationTargetSettledException>(async () =>
             await coordinator.PublishAsync(request)
         );
 
@@ -3960,7 +4001,7 @@ public sealed class RelocationRuntimeTests
             new ZLinkLocationOwnerToken("aggregate-target", 17)
         );
 
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        await Assert.ThrowsAsync<ZLinkRelocationTargetSettledException>(async () =>
             await coordinator.PublishAsync(request)
         );
 
@@ -4003,7 +4044,7 @@ public sealed class RelocationRuntimeTests
             new ZLinkLocationOwnerToken("aggregate-target", 17)
         );
 
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        await Assert.ThrowsAsync<ZLinkRelocationTargetSettledException>(async () =>
             await coordinator.PublishAsync(request)
         );
 
@@ -4104,7 +4145,7 @@ public sealed class RelocationRuntimeTests
             new ZLinkLocationOwnerToken("aggregate-target", 17)
         );
 
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        await Assert.ThrowsAsync<ZLinkRelocationTargetSettledException>(async () =>
             await coordinator.PublishAsync(request)
         );
 
@@ -4801,6 +4842,7 @@ public sealed class RelocationRuntimeTests
 
         internal int PublishedCount => _snapshots.Count;
         internal TimeSpan ReadDelay { get; init; }
+        internal int ReadFailuresRemaining { get; set; }
         private int _activeReads;
         private int _maximumConcurrentReads;
 
@@ -4842,6 +4884,11 @@ public sealed class RelocationRuntimeTests
                 Events.Add((EventClock.Next(), "read"));
             try
             {
+                if (ReadFailuresRemaining > 0)
+                {
+                    ReadFailuresRemaining--;
+                    throw new IOException("The authority read result is indeterminate.");
+                }
                 if (ReadDelay > TimeSpan.Zero)
                     await Task.Delay(ReadDelay, cancellationToken);
                 return !_snapshots.TryGetValue(key.Value, out var snapshot)

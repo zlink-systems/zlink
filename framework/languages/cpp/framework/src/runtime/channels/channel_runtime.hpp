@@ -45,6 +45,9 @@ class zlink_builder_access_t
                                           std::shared_ptr<zlink::context_t> context);
 };
 
+// ClientServer server는 listener 하나만 연다. Bind endpoint가 정확히 하나가 아니면 설정 오류다.
+const std::string &client_server_bind_endpoint (const channel_capability_snapshot_t &server);
+
 } // namespace zlink::framework::detail
 
 namespace zlink::framework::runtime

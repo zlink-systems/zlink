@@ -137,6 +137,51 @@ class ZLinkFrameworkLocationRuntimeTest {
     }
 
     @Test
+    void userSpotCloseRoutesByTheCurrentAuthorityNotTheCallerRouteCopy() throws Exception {
+        ZLinkInMemoryLocationStore store = new ZLinkInMemoryLocationStore();
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(store);
+        RoutingId nodeRid = RoutingId.from("route-copy-spot-node");
+        String spotId = "route-copy-room";
+        var mesh =
+                options.addRouteMesh("route-copy-game")
+                        .setRoutingIdPrefix(nodeRid.toString())
+                        .listen("inproc://route-copy-user-spot");
+        mesh.channelName("route-copy-game").server();
+        mesh.objects()
+                .server()
+                .addSpotFactory(
+                        "location-spot",
+                        LocationSpot.class,
+                        factory -> factory.disableRelocation());
+
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
+            var created =
+                    runtime.spotManager()
+                            .getOrCreate(spotId, "location-spot")
+                            .submit()
+                            .toCompletableFuture()
+                            .get();
+            var staleRouteCopy =
+                    new systems.zlink.framework.spots.SpotRef(
+                            spotId,
+                            created.spot().objectGeneration(),
+                            created.spot().meshName(),
+                            RoutingId.from("previous-owner-node"));
+
+            assertTrue(runtime.spotManager().close(staleRouteCopy).toCompletableFuture().get());
+            assertInstanceOf(
+                    ZLinkAuthorityMissing.class,
+                    repository(store)
+                            .read(ZLinkAuthorityKeyCodec.spot(spotId), () -> false)
+                            .toCompletableFuture()
+                            .get());
+        }
+    }
+
+    @Test
     void userSpotCloseRejectsMovingAuthorityBeforeLocalClose() throws Exception {
         ZLinkInMemoryLocationStore store = new ZLinkInMemoryLocationStore();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();

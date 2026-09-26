@@ -29,6 +29,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -37,6 +38,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import javax.net.ssl.SSLHandshakeException;
@@ -317,6 +319,450 @@ final class ZLinkStreamConnectorTest {
                 "the reentered frame must start after the active write returns");
     }
 
+    /** A proxy transport whose write of the frame named "first" completes only when released. */
+    private static ZLinkStreamTransportConnection heldFirstWriteTransport(
+            CompletableFuture<Void> firstWrite, List<String> written, AtomicBoolean closed) {
+        return (ZLinkStreamTransportConnection)
+                Proxy.newProxyInstance(
+                        ZLinkStreamTransportConnection.class.getClassLoader(),
+                        new Class<?>[] {ZLinkStreamTransportConnection.class},
+                        (proxy, method, arguments) -> {
+                            if (method.getName().equals("writeAsync")) {
+                                String name =
+                                        ZLinkStreamWireProtocol.decodeHeader(
+                                                        ZLinkStreamWireProtocol.decodeFrame(
+                                                                        (byte[]) arguments[0])
+                                                                .header())
+                                                .name();
+                                written.add(name);
+                                return name.equals("first")
+                                        ? firstWrite
+                                        : CompletableFuture.completedFuture(null);
+                            }
+                            if (method.getName().equals("close")) {
+                                closed.set(true);
+                            }
+                            if (method.getName().equals("isOpen")) {
+                                return !closed.get();
+                            }
+                            return null;
+                        });
+    }
+
+    /** Spec 32 5.2: a Send completes once its frame is written to the transport. */
+    @Test
+    void sendCompletesOnlyAfterItsFrameIsWrittenToTheTransport() throws Exception {
+        DefaultZLinkStreamConnector connector =
+                new DefaultZLinkStreamConnector(options(ZLinkStreamDispatchMode.IMMEDIATE));
+        Field lifecycleField = DefaultZLinkStreamConnector.class.getDeclaredField("lifecycle");
+        lifecycleField.setAccessible(true);
+        Object lifecycle = lifecycleField.get(connector);
+        CompletableFuture<Void> firstWrite = new CompletableFuture<>();
+        List<String> written = new ArrayList<>();
+        AtomicBoolean closed = new AtomicBoolean();
+        setField(lifecycle, "connection", heldFirstWriteTransport(firstWrite, written, closed));
+        setField(lifecycle, "state", ZLinkStreamConnectionState.CONNECTED);
+
+        CompletableFuture<Void> first =
+                connector.send(payload("first", "a")).submit().toCompletableFuture();
+        CompletableFuture<Void> second =
+                connector.send(payload("second", "b")).submit().toCompletableFuture();
+
+        assertEquals(List.of("first"), written);
+        assertFalse(first.isDone(), "the first Send's frame write has not completed");
+        assertFalse(second.isDone(), "the second Send's frame has not been written");
+
+        firstWrite.complete(null);
+        first.get(5, TimeUnit.SECONDS);
+        second.get(5, TimeUnit.SECONDS);
+        assertEquals(List.of("first", "second"), written);
+        ConnectorTestAwait.await(connector.close());
+    }
+
+    /**
+     * Spec 32 7, 9: close does not write frames not yet written and does not wait for the peer.
+     * Their Sends and Requests fail with Disconnected, the reason is ClientClose and no reconnect
+     * follows.
+     */
+    @Test
+    void closeFailsUnwrittenFramesWithoutWaitingForThePeer() throws Exception {
+        DefaultZLinkStreamConnector connector =
+                new DefaultZLinkStreamConnector(
+                        options(
+                                URI.create("tcp://127.0.0.1:1"),
+                                ZLinkStreamDispatchMode.IMMEDIATE,
+                                64 * 1024,
+                                64 * 1024,
+                                true,
+                                false,
+                                ZLinkStreamCompression.NONE));
+        Field lifecycleField = DefaultZLinkStreamConnector.class.getDeclaredField("lifecycle");
+        lifecycleField.setAccessible(true);
+        Object lifecycle = lifecycleField.get(connector);
+        CompletableFuture<Void> firstWrite = new CompletableFuture<>();
+        List<String> written = new ArrayList<>();
+        AtomicBoolean closed = new AtomicBoolean();
+        setField(lifecycle, "connection", heldFirstWriteTransport(firstWrite, written, closed));
+        setField(lifecycle, "state", ZLinkStreamConnectionState.CONNECTED);
+
+        CompletableFuture<Void> first =
+                connector.send(payload("first", "a")).submit().toCompletableFuture();
+        CompletableFuture<Void> second =
+                connector.send(payload("second", "b")).submit().toCompletableFuture();
+        CompletableFuture<?> request =
+                connector
+                        .request(payload("third", "c"))
+                        .timeout(Duration.ofSeconds(30))
+                        .submit()
+                        .toCompletableFuture();
+
+        //  The peer never lets the first write finish; close must still end.
+        connector.close().submit().toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+        assertTrue(closed.get());
+        assertEquals(List.of("first"), written);
+        for (CompletableFuture<?> unwritten : List.of(second, request)) {
+            CompletionException failure = assertThrows(CompletionException.class, unwritten::join);
+            assertEquals(
+                    ZLinkStreamErrorCode.DISCONNECTED,
+                    ((ZLinkStreamException) failure.getCause()).errorCode());
+        }
+        assertTrue(first.isDone());
+        assertEquals(ZLinkStreamConnectionState.CLOSED, connector.state());
+        assertEquals(Optional.of(ZLinkStreamCloseReason.CLIENT_CLOSE), connector.closeReason());
+        firstWrite.complete(null);
+        assertEquals(ZLinkStreamConnectionState.CLOSED, connector.state());
+    }
+
+    /**
+     * Spec 32 7: close closes the transport before it fails the frames it did not write, so no
+     * frame whose Send failed with Disconnected reaches the peer. The write pump starts the second
+     * frame on another thread; the second Send's failure lets that write continue, so the write
+     * lands exactly after the queue reset and before anything close does after it.
+     */
+    @Test
+    void closeNeverLetsThePeerReceiveAFrameWhoseSendFailedWithDisconnected() throws Exception {
+        DefaultZLinkStreamConnector connector =
+                new DefaultZLinkStreamConnector(options(ZLinkStreamDispatchMode.IMMEDIATE));
+        Object lifecycle = lifecycleOf(connector);
+        CompletableFuture<Void> firstWrite = new CompletableFuture<>();
+        CountDownLatch secondWriteStarted = new CountDownLatch(1);
+        CountDownLatch releaseSecondWrite = new CountDownLatch(1);
+        AtomicBoolean closed = new AtomicBoolean();
+        List<String> received = Collections.synchronizedList(new ArrayList<>());
+        ZLinkStreamTransportConnection transport =
+                (ZLinkStreamTransportConnection)
+                        Proxy.newProxyInstance(
+                                ZLinkStreamTransportConnection.class.getClassLoader(),
+                                new Class<?>[] {ZLinkStreamTransportConnection.class},
+                                (proxy, method, arguments) -> {
+                                    switch (method.getName()) {
+                                        case "writeAsync" -> {
+                                            if (frameName(arguments[0]).equals("first")) {
+                                                return firstWrite;
+                                            }
+                                            secondWriteStarted.countDown();
+                                            assertTrue(
+                                                    releaseSecondWrite.await(5, TimeUnit.SECONDS));
+                                            //  A closed transport puts nothing on the wire.
+                                            if (closed.get()) {
+                                                return CompletableFuture.failedFuture(
+                                                        new java.io.IOException("socket closed"));
+                                            }
+                                            received.add("second");
+                                            return CompletableFuture.completedFuture(null);
+                                        }
+                                        case "close" -> closed.set(true);
+                                        case "isOpen" -> {
+                                            return !closed.get();
+                                        }
+                                        default -> {}
+                                    }
+                                    return null;
+                                });
+        setField(lifecycle, "connection", transport);
+        setField(lifecycle, "state", ZLinkStreamConnectionState.CONNECTED);
+
+        CompletableFuture<Void> first =
+                connector.send(payload("first", "a")).submit().toCompletableFuture();
+        CompletableFuture<Void> second =
+                connector.send(payload("second", "b")).submit().toCompletableFuture();
+        //  Finishing the first write on another thread makes that thread
+        //  start the second write, which then waits inside the transport.
+        Thread pump = new Thread(() -> firstWrite.complete(null));
+        pump.start();
+        assertTrue(secondWriteStarted.await(5, TimeUnit.SECONDS));
+        second.whenComplete(
+                (ignored, failure) -> {
+                    releaseSecondWrite.countDown();
+                    try {
+                        pump.join(TimeUnit.SECONDS.toMillis(5));
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                    }
+                });
+
+        connector.close().submit().toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+        assertNull(first.get(5, TimeUnit.SECONDS));
+        CompletionException failure = assertThrows(CompletionException.class, second::join);
+        assertEquals(
+                ZLinkStreamErrorCode.DISCONNECTED,
+                ((ZLinkStreamException) failure.getCause()).errorCode());
+        assertEquals(List.of(), received, "a frame whose Send failed must not reach the peer");
+    }
+
+    /**
+     * Spec 32 7, 9: the transport close ends the frame write in progress, and that write's failure
+     * belongs to the connection ending, so its Send fails with Disconnected and not SendFailed.
+     */
+    @Test
+    void closeEndsTheFrameBeingWrittenWithDisconnected() throws Exception {
+        DefaultZLinkStreamConnector connector =
+                new DefaultZLinkStreamConnector(options(ZLinkStreamDispatchMode.IMMEDIATE));
+        Object lifecycle = lifecycleOf(connector);
+        CompletableFuture<Void> heldWrite = new CompletableFuture<>();
+        ZLinkStreamTransportConnection transport =
+                (ZLinkStreamTransportConnection)
+                        Proxy.newProxyInstance(
+                                ZLinkStreamTransportConnection.class.getClassLoader(),
+                                new Class<?>[] {ZLinkStreamTransportConnection.class},
+                                (proxy, method, arguments) -> {
+                                    switch (method.getName()) {
+                                        case "writeAsync" -> {
+                                            return heldWrite;
+                                        }
+                                        //  A socket close fails the write it
+                                        //  was carrying, on the closing thread.
+                                        case "close" ->
+                                                heldWrite.completeExceptionally(
+                                                        new java.io.IOException("socket closed"));
+                                        case "isOpen" -> {
+                                            return !heldWrite.isDone();
+                                        }
+                                        default -> {}
+                                    }
+                                    return null;
+                                });
+        setField(lifecycle, "connection", transport);
+        setField(lifecycle, "state", ZLinkStreamConnectionState.CONNECTED);
+
+        CompletableFuture<Void> send =
+                connector.send(payload("held", "a")).submit().toCompletableFuture();
+        connector.close().submit().toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+        CompletionException failure = assertThrows(CompletionException.class, send::join);
+        assertEquals(
+                ZLinkStreamErrorCode.DISCONNECTED,
+                ((ZLinkStreamException) failure.getCause()).errorCode());
+    }
+
+    /** Spec 32 7: close completes an admitted connect attempt without waiting for its transport. */
+    @Test
+    void closeCompletesAnInFlightConnectAsDisconnected() throws Exception {
+        DefaultZLinkStreamConnector connector =
+                new DefaultZLinkStreamConnector(options(ZLinkStreamDispatchMode.IMMEDIATE));
+        Object lifecycle = lifecycleOf(connector);
+        CompletableFuture<Void> attempt = new CompletableFuture<>();
+        setField(lifecycle, "state", ZLinkStreamConnectionState.CONNECTING);
+        setField(lifecycle, "connectionAttempt", attempt);
+
+        CompletableFuture<Void> connecting = connector.connect().submit().toCompletableFuture();
+        ConnectorTestAwait.await(connector.close());
+        CompletionException failure = assertThrows(CompletionException.class, connecting::join);
+        assertEquals(
+                ZLinkStreamErrorCode.DISCONNECTED,
+                ((ZLinkStreamException) failure.getCause()).errorCode());
+    }
+
+    /**
+     * Spec 32 9 and 12: a transport write failure is SendFailed for that write, ends the connection
+     * as TransportError, and fails every other operation in progress as Disconnected.
+     */
+    @Test
+    void transportWriteFailureEndsTheConnectionAndFailsOnlyItsWriteAsSendFailed() throws Exception {
+        DefaultZLinkStreamConnector connector =
+                new DefaultZLinkStreamConnector(
+                        options(
+                                URI.create("tcp://127.0.0.1:1"),
+                                ZLinkStreamDispatchMode.IMMEDIATE,
+                                64 * 1024,
+                                64 * 1024,
+                                false,
+                                false,
+                                ZLinkStreamCompression.LZ4));
+        Object lifecycle = lifecycleOf(connector);
+        AtomicInteger writes = new AtomicInteger();
+        ZLinkStreamTransportConnection transport =
+                (ZLinkStreamTransportConnection)
+                        Proxy.newProxyInstance(
+                                ZLinkStreamTransportConnection.class.getClassLoader(),
+                                new Class<?>[] {ZLinkStreamTransportConnection.class},
+                                (proxy, method, arguments) ->
+                                        switch (method.getName()) {
+                                            case "writeAsync" ->
+                                                    writes.incrementAndGet() == 1
+                                                            ? CompletableFuture.completedFuture(
+                                                                    null)
+                                                            : CompletableFuture.failedFuture(
+                                                                    new java.io.IOException(
+                                                                            "broken pipe"));
+                                            case "isOpen" -> true;
+                                            default -> null;
+                                        });
+        setField(lifecycle, "connection", transport);
+        setField(lifecycle, "state", ZLinkStreamConnectionState.CONNECTED);
+        CompletableFuture<ZLinkStreamReplyReceivedContext> replyContext = new CompletableFuture<>();
+        connector.onReplyReceived(replyContext::complete);
+
+        CompletableFuture<ZLinkStreamEncodedPayload> pending =
+                connector.request(payload("Pending", "a")).submit().toCompletableFuture();
+        CompletionException sendFailure =
+                assertThrows(
+                        CompletionException.class,
+                        () ->
+                                connector
+                                        .send(payload("Ping", "b"))
+                                        .submit()
+                                        .toCompletableFuture()
+                                        .join());
+        CompletionException requestFailure = assertThrows(CompletionException.class, pending::join);
+
+        assertEquals(
+                ZLinkStreamErrorCode.SEND_FAILED,
+                ((ZLinkStreamException) sendFailure.getCause()).errorCode());
+        assertEquals(
+                ZLinkStreamErrorCode.DISCONNECTED,
+                ((ZLinkStreamException) requestFailure.getCause()).errorCode());
+        assertEquals(
+                ZLinkStreamErrorCode.DISCONNECTED,
+                replyContext.get(5, TimeUnit.SECONDS).error().code());
+        assertEquals(Optional.of(ZLinkStreamCloseReason.TRANSPORT_ERROR), connector.closeReason());
+        assertEquals(ZLinkStreamConnectionState.DISCONNECTED, connector.state());
+        ConnectorTestAwait.await(connector.close());
+    }
+
+    /**
+     * Spec 32 7: closing the TLS transport does not wait for the peer. The server stops reading, so
+     * the frames fill the socket buffers and a frame write stays in progress; close must still
+     * release the socket at once instead of flushing close_notify behind that frame.
+     */
+    @Test
+    void tlsCloseReleasesTheSocketWithoutWaitingForThePeerToRead() throws Exception {
+        try (TlsStreamConnectorTestServer server = new TlsStreamConnectorTestServer()) {
+            DefaultZLinkStreamConnector connector =
+                    new DefaultZLinkStreamConnector(
+                            server.options(ZLinkStreamDispatchMode.IMMEDIATE));
+            ConnectorTestAwait.await(connector.connect());
+            server.stopReading();
+            String block = "A".repeat(60 * 1024);
+            CompletableFuture<Void> stalled = null;
+            for (int index = 0; index < 10_000 && stalled == null; index++) {
+                CompletableFuture<Void> send =
+                        connector.send(payload("Fill", block)).submit().toCompletableFuture();
+                try {
+                    send.get(1, TimeUnit.SECONDS);
+                } catch (TimeoutException blocked) {
+                    stalled = send;
+                }
+            }
+            assertTrue(stalled != null, "the peer that stopped reading must stall a frame write");
+            io.netty.channel.Channel socket =
+                    (io.netty.channel.Channel)
+                            fieldValue(fieldValue(lifecycleOf(connector), "connection"), "channel");
+
+            connector.close().submit().toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+            //  With close_notify queued behind the stalled frame the socket
+            //  stays open until the 3 s flush timeout ends.
+            assertTrue(
+                    socket.closeFuture().await(1, TimeUnit.SECONDS),
+                    "the TLS socket must close without waiting for the peer");
+            CompletionException failure = assertThrows(CompletionException.class, stalled::join);
+            assertEquals(
+                    ZLinkStreamErrorCode.DISCONNECTED,
+                    ((ZLinkStreamException) failure.getCause()).errorCode());
+        }
+    }
+
+    private static Object lifecycleOf(DefaultZLinkStreamConnector connector) throws Exception {
+        return fieldValue(connector, "lifecycle");
+    }
+
+    private static Object fieldValue(Object target, String name) throws Exception {
+        Field field = target.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        return field.get(target);
+    }
+
+    private static String frameName(Object frame) {
+        return ZLinkStreamWireProtocol.decodeHeader(
+                        ZLinkStreamWireProtocol.decodeFrame((byte[]) frame).header())
+                .name();
+    }
+
+    @Test
+    void sendAdmissionCannotPassAConnectionEnd() throws Exception {
+        DefaultZLinkStreamConnector connector =
+                new DefaultZLinkStreamConnector(options(ZLinkStreamDispatchMode.IMMEDIATE));
+        Field lifecycleField = DefaultZLinkStreamConnector.class.getDeclaredField("lifecycle");
+        lifecycleField.setAccessible(true);
+        Object lifecycle = lifecycleField.get(connector);
+        Field admissionLockField = lifecycle.getClass().getDeclaredField("connectionAttemptLock");
+        admissionLockField.setAccessible(true);
+        Object admissionLock = admissionLockField.get(lifecycle);
+        AtomicInteger writes = new AtomicInteger();
+        ZLinkStreamTransportConnection transport =
+                (ZLinkStreamTransportConnection)
+                        Proxy.newProxyInstance(
+                                ZLinkStreamTransportConnection.class.getClassLoader(),
+                                new Class<?>[] {ZLinkStreamTransportConnection.class},
+                                (proxy, method, arguments) -> {
+                                    if (method.getName().equals("writeAsync")) {
+                                        writes.incrementAndGet();
+                                        return CompletableFuture.completedFuture(null);
+                                    }
+                                    if (method.getName().equals("isOpen")) {
+                                        return true;
+                                    }
+                                    return null;
+                                });
+        setField(lifecycle, "connection", transport);
+        setField(lifecycle, "state", ZLinkStreamConnectionState.CONNECTED);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        CountDownLatch entering = new CountDownLatch(1);
+        Thread sender =
+                new Thread(
+                        () -> {
+                            entering.countDown();
+                            try {
+                                invokeSendFrame(connector, "stale").toCompletableFuture().join();
+                            } catch (Throwable ex) {
+                                failure.set(ex);
+                            }
+                        });
+
+        synchronized (admissionLock) {
+            sender.start();
+            assertTrue(entering.await(5, TimeUnit.SECONDS));
+            long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (sender.getState() != Thread.State.BLOCKED
+                    && writes.get() == 0
+                    && failure.get() == null
+                    && System.nanoTime() < until) {
+                Thread.onSpinWait();
+            }
+            assertEquals(0, writes.get(), "send must wait for lifecycle admission");
+            setField(lifecycle, "connection", null);
+            setField(lifecycle, "state", ZLinkStreamConnectionState.CLOSED);
+        }
+        sender.join(TimeUnit.SECONDS.toMillis(5));
+        assertFalse(sender.isAlive());
+        assertEquals(0, writes.get());
+        assertTrue(failure.get() != null);
+        ConnectorTestAwait.await(connector.close());
+    }
+
     private static CompletionStage<Void> invokeSendFrame(
             DefaultZLinkStreamConnector connector, String name) throws Exception {
         Method method =
@@ -494,16 +940,16 @@ final class ZLinkStreamConnectorTest {
                                     server.endpoint(), ZLinkStreamDispatchMode.MANUAL, 8));
             ConnectorTestAwait.await(connector.connect());
 
+            CompletableFuture<Void> send =
+                    connector
+                            .send(payload("Compressed", "A".repeat(1024)))
+                            .compress()
+                            .submit()
+                            .toCompletableFuture();
+            CompletionException failure = assertThrows(CompletionException.class, send::join);
             assertEquals(
                     ZLinkStreamErrorCode.VALIDATION_FAILED,
-                    assertThrows(
-                                    ZLinkStreamException.class,
-                                    () ->
-                                            connector
-                                                    .send(payload("Compressed", "A".repeat(1024)))
-                                                    .compress()
-                                                    .submit())
-                            .errorCode());
+                    ((ZLinkStreamException) failure.getCause()).errorCode());
         }
     }
 
@@ -587,13 +1033,17 @@ final class ZLinkStreamConnectorTest {
                     .join();
 
             CompletionException ex = assertThrows(CompletionException.class, replyFuture::join);
-            //  Common connector spec 32 8/9: a compressed inbound payload
-            //  that does not fit the receive limit is DecompressionFailed,
-            //  and 9.2 requires the caller to be able to read that code.
+            //  Common connector spec 32 4.7/9: a compressed inbound payload
+            //  that decompresses over the receive limit is FrameTooLarge. It
+            //  ends the connection as a protocol error and the pending
+            //  request fails with Disconnected.
             assertTrue(ex.getCause() instanceof ZLinkStreamException);
             assertEquals(
-                    ZLinkStreamErrorCode.DECOMPRESSION_FAILED,
+                    ZLinkStreamErrorCode.DISCONNECTED,
                     ((ZLinkStreamException) ex.getCause()).errorCode());
+            TcpStreamConnectorTestServer.awaitCondition(() -> connector.closeReason().isPresent());
+            assertEquals(
+                    Optional.of(ZLinkStreamCloseReason.PROTOCOL_ERROR), connector.closeReason());
         }
     }
 
@@ -735,18 +1185,30 @@ final class ZLinkStreamConnectorTest {
                                     "Echo",
                                     Map.of(),
                                     null),
-                            TcpStreamConnectorTestServer.bytes("compressed"))
+                            new byte[] {1})
                     .join();
 
-            assertThrows(CompletionException.class, replyFuture::join);
+            CompletionException failedReply =
+                    assertThrows(CompletionException.class, replyFuture::join);
+            //  Spec 32 4.7/9: over the receive limit after decompression is
+            //  FrameTooLarge, which ends the connection.
+            assertEquals(
+                    ZLinkStreamErrorCode.DISCONNECTED,
+                    ((ZLinkStreamException) failedReply.getCause()).errorCode());
+            TcpStreamConnectorTestServer.awaitCondition(() -> connector.closeReason().isPresent());
+            assertEquals(
+                    Optional.of(ZLinkStreamCloseReason.PROTOCOL_ERROR), connector.closeReason());
         }
     }
 
     @Test
     void lz4PicklerRejectsDecodedPayloadAboveReceiveLimit() {
-        assertThrows(
-                IllegalArgumentException.class,
-                () -> ZLinkStreamLz4Pickler.unpickle(new byte[] {0x40, 0x03}, 2));
+        assertEquals(
+                ZLinkStreamErrorCode.FRAME_TOO_LARGE,
+                assertThrows(
+                                ZLinkStreamException.class,
+                                () -> ZLinkStreamLz4Pickler.unpickle(new byte[] {0x40, 0x03}, 2))
+                        .errorCode());
     }
 
     @Test
@@ -851,7 +1313,7 @@ final class ZLinkStreamConnectorTest {
                             server.endpoint(),
                             ZLinkStreamDispatchMode.IMMEDIATE,
                             Duration.ofSeconds(1),
-                            0,
+                            1,
                             Duration.ofSeconds(1),
                             64 * 1024,
                             false,
@@ -1166,6 +1628,36 @@ final class ZLinkStreamConnectorTest {
     }
 
     @Test
+    void errorPayloadRequiresAStringMessage() throws Exception {
+        try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
+            ZLinkStreamConnector connector =
+                    createConnector(server.options(ZLinkStreamDispatchMode.IMMEDIATE));
+            AtomicReference<ZLinkStreamError> received = new AtomicReference<>();
+            connector.onErrorReceived(
+                    error -> {
+                        received.set(error);
+                        return CompletableFuture.completedFuture(null);
+                    });
+
+            ConnectorTestAwait.await(connector.connect());
+            server.sendAsync(
+                            new ZLinkStreamWireProtocol.Header(
+                                    ZLinkStreamWireProtocol.KIND_ERROR,
+                                    ZLinkStreamWireProtocol.CODEC_JSON,
+                                    0,
+                                    null,
+                                    "",
+                                    Map.of(),
+                                    null),
+                            "{\"code\":\"x\",\"message\":42}".getBytes(StandardCharsets.UTF_8))
+                    .join();
+
+            TcpStreamConnectorTestServer.awaitCondition(() -> received.get() != null);
+            assertEquals(ZLinkStreamErrorCode.FRAME_DECODE_FAILED, received.get().code());
+        }
+    }
+
+    @Test
     void correlatedRemoteErrorFailsOnlyItsPendingRequest() throws Exception {
         try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
             ZLinkStreamConnector connector =
@@ -1451,6 +1943,267 @@ final class ZLinkStreamConnectorTest {
         assertEquals(
                 ZLinkStreamTransport.WEB_SOCKET_SECURE,
                 ZLinkStreamConnectorConfiguration.from(mixedCaseWss).transport().kind());
+    }
+
+    @Test
+    void reconnectOptionsAcceptEveryPositiveFactorAndRequirePositiveAttemptCount() {
+        URI endpoint = URI.create("tcp://127.0.0.1:7000");
+        ZLinkStreamConnectorOptions subunitFactor =
+                new ZLinkStreamConnectorOptions(
+                        endpoint,
+                        ZLinkStreamDispatchMode.MANUAL,
+                        Duration.ofSeconds(1),
+                        1,
+                        Duration.ofSeconds(1),
+                        64 * 1024,
+                        false,
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(5),
+                        false,
+                        Duration.ofMillis(10),
+                        Duration.ofSeconds(1),
+                        0.5);
+        ZLinkStreamConnectorConfiguration.from(subunitFactor);
+
+        for (double factor : new double[] {0.0, -1.0, Double.NaN, Double.POSITIVE_INFINITY}) {
+            ZLinkStreamConnectorOptions invalidFactor =
+                    new ZLinkStreamConnectorOptions(
+                            endpoint,
+                            ZLinkStreamDispatchMode.MANUAL,
+                            Duration.ofSeconds(1),
+                            1,
+                            Duration.ofSeconds(1),
+                            64 * 1024,
+                            false,
+                            Duration.ofSeconds(1),
+                            Duration.ofSeconds(5),
+                            false,
+                            Duration.ofMillis(10),
+                            Duration.ofSeconds(1),
+                            factor);
+            assertEquals(
+                    ZLinkStreamErrorCode.VALIDATION_FAILED,
+                    assertThrows(
+                                    ZLinkStreamException.class,
+                                    () -> ZLinkStreamConnectorConfiguration.from(invalidFactor))
+                            .errorCode());
+        }
+
+        ZLinkStreamConnectorOptions zeroAttempts =
+                new ZLinkStreamConnectorOptions(
+                        endpoint,
+                        ZLinkStreamDispatchMode.MANUAL,
+                        Duration.ofSeconds(1),
+                        0,
+                        Duration.ofSeconds(1),
+                        64 * 1024,
+                        false,
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(5),
+                        false,
+                        Duration.ofMillis(10),
+                        Duration.ofSeconds(1),
+                        2.0);
+        assertEquals(
+                ZLinkStreamErrorCode.VALIDATION_FAILED,
+                assertThrows(
+                                ZLinkStreamException.class,
+                                () -> ZLinkStreamConnectorConfiguration.from(zeroAttempts))
+                        .errorCode());
+    }
+
+    @Test
+    void positiveHeartbeatAndReconnectValuesNeedNoOrdering() {
+        ZLinkStreamConnectorOptions options =
+                new ZLinkStreamConnectorOptions(
+                        URI.create("tcp://127.0.0.1:7000"),
+                        ZLinkStreamDispatchMode.MANUAL,
+                        Duration.ofSeconds(1),
+                        1,
+                        Duration.ofSeconds(1),
+                        64 * 1024,
+                        true,
+                        Duration.ofSeconds(5),
+                        Duration.ofSeconds(1),
+                        true,
+                        Duration.ofMillis(1000),
+                        Duration.ofMillis(100),
+                        0.5);
+        assertEquals(
+                Duration.ofSeconds(1),
+                ZLinkStreamConnectorConfiguration.from(options).heartbeat().timeout());
+    }
+
+    @Test
+    void requestSequenceExhaustionDoesNotReuseAnEarlierValue() throws Exception {
+        try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
+            ZLinkStreamConnector connector =
+                    createConnector(server.options(ZLinkStreamDispatchMode.MANUAL));
+            ConnectorTestAwait.await(connector.connect());
+            Field sequenceField =
+                    DefaultZLinkStreamConnector.class.getDeclaredField("nextRequestSeq");
+            sequenceField.setAccessible(true);
+            ((AtomicLong) sequenceField.get(connector)).set(-2L);
+
+            var first = connector.request(payload("Echo", "first")).submit();
+            assertEquals(-1L, server.readFrameAsync().join().header().requestSeq());
+            CompletionException exhausted =
+                    assertThrows(
+                            CompletionException.class,
+                            () ->
+                                    connector
+                                            .request(payload("Echo", "second"))
+                                            .submit()
+                                            .toCompletableFuture()
+                                            .join());
+            assertEquals(
+                    ZLinkStreamErrorCode.SEND_FAILED,
+                    ((ZLinkStreamException) exhausted.getCause()).errorCode());
+            assertTrue(connector.isConnected());
+            ConnectorTestAwait.await(connector.close());
+            assertTrue(first.toCompletableFuture().isCompletedExceptionally());
+        }
+    }
+
+    /**
+     * Spec 32 5.2: the request timeout starts when the Request is accepted, after its payload is
+     * compressed. The compression waits for a task that the connector's own timeout timer runs one
+     * request timeout later; a timeout started before the compression would run on that timer
+     * first. So the Request is still pending when submit returns only if its timer started at
+     * acceptance, and it then ends with RequestTimeout since the server never replies.
+     */
+    @Test
+    void requestTimeoutStartsAfterSlowCompressionAndAcceptance() throws Exception {
+        Duration timeout = Duration.ofMillis(200);
+        AtomicReference<java.util.concurrent.ScheduledExecutorService> timer =
+                new AtomicReference<>();
+        ZLinkStreamCompressionCodec codec =
+                new ZLinkStreamCompressionCodec() {
+                    @Override
+                    public byte[] compress(byte[] payload) {
+                        try {
+                            timer.get()
+                                    .schedule(() -> {}, timeout.toMillis(), TimeUnit.MILLISECONDS)
+                                    .get();
+                        } catch (Exception interrupted) {
+                            throw new IllegalStateException(interrupted);
+                        }
+                        return payload;
+                    }
+
+                    @Override
+                    public byte[] decompress(byte[] payload, int maxDecompressedSize) {
+                        return payload;
+                    }
+                };
+        try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
+            DefaultZLinkStreamConnector connector =
+                    new DefaultZLinkStreamConnector(
+                            options(
+                                    server.endpoint(),
+                                    ZLinkStreamDispatchMode.MANUAL,
+                                    64 * 1024,
+                                    64 * 1024,
+                                    false,
+                                    false,
+                                    ZLinkStreamCompression.LZ4,
+                                    codec));
+            connectors.add(connector);
+            timer.set(
+                    (java.util.concurrent.ScheduledExecutorService)
+                            fieldValue(connector, "timeouts"));
+            ConnectorTestAwait.await(connector.connect());
+
+            CompletableFuture<ZLinkStreamEncodedPayload> pending =
+                    connector
+                            .request(payload("SlowEncode", "request"))
+                            .timeout(timeout)
+                            .compress()
+                            .submit()
+                            .toCompletableFuture();
+
+            assertFalse(pending.isDone(), "the timeout must not start before acceptance");
+            assertEquals("SlowEncode", server.readFrameAsync().join().header().name());
+            CompletionException timedOut = assertThrows(CompletionException.class, pending::join);
+            assertEquals(
+                    ZLinkStreamErrorCode.REQUEST_TIMEOUT,
+                    ((ZLinkStreamException) timedOut.getCause()).errorCode());
+        }
+    }
+
+    @Test
+    void terminalResponseIsDiscardedBeforePayloadDecompression() throws Exception {
+        AtomicInteger decompressions = new AtomicInteger();
+        ZLinkStreamCompressionCodec codec =
+                new ZLinkStreamCompressionCodec() {
+                    @Override
+                    public byte[] compress(byte[] payload) {
+                        return payload;
+                    }
+
+                    @Override
+                    public byte[] decompress(byte[] payload, int maxDecompressedSize) {
+                        decompressions.incrementAndGet();
+                        return payload;
+                    }
+                };
+        try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
+            ZLinkStreamConnector connector =
+                    createConnector(
+                            options(
+                                    server.endpoint(),
+                                    ZLinkStreamDispatchMode.IMMEDIATE,
+                                    64 * 1024,
+                                    64 * 1024,
+                                    false,
+                                    false,
+                                    ZLinkStreamCompression.LZ4,
+                                    codec));
+            ConnectorTestAwait.await(connector.connect());
+            CompletableFuture<ZLinkStreamEncodedPayload> pending =
+                    connector
+                            .request(payload("Echo", "request"))
+                            .timeout(Duration.ofMillis(30))
+                            .submit()
+                            .toCompletableFuture();
+            TcpStreamConnectorTestServer.ReceivedFrame request = server.readFrameAsync().join();
+            assertThrows(CompletionException.class, pending::join);
+            CountDownLatch afterLate = new CountDownLatch(1);
+            connector.on(
+                    "AfterLate",
+                    message -> {
+                        message.payload().payload().close();
+                        afterLate.countDown();
+                        return CompletableFuture.completedFuture(null);
+                    });
+            server.sendAsync(
+                            new ZLinkStreamWireProtocol.Header(
+                                    ZLinkStreamWireProtocol.KIND_RESPONSE,
+                                    ZLinkStreamWireProtocol.CODEC_RAW,
+                                    ZLinkStreamWireProtocol.FLAG_HAS_REQUEST_SEQ
+                                            | ZLinkStreamWireProtocol.FLAG_PAYLOAD_COMPRESSED,
+                                    request.header().requestSeq(),
+                                    "Echo",
+                                    Map.of(),
+                                    null),
+                            TcpStreamConnectorTestServer.bytes("late"))
+                    .join();
+            server.sendAsync(
+                            new ZLinkStreamWireProtocol.Header(
+                                    ZLinkStreamWireProtocol.KIND_SEND,
+                                    ZLinkStreamWireProtocol.CODEC_RAW,
+                                    0,
+                                    null,
+                                    "AfterLate",
+                                    Map.of(),
+                                    null),
+                            TcpStreamConnectorTestServer.bytes("after"))
+                    .join();
+            assertTrue(afterLate.await(5, TimeUnit.SECONDS));
+            assertEquals(0, decompressions.get());
+            assertTrue(connector.isConnected());
+            ConnectorTestAwait.await(connector.close());
+        }
     }
 
     @Test

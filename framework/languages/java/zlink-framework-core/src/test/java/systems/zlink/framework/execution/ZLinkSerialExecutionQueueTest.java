@@ -1103,6 +1103,205 @@ final class ZLinkSerialExecutionQueueTest {
     }
 
     @Test
+    void suspendedLifecycleRetainsItsFifoPlaceWhileApplicationProgresses() throws Exception {
+        ZLinkSerialExecutionQueue queue =
+                new ZLinkSerialExecutionQueue(ZLinkExecutionLanePolicy.spot());
+        CompletableFuture<Void> remote = new CompletableFuture<>();
+        CompletableFuture<Void> started = new CompletableFuture<>();
+        List<String> order = java.util.Collections.synchronizedList(new ArrayList<>());
+
+        CompletableFuture<Void> first =
+                queue.enqueueLifecycleBarrier(
+                                () -> {
+                                    order.add("first-start");
+                                    started.complete(null);
+                                    return remote.thenRun(() -> order.add("first-end"));
+                                })
+                        .toCompletableFuture();
+        started.get(3, TimeUnit.SECONDS);
+        CompletableFuture<Void> second =
+                queue.enqueueLifecycleBarrier(
+                                () -> {
+                                    order.add("second");
+                                    return CompletableFuture.completedFuture(null);
+                                })
+                        .toCompletableFuture();
+        CompletableFuture<Void> application =
+                queue.enqueue(
+                                () -> {
+                                    order.add("application");
+                                    return CompletableFuture.completedFuture(null);
+                                })
+                        .toCompletableFuture();
+
+        application.get(3, TimeUnit.SECONDS);
+        CompletableFuture<Void> quiescent = queue.awaitQuiescence().toCompletableFuture();
+        assertFalse(first.isDone());
+        assertFalse(second.isDone());
+        assertFalse(quiescent.isDone());
+        remote.complete(null);
+        CompletableFuture.allOf(first, second).get(3, TimeUnit.SECONDS);
+        quiescent.get(3, TimeUnit.SECONDS);
+        assertEquals(List.of("first-start", "application", "first-end", "second"), order);
+    }
+
+    @Test
+    void actorJoinBarrierKeepsLaterActorPayloadBehindItsTerminal() throws Exception {
+        ZLinkSerialExecutionQueue queue =
+                new ZLinkSerialExecutionQueue(ZLinkExecutionLanePolicy.actorDelivery());
+        CompletableFuture<Void> joinTerminal = new CompletableFuture<>();
+        CompletableFuture<Void> started = new CompletableFuture<>();
+        List<String> order = java.util.Collections.synchronizedList(new ArrayList<>());
+
+        CompletableFuture<Void> join =
+                queue.enqueueBarrierNext(
+                                () -> {
+                                    order.add("join");
+                                    started.complete(null);
+                                    return joinTerminal;
+                                })
+                        .toCompletableFuture();
+        started.get(3, TimeUnit.SECONDS);
+        CompletableFuture<Void> payload =
+                queue.enqueue(
+                                () -> {
+                                    order.add("payload");
+                                    return CompletableFuture.completedFuture(null);
+                                })
+                        .toCompletableFuture();
+        assertFalse(payload.isDone());
+        joinTerminal.complete(null);
+        CompletableFuture.allOf(join, payload).get(3, TimeUnit.SECONDS);
+        assertEquals(List.of("join", "payload"), order);
+    }
+
+    @Test
+    void suspendedLifecycleContinuationYieldsBurstDebtToApplication() throws Exception {
+        LinkedBlockingQueue<Runnable> ready = new LinkedBlockingQueue<>();
+        ZLinkSerialExecutionQueue queue =
+                new ZLinkSerialExecutionQueue(
+                        ready::add, ZLinkExecutionLanePolicy.spot(), 1, Duration.ofSeconds(1));
+        CompletableFuture<Void> remote = new CompletableFuture<>();
+        List<String> order = new ArrayList<>();
+
+        CompletableFuture<Void> close =
+                queue.enqueueLifecycleBarrier(
+                                () -> {
+                                    order.add("lifecycle");
+                                    return remote;
+                                })
+                        .toCompletableFuture();
+        close.whenComplete((ignored, failure) -> order.add("continuation"));
+        ready.poll(3, TimeUnit.SECONDS).run();
+        CompletableFuture<Void> application =
+                queue.enqueue(
+                                () -> {
+                                    order.add("application");
+                                    return CompletableFuture.completedFuture(null);
+                                })
+                        .toCompletableFuture();
+        remote.complete(null);
+
+        ready.poll(3, TimeUnit.SECONDS).run();
+        application.get(3, TimeUnit.SECONDS);
+        close.get(3, TimeUnit.SECONDS);
+        assertEquals(List.of("lifecycle", "application", "continuation"), order);
+    }
+
+    @Test
+    void unrelatedApplicationContinuationKeepsItsApplicationPriority() throws Exception {
+        LinkedBlockingQueue<Runnable> ready = new LinkedBlockingQueue<>();
+        ZLinkSerialExecutionQueue queue =
+                new ZLinkSerialExecutionQueue(
+                        ready::add, ZLinkExecutionLanePolicy.spot(), 1, Duration.ofSeconds(1));
+        CompletableFuture<Void> applicationRemote = new CompletableFuture<>();
+        CompletableFuture<Void> lifecycleRemote = new CompletableFuture<>();
+        List<String> order = new ArrayList<>();
+
+        CompletableFuture<Void> application =
+                queue.enqueue(
+                                () -> {
+                                    order.add("application-start");
+                                    return ZLinkSerialExecutionQueue.yieldCurrent(
+                                            applicationRemote);
+                                })
+                        .toCompletableFuture();
+        application.whenComplete((ignored, failure) -> order.add("application-resume"));
+        ready.poll(3, TimeUnit.SECONDS).run();
+        CompletableFuture<Void> lifecycle =
+                queue.enqueueLifecycleBarrier(
+                                () -> {
+                                    order.add("lifecycle-start");
+                                    return lifecycleRemote;
+                                })
+                        .toCompletableFuture();
+        lifecycle.whenComplete((ignored, failure) -> order.add("lifecycle-resume"));
+        ready.poll(3, TimeUnit.SECONDS).run();
+        // Both continuations are queued before the next application turn arrives. Enqueuing the
+        // next turn first lets the drain pick it before the continuations exist.
+        applicationRemote.complete(null);
+        lifecycleRemote.complete(null);
+        CompletableFuture<Void> nextApplication =
+                queue.enqueue(
+                                () -> {
+                                    order.add("application-next");
+                                    return CompletableFuture.completedFuture(null);
+                                })
+                        .toCompletableFuture();
+
+        ready.poll(3, TimeUnit.SECONDS).run();
+        CompletableFuture.allOf(application, lifecycle, nextApplication).get(3, TimeUnit.SECONDS);
+        assertEquals(
+                List.of(
+                        "application-start",
+                        "lifecycle-start",
+                        "application-resume",
+                        "lifecycle-resume",
+                        "application-next"),
+                order);
+    }
+
+    @Test
+    void lifecycleDrainWaitsForAcceptedApplicationContinuationOnly() throws Exception {
+        ZLinkSerialExecutionQueue queue =
+                new ZLinkSerialExecutionQueue(ZLinkExecutionLanePolicy.spot());
+        CompletableFuture<Void> applicationRemote = new CompletableFuture<>();
+        CompletableFuture<Void> applicationStarted = new CompletableFuture<>();
+        List<String> order = new CopyOnWriteArrayList<>();
+
+        CompletableFuture<Void> application =
+                queue.enqueue(
+                                () -> {
+                                    applicationStarted.complete(null);
+                                    return ZLinkSerialExecutionQueue.yieldCurrent(applicationRemote)
+                                            .thenRun(() -> order.add("application-terminal"));
+                                })
+                        .toCompletableFuture();
+        applicationStarted.get(3, TimeUnit.SECONDS);
+        CompletableFuture<Void> close =
+                queue.enqueueLifecycleBarrier(
+                                () ->
+                                        queue.awaitQuiescence(
+                                                        ZLinkSerialExecutionQueue.Quiescence
+                                                                .APPLICATION)
+                                                .thenRun(() -> order.add("close")))
+                        .toCompletableFuture();
+        CompletableFuture<Void> laterLifecycle =
+                queue.enqueueLifecycleBarrier(
+                                () -> {
+                                    order.add("later-lifecycle");
+                                    return CompletableFuture.completedFuture(null);
+                                })
+                        .toCompletableFuture();
+
+        assertFalse(close.isDone());
+        assertFalse(laterLifecycle.isDone());
+        applicationRemote.complete(null);
+        CompletableFuture.allOf(application, close, laterLifecycle).get(3, TimeUnit.SECONDS);
+        assertEquals(List.of("application-terminal", "close", "later-lifecycle"), order);
+    }
+
+    @Test
     void quiescenceBarrierWaitsForEveryAcceptedTurn() throws Exception {
         ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         CompletableFuture<Void> active = new CompletableFuture<>();

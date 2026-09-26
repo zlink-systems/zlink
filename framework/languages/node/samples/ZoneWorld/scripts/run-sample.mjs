@@ -5,6 +5,12 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import {
+  applicationPortRange,
+  leaseLoopbackPort,
+  redisPortRange,
+  releasePortLease as releaseLeaseFile
+} from './port-lease.mjs';
 
 const runnerRoot = path.dirname(fileURLToPath(import.meta.url));
 const standaloneSampleRoot = path.basename(runnerRoot) === 'scripts'
@@ -40,11 +46,7 @@ let logDir;
 let workDir;
 
 const children = [];
-const reservedPorts = new Set();
 const portLeases = new Map();
-const sharedPortLeaseDir = path.join(os.tmpdir(), 'zlink-sample-port-leases');
-const redisPortRange = { min: 28000, max: 28099 };
-const applicationPortRange = { min: 28100, max: 29999 };
 const dockerCommandTimeoutMs = 10_000;
 let redisContainer;
 let failed = false;
@@ -261,74 +263,16 @@ async function reserveBrowserSafePort() {
 }
 
 async function reserveLeasedPort(range, purpose) {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    assertRunning();
-    const port = range.min + Math.floor(Math.random() * (range.max - range.min + 1));
-    if (reservedPorts.has(port)) continue;
-    const leasePath = acquirePortLease(port);
-    if (leasePath === undefined) continue;
-    const available = await canBind(port);
-    if (stopSignal !== undefined || cleaning) {
-      fs.rmSync(leasePath, { force: true });
-      assertRunning();
-    }
-    if (available) {
-      reservedPorts.add(port);
-      portLeases.set(port, leasePath);
-      return port;
-    }
-    fs.rmSync(leasePath, { force: true });
-  }
-  throw new Error(`Unable to reserve a ${purpose} loopback port.`);
-}
-
-function acquirePortLease(port) {
-  fs.mkdirSync(sharedPortLeaseDir, { recursive: true, mode: 0o700 });
-  const leasePath = path.join(sharedPortLeaseDir, `${port}.lock`);
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const descriptor = fs.openSync(leasePath, 'wx', 0o600);
-      fs.writeFileSync(descriptor, `${process.pid}\n`);
-      fs.closeSync(descriptor);
-      return leasePath;
-    } catch (error) {
-      if (error?.code !== 'EEXIST') throw error;
-      let owner;
-      try {
-        owner = Number.parseInt(fs.readFileSync(leasePath, 'utf8'), 10);
-      } catch (readError) {
-        if (readError?.code === 'ENOENT') continue;
-        throw readError;
-      }
-      if (Number.isInteger(owner) && isProcessRunning(owner)) return undefined;
-      fs.rmSync(leasePath, { force: true });
-    }
-  }
-  return undefined;
+  const lease = await leaseLoopbackPort(range, { exclude: portLeases, checkRunning: assertRunning });
+  if (lease === undefined) throw new Error(`Unable to reserve a ${purpose} loopback port.`);
+  portLeases.set(lease.port, lease.leasePath);
+  return lease.port;
 }
 
 function releasePortLease(port) {
   const leasePath = portLeases.get(port);
-  if (leasePath !== undefined) fs.rmSync(leasePath, { force: true });
+  if (leasePath !== undefined) releaseLeaseFile(leasePath);
   portLeases.delete(port);
-  reservedPorts.delete(port);
-}
-
-function isProcessRunning(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error?.code === 'EPERM';
-  }
-}
-
-function canBind(port) {
-  return new Promise((resolve) => {
-    const server = net.createServer();
-    server.once('error', () => resolve(false));
-    server.listen(port, '127.0.0.1', () => server.close(() => resolve(true)));
-  });
 }
 
 async function startRedis() {
@@ -602,7 +546,7 @@ async function cleanChildren() {
   if (redisContainer) {
     removeRedisAttempt(redisContainer, '');
   }
-  for (const leasePath of portLeases.values()) fs.rmSync(leasePath, { force: true });
+  for (const leasePath of portLeases.values()) releaseLeaseFile(leasePath);
   portLeases.clear();
   if (teardownFailures.size > 0) {
     throw new Error([...teardownFailures]

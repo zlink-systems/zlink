@@ -89,7 +89,7 @@ try {
     $redisPrefix = "zlink:supportchat:sample:${PID}:$([Guid]::NewGuid().ToString('N'))"
 
     $apiConfig = Join-Path $RunDir "api.properties"
-    Set-ZlinkSampleUtf8File -Path $apiConfig -Value @(
+    Set-ZlinkSampleProperties -Path $apiConfig -Value @(
         "sample.redisEndpoint=$($redis.Endpoint)",
         "sample.redisKeyPrefix=$redisPrefix",
         "sample.logDirectory=$LogDir",
@@ -98,7 +98,7 @@ try {
         "sample.apiHttpEndpoint=$apiHttpEndpoint"
     )
     $sessionConfig = Join-Path $RunDir "session.properties"
-    Set-ZlinkSampleUtf8File -Path $sessionConfig -Value @(
+    Set-ZlinkSampleProperties -Path $sessionConfig -Value @(
         "sample.redisEndpoint=$($redis.Endpoint)",
         "sample.redisKeyPrefix=$redisPrefix",
         "sample.logDirectory=$LogDir",
@@ -107,7 +107,7 @@ try {
         "sample.supportSpotRouterEndpoint=$supportRouterEndpoint"
     )
     $supportConfig = Join-Path $RunDir "support.properties"
-    Set-ZlinkSampleUtf8File -Path $supportConfig -Value @(
+    Set-ZlinkSampleProperties -Path $supportConfig -Value @(
         "sample.redisEndpoint=$($redis.Endpoint)",
         "sample.redisKeyPrefix=$redisPrefix",
         "sample.logDirectory=$LogDir",

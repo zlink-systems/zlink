@@ -477,6 +477,43 @@ public sealed class ActorHandoffTests
     }
 
     [Fact]
+    public void Expired_source_lease_takes_each_captured_request_once_and_retires_its_route()
+    {
+        var state = new ZLinkActorRuntimeState("actor-1");
+        var source = ActorRef("node-a", 1);
+        state.BindNativeActorRef(source);
+        state.Handoff.BeginCapture();
+        Capture(state, "before", "session-1", ZlinkStreamMessageKind.Request, flags: 1);
+        state.Handoff.SealCapture();
+        _ = state.Handoff.FreezeCaptureCommitBoundary();
+        Capture(
+            state,
+            "after",
+            "session-1",
+            ZlinkStreamMessageKind.Request,
+            requestId: 2,
+            flags: 1
+        );
+
+        var pending = state.Handoff.ExpireSourceCapture(source);
+
+        Assert.Equal(new[] { "before", "after" }, pending.Select(DecodeBody));
+        Assert.All(
+            pending,
+            frame =>
+                Assert.Equal(
+                    ZlinkStreamMessageKind.Request,
+                    ZLinkStreamProtocolDefaults.DecodeHeader(frame.Header).Kind
+                )
+        );
+        Assert.Empty(state.Handoff.ExpireSourceCapture(source));
+        Assert.Equal(
+            ZLinkActorFrameRoute.Stale,
+            state.Handoff.ResolveFrameRoute(source, source, out _)
+        );
+    }
+
+    [Fact]
     public void FinalJournalCutover_relays_only_the_post_boundary_suffix()
     {
         var state = new ZLinkActorRuntimeState("actor-1");

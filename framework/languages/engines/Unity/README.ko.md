@@ -17,11 +17,11 @@ Unity 2021.3이지만, 저장소의 실제 WebGL adapter 검증 project도 6000.
 `Packages/manifest.json`은 다음 package를 고정한다.
 
 - NuGetForUnity `v4.5.0`
-- `com.zlink.stream-connector.webgl` `framework-node/v0.25.0`
+- `com.zlink.stream-connector.webgl` `framework-node/v0.26.0`
 - Unity UI `2.0.0`
 
 `Assets/packages.config`는 native Editor와 desktop/mobile/console player가 사용하는
-`Zlink.Stream.Connector` `0.25.0`을 선언한다. 처음 열 때 package가 아직 없어 compile error가
+`Zlink.Stream.Connector` `0.26.0`을 선언한다. 처음 열 때 package가 아직 없어 compile error가
 보이면 Safe Mode로 들어가지 말고 **Ignore**를 선택한 다음 **NuGet → Restore Packages**를 실행한다.
 
 두 connector assembly는 같은 public type을 정의하므로 build target마다 하나만 포함해야 한다.

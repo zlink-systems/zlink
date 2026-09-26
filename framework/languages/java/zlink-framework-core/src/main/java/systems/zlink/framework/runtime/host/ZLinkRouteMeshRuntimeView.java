@@ -8,7 +8,6 @@ import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.locations.ZLinkCapacityUsage;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
-import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.monitoring.ZLinkMeshChannelSnapshot;
 import systems.zlink.framework.monitoring.ZLinkMeshNodeSnapshot;
 import systems.zlink.framework.monitoring.ZLinkMeshPeerSnapshot;
@@ -77,13 +76,19 @@ final class ZLinkRouteMeshRuntimeView
         if (state == ZLinkTopologyState.READY && !locationStoreHealthy) {
             state = ZLinkTopologyState.DEGRADED;
         }
+        ZLinkMeshNodeMonitoringProjection placement =
+                runtime.monitoringMeshNodeProjection(meshName, nativeStatus.routingId());
+        boolean placementAvailable =
+                state == ZLinkTopologyState.READY
+                        && placement.objectRole() == ZLinkMeshNodeObjectRole.SERVER
+                        && placement.placementWeight() > 0
+                        && hasActivationCapacity(placement)
+                        && hasAvailableObjectCapacity(placement);
         if (state == ZLinkTopologyState.READY
                 && nativePeers.stream()
                         .anyMatch(ZLinkRouteMeshRuntimeView::requiredPeerUnavailable)) {
             state = ZLinkTopologyState.DEGRADED;
         }
-        ZLinkMeshNodeMonitoringProjection placement =
-                runtime.monitoringMeshNodeProjection(meshName, nativeStatus.routingId());
         List<ZLinkMeshChannelSnapshot> channels =
                 runtime.monitoringMeshNodeChannelNames(meshName).stream()
                         .distinct()
@@ -130,12 +135,6 @@ final class ZLinkRouteMeshRuntimeView
                 && channels.stream().anyMatch(channel -> !channel.isReady())) {
             state = ZLinkTopologyState.DEGRADED;
         }
-        boolean placementAvailable =
-                state == ZLinkTopologyState.READY
-                        && placement.objectRole() == ZLinkMeshNodeObjectRole.SERVER
-                        && placement.placementWeight() > 0
-                        && hasActivationCapacity(placement)
-                        && hasAvailableObjectCapacity(placement);
         return new ZLinkMeshNodeSnapshot(
                 meshName,
                 state,
@@ -153,8 +152,8 @@ final class ZLinkRouteMeshRuntimeView
                 nativePeers.stream().map(ZLinkRouteMeshRuntimeView::peer).toList(),
                 new ZLinkPlacementSnapshot(
                         placementAvailable,
-                        runtime.activeActorCount(),
-                        runtime.activeSpotCount(),
+                        runtime.activeActorCount(meshName),
+                        runtime.activeSpotCount(meshName),
                         placementAvailable
                                 ? Optional.empty()
                                 : Optional.of(
@@ -204,7 +203,7 @@ final class ZLinkRouteMeshRuntimeView
                         meshName,
                         (ignored, existing) ->
                                 existing == null || existing.isStopped()
-                                        ? new SignalHub(requireNode(meshName))
+                                        ? new SignalHub(meshName, requireNode(meshName))
                                         : existing)
                 .register(signal);
         return publisher;
@@ -318,24 +317,8 @@ final class ZLinkRouteMeshRuntimeView
     }
 
     private static boolean hasAvailableObjectCapacity(ZLinkMeshNodeMonitoringProjection placement) {
-        boolean actorAvailable =
-                placement.objectCapabilities().stream()
-                                .anyMatch(
-                                        capability ->
-                                                capability.objectKind()
-                                                        == ZLinkPlacementObjectKind.ACTOR)
-                        && hasRemainingCapacity(placement.objectCapacity().actors());
-        boolean spotAvailable =
-                placement.objectCapabilities().stream()
-                                .anyMatch(
-                                        capability ->
-                                                capability.objectKind()
-                                                        != ZLinkPlacementObjectKind.ACTOR)
-                        && hasRemainingCapacity(placement.objectCapacity().spots())
-                        && (placement.objectCapacity().spotTypes().isEmpty()
-                                || placement.objectCapacity().spotTypes().stream()
-                                        .anyMatch(type -> hasRemainingCapacity(type.usage())));
-        return actorAvailable && spotAvailable;
+        return hasRemainingCapacity(placement.objectCapacity().actors())
+                || hasRemainingCapacity(placement.objectCapacity().spots());
     }
 
     private static boolean hasRemainingCapacity(ZLinkCapacityUsage capacity) {
@@ -380,6 +363,7 @@ final class ZLinkRouteMeshRuntimeView
     }
 
     private final class SignalHub implements AutoCloseable {
+        private final String meshName;
         private final ZLinkInternalMeshNode node;
         private final ZLinkStateLane stateLane = new ZLinkStateLane();
         private final List<PublisherSignal> signals = new ArrayList<>();
@@ -387,7 +371,8 @@ final class ZLinkRouteMeshRuntimeView
         private boolean pumpStarted;
         private Thread pump;
 
-        SignalHub(ZLinkInternalMeshNode node) {
+        SignalHub(String meshName, ZLinkInternalMeshNode node) {
+            this.meshName = meshName;
             this.node = node;
         }
 
@@ -484,8 +469,8 @@ final class ZLinkRouteMeshRuntimeView
                     peers,
                     Map.copyOf(peerChannels),
                     Map.copyOf(node.channelWeights()),
-                    runtime.activeActorCount(),
-                    runtime.activeSpotCount());
+                    runtime.activeActorCount(meshName),
+                    runtime.activeSpotCount(meshName));
         }
 
         private record SourceSnapshot(

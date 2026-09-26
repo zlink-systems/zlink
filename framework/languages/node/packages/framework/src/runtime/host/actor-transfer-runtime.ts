@@ -4,12 +4,11 @@ import type {
   RoutingId,
   ZLinkActor,
   ZLinkActorJoinOperationId,
-  ZLinkMessage,
   ZLinkMessageSerializer,
-  ZLinkRelocationStore,
   ZLinkSpot
 } from '../../contracts';
-import { ZLinkSpotKind } from '../../contracts';
+import { ZLinkEncodedPayload, ZLinkMessage, ZLinkSpotKind } from '../../contracts';
+import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import type {
   ZLinkAggregateId,
   ZLinkAuthoritySnapshot,
@@ -33,11 +32,9 @@ import {
   type ZLinkActorHandoffReplayPreparation,
   type ZLinkActorRoutedJoinTransport,
   type ZLinkActorTransferRegistry,
-  isDeferredJoinAcceptedRootPublication,
-  ZLinkDeferredJoinAcceptedJournal,
+  createDeferredJoinCompletion,
   rewriteActorAuthorityRoute,
-  type ZLinkDeferredJoinAcceptedRoot,
-  type ZLinkDeferredJoinRootIdentity,
+  type ZLinkDeferredJoinCompletion,
   type ZLinkRemoteBoundSessionTarget
 } from '../actors';
 import type { ZLinkActorRuntimeState } from '../actors/actor-runtime-state';
@@ -198,7 +195,6 @@ export interface ZLinkActorTransferRuntimeOptions {
   readonly authorityStore: () =>
     (ZLinkAuthorityStore & ZLinkObjectCreationStore & ZLinkOwnerLeaseStore) | undefined;
   readonly currentOwner: () => ZLinkLocationOwnerToken | undefined;
-  readonly relocationStore: () => ZLinkRelocationStore | undefined;
   /** Live admitted peers of a mesh; used to stop retries against a gone session owner. */
   readonly liveDescriptors?: (
     meshName: string,
@@ -229,43 +225,31 @@ export class ZLinkActorTransferRuntime {
       notifySubmitted?: () => Promise<void>;
     }
   >();
-  private readonly activeDeferredJoinTerminals = new Map<
-    string,
-    Promise<ZLinkDeferredJoinAcceptedRoot>
-  >();
-  private readonly deferredJoinTerminals = new BoundedReplayMap<
-    string,
-    ZLinkDeferredJoinAcceptedRoot
-  >(DEFERRED_JOIN_TERMINAL_CAPACITY);
+  //  Spot Actor membership sections 4-5: Join completion idempotency is
+  //  process-local. These maps end with the process; nothing is replayed.
+  private readonly activeDeferredJoinTerminals = new Map<string, Promise<void>>();
+  private readonly deferredJoinTerminals = new BoundedReplayMap<string, true>(
+    DEFERRED_JOIN_TERMINAL_CAPACITY
+  );
 
   constructor(private readonly options: ZLinkActorTransferRuntimeOptions) {}
 
-  beginDeferredActorHandoff(
-    actor: ZLinkActor,
-    state: ZLinkActorRuntimeState,
-    operationId: string
-  ): void {
+  beginDeferredActorHandoff(actor: ZLinkActor, state: ZLinkActorRuntimeState): void {
     const actorId = actor.context.actorId;
     this.options.actorHandoff.beginProvisional(
       actorId,
-      operationId,
       requireSourceObjectGeneration(actorId, state)
     );
   }
 
-  promoteDeferredActorHandoff(
-    actor: ZLinkActor,
-    _state: ZLinkActorRuntimeState,
-    operationId: string
-  ): void {
-    this.options.actorHandoff.promoteProvisional(actor.context.actorId, operationId);
+  promoteDeferredActorHandoff(actor: ZLinkActor, _state: ZLinkActorRuntimeState): void {
+    this.options.actorHandoff.promoteProvisional(actor.context.actorId);
   }
 
   async completeDeferredActorHandoff(
     actor: ZLinkActor,
     target: ZLinkSpotRouteTarget,
-    _targetActorRef: ActorRef,
-    operationId: string
+    _targetActorRef: ActorRef
   ): Promise<void> {
     const actorId = actor.context.actorId;
     if (!this.options.actorHandoff.isProvisional(actorId)) return;
@@ -275,7 +259,6 @@ export class ZLinkActorTransferRuntime {
     }
     const admitted = this.options.actorHandoff.admitDeferredPrefix(
       actorId,
-      operationId,
       (drain) => manager.admitRoutedActorPacketPrefix(target.spotId, actorId, drain),
       this.options.prepareApplicationJob
     );
@@ -284,110 +267,70 @@ export class ZLinkActorTransferRuntime {
 
   async cancelDeferredActorHandoff(
     actor: ZLinkActor,
-    _state: ZLinkActorRuntimeState,
-    operationId: string
+    state: ZLinkActorRuntimeState
   ): Promise<void> {
-    const admitted = this.admitDeferredSourcePrefix(actor, _state, operationId);
+    const admitted = this.admitDeferredSourcePrefix(actor, state);
     void this.observeHandoffReplay(admitted.terminal);
   }
 
-  async prepareDeferredJoinAccepted(
+  prepareDeferredJoinAccepted(
     actorId: string,
     operationId: ZLinkActorJoinOperationId,
     actorRef: ActorRef,
     rawReply: Uint8Array,
-    replyContentType?: string,
-    signal?: AbortSignal,
-    canonicalInventoryDigest?: string
-  ): Promise<ZLinkDeferredJoinAcceptedRoot> {
-    return await this.requireDeferredJoinJournal().prepare(
-      actorId,
-      operationId,
-      actorRef,
-      rawReply,
-      replyContentType,
-      signal,
-      canonicalInventoryDigest
-    );
+    replyContentType?: string
+  ): ZLinkDeferredJoinCompletion {
+    return createDeferredJoinCompletion(actorId, operationId, actorRef, rawReply, replyContentType);
   }
 
-  async isDeferredJoinAcceptedRootPublication(
-    reference: string,
-    checksumCrc32c: number,
-    expected: ZLinkDeferredJoinRootIdentity,
-    signal?: AbortSignal
-  ): Promise<boolean> {
-    const relocation = this.options.relocationStore();
-    return relocation === undefined
-      ? false
-      : await isDeferredJoinAcceptedRootPublication(
-          relocation,
-          reference,
-          checksumCrc32c,
-          expected,
-          signal
-        );
-  }
-
-  async discardDeferredJoinAccepted(
-    root: ZLinkDeferredJoinAcceptedRoot,
-    signal?: AbortSignal
-  ): Promise<void> {
-    await this.requireDeferredJoinJournal().discardPrepared(root, signal);
-  }
-
-  markDeferredJoinAcceptedCommitted(
-    root: ZLinkDeferredJoinAcceptedRoot,
-    actorRef: ActorRef,
-    signal?: AbortSignal
-  ): Promise<ZLinkDeferredJoinAcceptedRoot> {
-    return this.requireDeferredJoinJournal().markCommitted(root, actorRef, signal);
-  }
-
-  async commitAndDeliverDeferredJoinAccepted(
-    root: ZLinkDeferredJoinAcceptedRoot,
+  /**
+   * Runs the Accepted completion callback once in the target Actor mailbox.
+   * A repeated delivery of the same OperationId in this process observes the
+   * first terminal (completion idempotency only).
+   */
+  async deliverDeferredJoinAccepted(
+    completion: ZLinkDeferredJoinCompletion,
     actor: ZLinkActor,
     actorRef: ActorRef,
     submitMailbox: <T>(operation: () => Promise<T>) => Promise<T>,
     signal?: AbortSignal
-  ): Promise<ZLinkDeferredJoinAcceptedRoot> {
-    const terminalKey = deferredJoinTerminalKey(root);
-    const terminal = this.deferredJoinTerminals.get(terminalKey);
-    if (terminal !== undefined) {
+  ): Promise<void> {
+    const terminalKey = deferredJoinTerminalKey(completion);
+    if (this.deferredJoinTerminals.get(terminalKey) !== undefined) {
       this.deferredJoinTerminals.touch(terminalKey);
-      return terminal;
+      return;
     }
     const active = this.activeDeferredJoinTerminals.get(terminalKey);
     if (active !== undefined) return await waitForOperation(active, signal);
-    const completion = this.commitAndDeliverDeferredJoinAcceptedCore(
-      root,
+    const delivery = this.deliverDeferredJoinAcceptedCore(
+      completion,
       actor,
       actorRef,
       submitMailbox
     );
-    this.activeDeferredJoinTerminals.set(terminalKey, completion);
-    void completion.then(
-      (completed) => {
-        this.deferredJoinTerminals.remember(terminalKey, completed);
-        if (this.activeDeferredJoinTerminals.get(terminalKey) === completion) {
+    this.activeDeferredJoinTerminals.set(terminalKey, delivery);
+    void delivery.then(
+      () => {
+        this.deferredJoinTerminals.remember(terminalKey, true);
+        if (this.activeDeferredJoinTerminals.get(terminalKey) === delivery) {
           this.activeDeferredJoinTerminals.delete(terminalKey);
         }
       },
       () => {
-        if (this.activeDeferredJoinTerminals.get(terminalKey) === completion) {
+        if (this.activeDeferredJoinTerminals.get(terminalKey) === delivery) {
           this.activeDeferredJoinTerminals.delete(terminalKey);
         }
       }
     );
-    return await waitForOperation(completion, signal);
+    return await waitForOperation(delivery, signal);
   }
 
-  private async commitAndDeliverDeferredJoinAcceptedCore(
-    root: ZLinkDeferredJoinAcceptedRoot,
+  private async deliverDeferredJoinAcceptedCore(
+    completion: ZLinkDeferredJoinCompletion,
     actor: ZLinkActor,
     actorRef: ActorRef,
     submitMailbox: <T>(operation: () => Promise<T>) => Promise<T>
-  ): Promise<ZLinkDeferredJoinAcceptedRoot> {
+  ): Promise<void> {
     const targetActorRef = this.options
       .actorManager()
       ?.getState(actor.context.actorId)?.nativeActorRef;
@@ -395,47 +338,35 @@ export class ZLinkActorTransferRuntime {
       targetActorRef === undefined
         ? actorRef
         : toFrameworkActorRef(targetActorRef, actor.context.meshName);
-    let current =
-      root.cursor === 'prepared'
-        ? await this.requireDeferredJoinJournal().markCommitted(root, currentActorRef)
-        : root;
-    if (current.cursor === 'delivered') return current;
-    let lastError: unknown;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        current = await this.requireDeferredJoinJournal().deliver(
-          current,
-          actor,
-          currentActorRef,
-          submitMailbox
-        );
-        return current;
-      } catch (error) {
-        lastError = error;
-        if (attempt < 2) {
-          await new Promise<void>((resolve) => {
-            const timer = setTimeout(resolve, 10 << attempt);
-            timer.unref();
-          });
-          current =
-            (await this.requireDeferredJoinJournal().recover(currentActorRef.actorId)) ?? current;
-        }
-      }
+    if (
+      completion.actor.actorId !== currentActorRef.actorId ||
+      completion.actor.objectGeneration !== currentActorRef.objectGeneration
+    ) {
+      throw new Error(
+        'Deferred Join completion generation fence is stale ' +
+          `(completion ${completion.actor.actorId}/${completion.actor.objectGeneration}, ` +
+          `actor ${currentActorRef.actorId}/${currentActorRef.objectGeneration}).`
+      );
     }
-    throw lastError;
-  }
-
-  private requireDeferredJoinJournal(): ZLinkDeferredJoinAcceptedJournal {
-    const authority = this.options.authorityStore();
-    const relocation = this.options.relocationStore();
-    if (authority === undefined || relocation === undefined) {
-      throw new Error('Cross-node deferred Actor Join requires Location and Relocation Stores.');
-    }
-    return new ZLinkDeferredJoinAcceptedJournal(
-      authority,
-      relocation,
-      this.options.messageSerializers
-    );
+    await submitMailbox(async () => {
+      await actor.onJoinCompleted?.({
+        status: 'accepted',
+        operationId: completion.operationId,
+        actor: currentActorRef,
+        reply:
+          completion.rawReply.byteLength === 0
+            ? undefined
+            : completion.replyContentType === undefined
+              ? ZLinkMessage.fromEncoded(ZLinkEncodedPayload.from(completion.rawReply))
+              : wrapFrameworkPayloadMessage(
+                  RuntimeMessage.from(completion.rawReply),
+                  this.options.messageSerializers,
+                  completion.replyContentType,
+                  undefined,
+                  'reply'
+                )
+      });
+    });
   }
 
   private async prepareSourceActorLeave(
@@ -471,13 +402,10 @@ export class ZLinkActorTransferRuntime {
   private async beginSourceActorMove(
     actor: ZLinkActor,
     state: ZLinkActorRuntimeState,
-    deferredOperationId?: string
+    deferredJoin = false
   ): Promise<void> {
-    if (
-      deferredOperationId !== undefined &&
-      this.options.actorHandoff.isProvisional(actor.context.actorId)
-    ) {
-      this.promoteDeferredActorHandoff(actor, state, deferredOperationId);
+    if (deferredJoin && this.options.actorHandoff.isProvisional(actor.context.actorId)) {
+      this.promoteDeferredActorHandoff(actor, state);
     }
     state.beginMove();
     if (!this.options.actorHandoff.isActive(actor.context.actorId)) {
@@ -499,10 +427,10 @@ export class ZLinkActorTransferRuntime {
         });
       }
     } catch (error) {
-      if (deferredOperationId === undefined) {
+      if (!deferredJoin) {
         this.options.actorHandoff.cancel(actor.context.actorId);
       } else {
-        const admitted = this.admitDeferredSourcePrefix(actor, state, deferredOperationId);
+        const admitted = this.admitDeferredSourcePrefix(actor, state);
         void this.observeHandoffReplay(admitted.terminal);
       }
       state.endMove();
@@ -513,7 +441,7 @@ export class ZLinkActorTransferRuntime {
   private async cancelSourceActorMove(
     actor: ZLinkActor,
     state: ZLinkActorRuntimeState,
-    deferredOperationId?: string,
+    deferredJoin = false,
     replayStart: Promise<void> = Promise.resolve()
   ): Promise<void> {
     try {
@@ -522,16 +450,11 @@ export class ZLinkActorTransferRuntime {
       }
     } finally {
       try {
-        if (deferredOperationId === undefined) {
+        if (!deferredJoin) {
           const admitted = this.admitCanceledSourcePrefix(actor, state, replayStart);
           void this.observeHandoffReplay(admitted.terminal);
         } else {
-          const admitted = this.admitDeferredSourcePrefix(
-            actor,
-            state,
-            deferredOperationId,
-            replayStart
-          );
+          const admitted = this.admitDeferredSourcePrefix(actor, state, replayStart);
           void this.observeHandoffReplay(admitted.terminal);
         }
       } finally {
@@ -564,7 +487,6 @@ export class ZLinkActorTransferRuntime {
   private admitDeferredSourcePrefix(
     actor: ZLinkActor,
     state: ZLinkActorRuntimeState,
-    operationId: string,
     replayStart: Promise<void> = Promise.resolve()
   ): ZLinkActorHandoffPrefixAdmission {
     const queue = this.sourceHandoffPrefixQueue(actor, state);
@@ -574,7 +496,6 @@ export class ZLinkActorTransferRuntime {
     }
     return this.options.actorHandoff.admitDeferredPrefix(
       actor.context.actorId,
-      operationId,
       queue,
       this.options.prepareApplicationJob,
       replayStart
@@ -614,10 +535,10 @@ export class ZLinkActorTransferRuntime {
     state: ZLinkActorRuntimeState,
     signal?: AbortSignal,
     lifecycleAuthority: 'framework' | 'core' = 'framework',
-    deferredOperationId?: string,
+    deferredJoin = false,
     relocation?: ServiceWireOperationId
   ) {
-    await this.beginSourceActorMove(actor, state, deferredOperationId);
+    await this.beginSourceActorMove(actor, state, deferredJoin);
     const relocationMetric =
       state.meshName === undefined
         ? undefined
@@ -762,7 +683,7 @@ export class ZLinkActorTransferRuntime {
           this.coreSourceLeaves.delete(actor.context.actorId);
           const replayGate = createHandoffReplayGate();
           try {
-            await this.cancelSourceActorMove(actor, state, deferredOperationId, replayGate.start);
+            await this.cancelSourceActorMove(actor, state, deferredJoin, replayGate.start);
             await this.restoreSourceActor(actor, sourceSpotId);
             if (sealId !== undefined) {
               await this.observeBoundSessionSealAbort(actor, state);
@@ -776,7 +697,7 @@ export class ZLinkActorTransferRuntime {
       relocationMetric?.complete('failed');
       const replayGate = createHandoffReplayGate();
       try {
-        await this.cancelSourceActorMove(actor, state, deferredOperationId, replayGate.start);
+        await this.cancelSourceActorMove(actor, state, deferredJoin, replayGate.start);
         if (sourceLeaveStarted) await this.restoreSourceActor(actor, sourceSpotId);
         if (sealId !== undefined) {
           await this.observeBoundSessionSealAbort(actor, state);
@@ -810,6 +731,7 @@ export class ZLinkActorTransferRuntime {
       targetOwnerFence: ZLinkActorMessageFollowOwnerFence
     ): Promise<void>;
     rollback(): Promise<void>;
+    discard(reason: unknown): void;
   }> {
     relocationDebug('maintenance_session.begin', {
       actorId: actor.context.actorId,
@@ -865,6 +787,11 @@ export class ZLinkActorTransferRuntime {
             state.endMove();
             terminal = 'committed';
           }
+        },
+        discard: (reason) => {
+          if (terminal !== 'prepared') return;
+          terminal = 'rolledBack';
+          this.options.actorHandoff.failPending(actor.context.actorId, reason);
         },
         rollback: async () => {
           if (terminal !== 'prepared') return;
@@ -1885,10 +1812,10 @@ function relocationDebug(marker: string, detail: Record<string, unknown>): void 
   console.error('[zlink.runtime.relocation]', marker, detail);
 }
 
-function deferredJoinTerminalKey(root: ZLinkDeferredJoinAcceptedRoot): string {
+function deferredJoinTerminalKey(completion: ZLinkDeferredJoinCompletion): string {
   return (
-    `${root.actor.actorId}:${root.actor.objectGeneration.toString()}:` +
-    operationIdentityKey(root.operationId)
+    `${completion.actor.actorId}:${completion.actor.objectGeneration.toString()}:` +
+    operationIdentityKey(completion.operationId)
   );
 }
 

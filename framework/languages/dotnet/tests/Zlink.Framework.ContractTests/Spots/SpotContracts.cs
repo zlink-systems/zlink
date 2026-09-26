@@ -591,10 +591,8 @@ public sealed class SpotContracts
             return ValueTask.CompletedTask;
         }
 
-        public ValueTask<bool> CloseAsync(CancellationToken cancellationToken = default)
-        {
-            return ValueTask.FromResult(true);
-        }
+        public ValueTask<bool> CloseAsync(CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(true);
 
         public ValueTask<IZLinkTimer> AddTimer<THandler>(
             string name,

@@ -7,6 +7,7 @@ import {
   encodeStreamWireHeader
 } from '@zlink-systems/stream-wire';
 import { disconnectStreamPeer } from './node-socket-backend-adapter';
+import { translateBindingResultError } from './node-backend-adapter-support';
 import { ZLinkFrameworkException } from '../../../contracts';
 import { internalFrameworkWireReply } from '../../framework-errors-internal';
 import {
@@ -105,7 +106,6 @@ import { buildAdvertisedEndpoint } from '../../../contracts/Configuration/Endpoi
 import { ZLinkConfigurationException } from '../../../contracts/Configuration/ConfigurationException';
 import type {
   ZLinkBackendActorRef,
-  ZLinkBackendActorSessionSendFence,
   ZLinkBackendObjectPlacement,
   ZLinkBackendMeshNode
 } from '../contracts';
@@ -116,7 +116,7 @@ const MULTIPART_PACKET_NAME = SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME;
 const MULTIPART_CONTENT_TYPE = SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE;
 const FATAL_UTF8 = new TextDecoder('utf-8', { fatal: true });
 const MAX_DRAIN_RECORDS = 64;
-// Preserve the existing monitor/admission/liveness cadence. Only the binding
+// Preserve the existing route observation/admission/liveness cadence. Only the binding
 // readable handler admits receive work; this timer never probes the socket.
 const MESH_BACKEND_MAINTENANCE_INTERVAL_MS = 1;
 /**
@@ -186,6 +186,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     record: import('../../foundation/service-stateful-wire-codec').ServiceMessageFollowRecord
   ) => void;
   private dispatchErrors?: ZLinkDispatchErrorReporter;
+  private spotAdmissionProvider?: Parameters<ServiceStatefulRuntime['setSpotAdmissionProvider']>[0];
   private readonly peerDisconnectedHandlers = new Set<(endpoint: string) => void>();
   constructor(
     private readonly meshName: string,
@@ -239,6 +240,13 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   setDispatchErrorReporter(reporter: ZLinkDispatchErrorReporter): void {
     this.dispatchErrors = reporter;
     this.stateful?.setDispatchErrorReporter(reporter, this.meshName);
+  }
+
+  setSpotAdmissionProvider(
+    provider: Parameters<ServiceStatefulRuntime['setSpotAdmissionProvider']>[0]
+  ): void {
+    this.spotAdmissionProvider = provider;
+    this.stateful?.setSpotAdmissionProvider(provider);
   }
 
   setProtocolErrorHandler(
@@ -394,6 +402,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       descriptor.nodeRoutingId,
       descriptor.lifecycleGeneration
     );
+    if (this.spotAdmissionProvider !== undefined) {
+      this.stateful.setSpotAdmissionProvider(this.spotAdmissionProvider);
+    }
     if (this.dispatchErrors !== undefined) {
       this.stateful.setDispatchErrorReporter(this.dispatchErrors, this.meshName);
     }
@@ -1327,14 +1338,12 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     actor: ZLinkBackendActorRef,
     expectedBindingGeneration: bigint,
     parts: MessageLike | readonly MessageLike[],
-    _flags?: number,
-    actorFence?: ZLinkBackendActorSessionSendFence
+    _flags?: number
   ): Promise<SubmitResultValue> {
     return (await this.requireStateful().sendBoundSession(
       actor,
       expectedBindingGeneration,
-      encodeMultipart(parts),
-      actorFence
+      encodeMultipart(parts)
     )) as SubmitResultValue;
   }
 
@@ -1524,7 +1533,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     const id = { high: 1n, low };
     void promise.then(
       (result) => this.enqueueCompletion(id, operationKind, result),
-      (error) => this.enqueueCompletion(id, operationKind, genericOperationFailure(error))
+      (error) => this.enqueueCompletion(id, operationKind, requestFailureResult(error))
     );
     return id;
   }
@@ -1536,7 +1545,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     const id = { high: 2n, low: pending.id };
     void pending.promise.then(
       (result) => this.enqueueCompletion(id, operationKind, result),
-      (error) => this.enqueueCompletion(id, operationKind, statefulOperationFailure(error))
+      (error) => this.enqueueCompletion(id, operationKind, requestFailureResult(error))
     );
     return id;
   }
@@ -2430,38 +2439,62 @@ function readyDomain(domain: ServiceMailboxDomain): number {
 }
 
 /**
- * Classifies a generic node/channel request rejection into a completion
- * terminal. Spec 32-framework-error-model:91-92 — a reply that could not be
- * decoded (ServiceWireProtocolError from the reply parser) is a protocol
- * failure, not connection loss; only genuine transport rejections collapse to
- * NotConnected.
+ * The one classification of a failed node/channel/stateful request into its
+ * completion terminal. A binding REQUEST result is Core's decision and is kept
+ * as is; a submit failure retains its Core meaning at the request boundary.
+ * A reply that could not be decoded is a protocol
+ * failure (spec 32-framework-error-model:91-92). The failure code is a wire
+ * code, so a Core result carries 0.
  */
-export function genericOperationFailure(error: unknown): RawServiceRequestResult {
-  //  requestProtocolError(16): the schema terminal-failure-integrity rule
-  //  forbids a typed terminal (104) with failure none, so the synthesized
-  //  decode-failure pair is 104+16; genuine transport loss stays 109+0.
-  return error instanceof ServiceWireProtocolError
-    ? { terminalResult: RequestResult.ProtocolError, failureCode: 16 }
-    : { terminalResult: RequestResult.NotConnected, failureCode: 0 };
-}
-
-function statefulOperationFailure(error: unknown): RawServiceRequestResult {
-  if (error instanceof ZLinkFrameworkException) {
-    return internalFrameworkWireReply(error);
-  }
-  if (error instanceof OperationTimeoutError) {
-    return { terminalResult: RequestResult.TimedOut, failureCode: 0 };
-  }
-  if (isZLinkBackendResultError(error)) {
+export function requestFailureResult(error: unknown): RawServiceRequestResult {
+  const failure = translateBindingResultError(error);
+  if (isZLinkBackendResultError(failure)) {
     return {
-      terminalResult: error.result,
-      failureCode: error.nativeErrno ?? 0
+      terminalResult:
+        failure.operation === 'request' ? failure.result : submitFailureTerminal(failure.result),
+      failureCode: 0
     };
   }
-  if (error instanceof OperationCancelledError) {
+  //  requestProtocolError(16): the schema terminal-failure-integrity rule
+  //  forbids a typed terminal (104) with failure none.
+  if (failure instanceof ServiceWireProtocolError) {
+    return { terminalResult: RequestResult.ProtocolError, failureCode: 16 };
+  }
+  if (failure instanceof ZLinkFrameworkException) {
+    return internalFrameworkWireReply(failure);
+  }
+  if (failure instanceof OperationTimeoutError) {
+    return { terminalResult: RequestResult.TimedOut, failureCode: 0 };
+  }
+  if (failure instanceof OperationCancelledError) {
     return { terminalResult: RequestResult.NotConnected, failureCode: 0 };
   }
   return { terminalResult: RequestResult.InternalError, failureCode: 17 };
+}
+
+function submitFailureTerminal(result: number): number {
+  switch (result) {
+    case SubmitResult.Backpressured:
+      return RequestResult.Backpressured;
+    case SubmitResult.NotConnected:
+      return RequestResult.NotConnected;
+    case SubmitResult.NotFound:
+      return RequestResult.NotFound;
+    case SubmitResult.NotAdmitted:
+      return RequestResult.Rejected;
+    case SubmitResult.InvalidHandle:
+    case SubmitResult.InvalidArgument:
+    case SubmitResult.ThreadViolation:
+      return RequestResult.InvalidArgument;
+    case SubmitResult.InvalidState:
+      return RequestResult.InvalidState;
+    case SubmitResult.NotSupported:
+      return RequestResult.NotSupported;
+    case SubmitResult.Terminated:
+      return RequestResult.Terminated;
+    default:
+      return RequestResult.InternalError;
+  }
 }
 
 function encodeMultipart(parts: MessageLike | readonly MessageLike[]) {

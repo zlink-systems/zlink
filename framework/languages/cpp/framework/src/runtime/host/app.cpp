@@ -701,6 +701,11 @@ class public_framework_runtime_t final : public framework_runtime_t
         return *status;
     }
 
+    std::vector<http_listener_status_t> http_listener_statuses () const override
+    {
+        return _listeners->http_listeners ();
+    }
+
     std::unique_ptr<runtime_observation_t> observe (
       std::size_t capacity,
       std::function<void (const observed_status_t<framework_runtime_status_t> &)> observer) override
@@ -2130,8 +2135,6 @@ void app_t::_apply_zlink_framework ()
               try {
                   const auto route = actor_gateway_runtime.bound_session_route (actor);
                   if (!route || !route->session_rid || route->binding_generation == 0
-                      || route->authority_owner_generation == 0
-                      || route->owner_lease_generation == 0
                       || (expected_binding_generation != 0
                           && expected_binding_generation != route->binding_generation)) {
                       co_return result_t<void>::failure (framework_error_kind_t::not_configured,
@@ -2486,9 +2489,6 @@ void app_t::_apply_zlink_framework ()
                 return actor_gateway_runtime.prepare_session_relocation_target_route (
                   route, target_owner_lease_generation);
             },
-            [actor_gateway_runtime] (const runtime::protocol::bound_session_send_t &send) mutable {
-                return actor_gateway_runtime.confirm_session_remote_tenure (send);
-            },
             [actor_gateway_runtime,
              stream_runtime] (const runtime::protocol::bound_session_send_t &send) mutable
             -> std::optional<runtime::host::bound_session_operations_t::delivery_capability_t> {
@@ -2629,7 +2629,8 @@ void app_t::_apply_zlink_framework ()
     if (detail::has_inbound_channel (channel_snapshot)) {
         add_hosted_service (std::make_unique<runtime::channel_host_service_t> (
           _state->zlink.message_bus (), channel_snapshot, _state->handlers, _state->serializers,
-          _state->application_job_queue));
+          options.runtime_client_server_advertise_hosts (), _state->application_job_queue,
+          _state->listener_statuses));
     }
     if (!stream_snapshot.empty ()) {
         detail::configure_stream_dispatch_executor ();
@@ -2645,7 +2646,8 @@ void app_t::_apply_zlink_framework ()
     }
     if (!http_snapshot.endpoints.empty ()) {
         add_hosted_service (std::make_unique<runtime::http_host_service_t> (
-          http_snapshot, _state->health, options.handler_coroutine_workers ()));
+          http_snapshot, _state->health, options.handler_coroutine_workers (),
+          _state->listener_statuses));
     }
     detail::configure_handler_invocation_executor ();
     if (_state->framework_hosted_service_position) {
@@ -3260,6 +3262,10 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
       relocation_outcome_t::blocked, relocation_reason_t::relocation_failed};
     std::vector<std::string> readiness_meshes;
     std::map<std::string, std::vector<spot_id_t>> relocated_ready_spots;
+    /* 30 §13: units settled on both sides, or a source owner lease that
+     * expired before its Preserve fence, end the host in Error. */
+    std::size_t committed_units = 0;
+    bool authority_split = false;
 
     auto shutdown_requested = [&] {
         std::lock_guard lock (operation.mutex);
@@ -3289,6 +3295,8 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
         if (result.outcome == relocation_outcome_t::relocated) {
             state.runtime_state.store (framework_runtime_state_t::relocated,
                                        std::memory_order_release);
+        } else if (authority_split) {
+            state.runtime_state.store (framework_runtime_state_t::error, std::memory_order_release);
         } else if (!interrupted) {
             (void) publish_mesh_descriptor_state (state, framework_runtime_state_t::serving);
             state.runtime_state.store (framework_runtime_state_t::serving,
@@ -3464,12 +3472,17 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 }
 
                 const auto moved = co_await node->relocate_application_unit (
-                  std::move (sources), std::move (stable_types), *target, authorities);
+                  std::move (sources), std::move (stable_types), *target, authorities, deadline_at);
                 if (moved.terminal != runtime::stateful::relocation_terminal_t::completed) {
+                    authority_split =
+                      committed_units != 0
+                      || moved.reason
+                           == runtime::stateful::relocation_reason_t::owner_lease_expired;
                     terminal.reason = relocation_reason_t::relocation_failed;
                     complete (terminal);
                     co_return;
                 }
+                ++committed_units;
                 relocated_ready_spots[node->mesh_name ()].push_back (unit.spot_id);
             }
 
@@ -3529,13 +3542,18 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                     co_return;
                 }
 
-                const auto moved =
-                  co_await node->relocate_application_actor (actor, *target, *authority);
+                const auto moved = co_await node->relocate_application_actor (
+                  actor, *target, *authority, deadline_at);
                 if (moved.terminal != runtime::stateful::relocation_terminal_t::completed) {
+                    authority_split =
+                      committed_units != 0
+                      || moved.reason
+                           == runtime::stateful::relocation_reason_t::owner_lease_expired;
                     terminal.reason = relocation_reason_t::relocation_failed;
                     complete (terminal);
                     co_return;
                 }
+                ++committed_units;
             }
         }
         terminal.outcome = relocation_outcome_t::relocated;

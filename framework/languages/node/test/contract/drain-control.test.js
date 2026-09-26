@@ -145,12 +145,13 @@ test('stale or unknown mesh handles fail with a typed route error and do not cre
 test('RouteMesh snapshot projects typed population and activation capacity from the current descriptor', () => {
   const gate = new framework.ZLinkRuntimeAdmissionGate();
   const runtime = createRuntime(gate, {
+    localPlacementCounts: () => ({ activeActorCount: 7, activeSpotCount: 3 }),
     meshNodeDescriptor: () => ({
       objectRole: framework.ZLinkObjectRole.Server,
       placementWeight: 275,
       populationCapacity: {
-        actors: { active: 7, reserved: 2, limit: 100 },
-        spots: { active: 3, reserved: 1, limit: 20 },
+        actors: { active: 50, reserved: 2, limit: 100 },
+        spots: { active: 10, reserved: 1, limit: 20 },
         spotTypes: [{
           objectKind: 'user_spot',
           stableType: 'room',
@@ -172,6 +173,7 @@ test('RouteMesh snapshot projects typed population and activation capacity from 
   });
   runtime.markServing();
 
+  // Counts come from this MeshNode's activation records, never from the Store projection.
   const snapshot = runtime.snapshot('game');
   assert.equal(snapshot.meshName, 'game');
   assert.equal(snapshot.state, framework.ZLinkTopologyState.Ready);
@@ -196,12 +198,15 @@ test('RouteMesh observer reports a complete status after placement capacity chan
     applicationVersion: 1n,
     objectCapabilities: []
   };
+  let counts = { activeActorCount: 1, activeSpotCount: 1 };
   const runtime = createRuntime(gate, {
-    meshNodeDescriptor: () => descriptor
+    meshNodeDescriptor: () => descriptor,
+    localPlacementCounts: () => counts
   });
   runtime.markServing();
   const events = runtime.observe('game', 4)[Symbol.asyncIterator]();
 
+  counts = { activeActorCount: 2, activeSpotCount: 1 };
   descriptor = {
     ...descriptor,
     populationCapacity: {
@@ -410,7 +415,8 @@ test('RouteMesh placement is unavailable when all population capacity is exhaust
     }
   });
   const runtime = createRuntime(gate, {
-    meshNodeDescriptor: () => descriptor
+    meshNodeDescriptor: () => descriptor,
+    localPlacementCounts: () => ({ activeActorCount: 10, activeSpotCount: 4 })
   });
   runtime.markServing();
 
@@ -787,6 +793,7 @@ function createRuntime(gate, overrides = {}) {
       meshName === 'game' ? (overrides.meshNode ?? node) : undefined,
     meshNodeDescriptor: overrides.meshNodeDescriptor,
     isLocationStoreHealthy: overrides.isLocationStoreHealthy,
+    localPlacementCounts: overrides.localPlacementCounts,
     hostState: overrides.hostState,
     admission: gate,
     publishRetiring: overrides.publishRetiring ?? (async () => {}),

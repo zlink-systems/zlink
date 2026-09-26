@@ -27,6 +27,8 @@
     <ItemGroup>
         <Compile Include="../Shared/ZLinkCanonicalLocationKeyFormatter.cs"
                  Link="Internal/ZLinkCanonicalLocationKeyFormatter.cs"/>
+        <Compile Include="../Shared/ZLinkStoreRetention.cs"
+                 Link="Internal/ZLinkStoreRetention.cs"/>
         <Compile Include="../../../../runtime/protocol/generated/dotnet/ServiceWireConstants.g.cs"
                  Link="Runtime/Protocol/ServiceWireConstants.g.cs"/>
         <Compile Include="../../../../runtime/protocol/generated/dotnet/ServiceWirePilotCodec.g.cs"

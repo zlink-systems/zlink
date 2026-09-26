@@ -86,17 +86,12 @@ enum class peer_admission_result_t
     stale_descriptor
 };
 
-enum class service_connection_direction_t
-{
-    inbound,
-    outbound
-};
-
 struct admitted_peer_t
 {
     service_node_descriptor_t descriptor;
+    // The Core selected-route generation (Core ROUTER §10.1) this admission
+    // belongs to, as opaque bytes compared only for equality.
     std::vector<std::uint8_t> connection_id;
-    service_connection_direction_t direction = service_connection_direction_t::inbound;
     // Changes whenever this exact admitted connection is replaced.  Callers
     // use it only as an operation-local availability epoch; it is not a wire
     // generation or an ordering token.
@@ -120,10 +115,6 @@ class service_topology_registry_t
                                    std::vector<std::uint8_t> connection_id);
     peer_admission_result_t admit (service_node_descriptor_t descriptor,
                                    std::vector<std::uint8_t> connection_id,
-                                   service_connection_direction_t direction);
-    peer_admission_result_t admit (service_node_descriptor_t descriptor,
-                                   std::vector<std::uint8_t> connection_id,
-                                   service_connection_direction_t direction,
                                    const service_node_descriptor_t &expected_descriptor);
     bool disconnect (const std::vector<std::uint8_t> &node_routing_id,
                      const std::vector<std::uint8_t> &connection_id);
@@ -147,7 +138,6 @@ class service_topology_registry_t
                             const std::string &channel_name);
     peer_admission_result_t admit_impl (service_node_descriptor_t descriptor,
                                         std::vector<std::uint8_t> connection_id,
-                                        std::optional<service_connection_direction_t> direction,
                                         const service_node_descriptor_t *expected_descriptor);
 
     runtime::offload_executor_t _lane_executor;

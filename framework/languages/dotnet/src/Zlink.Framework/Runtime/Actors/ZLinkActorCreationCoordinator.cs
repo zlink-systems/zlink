@@ -80,7 +80,6 @@ internal sealed class ZLinkActorCreationCoordinator(
                         ActivateActorCoreAsync(
                                 state,
                                 actorId,
-                                actorType,
                                 factoryType,
                                 createRequest,
                                 CancellationToken.None,
@@ -126,7 +125,6 @@ internal sealed class ZLinkActorCreationCoordinator(
                     ActivateActorCoreAsync(
                             state,
                             actorId,
-                            actorType,
                             factoryType,
                             ZLinkMessage.Empty,
                             CancellationToken.None,
@@ -279,44 +277,45 @@ internal sealed class ZLinkActorCreationCoordinator(
         CancellationToken cancellationToken
     )
     {
-        var activationAdmission = getActivationAdmission?.Invoke(actorType);
-        activationAdmission?.Acquire($"ACTOR '{actorId}'");
+        // The relocation unit that owns this Restore holds its activation admission until its
+        // target commit (MeshNode §5.1); restoring the Actor itself takes none.
+        await using var scope = services.CreateAsyncScope();
+        EnsureNativeActorRef(
+            state,
+            actorId,
+            ZLinkMessage.Empty,
+            objectGeneration,
+            authorityOwnerGeneration
+        );
+        var context = ensureActorContext(state);
         try
         {
-            await using var scope = services.CreateAsyncScope();
-            EnsureNativeActorRef(
-                state,
-                actorId,
-                ZLinkMessage.Empty,
-                objectGeneration,
-                authorityOwnerGeneration
-            );
-            var context = ensureActorContext(state);
-            try
-            {
-                var actor = await CreateAndRestoreRelocatedActorAsync(
-                        scope.ServiceProvider,
-                        factoryType,
-                        context,
-                        relocation,
-                        relocationState,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-                bindActorContext(actor, state);
-                return actor;
-            }
-            catch (Exception activationFailure)
-            {
-                await DestroyStagedNativeActorAsync(state, activationFailure).ConfigureAwait(false);
-                throw;
-            }
+            var actor = await CreateAndRestoreRelocatedActorAsync(
+                    scope.ServiceProvider,
+                    factoryType,
+                    context,
+                    relocation,
+                    relocationState,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            bindActorContext(actor, state);
+            return actor;
         }
-        finally
+        catch (Exception activationFailure)
         {
-            activationAdmission?.Release();
+            await DestroyStagedNativeActorAsync(state, activationFailure).ConfigureAwait(false);
+            throw;
         }
     }
+
+    /// <summary>
+    /// Takes the Actor creation or restore admission on the Actor's MeshNode (MeshNode §5.1).
+    /// </summary>
+    private ZLinkActivationConcurrencyAdmission.Lease? AcquireActivationAdmission(
+        string actorType,
+        string actorId
+    ) => getActivationAdmission?.Invoke(actorType)?.Acquire($"ACTOR '{actorId}'");
 
     /// <summary>
     /// Creates the Actor instance from its factory and restores it. A
@@ -381,11 +380,48 @@ internal sealed class ZLinkActorCreationCoordinator(
         ulong? reservedAuthorityOwnerGeneration = null
     )
     {
+        // Actor creation holds one admission from receipt until Ready: claim, factory and
+        // Actor ref publication.
+        var admission = AcquireActivationAdmission(actorType, actorId);
+        try
+        {
+            return await CreateAdmittedActorCoreAsync(
+                    state,
+                    actorId,
+                    actorType,
+                    factoryType,
+                    createRequest,
+                    claimMode,
+                    cancellationToken,
+                    publishActorRef,
+                    reservedGeneration,
+                    reservedAuthorityOwnerGeneration
+                )
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            admission?.Release();
+        }
+    }
+
+    private async ValueTask<IZLinkActor> CreateAdmittedActorCoreAsync(
+        ZLinkActorRuntimeState state,
+        string actorId,
+        string actorType,
+        Type factoryType,
+        ZLinkMessage createRequest,
+        ZLinkActorClaimMode claimMode,
+        CancellationToken cancellationToken,
+        bool publishActorRef,
+        ulong? reservedGeneration,
+        ulong? reservedAuthorityOwnerGeneration
+    )
+    {
         if (Lifecycle is not { } lifecycle)
             return await ActivateActorCoreAsync(
                     state,
                     actorId,
-                    actorType,
                     factoryType,
                     createRequest,
                     cancellationToken,
@@ -413,7 +449,6 @@ internal sealed class ZLinkActorCreationCoordinator(
                     ActivateActorCoreAsync(
                         state,
                         actorId,
-                        actorType,
                         factoryType,
                         createRequest,
                         ct,
@@ -451,7 +486,6 @@ internal sealed class ZLinkActorCreationCoordinator(
     private async ValueTask<IZLinkActor> ActivateActorCoreAsync(
         ZLinkActorRuntimeState state,
         string actorId,
-        string actorType,
         Type factoryType,
         ZLinkMessage createRequest,
         CancellationToken cancellationToken,
@@ -459,48 +493,36 @@ internal sealed class ZLinkActorCreationCoordinator(
         ulong? reservedAuthorityOwnerGeneration = null
     )
     {
-        var activationAdmission = getActivationAdmission?.Invoke(actorType);
-        activationAdmission?.Acquire($"ACTOR '{actorId}'");
+        await using var scope = services.CreateAsyncScope();
+        EnsureNativeActorRef(
+            state,
+            actorId,
+            createRequest,
+            reservedGeneration,
+            reservedAuthorityOwnerGeneration
+        );
+        var context = ensureActorContext(state);
         try
         {
-            await using var scope = services.CreateAsyncScope();
-            EnsureNativeActorRef(
-                state,
-                actorId,
-                createRequest,
-                reservedGeneration,
-                reservedAuthorityOwnerGeneration
-            );
-            var context = ensureActorContext(state);
-            try
-            {
-                var factory = (IZLinkActorFactory)
-                    scope.ServiceProvider.GetRequiredService(factoryType);
-                var actor = await factory
-                    .CreateAsync(context, cancellationToken)
-                    .ConfigureAwait(false);
-                if (actor is null)
-                    throw new InvalidOperationException(
-                        $"Actor factory '{factoryType}' returned null."
-                    );
+            var factory = (IZLinkActorFactory)scope.ServiceProvider.GetRequiredService(factoryType);
+            var actor = await factory.CreateAsync(context, cancellationToken).ConfigureAwait(false);
+            if (actor is null)
+                throw new InvalidOperationException(
+                    $"Actor factory '{factoryType}' returned null."
+                );
 
-                if (!ReferenceEquals(actor.Context, context))
-                    throw new InvalidOperationException(
-                        $"Actor factory '{factoryType}' must return an Actor that exposes the provided context."
-                    );
+            if (!ReferenceEquals(actor.Context, context))
+                throw new InvalidOperationException(
+                    $"Actor factory '{factoryType}' must return an Actor that exposes the provided context."
+                );
 
-                bindActorContext(actor, state);
-                return actor;
-            }
-            catch (Exception activationFailure)
-            {
-                await DestroyStagedNativeActorAsync(state, activationFailure).ConfigureAwait(false);
-                throw;
-            }
+            bindActorContext(actor, state);
+            return actor;
         }
-        finally
+        catch (Exception activationFailure)
         {
-            activationAdmission?.Release();
+            await DestroyStagedNativeActorAsync(state, activationFailure).ConfigureAwait(false);
+            throw;
         }
     }
 

@@ -166,6 +166,9 @@ public sealed record ZLinkFrameworkRuntimeStatus(
 
 public interface IZLinkFrameworkRuntime
 {
+    /// <summary>Gets the advertised endpoint of a bound local listener.</summary>
+    ZLinkListenerStatus GetListenerStatus(ZLinkListenerKind kind, string name);
+
     /// <summary>Gets the latest immutable host lifecycle status.</summary>
     ZLinkFrameworkRuntimeStatus Status { get; }
 

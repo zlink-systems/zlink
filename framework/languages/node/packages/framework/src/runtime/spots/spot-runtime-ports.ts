@@ -10,7 +10,7 @@ import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-con
 import type {
   ZLinkRemoteActorPacketTarget,
   ZLinkRemoteBoundSessionTarget,
-  ZLinkDeferredJoinAcceptedRoot
+  ZLinkDeferredJoinCompletion
 } from '../actors';
 import type { ZLinkActorHandoffDispatch } from '../actors/actor-handoff';
 import type { ZLinkActorResponseOptions } from './spot-actor-packet-dispatch';
@@ -44,26 +44,15 @@ export interface ZLinkSpotActorTransferRuntime {
     operationId: ZLinkActorJoinOperationId,
     actorRef: ActorRef,
     rawReply: Uint8Array,
-    replyContentType?: string,
-    signal?: AbortSignal,
-    canonicalInventoryDigest?: string
-  ): Promise<ZLinkDeferredJoinAcceptedRoot>;
-  discardDeferredJoinAccepted(
-    root: ZLinkDeferredJoinAcceptedRoot,
-    signal?: AbortSignal
-  ): Promise<void>;
-  markDeferredJoinAcceptedCommitted(
-    root: ZLinkDeferredJoinAcceptedRoot,
-    actorRef: ActorRef,
-    signal?: AbortSignal
-  ): Promise<ZLinkDeferredJoinAcceptedRoot>;
-  commitAndDeliverDeferredJoinAccepted(
-    root: ZLinkDeferredJoinAcceptedRoot,
+    replyContentType?: string
+  ): ZLinkDeferredJoinCompletion;
+  deliverDeferredJoinAccepted(
+    completion: ZLinkDeferredJoinCompletion,
     actor: ZLinkActor,
     actorRef: ActorRef,
     submitMailbox: <T>(operation: () => Promise<T>) => Promise<T>,
     signal?: AbortSignal
-  ): Promise<ZLinkDeferredJoinAcceptedRoot>;
+  ): Promise<void>;
   getOrCreateRoutedActor(
     actorId: string,
     actorType: string,

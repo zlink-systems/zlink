@@ -63,22 +63,17 @@ public final class ZLinkServiceTopologyRegistry {
         local = descriptor;
     }
 
+    /**
+     * Admits {@code descriptor} on the connection that Core selected for its RID. The caller passes
+     * the selected route's identity; a different connection for the same RID is Core's replacement
+     * of the previous route (Core ROUTER §10.1), so this registry never chooses between pipes.
+     */
     public AdmissionResult admit(ZLinkServiceNodeDescriptor descriptor, String connectionId) {
-        return admit(
-                descriptor,
-                new Connection(
-                        connectionId,
-                        ZLinkServiceAdmissionGuard.ConnectionDirection.OUTBOUND,
-                        connectionId));
-    }
-
-    public AdmissionResult admit(ZLinkServiceNodeDescriptor descriptor, Connection connection) {
-        return inStateLane(() -> admitOnLane(descriptor, connection));
+        return inStateLane(() -> admitOnLane(descriptor, connectionId));
     }
 
     private AdmissionResult admitOnLane(
-            ZLinkServiceNodeDescriptor descriptor, Connection connection) {
-        String connectionId = connection == null ? null : connection.connectionId();
+            ZLinkServiceNodeDescriptor descriptor, String connectionId) {
         if (descriptor == null || connectionId == null || connectionId.isBlank()) {
             return AdmissionResult.INVALID_DESCRIPTOR;
         }
@@ -89,7 +84,7 @@ public final class ZLinkServiceTopologyRegistry {
             return AdmissionResult.INVALID_DESCRIPTOR;
         }
         Peer current = peers.get(descriptor.nodeRoutingId());
-        if (current != null && current.connection().connectionId().equals(connectionId)) {
+        if (current != null && current.connectionId().equals(connectionId)) {
             return admitDescriptorUpdate(current, descriptor);
         }
         if (current != null
@@ -106,23 +101,7 @@ public final class ZLinkServiceTopologyRegistry {
                                 && !current.descriptor().equals(descriptor))) {
             return AdmissionResult.STALE_DESCRIPTOR;
         }
-        if (current != null
-                && current.descriptor().lifecycleGeneration() == descriptor.lifecycleGeneration()) {
-            var duplicate =
-                    ZLinkServiceAdmissionGuard.selectConnection(
-                            local.nodeRoutingId(),
-                            descriptor.nodeRoutingId(),
-                            current.descriptor().lifecycleGeneration(),
-                            current.connection().direction(),
-                            current.connection().discriminator(),
-                            descriptor.lifecycleGeneration(),
-                            connection.direction(),
-                            connection.discriminator());
-            if (duplicate == ZLinkServiceAdmissionGuard.DuplicateConnectionDecision.KEEP_CURRENT) {
-                return AdmissionResult.DUPLICATE_REJECTED;
-            }
-        }
-        peers.put(descriptor.nodeRoutingId(), new Peer(descriptor, connection));
+        peers.put(descriptor.nodeRoutingId(), new Peer(descriptor, connectionId));
         readyConnections.remove(descriptor.nodeRoutingId());
         rebuildChannelPlansOnLane();
         return AdmissionResult.ADMITTED;
@@ -139,7 +118,7 @@ public final class ZLinkServiceTopologyRegistry {
         if (!immutableFieldsMatch(current.descriptor(), descriptor)) {
             return AdmissionResult.INVALID_DESCRIPTOR;
         }
-        peers.put(descriptor.nodeRoutingId(), new Peer(descriptor, current.connection()));
+        peers.put(descriptor.nodeRoutingId(), new Peer(descriptor, current.connectionId()));
         rebuildChannelPlansOnLane();
         return AdmissionResult.ADMITTED;
     }
@@ -176,7 +155,7 @@ public final class ZLinkServiceTopologyRegistry {
 
     private boolean disconnectOnLane(RoutingId nodeRoutingId, String connectionId) {
         Peer current = peers.get(nodeRoutingId);
-        if (current == null || !current.connection().connectionId().equals(connectionId)) {
+        if (current == null || !current.connectionId().equals(connectionId)) {
             return false;
         }
         peers.remove(nodeRoutingId);
@@ -482,28 +461,12 @@ public final class ZLinkServiceTopologyRegistry {
         return channelName;
     }
 
-    public record Peer(ZLinkServiceNodeDescriptor descriptor, Connection connection) {
+    /** An admitted peer and the identity of the Core-selected route it was admitted on. */
+    public record Peer(ZLinkServiceNodeDescriptor descriptor, String connectionId) {
         public Peer {
             Objects.requireNonNull(descriptor, "descriptor");
-            Objects.requireNonNull(connection, "connection");
-        }
-
-        public String connectionId() {
-            return connection.connectionId();
-        }
-    }
-
-    public record Connection(
-            String connectionId,
-            ZLinkServiceAdmissionGuard.ConnectionDirection direction,
-            String discriminator) {
-        public Connection {
-            Objects.requireNonNull(direction, "direction");
             if (connectionId == null || connectionId.isBlank()) {
                 throw new IllegalArgumentException("connectionId is required");
-            }
-            if (discriminator == null || discriminator.isBlank()) {
-                throw new IllegalArgumentException("connection discriminator is required");
             }
         }
     }
@@ -512,8 +475,7 @@ public final class ZLinkServiceTopologyRegistry {
         ADMITTED,
         MESH_MISMATCH,
         INVALID_DESCRIPTOR,
-        STALE_DESCRIPTOR,
-        DUPLICATE_REJECTED
+        STALE_DESCRIPTOR
     }
 
     private record WeightedPeer(Peer peer, int weight) {}

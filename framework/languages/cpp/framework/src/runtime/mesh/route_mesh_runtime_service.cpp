@@ -66,15 +66,12 @@ bool capacity_available (const capacity_usage_t &usage)
            || usage.active + usage.reserved < static_cast<std::uint64_t> (usage.limit);
 }
 
-bool placement_capacity_available (const mesh_node_descriptor_t &descriptor)
+bool placement_capacity_available (const mesh_node_descriptor_t &descriptor,
+                                   bool activation_headroom)
 {
     const bool object_slot_available = capacity_available (descriptor.capacity.actors)
                                        || capacity_available (descriptor.capacity.spots);
-    const bool activation_slot_available =
-      descriptor.activation_concurrency.limit == 0
-      || descriptor.activation_concurrency.active
-           < static_cast<std::uint64_t> (descriptor.activation_concurrency.limit);
-    return object_slot_available && activation_slot_available;
+    return object_slot_available && activation_headroom;
 }
 
 framework_exception_t invalid_runtime_call (std::string message)
@@ -683,19 +680,25 @@ build_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &st
     placement.placement_weight = descriptor.placement_weight;
     placement.capacity.actors.limit = hub->node->actor_limit ();
     placement.capacity.spots.limit = hub->node->spot_limit ();
-    placement.activation_concurrency.limit = hub->node->activation_concurrency_limit ();
+    placement.activation_concurrency.limit = hub->node->activation_admission ().limit ();
+    placement.activation_concurrency.active = hub->node->activation_admission ().active ();
     if (local_location != location_descriptors.end ())
         placement = *local_location;
+    // Runtime monitoring §5: report this MeshNode's local activation records.
+    placement.capacity.actors.active = hub->node->active_actor_count ();
+    placement.capacity.spots.active = hub->node->active_spot_count ();
+    const bool location_unavailable = state->location_store != nullptr && !location_is_healthy;
     const bool placement_available =
       placement.object_role == object_role_t::server && mapped_state == mesh_node_state_t::ready
-      && placement.placement_weight > 0 && placement_capacity_available (placement);
+      && !location_unavailable && placement.placement_weight > 0
+      && placement_capacity_available (placement,
+                                       hub->node->activation_admission ().has_headroom ());
 
     const bool required_peer_unavailable = std::any_of (
       peer_snapshots.begin (), peer_snapshots.end (), [] (const mesh_peer_snapshot_t &peer) {
           return peer.state == peer_state_t::connecting
                  || peer.state == peer_state_t::not_connected;
       });
-    const bool location_unavailable = state->location_store != nullptr && !location_is_healthy;
     const auto public_state = mapped_state == mesh_node_state_t::ready
                                   && (required_peer_unavailable || location_unavailable)
                                 ? mesh_node_state_t::degraded
@@ -726,6 +729,8 @@ build_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &st
                                                    ? mapped_state == mesh_node_state_t::stopping
                                                        ? topology_reason_t::draining
                                                        : topology_reason_t::runtime_not_ready
+                                                 : location_unavailable
+                                                   ? topology_reason_t::location_unavailable
                                                    : topology_reason_t::capacity_exceeded}},
       .sequence = state->next_sequence (descriptor.mesh_name),
       .observed_at = std::chrono::system_clock::now ()};

@@ -23,7 +23,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <deque>
 #include <memory>
 #include <map>
 #include <mutex>
@@ -40,7 +39,6 @@ namespace zlink
 class context_t;
 class poller_t;
 class router_socket_t;
-class socket_monitor_t;
 }
 
 namespace zlink::framework::runtime::mesh
@@ -72,50 +70,6 @@ struct raw_mesh_byte_vector_less_t
 {
     bool operator() (const std::vector<std::uint8_t> &left,
                      const std::vector<std::uint8_t> &right) const noexcept;
-};
-
-struct raw_mesh_connection_candidate_t
-{
-    std::vector<std::uint8_t> connection_id;
-    std::string remote_endpoint;
-    service_connection_direction_t direction = service_connection_direction_t::inbound;
-    std::uint64_t ready_sequence = 0;
-};
-
-class raw_mesh_connection_candidates_t
-{
-  public:
-    void ready (const std::vector<std::uint8_t> &node_routing_id,
-                std::vector<std::uint8_t> connection_id,
-                service_connection_direction_t direction,
-                std::string remote_endpoint = {});
-    std::optional<raw_mesh_connection_candidate_t>
-    for_handshake (const std::vector<std::uint8_t> &node_routing_id,
-                   service_connection_direction_t preferred_direction) const;
-    bool disconnect (const std::vector<std::uint8_t> &node_routing_id,
-                     const std::vector<std::uint8_t> &connection_id);
-    std::vector<std::vector<std::uint8_t>>
-    disconnect_all (const std::vector<std::uint8_t> &node_routing_id);
-    std::optional<std::vector<std::uint8_t>>
-    disconnect_by_connection_id (const std::vector<std::uint8_t> &connection_id,
-                                 std::string_view remote_endpoint = {});
-    std::vector<std::pair<std::vector<std::uint8_t>, std::vector<std::uint8_t>>>
-    disconnect_by_endpoint (std::string_view remote_endpoint);
-    std::size_t size (const std::vector<std::uint8_t> &node_routing_id) const;
-    std::size_t peer_count () const noexcept { return _candidates.size (); }
-    bool contains (const std::vector<std::uint8_t> &node_routing_id,
-                   const std::vector<std::uint8_t> &connection_id) const;
-    bool endpoint_in_use_by_other (std::string_view remote_endpoint,
-                                   const std::vector<std::uint8_t> &excluded_node_routing_id) const;
-
-  private:
-    std::map<std::vector<std::uint8_t>,
-             std::map<std::vector<std::uint8_t>,
-                      raw_mesh_connection_candidate_t,
-                      raw_mesh_byte_vector_less_t>,
-             raw_mesh_byte_vector_less_t>
-      _candidates;
-    std::uint64_t _next_ready_sequence = 1;
 };
 
 /* Outcome of an exact-identity-fenced relocationPrepare(40) round trip
@@ -232,15 +186,18 @@ class raw_mesh_node_owner_t
     task_t<zlink::submit_result_t>
     send_to_channel_result (const std::string &channel_name,
                             const protocol::application_payload_t &application_payload);
-    task_t<bool> send_to_spot (const std::vector<std::uint8_t> &target_routing_id,
-                               const std::string &source_spot_id,
-                               const protocol::spot_route_fence_t &target,
-                               const protocol::application_payload_t &application_payload);
+    task_t<bool>
+    send_to_spot (const std::vector<std::uint8_t> &target_routing_id,
+                  const std::string &source_spot_id,
+                  const protocol::spot_route_fence_t &target,
+                  const protocol::application_payload_t &application_payload,
+                  std::optional<protocol::wire_operation_id_t> operation = std::nullopt);
     task_t<zlink::submit_result_t>
     send_to_spot_result (const std::vector<std::uint8_t> &target_routing_id,
                          const std::string &source_spot_id,
                          const protocol::spot_route_fence_t &target,
-                         const protocol::application_payload_t &application_payload);
+                         const protocol::application_payload_t &application_payload,
+                         std::optional<protocol::wire_operation_id_t> operation = std::nullopt);
     task_t<bool>
     request_to_spot (const std::vector<std::uint8_t> &target_routing_id,
                      const std::string &source_spot_id,
@@ -256,14 +213,16 @@ class raw_mesh_node_owner_t
       const protocol::actor_route_fence_t &target,
       const protocol::application_payload_t &application_payload,
       std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source =
-        std::nullopt);
+        std::nullopt,
+      std::optional<protocol::wire_operation_id_t> operation = std::nullopt);
     task_t<zlink::submit_result_t> send_to_actor_result (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::optional<std::pair<std::string, std::uint64_t>> &source_actor,
       const protocol::actor_route_fence_t &target,
       const protocol::application_payload_t &application_payload,
       std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source =
-        std::nullopt);
+        std::nullopt,
+      std::optional<protocol::wire_operation_id_t> operation = std::nullopt);
     task_t<bool> request_to_actor (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::optional<std::pair<std::string, std::uint64_t>> &source_actor,
@@ -397,16 +356,15 @@ class raw_mesh_node_owner_t
                             bool accept_application_receive = true) noexcept;
     void signal_activity () noexcept;
     std::size_t last_pump_bytes () const;
-    task_t<std::size_t> drain_monitor_events (service_liveness_registry_t::clock_t::time_point now);
     task_t<service_liveness_tick_t>
     tick_liveness (service_liveness_registry_t::clock_t::time_point now);
+    // Polls this ROUTER through its ingress poller and applies the Core
+    // selected-route snapshot (see apply_route_snapshot). pump_one does the
+    // same whenever POLLROUTE is ready; returns the number of RIDs whose
+    // selected route changed.
+    std::size_t observe_routes ();
 
   private:
-    struct pending_admission_t
-    {
-        detail::backend::raw_received_t received;
-    };
-
     static std::string owner_key (const std::vector<std::uint8_t> &routing_id);
     static foundation::call_id_t operation_id (std::uint64_t lifecycle_generation,
                                                std::uint64_t correlation);
@@ -477,8 +435,12 @@ class raw_mesh_node_owner_t
                                 std::uint64_t lifecycle_generation,
                                 protocol::command command,
                                 peer_admission_result_t result);
-    void discard_pending_admissions (const std::vector<std::uint8_t> &node_routing_id);
-    void discard_pending_admissions_locked (const std::vector<std::uint8_t> &node_routing_id);
+    // The one route observer of this ROUTER (Core ROUTER §10.1): reads the
+    // selected-route snapshot, ends admission of every route that ended or
+    // was replaced and starts the handshake on every new route.
+    std::size_t apply_route_snapshot ();
+    bool route_current_locked (const std::vector<std::uint8_t> &node_routing_id,
+                               std::uint64_t route_generation) const;
     void
     end_peer_operations_if_disconnected_locked (const std::vector<std::uint8_t> &node_routing_id);
     bool reply_infrastructure (const service_mailbox_record_t &request,
@@ -497,7 +459,6 @@ class raw_mesh_node_owner_t
     std::unique_ptr<zlink::router_socket_t> _router;
     application_job_queue_t::receive_flow_registration_t _receive_flow_registration;
     std::unique_ptr<zlink::poller_t> _ingress_poller;
-    std::unique_ptr<zlink::socket_monitor_t> _monitor;
     std::shared_ptr<detail::backend::raw_route_port_t> _port;
     service_topology_registry_t _topology;
     service_liveness_registry_t _liveness;
@@ -514,12 +475,12 @@ class raw_mesh_node_owner_t
     std::array<std::atomic_uint64_t, 4> _inbound_drops{};
     opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObservableInstrument> _drop_metric;
     static void publish_drop_metrics (opentelemetry::metrics::ObserverResult result, void *state);
-    std::deque<pending_admission_t> _pending_admissions;
     std::atomic_size_t _last_pump_bytes{0};
     std::shared_ptr<foundation::operation_registry_t> _operations;
     std::map<std::vector<std::uint8_t>, service_node_descriptor_t, raw_mesh_byte_vector_less_t>
       _expected_peers;
-    raw_mesh_connection_candidates_t _connections;
+    // Last observed Core selected route per RID: RID -> route generation.
+    std::map<std::vector<std::uint8_t>, std::uint64_t, raw_mesh_byte_vector_less_t> _routes;
     std::set<std::string> _outbound_endpoints;
     std::uint64_t _next_reply_route_id = 1;
     std::uint64_t _next_operation_sequence = 1;

@@ -42,7 +42,6 @@ import { normalizeOptions } from './ZlinkStreamConnectorOptions';
 import {
   connectorError,
   throwIfAborted,
-  toStreamError,
   unwrapStreamError,
   subscription
 } from './ZlinkStreamSupport';
@@ -53,11 +52,7 @@ import { ZlinkStreamReceiveDispatcher } from './ZlinkStreamReceiveDispatcher';
 import { ZlinkStreamConnectorLifecycle } from './ZlinkStreamConnectorLifecycle';
 import { ZlinkStreamConnectorEvents } from './ZlinkStreamConnectorEvents';
 import { BrowserStreamTransportFactory } from './Transport/BrowserWebSocketConnection';
-import {
-  DefaultZlinkStreamActor,
-  ZlinkStreamActors,
-  zlinkStreamActorBinding
-} from './ZlinkStreamActors';
+import { DefaultZlinkStreamActor, ZlinkStreamActors } from './ZlinkStreamActors';
 
 export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
   static readonly heartbeatPingName = ZLINK_STREAM_HEARTBEAT_PING;
@@ -65,7 +60,9 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
 
   private readonly receivedMessages: ZlinkStreamReceivedMessages;
   private readonly lifecycle: ZlinkStreamConnectorLifecycle;
-  private readonly events = new ZlinkStreamConnectorEvents();
+  private readonly events = new ZlinkStreamConnectorEvents((callback, callbacks) =>
+    this.receivedMessages.enqueueCallback(callback, callbacks)
+  );
   private correlationCounter = 0n;
   private readonly pendingRequests = new ZlinkStreamPendingRequests();
   private readonly frameSender: ZlinkStreamFrameSender;
@@ -122,7 +119,7 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
   }
 
   get pendingDispatchCount(): number {
-    return this.pendingRequests.count;
+    return this.receivedMessages.pendingCallbacks;
   }
 
   get actors(): readonly ZlinkStreamActor[] {
@@ -210,7 +207,12 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
 
   request(payload: unknown, messageType?: Function): ZlinkStreamRequestCall {
     const encoded = this.encodePayload(payload, messageType);
-    return new ZlinkStreamRequestBuilder(this, this.resolveNameOrDefault(encoded), encoded);
+    return new ZlinkStreamRequestBuilder(
+      this,
+      this.resolveNameOrDefault(encoded),
+      encoded,
+      (callback) => this.receivedMessages.enqueueCallback(callback)
+    );
   }
 
   on<TPayload = ZlinkStreamEncodedPayload>(
@@ -262,6 +264,7 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
       this,
       this.resolveNameOrDefault(encoded),
       encoded,
+      (callback) => this.receivedMessages.enqueueCallback(callback),
       actor.slot,
       () => actor.ensureBound()
     );
@@ -276,17 +279,8 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     const encodedHandler = (
       message: ZlinkStreamMessage<ZlinkStreamEncodedPayload>,
       signal?: AbortSignal
-    ) => {
-      if (
-        (
-          message as ZlinkStreamMessage<ZlinkStreamEncodedPayload> & {
-            [zlinkStreamActorBinding]?: DefaultZlinkStreamActor;
-          }
-        )[zlinkStreamActorBinding] !== actor
-      ) {
-        return;
-      }
-      return handler(
+    ) =>
+      handler(
         {
           name: message.name,
           metadata: message.metadata,
@@ -298,8 +292,7 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
         },
         signal
       );
-    };
-    return this.receivedMessages.on(this.observedName(nameOrType), encodedHandler);
+    return this.receivedMessages.on(this.observedName(nameOrType), encodedHandler, actor);
   }
 
   waitFor<TPayload = ZlinkStreamEncodedPayload>(
@@ -460,7 +453,9 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     requestSeq: bigint | undefined,
     signal?: AbortSignal,
     correlationId?: string,
-    actorSlot?: number
+    actorSlot?: number,
+    expiry?: Promise<unknown>,
+    onAccepted?: () => void
   ): Promise<void> {
     await this.frameSender.send(
       this.lifecycle.connectionForSend(),
@@ -472,7 +467,9 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
       requestSeq,
       signal,
       correlationId,
-      actorSlot
+      actorSlot,
+      expiry,
+      onAccepted
     );
   }
 
@@ -506,37 +503,52 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
       }
     };
     let pending: ReturnType<ZlinkStreamPendingRequests['create']> | undefined;
+    let stopCancellation: (() => void) | undefined;
     try {
       throwIfAborted(signal);
       for (const handler of Array.from(this.requestSendingHandlers)) {
         try {
           handler(sendingContext);
         } catch (cause) {
-          queueMicrotask(() => {
-            void this.events.publishError(
-              toStreamError(
-                cause,
-                ZlinkStreamErrorCode.UserCallbackFailed,
-                'Request sending hook failed.'
-              ),
-              signal
-            );
-          });
+          this.events.publishError(
+            {
+              code: ZlinkStreamErrorCode.UserCallbackFailed,
+              message: 'Request sending hook failed.',
+              cause
+            },
+            signal
+          );
         }
       }
       pending = this.pendingRequests.create(name, timeoutMs);
-      await this.sendEncoded(
+      const accepted = pending;
+      const write = this.sendEncoded(
         ZlinkStreamMessageKind.Request,
         name,
         payload,
         requestMetadata,
         compress,
-        pending.requestSeq,
+        accepted.requestSeq,
         signal,
         this.nextCorrelationId(),
-        actorSlot
+        actorSlot,
+        accepted.promise,
+        accepted.startTimeout
       );
-      const reply = await pending.promise;
+      // Spec stream-connector 32 §5.2: a cancellation after the frame write
+      // started does not stop the write; the request ends with whichever comes
+      // first, its connector result or the cancellation.
+      const canceled = new Promise<never>((_, reject) => {
+        const onAbort = (): void =>
+          reject(connectorError(ZlinkStreamErrorCode.Disconnected, 'Operation canceled.'));
+        signal?.addEventListener('abort', onAbort, { once: true });
+        stopCancellation = () => signal?.removeEventListener('abort', onAbort);
+      });
+      const reply = await Promise.race([
+        write.then(() => accepted.promise),
+        accepted.promise,
+        canceled
+      ]);
       this.publishReplyReceived(
         {
           requestPacketName: name,
@@ -550,6 +562,9 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
       return reply.payload;
     } catch (error) {
       if (pending !== undefined) this.pendingRequests.cancel(pending.requestSeq);
+      // Spec stream-connector 32 §5.7: the reply received hook reports the
+      // result the connector decided, so a request the caller canceled skips it.
+      if (signal?.aborted === true) throw error;
       this.publishReplyReceived(
         {
           requestPacketName: name,
@@ -561,6 +576,8 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
         signal
       );
       throw error;
+    } finally {
+      stopCancellation?.();
     }
   }
 
@@ -569,22 +586,18 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     signal?: AbortSignal
   ): void {
     if (this.replyReceivedHandlers.size === 0) return;
-    this.receivedMessages.enqueueCallback(async () => {
-      for (const handler of Array.from(this.replyReceivedHandlers)) {
-        try {
-          await handler(context, signal);
-        } catch (cause) {
-          await this.events.publishError(
-            toStreamError(
-              cause,
-              ZlinkStreamErrorCode.UserCallbackFailed,
-              'Reply received hook failed.'
-            ),
+    this.receivedMessages.enqueueCallback(
+      () => {
+        for (const handler of Array.from(this.replyReceivedHandlers)) {
+          this.events.runUserCallback(
+            () => handler(context, signal),
+            'Reply received hook failed.',
             signal
           );
         }
-      }
-    });
+      },
+      () => this.replyReceivedHandlers.size
+    );
   }
 
   private resolveNameOrDefault(payload: ZlinkStreamEncodedPayload): string | undefined {

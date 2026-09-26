@@ -251,7 +251,8 @@ public sealed class FanoutSubscriptionTests
                 ZLinkApplicationJobQueueProfile.Balanced,
                 8,
                 1
-            )
+            ),
+            new ZLinkListenerRecords()
         );
         await using (state)
         await using (

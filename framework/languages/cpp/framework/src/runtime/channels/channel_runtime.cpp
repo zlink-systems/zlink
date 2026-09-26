@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -829,6 +830,14 @@ channel_runtime_t::server_peer_weight_override (const std::string &channel_name)
 channel_runtime_t channel_runtime_t::from (const message_bus_t &bus)
 {
     return channel_runtime_t (bus._state);
+}
+
+const std::string &client_server_bind_endpoint (const channel_capability_snapshot_t &server)
+{
+    if (server.bind_endpoints.size () != 1) {
+        throw std::invalid_argument ("ClientServer server requires one bind endpoint");
+    }
+    return server.bind_endpoints.front ();
 }
 
 } // namespace zlink::framework::detail
@@ -2107,7 +2116,16 @@ task_t<result_t<void>> route_client_t::submit_spot_id_send_erased (
         co_return result_t<void>::failure (framework_error_kind_t::not_configured,
                                            "in_mesh requires Instance Spot intent");
     }
-    auto address = co_await state->runtime->spot_resolver->resolve_spot_address ({}, target);
+    std::optional<runtime::spot_address_t> address;
+    try {
+        address = co_await state->runtime->spot_resolver->resolve_spot_address ({}, target);
+    }
+    catch (const framework_exception_t &error) {
+        // The resolver rejects a Closing authority (§9); Instance intent keeps
+        // the activation path, which decides that request's own result.
+        if (!intent.instance || error.kind () != framework_error_kind_t::rejected)
+            throw;
+    }
     if (!address && intent.instance) {
         detail::channel_runtime_state_t::instance_spot_send_t activate;
         activate = state->runtime->lane
@@ -2161,7 +2179,16 @@ task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_message_er
         throw framework_exception_t (framework_error_kind_t::not_configured,
                                      "in_mesh requires Instance Spot intent");
     }
-    auto address = co_await state->runtime->spot_resolver->resolve_spot_address ({}, target);
+    std::optional<runtime::spot_address_t> address;
+    try {
+        address = co_await state->runtime->spot_resolver->resolve_spot_address ({}, target);
+    }
+    catch (const framework_exception_t &error) {
+        // The resolver rejects a Closing authority (§9); Instance intent keeps
+        // the activation path, which decides that request's own result.
+        if (!intent.instance || error.kind () != framework_error_kind_t::rejected)
+            throw;
+    }
     if (!address && intent.instance) {
         detail::channel_runtime_state_t::instance_spot_request_t activate;
         activate = state->runtime->lane

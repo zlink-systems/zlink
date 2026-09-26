@@ -8,9 +8,9 @@ import systems.zlink.framework.actors.ZLinkActorCreateResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.*;
-import systems.zlink.framework.locations.ZLinkCapacityUsage;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
+import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeStatus;
@@ -57,6 +57,7 @@ public final class ZLinkActorCreationCoordinator
     private final ZLinkLocationRepository locations;
     private final ZLinkActorRuntime actors;
     private final ZLinkMessageSerializer serializer;
+    private final ZLinkActivationAdmission activationAdmission;
     private final ZLinkActorAuthorityPayloadCodec authorities =
             new ZLinkActorAuthorityPayloadCodec();
     private final ZLinkServiceM6AWireCodec payloads = new ZLinkServiceM6AWireCodec();
@@ -69,12 +70,15 @@ public final class ZLinkActorCreationCoordinator
             ZLinkInternalMeshNode node,
             ZLinkLocationRepository locations,
             ZLinkActorRuntime actors,
-            ZLinkMessageSerializer serializer) {
+            ZLinkMessageSerializer serializer,
+            ZLinkActivationAdmission activationAdmission) {
         this.meshName = Objects.requireNonNull(meshName, "meshName");
         this.node = Objects.requireNonNull(node, "node");
         this.locations = Objects.requireNonNull(locations, "locations");
         this.actors = Objects.requireNonNull(actors, "actors");
         this.serializer = Objects.requireNonNull(serializer, "serializer");
+        this.activationAdmission =
+                Objects.requireNonNull(activationAdmission, "activationAdmission");
     }
 
     @Override
@@ -313,10 +317,14 @@ public final class ZLinkActorCreationCoordinator
     @Override
     public CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse> create(
             ZLinkInternalMeshNode.ActorCreateRequest request) {
-        return serializeTarget(request.intent().actorId(), () -> executeTarget(request));
+        return serializeTarget(request.intent().actorId(), () -> admitTarget(request));
     }
 
-    private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse> executeTarget(
+    /**
+     * Holds this MeshNode's activation admission from the received create until its terminal
+     * (MeshNode §5.1).
+     */
+    private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse> admitTarget(
             ZLinkInternalMeshNode.ActorCreateRequest request) {
         ZLinkCreationOperationIdentity operation =
                 new ZLinkCreationOperationIdentity(
@@ -324,6 +332,14 @@ public final class ZLinkActorCreationCoordinator
                         request.sourceNodeGeneration(),
                         request.operationHigh(),
                         request.operationLow());
+        return activationAdmission.admit(
+                "Actor '" + request.intent().actorId() + "'",
+                () -> executeTarget(request, operation));
+    }
+
+    private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse> executeTarget(
+            ZLinkInternalMeshNode.ActorCreateRequest request,
+            ZLinkCreationOperationIdentity operation) {
         return locations
                 .readCreationTerminal(operation, OPEN)
                 .thenCompose(
@@ -884,11 +900,7 @@ public final class ZLinkActorCreationCoordinator
     static boolean hasCapacity(
             ZLinkMeshNodeDescriptor candidate, ZLinkObjectCapability capability) {
         return capability.objectKind() == ZLinkPlacementObjectKind.ACTOR
-                && hasRoom(candidate.capacity().actors());
-    }
-
-    private static boolean hasRoom(ZLinkCapacityUsage usage) {
-        return usage.limit() == 0 || (long) usage.active() + usage.reserved() < usage.limit();
+                && candidate.capacity().actors().hasRoomFor(1);
     }
 
     private static ZLinkMeshNodeDescriptorKey descriptorKey(ZLinkMeshNodeDescriptor descriptor) {

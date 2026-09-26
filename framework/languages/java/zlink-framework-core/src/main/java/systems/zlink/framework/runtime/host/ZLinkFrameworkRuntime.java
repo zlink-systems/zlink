@@ -57,6 +57,7 @@ import systems.zlink.framework.runtime.mesh.ZLinkMeshNodesRuntime;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.runtime.spots.SpotNodeRegistration;
 import systems.zlink.framework.runtime.spots.ZLinkSpotRuntime;
+import systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireRuntime.RelocationAuthorityErrorException;
 import systems.zlink.framework.runtime.streams.ZLinkStreamRuntime;
 import systems.zlink.framework.spots.ActorSpotHandleResolver;
 import systems.zlink.framework.spots.SpotHandleResolver;
@@ -176,27 +177,13 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                             status -> status.state() == ZLinkFrameworkRuntimeState.RELOCATED);
     private final ZLinkRouteMeshRuntimeView routeMeshRuntime = new ZLinkRouteMeshRuntimeView(this);
 
-    ZLinkFrameworkRuntime(
-            DefaultZLinkFrameworkOptions options,
-            ZLinkBackendAdapterProvider backendFactory,
-            ZLinkMessageSerializer serializer) {
-        this(options, backendFactory, serializer, ZLinkHandlerActivator.reflection());
-    }
-
-    ZLinkFrameworkRuntime(
-            DefaultZLinkFrameworkOptions options,
-            ZLinkBackendAdapterProvider backendFactory,
-            ZLinkMessageSerializer serializer,
-            ZLinkHandlerActivator handlerFactory) {
-        this(options, backendFactory, serializer, handlerFactory, null);
-    }
-
-    ZLinkFrameworkRuntime(
+    private ZLinkFrameworkRuntime(
             DefaultZLinkFrameworkOptions options,
             ZLinkBackendAdapterProvider backendFactory,
             ZLinkMessageSerializer serializer,
             ZLinkHandlerActivator handlerFactory,
-            ZLinkRuntimeEventDispatcher eventDispatcher) {
+            ZLinkRuntimeEventDispatcher eventDispatcher,
+            AtomicReference<ZLinkFrameworkRuntime> opened) {
         options.validate();
         options.registration().codecs().freeze();
         this.eventDispatcher = eventDispatcher;
@@ -227,6 +214,9 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                             .ZLinkRelocationAdapterRegistry.class,
                     relocationAdapters);
         }
+        //  From here on every resource the start opens is recorded in its field,
+        //  so start() can roll a failed start back through the close routine.
+        opened.set(this);
         ZLinkFrameworkLocationSubsystem locationSubsystem =
                 ZLinkFrameworkLocationSubsystem.create(this.registration, runtimeHandlers);
         if (this.registration.relocationStore() != null) {
@@ -250,36 +240,38 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             this.spotTransportAddressResolver = null;
             this.storeLocationResolvers = null;
         }
-        ZLinkFrameworkChannelSubsystem channelSubsystem =
-                ZLinkFrameworkChannelSubsystem.create(
-                        options,
-                        backendFactory,
-                        adapterOptions,
-                        serializer,
-                        runtimeHandlers,
-                        eventDispatcher);
-        this.backendContext = channelSubsystem.backendContext();
+        ZLinkChannelBackendAdapter channelBackend =
+                backendFactory.createChannelAdapter(adapterOptions);
+        this.backendContext = channelBackend.createContext();
         this.coreHwmContextActive.set(true);
-        this.channels = channelSubsystem.channels();
+        this.channels =
+                ZLinkFrameworkChannelSubsystem.create(
+                                options,
+                                channelBackend,
+                                this.backendContext,
+                                backendFactory,
+                                adapterOptions,
+                                serializer,
+                                runtimeHandlers,
+                                eventDispatcher)
+                        .channels();
         this.channels.setHostStateSupplier(runtimeState::get);
-        if (this.registration.meshNodes().isEmpty()) {
-            this.meshNodes = ZLinkMeshNodesRuntime.empty();
-        } else {
+        this.meshNodes = new ZLinkMeshNodesRuntime();
+        if (!this.registration.meshNodes().isEmpty()) {
             ZLinkMeshBackendAdapter meshAdapter = backendFactory.createMeshAdapter(adapterOptions);
-            this.meshNodes =
-                    ZLinkMeshNodesRuntime.start(
-                            this.registration.meshNodes(),
-                            meshAdapter,
-                            this.backendContext,
-                            mesh ->
-                                    new ZLinkMeshApplicationDispatcher(
-                                            mesh,
-                                            serializer,
-                                            this.registration,
-                                            handlerFactory,
-                                            this.meshDrains),
-                            true,
-                            this.applicationJobQueue);
+            this.meshNodes.start(
+                    this.registration.meshNodes(),
+                    meshAdapter,
+                    this.backendContext,
+                    mesh ->
+                            new ZLinkMeshApplicationDispatcher(
+                                    mesh,
+                                    serializer,
+                                    this.registration,
+                                    handlerFactory,
+                                    this.meshDrains),
+                    true,
+                    this.applicationJobQueue);
         }
         this.meshNodes
                 .nodesByName()
@@ -287,6 +279,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         (meshName, node) -> {
                             node.setPeerAdmissionSealGate(() -> this.meshDrains.isSealed(meshName));
                             this.channels.registerSpotRouterNode(meshName, node.spotNode());
+                            recordMeshListener(meshName, node);
                         });
         if (this.locationStores != null
                 && this.locationStores.unifiedStore() instanceof ZLinkLocationRepository store) {
@@ -317,10 +310,18 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         this.meshNodes.nodesByName(),
                         () -> {
                             if (this.objectDescriptors != null) {
-                                this.objectDescriptors
-                                        .publish(this.runtimeState.get())
-                                        .toCompletableFuture()
-                                        .join();
+                                try {
+                                    this.objectDescriptors
+                                            .publish(this.runtimeState.get())
+                                            .toCompletableFuture()
+                                            .join();
+                                } catch (CompletionException failure) {
+                                    Throwable cause = unwrapCompletionFailure(failure);
+                                    if (cause instanceof RuntimeException runtimeFailure) {
+                                        throw runtimeFailure;
+                                    }
+                                    throw failure;
+                                }
                             }
                         });
         runtimeHandlers.add(ZLinkRouteMeshRuntimeOptions.class, this.routeMeshRuntimeOptions);
@@ -408,6 +409,14 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         this.actors);
         this.streams = streamSubsystem.streams();
         if (this.streams != null) {
+            this.streams.start();
+            for (var streamNode : this.registration.streamNodes()) {
+                String endpoint = this.streams.boundListenerEndpoint(streamNode);
+                if (endpoint != null) {
+                    this.channels.recordListener(
+                            ZLinkListenerKind.STREAM, streamNode.name(), endpoint);
+                }
+            }
             this.meshNodes
                     .nodesByName()
                     .values()
@@ -519,6 +528,19 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         });
     }
 
+    /** Runs the shutdown routine over what a failed start opened; its failures stay attached. */
+    private void rollBackStartup(Throwable failure) {
+        try {
+            closeAsync().toCompletableFuture().join();
+        } catch (RuntimeException closeFailure) {
+            failure.addSuppressed(closeFailure);
+        }
+    }
+
+    private void recordMeshListener(String meshName, ZLinkInternalMeshNode node) {
+        channels.recordListener(ZLinkListenerKind.ROUTE_MESH, meshName, node.advertisedEndpoint());
+    }
+
     private void completeOwnerBoundStartup() {
         if (drainStarted.get()) {
             throw new IllegalStateException("Framework startup was interrupted by shutdown");
@@ -580,7 +602,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
 
     static ZLinkFrameworkRuntime start(
             DefaultZLinkFrameworkOptions options, ZLinkBackendAdapterProvider backendFactory) {
-        return new ZLinkFrameworkRuntime(options, backendFactory, serializerFor(options));
+        return start(options, backendFactory, ZLinkHandlerActivator.reflection(), null);
     }
 
     static ZLinkFrameworkRuntime start(
@@ -595,8 +617,25 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             ZLinkBackendAdapterProvider backendFactory,
             ZLinkHandlerActivator handlerFactory,
             ZLinkRuntimeEventDispatcher eventDispatcher) {
-        return new ZLinkFrameworkRuntime(
-                options, backendFactory, serializerFor(options), handlerFactory, eventDispatcher);
+        //  The constructor records itself here once it starts opening
+        //  resources; a failure after that point is rolled back through the
+        //  close routine, which releases what was opened.
+        AtomicReference<ZLinkFrameworkRuntime> opened = new AtomicReference<>();
+        try {
+            return new ZLinkFrameworkRuntime(
+                    options,
+                    backendFactory,
+                    serializerFor(options),
+                    handlerFactory,
+                    eventDispatcher,
+                    opened);
+        } catch (Throwable failure) {
+            ZLinkFrameworkRuntime partial = opened.get();
+            if (partial != null) {
+                partial.rollBackStartup(failure);
+            }
+            throw failure;
+        }
     }
 
     static ZLinkMessageSerializer serializerFor(DefaultZLinkFrameworkOptions options) {
@@ -665,42 +704,12 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     /**
-     * Returns the endpoint the current local listener provides to remote processes. The query only
-     * succeeds after the selected listener has completed its bind operation.
+     * Returns the endpoint the current local listener provides to remote processes. The query reads
+     * the listener's bound record once; a missing record is a configuration error.
      */
     public ZLinkListenerStatus listenerStatus(ZLinkListenerKind kind, String name) {
-        Objects.requireNonNull(kind, "kind");
-        if (name == null || name.isBlank()) {
-            throw new IllegalArgumentException("name is required");
-        }
-        String endpoint =
-                switch (kind) {
-                    case ROUTE_MESH -> {
-                        MeshNodeRegistration mesh =
-                                registration.meshNodes().stream()
-                                        .filter(value -> value.meshName().equals(name))
-                                        .findFirst()
-                                        .orElseThrow(
-                                                () ->
-                                                        new ZLinkConfigurationException(
-                                                                "RouteMesh is not configured: "
-                                                                        + name));
-                        ZLinkInternalMeshNode node = meshNodes.nodesByName().get(name);
-                        if (node == null) {
-                            throw new ZLinkConfigurationException(
-                                    "RouteMesh is not started: " + name);
-                        }
-                        String actual = node.status().localEndpoint();
-                        if (actual == null || actual.isBlank() || actual.endsWith(":0")) {
-                            throw new ZLinkConfigurationException(
-                                    "RouteMesh listener endpoint is not ready: " + name);
-                        }
-                        yield mesh.advertisedEndpoint(actual);
-                    }
-                    case CLIENT_SERVER, FANOUT -> channels.listenerEndpoint(kind, name);
-                    case STREAM -> streams.listenerEndpoint(name);
-                };
-        return new ZLinkListenerStatus(kind, name, endpoint, Instant.now());
+        return new ZLinkListenerStatus(
+                kind, name, channels.listenerEndpoint(kind, name), Instant.now());
     }
 
     public ZLinkSpotManager spotManager() {
@@ -726,10 +735,6 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
 
     ZLinkInternalMeshNode monitoringMeshNode(String meshName) {
         return meshNodes.nodesByName().get(meshName);
-    }
-
-    public Map<String, ZLinkInternalMeshNode> meshNodesForInternalMonitoring() {
-        return meshNodes.nodesByName();
     }
 
     public ZLinkLocationRuntimeQuery monitoringLocationRuntimeQuery() {
@@ -775,7 +780,10 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         if (descriptor.rid().equals(rid)) {
                             return systems.zlink.framework.runtime.internal.monitoring
                                     .ZLinkMeshNodeMonitoringProjection.fromDescriptor(descriptor)
-                                    .withActiveObjectCounts(activeActorCount(), activeSpotCount());
+                                    .withLocalActivationRecords(
+                                            activeActorCount(meshName),
+                                            activeSpotCount(meshName),
+                                            activationConcurrency(configured));
                         }
                     }
                     continuation = page.continuationToken();
@@ -787,15 +795,45 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         }
         return systems.zlink.framework.runtime.internal.monitoring.ZLinkMeshNodeMonitoringProjection
                 .fromRegistration(
-                        configured, node.status().descriptorRevision(), node.placementWeight());
+                        configured, node.status().descriptorRevision(), node.placementWeight())
+                .withLocalActivationRecords(
+                        activeActorCount(meshName),
+                        activeSpotCount(meshName),
+                        activationConcurrency(configured));
     }
 
-    public int activeActorCount() {
-        return actors == null ? 0 : actors.activeActorIds().size();
+    /**
+     * The MeshNode's activation admission record (MeshNode §5.1). Without a Spot runtime no
+     * activation can be admitted, so the record stays at zero.
+     */
+    private systems.zlink.framework.locations.ZLinkActivationConcurrency activationConcurrency(
+            MeshNodeRegistration configured) {
+        return spots == null
+                ? new systems.zlink.framework.locations.ZLinkActivationConcurrency(
+                        0, configured.activationConcurrency())
+                : spots.activationAdmission(configured.meshName()).snapshot();
     }
 
-    public int activeSpotCount() {
-        return spots == null ? 0 : spots.activeUserSpotCount() + spots.activeInstanceSpotCount();
+    systems.zlink.framework.locations.ZLinkActivationConcurrency activationConcurrency(
+            String meshName) {
+        return activationConcurrency(
+                registration.meshNodes().stream()
+                        .filter(candidate -> candidate.meshName().equals(meshName))
+                        .findFirst()
+                        .orElseThrow(
+                                () ->
+                                        new ZLinkConfigurationException(
+                                                "RouteMesh is not configured: " + meshName)));
+    }
+
+    /** Actors activated on the named MeshNode in this process (runtime monitoring §5). */
+    public int activeActorCount(String meshName) {
+        return actors == null ? 0 : actors.activeActorCount(meshName);
+    }
+
+    /** Spots activated on the named MeshNode in this process (runtime monitoring §5). */
+    public int activeSpotCount(String meshName) {
+        return spots == null ? 0 : spots.activeSpotCount(meshName);
     }
 
     public List<String> monitoringMeshNodeChannelNames(String meshName) {
@@ -1053,6 +1091,10 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                                 options.mode(),
                                                                 effectiveTargetVersion,
                                                                 failureReason);
+                                        //  Settled unit authority decides the host state
+                                        //  (spec 30 §13): every unit on the target is
+                                        //  Relocated, a split or an expired source lease is
+                                        //  Error, every unit on the source is Serving.
                                         completeRelocation(
                                                 candidate,
                                                 result,
@@ -1060,7 +1102,14 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                                 == ZLinkFrameworkRelocationOutcome
                                                                         .RELOCATED
                                                         ? ZLinkFrameworkRuntimeState.RELOCATED
-                                                        : ZLinkFrameworkRuntimeState.SERVING);
+                                                        : relocationCause
+                                                                                instanceof
+                                                                                RelocationAuthorityErrorException
+                                                                        && activeTermination.get()
+                                                                                == null
+                                                                ? ZLinkFrameworkRuntimeState.ERROR
+                                                                : ZLinkFrameworkRuntimeState
+                                                                        .SERVING);
                                     });
                         });
         return independentRelocationWaiter(completion);
@@ -2009,13 +2058,17 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         if (spots != null && !spotRuntimeStopped.get()) {
             spots.beginClose();
         }
-        channels.beginClose();
+        if (channels != null) {
+            channels.beginClose();
+        }
         ZLinkFrameworkShutdown shutdown = new ZLinkFrameworkShutdown();
         // Close completion admission after accepted runtime components have
         // finished their teardown, so graceful drain can still publish the
         // replies it already accepted.
         shutdown.defer("executor_close", this::closeHandlerExecutor);
-        shutdown.defer("context_close", this::closeBackendContext);
+        if (backendContext != null) {
+            shutdown.defer("context_close", this::closeBackendContext);
+        }
         shutdown.defer("route_mesh_close", routeMeshRuntime::close);
         if (authorityRouteRuntime != null) {
             shutdown.defer("authority_route_close", authorityRouteRuntime::close);
@@ -2023,7 +2076,9 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         if (storeLocationResolvers != null) {
             shutdown.defer("location_resolvers_close", storeLocationResolvers::close);
         }
-        shutdown.defer("mesh_nodes_close", meshNodes::close);
+        if (meshNodes != null) {
+            shutdown.defer("mesh_nodes_close", meshNodes::close);
+        }
         if (locationRuntime != null) {
             shutdown.defer("location_close", locationRuntime::close);
             shutdown.defer("location_lifecycle_close", locationLifecycle::close);
@@ -2042,7 +2097,9 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         return CompletableFuture.completedFuture(null);
                     });
         }
-        shutdown.defer("channel_close", channels::close);
+        if (channels != null) {
+            shutdown.defer("channel_close", channels::close);
+        }
         if (locationAutoConnectHost != null) {
             shutdown.deferStage("auto_connect_stop", locationAutoConnectHost::stop);
         }
@@ -2055,6 +2112,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         return shutdown.closeAsync()
                 .whenComplete(
                         (ignored, failure) -> {
+                            channels.clearListenerRecords();
                             if (!drainStarted.get() && failure == null) {
                                 drained.complete(new InternalDrained());
                             }

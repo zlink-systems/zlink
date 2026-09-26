@@ -29,6 +29,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
     private readonly Func<ZLinkHostCapacityStatus?> _capacitySnapshot;
     private readonly Func<bool> _safeToShutdownSnapshot;
     private readonly Action? _resetCapacityMetrics;
+    private readonly Func<ZLinkListenerKind, string, ZLinkListenerStatus> _listenerStatus;
     private readonly ILogger<ZLinkFrameworkMaintenanceRuntime>? _logger;
     private readonly ZLinkStateLane _lane = new();
     private readonly List<ZLinkObservationQueue<ZLinkFrameworkRuntimeStatus>> _observers = [];
@@ -55,6 +56,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
             ValueTask<ZLinkFrameworkRelocationReason?>
         > relocationPreflight,
         Func<CancellationToken, ValueTask<bool>> publishRelocating,
+        Func<ZLinkListenerKind, string, ZLinkListenerStatus> listenerStatus,
         long sourceApplicationVersion = 0,
         Func<bool>? acceptingWorkSnapshot = null,
         Func<ZLinkHostCapacityStatus?>? capacitySnapshot = null,
@@ -73,6 +75,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
         _capacitySnapshot = capacitySnapshot ?? (() => null);
         _safeToShutdownSnapshot = safeToShutdownSnapshot ?? (() => true);
         _resetCapacityMetrics = resetCapacityMetrics;
+        _listenerStatus = listenerStatus;
         _logger = logger;
         _metricRegistration = ZLinkRuntimeMetrics.RegisterHostState(() =>
             HostStateMetricValue(_hostLifecycle.State)
@@ -98,6 +101,9 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
             subscribeSafeToShutdownChanged(OnSafeToShutdownChanged);
         }
     }
+
+    public ZLinkListenerStatus GetListenerStatus(ZLinkListenerKind kind, string name) =>
+        _listenerStatus(kind, name);
 
     public ZLinkFrameworkRuntimeStatus Status
     {

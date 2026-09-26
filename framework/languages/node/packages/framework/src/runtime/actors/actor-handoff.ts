@@ -185,7 +185,12 @@ interface ActiveHandoff {
   readonly sourceEvidence: ReplySourceEvidence;
   readonly sourceOwner: ZLinkActorMessageFollowOwnerFence;
   phase: 'provisional' | 'releasing' | 'relocating';
-  readonly operationId?: string;
+  /**
+   * True for the handoff a deferred Join started. The handoff is keyed by
+   * its Actor; the public Join OperationId is a completion idempotency ID and
+   * never identifies the handoff (Spot Actor membership section 4).
+   */
+  readonly deferredJoin: boolean;
   replay?: ZLinkActorHandoffDispatch;
   connectionBoundSealed: boolean;
   readonly pending: PendingPacket[];
@@ -300,22 +305,17 @@ export class ZLinkActorHandoffCoordinator {
   }
 
   begin(actorId: string, oldGeneration: bigint): void {
-    this.startHandoff(actorId, oldGeneration, { phase: 'relocating' });
+    this.startHandoff(actorId, oldGeneration, 'relocating');
   }
 
-  beginProvisional(actorId: string, operationId: string, oldGeneration: bigint): void {
-    this.startHandoff(actorId, oldGeneration, { phase: 'provisional', operationId });
+  beginProvisional(actorId: string, oldGeneration: bigint): void {
+    this.startHandoff(actorId, oldGeneration, 'provisional');
   }
 
   private startHandoff(
     actorId: string,
     oldGeneration: bigint,
-    transition:
-      | { readonly phase: 'relocating' }
-      | {
-          readonly phase: 'provisional';
-          readonly operationId: string;
-        }
+    phase: 'relocating' | 'provisional'
   ): void {
     if (this.active.has(actorId)) {
       throw new Error(`Actor '${actorId}' already has an active packet handoff.`);
@@ -363,8 +363,8 @@ export class ZLinkActorHandoffCoordinator {
       oldNodeRidHex: sourceEvidence.nodeRidHex,
       sourceEvidence,
       sourceOwner,
-      phase: transition.phase,
-      ...(transition.phase === 'provisional' ? { operationId: transition.operationId } : {}),
+      phase,
+      deferredJoin: phase === 'provisional',
       connectionBoundSealed: false,
       pending: [],
       nextIndex: 0,
@@ -381,13 +381,10 @@ export class ZLinkActorHandoffCoordinator {
     return this.active.get(actorId)?.phase === 'provisional';
   }
 
-  promoteProvisional(actorId: string, operationId: string): void {
+  promoteProvisional(actorId: string): void {
     const handoff = this.active.get(actorId);
-    if (handoff === undefined) {
+    if (handoff?.phase !== 'provisional') {
       throw new Error(`Actor '${actorId}' does not have a provisional packet handoff.`);
-    }
-    if (handoff.phase !== 'provisional' || handoff.operationId !== operationId) {
-      throw new Error(`Actor '${actorId}' packet handoff belongs to another operation.`);
     }
     handoff.phase = 'relocating';
   }
@@ -403,14 +400,13 @@ export class ZLinkActorHandoffCoordinator {
 
   async releaseDeferred(
     actorId: string,
-    operationId: string,
     dispatch?: ZLinkActorHandoffDispatch,
     admission?: ZLinkActorHandoffReplayAdmission
   ): Promise<void> {
     const handoff = this.active.get(actorId);
     if (handoff === undefined) return;
-    if (handoff.operationId !== operationId) {
-      throw new Error(`Actor '${actorId}' packet handoff belongs to another operation.`);
+    if (!handoff.deferredJoin) {
+      throw new Error(`Actor '${actorId}' packet handoff was not started by a deferred Join.`);
     }
     await this.releaseHandoff(actorId, handoff, dispatch ?? handoff.replay, admission);
   }
@@ -434,15 +430,14 @@ export class ZLinkActorHandoffCoordinator {
    */
   admitDeferredPrefix(
     actorId: string,
-    operationId: string,
     queue: ZLinkActorHandoffPrefixQueue,
     preparation?: ZLinkActorHandoffReplayPreparation,
     start: Promise<void> = Promise.resolve()
   ): ZLinkActorHandoffPrefixAdmission {
     const handoff = this.active.get(actorId);
     if (handoff === undefined) return { terminal: Promise.resolve() };
-    if (handoff.operationId !== operationId) {
-      throw new Error(`Actor '${actorId}' packet handoff belongs to another operation.`);
+    if (!handoff.deferredJoin) {
+      throw new Error(`Actor '${actorId}' packet handoff was not started by a deferred Join.`);
     }
     return this.admitHandoffPrefix(actorId, handoff, queue, preparation, start);
   }
@@ -738,6 +733,19 @@ export class ZLinkActorHandoffCoordinator {
       this.removeReplyRoute(pending.packet.source.replyRouteId);
     }
     pending.reject?.(error);
+  }
+
+  /**
+   * Expired-owner terminal of a relocation (spec 28 §4.4): every pending
+   * record without a terminal fails once with `reason`. The handoff stays
+   * active, so the source never dispatches the Actor again.
+   */
+  failPending(actorId: string, reason: unknown): void {
+    const handoff = this.active.get(actorId);
+    if (handoff === undefined) return;
+    for (const pending of handoff.pending.splice(0)) this.failReleasedPending(pending, reason);
+    handoff.snapshotIndex = -1;
+    handoff.pendingBytes = 0;
   }
 
   cancel(actorId: string): void {

@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -22,6 +23,8 @@
 
 namespace zlink::framework::detail
 {
+
+class actor_join_lifecycle_reservation_t;
 
 enum class actor_move_phase_t
 {
@@ -54,6 +57,7 @@ struct pending_actor_admission_t
     std::uint64_t source_node_generation = 0;
     std::uint64_t source_owner_lease_generation = 0;
     std::optional<message_t> admission_reply;
+    std::shared_ptr<actor_join_lifecycle_reservation_t> lifecycle_reservation;
     std::vector<std::uint8_t> session_relocation_route;
     std::string session_relocation_actor_type;
     std::uint64_t session_relocation_target_owner_lease_generation = 0;
@@ -310,6 +314,10 @@ class actor_transfer_coordinator_t
                            const runtime::protocol::actor_route_fence_t &source_fence,
                            const runtime::protocol::actor_route_fence_t &target_fence);
 
+    // Decides whether a new Join attempt may start its admission. A newer
+    // attempt displaces an older one that has not reached commit authority;
+    // the displaced attempt releases its lifecycle position with it.
+    bool admit_attempt (const std::string &actor_key, const std::string &transfer_id);
     bool try_add_admission (std::string transfer_id, pending_actor_admission_t admission);
     std::optional<pending_actor_admission_t> admission (const std::string &transfer_id) const;
     // True iff transfer_id is still the move actor_key is tracking. A

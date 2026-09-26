@@ -212,7 +212,7 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
       discarded = true;
       this.state.endDeferredJoin();
       try {
-        await this.coordinator.abortDeferredJoin?.(this.actor, this.state, operationId);
+        await this.coordinator.abortDeferredJoin?.(this.actor, this.state);
       } finally {
         deadline.close();
         requestMessage.close();
@@ -228,7 +228,7 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
             // The provisional ingress fence is installed only after the
             // handler terminal. Target admission starts before reply encoding,
             // while completion and finalization remain in execute().
-            this.coordinator.beginDeferredJoin?.(this.actor, this.state, operationId);
+            this.coordinator.beginDeferredJoin?.(this.actor, this.state);
             pendingJoin = this.coordinator.joinSpot(
               this.actor,
               this.state,
@@ -268,7 +268,7 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
           } catch (error) {
             this.state.endDeferredJoin();
             await this.coordinator
-              .abortDeferredJoin?.(this.actor, this.state, operationId)
+              .abortDeferredJoin?.(this.actor, this.state)
               .catch(() => undefined);
             await notifyJoinFailure(this.actor, operationId, error, this.coordinator);
             return;
@@ -350,7 +350,7 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
       discarded = true;
       this.state.endDeferredJoin();
       try {
-        await this.coordinator.abortDeferredJoin?.(this.actor, this.state, operationId);
+        await this.coordinator.abortDeferredJoin?.(this.actor, this.state);
       } finally {
         deadline.close();
         requestMessage.close();
@@ -363,7 +363,7 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
           prepared = true;
           this.state.endDeferredJoin();
           try {
-            this.coordinator.beginDeferredJoin?.(this.actor, this.state, operationId);
+            this.coordinator.beginDeferredJoin?.(this.actor, this.state);
             pendingJoin = this.coordinator.joinEntrySpot(
               this.actor,
               this.state,
@@ -403,7 +403,7 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
           } catch (error) {
             this.state.endDeferredJoin();
             await this.coordinator
-              .abortDeferredJoin?.(this.actor, this.state, operationId)
+              .abortDeferredJoin?.(this.actor, this.state)
               .catch(() => undefined);
             await notifyJoinFailure(this.actor, operationId, error, this.coordinator);
             return;

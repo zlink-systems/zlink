@@ -207,48 +207,36 @@ internal sealed class ZLinkDeferredActorJoin(
         var barrier = Interlocked.Exchange(ref _barrier, null);
         try
         {
-            var remaining = timeout - Stopwatch.GetElapsedTime(_registeredTimestamp);
-            if (remaining <= TimeSpan.Zero)
-            {
-                await NotifySourceAsync(
-                        new ZLinkActorJoinCompletion.Failed(
-                            _operationId,
-                            ZLinkFrameworkErrorKind.DeadlineExceeded
-                        ),
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-                return;
-            }
-
+            ZLinkFrameworkErrorKind? failure = null;
             if (_targetCompletion is { } targetCompletion)
             {
                 try
                 {
-                    await targetCompletion
-                        .WaitAsync(remaining, cancellationToken)
-                        .ConfigureAwait(false);
-                    barrier = actorState.ReserveDeferredJoinBarrierAfterTarget();
+                    var remaining = RemainingTimeout();
+                    if (remaining <= TimeSpan.Zero)
+                        failure = ZLinkFrameworkErrorKind.DeadlineExceeded;
+                    else
+                        await targetCompletion
+                            .WaitAsync(remaining, cancellationToken)
+                            .ConfigureAwait(false);
                 }
                 catch (Exception exception)
                 {
-                    var kind = MapFailure(exception);
+                    failure = MapFailure(exception);
                     Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"deferred_join_target_wait_failed kind={kind} {exception}"
+                        $"deferred_join_target_wait_failed kind={failure} {exception}"
                     );
-                    await NotifySourceAsync(
-                            new ZLinkActorJoinCompletion.Failed(_operationId, kind),
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false);
-                    return;
                 }
+                barrier = actorState.ReserveDeferredJoinBarrierAfterTarget();
             }
 
             if (barrier is not { } reservedBarrier)
                 throw new InvalidOperationException(
                     "Deferred Actor Join barrier was not reserved."
                 );
+            // The deferred Join runs as its reserved barrier's turn, and every
+            // outcome, including an elapsed deadline, completes inside that
+            // turn. The reservation is therefore always claimed and released.
             using var turn = await reservedBarrier.ClaimAsync().ConfigureAwait(false);
             // Re-enter the flow captured at registration, but only while the
             // live level still allows capture (spec 27 §4): an On→Off flip
@@ -262,87 +250,94 @@ internal sealed class ZLinkDeferredActorJoin(
             );
             using var dispatch = actorState.EnterDeferredJoinExecution();
             ZLinkActorJoinCompletion? completion = null;
-            try
-            {
-                actorState.EnsureDeferredJoinIdentity(actor, objectGeneration);
-                var sourceNodeRid = actorState.NativeActorRef?.NodeRid;
-                var result = targetSpotId is { } spotId
-                    ? await runtime
-                        .JoinActorAsync(
-                            spotId,
-                            actor,
-                            request,
-                            _operationId,
-                            cancellationToken,
-                            _absoluteDeadline
-                        )
-                        .ConfigureAwait(false)
-                    : await runtime
-                        .JoinActorEntrySpotAsync(
-                            actor,
-                            request,
-                            _operationId,
-                            cancellationToken,
-                            _absoluteDeadline
-                        )
-                        .ConfigureAwait(false);
-
-                switch (result)
+            if (failure is null && RemainingTimeout() <= TimeSpan.Zero)
+                failure = ZLinkFrameworkErrorKind.DeadlineExceeded;
+            if (failure is { } failed)
+                completion = new ZLinkActorJoinCompletion.Failed(_operationId, failed);
+            else
+                try
                 {
-                    case ZLinkActorJoinResult.Accepted accepted
-                        when sourceNodeRid is null || accepted.Actor.NodeRid == sourceNodeRid.Value:
-                        completion = new ZLinkActorJoinCompletion.Accepted(
-                            _operationId,
-                            accepted.Actor,
-                            accepted.Reply.IsEmpty ? null : accepted.Reply
-                        );
-                        break;
-                    case ZLinkActorJoinResult.Accepted:
-                        // The target runtime delivers durable cross-node Accepted
-                        // after replay and source cleanup through the handoff
-                        // completion request.
-                        break;
-                    case ZLinkActorJoinResult.Rejected rejected:
-                        completion = new ZLinkActorJoinCompletion.Rejected(
-                            _operationId,
-                            rejected.Reply.IsEmpty ? null : rejected.Reply
-                        );
-                        break;
+                    actorState.EnsureDeferredJoinIdentity(actor, objectGeneration);
+                    var sourceNodeRid = actorState.NativeActorRef?.NodeRid;
+                    var result = targetSpotId is { } spotId
+                        ? await runtime
+                            .JoinActorAsync(
+                                spotId,
+                                actor,
+                                request,
+                                _operationId,
+                                cancellationToken,
+                                _absoluteDeadline
+                            )
+                            .ConfigureAwait(false)
+                        : await runtime
+                            .JoinActorEntrySpotAsync(
+                                actor,
+                                request,
+                                _operationId,
+                                cancellationToken,
+                                _absoluteDeadline
+                            )
+                            .ConfigureAwait(false);
+
+                    switch (result)
+                    {
+                        case ZLinkActorJoinResult.Accepted accepted
+                            when sourceNodeRid is null
+                                || accepted.Actor.NodeRid == sourceNodeRid.Value:
+                            completion = new ZLinkActorJoinCompletion.Accepted(
+                                _operationId,
+                                accepted.Actor,
+                                accepted.Reply.IsEmpty ? null : accepted.Reply
+                            );
+                            break;
+                        case ZLinkActorJoinResult.Accepted:
+                            // The target runtime delivers durable cross-node Accepted
+                            // after replay and source cleanup through the handoff
+                            // completion request.
+                            break;
+                        case ZLinkActorJoinResult.Rejected rejected:
+                            completion = new ZLinkActorJoinCompletion.Rejected(
+                                _operationId,
+                                rejected.Reply.IsEmpty ? null : rejected.Reply
+                            );
+                            break;
+                    }
                 }
-            }
-            catch (Exception exception)
-            {
-                var kind = MapFailure(exception);
-                //  The completion carries only a kind, so without this the
-                //  originating exception is lost and every throw site that maps
-                //  to the same kind looks identical from the outside. Trace it on
-                //  the message flow as well, so the cause carries the same flow
-                //  identity as the Join that produced it.
-                Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"deferred_join_failed kind={kind} {exception}"
-                );
-                if (runtime.Flow.CaptureEnabled)
-                    runtime.Flow.TraceDispatchError(
-                        new ZLinkDispatchFailure(
-                            ZLinkDispatchErrorSurface.SpotActor,
-                            ZLinkDispatchMessageKind.ActorRequest,
-                            ZLinkDispatchErrorReason.HandlerException,
-                            ZLinkDispatchErrorAction.ReplyError,
-                            "JoinSpot",
-                            ActorId: actor.Context.ActorId,
-                            Exception: exception,
-                            FlowId: _flow?.FlowId,
-                            FlowOrigin: _flow?.Origin
-                        )
+                catch (Exception exception)
+                {
+                    var kind = MapFailure(exception);
+                    //  The completion carries only a kind, so without this the
+                    //  originating exception is lost and every throw site that maps
+                    //  to the same kind looks identical from the outside. Trace it on
+                    //  the message flow as well, so the cause carries the same flow
+                    //  identity as the Join that produced it.
+                    Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
+                        $"deferred_join_failed kind={kind} {exception}"
                     );
-                completion = new ZLinkActorJoinCompletion.Failed(_operationId, kind);
-            }
+                    if (runtime.Flow.CaptureEnabled)
+                        runtime.Flow.TraceDispatchError(
+                            new ZLinkDispatchFailure(
+                                ZLinkDispatchErrorSurface.SpotActor,
+                                ZLinkDispatchMessageKind.ActorRequest,
+                                ZLinkDispatchErrorReason.HandlerException,
+                                ZLinkDispatchErrorAction.ReplyError,
+                                "JoinSpot",
+                                ActorId: actor.Context.ActorId,
+                                Exception: exception,
+                                FlowId: _flow?.FlowId,
+                                FlowOrigin: _flow?.Origin
+                            )
+                        );
+                    completion = new ZLinkActorJoinCompletion.Failed(_operationId, kind);
+                }
 
             if (completion is not null)
                 await NotifySourceAsync(completion, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
+            barrier?.Discard();
             var replay = actorState.Handoff.EndDeferredJoinCapture();
             actorState.ReleaseDeferredJoinBarrier();
             ReplayDeferredJoinFrames(replay);
@@ -373,6 +368,8 @@ internal sealed class ZLinkDeferredActorJoin(
         )
             batch.Dispose();
     }
+
+    private TimeSpan RemainingTimeout() => timeout - Stopwatch.GetElapsedTime(_registeredTimestamp);
 
     private ValueTask NotifySourceAsync(
         ZLinkActorJoinCompletion completion,

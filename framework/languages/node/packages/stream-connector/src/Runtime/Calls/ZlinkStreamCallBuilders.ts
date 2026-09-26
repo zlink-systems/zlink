@@ -140,6 +140,7 @@ export class ZlinkStreamRequestBuilder implements ZlinkStreamRequestCall {
     private readonly connector: ZlinkStreamConnectorSubmitter,
     name: string | undefined,
     private readonly payload: ZlinkStreamEncodedPayload,
+    private readonly enqueueCallback: (callback: () => void) => void,
     actorSlot?: number,
     validateActor?: () => void
   ) {
@@ -190,8 +191,11 @@ export class ZlinkStreamRequestBuilder implements ZlinkStreamRequestCall {
     );
     if (typeof signalOrCallback === 'function') {
       operation.then(
-        (value) => signalOrCallback({ isSuccess: true, value }),
-        (error) => signalOrCallback({ isSuccess: false, error: unwrapStreamError(error) })
+        (value) => this.enqueueCallback(() => signalOrCallback({ isSuccess: true, value })),
+        (error) =>
+          this.enqueueCallback(() =>
+            signalOrCallback({ isSuccess: false, error: unwrapStreamError(error) })
+          )
       );
       return;
     }

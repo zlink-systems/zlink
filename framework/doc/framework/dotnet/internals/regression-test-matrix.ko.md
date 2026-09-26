@@ -175,7 +175,7 @@ socket·context·message handle, process-wide diagnostics, static runtime state,
 | Entry Spot packet callback concurrency | `integration-single-process` | Entry Spot 일반 packet handler는 user Spot과 같은 등록 표면을 사용하지만 Entry Spot 전체 실행 줄에 직렬화되지 않는다 |
 | `OnInitializeAsync(...)` handler resolve | `integration-single-process` | spot마다 분리된 DI scope가 정상 동작한다 |
 | `OnClosingAsync(...)` 정상 close callback | `integration-single-process` | `CloseAsync(...)` 호출 시 spot 실행 문맥에서 한 번 호출된다 |
-| `IZLinkSpotContext.CloseAsync(...)` self close | `integration-single-process` | timer/handler 실행 중 현재 Spot 종료를 요청하면 현재 callback 이후 close가 진행되고 manager 조회에서 사라진다 |
+| `IZLinkSpotContext.CloseAsync(...)` self close | `integration-single-process` | timer/handler 실행 중 현재 Spot 종료를 요청하면 현재 callback 이후 close가 진행되고 종료 결과가 확정된 뒤 완료된다 |
 | `CloseAsync(...)` with joined actors | `integration-single-process` | join된 actor가 남은 user Spot은 close를 거부하고 `false`를 반환한다 |
 | local spot publish | `integration-single-process` | subscriber가 정상 수신한다 |
 | SPOT timer metadata | `integration-single-process` | timer handler가 callback 번호, 예정/시작 시각, 지연, skip metadata를 받는다 |

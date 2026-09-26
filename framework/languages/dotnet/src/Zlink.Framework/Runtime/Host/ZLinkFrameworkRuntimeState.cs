@@ -18,9 +18,11 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         IServiceProvider services,
         ZLinkRuntimeErrorSink errorSink,
         object executionOwner,
-        ZLinkApplicationJobQueueCapacity applicationJobQueueCapacity
+        ZLinkApplicationJobQueueCapacity applicationJobQueueCapacity,
+        ZLinkListenerRecords listenerRecords
     )
     {
+        ListenerRecords = listenerRecords;
         Context = context;
         Registration = registration;
         ErrorSink = errorSink;
@@ -105,6 +107,9 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
 
     public Dictionary<ZLinkStreamNodeName, ZLinkStreamNodeRuntime> StreamNodes { get; } = [];
 
+    // Bound listener records of this runtime generation, owned by the runtime.
+    internal ZLinkListenerRecords ListenerRecords { get; }
+
     internal void BuildRouteMeshChannelIndex()
     {
         RunStateAsync(BuildRouteMeshChannelIndexOnLane).GetAwaiter().GetResult();
@@ -184,34 +189,30 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
     {
         lock (_disposeGate)
         {
-            if (_disposeTask is not null)
-                return new ValueTask(_disposeTask);
-
-            var resources = RunStateAsync(() =>
-                    new RuntimeResources(
-                        SpotNodes.Values.ToArray(),
-                        StreamNodes.Values.ToArray(),
-                        ClientServerClientBundles.Values.ToArray(),
-                        ClientServerClientRuntimes.Values.ToArray(),
-                        ClientServerServerBundles.Values.ToArray(),
-                        PublisherBundles.Values.ToArray(),
-                        AutomaticFanoutSubscriberRuntimes.Values.ToArray(),
-                        SubscriberBundles.Values.ToArray(),
-                        ListenerTasks.ToArray()
-                    )
-                )
-                .GetAwaiter()
-                .GetResult();
-
-            return new ValueTask(_disposeTask = DisposeCoreAsync(resources, forceStopToken));
+            // The gate only elects the single disposal task; the lane snapshot is awaited
+            // inside that task, outside the gate.
+            return new ValueTask(_disposeTask ??= DisposeCoreAsync(forceStopToken));
         }
     }
 
-    private async Task DisposeCoreAsync(
-        RuntimeResources resources,
-        CancellationToken forceStopToken
-    )
+    private async Task DisposeCoreAsync(CancellationToken forceStopToken)
     {
+        // Leave the dispose gate before any disposal step runs.
+        await Task.Yield();
+        var resources = await RunStateAsync(() =>
+                new RuntimeResources(
+                    SpotNodes.Values.ToArray(),
+                    StreamNodes.Values.ToArray(),
+                    ClientServerClientBundles.Values.ToArray(),
+                    ClientServerClientRuntimes.Values.ToArray(),
+                    ClientServerServerBundles.Values.ToArray(),
+                    PublisherBundles.Values.ToArray(),
+                    AutomaticFanoutSubscriberRuntimes.Values.ToArray(),
+                    SubscriberBundles.Values.ToArray(),
+                    ListenerTasks.ToArray()
+                )
+            )
+            .ConfigureAwait(false);
         var failures = new List<Exception>();
         if (!forceStopToken.CanBeCanceled)
         {

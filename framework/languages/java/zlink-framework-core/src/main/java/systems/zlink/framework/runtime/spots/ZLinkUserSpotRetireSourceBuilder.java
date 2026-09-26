@@ -1013,16 +1013,14 @@ final class ZLinkUserSpotRetireSourceBuilder {
     }
 
     private static boolean hasCapacity(Inventory inventory, ZLinkMeshNodeDescriptor candidate) {
-        return hasCapacity(candidate.capacity().spots(), 1)
-                && hasCapacity(candidate.capacity().actors(), inventory.actors().size())
+        return candidate.capacity().spots().hasRoomFor(1)
+                && candidate.capacity().actors().hasRoomFor(inventory.actors().size())
                 && hasTypeCapacity(
                         candidate,
                         ZLinkPlacementObjectKind.USER_SPOT,
                         inventory.spot().stableType(),
                         1)
-                && (candidate.activationConcurrency().limit() == 0
-                        || candidate.activationConcurrency().active()
-                                < candidate.activationConcurrency().limit());
+                && candidate.activationConcurrency().hasRoom();
     }
 
     private static boolean hasCapability(ZLinkMeshNodeDescriptor target, Owned participant) {
@@ -1038,11 +1036,6 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                 == isSnapshot(participant.policy()));
     }
 
-    private static boolean hasCapacity(ZLinkCapacityUsage usage, int required) {
-        return usage.limit() == 0
-                || (long) usage.active() + usage.reserved() + required <= usage.limit();
-    }
-
     private static boolean hasTypeCapacity(
             ZLinkMeshNodeDescriptor target,
             ZLinkPlacementObjectKind kind,
@@ -1051,7 +1044,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
         return target.capacity().spotTypes().stream()
                 .filter(type -> type.objectKind() == kind && type.stableType().equals(stableType))
                 .findFirst()
-                .map(type -> hasCapacity(type.usage(), required))
+                .map(type -> type.usage().hasRoomFor(required))
                 .orElse(true);
     }
 
@@ -1548,6 +1541,64 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 return failed(failure);
             }
             return CompletableFuture.completedFuture(null);
+        }
+
+        /**
+         * Expired-owner terminal (spec 28 §4.4): the source owner lease expired before its {@code
+         * Preserve} fence, so the unit permanently stops dispatch and Store changes, keeps no
+         * Message Follow and discards its retained work.
+         */
+        CompletionStage<Void> discardAfterSourceLeaseExpiry(
+                ZLinkUserSpotRetireScheduler.SourceCleanup cleanup) {
+            ZLinkUserSpotRelocationBarrier.RelocationCommit retained;
+            try {
+                retained =
+                        inStateLane(
+                                () -> {
+                                    if (terminal || sourceCommitted) {
+                                        throw new IllegalStateException(
+                                                "source relocation is already settled");
+                                    }
+                                    sourceCommitted = true;
+                                    return relocationCommit;
+                                });
+            } catch (RuntimeException failure) {
+                return failed(failure);
+            }
+            Map<String, Long> targetOwnerGenerations = new LinkedHashMap<>();
+            for (var participant : stageRequest.participants()) {
+                targetOwnerGenerations.put(
+                        participant.authorityKey(),
+                        Math.addExact(participant.sourceAuthorityOwnerGeneration(), 1));
+            }
+            for (Owned actor : captured.inventory().actors()) {
+                actors.abortRelocationMessageFollow(
+                        actorRoute(actor, false, targetOwnerGenerations));
+            }
+            if (retained != null) {
+                retained.complete();
+            } else {
+                barrier.commit(seal);
+            }
+            CompletionStage<Void> unavailable = CompletableFuture.completedFuture(null);
+            if (relocationReplies != null) {
+                Owned spot = captured.inventory().spot();
+                unavailable =
+                        relocationReplies.failRelocationRepliesUnavailable(
+                                false, spot.id(), spot.snapshot().objectGeneration());
+                for (Owned actor : captured.inventory().actors()) {
+                    unavailable =
+                            unavailable.thenCompose(
+                                    ignored ->
+                                            relocationReplies.failRelocationRepliesUnavailable(
+                                                    true,
+                                                    actor.id(),
+                                                    actor.snapshot().objectGeneration()));
+                }
+            }
+            return unavailable
+                    .thenCompose(ignored -> cleanup.cleanup())
+                    .thenCompose(ignored -> discardInitialAfterCommit());
         }
 
         CompletionStage<Void> cleanupLocal(Instant deadline) {

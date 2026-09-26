@@ -57,7 +57,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkCanonicalRelocationReadySubmissionTest {
@@ -130,7 +129,6 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                                 12);
 
         AtomicInteger commits = new AtomicInteger();
-        AtomicLong firstCommitNanos = new AtomicLong();
         AtomicInteger aggregateAborts = new AtomicInteger();
         ZLinkLocationRepository observedLocations =
                 (ZLinkLocationRepository)
@@ -140,7 +138,6 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                                 (proxy, method, args) -> {
                                     if (method.getName().equals("commitAggregate")) {
                                         commits.incrementAndGet();
-                                        firstCommitNanos.compareAndSet(0L, System.nanoTime());
                                     } else if (method.getName().equals("abortAggregate")) {
                                         aggregateAborts.incrementAndGet();
                                     }
@@ -253,7 +250,11 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                 .publish(targetRid, request.fence(), Duration.ofMillis(100))
                 .toCompletableFuture()
                 .join();
-        assertEquals(0, attemptCount(overlappingSource, "sources"));
+        assertEquals(
+                1,
+                attemptCount(overlappingSource, "sources"),
+                "the CUTOVER submit terminal is not settlement: the source keeps its attempt"
+                        + " until authority settles (spec 28 §4.4)");
 
         AtomicReference<byte[]> failedPrepare = new AtomicReference<>();
         var failedSource =
@@ -308,7 +309,6 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
         AtomicBoolean rejectFirstCutover = new AtomicBoolean(true);
         AtomicReference<byte[]> rejectedCutover = new AtomicReference<>();
         AtomicReference<byte[]> submittedPrepare = new AtomicReference<>();
-        AtomicLong readySubmittedNanos = new AtomicLong();
         List<ScheduledExpiry> retainedExpiry = new CopyOnWriteArrayList<>();
         CountingEndpoint targetEndpoint = new CountingEndpoint();
         source.set(
@@ -320,8 +320,7 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                                 rejectFirstReady,
                                 rejectFirstCutover,
                                 rejectedCutover,
-                                submittedPrepare,
-                                readySubmittedNanos),
+                                submittedPrepare),
                         "mesh",
                         "source-entry",
                         observedLocations,
@@ -336,8 +335,7 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                                 rejectFirstReady,
                                 rejectFirstCutover,
                                 rejectedCutover,
-                                submittedPrepare,
-                                readySubmittedNanos),
+                                submittedPrepare),
                         "mesh",
                         "target-entry",
                         observedLocations,
@@ -353,7 +351,6 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                                 .stage(targetRid, request, Duration.ofMillis(100))
                                 .toCompletableFuture()
                                 .join());
-        Thread.sleep(1_100L);
         assertEquals(
                 0, commits.get(), "a failed READY submission must not arm the 1000 ms fallback");
         assertEquals(
@@ -365,10 +362,7 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                 aggregateAborts.get(),
                 "the exact immutable Prepare fence remains retryable rather than terminal ABORTED");
         assertEquals(1, attemptCount(target.get(), "targets"));
-        assertEquals(
-                1,
-                retainedExpiry.size(),
-                "READY failure must bind retry retention to Restore expiry");
+        assertEquals(0, retainedExpiry.size(), "the target must not choose a Restore expiry");
 
         var changed =
                 new ZLinkSpotRetireControl.StageRequest(
@@ -427,15 +421,34 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                                 .toCompletableFuture()
                                 .join());
         assertEquals(
-                0,
+                1,
                 attemptCount(source.get(), "sources"),
-                "a failed CUTOVER transport submission must release the source attempt");
-        Thread.sleep(1_100L);
+                "a failed CUTOVER submission is not a terminal: the source retains the attempt"
+                        + " and its boundary batch until authority settles (spec 28 §4.4)");
+        assertEquals(
+                0,
+                commits.get(),
+                "the cutover wait is a Warning only: no target CAS without a verified CUTOVER");
+        assertEquals(0, targetEndpoint.published.get(), "dispatch stays closed without CUTOVER");
+        assertEquals(1, attemptCount(target.get(), "targets"), "the target keeps its staging");
+        //  The source resends the retained CUTOVER; its verification alone enables the CAS.
+        target.get()
+                .apply(
+                        sourceRid,
+                        ServiceWireConstants.COMMAND_RELOCATION_CUTOVER,
+                        rejectedCutover.get())
+                .toCompletableFuture()
+                .join();
         assertEquals(1, commits.get());
         assertEquals(1, targetEndpoint.published.get());
-        assertTrue(
-                firstCommitNanos.get() - readySubmittedNanos.get() >= TimeUnit.SECONDS.toNanos(1),
-                "target fallback must not run before 1000 ms after READY submission");
+        assertEquals(
+                ZLinkRelocationTransitionClient.Settlement.TARGET_COMMITTED,
+                source.get()
+                        .settle(targetRid, request.fence(), Instant.now().plusSeconds(5))
+                        .toCompletableFuture()
+                        .get(2, TimeUnit.SECONDS),
+                "the source confirms the target commit from the Location Store");
+        assertEquals(0, attemptCount(source.get(), "sources"));
         assertEquals(
                 0,
                 attemptCount(target.get(), "targets"),
@@ -486,11 +499,9 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                 .apply(sourceRid, ServiceWireConstants.COMMAND_RELOCATION_CUTOVER, cutover)
                 .toCompletableFuture()
                 .join();
-        assertEquals(1, commits.get(), "late and duplicate CUTOVER after fallback mutate nothing");
+        assertEquals(1, commits.get(), "late and duplicate CUTOVER after commit mutate nothing");
         assertEquals(
-                2,
-                retainedExpiry.size(),
-                "the target tombstone must share the Restore expiry boundary");
+                1, retainedExpiry.size(), "only the terminal tombstone has a cleanup schedule");
         retainedExpiry.forEach(value -> value.cleanup().run());
         assertEquals(0, attemptCount(target.get(), "targets"));
         assertEquals(0, attemptCount(target.get(), "terminalTargets"));
@@ -591,8 +602,7 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
             AtomicBoolean rejectFirstReady,
             AtomicBoolean rejectFirstCutover,
             AtomicReference<byte[]> rejectedCutover,
-            AtomicReference<byte[]> submittedPrepare,
-            AtomicLong readySubmittedNanos) {
+            AtomicReference<byte[]> submittedPrepare) {
         MeshNodeStatus status =
                 new MeshNodeStatus(
                         MeshNodeState.READY,
@@ -640,20 +650,7 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                                                     new IllegalStateException(
                                                             "CUTOVER transport rejected"));
                                         }
-                                        CompletionStage<Void> delivered =
-                                                peer.get().apply(localRid, command, encoded);
-                                        if (command
-                                                == ServiceWireConstants.COMMAND_RELOCATION_READY) {
-                                            delivered =
-                                                    delivered.thenRun(
-                                                            () ->
-                                                                    readySubmittedNanos
-                                                                            .compareAndSet(
-                                                                                    0L,
-                                                                                    System
-                                                                                            .nanoTime()));
-                                        }
-                                        yield delivered;
+                                        yield peer.get().apply(localRid, command, encoded);
                                     }
                                     default ->
                                             throw new UnsupportedOperationException(

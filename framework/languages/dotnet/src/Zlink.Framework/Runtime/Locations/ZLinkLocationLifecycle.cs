@@ -34,6 +34,13 @@ internal sealed class ZLinkLocationLifecycle : IAsyncDisposable
 
     internal ZLinkLocationOwnerToken OwnerToken => _runtime.AdmissionOwnerToken;
 
+    /// <summary>
+    /// Location runtime §10: a relocation target keeps its staging and
+    /// resubmits its authority CAS only while this owner lease is still valid.
+    /// </summary>
+    internal bool IsOwnerLeaseValid(ZLinkLocationOwnerToken owner) =>
+        _runtime.IsOwnerAdmissionOpen && _runtime.AdmissionOwnerToken == owner;
+
     internal ValueTask<ZLinkLocationWriteResult> WriteMeshNodeDescriptorAsync(
         ZLinkMeshNodeDescriptor descriptor,
         ZLinkLocationWriteIntent intent,

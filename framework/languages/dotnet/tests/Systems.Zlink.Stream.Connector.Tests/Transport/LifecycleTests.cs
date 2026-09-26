@@ -216,20 +216,35 @@ public sealed partial class StreamConnectorTests
         var callbackCompleted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
+        var callbackStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseClose = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         _ = connector.OnConnectionStateChanged(
             async (change, _) =>
             {
                 if (change.Current != ZlinkStreamConnectionState.Connected)
                     return;
 
+                callbackStarted.TrySetResult();
+                await releaseClose.Task;
                 await connector.Close.Async();
                 callbackCompleted.TrySetResult();
             }
         );
 
-        await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
-            await connector.Connect.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5))
-        );
+        try
+        {
+            var connect = connector.Connect.Async().AsTask();
+            await callbackStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await connect.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            releaseClose.TrySetResult();
+        }
         await callbackCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await server.WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -519,7 +534,7 @@ public sealed partial class StreamConnectorTests
     }
 
     [Fact]
-    public async Task DetachedChildDisposeAfterCallbackReturnAwaitsWorkerTerminationAndSharedFinalizer()
+    public async Task DetachedChildDisposeDoesNotWaitForAsyncCallbackCompletion()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -572,6 +587,9 @@ public sealed partial class StreamConnectorTests
         var workerBlocked = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
+        var workerCompleted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var childDisposeCreated = new TaskCompletionSource<Task>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -594,6 +612,7 @@ public sealed partial class StreamConnectorTests
             {
                 workerBlocked.TrySetResult();
                 await releaseWorker.Task;
+                workerCompleted.TrySetResult();
             }
         );
 
@@ -604,12 +623,12 @@ public sealed partial class StreamConnectorTests
         await clientCloseObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var externalDispose = connector.DisposeAsync().AsTask();
 
-        Assert.False(childDispose.IsCompleted);
-        Assert.False(externalDispose.IsCompleted);
-
-        releaseWorker.TrySetResult();
         await childDispose.WaitAsync(TimeSpan.FromSeconds(5));
         await externalDispose.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(workerCompleted.Task.IsCompleted);
+
+        releaseWorker.TrySetResult();
+        await workerCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await server.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
@@ -720,7 +739,7 @@ public sealed partial class StreamConnectorTests
         var closeB = await closeBStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await serverB.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.False(closeB.IsCompleted);
+        await closeB.WaitAsync(TimeSpan.FromSeconds(5));
 
         releaseB.TrySetResult();
         await closeB.WaitAsync(TimeSpan.FromSeconds(5));
@@ -785,15 +804,12 @@ public sealed partial class StreamConnectorTests
         await server.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(ZlinkStreamConnectionState.Closed, connector.State);
-        Assert.False(disconnected.Task.IsCompleted);
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
-            await connector.Close.Async(canceled.Token)
-        );
+        var closed = await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(ZlinkStreamCloseReason.ClientClose, closed.CloseReason);
+        await connector.Close.Async(canceled.Token);
 
         releaseWorker.TrySetResult();
         await connector.Close.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
-        var closed = await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(ZlinkStreamCloseReason.ClientClose, closed.CloseReason);
     }
 
     [Fact]
@@ -1147,7 +1163,7 @@ public sealed partial class StreamConnectorTests
     }
 
     [Fact]
-    public async Task OneWayAsync_Waits_For_Bounded_Queue_Admission()
+    public async Task SendWaitsForAQueuePlaceWhenTheWriteQueueIsFull()
     {
         var connection = new BlockingWriteConnection();
         await using var connector = new ZlinkStreamConnector(
@@ -1161,16 +1177,18 @@ public sealed partial class StreamConnectorTests
         );
         await connector.Connect.Async();
 
-        await Submit(0);
+        var accepted = new List<Task> { Submit(0) };
         await connection.WriteStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         for (var index = 1; index <= 4096; index++)
-            await Submit(index);
+            accepted.Add(Submit(index));
 
         var pending = Submit(4097);
         Assert.False(pending.IsCompleted);
+        Assert.DoesNotContain(accepted, send => send.IsCompleted);
 
         connection.ReleaseWrite.TrySetResult();
         await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.WhenAll(accepted).WaitAsync(TimeSpan.FromSeconds(5));
 
         Task Submit(int value)
         {
@@ -1188,34 +1206,113 @@ public sealed partial class StreamConnectorTests
     }
 
     [Fact]
-    public async Task Dispose_Drains_Accepted_OneWay_Send_Before_Closing_Transport()
+    public async Task AcceptedSendIsNotWrittenToReplacementConnection()
     {
-        var connection = new OrderedDisposeConnection();
+        var first = new ReconnectWriteConnection();
+        var second = new RecordingWriteConnection();
+        var replacementConnected = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var connectCount = 0;
         var connector = new ZlinkStreamConnector(
             new ZlinkStreamConnectorOptions
             {
                 Endpoint = new Uri("tcp://127.0.0.1:1"),
                 Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
-                Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+                Reconnect = new ZlinkStreamReconnectOptions
+                {
+                    InitialDelay = TimeSpan.FromMilliseconds(1),
+                    MaxDelay = TimeSpan.FromMilliseconds(1),
+                    BackoffFactor = 1.0,
+                    MaxAttempts = 1,
+                },
             },
-            _ => ValueTask.FromResult<IZlinkStreamConnection>(connection)
+            _ =>
+            {
+                if (Interlocked.Increment(ref connectCount) == 1)
+                    return ValueTask.FromResult<IZlinkStreamConnection>(first);
+                replacementConnected.TrySetResult();
+                return ValueTask.FromResult<IZlinkStreamConnection>(second);
+            }
         );
         await connector.Connect.Async();
-
-        await connector
+        var inProgress = connector
             .Send(new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, new byte[] { 1 }))
-            .PacketName("dispose.drain")
-            .Async();
-        await connection.WriteStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            .PacketName("old.connection")
+            .Async()
+            .AsTask();
+        await first.WriteStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var queued = connector
+            .Send(new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, new byte[] { 2 }))
+            .PacketName("old.connection")
+            .Async()
+            .AsTask();
 
-        var dispose = connector.DisposeAsync().AsTask();
-        await Task.Yield();
-        Assert.False(connection.CloseStarted.Task.IsCompleted);
-        Assert.False(dispose.IsCompleted);
+        first.EndRead.TrySetResult();
+        await replacementConnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(
+            () => connector.State == ZlinkStreamConnectionState.Connected,
+            TimeSpan.FromSeconds(5)
+        );
+        first.ReleaseWrite.TrySetResult();
+        await connector.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
 
-        connection.ReleaseWrite.TrySetResult();
-        await dispose.WaitAsync(TimeSpan.FromSeconds(5));
-        await connection.CloseStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(0, second.WriteCount);
+        await inProgress.WaitAsync(TimeSpan.FromSeconds(5));
+        var error = await Assert.ThrowsAsync<ZlinkStreamException>(async () => await queued);
+        Assert.Equal(ZlinkStreamErrorCode.Disconnected, error.Error.Code);
+    }
+
+    [Fact]
+    public async Task OldConnectionWriteFailureDoesNotDisconnectReplacement()
+    {
+        var first = new ReconnectWriteConnection(failAfterRelease: true);
+        var second = new RecordingWriteConnection();
+        var replacementConnected = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var connectCount = 0;
+        await using var connector = new ZlinkStreamConnector(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri("tcp://127.0.0.1:1"),
+                Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
+                Reconnect = new ZlinkStreamReconnectOptions
+                {
+                    InitialDelay = TimeSpan.FromMilliseconds(1),
+                    MaxDelay = TimeSpan.FromMilliseconds(1),
+                    BackoffFactor = 1.0,
+                    MaxAttempts = 1,
+                },
+            },
+            _ =>
+            {
+                if (Interlocked.Increment(ref connectCount) == 1)
+                    return ValueTask.FromResult<IZlinkStreamConnection>(first);
+                replacementConnected.TrySetResult();
+                return ValueTask.FromResult<IZlinkStreamConnection>(second);
+            }
+        );
+        await connector.Connect.Async();
+        var payload = new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, new byte[] { 1 });
+        var inProgress = connector.Send(payload).PacketName("old.write").Async().AsTask();
+        await first.WriteStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var pending = connector.Request(payload).PacketName("old.request").Async().AsTask();
+
+        first.EndRead.TrySetResult();
+        await replacementConnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(
+            () => connector.State == ZlinkStreamConnectionState.Connected,
+            TimeSpan.FromSeconds(5)
+        );
+        first.ReleaseWrite.TrySetResult();
+        await Assert.ThrowsAsync<ZlinkStreamException>(async () => await pending);
+        var writeFailure = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
+            await inProgress
+        );
+        Assert.Equal(ZlinkStreamErrorCode.Disconnected, writeFailure.Error.Code);
+
+        Assert.Equal(ZlinkStreamConnectionState.Connected, connector.State);
     }
 
     [Fact]
@@ -1225,8 +1322,7 @@ public sealed partial class StreamConnectorTests
         var taskRunner = new ZlinkStreamTaskRunner(shutdown.Token);
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
-            ZlinkStreamDispatchMode.Immediate,
-            32
+            ZlinkStreamDispatchMode.Immediate
         );
         var firstEntered = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -1235,10 +1331,11 @@ public sealed partial class StreamConnectorTests
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         var order = new List<byte>();
+        var connection = new RecordingCloseConnection();
         var queue = new ZlinkStreamOneWaySubmitQueue(
             taskRunner,
-            callbacks,
-            async (frame, _) =>
+            () => connection,
+            async (_, frame, _) =>
             {
                 var value = frame.PayloadBytes.Span[0];
                 lock (order)
@@ -1250,7 +1347,7 @@ public sealed partial class StreamConnectorTests
             }
         );
 
-        await queue.SubmitAsync(
+        _ = queue.SendAsync(
             new ZlinkStreamOutboundFrame(ReadOnlyMemory<byte>.Empty, new byte[] { 1 }),
             CancellationToken.None
         );
@@ -1273,6 +1370,185 @@ public sealed partial class StreamConnectorTests
     }
 
     [Fact]
+    public async Task RequestFrameSubmissionFailsWhenTheOutboundQueueIsFull()
+    {
+        using var shutdown = new CancellationTokenSource();
+        var taskRunner = new ZlinkStreamTaskRunner(shutdown.Token);
+        var callbacks = new ZlinkStreamConnectorCallbacks(
+            taskRunner,
+            ZlinkStreamDispatchMode.Immediate
+        );
+        var firstEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseFirst = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var writes = new List<byte>();
+        var connection = new RecordingCloseConnection();
+        var queue = new ZlinkStreamOneWaySubmitQueue(
+            taskRunner,
+            () => connection,
+            async (_, frame, _) =>
+            {
+                var value = frame.PayloadBytes.Span[0];
+                writes.Add(value);
+                if (value == 0)
+                {
+                    firstEntered.TrySetResult();
+                    await releaseFirst.Task;
+                }
+            }
+        );
+        var frame = new ZlinkStreamOutboundFrame(ReadOnlyMemory<byte>.Empty, new byte[] { 1 });
+
+        try
+        {
+            _ = queue.SendAsync(
+                new ZlinkStreamOutboundFrame(ReadOnlyMemory<byte>.Empty, new byte[] { 0 }),
+                CancellationToken.None
+            );
+            await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            for (var index = 0; index < 4096; index++)
+                _ = queue.SendAsync(frame, CancellationToken.None);
+
+            var error = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
+                await queue
+                    .SubmitRequestAsync(
+                        new ZlinkStreamOutboundFrame(ReadOnlyMemory<byte>.Empty, new byte[] { 2 }),
+                        CancellationToken.None,
+                        () => { }
+                    )
+                    .AsTask()
+            );
+            Assert.Equal(ZlinkStreamErrorCode.SendFailed, error.Error.Code);
+            releaseFirst.TrySetResult();
+            queue.Complete();
+            await queue.WaitForCompletionAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(4097, writes.Count);
+            Assert.Equal((byte)0, writes[0]);
+            Assert.Equal((byte)1, writes[^1]);
+        }
+        finally
+        {
+            releaseFirst.TrySetResult();
+            queue.Complete();
+            await queue.WaitForCompletionAsync();
+            shutdown.Cancel();
+            await taskRunner.StopAndDrainAsync();
+        }
+    }
+
+    [Fact]
+    public async Task RequestFrameSubmissionFailureKeepsConnectionUsable()
+    {
+        var connection = new BlockingWriteConnection();
+        await using var connector = new ZlinkStreamConnector(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri("tcp://127.0.0.1:1"),
+                Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
+                Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+            },
+            _ => ValueTask.FromResult<IZlinkStreamConnection>(connection)
+        );
+        await connector.Connect.Async();
+        var payload = new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, new byte[] { 1 });
+        var fillers = new List<Task>
+        {
+            connector.Send(payload).PacketName("queue.filler").Async().AsTask(),
+        };
+        await connection.WriteStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        for (var index = 0; index < 4096; index++)
+            fillers.Add(connector.Send(payload).PacketName("queue.filler").Async().AsTask());
+
+        var error = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
+            await connector
+                .Request(payload)
+                .PacketName("queued.request")
+                .Timeout(TimeSpan.FromMilliseconds(100))
+                .Async()
+        );
+        Assert.Equal(ZlinkStreamErrorCode.SendFailed, error.Error.Code);
+        Assert.Equal(ZlinkStreamConnectionState.Connected, connector.State);
+
+        connection.ReleaseWrite.TrySetResult();
+        await Task.WhenAll(fillers).WaitAsync(TimeSpan.FromSeconds(5));
+        await connector.Send(payload).PacketName("after.timeout").Async();
+        Assert.Equal(ZlinkStreamConnectionState.Connected, connector.State);
+    }
+
+    /// <summary>
+    ///     Stream-connector spec §5.2: a Request timeout starts when the connector accepts
+    ///     the operation. The request sending hook runs before acceptance, so time spent in it
+    ///     is not part of the timeout.
+    /// </summary>
+    /// <remarks>
+    ///     The hook holds the request until a probe request with the same timeout, accepted
+    ///     after the hook was entered, has failed with <c>RequestTimeout</c>. A deadline that
+    ///     started before the hook has then passed, and the held request would fail without
+    ///     its frame being written.
+    /// </remarks>
+    [Fact]
+    public async Task RequestDeadlineStartsAfterQueueAcceptance()
+    {
+        var connection = new TransportCloseEndsWriteConnection();
+        var connector = CreateConnectorOn(connection, ZlinkStreamDispatchMode.Immediate);
+        using var releaseHook = new ManualResetEventSlim();
+        var hookEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        connector.OnRequestSending(context =>
+        {
+            if (context.RequestPacketName != "delayed.acceptance")
+                return;
+            hookEntered.TrySetResult();
+            releaseHook.Wait();
+        });
+        var timeout = TimeSpan.FromSeconds(1);
+        var payload = new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, new byte[] { 1 });
+
+        try
+        {
+            await connector.Connect.Async();
+            var request = Task.Run(async () =>
+                await connector
+                    .Request(payload)
+                    .PacketName("delayed.acceptance")
+                    .Timeout(timeout)
+                    .Async()
+            );
+            await hookEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            var probe = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
+                await connector
+                    .Request(payload)
+                    .PacketName("probe")
+                    .Timeout(timeout)
+                    .Async()
+                    .AsTask()
+                    .WaitAsync(TimeSpan.FromSeconds(10))
+            );
+            Assert.Equal(ZlinkStreamErrorCode.RequestTimeout, probe.Error.Code);
+            Assert.Equal(1, connection.WriteCount);
+
+            releaseHook.Set();
+            connection.ReleaseWrite.TrySetResult();
+            var error = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
+                await request.WaitAsync(TimeSpan.FromSeconds(10))
+            );
+            Assert.Equal(ZlinkStreamErrorCode.RequestTimeout, error.Error.Code);
+            Assert.Equal(2, connection.WriteCount);
+        }
+        finally
+        {
+            releaseHook.Set();
+            connection.ReleaseWrite.TrySetResult();
+            await connector.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact]
     public async Task CallerCancellationDoesNotInterruptAnInProgressFrameWrite()
     {
         using var shutdown = new CancellationTokenSource();
@@ -1280,8 +1556,7 @@ public sealed partial class StreamConnectorTests
         var taskRunner = new ZlinkStreamTaskRunner(shutdown.Token);
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
-            ZlinkStreamDispatchMode.Immediate,
-            32
+            ZlinkStreamDispatchMode.Immediate
         );
         var writeEntered = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -1290,10 +1565,11 @@ public sealed partial class StreamConnectorTests
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         var completedWrites = 0;
+        var connection = new RecordingCloseConnection();
         var queue = new ZlinkStreamOneWaySubmitQueue(
             taskRunner,
-            callbacks,
-            async (_, _) =>
+            () => connection,
+            async (_, _, _) =>
             {
                 writeEntered.TrySetResult();
                 await releaseWrite.Task;
@@ -1338,8 +1614,7 @@ public sealed partial class StreamConnectorTests
         var pending = new ZlinkStreamPendingRequests();
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
-            ZlinkStreamDispatchMode.Immediate,
-            32
+            ZlinkStreamDispatchMode.Immediate
         );
         var lifecycle = new ZlinkStreamConnectorLifecycle(
             new ZlinkStreamConnectorOptions
@@ -1366,6 +1641,7 @@ public sealed partial class StreamConnectorTests
                 return ValueTask.FromResult<IZlinkStreamConnection>(secondConnection);
             },
             _ => { },
+            () => ValueTask.CompletedTask,
             () => ValueTask.CompletedTask
         );
         var states = new List<ZlinkStreamConnectionState>();
@@ -1398,7 +1674,8 @@ public sealed partial class StreamConnectorTests
 
         var observed = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await lifecycle.HandleTransportErrorAsync(
-                new ZlinkStreamError(ZlinkStreamErrorCode.Disconnected, "transport failed")
+                new ZlinkStreamError(ZlinkStreamErrorCode.Disconnected, "transport failed"),
+                ZlinkStreamCloseReason.TransportError
             )
         );
 
@@ -1436,8 +1713,7 @@ public sealed partial class StreamConnectorTests
         var pending = new ZlinkStreamPendingRequests();
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
-            ZlinkStreamDispatchMode.Immediate,
-            32
+            ZlinkStreamDispatchMode.Immediate
         );
         var lifecycle = new ZlinkStreamConnectorLifecycle(
             new ZlinkStreamConnectorOptions
@@ -1451,6 +1727,7 @@ public sealed partial class StreamConnectorTests
             callbacks,
             _ => ValueTask.FromResult<IZlinkStreamConnection>(connection),
             _ => { },
+            () => ValueTask.CompletedTask,
             () => ValueTask.CompletedTask
         );
         var disconnected = new TaskCompletionSource<ZlinkStreamDisconnected>(
@@ -1526,8 +1803,7 @@ public sealed partial class StreamConnectorTests
         var taskRunner = new ZlinkStreamTaskRunner(shutdown.Token);
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
-            ZlinkStreamDispatchMode.Immediate,
-            32
+            ZlinkStreamDispatchMode.Immediate
         );
         var lifecycle = new ZlinkStreamConnectorLifecycle(
             new ZlinkStreamConnectorOptions
@@ -1552,6 +1828,7 @@ public sealed partial class StreamConnectorTests
                         : secondConnection
                 ),
             _ => { },
+            () => ValueTask.CompletedTask,
             () => ValueTask.CompletedTask
         );
         var disconnectCount = 0;
@@ -1614,8 +1891,7 @@ public sealed partial class StreamConnectorTests
         var taskRunner = new ZlinkStreamTaskRunner(shutdown.Token);
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
-            ZlinkStreamDispatchMode.Immediate,
-            32
+            ZlinkStreamDispatchMode.Immediate
         );
         ZlinkStreamConnectorLifecycle? lifecycle = null;
         lifecycle = new ZlinkStreamConnectorLifecycle(
@@ -1630,6 +1906,7 @@ public sealed partial class StreamConnectorTests
             callbacks,
             _ => ValueTask.FromResult<IZlinkStreamConnection>(connection),
             _ => { },
+            () => ValueTask.CompletedTask,
             () => ValueTask.CompletedTask
         );
         var disconnectCount = 0;
@@ -1681,7 +1958,7 @@ public sealed partial class StreamConnectorTests
     }
 
     [Fact]
-    public async Task AsyncStateSubscribersRunSequentiallyWithoutBlockingConnectAndCanSelfClose()
+    public async Task AsyncStateSubscriberCompletionDoesNotDelayLaterSubscribersOrConnect()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -1705,6 +1982,9 @@ public sealed partial class StreamConnectorTests
         var secondEntered = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
+        var firstExited = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var order = new List<string>();
         _ = connector.OnConnectionStateChanged(
             async (change, _) =>
@@ -1719,6 +1999,7 @@ public sealed partial class StreamConnectorTests
                 await connector.Close.Async();
                 lock (order)
                     order.Add("first-exit");
+                firstExited.TrySetResult();
             }
         );
         _ = connector.OnConnectionStateChanged(
@@ -1738,14 +2019,15 @@ public sealed partial class StreamConnectorTests
         var connect = connector.Connect.Async().AsTask();
         await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await connect.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.False(secondEntered.Task.IsCompleted);
+        await secondEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         releaseFirst.TrySetResult();
         await secondEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await connector.Close.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        await firstExited.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await server.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.Equal(new[] { "first-enter", "first-exit", "second" }, order);
+        Assert.Equal(new[] { "first-enter", "second", "first-exit" }, order);
     }
 
     [Fact]
@@ -1958,15 +2240,11 @@ public sealed partial class StreamConnectorTests
         );
         await connector.Dispatch.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
 
-        var callbackException = callbackFailure.Task.IsCompleted
-            ? await callbackFailure.Task
-            : null;
-        Assert.True(
-            callbackCompleted.Task.IsCompleted,
-            callbackException is not null
-                ? $"Disconnected callback Close failed: {callbackException}"
-                : "Disconnected callback was not dispatched."
-        );
+        var terminal = await Task.WhenAny(callbackCompleted.Task, callbackFailure.Task)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        if (terminal == callbackFailure.Task)
+            throw await callbackFailure.Task;
+        Assert.True(callbackCompleted.Task.IsCompleted);
         Assert.False(callbackFailure.Task.IsCompleted);
         lock (reportedErrors)
             Assert.Empty(reportedErrors);
@@ -2269,6 +2547,67 @@ public sealed partial class StreamConnectorTests
         }
     }
 
+    private sealed class ReconnectWriteConnection(bool failAfterRelease = false)
+        : IZlinkStreamConnection
+    {
+        public TaskCompletionSource EndRead { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource WriteStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseWrite { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool CanWriteSegments => true;
+
+        public async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken
+        )
+        {
+            await EndRead.Task.WaitAsync(cancellationToken);
+            return 0;
+        }
+
+        public async ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken
+        )
+        {
+            WriteStarted.TrySetResult();
+            await ReleaseWrite.Task;
+            if (failAfterRelease)
+                throw new IOException("old connection write failed");
+        }
+
+        public ValueTask CloseAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
+    }
+
+    private sealed class RecordingWriteConnection : IZlinkStreamConnection
+    {
+        private int _writeCount;
+        public int WriteCount => Volatile.Read(ref _writeCount);
+        public bool CanWriteSegments => true;
+
+        public async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken
+        )
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0;
+        }
+
+        public ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken
+        )
+        {
+            Interlocked.Increment(ref _writeCount);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask CloseAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
+    }
+
     private sealed class BlockingWriteConnection : IZlinkStreamConnection
     {
         public TaskCompletionSource WriteStarted { get; } =
@@ -2447,8 +2786,7 @@ public sealed partial class StreamConnectorTests
         var pending = new ZlinkStreamPendingRequests();
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
-            ZlinkStreamDispatchMode.Immediate,
-            32
+            ZlinkStreamDispatchMode.Immediate
         );
         var lifecycle = new ZlinkStreamConnectorLifecycle(
             new ZlinkStreamConnectorOptions
@@ -2468,6 +2806,7 @@ public sealed partial class StreamConnectorTests
             callbacks,
             OpenTransportAsync,
             _ => { },
+            () => ValueTask.CompletedTask,
             () => ValueTask.CompletedTask
         );
 
@@ -2478,7 +2817,8 @@ public sealed partial class StreamConnectorTests
             CancellationToken.None
         );
         await lifecycle.HandleTransportErrorAsync(
-            new ZlinkStreamError(ZlinkStreamErrorCode.Disconnected, "transport failed")
+            new ZlinkStreamError(ZlinkStreamErrorCode.Disconnected, "transport failed"),
+            ZlinkStreamCloseReason.TransportError
         );
         await reconnectTransportEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -2554,7 +2894,11 @@ public sealed partial class StreamConnectorTests
 
         await connector.Close.Async();
 
-        await Assert.ThrowsAsync<ObjectDisposedException>(async () => await waitingConnect);
+        // Spec §9: a connect that close ends fails with Disconnected, not a standard exception.
+        var closed = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
+            await waitingConnect
+        );
+        Assert.Equal(ZlinkStreamErrorCode.Disconnected, closed.Error.Code);
         await server.WaitAsync(TimeSpan.FromSeconds(5));
     }
 

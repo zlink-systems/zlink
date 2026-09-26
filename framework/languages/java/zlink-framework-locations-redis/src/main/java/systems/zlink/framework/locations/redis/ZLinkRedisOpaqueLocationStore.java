@@ -27,6 +27,7 @@ import systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteConflict;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
+import systems.zlink.framework.runtime.locations.ZLinkStoreRetention;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -691,7 +692,8 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
                         bytes(
                                 put.retention() == null
                                         ? "-1"
-                                        : Long.toString(ceilMillis(put.retention()))));
+                                        : Long.toString(
+                                                ZLinkStoreRetention.toMillis(put.retention()))));
             } else {
                 arguments.add(bytes("delete"));
                 arguments.add(bytes(key.value()));
@@ -774,12 +776,6 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
 
     private static int utf8Length(String value) {
         return value.getBytes(StandardCharsets.UTF_8).length;
-    }
-
-    private static long ceilMillis(Duration duration) {
-        long seconds = duration.getSeconds();
-        int nanos = duration.getNano();
-        return Math.addExact(Math.multiplyExact(seconds, 1000), (nanos + 999_999L) / 1_000_000L);
     }
 
     private static boolean cancelled(ZLinkStoreCancellation cancellation) {

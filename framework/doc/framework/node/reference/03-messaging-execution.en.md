@@ -144,7 +144,7 @@ started, an individual target failure does not turn into an overall failure and 
 
 **When to use.** Use this for observation/notification where the publisher must not know its
 subscribers. For messaging aimed at a specific target, use `sendToChannel` or
-`requestToChannel`. Use `ZLinkFanoutClient.getListenerStatus(channelName)`
+`requestToChannel`. Use the Framework runtime's `getListenerStatus('fanout', channelName)`
 (topology-discovery category) to check the publisher listener's advertised endpoint.
 
 ---

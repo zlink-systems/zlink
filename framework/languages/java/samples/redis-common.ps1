@@ -4,7 +4,7 @@ if (-not (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue)) {
     $IsWindows = $env:OS -eq "Windows_NT"
 }
 
-function Set-ZlinkSampleUtf8File {
+function Set-ZlinkSampleProperties {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Value
@@ -12,7 +12,7 @@ function Set-ZlinkSampleUtf8File {
 
     [System.IO.File]::WriteAllText(
         $Path,
-        ($Value -join [System.Environment]::NewLine),
+        ($Value -join [System.Environment]::NewLine).Replace('\', '/'),
         [System.Text.UTF8Encoding]::new($false))
 }
 

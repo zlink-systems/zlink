@@ -10,7 +10,7 @@
 #include <chrono>
 #include <atomic>
 #include <functional>
-#if ZLINK_STREAM_CONNECTOR_HAS_EXCEPTIONS
+#if ZLINK_HAS_EXCEPTIONS
 #include <future>
 #include <stdexcept>
 #endif
@@ -134,7 +134,8 @@ class send_call_t
     /// Marks the outbound packet for compression when compression is available.
     send_call_t &compress ();
 
-    /// Gives the packet to the connector for delivery.
+    /// Gives the packet to the connector for delivery. A send failure is reported
+    /// through the connector error event.
     void submit ();
 
   private:
@@ -406,7 +407,7 @@ template <typename TMessage> class wait_call_t
           });
     }
 
-#if ZLINK_STREAM_CONNECTOR_HAS_EXCEPTIONS
+#if ZLINK_HAS_EXCEPTIONS
     /* Convenience for callers that already work in futures. It is compiled out
      * where exceptions are disabled, so the core keeps its no-exception
      * boundary for engine builds (cpp stream-connector §5). */

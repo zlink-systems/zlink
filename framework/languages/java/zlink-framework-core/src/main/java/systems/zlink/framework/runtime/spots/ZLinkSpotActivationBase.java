@@ -19,6 +19,7 @@ import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -35,6 +36,33 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
             Collections.synchronizedSet(Collections.newSetFromMap(new IdentityHashMap<>()));
     private ZLinkBackendActorReceived pendingActorHeader;
     private CompletionStage<Void> closingCallback;
+    private ZLinkSpotCloseCoordinator closeCoordinator;
+
+    final synchronized ZLinkSpotCloseCoordinator closeCoordinator(
+            Supplier<ZLinkSpotCloseCoordinator> create) {
+        if (closeCoordinator == null) {
+            closeCoordinator = Objects.requireNonNull(create.get(), "close coordinator");
+        }
+        return closeCoordinator;
+    }
+
+    final synchronized boolean closeStarted() {
+        return closeCoordinator != null;
+    }
+
+    final synchronized ZLinkSpotCloseCoordinator existingCloseCoordinator() {
+        return closeCoordinator;
+    }
+
+    final synchronized void clearUncommittedClose(ZLinkSpotCloseCoordinator candidate) {
+        if (closeCoordinator == candidate && !candidate.committed()) {
+            closeCoordinator = null;
+        }
+    }
+
+    final synchronized boolean closeCommitted() {
+        return closeCoordinator != null && closeCoordinator.committed();
+    }
 
     final synchronized CompletionStage<Void> closingCallback(
             Supplier<CompletionStage<Void>> callback) {

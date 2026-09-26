@@ -1,5 +1,5 @@
-# Hash of the published framework release source unit; checksum bypass is not used.
+# Replace the inherited digest with the newly published source archive digest.
 sources:
-  "0.25.0":
-    url: "https://github.com/zlink-systems/zlink/releases/download/framework-cpp/v0.25.0/zlink-framework-cpp-0.25.0.tar.gz"
+  "0.26.0":
+    url: "https://github.com/zlink-systems/zlink/releases/download/framework-cpp/v0.26.0/zlink-framework-cpp-0.26.0.tar.gz"
     sha256: "6a5cbe7d5ae6078c4ff06dc7d31fef6fea790e57495d2afc4db955ac1f4eab0e"

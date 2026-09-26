@@ -30,10 +30,14 @@
 // BigInt() call in the frame header path.
 //
 // es2019 makes the link succeed; it does not make that optimizer safe. Its
-// dead-code stage still deletes destructuring declarations, which no bundler
-// setting reaches - see test/browser/unity-webgl-emscripten.test.js, which pins
-// both what is fixed and what is not. The ESM browser bundles are loaded by the
-// browser itself, never by emscripten, so they stay at es2022.
+// dead-code stage still deletes any destructuring declaration in a scope with
+// no reference to the identifier `undefined` - a bug in emscripten itself, not
+// something a bundler setting reaches. The IIFE bundle's source no longer has
+// one in that shape (see ZlinkStreamReceivedMessages.ts's drain loop), and
+// test/browser/unity-webgl-emscripten.test.js counts destructuring
+// declarations before and after that stage runs as a regression guard: it
+// fails again if a future change reintroduces one. The ESM browser bundles are
+// loaded by the browser itself, never by emscripten, so they stay at es2022.
 import { build } from 'esbuild';
 
 const args = process.argv.slice(2);

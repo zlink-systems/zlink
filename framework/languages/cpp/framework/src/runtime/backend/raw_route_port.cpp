@@ -414,8 +414,13 @@ zlink::poll_event_flag_t raw_route_port_t::poll (std::chrono::milliseconds timeo
     zlink::poll_event_t events[3];
     const auto completion_events =
       zlink::poll_event_flag_t::pollout | zlink::poll_event_flag_t::pollcompletion;
+    // Without a supply permit only ordinary receive (pollin) is withheld;
+    // route observation and completion progress stay armed.
+    const auto armed_without_receive = static_cast<zlink::poll_event_flag_t> (
+      static_cast<short> (_receive_events)
+      & ~static_cast<short> (zlink::poll_event_flag_t::pollin));
     if (!accept_application_receive)
-        _poller->modify (*_socket, completion_events);
+        _poller->modify (*_socket, armed_without_receive | completion_events);
     std::size_t count;
     try {
         count = _poller->wait (events, 3, timeout);
@@ -439,7 +444,7 @@ zlink::poll_event_flag_t raw_route_port_t::poll (std::chrono::milliseconds timeo
                                                      | (static_cast<short> (events[index].revents)
                                                         & static_cast<short> (_receive_events)));
         } else {
-            // Shared-poller sources (the mesh monitor) wake management;
+            // Other shared-poller sources wake management;
             // their owner drains them without claiming ordinary records.
             wake = true;
         }
@@ -478,10 +483,11 @@ std::optional<raw_received_t> raw_route_port_t::receive_if_ready (zlink::poll_ev
     }
     auto source_routing_id = _received.routing_id ()->to_bytes ();
     auto reply_token = _received.reply_token ();
+    const auto route_generation = _received.route_generation ();
     auto parts = copy_binding_parts (_received.parts ());
     _received.close ();
-    return raw_received_t{std::move (source_routing_id), std::move (reply_token),
-                          std::move (parts)};
+    return raw_received_t{std::move (source_routing_id), std::move (reply_token), std::move (parts),
+                          route_generation};
 }
 
 std::optional<raw_received_t> raw_route_port_t::try_receive ()

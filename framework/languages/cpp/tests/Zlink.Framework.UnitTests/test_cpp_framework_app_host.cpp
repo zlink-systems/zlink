@@ -25,9 +25,7 @@
 #include <utility>
 #include <vector>
 
-#ifdef _WIN32
-#include <process.h>
-#else
+#ifndef _WIN32
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -114,43 +112,6 @@ class blocking_stop_service_t final : public zlink::framework::hosted_service_t
     bool _release_stop = false;
 };
 
-std::uint32_t current_process_id () noexcept
-{
-#ifdef _WIN32
-    return static_cast<std::uint32_t> (_getpid ());
-#else
-    return static_cast<std::uint32_t> (getpid ());
-#endif
-}
-
-std::uint16_t process_unique_port (std::uint16_t base_port, std::uint16_t salt)
-{
-    const auto offset = static_cast<std::uint16_t> ((current_process_id () % 1500U) * 23U);
-    const auto first = static_cast<std::uint16_t> (base_port + offset + salt);
-#ifdef _WIN32
-    return first;
-#else
-    for (std::uint16_t attempt = 0; attempt < 200; ++attempt) {
-        const auto candidate = static_cast<std::uint16_t> (first + attempt * 13U);
-        const int descriptor = ::socket (AF_INET, SOCK_STREAM, 0);
-        if (descriptor < 0) {
-            return first;
-        }
-        sockaddr_in address{};
-        address.sin_family = AF_INET;
-        address.sin_port = htons (candidate);
-        address.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
-        const bool bindable =
-          ::bind (descriptor, reinterpret_cast<sockaddr *> (&address), sizeof (address)) == 0;
-        ::close (descriptor);
-        if (bindable) {
-            return candidate;
-        }
-    }
-    return first;
-#endif
-}
-
 std::uint16_t port_from_endpoint (const std::string &endpoint)
 {
     const auto scheme = endpoint.find ("://");
@@ -178,9 +139,66 @@ std::string endpoint_with_port (const std::string &endpoint, std::uint16_t port)
     return endpoint.substr (0, colon + 1) + std::to_string (port) + endpoint.substr (port_end);
 }
 
-std::string process_unique_endpoint (const std::string &endpoint, std::uint16_t salt)
+std::optional<zlink::framework::http_listener_status_t>
+wait_for_http_listener (zlink::framework::app_t &app, const std::string &configured_endpoint)
 {
-    return endpoint_with_port (endpoint, process_unique_port (port_from_endpoint (endpoint), salt));
+    auto provider = app.advanced ().services ().build_provider ();
+    auto &runtime = provider.get_required<zlink::framework::framework_runtime_t> ();
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        const auto statuses = runtime.http_listener_statuses ();
+        const auto found = std::find_if (statuses.begin (), statuses.end (), [&] (const auto &status) {
+            return status.configured_endpoint == configured_endpoint;
+        });
+        if (found != statuses.end ()) {
+            auto result = *found;
+            provider.close ();
+            return result;
+        }
+        std::this_thread::sleep_for (std::chrono::milliseconds (10));
+    }
+    provider.close ();
+    return std::nullopt;
+}
+
+bool verify_http_listener_statuses ()
+{
+    auto app = zlink::framework::app_t::create ();
+    const std::string first = "http://127.0.0.1:0";
+    const std::string third = "http://0.0.0.0:0";
+    app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
+        options.http ().listen (first).listen (first).listen (third);
+    });
+    auto provider = app.advanced ().services ().build_provider ();
+    auto &runtime = provider.get_required<zlink::framework::framework_runtime_t> ();
+    if (!runtime.http_listener_statuses ().empty ()) {
+        provider.close ();
+        return false;
+    }
+    const char *arguments[] = {"app"};
+    int exit_code = -1;
+    std::thread thread ([&] { exit_code = app.run (1, const_cast<char **> (arguments)); });
+    std::vector<zlink::framework::http_listener_status_t> statuses;
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        statuses = runtime.http_listener_statuses ();
+        if (statuses.size () == 3)
+            break;
+        std::this_thread::sleep_for (std::chrono::milliseconds (10));
+    }
+    const bool bound = statuses.size () == 3 && statuses[0].configured_endpoint == first
+                       && statuses[1].configured_endpoint == first
+                       && statuses[2].configured_endpoint == third
+                       && statuses[0].bound_url != statuses[1].bound_url
+                       && statuses[0].bound_url.starts_with ("http://127.0.0.1:")
+                       && statuses[1].bound_url.starts_with ("http://127.0.0.1:")
+                       && statuses[2].bound_url.starts_with ("http://0.0.0.0:")
+                       && port_from_endpoint (statuses[0].bound_url) != 0
+                       && port_from_endpoint (statuses[1].bound_url) != 0
+                       && port_from_endpoint (statuses[2].bound_url) != 0;
+    app.stop ();
+    thread.join ();
+    const bool unbound = runtime.http_listener_statuses ().empty ();
+    provider.close ();
+    return bound && unbound && exit_code == 0;
 }
 
 bool http_keep_alive_round_trip (const std::string &endpoint)
@@ -797,6 +815,11 @@ int main (int test_argc, char **test_argv)
     const bool http_submit_only =
       test_argc == 2 && std::string (test_argv[1]) == "--http-submit-only";
     failure_trace_t trace;
+    if (!http_submit_only) {
+        trace.phase = "HTTP listener statuses";
+        if (!verify_http_listener_statuses ())
+            return 72;
+    }
     bool duplicate_route_rejected = false;
     try {
         auto duplicate_app = zlink::framework::app_t::create ();
@@ -939,13 +962,10 @@ int main (int test_argc, char **test_argv)
     bool zlink_configured = false;
     correlation_middleware_t::before_count = 0;
     correlation_middleware_t::after_count = 0;
-    const auto http_endpoint = process_unique_endpoint (ZLINK_FRAMEWORK_HTTP_TEST_HTTP_ENDPOINT, 0);
+    const auto http_endpoint = endpoint_with_port (ZLINK_FRAMEWORK_HTTP_TEST_HTTP_ENDPOINT, 0);
     const auto https_invalid_endpoint =
-      process_unique_endpoint (ZLINK_FRAMEWORK_HTTP_TEST_HTTPS_INVALID_ENDPOINT, 1);
-    const auto https_endpoint =
-      process_unique_endpoint (ZLINK_FRAMEWORK_HTTP_TEST_HTTPS_ENDPOINT, 2);
-    const auto https_client_base_url = endpoint_with_port (
-      ZLINK_FRAMEWORK_HTTP_TEST_HTTPS_CLIENT_BASE_URL, port_from_endpoint (https_endpoint));
+      endpoint_with_port (ZLINK_FRAMEWORK_HTTP_TEST_HTTPS_INVALID_ENDPOINT, 0);
+    const auto https_endpoint = endpoint_with_port (ZLINK_FRAMEWORK_HTTP_TEST_HTTPS_ENDPOINT, 0);
     (void) app.advanced ().zlink ();
     zlink_configured = true;
     app.health ()
@@ -997,11 +1017,19 @@ int main (int test_argc, char **test_argv)
     auto **argv = const_cast<char **> (argv_raw);
     int exit_code = -1;
     std::thread app_thread ([&] { exit_code = app.run (4, argv); });
-    auto http_client = make_app_host_test_client (http_endpoint);
+    trace.phase = "main app HTTP listener status";
+    const auto http_status = wait_for_http_listener (app, http_endpoint);
+    if (!http_status) {
+        app.stop ();
+        app_thread.join ();
+        return 13;
+    }
+    const auto http_bound_url = http_status->bound_url;
+    auto http_client = make_app_host_test_client (http_bound_url);
     std::string readiness_error;
     trace.phase = "main app readiness";
     if (!wait_for_ready (http_client, &readiness_error)) {
-        std::cerr << "main HTTP app did not become ready at " << http_endpoint << ": "
+        std::cerr << "main HTTP app did not become ready at " << http_bound_url << ": "
                   << readiness_error << '\n';
         app.stop ();
         app_thread.join ();
@@ -1121,7 +1149,7 @@ int main (int test_argc, char **test_argv)
       http_client.get ("/games/blocked").submit<create_game_http_handler_t::reply_type> ();
     const auto health_result = http_client.get ("/health").submit<health_http_reply_t> ();
     const auto liveness_result = http_client.get ("/live").submit<health_http_reply_t> ();
-    const bool keep_alive_ok = http_keep_alive_round_trip (http_endpoint);
+    const bool keep_alive_ok = http_keep_alive_round_trip (http_bound_url);
     trace.phase = "main app stop";
     app.stop ();
     app_thread.join ();
@@ -1497,8 +1525,7 @@ int main (int test_argc, char **test_argv)
     }
 
     auto unhealthy_app = zlink::framework::app_t::create ();
-    const auto unhealthy_endpoint =
-      process_unique_endpoint (ZLINK_FRAMEWORK_HTTP_TEST_HTTP_ENDPOINT, 3);
+    const auto unhealthy_endpoint = endpoint_with_port (ZLINK_FRAMEWORK_HTTP_TEST_HTTP_ENDPOINT, 0);
     unhealthy_app.health ()
       .add_channel_check ("games.channel")
       .set_status ("games.channel", zlink::framework::health_status_t::unhealthy,
@@ -1508,7 +1535,14 @@ int main (int test_argc, char **test_argv)
     });
     int unhealthy_exit_code = -1;
     std::thread unhealthy_thread ([&] { unhealthy_exit_code = unhealthy_app.run (1, argv); });
-    auto unhealthy_client = make_app_host_test_client (unhealthy_endpoint);
+    trace.phase = "unhealthy app HTTP listener status";
+    const auto unhealthy_status = wait_for_http_listener (unhealthy_app, unhealthy_endpoint);
+    if (!unhealthy_status) {
+        unhealthy_app.stop ();
+        unhealthy_thread.join ();
+        return 73;
+    }
+    auto unhealthy_client = make_app_host_test_client (unhealthy_status->bound_url);
     trace.phase = "unhealthy app readiness";
     if (!wait_for_raw_status (unhealthy_client, "/ready", 503)) {
         unhealthy_app.stop ();
@@ -1527,8 +1561,7 @@ int main (int test_argc, char **test_argv)
     }
 
     auto not_live_app = zlink::framework::app_t::create ();
-    const auto not_live_endpoint =
-      process_unique_endpoint (ZLINK_FRAMEWORK_HTTP_TEST_HTTP_ENDPOINT, 4);
+    const auto not_live_endpoint = endpoint_with_port (ZLINK_FRAMEWORK_HTTP_TEST_HTTP_ENDPOINT, 0);
     not_live_app.health ()
       .add_hosted_service_check ("games.service")
       .set_status ("games.service", zlink::framework::health_status_t::unhealthy,
@@ -1538,7 +1571,14 @@ int main (int test_argc, char **test_argv)
     });
     int not_live_exit_code = -1;
     std::thread not_live_thread ([&] { not_live_exit_code = not_live_app.run (1, argv); });
-    auto not_live_client = make_app_host_test_client (not_live_endpoint);
+    trace.phase = "not-live app HTTP listener status";
+    const auto not_live_status = wait_for_http_listener (not_live_app, not_live_endpoint);
+    if (!not_live_status) {
+        not_live_app.stop ();
+        not_live_thread.join ();
+        return 74;
+    }
+    auto not_live_client = make_app_host_test_client (not_live_status->bound_url);
     trace.phase = "not-live app readiness";
     if (!wait_for_raw_status (not_live_client, "/ready", 503)) {
         not_live_app.stop ();
@@ -1557,8 +1597,7 @@ int main (int test_argc, char **test_argv)
     }
 
     auto limited_app = zlink::framework::app_t::create ();
-    const auto limited_endpoint =
-      process_unique_endpoint (ZLINK_FRAMEWORK_HTTP_TEST_HTTP_ENDPOINT, 5);
+    const auto limited_endpoint = endpoint_with_port (ZLINK_FRAMEWORK_HTTP_TEST_HTTP_ENDPOINT, 0);
     limited_app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
         options.http ()
           .configure_server ([] (zlink::framework::http_server_options_builder_t &server) {
@@ -1570,12 +1609,20 @@ int main (int test_argc, char **test_argv)
     });
     int limited_exit_code = -1;
     std::thread limited_thread ([&] { limited_exit_code = limited_app.run (1, argv); });
-    auto limited_client = make_app_host_test_client (limited_endpoint);
+    trace.phase = "limited app HTTP listener status";
+    const auto limited_status = wait_for_http_listener (limited_app, limited_endpoint);
+    if (!limited_status) {
+        limited_app.stop ();
+        limited_thread.join ();
+        return 75;
+    }
+    const auto limited_bound_url = limited_status->bound_url;
+    auto limited_client = make_app_host_test_client (limited_bound_url);
     trace.phase = "limited app raw rejection";
     const bool limited_ready = wait_for_ready (limited_client);
     const bool limited_rejected =
       limited_ready
-      && http_raw_request_contains (limited_endpoint,
+      && http_raw_request_contains (limited_bound_url,
                                     "POST /raw/1?mode=echo HTTP/1.1\r\nHost: "
                                     "localhost\r\nContent-Type: text/plain\r\nContent-Length: "
                                     "9\r\nConnection: close\r\n\r\ntoo-large",
@@ -1585,7 +1632,7 @@ int main (int test_argc, char **test_argv)
       + "\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
     const bool large_header_rejected =
       limited_ready
-      && http_raw_request_contains (limited_endpoint, large_header_request,
+      && http_raw_request_contains (limited_bound_url, large_header_request,
                                     "431 Request Header Fields Too Large");
     limited_app.stop ();
     limited_thread.join ();
@@ -1684,6 +1731,16 @@ int main (int test_argc, char **test_argv)
     });
     int secure_exit_code = -1;
     std::thread secure_thread ([&] { secure_exit_code = secure_host.run (3, argv); });
+    trace.phase = "secure app HTTP listener status";
+    const auto secure_status = wait_for_http_listener (secure_host, https_endpoint);
+    if (!secure_status) {
+        secure_host.stop ();
+        secure_thread.join ();
+        return 76;
+    }
+    const auto https_client_base_url = endpoint_with_port (
+      ZLINK_FRAMEWORK_HTTP_TEST_HTTPS_CLIENT_BASE_URL,
+      port_from_endpoint (secure_status->bound_url));
     auto secure_client = make_app_host_test_client (https_client_base_url,
                                                     std::string (ZLINK_FRAMEWORK_HTTP_TEST_CERT));
     trace.phase = "secure app readiness";

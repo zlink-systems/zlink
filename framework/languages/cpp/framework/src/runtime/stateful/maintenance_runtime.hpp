@@ -25,6 +25,7 @@
 #include <optional>
 #include <stop_token>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace zlink::framework::runtime::stateful
@@ -122,10 +123,70 @@ struct relocation_participant_identity_t
                             const relocation_participant_identity_t &) = default;
 };
 
+/* The authority fence of one relocation unit (01 §6.1, §10): the primary
+ * authority row, the StoreVersion the target NewOwner CAS expects, and the
+ * two owner tokens. Source settlement and target CAS both read this row. */
+struct relocation_authority_fence_t
+{
+    object_kind_t kind = object_kind_t::actor;
+    std::string key;
+    std::string expected_store_version;
+    location_owner_token_t source_owner;
+    location_owner_token_t target_owner;
+};
+
+/* Settled authority of one relocation unit as the Location Store shows it.
+ * `unsettled` covers both "the row still names the source at the expected
+ * StoreVersion" and an indeterminate Store result: neither is evidence. */
+enum class relocation_authority_t
+{
+    unsettled,
+    target_committed,
+    source_preserved,
+    source_lease_expired
+};
+
+/* The primary participant whose authority row carries the unit's fence: the
+ * User Spot of a SpotWide unit, otherwise the (kind, key)-smallest one. */
+inline const object_ref_t &relocation_primary (const std::vector<object_ref_t> &participants)
+{
+    const object_ref_t *primary = &participants.front ();
+    for (const auto &participant : participants) {
+        if (participant.kind == object_kind_t::user_spot)
+            return participant;
+        if (std::tie (participant.kind, participant.key) < std::tie (primary->kind, primary->key))
+            primary = &participant;
+    }
+    return *primary;
+}
+
 class authority_relocation_port_t
 {
   public:
     virtual ~authority_relocation_port_t () = default;
+    /* Reads the unit's primary row: target owner -> target_committed; a
+     * StoreVersion other than the expected one -> source_preserved (the
+     * target CAS can no longer commit); otherwise unsettled. */
+    virtual relocation_authority_t observe_relocation (const relocation_authority_fence_t &fence)
+    {
+        const auto current = read (fence.kind, fence.key);
+        return current && current->target_owner.owner_id == fence.target_owner.owner_id
+                   && current->target_owner.lease_generation == fence.target_owner.lease_generation
+                 ? relocation_authority_t::target_committed
+                 : relocation_authority_t::unsettled;
+    }
+    /* The source Preserve fence (01 §6.1): an expected-StoreVersion CAS that
+     * keeps the source owner and requires its live owner lease. */
+    virtual relocation_authority_t preserve_relocation (const relocation_authority_fence_t &fence)
+    {
+        return observe_relocation (fence);
+    }
+    /* True/false when the Store confirmed the lease state; nullopt when the
+     * read is indeterminate. */
+    virtual std::optional<bool> owner_lease_live (const location_owner_token_t &)
+    {
+        return std::nullopt;
+    }
     /* Enumerates every live authority row (the repository scans the
      * "authority\0…" preimage prefix). The target reconstructs the
      * canonical ordered participant inventory of an inbound relocation
@@ -143,7 +204,10 @@ class authority_relocation_port_t
              std::string relocation_reference,
              std::uint32_t checksum_crc32c,
              inventory_digest_t inventory_digest,
-             std::vector<std::byte> target_application_payload = {}) = 0;
+             std::vector<std::byte> target_application_payload = {},
+             /* The StoreVersion the relocation NewOwner CAS expects (the source
+              * fence); empty for a publish that is not a relocation CAS. */
+             std::string expected_store_version = {}) = 0;
     virtual std::optional<authority_relocation_reference_t> read (object_kind_t kind,
                                                                   const std::string &key) = 0;
     virtual authority_publish_result_t publish_completion (object_kind_t,
@@ -204,7 +268,10 @@ class aggregate_authority_port_t
                                                 location_owner_token_t target_owner,
                                                 std::string relocation_reference,
                                                 std::uint32_t checksum_crc32c,
-                                                inventory_digest_t inventory_digest) = 0;
+                                                inventory_digest_t inventory_digest,
+                                                /* The StoreVersion the unit primary row must
+                                                 * still carry (the source fence, 01 §6.1). */
+                                                std::string expected_primary_store_version) = 0;
     virtual aggregate_publish_result_t commit (aggregate_relocation_fence_t fence) = 0;
     virtual void abort (aggregate_relocation_fence_t fence) = 0;
 };
@@ -261,6 +328,7 @@ struct eligible_relocation_unit_t
         std::function<task_t<bool> (const std::vector<protocol::relocation_data_t> &,
                                     const relocation_ingress_batch_t &)>
           send_relocation_data;
+        std::function<void (const object_ref_t &, const turn_record_t &)> send_application;
         enum class cutover_enqueue_t
         {
             not_enqueued,
@@ -269,6 +337,14 @@ struct eligible_relocation_unit_t
         };
         std::function<task_t<cutover_enqueue_t> (const protocol::relocation_cutover_t &)>
           send_cutover;
+        /* The unit Restore absolute deadline, owned by the source: from it the
+         * source settles authority with its Preserve fence (01 §10). */
+        std::chrono::steady_clock::time_point restore_deadline{};
+        /* The existing host lifecycle ends source settlement after shutdown. */
+        std::function<bool ()> source_stopped;
+        /* Whether the ordered connection to the target is currently up; a
+         * reconnect after a break resends the batch and cutover (28 §4.4). */
+        std::function<bool ()> target_connected;
         // This is valid only after an exact target failure and before a
         // Cutover enqueue.  It fences source admission restoration.
         std::function<bool ()> abort_target_before_cutover;
@@ -363,7 +439,9 @@ enum class relocation_reason_t
     payload_missing,
     inventory_mismatch,
     restore_failed,
-    bound_session_fence_incomplete
+    bound_session_fence_incomplete,
+    /* The source owner lease expired before its Preserve fence (28 §4.4). */
+    owner_lease_expired
 };
 
 struct target_only_cas_t
@@ -448,6 +526,10 @@ class maintenance_runtime_t
       std::uint64_t advertised_receive_chunk_limit_bytes = 0);
 
     void attach_relocation_wire (raw_relocation_replay_coordinator_t &wire) noexcept;
+    /* Expired-owner terminal (28 §4.4): replies Unavailable once to each
+     * pending request of the object and drops its accepted records. */
+    void attach_unavailable_terminal (std::function<void (const object_ref_t &)> terminal) noexcept;
+    void attach_committed_terminal (std::function<void (const object_ref_t &)> terminal) noexcept;
 
     relocation_gate_snapshot_t gate_snapshot () const;
 
@@ -457,12 +539,9 @@ class maintenance_runtime_t
     void configure_route_convergence_metric (std::function<void (double)> metric) noexcept;
 
     /* SafeToShutdown (24 §"State"): true only while no relocation unit this
-     * source started still has an open retransmission window. A unit opens
-     * its window at cutover submit terminal and closes it when the
-     * retained payload/boundary copies are released (28 §4.4), which this
-     * runtime also treats as the point the unit's Message Follow route
-     * becomes removable — no separate Message Follow expiry timer exists
-     * in this runtime to measure that condition independently. */
+     * source sealed is still pending: a unit is pending from its seal until
+     * its authority settles, and after a confirmed target commit until its
+     * Message Follow route becomes removable (28 §4.4, §10). */
     bool relocation_units_settled () const noexcept;
 
     static std::uint32_t crc32c (const std::vector<std::uint8_t> &payload) noexcept;
@@ -531,17 +610,24 @@ class maintenance_runtime_t
     std::uint64_t effective_in_flight_budget () const noexcept;
     task_t<void> acquire_transfer_budget (std::uint64_t bytes);
     void release_transfer_budget (std::uint64_t bytes) noexcept;
-    void retain_retransmission_copies (std::shared_ptr<relocation_terminal_state_t> state);
+    task_t<relocation_authority_t>
+    settle_relocation (std::shared_ptr<relocation_terminal_state_t> state,
+                       std::vector<object_ref_t> participants);
+    std::pair<relocation_terminal_t, relocation_reason_t>
+    apply_relocation_settlement (const std::shared_ptr<relocation_terminal_state_t> &state,
+                                 const std::vector<object_ref_t> &participants,
+                                 relocation_authority_t settled);
+    void retain_message_follow (std::shared_ptr<relocation_terminal_state_t> state);
     /* SafeToShutdown must observe a relocation unit as pending from the
      * moment it is sealed (registered), not only once it reaches S1
-     * (cutover submit terminal, where retain_retransmission_copies used
+     * (cutover submit terminal, where retain_message_follow used
      * to be the sole increment site) — otherwise a shutdown query racing
      * the seal-to-S1 window can see relocation_units_settled() report
      * true while a unit is still actively transferring. The returned
      * token increments pending_units immediately and decrements it again
      * on destruction (whether that is an early failure return dropping
      * the owning relocation_terminal_state_t, or the S4+window observer
-     * in retain_retransmission_copies explicitly releasing it). */
+     * in retain_message_follow explicitly releasing it). */
     std::shared_ptr<void> begin_pending_relocation_unit () noexcept;
     void release () noexcept;
     relocation_result_t finish (relocation_result_t result);
@@ -570,9 +656,11 @@ class maintenance_runtime_t
     mutable std::mutex _gate_mutex;
     relocation_gate_snapshot_t _gate;
     raw_relocation_replay_coordinator_t *_relocation_wire = nullptr;
+    std::function<void (const object_ref_t &)> _unavailable_terminal;
+    std::function<void (const object_ref_t &)> _committed_terminal;
     /* route_convergence metric + SafeToShutdown obligation count, held
      * separately from `this` in a shared_ptr: the retention coroutine in
-     * retain_retransmission_copies is detached (self-keeping via
+     * retain_message_follow is detached (self-keeping via
      * observe_task_completion) and outlives an owning maintenance_runtime_t
      * that is torn down while a retransmission window is still open. The
      * coroutine and its completion callback capture this shared_ptr by

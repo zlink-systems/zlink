@@ -369,8 +369,7 @@ export interface ZLinkBackendMeshNode {
     actor: ZLinkBackendActorRef,
     expectedBindingGeneration: bigint,
     parts: MessageLike | readonly MessageLike[],
-    flags?: number,
-    actorFence?: ZLinkBackendActorSessionSendFence
+    flags?: number
   ): Promise<SubmitResult>;
   closeActorBoundSession(
     actor: ZLinkBackendActorRef,
@@ -413,20 +412,12 @@ export interface ZLinkBackendActorRef {
   readonly generation: bigint;
 }
 
-export interface ZLinkBackendActorSessionSendFence {
-  readonly targetNodeGeneration: bigint;
-  readonly authorityOwnerGeneration: bigint;
-  readonly ownerLeaseGeneration: bigint;
-}
-
 export interface ZLinkBackendActorSessionNode {
-  actorNodeGeneration?(actor: ZLinkBackendActorRef): bigint | undefined;
   sendActorBoundSession(
     actor: ZLinkBackendActorRef,
     expectedBindingGeneration: bigint,
     parts: readonly Message[],
-    flags: number,
-    actorFence?: ZLinkBackendActorSessionSendFence
+    flags: number
   ): Promise<ZLinkSubmitResult>;
   closeActorBoundSession(
     actor: ZLinkBackendActorRef,

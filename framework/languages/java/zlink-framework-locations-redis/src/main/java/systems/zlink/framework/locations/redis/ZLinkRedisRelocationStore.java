@@ -15,6 +15,7 @@ import systems.zlink.framework.locationprovider.ZLinkBlobRenewed;
 import systems.zlink.framework.locationprovider.ZLinkBlobStored;
 import systems.zlink.framework.locationprovider.ZLinkRelocationStore;
 import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
+import systems.zlink.framework.runtime.locations.ZLinkStoreRetention;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -80,7 +81,7 @@ public final class ZLinkRedisRelocationStore implements ZLinkRelocationStore, Au
             ZLinkStoreCancellation cancellation) {
         String normalized = requireReference(reference);
         byte[] snapshot = requirePayload(payload);
-        long retentionMs = retentionMillis(retention);
+        long retentionMs = ZLinkStoreRetention.toMillis(retention);
         if (cancelled(cancellation)) {
             return cancelledStage();
         }
@@ -138,7 +139,7 @@ public final class ZLinkRedisRelocationStore implements ZLinkRelocationStore, Au
     public CompletionStage<ZLinkBlobRenewResult> renew(
             ZLinkBlobReference reference, Duration retention, ZLinkStoreCancellation cancellation) {
         String normalized = requireReference(reference);
-        long retentionMs = retentionMillis(retention);
+        long retentionMs = ZLinkStoreRetention.toMillis(retention);
         if (cancelled(cancellation)) {
             return cancelledStage();
         }
@@ -201,18 +202,6 @@ public final class ZLinkRedisRelocationStore implements ZLinkRelocationStore, Au
             throw new IllegalArgumentException("invalid relocation reference");
         }
         return value;
-    }
-
-    private static long retentionMillis(Duration retention) {
-        Objects.requireNonNull(retention, "retention");
-        if (retention.isZero() || retention.isNegative()) {
-            throw new IllegalArgumentException("retention must be positive");
-        }
-        try {
-            return Math.max(1L, retention.toMillis());
-        } catch (ArithmeticException error) {
-            throw new IllegalArgumentException("retention is too large", error);
-        }
     }
 
     private static boolean cancelled(ZLinkStoreCancellation cancellation) {

@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.binding;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -98,6 +99,70 @@ final class ZLinkJavaRawMeshNodeCanonicalActorJoinTest {
             assertEquals(
                     "{\"transferId\":\"canonical-text\"}",
                     new String(join.payload().payload(), StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
+    void actorJoin28LeavesTheSpotFenceJudgementToTheReceivingOwner() throws Exception {
+        String endpoint = "inproc://jvm-canonical-actor-join-fence-" + System.nanoTime();
+        RoutingId sourceRid = RoutingId.from("jvm-canonical-fence-source");
+        RoutingId targetRid = RoutingId.from("jvm-canonical-fence-target");
+        AtomicReference<ServiceWirePilotCodec.ActorJoin28> received = new AtomicReference<>();
+        try (var context = Zlink.createContext();
+                var source = new ZLinkJavaRawMeshNode(context, "mesh");
+                var target = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            source.setRoutingId(sourceRid);
+            source.setBind("inproc://jvm-canonical-fence-source-" + System.nanoTime());
+            target.setRoutingId(targetRid);
+            target.setBind(endpoint);
+            target.setPeerAuthorityResolver(
+                    (mesh, rid, generation) ->
+                            CompletableFuture.completedFuture(
+                                    generation == 0
+                                            ? Optional.empty()
+                                            : Optional.of(
+                                                    new ZLinkInternalMeshNode.PeerAuthorityFence(
+                                                            rid, generation, "source-owner", 1L))));
+            target.setCanonicalActorJoinHandler(
+                    (sourcePeer, join) -> {
+                        received.set(join);
+                        return CompletableFuture.completedFuture(
+                                new ZLinkInternalMeshNode.CanonicalActorJoinResponse(
+                                        false, 7L, List.of()));
+                    });
+            source.start();
+            target.start();
+            source.connectPeer(endpoint, targetRid);
+            awaitAdmitted(source);
+            //  The requester observed an older Spot authority than the fence it sends.
+            ((ZLinkJavaRawSpotNode) source.spotNode())
+                    .rememberSpotAuthority(targetRid, "target-room", 5L, 9L, 11L);
+            var request =
+                    new ZLinkInternalMeshNode.CanonicalActorJoinRequest(
+                            new ZLinkBackendActorRef(sourceRid, "actor-a", 3L),
+                            source.lifecycleGeneration(),
+                            1L,
+                            2L,
+                            targetRid,
+                            target.lifecycleGeneration(),
+                            "target-room",
+                            5L,
+                            10L,
+                            12L,
+                            false,
+                            "ZLinkFrameworkActorJoinRequest",
+                            "application/json",
+                            "{}".getBytes(StandardCharsets.UTF_8));
+
+            var reply =
+                    source.requestCanonicalActorJoin(request, Duration.ofSeconds(1))
+                            .toCompletableFuture()
+                            .get(1, TimeUnit.SECONDS);
+
+            assertFalse(reply.accepted(), "the receiving owner returns its own admission result");
+            ServiceWirePilotCodec.ActorJoin28 join = received.get();
+            assertEquals(10L, join.targetSpot().expectedAuthorityOwnerGeneration());
+            assertEquals(12L, join.targetSpot().expectedOwnerLeaseGeneration());
         }
     }
 

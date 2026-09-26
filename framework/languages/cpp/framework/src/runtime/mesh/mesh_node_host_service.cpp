@@ -910,11 +910,25 @@ mesh_node_host_service_t::create_actor (bool exclusive,
             std::optional<zlink::message_t> raw_request;
             if (request)
                 raw_request = detail::message_to_raw (*request, *_serializers);
-            const auto created =
-              (*target_runtime)
-                ->create_application_actor (stable_type, std::string (actor_id.value ()),
-                                            raw_request, winner->fence.object_generation,
-                                            winner->fence.authority_owner_generation, timeout);
+            // MeshNode §5.1: the target MeshNode holds one activation admission for this Actor
+            // creation until Ready, rejection or failure.
+            std::shared_ptr<void> activation_admission;
+            const auto created = [&] {
+                try {
+                    activation_admission =
+                      (*target_runtime)
+                        ->activation_admission ()
+                        .enter_scoped (detail::activation_admission_t::actor_key (
+                          std::string (actor_id.value ())));
+                }
+                catch (const framework_exception_t &error) {
+                    return detail::result_access_t::failure<actor_ref_t> (error);
+                }
+                return (*target_runtime)
+                  ->create_application_actor (stable_type, std::string (actor_id.value ()),
+                                              raw_request, winner->fence.object_generation,
+                                              winner->fence.authority_owner_generation, timeout);
+            }();
             if (!created) {
                 const auto failed_envelope = actor_terminal_envelope (
                   terminal_codec::request_terminal_result_t::internalError,
@@ -1594,17 +1608,10 @@ mesh_node_host_service_t::close_user_spot (const std::shared_ptr<detail::mesh_no
     const auto read =
       _location_store->read_authority (spot_authority_key (spot.spot_id ())).result ().value ();
     const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
+    // Without an authority no owner can hold this incarnation. Otherwise the
+    // row only addresses the owner, which classifies the request (§7.1).
     if (!snapshot)
         return task_t<bool> (result_t<bool>::success (false));
-    if (snapshot->object_generation != spot.object_generation ())
-        return task_t<bool> (result_t<bool>::failure (framework_error_kind_t::invalid_operation,
-                                                      "User Spot generation is stale"));
-    if (snapshot->allocation.object_kind != placement_object_kind_t::user_spot
-        || snapshot->allocation.state != placement_allocation_state_t::active
-        || snapshot->allocation.target.mesh_name != spot.mesh_name ()
-        || snapshot->allocation.target.node_rid.value () != spot.node_rid ().value ())
-        return task_t<bool> (result_t<bool>::failure (framework_error_kind_t::unavailable,
-                                                      "User Spot owner is moving"));
     const auto source_status = source->native_node ().status ();
     protocol::user_spot_close_header_t command{
       0,
@@ -1723,10 +1730,17 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
             registration->spot_state->close_user_spot = [this, source] (spot_ref_t spot) {
                 return close_user_spot (source, std::move (spot));
             };
+            registration->spot_state->begin_user_spot_close =
+              [source] (const spot_id_t &spot_id, std::uint64_t object_generation,
+                        std::uint64_t authority_owner_generation) {
+                  return source->native_node ().begin_local_user_spot_close (
+                    std::string (spot_id), object_generation, authority_owner_generation);
+              };
             _nodes[index]->configure_user_spot_operations (
-              store, [this, registration, source] (const stateful::object_ref_t &object,
-                                                   const std::string &stable_type,
-                                                   const std::vector<std::byte> &payload) {
+              store,
+              [this, registration, source] (const stateful::object_ref_t &object,
+                                            const std::string &stable_type,
+                                            const std::vector<std::byte> &payload) {
                   std::vector<std::uint8_t> rid_bytes;
                   rid_bytes.reserve (object.key.size ());
                   for (const auto value : object.key)
@@ -1772,6 +1786,18 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                     created->state == spot_create_state_t::created
                       || created->state == spot_create_state_t::existing,
                     std::move (application_reply)};
+              },
+              [registration] (const std::string &spot_id, host::spot_close_begin_t begin,
+                              host::spot_close_done_t done) {
+                  // The materializer registers the activation under this local id.
+                  std::vector<std::uint8_t> rid_bytes;
+                  rid_bytes.reserve (spot_id.size ());
+                  for (const auto value : spot_id)
+                      rid_bytes.push_back (
+                        static_cast<std::uint8_t> (static_cast<unsigned char> (value)));
+                  detail::spot_node_runtime_t (registration->spot_state)
+                    .close_user_spot_owner (zlink::routing_id_t::from (rid_bytes).to_string (),
+                                            std::move (begin), std::move (done));
               });
             if (!registration->spot_state->snapshot.instance_spot_names.empty ()) {
                 if (!instance_relocations)
@@ -1782,7 +1808,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   [source] (const spot_id_t &spot_id, std::string_view stable_type,
                             std::uint64_t object_generation,
                             std::uint64_t authority_owner_generation,
-                            std::function<bool ()> close_local) {
+                            std::function<void ()> close_local) {
                       return source->native_node ().evict_instance_spot (
                         std::string (stable_type), std::string (spot_id), object_generation,
                         authority_owner_generation, std::move (close_local));
@@ -2076,6 +2102,18 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                       return;
                   }
                   const auto creation_request = zlink::message_t::from (*creation_bytes);
+                  // MeshNode §5.1: this MeshNode holds one activation admission for the Actor
+                  // creation until Ready, rejection or failure.
+                  std::shared_ptr<void> activation_admission;
+                  try {
+                      activation_admission = node->activation_admission ().enter_scoped (
+                        detail::activation_admission_t::actor_key (request.actor_id));
+                  }
+                  catch (const framework_exception_t &) {
+                      (void) publish (std::nullopt, std::nullopt, std::nullopt);
+                      completion (failed ());
+                      return;
+                  }
                   const auto created = node->create_application_actor (
                     request.stable_type, request.actor_id, creation_request,
                     request.reservation.object_generation,
@@ -2089,8 +2127,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   const auto joined = node->submit_application_actor_entry_spot_join (
                     actor, node_rid_t::from_string (status.routing_id ().to_string ()),
                     creation_request, timeout,
-                    [request, actor, completion,
-                     publish] (result_t<detail::actor_join_reply_t> joined) mutable {
+                    [request, actor, completion, publish,
+                     activation_admission] (result_t<detail::actor_join_reply_t> joined) mutable {
                         host::actor_create_operation_result_t result;
                         result.reply.header = {
                           request.correlation, 105u,
@@ -2098,6 +2136,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                             protocol::framework_error_code::actorCreateFailed)};
                         if (!joined) {
                             (void) publish (std::nullopt, std::nullopt, std::nullopt);
+                            activation_admission.reset ();
                             completion (std::move (result));
                             return;
                         }
@@ -2129,6 +2168,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                 protocol::framework_error_code::actorCreateFailed)};
                             result.application_reply.reset ();
                         }
+                        activation_admission.reset ();
                         completion (std::move (result));
                     });
                   if (!joined) {
@@ -2189,7 +2229,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
             descriptor.placement_weight = node->placement_weight ();
             descriptor.capacity.actors.limit = node->actor_limit ();
             descriptor.capacity.spots.limit = node->spot_limit ();
-            descriptor.activation_concurrency.limit = node->activation_concurrency_limit ();
+            descriptor.activation_concurrency.limit = node->activation_admission ().limit ();
             descriptor.state = framework_runtime_state_t::serving;
             descriptor.security_identity = "default";
             descriptor.owner_id = owner ? owner->owner_id : std::string{};
@@ -2793,10 +2833,11 @@ void mesh_node_host_service_t::dispatch_application (
                                                     record.release_mailbox_reservation);
     std::shared_ptr<application_dispatch_terminal_owner_t> deferred_terminal;
     try {
+        // A draining runtime admits no new application work, whatever the target
+        // authority state is (Spot address messaging §9).
         if (reject_only || !record.before_application_handler) {
             reject_application_request (record, std::move (parts),
-                                        reject_only ? framework_error_kind_t::shutting_down
-                                                    : framework_error_kind_t::rejected,
+                                        framework_error_kind_t::shutting_down,
                                         "MeshNode is draining and rejects new application work");
             return;
         }

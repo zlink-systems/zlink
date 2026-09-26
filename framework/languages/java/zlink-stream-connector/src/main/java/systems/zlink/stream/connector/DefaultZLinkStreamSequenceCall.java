@@ -138,7 +138,13 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
                         closeMessages(pending);
                     }
                 });
-        return result.orTimeout(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        CompletableFuture.delayedExecutor(timeout.toNanos(), TimeUnit.NANOSECONDS)
+                .execute(
+                        () ->
+                                result.completeExceptionally(
+                                        ZLinkStreamException.validationFailed(
+                                                "Timed out waiting for '" + name + "' sequence.")));
+        return result;
     }
 
     private void processGenericMessage(
@@ -222,13 +228,14 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
             //  run inside sequenceLock and could order its own lock against
             //  a lock it cannot see.
             if (result.completeExceptionally(
-                    new TimeoutException("Timed out waiting for '" + name + "' sequence."))) {
+                    ZLinkStreamException.validationFailed(
+                            "Timed out waiting for '" + name + "' sequence."))) {
                 closeMessages(takeMessages(messages, sequenceLock));
             }
             return;
         }
         CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> waiter =
-                concrete.awaitMessage(name, predicates.get(index))
+                concrete.awaitMessage(name, ignored -> true)
                         .toCompletableFuture()
                         .orTimeout(remainingNanos, TimeUnit.NANOSECONDS);
         currentWaiter.set(waiter);
@@ -241,9 +248,23 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
                     boolean continueSequence = false;
                     boolean closeCurrent = false;
                     List<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> completed = null;
+                    Throwable observationFailure = error;
+                    if (error == null && !result.isCancelled()) {
+                        try {
+                            if (!predicates.get(index).test(message)) {
+                                observationFailure =
+                                        ZLinkStreamException.validationFailed(
+                                                "Message '"
+                                                        + name
+                                                        + "' arrived out of the expected sequence.");
+                            }
+                        } catch (RuntimeException predicateFailure) {
+                            observationFailure = predicateFailure;
+                        }
+                    }
                     synchronized (sequenceLock) {
                         currentWaiter.compareAndSet(waiter, null);
-                        if (error == null) {
+                        if (observationFailure == null) {
                             if (result.isCancelled()) {
                                 closeCurrent = true;
                             } else {
@@ -257,13 +278,21 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
                             }
                         }
                     }
+                    if (observationFailure != null && message != null) {
+                        closeCurrent = true;
+                    }
                     if (closeCurrent) {
                         closeMessage(message);
                     }
                     //  Same rule as the timeout path above: the application
                     //  future is completed with no lock held.
-                    if (error != null) {
-                        if (result.completeExceptionally(error)) {
+                    if (observationFailure != null) {
+                        Throwable failure =
+                                observationFailure instanceof TimeoutException
+                                        ? ZLinkStreamException.validationFailed(
+                                                "Timed out waiting for '" + name + "' sequence.")
+                                        : observationFailure;
+                        if (result.completeExceptionally(failure)) {
                             closeMessages(takeMessages(messages, sequenceLock));
                         }
                     } else if (completed != null && !result.complete(completed)) {

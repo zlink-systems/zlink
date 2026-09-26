@@ -89,14 +89,11 @@ internal sealed class ZLinkCanonicalRelocationTargetOwner(
                         authenticatedSourceNodeRid
                     )
                 )
-                    standaloneActorRuntime.ScheduleTargetCutoverFallback(
-                        prepare,
-                        authenticatedSourceNodeRid
-                    );
+                    standaloneActorRuntime.ScheduleTargetCutoverWarning(prepare);
                 return;
             case ZLinkPlacementObjectKind.UserSpot
             or ZLinkPlacementObjectKind.InstanceSpot when targetRuntime is not null:
-                targetRuntime.ScheduleCanonicalCutoverFallback(prepare, authenticatedSourceNodeRid);
+                targetRuntime.ScheduleCanonicalCutoverWarning(prepare);
                 return;
             default:
                 throw Unavailable("The relocation target is not configured.");

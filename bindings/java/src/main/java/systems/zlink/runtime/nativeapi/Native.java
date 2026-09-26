@@ -10,6 +10,7 @@ import systems.zlink.contracts.errors.ZlinkConfigException;
 import systems.zlink.contracts.errors.ZlinkException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
+import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
@@ -265,7 +266,7 @@ public final class Native {
     private static final MethodHandle MH_STRERROR = downcall("zlink_strerror",
             FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
     private static final MethodHandle MH_HAS = downcall("zlink_has",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
+            FunctionDescriptor.of(ValueLayout.JAVA_BOOLEAN, ValueLayout.ADDRESS));
     private static final MethodHandle MH_SLEEP = downcall("zlink_sleep",
             FunctionDescriptor.ofVoid(ValueLayout.JAVA_INT));
     private static final MethodHandle MH_SET_TLS_SRV = downcall(
@@ -315,15 +316,18 @@ public final class Native {
       FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
         ValueLayout.ADDRESS));
 
+    // C `unsigned long` is 32 bits on Windows (LLP64) and 64 bits on Linux (LP64).
+    private static final ValueLayout C_UNSIGNED_LONG =
+        (ValueLayout) Linker.nativeLinker().canonicalLayouts().get("long");
     private static final MethodHandle MH_STOPWATCH_START = downcall(
       "zlink_stopwatch_start",
       FunctionDescriptor.of(ValueLayout.ADDRESS));
     private static final MethodHandle MH_STOPWATCH_INTERMEDIATE = downcall(
       "zlink_stopwatch_intermediate",
-      FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+      FunctionDescriptor.of(C_UNSIGNED_LONG, ValueLayout.ADDRESS));
     private static final MethodHandle MH_STOPWATCH_STOP = downcall(
       "zlink_stopwatch_stop",
-      FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+      FunctionDescriptor.of(C_UNSIGNED_LONG, ValueLayout.ADDRESS));
 
     private static final MethodHandle MH_THREAD_START = downcall(
       "zlink_thread_start",
@@ -1146,9 +1150,9 @@ public final class Native {
         }
     }
 
-    public static int has(MemorySegment capability) {
+    public static boolean has(MemorySegment capability) {
         try {
-            return (int) MH_HAS.invokeExact(capability);
+            return (boolean) MH_HAS.invokeExact(capability);
         } catch (Throwable t) {
             throw new RuntimeException("zlink_has failed", t);
         }
@@ -1273,9 +1277,15 @@ public final class Native {
         }
     }
 
+    private static long unsignedLong(MethodHandle handle, MemorySegment watch) throws Throwable {
+        return C_UNSIGNED_LONG.byteSize() == Integer.BYTES
+            ? Integer.toUnsignedLong((int) handle.invokeExact(watch))
+            : (long) handle.invokeExact(watch);
+    }
+
     public static long stopwatchIntermediate(MemorySegment watch) {
         try {
-            return (long) MH_STOPWATCH_INTERMEDIATE.invokeExact(watch);
+            return unsignedLong(MH_STOPWATCH_INTERMEDIATE, watch);
         } catch (Throwable t) {
             throw new RuntimeException("zlink_stopwatch_intermediate failed", t);
         }
@@ -1283,7 +1293,7 @@ public final class Native {
 
     public static long stopwatchStop(MemorySegment watch) {
         try {
-            return (long) MH_STOPWATCH_STOP.invokeExact(watch);
+            return unsignedLong(MH_STOPWATCH_STOP, watch);
         } catch (Throwable t) {
             throw new RuntimeException("zlink_stopwatch_stop failed", t);
         }

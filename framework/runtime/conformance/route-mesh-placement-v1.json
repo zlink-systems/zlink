@@ -1,0 +1,579 @@
+{
+  "fixture": "zlink.framework.route-mesh-placement",
+  "version": 1,
+  "rules": {
+    "activeCountSource": "reportingMeshNodeActivationRecords",
+    "locationStoreProjectionIsActiveCountSource": false,
+    "hostWideDrainRemainderIsSeparateFact": true,
+    "limitZeroMeansUnlimited": true,
+    "capacityCountsActivePlusReserved": true,
+    "isAvailableCapacity": "activationConcurrencyAndActorOrSpotHeadroom",
+    "isAvailableRequiresRelocationCapability": false,
+    "isAvailableRequiresPositivePlacementWeight": true,
+    "activationAdmissionOperations": [
+      "actorCreate",
+      "userSpotCreate",
+      "instanceSpotColdActivation",
+      "relocationTargetRestore"
+    ],
+    "activationAdmissionExcludes": [
+      "entrySpot",
+      "actorJoin"
+    ]
+  },
+  "ownerLease": {
+    "renewIntervalMs": 50,
+    "renewTimeoutMs": 100,
+    "ttlMs": 1000,
+    "fencingMarginMs": 200
+  },
+  "scenarios": [
+    {
+      "name": "user-spot-on-first-mesh-node",
+      "locationStore": "available",
+      "meshNodes": [
+        {
+          "meshName": "game",
+          "placementWeightAfterStartup": 100,
+          "actorLimit": 0,
+          "spotLimit": 1,
+          "actorFactory": false,
+          "spotRelocation": "disabled",
+          "activationConcurrency": 128,
+          "instanceSpotFactory": false
+        },
+        {
+          "meshName": "lobby",
+          "placementWeightAfterStartup": 100,
+          "actorLimit": 0,
+          "spotLimit": 1,
+          "actorFactory": false,
+          "spotRelocation": "disabled",
+          "activationConcurrency": 128,
+          "instanceSpotFactory": false
+        }
+      ],
+      "objects": [
+        {
+          "kind": "userSpot",
+          "meshName": "game",
+          "count": 1,
+          "hold": false
+        }
+      ],
+      "expected": [
+        {
+          "meshName": "game",
+          "activeActorCount": 0,
+          "activeSpotCount": 1,
+          "isAvailable": true,
+          "state": "ready"
+        },
+        {
+          "meshName": "lobby",
+          "activeActorCount": 0,
+          "activeSpotCount": 0,
+          "isAvailable": true,
+          "state": "ready"
+        }
+      ]
+    },
+    {
+      "name": "user-spot-on-second-mesh-node",
+      "locationStore": "available",
+      "meshNodes": [
+        {
+          "meshName": "game",
+          "placementWeightAfterStartup": 100,
+          "actorLimit": 0,
+          "spotLimit": 1,
+          "actorFactory": false,
+          "spotRelocation": "disabled",
+          "activationConcurrency": 128,
+          "instanceSpotFactory": false
+        },
+        {
+          "meshName": "lobby",
+          "placementWeightAfterStartup": 100,
+          "actorLimit": 0,
+          "spotLimit": 1,
+          "actorFactory": false,
+          "spotRelocation": "disabled",
+          "activationConcurrency": 128,
+          "instanceSpotFactory": false
+        }
+      ],
+      "objects": [
+        {
+          "kind": "userSpot",
+          "meshName": "lobby",
+          "count": 1,
+          "hold": false
+        }
+      ],
+      "expected": [
+        {
+          "meshName": "game",
+          "activeActorCount": 0,
+          "activeSpotCount": 0,
+          "isAvailable": true,
+          "state": "ready"
+        },
+        {
+          "meshName": "lobby",
+          "activeActorCount": 0,
+          "activeSpotCount": 1,
+          "isAvailable": true,
+          "state": "ready"
+        }
+      ]
+    },
+    {
+      "name": "relocation-disabled-factories-leave-capacity-headroom",
+      "locationStore": "available",
+      "meshNodes": [
+        {
+          "meshName": "arena",
+          "placementWeightAfterStartup": 100,
+          "actorLimit": 0,
+          "spotLimit": 2,
+          "actorFactory": false,
+          "spotRelocation": "disabled",
+          "activationConcurrency": 128,
+          "instanceSpotFactory": false
+        },
+        {
+          "meshName": "market",
+          "placementWeightAfterStartup": 100,
+          "actorLimit": 0,
+          "spotLimit": 2,
+          "actorFactory": false,
+          "spotRelocation": "disabled",
+          "activationConcurrency": 128,
+          "instanceSpotFactory": false
+        }
+      ],
+      "objects": [],
+      "expected": [
+        {
+          "meshName": "arena",
+          "activeActorCount": 0,
+          "activeSpotCount": 0,
+          "isAvailable": true,
+          "state": "ready"
+        },
+        {
+          "meshName": "market",
+          "activeActorCount": 0,
+          "activeSpotCount": 0,
+          "isAvailable": true,
+          "state": "ready"
+        }
+      ]
+    },
+    {
+      "name": "actor-on-one-of-two-mesh-nodes",
+      "locationStore": "available",
+      "meshNodes": [
+        {
+          "meshName": "game",
+          "placementWeightAfterStartup": 100,
+          "actorLimit": 2,
+          "spotLimit": 0,
+          "actorFactory": true,
+          "spotRelocation": "disabled",
+          "activationConcurrency": 128,
+          "instanceSpotFactory": false
+        },
+        {
+          "meshName": "lobby",
+          "placementWeightAfterStartup": 100,
+          "actorLimit": 2,
+          "spotLimit": 0,
+          "actorFactory": false,
+          "spotRelocation": "disabled",
+          "activationConcurrency": 128,
+          "instanceSpotFactory": false
+        }
+      ],
+      "objects": [
+        {
+          "kind": "actor",
+          "meshName": "game",
+          "count": 1,
+          "hold": false
+        }
+      ],
+      "expected": [
+        {
+          "meshName": "game",
+          "activeActorCount": 1,
+          "activeSpotCount": 0,
+          "isAvailable": true,
+          "state": "ready"
+        },
+        {
+          "meshName": "lobby",
+          "activeActorCount": 0,
+          "activeSpotCount": 0,
+          "isAvailable": true,
+          "state": "ready"
+        }
+      ]
+    },
+    {
+      "name": "actor-and-spot-limits-exhausted-on-one-mesh-node",
+      "locationStore": "available",
+      "meshNodes": [
+        {
+          "meshName": "game",
+          "placementWeightAfterStartup": 100,
+          "actorLimit": 1,
+          "spotLimit": 1,
+          "actorFactory": true,
+          "spotRelocation": "disabled",
+          "activationConcurrency": 128,
+          "instanceSpotFactory": false
+        },
+        {
+          "meshName": "lobby",
+          "placementWeightAfterStartup": 100,
+          "actorLimit": 1,
+          "spotLimit": 1,
+          "actorFactory": false,
+          "spotRelocation": "disabled",
+          "activationConcurrency": 128,
+          "instanceSpotFactory": false
+        }
+      ],
+      "objects": [
+        {
+          "kind": "actor",
+          "meshName": "game",
+          "count": 1,
+          "hold": false
+        },
+        {
+          "kind": "userSpot",
+          "meshName": "game",
+          "count": 1,
+          "hold": false
+        }
+      ],
+      "expected": [
+        {
+          "meshName": "game",
+          "activeActorCount": 1,
+          "activeSpotCount": 1,
+          "isAvailable": false,
+          "state": "ready"
+        },
+        {
+          "meshName": "lobby",
+          "activeActorCount": 0,
+          "activeSpotCount": 0,
+          "isAvailable": true,
+          "state": "ready"
+        }
+      ]
+    },
+    {
+      "name": "zero-placement-weight",
+      "locationStore": "available",
+      "meshNodes": [
+        {
+          "meshName": "game",
+          "placementWeightAfterStartup": 0,
+          "actorLimit": 0,
+          "spotLimit": 0,
+          "actorFactory": false,
+          "spotRelocation": "disabled",
+          "activationConcurrency": 128,
+          "instanceSpotFactory": false
+        },
+        {
+          "meshName": "lobby",
+          "placementWeightAfterStartup": 100,
+          "actorLimit": 0,
+          "spotLimit": 0,
+          "actorFactory": false,
+          "spotRelocation": "disabled",
+          "activationConcurrency": 128,
+          "instanceSpotFactory": false
+        }
+      ],
+      "objects": [],
+      "expected": [
+        {
+          "meshName": "game",
+          "activeActorCount": 0,
+          "activeSpotCount": 0,
+          "isAvailable": false,
+          "state": "ready"
+        },
+        {
+          "meshName": "lobby",
+          "activeActorCount": 0,
+          "activeSpotCount": 0,
+          "isAvailable": true,
+          "state": "ready"
+        }
+      ]
+    },
+    {
+      "name": "held-actor-create-uses-activation-admission",
+      "locationStore": "available",
+      "meshNodes": [
+        {
+          "meshName": "game",
+          "placementWeightAfterStartup": 100,
+          "actorLimit": 0,
+          "spotLimit": 0,
+          "activationConcurrency": 1,
+          "actorFactory": true,
+          "instanceSpotFactory": false,
+          "spotRelocation": "disabled"
+        },
+        {
+          "meshName": "lobby",
+          "placementWeightAfterStartup": 100,
+          "actorLimit": 0,
+          "spotLimit": 0,
+          "activationConcurrency": 1,
+          "actorFactory": false,
+          "instanceSpotFactory": false,
+          "spotRelocation": "disabled"
+        }
+      ],
+      "objects": [
+        {
+          "kind": "actor",
+          "meshName": "game",
+          "count": 1,
+          "hold": true
+        }
+      ],
+      "expected": [
+        {
+          "meshName": "game",
+          "activeActorCount": 0,
+          "activeSpotCount": 0,
+          "isAvailable": false,
+          "state": "ready"
+        },
+        {
+          "meshName": "lobby",
+          "activeActorCount": 0,
+          "activeSpotCount": 0,
+          "isAvailable": true,
+          "state": "ready"
+        }
+      ]
+    },
+    {
+      "name": "held-user-spot-create-uses-activation-admission",
+      "locationStore": "available",
+      "meshNodes": [
+        {
+          "meshName": "game",
+          "placementWeightAfterStartup": 100,
+          "actorLimit": 0,
+          "spotLimit": 0,
+          "activationConcurrency": 1,
+          "actorFactory": false,
+          "instanceSpotFactory": false,
+          "spotRelocation": "disabled"
+        },
+        {
+          "meshName": "lobby",
+          "placementWeightAfterStartup": 100,
+          "actorLimit": 0,
+          "spotLimit": 0,
+          "activationConcurrency": 1,
+          "actorFactory": false,
+          "instanceSpotFactory": false,
+          "spotRelocation": "disabled"
+        }
+      ],
+      "objects": [
+        {
+          "kind": "userSpot",
+          "meshName": "game",
+          "count": 1,
+          "hold": true
+        }
+      ],
+      "expected": [
+        {
+          "meshName": "game",
+          "activeActorCount": 0,
+          "activeSpotCount": 0,
+          "isAvailable": false,
+          "state": "ready"
+        },
+        {
+          "meshName": "lobby",
+          "activeActorCount": 0,
+          "activeSpotCount": 0,
+          "isAvailable": true,
+          "state": "ready"
+        }
+      ]
+    },
+    {
+      "name": "held-instance-spot-cold-activation-uses-activation-admission",
+      "locationStore": "available",
+      "meshNodes": [
+        {
+          "meshName": "game",
+          "placementWeightAfterStartup": 100,
+          "actorLimit": 0,
+          "spotLimit": 0,
+          "activationConcurrency": 1,
+          "actorFactory": false,
+          "instanceSpotFactory": true,
+          "spotRelocation": "disabled"
+        },
+        {
+          "meshName": "lobby",
+          "placementWeightAfterStartup": 100,
+          "actorLimit": 0,
+          "spotLimit": 0,
+          "activationConcurrency": 1,
+          "actorFactory": false,
+          "instanceSpotFactory": false,
+          "spotRelocation": "disabled"
+        }
+      ],
+      "objects": [
+        {
+          "kind": "instanceSpot",
+          "meshName": "game",
+          "count": 1,
+          "hold": true
+        }
+      ],
+      "expected": [
+        {
+          "meshName": "game",
+          "activeActorCount": 0,
+          "activeSpotCount": 0,
+          "isAvailable": false,
+          "state": "ready"
+        },
+        {
+          "meshName": "lobby",
+          "activeActorCount": 0,
+          "activeSpotCount": 0,
+          "isAvailable": true,
+          "state": "ready"
+        }
+      ]
+    },
+    {
+      "name": "entry-spot-is-not-an-activation",
+      "locationStore": "available",
+      "meshNodes": [
+        {
+          "meshName": "game",
+          "placementWeightAfterStartup": 100,
+          "actorLimit": 0,
+          "spotLimit": 0,
+          "activationConcurrency": 1,
+          "actorFactory": true,
+          "instanceSpotFactory": false,
+          "spotRelocation": "disabled"
+        },
+        {
+          "meshName": "lobby",
+          "placementWeightAfterStartup": 100,
+          "actorLimit": 0,
+          "spotLimit": 0,
+          "activationConcurrency": 1,
+          "actorFactory": false,
+          "instanceSpotFactory": false,
+          "spotRelocation": "disabled"
+        }
+      ],
+      "objects": [],
+      "expected": [
+        {
+          "meshName": "game",
+          "activeActorCount": 0,
+          "activeSpotCount": 0,
+          "isAvailable": true,
+          "state": "ready"
+        },
+        {
+          "meshName": "lobby",
+          "activeActorCount": 0,
+          "activeSpotCount": 0,
+          "isAvailable": true,
+          "state": "ready"
+        }
+      ]
+    },
+    {
+      "name": "held-actor-join-is-not-an-activation",
+      "locationStore": "available",
+      "meshNodes": [
+        {
+          "meshName": "game",
+          "placementWeightAfterStartup": 100,
+          "actorLimit": 0,
+          "spotLimit": 0,
+          "activationConcurrency": 1,
+          "actorFactory": true,
+          "instanceSpotFactory": false,
+          "spotRelocation": "disabled"
+        },
+        {
+          "meshName": "lobby",
+          "placementWeightAfterStartup": 100,
+          "actorLimit": 0,
+          "spotLimit": 0,
+          "activationConcurrency": 1,
+          "actorFactory": false,
+          "instanceSpotFactory": false,
+          "spotRelocation": "disabled"
+        }
+      ],
+      "objects": [
+        {
+          "kind": "actor",
+          "meshName": "game",
+          "count": 1,
+          "hold": false
+        },
+        {
+          "kind": "userSpot",
+          "meshName": "game",
+          "count": 1,
+          "hold": false
+        },
+        {
+          "kind": "actorJoin",
+          "meshName": "game",
+          "count": 1,
+          "hold": true
+        }
+      ],
+      "expected": [
+        {
+          "meshName": "game",
+          "activeActorCount": 1,
+          "activeSpotCount": 1,
+          "isAvailable": true,
+          "state": "ready"
+        },
+        {
+          "meshName": "lobby",
+          "activeActorCount": 0,
+          "activeSpotCount": 0,
+          "isAvailable": true,
+          "state": "ready"
+        }
+      ]
+    }
+  ]
+}

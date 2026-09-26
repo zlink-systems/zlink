@@ -2539,10 +2539,7 @@ public sealed partial class StatefulServiceRuntimeTests
         services.AddZLinkFramework(options =>
         {
             options.UseTestLocationStore();
-            var node = options
-                .AddRouteMesh("objects")
-                .Listen($"tcp://127.0.0.1:{FindFreeTcpPort()}")
-                .SetSpotLimit(1);
+            var node = options.AddRouteMesh("objects").Listen("tcp://127.0.0.1:0").SetSpotLimit(1);
             node.Objects()
                 .Server()
                 .AddSpotFactory<ProductionUserSpot>(
@@ -2648,9 +2645,7 @@ public sealed partial class StatefulServiceRuntimeTests
         {
             options.UseTestLocationStore();
             options.AddRelocationStore(relocationStore);
-            var node = options
-                .AddRouteMesh("objects")
-                .Listen($"tcp://127.0.0.1:{FindFreeTcpPort()}");
+            var node = options.AddRouteMesh("objects").Listen("tcp://127.0.0.1:0");
             node.Objects()
                 .Server()
                 .AddInstanceSpotFactory<MonitoringInstanceSpot>(
@@ -2703,7 +2698,7 @@ public sealed partial class StatefulServiceRuntimeTests
             options.AddRelocationStore(relocationStore);
             var node = options
                 .AddRouteMesh("objects")
-                .Listen($"tcp://127.0.0.1:{FindFreeTcpPort()}")
+                .Listen("tcp://127.0.0.1:0")
                 .SetSpotLimit(128);
             node.Objects()
                 .Server()
@@ -2821,8 +2816,7 @@ public sealed partial class StatefulServiceRuntimeTests
         var suffix = Guid.NewGuid().ToString("N");
         var targetRid = RoutingId.From($"production-target-{suffix}");
         var sourceRid = RoutingId.From($"production-source-{suffix}");
-        var targetEndpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
-        var sourceEndpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
+        const string bindEndpoint = "tcp://127.0.0.1:0";
         const string stableType = "Tests.ProductionUserSpot";
         var relocationStore = new InMemoryRelocationStore();
 
@@ -2833,7 +2827,7 @@ public sealed partial class StatefulServiceRuntimeTests
             options.AddRelocationStore(relocationStore);
             var node = options
                 .AddRouteMesh("objects")
-                .Listen(targetEndpoint)
+                .Listen(bindEndpoint)
                 .SetRoutingIdPrefix($"production-target-{suffix}")
                 .SetSpotLimit(100);
             node.Objects()
@@ -2851,6 +2845,9 @@ public sealed partial class StatefulServiceRuntimeTests
         targetRid = runtime.PrepareLocationNodeRoutingId();
         await locations.StartAsync(targetRid, CancellationToken.None);
         await runtime.StartAsync(CancellationToken.None);
+        var targetEndpoint = Assert.IsType<string>(
+            runtime.GetSpotNodeRuntime("objects").Node.MeshStatus().LocalEndpoint
+        );
         await autoConnect.StartAsync(
             await runtime.GetStartedStateForRoutingAsync(CancellationToken.None),
             CancellationToken.None
@@ -2863,10 +2860,11 @@ public sealed partial class StatefulServiceRuntimeTests
             await using var sourceContext = Systems.Zlink.Zlink.CreateContext();
             await using var source = new ZLinkManagedMeshNode(sourceContext, "objects");
             source.SetRoutingId(sourceRid);
-            source.SetBind(sourceEndpoint);
+            source.SetBind(bindEndpoint);
+            source.Start();
+            var sourceEndpoint = Assert.IsType<string>(source.Status().LocalEndpoint);
             source.ConnectPeer(targetEndpoint, targetRid);
             target.Node.ConnectPeer(sourceRid, sourceEndpoint);
-            source.Start();
             await WaitUntilAsync(() =>
                 source.Status().AdmittedPeerCount == 1
                 && target.Node.MeshStatus().AdmittedPeerCount == 1
@@ -3161,6 +3159,38 @@ public sealed partial class StatefulServiceRuntimeTests
                 )
             );
             Assert.Equal(ZLinkUserSpotAuthorityState.Ready, retainedPayload.State);
+
+            // Spec §7: the owner has no local incarnation and the Store holds
+            // another generation of this Spot ID. The command 48 owner path and
+            // the owner's own manager Close both end InvalidOperation.
+            var staleOrphanFence = orphanFence with
+            {
+                ObjectGeneration = orphanFence.ObjectGeneration + 1,
+            };
+            Assert.Equal(
+                SubmitResult.Ok,
+                source.CloseUserSpot(
+                    targetRid,
+                    staleOrphanFence,
+                    checked((ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds()),
+                    out var staleOrphanOperation,
+                    TimeSpan.FromSeconds(3)
+                )
+            );
+            await WaitUntilAsync(() => source.Status().PendingInfrastructureMessages > 0);
+            var (staleCompletion, staleParts) = DrainCompletion(source, staleOrphanOperation);
+            ZLinkMessageParts.DisposeAll(staleParts);
+            Assert.Equal((int)RequestResult.Conflict, staleCompletion.TerminalResult);
+            Assert.Equal(
+                (int)ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale,
+                staleCompletion.FailureErrno
+            );
+            var directStale = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await runtime.CloseAsync(
+                    new SpotRef(orphanRid, staleOrphanFence.ObjectGeneration, "objects", targetRid)
+                )
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, directStale.Kind);
         }
         finally
         {
@@ -3180,10 +3210,9 @@ public sealed partial class StatefulServiceRuntimeTests
         var locationStore = new ZLinkProviderLocationRepository(locationProvider);
         var sourceRid = RoutingId.From($"public-source-{suffix}");
         var targetRid = RoutingId.From($"public-target-{suffix}");
-        var sourceEndpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
-        var targetEndpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
+        const string bindEndpoint = "tcp://127.0.0.1:0";
 
-        ServiceProvider Build(RoutingId rid, string endpoint, bool server)
+        ServiceProvider Build(RoutingId rid, bool server)
         {
             var services = new ServiceCollection();
             services.AddZLinkFramework(options =>
@@ -3191,7 +3220,7 @@ public sealed partial class StatefulServiceRuntimeTests
                 options.AddLocationStore(locationProvider);
                 var node = options
                     .AddRouteMesh("objects")
-                    .Listen(endpoint)
+                    .Listen(bindEndpoint)
                     .SetRoutingIdPrefix(rid.ToString())
                     .SetSpotLimit(100);
                 var objects = node.Objects();
@@ -3212,8 +3241,8 @@ public sealed partial class StatefulServiceRuntimeTests
             return services.BuildServiceProvider();
         }
 
-        await using var targetProvider = Build(targetRid, targetEndpoint, true);
-        await using var sourceProvider = Build(sourceRid, sourceEndpoint, false);
+        await using var targetProvider = Build(targetRid, true);
+        await using var sourceProvider = Build(sourceRid, false);
         var target = targetProvider.GetRequiredService<ZLinkFrameworkRuntime>();
         var source = sourceProvider.GetRequiredService<ZLinkFrameworkRuntime>();
         var targetLocations = targetProvider.GetRequiredService<ZLinkLocationRuntime>();
@@ -3226,6 +3255,12 @@ public sealed partial class StatefulServiceRuntimeTests
         await sourceLocations.StartAsync(sourceRid, CancellationToken.None);
         await target.StartAsync(CancellationToken.None);
         await source.StartAsync(CancellationToken.None);
+        var sourceEndpoint = Assert.IsType<string>(
+            source.GetSpotNodeRuntime("objects").Node.MeshStatus().LocalEndpoint
+        );
+        var targetEndpoint = Assert.IsType<string>(
+            target.GetSpotNodeRuntime("objects").Node.MeshStatus().LocalEndpoint
+        );
         targetRid = target.GetSpotNodeRuntime("objects").Node.RoutingId;
         sourceRid = source.GetSpotNodeRuntime("objects").Node.RoutingId;
         await targetAutoConnect.StartAsync(
@@ -4702,13 +4737,6 @@ public sealed partial class StatefulServiceRuntimeTests
                 throw new TimeoutException("The stateful runtime condition was not reached.");
             await Task.Delay(10);
         }
-    }
-
-    private static int FindFreeTcpPort()
-    {
-        using var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
-        listener.Start();
-        return ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
     }
 
     private sealed class RecordingUserSpotOperationTarget : IUserSpotOperationTarget

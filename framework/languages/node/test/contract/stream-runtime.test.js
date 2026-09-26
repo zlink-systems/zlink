@@ -3656,7 +3656,7 @@ test('command 36 decodes the canonical actor route lease emitted by other runtim
   }, 6n).toString('hex'), canonical.toString('hex'));
 });
 
-test('production command 36 preserves its producer fence without duplicating Location authority validation', async () => {
+test('production command 36 is sent by binding identity after owner lifecycle fields advance', async () => {
   const actorId = 'actor-command36-sender-lease';
   const wireHeaders = [];
   const ingressResults = [];
@@ -3725,7 +3725,8 @@ test('production command 36 preserves its producer fence without duplicating Loc
     },
     undefined,
     {
-      retainOutbound: (claim, delivery) => aggregate.admitRelocationOutbound(claim, delivery),
+      retainOutbound: (retainedActorId, delivery) =>
+        aggregate.retainRelocationOutbound(retainedActorId, delivery),
       clearOutbound: (retainedActorId, error) => aggregate.clearRelocation(retainedActorId, error)
     }
   ).promise;
@@ -3740,6 +3741,7 @@ test('production command 36 preserves its producer fence without duplicating Loc
   );
 
   const serviceSubmitResults = [];
+  let ownerLifecycle = { locationGeneration: 11n, ownerLeaseGeneration: 13n };
   const senderHost = new framework.ZLinkFrameworkRuntimeHost({
     registration: framework.createFrameworkRegistration()
   });
@@ -3749,7 +3751,7 @@ test('production command 36 preserves its producer fence without duplicating Loc
         routingId: zlink.RoutingId.from('actor-node'),
         lifecycleGeneration: 4n
       }),
-      async sendActorBoundSession(actor, bindingGeneration, _parts, _flags, actorFence) {
+      async sendActorBoundSession(actor, bindingGeneration) {
         const result = await serviceRuntime.sendBoundSession(
           actor,
           bindingGeneration,
@@ -3757,8 +3759,7 @@ test('production command 36 preserves its producer fence without duplicating Loc
             packetName: 'RelocationNotice',
             contentType: 'application/json',
             payload: Buffer.from('{"accepted":true}')
-          },
-          actorFence
+          }
         );
         serviceSubmitResults.push(result);
         return result;
@@ -3773,8 +3774,7 @@ test('production command 36 preserves its producer fence without duplicating Loc
             actor: { actorId },
             nativeActorRef: serviceActor.ref,
             boundSessionBindingGeneration: binding.bindingGeneration,
-            locationGeneration: 11n,
-            ownerLeaseGeneration: 13n
+            ...ownerLifecycle
           }
         : undefined;
     }
@@ -3789,27 +3789,22 @@ test('production command 36 preserves its producer fence without duplicating Loc
   assert.equal(wireHeaders.length, 1);
   assert.equal(wireHeaders[0].actor.targetNodeGeneration, 4n);
   assert.equal(wireHeaders[0].actor.authorityOwnerGeneration, 11n);
-  assert.equal(wireHeaders[0].actor.ownerLeaseGeneration, 13n);
+  assert.equal(wireHeaders[0].expectedBindingGeneration, binding.bindingGeneration);
   assert.deepEqual(serviceSubmitResults, [SubmitResult.Ok]);
   assert.deepEqual(ingressResults, ['application']);
   assert.equal(deliveries, 1);
 
-  const wrongLeaseResult = await serviceRuntime.sendBoundSession(
-    serviceActor.ref,
-    binding.bindingGeneration,
-    {
-      packetName: 'RelocationNotice',
-      contentType: 'application/json',
-      payload: Buffer.from('{"wrongLease":true}')
-    },
-    {
-      targetNodeGeneration: 4n,
-      authorityOwnerGeneration: 11n,
-      ownerLeaseGeneration: 14n
-    }
-  );
-  assert.equal(wrongLeaseResult, SubmitResult.Ok);
-  assert.equal(ingressResults.at(-1), 'application');
+  // Session-Actor binding section 3 item 3: the binding survives an owner
+  // lifecycle change, so the source keeps sending by SessionRid and binding
+  // generation. The ActorRef's owner lifecycle copies are not send conditions.
+  ownerLifecycle = { locationGeneration: 12n, ownerLeaseGeneration: 14n };
+  await senderHost.createActorManagerOptions()
+    .boundSessionFactory(actorId)
+    .send({ accepted: true })
+    .packetName('RelocationNotice')
+    .submit();
+  assert.deepEqual(serviceSubmitResults, [SubmitResult.Ok, SubmitResult.Ok]);
+  assert.deepEqual(ingressResults, ['application', 'application']);
   assert.equal(deliveries, 2);
   serviceRuntime.close();
 });
@@ -3872,8 +3867,8 @@ test('M1 actorJoin actual command 36 stays FIFO-held until exact atomic route ap
     },
     undefined,
     {
-      retainOutbound: (claim, delivery) =>
-        aggregate.admitRelocationOutbound(claim, delivery),
+      retainOutbound: (actorId, delivery) =>
+        aggregate.retainRelocationOutbound(actorId, delivery),
       clearOutbound: (actorId, error) =>
         aggregate.clearRelocation(actorId, error)
     }
@@ -3961,20 +3956,109 @@ test('M1 actorJoin actual command 36 stays FIFO-held until exact atomic route ap
   );
   await host.boundSessionRelay.boundSessions
     .receiveServiceWireSessionRelocationRoute(commit);
-  assert.equal(await command36(4), 'protocolError');
-  assert.equal(await command36(4, targetFence, binding.bindingGeneration, 'session-owner'), 'protocolError');
-  assert.deepEqual(delivered, [0, 0, 0, 1, 2, 3, 3]);
-  assert.equal(await command36(4, targetFence), 'application');
-  assert.deepEqual(delivered, [0, 0, 0, 1, 2, 3, 3, 4]);
-  assert.equal(await command36(5, {
+  // Session-Actor binding section 3 item 3 and section 8.1: after the route
+  // change the Session owner admits by binding identity alone. The producer
+  // peer and the header's route fields are not a second admission decision.
+  assert.equal(await command36(4), 'application');
+  assert.equal(await command36(5, targetFence, binding.bindingGeneration, 'session-owner'), 'application');
+  assert.equal(await command36(6, targetFence), 'application');
+  assert.equal(await command36(7, {
     ...targetFence,
     ownerLeaseGeneration: 15n
   }), 'application');
-  assert.deepEqual(delivered, [0, 0, 0, 1, 2, 3, 3, 4, 5]);
+  assert.equal(
+    await command36(8, targetFence, binding.bindingGeneration + 1n),
+    'protocolError'
+  );
+  assert.deepEqual(delivered, [0, 0, 0, 1, 2, 3, 3, 4, 5, 6, 7]);
   serviceRuntime.close();
 });
 
-test('actual raw command 36 binds successor header to the authenticated peer tenure before Store', async () => {
+test('command 36 refused as not current is traced with the closed flow vocabulary', async () => {
+  let serviceIngress;
+  const serviceRuntime = new ServiceStatefulRuntime({
+    observePeerConnectionIntentRemoved() { return () => {}; },
+    setServiceIngress(handler) {
+      serviceIngress = handler;
+    }
+  }, 'session-owner', 4n);
+  const serviceActor = serviceRuntime.restoreActorAuthority(
+    'actor-command36-stale-trace',
+    'actor',
+    5n,
+    11n,
+    'session-owner',
+    4n,
+    1n
+  );
+  const traced = [];
+  const begun = [];
+  let tracing = false;
+  serviceRuntime.setDispatchErrorReporter({
+    captureEnabled: () => false,
+    report() {},
+    flow: {
+      begin(outcome) {
+        begun.push(outcome);
+        return tracing ? { trace: event => traced.push(event) } : undefined;
+      }
+    }
+  }, 'play.route');
+  let deliveries = 0;
+  const bindingResult = await serviceRuntime.bindSession(
+    'session',
+    serviceActor.ref,
+    1000,
+    () => {
+      deliveries += 1;
+      return true;
+    }
+  ).promise;
+  assert.equal(bindingResult.terminalResult, RequestResult.Ok);
+  const binding = serviceRuntime.sessionBindings('session')[0];
+  assert.ok(binding);
+  const command36 = expectedBindingGeneration => serviceIngress({
+    command: serviceStatefulWire.M6bServiceWireCommand.boundSessionSend,
+    flags: 0,
+    sourceRoutingId: 'session-owner',
+    sourceNodeGeneration: 4n,
+    parts: [
+      serviceStatefulWire.encodeBoundSessionSendHeader({
+        actor: serviceActor.ref,
+        targetNodeGeneration: 4n,
+        authorityOwnerGeneration: 11n,
+        ownerLeaseGeneration: 13n
+      }, expectedBindingGeneration),
+      serviceWire.encodeApplicationPayload({
+        packetName: 'RelocationNotice',
+        contentType: 'application/json',
+        payload: Buffer.from('{}')
+      })
+    ]
+  });
+
+  // Tracing off: the refusal builds no event.
+  assert.equal(await command36(binding.bindingGeneration + 1n), 'protocolError');
+  assert.deepEqual(traced, []);
+
+  // Session-Actor binding section 3 item 4: tracing on records the refusal.
+  tracing = true;
+  assert.equal(await command36(binding.bindingGeneration + 1n), 'protocolError');
+  assert.equal(await command36(binding.bindingGeneration), 'application');
+  assert.equal(deliveries, 1);
+  assert.equal(traced.length, 1);
+  assert.equal(traced[0].outcome, 'dropped');
+  assert.equal(traced[0].surface, 'streamSession');
+  assert.equal(traced[0].messageKind, 'send');
+  assert.equal(traced[0].errorReason, 'stale_target');
+  assert.equal(traced[0].packetName, 'RelocationNotice');
+  assert.equal(traced[0].actorId, 'actor-command36-stale-trace');
+  assert.equal(traced[0].sourceRid, 'session-owner');
+  assert.deepEqual(begun, ['dropped', 'dropped']);
+  serviceRuntime.close();
+});
+
+test('actual raw command 36 from an authenticated peer is admitted by the current binding alone', async () => {
   const actorId = 'actor-command36-authenticated-source';
   const raw = new RawServiceMeshRuntime({
     descriptor: testServiceNodeDescriptor('session-owner', 4n),
@@ -4025,9 +4109,9 @@ test('actual raw command 36 binds successor header to the authenticated peer ten
     },
     undefined,
     {
-      retainOutbound(claim, delivery) {
+      retainOutbound(actorId, delivery) {
         storeCalls += 1;
-        return aggregate.owner.admitRelocationOutbound(claim, delivery);
+        return aggregate.owner.retainRelocationOutbound(actorId, delivery);
       },
       clearOutbound: (value, error) => aggregate.owner.clearRelocation(value, error)
     }
@@ -4052,17 +4136,20 @@ test('actual raw command 36 binds successor header to the authenticated peer ten
     parts: [header, payload]
   }, 0, false);
 
-  assert.equal(await ingress('source'), 'protocolError');
-  assert.equal(storeCalls, 0);
-  assert.equal(deliveries, 0);
-  assert.equal(await ingress('target'), 'application');
+  // The transport boundary authenticated both peers. Which peer produced the
+  // push is not compared with the header's Actor route (Session-Actor binding
+  // section 8.1); the current binding admits both.
+  assert.equal(await ingress('source'), 'application');
   assert.equal(storeCalls, 1);
   assert.equal(deliveries, 1);
+  assert.equal(await ingress('target'), 'application');
+  assert.equal(storeCalls, 2);
+  assert.equal(deliveries, 2);
   serviceRuntime.close();
   raw.close();
 });
 
-test('actual command 36 retains the exact physical target after off-wire ownership advances first', async () => {
+test('actual command 36 held under a seal is released in order when command 44 commits', async () => {
   const actorId = 'actor-command36-off-wire-owner-advance';
   const sourceRef = {
     actorId,
@@ -4107,7 +4194,7 @@ test('actual command 36 retains the exact physical target after off-wire ownersh
     },
     undefined,
     {
-      retainOutbound: (claim, delivery) => aggregate.owner.admitRelocationOutbound(claim, {
+      retainOutbound: (actorId, delivery) => aggregate.owner.retainRelocationOutbound(actorId, {
         deliver: () => delivery.deliver(),
         fail(error) {
           failed.push(error);
@@ -4179,24 +4266,16 @@ test('actual command 36 retains the exact physical target after off-wire ownersh
     actorId,
     seal.sealId,
     'off-wire-owner-advance-apply',
-    'commit',
     async () => {
       assert.equal(await aggregate.port.abortActorRouteSeal(actorId, seal.sealId), true);
-    },
-    {
-      actorId,
-      objectGeneration: 5n,
-      actorNodeRid: 'target',
-      actorNodeGeneration: 5n,
-      sessionIdentity: 'session',
-      bindingGeneration: 1n
     }
   );
-  await waitForCondition(() => delivered.length === 3, 'off-wire advanced target FIFO drain');
-  assert.deepEqual(delivered, [1, 2, 3]);
-  assert.equal(failed.length, 2);
+  // Every push held under the seal was admitted by the current binding, so
+  // command 44 releases all of them; the producer node is not judged again.
+  await waitForCondition(() => delivered.length === 4, 'held push FIFO drain');
+  assert.deepEqual(delivered, [1, 2, 3, 4]);
+  assert.equal(failed.length, 1);
   assert.match(String(failed[0]), /capacity/);
-  assert.match(String(failed[1]), /did not match command 44 proof/);
   serviceRuntime.close();
 });
 
@@ -4248,8 +4327,8 @@ test('actual command 36 FIFO bounds capacity and settles false throw and duplica
     },
     undefined,
     {
-      retainOutbound: (claim, delivery) => aggregate.owner.admitRelocationOutbound(
-        claim,
+      retainOutbound: (actorId, delivery) => aggregate.owner.retainRelocationOutbound(
+        actorId,
         {
           deliver: () => delivery.deliver(),
           fail(error) {
@@ -4325,18 +4404,9 @@ test('actual command 36 FIFO bounds capacity and settles false throw and duplica
     actorId,
     sourceSeal.sealId,
     'command36-source-apply',
-    'commit',
     async () => aggregate.publish(targetRef, {
       sealId: sourceSeal.sealId
-    }),
-    {
-      actorId,
-      objectGeneration: 5n,
-      actorNodeRid: 'target',
-      actorNodeGeneration: 5n,
-      sessionIdentity: 'session',
-      bindingGeneration: 1n
-    }
+    })
   );
   await waitForCondition(() => attempted.length === 2, 'false delivery settlement');
   assert.deepEqual(attempted, [1, 2]);
@@ -4369,7 +4439,6 @@ test('actual command 36 FIFO bounds capacity and settles false throw and duplica
     actorId,
     throwSeal.sealId,
     'command36-throw-apply',
-    'abort',
     async () => {
       assert.equal(await aggregate.port.abortActorRouteSeal(actorId, throwSeal.sealId), true);
     }
@@ -4440,18 +4509,7 @@ test('per-actor relocation lineage and pending capacity stay bounded across repe
       bindingGeneration: 1n,
       ownerLeaseGeneration: 13n
     });
-    const retain = value => aggregate.owner.admitRelocationOutbound({
-      actorId,
-      objectGeneration: 5n,
-      actorNodeRid: 'source',
-      actorNodeGeneration: 4n,
-      authorityOwnerGeneration: 11n,
-      ownerLeaseGeneration: 13n,
-      producerNodeRid: 'source',
-      producerNodeGeneration: 4n,
-      sessionIdentity: 'session',
-      bindingGeneration: 1n
-    }, {
+    const retain = value => aggregate.owner.retainRelocationOutbound(actorId, {
       async deliver() {
         delivered.push(value);
         return true;
@@ -4467,7 +4525,6 @@ test('per-actor relocation lineage and pending capacity stay bounded across repe
       actorId,
       sealId,
       `bounded-lineage-apply-${iteration}`,
-      'abort',
       async () => {
         assert.equal(await aggregate.port.abortActorRouteSeal(actorId, sealId), true);
       }
@@ -9137,8 +9194,6 @@ async function testActorRouteAggregate(
     relocationSnapshot: (actorId, sealId) => registry.relocationSnapshot(actorId, sealId),
     retainRelocationOutbound: (actorId, operation, sealId) =>
       registry.retainRelocationOutbound(actorId, operation, sealId),
-    admitRelocationOutbound: (claim, operation) =>
-      registry.admitRelocationOutbound(claim, operation),
     discardRelocationOutbound: (actorId, sealId, error) =>
       registry.discardRelocationOutbound(actorId, sealId, error),
     applyRelocation: (...args) => registry.applyRelocation(...args),

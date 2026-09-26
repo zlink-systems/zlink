@@ -181,15 +181,22 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             );
         }
 
+        // _replyReceivedHandlers is the one owner of whether the JavaScript boundary
+        // subscribes to reply-received notifications at all: ZlinkStreamRuntime.jspre
+        // used to subscribe unconditionally, which meant every WebGL connector always
+        // looked like it had a hook to ZlinkStreamConnector.ts's own no-hook early
+        // return, so every request paid to copy the reply context and payload across
+        // the boundary whether or not C# had anything registered. Telling JavaScript
+        // only on the set's 0/1 transition - not on every Add/Remove - keeps this one
+        // decision point instead of adding a second place that tracks interest.
         public IDisposable OnReplyReceived(Action<ZlinkStreamReplyReceivedContext> handler)
         {
             if (handler is null)
                 throw new ArgumentNullException(nameof(handler));
             _replyReceivedHandlers.Add(handler);
-            return new HookRegistration<ZlinkStreamReplyReceivedContext>(
-                _replyReceivedHandlers,
-                handler
-            );
+            if (_replyReceivedHandlers.Count == 1)
+                ZlinkStreamInterop.SetReplyReceivedInterest(_handle, 1);
+            return new ReplyReceivedHookRegistration(this, handler);
         }
 
         /// <summary>Callbacks waiting for the next <see cref="Dispatch" />.</summary>
@@ -1398,6 +1405,36 @@ namespace Systems.Zlink.Stream.Connector.Runtime
             public void Dispose()
             {
                 _handlers.Remove(_handler);
+            }
+        }
+
+        // Not a HookRegistration<T>: disposing the last reply received hook has to
+        // tell JavaScript interest dropped to zero (see OnReplyReceived), which none
+        // of the other hook kinds need.
+        private sealed class ReplyReceivedHookRegistration : IDisposable
+        {
+            private readonly ZlinkStreamWebGlConnector _connector;
+            private readonly Action<ZlinkStreamReplyReceivedContext> _handler;
+
+            internal ReplyReceivedHookRegistration(
+                ZlinkStreamWebGlConnector connector,
+                Action<ZlinkStreamReplyReceivedContext> handler
+            )
+            {
+                _connector = connector;
+                _handler = handler;
+            }
+
+            public void Dispose()
+            {
+                // Remove's own result, not a re-check of Count: a second Dispose of
+                // the same registration removes nothing, so it must not repeat the
+                // interop call - Count alone cannot tell "just transitioned to zero"
+                // from "already zero and unrelated hooks came and went since".
+                if (!_connector._replyReceivedHandlers.Remove(_handler))
+                    return;
+                if (_connector._replyReceivedHandlers.Count == 0)
+                    ZlinkStreamInterop.SetReplyReceivedInterest(_connector._handle, 0);
             }
         }
 

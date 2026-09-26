@@ -55,17 +55,19 @@ final class ZLinkSpotActivationFactory {
         this.relocationCoordinationModes = Map.copyOf(relocationCoordinationModes);
     }
 
+    /** Activates a User Spot on the MeshNode {@code nodeRid} that admitted it. */
     CompletionStage<SpotActivationCreateResult> activate(
             Class<? extends ZLinkSpot<?>> spotType,
             ZLinkBackendSpot backendSpot,
-            ZLinkMessage request) {
+            ZLinkMessage request,
+            RoutingId nodeRid) {
         ZLinkMessage effectiveRequest = request == null ? ZLinkMessage.empty() : request;
         DefaultSpotContext context =
                 new DefaultSpotContext(
                         host,
                         workerPool,
                         handlerLoader,
-                        host.primaryNode().routingId(),
+                        nodeRid,
                         backendSpot,
                         new ZLinkSerialExecutionQueue(
                                 host.serialExecutor(), ZLinkExecutionLanePolicy.spot()),
@@ -120,14 +122,15 @@ final class ZLinkSpotActivationFactory {
                         });
     }
 
+    /** Activates a relocated User Spot on the target MeshNode {@code nodeRid}. */
     CompletionStage<SpotActivationCreateResult> activateRelocation(
-            Class<? extends ZLinkSpot<?>> spotType, ZLinkBackendSpot backendSpot) {
+            Class<? extends ZLinkSpot<?>> spotType, ZLinkBackendSpot backendSpot, RoutingId nodeRid) {
         DefaultSpotContext context =
                 new DefaultSpotContext(
                         host,
                         workerPool,
                         handlerLoader,
-                        host.primaryNode().routingId(),
+                        nodeRid,
                         backendSpot,
                         new ZLinkSerialExecutionQueue(
                                 host.serialExecutor(), ZLinkExecutionLanePolicy.spot()),
@@ -238,18 +241,15 @@ final class ZLinkSpotActivationFactory {
         return activation;
     }
 
+    /** Activates an Instance Spot on the MeshNode {@code nodeRid} of {@code meshName}. */
     CompletionStage<ZLinkInstanceSpotActivation> activateInstance(
             String meshName,
+            RoutingId nodeRid,
             Class<? extends ZLinkInstanceSpot> spotType,
             ZLinkBackendSpot backendSpot) {
         DefaultInstanceSpotContext context =
                 new DefaultInstanceSpotContext(
-                        host,
-                        workerPool,
-                        handlerLoader,
-                        meshName,
-                        host.primaryNode().routingId(),
-                        backendSpot);
+                        host, workerPool, handlerLoader, meshName, nodeRid, backendSpot);
         ZLinkInstanceSpot spot;
         try {
             spot =

@@ -219,15 +219,15 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
             String remoteEndpoint = endpoint(peer);
             RoutingId remoteRid = peer.routingId();
             peer.close();
-            await(() -> closed(local));
+            await(() -> !admitted(local));
             try (var replacement = new ZLinkJavaRawMeshNode(context, "mesh")) {
                 replacement.setRoutingId(remoteRid);
                 replacement.setBind(remoteEndpoint);
                 replacement.start();
-                // Install the replacement intent through the existing public
-                // owner after it has observed the admitted connection close.
-                local.replacePeerConnection(
-                        remoteEndpoint, remoteRid, replacement.lifecycleGeneration(), "default");
+                // Transport loss leaves the intent open for Core's reconnect
+                // (mesh-node §7.1); replacement closes it through the owner.
+                replaceAfterClose(
+                        local, remoteEndpoint, remoteRid, replacement.lifecycleGeneration());
                 var announce =
                         ZLinkJavaRawMeshNode.class.getDeclaredMethod(
                                 "announceExpectedPeers", long.class);
@@ -274,13 +274,13 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
             String remoteEndpoint = endpoint(peer);
             RoutingId remoteRid = peer.routingId();
             peer.close();
-            await(() -> closed(local));
+            await(() -> !admitted(local));
             try (var replacement = new ZLinkJavaRawMeshNode(context, "mesh")) {
                 replacement.setRoutingId(remoteRid);
                 replacement.setBind(remoteEndpoint);
                 replacement.start();
-                local.replacePeerConnection(
-                        remoteEndpoint, remoteRid, replacement.lifecycleGeneration(), "default");
+                replaceAfterClose(
+                        local, remoteEndpoint, remoteRid, replacement.lifecycleGeneration());
                 await(() -> admitted(local) && admitted(replacement));
                 assertFalse(drains.isSealed("mesh"));
                 assertEquals(
@@ -400,15 +400,6 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
                 .get(2, TimeUnit.SECONDS);
     }
 
-    private static boolean monitorRegistered(ZLinkJavaRawMeshNode node, String endpointPair) {
-        try {
-            return ((java.util.Map<?, ?>) field(node, "monitorConnectionIds"))
-                    .containsKey(endpointPair);
-        } catch (ReflectiveOperationException e) {
-            throw new AssertionError(e);
-        }
-    }
-
     private static boolean ready(ZLinkJavaRawMeshNode node, RoutingId peer) {
         try {
             var method =
@@ -456,12 +447,18 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
         return node.peers().stream().anyMatch(p -> p.state() == MeshPeerState.ADMITTED);
     }
 
-    // Manual re-connection of a fixed RID requires the previous pipe's
-    // confirmed close (mesh-node §7.1 (3)), which peers() publishes as
-    // CLOSED. "Not ADMITTED" is weaker: CONNECTING still owns a reconnecting
-    // Core intent and replacePeerConnection rejects it.
-    private static boolean closed(ZLinkJavaRawMeshNode node) {
-        return node.peers().stream().anyMatch(p -> p.state() == MeshPeerState.CLOSED);
+    // A transport loss leaves the intent open for Core's reconnect (mesh-node
+    // §7.1). The first call requests closure; Core's selected-route result
+    // signals when that closure has completed.
+    private static long replaceAfterClose(
+            ZLinkJavaRawMeshNode node, String endpoint, RoutingId rid, long lifecycleGeneration)
+            throws Exception {
+        long oldIntent = node.connectionIntentIds().get(0);
+        assertThrows(
+                IllegalStateException.class,
+                () -> node.replacePeerConnection(endpoint, rid, lifecycleGeneration, "default"));
+        await(() -> !node.isPeerConnectionClosing(oldIntent));
+        return node.replacePeerConnection(endpoint, rid, lifecycleGeneration, "default");
     }
 
     private static Object field(Object owner, String name) throws ReflectiveOperationException {

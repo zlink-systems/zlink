@@ -348,7 +348,7 @@ Application Job Queue는 별도의 job-count limit이다. Manual 범위는 `1..2
 ```cpp
 // DI에서 주입받은 인스턴스
 zlink::framework::route_mesh_runtime_options_t &placement = route_mesh_runtime_options;
-placement.placement_weight (50); // 이 node로 가는 새 Actor·Spot 배치 비중을 낮춘다
+placement.mesh ("play").placement_weight (50); // play MeshNode로 가는 새 Actor·Spot 배치 비중을 낮춘다
 placement.channel ("play.api").weight (0); // 이 Channel Server를 선택 대상에서 제외한다
 ```
 
@@ -356,10 +356,10 @@ placement.channel ("play.api").weight (0); // 이 Channel Server를 선택 대�
 
 | Property | 기본값 | 의미 |
 | --- | --- | --- |
-| `route_mesh_runtime_options_t::placement_weight()`/`(value)` | 등록 시점 값 | node 단위 Actor·Spot 배치 가중치 |
+| `route_mesh_runtime_options_t::mesh(name).placement_weight()`/`(value)` | 등록 시점 값 | MeshNode 단위 Actor·Spot 배치 가중치 |
 | `route_mesh_runtime_options_t::channel(name).weight()`/`(value)` | 등록 시점 값 | ChannelName 단위 Server 선택 가중치 |
 
-**완료 결과.** 동기 get/set이다. 즉시 적용되며 별도 완료 신호가 없다. 등록되지 않은 ChannelName을
+**완료 결과.** 동기 get/set이다. 즉시 적용되며 별도 완료 신호가 없다. 등록되지 않은 MeshName이나 ChannelName을
 조회하면 configuration error다.
 
 **선택 기준.** 운영 중 배치나 트래픽 비중을 조정할 때 사용한다. `max_message_size`를 포함한 transport

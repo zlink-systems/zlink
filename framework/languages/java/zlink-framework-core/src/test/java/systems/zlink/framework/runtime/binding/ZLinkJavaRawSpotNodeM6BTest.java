@@ -15,8 +15,6 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
-import systems.zlink.contracts.eventing.MonitorEvent;
-import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SendFlags;
@@ -42,7 +40,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
@@ -52,7 +49,6 @@ import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
 import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -71,19 +67,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkJavaRawSpotNodeM6BTest {
-    @Test
-    void sendRouteLivenessSnapshotAllowsPreviouslyReadyValidationOnly() {
-        assertTrue(
-                ZLinkJavaRawMeshNode.sendRouteLivenessAllows(
-                        ZLinkServiceLivenessRegistry.Readiness.READY));
-        assertTrue(
-                ZLinkJavaRawMeshNode.sendRouteLivenessAllows(
-                        ZLinkServiceLivenessRegistry.Readiness.VALIDATING_PREVIOUSLY_READY));
-        assertFalse(
-                ZLinkJavaRawMeshNode.sendRouteLivenessAllows(
-                        ZLinkServiceLivenessRegistry.Readiness.NOT_READY));
-    }
-
     @Test
     void serviceDescriptorStaysPreparingUntilHostMarksReady() throws Exception {
         RoutingId targetRid = RoutingId.from("jvm-ready-target");
@@ -345,152 +328,6 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 assertEquals("application/example", receivedContentType.get(1, TimeUnit.SECONDS));
             }
         }
-    }
-
-    @Test
-    void actorSendKeepsTheSelectedRouteWhileADuplicateCandidateRevalidates() throws Exception {
-        String targetEndpoint = "inproc://jvm-revalidation-target-" + System.nanoTime();
-        String callerEndpoint = "inproc://jvm-revalidation-caller-" + System.nanoTime();
-        RoutingId targetRid = RoutingId.from("jvm-revalidation-target");
-        RoutingId callerRid = RoutingId.from("jvm-revalidation-caller");
-        try (var context = Zlink.createContext();
-                var target = new ZLinkJavaRawMeshNode(context, "mesh");
-                var caller = new ZLinkJavaRawMeshNode(context, "mesh")) {
-            target.setRoutingId(targetRid);
-            target.setBind(targetEndpoint);
-            caller.setRoutingId(callerRid);
-            caller.setBind(callerEndpoint);
-            List<String> delivered = new CopyOnWriteArrayList<>();
-            target.spotNode()
-                    .entrySpot()
-                    .onDispatchEvent(
-                            info -> {
-                                if (info.event() != ZLinkBackendSpotDispatchEvent.ACTOR_READABLE) {
-                                    return;
-                                }
-                                try {
-                                    delivered.add(
-                                            info.actorMessages()
-                                                    .getLast()
-                                                    .message()
-                                                    .toUtf8String());
-                                } finally {
-                                    info.actorMessages()
-                                            .forEach(
-                                                    systems.zlink.framework.runtime.internal.backend
-                                                                    .ZLinkBackendActorReceived
-                                                            ::close);
-                                }
-                            });
-            target.start();
-            caller.start();
-            acceptAnySource(target);
-            acceptAnySource(caller);
-            caller.connectPeer(targetEndpoint, targetRid);
-            awaitAdmitted(caller, targetRid);
-
-            ZLinkBackendActorRef actor;
-            try (Message create = Message.from("create")) {
-                actor = target.spotNode().createActor("revalidated-actor", create);
-            }
-            target.spotNode().rememberActorAuthority(actor, 41, 1);
-            caller.spotNode().rememberActorAuthority(actor, 41, 1);
-
-            //  Control: the strictly ready route carries the send, so the
-            //  second send below is distinguished by the revalidation window
-            //  alone and not by anything else in this fixture.
-            sendToRemoteActor(caller, actor, "before-revalidation");
-            awaitDelivery(delivered, "before-revalidation");
-
-            //  A second physical connection observed for the same
-            //  (MeshName, RID) pair is the duplicate candidate of mesh-node
-            //  §7.1: the admission guard keeps the connection it already
-            //  selected and excludes the new one from target selection. It
-            //  only pulls the selected pair's validation forward, and
-            //  transport-liveness §5 takes readiness away from a connection
-            //  only when a new one actually replaced it.
-            observeDuplicateCandidate(caller, targetRid, targetEndpoint);
-            assertTrue(
-                    caller.peers().stream()
-                            .noneMatch(
-                                    peer ->
-                                            peer.routingId().equals(targetRid)
-                                                    && peer.state() == MeshPeerState.ADMITTED),
-                    "the duplicate candidate must open the revalidation window");
-
-            sendToRemoteActor(caller, actor, "during-revalidation");
-            awaitDelivery(delivered, "during-revalidation");
-        }
-    }
-
-    /**
-     * Drives the real monitor observation for one more physical connection to an already-admitted
-     * peer. The strict ready gate drops for the pair validation the observation pulls forward,
-     * which is exactly the state an exact-route send must still be able to use.
-     */
-    private static void observeDuplicateCandidate(
-            ZLinkJavaRawMeshNode node, RoutingId peerRoutingId, String peerEndpoint)
-            throws Exception {
-        MonitorEvent candidate =
-                new MonitorEvent(
-                        MonitorEventType.CONNECTION_READY,
-                        1,
-                        Optional.of(peerRoutingId),
-                        "inproc://jvm-revalidation-local",
-                        peerEndpoint,
-                        7,
-                        0,
-                        1);
-        Method observe =
-                ZLinkJavaRawMeshNode.class.getDeclaredMethod(
-                        "observeConnectionReady", MonitorEvent.class, RoutingId.class);
-        observe.setAccessible(true);
-        observe.invoke(node, candidate, peerRoutingId);
-    }
-
-    private static void acceptAnySource(ZLinkJavaRawMeshNode node) {
-        node.setPeerAuthorityResolver(
-                (meshName, candidateRid, candidateGeneration) ->
-                        CompletableFuture.completedFuture(
-                                candidateGeneration > 0
-                                        ? Optional.of(
-                                                new ZLinkInternalMeshNode.PeerAuthorityFence(
-                                                        candidateRid,
-                                                        candidateGeneration,
-                                                        "revalidation-owner-" + candidateRid,
-                                                        1))
-                                        : Optional.empty()));
-    }
-
-    private static void sendToRemoteActor(
-            ZLinkJavaRawMeshNode caller, ZLinkBackendActorRef actor, String payload)
-            throws Exception {
-        List<Message> parts =
-                List.of(
-                        Message.from(
-                                ZLinkStreamHeaderCodec.encode(
-                                        new ZLinkStreamHeader(
-                                                "RevalidationPacket", Map.of(), Optional.empty()))),
-                        Message.from(payload));
-        try {
-            caller.spotNode()
-                    .sendToActorAsync(actor, parts)
-                    .toCompletableFuture()
-                    .get(2, TimeUnit.SECONDS);
-        } finally {
-            parts.forEach(Message::close);
-        }
-    }
-
-    private static void awaitDelivery(List<String> delivered, String payload)
-            throws InterruptedException {
-        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
-        while (!delivered.contains(payload) && System.nanoTime() < deadline) {
-            Thread.sleep(1);
-        }
-        assertTrue(
-                delivered.contains(payload),
-                "the Actor never received " + payload + ": " + delivered);
     }
 
     private static MeshPeerEntry awaitAdmitted(ZLinkJavaRawMeshNode node)
@@ -2703,13 +2540,11 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             sessionNode.setBoundSessionSendHandler(
                     (sourceNodeRid, sourceNodeGeneration, command, payload) -> {
                         boolean accepted =
-                                sessionOwner.matchesBoundSessionSend(
-                                                sourceNodeRid, sourceNodeGeneration, command)
-                                        && sessionOwner.acceptBoundSessionSend(
-                                                sourceNodeRid,
-                                                sourceNodeGeneration,
-                                                command,
-                                                payload);
+                                sessionOwner.matchesBoundSessionSend(command)
+                                        && sessionOwner
+                                                .acceptBoundSessionSendAsync(command, payload)
+                                                .toCompletableFuture()
+                                                .join();
                         return boundPushCalls.incrementAndGet() == 1
                                 ? firstBoundPushSettlement
                                 : CompletableFuture.completedFuture(accepted);
@@ -2952,6 +2787,209 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             assertEquals("alpha", reactivated.stableType());
             assertTrue(reactivated.spot().lifecycleGeneration() > firstGeneration);
         }
+    }
+
+    @Test
+    void acceptedInstanceSpotRequestCompletesAfterAdmissionSeals() throws Exception {
+        String endpoint = "inproc://jvm-m6b-closing-instance-" + System.nanoTime();
+        RoutingId targetRid = RoutingId.from("jvm-m6b-closing-target");
+        RoutingId sourceRid = RoutingId.from("jvm-m6b-closing-source");
+        String spotId = "jvm-m6b-closing-spot";
+        CompletableFuture<Void> queued = new CompletableFuture<>();
+        try (var context = Zlink.createContext();
+                var targetNode = new ZLinkJavaRawMeshNode(context, "mesh");
+                var sourceNode = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            targetNode.setRoutingId(targetRid);
+            targetNode.setBind(endpoint);
+            sourceNode.setRoutingId(sourceRid);
+            sourceNode.setBind("inproc://jvm-m6b-closing-source-" + System.nanoTime());
+            targetNode.start();
+            sourceNode.start();
+            sourceNode.connectPeer(endpoint, targetRid);
+            awaitAdmitted(sourceNode, targetRid);
+
+            ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) targetNode.spotNode();
+            spots.registerInstanceSpotType(
+                    "orders",
+                    (type, route, spot) -> {
+                        spot.onDispatchEvent(info -> queued.complete(null));
+                        return CompletableFuture.completedFuture(null);
+                    });
+            var route =
+                    new ZLinkServiceM6BWireCodec.InstanceRouteFence(
+                            targetRid,
+                            targetNode.lifecycleGeneration(),
+                            spotId,
+                            41,
+                            "owner-a",
+                            17,
+                            9,
+                            "store-3");
+            spots.registerInstanceSpotAuthority("orders", route);
+
+            try (Message packet = Message.from("Packet");
+                    Message payload = Message.from("queued")) {
+                var request =
+                        sourceNode
+                                .requestInstanceSpot(
+                                        route,
+                                        "orders",
+                                        null,
+                                        new byte[0],
+                                        List.of(packet, payload),
+                                        Duration.ofSeconds(10))
+                                .toCompletableFuture();
+                queued.get(2, TimeUnit.SECONDS);
+                ZLinkBackendSpot spot = spots.localSpot(spotId);
+                assertNotNull(spot);
+                spot.sealSpotAdmission(
+                        () ->
+                                new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.NOT_FOUND, "sealed"));
+                ZLinkBackendReceived accepted = spot.recvRoute(ZLinkBackendRecvMode.DONT_WAIT);
+                assertNotNull(accepted);
+                try (accepted;
+                        Message response = Message.from("accepted")) {
+                    accepted.reply().accept(List.of(response));
+                }
+                List<Message> replies = request.get(2, TimeUnit.SECONDS);
+                try {
+                    assertEquals("accepted", replies.getFirst().toUtf8String());
+                } finally {
+                    replies.forEach(Message::close);
+                }
+            }
+        }
+    }
+
+    @Test
+    void instanceSpotRequestAfterAdmissionSealsGetsFailureReply() throws Exception {
+        String endpoint = "inproc://jvm-m6b-sealed-instance-" + System.nanoTime();
+        RoutingId targetRid = RoutingId.from("jvm-m6b-sealed-target");
+        RoutingId sourceRid = RoutingId.from("jvm-m6b-sealed-source");
+        String spotId = "jvm-m6b-sealed-spot";
+        try (var context = Zlink.createContext();
+                var targetNode = new ZLinkJavaRawMeshNode(context, "mesh");
+                var sourceNode = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            targetNode.setRoutingId(targetRid);
+            targetNode.setBind(endpoint);
+            sourceNode.setRoutingId(sourceRid);
+            sourceNode.setBind("inproc://jvm-m6b-sealed-source-" + System.nanoTime());
+            targetNode.start();
+            sourceNode.start();
+            sourceNode.connectPeer(endpoint, targetRid);
+            awaitAdmitted(sourceNode, targetRid);
+
+            ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) targetNode.spotNode();
+            spots.registerInstanceSpotType("orders");
+            var route =
+                    new ZLinkServiceM6BWireCodec.InstanceRouteFence(
+                            targetRid,
+                            targetNode.lifecycleGeneration(),
+                            spotId,
+                            41,
+                            "owner-a",
+                            17,
+                            9,
+                            "store-3");
+            spots.registerInstanceSpotAuthority("orders", route);
+            ZLinkBackendSpot spot =
+                    spots.activateInstanceSpot(spotId, "orders")
+                            .toCompletableFuture()
+                            .get(2, TimeUnit.SECONDS)
+                            .spot();
+            spot.sealSpotAdmission(
+                    () -> new ZLinkFrameworkException(ZLinkFrameworkErrorKind.NOT_FOUND, "sealed"));
+
+            try (Message packet = Message.from("Packet");
+                    Message payload = Message.from("late")) {
+                var request =
+                        sourceNode
+                                .requestInstanceSpot(
+                                        route,
+                                        "orders",
+                                        null,
+                                        new byte[0],
+                                        List.of(packet, payload),
+                                        Duration.ofSeconds(10))
+                                .toCompletableFuture();
+                ExecutionException failure =
+                        assertThrows(
+                                ExecutionException.class, () -> request.get(2, TimeUnit.SECONDS));
+                assertTrue(failure.getCause() instanceof ZLinkFrameworkException);
+                assertEquals(
+                        ZLinkFrameworkErrorKind.NOT_FOUND,
+                        ((ZLinkFrameworkException) failure.getCause()).kind());
+            }
+        }
+    }
+
+    @Test
+    void sealedSpotRejectsNewRouteWhileAcceptedRouteRemainsDrainable() {
+        ZLinkJavaRawSpot spot = new ZLinkJavaRawSpot(null, "failed-close-spot", 1);
+        var rejection = new ZLinkFrameworkException(ZLinkFrameworkErrorKind.REJECTED, "closing");
+
+        AtomicReference<String> reply = new AtomicReference<>();
+        try (Message request = Message.from("request");
+                Message response = Message.from("accepted")) {
+            ZLinkBackendReceived received =
+                    new ZLinkBackendReceived(
+                            ZLinkBackendRequestResult.OK,
+                            Optional.empty(),
+                            Optional.empty(),
+                            Optional.empty(),
+                            new byte[0],
+                            new byte[0],
+                            List.of(request),
+                            parts -> reply.set(parts.getFirst().toUtf8String()),
+                            () -> {},
+                            "application/json");
+            spot.enqueueRoute(received).toCompletableFuture().join();
+            spot.sealSpotAdmission(() -> rejection);
+            ZLinkBackendReceived late =
+                    new ZLinkBackendReceived(
+                            ZLinkBackendRequestResult.OK,
+                            Optional.empty(),
+                            Optional.empty(),
+                            Optional.empty(),
+                            new byte[0],
+                            new byte[0],
+                            List.of(Message.from("late")),
+                            parts -> {},
+                            () -> {},
+                            "application/json");
+            assertEquals(
+                    rejection,
+                    assertThrows(
+                                    java.util.concurrent.CompletionException.class,
+                                    () -> spot.enqueueRoute(late).toCompletableFuture().join())
+                            .getCause());
+            assertFalse(
+                    spot.enqueueTopic(
+                            new ZLinkBackendTopicMessage(
+                                    Optional.empty(), "updates", List.of(Message.from("late")))));
+            assertEquals(
+                    rejection,
+                    assertThrows(
+                                    java.util.concurrent.CompletionException.class,
+                                    () ->
+                                            spot.enqueueJoin(
+                                                            new systems.zlink.framework.runtime
+                                                                    .internal.backend
+                                                                    .ZLinkBackendActorJoinRequest(
+                                                                    null,
+                                                                    null,
+                                                                    List.of(Message.from("late")),
+                                                                    null))
+                                                    .toCompletableFuture()
+                                                    .join())
+                            .getCause());
+            try (ZLinkBackendReceived accepted = spot.recvRoute(ZLinkBackendRecvMode.DONT_WAIT)) {
+                assertNotNull(accepted);
+                accepted.reply().accept(List.of(response));
+            }
+        }
+        assertEquals("accepted", reply.get());
     }
 
     private static byte[] payloadBytes(int length, int seed) {

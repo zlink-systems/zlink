@@ -34,7 +34,7 @@ abstract class ZLinkSpotContextHost {
     abstract CompletionStage<Void> leaveActor(
             RoutingId nodeRid, ZLinkSpot<?> spot, ZLinkActor actor, String fallbackSpotId);
 
-    abstract CompletionStage<Boolean> closeSpot(String spotId);
+    abstract CompletionStage<Boolean> closeSpot(String spotId, long objectGeneration);
 
     abstract CompletionStage<Boolean> closeInstanceSpot(String spotId, long objectGeneration);
 

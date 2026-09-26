@@ -3,6 +3,9 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Text;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime.Transport;
 using Xunit;
@@ -12,37 +15,49 @@ public sealed partial class StreamConnectorTests
     [Fact]
     public async Task CanceledWebSocketCloseStillDisposesTransport()
     {
-        using var listener = new HttpListener();
-        var port = GetFreeTcpPort();
-        listener.Prefixes.Add($"http://127.0.0.1:{port}/canceled-close/");
-        listener.Start();
-        var server = Task.Run(async () =>
-        {
-            var context = await listener.GetContextAsync();
-            var accepted = await context.AcceptWebSocketAsync(null);
-            using var socket = accepted.WebSocket;
-            var buffer = new byte[1];
-            try
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        await using var app = builder.Build();
+        app.UseWebSockets();
+        var server = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        app.Map(
+            "/canceled-close",
+            async (HttpContext context) =>
             {
-                await socket.ReceiveAsync(buffer, CancellationToken.None);
+                try
+                {
+                    using var socket = await context.WebSockets.AcceptWebSocketAsync();
+                    var buffer = new byte[1];
+                    try
+                    {
+                        await socket.ReceiveAsync(buffer, CancellationToken.None);
+                    }
+                    catch (WebSocketException) { }
+                    server.TrySetResult();
+                }
+                catch (Exception exception)
+                {
+                    server.TrySetException(exception);
+                }
             }
-            catch (WebSocketException) { }
-        });
+        );
+        await app.StartAsync();
+        var address = new Uri(app.Urls.Single());
         using var client = new ClientWebSocket();
         await client.ConnectAsync(
-            new Uri($"ws://127.0.0.1:{port}/canceled-close/"),
+            new Uri($"ws://127.0.0.1:{address.Port}/canceled-close/"),
             CancellationToken.None
         );
         var connection = new WebSocketConnection(client, 1024);
         using var canceled = new CancellationTokenSource();
         canceled.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
-            await connection.CloseAsync(canceled.Token)
-        );
+        // Close aborts the socket without a close handshake, so there is nothing for the
+        // canceled token to stop (stream-connector spec §7).
+        await connection.CloseAsync(canceled.Token);
 
         Assert.Equal(WebSocketState.Closed, client.State);
-        await server.WaitAsync(TimeSpan.FromSeconds(5));
+        await server.Task.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     [Fact]
@@ -222,28 +237,36 @@ public sealed partial class StreamConnectorTests
     [Fact]
     public async Task WebSocketSendUsesBinaryFrames()
     {
-        using var listener = new HttpListener();
-        var port = GetFreeTcpPort();
-        listener.Prefixes.Add($"http://127.0.0.1:{port}/ws/");
-        listener.Start();
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        await using var app = builder.Build();
+        app.UseWebSockets();
         var headerCodec = new ZlinkStreamHeaderCodec();
-        var server = Task.Run(async () =>
-        {
-            var context = await listener.GetContextAsync();
-            var webSocketContext = await context.AcceptWebSocketAsync(null);
-            using var webSocket = webSocketContext.WebSocket;
-            var received = await ReceiveWebSocketMessageAsync(webSocket);
-            var packet = DecodePacket(received);
-            var header = headerCodec.Decode(packet.Header);
-            Assert.Equal("wh", header.Name);
-            Assert.Equal(ZlinkStreamCodec.Raw, header.Codec);
-            Assert.Equal("wb", Encoding.UTF8.GetString(packet.Payload));
-        });
+        var received = new TaskCompletionSource<byte[]>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        app.Map(
+            "/ws",
+            async (HttpContext context) =>
+            {
+                try
+                {
+                    using var webSocket = await context.WebSockets.AcceptWebSocketAsync();
+                    received.TrySetResult(await ReceiveWebSocketMessageAsync(webSocket));
+                }
+                catch (Exception exception)
+                {
+                    received.TrySetException(exception);
+                }
+            }
+        );
+        await app.StartAsync();
+        var address = new Uri(app.Urls.Single());
 
         await using var connector = ZlinkStreamConnectorFactory.Create(
             new ZlinkStreamConnectorOptions
             {
-                Endpoint = new Uri($"ws://127.0.0.1:{port}/ws/"),
+                Endpoint = new Uri($"ws://127.0.0.1:{address.Port}/ws/"),
                 Heartbeat = DisabledHeartbeat(),
             }
         );
@@ -254,51 +277,62 @@ public sealed partial class StreamConnectorTests
             .PacketName("wh")
             .Async();
 
-        await server;
+        var packet = DecodePacket(await received.Task);
+        var header = headerCodec.Decode(packet.Header);
+        Assert.Equal("wh", header.Name);
+        Assert.Equal(ZlinkStreamCodec.Raw, header.Codec);
+        Assert.Equal("wb", Encoding.UTF8.GetString(packet.Payload));
     }
 
     [Fact]
     public async Task WebSocketReceivePayloadLimitDisconnectsBeforeExtraCopy()
     {
-        using var listener = new HttpListener();
-        var port = GetFreeTcpPort();
-        listener.Prefixes.Add($"http://127.0.0.1:{port}/ws/");
-        listener.Start();
-        var accepting = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        await using var app = builder.Build();
+        app.UseWebSockets();
+        var server = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        app.Map(
+            "/ws",
+            async (HttpContext context) =>
+            {
+                try
+                {
+                    using var webSocket = await context.WebSockets.AcceptWebSocketAsync();
+                    await webSocket.SendAsync(
+                        new byte[70_000],
+                        WebSocketMessageType.Binary,
+                        true,
+                        CancellationToken.None
+                    );
+                    server.TrySetResult();
+                }
+                catch (Exception exception)
+                {
+                    server.TrySetException(exception);
+                }
+            }
         );
-        var server = Task.Run(async () =>
-        {
-            accepting.SetResult();
-            var context = await listener.GetContextAsync();
-            var webSocketContext = await context.AcceptWebSocketAsync(null);
-            using var webSocket = webSocketContext.WebSocket;
-            await webSocket.SendAsync(
-                new byte[70_000],
-                WebSocketMessageType.Binary,
-                true,
-                CancellationToken.None
-            );
-        });
+        await app.StartAsync();
+        var address = new Uri(app.Urls.Single());
 
         await using var connector = ZlinkStreamConnectorFactory.Create(
             new ZlinkStreamConnectorOptions
             {
-                Endpoint = new Uri($"ws://127.0.0.1:{port}/ws/"),
+                Endpoint = new Uri($"ws://127.0.0.1:{address.Port}/ws/"),
                 Heartbeat = DisabledHeartbeat(),
                 ConnectTimeout = TimeSpan.FromSeconds(15),
                 MaxReceivePayloadSize = 1,
                 Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
             }
         );
-        await accepting.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await connector.Connect.Async();
 
         await WaitUntilAsync(
             () => connector.State == ZlinkStreamConnectionState.Disconnected,
             TimeSpan.FromSeconds(5)
         );
-        await server;
+        await server.Task;
     }
 
     [Fact]

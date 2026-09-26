@@ -45,7 +45,9 @@ test('stream connector json codec writes json payload frame through connector', 
   await instance.close();
 });
 
-test('stream connector close drains submitted one-way send writes', async () => {
+// Spec stream-connector 32 section 7: close does not wait for the frame being
+// written; its Send fails with Disconnected.
+test('stream connector close does not wait for a one-way send write', async () => {
   const transportFactory = new MemoryTransportFactory();
   transportFactory.connection.delayWrites = true;
   const instance = connector.zlinkStreamConnectorFactory.create({
@@ -54,17 +56,16 @@ test('stream connector close drains submitted one-way send writes', async () => 
   });
 
   await instance.connect();
-  instance.send(new Ready()).packetName('Ready').submit();
-  const closing = instance.close();
+  const sending = instance.send(new Ready()).packetName('Ready').submit();
+  await instance.close();
 
+  await assert.rejects(
+    sending,
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.Disconnected
+  );
   assert.equal(transportFactory.connection.frames.length, 0);
-  transportFactory.connection.releaseWrites();
-  await closing;
-
-  const frame = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[0]);
-  const header = protocolCodecs.ZlinkStreamHeaderCodec.decode(frame.header);
-  assert.equal(header.name, 'Ready');
   assert.equal(transportFactory.connection.closed, true);
+  transportFactory.connection.releaseWrites();
 });
 
 test('stream connector json codec decodes reply payload through connector', async () => {

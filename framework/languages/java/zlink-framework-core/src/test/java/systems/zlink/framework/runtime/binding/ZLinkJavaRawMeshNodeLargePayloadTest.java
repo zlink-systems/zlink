@@ -16,7 +16,6 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.internal.binding.spot.RecordKind;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 
-import java.net.ServerSocket;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
@@ -27,7 +26,6 @@ import java.util.concurrent.TimeUnit;
 final class ZLinkJavaRawMeshNodeLargePayloadTest {
     @Test
     void oneMebibyteRequestCrossesTheTcpRouteMesh() throws Exception {
-        String endpoint = "tcp://127.0.0.1:" + availableTcpPort();
         RoutingId sourceRid = RoutingId.from("large-payload-source");
         RoutingId targetRid = RoutingId.from("large-payload-target");
         byte[] payloadBytes = new byte[1024 * 1024];
@@ -41,11 +39,12 @@ final class ZLinkJavaRawMeshNodeLargePayloadTest {
             source.setRouterHighWaterMark(4_096_000L);
             source.setRouterReceiveHighWaterMark(4_096_000L);
             target.setRoutingId(targetRid);
-            target.setBind(endpoint);
+            target.setBind("tcp://127.0.0.1:0");
             target.setRouterHighWaterMark(4_096_000L);
             target.setRouterReceiveHighWaterMark(4_096_000L);
             source.start();
             target.start();
+            String endpoint = target.status().localEndpoint();
             source.connectPeer(endpoint, targetRid);
             awaitAdmitted(source);
 
@@ -100,12 +99,5 @@ final class ZLinkJavaRawMeshNodeLargePayloadTest {
             Thread.sleep(5);
         }
         throw new AssertionError("RouteMesh peer did not become admitted");
-    }
-
-    private static int availableTcpPort() throws Exception {
-        try (var socket = new ServerSocket(0)) {
-            socket.setReuseAddress(true);
-            return socket.getLocalPort();
-        }
     }
 }

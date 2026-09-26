@@ -212,7 +212,10 @@ test('Spot close invokes lifecycle cleanup only after its execution seal is quie
   await activeStarted.promise;
 
   const seal = state.sealExecution();
-  const closing = lifecycle.closeAfterSeal(state, seal);
+  const closing = (async () => {
+    await lifecycle.sealForClose(state, seal);
+    await lifecycle.cleanupClosedActivation(state);
+  })();
   await Promise.resolve();
   assert.deepEqual(events, ['active:start']);
 

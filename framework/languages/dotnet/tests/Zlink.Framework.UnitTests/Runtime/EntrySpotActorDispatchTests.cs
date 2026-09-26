@@ -153,6 +153,19 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public void SpotContextClose_ReturnsCompletionResult()
+    {
+        Assert.Equal(
+            typeof(ValueTask<bool>),
+            typeof(IZLinkSpotContext).GetMethod("CloseAsync")?.ReturnType
+        );
+        Assert.Equal(
+            typeof(ValueTask<bool>),
+            typeof(IZLinkInstanceSpotContext).GetMethod("CloseAsync")?.ReturnType
+        );
+    }
+
+    [Fact]
     public async Task EntrySpot_Identity_Is_FrameworkIssued_After_Node_Bind()
     {
         var services = new ServiceCollection().BuildServiceProvider();
@@ -2256,6 +2269,86 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task Expired_relocation_source_replies_unavailable_once_on_the_saved_direct_route()
+    {
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(new CapturingSpotNode());
+        try
+        {
+            var actorState = new ZLinkActorRuntimeState(actorRef.ActorId);
+            actorState.BindNativeActorRef(actorRef);
+            var replies = new List<byte[]>();
+            const ulong requestId = 44;
+            var deadlineUnixMs = checked(
+                (ulong)DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeMilliseconds()
+            );
+            var saved = runtime.ActorMessageFollower.PreserveDirectReply(
+                actorRef.NodeRid,
+                actorRef.ActorId,
+                requestId,
+                deadlineUnixMs,
+                parts =>
+                {
+                    replies.Add(parts.Single().AsReadOnlySpan().ToArray());
+                    return SubmitResult.Ok;
+                }
+            );
+            var caller = RoutingId.From("caller-node");
+            using var frame = new ZLinkSpotActorFrame(
+                actorRef,
+                actorRef,
+                caller,
+                RoutingId.From("caller-session"),
+                requestId,
+                ZLinkActorBoundSessionRelay.ActorRecvInfoNoBind,
+                new ZLinkBackendActorRouteContext(
+                    new MeshOperationId(11, requestId),
+                    MessageFollowHopCount: 0,
+                    TargetNodeGeneration: 1,
+                    AuthorityOwnerGeneration: 1,
+                    OwnerLeaseGeneration: 1,
+                    ReplyRequestId: requestId,
+                    ReplyFlags: ZLinkActorBoundSessionRelay.ActorRecvInfoNoBind,
+                    ReplyCapability: saved.Capability,
+                    DeadlineUnixMs: deadlineUnixMs
+                ),
+                new ZlinkStreamHeader(
+                    ZlinkStreamMessageKind.Request,
+                    ZlinkStreamCodec.Raw,
+                    ZlinkStreamHeaderFlags.HasRequestSeq,
+                    new ZlinkStreamRequestSeq(requestId),
+                    "captured-request",
+                    ZlinkStreamMetadata.Empty
+                ),
+                Message.From([1, 2, 3]),
+                1,
+                new ZLinkServiceWireCodec.RequestSourceFence("source", 1, caller, 1)
+            );
+            frame.BindRelocationReplyRoute(requestId);
+            actorState.Handoff.BeginCapture();
+            Assert.Equal(
+                ZLinkActorHandoffCaptureResult.Captured,
+                actorState.Handoff.TryCapture(frame)
+            );
+            actorState.Handoff.SealCapture();
+            _ = actorState.Handoff.FreezeCaptureCommitBoundary();
+
+            await runtime.FailStandaloneActorRelocationSourceAsync(actorState, actorRef);
+            await runtime.FailStandaloneActorRelocationSourceAsync(actorState, actorRef);
+
+            var reply = Assert.Single(replies);
+            Assert.Equal("unavailable", DecodeReplyFrame<ZLinkStreamWireError>(reply).Payload.Code);
+            Assert.Equal(
+                ZLinkActorFrameRoute.Stale,
+                actorState.Handoff.ResolveFrameRoute(actorRef, actorRef, out _)
+            );
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task RemoteActorFrame_BoundSessionWithoutRouteLease_UsesBindingFenceForStaleHandling()
     {
         var node = new CapturingSpotNode();
@@ -2812,14 +2905,18 @@ public sealed partial class EntrySpotActorDispatchTests
     // ZLinkActorBoundSessionCoordinator call sites. Per
     // 04-session/02-session-actor-binding.ko.md §8.1, a Retained admission is
     // an *acceptance* (the aggregate holds the frame until route commit) and
-    // must never be reported as a failed/not-found submit. This test pins
-    // an actor outbound push whose tenure is stale against the sealed table
-    // route: AdmitOutboundAsync must retain it, the async entry point must
-    // report Submitted (not TargetNotFound), hard-cap overload must preserve
-    // Backpressured, and held frames must reach the session's stream once the
-    // relocation route commits.
-    [Fact]
-    public async Task ActorBoundSessionOutboundSendDuringRelocationSealPreservesAdmissionOutcomesAsync()
+    // must never be reported as a failed/not-found submit. §3 item 3 and §8.1
+    // also fix that the sealed binding alone decides: every push of the
+    // current binding is held whatever owner authority generation the Actor
+    // side carries (11 = source route, 99 = committed target), no
+    // relocation-specific count limit returns Backpressured, and held frames
+    // reach the session's stream once the relocation route commits.
+    [Theory]
+    [InlineData(11UL)]
+    [InlineData(99UL)]
+    public async Task ActorBoundSessionOutboundSendDuringRelocationSealPreservesAdmissionOutcomesAsync(
+        ulong actorAuthorityOwnerGeneration
+    )
     {
         var node = new CapturingSpotNode();
         var (runtime, _) = await CreateStartedRuntimeAsync(node, includeActorFactory: false);
@@ -2857,11 +2954,9 @@ public sealed partial class EntrySpotActorDispatchTests
                 sessionOwnerLeaseGeneration: 8
             );
 
-            // The actor-side outbound snapshot already carries the
-            // AuthorityOwnerGeneration the relocation target will commit to
-            // (99). Until the seal commits, the table's Route still says 11,
-            // so AdmitOutboundAsync must not match Immediate — it must
-            // Retain.
+            // The table's Route says 11 until the seal commits. The Actor-side
+            // owner authority generation is not an admission field, so the
+            // sealed binding holds the push for either value.
             _ = runtime.BindActorSession(
                 actorId,
                 sessionNodeRid: node.RoutingId,
@@ -2869,7 +2964,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 bindingToken: bindingToken,
                 bindingGeneration: 6,
                 objectGeneration: 5,
-                authorityOwnerGeneration: 99,
+                authorityOwnerGeneration: actorAuthorityOwnerGeneration,
                 meshName: "entry",
                 targetNodeGeneration: 2,
                 ownerLeaseGeneration: 17,
@@ -2930,12 +3025,11 @@ public sealed partial class EntrySpotActorDispatchTests
             // Not delivered yet: the frame is held until the seal commits.
             Assert.Empty(stream.Writes);
 
-            // The retained queue is bounded at 4,096 frames. Fill the rest of
-            // that production queue, then prove the hard-overload admission
-            // remains Backpressured instead of falling through to
-            // TargetNotFound.
-            const int retainedOutboundCapacity = 4_096;
-            for (var retained = 1; retained < retainedOutboundCapacity; retained++)
+            // The old relocation-only limit was 4,096 retained frames. Held
+            // pushes beyond it stay accepted: only ordinary message limits
+            // apply during the seal (§8.1, relocation-flow §5.3).
+            const int heldPushCount = 4_097;
+            for (var retained = 1; retained < heldPushCount; retained++)
             {
                 using var retainedPayload = Message.From(sendFrame);
                 var retainedResult = await runtime.SendActorBoundSessionIfCurrentAsync(
@@ -2945,17 +3039,6 @@ public sealed partial class EntrySpotActorDispatchTests
                     CancellationToken.None
                 );
                 Assert.Equal(ZLinkOneWaySubmitStatus.Submitted, retainedResult.Status);
-            }
-
-            using (var overflowPayload = Message.From(sendFrame))
-            {
-                var overflowResult = await runtime.SendActorBoundSessionIfCurrentAsync(
-                    actorId,
-                    bindingToken,
-                    new[] { overflowPayload },
-                    CancellationToken.None
-                );
-                Assert.Equal(ZLinkOneWaySubmitStatus.Backpressured, overflowResult.Status);
             }
             Assert.Empty(stream.Writes);
 
@@ -2980,7 +3063,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 )
             );
 
-            Assert.Equal(retainedOutboundCapacity, stream.Writes.Count);
+            Assert.Equal(heldPushCount, stream.Writes.Count);
             Assert.All(stream.Writes, written => Assert.Equal(sendBody, written));
 
             // The adjacent Immediate path has the same contract: a local
@@ -2994,7 +3077,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 CancellationToken.None
             );
             Assert.Equal(ZLinkOneWaySubmitStatus.Backpressured, refusedResult.Status);
-            Assert.Equal(retainedOutboundCapacity, stream.Writes.Count);
+            Assert.Equal(heldPushCount, stream.Writes.Count);
         }
         finally
         {
@@ -5163,6 +5246,34 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task LocalSpotClose_RejectsAStaleObjectGeneration()
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            node,
+            userSpotType: typeof(EmptyUserSpot)
+        );
+        try
+        {
+            var created = await runtime.CreateAsync<EmptyUserSpot>();
+            var staleGeneration = created.Spot.ObjectGeneration == 1 ? 2UL : 1UL;
+            // The manager hands the owner node the SpotRef generation; the owner
+            // never closes another incarnation of the same Spot ID (spec §7).
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await runtime
+                    .GetSpotNodeRuntime("entry")
+                    .CloseAsync(created.Spot.SpotId, staleGeneration, CancellationToken.None)
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, error.Kind);
+            Assert.True(await runtime.CloseAsync(created.Spot));
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task PerActor_relocation_destination_requires_exact_published_shell()
     {
         var node = new CapturingSpotNode();
@@ -5288,6 +5399,81 @@ public sealed partial class EntrySpotActorDispatchTests
             Assert.True((await join.WaitAsync(TimeSpan.FromSeconds(5))).Accepted);
             Assert.False(await close.WaitAsync(TimeSpan.FromSeconds(5)));
             Assert.NotNull(await catalog.GetAsync(created.Spot.SpotId, CancellationToken.None));
+        }
+        finally
+        {
+            probe.Release.TrySetResult();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task JoinActorAsync_RetainsLifecycleOwnerThroughJoinedCallback()
+    {
+        var probe = new BlockingActorJoinProbe();
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            userSpotType: typeof(BlockingActorJoinSpot),
+            blockingActorJoinProbe: probe
+        );
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            var created = await runtime.CreateAsync<BlockingActorJoinSpot>();
+            var activation = Assert.Single(
+                runtime.GetSpotNodeRuntime("entry").Catalog.Spots,
+                candidate => candidate.SpotId == created.Spot.SpotId
+            );
+            var join = activation
+                .JoinActorAsync(actor, ZLinkMessage.Empty, CancellationToken.None)
+                .AsTask();
+            await probe.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            probe.Release.TrySetResult();
+            Assert.True((await join.WaitAsync(TimeSpan.FromSeconds(5))).Accepted);
+            Assert.True(probe.ActorJoinWasLifecycle);
+            Assert.True(probe.JoinedWasLifecycle);
+        }
+        finally
+        {
+            probe.Release.TrySetResult();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task LeaveActorFromContextAsync_EndsAfterMembershipResultIsDecided()
+    {
+        var probe = new BlockingActorJoinProbe();
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            userSpotType: typeof(BlockingActorJoinSpot),
+            blockingActorJoinProbe: probe
+        );
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            var created = await runtime.CreateAsync<BlockingActorJoinSpot>();
+            var activation = Assert.Single(
+                runtime.GetSpotNodeRuntime("entry").Catalog.Spots,
+                candidate => candidate.SpotId == created.Spot.SpotId
+            );
+            probe.Release.TrySetResult();
+            Assert.True(
+                (
+                    await activation.JoinActorAsync(
+                        actor,
+                        ZLinkMessage.Empty,
+                        CancellationToken.None
+                    )
+                ).Accepted
+            );
+            Assert.Equal(1, activation.JoinedActorCount);
+            await activation.LeaveActorFromContextAsync(actor, CancellationToken.None);
+            // Gate §7: the leave lifecycle item ends when its membership result
+            // is decided, so a later lifecycle item (Close) reads it.
+            Assert.Equal(0, activation.JoinedActorCount);
         }
         finally
         {
@@ -8065,6 +8251,40 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task ExpiredDeferredJoinReleasesActorBarrierBeforeShutdown()
+    {
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(new CapturingSpotNode());
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            var join = new ZLinkDeferredActorJoin(
+                runtime,
+                runtime.GetOrCreateActorState(actor.ActorId),
+                actor,
+                actorRef.Generation,
+                "missing-spot",
+                ZLinkMessage.Empty,
+                TimeSpan.Zero
+            );
+            join.ReserveBarrier();
+            join.Activate();
+
+            var completion = await actor.JoinCompletion.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(
+                ZLinkFrameworkErrorKind.DeadlineExceeded,
+                Assert.IsType<ZLinkActorJoinCompletion.Failed>(completion).Kind
+            );
+        }
+        finally
+        {
+            await runtime
+                .StopAsync(CancellationToken.None)
+                .AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(2));
+        }
+    }
+
+    [Fact]
     public async Task OneHandlerCompletes65DeferredActorJoinsWhoseRequestsTotalMoreThan8MiB()
     {
         var node = new CapturingSpotNode();
@@ -8100,6 +8320,46 @@ public sealed partial class EntrySpotActorDispatchTests
         finally
         {
             await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    // A deferred Join runs as its reserved barrier's turn (execution gate §6–7).
+    // A deadline that elapsed before the barrier ran completes the Join inside
+    // that turn and releases it, so the runtime stop that follows can drain it.
+    [Fact]
+    public async Task DeferredJoinWhoseDeadlineElapsedReleasesItsBarrierTurn()
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        var stopped = false;
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            using (var handler = ZLinkDeferredActorJoinHandlerScope.Open())
+            {
+                actor
+                    .Context.JoinSpot("elapsed-target", ZLinkMessage.Empty)
+                    .Timeout(TimeSpan.FromMilliseconds(1))
+                    .Defer();
+                Thread.Sleep(TimeSpan.FromMilliseconds(20));
+                handler.Complete();
+            }
+
+            var completion = await actor.JoinCompletion.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(
+                ZLinkFrameworkErrorKind.DeadlineExceeded,
+                Assert.IsType<ZLinkActorJoinCompletion.Failed>(completion).Kind
+            );
+            await runtime
+                .StopAsync(CancellationToken.None)
+                .AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            stopped = true;
+        }
+        finally
+        {
+            if (!stopped)
+                _ = runtime.StopAsync(CancellationToken.None);
         }
     }
 
@@ -8737,7 +8997,10 @@ public sealed partial class EntrySpotActorDispatchTests
     [Fact]
     public async Task MessageFollowLocalReply_BackpressureIsOneShotTerminal()
     {
-        var (runtime, actor) = await CreateStartedRuntimeAsync(new CapturingSpotNode());
+        var node = new CapturingSpotNode();
+        var fallbackReplies = 0;
+        node.BeforeNoBindReply = _ => Interlocked.Increment(ref fallbackReplies);
+        var (runtime, actor) = await CreateStartedRuntimeAsync(node);
         try
         {
             var attempts = 0;
@@ -8778,6 +9041,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 [duplicate]
             );
             Assert.Equal(1, Volatile.Read(ref attempts));
+            Assert.Equal(0, Volatile.Read(ref fallbackReplies));
         }
         finally
         {
@@ -10020,9 +10284,11 @@ public sealed partial class EntrySpotActorDispatchTests
         public async ValueTask<ulong> PublishAsync(
             ZLinkSpotRetireReservation reservation,
             ZLinkAggregateRelocationPublished relocation,
+            DateTimeOffset restoreDeadline,
             CancellationToken cancellationToken
         )
         {
+            _ = restoreDeadline;
             PublishCalls++;
             cancellationToken.ThrowIfCancellationRequested();
             switch (publishMode)
@@ -10362,15 +10628,17 @@ public sealed partial class EntrySpotActorDispatchTests
             _ = actorId;
             _ = request;
             _ = cancellationToken;
+            probe.ActorJoinWasLifecycle = ZLinkSerialTurn.Current?.LifecycleOwner is not null;
             probe.Started.TrySetResult();
             await probe.Release.Task.ConfigureAwait(false);
             return ZLinkSpotActorJoinResult.Accept();
         }
 
-        public ValueTask OnJoinedActorAsync(
-            ProbeActor actor,
-            CancellationToken cancellationToken
-        ) => ValueTask.CompletedTask;
+        public ValueTask OnJoinedActorAsync(ProbeActor actor, CancellationToken cancellationToken)
+        {
+            probe.JoinedWasLifecycle = ZLinkSerialTurn.Current?.LifecycleOwner is not null;
+            return ValueTask.CompletedTask;
+        }
 
         public ValueTask OnLeaveActorAsync(ProbeActor actor, CancellationToken cancellationToken) =>
             ValueTask.CompletedTask;
@@ -10378,6 +10646,10 @@ public sealed partial class EntrySpotActorDispatchTests
 
     private sealed class BlockingActorJoinProbe
     {
+        public bool ActorJoinWasLifecycle { get; set; }
+
+        public bool JoinedWasLifecycle { get; set; }
+
         public TaskCompletionSource Started { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 

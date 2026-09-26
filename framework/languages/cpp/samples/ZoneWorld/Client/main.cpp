@@ -540,28 +540,18 @@ se::task_t<bool> run_transition (se::coroutine_connector_t &source,
     auto visible_wait = source.wait_for<zone_state_notify_t> ()
                           .where ([&] (const auto &state_message) {
                               const auto &state = state_message.payload;
-                              return std::any_of (
-                                state.players.begin (),
-                                state.players.end (),
-                                [&] (const auto &player) {
-                                    return player.player_id == "player-transition-target"
-                                           && player.zone_id == pair.target_zone_id;
-                                });
+                              return state.zone_id == pair.source_zone_id
+                                     && std::any_of (
+                                       state.players.begin (),
+                                       state.players.end (),
+                                       [&] (const auto &player) {
+                                           return player.player_id == "player-transition-target"
+                                                  && player.zone_id == pair.target_zone_id;
+                                       });
                           })
                           .async ();
     (void) co_await visible_wait;
 
-    auto expired_wait = source.wait_for<zone_state_notify_t> ()
-                          .where ([] (const auto &state_message) {
-                              const auto &state = state_message.payload;
-                              return std::none_of (state.players.begin (),
-                                                   state.players.end (),
-                                                   [] (const auto &player) {
-                                                       return player.player_id
-                                                              == "player-transition-target";
-                                                   });
-                          })
-                          .async ();
     auto disconnected_wait = ops.wait_for<node_status_notify_t> ()
                                .where ([target_node_id] (const auto &node_message) {
                                    const auto &node = node_message.payload;
@@ -570,11 +560,21 @@ se::task_t<bool> run_transition (se::coroutine_connector_t &source,
                                .async ();
     std::cout << "scenario ZW-B4-C3 armed node=" << target_node_id << std::endl;
 
+    (void) co_await disconnected_wait;
+    auto expired_wait = source.wait_for<zone_state_notify_t> ()
+                          .where ([&] (const auto &state_message) {
+                              const auto &state = state_message.payload;
+                              return state.zone_id == pair.source_zone_id
+                                     && std::none_of (state.players.begin (),
+                                                      state.players.end (),
+                                                      [] (const auto &player) {
+                                                          return player.player_id
+                                                                 == "player-transition-target";
+                                                      });
+                          })
+                          .async ();
     (void) co_await expired_wait;
     std::cout << "scenario ZW-B4 passed\n";
-    //  The disconnect is awaited only to order the report-TTL wait after it. ZW-C2 is asserted
-    //  by its own graceful lane; this lane stops the node abruptly.
-    (void) co_await disconnected_wait;
     auto expired_report_wait = ops.wait_for<node_status_notify_t> ()
                                  .where ([target_node_id] (const auto &node_message) {
                                      const auto &node = node_message.payload;

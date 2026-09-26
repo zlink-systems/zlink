@@ -1,3 +1,4 @@
+import type { ZLinkListenerRecords } from '../foundation/listener-records';
 import type {
   ActorRef,
   Type,
@@ -167,6 +168,7 @@ export interface ZLinkStreamSessionNodeRuntimeOptions extends Omit<
 }
 
 export interface ZLinkStreamRuntimeManagerOptions {
+  readonly listenerRecords?: ZLinkListenerRecords;
   readonly registration: ZLinkFrameworkRegistration;
   readonly backendAdapterFactory: ZLinkBackendAdapterFactory;
   readonly context: ZLinkBackendContext;
@@ -183,14 +185,16 @@ export interface ZLinkStreamRuntimeManagerOptions {
   readonly applicationJobQueue?: ApplicationJobQueue;
 }
 
+// A STREAM node's native resources, recorded as each one is created. The
+// manager owns them from creation, so `dispose` releases whatever a failed
+// `start` had already opened; an unreleased socket keeps the context from
+// terminating.
 interface ZLinkStartedStreamNode {
   readonly meshName?: string;
-  readonly advertisedEndpoint: string;
-  readonly runtime: ZLinkStreamSessionNodeRuntimeCore;
   readonly socket: ZLinkBackendStreamSocket;
-  readonly monitor: ZLinkBackendSocketMonitor;
-  readonly nativeSessionService?: StreamSessionService;
-  readonly nativeSessionServices?: readonly StreamSessionService[];
+  readonly nativeSessionServices: StreamSessionService[];
+  monitor?: ZLinkBackendSocketMonitor;
+  runtime?: ZLinkStreamSessionNodeRuntimeCore;
 }
 
 export class ZLinkStreamRuntimeManager {
@@ -215,6 +219,12 @@ export class ZLinkStreamRuntimeManager {
       const nativeMeshNode = actorDispatchEnabled ? this.options.nativeMeshNode : undefined;
       const meshCompletions = actorDispatchEnabled ? this.options.meshCompletions : undefined;
       const socket = streamAdapter.createStreamSocket(this.options.context);
+      const node: ZLinkStartedStreamNode = {
+        meshName: applicationMeshName,
+        socket,
+        nativeSessionServices: []
+      };
+      this.nodes.set(nodeName, node);
       // Core uses -1 as the explicit unlimited value. The Framework value 0
       // means that it adds no separate STREAM cap, so preserve that meaning
       // when applying the socket option.
@@ -240,7 +250,6 @@ export class ZLinkStreamRuntimeManager {
           `STREAM node '${nodeName}' advertised host requires a TCP endpoint, received '${boundEndpoint}'.`
         );
       }
-      const readablePoller = streamAdapter.createReadablePoller(socket);
       const nativeSessionRoutes = new Map<
         string,
         {
@@ -262,11 +271,12 @@ export class ZLinkStreamRuntimeManager {
           const createService = meshNode?.createStreamSessionService;
           if (typeof createService !== 'function' || completions === undefined) continue;
           const service = createService.call(meshNode, socket.nativeInstance as never);
+          node.nativeSessionServices.push(service);
           const bindingOwner = actorSessionBindingRuntimeOwner(this.options.bindingRuntime);
           registerServiceSessionBindingIngressPort(service, {
             actorSlot: (actorId, sessionRid) => bindingOwner.actorSlot(actorId, sessionRid),
-            retainOutbound: (claim, delivery) =>
-              bindingOwner.admitRelocationOutbound(claim, delivery),
+            retainOutbound: (actorId, delivery) =>
+              bindingOwner.retainRelocationOutbound(actorId, delivery),
             clearOutbound: (actorId, error) => bindingOwner.clearRelocation(actorId, error)
           });
           nativeSessionRoutes.set(meshName, {
@@ -280,11 +290,15 @@ export class ZLinkStreamRuntimeManager {
           ? undefined
           : nativeSessionRoutes.get(applicationMeshName)?.service;
       const monitor = monitoringAdapter.openSocketMonitor(socket);
+      node.monitor = monitor;
       const sessionType = streamNode.session!;
       const sessionHandlerTypes =
         (streamNode as unknown as Record<symbol, readonly Type[] | undefined>)[
           Symbol.for('@zlink-systems/framework:session-handler-types')
         ] ?? [];
+      // The runtime disposes the poller, so the poller is created where nothing
+      // can fail before the runtime owns it.
+      const readablePoller = streamAdapter.createReadablePoller(socket);
       const runtime = new ZLinkStreamSessionNodeRuntimeCore({
         nodeName,
         socket,
@@ -310,16 +324,9 @@ export class ZLinkStreamRuntimeManager {
             sessionHandlerTypes
           )
       });
+      node.runtime = runtime;
       runtime.start();
-      this.nodes.set(nodeName, {
-        meshName: applicationMeshName,
-        advertisedEndpoint,
-        runtime,
-        socket,
-        monitor,
-        nativeSessionService,
-        nativeSessionServices: [...nativeSessionRoutes.values()].map((route) => route.service)
-      });
+      this.options.listenerRecords?.record('stream', nodeName, advertisedEndpoint);
     }
   }
 
@@ -327,15 +334,12 @@ export class ZLinkStreamRuntimeManager {
     const nodes = [...this.nodes.values()];
     this.nodes.clear();
     for (const node of nodes.reverse()) {
-      await node.runtime.dispose();
-      const nativeServices =
-        node.nativeSessionServices ??
-        (node.nativeSessionService === undefined ? [] : [node.nativeSessionService]);
-      for (const service of nativeServices) {
+      await node.runtime?.dispose();
+      for (const service of node.nativeSessionServices) {
         service.shutdown(1000);
         service.close();
       }
-      await node.monitor.dispose();
+      await node.monitor?.dispose();
       await node.socket.dispose();
     }
   }
@@ -344,7 +348,7 @@ export class ZLinkStreamRuntimeManager {
     await Promise.all(
       [...this.nodes.values()]
         .filter((node) => node.meshName === meshName)
-        .map((node) => node.runtime.drainCloseSessions())
+        .map((node) => node.runtime?.drainCloseSessions())
     );
   }
 
@@ -352,7 +356,7 @@ export class ZLinkStreamRuntimeManager {
     await Promise.all(
       [...this.nodes.values()]
         .filter((node) => node.meshName === undefined)
-        .map((node) => node.runtime.drainCloseSessions())
+        .map((node) => node.runtime?.drainCloseSessions())
     );
   }
 }
@@ -453,8 +457,6 @@ export class ZLinkStreamBindingRuntime {
       relocationSnapshot: (actorId, sealId) => this.routes.relocationSnapshot(actorId, sealId),
       retainRelocationOutbound: (actorId, operation, sealId) =>
         this.routes.retainRelocationOutbound(actorId, operation, sealId),
-      admitRelocationOutbound: (claim, operation) =>
-        this.routes.admitRelocationOutbound(claim, operation),
       discardRelocationOutbound: (actorId, sealId, error) =>
         this.routes.discardRelocationOutbound(actorId, sealId, error),
       applyRelocation: (...args) => this.routes.applyRelocation(...args),

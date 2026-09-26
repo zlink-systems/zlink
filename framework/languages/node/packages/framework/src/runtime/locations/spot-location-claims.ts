@@ -126,7 +126,8 @@ export class ZLinkSpotLocationClaims {
 
   async beginInstanceClosing(
     meshName: string,
-    spotId: RoutingId
+    spotId: RoutingId,
+    onCommitted: () => void
   ): Promise<ZLinkInstanceClosingAuthority | undefined> {
     const canonical = ZLinkLocationKeyCodec.encodeSpotKey({ meshName, spotId });
     const tracked = this.spots.get(canonical);
@@ -166,39 +167,9 @@ export class ZLinkSpotLocationClaims {
       return undefined;
     }
     tracked.storeVersion = result.storeVersion.value;
-    this.invalidateSpotRoute?.(tracked.spotId);
-    let restored = false;
+    onCommitted();
     return {
-      restoreReady: async () => {
-        if (restored) return;
-        const restore = await store.compareExchangeAuthority(key, result.storeVersion, {
-          kind: 'put',
-          generationTransition: 'preserve',
-          payload: replaceServiceRelocationAuthorityApplicationPayload(
-            current.payload,
-            encodeServiceInstanceAuthorityPayload({
-              state: 'ready',
-              stableType: decoded.stableType,
-              spotId: decoded.spotId,
-              ownerId: decoded.ownerId,
-              ownerLeaseGeneration: decoded.ownerLeaseGeneration,
-              ownerMeshName: decoded.ownerMeshName,
-              ownerNodeRid: decoded.ownerNodeRid,
-              ownerNodeGeneration: decoded.ownerNodeGeneration
-            })
-          )
-        });
-        if (restore.kind !== 'stored') {
-          throw createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.SpotMoving,
-            `Instance Spot '${String(spotId)}' Ready authority could not be restored after idle eviction was declined.`,
-            true
-          );
-        }
-        restored = true;
-        tracked.storeVersion = restore.storeVersion.value;
-        this.invalidateSpotRoute?.(tracked.spotId);
-      }
+      release: async () => undefined
     };
   }
 
@@ -382,7 +353,7 @@ export interface ZLinkTrackedInstanceAuthority {
 }
 
 export interface ZLinkInstanceClosingAuthority {
-  restoreReady(): Promise<void>;
+  release(): Promise<void>;
 }
 
 interface TrackedLegacySpot {

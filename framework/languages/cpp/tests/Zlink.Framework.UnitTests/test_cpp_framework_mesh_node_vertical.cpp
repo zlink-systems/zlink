@@ -13,9 +13,9 @@
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 #include "runtime/streams/stream_host_service.hpp"
+#include "runtime/diagnostics/listener_status_registry.hpp"
 #include "runtime/streams/stream_runtime.hpp"
-
-#include "loopback_tcp_endpoint.hpp"
+#include "../support/loopback_tcp_endpoint.hpp"
 
 #include <zlink/framework/contracts/configuration/zlink_builder.hpp>
 #include <zlink/framework/contracts/configuration/framework_options.hpp>
@@ -122,6 +122,58 @@ class monitoring_mesh_store_t final
     mutable std::mutex _mutex;
     zlink::framework::mesh_node_descriptor_t _descriptor;
     std::optional<zlink::framework::mesh_node_descriptor_t> _remote;
+};
+
+class monitoring_location_query_t final : public zlink::framework::location_runtime_query_t
+{
+  public:
+    void set_store_healthy (bool healthy) { _store_healthy.store (healthy); }
+
+    zlink::framework::task_t<zlink::framework::location_runtime_status_t> get_status () override
+    {
+        zlink::framework::location_runtime_status_t status;
+        status.store_healthy = _store_healthy.load ();
+        co_return status;
+    }
+
+    zlink::framework::task_t<
+      zlink::framework::location_page_t<zlink::framework::location_topology_entry_t>>
+    list_topology (zlink::framework::location_topology_filter_t,
+                   zlink::framework::location_page_request_t = {}) override
+    {
+        co_return zlink::framework::location_page_t<zlink::framework::location_topology_entry_t>{};
+    }
+
+    zlink::framework::task_t<
+      zlink::framework::location_page_t<zlink::framework::location_service_summary_t>>
+    list_service_summaries (zlink::framework::location_service_summary_filter_t,
+                            zlink::framework::location_page_request_t = {}) override
+    {
+        co_return zlink::framework::location_page_t<zlink::framework::location_service_summary_t>{};
+    }
+
+    zlink::framework::task_t<std::optional<zlink::framework::location_object_entry_t>>
+    find_actor_location (zlink::framework::actor_id_t) override
+    {
+        co_return std::nullopt;
+    }
+
+    zlink::framework::task_t<std::optional<zlink::framework::location_object_entry_t>>
+    find_spot_location (zlink::framework::spot_id_t) override
+    {
+        co_return std::nullopt;
+    }
+
+    zlink::framework::task_t<
+      zlink::framework::location_page_t<zlink::framework::location_object_entry_t>>
+    list_object_locations (zlink::framework::location_object_filter_t,
+                           zlink::framework::location_page_request_t = {}) override
+    {
+        co_return zlink::framework::location_page_t<zlink::framework::location_object_entry_t>{};
+    }
+
+  private:
+    std::atomic_bool _store_healthy{true};
 };
 
 class faulting_mesh_location_repository_t final
@@ -842,6 +894,9 @@ void verify_actor_route_resolver_preserves_unavailable ()
         }}},
       30s, service.nodes ().front (), {}, stream_listeners);
     assert (stream_host.start (provider).result ());
+    const auto stream_endpoint =
+      stream_listeners->find (zlink::framework::listener_kind_t::stream, "expired-actor-stream")
+        ->endpoint;
     zlink::stream_connector::connector_options_t connector_options;
     connector_options.endpoint = zlink::framework::tests::listener_endpoint (
       *stream_listeners, listener_kind_t::stream, "expired-actor-stream");
@@ -1308,7 +1363,7 @@ void verify_public_runtime_surface ()
       "client-only", zlink::framework::detail::mesh_channel_registration_t{100, {}, true, false});
     registration->actor_limit = 0;
     registration->spot_limit = 17;
-    registration->activation_concurrency_limit = 5;
+    registration->spot_state->activation_admission->set_limit (5);
     registration->placement_weight = 42;
     auto node = std::make_shared<zlink::framework::detail::mesh_node_runtime_t> (registration);
     node->start ();
@@ -1344,8 +1399,10 @@ void verify_public_runtime_surface ()
     assert (first.mesh_name == "vertical-mesh");
     assert (first.state == zlink::framework::mesh_node_state_t::ready);
     assert (first.is_ready);
-    assert (first.placement.active_actor_count == 4);
-    assert (first.placement.active_spot_count == 3);
+    // Status counts come from this MeshNode's activation records, not from the
+    // Location Store projection (runtime monitoring §5): nothing is active here.
+    assert (first.placement.active_actor_count == 0);
+    assert (first.placement.active_spot_count == 0);
     assert (first.placement.is_available);
     assert (first.channels.size () == 2);
     const auto client_only_initial =
@@ -1367,10 +1424,10 @@ void verify_public_runtime_surface ()
     assert (!runtime->snapshot ("vertical-mesh").channels.front ().is_ready);
     channel_options.weight (100);
     assert (channel_options.weight () == 100);
-    runtime_options.placement_weight (0);
-    assert (runtime_options.placement_weight () == 0);
-    runtime_options.placement_weight (100);
-    assert (runtime_options.placement_weight () == 100);
+    runtime_options.mesh ("vertical-mesh").placement_weight (0);
+    assert (runtime_options.mesh ("vertical-mesh").placement_weight () == 0);
+    runtime_options.mesh ("vertical-mesh").placement_weight (100);
+    assert (runtime_options.mesh ("vertical-mesh").placement_weight () == 100);
 
     std::mutex event_mutex;
     std::condition_variable event_ready;
@@ -1482,8 +1539,9 @@ void verify_public_runtime_surface ()
     }));
 
     unavailable.placement_weight = 100;
-    unavailable.capacity.actors.limit = 6;
-    unavailable.capacity.spots.limit = 4;
+    // The reserved slots alone exhaust both limits (MeshNode §5.1).
+    unavailable.capacity.actors.limit = 2;
+    unavailable.capacity.spots.limit = 1;
     ++unavailable.descriptor_revision;
     (void) monitoring_store.update_mesh_node (unavailable,
                                               zlink::framework::location_write_intent_t::renew);
@@ -1553,6 +1611,69 @@ void verify_public_runtime_surface ()
     assert (runtime->snapshot ("vertical-mesh").state
             == zlink::framework::mesh_node_state_t::stopped);
     observation->close ();
+    node->stop ();
+}
+
+void verify_location_store_blocks_placement ()
+{
+    auto registration = make_node ("tcp://127.0.0.1:0", "placement-store-node");
+    registration->placement_weight = 100;
+    auto node = std::make_shared<zlink::framework::detail::mesh_node_runtime_t> (registration);
+    node->start ();
+
+    const auto node_status = node->status ();
+    zlink::framework::mesh_node_descriptor_t descriptor;
+    descriptor.mesh_name = "vertical-mesh";
+    descriptor.rid = node_status.routing_id ();
+    descriptor.lifecycle_generation = node_status.lifecycle_generation ();
+    descriptor.object_role = zlink::framework::object_role_t::server;
+    descriptor.state = zlink::framework::framework_runtime_state_t::serving;
+    descriptor.placement_weight = 100;
+    monitoring_mesh_store_t store;
+    store.set_local (descriptor);
+    monitoring_location_query_t location_query;
+    zlink::framework::runtime::route_mesh_runtime_service_t runtime ({node}, &location_query,
+                                                                     &store);
+    runtime.start ();
+
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::vector<zlink::framework::mesh_node_snapshot_t> received;
+    auto observation = runtime.observe (
+      "vertical-mesh", 1,
+      [&] (const zlink::framework::observed_status_t<zlink::framework::mesh_node_snapshot_t>
+             &observed) {
+          {
+              std::lock_guard lock (mutex);
+              received.push_back (observed.status);
+          }
+          changed.notify_one ();
+      });
+    const auto wait_for = [&] (const auto &predicate) {
+        std::unique_lock lock (mutex);
+        return changed.wait_for (
+          lock, 2s, [&] { return !received.empty () && predicate (received.back ()); });
+    };
+
+    assert (wait_for ([] (const auto &snapshot) {
+        return snapshot.state == zlink::framework::mesh_node_state_t::ready
+               && snapshot.placement.is_available;
+    }));
+    location_query.set_store_healthy (false);
+    assert (wait_for ([] (const auto &snapshot) {
+        return snapshot.state == zlink::framework::mesh_node_state_t::degraded
+               && !snapshot.placement.is_available
+               && snapshot.placement.unavailable_reason
+                    == zlink::framework::topology_reason_t::location_unavailable;
+    }));
+    location_query.set_store_healthy (true);
+    assert (wait_for ([] (const auto &snapshot) {
+        return snapshot.state == zlink::framework::mesh_node_state_t::ready
+               && snapshot.placement.is_available;
+    }));
+
+    observation->close ();
+    runtime.stop ();
     node->stop ();
 }
 
@@ -1684,15 +1805,15 @@ void verify_host_shutdown_seal_reaches_raw_mesh ()
     const auto deadline = std::chrono::steady_clock::now () + 2s;
     while (ready == 0 && std::chrono::steady_clock::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-        transport.drain_monitor_events (now).result ().value ();
-        ready += remote.drain_monitor_events (now).result ().value ();
+        transport.observe_routes ();
+        ready += remote.observe_routes ();
         std::this_thread::sleep_for (1ms);
     }
     assert (ready != 0);
     const auto quiet_until = std::chrono::steady_clock::now () + 200ms;
     while (std::chrono::steady_clock::now () < quiet_until) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-        transport.drain_monitor_events (now).result ().value ();
+        transport.observe_routes ();
         assert (remote.pump_one (now).result ().value () == mesh::raw_mesh_pump_result_t::no_data);
         std::this_thread::sleep_for (1ms);
     }
@@ -1936,11 +2057,11 @@ int run_cross_process_delivery ()
         close (reciprocal_child_ready_pipe[1]);
         close (reciprocal_child_stop_pipe[0]);
         close (reciprocal_child_stop_pipe[1]);
+        close (reciprocal_endpoint_pipe[1]);
         close (formal_descriptor_pipe[0]);
         close (formal_ack_pipe[0]);
         close (reciprocal_child_endpoint_pipe[0]);
         close (reciprocal_child_endpoint_pipe[1]);
-        close (reciprocal_endpoint_pipe[1]);
         auto state = make_node ("tcp://127.0.0.1:*", "vertical-b");
         zlink::framework::detail::mesh_node_runtime_t node (state);
         node.start ();
@@ -2339,6 +2460,7 @@ int main (int argc, char **argv)
     verify_unselected_object_role_defaults_to_none ();
     verify_automatic_identity_and_port_builder ();
     verify_public_runtime_surface ();
+    verify_location_store_blocks_placement ();
     verify_slow_observer_does_not_block_stop ();
     verify_object_client_registration_boundary ();
     verify_host_shutdown_seal_reaches_raw_mesh ();

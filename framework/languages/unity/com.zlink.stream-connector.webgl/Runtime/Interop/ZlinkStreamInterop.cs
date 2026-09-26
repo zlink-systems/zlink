@@ -144,6 +144,12 @@ namespace Systems.Zlink.Stream.Connector.Runtime
 
         [DllImport("__Internal", EntryPoint = "ZlinkStreamGetPendingDispatchCount")]
         public static extern int GetPendingDispatchCount(int handle);
+
+        // C#'s reply received hook set is the one owner of this decision - see
+        // ZlinkStreamWebGlConnector.cs's OnReplyReceived - so this call only
+        // happens on that set's 0/1 transition, not once per hook.
+        [DllImport("__Internal", EntryPoint = "ZlinkStreamSetReplyReceivedInterest")]
+        public static extern void SetReplyReceivedInterest(int handle, int interested);
 #else
         // The assembly definition limits this package to the WebGL player, so these
         // bodies exist only to keep the file readable in an IDE that ignores the
@@ -251,6 +257,11 @@ namespace Systems.Zlink.Stream.Connector.Runtime
         }
 
         public static int GetPendingDispatchCount(int handle)
+        {
+            throw new PlatformNotSupportedException(NotWebGl);
+        }
+
+        public static void SetReplyReceivedInterest(int handle, int interested)
         {
             throw new PlatformNotSupportedException(NotWebGl);
         }

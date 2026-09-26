@@ -1,7 +1,7 @@
 require('reflect-metadata');
 const { Injectable, Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
-const { ZLinkModule, zlinkFramework } = require('@zlink-systems/nestjs');
+const { ZLinkModule, ZLINK_FRAMEWORK_RUNTIME, zlinkFramework } = require('@zlink-systems/nestjs');
 
 const endpoint = requiredArgument('--endpoint');
 const certificatePath = optionalArgument('--certificate');
@@ -62,7 +62,9 @@ async function main() {
     logger: false,
     abortOnError: true
   });
-  process.stdout.write(`${JSON.stringify({ event: 'ready', endpoint })}\n`);
+  const boundEndpoint = app.get(ZLINK_FRAMEWORK_RUNTIME, { strict: false })
+    .getListenerStatus('stream', 'browser-test').endpoint;
+  process.stdout.write(`${JSON.stringify({ event: 'ready', endpoint: boundEndpoint })}\n`);
   while (!stopping) await new Promise((resolve) => setTimeout(resolve, 25));
   await app.close();
 }

@@ -149,7 +149,7 @@ async function startFanoutPair(subscriptions, receivedTopics) {
     publisherRuntime.channelTransport
   );
   await publisherRuntime.start();
-  const endpoint = fanout.getListenerStatus('events').endpoint;
+  const endpoint = publisherRuntime.getListenerStatus('fanout', 'events').endpoint;
   const subscriberOptions = framework.createFrameworkOptions((builder) => {
     const channel = builder.addFanoutChannel('events').enableSubscriber(endpoint);
     for (const topic of subscriptions) channel.subscribe(topic);

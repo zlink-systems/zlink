@@ -67,6 +67,7 @@ test('standalone samples stay outside workspaces and carry package-mode build in
     'utf8'
   );
   const sampleRunner = fs.readFileSync(path.join(workspaceRoot, 'samples', 'run-sample.mjs'), 'utf8');
+  const samplePortLease = fs.readFileSync(path.join(workspaceRoot, 'samples', 'port-lease.mjs'), 'utf8');
   const browserRunner = fs.readFileSync(
     path.join(workspaceRoot, 'scripts', 'browser-e2e', 'run-sample.mjs'),
     'utf8'
@@ -100,6 +101,11 @@ test('standalone samples stay outside workspaces and carry package-mode build in
     assert.equal(
       fs.readFileSync(path.join(sampleRoot, 'scripts', 'run-sample.mjs'), 'utf8'),
       sampleRunner,
+      sampleName
+    );
+    assert.equal(
+      fs.readFileSync(path.join(sampleRoot, 'scripts', 'port-lease.mjs'), 'utf8'),
+      samplePortLease,
       sampleName
     );
     if (browserSamples.has(sampleName)) {

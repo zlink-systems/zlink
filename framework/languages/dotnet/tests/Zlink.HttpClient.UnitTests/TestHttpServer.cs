@@ -1,103 +1,43 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
-using System.Net;
-using System.Net.Sockets;
 using System.Text;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 
 namespace Zlink.HttpClient.UnitTests;
 
 /// <summary>
-///     Minimal in-process HTTP server backed by <see cref="HttpListener" /> for contract tests.
+///     Minimal in-process HTTP server backed by Kestrel for contract tests.
 ///     Mirrors the role of the C++ <c>test_cpp_http_client</c> embedded server.
 /// </summary>
 internal sealed class TestHttpServer : IDisposable
 {
-    private readonly CancellationTokenSource _cts = new();
-    private readonly Func<HttpListenerContext, Task> _handler;
-    private readonly HttpListener _listener = new();
+    private readonly WebApplication _app;
 
-    public TestHttpServer(Func<HttpListenerContext, Task> handler)
+    public TestHttpServer(Func<HttpContext, Task> handler)
     {
-        _handler = handler;
-        var port = FreePort();
-        BaseUrl = $"http://127.0.0.1:{port}";
-        _listener.Prefixes.Add($"{BaseUrl}/");
-        _listener.Start();
-        _ = AcceptLoopAsync();
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseKestrel(options => options.Listen(System.Net.IPAddress.Loopback, 0));
+        _app = builder.Build();
+        _app.Run(context => handler(context));
+        _app.StartAsync().GetAwaiter().GetResult();
+        BaseUrl = _app.Urls.Single();
     }
 
     public string BaseUrl { get; }
 
     public void Dispose()
     {
-        _cts.Cancel();
-        try
-        {
-            _listener.Stop();
-            _listener.Close();
-        }
-        catch
-        {
-            // already stopped
-        }
-
-        _cts.Dispose();
-    }
-
-    private async Task AcceptLoopAsync()
-    {
-        while (!_cts.IsCancellationRequested)
-        {
-            HttpListenerContext context;
-            try
-            {
-                context = await _listener.GetContextAsync().ConfigureAwait(false);
-            }
-            catch
-            {
-                return;
-            }
-
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await _handler(context).ConfigureAwait(false);
-                }
-                catch
-                {
-                    // ignore handler faults in tests
-                }
-                finally
-                {
-                    try
-                    {
-                        context.Response.Close();
-                    }
-                    catch
-                    {
-                        // already closed
-                    }
-                }
-            });
-        }
-    }
-
-    private static int FreePort()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
+        _app.DisposeAsync().AsTask().GetAwaiter().GetResult();
     }
 }
 
-/// <summary>Helpers for writing <see cref="HttpListener" /> responses in tests.</summary>
+/// <summary>Helpers for writing Kestrel responses in tests.</summary>
 internal static class TestHttpServerExtensions
 {
     public static async Task WriteAsync(
-        this HttpListenerResponse response,
+        this HttpResponse response,
         int status,
         string body,
         string contentType = "application/json"
@@ -106,25 +46,25 @@ internal static class TestHttpServerExtensions
         response.StatusCode = status;
         response.ContentType = contentType;
         var bytes = Encoding.UTF8.GetBytes(body);
-        response.ContentLength64 = bytes.Length;
-        await response.OutputStream.WriteAsync(bytes).ConfigureAwait(false);
+        response.ContentLength = bytes.Length;
+        await response.Body.WriteAsync(bytes).ConfigureAwait(false);
     }
 
-    public static string ReadBody(this HttpListenerRequest request)
+    public static async Task<string> ReadBodyAsync(this HttpRequest request)
     {
-        using var reader = new StreamReader(request.InputStream, request.ContentEncoding);
-        return reader.ReadToEnd();
+        using var reader = new StreamReader(request.Body, Encoding.UTF8);
+        return await reader.ReadToEndAsync().ConfigureAwait(false);
     }
 
-    public static byte[] ReadBodyBytes(this HttpListenerRequest request)
+    public static async Task<byte[]> ReadBodyBytesAsync(this HttpRequest request)
     {
         using var output = new MemoryStream();
-        request.InputStream.CopyTo(output);
+        await request.Body.CopyToAsync(output).ConfigureAwait(false);
         return output.ToArray();
     }
 
     public static async Task WriteBytesAsync(
-        this HttpListenerResponse response,
+        this HttpResponse response,
         int status,
         byte[] body,
         string contentType
@@ -132,7 +72,7 @@ internal static class TestHttpServerExtensions
     {
         response.StatusCode = status;
         response.ContentType = contentType;
-        response.ContentLength64 = body.Length;
-        await response.OutputStream.WriteAsync(body).ConfigureAwait(false);
+        response.ContentLength = body.Length;
+        await response.Body.WriteAsync(body).ConfigureAwait(false);
     }
 }

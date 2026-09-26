@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
@@ -16,6 +17,7 @@ import systems.zlink.framework.streams.ZLinkSessionContext;
 import systems.zlink.framework.streams.ZLinkStreamError;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -47,6 +49,33 @@ final class ZLinkSessionRelocationSealTimeoutWiringTest {
             timeout.setAccessible(true);
             assertEquals(Duration.ofMillis(17), timeout.get(sessionOwner));
         }
+    }
+
+    /** Session-Actor binding §4: binding generations are unique across Sessions of one node. */
+    @Test
+    void bindingGenerationsAreUniqueAcrossSessionsOfOneSessionOwnerNode() throws Exception {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addStreamNode("gateway")
+                .bind("inproc://session-binding-generation-owner")
+                .registerSession(TestSession.class);
+
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
+            Object first = runtime.sessionActors("gateway", RoutingId.from("session-first"));
+            Object second = runtime.sessionActors("gateway", RoutingId.from("session-second"));
+            long firstGeneration = nextBindingGeneration(first, "actor-1");
+            long secondGeneration = nextBindingGeneration(second, "actor-1");
+            assertNotEquals(firstGeneration, secondGeneration);
+        }
+    }
+
+    private static long nextBindingGeneration(Object sessionOwner, String actorId)
+            throws Exception {
+        Method allocate =
+                sessionOwner.getClass().getDeclaredMethod("currentBindingGeneration", String.class);
+        allocate.setAccessible(true);
+        return (long) allocate.invoke(sessionOwner, actorId);
     }
 
     @Test

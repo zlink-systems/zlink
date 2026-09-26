@@ -30,10 +30,12 @@ export interface ServiceRelocationCaptureUnit {
   captureApplicationState(signal?: AbortSignal): Promise<Uint8Array>;
   commitSeal(): Promise<void> | void;
   abortSeal(): Promise<void> | void;
+  /** Expired-owner terminal: pending requests fail once and dispatch stays closed. */
+  discardSeal?(reason: unknown): Promise<void> | void;
 }
 
 export class ServiceCapturedObjectRelocation {
-  private terminal: 'open' | 'committed' | 'aborted' = 'open';
+  private terminal: 'open' | 'committed' | 'aborted' | 'discarded' = 'open';
 
   constructor(
     readonly envelope: ServiceRelocationEnvelope,
@@ -42,8 +44,8 @@ export class ServiceCapturedObjectRelocation {
 
   async commitSource(): Promise<void> {
     if (this.terminal === 'committed') return;
-    if (this.terminal === 'aborted') {
-      throw new Error('Relocation source capture was already aborted.');
+    if (this.terminal !== 'open') {
+      throw new Error(`Relocation source capture was already ${this.terminal}.`);
     }
     for (const unit of this.units) await unit.commitSeal();
     this.terminal = 'committed';
@@ -51,8 +53,8 @@ export class ServiceCapturedObjectRelocation {
 
   async abortSource(): Promise<void> {
     if (this.terminal === 'aborted') return;
-    if (this.terminal === 'committed') {
-      throw new Error('Committed relocation source capture cannot be aborted.');
+    if (this.terminal !== 'open') {
+      throw new Error(`A ${this.terminal} relocation source capture cannot be aborted.`);
     }
     const failures: unknown[] = [];
     for (const unit of [...this.units].reverse()) {
@@ -66,6 +68,17 @@ export class ServiceCapturedObjectRelocation {
     if (failures.length !== 0) {
       throw new AggregateError(failures, 'Relocation source rollback was incomplete.');
     }
+  }
+
+  /**
+   * The source owner lease ended before the authority settled (spec 28 §4.4):
+   * the source neither resumes nor commits. Retained work is dropped and
+   * every pending request without a terminal fails once with `reason`.
+   */
+  async discardSource(reason: unknown): Promise<void> {
+    if (this.terminal !== 'open') return;
+    this.terminal = 'discarded';
+    for (const unit of this.units) await unit.discardSeal?.(reason);
   }
 }
 

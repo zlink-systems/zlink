@@ -149,7 +149,7 @@ try {
     $commonProperties = @"
 sample.redisEndpoint=$redisEndpoint
 sample.redisKeyPrefix=$redisKeyPrefix
-sample.logDirectory=$($FlowLogDir.Replace('\', '/'))
+sample.logDirectory=$FlowLogDir
 sample.apiAChannelEndpoint=tcp://$($apiAChannel.Host):$($apiAChannel.Port)
 sample.apiBChannelEndpoint=tcp://$($apiBChannel.Host):$($apiBChannel.Port)
 sample.apiAMeshEndpoint=tcp://$($apiAMesh.Host):$($apiAMesh.Port)
@@ -170,7 +170,7 @@ sample.matchmakingRouterEndpoint=tcp://$($matchmakingRouter.Host):$($matchmaking
         } else {
             "tcp://$($apiAMatchmaking.Host):$($apiAMatchmaking.Port)"
         }
-        Set-ZlinkSampleUtf8File -Path $path -Value "$commonProperties`nsample.apiMatchmakingRouterEndpoint=$matchmakingEndpoint`nsample.$RoleName=$RoleValue"
+        Set-ZlinkSampleProperties -Path $path -Value "$commonProperties`nsample.apiMatchmakingRouterEndpoint=$matchmakingEndpoint`nsample.$RoleName=$RoleValue"
         Protect-ConfigFile $path
         return $path
     }
@@ -182,7 +182,7 @@ sample.matchmakingRouterEndpoint=tcp://$($matchmakingRouter.Host):$($matchmaking
     $playBConfig = Write-SampleConfig "play-b" "playNode" "b"
     $matchmakingConfig = Write-SampleConfig "matchmaking" "matchmakingNode" "matchmaking"
     $clientConfig = Join-Path $ConfigDir "client.properties"
-    Set-ZlinkSampleUtf8File -Path $clientConfig -Value @(
+    Set-ZlinkSampleProperties -Path $clientConfig -Value @(
         "sessionAStreamEndpoint=tcp://$($sessionAStream.Host):$($sessionAStream.Port)",
         "sessionBStreamEndpoint=tcp://$($sessionBStream.Host):$($sessionBStream.Port)"
     )

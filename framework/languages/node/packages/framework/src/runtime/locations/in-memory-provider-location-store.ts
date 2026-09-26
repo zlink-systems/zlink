@@ -70,12 +70,10 @@ export class ZLinkInMemoryProviderLocationStore implements ZLinkLocationStore {
         this.values.delete(mutation.key.value);
         continue;
       }
-      requireValue(mutation.bytes, mutation.retentionMs);
+      const retentionMs = requireValue(mutation.bytes, mutation.retentionMs);
       const version = storeVersion((++this.nextVersion).toString());
       const expiresAt =
-        mutation.retentionMs === undefined
-          ? undefined
-          : new Date(storeNow.getTime() + mutation.retentionMs);
+        retentionMs === undefined ? undefined : new Date(storeNow.getTime() + retentionMs);
       this.values.set(mutation.key.value, {
         bytes: mutation.bytes.slice(),
         version,
@@ -195,13 +193,19 @@ function requireScanRequest(request: ZLinkStoreScanRequest): void {
   }
 }
 
-function requireValue(bytes: Uint8Array, retentionMs: number | undefined): void {
+function requireValue(bytes: Uint8Array, retentionMs: number | undefined): number | undefined {
   if (bytes.byteLength > 1024 * 1024) {
     throw new RangeError('Location Store value exceeds 1 MiB.');
   }
-  if (retentionMs !== undefined && (!Number.isSafeInteger(retentionMs) || retentionMs < 1)) {
-    throw new RangeError('Location Store retention must be a positive safe integer.');
+  if (
+    retentionMs !== undefined &&
+    (!Number.isFinite(retentionMs) ||
+      retentionMs <= 0 ||
+      !Number.isSafeInteger(Math.ceil(retentionMs)))
+  ) {
+    throw new RangeError('Location Store retention must round to a positive safe integer.');
   }
+  return retentionMs === undefined ? undefined : Math.ceil(retentionMs);
 }
 
 function requireKey(value: string): void {

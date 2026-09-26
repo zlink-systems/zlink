@@ -2,137 +2,46 @@
 
 #include "runtime/protocol/framing.hpp"
 
-#include "runtime/protocol/compression/lz4_compression_codec.hpp"
-#include "runtime/protocol/framing/frame_codec.hpp"
-#include "runtime/protocol/header_codec.hpp"
-#include "runtime/transport/stream_connection.hpp"
-
-#include <chrono>
-#include <functional>
-#include <memory>
-#include <optional>
-#include <stdexcept>
-#include <string>
+#include <exception>
+#include <vector>
 
 namespace zlink::stream_connector::detail
 {
 
-namespace
-{
-
-bool has_flag (header_flags_t flags, header_flags_t flag) noexcept
-{
-    return (static_cast<std::uint8_t> (flags) & static_cast<std::uint8_t> (flag)) != 0;
-}
-
-result_t<std::vector<std::uint8_t>>
-read_exact_from_connection (const std::shared_ptr<stream_connection_t> &connection,
-                            std::size_t size)
-{
-    if (!connection) {
-        return result_t<std::vector<std::uint8_t>>::failure (error_code_t::disconnected,
-                                                             "stream connector is not connected");
-    }
-    std::vector<std::uint8_t> bytes (size);
-    std::size_t offset = 0;
-    while (offset < size) {
-        boost::system::error_code error;
-        const auto read = connection->read_some (bytes.data () + offset, size - offset, error);
-        if (error) {
-            return result_t<std::vector<std::uint8_t>>::failure (error_code_t::disconnected,
-                                                                 error.message ());
-        }
-        if (read == 0) {
-            return result_t<std::vector<std::uint8_t>>::failure (
-              error_code_t::disconnected, "stream connector returned a zero-byte read");
-        }
-        offset += read;
-    }
-    return result_t<std::vector<std::uint8_t>>::success (std::move (bytes));
-}
-
-result_t<dispatch_envelope_t>
-read_stream_packet (connector_state_t &state,
-                    const std::shared_ptr<stream_connection_t> &connection)
-{
-    auto prefix_result = read_exact_from_connection (connection, 6);
-    if (!prefix_result) {
-        return result_t<dispatch_envelope_t>::failure (prefix_result.error ()->code,
-                                                       prefix_result.error ()->message);
-    }
-    const auto &prefix = prefix_result.value ();
-    const auto header_size = static_cast<std::size_t> ((prefix[0] << 8) | prefix[1]);
-    const auto payload_size =
-      (static_cast<std::size_t> (prefix[2]) << 24) | (static_cast<std::size_t> (prefix[3]) << 16)
-      | (static_cast<std::size_t> (prefix[4]) << 8) | static_cast<std::size_t> (prefix[5]);
-    if (!frame_codec_t::validate_receive_frame_size (header_size, payload_size, state.options)) {
-        return result_t<dispatch_envelope_t>::failure (
-          error_code_t::frame_too_large, "Inbound stream frame exceeds configured limits.");
-    }
-    auto header_result = read_exact_from_connection (connection, header_size);
-    if (!header_result) {
-        return result_t<dispatch_envelope_t>::failure (header_result.error ()->code,
-                                                       header_result.error ()->message);
-    }
-    auto payload_result = read_exact_from_connection (connection, payload_size);
-    if (!payload_result) {
-        return result_t<dispatch_envelope_t>::failure (payload_result.error ()->code,
-                                                       payload_result.error ()->message);
-    }
-    auto header_bytes = std::move (header_result.value ());
-    auto payload_bytes = std::move (payload_result.value ());
-    auto decoded = header_codec_t{}.decode (header_bytes);
-    if (!decoded) {
-        return result_t<dispatch_envelope_t>::failure (decoded.error ()->code,
-                                                       decoded.error ()->message);
-    }
-    return decode_inbound_packet (state, decoded.value (), std::move (payload_bytes));
-}
-
-} // namespace
-
-void dispatch_packet (connector_state_t &state, const dispatch_envelope_t &envelope)
+std::vector<packet_handler_entry_t> select_packet_handlers (connector_state_t &state,
+                                                            const dispatch_envelope_t &envelope)
 {
     std::vector<packet_handler_entry_t> handlers;
     {
         std::lock_guard<std::mutex> lock (state.lifecycle_mutex);
         const auto found = state.packet_handlers.find (envelope.packet.name);
         if (found == state.packet_handlers.end ()) {
-            return;
+            return handlers;
         }
-        handlers = found->second;
+        for (const auto &entry : found->second) {
+            if (entry.takes (envelope)) {
+                handlers.push_back (entry);
+            }
+        }
     }
+    return handlers;
+}
+
+void dispatch_packet (connector_state_t &state,
+                      const dispatch_envelope_t &envelope,
+                      const std::vector<packet_handler_entry_t> &handlers)
+{
     for (const auto &entry : handlers) {
         try {
             entry.handler (envelope);
         }
+        catch (const std::exception &error) {
+            publish_error (state, {error_code_t::user_callback_failed, error.what ()});
+        }
         catch (...) {
+            publish_error (state, {error_code_t::user_callback_failed, "packet handler failed"});
         }
     }
-}
-
-result_t<std::vector<dispatch_envelope_t>>
-drain_available_pushes (connector_state_t &state,
-                        const std::shared_ptr<stream_connection_t> &connection)
-{
-    std::vector<dispatch_envelope_t> packets;
-    while (connection && connection->is_open ()) {
-        boost::system::error_code error;
-        if (connection->available (error) == 0) {
-            if (error) {
-                return result_t<std::vector<dispatch_envelope_t>>::failure (
-                  error_code_t::disconnected, error.message ());
-            }
-            return result_t<std::vector<dispatch_envelope_t>>::success (std::move (packets));
-        }
-        auto packet = read_stream_packet (state, connection);
-        if (!packet) {
-            return result_t<std::vector<dispatch_envelope_t>>::failure (packet.error ()->code,
-                                                                        packet.error ()->message);
-        }
-        packets.push_back (std::move (packet.value ()));
-    }
-    return result_t<std::vector<dispatch_envelope_t>>::success (std::move (packets));
 }
 
 } // namespace zlink::stream_connector::detail

@@ -25,6 +25,7 @@ import type { ZLinkTimerRelocationState } from './spot-timer';
 export type ZLinkSpotActivationDomain =
   | {
       readonly kind: 'user';
+      readonly objectGeneration?: bigint;
       readonly executionMode: ZLinkUserSpotExecutionMode;
       readonly relocationCoordinationMode: ZLinkSpotRelocationCoordinationMode;
     }
@@ -54,19 +55,6 @@ export interface ZLinkSpotActivationOptions {
 export interface ZLinkSpotRelocationCapture {
   readonly seal: ZLinkExecutionBarrierSeal;
   readonly timers: readonly ZLinkTimerRelocationState[];
-}
-
-/**
- * Internal signal that a close seal reached quiescence but the activation
- * became occupied again while it waited (an actor join queued ahead of the
- * close finished after the eager pre-seal occupancy check). This is not a
- * close failure: the seal is released, the Spot stays open, and the caller
- * reports `close(...)` as `false` instead of throwing.
- */
-export class ZLinkSpotCloseOccupiedError extends Error {
-  constructor(spotId: RoutingId) {
-    super(`Spot '${String(spotId)}' became occupied while its close seal reached quiescence.`);
-  }
 }
 
 export class ZLinkSpotActivation {
@@ -126,7 +114,7 @@ export class ZLinkSpotActivation {
   }
 
   get objectGeneration(): bigint | undefined {
-    return this.domain.kind === 'instance' ? this.domain.objectGeneration : undefined;
+    return this.domain.objectGeneration;
   }
 
   get executionMode(): ZLinkUserSpotExecutionMode {
@@ -274,8 +262,8 @@ export class ZLinkSpotActivation {
     return this.serialExecutor.admitActorDurablePrefix(actorId, records);
   }
 
-  sealExecution(): ZLinkExecutionBarrierSeal {
-    return this.executionBarrier.seal();
+  sealExecution(drainsYieldedTurns = false): ZLinkExecutionBarrierSeal {
+    return this.executionBarrier.seal(drainsYieldedTurns);
   }
 
   waitForExecutionQuiescence(seal: ZLinkExecutionBarrierSeal, signal?: AbortSignal): Promise<void> {

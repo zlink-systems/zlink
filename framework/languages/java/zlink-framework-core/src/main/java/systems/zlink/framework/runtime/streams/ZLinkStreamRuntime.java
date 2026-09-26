@@ -18,6 +18,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvi
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
@@ -63,6 +64,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -87,6 +89,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final ZLinkMessageSerializer serializer;
     private final ZLinkActorRuntime actors;
     private final Map<String, ZLinkInternalMeshNode> meshNodes;
+    private final Map<String, ZLinkInternalSpotNode> spotNodes;
+    private final ZLinkStreamBackendAdapter streamAdapter;
     private final ZLinkHandlerActivator handlerFactory;
     private final Executor handlerExecutor;
     private final Executor serialExecutor;
@@ -102,6 +106,9 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final List<ZLinkBackendStreamSocket> streams = new ArrayList<>();
     private final Map<String, ZLinkBackendStreamSocket> streamsByName = new HashMap<>();
     private final Map<String, Boolean> streamSessionRelayAttached = new HashMap<>();
+    // One binding generation counter for every Session this node owns when no
+    // native Session relay allocates it (Session-Actor binding §4).
+    private final AtomicLong sessionBindingGenerations = new AtomicLong();
     private final Map<String, ZLinkInternalSpotNode> streamSessionRelaySpotNodes = new HashMap<>();
     private final Map<String, SessionState> sessions = new HashMap<>();
     private final Map<String, CompletableFuture<SessionState>> pendingSessionCreations =
@@ -287,16 +294,27 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                             thread.setDaemon(true);
                             return thread;
                         });
-        ZLinkStreamBackendAdapter streamAdapter =
-                backendFactory.createStreamAdapter(adapterOptions);
+        this.streamAdapter = backendFactory.createStreamAdapter(adapterOptions);
+        this.spotNodes = spotNodes;
         this.context = Objects.requireNonNull(context, "context");
         this.ownsContext = ownsContext;
+    }
+
+    /**
+     * Opens each STREAM node and starts receiving.
+     *
+     * <p>The runtime is already recorded by its owner when this runs, and each socket is recorded
+     * in {@code streams} the moment it exists. A failure here leaves a partial set of sockets that
+     * the owner's close ({@link #closeAsync()}) releases like any other.
+     */
+    public ZLinkStreamRuntime start() {
         for (StreamNodeRegistration streamNode : registration.streamNodes()) {
             String actorMeshName =
                     streamNode.actorDispatchEnabled() ? resolveActorDispatchMeshName() : null;
             ZLinkInternalMeshNode meshNode =
                     actorMeshName == null ? null : meshNodes.get(actorMeshName);
             ZLinkBackendStreamSocket stream = streamAdapter.createStreamSocket(context, meshNode);
+            streams.add(stream);
             if (streamNode.tlsServer() != null) {
                 stream.setTlsServer(
                         streamNode.tlsServer().certificatePath(),
@@ -314,7 +332,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                             reportTransportError(streamNode, routingId, nativeCode, message));
             stream.startSessionService();
             ZLinkInternalSpotNode spotNode = resolveSessionRelayNode(spotNodes);
-            streams.add(stream);
             streamsByName.put(streamNode.name(), stream);
             streamSessionRelayAttached.put(streamNode.name(), spotNode != null);
             if (spotNode != null) {
@@ -324,6 +341,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
         receiveLoops.forEach(StreamReceiveLoop::start);
         livenessExecutor.scheduleAtFixedRate(this::checkSessionLiveness, 1L, 1L, TimeUnit.SECONDS);
+        return this;
     }
 
     private String resolveActorDispatchMeshName() {
@@ -360,32 +378,21 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                         streamSessionRelayAttached.getOrDefault(streamNodeName, false),
                         defaultCodec,
                         flow,
-                        sessionRelocationSealTimeout)
+                        sessionRelocationSealTimeout,
+                        sessionBindingGenerations::incrementAndGet)
                 .metadataPolicy(
                         metadataPolicy.sessionToActorKeys(), metadataPolicy.actorToSessionKeys());
     }
 
-    public String listenerEndpoint(String streamNodeName) {
-        StreamNodeRegistration registration =
-                this.registration.streamNodes().stream()
-                        .filter(value -> value.name().equals(streamNodeName))
-                        .findFirst()
-                        .orElseThrow(
-                                () ->
-                                        new ZLinkConfigurationException(
-                                                "stream node is not configured: "
-                                                        + streamNodeName));
-        ZLinkBackendStreamSocket stream = streamsByName.get(streamNodeName);
-        if (stream == null) {
-            throw new ZLinkConfigurationException("stream node is not started: " + streamNodeName);
-        }
-        String actual = stream.lastEndpoint();
+    /** Returns the advertised endpoint of a bound STREAM listener, or null when it has none. */
+    public String boundListenerEndpoint(StreamNodeRegistration registration) {
+        ZLinkBackendStreamSocket stream = streamsByName.get(registration.name());
+        String actual = stream == null ? null : stream.lastEndpoint();
         if (actual == null || actual.isBlank()) {
             actual = registration.bindEndpoint();
         }
         if (actual == null || actual.isBlank() || actual.endsWith(":0")) {
-            throw new ZLinkConfigurationException(
-                    "stream listener endpoint is not ready: " + streamNodeName);
+            return null;
         }
         return registration.advertisedEndpoint(actual);
     }
@@ -466,6 +473,11 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 .thenApply(codec::encodeSessionRelocationSealed);
     }
 
+    /**
+     * Routes command 36 to the one Session whose current binding it names. The transport boundary
+     * has already authenticated the source peer; the Session owner decides admission from the
+     * binding identity alone (Session-Actor binding §3 item 3, §8.1).
+     */
     public CompletionStage<Boolean> handleBoundSessionSend(
             RoutingId sourceNodeRid,
             long sourceNodeGeneration,
@@ -480,96 +492,86 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                                             .filter(Objects::nonNull)
                                             .map(SessionBoundSessionSendOwner::new)
                                             .toList();
-                            return dispatchBoundSessionSendAsync(
-                                    owners, sourceNodeRid, sourceNodeGeneration, command, payload);
+                            return dispatchBoundSessionSend(
+                                    owners, flow, sourceNodeRid, command, payload);
                         })
                 .thenCompose(Function.identity());
     }
 
-    static boolean dispatchBoundSessionSend(
+    static CompletionStage<Boolean> dispatchBoundSessionSend(
             List<? extends BoundSessionSendOwner> owners,
+            ZLinkMessageFlowTracer flow,
             RoutingId sourceNodeRid,
-            long sourceNodeGeneration,
             ZLinkServiceM6BWireCodec.BoundSessionSend command,
             ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
         List<? extends BoundSessionSendOwner> matches =
-                owners.stream()
-                        .filter(
-                                owner ->
-                                        owner.matches(sourceNodeRid, sourceNodeGeneration, command))
-                        .toList();
-        return matches.size() == 1
-                && matches.getFirst().accept(sourceNodeRid, sourceNodeGeneration, command, payload);
+                owners.stream().filter(owner -> owner.matches(command)).toList();
+        CompletionStage<Boolean> accepted =
+                matches.size() == 1
+                        ? matches.getFirst().acceptAsync(command, payload)
+                        : CompletableFuture.completedFuture(false);
+        return accepted.thenApply(
+                admitted -> {
+                    if (!admitted) {
+                        traceRejectedBoundSessionSend(flow, sourceNodeRid, command, payload);
+                    }
+                    return admitted;
+                });
     }
 
-    private static CompletionStage<Boolean> dispatchBoundSessionSendAsync(
-            List<? extends BoundSessionSendOwner> owners,
+    //  Session-Actor binding §3 item 4: a push refused as not current is recorded with the
+    //  closed message-flow vocabulary instead of disappearing.
+    private static void traceRejectedBoundSessionSend(
+            ZLinkMessageFlowTracer flow,
             RoutingId sourceNodeRid,
-            long sourceNodeGeneration,
             ZLinkServiceM6BWireCodec.BoundSessionSend command,
             ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
-        List<? extends BoundSessionSendOwner> matches =
-                owners.stream()
-                        .filter(
-                                owner ->
-                                        owner.matches(sourceNodeRid, sourceNodeGeneration, command))
-                        .toList();
-        return matches.size() == 1
-                ? matches.getFirst()
-                        .acceptAsync(sourceNodeRid, sourceNodeGeneration, command, payload)
-                : CompletableFuture.completedFuture(false);
+        ZLinkMessageFlowTracer.TracePoint tracePoint =
+                flow == null ? null : flow.begin(ZLinkMessageFlowOutcome.DROPPED);
+        if (tracePoint == null) {
+            return;
+        }
+        tracePoint.trace(
+                new ZLinkMessageFlowEvent(
+                        ZLinkMessageFlowOutcome.DROPPED,
+                        ZLinkDispatchErrorSurface.STREAM_SESSION,
+                        ZLinkDispatchMessageKind.SEND,
+                        payload.packetName(),
+                        null,
+                        null,
+                        null,
+                        sourceNodeRid.toString(),
+                        null,
+                        command.actor().actor().actorId(),
+                        null,
+                        ZLinkDispatchErrorReason.STALE_TARGET,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null));
     }
 
     interface BoundSessionSendOwner {
-        boolean matches(
-                RoutingId sourceNodeRid,
-                long sourceNodeGeneration,
-                ZLinkServiceM6BWireCodec.BoundSessionSend command);
+        boolean matches(ZLinkServiceM6BWireCodec.BoundSessionSend command);
 
-        boolean accept(
-                RoutingId sourceNodeRid,
-                long sourceNodeGeneration,
+        CompletionStage<Boolean> acceptAsync(
                 ZLinkServiceM6BWireCodec.BoundSessionSend command,
                 ZLinkServiceM6AWireCodec.ApplicationPayload payload);
-
-        default CompletionStage<Boolean> acceptAsync(
-                RoutingId sourceNodeRid,
-                long sourceNodeGeneration,
-                ZLinkServiceM6BWireCodec.BoundSessionSend command,
-                ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
-            return CompletableFuture.completedFuture(
-                    accept(sourceNodeRid, sourceNodeGeneration, command, payload));
-        }
     }
 
     private record SessionBoundSessionSendOwner(ZLinkSessionActorsRuntime runtime)
             implements BoundSessionSendOwner {
         @Override
-        public boolean matches(
-                RoutingId sourceNodeRid,
-                long sourceNodeGeneration,
-                ZLinkServiceM6BWireCodec.BoundSessionSend command) {
-            return runtime.matchesBoundSessionSend(sourceNodeRid, sourceNodeGeneration, command);
-        }
-
-        @Override
-        public boolean accept(
-                RoutingId sourceNodeRid,
-                long sourceNodeGeneration,
-                ZLinkServiceM6BWireCodec.BoundSessionSend command,
-                ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
-            return runtime.acceptBoundSessionSend(
-                    sourceNodeRid, sourceNodeGeneration, command, payload);
+        public boolean matches(ZLinkServiceM6BWireCodec.BoundSessionSend command) {
+            return runtime.matchesBoundSessionSend(command);
         }
 
         @Override
         public CompletionStage<Boolean> acceptAsync(
-                RoutingId sourceNodeRid,
-                long sourceNodeGeneration,
                 ZLinkServiceM6BWireCodec.BoundSessionSend command,
                 ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
-            return runtime.acceptBoundSessionSendAsync(
-                    sourceNodeRid, sourceNodeGeneration, command, payload);
+            return runtime.acceptBoundSessionSendAsync(command, payload);
         }
     }
 
@@ -1266,7 +1268,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                                                 streamNode.name(), false),
                                         defaultCodec,
                                         flow,
-                                        sessionRelocationSealTimeout)
+                                        sessionRelocationSealTimeout,
+                                        sessionBindingGenerations::incrementAndGet)
                                 .metadataPolicy(
                                         metadataPolicy.sessionToActorKeys(),
                                         metadataPolicy.actorToSessionKeys());
@@ -1380,7 +1383,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                     return null;
                 });
         sessionContexts.forEach(ZLinkStreamSessionContextState::closeReplyRetries);
-        String closeReason = draining ? "server_shutdown" : "transport_error";
+        String closeReason = draining ? "server_drain" : "transport_error";
         for (int index = 0; index < activeSessions.size(); index++) {
             recordSessionClosed(activeSessions.get(index), closeReason);
         }

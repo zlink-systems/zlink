@@ -118,6 +118,16 @@ class http_host_service_t::listener_t
         start_accept ();
     }
 
+    http_listener_status_t status () const
+    {
+        const auto local = _acceptor.local_endpoint ();
+        const auto address = local.address ();
+        const auto host = address.is_v6 () ? "[" + address.to_string () + "]"
+                                            : address.to_string ();
+        return {_endpoint->uri, _parsed.scheme + "://" + host + ":"
+                                  + std::to_string (local.port ())};
+    }
+
     void start ()
     {
         // async captures every exception from the thread in its future;
@@ -539,8 +549,10 @@ class http_host_service_t::listener_t
 };
 http_host_service_t::http_host_service_t (http_options_snapshot_t options,
                                           health_builder_t &health,
-                                          std::size_t handler_worker_count) :
-    _options (std::move (options)), _health (&health), _handler_worker_count (handler_worker_count)
+                                          std::size_t handler_worker_count,
+                                          std::shared_ptr<listener_status_registry_t> listener_statuses) :
+    _options (std::move (options)), _health (&health), _handler_worker_count (handler_worker_count),
+    _listener_statuses (std::move (listener_statuses))
 {
 }
 
@@ -561,6 +573,7 @@ task_t<void> http_host_service_t::start (service_provider_t &services)
                                                           _handler_worker_count, _stop);
             _listeners.push_back (std::move (listener));
             _listeners.back ()->open ();
+            _listener_statuses->add_http (_listeners.back ()->status ());
         }
         for (const auto &listener : _listeners) {
             listener->start ();
@@ -605,6 +618,7 @@ void http_host_service_t::stop () noexcept
         listener->stop_after_accept_loop ();
     }
     _listeners.clear ();
+    _listener_statuses->clear_http ();
 }
 
 } // namespace zlink::framework::runtime

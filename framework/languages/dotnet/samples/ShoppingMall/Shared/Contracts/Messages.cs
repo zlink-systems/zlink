@@ -70,7 +70,7 @@ public sealed record PrepareInventoryReservedCheckpointReq(StartOrderWorkflowReq
 
 public sealed record CloseOrderWorkflowForPlannedRelocationReq;
 
-public sealed record CloseOrderWorkflowForPlannedRelocationRes(bool Closed);
+public sealed record CloseOrderWorkflowForPlannedRelocationRes(bool Requested);
 
 public sealed record StartPlannedRelocationReq;
 

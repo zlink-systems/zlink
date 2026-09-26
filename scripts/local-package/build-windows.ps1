@@ -136,7 +136,7 @@ function Assert-NodePackage([string]$Package, [string]$WorkRoot, [string]$Versio
                             [string]$CoreRuntime, [string]$CoreManifest) {
   $verifyRoot = Join-Path $WorkRoot "verify"
   New-Item -ItemType Directory -Force -Path $verifyRoot | Out-Null
-  Invoke-Checked tar.exe @("-xzf", $Package, "-C", $verifyRoot)
+  Invoke-Checked (Join-Path $env:SystemRoot "System32\tar.exe") @("-xzf", $Package, "-C", $verifyRoot)
 
   $packageRoot = Join-Path $verifyRoot "package"
   $prebuild = Join-Path $packageRoot "prebuilds\win32-x64"

@@ -9,6 +9,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Supplier;
 
 public interface ZLinkBackendSpot extends ZLinkBackendObject {
     String spotId();
@@ -21,6 +22,9 @@ public interface ZLinkBackendSpot extends ZLinkBackendObject {
     default boolean closeInstanceSpot() {
         return false;
     }
+
+    /** Stops new local route admission while accepted routes remain drainable. */
+    default void sealSpotAdmission(Supplier<? extends RuntimeException> rejection) {}
 
     void setRoutingId(String spotId);
 

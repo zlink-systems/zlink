@@ -97,6 +97,9 @@ internal sealed class ZLinkActorRuntimeState(
 
     public IZLinkActor? Actor { get; private set; }
 
+    /// <summary>MeshNode that activated this Actor in the current process.</summary>
+    internal string? MeshName => Activation?.MeshName ?? Context?.MeshName;
+
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 
@@ -1207,11 +1210,12 @@ internal sealed class ZLinkActorRuntimeState(
     {
         var result = RunState(() =>
         {
-            // Once the target authority is committed, a relocation can still
-            // retain the source projection in _boundSession until the session
-            // owner acknowledges the route switch. Outbound pushes must use
-            // the committed target projection during that interval; otherwise
-            // the first target push is fenced as a stale source push.
+            // After the target authority commits, _boundSession keeps the
+            // source projection until the target has submitted the one-way
+            // Session route update (relocation flow §4.6; no reply follows).
+            // Outbound pushes in that interval use the committed target
+            // projection; otherwise the first target push is fenced as a
+            // stale source push.
             if (
                 _pendingSessionRoute is
                 { TargetActor: not null, TargetAuthorityOwnerGeneration: > 0 } pending
@@ -1429,7 +1433,7 @@ internal sealed class ZLinkActorRuntimeState(
     {
         if (Actor is null || Volatile.Read(ref _actorMetricActive) != 0)
             return;
-        var meshName = Activation?.MeshName ?? Context?.MeshName;
+        var meshName = MeshName;
         if (string.IsNullOrWhiteSpace(meshName))
             return;
         if (Interlocked.CompareExchange(ref _actorMetricActive, 1, 0) != 0)

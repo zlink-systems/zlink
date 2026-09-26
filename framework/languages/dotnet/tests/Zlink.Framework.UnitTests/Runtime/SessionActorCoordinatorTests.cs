@@ -1389,128 +1389,70 @@ public sealed class SessionActorCoordinatorTests
     }
 
     [Fact]
-    public async Task Push_Ignores_Derived_Route_Copies_But_Still_Fences_Authority_Generation()
+    public async Task Push_Admission_Uses_Only_The_Session_Binding_Identity()
     {
         var runtime = CreateRuntime();
-        var stream = new TestStream(RoutingId.From("session-route-lower"));
+        var stream = new TestStream(RoutingId.From("session-push-binding-identity"));
         var context = CreateSessionContext(runtime, stream);
-        var source = new ActorRef("actor-route-lower", 7, "actors", RoutingId.From("actor-node-a"));
-        var targetNode = RoutingId.From("actor-node-b");
+        var source = new ActorRef(
+            "actor-push-binding-identity",
+            7,
+            "actors",
+            RoutingId.From("actor-node-a")
+        );
+        var sender = RoutingId.From("actor-node-b");
         _ = await context.ActorCoordinator.BindOrGetActorAsync(
             context,
             source,
             CancellationToken.None
         );
-
         Assert.True(runtime.TryGetSessionActorBinding(source.ActorId, out var identity));
-        const string handoffId = "handoff-route-lower";
-        Assert.True(
-            (
-                await runtime.SealSessionActorRouteAsync(
-                    new ZLinkSessionRouteSeal(
-                        source.ActorId,
-                        identity.BindingToken,
-                        identity.BindingGeneration,
-                        source.ObjectGeneration,
-                        identity.AuthorityOwnerGeneration,
-                        identity.MeshName,
-                        identity.TargetNodeGeneration,
-                        identity.OwnerLeaseGeneration,
-                        identity.SessionOwnerNodeGeneration,
-                        handoffId
-                    ),
-                    CancellationToken.None
-                )
-            ).Acknowledged
-        );
 
+        // 04-session/02-session-actor-binding §3 item 3, §8.1: the route copy
+        // and the owner lifecycle fields differ from the registered binding,
+        // but only SessionRid, binding generation, ActorId and ObjectGeneration
+        // decide admission.
         var relay = new ZLinkRemoteSessionPushRelay(
             source.ActorId,
             source.ObjectGeneration,
             identity.MeshName,
-            targetNode.ToHex(),
-            TargetNodeGeneration: 11,
-            AuthorityOwnerGeneration: 14,
-            OwnerLeaseGeneration: 3,
+            RoutingId.From("actor-node-c").ToHex(),
+            TargetNodeGeneration: identity.TargetNodeGeneration + 5,
+            AuthorityOwnerGeneration: identity.AuthorityOwnerGeneration + 3,
+            OwnerLeaseGeneration: identity.OwnerLeaseGeneration + 2,
             identity.BindingToken,
             identity.BindingGeneration,
             identity.SessionOwnerNodeGeneration,
             identity.Context.RoutingId!.Value.ToHex(),
             ActorFrame([1, 2, 3])
         );
+        await runtime.DeliverRemoteSessionPushAsync(
+            relay,
+            relay.Frame,
+            sender,
+            CancellationToken.None
+        );
+        Assert.Equal(new byte[] { 1, 2, 3 }, Assert.Single(stream.Writes).Payload);
 
-        var wrongTargetNode = RoutingId.From("actor-node-c");
         await runtime.DeliverRemoteSessionPushAsync(
             relay with
             {
-                TargetNodeRid = wrongTargetNode.ToHex(),
-                TargetNodeGeneration = identity.TargetNodeGeneration,
-                AuthorityOwnerGeneration = identity.AuthorityOwnerGeneration,
-                OwnerLeaseGeneration = identity.OwnerLeaseGeneration,
+                BindingGeneration = identity.BindingGeneration + 1,
             },
             ActorFrame([4, 5, 6]),
-            wrongTargetNode,
+            sender,
             CancellationToken.None
         );
-        Assert.Single(stream.Writes);
-        Assert.Equal(new byte[] { 4, 5, 6 }, stream.Writes[0].Payload);
-
         await runtime.DeliverRemoteSessionPushAsync(
-            relay,
-            ActorFrame([1, 2, 3]),
-            targetNode,
-            CancellationToken.None
-        );
-
-        Assert.Single(stream.Writes);
-        Assert.Equal(new byte[] { 4, 5, 6 }, stream.Writes[0].Payload);
-
-        var target = new ActorRef(
-            source.ActorId,
-            source.ObjectGeneration,
-            source.MeshName,
-            targetNode
-        );
-        var commit = runtime.CommitSessionActorRoute(
-            new ZLinkSessionRouteCommit(
-                source.ActorId,
-                identity.BindingToken,
-                identity.BindingGeneration,
-                source.ObjectGeneration,
-                identity.AuthorityOwnerGeneration,
-                identity.AuthorityOwnerGeneration + 1,
-                identity.MeshName,
-                identity.MeshName,
-                identity.TargetNodeGeneration,
-                identity.TargetNodeGeneration + 1,
-                identity.OwnerLeaseGeneration,
-                identity.OwnerLeaseGeneration + 1,
-                identity.SessionOwnerNodeGeneration,
-                identity.AcceptedHighWater,
-                handoffId,
-                target
-            )
-        );
-        Assert.True(commit.Acknowledged);
-
-        // The target route is installed before Unseal. A push that still carries
-        // the source authority generation remains fenced even when its derived
-        // route copies are otherwise ignored.
-        var preCommitIdentity = relay with
-        {
-            AuthorityOwnerGeneration = identity.AuthorityOwnerGeneration,
-            TargetNodeGeneration = identity.TargetNodeGeneration,
-            OwnerLeaseGeneration = identity.OwnerLeaseGeneration,
-        };
-        await runtime.DeliverRemoteSessionPushAsync(
-            preCommitIdentity,
+            relay with
+            {
+                ObjectGeneration = source.ObjectGeneration + 1,
+            },
             ActorFrame([7, 8, 9]),
-            targetNode,
+            sender,
             CancellationToken.None
         );
-
         Assert.Single(stream.Writes);
-        Assert.Equal(new byte[] { 4, 5, 6 }, stream.Writes[0].Payload);
     }
 
     [Theory]
@@ -1796,11 +1738,6 @@ public sealed class SessionActorCoordinatorTests
         var targetTenure = new ZLinkSessionOutboundTenure(
             route.Ref.ActorId,
             route.Ref.ObjectGeneration,
-            "lagging-derived-mesh-copy",
-            RoutingId.From("actor-node-seal-target"),
-            route.TargetNodeGeneration,
-            route.AuthorityOwnerGeneration,
-            route.OwnerLeaseGeneration + 1,
             actor.BindingToken,
             BindingGeneration: 5,
             SessionOwnerNodeGeneration: 7,

@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.Net;
-using System.Net.Sockets;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Zlink.Framework.AspNetCore;
@@ -34,13 +32,13 @@ public sealed class RouteMeshRuntimeServiceTests
     public async Task ObserveAsync_Converges_When_Peer_Is_Admitted_After_Subscription()
     {
         var targetRid = RoutingId.From("zz-observed-late-peer");
-        var targetEndpoint = RuntimeFixture.ReserveTcpEndpoint();
         await using var target = await RuntimeFixture.StartAsync(
             ZLinkMeshNodeObjectRole.Server,
-            listenEndpoint: targetEndpoint,
+            listenEndpoint: "tcp://127.0.0.1:0",
             registerServerChannel: true,
             routingId: targetRid
         );
+        var targetEndpoint = target.ListenEndpoint;
         await using var source = await RuntimeFixture.StartManualAsync(
             ZLinkMeshNodeObjectRole.Server,
             targetRid,
@@ -164,11 +162,10 @@ public sealed class RouteMeshRuntimeServiceTests
     [Fact]
     public async Task Remote_RouteMesh_Server_With_Zero_Weight_Is_Unavailable()
     {
-        var targetEndpoint = RuntimeFixture.ReserveTcpEndpoint();
         await using var target = await RuntimeFixture.StartAsync(
             ZLinkMeshNodeObjectRole.Server,
             routingIdPrefix: "zz-zero-weight-target",
-            listenEndpoint: targetEndpoint,
+            listenEndpoint: "tcp://127.0.0.1:0",
             registerServerChannel: true,
             channelWeight: 0
         );
@@ -213,11 +210,10 @@ public sealed class RouteMeshRuntimeServiceTests
     [Fact]
     public async Task Previously_Admitted_RouteMesh_Server_When_Disconnected_Is_Unavailable()
     {
-        var targetEndpoint = RuntimeFixture.ReserveTcpEndpoint();
         await using var target = await RuntimeFixture.StartAsync(
             ZLinkMeshNodeObjectRole.Server,
             routingIdPrefix: "zz-disconnected-target",
-            listenEndpoint: targetEndpoint,
+            listenEndpoint: "tcp://127.0.0.1:0",
             registerServerChannel: true
         );
         await using var source = await RuntimeFixture.StartManualAsync(
@@ -267,11 +263,10 @@ public sealed class RouteMeshRuntimeServiceTests
     [Fact]
     public async Task Channel_Request_Reselection_Serializes_NormalJson_Body_Once()
     {
-        var targetEndpoint = RuntimeFixture.ReserveTcpEndpoint();
         await using var target = await RuntimeFixture.StartAsync(
             ZLinkMeshNodeObjectRole.Server,
             routingIdPrefix: "zz-reselection-target",
-            listenEndpoint: targetEndpoint,
+            listenEndpoint: "tcp://127.0.0.1:0",
             registerServerChannel: true
         );
         await using var source = await RuntimeFixture.StartManualAsync(
@@ -543,10 +538,9 @@ public sealed class RouteMeshRuntimeServiceTests
     [Fact]
     public async Task Manual_ObjectClient_Target_Is_NotFound_Without_Retrying_The_Pair()
     {
-        var targetEndpoint = RuntimeFixture.ReserveTcpEndpoint();
         await using var target = await RuntimeFixture.StartAsync(
             ZLinkMeshNodeObjectRole.Client,
-            listenEndpoint: targetEndpoint
+            listenEndpoint: "tcp://127.0.0.1:0"
         );
         await using var source = await RuntimeFixture.StartManualAsync(
             ZLinkMeshNodeObjectRole.Client,
@@ -840,7 +834,7 @@ public sealed class RouteMeshRuntimeServiceTests
             int channelWeight = 100
         )
         {
-            var listenEndpoint = ReserveTcpEndpoint();
+            const string listenEndpoint = "tcp://127.0.0.1:0";
             var services = new ServiceCollection();
             services.AddZLinkFramework(options =>
             {
@@ -855,15 +849,6 @@ public sealed class RouteMeshRuntimeServiceTests
                 node.PeerConnections.Connect(peerRid, peerEndpoint);
             });
             return await StartProviderAsync(services, listenEndpoint);
-        }
-
-        internal static string ReserveTcpEndpoint()
-        {
-            var listener = new TcpListener(IPAddress.Loopback, 0);
-            listener.Start();
-            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-            listener.Stop();
-            return $"tcp://127.0.0.1:{port}";
         }
 
         private static async Task<RuntimeFixture> StartProviderAsync(
@@ -890,7 +875,12 @@ public sealed class RouteMeshRuntimeServiceTests
                     provider.GetRequiredService<IZLinkRouteMeshRuntimeOptions>(),
                     provider.GetRequiredService<IZLinkRouteClient>(),
                     frameworkRuntime.GetMeshNodeRuntime(MeshName).Node.RoutingId,
-                    listenEndpoint
+                    Assert.IsType<string>(
+                        frameworkRuntime
+                            .GetMeshNodeRuntime(MeshName)
+                            .Node.MeshStatus()
+                            .LocalEndpoint
+                    )
                 );
             }
             catch

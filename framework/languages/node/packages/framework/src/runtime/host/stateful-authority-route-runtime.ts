@@ -19,6 +19,7 @@ import type {
 } from '../foundation/service-stateful-wire-codec';
 import { routingIdsEqual } from '../routing-id';
 import {
+  decodeServiceClosingSpotAuthority,
   decodeServiceInstanceAuthorityPayload,
   decodeServiceReadySpotAuthority,
   type ServiceActivationRecoveryState
@@ -74,6 +75,7 @@ interface StatefulAuthorityRouteSink {
 
 interface AppliedAuthorityRoute {
   readonly kind: 'user_spot' | 'instance_spot';
+  readonly closing: boolean;
   readonly stableType: string;
   readonly meshName: string;
   readonly spotRoute: ServiceDirectSpotRouteFence;
@@ -189,7 +191,7 @@ export class ZLinkStatefulAuthorityRouteRuntime {
         const expectedInstanceRoute =
           previousRoute?.kind === 'instance_spot' ? previousRoute.instanceRoute : null;
         sink.rememberSpotRoute(route.spotRoute, expectedSpotRoute);
-        if (route.kind === 'instance_spot') {
+        if (route.kind === 'instance_spot' && !route.closing) {
           const status = sink.status();
           if (
             routingIdsEqual(status.routingId, route.instanceRoute.targetNodeRid) &&
@@ -555,9 +557,9 @@ function pendingInstanceActivation(
 
 function authorityRoute(snapshot: ZLinkAuthoritySnapshot): AppliedAuthorityRoute | undefined {
   const allocation = snapshot.allocation;
-  const decoded = decodeServiceReadySpotAuthority(
-    serviceRelocationAuthorityApplicationPayload(snapshot.payload)
-  );
+  const payload = serviceRelocationAuthorityApplicationPayload(snapshot.payload);
+  const ready = decodeServiceReadySpotAuthority(payload);
+  const decoded = ready ?? decodeServiceClosingSpotAuthority(payload);
   if (
     allocation.state !== 'active' ||
     allocation.objectKind === 'actor' ||
@@ -585,6 +587,7 @@ function authorityRoute(snapshot: ZLinkAuthoritySnapshot): AppliedAuthorityRoute
   };
   return {
     kind: allocation.objectKind,
+    closing: ready === undefined,
     stableType: allocation.stableType,
     meshName: allocation.descriptor.meshName,
     spotRoute,
@@ -617,6 +620,7 @@ function sameAppliedRoute(
   if (right === undefined) return false;
   return (
     left.kind === right.kind &&
+    left.closing === right.closing &&
     left.stableType === right.stableType &&
     left.meshName === right.meshName &&
     left.instanceRoute.targetNodeRid === right.instanceRoute.targetNodeRid &&

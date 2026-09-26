@@ -287,7 +287,7 @@ test('provisional Join ingress replays one-way packets through the source mailbo
   const replay = async (parts) => {
       replayed.push(parts[1].data().toString());
   };
-  coordinator.beginProvisional('actor-1', 'join-1', 1n, 'source-node');
+  coordinator.beginProvisional('actor-1', 1n);
   for (const value of ['P1', 'P2']) {
     const parts = frame(value);
     await coordinator.capture(
@@ -303,7 +303,7 @@ test('provisional Join ingress replays one-way packets through the source mailbo
     parts.forEach((part) => part.close());
   }
 
-  await coordinator.releaseDeferred('actor-1', 'join-1');
+  await coordinator.releaseDeferred('actor-1');
   assert.deepEqual(replayed, ['P1', 'P2']);
   assert.equal(coordinator.isActive('actor-1'), false);
 });
@@ -414,7 +414,7 @@ test('rejected provisional Join releases its current Actor mailbox record before
   try {
     const current = actorMailbox.execute(() => spotSerial.execute(async () => {
       events.push('handler');
-      coordinator.beginProvisional('actor-1', 'join-rejected', 1n);
+      coordinator.beginProvisional('actor-1', 1n);
       for (const value of ['held-1', 'held-2']) {
         const parts = frame(value);
         try {
@@ -435,8 +435,7 @@ test('rejected provisional Join releases its current Actor mailbox record before
       events.push('release:start');
       await transfer.cancelDeferredActorHandoff(
         { context: { actorId: 'actor-1' } },
-        { spotId: 'source-spot' },
-        'join-rejected'
+        { spotId: 'source-spot' }
       );
       events.push('release:end');
       newerParts = frame('newer');
@@ -516,7 +515,7 @@ test('provisional Join ingress preserves request completion when replayed locall
   const { coordinator } = harness();
   const parts = frame('request');
   const ref = contextRef(parts, { request: true });
-  coordinator.beginProvisional('actor-1', 'join-2', 1n, 'source-node');
+  coordinator.beginProvisional('actor-1', 1n);
   const pending = coordinator.capture(
     'actor-1',
     parts,
@@ -529,7 +528,7 @@ test('provisional Join ingress preserves request completion when replayed locall
   );
   parts.forEach((part) => part.close());
 
-  await coordinator.releaseDeferred('actor-1', 'join-2');
+  await coordinator.releaseDeferred('actor-1');
   assert.equal(await pending, 'local-reply');
 });
 
@@ -581,7 +580,7 @@ test('deferred Join release uses the direct Spot replay path without recapturing
       reported.push(error);
     }
   });
-  coordinator.beginProvisional('actor-1', 'join-direct', 1n, 'source-node');
+  coordinator.beginProvisional('actor-1', 1n);
   for (const value of ['D1', 'D2']) {
     const parts = frame(value);
     await coordinator.capture(
@@ -597,8 +596,7 @@ test('deferred Join release uses the direct Spot replay path without recapturing
   await transfer.completeDeferredActorHandoff(
     { context: { actorId: 'actor-1' } },
     { spotId: 'target-spot' },
-    actorRef(),
-    'join-direct'
+    actorRef()
   );
   await new Promise(resolve => setImmediate(resolve));
 
@@ -614,7 +612,7 @@ test('release replay preserves typed request failures and observes one-way failu
   const { coordinator } = harness();
   const requestDeadlineUnixMs = Date.now() + 10;
   const requestParts = frame('expired-release');
-  coordinator.beginProvisional('actor-1', 'join-expired-release', 1n, 'source-node');
+  coordinator.beginProvisional('actor-1', 1n);
   const request = coordinator.capture(
     'actor-1',
     requestParts,
@@ -630,13 +628,13 @@ test('release replay preserves typed request failures and observes one-way failu
   );
   requestParts.forEach(part => part.close());
   await new Promise(resolve => setTimeout(resolve, 20));
-  await coordinator.releaseDeferred('actor-1', 'join-expired-release');
+  await coordinator.releaseDeferred('actor-1');
   await assert.rejects(
     request,
     error => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
   );
 
-  coordinator.beginProvisional('actor-1', 'join-one-way-failure', 1n, 'source-node');
+  coordinator.beginProvisional('actor-1', 1n);
   const sendParts = frame('failed-release-send');
   await coordinator.capture(
     'actor-1',
@@ -652,7 +650,7 @@ test('release replay preserves typed request failures and observes one-way failu
   );
   sendParts.forEach(part => part.close());
   await assert.rejects(
-    coordinator.releaseDeferred('actor-1', 'join-one-way-failure'),
+    coordinator.releaseDeferred('actor-1'),
     /one-way replay failed/
   );
   assert.equal(coordinator.isActive('actor-1'), false);
@@ -666,7 +664,7 @@ test('durable request handoff returns its initial permit before capacity-one rep
       () => 1n
     )
   );
-  coordinator.beginProvisional('actor-1', 'join-capacity-one', 1n, 'source-node');
+  coordinator.beginProvisional('actor-1', 1n);
   const parts = frame('capacity-one-request');
   const initialPermit = await queue.acquire();
   initialPermit.markApplicationQueued();
@@ -687,7 +685,6 @@ test('durable request handoff returns its initial permit before capacity-one rep
   let replayAdmissions = 0;
   const release = coordinator.releaseDeferred(
     'actor-1',
-    'join-capacity-one',
     undefined,
     async operation => {
       const permit = await queue.acquire();

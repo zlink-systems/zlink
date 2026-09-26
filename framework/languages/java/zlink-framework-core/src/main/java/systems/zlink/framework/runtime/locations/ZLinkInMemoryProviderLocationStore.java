@@ -81,7 +81,10 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
                             String key = requireKey(put.key());
                             byte[] bytes = requireBytes(put.bytes());
                             Instant expiresAt =
-                                    put.retention() == null ? null : now.plus(put.retention());
+                                    put.retention() == null
+                                            ? null
+                                            : now.plusMillis(
+                                                    ZLinkStoreRetention.toMillis(put.retention()));
                             var next = new ZLinkStoreVersion(Long.toUnsignedString(++version));
                             rows.put(key, new Entry(bytes, next, expiresAt));
                             putVersions.put(put.key(), next);

@@ -869,7 +869,7 @@ test('manual ClientServer admission timeout retries hello on the same physical c
 });
 
 for (const cause of ['malformed control', 'invalid pushed control', 'liveness deadline']) {
-  test(`ClientServer ${cause} restores intent only after its endpoint closes`, async () => {
+  test(`ClientServer ${cause} restarts admission on the retained connect intent`, async () => {
     const endpoint = 'tcp://10.0.0.1:9401';
     const registration = internal.createFrameworkRegistration({
       channels: { orders: { client: { manualConnections: [endpoint] } } }
@@ -927,30 +927,26 @@ for (const cause of ['malformed control', 'invalid pushed control', 'liveness de
       } else {
         sockets.tickClientServerLiveness(performance.now() + 15_001);
       }
+      // Only the logical admission ends. Core keeps the endpoint connect
+      // intent (transport liveness §6), and the handshake restarts at once on
+      // the existing admission path.
       assert.equal(sockets.clientDealerForOutbound('orders'), undefined);
-      assert.deepEqual(calls, [`connect:${endpoint}`, `disconnect:${endpoint}`]);
-      emit(events.ConnectionReady);
-      emit(events.Closed, 'tcp://10.0.0.2:9401');
-      emit(events.HandshakeFailedProtocol);
-      sockets.tickClientServerLiveness(performance.now() + 30_001);
-      assert.equal(requests.length, 1);
-      assert.equal(calls.length, 2);
-
-      emit(events.Disconnected);
-      assert.deepEqual(calls, [
-        `connect:${endpoint}`, `disconnect:${endpoint}`, `connect:${endpoint}`
-      ]);
-      assert.equal(requests.length, 1);
-      assert.equal(sockets.clientDealerForOutbound('orders'), undefined);
-      emit(events.Closed);
-      assert.equal(calls.length, 3);
-      emit(events.ConnectionReady, endpoint, 0n);
-      assert.equal(requests.length, 1);
-      emit(events.ConnectionReady);
+      assert.deepEqual(calls, [`connect:${endpoint}`]);
       assert.equal(requests.length, 2);
       await admit(1);
       assert.equal(sockets.clientDealerForOutbound('orders'), dealer);
-      assert.equal(calls.length, 3);
+
+      // A transport disconnect fences the admission; the Framework neither
+      // disconnects nor reconnects the endpoint, and the next READY re-admits.
+      emit(events.Disconnected);
+      assert.equal(sockets.clientDealerForOutbound('orders'), undefined);
+      emit(events.ConnectionReady, endpoint, 0n);
+      assert.equal(requests.length, 2);
+      emit(events.ConnectionReady);
+      assert.equal(requests.length, 3);
+      await admit(2);
+      assert.equal(sockets.clientDealerForOutbound('orders'), dealer);
+      assert.deepEqual(calls, [`connect:${endpoint}`]);
     } finally {
       await sockets.dispose();
     }
@@ -1044,19 +1040,12 @@ for (const transport of ['inproc', 'tcp']) {
       assert.equal(helloCount, 2);
       assert.equal(diagnostics.length, 1);
       assert.match(diagnostics[0].message, /probeId is truncated/);
-      assert.deepEqual(calls.filter(value => typeof value.kind === 'string'), [
-        { kind: 'connect', endpoint },
-        { kind: 'disconnect', endpoint },
+      // Core owns the endpoint reconnect (transport liveness §6): the
+      // Framework re-admitted on the same connect intent without a
+      // disconnect/connect of its own.
+      assert.deepEqual(calls.filter(value => value.kind === 'connect' || value.kind === 'disconnect'), [
         { kind: 'connect', endpoint }
       ]);
-      const disconnect = calls.findIndex(value => value.kind === 'disconnect');
-      const closed = calls.findIndex((value, index) => index > disconnect
-        && value.endpoint === endpoint
-        && [internal.ZLinkSocketNativeEventType.Disconnected, internal.ZLinkSocketNativeEventType.Closed].includes(value.kind));
-      const restored = calls.findIndex((value, index) => index > disconnect && value.kind === 'connect');
-      const ready = calls.findIndex((value, index) => index > restored
-        && value.kind === internal.ZLinkSocketNativeEventType.ConnectionReady);
-      assert.ok(disconnect > 0 && closed > disconnect && restored > closed && ready > restored);
     } finally {
       await sockets.dispose();
       await router.dispose();
@@ -1900,12 +1889,11 @@ for (const knownTarget of [false, true]) {
     if (knownTarget) {
       sockets.admitClientServerConnection(discoveryDescriptor('server-a', 0), 'orders-a:7');
     }
-    assert.equal(sockets.hasKnownClientServerTargets('orders'), knownTarget);
     assert.equal(sockets.clientDealerForOutbound('orders'), undefined);
     const submitted = t.mock.method(dealer, 'request');
     const startedAt = performance.now();
     await assert.rejects(request(200), {
-      kind: knownTarget ? framework.ZLinkFrameworkErrorKind.Unavailable : framework.ZLinkFrameworkErrorKind.NotFound
+      kind: framework.ZLinkFrameworkErrorKind.Unavailable
     });
     const elapsed = performance.now() - startedAt;
     // The extra 50 ms permits event-loop scheduling after the 200 ms deadline, not another wait budget.
@@ -1990,7 +1978,7 @@ test('ClientServer call deadline caps a long per-call ready wait at five seconds
   const { request, dealer } = readyWaitClient(t, 50);
   const submitted = t.mock.method(dealer, 'request');
   const startedAt = performance.now();
-  await assert.rejects(request(60_000), { kind: framework.ZLinkFrameworkErrorKind.NotFound });
+  await assert.rejects(request(60_000), { kind: framework.ZLinkFrameworkErrorKind.Unavailable });
   const elapsed = performance.now() - startedAt;
   assert.ok(elapsed >= 5_000 && elapsed < 5_500, `5 s ready cap finished after ${elapsed} ms`);
   assert.equal(submitted.mock.callCount(), 0);
@@ -2072,7 +2060,7 @@ for (const [direction, jumpMs] of [['forward', 10_000], ['backward', -10_000]]) 
   });
 }
 
-test('ClientServer outbound reports no selectable target as RequestTargetNotFound', async () => {
+test('ClientServer outbound reports no selectable target as Unavailable', async () => {
   const registration = internal.createFrameworkRegistration({
     channels: {
       orders: {
@@ -2090,14 +2078,12 @@ test('ClientServer outbound reports no selectable target as RequestTargetNotFoun
 
   assert.deepEqual(
     await manager.send('orders', 'Notice', { id: 1 }),
-    { status: submissionResult.ZLinkSubmitStatus.TargetNotFound }
+    { status: submissionResult.ZLinkSubmitStatus.RouteNotConnected }
   );
   await assert.rejects(
     () => manager.request('orders', 'Lookup', { id: 1 }, 60),
     (error) => error instanceof framework.ZLinkFrameworkException
-      && error.kind === framework.ZLinkFrameworkErrorKind.NotFound
-      // The kind carries retry policy; RequestTargetNotFound is not retriable by default in any
-      // lane, and the reference throws omit the flag exactly as this one does.
+      && error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
       && !('isRetriable' in error)
   );
   await manager.dispose();

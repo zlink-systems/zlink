@@ -103,7 +103,7 @@
         <Compile Include="Runtime/DurableAuthorityGoldenConformanceTests.cs"/>
         <Compile Include="Runtime/AuthorityRelocationStateGoldenConformanceTests.cs"/>
         <Compile Include="Runtime/DeferredActorJoinContractTests.cs"/>
-        <Compile Include="Runtime/DeferredActorJoinDurabilityTests.cs"/>
+        <Compile Include="Runtime/ActorRelocationCompletionOrderingTests.cs"/>
         <Compile Include="Runtime/DirectReplyCompletionRegistryTests.cs"/>
         <Compile Include="Runtime/DescriptorOwnerLeaseSelectionTests.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.cs"/>
@@ -188,6 +188,7 @@
         <Compile Include="Runtime/ReconciliationRunnerTests.cs"/>
         <Compile Include="Runtime/RelocationRuntimeTests.cs"/>
         <Compile Include="Runtime/RelocationBehaviorConformanceTests.cs"/>
+        <Compile Include="Runtime/SpotCloseConformanceTests.cs"/>
         <Compile Include="Runtime/RelocationTreeParallelIoTests.cs"/>
         <Compile Include="Runtime/StandaloneActorRelocationRuntimeTests.cs"/>
         <Compile Include="Runtime/StandaloneActorRelocationPrecommitTests.cs"/>
@@ -198,6 +199,7 @@
         <Compile Include="Runtime/RouteMeshReceiveFlowTests.cs"/>
         <Compile Include="Runtime/RouteMeshRuntimeServiceTests.cs"/>
         <Compile Include="Runtime/RuntimeConformanceFixtureTests.cs"/>
+        <Compile Include="Runtime/ActivationAdmissionRelocationRestoreTests.cs"/>
         <Compile Include="Runtime/RuntimeConcurrencyBoundaryTests.cs"/>
         <Compile Include="Runtime/RuntimeMetricsTests.cs"/>
         <Compile Include="Runtime/UnhandledDispatchPolicyTests.cs"/>

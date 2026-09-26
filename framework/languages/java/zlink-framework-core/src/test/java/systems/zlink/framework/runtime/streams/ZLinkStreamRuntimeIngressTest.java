@@ -75,6 +75,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -143,12 +144,16 @@ final class ZLinkStreamRuntimeIngressTest {
                         ZLinkStreamHeaderCodec.encode(request),
                         "{}".getBytes(StandardCharsets.UTF_8)));
         Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
-        List<String> lines = Collections.synchronizedList(new ArrayList<>());
+        List<String> lines = new CopyOnWriteArrayList<>();
+        CountDownLatch replied = new CountDownLatch(1);
         Handler handler =
                 new Handler() {
                     @Override
                     public void publish(LogRecord record) {
                         lines.add(record.getMessage());
+                        if (record.getMessage().contains(" phase=replied")) {
+                            replied.countDown();
+                        }
                     }
 
                     @Override
@@ -179,11 +184,7 @@ final class ZLinkStreamRuntimeIngressTest {
                                                         && line.contains(identity)),
                         () -> "missing session on " + phase + ": " + lines);
             }
-            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-            while (lines.stream().noneMatch(line -> line.contains(" phase=replied"))
-                    && System.nanoTime() < deadline) {
-                Thread.sleep(1);
-            }
+            assertTrue(replied.await(5, TimeUnit.SECONDS));
             assertTrue(
                     lines.stream()
                             .anyMatch(
@@ -372,7 +373,7 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
-    void drainedCloseUsesServerShutdownMetricReason() throws Exception {
+    void drainedCloseUsesServerDrainMetricReason() throws Exception {
         FakeStream stream = new FakeStream();
         stream.enqueue(PEER_A, frame("initial", "{}"));
         List<String> closeReasons = Collections.synchronizedList(new ArrayList<>());
@@ -384,7 +385,7 @@ final class ZLinkStreamRuntimeIngressTest {
             runtime.beginDrain();
             runtime.closeAsync().toCompletableFuture().join();
 
-            assertEquals(List.of("server_shutdown"), closeReasons);
+            assertEquals(List.of("server_drain"), closeReasons);
         }
     }
 
@@ -848,19 +849,20 @@ final class ZLinkStreamRuntimeIngressTest {
                                         });
         ZLinkStreamRuntime runtime =
                 new ZLinkStreamRuntime(
-                        new FakeProvider(stream),
-                        new ZLinkBackendAdapterOptions(Duration.ofSeconds(1)),
-                        registration,
-                        Map.of(),
-                        Map.of(MESH, ownerNode),
-                        serializer,
-                        actors,
-                        ZLinkHandlerActivator.reflection(),
-                        ignored -> true,
-                        null,
-                        null,
-                        new FakeContext(),
-                        false);
+                                new FakeProvider(stream),
+                                new ZLinkBackendAdapterOptions(Duration.ofSeconds(1)),
+                                registration,
+                                Map.of(),
+                                Map.of(MESH, ownerNode),
+                                serializer,
+                                actors,
+                                ZLinkHandlerActivator.reflection(),
+                                ignored -> true,
+                                null,
+                                null,
+                                new FakeContext(),
+                                false)
+                        .start();
         return new ReplacementFixture(runtime, actors);
     }
 
@@ -931,21 +933,23 @@ final class ZLinkStreamRuntimeIngressTest {
         lastRegistration = registration;
         FakeProvider provider = new FakeProvider(stream);
         return new ZLinkStreamRuntime(
-                provider,
-                new ZLinkBackendAdapterOptions(Duration.ofSeconds(1)),
-                registration,
-                Map.of(),
-                Map.of(),
-                new ZLinkJsonMessageSerializer(),
-                null,
-                ZLinkHandlerActivator.reflection(),
-                ignored -> true,
-                null,
-                null,
-                new FakeContext(),
-                false,
-                (ignoredBackend, ignoredKey) ->
-                        (ignoredReady, ignoredShutdown) -> CompletableFuture.completedFuture(null));
+                        provider,
+                        new ZLinkBackendAdapterOptions(Duration.ofSeconds(1)),
+                        registration,
+                        Map.of(),
+                        Map.of(),
+                        new ZLinkJsonMessageSerializer(),
+                        null,
+                        ZLinkHandlerActivator.reflection(),
+                        ignored -> true,
+                        null,
+                        null,
+                        new FakeContext(),
+                        false,
+                        (ignoredBackend, ignoredKey) ->
+                                (ignoredReady, ignoredShutdown) ->
+                                        CompletableFuture.completedFuture(null))
+                .start();
     }
 
     private ZLinkStreamRuntime startWithCustomReceiveCodec(FakeStream stream) {
@@ -963,21 +967,23 @@ final class ZLinkStreamRuntimeIngressTest {
                 codecs.serializerWithFallback(new ZLinkJsonMessageSerializer());
         lastRegistration = registration;
         return new ZLinkStreamRuntime(
-                new FakeProvider(stream),
-                new ZLinkBackendAdapterOptions(Duration.ofSeconds(1)),
-                registration,
-                Map.of(),
-                Map.of(),
-                serializer,
-                null,
-                ZLinkHandlerActivator.reflection(),
-                ignored -> true,
-                null,
-                null,
-                new FakeContext(),
-                false,
-                (ignoredBackend, ignoredKey) ->
-                        (ignoredReady, ignoredShutdown) -> CompletableFuture.completedFuture(null));
+                        new FakeProvider(stream),
+                        new ZLinkBackendAdapterOptions(Duration.ofSeconds(1)),
+                        registration,
+                        Map.of(),
+                        Map.of(),
+                        serializer,
+                        null,
+                        ZLinkHandlerActivator.reflection(),
+                        ignored -> true,
+                        null,
+                        null,
+                        new FakeContext(),
+                        false,
+                        (ignoredBackend, ignoredKey) ->
+                                (ignoredReady, ignoredShutdown) ->
+                                        CompletableFuture.completedFuture(null))
+                .start();
     }
 
     private void assertLivenessCloseReason(String expiredTimestampField, String expectedReason)

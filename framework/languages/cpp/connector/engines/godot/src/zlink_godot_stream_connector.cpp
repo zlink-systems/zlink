@@ -53,7 +53,7 @@ void log_callback_error (const char *message)
 
 template <typename Callback> void invoke_callback (Callback &&callback)
 {
-#if ZLINK_STREAM_CONNECTOR_HAS_EXCEPTIONS
+#if ZLINK_HAS_EXCEPTIONS
     try {
         callback ();
     }

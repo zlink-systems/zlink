@@ -882,4 +882,59 @@ decode_actor_authority_payload (const std::vector<std::byte> &bytes,
                                         payload->node_generation};
 }
 
+// Payload of an Instance Spot authority whose Close committed Closing (§7 step 1).
+struct instance_closing_state_t
+{
+    std::string stable_type;
+    std::string spot_id;
+    std::uint64_t object_generation = 0;
+    std::uint64_t authority_owner_generation = 0;
+};
+
+inline std::vector<std::byte> encode_instance_closing_state (const instance_closing_state_t &state)
+{
+    const std::string value = "zlink:instance-spot:closing:v1\n" + state.stable_type + "\n"
+                              + state.spot_id + "\n" + std::to_string (state.object_generation)
+                              + "\n" + std::to_string (state.authority_owner_generation);
+    std::vector<std::byte> result;
+    result.reserve (value.size ());
+    for (const auto character : value)
+        result.push_back (static_cast<std::byte> (static_cast<unsigned char> (character)));
+    return result;
+}
+
+inline std::optional<instance_closing_state_t>
+decode_instance_closing_state (const std::vector<std::byte> &payload)
+{
+    std::string value;
+    value.reserve (payload.size ());
+    for (const auto character : payload)
+        value.push_back (static_cast<char> (std::to_integer<unsigned char> (character)));
+    constexpr std::string_view prefix = "zlink:instance-spot:closing:v1\n";
+    if (value.rfind (prefix, 0) != 0)
+        return std::nullopt;
+    std::vector<std::string> fields;
+    std::size_t begin = prefix.size ();
+    while (begin <= value.size ()) {
+        const auto end = value.find ('\n', begin);
+        fields.push_back (
+          value.substr (begin, end == std::string::npos ? std::string::npos : end - begin));
+        if (end == std::string::npos)
+            break;
+        begin = end + 1;
+    }
+    if (fields.size () != 4 || fields[0].empty () || fields[1].empty ())
+        return std::nullopt;
+    try {
+        const auto object_generation = std::stoull (fields[2]);
+        const auto owner_generation = std::stoull (fields[3]);
+        if (object_generation == 0 || owner_generation == 0)
+            return std::nullopt;
+        return instance_closing_state_t{fields[0], fields[1], object_generation, owner_generation};
+    }
+    catch (...) {
+        return std::nullopt;
+    }
+}
+
 } // namespace zlink::framework::runtime

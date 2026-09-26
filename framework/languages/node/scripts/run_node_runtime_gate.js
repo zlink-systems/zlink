@@ -131,8 +131,8 @@ function runTestFile(label, args) {
   if (tap.plan !== undefined && tap.plan !== tap.completed) {
     integrityErrors.push(`plan=${tap.plan}, completed=${tap.completed}`);
   }
-  if (tap.summary !== undefined && tap.summary !== tap.completed) {
-    integrityErrors.push(`summary=${tap.summary}, completed=${tap.completed}`);
+  if (tap.summary !== undefined && tap.summary !== tap.totalCompleted) {
+    integrityErrors.push(`summary=${tap.summary}, completed=${tap.totalCompleted}`);
   }
   if (result.error) {
     integrityErrors.push(
@@ -158,17 +158,19 @@ function runTestFile(label, args) {
 function inspectTap(output) {
   let announced = 0;
   let completed = 0;
+  let totalCompleted = 0;
   let plan;
   let summary;
   for (const line of output.split(/\r?\n/)) {
     if (/^# Subtest: /.test(line)) announced += 1;
     if (/^(?:ok|not ok) \d+ - /.test(line)) completed += 1;
+    if (/^\s*(?:ok|not ok) \d+ - /.test(line)) totalCompleted += 1;
     const planMatch = /^1\.\.(\d+)$/.exec(line);
     if (planMatch !== null) plan = Number(planMatch[1]);
     const summaryMatch = /^# tests (\d+)$/.exec(line);
     if (summaryMatch !== null) summary = Number(summaryMatch[1]);
   }
-  return { announced, completed, plan, summary };
+  return { announced, completed, totalCompleted, plan, summary };
 }
 
 function listTestFiles(root) {

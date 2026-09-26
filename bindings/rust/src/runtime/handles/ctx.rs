@@ -431,7 +431,7 @@ pub fn version() -> (i32, i32, i32) {
 /// Check whether the library supports a given capability (e.g. `"ipc"`, `"tls"`).
 pub fn has(capability: &str) -> bool {
     let c = std::ffi::CString::new(capability).unwrap_or_default();
-    unsafe { ffi::zlink_has(c.as_ptr()) != 0 }
+    unsafe { ffi::zlink_has(c.as_ptr()) }
 }
 
 /// Returns the native error text for an errno value.

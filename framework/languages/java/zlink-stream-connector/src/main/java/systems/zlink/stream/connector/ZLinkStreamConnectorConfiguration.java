@@ -62,20 +62,16 @@ final class ZLinkStreamConnectorConfiguration {
         requirePositive(options.waitTimeout(), "waitTimeout");
         requirePositive(options.heartbeatInterval(), "heartbeatInterval");
         requirePositive(options.heartbeatTimeout(), "heartbeatTimeout");
-        if (options.heartbeatEnabled()
-                && !options.heartbeatTimeout().minus(options.heartbeatInterval()).isPositive()) {
-            throw ZLinkStreamException.configurationError(
-                    "heartbeatTimeout must be greater than heartbeatInterval");
-        }
         requirePositive(options.reconnectInitialDelay(), "reconnectInitialDelay");
         requirePositive(options.reconnectMaxDelay(), "reconnectMaxDelay");
-        if (options.reconnectBackoffFactor() < 1.0) {
+        if (!Double.isFinite(options.reconnectBackoffFactor())
+                || options.reconnectBackoffFactor() <= 0.0) {
             throw ZLinkStreamException.validationFailed(
-                    "reconnectBackoffFactor must be at least 1.0");
+                    "reconnectBackoffFactor must be finite and positive");
         }
         if (options.maxReconnectAttempts()
                         < ZLinkStreamConnectorOptions.UNLIMITED_RECONNECT_ATTEMPTS
-                || (options.reconnectEnabled() && options.maxReconnectAttempts() == 0)) {
+                || options.maxReconnectAttempts() == 0) {
             throw ZLinkStreamException.validationFailed(
                     "maxReconnectAttempts must be unlimited or positive");
         }

@@ -66,6 +66,9 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         // endpoint and do not need a separate listener identity.
     }
 
+    /** The endpoint this started node advertises for its bound listener. */
+    String advertisedEndpoint();
+
     void addChannel(String channelName);
 
     void setChannelWeight(String channelName, int weight);
@@ -303,15 +306,6 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     /** Installs the canonical service-wire actorJoin(28) admission owner. */
     default void setCanonicalActorJoinHandler(CanonicalActorJoinHandler handler) {
         // Alternate backends may not accept canonical actorJoin service records.
-    }
-
-    /**
-     * Returns whether the exact observed Spot authority and its admitted peer can carry canonical
-     * service-wire actorJoin(28). A false result keeps the caller on the established private
-     * transfer path.
-     */
-    default boolean canRequestCanonicalActorJoin(CanonicalActorJoinRequest request) {
-        return false;
     }
 
     /**

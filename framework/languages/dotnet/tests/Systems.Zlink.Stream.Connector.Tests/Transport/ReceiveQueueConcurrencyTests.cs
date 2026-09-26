@@ -1,10 +1,145 @@
 using System.Net;
 using System.Net.Sockets;
 using Systems.Zlink.Stream.Connector.Contracts;
+using Systems.Zlink.Stream.Connector.Runtime;
 using Xunit;
 
 public sealed partial class StreamConnectorTests
 {
+    /// <summary>
+    ///     Stream-connector spec §10: recording an unhandled arrival into the unread history
+    ///     counts it in the same step, so the count never runs ahead of what a wait can take.
+    /// </summary>
+    [Fact]
+    public void RecordingAnArrivalCountsItInTheSameStep()
+    {
+        var received = new ZlinkStreamReceivedMessages();
+        received.ResetForConnection(1);
+        received.Record(
+            new ZlinkStreamMessage<ZlinkStreamEncodedPayload>(
+                "recorded",
+                ZlinkStreamMetadata.Empty,
+                new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, ReadOnlyMemory<byte>.Empty)
+            )
+        );
+
+        Assert.Equal(1, received.Count("recorded"));
+    }
+
+    /// <summary>
+    ///     Stream-connector spec §10: a wait meets each unread message with its predicate
+    ///     once while messages keep arriving. Here every predicate call records the next
+    ///     message, so an arrival that restarted the scan would meet the earlier messages
+    ///     again on every call.
+    /// </summary>
+    [Fact]
+    public async Task WaitPredicateMeetsEachMessageOnceWhileMessagesKeepArriving()
+    {
+        const byte last = 50;
+        var received = new ZlinkStreamReceivedMessages();
+        received.ResetForConnection(1);
+        received.Record(Arrival(0));
+        var recorded = new HashSet<byte> { 0 };
+        var calls = 0;
+
+        var match = await received.WaitForAsync(
+            "arriving",
+            message =>
+            {
+                calls++;
+                var value = message.Payload.Payload.Span[0];
+                if (value < last && recorded.Add((byte)(value + 1)))
+                    received.Record(Arrival((byte)(value + 1)));
+                return value == last;
+            },
+            TimeSpan.FromSeconds(5),
+            CancellationToken.None
+        );
+
+        Assert.NotNull(match);
+        Assert.Equal(last, match.Payload.Payload.Span[0]);
+        Assert.Equal(last + 1, calls);
+
+        static ZlinkStreamMessage<ZlinkStreamEncodedPayload> Arrival(byte value) =>
+            new(
+                "arriving",
+                ZlinkStreamMetadata.Empty,
+                new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, new[] { value })
+            );
+    }
+
+    /// <summary>
+    ///     Stream-connector spec §10: a message another wait takes while this wait's predicate
+    ///     examines it is not taken twice, and this wait continues with the messages still
+    ///     unread.
+    /// </summary>
+    [Fact]
+    public async Task WaitContinuesWhenAnotherWaitTakesTheMessageItExamines()
+    {
+        var received = new ZlinkStreamReceivedMessages();
+        received.ResetForConnection(1);
+        received.Record(Arrival(0));
+        received.Record(Arrival(1));
+        ZlinkStreamMessage<ZlinkStreamEncodedPayload>? takenByOther = null;
+
+        var match = await received.WaitForAsync(
+            "taken",
+            message =>
+            {
+                if (takenByOther is null)
+                    takenByOther = received
+                        .WaitForAsync(
+                            "taken",
+                            null,
+                            TimeSpan.FromSeconds(1),
+                            CancellationToken.None
+                        )
+                        .AsTask()
+                        .GetAwaiter()
+                        .GetResult();
+                return true;
+            },
+            TimeSpan.FromSeconds(5),
+            CancellationToken.None
+        );
+
+        Assert.Equal(0, takenByOther!.Payload.Payload.Span[0]);
+        Assert.Equal(1, match!.Payload.Payload.Span[0]);
+
+        static ZlinkStreamMessage<ZlinkStreamEncodedPayload> Arrival(byte value) =>
+            new(
+                "taken",
+                ZlinkStreamMetadata.Empty,
+                new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, new[] { value })
+            );
+    }
+
+    [Fact]
+    public void DrainingReceivedBacklogDoesNotCopyRemainingMessages()
+    {
+        var received = new ZlinkStreamReceivedMessages();
+        received.ResetForConnection(1);
+        var message = new ZlinkStreamMessage<ZlinkStreamEncodedPayload>(
+            "backlog",
+            ZlinkStreamMetadata.Empty,
+            new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, ReadOnlyMemory<byte>.Empty)
+        );
+        for (var index = 0; index < 4096; index++)
+            received.Record(message);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < 4096; index++)
+        {
+            var next = received
+                .WaitForAsync("backlog", null, TimeSpan.FromSeconds(1), CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+            Assert.Same(message, next);
+        }
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(allocated < 20_000_000, $"Draining allocated {allocated} bytes.");
+    }
+
     /// <summary>
     ///     A wait predicate is caller code — on the typed surface it decodes the payload
     ///     first — so it must not run while the receive queue lock is held, and it must be
