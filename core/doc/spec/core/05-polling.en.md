@@ -43,6 +43,9 @@ There are two ways to wait for readiness.
   sources registered with a poller object and repeatedly wait through
   `zlink_poller_wait`.
 
+In both forms, when a signal interrupts the wait, Core resumes it with the remaining timeout, so
+`zlink_poll` and `zlink_poller_wait` never fail with `EINTR`.
+
 ## 3. Source types and readiness
 
 The readiness reported through `ZLINK_POLLIN` and `ZLINK_POLLOUT` for each source
@@ -346,6 +349,7 @@ and event-array contents. Each item maps to one unit test.
 - Platform `POLLPRI` for an FD maps to `ZLINK_POLLPRI`; all other platform error bits map to `ZLINK_POLLERR`.
 - The event fields `socket`, `fd`, and `timer` are valid only for SOCKET, FD, and TIMER sources, respectively, and `user_data` returns the pointer supplied at registration unchanged.
 - An event array returned by wait is caller-owned and contains no pointer to Core storage.
+- On POSIX, when a signal installed without `SA_RESTART` interrupts the wait of `zlink_poll` or `zlink_poller_wait`, the call does not fail with `EINTR`: it returns the event if readiness occurs within the remaining timeout, and otherwise returns `0` after the original timeout elapses.
 
 **Completion polling**
 
