@@ -59,7 +59,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly Dictionary<RoutingId, Peer> _peersByRid = new();
     private readonly Dictionary<RoutingId, ZLinkMeshPeerExpectation> _peerExpectations = new();
     private event Action<RoutingId>? PeerConnectionIntentRemoved;
-    private readonly ZLinkMeshConnectionCandidates _connectionCandidates = new();
+    private readonly ZLinkMeshSelectedRoutes _selectedRoutes = new();
     private readonly ZLinkMeshPeerAdmission _peerAdmission = new();
     private readonly ConcurrentDictionary<MailboxKey, OwnedMailbox> _ownedMailboxes = new();
     private readonly ConcurrentDictionary<ulong, PendingOperation> _operations = new();
@@ -125,7 +125,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ObservedActorAuthorityKey,
         ObservedAuthority
     > _observedActorAuthorities = new();
-    private readonly ConcurrentQueue<TransportDisconnect> _transportDisconnects = new();
     private readonly ConcurrentQueue<PendingNativeTerminalReply> _pendingNativeTerminalReplies =
         new();
 
@@ -390,7 +389,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     PollEventFlags.PollIn
                         | PollEventFlags.PollErr
                         | PollEventFlags.PollOut
-                        | PollEventFlags.PollCompletion,
+                        | PollEventFlags.PollCompletion
+                        | PollEventFlags.PollRoute,
                     1
                 );
                 _socket = socket;
@@ -3235,11 +3235,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             mailbox.Dispose();
         _ownedMailboxes.Clear();
         Interlocked.Exchange(ref _reservedRawApplicationAdmission, null)?.Dispose();
-        while (_transportDisconnects.TryDequeue(out _)) { }
-        RunState(() =>
-        {
-            _connectionCandidates.Clear();
-        });
+        RunState(_selectedRoutes.Clear);
         while (_pendingNativeTerminalReplies.TryDequeue(out var pendingReply))
             pendingReply.Dispose();
         foreach (var spot in _spots.Values)
@@ -5311,11 +5307,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             {
                 var count = _poller!.Wait(events, PollInterval);
                 var now = Stopwatch.GetTimestamp();
-                // Apply already-delivered exact disconnects before dispatching
-                // more work. Ingress itself carries the authoritative pair
-                // identity, so correctness does not depend on monitor timing.
                 DrainSocketMonitorEvents();
-                DrainTransportDisconnects(now);
+                // This loop is the socket's single route observer (Core ROUTER
+                // §10.1). Apply selected-route changes before dispatching the
+                // records that the same wait reported.
+                if (count > 0 && (events[0].Revents & PollEventFlags.PollRoute) != 0)
+                    ObserveSelectedRoutes(now);
                 if (count > 0)
                     DrainRawSocket(cancellationToken, admissions);
                 ProcessInfrastructure(now);
@@ -8788,26 +8785,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ZLinkServiceAdmissionDecision decision;
         var admissionCompleted = false;
         {
-            var preferredDirection =
-                command == ServiceWireConstants.Command.Hello
-                    ? ZLinkServiceConnectionDirection.Inbound
-                    : ZLinkServiceConnectionDirection.Outbound;
-            var handshakeCandidate = _connectionCandidates.ForHandshake(
-                sourceRid,
-                preferredDirection
-            );
+            // The record already passed the selected-route fence. A replaced
+            // route ended the previous admission when it was observed, so a
+            // Hello here is either fresh or repeats the current descriptor.
             var matchedPeer = _peerAdmission.FindForAdmission(
                 _peersByRid,
                 _peersByIntent.Values,
                 sourceRid,
                 command,
-                admission.AdvertisedEndpoint,
-                handshakeCandidate?.Direction
+                admission.AdvertisedEndpoint
             );
-            var replacesCurrentPeer =
-                command == ServiceWireConstants.Command.Hello
-                && handshakeCandidate is not null
-                && matchedPeer?.Admission is not null;
             if (matchedPeer is null && command != ServiceWireConstants.Command.Hello)
             {
                 // An Admit/Update arriving after its intent was removed is a
@@ -8968,14 +8955,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             if (duplicate is not null)
             {
                 var duplicateDecision = ZLinkServiceAdmissionGuard.SelectConnection(
-                    _routingId,
-                    sourceRid,
                     duplicate.LifecycleGeneration,
                     duplicate.Direction,
-                    duplicate.Discriminator,
                     admission.LifecycleGeneration,
-                    peer.Direction,
-                    peer.Discriminator
+                    peer.Direction
                 );
                 if (duplicateDecision == ZLinkServiceDuplicateConnectionDecision.KeepCurrent)
                 {
@@ -8995,8 +8978,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             }
 
             decision = ZLinkServiceAdmissionGuard.Evaluate(peer.Admission, command, admission);
-            if (replacesCurrentPeer && decision == ZLinkServiceAdmissionDecision.Idempotent)
-                decision = ZLinkServiceAdmissionDecision.Accept;
             if (decision == ZLinkServiceAdmissionDecision.Reject)
             {
                 RejectPeerAdmissionUnderLock(peer);
@@ -9008,13 +8989,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 Publish(MeshMonitorEventKind.PeerRejected, peerRid: sourceRid);
                 return;
             }
-            if (
-                handshakeCandidate is not null
-                && command
-                    is ServiceWireConstants.Command.Hello
-                        or ServiceWireConstants.Command.Admit
-            )
-                _connectionCandidates.Consume(sourceRid, handshakeCandidate.ConnectionId);
             // Repeated descriptors preserve their connection and liveness
             // epoch (service-wire §5). An idempotent Admit can finish a pending
             // handshake; an idempotent Hello still needs its Admit accepted.
@@ -9023,15 +8997,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 if (!_peersByIntent.ContainsKey(peer.Intent))
                     _peersByIntent.Add(peer.Intent, peer);
                 if (
-                    replacesCurrentPeer
-                    || peer.Admission is { } previousAdmission
-                        && previousAdmission.LifecycleGeneration != admission.LifecycleGeneration
+                    peer.Admission is { } previousAdmission
+                    && previousAdmission.LifecycleGeneration != admission.LifecycleGeneration
                 )
                 {
-                    // READY contributes only a pending physical candidate. The
-                    // successful Hello that consumes it owns replacement: old
-                    // controls are fenced by a new epoch. Liveness starts when
-                    // admission completes.
+                    // A new lifecycle on the same route starts a new epoch: old
+                    // controls are fenced. Liveness starts when admission
+                    // completes.
                     peer.ConnectionGeneration = checked(++_nextPeerConnectionGeneration);
                     peer.Liveness = null;
                 }
@@ -9208,6 +9180,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RetryPendingNativeTerminalReplies();
         var peers = RunState(() => _peersByIntent.Values.ToArray());
         bool? admissionSealed = null;
+        HashSet<RoutingId>? greetedRoutes = null;
 
         foreach (var peer in peers)
         {
@@ -9229,7 +9202,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     admissionSealed ??= _peerAdmissionSealed?.Invoke() == true;
                     if (admissionSealed.Value)
                         continue;
-                    var shouldSendAdmission = RunState(() =>
+                    var (shouldSendAdmission, unboundRoutes, hello) = RunState(() =>
                     {
                         if (
                             !_peersByIntent.TryGetValue(peer.Intent, out var current)
@@ -9237,12 +9210,27 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                             || current.Direction != ZLinkServiceConnectionDirection.Outbound
                             || current.State != MeshPeerState.Connecting
                         )
-                            return false;
+                            return (false, Array.Empty<RoutingId>(), (byte[]?)null);
                         current.NextAdmissionTimestamp = Add(now, AdmissionRetryInterval);
-                        return true;
+                        if (!current.PhysicalRoutingId.IsEmpty)
+                            return (true, Array.Empty<RoutingId>(), null);
+                        // An intent without a known RID cannot address its
+                        // route. It greets every selected route that no peer
+                        // owns; the endpoint in the reply identifies its own.
+                        var routes = UnboundSelectedRoutesUnderLock();
+                        return (
+                            false,
+                            routes,
+                            routes.Length == 0
+                                ? null
+                                : EncodeLocalAdmission(ServiceWireConstants.Command.Hello)
+                        );
                     });
                     if (shouldSendAdmission)
                         SendAdmission(peer, ServiceWireConstants.Command.Hello);
+                    foreach (var routingId in unboundRoutes)
+                        if ((greetedRoutes ??= []).Add(routingId))
+                            TryScheduleRoutedSend(routingId, [hello!]);
                 }
                 continue;
             }
@@ -9314,49 +9302,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private void OnSocketMonitorEvent(MonitorEvent value)
-    {
-        var routingId = value.RoutingId ?? default;
-        if (value.Event == MonitorEventType.ConnectionReady)
-        {
-            // Core also publishes connection-ready count snapshots with the
-            // edge flag clear. Only a rising edge may admit a physical peer.
-            if ((value.Flags & MonitorEventFlags.ConnectionReadyEdge) == 0)
-                return;
-            if (routingId.IsEmpty || value.ConnectionId == 0)
-                return;
-            RunState(() =>
-            {
-                var outboundCandidate = ZLinkMeshPeerAdmission.FindReadyOutboundCandidate(
-                    _peersByIntent.Values,
-                    value.RemoteAddr
-                );
-                if (outboundCandidate is { ExpectedRid: null })
-                    outboundCandidate.PhysicalRoutingId = routingId;
-                // READY can be delivered after admission on the same connection.
-                // Admission owns the peer epoch; monitor delivery must preserve
-                // queued controls and the established liveness state.
-                _connectionCandidates.Ready(
-                    routingId,
-                    value.ConnectionId,
-                    outboundCandidate is null
-                        ? ZLinkServiceConnectionDirection.Inbound
-                        : ZLinkServiceConnectionDirection.Outbound,
-                    value.RemoteAddr
-                );
-            });
-            return;
-        }
-        if (value.Event != MonitorEventType.Disconnected || value.ConnectionId == 0)
-            return;
-
-        var disconnected = RunState(() =>
-            _connectionCandidates.Disconnect(routingId, value.ConnectionId, value.RemoteAddr)
+    // Monitor events are transport observations, not the selected route
+    // (Core ROUTER §10.1). They remain diagnostics only.
+    private void OnSocketMonitorEvent(MonitorEvent value) =>
+        ZLinkFrameworkDebugLog.SpotDiscovery(
+            $"mesh_transport_event local={_routingId} event={value.Event} "
+                + $"peer={value.RoutingId?.ToString() ?? "-"} remote={value.RemoteAddr} "
+                + $"connection={value.ConnectionId}"
         );
-        if (disconnected is null || disconnected.HasRemainingCandidates)
-            return;
-        _transportDisconnects.Enqueue(new TransportDisconnect(disconnected.RoutingId));
-    }
 
     private void DrainSocketMonitorEvents()
     {
@@ -9377,50 +9330,71 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private void DrainTransportDisconnects(long now)
+    // Reads Core's selected-route snapshot and ends the logical admission of
+    // every RID whose observed route disappeared or was replaced. Only the
+    // receive loop calls this, so the socket has one route observer.
+    private void ObserveSelectedRoutes(long now)
     {
-        while (_transportDisconnects.TryDequeue(out var disconnect))
+        IReadOnlyList<RouterRoute> routes;
+        lock (_socketGate)
         {
-            var routingId = disconnect.RoutingId;
-            var closedRid = RunState(() =>
-            {
-                var peer = _peersByRid.TryGetValue(routingId, out var indexed)
-                    ? indexed
-                    : _peersByIntent.Values.FirstOrDefault(candidate =>
-                        candidate.PhysicalRoutingId == routingId
-                    );
-                if (peer is null)
-                    return (RoutingId?)null;
-                if (peer.Direction == ZLinkServiceConnectionDirection.Inbound)
-                {
-                    // An inbound transport has no local retry intent. Once
-                    // its physical pipe closes, remove the peer instead of
-                    // converting it into a locally reconnecting candidate.
-                    RemovePeer(peer, disconnect: false);
-                    return null;
-                }
-
-                if (
-                    !_peersByRid.TryGetValue(peer.RoutingId, out var current)
-                    || !ReferenceEquals(current, peer)
-                )
-                    return null;
-
-                peer.Admitted = false;
-                peer.State = MeshPeerState.Connecting;
-                peer.Admission = null;
-                peer.Liveness = null;
-                peer.ConnectionGeneration = checked(++_nextPeerConnectionGeneration);
-                _peersByRid.Remove(peer.RoutingId);
-                RebuildChannelSelectionPlansUnderLock();
-                peer.NextAdmissionTimestamp = now;
-                SetPeerLossStateUnderLock();
-                return peer.RoutingId;
-            });
-
-            if (closedRid is { } peerRid)
-                Publish(MeshMonitorEventKind.PeerClosed, peerRid: peerRid);
+            var socket = _socket;
+            if (socket is null)
+                return;
+            routes = socket.RoutesSnapshot();
         }
+
+        var closed = RunState(() =>
+        {
+            var closedRids = new List<RoutingId>();
+            foreach (var routingId in _selectedRoutes.Apply(routes))
+                if (EndRouteAdmissionUnderLock(routingId, now) is { } peerRid)
+                    closedRids.Add(peerRid);
+            return closedRids;
+        });
+        foreach (var peerRid in closed)
+            Publish(MeshMonitorEventKind.PeerClosed, peerRid: peerRid);
+    }
+
+    private RoutingId? EndRouteAdmissionUnderLock(RoutingId routingId, long now)
+    {
+        var peer = _peersByRid.TryGetValue(routingId, out var indexed)
+            ? indexed
+            : _peersByIntent.Values.FirstOrDefault(candidate =>
+                candidate.PhysicalRoutingId == routingId
+            );
+        if (peer is null)
+            return null;
+        if (peer.Direction == ZLinkServiceConnectionDirection.Inbound)
+        {
+            // An inbound peer has no local connect intent. Once its route
+            // ends, remove the peer instead of converting it into a locally
+            // reconnecting candidate.
+            RemovePeer(peer, disconnect: false);
+            return null;
+        }
+
+        if (
+            !_peersByRid.TryGetValue(peer.RoutingId, out var current)
+            || !ReferenceEquals(current, peer)
+        )
+            return null;
+
+        // The configured intent stays; Core reconnects the endpoint. The next
+        // selected route needs a new handshake, and an intent without an
+        // expected RID learns its RID again from that handshake.
+        peer.Admitted = false;
+        peer.State = MeshPeerState.Connecting;
+        peer.Admission = null;
+        peer.Liveness = null;
+        peer.ConnectionGeneration = checked(++_nextPeerConnectionGeneration);
+        if (peer.ExpectedRid is null)
+            peer.PhysicalRoutingId = default;
+        _peersByRid.Remove(peer.RoutingId);
+        RebuildChannelSelectionPlansUnderLock();
+        peer.NextAdmissionTimestamp = now;
+        SetPeerLossStateUnderLock();
+        return peer.RoutingId;
     }
 
     private SubmitResult SubmitRequest(
@@ -11621,36 +11595,43 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var target = peer.PhysicalRoutingId;
         if (target.IsEmpty)
             return;
-        ulong descriptorRevision;
-        Dictionary<string, uint> channels;
-        byte runtimeState;
-        descriptorRevision = _descriptorRevision;
-        channels = _channels.ToDictionary(
-            static entry => entry.Key.Value,
-            static entry => entry.Value,
-            StringComparer.Ordinal
+        var descriptor = EncodeLocalAdmission(command);
+        ZLinkFrameworkDebugLog.SpotDiscovery(
+            $"mesh_peer_admission_sent local={_routingId} target={peer.RoutingId} "
+                + $"command={command} endpoint={_advertisedEndpoint} "
+                + $"lifecycle={_lifecycleGeneration} revision={_descriptorRevision}"
         );
-        //  Spec 28 §567: draining node는 그 사실을 descriptor로 알려 새
-        //  selection과 placement에서 빠진다. runtime-state.draining = 2.
-        runtimeState = _state == MeshNodeState.Draining ? (byte)2 : (byte)1;
-        var descriptor = ZLinkServiceWireCodec.EncodeRouteAdmission(
+        SendControl(target, peer.ConnectionGeneration, command, descriptor, exactResponse);
+    }
+
+    private byte[] EncodeLocalAdmission(ServiceWireConstants.Command command) =>
+        ZLinkServiceWireCodec.EncodeRouteAdmission(
             command,
             _meshName,
             _advertisedEndpoint,
             _lifecycleGeneration,
-            descriptorRevision,
-            channels,
+            _descriptorRevision,
+            _channels.ToDictionary(
+                static entry => entry.Key.Value,
+                static entry => entry.Value,
+                StringComparer.Ordinal
+            ),
             (byte)_objectRole,
-            runtimeState,
+            //  Spec 28 §567: draining node는 그 사실을 descriptor로 알려 새
+            //  selection과 placement에서 빠진다. runtime-state.draining = 2.
+            _state == MeshNodeState.Draining
+                ? (byte)2
+                : (byte)1,
             ZLinkServiceSecurityIdentity.Plaintext
         );
-        ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"mesh_peer_admission_sent local={_routingId} target={peer.RoutingId} "
-                + $"command={command} endpoint={_advertisedEndpoint} "
-                + $"lifecycle={_lifecycleGeneration} revision={descriptorRevision}"
-        );
-        SendControl(target, peer.ConnectionGeneration, command, descriptor, exactResponse);
-    }
+
+    private RoutingId[] UnboundSelectedRoutesUnderLock() =>
+        _selectedRoutes
+            .RoutingIds.Where(routingId =>
+                !_peersByRid.ContainsKey(routingId)
+                && !_peersByIntent.Values.Any(peer => peer.PhysicalRoutingId == routingId)
+            )
+            .ToArray();
 
     private bool SendControl(
         RoutingId target,
@@ -11967,7 +11948,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             //  is reconnected as long as "the application configuration has
             //  intent to connect to that peer". An outbound peer carries that
             //  standing intent, so a failed control send may end only the
-            //  current connection epoch — mirroring DrainTransportDisconnects
+            //  current connection epoch — mirroring EndRouteAdmissionUnderLock
             //  — never the intent itself. Removing it here let the admission
             //  retry Hello (whose routed send fails while the route is down)
             //  erase the reconnect candidate, so the peer vanished from
@@ -12862,8 +12843,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 ZLinkMessageParts.DisposeAll(owned);
         }
     }
-
-    private readonly record struct TransportDisconnect(RoutingId RoutingId);
 
     private readonly record struct RemoteUserSpotOperationKey(
         RoutingId SourceNodeRid,

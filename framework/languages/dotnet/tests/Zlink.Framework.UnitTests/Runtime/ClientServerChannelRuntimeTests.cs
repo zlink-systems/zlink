@@ -2078,6 +2078,22 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             }
             Assert.Equal(0, transport.LivenessAckCount);
             Assert.Equal(2, transport.SentLivenessProbeCount);
+
+            // The expired deadline ends only the logical admission. The
+            // connect intent stays with Core, so the next Hello uses the same
+            // selected route instead of a reconnected one.
+            while (true)
+            {
+                using var next = await PollReceivedAsync(
+                    storage => TryReceive(router, storage),
+                    TimeSpan.FromSeconds(5)
+                );
+                if (!ZLinkClientServerControlProtocol.TryDecodeHello(next.Parts, out _))
+                    continue;
+                Assert.NotEqual(0UL, hello.RouteGeneration);
+                Assert.Equal(hello.RouteGeneration, next.RouteGeneration);
+                break;
+            }
         }
         finally
         {
@@ -2353,7 +2369,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     }
 
     [Fact]
-    public async Task MalformedPushedControl_ReconnectsAndReadmits()
+    public async Task MalformedPushedControl_ReadmitsOnTheSameConnection()
     {
         using var context = Systems.Zlink.Zlink.CreateContext();
         using var router = CreateClientServerRouter(context);
@@ -2409,6 +2425,11 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 Assert.True(
                     ZLinkClientServerControlProtocol.TryDecodeHello(secondHello.Parts, out _)
                 );
+                // Core owns the endpoint reconnect (transport liveness §6): the
+                // framework restarts only the service handshake, so the Hello
+                // arrives on the same selected route.
+                Assert.NotEqual(0UL, firstHello.RouteGeneration);
+                Assert.Equal(firstHello.RouteGeneration, secondHello.RouteGeneration);
                 ReplyAdmission(router, secondHello, endpoint);
             }
             await WaitUntilAsync(

@@ -9,13 +9,11 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.framework.actors.ZLinkActor;
-import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.monitoring.ZLinkPeerState;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
-import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
@@ -35,9 +33,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.logging.Handler;
-import java.util.logging.LogRecord;
-import java.util.logging.Logger;
 
 final class SpotManagerTest {
     @Test
@@ -259,31 +254,11 @@ final class SpotManagerTest {
     }
 
     @Test
-    void logicalMulticastGoneTargetEmitsDispatchErrorAndKeepsPublishTerminal() throws Exception {
+    void logicalMulticastUsesReadyTargetsAtPublishStart() throws Exception {
         Zlink.version();
         DiagnosticPublishingSpot.createdContext.set(null);
         String suffix = Long.toUnsignedString(System.nanoTime(), 36);
         RoutingId targetRid = RoutingId.from("multicast-target-" + suffix);
-        CompletableFuture<String> dispatchError = new CompletableFuture<>();
-        Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
-        Handler handler =
-                new Handler() {
-                    @Override
-                    public void publish(LogRecord record) {
-                        String message = record.getMessage();
-                        if (message.contains("event_id=zlink.dispatch_error")
-                                && message.contains("target_rid=" + targetRid)) {
-                            dispatchError.complete(message);
-                        }
-                    }
-
-                    @Override
-                    public void flush() {}
-
-                    @Override
-                    public void close() {}
-                };
-        logger.addHandler(handler);
         var store = new ZLinkInMemoryLocationStore();
 
         DefaultZLinkFrameworkOptions targetOptions = new DefaultZLinkFrameworkOptions();
@@ -300,7 +275,6 @@ final class SpotManagerTest {
                     target.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "game").endpoint();
             DefaultZLinkFrameworkOptions sourceOptions = new DefaultZLinkFrameworkOptions();
             sourceOptions.addLocationStore(store);
-            sourceOptions.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             var sourceNode = sourceOptions.addRouteMesh("game");
             sourceNode
                     .listen("tcp://127.0.0.1:0")
@@ -326,7 +300,10 @@ final class SpotManagerTest {
                                 .toCompletableFuture()
                                 .get(3, TimeUnit.SECONDS);
                 target.close();
+                waitForPeerNotReady(source, targetRid, 3_000);
 
+                // The publish snapshot has no ready remote target now. A prior
+                // ready snapshot cannot make this publish report a stale target.
                 DiagnosticPublishingSpot.createdContext
                         .get()
                         .outbound()
@@ -334,26 +311,8 @@ final class SpotManagerTest {
                         .submit()
                         .toCompletableFuture()
                         .get(3, TimeUnit.SECONDS);
-
-                String record = dispatchError.get(3, TimeUnit.SECONDS);
-                assertTrue(record.contains("event_id=zlink.dispatch_error"));
-                assertTrue(record.contains("surface=spot"));
-                assertTrue(record.contains("kind=send"));
-                assertTrue(record.contains("outcome=failed"));
-                assertTrue(record.contains("action=drop"));
-                assertTrue(record.contains("reason=stale_target"));
-                assertTrue(record.contains("target_rid=" + targetRid));
-                assertTrue(record.contains("topic=orders"));
-                assertTrue(record.contains("channel=events"));
-                assertTrue(record.contains("mesh=game"));
-                assertFalse(record.contains(" phase="));
-                assertFalse(record.contains(" source_rid="));
-                assertFalse(record.contains(" packet="));
-                assertTrue(record.contains("error_type="));
-                assertTrue(record.contains("error_message="));
+                assertTrue(source.spotManager().close(created.spot()).toCompletableFuture().join());
             }
-        } finally {
-            logger.removeHandler(handler);
         }
     }
 
@@ -491,9 +450,25 @@ final class SpotManagerTest {
                                             peer.nodeRid().equals(targetRid)
                                                     && peer.state() == ZLinkPeerState.READY);
             if (ready) return;
-            Thread.sleep(10);
+            Thread.onSpinWait();
         }
         throw new AssertionError("generic peer never reached READY before replacement");
+    }
+
+    private static void waitForPeerNotReady(
+            ZLinkFrameworkRuntime runtime, RoutingId targetRid, long timeoutMillis) {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        while (System.nanoTime() < deadline) {
+            boolean ready =
+                    runtime.routeMeshRuntime().snapshot("game").peers().stream()
+                            .anyMatch(
+                                    peer ->
+                                            peer.nodeRid().equals(targetRid)
+                                                    && peer.state() == ZLinkPeerState.READY);
+            if (!ready) return;
+            Thread.onSpinWait();
+        }
+        throw new AssertionError("closed peer stayed READY");
     }
 
     public static final class PublishingSpot implements ZLinkSpot<ZLinkActor> {

@@ -19,10 +19,10 @@ function fixture(registrationFailure) {
   let receives = 0;
   let released = 0;
   let registrations = 0;
-  let monitorDrains = 0;
+  let routeObservations = 0;
   let closed = false;
   let drained;
-  let monitorDrained;
+  let routesObserved;
   const sourceRoute = Buffer.from('peer');
   const parts = [Buffer.from([0xff])];
   const router = {
@@ -33,7 +33,7 @@ function fixture(registrationFailure) {
       if (registrationFailure) throw registrationFailure;
       readable = handler;
     },
-    monitor: () => ({ drain() { monitorDrains++; monitorDrained?.(); return 0; }, close() {} }),
+    routesSnapshot() { routeObservations++; routesObserved?.(); return []; },
     receive(dontWait) {
       assert.equal(closed, false);
       assert.equal(typeof readable, 'function', 'ingress requires binding readiness registration');
@@ -52,13 +52,13 @@ function fixture(registrationFailure) {
   backend.setBind('tcp://127.0.0.1:54321');
   return {
     backend, queue,
-    get state() { return { receives, released, registrations, monitorDrains, closed }; },
+    get state() { return { receives, released, registrations, routeObservations, closed }; },
     notify(count) {
       pending += count;
       readable();
     },
     untilDrained() { return new Promise(resolve => { drained = resolve; }); },
-    untilMonitorDrained() { return new Promise(resolve => { monitorDrained = resolve; }); }
+    untilRoutesObserved() { return new Promise(resolve => { routesObserved = resolve; }); }
   };
 }
 
@@ -67,9 +67,9 @@ test('RouteMesh registers readiness at startup and idle maintenance never receiv
   f.backend.start();
   try {
     assert.equal(f.state.registrations, 1);
-    await f.untilMonitorDrained();
-    await f.untilMonitorDrained();
-    assert.ok(f.state.monitorDrains > 1, 'idle monitor work must still progress');
+    await f.untilRoutesObserved();
+    await f.untilRoutesObserved();
+    assert.ok(f.state.routeObservations > 1, 'idle route observation must still progress');
     assert.equal(f.state.receives, 0);
   } finally { f.backend.close(); }
 });
@@ -86,8 +86,8 @@ test('one readiness notification drains beyond a batch to no-data with the host 
     assert.ok(f.state.receives >= 131, 'the receive result, not the notification, ends the drain');
     assert.equal(f.queue.snapshot().permitsInUse, 0n);
     const receives = f.state.receives;
-    await f.untilMonitorDrained();
-    await f.untilMonitorDrained();
+    await f.untilRoutesObserved();
+    await f.untilRoutesObserved();
     assert.equal(f.state.receives, receives, 'no-data ends receive work until another notification');
   } finally { f.backend.close(); }
 });

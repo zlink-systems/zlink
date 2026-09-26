@@ -54,7 +54,7 @@ test('NotRequired Admit conveys the peer descriptor before the connector closes'
   }
 });
 
-async function assertTerminalPair({ left, right, disconnected, sent, monitorEvents }) {
+async function assertTerminalPair({ left, right, disconnected, sent, selectRoute }) {
   assert.deepEqual(left.topology.notRequiredPeers(), [right.topology.localDescriptor()]);
   assert.deepEqual(right.topology.notRequiredPeers(), [left.topology.localDescriptor()]);
   assert.equal(left.topology.peers().length, 0);
@@ -63,15 +63,10 @@ async function assertTerminalPair({ left, right, disconnected, sent, monitorEven
   assert.equal(right.liveness.size, 0);
   assert.deepEqual(disconnected, [right.topology.localDescriptor().advertisedEndpoint]);
 
-  // An already queued READY cannot revive a terminal intent (MeshNode §7.1).
+  // A later selected route cannot revive a terminal intent (MeshNode §7.1).
   const sentBeforeReady = sent.length;
-  monitorEvents.left.push({
-    event: 0x1000, value: 1n, routingId: 'right',
-    localAddress: left.topology.localDescriptor().advertisedEndpoint,
-    remoteAddress: right.topology.localDescriptor().advertisedEndpoint,
-    connectionId: 17n, transportLane: 0, flags: 1
-  });
-  assert.equal(await left.drainMonitorEvents(), 1);
+  selectRoute(17n);
+  assert.equal(await left.observeSelectedRoutes(), 1);
   assert.equal(await left.announceExpectedPeers(), 0);
   assert.equal(await right.announceExpectedPeers(), 0);
   assert.equal(await left.announcePeer('right'), false);
@@ -83,7 +78,7 @@ async function assertTerminalPair({ left, right, disconnected, sent, monitorEven
 
 function createPair({ endpointOnly, hostAttached, notify }) {
   const queues = { left: [], right: [] };
-  const monitorEvents = { left: [], right: [] };
+  let routeGeneration = 1n;
   const disconnected = [];
   const sent = [];
   let connected = false;
@@ -102,8 +97,8 @@ function createPair({ endpointOnly, hostAttached, notify }) {
       assert.equal(endpoint, descriptors[remote].advertisedEndpoint);
       connected = true;
       if (notify) {
-        queues.left.push({ sourceRid: 'right', parts: [] });
-        queues.right.push({ sourceRid: 'left', parts: [] });
+        queues.left.push({ sourceRid: 'right', routeGeneration, parts: [] });
+        queues.right.push({ sourceRid: 'left', routeGeneration, parts: [] });
       }
     };
     const router = {
@@ -123,7 +118,7 @@ function createPair({ endpointOnly, hostAttached, notify }) {
       async send(target, parts) {
         assert.equal(target, remote);
         assert.equal(connected, true);
-        const record = { sourceRid: rid, parts: parts.map(part => Buffer.from(part)) };
+        const record = { sourceRid: rid, routeGeneration, parts: parts.map(part => Buffer.from(part)) };
         sent.push(record);
         queues[remote].push(record);
       },
@@ -133,15 +128,8 @@ function createPair({ endpointOnly, hostAttached, notify }) {
           ...record, sourceRoute: Buffer.from(record.sourceRid), close() {}
         };
       },
-      monitor() {
-        return {
-          drain(handler) {
-            const batch = monitorEvents[rid].splice(0);
-            batch.forEach(handler);
-            return batch.length;
-          },
-          statusReady() { return connected; }, close() {}
-        };
+      routesSnapshot() {
+        return connected ? [{ routingId: remote, routeGeneration }] : [];
       },
       close() {}
     };
@@ -158,5 +146,9 @@ function createPair({ endpointOnly, hostAttached, notify }) {
   right.start();
   if (endpointOnly) left.connectPeerEndpoint(descriptors.right.advertisedEndpoint);
   else left.connectPeer(descriptors.right.advertisedEndpoint, descriptors.right);
-  return { left, right, sent, disconnected, monitorEvents };
+  const selectRoute = generation => {
+    routeGeneration = generation;
+    connected = true;
+  };
+  return { left, right, sent, disconnected, selectRoute };
 }

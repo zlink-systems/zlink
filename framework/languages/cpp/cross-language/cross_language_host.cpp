@@ -358,7 +358,6 @@ int run_message_follow_host ()
     bool received = false;
     while (std::chrono::steady_clock::now () < deadline) {
         const auto now = runtime::mesh::service_liveness_registry_t::clock_t::now ();
-        (void) owner.drain_monitor_events (now);
         (void) owner.pump_one (now);
         (void) owner.tick_liveness (now);
 

@@ -50,30 +50,83 @@ test('ClientServer request terminals map to the spec public kind (not collapsed 
   }
 });
 
-test('malformed reply rejections synthesize ProtocolError, not NotConnected (round-12)', () => {
-  //  Spec 32-framework-error-model:58-60 + 91-92 — a reply that could not be
-  //  decoded while awaiting a node/channel request must surface publicly as
-  //  ProtocolError; only genuine transport rejections collapse to
-  //  NotConnected (public Unavailable). The generic completion path formerly
-  //  discarded the decode error and synthesized NotConnected for every
-  //  rejection.
+test('request failures retain the Core terminal and classify submit results by meaning', () => {
+  //  Core REQUEST result and errno classification belong to Core and the
+  //  binding (core 03-errors §Result와 errno 대응). One Framework function
+  //  classifies node/channel/stateful request failures: a binding REQUEST
+  //  result is kept as is, while submit failures retain their Core meaning.
   const {
-    genericOperationFailure
+    requestFailureResult
   } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
   const {
     ServiceWireProtocolError
   } = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
+  const {
+    OperationCancelledError,
+    OperationTimeoutError
+  } = require('../../packages/framework/dist/runtime/foundation/operation-registry');
+  const { SubmitResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 
-  //  failureCode 16 (requestProtocolError): the schema integrity rule forbids
-  //  a typed terminal with failure none, so the legal synthesis is 104+16.
-  assert.deepEqual(
-    genericOperationFailure(new ServiceWireProtocolError('Invalid reply parts.')),
-    { terminalResult: RequestResult.ProtocolError, failureCode: 16 }
-  );
-  //  Genuine transport rejection stays NotConnected (-> public Unavailable via
-  //  the terminal table pinned above).
-  assert.deepEqual(
-    genericOperationFailure(new Error('socket closed')),
-    { terminalResult: RequestResult.NotConnected, failureCode: 0 }
-  );
+  for (const result of [
+    RequestResult.TimedOut,
+    RequestResult.NotFound,
+    RequestResult.Terminated,
+    RequestResult.Rejected,
+    RequestResult.Busy,
+    RequestResult.NotConnected,
+    RequestResult.Backpressured,
+    RequestResult.InternalError
+  ]) {
+    assert.deepEqual(
+      requestFailureResult(new ZLinkBackendResultError('request', result, 113)),
+      { terminalResult: result, failureCode: 0 },
+      `Core request result ${result} is kept`
+    );
+  }
+  const submitted = (result) =>
+    requestFailureResult(new ZLinkBackendResultError('submit', result, 2));
+  assert.deepEqual(submitted(SubmitResult.Backpressured), {
+    terminalResult: RequestResult.Backpressured,
+    failureCode: 0
+  });
+  assert.deepEqual(submitted(SubmitResult.NotConnected), {
+    terminalResult: RequestResult.NotConnected,
+    failureCode: 0
+  });
+  assert.deepEqual(submitted(SubmitResult.NotFound), {
+    terminalResult: RequestResult.NotFound,
+    failureCode: 0
+  });
+  for (const [result, terminalResult] of [
+    [SubmitResult.Terminated, RequestResult.Terminated],
+    [SubmitResult.NotAdmitted, RequestResult.Rejected],
+    [SubmitResult.InvalidArgument, RequestResult.InvalidArgument],
+    [SubmitResult.InvalidState, RequestResult.InvalidState],
+    [SubmitResult.NotSupported, RequestResult.NotSupported],
+    [SubmitResult.InternalError, RequestResult.InternalError]
+  ]) {
+    assert.deepEqual(submitted(result), { terminalResult, failureCode: 0 });
+  }
+
+  //  Framework-owned failures. A reply that could not be decoded is a
+  //  protocol failure (spec 32-framework-error-model:58-60, 91-92); the
+  //  schema terminal-failure-integrity rule makes that pair 104+16.
+  assert.deepEqual(requestFailureResult(new ServiceWireProtocolError('Invalid reply parts.')), {
+    terminalResult: RequestResult.ProtocolError,
+    failureCode: 16
+  });
+  assert.deepEqual(requestFailureResult(new OperationTimeoutError(1n)), {
+    terminalResult: RequestResult.TimedOut,
+    failureCode: 0
+  });
+  assert.deepEqual(requestFailureResult(new OperationCancelledError(1n, 'closed')), {
+    terminalResult: RequestResult.NotConnected,
+    failureCode: 0
+  });
+  //  An unclassified exception is a Framework execution failure, not a
+  //  transport disconnect.
+  assert.deepEqual(requestFailureResult(new Error('socket closed')), {
+    terminalResult: RequestResult.InternalError,
+    failureCode: 17
+  });
 });

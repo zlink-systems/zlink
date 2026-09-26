@@ -10,7 +10,6 @@
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/diagnostics/listener_status_registry.hpp"
 #include "runtime/transport/listener_identity.hpp"
-#include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
@@ -51,7 +50,6 @@ namespace
 {
 
 constexpr auto default_send_wait_timeout = std::chrono::milliseconds (1000);
-constexpr auto maximum_channel_ready_wait = std::chrono::seconds (5);
 
 const channel_capability_snapshot_t *client_capability (const channel_runtime_state_t &state,
                                                         const std::string &channel_name)
@@ -184,35 +182,21 @@ encode_channel_payload_parts (runtime::messaging::envelope_header_t header,
                                            detail::encoded_payload_to_raw (serialized.payload));
 }
 
-framework_exception_t map_native_request_exception (const std::exception &error)
+// The binding typed result owns the classification; errno only details the
+// same failure (Core errors §Result와 errno 대응), so it is never consulted here.
+framework_exception_t map_native_exception (const std::exception &error)
 {
     if (const auto *framework_error = dynamic_cast<const framework_exception_t *> (&error)) {
         return *framework_error;
     }
     if (const auto *request_error = dynamic_cast<const zlink::request_error_t *> (&error);
         request_error != nullptr) {
-        if (request_error->result () == zlink::request_result_t::timed_out) {
-            return detail::make_boundary_exception (detail::boundary_error_t::timed_out,
-                                                    "channel request timed out");
-        }
-        if (request_error->result () == zlink::request_result_t::not_connected) {
-            return detail::make_boundary_exception (detail::boundary_error_t::disconnected,
-                                                    "channel request target is not connected");
-        }
-        if (request_error->internal_errno () == ECONNREFUSED
-            || request_error->internal_errno () == ENOTCONN
-            || request_error->internal_errno () == EHOSTUNREACH
-            || request_error->internal_errno () == ENETUNREACH) {
-            return detail::make_boundary_exception (detail::boundary_error_t::disconnected,
-                                                    "channel request target is not connected");
-        }
         return runtime::messaging::map_request_result_exception (request_error->result (),
                                                                  request_error->what ());
     }
     if (const auto *recv_error = dynamic_cast<const zlink::recv_error_t *> (&error);
         recv_error != nullptr) {
-        if (recv_error->result () == zlink::recv_result_t::no_data
-            || recv_error->internal_errno () == EAGAIN) {
+        if (recv_error->result () == zlink::recv_result_t::no_data) {
             return detail::make_boundary_exception (detail::boundary_error_t::timed_out,
                                                     "channel request timed out");
         }
@@ -221,48 +205,6 @@ framework_exception_t map_native_request_exception (const std::exception &error)
     }
     if (const auto *submit_error = dynamic_cast<const zlink::submit_error_t *> (&error);
         submit_error != nullptr) {
-        if (submit_error->result () == zlink::submit_result_t::backpressured
-            && (submit_error->internal_errno () == EAGAIN
-                || submit_error->internal_errno () == ETIMEDOUT)) {
-            return detail::make_boundary_exception (detail::boundary_error_t::timed_out,
-                                                    "channel request timed out");
-        }
-        if (submit_error->result () == zlink::submit_result_t::not_connected) {
-            return detail::make_boundary_exception (detail::boundary_error_t::disconnected,
-                                                    "channel request target is not connected");
-        }
-        if (submit_error->internal_errno () == ECONNREFUSED
-            || submit_error->internal_errno () == ENOTCONN
-            || submit_error->internal_errno () == EHOSTUNREACH
-            || submit_error->internal_errno () == ENETUNREACH) {
-            return detail::make_boundary_exception (detail::boundary_error_t::disconnected,
-                                                    "channel request target is not connected");
-        }
-        return runtime::messaging::map_channel_submit_result_exception (submit_error->result (),
-                                                                        submit_error->what ());
-    }
-    return framework_exception_t (framework_error_kind_t::internal_failure, error.what ());
-}
-
-framework_exception_t map_native_send_exception (const std::exception &error)
-{
-    if (const auto *submit_error = dynamic_cast<const zlink::submit_error_t *> (&error);
-        submit_error != nullptr) {
-        if ((submit_error->result () == zlink::submit_result_t::backpressured
-             || submit_error->result () == zlink::submit_result_t::not_admitted)
-            && (submit_error->internal_errno () == EAGAIN
-                || submit_error->internal_errno () == ETIMEDOUT)) {
-            return detail::make_boundary_exception (detail::boundary_error_t::timed_out,
-                                                    "channel send timed out");
-        }
-        if (submit_error->result () == zlink::submit_result_t::not_connected
-            || submit_error->internal_errno () == ECONNREFUSED
-            || submit_error->internal_errno () == ENOTCONN
-            || submit_error->internal_errno () == EHOSTUNREACH
-            || submit_error->internal_errno () == ENETUNREACH) {
-            return detail::make_boundary_exception (detail::boundary_error_t::disconnected,
-                                                    "channel send target is not connected");
-        }
         return runtime::messaging::map_channel_submit_result_exception (submit_error->result (),
                                                                         submit_error->what ());
     }
@@ -290,7 +232,7 @@ drain_native_request_terminal (zlink::async_result_t<std::vector<zlink::message_
         if (!state->settled.exchange (true, std::memory_order_acq_rel)) {
             state->completion.complete (
               detail::result_access_t::failure<runtime::messaging::message_parts_t> (
-                map_native_request_exception (error)));
+                map_native_exception (error)));
         }
     }
     catch (...) {
@@ -389,9 +331,7 @@ class channel_native_client_t
         _channel_name (std::move (channel_name)),
         _client (client),
         _runtime (std::move (runtime)),
-        _core_context (std::move (core_context)),
-        _readiness_executor (
-          std::make_shared<runtime::offload_executor_t> (1, "zlink-channel-ready"))
+        _core_context (std::move (core_context))
     {
         initialize_transport ();
     }
@@ -407,8 +347,11 @@ class channel_native_client_t
             co_return detail::boundary_failure<runtime::messaging::message_parts_t> (
               detail::boundary_error_t::shutdown, "channel native client is closed");
         }
+        if (timeout <= std::chrono::milliseconds::zero ()) {
+            co_return detail::boundary_failure<runtime::messaging::message_parts_t> (
+              detail::boundary_error_t::timed_out, "channel request deadline expired");
+        }
         try {
-            const auto operation_deadline = std::chrono::steady_clock::now () + timeout;
             const auto current = endpoints ();
             if (current.endpoints.empty ()) {
                 co_return detail::boundary_failure<runtime::messaging::message_parts_t> (
@@ -425,21 +368,9 @@ class channel_native_client_t
                 }
                 transport = sync_connections (current);
             }
-            const auto ready_deadline = std::min (
-              operation_deadline, std::chrono::steady_clock::now () + maximum_channel_ready_wait);
-            if (!co_await wait_for_connection_ready (ready_deadline)) {
-                co_return detail::boundary_failure<runtime::messaging::message_parts_t> (
-                  detail::boundary_error_t::timed_out,
-                  "channel request target did not become ready before the deadline");
-            }
-            const auto now = std::chrono::steady_clock::now ();
-            if (now >= operation_deadline) {
-                co_return detail::boundary_failure<runtime::messaging::message_parts_t> (
-                  detail::boundary_error_t::timed_out,
-                  "channel request timed out before native admission");
-            }
-            const auto remaining =
-              std::chrono::duration_cast<std::chrono::milliseconds> (operation_deadline - now);
+            // Core owns peer readiness and weight admission for this DEALER:
+            // submit now and map its typed terminal.
+            const auto request_timeout = timeout;
             {
                 zlink::message_t request_header = parts[0];
                 zlink::message_t request_body = parts[1];
@@ -456,23 +387,18 @@ class channel_native_client_t
                 pending.emplace (transport->socket->request ()
                                    .message (request_header)
                                    .message (request_body)
-                                   .timeout (remaining > std::chrono::milliseconds::zero ()
-                                               ? remaining
-                                               : std::chrono::milliseconds (1))
+                                   .timeout (request_timeout)
                                    .async ()
                                    .reply);
             }
             auto wait_state = std::make_shared<native_request_wait_state_t> ();
             auto terminal = wait_state->completion.task ();
             (void) drain_native_request_terminal (std::move (*pending), wait_state);
-            (void) expire_native_request_wait (remaining > std::chrono::milliseconds::zero ()
-                                                 ? remaining
-                                                 : std::chrono::milliseconds (1),
-                                               wait_state);
+            (void) expire_native_request_wait (request_timeout, wait_state);
             co_return co_await std::move (terminal);
         }
         catch (const std::exception &error) {
-            const auto mapped = map_native_request_exception (error);
+            const auto mapped = map_native_exception (error);
             co_return detail::result_access_t::failure<runtime::messaging::message_parts_t> (
               mapped);
         }
@@ -492,7 +418,10 @@ class channel_native_client_t
             throw detail::make_boundary_exception (detail::boundary_error_t::shutdown,
                                                    "channel native client is closed");
         }
-        const auto operation_deadline = std::chrono::steady_clock::now () + timeout;
+        if (timeout <= std::chrono::milliseconds::zero ()) {
+            throw detail::make_boundary_exception (detail::boundary_error_t::timed_out,
+                                                   "channel send deadline expired");
+        }
         const auto current = endpoints ();
         if (current.endpoints.empty ()) {
             throw detail::make_boundary_exception (
@@ -512,21 +441,8 @@ class channel_native_client_t
                 std::lock_guard lock (_mutex);
                 transport = sync_connections (current);
             }
-            const auto ready_deadline = std::min (
-              operation_deadline, std::chrono::steady_clock::now () + maximum_channel_ready_wait);
-            if (!co_await wait_for_connection_ready (ready_deadline)) {
-                throw detail::make_boundary_exception (
-                  detail::boundary_error_t::timed_out,
-                  "channel send target did not become ready before the deadline");
-            }
-            const auto now = std::chrono::steady_clock::now ();
-            if (now >= operation_deadline) {
-                throw detail::make_boundary_exception (
-                  detail::boundary_error_t::timed_out,
-                  "channel send timed out before native admission");
-            }
-            const auto remaining =
-              std::chrono::duration_cast<std::chrono::milliseconds> (operation_deadline - now);
+            // Core owns peer readiness and weight admission for this DEALER:
+            // submit now and map its typed result.
             std::optional<zlink::async_result_t<void>> pending;
             {
                 std::lock_guard client_lock (_mutex);
@@ -540,9 +456,7 @@ class channel_native_client_t
                                                            "channel native client is closed");
                 }
                 const auto configured_timeout = transport->socket->options ().send_timeout ();
-                transport->socket->options ().send_timeout (
-                  remaining > std::chrono::milliseconds::zero () ? remaining
-                                                                 : std::chrono::milliseconds (1));
+                transport->socket->options ().send_timeout (timeout);
                 try {
                     pending.emplace (transport->socket->send ()
                                        .message (send_header)
@@ -563,13 +477,11 @@ class channel_native_client_t
             throw;
         }
         catch (const zlink::submit_error_t &error) {
-            if ((error.result () == zlink::submit_result_t::backpressured
-                 || error.result () == zlink::submit_result_t::not_admitted)
-                && (error.internal_errno () == EAGAIN || error.internal_errno () == ETIMEDOUT)) {
+            if (error.result () == zlink::submit_result_t::backpressured) {
                 trace_channel_backpressure (_runtime.dispatch_options_ref (), _channel_name,
                                             trace_packet_name, correlation_id);
             }
-            const auto mapped = map_native_send_exception (error);
+            const auto mapped = map_native_exception (error);
             throw mapped;
         }
         catch (const std::exception &error) {
@@ -592,17 +504,9 @@ class channel_native_client_t
             _transport->close_noexcept ();
             _transport.reset ();
         }
-        {
-            std::lock_guard readiness_lock (_readiness->mutex);
-            _readiness->closed = true;
-        }
-        _readiness->changed.notify_all ();
-        _readiness_executor->request_stop ();
     }
 
   private:
-    struct readiness_state_t;
-
     struct transport_t
     {
         transport_t (const channel_capability_snapshot_t &client,
@@ -626,48 +530,38 @@ class channel_native_client_t
 
         ~transport_t () { close_noexcept (); }
 
-        void start_monitoring (std::shared_ptr<readiness_state_t> readiness,
-                               channel_runtime_t runtime,
-                               std::string channel_name)
+        // The one poller of this DEALER: waiting on it drains the binding
+        // completions; monitor events are diagnostics only (server 05 §5).
+        void start_monitoring (channel_runtime_t runtime, std::string channel_name)
         {
-            monitor_thread =
-              std::thread ([this, readiness = std::move (readiness), runtime = std::move (runtime),
-                            channel_name = std::move (channel_name)] () mutable {
-                  while (!monitor_stop.load (std::memory_order_acquire)) {
-                      try {
-                          zlink::poll_event_t poll_event;
-                          if (monitor_poller.wait (&poll_event, 1, std::chrono::milliseconds (50))
-                                != 1
-                              || poll_event.slot != 1
-                              || (static_cast<short> (poll_event.revents)
-                                  & static_cast<short> (zlink::poll_event_flag_t::pollin))
-                                   == 0) {
-                              continue;
-                          }
-                          for (;;) {
-                              auto event = monitor.recv (zlink::recv_flags_t::dontwait);
-                              if (!event)
-                                  break;
-                              bool changed = false;
-                              if (event->event == zlink::monitor_event::connection_ready) {
-                                  std::lock_guard lock (readiness->mutex);
-                                  const auto ready_count = event->value;
-                                  changed = readiness->ready_count != ready_count;
-                                  readiness->ready_count = ready_count;
-                              }
-                              if (changed)
-                                  readiness->changed.notify_all ();
-                              if (const auto kind = map_socket_monitor_event (event->event)) {
-                                  runtime.publish_socket_event (
-                                    channel_name, *kind, event->local_addr, event->remote_addr);
-                              }
-                          }
-                      }
-                      catch (...) {
-                          break;
-                      }
-                  }
-              });
+            monitor_thread = std::thread ([this, runtime = std::move (runtime),
+                                           channel_name = std::move (channel_name)] () mutable {
+                while (!monitor_stop.load (std::memory_order_acquire)) {
+                    try {
+                        zlink::poll_event_t poll_event;
+                        if (monitor_poller.wait (&poll_event, 1, std::chrono::milliseconds (50))
+                              != 1
+                            || poll_event.slot != 1
+                            || (static_cast<short> (poll_event.revents)
+                                & static_cast<short> (zlink::poll_event_flag_t::pollin))
+                                 == 0) {
+                            continue;
+                        }
+                        for (;;) {
+                            auto event = monitor.recv (zlink::recv_flags_t::dontwait);
+                            if (!event)
+                                break;
+                            if (const auto kind = map_socket_monitor_event (event->event)) {
+                                runtime.publish_socket_event (
+                                  channel_name, *kind, event->local_addr, event->remote_addr);
+                            }
+                        }
+                    }
+                    catch (const zlink::recv_error_t &) {
+                        break;
+                    }
+                }
+            });
         }
 
         void close_noexcept () noexcept
@@ -707,46 +601,6 @@ class channel_native_client_t
         std::uint64_t connection_version = 0;
         std::mutex mutex;
     };
-
-    struct readiness_state_t
-    {
-        std::mutex mutex;
-        std::condition_variable changed;
-        std::uint64_t ready_count = 0;
-        bool closed = false;
-    };
-
-    task_t<bool> wait_for_connection_ready (std::chrono::steady_clock::time_point deadline)
-    {
-        {
-            std::lock_guard lock (_readiness->mutex);
-            if (_readiness->closed) {
-                return task_t<bool> (result_t<bool>::success (false));
-            }
-            if (_readiness->ready_count != 0) {
-                return task_t<bool> (result_t<bool>::success (true));
-            }
-        }
-        auto completion = std::make_shared<detail::task_completion_source_t<bool>> ();
-        auto output = completion->task ();
-        const auto readiness = _readiness;
-        const bool accepted = _readiness_executor->try_submit_cancellable (
-          [readiness, deadline, completion] (std::stop_token stop) {
-              std::stop_callback wake_on_stop (stop,
-                                               [readiness] { readiness->changed.notify_all (); });
-              std::unique_lock lock (readiness->mutex);
-              readiness->changed.wait_until (lock, deadline, [&] {
-                  return readiness->closed || stop.stop_requested () || readiness->ready_count != 0;
-              });
-              const bool ready =
-                !readiness->closed && !stop.stop_requested () && readiness->ready_count != 0;
-              lock.unlock ();
-              completion->complete (result_t<bool>::success (ready));
-          });
-        if (!accepted)
-            completion->complete (result_t<bool>::success (false));
-        return output;
-    }
 
     std::shared_ptr<transport_t> sync_connections (const channel_endpoint_snapshot_t &snapshot)
     {
@@ -788,7 +642,7 @@ class channel_native_client_t
     std::shared_ptr<transport_t> make_transport ()
     {
         auto transport = std::make_shared<transport_t> (_client, _core_context);
-        transport->start_monitoring (_readiness, _runtime, _channel_name);
+        transport->start_monitoring (_runtime, _channel_name);
         return transport;
     }
 
@@ -796,8 +650,6 @@ class channel_native_client_t
     channel_capability_snapshot_t _client;
     channel_runtime_t _runtime;
     std::shared_ptr<zlink::context_t> _core_context;
-    std::shared_ptr<readiness_state_t> _readiness = std::make_shared<readiness_state_t> ();
-    std::shared_ptr<runtime::offload_executor_t> _readiness_executor;
     std::shared_ptr<transport_t> _transport;
     std::mutex _mutex;
     std::atomic_bool _closed{false};
@@ -866,7 +718,7 @@ class channel_native_publisher_t
             catch (const std::exception &error) {
                 if (override_timeout)
                     _socket.options ().send_timeout (configured_timeout);
-                throw map_native_send_exception (error);
+                throw map_native_exception (error);
             }
             catch (...) {
                 if (override_timeout)
@@ -1240,7 +1092,7 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                     && submit_error->result () == zlink::submit_result_t::backpressured) {
                     terminal_trace.backpressured ();
                 }
-                const auto mapped = map_native_request_exception (error);
+                const auto mapped = map_native_exception (error);
                 terminal_trace.failed_as (mapped);
                 request_metrics.timed_out =
                   detail::boundary_state (mapped) == detail::boundary_error_t::timed_out;
@@ -1364,7 +1216,7 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                 && submit_error->result () == zlink::submit_result_t::backpressured) {
                 terminal_trace.backpressured ();
             }
-            const auto mapped = map_native_request_exception (error);
+            const auto mapped = map_native_exception (error);
             terminal_trace.failed_as (mapped);
             request_metrics.timed_out =
               detail::boundary_state (mapped) == detail::boundary_error_t::timed_out;
@@ -1566,7 +1418,7 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
                 throw;
             }
             catch (const std::exception &error) {
-                throw map_native_send_exception (error);
+                throw map_native_exception (error);
             }
         }
         try {
@@ -1612,7 +1464,7 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
             throw;
         }
         catch (const std::exception &error) {
-            throw map_native_send_exception (error);
+            throw map_native_exception (error);
         }
         catch (...) {
             throw framework_exception_t (framework_error_kind_t::internal_failure,

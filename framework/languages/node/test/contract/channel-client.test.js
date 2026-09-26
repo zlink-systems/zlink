@@ -126,6 +126,32 @@ test('two in-process ClientServer nodes deliver a delayed reply to an awaited cl
   }
 });
 
+test('ClientServer channel with no eligible member reports Unavailable', async () => {
+  const registration = framework.createFrameworkRegistration({
+    channels: { empty: { client: { manualConnections: ['tcp://127.0.0.1:1'] }, requestTimeoutMs: 30 } }
+  });
+  const runtime = new framework.ZLinkFrameworkRuntimeHost({ registration });
+  const client = new framework.DefaultZLinkChannelClient(registration, runtime.channelTransport);
+  try {
+    await runtime.start();
+    const unavailable = (error) =>
+      error instanceof framework.ZLinkFrameworkException &&
+      error.kind === framework.ZLinkFrameworkErrorKind.Unavailable;
+    await assert.rejects(
+      () => client.sendToChannel('empty', typedPacket('Notice', { id: 1 })).submit(),
+      unavailable
+    );
+    await assert.rejects(
+      () => client.requestToChannel('empty', typedPacket('Question', { id: 2 }))
+        .timeout(30)
+        .submit(),
+      unavailable
+    );
+  } finally {
+    await runtime.stop();
+  }
+});
+
 test('two Node RouteMesh nodes round-trip a channel request and retain the pending submit', async () => {
   const descriptor = (rid, endpoint, channels, role) => ({
     meshName: 'channel-round-trip', nodeRoutingId: rid, lifecycleGeneration: 1n,
@@ -164,7 +190,7 @@ test('two Node RouteMesh nodes round-trip a channel request and retain the pendi
     //  아니므로 예산을 넉넉히 둔다.
     for (let turn = 0; turn < 3000
       && (!client.isPeerRouteReady('channel-server') || !server.isPeerRouteReady('channel-client')); turn += 1) {
-      await client.drainMonitorEvents(); await server.drainMonitorEvents();
+      await client.observeSelectedRoutes(); await server.observeSelectedRoutes();
       await client.announceExpectedPeers(); await server.announceExpectedPeers();
       await client.tickLiveness(); await server.tickLiveness();
       await client.pumpOne(); await server.pumpOne();
@@ -196,7 +222,7 @@ test('raw RouteMesh applies current receive-flow state before bind and unregiste
     setReceiveFlowState(state) { calls.push(`flow:${state}`); },
     bind() { calls.push('bind'); },
     localEndpoint() { return 'tcp://127.0.0.1:9404'; },
-    monitor() { return { drain() { return 0; }, statusReady() { return true; }, close() { calls.push('monitor:close'); } }; },
+    routesSnapshot() { return []; },
     close() { calls.push('router:close'); }
   };
   const queue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration({
@@ -232,7 +258,7 @@ test('raw RouteMesh applies current receive-flow state before bind and unregiste
   assert.equal(calls.at(-1), 'flow:running');
   for (const permit of permits) permit.releaseAfterInternalProcessing();
   runtime.close();
-  assert.deepEqual(calls.slice(-2), ['monitor:close', 'router:close']);
+  assert.deepEqual(calls.slice(-2), ['flow:running', 'router:close']);
   const countAfterClose = calls.length;
   const afterClose = [];
   for (let index = 0; index < 4; index += 1) afterClose.push(await queue.acquire());

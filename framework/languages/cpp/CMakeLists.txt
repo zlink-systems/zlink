@@ -1881,11 +1881,28 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_link_libraries(test_cpp_framework_channel_reply_admission PRIVATE
     GTest::gtest_main)
   add_zlink_framework_test(
+    test_cpp_framework_channel_core_admission
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_channel_core_admission.cpp
+    "framework-unit;framework-regression;channel;admission")
+  target_include_directories(test_cpp_framework_channel_core_admission PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_compile_definitions(test_cpp_framework_channel_core_admission PRIVATE
+    ZLINK_FRAMEWORK_CPP_SOURCE_DIR="${ZLINK_FRAMEWORK_CPP_DIR}")
+  target_link_libraries(test_cpp_framework_channel_core_admission PRIVATE
+    GTest::gtest_main)
+  add_zlink_framework_test(
     test_cpp_framework_route_mesh_weight_update
     tests/Zlink.Framework.UnitTests/test_cpp_framework_route_mesh_weight_update.cpp
     "framework-unit;framework-regression;channel;messaging")
   target_use_zlink_gtest_main(test_cpp_framework_route_mesh_weight_update)
   target_include_directories(test_cpp_framework_route_mesh_weight_update PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_mesh_selected_route
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_selected_route.cpp
+    "framework-unit;framework-regression;channel;topology;liveness")
+  target_use_zlink_gtest_main(test_cpp_framework_mesh_selected_route)
+  target_include_directories(test_cpp_framework_mesh_selected_route PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
     test_cpp_framework_application_job_queue

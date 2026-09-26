@@ -51,7 +51,9 @@ final class InstanceSpotRuntimeIntegrationTest {
         EchoInstanceSpot.initializations.set(0);
         EchoInstanceSpot.sends.set(0);
         EchoInstanceSpot.closes.set(null);
+        EchoInstanceSpot.closeCompleted = new CompletableFuture<>();
         SourceEntrySpot.reset();
+        SourceEntrySpot.afterCloseStart = new CompletableFuture<>();
         String suffix = Long.toUnsignedString(System.nanoTime(), 36);
         var store = new ZLinkInMemoryLocationStore();
 
@@ -88,6 +90,8 @@ final class InstanceSpotRuntimeIntegrationTest {
                                 sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
             SourceEntrySpot.request.set(new Request("echo-" + suffix));
             SourceEntrySpot.start.complete(null);
+            assertTrue(EchoInstanceSpot.closeCompleted.get(5, TimeUnit.SECONDS));
+            SourceEntrySpot.afterCloseStart.complete(null);
             String reply = SourceEntrySpot.reply.get();
 
             assertEquals("echo:hello|echo:again|echo:after-close", reply);
@@ -543,6 +547,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         static final List<Long> generations = new CopyOnWriteArrayList<>();
         static final AtomicInteger sends = new AtomicInteger();
         static final AtomicReference<Boolean> closes = new AtomicReference<>();
+        static volatile CompletableFuture<Boolean> closeCompleted = new CompletableFuture<>();
         static final AtomicReference<ZLinkSpotCloseReason> closeReason = new AtomicReference<>();
         static volatile CompletableFuture<Void> idleEvicted = new CompletableFuture<>();
         private final ZLinkInstanceSpotContext context;
@@ -606,6 +611,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                     .thenApply(
                             closed -> {
                                 EchoInstanceSpot.closes.set(closed);
+                                EchoInstanceSpot.closeCompleted.complete(closed);
                                 return null;
                             });
         }

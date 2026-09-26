@@ -45,8 +45,8 @@ bool pump_until (mesh::raw_mesh_node_owner_t &source,
     const auto deadline = std::chrono::steady_clock::now () + 2s;
     while (!condition () && std::chrono::steady_clock::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-        (void) await_task (source.drain_monitor_events (now));
-        (void) await_task (target.drain_monitor_events (now));
+        (void) source.observe_routes ();
+        (void) target.observe_routes ();
         (void) await_task (source.pump_one (now));
         (void) await_task (target.pump_one (now));
         std::this_thread::yield ();

@@ -139,10 +139,6 @@ class channel_host_service_t::server_loop_t
             if (rc != static_cast<int> (zlink::recv_result_t::ok)) {
                 continue;
             }
-            if (is_drained ()) {
-                _received.close ();
-                continue;
-            }
             dispatch_async (std::make_shared<zlink::received_t> (std::move (_received)),
                             std::move (*permit));
         }
@@ -304,8 +300,6 @@ class channel_host_service_t::server_loop_t
           zlink::peer_weight_t::value (static_cast<std::uint32_t> (std::min (*peer_weight, 100))));
         _applied_peer_weight = *peer_weight;
     }
-
-    bool is_drained () const noexcept { return _applied_peer_weight && *_applied_peer_weight == 0; }
 
     void drain_monitor_events ()
     {

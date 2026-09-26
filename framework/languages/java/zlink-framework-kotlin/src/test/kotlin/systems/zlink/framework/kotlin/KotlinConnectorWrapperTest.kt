@@ -716,7 +716,8 @@ final class KotlinConnectorWrapperTest {
                         actorSlot = 7,
                     )
                 )
-                withTimeout(1_000) { while (connector.receivedCount("Map") == 0) yield() }
+                withTimeout(1_000) { while (connector.pendingDispatchCount == 0) yield() }
+                assertEquals(1, connector.receivedCount("Map"))
                 connector.dispatch().await()
                 assertEquals(
                     "typed",
