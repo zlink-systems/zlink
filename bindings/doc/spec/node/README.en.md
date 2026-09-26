@@ -459,9 +459,8 @@ factories and public contract methods.
 Public Spot and Actor creation, including service-owned timers, is specified by the [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md). This binding specification defines creation of Core raw sockets, monitors, pollers, and generic timers.
 - `createPoller()` and `createTimer()` create eventing resources.
 - `Pollable` is `BaseSocket | SocketMonitor | Timer | number`, and `Poller.add/modify/remove`
-  provide `SocketMonitor` overloads (common spec "Monitor sources in `Poller`"). Only
-  `PollEventFlag.PollIn` is valid for a socket monitor; any other readiness mask is rejected
-  with a typed `ConfigResult.InvalidArgument`. Drain with `monitor.recv(RecvFlags.DontWait)`
+  provide `SocketMonitor` overloads (common spec "Monitor sources in `Poller`"). The result of a monitor mask follows the common spec "Monitor sources in `Poller`".
+  Drain with `monitor.recv(RecvFlags.DontWait)`
   after readiness; `PollEvents.source(index)` returns the registered monitor object.
 - A socket registers a **receive readiness notification handler** with
   `setReadableHandler(handler)`. Node runs a single event loop, so `Poller.wait`

@@ -226,8 +226,8 @@ source-of-truth detail lives in the [.NET bindings blueprint](../dotnet/README.e
 
 `poller_t` accepts a socket monitor as a source through `void add(socket_monitor_t &monitor_, poll_event_flag_t events_, std::uintptr_t slot_)`,
 `void modify(socket_monitor_t &monitor_, poll_event_flag_t events_)` and `bool remove(socket_monitor_t &monitor_)` (common spec
-"Monitor sources in `Poller`"). A monitor mask accepts only `pollin` or none; any other bit is rejected with
-`config_error_t(config_result_t::invalid_argument)`. Drain with `socket_monitor_t::recv(DONTWAIT)` after readiness.
+"Monitor sources in `Poller`"). The result of a monitor mask follows the common spec "Monitor sources in `Poller`".
+Drain with `socket_monitor_t::recv(DONTWAIT)` after readiness.
 
 The map above is a public API index. It is the C++ equivalent of a
 contract-surface overview, and does not imply abstract interfaces such as

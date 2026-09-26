@@ -152,8 +152,7 @@ bindings/dotnet/
 
 `IPoller`는 `void Add(ISocketMonitor monitor, PollEventFlags events, nuint slot)`, `void Modify(ISocketMonitor monitor, PollEventFlags events)`,
 `bool Remove(ISocketMonitor monitor)`로 socket monitor를 source로 받는다(공통 spec "`Poller`의 monitor source"); one-shot
-`ZlinkPoll.Poll(IReadOnlyList<ISocketMonitor>, ...)`도 유지한다. monitor mask는 `PollIn` 또는 `None`만 유효하고 다른 bit는
-`ZlinkConfigException`(`ErrorCode.InvalidArgument`)로 거절한다. ready 뒤 `Receive`/`TryReceive`(DONTWAIT)로 drain한다.
+`ZlinkPoll.Poll(IReadOnlyList<ISocketMonitor>, ...)`도 유지한다. monitor mask의 결과는 공통 spec "`Poller`의 monitor source"를 따른다. ready 뒤 `Receive`/`TryReceive`(DONTWAIT)로 drain한다.
 
 `Runtime/Buffers`, `Runtime/Handles`, `Runtime/Options`는 구현 지원 카테고리다.
 .NET 바인딩에는 숨겨야 할 실제 네이티브 ownership, routing-id 인코딩,

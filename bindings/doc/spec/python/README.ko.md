@@ -170,7 +170,7 @@ Native completion ID·`user_context`·raw drain은 public API에 노출하지 �
 `Poller.modify_monitor(monitor: MonitorSocket, events: PollEventFlag) -> None`,
 `Poller.remove_monitor(monitor: MonitorSocket) -> None`는 socket monitor를 poller source로 등록·수정·제거한다
 (공통 spec "`Poller`의 monitor source"). 기존 `add_socket/modify_socket/remove_socket`도 monitor를 수용한다.
-monitor에는 `PollEventFlag.POLLIN`만 유효하고 다른 bit가 있으면 typed `ConfigResult.INVALID_ARGUMENT`로 거절한다.
+monitor mask의 결과는 공통 spec "`Poller`의 monitor source"를 따른다.
 ready 뒤 `monitor.recv(RecvFlags.DONT_WAIT)`로 drain하며 poll event는 socket과 같은 slot/source kind로 보고한다.
 
 `ReplyToken`은 module-private `_reply_token_from_native`만 만들며 public construction과

@@ -151,8 +151,8 @@ bindings/dotnet/
 
 `IPoller` accepts a socket monitor as a source through `void Add(ISocketMonitor monitor, PollEventFlags events, nuint slot)`,
 `void Modify(ISocketMonitor monitor, PollEventFlags events)` and `bool Remove(ISocketMonitor monitor)` (common spec "Monitor
-sources in `Poller`"); the one-shot `ZlinkPoll.Poll(IReadOnlyList<ISocketMonitor>, ...)` remains. A monitor mask accepts only
-`PollIn` or `None`; any other bit is rejected with `ZlinkConfigException` (`ErrorCode.InvalidArgument`). Drain with
+sources in `Poller`"); the one-shot `ZlinkPoll.Poll(IReadOnlyList<ISocketMonitor>, ...)` remains. The result of a monitor mask follows the common spec "Monitor sources in `Poller`".
+Drain with
 `Receive`/`TryReceive` (DONTWAIT) after readiness.
 
 `Runtime/Buffers`, `Runtime/Handles`, and `Runtime/Options` are

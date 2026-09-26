@@ -80,7 +80,7 @@ modify, remove와 wait 호출은 호출자가 직렬화한다.
 `(*Poller).ModifyMonitor(monitor *SocketMonitor, events PollEventFlag) error`,
 `(*Poller).RemoveMonitor(monitor *SocketMonitor) error`는 socket monitor를 poller source로 등록·수정·제거한다
 (공통 spec "`Poller`의 monitor source"). 기존 `AddSocket/ModifySocket/RemoveSocket`(`SocketTarget`)도 monitor를
-수용한다. monitor에는 `POLLIN`만 유효하고 다른 bit는 typed `ConfigResult` `InvalidArgument`로 거절한다. ready 뒤
+수용한다. monitor mask의 결과는 공통 spec "`Poller`의 monitor source"를 따른다. ready 뒤
 `monitor.Recv(RecvFlagsDontWait)`로 drain하며 poll event는 socket과 같은 slot/source kind로 보고한다.
 
 ## Byte HWM과 Auto-HWM

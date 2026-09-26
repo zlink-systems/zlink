@@ -185,8 +185,8 @@ completion joins, lifetime, and progress conditions for `PollEventFlag.POLLCOMPL
 `Poller.modify_monitor(monitor: MonitorSocket, events: PollEventFlag) -> None` and
 `Poller.remove_monitor(monitor: MonitorSocket) -> None` register, modify and remove a socket monitor as a
 poller source (common spec "Monitor sources in `Poller`"); the existing `add_socket/modify_socket/remove_socket`
-also accept a monitor. Only `PollEventFlag.POLLIN` is valid for a monitor; any other bit is rejected with a typed
-`ConfigResult.INVALID_ARGUMENT`. Drain with `monitor.recv(RecvFlags.DONT_WAIT)` after readiness; the poll event
+also accept a monitor. The result of a monitor mask follows the common spec "Monitor sources in `Poller`".
+Drain with `monitor.recv(RecvFlags.DONT_WAIT)` after readiness; the poll event
 reports the monitor through the same slot and source kind as a socket.
 
 Only module-private `_reply_token_from_native` creates a `ReplyToken`; public construction and
