@@ -4349,7 +4349,13 @@ export class ServiceStatefulRuntime {
           applicationJobOwner
         };
         try {
-          await this.submitLocalRequest(localIngress, pending, operationKind, actor, deadlineUnixMs);
+          await this.submitLocalRequest(
+            localIngress,
+            pending,
+            operationKind,
+            actor,
+            deadlineUnixMs
+          );
         } catch (error) {
           this.operations.reply(pending.id, failure(error));
         } finally {
