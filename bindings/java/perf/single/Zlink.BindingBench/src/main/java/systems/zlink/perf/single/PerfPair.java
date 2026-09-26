@@ -59,8 +59,7 @@ final class PerfPair {
             long activeEnd = System.nanoTime()
                 + config.durationSeconds() * 1_000_000_000L;
             Thread receiverThread = new Thread(() -> {
-                try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
-                         List.of(receiver), PollEventFlags.POLLIN);
+                try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(List.of(receiver), PollEventFlags.POLLIN);
                      Received received = new Received()) {
                     while (true) {
                         pollSet.poll(-1);

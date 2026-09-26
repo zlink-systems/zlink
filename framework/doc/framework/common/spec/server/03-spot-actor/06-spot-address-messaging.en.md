@@ -571,28 +571,6 @@ Instance Spot, an application handler or timer requests local `Close` from
 its own lifecycle context. Host shutdown and `Relocate` can clean up or
 move an Instance Spot via a separate operational lifecycle.
 
-**`Close` on a Spot context is a request that returns no result.** It is called only from
-a handler or timer turn. The call registers a Close request with the context's captured
-generation. Duplicate calls in the same turn and later calls for that generation join an
-already registered or running Close. The request starts in the Spot's
-[lifecycle lane](../01-execution/02-handler-turn-and-execution-gate.en.md#execution-lanes)
-after the requesting turn ends, whether normally, by exception, by cancellation, or with a
-reply failure. That turn is excluded from Close's wait for accepted turns.
-
-Close and relocation follow the authority-commit order of
-[Host relocation §12](../05-location-relocation/05-host-relocation-flow.en.md#12-moving-pending-messages-timers-and-sessions).
-If relocation wins, the registered context request is neither run nor resubmitted, and its
-moving result is recorded in diagnostics. If `Closing` wins, Close finishes and the Spot is
-not moved. If the idle-cleanup seal in [Object lifecycle §5](09-object-lifecycle.en.md#5-when-to-clean-up-an-active-object-and-what-bounds-it)
-or the host-shutdown seal in [Host relocation §14](../05-location-relocation/05-host-relocation-flow.en.md#14-the-race-between-shutdown-and-relocate)
-wins first, the registered context request is not run and its result is recorded in
-diagnostics. A pending request remains until it runs or its superseding-seal result is
-recorded.
-
-Manager `Close` returns its result to its caller. A Manager `Close` that ends with a moving result is not automatically resubmitted to a new owner. Context `Close` returns no result;
-`false`, failure, joined, and unrun requests are each recorded in diagnostics.
-`OnClosing(ExplicitClose)` indicates cleanup started, not that authority release completed.
-
 The close procedure proceeds in the following order.
 
 1. Verifies expected owner and ObjectGeneration and transitions authority to
@@ -604,20 +582,12 @@ The close procedure proceeds in the following order.
    continues. Resuming Close does not invoke `OnClosing` again if it was already invoked.
 4. Releases authority with the same owner/generation fence.
 
-If the transition to `Closing` in step 1 is not committed, authority does not
-change and Close ends with a result listed below. Once the transition to
-`Closing` is committed, authority never returns to `Ready`. If work other than
-the `OnClosing` invocation in steps 2–4 fails, manager `Close` returns that
-failure to the caller (context `Close` follows the diagnostics rule above), and
-the target owner runtime continues the remaining work from the failed
-operation on the same owner and generation. Completed operations are not repeated.
-
 If that incarnation no longer exists, idempotent `false`; if a different
 generation of the same Spot ID exists, `InvalidOperation`; if sealing for a
 move, `Unavailable`. The framework doesn't re-find the current ref and
 close a new incarnation. An operation accepted before the seal can complete
-on the existing generation. The §9 table decides the result of a new admission that
-arrives after the seal.
+on the existing generation, but an operation after the seal ends with a
+closing or stale result.
 
 **If even one current Actor membership remains on a User Spot, Close ends
 with `false` and keeps admission and authority.** The framework doesn't
@@ -696,8 +666,7 @@ After seal, the source ingress hold is relayed via the committed Message Follow 
 | The target authority of a Spot direct send or request without Instance intent is `Missing` or `Creating` | `NotFound`. |
 | The generation of a control addressed by `ActorRef`/`SpotRef` differs from the current generation (a direct message doesn't compare generations, per [08-routing §2.6](08-routing.en.md#26-where-objectgeneration-is-used-and-where-its-not)) | `InvalidOperation`. |
 | The [owner fence](../00-foundation/02-glossary.en.md#owner-fence) differs | `Unavailable`. |
-| A Spot direct send or request without Instance intent finds target authority `Closing`, at the source or owner | `Rejected`. |
-| The runtime is `Draining` and takes no new admission (whatever the target authority state) | `ShuttingDown`. |
+| New admission requested on a `Closing` or `Draining` owner | Rejected. |
 | Ingress arrives on the source route after a relocation seal | Not rejected — retained in the relocation hold. |
 | A message arrives at a `Relocating` unit not yet sealed | Accepted, keeping existing owner admission. |
 | A request failed | Not bypassed by a different Spot ID, MeshName, or owner. |

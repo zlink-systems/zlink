@@ -151,8 +151,8 @@ bindings/dotnet/
 
 `IPoller` accepts a socket monitor as a source through `void Add(ISocketMonitor monitor, PollEventFlags events, nuint slot)`,
 `void Modify(ISocketMonitor monitor, PollEventFlags events)` and `bool Remove(ISocketMonitor monitor)` (common spec "Monitor
-sources in `Poller`"); the one-shot `ZlinkPoll.Poll(IReadOnlyList<ISocketMonitor>, ...)` remains. A monitor mask accepts only
-`PollIn` or `None`; any other bit is rejected with `ZlinkConfigException` (`ErrorCode.InvalidArgument`). Drain with
+sources in `Poller`"); the one-shot `ZlinkPoll.Poll(IReadOnlyList<ISocketMonitor>, ...)` remains. The result of a monitor mask follows the common spec "Monitor sources in `Poller`".
+Drain with
 `Receive`/`TryReceive` (DONTWAIT) after readiness.
 
 `Runtime/Buffers`, `Runtime/Handles`, and `Runtime/Options` are
@@ -337,7 +337,7 @@ An interface defines behavior; creation is provided by a public factory.
 - `Zlink.CreateAtomicCounter()`, `CreateStopwatch()`, `CreateThread(...)` create utility resources through the public contract.
 - `IContext.CreatePairSocket()`, `CreateDealerSocket()`, `CreateRouterSocket()`, `CreatePubSocket()`, `CreateSubSocket()`, `CreateXPubSocket()`, `CreateXSubSocket()`, `CreateStreamSocket()` create runtime socket implementations.
 Public Spot and Actor creation, including service-owned timers, is specified by the [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md). This binding specification defines creation of Core raw sockets, monitors, pollers, and generic timers.
-- `IContext.CreatePoller()` creates a poller owned by that context; `Zlink.CreateTimer()` creates a timer.
+- `Zlink.CreatePoller()` and `Zlink.CreateTimer()` create eventing resources.
 - `Zlink.Version()`, `Zlink.Has(...)`, `Zlink.Strerror(...)`, `Zlink.Proxy(...)`, `Zlink.Sleep(...)`, `Zlink.MultipartClose(...)`, `ZlinkPoll.Poll(...)` are public static facades. Even though their native calls remain in `Runtime/`, their callable behavior is part of the contract surface.
 
 A factory's return type favors the public contract wherever the caller

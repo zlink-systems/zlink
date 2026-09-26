@@ -23,8 +23,13 @@ connector는 factory가 값 객체로 만든다. 생성 시 options를 복사하
 static connector_t connector_factory_t::create(connector_options_t options);
 ```
 
-`connect`는 [공통 스펙 §6.3](../../32-stream-connector.ko.md#63-옵션-검증)의 option 검증을
-`error_code_t::validation_failed` 또는 `error_code_t::configuration_error`로 반환한다.
+**option 전 항목의 검증은 `connect`에서 이뤄진다**([공통 스펙 §6.3](../../32-stream-connector.ko.md#63-옵션-검증)).
+C++ core는 예외를 던지지 않고 `create`는 값을 돌려주므로, 생성 표면에는 검증 실패를 전달할
+통로가 없다. 그래서 C++이 실패를 알릴 수 있는 가장 이른 지점이 `connect`이며, **연결이 이뤄지기
+전에** 거부한다. 값 하나가 허용 범위를 벗어나면 `error_code_t::validation_failed`, 항목 사이가
+맞지 않으면 `error_code_t::configuration_error`다. endpoint scheme과 `transport`의 충돌, 이 빌드가
+지원하지 않는 transport, `compression_t::none`에 `compression_codec`을 함께 넣는 것이 뒤쪽에
+해당한다.
 
 ## 2. `connector_t`
 
@@ -174,7 +179,6 @@ send_call_t& metadata(std::string key, std::string value);
 send_call_t& metadata(metadata_t metadata);
 send_call_t& compress();
 void submit(); // connector core의 기존 no-coroutine 경계에서 one-way 전송을 시작한다.
-void submit(std::function<void(result_t<void>)> callback); // frame을 transport에 쓴 뒤 완료를 받는다.
 
 request_call_t& packet_name(std::string name);
 request_call_t& metadata(std::string key, std::string value);
@@ -202,7 +206,10 @@ result_t<message_t<TMessage>> submit(); // 일치하는 unread packet 하나를 
 void submit(std::function<void(result_t<message_t<TMessage>>)> callback);
 ```
 
-인자 없는 one-way `submit()`은 결과를 반환하지 않으며 전송 실패를 기존 connector error event로 보고한다. 완료가 필요하면 callback을 받는 `submit(...)`을 쓴다. 이 callback은 frame을 transport에 쓴 뒤([공통 스펙 §5.2](../../32-stream-connector.ko.md#52-request-correlation)) 또는 실패했을 때 한 번 실행되고, request callback과 같이 dispatch mode를 따르며([공통 스펙 §7](../../32-stream-connector.ko.md#7-dispatch-모드)), 실패는 이 callback으로 전달한다. C++ connector core는 공통 계약의 no-exception·no-coroutine 경계를 유지하므로 이 terminal에 `task_t`를 새로 도입하지 않는다. Request와 wait는 기존 결과형을 유지하며 callback 완료 경로도 함께 제공한다.
+one-way `submit()`은 결과를 반환하지 않는다. C++ connector core는 공통 계약의
+no-exception·no-coroutine 경계를 유지하므로 이 terminal에 `task_t`를 새로 도입하지 않는다.
+전송 실패는 기존 connector error event로 보고한다. Request와 wait는 기존 결과형을 유지하며 callback
+완료 경로도 함께 제공한다.
 
 Typed `send`, `request`, `on`과 `wait_for`는
 [공통 스펙 §5.4](../../32-stream-connector.ko.md#54-codec)의 주입점인
@@ -374,7 +381,7 @@ struct reconnect_options_t {
     std::chrono::milliseconds initial_delay{250};
     std::chrono::milliseconds max_delay{5000};
     double backoff_factor = 2.0;
-    std::optional<int> max_attempts = 3; // 빈 값은 무제한
+    std::optional<int> max_attempts = 3; // 빈 값이면 무제한. 그 밖에는 양수여야 한다
 };
 
 struct connector_options_t {

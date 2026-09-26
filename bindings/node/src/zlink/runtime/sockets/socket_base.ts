@@ -7,8 +7,7 @@ import {
   bindCall,
   closeCall,
   configCall,
-  connectCall,
-  lastError
+  connectCall
 } from '../errors/native_errors';
 import { validateCString } from '../options/validation';
 import { RoutingId } from '../../contracts';
@@ -27,11 +26,8 @@ import {
 
 export class SocketBase extends NativeHandle {
   constructor(ctx: Context, type: number) {
-    super(requireNative().socketNew(getNativeHandle(ctx), type));
-    if (!this._native) {
-      throw lastError('config', 'socket creation failed');
-    }
-    installCompletionOwner(this, this._native);
+    super(configCall('socket creation failed', () => requireNative().socketNew(getNativeHandle(ctx), type)));
+    installCompletionOwner(this);
   }
 
   setReadableHandler(handler: ZLinkReadableHandler): void {

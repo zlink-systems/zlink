@@ -4,7 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const zlink = require('@zlink-systems/zlink');
 const readline = require('node:readline');
 const { MonitorEventType, RecvFlags, RecvResult } = zlink;
-const { applyAutoHwmProfile, integerEnv, manualSocketOverridesEnabled, monotonicMs, sleepImmediate } = require('../common/perf_metrics');
+const { applyAutoHwmProfile, integerEnv, manualSocketOverridesEnabled, monotonicMs } = require('../common/perf_metrics');
 const POLLIN = 1;
 const POLLCOMPLETION = zlink.PollEventFlag.PollCompletion;
 const { emitMultiSocketHwmDetail } = require('./perf_multi_auto_hwm');
@@ -295,46 +295,11 @@ async function waitForRunnerStart(msgSize) {
         rl.close();
     }
 }
-function createSocketEventWaiter(socket, events) {
-    const poller = zlink.createPoller();
-    poller.add(socket, pollEvents(events), 0);
-    const eventBuffer = zlink.createPollEvents(1);
-    return {
-        // PERF_MULTI_TEST_POLICY § 1.3.1: signal-driven `-1` wait. The core
-        // emits a wakeup on every relevant event, so timer fallbacks are not
-        // needed. The leading `sleepImmediate()` lets queued microtasks run
-        // before we descend into the synchronous N-API wait.
-        async wait(mask = events) {
-            while (true) {
-                await sleepImmediate();
-                let ready = null;
-                try {
-                    ready = waitPollerOne(poller, eventBuffer, -1);
-                }
-                catch (error) {
-                    const text = String(error && error.message ? error.message : error);
-                    if ((error && error.code === 'EAGAIN') || text.includes('Resource temporarily unavailable')) {
-                        continue;
-                    }
-                    throw error;
-                }
-                if (ready && pollEventHas(ready, mask)) {
-                    return ready;
-                }
-            }
-        },
-        close() {
-            eventBuffer.close();
-            poller.close();
-        }
-    };
-}
 module.exports = {
     POLLIN,
     POLLCOMPLETION,
     applyContextPolicy,
     applySocketPolicy,
-    createSocketEventWaiter,
     emitMultiSocketHwmDetail,
     pollEvents,
     pollEventHas,

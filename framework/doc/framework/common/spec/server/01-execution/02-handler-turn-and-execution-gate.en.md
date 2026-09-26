@@ -348,8 +348,8 @@ This distinction keeps ordering scoped to each execution object.
 
 | Lane | Holds |
 |---|---|
-| [application lane](../00-foundation/02-glossary.en.md#application-lane) | Business payload, timer callback, session connection established/error/connection closed callback |
-| [lifecycle lane](../00-foundation/02-glossary.en.md#lifecycle-lane) | join/leave/relocation/session binding replacement/lifecycle control |
+| [application lane](../00-foundation/02-glossary.en.md#application-lane) | Business payload, timer callback |
+| [lifecycle lane](../00-foundation/02-glossary.en.md#lifecycle-lane) | join/leave/relocation/lifecycle control |
 
 **Neither lane has a bound of its own.** Splitting the lanes orders and prioritises the work;
 how much has piled up is counted once, as the host's job count

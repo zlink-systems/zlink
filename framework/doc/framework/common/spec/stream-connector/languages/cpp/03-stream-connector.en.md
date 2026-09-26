@@ -28,8 +28,18 @@ options at creation and doesn't expose the implementation detail type.
 static connector_t connector_factory_t::create(connector_options_t options);
 ```
 
-`connect` returns `error_code_t::validation_failed` or `error_code_t::configuration_error`
-for option validation under [Common Spec §6.3](../../32-stream-connector.en.md#63-option-validation).
+**Every option is checked in `connect`**
+([Common Spec §6.3](../../32-stream-connector.en.md#63-option-validation)).
+The C++ core throws nothing and `create` returns a value, so the
+creation surface has no channel for a validation failure. `connect` is
+therefore the earliest point at which C++ can report one, and the
+rejection comes **before a connection is made.** A single value out of
+range is
+`error_code_t::validation_failed`, and a mismatch between options is
+`error_code_t::configuration_error` — a conflict between the endpoint
+scheme and `transport`, a transport this build doesn't support, and a
+`compression_codec` given together with `compression_t::none` fall into
+the latter.
 
 ## 2. `connector_t`
 
@@ -192,7 +202,6 @@ send_call_t& metadata(std::string key, std::string value);
 send_call_t& metadata(metadata_t metadata);
 send_call_t& compress();
 void submit(); // starts a one-way send on the connector core's existing no-coroutine boundary.
-void submit(std::function<void(result_t<void>)> callback); // receives completion once the frame is written to the transport.
 
 request_call_t& packet_name(std::string name);
 request_call_t& metadata(std::string key, std::string value);
@@ -220,7 +229,12 @@ result_t<message_t<TMessage>> submit(); // consumes and decodes one matching unr
 void submit(std::function<void(result_t<message_t<TMessage>>)> callback);
 ```
 
-The argument-less one-way `submit()` doesn't return a result and reports a send failure through the existing connector error event. When completion is needed, use the `submit(...)` overload that takes a callback. That callback runs once, after the frame is written to the transport ([Common Spec §5.2](../../32-stream-connector.en.md#52-request-correlation)) or when the write fails; it follows the dispatch mode like a request callback ([Common Spec §7](../../32-stream-connector.en.md#7-dispatch-mode)), and the failure is delivered to it. Since the C++ connector core keeps the common contract's no-exception/no-coroutine boundary, a new `task_t` isn't introduced for this terminal. Request and wait keep the existing result type and also provide a callback completion path.
+The one-way `submit()` doesn't return a result. Since the C++ connector
+core keeps the common contract's no-exception/no-coroutine boundary, a
+new `task_t` isn't introduced for this terminal. A send failure is
+reported through the existing connector error event. Request and wait
+keep the existing result type and also provide a callback completion
+path.
 
 Typed `send`, `request`, `on`, and `wait_for` all use the single codec
 put in `connector_options_t::typed_codec` — the injection point of

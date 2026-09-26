@@ -67,8 +67,7 @@ final class PerfMultiStream {
 
     private static void runPullEcho(StreamSocket server,
                                     AtomicBoolean stopRequested) {
-        try (PerfSocketPollSet poller = PerfSocketPollSet.fromSockets(
-                 List.of(server),
+        try (PerfSocketPollSet poller = PerfSocketPollSet.fromSockets(List.of(server),
                  systems.zlink.contracts.eventing.PollEventFlags.POLLIN);
              StreamPacket packet = new StreamPacket()) {
             while (!stopRequested.get()) {

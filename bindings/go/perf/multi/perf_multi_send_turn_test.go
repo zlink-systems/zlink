@@ -18,6 +18,13 @@ func (s testSendSubmission) Admitted(ctx context.Context) error {
 	if s.release == nil {
 		return nil
 	}
+	// A released submission is admitted even for an already canceled
+	// context; select alone would pick between the two ready cases at random.
+	select {
+	case <-s.release:
+		return nil
+	default:
+	}
 	select {
 	case <-s.release:
 		return nil

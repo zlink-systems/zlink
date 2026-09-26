@@ -33,6 +33,7 @@
 #include <iostream>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <regex>
 #include <stdexcept>
 #include <string>
@@ -824,25 +825,26 @@ void verify_actor_route_resolver_preserves_unavailable ()
     zlink_builder_t stream_zlink;
     detail::configure_stream_dispatch_executor ();
     zlink_framework_options_t stream_options (services, handlers, serializers, stream_zlink);
-    const auto port = zlink::framework::tests::reserve_loopback_tcp_port ();
     stream_options.add_stream_node ("expired-actor-stream")
-      .bind ("tcp://127.0.0.1:" + std::to_string (port))
+      .bind (zlink::framework::tests::loopback_tcp_any_port)
       .register_session ("expired-actor-session");
     stream_options.apply ();
     auto stream_runtime = detail::stream_runtime_t::from (stream_zlink);
     const auto stream_snapshots = stream_runtime.snapshots ();
     assert (stream_snapshots.size () == 1);
     assert (stream_snapshots.front ().packet_session_name == "expired-actor-session");
+    auto stream_listeners = std::make_shared<runtime::listener_status_registry_t> ();
     runtime::stream_host_service_t stream_host (
       stream_runtime, stream_snapshots,
       {{"expired-actor-session",
         [] (service_provider_t &scope) -> packet_stream_session_t & {
             return scope.get_required<expired_actor_bind_session_t> ();
         }}},
-      30s, service.nodes ().front ());
+      30s, service.nodes ().front (), {}, stream_listeners);
     assert (stream_host.start (provider).result ());
     zlink::stream_connector::connector_options_t connector_options;
-    connector_options.endpoint = "tcp://127.0.0.1:" + std::to_string (port);
+    connector_options.endpoint = zlink::framework::tests::listener_endpoint (
+      *stream_listeners, listener_kind_t::stream, "expired-actor-stream");
     connector_options.connect_timeout = 2s;
     connector_options.reconnect.enabled = false;
     auto client = zlink::stream_connector::connector_factory_t::create (connector_options);
@@ -1852,6 +1854,27 @@ void verify_deferred_application_terminal_ownership ()
 }
 
 #if defined(__unix__)
+// A node process binds "tcp://127.0.0.1:*" and passes the endpoint it resolved to
+// the other process through a pipe, so no port is reserved before the bind.
+bool write_endpoint (int fd_, const std::string &endpoint_)
+{
+    const auto size = static_cast<std::uint32_t> (endpoint_.size ());
+    return write (fd_, &size, sizeof (size)) == sizeof (size)
+           && write (fd_, endpoint_.data (), endpoint_.size ())
+                == static_cast<ssize_t> (endpoint_.size ());
+}
+
+std::optional<std::string> read_endpoint (int fd_)
+{
+    std::uint32_t size = 0;
+    if (read (fd_, &size, sizeof (size)) != sizeof (size))
+        return std::nullopt;
+    std::string endpoint (size, '\0');
+    if (read (fd_, endpoint.data (), endpoint.size ()) != static_cast<ssize_t> (endpoint.size ()))
+        return std::nullopt;
+    return endpoint;
+}
+
 int run_cross_process_delivery ()
 {
     const std::map<std::string, std::string> metadata_boundary{{"k", std::string (1018, 'v')}};
@@ -1886,17 +1909,18 @@ int run_cross_process_delivery ()
     int reciprocal_ready_pipe[2];
     int reciprocal_child_ready_pipe[2];
     int reciprocal_child_stop_pipe[2];
+    int reciprocal_child_endpoint_pipe[2];
+    int reciprocal_endpoint_pipe[2];
     int formal_descriptor_pipe[2];
     int formal_ack_pipe[2];
     if (pipe (endpoint_pipe) != 0 || pipe (direct_ack_pipe) != 0 || pipe (channel_ack_pipe) != 0
         || pipe (request_ack_pipe) != 0 || pipe (completion_ack_pipe) != 0
         || pipe (spot_request_ack_pipe) != 0 || pipe (reciprocal_ready_pipe) != 0
         || pipe (reciprocal_child_ready_pipe) != 0 || pipe (reciprocal_child_stop_pipe) != 0
-        || pipe (formal_descriptor_pipe) != 0 || pipe (formal_ack_pipe) != 0)
+        || pipe (formal_descriptor_pipe) != 0 || pipe (formal_ack_pipe) != 0
+        || pipe (reciprocal_child_endpoint_pipe) != 0 || pipe (reciprocal_endpoint_pipe) != 0)
         return 1;
 
-    const std::string reciprocal_endpoint =
-      zlink::framework::tests::reserve_loopback_tcp_endpoint ();
     const pid_t child = fork ();
     if (child < 0)
         return 1;
@@ -1914,9 +1938,10 @@ int run_cross_process_delivery ()
         close (reciprocal_child_stop_pipe[1]);
         close (formal_descriptor_pipe[0]);
         close (formal_ack_pipe[0]);
+        close (reciprocal_child_endpoint_pipe[0]);
+        close (reciprocal_child_endpoint_pipe[1]);
+        close (reciprocal_endpoint_pipe[1]);
         auto state = make_node ("tcp://127.0.0.1:*", "vertical-b");
-        state->peer_connections.push_back (zlink::framework::mesh_peer_connection_t{
-          2, zlink::routing_id_t::from (std::string ("vertical-c")), reciprocal_endpoint});
         zlink::framework::detail::mesh_node_runtime_t node (state);
         node.start ();
         auto target_spot = node.get_or_create_spot ("target-spot");
@@ -1928,14 +1953,15 @@ int run_cross_process_delivery ()
             _exit (8);
         }
         close (formal_descriptor_pipe[1]);
-        const std::string endpoint = node.status ().local_endpoint ();
-        const std::uint32_t size = static_cast<std::uint32_t> (endpoint.size ());
-        if (write (endpoint_pipe[1], &size, sizeof (size)) != sizeof (size)
-            || write (endpoint_pipe[1], endpoint.data (), endpoint.size ())
-                 != static_cast<ssize_t> (endpoint.size ())) {
+        if (!write_endpoint (endpoint_pipe[1], node.status ().local_endpoint ()))
             _exit (2);
-        }
         close (endpoint_pipe[1]);
+        const auto reciprocal_endpoint = read_endpoint (reciprocal_endpoint_pipe[0]);
+        close (reciprocal_endpoint_pipe[0]);
+        if (!reciprocal_endpoint)
+            _exit (14);
+        node.connect_peer (zlink::routing_id_t::from (std::string ("vertical-c")),
+                           *reciprocal_endpoint);
 
         const bool multi_peer_admitted = wait_until_admitted_count (node, 2);
         const char reciprocal_ready = multi_peer_admitted ? 1 : 0;
@@ -2017,16 +2043,12 @@ int run_cross_process_delivery ()
     close (reciprocal_ready_pipe[1]);
     close (formal_descriptor_pipe[1]);
     close (formal_ack_pipe[1]);
-    std::uint32_t endpoint_size = 0;
-    if (read (endpoint_pipe[0], &endpoint_size, sizeof (endpoint_size)) != sizeof (endpoint_size)) {
-        return 1;
-    }
-    std::string endpoint (endpoint_size, '\0');
-    if (read (endpoint_pipe[0], endpoint.data (), endpoint.size ())
-        != static_cast<ssize_t> (endpoint.size ())) {
-        return 1;
-    }
+    close (reciprocal_endpoint_pipe[0]);
+    const auto read_node_endpoint = read_endpoint (endpoint_pipe[0]);
     close (endpoint_pipe[0]);
+    if (!read_node_endpoint)
+        return 1;
+    const std::string endpoint = *read_node_endpoint;
     std::uint64_t formal_descriptors[2]{};
     assert (read (formal_descriptor_pipe[0], formal_descriptors, sizeof (formal_descriptors))
             == sizeof (formal_descriptors));
@@ -2037,12 +2059,17 @@ int run_cross_process_delivery ()
     if (reciprocal_child == 0) {
         close (reciprocal_child_ready_pipe[0]);
         close (reciprocal_child_stop_pipe[1]);
-        auto reciprocal_state = make_node (reciprocal_endpoint, "vertical-c");
+        close (reciprocal_child_endpoint_pipe[0]);
+        close (reciprocal_endpoint_pipe[1]);
+        auto reciprocal_state = make_node ("tcp://127.0.0.1:*", "vertical-c");
         reciprocal_state->peer_connections.push_back (zlink::framework::mesh_peer_connection_t{
           1, zlink::routing_id_t::from (std::string ("vertical-b")), endpoint});
         zlink::framework::detail::mesh_node_runtime_t reciprocal_node (reciprocal_state);
         reciprocal_node.start ();
-        const char ready = wait_until_admitted (reciprocal_node) ? 1 : 0;
+        const bool endpoint_sent = write_endpoint (reciprocal_child_endpoint_pipe[1],
+                                                   reciprocal_node.status ().local_endpoint ());
+        close (reciprocal_child_endpoint_pipe[1]);
+        const char ready = endpoint_sent && wait_until_admitted (reciprocal_node) ? 1 : 0;
         (void) write (reciprocal_child_ready_pipe[1], &ready, sizeof (ready));
         close (reciprocal_child_ready_pipe[1]);
         char stop = 0;
@@ -2053,6 +2080,12 @@ int run_cross_process_delivery ()
     }
     close (reciprocal_child_ready_pipe[1]);
     close (reciprocal_child_stop_pipe[0]);
+    close (reciprocal_child_endpoint_pipe[1]);
+    const auto reciprocal_endpoint = read_endpoint (reciprocal_child_endpoint_pipe[0]);
+    close (reciprocal_child_endpoint_pipe[0]);
+    assert (reciprocal_endpoint);
+    assert (write_endpoint (reciprocal_endpoint_pipe[1], *reciprocal_endpoint));
+    close (reciprocal_endpoint_pipe[1]);
     char reciprocal_child_ready = 0;
     assert (read (reciprocal_child_ready_pipe[0], &reciprocal_child_ready,
                   sizeof (reciprocal_child_ready))

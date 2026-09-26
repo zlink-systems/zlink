@@ -26,7 +26,7 @@ test('ReplyToken equality and hash include the socket owner', async () => {
     const ctx = zlink.createContext();
     const router = zlink.createRouterSocket(ctx);
     const dealer = zlink.createDealerSocket(ctx);
-    const completions = new completion_poller_1.CompletionPollerDriver(dealer);
+    const completions = new completion_poller_1.CompletionPollerDriver(ctx, dealer);
     router.bind('inproc://reply-token-value-contract');
     dealer.connect('inproc://reply-token-value-contract');
     try {

@@ -31,8 +31,8 @@ async function main() {
       dealerSocket.setRoutingId(clientRoutingId);
       routerSocket.bind(endpoint);
       dealerSocket.connect(endpoint);
-      await waitForConnectionReady(routerMonitor, zlink);
-      await waitForConnectionReady(dealerMonitor, zlink);
+      await waitForConnectionReady(ctx, routerMonitor, zlink);
+      await waitForConnectionReady(ctx, dealerMonitor, zlink);
     } finally {
       routerMonitor.close();
       dealerMonitor.close();

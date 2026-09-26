@@ -182,8 +182,8 @@ internal static class PerfMultiSocketReqRep
                 slots.Add(slot);
             }
 
-            var result = await RunClientLoopAsync(slots, routerRouter, size,
-                durationSeconds, latencySampleCap).ConfigureAwait(false);
+            var result = await RunClientLoopAsync(slots, routerRouter,
+                size, durationSeconds, latencySampleCap).ConfigureAwait(false);
             if (result.completed <= 0 || result.latencyCount <= 0)
             {
                 DebugLogLimited(ref s_debugClientReplyLogs,
@@ -216,8 +216,7 @@ internal static class PerfMultiSocketReqRep
 
     private static Task<(long completed, List<double> latencySamples,
         long latencyCount, double latencySum)>
-        RunClientLoopAsync(
-        List<ClientSlot> slots, bool routerRouter,
+        RunClientLoopAsync(List<ClientSlot> slots, bool routerRouter,
         int msgSize, int durationSeconds, int latencyCap)
     {
         int payloadSize = Math.Max(msgSize, PerfMetricHeaderSize);

@@ -246,7 +246,7 @@ ID로 처음 호출할 때 Framework가 만들 수 있는 Spot을
 | `policy` | `recreate|snapshot` |
 | Relocation `outcome` | `completed|aborted|failed|shutdown` |
 | `transport` | Startup 등록 시점에 정한 허용 값 중 하나다. |
-| `close_reason` | `client_close|idle_timeout|heartbeat_timeout|server_drain|protocol_error|transport_error` |
+| `close_reason` | `client_close|idle_timeout|heartbeat_timeout|server_shutdown|protocol_error|transport_error` |
 
 ## 7. Instance Spot activation 계기
 

@@ -97,7 +97,8 @@ func (s *PubSocket) Publish(topic string) PublishOp {
 	return newPublishBuilder(func(parts []sendBuilderPart, flags SendFlags) error {
 		return s.withCString(topic, func(cstr *C.char) error {
 			return submitMultipartFromBuilderParts(parts, func(native *C.zlink_msg_t, count C.size_t) error {
-				return submitErrorFromResult(C.zlink_publish(s.raw(), cstr, native, count, C.zlink_send_flags_t(flags)))
+				nativeResult0, nativeErr0 := C.zlink_publish(s.raw(), cstr, native, count, C.zlink_send_flags_t(flags))
+				return submitErrorFromCall(nativeResult0, nativeErr0)
 			})
 		})
 	})
@@ -139,7 +140,8 @@ func newDealerSocket(ctx *Context) (*DealerSocket, error) {
 
 func (s *DealerSocket) SetRoutingID(id RoutingID) error {
 	raw := id.toC()
-	return configErrorFromResult(C.zlink_set_routing_id(s.raw(), routingIDPointer(&raw), C.size_t(raw.size)))
+	nativeResult1, nativeErr1 := C.zlink_set_routing_id(s.raw(), routingIDPointer(&raw), C.size_t(raw.size))
+	return configErrorFromCall(nativeResult1, nativeErr1)
 }
 
 func (s *DealerSocket) SetProbe(value bool) error {
@@ -147,7 +149,8 @@ func (s *DealerSocket) SetProbe(value bool) error {
 	if value {
 		raw = 1
 	}
-	return configErrorFromResult(C.zlink_set_dealer_option(s.raw(), C.ZLINK_DEALER_OPT_PROBE, unsafe.Pointer(&raw), C.size_t(C.sizeof_int)))
+	nativeResult2, nativeErr2 := C.zlink_set_dealer_option(s.raw(), C.ZLINK_DEALER_OPT_PROBE, unsafe.Pointer(&raw), C.size_t(C.sizeof_int))
+	return configErrorFromCall(nativeResult2, nativeErr2)
 }
 
 func (s *DealerSocket) RoutingID() (RoutingID, error) {
@@ -156,13 +159,15 @@ func (s *DealerSocket) RoutingID() (RoutingID, error) {
 
 func (s *DealerSocket) SetWeight(value int) error {
 	raw := C.int(value)
-	return configErrorFromResult(C.zlink_set_dealer_option(s.raw(), C.ZLINK_DEALER_OPT_WEIGHT, unsafe.Pointer(&raw), C.size_t(C.sizeof_int)))
+	nativeResult3, nativeErr3 := C.zlink_set_dealer_option(s.raw(), C.ZLINK_DEALER_OPT_WEIGHT, unsafe.Pointer(&raw), C.size_t(C.sizeof_int))
+	return configErrorFromCall(nativeResult3, nativeErr3)
 }
 
 func (s *DealerSocket) Weight() (int, error) {
 	var raw C.int
 	size := C.size_t(C.sizeof_int)
-	if err := configErrorFromResult(C.zlink_get_dealer_option(s.raw(), C.ZLINK_DEALER_OPT_WEIGHT, unsafe.Pointer(&raw), &size)); err != nil {
+	nativeResult4, nativeErr4 := C.zlink_get_dealer_option(s.raw(), C.ZLINK_DEALER_OPT_WEIGHT, unsafe.Pointer(&raw), &size)
+	if err := configErrorFromCall(nativeResult4, nativeErr4); err != nil {
 		return 0, err
 	}
 	return int(raw), nil
@@ -174,7 +179,8 @@ func (s *DealerSocket) SetRequestTimeout(value time.Duration) error {
 		return err
 	}
 	raw := C.int(ms)
-	return configErrorFromResult(C.zlink_set_dealer_option(s.raw(), C.ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS, unsafe.Pointer(&raw), C.size_t(C.sizeof_int)))
+	nativeResult5, nativeErr5 := C.zlink_set_dealer_option(s.raw(), C.ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS, unsafe.Pointer(&raw), C.size_t(C.sizeof_int))
+	return configErrorFromCall(nativeResult5, nativeErr5)
 }
 
 func (s *DealerSocket) Send() SendOp {
@@ -211,7 +217,8 @@ func (s *RouterSocket) SetMandatory(value bool) error {
 	if value {
 		raw = 1
 	}
-	return configErrorFromResult(C.zlink_set_router_option(s.raw(), C.ZLINK_ROUTER_OPT_MANDATORY, unsafe.Pointer(&raw), C.size_t(C.sizeof_int)))
+	nativeResult6, nativeErr6 := C.zlink_set_router_option(s.raw(), C.ZLINK_ROUTER_OPT_MANDATORY, unsafe.Pointer(&raw), C.size_t(C.sizeof_int))
+	return configErrorFromCall(nativeResult6, nativeErr6)
 }
 
 func (s *RouterSocket) SetProbe(value bool) error {
@@ -219,23 +226,27 @@ func (s *RouterSocket) SetProbe(value bool) error {
 	if value {
 		raw = 1
 	}
-	return configErrorFromResult(C.zlink_set_router_option(s.raw(), C.ZLINK_ROUTER_OPT_PROBE, unsafe.Pointer(&raw), C.size_t(C.sizeof_int)))
+	nativeResult7, nativeErr7 := C.zlink_set_router_option(s.raw(), C.ZLINK_ROUTER_OPT_PROBE, unsafe.Pointer(&raw), C.size_t(C.sizeof_int))
+	return configErrorFromCall(nativeResult7, nativeErr7)
 }
 
 func (s *RouterSocket) SetRoutingID(id RoutingID) error {
 	raw := id.toC()
-	return configErrorFromResult(C.zlink_set_routing_id(s.raw(), routingIDPointer(&raw), C.size_t(raw.size)))
+	nativeResult8, nativeErr8 := C.zlink_set_routing_id(s.raw(), routingIDPointer(&raw), C.size_t(raw.size))
+	return configErrorFromCall(nativeResult8, nativeErr8)
 }
 
 func (s *RouterSocket) SetWeight(value int) error {
 	raw := C.int(value)
-	return configErrorFromResult(C.zlink_set_router_option(s.raw(), C.ZLINK_ROUTER_OPT_WEIGHT, unsafe.Pointer(&raw), C.size_t(C.sizeof_int)))
+	nativeResult9, nativeErr9 := C.zlink_set_router_option(s.raw(), C.ZLINK_ROUTER_OPT_WEIGHT, unsafe.Pointer(&raw), C.size_t(C.sizeof_int))
+	return configErrorFromCall(nativeResult9, nativeErr9)
 }
 
 func (s *RouterSocket) Weight() (int, error) {
 	var raw C.int
 	size := C.size_t(C.sizeof_int)
-	if err := configErrorFromResult(C.zlink_get_router_option(s.raw(), C.ZLINK_ROUTER_OPT_WEIGHT, unsafe.Pointer(&raw), &size)); err != nil {
+	nativeResult10, nativeErr10 := C.zlink_get_router_option(s.raw(), C.ZLINK_ROUTER_OPT_WEIGHT, unsafe.Pointer(&raw), &size)
+	if err := configErrorFromCall(nativeResult10, nativeErr10); err != nil {
 		return 0, err
 	}
 	return int(raw), nil
@@ -247,13 +258,15 @@ func (s *RouterSocket) SetRequestTimeout(value time.Duration) error {
 		return err
 	}
 	raw := C.int(ms)
-	return configErrorFromResult(C.zlink_set_router_option(s.raw(), C.ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS, unsafe.Pointer(&raw), C.size_t(C.sizeof_int)))
+	nativeResult11, nativeErr11 := C.zlink_set_router_option(s.raw(), C.ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS, unsafe.Pointer(&raw), C.size_t(C.sizeof_int))
+	return configErrorFromCall(nativeResult11, nativeErr11)
 }
 
 func (s *RouterSocket) RequestTimeout() (time.Duration, error) {
 	var raw C.int
 	size := C.size_t(C.sizeof_int)
-	if err := configErrorFromResult(C.zlink_get_router_option(s.raw(), C.ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS, unsafe.Pointer(&raw), &size)); err != nil {
+	nativeResult12, nativeErr12 := C.zlink_get_router_option(s.raw(), C.ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS, unsafe.Pointer(&raw), &size)
+	if err := configErrorFromCall(nativeResult12, nativeErr12); err != nil {
 		return 0, err
 	}
 	return time.Duration(raw) * time.Millisecond, nil
@@ -264,12 +277,14 @@ func (s *RouterSocket) SetHandover(value bool) error {
 	if value {
 		raw = C.int(C.ZLINK_RID_DUPLICATE_HANDOVER)
 	}
-	return configErrorFromResult(C.zlink_set_option(s.raw(), C.ZLINK_OPT_RID_DUPLICATE_POLICY, unsafe.Pointer(&raw), C.size_t(C.sizeof_int)))
+	nativeResult13, nativeErr13 := C.zlink_set_option(s.raw(), C.ZLINK_OPT_RID_DUPLICATE_POLICY, unsafe.Pointer(&raw), C.size_t(C.sizeof_int))
+	return configErrorFromCall(nativeResult13, nativeErr13)
 }
 
 func (s *RouterSocket) SetConnectRoutingID(id RoutingID) error {
 	raw := id.toC()
-	return configErrorFromResult(C.zlink_set_router_option(s.raw(), C.ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID, routingIDPointer(&raw), C.size_t(raw.size)))
+	nativeResult14, nativeErr14 := C.zlink_set_router_option(s.raw(), C.ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID, routingIDPointer(&raw), C.size_t(raw.size))
+	return configErrorFromCall(nativeResult14, nativeErr14)
 }
 
 func (s *RouterSocket) RoutingID() (RoutingID, error) {
@@ -292,7 +307,8 @@ func (s *XPubSocket) Publish(topic string) PublishOp {
 	return newPublishBuilder(func(parts []sendBuilderPart, flags SendFlags) error {
 		return s.withCString(topic, func(cstr *C.char) error {
 			return submitMultipartFromBuilderParts(parts, func(native *C.zlink_msg_t, count C.size_t) error {
-				return submitErrorFromResult(C.zlink_publish(s.raw(), cstr, native, count, C.zlink_send_flags_t(flags)))
+				nativeResult15, nativeErr15 := C.zlink_publish(s.raw(), cstr, native, count, C.zlink_send_flags_t(flags))
+				return submitErrorFromCall(nativeResult15, nativeErr15)
 			})
 		})
 	})
@@ -499,7 +515,8 @@ func (s *StreamSocket) SetTLSClient(caCertPath string, hostname string, trustSys
 
 func (s *StreamSocket) SetRoutingID(id RoutingID) error {
 	raw := id.toC()
-	return configErrorFromResult(C.zlink_set_routing_id(s.raw(), routingIDPointer(&raw), C.size_t(raw.size)))
+	nativeResult16, nativeErr16 := C.zlink_set_routing_id(s.raw(), routingIDPointer(&raw), C.size_t(raw.size))
+	return configErrorFromCall(nativeResult16, nativeErr16)
 }
 
 func (s *StreamSocket) RoutingID() (RoutingID, error) {
@@ -539,23 +556,25 @@ func (s *StreamSocket) RecvPacket(out *StreamPacket, flags RecvFlags) (bool, err
 	_ = out.reset()
 
 	header := &Message{}
-	if err := configErrorFromResult(C.zlink_msg_init(&header.msg)); err != nil {
+	nativeResult17, nativeErr17 := C.zlink_msg_init(&header.msg)
+	if err := configErrorFromCall(nativeResult17, nativeErr17); err != nil {
 		return false, err
 	}
 	body := &Message{}
-	if err := configErrorFromResult(C.zlink_msg_init(&body.msg)); err != nil {
+	nativeResult18, nativeErr18 := C.zlink_msg_init(&body.msg)
+	if err := configErrorFromCall(nativeResult18, nativeErr18); err != nil {
 		_ = header.Close()
 		return false, err
 	}
 	var sourceRID *C.zlink_routing_id_t
-	result := C.zlink_stream_recv_packet(
+	result, cerr := C.zlink_stream_recv_packet(
 		s.raw(), &sourceRID, &header.msg, &body.msg, C.zlink_recv_flags_t(flags))
 	if result == C.ZLINK_RECV_NO_DATA {
 		_ = header.Close()
 		_ = body.Close()
 		return false, nil
 	}
-	if err := recvErrorFromResult(result); err != nil {
+	if err := recvErrorFromCall(result, cerr); err != nil {
 		_ = header.Close()
 		_ = body.Close()
 		return false, err
@@ -578,8 +597,9 @@ func (s *StreamSocket) ReceiveMode() (StreamReceiveMode, error) {
 	}
 	var raw C.int
 	size := C.size_t(C.sizeof_int)
-	if err := configErrorFromResult(C.zlink_get_stream_option(
-		s.raw(), C.ZLINK_STREAM_OPT_RECV_MODE, unsafe.Pointer(&raw), &size)); err != nil {
+	nativeResult19, nativeErr19 := C.zlink_get_stream_option(
+		s.raw(), C.ZLINK_STREAM_OPT_RECV_MODE, unsafe.Pointer(&raw), &size)
+	if err := configErrorFromCall(nativeResult19, nativeErr19); err != nil {
 		return StreamReceiveUnspecified, err
 	}
 	return StreamReceiveMode(raw), nil
@@ -593,8 +613,9 @@ func (s *StreamSocket) SetReceiveMode(mode StreamReceiveMode) error {
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
 	raw := C.int(mode)
-	return configErrorFromResult(C.zlink_set_stream_option(
-		s.raw(), C.ZLINK_STREAM_OPT_RECV_MODE, unsafe.Pointer(&raw), C.size_t(C.sizeof_int)))
+	nativeResult20, nativeErr20 := C.zlink_set_stream_option(
+		s.raw(), C.ZLINK_STREAM_OPT_RECV_MODE, unsafe.Pointer(&raw), C.size_t(C.sizeof_int))
+	return configErrorFromCall(nativeResult20, nativeErr20)
 }
 
 func (s *StreamSocket) SetNotify(value bool) error {
@@ -602,13 +623,15 @@ func (s *StreamSocket) SetNotify(value bool) error {
 	if value {
 		raw = 1
 	}
-	return configErrorFromResult(C.zlink_set_stream_option(s.raw(), C.ZLINK_STREAM_OPT_NOTIFY, unsafe.Pointer(&raw), C.size_t(C.sizeof_int)))
+	nativeResult21, nativeErr21 := C.zlink_set_stream_option(s.raw(), C.ZLINK_STREAM_OPT_NOTIFY, unsafe.Pointer(&raw), C.size_t(C.sizeof_int))
+	return configErrorFromCall(nativeResult21, nativeErr21)
 }
 
 func (s *StreamSocket) Notify() (bool, error) {
 	var raw C.int
 	size := C.size_t(C.sizeof_int)
-	if err := configErrorFromResult(C.zlink_get_stream_option(s.raw(), C.ZLINK_STREAM_OPT_NOTIFY, unsafe.Pointer(&raw), &size)); err != nil {
+	nativeResult22, nativeErr22 := C.zlink_get_stream_option(s.raw(), C.ZLINK_STREAM_OPT_NOTIFY, unsafe.Pointer(&raw), &size)
+	if err := configErrorFromCall(nativeResult22, nativeErr22); err != nil {
 		return false, err
 	}
 	return raw != 0, nil

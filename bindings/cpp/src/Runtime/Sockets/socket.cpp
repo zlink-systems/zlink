@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
+#include <Runtime/Errors/result_from_errno.hpp>
 #include <zlink/Contracts/Sockets/socket_contracts.hpp>
 
 #include <Runtime/Native/native_message_guard.hpp>
@@ -139,7 +140,8 @@ void socket_t::set_tls_server (const std::string &cert_,
     const int rc = zlink_set_tls_server (detail::native_handle (*this), cert_.c_str (),
                                          key_.c_str (), require_client_cert_ ? 1 : 0);
     if (rc != 0)
-        throw config_error_t (detail::config_result_from_errno (zlink_errno ()), zlink_errno ());
+        throw config_error_t (detail::result_from_errno (config_result_t{}, zlink_errno ()),
+                              zlink_errno ());
 }
 
 void socket_t::set_tls_client (const std::string &ca_cert_,
@@ -151,7 +153,8 @@ void socket_t::set_tls_client (const std::string &ca_cert_,
     const int rc =
       zlink_set_tls_client (detail::native_handle (*this), ca, hostname, trust_system_ ? 1 : 0);
     if (rc != 0)
-        throw config_error_t (detail::config_result_from_errno (zlink_errno ()), zlink_errno ());
+        throw config_error_t (detail::result_from_errno (config_result_t{}, zlink_errno ()),
+                              zlink_errno ());
 }
 
 void socket_t::set_receive_flow_state (receive_flow_state_t state_)
@@ -263,9 +266,13 @@ int socket_t::receive_impl (
         return rc;
     }
 
+    // Core reports the route generation of the record returned by the last
+    // successful zlink_router_recv; read it before any other data receive.
+    const uint64_t route_generation =
+      use_router_recv ? zlink_router_recv_route_generation (detail::native_handle (*this)) : 0;
     detail::received_access_t::commit_receive_metadata (
       received_, std::move (envelope.source_rid), envelope.has_reply_token,
-      envelope.reply_token, _runtime ? _runtime->reply_owner : nullptr);
+      envelope.reply_token, _runtime ? _runtime->reply_owner : nullptr, route_generation);
     if (attach_routed_send_context_ && received_.routing_id ().has_value ())
         detail::received_access_t::set_socket_rid_send_context (received_,
                                                                 detail::native_handle (*this),

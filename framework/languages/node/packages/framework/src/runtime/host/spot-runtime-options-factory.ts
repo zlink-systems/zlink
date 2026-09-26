@@ -196,11 +196,6 @@ export class ZLinkSpotRuntimeOptionsFactory {
           }
         } as never;
       },
-      createReceived: () => {
-        const runtime = this.options.spotNodeRuntime();
-        if (runtime === undefined) throw new Error('Spot backend runtime is not initialized.');
-        return runtime.createReceived();
-      },
       createTopicMessage: () => {
         const runtime = this.options.spotNodeRuntime();
         if (runtime === undefined) throw new Error('Spot backend runtime is not initialized.');

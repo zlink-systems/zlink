@@ -109,8 +109,8 @@ public sealed class SocketReadyPoller : IDisposable
         }
     }
 
-    public int Poll(IReadOnlyList<ISocket> sockets, PollEventFlags events,
-        int timeoutMs)
+    public int Poll(IReadOnlyList<ISocket> sockets,
+        PollEventFlags events, int timeoutMs)
     {
         int count = sockets.Count;
         if (count <= 0)
@@ -249,8 +249,8 @@ public sealed class PollManager : IDisposable
         return _socketPoller.Poll(sockets, eventMasks, timeoutMs);
     }
 
-    public int PollSockets(IReadOnlyList<ISocket> sockets, PollEventFlags events,
-        int timeoutMs)
+    public int PollSockets(IReadOnlyList<ISocket> sockets,
+        PollEventFlags events, int timeoutMs)
     {
         return _socketPoller.Poll(sockets, events, timeoutMs);
     }

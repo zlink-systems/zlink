@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const zlink = require('@zlink-systems/zlink');
 import { CompletionPollerDriver } from './completion_poller';
 
+const ETERM = 156384765;
 let sequence = 0;
 
 function endpoint(): string {
@@ -175,7 +176,7 @@ test('retry completion does not consume a Message wrapper reused by the caller',
   context.options.autoHwmEnabled = false;
   const sender = zlink.createPairSocket(context);
   const receiver = zlink.createPairSocket(context);
-  const completions = new CompletionPollerDriver(sender);
+  const completions = new CompletionPollerDriver(context, sender);
   const messages: any[] = [];
   const sends: Promise<void>[] = [];
   const expected: string[] = [];
@@ -264,7 +265,7 @@ test('context shutdown rejects a backpressured managed send as Terminated', asyn
   context.options.autoHwmEnabled = false;
   const sender = zlink.createPairSocket(context);
   const receiver = zlink.createPairSocket(context);
-  const completions = new CompletionPollerDriver(sender);
+  const completions = new CompletionPollerDriver(context, sender);
   const attempts: Array<{ settled: boolean; error?: unknown; done: Promise<void> }> = [];
 
   try {
@@ -300,8 +301,10 @@ test('context shutdown rejects a backpressured managed send as Terminated', asyn
     const pending = attempts.find((attempt) => !attempt.settled);
     assert.ok(pending, 'HWM must leave at least one managed send waiting');
     context.shutdown();
+    // Core ends the wait after the shutdown with its configuration result.
     assert.throws(() => completions.wait(100), (error: any) =>
-      error instanceof zlink.RecvError && error.result === zlink.RecvResult.Terminated);
+      error instanceof zlink.ConfigError && error.result === zlink.ConfigResult.InternalError
+      && error.nativeErrno === ETERM);
     for (let turn = 0; turn < 10_000 && !pending.settled; turn += 1) {
       await yieldToEventLoop();
     }
@@ -324,7 +327,7 @@ test('managed routed send retries the same target and packet after HWM drain', a
   context.options.autoHwmEnabled = false;
   const router = zlink.createRouterSocket(context);
   const dealer = zlink.createDealerSocket(context);
-  const completions = new CompletionPollerDriver(router);
+  const completions = new CompletionPollerDriver(context, router);
   const peer = zlink.RoutingId.from('node-managed-routed-peer');
   const payloads: Buffer[] = [];
   const sends: Promise<void>[] = [];

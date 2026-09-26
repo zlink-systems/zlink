@@ -382,8 +382,11 @@ interface RequiredZlinkStreamConnectorOptions {
 ```
 
 connector 생성은 `zlinkStreamConnectorFactory.create(options)`를 사용한다.
-`zlinkStreamConnectorFactory.create(options)`는 [공통 스펙 §6.3](../../32-stream-connector.ko.md#63-옵션-검증)의
-option 검증에 실패하면 `ZlinkStreamException`을 던진다.
+**`create(options)`가 option 전 항목을 검증하며**, 검증에 실패하면 connector를 만들지 않고
+`ZlinkStreamException`을 던진다([공통 스펙 §6.3](../../32-stream-connector.ko.md#63-옵션-검증)).
+값 하나가 허용 범위를 벗어나면 `ValidationFailed`, 항목 사이가 맞지 않으면 `ConfigurationError`를
+담는다. endpoint scheme과 `transport`의 충돌, 브라우저가 지원하지 않는 `tcp`·`tls`,
+`compression: none`에 `compressionCodec`을 함께 넣는 것이 뒤쪽에 해당한다.
 
 - **취소는 optional `AbortSignal`로 전달한다.** 다른 언어의 cancellation token 모양을 복제하지
   않는다([비동기 실행과 coroutine 정책](../../../server/01-execution/README.ko.md)).
@@ -422,11 +425,6 @@ waitForSequence<T>(nameOrType: string | Function): ZlinkStreamSequenceCall<T>; /
   `waitFor<T>(name).where(message => message.payload.status === …)`로 표현한다.
 
 - **도메인 REST 폴링은 이 표면이 아니다.** 그건 HTTP client의 일이다.
-
-### 4.2 취소
-
-취소한 operation의 promise는 그 `AbortSignal`의 `reason`으로 reject한다
-([공통 스펙 §5.2](../../32-stream-connector.ko.md#52-request-correlation)).
 
 ## 5. 수신 큐
 

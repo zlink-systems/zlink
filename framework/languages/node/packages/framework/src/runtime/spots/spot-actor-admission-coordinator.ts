@@ -30,7 +30,6 @@ type AdmissionOptions = Pick<
   | 'locationClaim'
   | 'messageSerializers'
   | 'nativeSpotNodeProvider'
-  | 'createReceived'
   | 'createTopicMessage'
   | 'providerResolver'
   | 'runtimeEventPublisher'
@@ -92,7 +91,6 @@ export class ZLinkSpotActorAdmissionCoordinator {
     if (nativeSpot === undefined) return undefined;
     const nativeDispatch = new ZLinkSpotActorJoinDispatch({
       nativeSpot,
-      createReceived: requireBackendValueFactory(this.options.createReceived, 'Received'),
       createTopicMessage: requireBackendValueFactory(
         this.options.createTopicMessage,
         'TopicMessage'

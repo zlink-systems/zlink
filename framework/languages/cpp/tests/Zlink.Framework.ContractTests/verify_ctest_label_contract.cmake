@@ -88,6 +88,13 @@ endif()
 if(build_cache MATCHES "ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES:BOOL=ON")
   list(APPEND required_labels ${sample_labels})
 endif()
+# The engine adapter tests register only when their adapter is built.
+if(build_cache MATCHES "ZLINK_STREAM_CONNECTOR_BUILD_GODOT:BOOL=ON")
+  list(APPEND required_labels connector-godot-contract connector-godot-e2e)
+endif()
+if(build_cache MATCHES "ZLINK_STREAM_CONNECTOR_BUILD_AXMOL:BOOL=ON")
+  list(APPEND required_labels connector-axmol-contract connector-axmol-e2e)
+endif()
 
 set(known_labels
   ${ZLINK_FRAMEWORK_CPP_TEST_TIERS}

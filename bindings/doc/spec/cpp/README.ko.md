@@ -215,12 +215,10 @@ Layout 섹션이다. 이 C++ README는 그 카테고리의 C++ 투영만 정의�
 | Eventing | `socket_monitor_t`, monitor 이벤트, poller, poll 이벤트, timer, readiness 헬퍼 | `Contracts/Eventing/` |
 | Errors | 공개 예외와 result 도메인 타입 | `Contracts/Errors/` |
 
-`explicit poller_t(context_t &context_)`는 전달한 context가 소유하는 poller를 만든다. `poller_t`에는 context를 받지 않는 생성자가 없다.
-
 `poller_t`는 `void add(socket_monitor_t &monitor_, poll_event_flag_t events_, std::uintptr_t slot_)`,
 `void modify(socket_monitor_t &monitor_, poll_event_flag_t events_)`, `bool remove(socket_monitor_t &monitor_)`로 socket monitor를
-source로 받는다(공통 spec "`Poller`의 monitor source"). monitor mask는 `pollin` 또는 none만 유효하고 다른 bit는
-`config_error_t(config_result_t::invalid_argument)`로 거절한다. ready 뒤 `socket_monitor_t::recv(DONTWAIT)`로 drain한다.
+source로 받는다(공통 spec "`Poller`의 monitor source"). monitor mask의 결과는 공통 spec "`Poller`의 monitor source"를 따른다.
+ready 뒤 `socket_monitor_t::recv(DONTWAIT)`로 drain한다.
 
 위 지도는 공개 API 색인이다. 계약 표면 개요의 C++ 등가물이며, `IContext` 같은 추상 인터페이스를 의미하지 않는다. 공개 리소스 객체는 호출자가 진정한 대체
 동작을 필요로 하지 않는 한 구체 RAII 파사드로 유지한다. 좁은 인터페이스는 codec, callback,
@@ -379,12 +377,12 @@ C++가 header-only를 벗어나면 바인딩은 컴파일된 산출물을 하나
 - Send의 blocking `submit()`은 Core `NONE` admission을 사용하고 `async()`는 Core
   `DONTWAIT` completion을 기다린다. Socket `SNDTIMEO`는 blocking admission wait의
   상한이다. Binding은 payload 재전송 queue를 만들지 않는다.
-- C++ binding은 outbound 경로에 lock을 두지 않는다. Builder가 모은 모든 part를 native 배열로
-  만든 뒤 Core whole-message API를 한 번 호출한다. Core는 배열 전체를 하나의 record로 원자적으로
-  제출하고 모든 슬롯을 소비하지만, binding의 별도 native view가 공개 C++ message를 보존한다.
-  여러 thread의 독립된 제출은 Core가 처리하며 binding은 직렬화하거나 대기하거나 재시도하지
-  않는다. close와 in-flight 제출의 경합은
-  [공통 lifecycle 규칙](../async-execution-model.ko.md#4-poller와-completion-drain)을 따른다.
+- C++ binding은 outbound 경로에 자체 lock이나 gate를 두지 않는다. Builder가 모은 모든 part를
+  native 배열로 만든 뒤 Core whole-message API를 한 번 호출한다. Core는 배열 전체를 하나의
+  record로 원자적으로 제출하고 모든 슬롯을 소비하지만, binding의 별도 native view가 공개 C++
+  message를 보존한다. 여러 thread의 독립된 제출은 Core가 처리하며 binding은 직렬화하거나
+  대기하거나 재시도하지 않는다. close와
+  in-flight 제출의 경합도 Core lifecycle gate가 담당한다.
 - Request는 blocking `submit()`과 `async()`를 제공하고 builder의 reply timeout을 유지한다.
   Target은 operation 생성 때 capture하며 physical connection identity를 public target으로
   사용하지 않는다.

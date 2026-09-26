@@ -195,6 +195,9 @@ public interface IZlinkStreamWaitCall
   `Async()`'s completion value has no transport result or admission
   status — it only delivers async completion and failure (§6). Use
   `Request` if a response is needed.
+- This .NET implementation creates one frame write queue when the connector is created and keeps up to
+  4,096 operations in it. When it is full, a one-way `Submit` waits for room and a `Request` frame
+  submission fails at once with `SendFailed`.
 - **`Timeout(...)` only applies to that operation.**
 - **`On(...)` is a persistent push handler, and `WaitFor(...)` is a
   one-time wait.** Production push handling uses `On(...)`, and
@@ -303,15 +306,23 @@ owned by [Common Spec §6](../../32-stream-connector.en.md).
   waiter.** It doesn't cancel an already-started shared close work.
 - **Once a frame write has started, caller cancellation doesn't create
   a partial frame.**
-- **An operation the caller cancelled ends with the
-  `OperationCanceledException` of its `CancellationToken`**
-  ([Common Spec §5.2](../../32-stream-connector.en.md#52-request-correlation)).
 
 ## 7. Dispatch
 
-`.NET` expresses the `Manual` pump in [Common Spec §7](../../32-stream-connector.en.md#7-dispatch-mode)
-as `Dispatch.Async(...)`. [Common Spec §5.2](../../32-stream-connector.en.md#52-request-correlation)
-owns outbound admission, ordering, and timeouts.
+**This is a `.NET`-specific contract.**
+
+| Item | Contract |
+|---|---|
+| `Manual` (default) | A receive callback/request callback/lifecycle event is processed in the **execution context that called `Dispatch.Async(...)`** |
+| `Immediate` | **Runs inline on the receive path** (no separate dispatch work). A slow handler blocks the receive loop, so the receives after it are delayed |
+| `MaxPendingDispatchCallbacks` | **Applies only in `Manual`.** It bounds the places a receive handler waits in; when none is free, the work waits until one appears. **The completion callback of an already-accepted request is not counted here** — the completion of an accepted call is never deferred or refused for want of a place. `Immediate` does not pass through this bound since it doesn't go through the queue |
+| Outbound send queue | An order-preserving queue **separate** from the dispatch bound. The frame write queue item above defines the result when it is full |
+
+- **A send accepted earlier is sent before a request started later.**
+  A request waits for the response **only after its own frame's actual
+  write finishes.**
+- **A send doesn't route around callback execution on a background
+  thread.**
 
 ## 8. Receive Message History
 
@@ -455,9 +466,30 @@ requires is expressed as `null` on a nullable `int`.
 public int? MaxAttempts { get; init; } = 3; // null means unlimited
 ```
 
-`ZlinkStreamConnectorFactory.Create(options)` rejects an option that fails
-[Common Spec §6.3](../../32-stream-connector.en.md#63-option-validation) before creating the connector
-and throws `ZlinkStreamException` carrying the corresponding error code.
+**`.NET`-only option:**
+
+| Option | Default | Meaning |
+|---|---|---|
+| `MaxPendingDispatchCallbacks` | 1024 | The dispatch pending callback bound (§7) |
+
+**Validation contract:**
+
+The validation timing is owned by
+[Common Spec §6.3](../../32-stream-connector.en.md#63-option-validation).
+In `.NET`, `ZlinkStreamConnectorFactory.Create(options)` checks every
+option, and on a validation failure it builds no `IZlinkStreamConnector`
+instance and delivers the failure to the caller.
+
+| Violation | Failure |
+|---|---|
+| No endpoint | `ZlinkStreamException`'s `ValidationFailed` |
+| Unsupported scheme, URI scheme/`Transport` mismatch | `ZlinkStreamException`'s `ConfigurationError` |
+| A `CompressionCodec` given together with compression turned off | `ZlinkStreamException`'s `ConfigurationError` |
+| An out-of-range individual timeout, heartbeat, or reconnect value, or dispatch queue size | `ZlinkStreamException`'s `ValidationFailed` |
+
+Every timeout and dispatch queue size option must be **positive**, and the
+preview length **can't be negative.** `MaxAttempts` must be `null` or
+positive.
 
 ## 13. Regression Test
 

@@ -173,7 +173,7 @@ Location Store가 기록하는 record와 조건만 §8~§9에서 다시 구체�
    dispatch는 닫아 둔다. 필요한 lifecycle callback을 끝낸 뒤 application message 처리를
    시작한다.
 8. Source는 cutover를 보낸 뒤 완료 reply를 기다리지 않고 Message Follow를 유지한다.
-   Memory에 유지한 payload와 relay batch는 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 authority 판정 또는 source lease 만료 terminal까지 유지한다.
+   Memory에 유지한 payload와 relay batch는 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 authority 판정 또는 source lease 만료 terminal까지 유지한다.
 
 **Handoff payload와 owner 변경은 하나의 distributed transaction이나 2PC로 묶지 않는다.**
 Restore 요청, 각 chunk와 target의 owner CAS는 같은 `RelocationId`, target attempt와 source
@@ -1295,9 +1295,14 @@ completion reply가 없으며, source는 Location Store를 대신 갱신하지 �
 정확한 반환값과 입력 제한은 [Location Store](02-location-store-redis.ko.md)와
 [Relocation Store](03-relocation-store-redis.ko.md)가 정의한다.
 
-일시적 오류나 불확정 응답의 target CAS는 같은 expected source fence, `RelocationId`와 expected `StoreVersion`으로 원래 `NewOwner` CAS(`SpotWide`에는 §8.1의 whole-unit batch)를 다시 제출한다. Command 40은 Restore deadline을 싣지 않으므로 target은 Restore deadline이나 별도 timeout을 두지 않는다. 재제출은 commit 확인, definitive `Conflict`, source `Preserve` 확인 또는 target lease 만료로만 끝나며 source lease 만료로는 끝나지 않는다. 같은 `RelocationId`의 target commit이 확인되면 target dispatch를 열고, 나머지 셋은 staging을 폐기한다. Commit 확인 전에는 dispatch를 열지 않으며, source를 가리킨 이전 read만으로는 staging을 폐기하지 않는다.
+일시적 오류나 불확정 응답의 target CAS는 같은 expected source fence, `RelocationId`와 expected `StoreVersion`으로 원래 `NewOwner` CAS(`SpotWide`에는 §8.1의 whole-unit batch)를 다시 제출한다. Target은 이 재제출에 deadline이나 별도 timeout을 두지 않는다. 재제출은 같은 `RelocationId`의 target commit 확인, 이 target commit을 배제하는 definitive `Conflict`, source `Preserve` 확인, commit 확인 전 target lease 만료 중 하나로 끝난다. Target commit이 확인되면 target dispatch를 열고, 나머지 경우에는 staging을 폐기한다. Commit 확인 전에는 dispatch를 열지 않는다.
 
-Source는 자신의 Restore deadline에 target `NewOwner` CAS가 기대하는 `StoreVersion`을 조건으로 §6.1의 `Preserve`를 실행한다. Source `Preserve` 성공이 확인되면 target의 늦은 CAS는 commit할 수 없다. Source는 owner로 남아 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 보관 작업을 다시 처리하며, owner lease가 §5에 따라 유효할 때만 dispatch를 재개한다. 같은 `RelocationId`의 target owner가 이미 확인되면 source는 target route를 채택한다. `Preserve` 응답이 불확정이면 source lease가 유효한 동안 새 timer 없이 이 절의 Store 실패 정책으로 반복한다. Source lease 만료는 source의 작업을 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 expired-owner terminal로 끝낸다.
+Restore 유효시간(relocation을 시작한 operation의 deadline)은 source가 판정한다. Source는 이 시각에 target `NewOwner` CAS가 기대하는 `StoreVersion`을 조건으로 §6.1의
+`Preserve`를 실행한다. Source `Preserve` 성공이 확인되면 target의 늦은 CAS는 commit할 수
+없다. Source는 owner로 남아 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의
+보관 작업을 다시 처리한다. 같은 `RelocationId`의 target owner가 이미 확인되면 source는
+target route를 채택한다. `Preserve` 응답이 불확정이면 source lease가 유효한 동안 새 timer 없이 이 절의 Store-failure 정책으로 반복한다. Source lease 만료는 source의 작업을 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 expired-owner terminal로 끝낸다. Source는 owner lease가
+§5에 따라 유효할 때만 dispatch를 재개한다.
 
 `StoreFailureGrace` 동안에는 마지막으로 완전히 읽은 descriptor 목록을 유지한다. 그 목록의
 target에 대한 connection intent(아직 연결되지 않은 target 포함)를 유지하고 기존 connection의 연결

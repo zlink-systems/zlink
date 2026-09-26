@@ -189,6 +189,11 @@ func TestOptimizationGuardAvoidsRuntimeFinalizersAndSleeps(t *testing.T) {
 		if strings.Contains(body, "time.Sleep(") {
 			t.Fatalf("%s uses time.Sleep in binding implementation hot path", path)
 		}
+		// cgo returns errno from the thread the native call returned on, so
+		// no call pins its goroutine to an OS thread.
+		if strings.Contains(body, "runtime.LockOSThread(") {
+			t.Fatalf("%s pins a goroutine with runtime.LockOSThread", path)
+		}
 	}
 }
 

@@ -106,13 +106,15 @@ func (s *sendRetryState) attempt(userContext uintptr) (uint64, error) {
 	}
 	err := submitMultipartFromClones(s.payload.owned, false, func(native *C.zlink_msg_t, count C.size_t) error {
 		if !s.hasTarget {
-			return submitErrorFromResult(C.zlink_go_send_with_context(
+			rc, cerr := C.zlink_go_send_with_context(
 				s.core.raw(), native, count, C.ZLINK_SEND_FLAGS_DONTWAIT,
-				C.uintptr_t(userContext), &completionID))
+				C.uintptr_t(userContext), &completionID)
+			return submitErrorFromCall(rc, cerr)
 		}
-		return submitErrorFromResult(C.zlink_go_send_rid_with_context(
+		rc, cerr := C.zlink_go_send_rid_with_context(
 			s.core.raw(), rid, native, count, C.ZLINK_SEND_FLAGS_DONTWAIT,
-			C.uintptr_t(userContext), &completionID))
+			C.uintptr_t(userContext), &completionID)
+		return submitErrorFromCall(rc, cerr)
 	})
 	return uint64(completionID), err
 }
@@ -129,9 +131,10 @@ func (s *requestRetryState) attempt(userContext uintptr) (uint64, error) {
 		ridPointer = &rid
 	}
 	err := submitMultipartFromClones(s.payload.owned, false, func(native *C.zlink_msg_t, count C.size_t) error {
-		return submitErrorFromResult(C.zlink_go_request_with_context(
+		rc, cerr := C.zlink_go_request_with_context(
 			s.core.raw(), ridPointer, native, count, C.ZLINK_SEND_FLAGS_DONTWAIT,
-			C.uint32_t(s.timeout), C.uintptr_t(userContext), &completionID))
+			C.uint32_t(s.timeout), C.uintptr_t(userContext), &completionID)
+		return submitErrorFromCall(rc, cerr)
 	})
 	return uint64(completionID), err
 }
@@ -313,9 +316,10 @@ func submitCompletionRequest(
 		ridPointer = &rid
 	}
 	err = submitMultipartFromBuilderParts(parts, func(native *C.zlink_msg_t, count C.size_t) error {
-		return submitErrorFromResult(C.zlink_go_request_with_context(
+		rc, cerr := C.zlink_go_request_with_context(
 			core.raw(), ridPointer, native, count, C.ZLINK_SEND_FLAGS_DONTWAIT,
-			C.uint32_t(timeoutMillis), C.uintptr_t(entry.handleKey), &completionID))
+			C.uint32_t(timeoutMillis), C.uintptr_t(entry.handleKey), &completionID)
+		return submitErrorFromCall(rc, cerr)
 	})
 	if err == nil {
 		if completionID == 0 {

@@ -9,6 +9,8 @@ import systems.zlink.contracts.core.CoreHwmBudgetSnapshot;
 import systems.zlink.internal.ContractAccess;
 import systems.zlink.contracts.errors.ZlinkConfigException;
 import systems.zlink.contracts.errors.ConfigResult;
+import systems.zlink.contracts.errors.CloseResult;
+import systems.zlink.contracts.errors.ZlinkCloseException;
 import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.contracts.sockets.DealerSocket;
 import systems.zlink.contracts.sockets.PairSocket;
@@ -21,7 +23,6 @@ import systems.zlink.contracts.sockets.XSubSocket;
 import systems.zlink.runtime.nativeapi.InternalAccess;
 import systems.zlink.runtime.nativeapi.CompletionDispatcher;
 import systems.zlink.runtime.nativeapi.Native;
-import systems.zlink.runtime.nativeapi.NativeErrno;
 import systems.zlink.runtime.nativeapi.NativeHelpers;
 import systems.zlink.runtime.nativeapi.NativeLayouts;
 import systems.zlink.runtime.sockets.NativeSockets;
@@ -277,10 +278,12 @@ final class NativeContext implements Context {
         if (handle == null || handle.address() == 0) {
             return;
         }
-        NativeErrno.retryWhileInterrupted(() -> Native.ctxShutdown(handle),
-            rc -> rc != 0);
-        NativeErrno.retryWhileInterrupted(() -> Native.ctxTerm(handle),
-            rc -> rc != 0);
+        int shutdown = Native.ctxShutdown(handle);
+        if (shutdown != 0)
+            throw new ZlinkCloseException(CloseResult.fromValue(shutdown), Native.errno());
+        int term = Native.ctxTerm(handle);
+        if (term != 0)
+            throw new ZlinkCloseException(CloseResult.fromValue(term), Native.errno());
         handle = MemorySegment.NULL;
         completionDispatcher.close();
     }
@@ -322,12 +325,14 @@ final class NativeContext implements Context {
 
     private int getOption(ContextOption option) {
         ensureOpen();
-        int rc = Native.ctxGet(handle, option.getValue());
-        if (rc < 0 && option != ContextOption.THREAD_PRIORITY
-            && option != ContextOption.THREAD_SCHED_POLICY) {
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment errorOut = arena.allocate(ValueLayout.JAVA_INT);
+            int value = Native.ctxGet(handle, option.getValue(), errorOut);
+            int result = errorOut.get(ValueLayout.JAVA_INT, 0);
+            if (result != ConfigResult.OK.value())
+                throw new ZlinkConfigException(ConfigResult.fromValue(result), Native.errno());
+            return value;
         }
-        return rc;
     }
 
     private long getUInt64Option(ContextOption option) {

@@ -62,9 +62,8 @@ Socket 기능은 concrete socket type에 귀속한다. 모든 socket에 같은 m
 ## Context와 resource 수명
 
 - `NewContext`가 만든 Context는 socket과 context-wide option의 owner다.
-- Context를 `Close`하면 아직 닫히지 않은 resource를 [공통 lifecycle 규칙](../async-execution-model.ko.md#4-poller와-completion-drain)대로 닫는다.
-- `NewPoller(ctx *Context) (*Poller, error)`는 `ctx`가 소유하는 poller를 만든다. Context를 받지 않는 `NewPoller`는 없다.
-- 호출자는 사용이 끝난 Context, socket, monitor, poller, timer와 utility resource를 `Close` 또는 해당 종료 method로 닫는다. 사용 중인 poller의 보관은 [공통 lifecycle 규칙](../async-execution-model.ko.md#4-poller와-completion-drain)을 따른다.
+- Context `Close`는 [공통 lifecycle 규칙](../async-execution-model.ko.md#4-poller와-completion-drain)을 따른다.
+- Context, socket, monitor, poller, timer와 utility resource는 호출자가 소유하며 사용이 끝나면 `Close` 또는 해당 종료 method를 호출한다.
 - Close는 같은 resource에 반복해서 호출해도 이미 종료된 상태를 다시 해제하지 않는다.
 
 Context option은 I/O thread와 socket default를 설정한다. Auto-HWM memory limit과
@@ -81,7 +80,7 @@ modify, remove와 wait 호출은 호출자가 직렬화한다.
 `(*Poller).ModifyMonitor(monitor *SocketMonitor, events PollEventFlag) error`,
 `(*Poller).RemoveMonitor(monitor *SocketMonitor) error`는 socket monitor를 poller source로 등록·수정·제거한다
 (공통 spec "`Poller`의 monitor source"). 기존 `AddSocket/ModifySocket/RemoveSocket`(`SocketTarget`)도 monitor를
-수용한다. monitor에는 `POLLIN`만 유효하고 다른 bit는 typed `ConfigResult` `InvalidArgument`로 거절한다. ready 뒤
+수용한다. monitor mask의 결과는 공통 spec "`Poller`의 monitor source"를 따른다. ready 뒤
 `monitor.Recv(RecvFlagsDontWait)`로 drain하며 poll event는 socket과 같은 slot/source kind로 보고한다.
 
 ## Byte HWM과 Auto-HWM

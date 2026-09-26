@@ -51,7 +51,7 @@ _register_windows_dll_directories()
 def _require_supported_platform():
     if SUPPORTED_PLATFORM is None:
         raise OSError(
-            "zlink Python Core 1.9.0 supports Linux x86_64 and Windows x86_64"
+            "zlink Python Core 1.10.0 supports Linux x86_64 and Windows x86_64"
         )
 
 
@@ -81,7 +81,7 @@ def load_native_library(bind=None):
                 _WINDOWS_DLL_DIRECTORY_HANDLES.append(
                     os.add_dll_directory(str(candidate_path.parent))
                 )
-            lib = ctypes.CDLL(str(candidate_path))
+            lib = ctypes.CDLL(str(candidate_path), use_errno=True)
             if bind is not None:
                 bind(lib)
             return lib

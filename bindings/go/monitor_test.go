@@ -131,7 +131,7 @@ func TestMonitorObservesReceiveFlowStateTransitionsWithPairMetadata(t *testing.T
 	if err := dealer.Connect(endpoint); err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
-	completions := startCompletionPoller(t, dealer)
+	completions := startCompletionPoller(t, ctx, dealer)
 	defer completions.close(t)
 	sendAfterConnect(t, dealer, newMessage(t, "hello"))
 	var request zlink.Received

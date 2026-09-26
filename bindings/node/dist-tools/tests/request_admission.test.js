@@ -136,7 +136,7 @@ test('connect-before-bind REQUEST resumes from WRITABLE and then awaits its repl
 test('socket close releases a connect-before-bind REQUEST token', async () => {
     const context = zlink.createContext();
     const dealer = zlink.createDealerSocket(context);
-    const completions = new completion_poller_1.CompletionPollerDriver(dealer);
+    const completions = new completion_poller_1.CompletionPollerDriver(context, dealer);
     dealer.options.immediate = true;
     dealer.connect(endpoint('close-token'));
     const submission = dealer.request().message('close-me').timeout(30_000).submit();
@@ -171,7 +171,7 @@ test('context shutdown terminates a REQUEST wait token as typed Terminated', asy
     const context = zlink.createContext();
     const dealer = zlink.createDealerSocket(context);
     const router = zlink.createRouterSocket(context);
-    const completions = new completion_poller_1.CompletionPollerDriver(dealer);
+    const completions = new completion_poller_1.CompletionPollerDriver(context, dealer);
     const address = endpoint('shutdown-token');
     configureSmallHwm(context, dealer, router);
     router.bind(address);
@@ -184,7 +184,8 @@ test('context shutdown terminates a REQUEST wait token as typed Terminated', asy
         const outcomes = [];
         const pending = Array.from({ length: 64 }, (_, index) => dealer.request().message(Buffer.alloc(64, index)).timeout(30_000).submit().reply.then(() => outcomes.push(null), (error) => outcomes.push(error)));
         context.shutdown();
-        assert.throws(() => completions.wait(100), (error) => error instanceof zlink.RecvError && error.result === zlink.RecvResult.Terminated);
+        assert.throws(() => completions.wait(100), (error) => error instanceof zlink.ConfigError && error.result === zlink.ConfigResult.InternalError
+            && error.nativeErrno === 156384765);
         for (let turn = 0; turn < 1_000
             && !outcomes.some((error) => error instanceof zlink.SubmitError); turn += 1) {
             await new Promise((resolve) => setImmediate(resolve));

@@ -85,6 +85,11 @@ pub enum RecvResult {
     NotSupported = 205,
     /// An unexpected internal error occurred.
     InternalError = 206,
+    /// The caller's output capacity was too small; nothing was written.
+    BufferTooSmall = 207,
+    /// The handle is in a receive lifecycle state that rejects the call,
+    /// for example after it was closed.
+    InvalidState = 208,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,6 +166,8 @@ pub enum ConnectResult {
     Conflict = 606,
     /// The resource was busy and could not service the request.
     Busy = 607,
+    /// Transport peer authentication failed.
+    AuthFailed = 608,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,4 +188,10 @@ pub enum ConfigResult {
     InvalidState = 705,
     /// The target was not found.
     NotFound = 706,
+    /// A duplicate identity, endpoint, or registration value.
+    Conflict = 707,
+    /// The caller's output capacity was too small; nothing was written.
+    BufferTooSmall = 708,
+    /// The same mutable object is in use concurrently.
+    Busy = 709,
 }

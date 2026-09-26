@@ -275,14 +275,14 @@ public contract methods.
 - `Context::new(...)` creates the native-backed context implementation.
 - `Context::create_pair_socket()`, `create_dealer_socket()`, `create_router_socket()`, `create_pub_socket()`, `create_sub_socket()`, `create_xpub_socket()`, `create_xsub_socket()`, `create_stream_socket()` create the native-backed socket implementations.
 Public Spot and Actor creation, including service-owned timers, is specified by the [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.en.md). This binding specification defines creation of Core raw sockets, monitors, pollers, and generic timers.
-- `Poller::new(&Context)` creates a poller owned by the given context; `Timer::new(...)` creates a timer.
+- `Poller::new(...)` and `Timer::new(...)` create eventing resources.
 - `Poller` accepts a socket monitor as a source through
   `add_monitor(&self, monitor: &SocketMonitor, events: i16, slot: usize) -> Result<(), ConfigError>`,
   `modify_monitor(&self, monitor: &SocketMonitor, events: i16) -> Result<(), ConfigError>` and
   `remove_monitor(&self, monitor: &SocketMonitor) -> Result<(), ConfigError>` (common spec "Monitor sources in
   `Poller`"). `SocketMonitor` does not implement the socket-only sealed `Pollable` (this protects the `proxy`
-  argument contract). Only `POLLIN` is valid for a monitor; any other mask is rejected with
-  `ConfigError(ConfigResult::InvalidArgument)`. Drain with `recv_with_flags(RecvFlags::DONT_WAIT)` after readiness;
+  argument contract). The result of a monitor mask follows the common spec "Monitor sources in `Poller`".
+  Drain with `recv_with_flags(RecvFlags::DONT_WAIT)` after readiness;
   `PollEvent` reports it as `PollSourceKind::Socket`.
 - `AtomicCounter::new()`, `Stopwatch::start()`, `Thread::start(...)` create caller-owned utility resources.
 - Version and capability lookup, strerror, proxy, sleep, and the multipart cleanup helper are public crate functions. The FFI calls behind these functions stay private.

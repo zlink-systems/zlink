@@ -4,6 +4,7 @@
 #include <zlink.h>
 
 #include <condition_variable>
+#include <cerrno>
 #include <mutex>
 #include <string>
 #include <type_traits>
@@ -240,43 +241,72 @@ void test_monitor_poller_mask_and_drain (bool tcp_)
     zlink::pair_socket_t client (ctx);
     auto monitor = server.monitor_open (zlink::monitor_event::connection_ready);
     zlink::poller_t poller;
-    const auto invalid_masks = {
-      zlink::poll_event_flag_t::pollout,
-      zlink::poll_event_flag_t::pollcompletion,
-      static_cast<zlink::poll_event_flag_t> (ZLINK_POLLIN | ZLINK_POLLOUT),
-      static_cast<zlink::poll_event_flag_t> (ZLINK_POLLIN | ZLINK_POLLCOMPLETION),
-      static_cast<zlink::poll_event_flag_t> (ZLINK_POLLERR),
-      static_cast<zlink::poll_event_flag_t> (ZLINK_POLLPRI),
-      static_cast<zlink::poll_event_flag_t> (0x4000)};
-    for (const auto mask : invalid_masks) {
+    const auto expect_rejected = [&] (zlink::poll_event_flag_t mask,
+                                      zlink::config_result_t expected, int expected_errno) {
         bool rejected = false;
         try {
             poller.add (monitor, mask, 71);
         } catch (const zlink::config_error_t &error) {
-            assert (error.result () == zlink::config_result_t::invalid_argument);
+            assert (error.result () == expected);
+            assert (error.internal_errno () == expected_errno);
             rejected = true;
         }
         assert (rejected);
         assert (poller.size () == 0);
-    }
-    poller.add (monitor, zlink::poll_event_flag_t::none, 71);
+    };
+    expect_rejected (zlink::poll_event_flag_t::pollout, zlink::config_result_t::not_supported,
+                     ENOTSUP);
+    expect_rejected (static_cast<zlink::poll_event_flag_t> (ZLINK_POLLIN | ZLINK_POLLOUT),
+                     zlink::config_result_t::not_supported, ENOTSUP);
+    expect_rejected (zlink::poll_event_flag_t::pollcompletion,
+                     zlink::config_result_t::invalid_argument, EINVAL);
+    expect_rejected (static_cast<zlink::poll_event_flag_t> (ZLINK_POLLIN | ZLINK_POLLCOMPLETION),
+                     zlink::config_result_t::invalid_argument, EINVAL);
+    expect_rejected (static_cast<zlink::poll_event_flag_t> (ZLINK_POLLOUT | ZLINK_POLLCOMPLETION),
+                     zlink::config_result_t::invalid_argument, EINVAL);
+    expect_rejected (static_cast<zlink::poll_event_flag_t> (ZLINK_POLLERR),
+                     zlink::config_result_t::not_supported, ENOTSUP);
+    expect_rejected (static_cast<zlink::poll_event_flag_t> (ZLINK_POLLPRI),
+                     zlink::config_result_t::not_supported, ENOTSUP);
+    expect_rejected (static_cast<zlink::poll_event_flag_t> (0x4000),
+                     zlink::config_result_t::invalid_argument, EINVAL);
+    poller.add (monitor, zlink::poll_event_flag_t::pollin, 71);
     server.bind (tcp_ ? "tcp://127.0.0.1:*"
                      : zlink_cpp_contract::unique_inproc ("monitor-poller-mask"));
     client.connect (server.options ().last_endpoint ());
     zlink::poll_event_t event;
     assert (poller.wait (&event, 1, std::chrono::milliseconds (0)) == 0);
-    poller.modify (monitor, zlink::poll_event_flag_t::pollin);
-    for (const auto mask : invalid_masks) {
+    const auto expect_modify_rejected = [&] (zlink::poll_event_flag_t mask,
+                                             zlink::config_result_t expected, int expected_errno) {
         bool rejected = false;
         try {
             poller.modify (monitor, mask);
         } catch (const zlink::config_error_t &error) {
-            assert (error.result () == zlink::config_result_t::invalid_argument);
+            assert (error.result () == expected);
+            assert (error.internal_errno () == expected_errno);
             rejected = true;
         }
         assert (rejected);
         assert (poller.size () == 1);
-    }
+    };
+    expect_modify_rejected (zlink::poll_event_flag_t::pollout,
+                            zlink::config_result_t::not_supported, ENOTSUP);
+    expect_modify_rejected (static_cast<zlink::poll_event_flag_t> (ZLINK_POLLIN | ZLINK_POLLOUT),
+                            zlink::config_result_t::not_supported, ENOTSUP);
+    expect_modify_rejected (zlink::poll_event_flag_t::pollcompletion,
+                            zlink::config_result_t::invalid_argument, EINVAL);
+    expect_modify_rejected (
+      static_cast<zlink::poll_event_flag_t> (ZLINK_POLLIN | ZLINK_POLLCOMPLETION),
+      zlink::config_result_t::invalid_argument, EINVAL);
+    expect_modify_rejected (
+      static_cast<zlink::poll_event_flag_t> (ZLINK_POLLOUT | ZLINK_POLLCOMPLETION),
+      zlink::config_result_t::invalid_argument, EINVAL);
+    expect_modify_rejected (static_cast<zlink::poll_event_flag_t> (ZLINK_POLLERR),
+                            zlink::config_result_t::not_supported, ENOTSUP);
+    expect_modify_rejected (static_cast<zlink::poll_event_flag_t> (ZLINK_POLLPRI),
+                            zlink::config_result_t::not_supported, ENOTSUP);
+    expect_modify_rejected (static_cast<zlink::poll_event_flag_t> (0x4000),
+                            zlink::config_result_t::invalid_argument, EINVAL);
     assert (poller.wait (&event, 1, std::chrono::milliseconds (2000)) == 1);
     assert (event.source_kind == zlink::poll_source_kind_t::socket);
     assert (event.slot == 71);

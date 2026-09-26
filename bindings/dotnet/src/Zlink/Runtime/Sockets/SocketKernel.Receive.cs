@@ -67,12 +67,14 @@ internal sealed partial class SocketKernel
     {
         var allowNoData = (flags & DontWaitFlag) != 0;
         if (!ReceiveRoutedParts(flags, out var routingId, out var replyToken,
-                out var singlePart, out var parts, allowNoData))
+                out var routeGeneration, out var singlePart, out var parts,
+                allowNoData))
             return false;
         try
         {
             PopulateRoutedReceivedInto(result, singlePart, parts, routingId,
                 replyToken);
+            result.SetRouteGeneration(routeGeneration);
             return true;
         }
         catch

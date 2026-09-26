@@ -201,8 +201,11 @@ public record ZLinkStreamConnectorOptions(
 }
 ```
 
-`ZLinkStreamConnectorFactory.create(options)`는 [공통 스펙 §6.3](../../32-stream-connector.ko.md#63-옵션-검증)의
-option 검증에 실패하면 `ZLinkStreamException`(§11)을 던진다.
+**옵션 검증 시점은 [공통 스펙 §6.3](../../32-stream-connector.ko.md#63-옵션-검증)가 소유한다.**
+Java는 `ZLinkStreamConnectorFactory.create(options)`가 option 전 항목을 확인하며, 검증에 실패하면
+`ZLinkStreamConnector` 인스턴스를 만들지 않고 `ZLinkStreamException`(§11)으로 실패한다. 값 하나가
+허용 범위를 벗어나면 `VALIDATION_FAILED`, 항목 사이가 맞지 않으면 `CONFIGURATION_ERROR`를 담는다.
+`maxReconnectAttempts`는 `UNLIMITED_RECONNECT_ATTEMPTS`이거나 양수여야 한다.
 
 `skipServerCertificateValidation`은 테스트용 자체 서명 인증서에만 사용한다. 운영
 기본값은 `false`다. 이 값을 `true`로 바꾸면 TLS transport와 WSS transport 모두 서버
@@ -454,9 +457,7 @@ public enum ZLinkStreamConnectionState {
 
 오류의 의미는 [공통 스펙 §9](../../32-stream-connector.ko.md)가 소유한다. Java는 닫힌 enum으로
 표현한다. [공통 스펙 §9.2](../../32-stream-connector.ko.md#92-전달--받는-쪽이-코드를-읽을-수-있어야-한다)가
-요구하는 **코드를 담는 전용 예외 타입은 `ZLinkStreamException`이다.** caller가 취소한 operation의
-`CompletableFuture`는 `CancellationException`으로 끝나며 `ZLinkStreamException`이 아니다
-([공통 스펙 §5.2](../../32-stream-connector.ko.md#52-request-correlation)).
+요구하는 **코드를 담는 전용 예외 타입은 `ZLinkStreamException`이다.**
 
 ```java
 public record ZLinkStreamError(

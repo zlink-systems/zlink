@@ -29,19 +29,22 @@ public abstract partial class ZlinkException
     private const int EshutdownFallback = ZlinkHausnumero + 22;
     private const int EfsmNative = ZlinkHausnumero + 51;
     private const int EnoCompatProtoNative = ZlinkHausnumero + 52;
-    private const int EtermNative = ZlinkHausnumero + 53;
+    internal const int EtermNative = ZlinkHausnumero + 53;
     private const int EmThreadNative = ZlinkHausnumero + 54;
 
+    // Core returned rc; its errno stays attached as the diagnostic value.
     internal static void ThrowConfigIfError(int rc)
     {
         if (rc != 0)
-            throw CreateConfigException((ConfigResult)rc);
+            throw new ZlinkConfigException((ConfigResult)rc,
+                Systems.Zlink.Runtime.Native.NativeMethods.GetLastPInvokeError());
     }
 
     internal static void ThrowConnectIfError(int rc)
     {
         if (rc != 0)
-            throw CreateConnectException((ConnectResult)rc);
+            throw new ZlinkConnectException((ConnectResult)rc,
+                Systems.Zlink.Runtime.Native.NativeMethods.GetLastPInvokeError());
     }
 
     internal static void ThrowSubmitIfError(int rc)
@@ -243,7 +246,7 @@ public abstract partial class ZlinkException
             0 => RequestResult.Ok,
             60 or 110 or 10060 => RequestResult.TimedOut,
             3 or 2 => RequestResult.NotFound,
-            156384765 => RequestResult.Terminated,
+            156384765 or 58 or 108 or 10058 => RequestResult.Terminated,
             104 => RequestResult.ProtocolError,
             12 or 105 => RequestResult.InternalError,
             1 or 13 => RequestResult.Rejected,
@@ -252,7 +255,6 @@ public abstract partial class ZlinkException
             107 or 113 or 111 or 10057 or 10065 =>
                 RequestResult.NotConnected,
             22 => RequestResult.InvalidArgument,
-            108 => RequestResult.InvalidState,
             95 or 93 or 97 or 156384766 => RequestResult.NotSupported,
             _ => RequestResult.InternalError
         };
@@ -266,6 +268,7 @@ public abstract partial class ZlinkException
             11 or 35 or 10035 => RecvResult.NoData,
             16 => RecvResult.Busy,
             156384765 => RecvResult.Terminated,
+            58 or 108 or 10058 => RecvResult.InvalidState,
             9 or 14 or 88 => RecvResult.InvalidHandle,
             95 or 93 or 97 => RecvResult.NotSupported,
             _ => RecvResult.InternalError

@@ -1,12 +1,12 @@
 vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 
-# This checksum identifies the currently published, header-only asset. The
-# release workflow must publish the complete source unit and update this hash
-# before this port can install from GitHub; do not skip checksum validation.
+# This checksum belongs to the previous release asset. The release workflow
+# must publish the complete 1.10.0 source unit and update this hash before
+# this port can install from GitHub; do not skip checksum validation.
 vcpkg_download_distfile(ARCHIVE
     URLS "https://github.com/zlink-systems/zlink/releases/download/cpp/v${VERSION}/zlink-cpp-${VERSION}.tar.gz"
     FILENAME "zlink-cpp-${VERSION}.tar.gz"
-    SHA512 5445e2312191e702ecd9e0d796bb9cfa2a492c2927dea695cf0dbcd2502e56169880e4367b2242543749788b865ed653cd34cad13261103caad567c95e2f0844
+    SHA512 eb53046ad96a916926d1e3c088e81d745d98cf11cd81b38f5b88280111bd5b18b1b15508c3fa204707cdd685610d97d1c484b0b34ee1ab1ec3ec76d658489ddc
 )
 vcpkg_extract_source_archive(SOURCE_PATH ARCHIVE "${ARCHIVE}")
 foreach(required_path CMakeLists.txt cmake/zlink_cppConfig.cmake.in src/Runtime/Core/context.cpp include/zlink.hpp LICENSE)

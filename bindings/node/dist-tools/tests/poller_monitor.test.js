@@ -5,6 +5,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { once } = require('node:events');
 const net = require('node:net');
+const path = require('node:path');
 const zlink = require('@zlink-systems/zlink');
 async function tcpEndpoint() {
     const server = net.createServer();
@@ -78,7 +79,7 @@ test('removing a monitor suppresses poll delivery without consuming its event', 
         router.bind(endpoint);
         dealer.connect(endpoint);
         assert.equal(poller.wait(events, 250), 0);
-        const event = monitor.recv(zlink.RecvFlags.DontWait);
+        const event = monitor.recv(zlink.RecvFlags.None);
         assert.equal(event?.event, zlink.MonitorEventType.ConnectionReady);
     }
     finally {
@@ -90,23 +91,37 @@ test('removing a monitor suppresses poll delivery without consuming its event', 
         ctx.close();
     }
 });
-test('monitor rejects non-PollIn registrations with typed InvalidArgument', () => {
+test('monitor reports the Core result for unsupported poll events', () => {
     const ctx = zlink.createContext();
     const dealer = zlink.createDealerSocket(ctx);
     const monitor = dealer.monitorOpen();
     const poller = zlink.createPoller();
-    const isInvalidArgument = (error) => error instanceof zlink.ConfigError
-        && error.result === zlink.ConfigResult.InvalidArgument
-        && error.nativeErrno === 22;
+    const isNotSupported = (error) => error instanceof zlink.ConfigError
+        && error.result === zlink.ConfigResult.NotSupported
+        && error.nativeErrno === 95;
     try {
-        assert.throws(() => poller.add(monitor, [zlink.PollEventFlag.PollOut], 43), isInvalidArgument);
-        assert.throws(() => poller.add(monitor, [zlink.PollEventFlag.PollCompletion], 43), isInvalidArgument);
-        assert.throws(() => poller.modify(monitor, [zlink.PollEventFlag.PollOut]), isInvalidArgument);
+        assert.throws(() => poller.add(monitor, [zlink.PollEventFlag.PollPri], 43), isNotSupported);
+        poller.add(monitor, [zlink.PollEventFlag.PollIn], 43);
+        assert.throws(() => poller.modify(monitor, [zlink.PollEventFlag.PollPri]), isNotSupported);
+        assert.equal(poller.size, 1);
     }
     finally {
         poller.close();
         monitor.close();
         dealer.close();
         ctx.close();
+    }
+});
+test('native wait passes an empty event buffer to Core', () => {
+    const native = require(path.resolve(__dirname, '../../build/Release/zlink.node'));
+    const poller = zlink.createPoller();
+    try {
+        assert.throws(() => native.pollerWaitInto(poller._native, null, 0, 0), (error) => error instanceof Error
+            && !(error instanceof RangeError)
+            && error.nativeResult === zlink.ConfigResult.InvalidArgument
+            && error.nativeErrno === 22);
+    }
+    finally {
+        poller.close();
     }
 });

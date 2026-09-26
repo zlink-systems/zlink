@@ -1,6 +1,5 @@
 const assert = require('node:assert/strict');
 const { fork } = require('node:child_process');
-const net = require('node:net');
 const path = require('node:path');
 const test = require('node:test');
 
@@ -10,12 +9,11 @@ test(
   'two processes retain the post-Join completion until exact command 44 route publication',
   { timeout: 30_000 },
   async (t) => {
-    const port = await reservePort();
     const children = [];
     t.after(async () => await Promise.all(children.map(stopChild)));
-    const session = startChild(children, 'session', port);
+    const session = startChild(children, 'session');
     const sessionReady = await session.ready;
-    const target = startChild(children, 'target', port);
+    const target = startChild(children, 'target', sessionReady.port);
     const targetReady = await target.ready;
     assert.notEqual(sessionReady.pid, targetReady.pid);
 
@@ -56,7 +54,7 @@ function startChild(children, role, port) {
     env: {
       ...process.env,
       ZLINK_TEST_ROLE: role,
-      ZLINK_TEST_PORT: String(port)
+      ...(port === undefined ? {} : { ZLINK_TEST_PORT: String(port) })
     },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc']
   });
@@ -120,15 +118,4 @@ async function stopChild(entry) {
   const timer = setTimeout(() => child.kill('SIGKILL'), 3_000);
   await exited;
   clearTimeout(timer);
-}
-
-async function reservePort() {
-  const server = net.createServer();
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  const port = server.address().port;
-  await new Promise(resolve => server.close(resolve));
-  return port;
 }

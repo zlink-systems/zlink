@@ -23,6 +23,15 @@ public final class NativeLayouts {
     public static final long ROUTING_ID_DATA_OFFSET = ROUTING_ID_LAYOUT.byteOffset(
             PathElement.groupElement("data"));
 
+    public static final MemoryLayout ROUTER_ROUTE_LAYOUT =
+            MemoryLayout.structLayout(
+                    ROUTING_ID_LAYOUT.withName("rid"),
+                    ValueLayout.JAVA_LONG.withName("route_generation"));
+    public static final long ROUTER_ROUTE_RID_OFFSET = offset(
+        ROUTER_ROUTE_LAYOUT, "rid");
+    public static final long ROUTER_ROUTE_GENERATION_OFFSET = offset(
+        ROUTER_ROUTE_LAYOUT, "route_generation");
+
     public static final MemoryLayout COMPLETION_LAYOUT =
             MemoryLayout.structLayout(
                     ValueLayout.JAVA_INT.withName("struct_size"),

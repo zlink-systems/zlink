@@ -137,6 +137,7 @@ public final class EnumCodecs {
             case POLLERR -> 4;
             case POLLPRI -> 8;
             case POLLCOMPLETION -> 32;
+            case POLLROUTE -> 64;
         };
     }
 

@@ -3,7 +3,7 @@ use std::os::fd::RawFd;
 use std::sync::Arc;
 
 use crate::SocketMonitor;
-use crate::error::{ConfigError, RecvError};
+use crate::error::{CloseError, ConfigError, RecvError, ZlinkError};
 use crate::internal::{PollerStorage, TimerStorage};
 
 pub(crate) mod private {
@@ -22,6 +22,9 @@ pub const POLLOUT: i16 = 2;
 /// for both WRITABLE admission retries and its terminal result; SEND
 /// backpressure is resumed by WRITABLE on [`POLLOUT`].
 pub const POLLCOMPLETION: i16 = 32;
+/// Poll event flag: a ROUTER's selected route changed; read
+/// `RouterSocket::routes_snapshot`.
+pub const POLLROUTE: i16 = 64;
 
 /// A built-in socket source that can be registered with a [`Poller`].
 ///
@@ -102,6 +105,11 @@ impl Poller {
     /// Creates an empty poller. The caller owns it and releases it on drop.
     pub fn new() -> Result<Self, ConfigError> {
         crate::poller::poller_new()
+    }
+
+    /// Destroys the poller. A native `EBUSY` leaves it available for a later close.
+    pub fn close(&mut self) -> Result<(), CloseError> {
+        self.inner.close()
     }
 
     /// Registers `socket` to be watched for `events`; `slot` is a caller token
@@ -187,13 +195,14 @@ impl Poller {
     /// Before returning a socket's [`POLLOUT`] or [`POLLCOMPLETION`] event,
     /// the owning poller pulls completion records through NO_DATA so matching
     /// WRITABLE waiters can retry and admitted REQUEST waiters can receive
-    /// their reply or terminal result.
-    pub fn wait(&self, events: &mut [PollEvent], timeout_ms: i64) -> Result<usize, RecvError> {
+    /// their reply or terminal result. Native wait failures retain Core's
+    /// configuration result; completion drain failures are receive errors.
+    pub fn wait(&self, events: &mut [PollEvent], timeout_ms: i64) -> Result<usize, ZlinkError> {
         self.inner.wait(events, timeout_ms)
     }
 
-    /// Returns the number of registered sources.
-    pub fn size(&self) -> i32 {
+    /// Returns the number of registered sources, or Core's configuration error.
+    pub fn size(&self) -> Result<i32, ConfigError> {
         self.inner.size()
     }
 }

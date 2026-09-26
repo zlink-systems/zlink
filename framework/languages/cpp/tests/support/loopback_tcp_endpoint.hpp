@@ -2,23 +2,34 @@
 
 #pragma once
 
-#include <boost/asio/io_context.hpp>
-#include <boost/asio/ip/tcp.hpp>
+#include "runtime/diagnostics/listener_status_registry.hpp"
 
+#include <cassert>
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace zlink::framework::tests
 {
-inline std::uint16_t reserve_loopback_tcp_port ()
+// A test listener binds "tcp://127.0.0.1:*" (or "tls://127.0.0.1:*"), so the
+// port is chosen by the bind itself and no other process can take it between
+// a reservation and the bind. The resolved endpoint is read afterwards.
+inline constexpr const char *loopback_tcp_any_port = "tcp://127.0.0.1:*";
+
+inline std::uint16_t endpoint_port (const std::string &endpoint_)
 {
-    boost::asio::io_context io;
-    boost::asio::ip::tcp::acceptor reservation (io, {boost::asio::ip::address_v4::loopback (), 0});
-    return reservation.local_endpoint ().port ();
+    const auto colon = endpoint_.rfind (':');
+    assert (colon != std::string::npos);
+    return static_cast<std::uint16_t> (std::stoul (endpoint_.substr (colon + 1)));
 }
 
-inline std::string reserve_loopback_tcp_endpoint ()
+// The endpoint a started listener resolved, from its listener status.
+inline std::string listener_endpoint (const runtime::listener_status_registry_t &listeners_,
+                                      listener_kind_t kind_,
+                                      const std::string &name_)
 {
-    return "tcp://127.0.0.1:" + std::to_string (reserve_loopback_tcp_port ());
+    const std::optional<listener_status_t> status = listeners_.find (kind_, name_);
+    assert (status && !status->endpoint.empty ());
+    return status->endpoint;
 }
 }

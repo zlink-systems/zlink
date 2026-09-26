@@ -152,8 +152,7 @@ bindings/dotnet/
 
 `IPoller`는 `void Add(ISocketMonitor monitor, PollEventFlags events, nuint slot)`, `void Modify(ISocketMonitor monitor, PollEventFlags events)`,
 `bool Remove(ISocketMonitor monitor)`로 socket monitor를 source로 받는다(공통 spec "`Poller`의 monitor source"); one-shot
-`ZlinkPoll.Poll(IReadOnlyList<ISocketMonitor>, ...)`도 유지한다. monitor mask는 `PollIn` 또는 `None`만 유효하고 다른 bit는
-`ZlinkConfigException`(`ErrorCode.InvalidArgument`)로 거절한다. ready 뒤 `Receive`/`TryReceive`(DONTWAIT)로 drain한다.
+`ZlinkPoll.Poll(IReadOnlyList<ISocketMonitor>, ...)`도 유지한다. monitor mask의 결과는 공통 spec "`Poller`의 monitor source"를 따른다. ready 뒤 `Receive`/`TryReceive`(DONTWAIT)로 drain한다.
 
 `Runtime/Buffers`, `Runtime/Handles`, `Runtime/Options`는 구현 지원 카테고리다.
 .NET 바인딩에는 숨겨야 할 실제 네이티브 ownership, routing-id 인코딩,
@@ -391,7 +390,7 @@ facade 연결을 위해 내부적으로 런타임 코드에 위임할 수 있지
   `CreateXPubSocket()`, `CreateXSubSocket()`, `CreateStreamSocket()`은
   런타임 socket 구현을 만든다.
 공개 Spot과 Actor 생성 및 service 소유 timer는 [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md)가 규정한다. 이 binding spec은 Core raw socket, monitor, poller, 일반 timer의 생성을 정의한다.
-- `IContext.CreatePoller()`는 그 context가 소유하는 poller를, `Zlink.CreateTimer()`는 timer를 만든다.
+- `Zlink.CreatePoller()`, `Zlink.CreateTimer()`는 eventing 리소스를 만든다.
 - `Zlink.Version()`, `Zlink.Has(...)`, `Zlink.Strerror(...)`, `Zlink.Proxy(...)`,
   `Zlink.Sleep(...)`, `Zlink.MultipartClose(...)`,
   `ZlinkPoll.Poll(...)`은 공개 static facade다. 네이티브 호출이 `Runtime/`에

@@ -147,12 +147,14 @@ consumer cannot implement it for a custom type.
 | `add_timer(&self, timer: &Timer, slot: usize)` | registers a timer to be multiplexed alongside sockets/fds |
 | `modify_socket(&self, socket, events)` / `modify_fd(&self, fd, events)` | replaces the watched events for an already-registered socket/fd |
 | `remove_socket(&self, socket)` / `remove_fd(&self, fd)` / `remove_timer(&self, timer: &Timer)` | unregisters the source |
-| `wait(&self, events: &mut [PollEvent], timeout_ms: i64) -> Result<usize, RecvError>` | blocks up to `timeout_ms`, writing up to `events.len()` results in place; a negative timeout blocks indefinitely |
-| `size(&self) -> i32` | the number of currently registered sources |
+| `wait(&self, events: &mut [PollEvent], timeout_ms: i64) -> Result<usize, ZlinkError>` | blocks up to `timeout_ms`, writing up to `events.len()` results in place; a negative timeout blocks indefinitely |
+| `size(&self) -> Result<i32, ConfigError>` | the number of currently registered sources; `ConfigResult::Busy` (709) while a `wait()` is in progress |
 
 **Completion result.** Registration/removal members return `Result<(), ConfigError>`. `wait`
-returns `Result<usize, RecvError>` — the ready count, writing up to `events.len()` results in
-place. `modify_socket` can atomically add or remove `POLLCOMPLETION`, transferring the socket's
+returns `Result<usize, ZlinkError>` — the ready count, writing up to `events.len()` results in
+place. A failed wait is `ZlinkError::Config` with Core's result (`ConfigResult::Busy` while another
+wait runs, `ConfigResult::InternalError` with `ETERM` after a context shutdown); a failed completion
+drain is `ZlinkError::Recv`. `modify_socket` can atomically add or remove `POLLCOMPLETION`, transferring the socket's
 completion-drain owner with the native registration change. While a public poller owns that bit,
 its owner must keep calling `wait()` to drain and settle completions; use another execution context
 for a simultaneous blocking terminal.

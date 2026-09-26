@@ -5,7 +5,6 @@
 #include <zlink/codecs/protobuf.hpp>
 
 #include "../support/read_text_file.hpp"
-#include "loopback_tcp_endpoint.hpp"
 #include "test_completion_poller_driver.hpp"
 
 #include "runtime/channels/channel_packet_dispatcher.hpp"
@@ -1749,18 +1748,19 @@ int main ()
     }
 
     const auto framework_core_context = std::make_shared<zlink::context_t> ();
+    // The server binds an ephemeral port first; the client connects to the
+    // endpoint it resolved.
+    zlink::context_t native_bus_server_context;
+    zlink::router_socket_t native_bus_server (native_bus_server_context);
+    zlink::socket_monitor_t native_bus_server_monitor = native_bus_server.monitor_open ();
+    native_bus_server.bind ("tcp://127.0.0.1:*");
+    const auto native_bus_endpoint = native_bus_server.options ().last_endpoint ();
     zlink::framework::zlink_builder_t native_bus_builder;
-    const auto native_bus_endpoint = zlink::framework::tests::reserve_loopback_tcp_endpoint ();
     native_bus_builder.channel ("native-bus").enable_client ().connect (native_bus_endpoint);
     auto native_bus_runtime =
       zlink::framework::detail::channel_runtime_t::from (native_bus_builder.message_bus ());
     native_bus_runtime.bind_core_context (framework_core_context);
     native_bus_runtime.bind_serializers (serializers);
-
-    zlink::context_t native_bus_server_context;
-    zlink::router_socket_t native_bus_server (native_bus_server_context);
-    zlink::socket_monitor_t native_bus_server_monitor = native_bus_server.monitor_open ();
-    native_bus_server.bind (native_bus_endpoint);
     auto native_bus_server_done = std::async (std::launch::async, [&] () -> int {
         for (int request_index = 0; request_index < 2; ++request_index) {
             zlink::received_t native_received;
@@ -1837,7 +1837,7 @@ int main ()
     }
 
     zlink::framework::zlink_builder_t hosted_builder;
-    const auto hosted_endpoint = zlink::framework::tests::reserve_loopback_tcp_endpoint ();
+    const auto hosted_endpoint = unique_inproc_endpoint ("framework-channel-hosted");
     const auto hosted_server_rid = zlink::routing_id_t::from (std::string ("hosted-server"));
     auto hosted_channel = hosted_builder.channel ("hosted");
     hosted_channel.enable_server ().set_routing_id (hosted_server_rid).bind (hosted_endpoint);
@@ -1896,7 +1896,8 @@ int main ()
         hosted_handler.release_blocking_send = true;
     }
     hosted_handler.send_gate_changed.notify_all ();
-    zlink::context_t peer_context;
+    // The hosted channel listens on an inproc endpoint of the framework context.
+    zlink::context_t &peer_context = *framework_core_context;
     zlink::router_socket_t peer_router (peer_context);
     zlink::framework::test::completion_poller_driver_t peer_completion_owner (peer_router);
     peer_router.connect (hosted_endpoint);
@@ -1949,7 +1950,7 @@ int main ()
     }
     hosted_service.stop ();
 
-    const auto manual_hosted_endpoint = zlink::framework::tests::reserve_loopback_tcp_endpoint ();
+    const auto manual_hosted_endpoint = unique_inproc_endpoint ("framework-channel-manual-hosted");
 
     zlink::framework::zlink_builder_t manual_server_builder;
     manual_server_builder.channel ("hosted-manual").enable_server ().bind (manual_hosted_endpoint);
@@ -2021,7 +2022,7 @@ int main ()
     }
 
     zlink::framework::zlink_builder_t nested_hosted_builder;
-    const auto nested_hosted_endpoint = zlink::framework::tests::reserve_loopback_tcp_endpoint ();
+    const auto nested_hosted_endpoint = unique_inproc_endpoint ("framework-channel-nested-hosted");
     auto nested_hosted_channel = nested_hosted_builder.channel ("hosted-nested");
     nested_hosted_channel.enable_server ().bind (nested_hosted_endpoint);
     nested_hosted_channel.enable_client ().connect (nested_hosted_endpoint);
@@ -2055,7 +2056,7 @@ int main ()
     }
 
     zlink::framework::zlink_builder_t scoped_hosted_builder;
-    const auto scoped_hosted_endpoint = zlink::framework::tests::reserve_loopback_tcp_endpoint ();
+    const auto scoped_hosted_endpoint = unique_inproc_endpoint ("framework-channel-scoped-hosted");
     auto scoped_hosted_channel = scoped_hosted_builder.channel ("hosted-scoped");
     scoped_hosted_channel.enable_server ().bind (scoped_hosted_endpoint);
     scoped_hosted_channel.enable_client ().connect (scoped_hosted_endpoint);

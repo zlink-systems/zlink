@@ -15,7 +15,6 @@ test('loaded node binding package provides a native artifact for the current pla
 });
 
 test('loaded node binding monitor pull carries a STREAM peer routing id', async () => {
-  const port = await reservePort();
   const context = zlink.createContext();
   const stream = zlink.createStreamSocket(context);
   const monitor = stream.monitorOpen([
@@ -25,7 +24,9 @@ test('loaded node binding monitor pull carries a STREAM peer routing id', async 
   const client = new net.Socket();
   try {
     stream.options.recvMode = zlink.StreamRecvMode.Raw;
-    stream.bind(`tcp://127.0.0.1:${port}`);
+    // Bind an OS-assigned port and connect to the port the socket bound.
+    stream.bind('tcp://127.0.0.1:*');
+    const port = Number(stream.options.lastEndpoint.split(':').pop());
     await new Promise((resolve, reject) => {
       client.once('error', reject);
       client.connect(port, '127.0.0.1', resolve);
@@ -74,14 +75,6 @@ function recvMonitorEvent(monitor, expectedType) {
   }
 }
 
-async function reservePort() {
-  const server = net.createServer();
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const { port } = server.address();
-  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-  return port;
-}
 
 async function waitFor(read) {
   const deadline = Date.now() + 5000;

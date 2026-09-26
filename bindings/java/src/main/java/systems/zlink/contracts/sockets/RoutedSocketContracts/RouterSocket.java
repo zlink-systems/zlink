@@ -2,6 +2,7 @@
 
 package systems.zlink.contracts.sockets;
 
+import java.util.List;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.messaging.ReplyOperation;
@@ -18,6 +19,13 @@ public interface RouterSocket extends Socket {
     void disconnectRid(RoutingId routingId);
     void setRoutingId(RoutingId rid);
     RoutingId getRoutingId();
+
+    /**
+     * Returns every selected route atomically, one row per routing id. A
+     * successful call clears {@code POLLROUTE} readiness unless a later change
+     * raced with it. Keep one route observer per socket.
+     */
+    List<RouterRoute> routesSnapshot();
     SendOperation send(RoutingId rid);
     boolean recv(Received result, RecvFlags flags);
     RequestOperation request(RoutingId rid);

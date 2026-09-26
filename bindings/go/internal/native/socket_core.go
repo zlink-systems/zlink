@@ -28,9 +28,9 @@ func newSocketCore(ctx *Context, socketType C.zlink_socket_type_t) (*socketCore,
 	if ctx == nil || ctx.closed.Load() {
 		return nil, &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
-	handle := C.zlink_socket(ctx.raw(), socketType)
+	handle, cerr := C.zlink_socket(ctx.raw(), socketType)
 	if handle == nil {
-		return nil, configErrorFromErrno(currentErrno())
+		return nil, configErrorFromErrno(cgoErrno(cerr))
 	}
 	core := &socketCore{context: ctx}
 	core.handle.Store((*byte)(handle))
@@ -52,35 +52,40 @@ func (s *socketCore) isClosed() bool {
 
 func (s *socketCore) Bind(endpoint string) error {
 	return s.withCString(endpoint, func(cstr *C.char) error {
-		return bindErrorFromResult(C.zlink_bind(s.raw(), cstr))
+		nativeResult0, nativeErr0 := C.zlink_bind(s.raw(), cstr)
+		return bindErrorFromCall(nativeResult0, nativeErr0)
 	})
 }
 
 func (s *socketCore) Connect(endpoint string) error {
 	return s.withCString(endpoint, func(cstr *C.char) error {
-		return connectErrorFromResult(C.zlink_connect(s.raw(), cstr))
+		nativeResult1, nativeErr1 := C.zlink_connect(s.raw(), cstr)
+		return connectErrorFromCall(nativeResult1, nativeErr1)
 	})
 }
 
 func (s *socketCore) Unbind(endpoint string) error {
 	return s.withCString(endpoint, func(cstr *C.char) error {
-		return connectErrorFromResult(C.zlink_unbind(s.raw(), cstr))
+		nativeResult2, nativeErr2 := C.zlink_unbind(s.raw(), cstr)
+		return connectErrorFromCall(nativeResult2, nativeErr2)
 	})
 }
 
 func (s *socketCore) Disconnect(endpoint string) error {
 	return s.withCString(endpoint, func(cstr *C.char) error {
-		return connectErrorFromResult(C.zlink_disconnect(s.raw(), cstr))
+		nativeResult3, nativeErr3 := C.zlink_disconnect(s.raw(), cstr)
+		return connectErrorFromCall(nativeResult3, nativeErr3)
 	})
 }
 
 func (s *socketCore) DisconnectRID(peerRID RoutingID) error {
 	rid := peerRID.toC()
-	return connectErrorFromResult(
+	nativeResult4, nativeErr4 :=
 		C.zlink_disconnect_rid(
 			s.raw(),
 			(*C.zlink_routing_id_t)(unsafe.Pointer(&rid)),
-		))
+		)
+	return connectErrorFromCall(nativeResult4, nativeErr4)
 }
 
 func (s *socketCore) Close() error {
@@ -94,7 +99,8 @@ func (s *socketCore) Close() error {
 	}
 	s.completion.shutdownOwner()
 	handle := s.raw()
-	closeErr := closeErrorFromResult(C.zlink_close(handle))
+	nativeResult5, nativeErr5 := C.zlink_close(handle)
+	closeErr := closeErrorFromCall(nativeResult5, nativeErr5)
 	if closeErr != nil {
 		return closeErr
 	}
@@ -124,14 +130,16 @@ func (s *socketCore) setUint64Option(option C.zlink_option_t, value uint64) erro
 func (s *socketCore) getIntOption(option C.zlink_option_t) (int32, error) {
 	var value C.int
 	size := C.size_t(C.sizeof_int)
-	err := configErrorFromResult(C.zlink_get_option(s.raw(), option, unsafe.Pointer(&value), &size))
+	nativeResult6, nativeErr6 := C.zlink_get_option(s.raw(), option, unsafe.Pointer(&value), &size)
+	err := configErrorFromCall(nativeResult6, nativeErr6)
 	return int32(value), err
 }
 
 func (s *socketCore) getUint64Option(option C.zlink_option_t) (uint64, error) {
 	var value C.uint64_t
 	size := C.size_t(unsafe.Sizeof(value))
-	err := configErrorFromResult(C.zlink_get_option(s.raw(), option, unsafe.Pointer(&value), &size))
+	nativeResult7, nativeErr7 := C.zlink_get_option(s.raw(), option, unsafe.Pointer(&value), &size)
+	err := configErrorFromCall(nativeResult7, nativeErr7)
 	return uint64(value), err
 }
 
@@ -143,7 +151,8 @@ func (s *socketCore) setInt64Option(option C.zlink_option_t, value int64) error 
 func (s *socketCore) getInt64Option(option C.zlink_option_t) (int64, error) {
 	var value C.int64_t
 	size := C.size_t(unsafe.Sizeof(value))
-	err := configErrorFromResult(C.zlink_get_option(s.raw(), option, unsafe.Pointer(&value), &size))
+	nativeResult8, nativeErr8 := C.zlink_get_option(s.raw(), option, unsafe.Pointer(&value), &size)
+	err := configErrorFromCall(nativeResult8, nativeErr8)
 	return int64(value), err
 }
 
@@ -175,7 +184,8 @@ func (s *socketCore) getStringOption(option C.zlink_option_t, capHint int) (stri
 	}
 	buf := make([]byte, capHint)
 	size := C.size_t(len(buf))
-	err := configErrorFromResult(C.zlink_get_option(s.raw(), option, unsafe.Pointer(&buf[0]), &size))
+	nativeResult9, nativeErr9 := C.zlink_get_option(s.raw(), option, unsafe.Pointer(&buf[0]), &size)
+	err := configErrorFromCall(nativeResult9, nativeErr9)
 	if err != nil {
 		return "", err
 	}

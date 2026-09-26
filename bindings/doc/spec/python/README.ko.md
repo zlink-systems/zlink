@@ -52,7 +52,6 @@ handle, FFI symbol, native struct를 public type으로 노출하지 않는다.
 주요 factory는 `create_context()`, `create_pair_socket()`, `create_dealer_socket()`,
 `create_router_socket()`, `create_stream_socket()`, `create_pub_socket()`, `create_sub_socket()`,
 `create_poller()`, `create_timer()`, `create_received()`와 `create_message` 계열이다.
-`create_poller(context)`는 전달한 context가 소유하는 poller를 만들며, context를 받지 않는 형태는 없다.
 정확한 Python signature는 같은 디렉터리의 contract module과 public header를 함께 기준으로 한다.
 
 ## Byte HWM과 Auto-HWM
@@ -171,7 +170,7 @@ Native completion ID·`user_context`·raw drain은 public API에 노출하지 �
 `Poller.modify_monitor(monitor: MonitorSocket, events: PollEventFlag) -> None`,
 `Poller.remove_monitor(monitor: MonitorSocket) -> None`는 socket monitor를 poller source로 등록·수정·제거한다
 (공통 spec "`Poller`의 monitor source"). 기존 `add_socket/modify_socket/remove_socket`도 monitor를 수용한다.
-monitor에는 `PollEventFlag.POLLIN`만 유효하고 다른 bit가 있으면 typed `ConfigResult.INVALID_ARGUMENT`로 거절한다.
+monitor mask의 결과는 공통 spec "`Poller`의 monitor source"를 따른다.
 ready 뒤 `monitor.recv(RecvFlags.DONT_WAIT)`로 drain하며 poll event는 socket과 같은 slot/source kind로 보고한다.
 
 `ReplyToken`은 module-private `_reply_token_from_native`만 만들며 public construction과

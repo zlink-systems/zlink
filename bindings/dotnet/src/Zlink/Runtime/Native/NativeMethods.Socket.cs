@@ -29,7 +29,7 @@ internal static partial class NativeMethods
     internal static extern int zlink_disconnect(IntPtr socket,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string addr);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_disconnect_rid(IntPtr socket,
         ref ZlinkRoutingId peerRoutingId);
 
@@ -60,6 +60,16 @@ internal static partial class NativeMethods
         out IntPtr sourceNodeRoutingId, out ulong replyToken,
         ref ZlinkMsg parts, nuint partsCapacity, out nuint partCount, int flags);
 
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern ulong zlink_router_recv_route_generation(
+        IntPtr router);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl,
+        SetLastError = true)]
+    internal static extern unsafe int zlink_router_routes_snapshot(
+        IntPtr router, ZlinkRouterRoute* routes, nuint capacity,
+        out nuint routeCount);
+
     [LibraryImport(LibraryName, SetLastError = true)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static unsafe partial int zlink_send_rid(IntPtr handle,
@@ -89,12 +99,12 @@ internal static partial class NativeMethods
         ref ZlinkRoutingId sourceRoutingId, ulong replyToken,
         ref ZlinkMsg parts, nuint partCount);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern unsafe int zlink_stream_recv_packet(IntPtr stream,
         out IntPtr sourceRoutingId, ref ZlinkMsg header, ref ZlinkMsg body,
         int flags);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_completion_recv(IntPtr socket,
         ref ZlinkCompletion completion, int flags);
 
@@ -102,19 +112,19 @@ internal static partial class NativeMethods
     internal static extern void zlink_completion_close(
         ref ZlinkCompletion completion);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_set_option(IntPtr handle, int option,
         IntPtr value, nuint length);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_get_option(IntPtr handle, int option,
         IntPtr value, ref nuint length);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_set_routing_id(IntPtr handle, IntPtr data,
         nuint size);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_get_routing_id(IntPtr handle,
         out ZlinkRoutingId routingId);
 
@@ -132,47 +142,47 @@ internal static partial class NativeMethods
         [MarshalAs(UnmanagedType.LPUTF8Str)] string hostname,
         int trustSystem);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_socket_set_receive_flow_state(
         IntPtr handle, int state);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_set_router_option(IntPtr handle,
         int option, IntPtr value, nuint length);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_get_router_option(IntPtr handle,
         int option, IntPtr value, ref nuint length);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_set_dealer_option(IntPtr handle,
         int option, IntPtr value, nuint length);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_get_dealer_option(IntPtr handle,
         int option, IntPtr value, ref nuint length);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_set_pub_option(IntPtr handle, int option,
         IntPtr value, nuint length);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_get_pub_option(IntPtr handle, int option,
         IntPtr value, ref nuint length);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_set_sub_option(IntPtr handle, int option,
         IntPtr value, nuint length);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_get_sub_option(IntPtr handle, int option,
         IntPtr value, ref nuint length);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_set_stream_option(IntPtr handle,
         int option, IntPtr value, nuint length);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_get_stream_option(IntPtr handle,
         int option, IntPtr value, ref nuint length);
 

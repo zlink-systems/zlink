@@ -9,11 +9,10 @@ import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProvider
 import type { RoutingId } from '../../contracts';
 import type { ActorRef } from '../../contracts/Common/ActorRef';
 import type { ZLinkRemoteActorPacketTarget, ZLinkRemoteBoundSessionTarget } from '../actors';
-import type { ZLinkBackendReceived, ZLinkBackendSpot } from '../backend/contracts';
+import type { ZLinkBackendReceived } from '../backend/contracts';
 import type { ZLinkDispatchErrorReporter } from '../channels';
 import type { ZLinkChannelEnvelopeCodecRegistry } from '../channels/channel-envelope';
 import { decodeRemoteActorPacketRelay } from './spot-remote-route-codec';
-import { ZLINK_RECV_DONT_WAIT } from './spot-native-flags';
 import { ZLinkSpotActorPacketRelayDispatch } from './spot-actor-packet-relay-dispatch';
 import type {
   ZLinkActorPacketDelivery,
@@ -33,8 +32,6 @@ interface ZLinkRoutedFrameAdmissionTarget {
 }
 
 interface ZLinkSpotRoutedFrameDispatchOptions {
-  readonly nativeSpot: ZLinkBackendSpot;
-  readonly createReceived: () => ZLinkBackendReceived;
   readonly nativeSpotId: string;
   readonly serial: ZLinkSpotSerialTurnExecutor;
   readonly resolveActor: (actorId: string) => ZLinkActor | undefined;
@@ -86,11 +83,9 @@ interface ZLinkSpotRoutedFrameDispatchOptions {
   readonly providerResolver?: ZLinkProviderResolver;
   readonly dispatchErrors?: ZLinkDispatchErrorReporter;
   readonly claimApplicationWork?: () => ZLinkApplicationWorkClaim;
-  readonly waitIdle: () => Promise<void>;
 }
 
 export class ZLinkSpotRoutedFrameDispatch {
-  private routeDraining = false;
   private readonly packetHandlers = new Map<string, ZLinkSpotHandlerRegistration[]>();
   private readonly routedBoundSessionDispatch: ZLinkSpotRoutedBoundSessionDispatch;
   private readonly actorPacketRelayDispatch: ZLinkSpotActorPacketRelayDispatch;
@@ -144,61 +139,6 @@ export class ZLinkSpotRoutedFrameDispatch {
     }
   }
 
-  async drain(
-    received: ZLinkBackendReceived | undefined = undefined,
-    retryDeadlineMs = performance.now()
-  ): Promise<void> {
-    if (this.routeDraining) {
-      if (received !== undefined) {
-        try {
-          await this.dispatch(received);
-        } finally {
-          received.close();
-        }
-      }
-      return;
-    }
-    this.routeDraining = true;
-    try {
-      if (received !== undefined) {
-        try {
-          await this.dispatch(received);
-        } finally {
-          received.close();
-        }
-        received = undefined;
-      }
-      for (;;) {
-        received ??= this.options.createReceived();
-        try {
-          if (!this.options.nativeSpot.recvRoute(received, ZLINK_RECV_DONT_WAIT)) {
-            received.close();
-            await this.options.waitIdle();
-            return;
-          }
-        } catch (error) {
-          if (isRouteRecvRetryable(error)) {
-            closeReceivedQuietly(received);
-            if (performance.now() < retryDeadlineMs) {
-              setTimeout(() => void this.drain(undefined, retryDeadlineMs), 10);
-            }
-            return;
-          }
-          received.close();
-          throw error;
-        }
-        try {
-          await this.dispatch(received);
-        } finally {
-          received.close();
-        }
-        received = this.options.createReceived();
-      }
-    } finally {
-      this.routeDraining = false;
-    }
-  }
-
   async dispatchFromEvent(received: ZLinkBackendReceived): Promise<void> {
     try {
       await this.dispatch(received);
@@ -236,18 +176,4 @@ export class ZLinkSpotRoutedFrameDispatch {
     }
     await this.routedActorAdmission.admit(received);
   }
-}
-
-function isRouteRecvRetryable(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    [201, 202, 204].includes(Number((error as { result?: unknown }).result))
-  );
-}
-
-function closeReceivedQuietly(received: ZLinkBackendReceived): void {
-  try {
-    received.close();
-  } catch {}
 }

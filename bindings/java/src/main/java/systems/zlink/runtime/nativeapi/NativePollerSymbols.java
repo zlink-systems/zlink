@@ -106,9 +106,9 @@ final class NativePollerSymbols {
         }
     }
 
-    static int pollerSize(MemorySegment poller) {
+    static int pollerSize(MemorySegment poller, MemorySegment errorOut) {
         try {
-            return (int) MH_POLLER_SIZE.invokeExact(poller, MemorySegment.NULL);
+            return (int) MH_POLLER_SIZE.invokeExact(poller, errorOut);
         } catch (Throwable t) {
             throw new RuntimeException("zlink_poller_size failed", t);
         }
@@ -188,14 +188,6 @@ final class NativePollerSymbols {
     }
 
     static int pollerWait(MemorySegment poller, MemorySegment events,
-                          int count, int timeoutMs) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment errorOut = arena.allocate(ValueLayout.JAVA_INT);
-            return pollerWait(poller, events, count, timeoutMs, errorOut);
-        }
-    }
-
-    static int pollerWait(MemorySegment poller, MemorySegment events,
                           int count, int timeoutMs, MemorySegment errorOut) {
         if (events == null || events.address() == 0)
             throw new NullPointerException("events");
@@ -205,24 +197,16 @@ final class NativePollerSymbols {
             errorOut.set(ValueLayout.JAVA_INT, 0, 0);
             int rc = (int) MH_POLLER_WAIT.invokeExact(poller, events, count,
                 (long) timeoutMs, errorOut);
-            if (rc < 0) {
-                int error = errorOut.get(ValueLayout.JAVA_INT, 0);
-                if (error != 0) {
-                    throw new ZlinkConfigException(
-                        ConfigResult.fromValue(error), Native.errno());
-                }
-            }
+            if (rc < 0)
+                throw new ZlinkConfigException(
+                    ConfigResult.fromValue(errorOut.get(ValueLayout.JAVA_INT, 0)),
+                    Native.errno());
             return rc;
         } catch (RuntimeException ex) {
             throw ex;
         } catch (Throwable t) {
             throw new RuntimeException("zlink_poller_wait failed", t);
         }
-    }
-
-    static int pollerWait(MemorySegment poller, MemorySegment event,
-                          int timeoutMs) {
-        return pollerWait(poller, event, 1, timeoutMs);
     }
 
     private static MethodHandle downcall(String name, FunctionDescriptor fd) {

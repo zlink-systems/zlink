@@ -28,6 +28,10 @@ type (
 	DealerSocket = impl.DealerSocket
 	// RouterSocket routes messages to peers addressed by routing id; the request/reply server side.
 	RouterSocket = impl.RouterSocket
+	// RouterRoute is one row of a ROUTER selected-route snapshot: the peer
+	// routing id and the opaque nonzero generation of the route Core
+	// currently selects for it. Compare generations only for equality.
+	RouterRoute = impl.RouterRoute
 	// XPubSocket is like PubSocket but also surfaces subscriber subscription events.
 	XPubSocket = impl.XPubSocket
 	// XSubSocket is a subscriber whose subscriptions are carried as messages.

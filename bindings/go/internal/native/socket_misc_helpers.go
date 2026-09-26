@@ -20,7 +20,8 @@ func routingIDPointer(raw *C.zlink_routing_id_t) unsafe.Pointer {
 
 func getHandleRoutingID(handle unsafe.Pointer) (RoutingID, error) {
 	var raw C.zlink_routing_id_t
-	if err := configErrorFromResult(C.zlink_get_routing_id(handle, &raw)); err != nil {
+	rc51, errno51 := C.zlink_get_routing_id(handle, &raw)
+	if err := configErrorFromCall(rc51, errno51); err != nil {
 		return RoutingID{}, err
 	}
 	return routingIDFromC(raw), nil
@@ -45,7 +46,8 @@ func subscriptionAt(handle unsafe.Pointer, index int) (string, bool, error) {
 	}
 	var size C.size_t
 	var isPattern C.int
-	err := configErrorFromResult(C.zlink_subscription_at(handle, C.size_t(index), nil, &size, &isPattern))
+	rc52, errno52 := C.zlink_subscription_at(handle, C.size_t(index), nil, &size, &isPattern)
+	err := configErrorFromCall(rc52, errno52)
 	if err == nil {
 		return "", isPattern != 0, nil
 	}
@@ -54,7 +56,8 @@ func subscriptionAt(handle unsafe.Pointer, index int) (string, bool, error) {
 		return "", false, err
 	}
 	buf := make([]byte, int(size))
-	if err := configErrorFromResult(C.zlink_subscription_at(handle, C.size_t(index), (*C.char)(unsafe.Pointer(&buf[0])), &size, &isPattern)); err != nil {
+	rc53, errno53 := C.zlink_subscription_at(handle, C.size_t(index), (*C.char)(unsafe.Pointer(&buf[0])), &size, &isPattern)
+	if err := configErrorFromCall(rc53, errno53); err != nil {
 		return "", false, err
 	}
 	return string(buf[:int(size)]), isPattern != 0, nil
@@ -66,7 +69,8 @@ func setTLSServer(handle unsafe.Pointer, certPath string, keyPath string, requir
 		if requireClientCert {
 			required = 1
 		}
-		return configErrorFromResult(C.zlink_set_tls_server(handle, certC, keyC, required))
+		rc54, errno54 := C.zlink_set_tls_server(handle, certC, keyC, required)
+		return configErrorFromCall(rc54, errno54)
 	})
 }
 
@@ -76,6 +80,7 @@ func setTLSClient(handle unsafe.Pointer, caCertPath string, hostname string, tru
 		if trustSystem {
 			trust = 1
 		}
-		return configErrorFromResult(C.zlink_set_tls_client(handle, caCertC, hostnameC, trust))
+		rc55, errno55 := C.zlink_set_tls_client(handle, caCertC, hostnameC, trust)
+		return configErrorFromCall(rc55, errno55)
 	})
 }

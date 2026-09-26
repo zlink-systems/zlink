@@ -58,6 +58,9 @@ export interface SocketNativeBinding {
     preferManagedParts?: boolean,
     routingIdStorage?: Buffer | null
   ) => NativeReceivedRaw | null;
+  routerRoutesSnapshot: (
+    socket: NativeHandle
+  ) => Array<{ routingId: Buffer | null; routeGeneration: bigint }>;
   routerRecvMessageNoWait: (
     socket: NativeHandle,
     preferManagedParts?: boolean,

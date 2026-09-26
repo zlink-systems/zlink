@@ -302,7 +302,7 @@ Member Actor를 이 Spot에서 내보내거나, Spot 자신을 닫거나, Entry 
 
 ```csharp
 await Context.LeaveActorAsync(actor, ct);       // User Spot: member Actor만 내보낸다
-Context.Close();                                // User·Instance Spot: 종료 요청을 등록한다
+bool closed = await Context.CloseAsync(ct);     // User·Instance Spot: 이 Spot 자신을 닫는다
 await entryContext.DestroyActorAsync(actor, ct); // Entry Spot: Actor를 완전히 파기한다
 ```
 
@@ -310,9 +310,9 @@ await entryContext.DestroyActorAsync(actor, ct); // Entry Spot: Actor를 완전�
 `CancellationToken`만 받는다.
 
 **완료 결과.** `LeaveActorAsync`(`IZLinkSpotContext` 전용)는 member Actor membership만 해제하고
-Actor 자체는 파기하지 않는다. `Close()`(`IZLinkSpotContext`/`IZLinkInstanceSpotContext`)는 결과 없는 종료 요청을
-등록한다([공통 Spot 메시징 §7](../../common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md#7-close와-generation-경계)).
-Manager의 `CloseAsync(spotRef)`만 결과를 반환한다. `DestroyActorAsync`(`IZLinkEntrySpotContext` 전용)는 Actor를 완전히
+Actor 자체는 파기하지 않는다. `CloseAsync`(`IZLinkSpotContext`/`IZLinkInstanceSpotContext`)는
+manager의 `CloseAsync(spotRef)`(spot-instance category 앞부분 항목)와 같은 완료 kind를 쓰되, 이
+Spot 자신을 대상으로 한다. `DestroyActorAsync`(`IZLinkEntrySpotContext` 전용)는 Actor를 완전히
 파기한다 — `LeaveActorAsync`와 달리 membership 해제가 아니라 Actor 자체를 없앤다.
 
 **선택 기준.** Member Actor를 다른 곳으로 옮기지 않고 이 Spot에서만 빼려면 `LeaveActorAsync`를,

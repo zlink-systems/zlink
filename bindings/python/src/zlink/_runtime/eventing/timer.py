@@ -7,7 +7,7 @@ from ...contracts.errors.codes import CloseResult, ConfigResult
 from ...contracts.errors.errors import CloseError, ConfigError, RecvError
 from ...contracts.sockets.codes import RecvResult
 from ..._native.ffi import lib
-from ..handles.native_support import _raise_result_error
+from ..handles.native_support import _native_errno, _raise_result_error
 
 
 class NativeTimer:
@@ -16,31 +16,31 @@ class NativeTimer:
             return
         self._handle = lib().zlink_timer_new()
         if not self._handle:
-            _raise_result_error(ConfigError, ConfigResult, 701, lib().zlink_errno())
+            _raise_result_error(ConfigError, ConfigResult, 701, _native_errno())
 
     def start(self, interval_ns: int, repeat_count: int) -> None:
         if not self._handle:
-            raise ConfigError(ConfigResult.INVALID_HANDLE, lib().zlink_errno())
+            raise ConfigError(ConfigResult.INVALID_HANDLE, _native_errno())
         rc = lib().zlink_timer_start(self._handle, int(interval_ns), int(repeat_count))
         if rc != 0:
-            _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
+            _raise_result_error(ConfigError, ConfigResult, rc, _native_errno())
 
     def stop(self) -> None:
         if not self._handle:
-            raise ConfigError(ConfigResult.INVALID_HANDLE, lib().zlink_errno())
+            raise ConfigError(ConfigResult.INVALID_HANDLE, _native_errno())
         rc = lib().zlink_timer_stop(self._handle)
         if rc != 0:
-            _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
+            _raise_result_error(ConfigError, ConfigResult, rc, _native_errno())
 
     def recv(self) -> Optional[int]:
         if not self._handle:
-            raise RecvError(RecvResult.INVALID_HANDLE, lib().zlink_errno())
+            raise RecvError(RecvResult.INVALID_HANDLE, _native_errno())
         fire_count = ctypes.c_uint64()
         rc = lib().zlink_timer_recv(self._handle, ctypes.byref(fire_count))
         if rc == RecvResult.NO_DATA:
             return None
         if rc != 0:
-            _raise_result_error(RecvError, RecvResult, rc, lib().zlink_errno())
+            _raise_result_error(RecvError, RecvResult, rc, _native_errno())
         return int(fire_count.value)
 
     def close(self) -> None:
@@ -49,7 +49,7 @@ class NativeTimer:
         handle = ctypes.c_void_p(self._handle)
         rc = lib().zlink_timer_destroy(ctypes.byref(handle))
         if rc != 0:
-            _raise_result_error(CloseError, CloseResult, rc, lib().zlink_errno())
+            _raise_result_error(CloseError, CloseResult, rc, _native_errno())
         self._handle = None
 
     def __enter__(self):

@@ -9,7 +9,7 @@
 namespace zlink
 {
 
-inline int find_socket_item (const std::vector<std::unique_ptr<poller_item_t>> &items_,
+inline int find_socket_item (const std::vector<std::shared_ptr<poller_item_t>> &items_,
                              const std::unordered_map<const void *, size_t> &socket_item_indexes_,
                              const void *socket_handle_) noexcept
 {
@@ -31,7 +31,7 @@ inline int find_socket_item (const std::vector<std::unique_ptr<poller_item_t>> &
     return -1;
 }
 
-inline int find_fd_item (const std::vector<std::unique_ptr<poller_item_t>> &items_,
+inline int find_fd_item (const std::vector<std::shared_ptr<poller_item_t>> &items_,
                          int fd_) noexcept
 {
     for (size_t i = 0; i < items_.size (); ++i) {
@@ -41,7 +41,7 @@ inline int find_fd_item (const std::vector<std::unique_ptr<poller_item_t>> &item
     return -1;
 }
 
-inline int find_timer_item (const std::vector<std::unique_ptr<poller_item_t>> &items_,
+inline int find_timer_item (const std::vector<std::shared_ptr<poller_item_t>> &items_,
                             const void *timer_handle_) noexcept
 {
     for (size_t i = 0; i < items_.size (); ++i) {
@@ -53,7 +53,7 @@ inline int find_timer_item (const std::vector<std::unique_ptr<poller_item_t>> &i
 }
 
 inline void
-rebuild_socket_item_indexes (const std::vector<std::unique_ptr<poller_item_t>> &items_,
+rebuild_socket_item_indexes (const std::vector<std::shared_ptr<poller_item_t>> &items_,
                              std::unordered_map<const void *, size_t> &socket_item_indexes_)
 {
     socket_item_indexes_.clear ();

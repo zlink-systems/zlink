@@ -174,6 +174,8 @@ public interface IZlinkStreamWaitCall
 - **`Send`는 reply를 기다리지 않는 one-way 전송이다.** `Async()`의 완료 값에는 전송 결과나
   admission status가 없으며, 비동기 완료와 실패만 전달한다(§6).
   응답이 필요하면 `Request`를 사용한다.
+- 이 .NET 구현은 connector를 만들 때 frame write queue 하나를 만들고 operation 4,096개를 보관한다. Queue가 차면
+  one-way `Submit`은 자리를 기다리고, `Request`의 frame 제출은 곧바로 `SendFailed`로 실패한다.
 - **`Timeout(...)`은 그 operation에만 적용한다.**
 - **`On(...)`은 지속적인 push handler, `WaitFor(...)`는 한 번성 대기**다. production의 push 처리는
   `On(...)`, sample·CLI·E2E의 대기는 `WaitFor(...)`를 사용한다.
@@ -264,14 +266,21 @@ public interface IZlinkStreamCodecRegistration
 - **lifecycle waiter의 `CancellationToken`은 그 waiter만 취소한다.** 이미 시작된 공유 종료 작업을
   취소하지 않는다.
 - **frame write가 시작된 뒤에는 caller cancellation이 partial frame을 만들지 않는다.**
-- **caller가 취소한 operation은 그 `CancellationToken`의 `OperationCanceledException`으로 끝난다**
-  ([공통 스펙 §5.2](../../32-stream-connector.ko.md#52-request-correlation)).
 
 ## 7. Dispatch
 
-`.NET`은 [공통 스펙 §7](../../32-stream-connector.ko.md#7-dispatch-모드)의 `Manual` pump를
-`Dispatch.Async(...)`로 표현한다. Outbound admission과 순서, timeout은
-[공통 스펙 §5.2](../../32-stream-connector.ko.md#52-request-correlation)가 정한다.
+**`.NET` 고유 계약이다.**
+
+| 항목 | 계약 |
+|---|---|
+| `Manual`(기본) | 수신 callback·request callback·lifecycle event가 **`Dispatch.Async(...)`를 호출한 실행 문맥**에서 처리된다 |
+| `Immediate` | **receive 경로에서 인라인 실행한다**(별도 dispatch 작업 없음). 느린 handler는 receive loop를 막으므로 후속 receive 처리가 지연된다 |
+| `MaxPendingDispatchCallbacks` | **`Manual`에서만 적용된다.** 수신 handler가 기다리는 자리를 제한하며, 자리가 없으면 날 때까지 기다린다. **이미 수락한 request의 완료 callback은 이 제한에 들지 않는다** — 수락한 호출의 완료는 자리를 이유로 미루거나 거절하지 않는다. `Immediate`는 큐를 거치지 않으므로 이 제한을 지나지 않는다 |
+| outbound 전송 queue | dispatch 제한과 **별개인 순서 보존 queue**. 가득 찼을 때의 결과는 위 frame write queue 항목이 정한다 |
+
+- **먼저 수락한 send는 뒤에 시작한 request보다 먼저 전송된다.** request는 **자기 frame의 실제 write가
+  끝난 뒤** response를 기다린다.
+- **전송을 background thread의 callback 실행으로 우회하지 않는다.**
 
 ## 8. 수신 메시지 history
 
@@ -385,8 +394,27 @@ nullable `int`의 `null`로 표현한다.**
 public int? MaxAttempts { get; init; } = 3; // null은 무제한
 ```
 
-`ZlinkStreamConnectorFactory.Create(options)`는 [공통 스펙 §6.3](../../32-stream-connector.ko.md#63-옵션-검증)의
-option 검증에 실패하면 connector를 만들지 않고 해당 오류 코드를 담은 `ZlinkStreamException`을 던진다.
+**`.NET`에만 있는 option:**
+
+| option | 기본값 | 의미 |
+|---|---|---|
+| `MaxPendingDispatchCallbacks` | 1024 | dispatch 대기 callback 한도(§7) |
+
+**검증 계약:**
+
+검증 시점은 [공통 스펙 §6.3](../../32-stream-connector.ko.md#63-옵션-검증)가 소유한다. `.NET`은
+`ZlinkStreamConnectorFactory.Create(options)`가 option 전 항목을 확인하며, 검증에 실패하면
+`IZlinkStreamConnector` 인스턴스를 만들지 않고 실패를 호출자에게 전달한다.
+
+| 위반 | 실패 |
+|---|---|
+| endpoint 없음 | `ZlinkStreamException`의 `ValidationFailed` |
+| 지원하지 않는 scheme, URI scheme과 `Transport` 불일치 | `ZlinkStreamException`의 `ConfigurationError` |
+| 압축을 끈 구성에 `CompressionCodec`을 함께 지정 | `ZlinkStreamException`의 `ConfigurationError` |
+| 범위를 벗어난 개별 timeout·heartbeat·reconnect 값 또는 dispatch queue 크기 | `ZlinkStreamException`의 `ValidationFailed` |
+
+모든 timeout과 dispatch queue 크기 option은 **양수**여야 하고, preview 길이는 **음수일 수 없다.**
+`MaxAttempts`는 `null`이거나 양수여야 한다.
 
 ## 13. 회귀 테스트
 

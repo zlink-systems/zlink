@@ -1,7 +1,6 @@
 const assert = require('node:assert/strict');
 const { once } = require('node:events');
 const { spawn } = require('node:child_process');
-const net = require('node:net');
 const path = require('node:path');
 const nodeTest = require('node:test');
 
@@ -112,16 +111,8 @@ async function waitEventually(predicate, timeoutMs = 2000) {
   throw new Error('Condition did not become true before the timeout.');
 }
 
-async function reserveTcpEndpoint() {
-  const server = net.createServer();
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  const address = server.address();
-  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-  return `tcp://127.0.0.1:${address.port}`;
-}
+// A bind side binds an OS-assigned port and peers use the endpoint it bound.
+const ANY_LOOPBACK_PORT = 'tcp://127.0.0.1:*';
 
 test('backend adapter factory exposes the supported backend adapters', () => {
   const factory = new backend.ZLinkNodeBackendAdapterFactory();
@@ -578,15 +569,13 @@ test('backend mesh dispatch pump drains a local channel record through claim and
   let senderPump;
 
   try {
-    const receiverEndpoint = await reserveTcpEndpoint();
-    const senderEndpoint = await reserveTcpEndpoint();
-    receiver.setBind(receiverEndpoint);
+    receiver.setBind(ANY_LOOPBACK_PORT);
     receiver.addChannelName('backend.dispatch');
     receiver.start();
-    sender.setBind(senderEndpoint);
+    sender.setBind(ANY_LOOPBACK_PORT);
     sender.start();
     sender.connectPeer({
-      endpoint: receiverEndpoint,
+      endpoint: receiver.status().localEndpoint,
       expectedRid: receiver.status().routingId,
       expectedSecurityIdentity: 'default'
     });
@@ -1559,14 +1548,12 @@ test('MeshNode runtime manager owns lifecycle and forwards pull-dispatch records
   const factory = new backend.ZLinkNodeBackendAdapterFactory();
   const context = factory.createChannelAdapter().createContext();
   const meshName = `runtime.dispatch.${process.pid}`;
-  const receiverEndpoint = await reserveTcpEndpoint();
-  const senderEndpoint = await reserveTcpEndpoint();
   class RuntimeDispatchNotice {
     handle() {}
   }
   const registration = framework.createFrameworkRegistrationWithBuilder((builder) => {
     const mesh = builder.addRouteMesh(meshName)
-      .listen(receiverEndpoint)
+      .listen(ANY_LOOPBACK_PORT)
       .routingId(`runtime-node-${process.pid}`);
     mesh.channel(meshName).server().addSendHandler(RuntimeDispatchNotice);
   });
@@ -1595,7 +1582,7 @@ test('MeshNode runtime manager owns lifecycle and forwards pull-dispatch records
 
   try {
     await runtime.start();
-    sender.setBind(senderEndpoint);
+    sender.setBind(ANY_LOOPBACK_PORT);
     sender.start();
     senderPump = new backend.ZLinkMeshDispatchPump(sender, {
       applicationJobQueue: applicationJobQueue(),
@@ -1604,7 +1591,7 @@ test('MeshNode runtime manager owns lifecycle and forwards pull-dispatch records
     });
     senderPump.start();
     sender.connectPeer({
-      endpoint: receiverEndpoint,
+      endpoint: runtime.primaryMeshNode.status().localEndpoint,
       expectedRid: runtime.primaryMeshNode.status().routingId
     });
     assert.equal(runtime.meshNodesByName.size, 1);
@@ -1847,8 +1834,6 @@ test('Logical Multicast binding commit preserves admission after post-start abor
 
 test('framework host dispatches a MeshNode channel record through registered handler lifecycle', async () => {
   const meshName = `host.dispatch.${process.pid}`;
-  const receiverEndpoint = await reserveTcpEndpoint();
-  const senderEndpoint = await reserveTcpEndpoint();
   let resolveHandled;
   const handled = new Promise((resolve) => {
     resolveHandled = resolve;
@@ -1860,7 +1845,7 @@ test('framework host dispatches a MeshNode channel record through registered han
   }
   const registration = framework.createFrameworkRegistrationWithBuilder((builder) => {
     const mesh = builder.addRouteMesh(meshName)
-      .listen(receiverEndpoint)
+      .listen(ANY_LOOPBACK_PORT)
       .routingId(`host-dispatch-node-${process.pid}`);
     mesh.channel(meshName).server().addSendHandler(MeshNotice);
   });
@@ -1877,7 +1862,7 @@ test('framework host dispatches a MeshNode channel record through registered han
   try {
     await host.start();
     const node = host.requirePrimaryMeshNode();
-    sender.setBind(senderEndpoint);
+    sender.setBind(ANY_LOOPBACK_PORT);
     sender.start();
     senderPump = new backend.ZLinkMeshDispatchPump(sender, {
       applicationJobQueue: applicationJobQueue(),
@@ -1886,7 +1871,7 @@ test('framework host dispatches a MeshNode channel record through registered han
     });
     senderPump.start();
     sender.connectPeer({
-      endpoint: receiverEndpoint,
+      endpoint: node.status().localEndpoint,
       expectedRid: node.status().routingId
     });
     assert.equal(await submitEventually(
@@ -2071,11 +2056,11 @@ test('backend bound router dispose releases its poller and endpoint through sock
   const factory = new backend.ZLinkNodeBackendAdapterFactory();
   const channel = factory.createChannelAdapter();
   const context = channel.createContext();
-  const endpoint = await reserveTcpEndpoint();
   const dealer = channel.createDealerSocket(context);
   const router = channel.createRouterSocket(context);
   let reboundRouter;
   let routerDisposed = false;
+  let dealerDisposed = false;
   let handlerError;
 
   nodeEventLoopPollerOf(router).setReadableHandler(() => {
@@ -2099,7 +2084,8 @@ test('backend bound router dispose releases its poller and endpoint through sock
   });
 
   try {
-    router.bind(endpoint);
+    router.bind(ANY_LOOPBACK_PORT);
+    const endpoint = router.lastEndpoint;
     dealer.connect(endpoint);
     const reply = await dealer.request(Buffer.from('request'), 1000);
     try {
@@ -2110,6 +2096,10 @@ test('backend bound router dispose releases its poller and endpoint through sock
       for (const part of reply) part.close();
     }
 
+    // The dealer leaves first: its reconnect attempts to the released port
+    // must not hold that port when the router binds it again.
+    await dealer.dispose();
+    dealerDisposed = true;
     await router.dispose();
     routerDisposed = true;
 
@@ -2117,7 +2107,7 @@ test('backend bound router dispose releases its poller and endpoint through sock
     reboundRouter.bind(endpoint);
   } finally {
     await reboundRouter?.dispose();
-    await dealer.dispose();
+    if (!dealerDisposed) await dealer.dispose();
     if (!routerDisposed) await router.dispose();
     await context.dispose();
   }

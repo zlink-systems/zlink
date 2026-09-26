@@ -290,13 +290,13 @@ Trait는 호출자에게 대체 가능한 동작이나 generic bound가 필요�
   `create_xpub_socket()`, `create_xsub_socket()`, `create_stream_socket()`은
   네이티브 기반 socket 구현을 생성한다.
 공개 Spot과 Actor 생성 및 service 소유 timer는 [Framework API](../../../../framework/doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md)가 규정한다. 이 binding spec은 Core raw socket, monitor, poller, 일반 timer의 생성을 정의한다.
-- `Poller::new(&Context)`는 인자로 받은 context가 소유하는 poller를, `Timer::new(...)`는 timer를 생성한다.
+- `Poller::new(...)`, `Timer::new(...)`는 eventing 리소스를 생성한다.
 - `Poller`는 `add_monitor(&self, monitor: &SocketMonitor, events: i16, slot: usize) -> Result<(), ConfigError>`,
   `modify_monitor(&self, monitor: &SocketMonitor, events: i16) -> Result<(), ConfigError>`,
   `remove_monitor(&self, monitor: &SocketMonitor) -> Result<(), ConfigError>`로 socket monitor를 source로
   받는다(공통 spec "`Poller`의 monitor source"). `SocketMonitor`는 socket 전용 sealed `Pollable`을 구현하지
-  않는다(`proxy` 인자 계약 보호). monitor에는 `POLLIN`만 유효하고 다른 mask는
-  `ConfigError(ConfigResult::InvalidArgument)`로 거절한다. ready 뒤 `recv_with_flags(RecvFlags::DONT_WAIT)`로
+  않는다(`proxy` 인자 계약 보호). monitor mask의 결과는 공통 spec "`Poller`의 monitor source"를 따른다.
+  ready 뒤 `recv_with_flags(RecvFlags::DONT_WAIT)`로
   drain하며 `PollEvent`는 `PollSourceKind::Socket`으로 보고한다.
 - `AtomicCounter::new()`, `Stopwatch::start()`, `Thread::start(...)`는 호출자가
   소유하는 유틸리티 리소스를 생성한다.

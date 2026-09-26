@@ -21,6 +21,14 @@ internal unsafe struct ZlinkRoutingId
     public fixed byte Data[255];
 }
 
+/// <summary>Mirrors <c>zlink_router_route_t</c>.</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct ZlinkRouterRoute
+{
+    public ZlinkRoutingId Rid;
+    public ulong RouteGeneration;
+}
+
 internal enum ZlinkSendCompleteResult
 {
     Admitted = 0,

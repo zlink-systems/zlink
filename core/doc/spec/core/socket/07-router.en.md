@@ -313,9 +313,7 @@ ZLINK_EXPORT uint64_t zlink_router_recv_route_generation(void *router_);
 - **`zlink_router_recv_route_generation()` returns the route generation of the record returned by the
   last successful `zlink_router_recv()`.** It has the same lifetime as the returned RID (until the next
   data recv on the same socket). It is `0` if the next data recv failed or there was no successful
-  receive. When the caller processes
-  the record, it compares this value with the current selected route generation of that RID to recognize
-  a record whose route changed after it was returned. If the RID has no selected-route row, the record
+  receive. If the RID has no selected-route row, the record
   was left by a pipe that ended with no successor selection and was not discarded by a selection change;
   the reply result for such a REQUEST follows [§9](#9-raw-reply-submit).
 - **Keep one route observer per socket.** The same observer calls the snapshot and handles

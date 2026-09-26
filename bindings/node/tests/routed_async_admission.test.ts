@@ -95,7 +95,7 @@ test('request Promise settles from a pulled completion', async () => {
   const context = zlink.createContext();
   const router = zlink.createRouterSocket(context);
   const dealer = zlink.createDealerSocket(context);
-  const completions = new CompletionPollerDriver(dealer);
+  const completions = new CompletionPollerDriver(context, dealer);
   router.bind(endpoint('request'));
   dealer.connect(router.options.lastEndpoint);
   try {
@@ -367,7 +367,7 @@ test('request non-OK completion rejects with typed RequestError only', async () 
   const context = zlink.createContext();
   const router = zlink.createRouterSocket(context);
   const dealer = zlink.createDealerSocket(context);
-  const completions = new CompletionPollerDriver(dealer);
+  const completions = new CompletionPollerDriver(context, dealer);
   router.bind(endpoint('timeout'));
   dealer.connect(router.options.lastEndpoint);
   try {
@@ -385,7 +385,7 @@ test('closing a socket rejects its live request with typed RequestError', async 
   const context = zlink.createContext();
   const router = zlink.createRouterSocket(context);
   const dealer = zlink.createDealerSocket(context);
-  const completions = new CompletionPollerDriver(dealer);
+  const completions = new CompletionPollerDriver(context, dealer);
   router.bind(endpoint('request-close'));
   dealer.connect(router.options.lastEndpoint);
   try {

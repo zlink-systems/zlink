@@ -7,6 +7,7 @@ const { NestFactory } = require('@nestjs/core');
 const framework = require('../../packages/framework/dist');
 const nestjs = require('../../packages/nestjs/dist');
 const { waitForClientServerTargets } = require('./helpers/client-server-readiness');
+const { holdTcpEndpoint } = require('./helpers/nestjs-test-utils');
 
 class Ping {
   constructor(value) {
@@ -57,8 +58,9 @@ for (const weight of [100, 0]) {
 }
 
 test('Client-only ClientServer topology without a Ready Server is degraded', async () => {
-  const port = await reservePort();
-  const app = await createApp(channel => channel.client().connect(`tcp://127.0.0.1:${port}`));
+  // A plain listener holds the endpoint; it never completes a ZMTP handshake.
+  const unreachable = await holdTcpEndpoint();
+  const app = await createApp(channel => channel.client().connect(unreachable.endpoint));
   try {
     const runtime = app.get(nestjs.ZLINK_CLIENT_SERVER_RUNTIME);
     const status = runtime.snapshot('work');
@@ -72,6 +74,7 @@ test('Client-only ClientServer topology without a Ready Server is degraded', asy
     assert.deepEqual(status.targets, []);
   } finally {
     await app.close();
+    await unreachable.close();
   }
 });
 

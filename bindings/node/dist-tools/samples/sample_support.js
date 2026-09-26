@@ -23,7 +23,7 @@ async function waitUntil(predicate, timeoutMs, message) {
     }
     throw new Error(message);
 }
-async function waitForConnectionReady(monitor, zlink, timeoutMs = 5000) {
+async function waitForConnectionReady(context, monitor, zlink, timeoutMs = 5000) {
     const poller = zlink.createPoller();
     const events = zlink.createPollEvents(1);
     const deadline = Date.now() + timeoutMs;

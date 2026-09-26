@@ -5,11 +5,12 @@ exports.CompletionPollerDriver = void 0;
 const zlink = require('@zlink-systems/zlink');
 /** Caller-owned public completion poller used by async binding contract tests. */
 class CompletionPollerDriver {
-    poller = zlink.createPoller();
+    poller;
     events;
     closed = false;
-    constructor(sockets) {
+    constructor(context, sockets) {
         const sources = Array.isArray(sockets) ? sockets : [sockets];
+        this.poller = zlink.createPoller();
         this.events = zlink.createPollEvents(Math.max(1, sources.length));
         try {
             sources.forEach((socket, index) => {

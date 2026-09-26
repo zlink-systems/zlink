@@ -27,11 +27,7 @@ public static partial class Zlink
         if (capability == null)
             throw new ArgumentNullException(nameof(capability));
 
-        var rc = NativeMethods.zlink_has(capability);
-        if (rc < 0)
-            throw ZlinkException.CreateConfigException(
-                NativeMethods.GetLastPInvokeError());
-        return rc != 0;
+        return NativeMethods.zlink_has(capability);
     }
 
     private static void ProxyCore(IZlinkSocket frontend, IZlinkSocket backend,

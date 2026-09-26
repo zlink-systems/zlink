@@ -97,8 +97,8 @@ final class PerfMultiRouterRouter {
                 }
                 monitors.clear();
 
-                runRouterRouterClientLoop(clients, config, durationSeconds,
-                    metrics);
+                runRouterRouterClientLoop(clients, config,
+                    durationSeconds, metrics);
             } finally {
                 for (var monitor : monitors) {
                     try { monitor.close(); } catch (RuntimeException ignored) {}
@@ -127,8 +127,7 @@ final class PerfMultiRouterRouter {
         // canonical ref-out recv refills it in place via populateRoutedSinglePart,
         // avoiding the per-recv Received + ArrayList allocation.
         systems.zlink.contracts.messaging.Received replyBuffer = new systems.zlink.contracts.messaging.Received();
-        try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
-                socketsAsBase, PollEventFlags.POLLIN,
+        try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(socketsAsBase, PollEventFlags.POLLIN,
                 PollEventFlags.POLLCOMPLETION)) {
             long activeEnd = System.nanoTime()
                 + (long) durationSeconds * 1_000_000_000L;

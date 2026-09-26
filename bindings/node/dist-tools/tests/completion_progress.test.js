@@ -103,7 +103,7 @@ const zlink = require('@zlink-systems/zlink');
             socket.connect(address);
             return socket;
         });
-        const completions = new completion_poller_1.CompletionPollerDriver(dealers);
+        const completions = new completion_poller_1.CompletionPollerDriver(ctx, dealers);
         return { ctx, router, dealers, completions };
     });
     const exchange = async (group) => {
@@ -138,7 +138,8 @@ const zlink = require('@zlink-systems/zlink');
             .message('shutdown').timeout(1000).submit().reply;
         const rejected = strict_1.default.rejects(terminated, (error) => error instanceof zlink.RequestError && error.result === zlink.RequestResult.Terminated);
         groups[0].ctx.shutdown();
-        strict_1.default.throws(() => groups[0].completions.wait(100), (error) => error instanceof zlink.RecvError && error.result === zlink.RecvResult.Terminated);
+        strict_1.default.throws(() => groups[0].completions.wait(100), (error) => error instanceof zlink.ConfigError && error.result === zlink.ConfigResult.InternalError
+            && error.nativeErrno === 156384765);
         await rejected;
         await exchange(groups[1]);
         close(groups[0]);

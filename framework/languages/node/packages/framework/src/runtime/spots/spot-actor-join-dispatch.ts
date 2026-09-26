@@ -11,7 +11,6 @@ import { ZLinkBackendSpotDispatchEvent } from '../backend/contracts';
 import type {
   ZLinkBackendActorRef,
   ZLinkBackendActorRecvInfo,
-  ZLinkBackendReceived,
   ZLinkBackendSpot,
   ZLinkBackendTopicMessage
 } from '../backend/contracts';
@@ -92,7 +91,6 @@ export interface ZLinkDetachedTaskRunner {
 
 interface ZLinkSpotActorJoinDispatchOptions {
   readonly nativeSpot: ZLinkBackendSpot;
-  readonly createReceived: () => ZLinkBackendReceived;
   readonly createTopicMessage: () => ZLinkBackendTopicMessage;
   readonly serial: ZLinkSpotSerialTurnExecutor;
   readonly actors: ZLinkSpotActorAdmissionRuntime;
@@ -148,8 +146,6 @@ export class ZLinkSpotActorJoinDispatch {
       dispatchErrors: options.dispatchErrors
     });
     this.routedFrames = new ZLinkSpotRoutedFrameDispatch({
-      nativeSpot: options.nativeSpot,
-      createReceived: options.createReceived,
       nativeSpotId: this.nativeSpotId,
       serial: options.serial,
       resolveActor: actors.resolveActor,
@@ -189,8 +185,7 @@ export class ZLinkSpotActorJoinDispatch {
       messageSerializers: options.messageSerializers,
       providerResolver: options.providerResolver,
       dispatchErrors: options.dispatchErrors,
-      claimApplicationWork: options.claimApplicationWork,
-      waitIdle: waitSpotDispatchIdle
+      claimApplicationWork: options.claimApplicationWork
     });
     this.subscriptions = new ZLinkSpotSubscriptionDispatch({
       nativeSpot: options.nativeSpot,

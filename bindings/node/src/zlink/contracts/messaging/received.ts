@@ -111,6 +111,12 @@ export class Received extends MessagePartsEnvelope {
   routingId: RoutingId | null;
   /** Opaque reply capability, present only for a ROUTER REQUEST receive. */
   replyToken: ReplyToken | null;
+  /**
+   * Selected-route generation of the ROUTER route that delivered this record,
+   * or 0n when the receive is not a ROUTER receive. Compare it for equality
+   * with `RouterSocket.routesSnapshot()` rows.
+   */
+  routeGeneration: bigint;
   private _replyContext: ReplyContext | null;
   private _sendContext: SendContext | null;
 
@@ -122,6 +128,7 @@ export class Received extends MessagePartsEnvelope {
     super();
     this.routingId = null;
     this.replyToken = null;
+    this.routeGeneration = 0n;
     this._replyContext = null;
     this._sendContext = null;
   }

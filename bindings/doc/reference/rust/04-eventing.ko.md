@@ -155,12 +155,14 @@ trait다 — crate 사용자는 custom 타입에 대해 이걸 구현할 수 없
 | `add_timer(&self, timer: &Timer, slot: usize)` | timer를 socket/fd와 함께 multiplex하도록 등록 |
 | `modify_socket(&self, socket, events)` / `modify_fd(&self, fd, events)` | 이미 등록된 socket/fd의 감시 event를 교체 |
 | `remove_socket(&self, socket)` / `remove_fd(&self, fd)` / `remove_timer(&self, timer: &Timer)` | source 등록을 해제 |
-| `wait(&self, events: &mut [PollEvent], timeout_ms: i64) -> Result<usize, RecvError>` | `timeout_ms`까지 block하며 `events.len()`까지 결과를 그 자리에 씀; 음수 timeout은 무기한 block |
-| `size(&self) -> i32` | 현재 등록된 source 개수 |
+| `wait(&self, events: &mut [PollEvent], timeout_ms: i64) -> Result<usize, ZlinkError>` | `timeout_ms`까지 block하며 `events.len()`까지 결과를 그 자리에 씀; 음수 timeout은 무기한 block |
+| `size(&self) -> Result<i32, ConfigError>` | 현재 등록된 source 개수; `wait()`가 진행 중이면 `ConfigResult::Busy`(709) |
 
 **Completion result.** 등록/제거 member는 `Result<(), ConfigError>`를
-반환한다. `wait`는 `Result<usize, RecvError>`(준비된 개수)를 반환하며,
-`events.len()`까지 결과를 그 자리에 사용한다. `modify_socket`은
+반환한다. `wait`는 `Result<usize, ZlinkError>`(준비된 개수)를 반환하며,
+`events.len()`까지 결과를 그 자리에 사용한다. 실패한 wait는 Core의 결과를 담은
+`ZlinkError::Config`이고(다른 wait가 진행 중이면 `ConfigResult::Busy`, context shutdown 뒤에는
+`ETERM`과 함께 `ConfigResult::InternalError`), completion drain 실패는 `ZlinkError::Recv`다. `modify_socket`은
 `POLLCOMPLETION`을 원자적으로 추가·제거하며 native registration 변경과
 함께 completion-drain owner를 이전한다. Public poller가 그 bit를 소유하는
 동안 owner는 `wait()`를 계속 호출해 completion을 drain·settle해야 한다.

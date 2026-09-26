@@ -207,14 +207,10 @@ zlink_poller_add (void *poller_, void *socket_, void *user_data_, short events_)
       type == ZLINK_CORE_SOCKET_DEALER || type == ZLINK_CORE_SOCKET_ROUTER
       || zlink::socket_type_supports_completion_pull (type);
     if (validate_socket_poller_event_mask (
-          events_, has_completion_channel,
+          events_, handle.socket->is_monitor_socket (), has_completion_channel,
           type == ZLINK_CORE_SOCKET_ROUTER)
         != 0)
         return zlink::config_result_internal::from_errno (errno);
-    if ((events_ & ZLINK_POLLCOMPLETION) != 0 && !has_completion_channel) {
-        errno = EINVAL;
-        return ZLINK_CONFIG_INVALID_ARGUMENT;
-    }
     if (poller_find_registration_index (poller, socket_, poller_subject_none)
         >= 0) {
         errno = EEXIST;
@@ -263,7 +259,7 @@ zlink_config_result_t zlink_poller_modify (void *poller_, void *socket_, short e
       type == ZLINK_CORE_SOCKET_DEALER || type == ZLINK_CORE_SOCKET_ROUTER
       || zlink::socket_type_supports_completion_pull (type);
     if (validate_socket_poller_event_mask (
-          events_, has_completion_channel,
+          events_, handle.socket->is_monitor_socket (), has_completion_channel,
           type == ZLINK_CORE_SOCKET_ROUTER)
         != 0)
         return zlink::config_result_internal::from_errno (errno);

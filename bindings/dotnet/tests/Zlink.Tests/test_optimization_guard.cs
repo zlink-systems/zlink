@@ -277,6 +277,21 @@ public sealed class test_optimization_guard
     }
 
     [Fact]
+    public void message_vector_move_captures_errno_before_dispose()
+    {
+        string source = File.ReadAllText(Path.Combine(BindingRoot(), "src",
+            "Zlink", "Runtime", "Messaging", "Message.NativeVector.cs"));
+        int move = source.IndexOf("var rc = NativeMethods.zlink_msg_move(ref msg._msg",
+            StringComparison.Ordinal);
+        Assert.True(move >= 0);
+        int capture = source.IndexOf("var errno = NativeMethods.GetLastPInvokeError();",
+            move, StringComparison.Ordinal);
+        int dispose = source.IndexOf("msg.Dispose();", move,
+            StringComparison.Ordinal);
+        Assert.True(capture > move && capture < dispose);
+    }
+
+    [Fact]
     public void remaining_multi_async_senders_register_public_completion_owners()
     {
         string sourceRoot = Path.Combine(BindingRoot(), "perf", "multi",
@@ -287,7 +302,7 @@ public sealed class test_optimization_guard
         Assert.Contains("Array.Fill(completionMasks, PollEventFlags.PollCompletion)",
             dealerDealer, StringComparison.Ordinal);
         Assert.True(dealerDealer.IndexOf(
-                "PollSocketEvents(pollManager, activeClients, completionMasks, 0)",
+                "PollSocketEvents(context, pollManager, activeClients,",
                 StringComparison.Ordinal)
             < dealerDealer.IndexOf("sendTasks[i] = SendLoopAsync",
                 StringComparison.Ordinal));

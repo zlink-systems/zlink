@@ -37,8 +37,8 @@ public final class PollEvents {
     }
 
     public PollEvents(int capacity) {
-        if (capacity <= 0)
-            throw new IllegalArgumentException("capacity must be > 0");
+        if (capacity < 0)
+            throw new IllegalArgumentException("capacity must be >= 0");
         this.capacity = capacity;
         this.sourceKinds = new PollSourceKind[capacity];
         this.slots = new long[capacity];

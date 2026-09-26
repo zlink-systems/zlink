@@ -124,6 +124,20 @@ public sealed class test_pair_tcp
     }
 
     [Fact]
+    public void poller_wait_empty_span_reports_core_invalid_argument()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        using var poller = Zlink.CreatePoller();
+        var empty = Array.Empty<PollEvent>();
+        var error = Assert.Throws<ZlinkConfigException>(() =>
+            poller.Wait(empty.AsSpan(), TimeSpan.Zero));
+        Assert.Equal(ZlinkConfigException.ErrorCode.InvalidArgument,
+            error.Result);
+    }
+
+    [Fact]
     public void poller_clear_removes_registered_items()
     {
         if (!CoreTestSupport.IsNativeAvailable())

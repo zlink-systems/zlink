@@ -375,8 +375,8 @@ Kotlin은 address DTO, process-local handle, resolver와 unbounded directory를 
 route client와 manager는 fluent option과 single-use state를 보존하는 전용 wrapper를 반환하며 Java call,
 `CompletionStage`와 `Class<T>`를 application에 노출하지 않는다.
 `close(SpotRef)`는 Missing이면 `false`, generation 불일치는 `InvalidOperation`, seal된 이관 구간은
-`Unavailable`로 처리하며 User Spot만 대상으로 한다. Instance Spot의 self-close는 Java `ZLinkInstanceSpotContext.close()`로 결과 없는 요청을
-등록하며 [Spot 주소 메시징 §7](../../../03-spot-actor/06-spot-address-messaging.ko.md#7-close와-generation-경계)을 따른다.
+`Unavailable`로 처리하며 User Spot만 대상으로 한다. Instance Spot의 self-close는 Java
+`ZLinkInstanceSpotContext.close()`를 그대로 사용한다.
 
 Maintenance target은 Actor adapter와 queue·timer를 복원하고 Location authority·membership을
 commit한 뒤 Actor message 처리를 시작한다. Bound Session의 relocation route 갱신은 [Session–Actor binding §8.2](../../../04-session/02-session-actor-binding.ko.md#82-control-message-424344)가 소유한다.

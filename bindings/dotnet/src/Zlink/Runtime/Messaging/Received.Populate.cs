@@ -30,6 +30,7 @@ public sealed partial class Received : IDisposable
         _routingId = null;
         _routingIdSnapshot = default;
         _replyToken = null;
+        _routeGeneration = 0;
         _sendKernel = null;
         _sendRoutingIdSnapshot = default;
         MessageType = ReceivedMessageType.Raw;
@@ -70,6 +71,11 @@ public sealed partial class Received : IDisposable
             : ReceivedMessageType.Raw;
         _replyToken = replyToken;
         SetSendContext(sendKernel, routingId);
+    }
+
+    internal void SetRouteGeneration(ulong routeGeneration)
+    {
+        _routeGeneration = routeGeneration;
     }
 
     internal void SetSendContext(SocketKernel? sendKernel,

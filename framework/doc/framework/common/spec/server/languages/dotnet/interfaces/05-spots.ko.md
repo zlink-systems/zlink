@@ -187,14 +187,16 @@ public interface IZLinkSpotContext : IZLinkSpotCommonContext
  IZLinkActor actor,
  CancellationToken cancellationToken = default);
 
- void Close();
+ ValueTask<bool> CloseAsync(
+ CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkInstanceSpotContext : IZLinkSpotCommonContext
 {
  IZLinkInstanceSpotHandlerRegistry Handlers { get; }
 
- void Close();
+ ValueTask<bool> CloseAsync(
+ CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkEntrySpot
@@ -559,7 +561,7 @@ Spot close 결과는 [Object lifecycle](../../../03-spot-actor/09-object-lifecyc
 `IZLinkSpotManager`는 User Spot의 명시적 create·get-or-create, resolve와 close만 제공한다. Manager에
 Spot kind를 선택하는 인자나 Instance Spot create·get-or-create overload를 두지 않는다. Instance Spot의
 생성 경로는 Spot 전용 message call의 명시적 `InstanceSpot(...)` opt-in 하나다. Instance Spot
-구현이 자신의 lifecycle 종료를 요청하는 `IZLinkInstanceSpotContext.Close()`는 남긴다([Spot 주소 메시징 §7](../../../03-spot-actor/06-spot-address-messaging.ko.md#7-close와-generation-경계)).
+구현이 자신의 lifecycle을 종료하는 `IZLinkInstanceSpotContext.CloseAsync()`는 남긴다.
 
 Create·GetOrCreate 결과는 [Spot 주소 메시징](../../../03-spot-actor/06-spot-address-messaging.ko.md)과 [Object lifecycle](../../../03-spot-actor/09-object-lifecycle.ko.md)이 정한다. .NET은 `Async(...)`를 제공하고 오류를 `InvalidOperation`, `TypeMismatch`, `DeadlineExceeded`로 표현한다.
 

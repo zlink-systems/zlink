@@ -258,7 +258,10 @@ impl ContextStorage {
     }
 
     pub(crate) fn set_thread_priority(&self, priority: i32) -> Result<(), ConfigError> {
-        self.set_int_option(ffi::zlink_ctx_option_t::ZLINK_THREAD_PRIORITY as i32, priority)
+        self.set_int_option(
+            ffi::zlink_ctx_option_t::ZLINK_THREAD_PRIORITY as i32,
+            priority,
+        )
     }
 
     pub(crate) fn thread_scheduling_policy(&self) -> Result<i32, ConfigError> {
@@ -406,6 +409,7 @@ fn raw_option(value: i32) -> ffi::zlink_ctx_option_t {
 impl Drop for ContextStorage {
     fn drop(&mut self) {
         unsafe {
+            ffi::zlink_ctx_shutdown(self.handle);
             ffi::zlink_ctx_term(self.handle);
         }
     }

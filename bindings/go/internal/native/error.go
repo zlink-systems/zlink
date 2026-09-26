@@ -216,12 +216,17 @@ func errnoToError(errno int) error {
 	return syscall.Errno(normalizeNativeErrno(errno))
 }
 
-func currentErrno() int {
-	return int(C.zlink_errno())
+// cgoErrno returns the errno that the cgo two-value call form captured on the
+// thread that ran the call (rule: never read errno in a later cgo call).
+func cgoErrno(cerr error) int {
+	if errno, ok := cerr.(syscall.Errno); ok {
+		return int(errno)
+	}
+	return 0
 }
 
-func errnoOrIO() int {
-	if errno := currentErrno(); errno != 0 {
+func errnoOrIO(cerr error) int {
+	if errno := cgoErrno(cerr); errno != 0 {
 		return errno
 	}
 	return int(C.EIO)
@@ -305,12 +310,12 @@ type resultCodeValue interface {
 		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~uintptr
 }
 
-func submitErrorFromResult[T resultCodeValue](result T) error {
+func submitErrorFromCall[T resultCodeValue](result T, cerr error) error {
 	resultCode := SubmitResult(resultCodeInt(result))
 	if resultCode == SubmitOK {
 		return nil
 	}
-	errno := currentErrno()
+	errno := cgoErrno(cerr)
 	if errno == 0 {
 		errno = fallbackSubmitErrno(resultCode)
 	}
@@ -328,55 +333,55 @@ func requestCompletionError(result RequestResult) error {
 	return &RequestError{Result: result, nativeErrno: fallbackRequestErrno(result)}
 }
 
-func recvErrorFromResult[T resultCodeValue](result T) error {
+func recvErrorFromCall[T resultCodeValue](result T, cerr error) error {
 	resultCode := RecvResult(resultCodeInt(result))
 	if resultCode == RecvOK {
 		return nil
 	}
-	errno := currentErrno()
+	errno := cgoErrno(cerr)
 	if errno == 0 {
 		errno = fallbackRecvErrno(resultCode)
 	}
 	return &RecvError{Result: resultCode, nativeErrno: errno}
 }
 
-func handlerErrorFromResult[T resultCodeValue](result T) error {
+func handlerErrorFromCall[T resultCodeValue](result T, cerr error) error {
 	if resultCodeInt(result) == int(HandlerOK) {
 		return nil
 	}
-	errno := errnoOrIO()
+	errno := errnoOrIO(cerr)
 	return &HandlerError{Result: HandlerResult(resultCodeInt(result)), nativeErrno: errno}
 }
 
-func closeErrorFromResult[T resultCodeValue](result T) error {
+func closeErrorFromCall[T resultCodeValue](result T, cerr error) error {
 	if resultCodeInt(result) == int(CloseOK) {
 		return nil
 	}
-	errno := errnoOrIO()
+	errno := errnoOrIO(cerr)
 	return &CloseError{Result: CloseResult(resultCodeInt(result)), nativeErrno: errno}
 }
 
-func bindErrorFromResult[T resultCodeValue](result T) error {
+func bindErrorFromCall[T resultCodeValue](result T, cerr error) error {
 	if resultCodeInt(result) == int(BindOK) {
 		return nil
 	}
-	errno := errnoOrIO()
+	errno := errnoOrIO(cerr)
 	return &BindError{Result: BindResult(resultCodeInt(result)), nativeErrno: errno}
 }
 
-func connectErrorFromResult[T resultCodeValue](result T) error {
+func connectErrorFromCall[T resultCodeValue](result T, cerr error) error {
 	if resultCodeInt(result) == int(ConnectOK) {
 		return nil
 	}
-	errno := errnoOrIO()
+	errno := errnoOrIO(cerr)
 	return &ConnectError{Result: ConnectResult(resultCodeInt(result)), nativeErrno: errno}
 }
 
-func configErrorFromResult[T resultCodeValue](result T) error {
+func configErrorFromCall[T resultCodeValue](result T, cerr error) error {
 	if resultCodeInt(result) == int(ConfigOK) {
 		return nil
 	}
-	errno := errnoOrIO()
+	errno := errnoOrIO(cerr)
 	return &ConfigError{Result: ConfigResult(resultCodeInt(result)), nativeErrno: errno}
 }
 

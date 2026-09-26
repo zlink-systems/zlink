@@ -7,6 +7,18 @@ use crate::{
 };
 use crate::{Empty, ReplyOp, ReplyToken, RequestOp, RoutingId, SendOp};
 
+/// One row of a ROUTER selected-route snapshot: the peer routing id and the
+/// generation of the route Core currently selects for it.
+///
+/// `route_generation` is a nonzero opaque equality token; it changes whenever
+/// Core selects a different route for the same routing id. Compare it only
+/// for equality.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct RouterRoute {
+    pub routing_id: RoutingId,
+    pub route_generation: u64,
+}
+
 /// ROUTER socket: routes messages to peers addressed by routing id, the
 /// server side of asynchronous request/reply.
 pub struct RouterSocket {
@@ -55,6 +67,15 @@ impl RouterSocket {
             flags.bits(),
             out,
         )
+    }
+
+    /// Returns the Core-selected route of every routing id as one atomic
+    /// snapshot. A routing id without a row has no selected route. A
+    /// successful snapshot clears [`crate::POLLROUTE`] readiness unless a
+    /// later change raced with it. Call it only from the socket's single
+    /// route observer.
+    pub fn routes_snapshot(&self) -> Result<Vec<RouterRoute>, ConfigError> {
+        crate::socket::router_routes_snapshot(crate::socket::router_inner(self).handle)
     }
 
     /// Begins a request addressed to peer `peer_rid`: add parts, then submit and

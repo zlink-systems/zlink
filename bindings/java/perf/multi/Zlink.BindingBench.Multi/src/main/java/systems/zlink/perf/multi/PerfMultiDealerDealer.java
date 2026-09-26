@@ -31,8 +31,7 @@ final class PerfMultiDealerDealer {
     static PerfUtil.Result runServer(PerfUtil.Config config) {
         try (Context ctx = PerfUtil.newContext(config);
              DealerSocket server = ctx.createDealerSocket();
-             PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
-                 List.of(server), PollEventFlags.POLLIN)) {
+             PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(List.of(server), PollEventFlags.POLLIN)) {
             PerfUtil.applySocketOptions(server, config);
             PerfUtil.configureServerTls(server, config.transport());
             server.bind(config.endpoint());

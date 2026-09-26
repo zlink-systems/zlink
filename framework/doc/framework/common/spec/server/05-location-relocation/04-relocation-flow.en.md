@@ -237,18 +237,15 @@ records sent before the boundary, and the CRC-32C checksum of that whole relay. 
 target sends no cutover reply. New messages keep arriving while this control is being
 sent, but they enter the post-boundary span, so cutover doesn't wait for mailbox drain.
 
-Acceptance of the ready-to-receive-relay reply does not itself permit source dispatch
-to reopen after a cutover-submit failure. The source submits cutover once and holds its
-queued-job permit until submit is terminal. It retains the captured payload and original
-ingress-hold records accepted before and after the boundary until authority settlement
-under [Location runtime §6.1 and §10](01-location-runtime.en.md#61-read-and-cas) is confirmed.
-The relocation-backlog handoff, permit return, and later permit acquisition for accepted records follow [Application job queue §3](../01-execution/04-application-job-queue-and-backpressure.en.md#3-ordinary-ingress-permit-order). On confirmed target commit, the source releases its copy and adopts the target route. On a successful source `Preserve` fence, it returns
-the captured queue and timers followed by retained records to the source queue in their
-original acceptance order. Source dispatch reopens while its owner lease is valid. If `Preserve` is
-indeterminate, both sides retain work while the source owner lease remains valid, and neither opens dispatch until authority settles. This Framework-memory copy occupies no pipe and is not charged to the §5.3
-in-flight budget. The target sends no separate cutover reply.
+The source retains its captured payload and accepted ingress-hold records after submitting cutover until the Store authority result is confirmed.
 
-If the source owner lease expires before `Preserve` succeeds, settlement ends under the expired-owner rule in [failure/failover policy §7](06-failure-failover-policy.en.md#7-store-failure). The source permanently stops dispatch and Store changes for that unit and discards retained work. Each pending request without an observed terminal receives `Unavailable` once on its original reply route, subject to its original absolute deadline; this does not assert non-execution. A completed one-way send receives no further completion; uncertain delivery is recorded through diagnostics. Source lease expiry does not settle an indeterminate target CAS. The target opens dispatch only after confirming its commit with this `RelocationId` under [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). Staging terminals also follow §10. After source lease expiry, target CAS resubmission and staging terminals follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). If the Store remains unavailable, authority checks follow that section. Subsequent object handling follows [failure/failover policy §4.2](06-failure-failover-policy.en.md#42-an-existing-actor-and-spot). Source retention does not outlast the owner lease TTL.
+After verifying the pre-boundary relay batch and cutover, the target requests target commit from the Location Store conditional on the same source authority. On Store approval of target commit, the target opens its queue and the source releases its copy.
+
+To process retained work itself, the source requests a `Preserve` fence against that authority. On Store approval of source `Preserve`, the source resumes retained work in its original acceptance order.
+
+Neither side opens application dispatch before one of these approvals is confirmed. Permit return for retained records follows [Application job queue §3](../01-execution/04-application-job-queue-and-backpressure.en.md#3-ordinary-ingress-permit-order).
+
+After source lease expiry, target CAS resubmission and staging terminals follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received).
 
 When cutover arrives at the target, every ingress-hold relay sent on the same connection
 before the boundary has already arrived. The target compares the record count and
@@ -266,20 +263,16 @@ replacement, not per-record deduplication or partial merge, so the order inside 
 is fixed by the batch order even on the new connection. When the verification values
 match, the target proceeds with CAS and queue opening.
 
-The end of the cutover wait never permits CAS or application dispatch without verified
-cutover. The target records a `cutover_timeout` Warning. The Restore absolute deadline is the
-[deadline](../00-foundation/02-glossary.en.md#deadline) of the operation that started the relocation. At that deadline,
-the source settles authority using the `Preserve` fence under
-[Location runtime §6.1 and §10](01-location-runtime.en.md#61-read-and-cas). If the source
-fence commits first, a late target CAS fails and the target discards staging. The source
-processes the retained work itself, so accepted requests on this path do not receive
-`Unavailable`. If target commit is confirmed first, its queue processes the work. An indeterminate `Preserve` keeps retention and reconciliation active while the source lease remains valid; expiry follows the expired-owner rule above. A late or duplicate
-cutover does not change settled authority.
+The end of the cutover wait never permits CAS or application dispatch without verified cutover. The target records a `cutover_timeout` Warning. A late or duplicate cutover does not change the authority approved by the Store.
 
 The source can still receive a message that arrives late at the old address after this
 boundary. Before owner change it relays it to the temporary queue; after owner change it
 delivers it through the path by which the previous owner forwards it to the new owner on
 its behalf, [Message Follow](../00-foundation/02-glossary.en.md#message-follow) (§10).
+
+When the source lease expires, the source stops dispatch for that unit and discards retained work. Each
+pending request without an observed terminal receives `Unavailable` once on its original reply route,
+within its original deadline.
 
 ### 4.5 Only the Prepared Target Changes the Location Store
 
@@ -463,13 +456,11 @@ to the new address arrives at the target first isn't guaranteed.
 | Kind | Values kept when relaying | Result the caller waits for |
 |---|---|---|
 | `send` | Target identity and payload | Confirms only the transport submit result. There's no target application response. |
-| `request` | The value that identifies retries and duplicate delivery as the same work, [Operation identity](../00-foundation/02-glossary.en.md#operation-identity), correlation, reply route, payload, and the remaining request budget; the requester retains its original absolute deadline for terminal completion | Waits for the settled owner's response, a terminal at the original request deadline, or the source-lease-expiry `Unavailable` terminal in [§4.4](#44-ordered-relay-and-one-way-cutover). If source `Preserve` wins, source processes retained work. |
+| `request` | The value that identifies retries and duplicate delivery as the same work, [Operation identity](../00-foundation/02-glossary.en.md#operation-identity), correlation, reply route, payload, and deadline | Waits for the target response or an existing request timeout. |
 
 Relocation adds no application ACK to `send`. It doesn't turn a `request` into a new
 operation and doesn't resubmit it against another target, hidden from the caller. The
-source isn't the caller of a relayed request. A pending request the caller keeps ends through the settled owner's response or its
-existing deadline. A winning source `Preserve` processes retained work under the same
-operation identity; it does not create a new request. Both kinds use the same queue order, and no per-message
+source isn't the caller of a relayed request. A pending request the caller keeps ends with the target response or its existing deadline; the source does not create a new request based on a timeout. Both kinds use the same queue order, and no per-message
 ACK, numeric high-water, or durable delivery journal is added.
 
 When a diagram or a contract test marks `[request]`, it also shows the corresponding
@@ -528,7 +519,7 @@ as new values.
 |---|---|
 | Change succeeds | The target is owner. It opens the target queue and doesn't roll back to source. |
 | Condition mismatch | Authority is settled under [Location runtime §6.1 and §10](01-location-runtime.en.md#61-read-and-cas). If source `Preserve` won, target staging is removed and the source resumes retained work. |
-| Store returns a retryable failure | Target dispatch stays closed; ordinary retries and the post-source-lease exception follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). |
+| Store returns a retryable failure | Target dispatch stays closed; target CAS resubmission and its terminals follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). |
 | Target receives no CAS response | Target CAS resubmission and its terminals follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). |
 | A different valid owner or generation is confirmed | Ends the relocation immediately as stale and removes the prepared target object and queue. |
 | CAS result is indeterminate at the source Restore deadline | Source `Preserve` and target CAS resubmission follow [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received). |
@@ -593,7 +584,7 @@ defined by [Complete Host Relocation Flow](05-host-relocation-flow.en.md).
 | No route update within `SessionRelocationSealTimeout` | Target owner, Session connection closed | Session owner closes the physical connection and cleans binding, held messages, and seal. A late update is ignored with only a Warning. |
 | Caller cancellation | Shared relocation keeps following the current phase's rule | Ends only that waiter. Authority settlement under [Location runtime §6.1 and §10](01-location-runtime.en.md#61-read-and-cas), not cutover submit or cancellation, determines source restoration. |
 | Source shutdown races relocation | Whichever operation sealed first | If relocation is already past owner transition, performs only Message Follow cleanup. If shutdown sealed first, no new relocation starts. |
-| Cutover submit result is unknown | Authority settlement pending | The source retains original work under [§4.4](#44-ordered-relay-and-one-way-cutover). Confirmed target commit adopts the target route; winning source `Preserve` processes work locally. Indeterminate Store results retain work until the source-lease-expiry terminal under [§4.4](#44-ordered-relay-and-one-way-cutover). |
+| Cutover submit result is unknown | Store authority confirmation | Source and target keep dispatch closed until the approval in [§4.4](#44-ordered-relay-and-one-way-cutover) is confirmed. |
 
 An explicit failure before the ready-to-receive-relay reply uses the existing source
 restoration path. A cutover-submit result alone does not reopen source dispatch. At the
@@ -602,7 +593,7 @@ Confirmed target commit opens its queue; winning source `Preserve` lets the sour
 retained work under [§4.4](#44-ordered-relay-and-one-way-cutover). Both sides retain work
 while the Store result is indeterminate.
 
-If Store failure continues until the Restore deadline, the Session may end through
+If Store failure continues until Restore validity expires, the Session may end through
 its own separate seal timeout. After the Store recovers, a new Session connection
 doesn't restore the previous binding; it performs normal location validation and Actor/
 Spot creation or recovery again. An expired owner lease or terminal relocation state
@@ -625,15 +616,11 @@ redefine those values and only adds the following two.
   the hop count and duration limit Location Runtime sets, no relocation-specific record
   count or byte cap is added.
 
-The original requester's deadline in [§5.2](#52-send-and-request) remains authoritative for its
-terminal result. Wire request commands 22 and 25 carry the remaining request budget as
-`remainingDeadlineMs`. On the first send of a Spot or Actor request, the sender transmits its
-positive remaining budget after earlier stages, rounded up to the next whole millisecond (a budget
-above the u64 millisecond maximum, about 584 million years, saturates to that maximum); if the budget has
-expired, it completes the timeout without transmitting. Each receiving hop sets a local deadline
-from its receive time and the transmitted budget; it forwards only a positive remainder and does
-not forward an expired request. Network transit time can make a receiving hop's local deadline
-later than the requester's deadline. Relaying never extends the requester's terminal deadline.
+The end-to-end deadline of a followed operation is managed by the client, not an
+absolute value each relay hop propagates. A relay hop re-sets its own wait using a local
+relay window instead of the original request's remaining deadline, and forwards the
+preserved operation identity, source routing id, and reply route so that the client's
+own timeout can decide whether continuing end to end is still worth it.
 
 A late cutover or Session route update being late doesn't indefinitely extend the
 Message Follow period. Conversely, a Session route being applied first doesn't

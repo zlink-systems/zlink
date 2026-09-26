@@ -479,25 +479,6 @@ Spot manager의 public `Close`는 User Spot의 `SpotRef`를 받는다. Instance 
 application handler나 timer가 자신의 lifecycle context에서 local `Close`를 요청한다. Host
 shutdown과 `Relocate`는 별도 운영 lifecycle로 Instance Spot을 정리하거나 이동할 수 있다.
 
-**Spot context의 `Close`는 결과를 반환하지 않는 요청이다.** Handler나 timer turn에서만
-호출한다. 호출 시 context의 generation을 붙여 Close 요청을 등록하며, 같은 turn의 중복 호출과
-나중에 도착한 같은 generation의 요청은 이미 등록됐거나 진행 중인 Close에 합친다. 요청은
-호출한 turn이 정상 종료·예외·취소·reply 실패 중 어느 경로로 끝나든, 그 뒤 Spot의
-[lifecycle lane](../01-execution/02-handler-turn-and-execution-gate.ko.md#execution-lanes)에서 시작한다.
-호출한 turn은 Close의 accepted-turn 대기에 포함하지 않는다.
-
-Close와 relocation의 순서는 [Host relocation §12](../05-location-relocation/05-host-relocation-flow.ko.md#12-대기-중인-message-timer와-session을-옮긴다)의
-authority commit 순서를 따른다. Relocation이 이기면 등록한 context 요청은 실행하거나
-다시 제출하지 않고 moving 결과를 diagnostics에 기록한다. `Closing`이 이기면 Close를 끝내고
-Spot을 이전하지 않는다. Idle cleanup의 seal([Object lifecycle §5](09-object-lifecycle.ko.md#5-활성-객체를-언제-정리하고-무엇으로-막는가))과
-host shutdown의 seal([Host relocation §14](../05-location-relocation/05-host-relocation-flow.ko.md#14-shutdown과-relocate의-경쟁))이
-먼저 확정되면 등록한 context 요청은 실행하지 않고 그 결과를 diagnostics에 남긴다. Pending
-요청은 실행되거나 seal에 의해 대체된 결과가 기록될 때까지 버리지 않는다.
-
-Manager `Close`는 결과를 caller에게 반환한다. Manager `Close`가 moving 결과로 끝나도 Framework는 같은 `Close`를 새 owner에게 자동 재제출하지 않는다. Context `Close`는 결과가 없으므로 `false`,
-실패, 합쳐진 요청과 실행되지 않은 요청을 각각 diagnostics에 기록한다.
-`OnClosing(ExplicitClose)`은 cleanup 시작을 뜻하며 authority 해제 완료를 뜻하지 않는다.
-
 Close 절차는 다음 순서로 진행한다.
 
 1. Expected owner와 ObjectGeneration을 검증해 authority를 `Closing`으로 전이한다.
@@ -507,16 +488,10 @@ Close 절차는 다음 순서로 진행한다.
    재개해도 이미 호출한 `OnClosing`은 다시 호출하지 않는다.
 4. 같은 owner·generation fence로 authority를 해제한다.
 
-1단계에서 `Closing` 전이가 확정되지 않으면 authority는 바뀌지 않고 Close는 아래 결과로 끝난다.
-`Closing` 전이가 확정된 뒤에는 authority를 `Ready`로 되돌리지 않는다. 2–4단계에서 `OnClosing`
-호출 이외의 작업이 실패하면 manager `Close`는 caller에게 그 실패를 반환하고(context `Close`는 위의
-diagnostics 규칙을 따른다), target owner runtime은 같은
-owner·generation에서 실패한 작업부터 남은 작업을 이어서 처리한다. 완료한 작업은 반복하지 않는다.
-
 같은 incarnation이 이미 없으면 idempotent `false`, 같은 Spot ID의 다른 generation이 있으면
 `InvalidOperation`, 이동 seal 중이면 `Unavailable`로 끝난다. Framework는 current ref를 다시
 찾아 새 incarnation을 닫지 않는다. Seal 전에 accepted된 operation은 기존 generation에서 완료할
-수 있다. Seal 뒤에 도착한 신규 admission의 결과는 §9 표가 정한다.
+수 있지만 seal 뒤 operation은 closing 또는 stale 결과로 끝난다.
 
 **User Spot에 current Actor membership이 하나라도 있으면 Close는 `false`로 끝나며 admission과
 authority를 유지한다.** Framework는 member Actor를 숨겨서 이동하거나 destroy하지 않는다. Close는
@@ -578,8 +553,7 @@ Seal 뒤 source ingress hold는 commit된 Message Follow route로 relay한다.
 | Instance intent가 없는 Spot direct send·request의 target authority가 `Missing` 또는 `Creating`이다 | `NotFound`다. |
 | `ActorRef`·`SpotRef`로 지정한 control의 generation이 current generation과 다르다(direct message는 [08-routing §2.6](08-routing.ko.md#26-objectgeneration을-어디에-사용하고-어디에-사용하지-않는가)대로 generation을 비교하지 않는다) | `InvalidOperation`이다. |
 | [owner fence](../00-foundation/02-glossary.ko.md#owner-fence)가 다르다 | `Unavailable`이다. |
-| Instance intent가 없는 Spot direct send·request가 source 또는 owner에서 target authority `Closing`을 확인했다 | `Rejected`다. |
-| Runtime이 `Draining`이라 신규 admission을 받지 않는다(target authority 상태와 관계없이) | `ShuttingDown`이다. |
+| `Closing` 또는 `Draining` owner에 신규 admission을 요청했다 | 거부한다. |
 | Relocation seal 이후 source route로 ingress가 도착했다 | 거부하지 않고 relocation hold에 보관한다. |
 | `Relocating`이지만 아직 seal하지 않은 unit에 message가 도착했다 | 기존 owner admission을 유지해 수락한다. |
 | Request가 실패했다 | 다른 Spot ID, MeshName이나 owner로 우회하지 않는다. |

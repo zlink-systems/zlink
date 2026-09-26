@@ -213,18 +213,15 @@ dispatch 개방을 진행할 수 있다**고 알린다. Cutover control에는 `R
 reply를 보내지 않는다. 이 control을 보내는 동안 새 message가 계속 도착해도 boundary 뒤
 구간에 넣으므로 cutover가 mailbox drain을 기다리지 않는다.
 
-Relay 수신 준비 reply의 acceptance는 cutover submit 실패만으로 source dispatch를 다시 여는
-근거가 아니다. Source는 cutover를 한 번 제출하고 submit terminal까지 queued-job permit을
-유지한다. Capture payload와 boundary 전후에 수락한 ingress-hold record의 원본은
-[Location runtime §6.1·§10](01-location-runtime.ko.md#61-read와-cas)의 authority settlement가
-확인될 때까지 유지한다. 수락한 record의 relocation backlog handoff와 permit 반환·재획득은
-[Application job queue §3](../01-execution/04-application-job-queue-and-backpressure.ko.md#3-ordinary-ingress-permit-순서)을 따른다. Target commit이 확인되면 source copy를 해제하고 target route를 채택한다. Source `Preserve` fence가 성공하면 captured queue·timer 뒤에 보관한 record를 원래
-수락 순서로 source queue에 되돌린다. Source owner lease가 유효할 때 source dispatch를 다시 연다. `Preserve`가 불확정이면
-source owner lease가 유효한 동안 양쪽이 작업을 보관하며 결과가 확정될 때까지 dispatch를 열지 않는다. Framework memory
-사본은 pipe를 점유하지 않아 §5.3의 in-flight 예산에 포함하지 않는다. Target의 별도 cutover
-reply는 없다.
+Source는 cutover를 제출한 뒤 capture payload와 수락한 ingress-hold record를 authority 결과가 확인될 때까지 보관한다.
 
-Source `Preserve`가 성공하기 전에 source owner lease가 만료되면 [failure/failover policy §7](06-failure-failover-policy.ko.md#7-store-장애)의 expired-owner 규칙으로 끝낸다. Source는 해당 unit의 dispatch와 Store 변경을 영구 중단하고 보관 작업을 폐기한다. 관찰된 terminal이 없는 pending request는 원래 절대 deadline 안에서 원래 reply route에 `Unavailable`을 한 번 받으며, 이는 실행되지 않았다고 단정하지 않는다. 이미 완료된 one-way send에는 더 이상 완료를 전달하지 않고, 전달 여부가 불확실하면 diagnostics에 기록한다. Source lease 만료는 결과를 모르는 target CAS를 정리하지 않는다. Target은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)에 따라 같은 `RelocationId`의 commit을 확인한 뒤에만 dispatch를 연다. Staging terminal도 §10을 따른다. Source lease 만료 뒤 target의 CAS 재제출·staging terminal은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)이 정한다. Store를 계속 사용할 수 없으면 그 절에 따라 authority를 확인한다. 이후 object 처리는 [failure/failover policy §4.2](06-failure-failover-policy.ko.md#42-기존-actor와-spot)를 따른다. Source 보관 기간은 owner lease TTL을 넘지 않는다.
+Target은 boundary 전 relay batch와 cutover를 검증한 뒤 같은 source authority를 조건으로 Location Store에 target commit을 요청한다. Store가 target commit을 승인하면 target queue를 열고 source 사본을 해제한다.
+
+Source가 보관 작업을 직접 처리하려면 같은 authority에 `Preserve` fence를 요청한다. Store가 source `Preserve`를 승인하면 source가 보관 작업을 원래 수락 순서로 재개한다.
+
+어느 승인도 확인되지 않으면 양쪽 모두 application dispatch를 열지 않는다. 보관 record의 permit 반환은 [Application job queue §3](../01-execution/04-application-job-queue-and-backpressure.ko.md#3-ordinary-ingress-permit-순서)을 따른다.
+
+Source lease 만료 뒤 target의 CAS 재제출·staging terminal은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)이 정한다.
 
 Cutover가 target에 도착하면 같은 connection에서 boundary보다 앞서 보낸 ingress-hold relay가
 모두 도착한 것이다. Target은 cutover가 실은 record 수와 checksum을 수신한 relay와 대조한 뒤
@@ -239,19 +236,14 @@ boundary 전 relay 구간을 폐기하고 재전송된 batch 전체로 한 번�
 부분 병합이 아니라 전체 교체이므로, 새 connection에서도 구간 안의 순서가 batch 순서로
 확정된다. 확인 값이 일치하면 target은 CAS와 queue 개방을 진행한다.
 
-대기 시간이 끝나도 검증된 cutover 없이 CAS나 application dispatch를 시작하지 않는다.
-Target은 `cutover_timeout` Warning을 기록한다. Restore absolute deadline은 그 relocation을 시작한
-operation의 [deadline](../00-foundation/02-glossary.ko.md#deadline)이다. 이 deadline에 source는
-[Location runtime §6.1·§10](01-location-runtime.ko.md#61-read와-cas)의 `Preserve` fence로
-authority를 확정한다. Source fence가 먼저 성공하면 target의 늦은 CAS는 실패하고 target은
-staging을 정리한다. Source는 §4.4의 보관 작업을 직접 처리하므로 이 경로에서 accepted request에
-`Unavailable`을 보내지 않는다. Target commit이 먼저 확인되면 target queue가 작업을 처리한다.
-`Preserve`가 불확정이면 source lease가 유효한 동안 보관과 재확인을 계속하며, lease 만료는 위 expired-owner 규칙으로 끝낸다. 늦은 cutover와 duplicate cutover는 확정된
-authority를 다시 바꾸지 않는다.
+대기 시간이 끝나도 검증된 cutover 없이 CAS나 application dispatch를 시작하지 않는다. Target은 `cutover_timeout` Warning을 기록한다. 늦은 cutover와 duplicate cutover는 Store가 승인한 authority를 다시 바꾸지 않는다.
 
 Source는 이 경계 뒤에도 이전 주소로 늦게 도착하는 message를 받을 수 있다. Owner 변경 전에는
 temporary queue로 relay하고, owner 변경 뒤에는 이전 owner가 그 message를 새 owner에게 대신
 전달하는 [Message Follow](../00-foundation/02-glossary.ko.md#message-follow) 경로로 target에 전달한다(§10).
+
+Source lease가 만료되면 source는 해당 unit의 dispatch를 중단하고 보관 작업을 폐기한다. Terminal을 아직
+관찰하지 못한 pending request는 원래 deadline 안에서 원래 reply route로 `Unavailable`을 한 번 받는다.
 
 ### 4.5 준비를 끝낸 target만 Location Store를 변경한다
 
@@ -425,13 +417,12 @@ Target execution queue에는 payload로 전송된 기존 작업, 전환 경계 �
 | 종류 | Relay할 때 유지하는 값 | Caller가 기다리는 결과 |
 |---|---|---|
 | `send` | 대상 identity와 payload | Transport submit 결과까지만 확인한다. Target application response는 없다. |
-| `request` | Retry나 중복 전달을 같은 작업으로 판정하는 값인 [Operation identity](../00-foundation/02-glossary.ko.md#operation-identity), correlation, reply route, payload와 남은 request 예산. 요청자는 terminal 완료를 위해 원래 absolute deadline을 유지한다 | 확정된 owner의 response, 원래 request deadline의 terminal 또는 source lease 만료 시 [§4.4](#44-ordered-relay와-one-way-cutover)의 `Unavailable` terminal을 기다린다. Source `Preserve` fence가 이기면 source가 보관 작업을 처리한다. |
+| `request` | Retry나 중복 전달을 같은 작업으로 판정하는 값인 [Operation identity](../00-foundation/02-glossary.ko.md#operation-identity), correlation, reply route, payload와 deadline | Target response 또는 기존 request timeout을 기다린다. |
 
 Relocation은 `send`에 application ACK를 추가하지 않는다. `request`를 새로운 operation으로
 바꾸거나 다른 target에 숨겨서 다시 제출하지 않는다. Source는 relayed request의 caller가
-아니다. Caller가 유지한 pending request는 확정된 owner의 response 또는 기존 deadline으로
-끝난다. Source `Preserve`가 이겨도 같은 operation identity로 보관 작업을 처리하며 새로운
-request를 만들지 않는다. 두 종류 모두 같은 queue 순서를 사용하며,
+아니다. Caller가 유지한 pending request는 target response나 기존 deadline으로 끝나며, source가
+timeout을 근거로 같은 request를 다시 만들지 않는다. 두 종류 모두 같은 queue 순서를 사용하며,
 message마다 ACK, 숫자 high-water나 durable delivery journal을 추가하지 않는다.
 
 Diagram이나 contract test에서 `[request]`를 표시하면 정상 경로의 대응 `[reply]`도 함께
@@ -483,7 +474,7 @@ Target은 예상한 source owner와 generation을 조건으로 주고, 자기 no
 |---|---|
 | 변경 성공 | Target이 owner다. Target queue를 열고 source로 되돌리지 않는다. |
 | 조건 불일치 | [Location runtime §6.1·§10](01-location-runtime.ko.md#61-read와-cas)의 authority settlement로 판정한다. Source `Preserve` fence가 이겼으면 target staging을 정리하고 source가 보관 작업을 재개한다. |
-| Store가 retry 가능한 실패를 반환 | Target queue는 닫아 두고 일반 재시도와 source lease 만료 뒤 예외를 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)에 맡긴다. |
+| Store가 retry 가능한 실패를 반환 | Target dispatch는 닫아 두며, target CAS 재제출과 종료는 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. |
 | Target이 CAS 응답을 받지 못함 | Target CAS 재제출과 그 종료는 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. |
 | 다른 valid owner나 generation이 확인됨 | Stale relocation으로 즉시 종료하고 준비한 target object와 queue를 제거한다. |
 | Source Restore deadline에 CAS 결과가 불확정 | Source `Preserve`와 target CAS 재제출은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. |
@@ -543,13 +534,13 @@ Session owner가 검증하는 값, seal과 route 전환의 정확한 시점·tim
 | `SessionRelocationSealTimeout` 안에 route update가 없음 | Target owner, Session connection 종료 | Session owner는 physical connection을 종료하고 binding, held message와 seal을 정리한다. 늦은 update는 Warning만 기록하고 무시한다. |
 | Caller cancellation | Shared relocation은 현재 phase 규칙을 계속 따름 | 해당 waiter만 끝낸다. Source 복원 여부는 cutover submit 또는 cancellation이 아니라 [Location runtime §6.1·§10](01-location-runtime.ko.md#61-read와-cas)의 authority settlement가 정한다. |
 | Source shutdown과 경쟁 | 먼저 seal한 operation | Relocation이 owner 전환 뒤라면 Message Follow 정리만 수행한다. Shutdown이 먼저면 새 relocation을 시작하지 않는다. |
-| Cutover submit 결과를 알 수 없음 | Authority settlement 대기 | Source는 [§4.4](#44-ordered-relay와-one-way-cutover)의 원본 작업을 유지한다. Target commit이 확인되면 target route를 채택하고, source `Preserve`가 이기면 source가 처리한다. Store 결과가 불명확하면 source lease 만료 전까지 [§4.4](#44-ordered-relay와-one-way-cutover)에 따라 보관한다. |
+| Cutover submit 결과를 알 수 없음 | Store authority 확인 | Source와 target은 [§4.4](#44-ordered-relay와-one-way-cutover)의 승인 결과가 확인될 때까지 dispatch를 열지 않는다. |
 
 Relay 수신 준비 reply 이전의 명시적 실패는 기존 source 복원 절차를 따른다. 그 뒤의
 cutover submit 결과만으로 source dispatch를 열지 않는다. Restore absolute deadline에
 source는 `Preserve` fence로 판정하며, target CAS 재제출은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. Target commit이면 target queue를 열고, source fence가 이기면 source가 [§4.4](#44-ordered-relay와-one-way-cutover)의 보관 작업을 직접 처리한다. 불확정이면 양쪽이 작업을 보관한다.
 
-Store 장애가 Restore deadline까지 계속되면 Session은 별도의 seal timeout으로 종료될 수 있다.
+Store 장애가 Restore 유효시간까지 계속되면 Session은 별도의 seal timeout으로 종료될 수 있다.
 Store가 정상화된 뒤 새 Session connection은 이전 binding을 복원하지 않고 일반 location
 validation과 Actor·Spot 생성 또는 복구 절차를 다시 수행한다. 만료된 owner lease나 terminal
 relocation state를 새 연결의 authority로 사용하지 않는다.
@@ -569,13 +560,11 @@ reply route를 유지한다. Store를 다시 읽거나 application handler를 so
 - Message Follow의 전달량에는 이 handoff가 별도로 두는 상한이 없다 — Location runtime이 정한
   hop 수와 기간 제한 외에 relocation 전용 record 수·byte 상한을 추가하지 않는다.
 
-원래 요청자의 [§5.2](#52-send와-request) deadline이 그 terminal 결과를 정한다. Wire의 request
-command(22·25)는 남은 request 예산을 `remainingDeadlineMs`로 싣는다. Spot·Actor request를 처음 보낼 때
-송신자는 앞 단계 뒤에 남은 양수 예산을 다음 정수 millisecond로 올려 싣고(u64 millisecond 최댓값, 약
-5억 8천만 년을 넘는 예산은 그 최댓값으로 싣는다), 예산이 이미 끝났으면 보내지 않고
-timeout으로 완료한다. 받은 hop은 받은 시각과 받은 예산으로 자기 local deadline을 정하고, 남은 값이 양수일
-때만 다음 hop으로 보내며 만료된 request는 보내지 않는다. 전송 시간 때문에 받은 hop의 local deadline이
-요청자의 deadline보다 늦을 수 있다. Relay는 요청자의 terminal deadline을 연장하지 않는다.
+Follow되는 operation의 end-to-end deadline은 각 relay hop이 절대값으로 전파하는 값이 아니라
+client가 관리한다. Relay hop은 original request의 남은 deadline 대신 local relay window로
+자신의 대기 시간을 다시 설정하며, 유지한 operation identity, source routing id와 reply
+route를 전달해 client 자신의 timeout이 end-to-end로 계속 진행할 가치가 있는지를 판단하게
+한다.
 
 Late cutover나 Session route update가 늦었다는 이유로 Message Follow 기간을 무기한 연장하지
 않는다. 반대로 Session route가 먼저 적용됐다는 이유로 이미 이전 주소로 전송된 server

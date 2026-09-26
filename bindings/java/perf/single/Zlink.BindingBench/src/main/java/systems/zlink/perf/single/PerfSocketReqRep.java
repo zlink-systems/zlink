@@ -158,7 +158,8 @@ final class PerfSocketReqRep {
         return Math.max(1L, hwmBytes / Math.max(1, wireSize));
     }
 
-    private static void runRequestPhase(Socket client, boolean routedClient,
+    private static void runRequestPhase(Socket client,
+                                        boolean routedClient,
                                         PerfUtil.Config config,
                                         PerfUtil.Metrics metrics,
                                         AtomicReference<Throwable> failure,
@@ -196,8 +197,7 @@ final class PerfSocketReqRep {
             }
         };
 
-        try (PerfSocketPollSet completionPoller = PerfSocketPollSet.fromSockets(
-                 List.of(client), PollEventFlags.POLLCOMPLETION)) {
+        try (PerfSocketPollSet completionPoller = PerfSocketPollSet.fromSockets(List.of(client), PollEventFlags.POLLCOMPLETION)) {
             while (System.nanoTime() < activeEnd && failure.get() == null) {
                 int submittedSinceProgress = 0;
                 while (System.nanoTime() < activeEnd

@@ -162,7 +162,7 @@ typedef void (zlink_free_fn) (void *data_, void *hint_);
 `zlink_free_fn` is the callback type used by `zlink_msg_init_data()` to create a zero-copy
 message. The library invokes this function when the message data buffer is no longer needed.
 The library may invoke this callback on an internal thread, while holding an internal lock, or during a
-socket turn. The callback must not call any zlink API or wait; it must release the buffer and return.
+socket turn.
 
 ## 6. Functions
 

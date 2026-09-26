@@ -36,7 +36,8 @@ async function start() {
   else throw new Error(`Unsupported role '${role}'.`);
   process.on('message', onMessage);
   process.once('SIGTERM', () => void stop());
-  send({ type: 'ready', role, pid: process.pid });
+  // The session owner reports the port it bound; the target connects to it.
+  send({ type: 'ready', role, pid: process.pid, port: server?.address().port });
 }
 
 async function startSessionOwner() {
@@ -77,7 +78,6 @@ async function startSessionOwner() {
     ownerLeaseGeneration: 13n,
     bindingGeneration: 6n
   });
-  const port = Number(requireText(process.env.ZLINK_TEST_PORT, 'ZLINK_TEST_PORT'));
   server = net.createServer(socket => {
     let body = '';
     socket.setEncoding('utf8');
@@ -89,7 +89,7 @@ async function startSessionOwner() {
   });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(port, '127.0.0.1', resolve);
+    server.listen(0, '127.0.0.1', resolve);
   });
 }
 
