@@ -108,18 +108,14 @@ HWM·PAUSED가 뒤의 liveness record도 늦출 수 있고, 이 문서의 15초 
 4. Peer는 받은 ID를 `livenessAck`에 그대로 넣어 반환한다.
 5. 현재 connection이 기다리는 ID와 같은 첫 ACK만 deadline을 다시 15초로 설정한다.
 
-Connection 하나에는 아직 응답받지 못한 ID를 최대 하나만 유지한다. Core의 선택 route가 바뀌면 기다리던
-ID를 버리고, 새 route의 probe에는 이전에 쓰지 않은 ID를 쓴다. ACK는 그 record의 route generation
-([Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.ko.md#101-선택-route-관찰))이 Framework가 그
-RID에 대해 마지막으로 관찰한 선택 route generation과 같을 때만 증거로 쓴다. 다르면 snapshot을 다시
-조회하고, 새로 관찰한 generation과도 다르면 버린다.
+Connection 하나에는 아직 응답받지 못한 ID를 최대 하나만 유지한다.
 
 | 받은 입력 | 현재 connection에 미치는 영향 |
 |---|---|
 | 기다리는 ID와 같은 첫 ACK | 해당 ID를 제거하고 deadline을 다시 15초로 설정한다. |
 | 같은 ACK의 중복 수신 | 상태를 바꾸지 않는다. |
 | 이전 probe ID의 ACK | 상태를 바꾸지 않는다. |
-| Framework가 선택 route 변경을 관찰한 뒤 처리하는, 이전 route probe의 ACK | 관찰할 때 기다리던 ID를 버리므로 상태를 바꾸지 않는다. |
+| 다른 physical connection의 ACK | 현재 connection의 증거로 사용하지 않는다. |
 | 일반 application message | 진단용 마지막 수신 시각만 갱신하고 deadline은 연장하지 않는다. |
 
 15초 안에 올바른 ACK를 받지 못하면 해당 connection을 not-ready로 바꾸고 닫는다.
@@ -264,11 +260,8 @@ admission을 descriptor의 RID·security identity·lifecycle generation으로 �
 순서로 선택 route를 재구성하지 않는다.
 
 Orderly close와 transport disconnect는 15초를 기다리지 않는다. 이전 physical
-connection의 record는 선택이 바뀐 뒤 Core가 반환하지 않는다. Framework가 선택 변경을 관찰한 뒤에는
-이전 generation의 record가 증거가 되지 않으므로 새 connection의 상태를 바꾸지 못한다. Handshake도 같은
-비교를 거친 뒤에만 admission한다. 이 generation 비교는 connection의 ready·liveness 상태를 바꾸는
-record(`livenessAck`와 service handshake)에만 적용한다. Spot·Actor·Channel message를 담은 record는 비교하지
-않고 Core가 반환한 대로 처리한다.
+connection에서 늦게 도착한 ACK나 frame은 새 connection의 상태를 바꾸지 못한다. Core가 반환한
+Spot·Actor·Channel message는 Framework가 generation으로 다시 판정하지 않는다.
 
 Peer 하나의 실패는 host 전체를 `Error`로 바꾸지 않는다. 다른 ready peer와, 현재 이
 host에서 Actor·Spot을 실제로 실행하며 그 application queue를 관리하는 local

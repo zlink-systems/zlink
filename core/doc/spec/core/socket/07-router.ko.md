@@ -294,8 +294,7 @@ ZLINK_EXPORT uint64_t zlink_router_recv_route_generation(void *router_);
   [completion 표](README.ko.md#completion-pull과-ownership)대로 `ZLINK_REQUEST_NOT_CONNECTED`로 한 번 종결한다.
 - **`zlink_router_recv_route_generation()`은 마지막으로 성공한 `zlink_router_recv()`가 반환한 record의
   route generation을 돌려준다.** 반환한 RID와 같은 수명(같은 socket의 다음 data recv 진입까지)이다.
-  다음 data recv가 실패했거나 성공한 receive가 없으면 `0`이다. Caller는 record를 처리할 때 이 값을 그 RID의 현재 선택 route
-  generation과 비교해, 반환 뒤에 선택이 바뀐 record를 구분한다. 그 RID에 선택 route 행이 없으면 그 record는
+  다음 data recv가 실패했거나 성공한 receive가 없으면 `0`이다. 그 RID에 선택 route 행이 없으면 그 record는
   후속 선택 없이 끝난 pipe가 남긴 것이며 선택 변경으로 버려진 것이 아니다. 그 REQUEST의 reply 결과는
   [§9](#9-raw-reply-submit)를 따른다.
 - **Socket마다 route 관찰자는 하나만 둔다.** Snapshot 호출과 `ZLINK_POLLROUTE` 처리는 같은 관찰자가

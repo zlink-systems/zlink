@@ -123,20 +123,14 @@ applies.
 5. Only the first ACK matching the ID the current connection is waiting for resets the
    deadline to 15 seconds.
 
-One connection keeps at most one ID still awaiting a response. When Core's selected route changes,
-the waiting ID is discarded and a probe on the new route uses an ID that has not been used before. An
-ACK is used as evidence only when the route generation of its record
-([Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.en.md#101-observing-the-selected-route)) equals
-the selected route generation that the framework last observed for that RID. If it differs, the
-framework queries the snapshot again and discards the ACK if it also differs from the newly observed
-generation.
+One connection keeps at most one ID still awaiting a response.
 
 | Input received | Effect on the current connection |
 |---|---|
 | The first ACK matching the awaited ID | Removes that ID and resets the deadline to 15 seconds. |
 | A duplicate receipt of the same ACK | Doesn't change state. |
 | An ACK for a previous probe ID | Doesn't change state. |
-| An ACK for a previous route's probe, processed after the framework observed the selected-route change | The waiting ID was discarded at that observation, so the state does not change. |
+| ACK from another physical connection | Not used as evidence for the current connection. |
 | A regular application message | Only updates the last-receive time for diagnostics — doesn't extend the deadline. |
 
 If a valid ACK isn't received within 15 seconds, that connection is switched to not-ready and
@@ -294,13 +288,7 @@ per RID through the snapshot and `ZLINK_POLLROUTE` of [Core ROUTER §10.1](../..
 logical admission of that route from the descriptor's RID, security identity, and lifecycle
 generation. It does not reconstruct the selected route from the order of monitor events.
 
-Orderly close and transport disconnect don't wait 15 seconds. Core does not return records
-of a previous physical connection after the selection changes. Once the framework has observed the
-selection change, a record of the previous generation is no longer evidence, so it can't change the
-new connection's state. A handshake is admitted only after the same comparison.
-This generation comparison applies only to records that change a connection's ready or liveness
-state (`livenessAck` and the service handshake). Records that carry a Spot, Actor, or Channel
-message are not compared and are processed as Core returns them.
+Orderly close and transport disconnect don't wait 15 seconds. A late ACK or frame from a previous physical connection cannot change the new connection state. The framework processes Spot, Actor, and Channel messages as Core returns them without a second generation decision.
 
 One peer's failure doesn't turn the whole host `Error`. Other ready peers and the local
 [Owner](../00-foundation/02-glossary.en.md#owner) — the MeshNode that actually runs the Actor or

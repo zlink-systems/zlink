@@ -409,8 +409,14 @@ interface RequiredZlinkStreamConnectorOptions {
 ```
 
 A connector is created with `zlinkStreamConnectorFactory.create(options)`.
-`zlinkStreamConnectorFactory.create(options)` throws `ZlinkStreamException`
-for option validation under [Common Spec §6.3](../../32-stream-connector.en.md#63-option-validation).
+**`create(options)` checks every option**, and on a validation failure
+it builds no connector and throws a `ZlinkStreamException`
+([Common Spec §6.3](../../32-stream-connector.en.md#63-option-validation)).
+A single value out of range carries `ValidationFailed`, and a mismatch
+between options carries `ConfigurationError` — a conflict between the
+endpoint scheme and `transport`, the `tcp`/`tls` the browser doesn't
+support, and a `compressionCodec` given together with
+`compression: none` fall into the latter.
 
 - **Cancellation is delivered through an optional `AbortSignal`.** It
   doesn't replicate another language's cancellation token shape
@@ -468,11 +474,6 @@ waitForSequence<T>(nameOrType: string | Function): ZlinkStreamSequenceCall<T>; /
 
 - **Domain REST polling isn't this surface.** That's the HTTP client's
   job.
-
-### 4.2 Cancellation
-
-The promise of a cancelled operation rejects with the `reason` of its
-`AbortSignal` ([Common Spec §5.2](../../32-stream-connector.en.md#52-request-correlation)).
 
 ## 5. Receive Queue
 

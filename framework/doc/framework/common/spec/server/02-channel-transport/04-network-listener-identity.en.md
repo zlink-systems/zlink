@@ -229,11 +229,9 @@ The common query identifies a local listener by its listener kind and
 configured name. Its result contains the kind, name, advertised endpoint,
 and observation time. The result is determined by that listener's bound
 record alone. The record is created when the listener completes binding and
-is removed when closing that listener starts. Host shutdown also closes
-listeners. The query reads the record once: it succeeds if the record exists
-and returns a configuration error otherwise. This covers an unknown listener,
-a listener that hasn't completed binding, and a listener whose closing has
-started. The precise method and value types are fixed by each language
+is retained while that listener remains bound. The query reads the record once: it succeeds if the record exists
+and returns a configuration error otherwise. This covers an unknown listener
+and a listener that hasn't completed binding. The precise method and value types are fixed by each language
 interface, but every implementation exposes the same four listener kinds:
 `ROUTE_MESH`, `CLIENT_SERVER`, `FANOUT`, and `STREAM`.
 
