@@ -3,7 +3,6 @@ package systems.zlink.framework.runtime.spots;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkActor;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
@@ -15,7 +14,6 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessage
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
-import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
@@ -335,8 +333,7 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                 return stage.thenApply(ignored -> (Void) null)
                         .whenComplete((ignored, error) -> closeRouteReceived(received));
             }
-            if (host.isDraining()
-                    && ZLinkActorSpotRoutePackets.ACTOR_PACKET_NAME.equals(packet.packetName())) {
+            if (host.isDraining() || closeCommitted()) {
                 if (received.requestSeq().isPresent()) {
                     host.replySpotRouteDispatchError(
                             received,
@@ -345,9 +342,7 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                             ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
                             //  Sealed admission is a framework-generated rejection, so
                             //  the reply carries the framework-origin marker.
-                            ZLinkFrameworkErrorOrigin.framework(
-                                    ZLinkFrameworkErrorKind.REJECTED,
-                                    "Actor application admission is sealed"));
+                            host.spotAdmissionFailure(backendSpot.spotId()));
                 }
                 closeRouteReceived(received);
                 return CompletableFuture.completedFuture(null);
@@ -372,22 +367,6 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                                 })
                         .thenApply(ignored -> (Void) null)
                         .whenComplete((ignored, error) -> closeRouteReceived(received));
-            }
-            if (host.isDraining()) {
-                if (received.requestSeq().isPresent()) {
-                    host.replySpotRouteDispatchError(
-                            received,
-                            packet.packetName(),
-                            backendSpot.spotId(),
-                            ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
-                            //  Sealed admission is a framework-generated rejection, so
-                            //  the reply carries the framework-origin marker.
-                            ZLinkFrameworkErrorOrigin.framework(
-                                    ZLinkFrameworkErrorKind.REJECTED,
-                                    "SPOT application admission is sealed"));
-                }
-                closeRouteReceived(received);
-                return CompletableFuture.completedFuture(null);
             }
             return dispatchSpotRouteHandler(received, packet);
         } finally {
@@ -636,22 +615,30 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
         if (spot == null) {
             return;
         }
-        host.awaitClosing(
-                closingCallback(
-                        () ->
-                                context.enqueueLifecycle(
-                                        () ->
-                                                host.runWithOutbound(
-                                                        context.dispatchOutbound(),
-                                                        () ->
-                                                                ZLinkHandlerStages
-                                                                        .fromStageSupplier(
-                                                                                () ->
-                                                                                        spot
-                                                                                                .onClosing(
-                                                                                                        new ZLinkSpotClosingContext(
-                                                                                                                reason,
-                                                                                                                deadline)))))));
+        host.awaitClosing(closingStage(reason, deadline));
+    }
+
+    CompletionStage<Void> closingStage(ZLinkSpotCloseReason reason, Instant deadline) {
+        if (spot == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return closingCallback(
+                () -> {
+                    Supplier<CompletionStage<Void>> callback =
+                            () ->
+                                    host.runWithOutbound(
+                                            context.dispatchOutbound(),
+                                            () ->
+                                                    ZLinkHandlerStages.fromStageSupplier(
+                                                            () ->
+                                                                    spot.onClosing(
+                                                                            new ZLinkSpotClosingContext(
+                                                                                    reason,
+                                                                                    deadline))));
+                    return context.isCurrentSpotTurn()
+                            ? context.runLifecycleExecution(callback)
+                            : context.enqueueLifecycle(callback);
+                });
     }
 
     private void closeResources() {

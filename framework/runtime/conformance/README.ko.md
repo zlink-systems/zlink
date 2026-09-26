@@ -32,6 +32,11 @@ content-type은 startup에서 parameter가 없는 ASCII media type으로 정규�
 `runtime-state-v1.json`은 public 7-state 값, readiness authority, work admission과
 maintenance·discovery bounded context로 보내는 단방향 projection을 정의한다.
 
+`spot-close-v1.json`은 Spot Close의 공개 결과를 정의한다. 없는 incarnation, 다른 generation,
+Actor membership, Closing 확정 전 실패, `OnClosing` 실패 기록, 먼저 수락된 Join 뒤의 Close가
+대상이다. Context Close는 manager Close와 같은 완료 결과를 반환한다.
+네 언어의 unit test가 이 fixture를 읽고 scenario마다 실제 runtime 결과를 대조한다.
+
 `relocation-behavior-v1.json`은 Actor와 Spot relocation에서 application과 runtime port가
 관찰하는 lifecycle, traffic identity, terminal settlement를 정의한다. `actorJoin`,
 `actorHostHandoff`, `perActorUserSpot`, `spotWideUserSpot`, `instanceSpot` profile은 공통 사건을

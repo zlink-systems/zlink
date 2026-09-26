@@ -229,6 +229,238 @@ test('Ready Instance authority with an expired owner remains unavailable instead
   );
 });
 
+test('Closing Spot authority retains the owner route without caching it as Ready', async () => {
+  let reads = 0;
+  const authority = {
+    async readAuthority() {
+      reads++;
+      return {
+        kind: 'snapshot',
+        storeVersion: { value: 'closing-v1' },
+        payload: internal.encodeServiceUserSpotAuthorityPayload({
+          state: 'closing', stableType: 'Room', spotId: 'closing-room',
+          ownerId: 'owner-a', ownerLeaseGeneration: 2n,
+          ownerMeshName: 'play', ownerNodeRid: 'node-a', ownerNodeGeneration: 3n
+        }),
+        objectGeneration: 4n,
+        authorityOwnerGeneration: 5n,
+        ownerId: 'owner-a',
+        ownerLeaseGeneration: 2n,
+        allocation: {
+          state: 'active', objectKind: 'user_spot', stableType: 'Room',
+          descriptor: { meshName: 'play', nodeRid: 'node-a' },
+          descriptorLifecycleGeneration: 3n,
+          capacity: { actors: 0, spots: 1 }
+        },
+        storeNow: new Date()
+      };
+    }
+  };
+  const resolver = new internal.ZLinkAuthoritySpotRouteResolver(
+    authority, meshName => meshName, undefined,
+    { remainingOwnerTokenLeaseMs: async () => 60_000 }, 15_000, () => 0
+  );
+  assert.equal((await resolver.resolve('closing-room')).targetNodeRid, 'node-a');
+  assert.equal((await resolver.resolve('closing-room')).targetSpotGeneration, 4n);
+  assert.equal(reads, 2);
+});
+
+test('target owner applies Draining before Closing and maps absent direct Spot to NotFound', () => {
+  const { ServiceStatefulRuntime } = require(
+    '../../packages/framework/dist/runtime/foundation/service-stateful-runtime'
+  );
+  const runtime = new ServiceStatefulRuntime({ setServiceIngress() {} }, 'node-a', 3n);
+  let state = framework.ZLinkFrameworkRuntimeState.Serving;
+  let closing = true;
+  runtime.setSpotAdmissionProvider({
+    isClosing: () => closing,
+    runtimeState: () => state
+  });
+  const fence = {
+    spot: { spotId: 'closing-room', generation: 4n },
+    targetNodeRid: 'node-a', targetNodeGeneration: 3n,
+    authorityOwnerGeneration: 5n, ownerLeaseGeneration: 2n,
+    storeVersion: 'closing-v1'
+  };
+  assert.throws(
+    () => runtime.validateDirectSpotFence(fence),
+    error => error.kind === framework.ZLinkFrameworkErrorKind.Rejected
+  );
+  state = framework.ZLinkFrameworkRuntimeState.Draining;
+  assert.throws(
+    () => runtime.validateDirectSpotFence(fence),
+    error => error.kind === framework.ZLinkFrameworkErrorKind.ShuttingDown
+  );
+  state = framework.ZLinkFrameworkRuntimeState.Serving;
+  closing = false;
+  assert.throws(
+    () => runtime.validateDirectSpotFence(fence),
+    error => error.kind === framework.ZLinkFrameworkErrorKind.NotFound
+  );
+});
+
+test('direct Spot request preserves the target owner Closing and Draining verdict', async () => {
+  const { ServiceStatefulRuntime } = require(
+    '../../packages/framework/dist/runtime/foundation/service-stateful-runtime'
+  );
+  class Lookup {}
+  let authorityState = 'ready';
+  let runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
+  let routedCalls = 0;
+  const authority = {
+    async readAuthority() {
+      if (authorityState === 'missing') return { kind: 'missing' };
+      return {
+        kind: 'snapshot', storeVersion: { value: 'v1' },
+        payload: internal.encodeServiceUserSpotAuthorityPayload({
+          state: authorityState, stableType: 'Room', spotId: 'room-direct',
+          ownerId: 'owner-a', ownerLeaseGeneration: 2n,
+          ownerMeshName: 'play', ownerNodeRid: 'node-a', ownerNodeGeneration: 3n
+        }),
+        objectGeneration: 4n, authorityOwnerGeneration: 5n,
+        ownerId: 'owner-a', ownerLeaseGeneration: 2n,
+        allocation: {
+          state: 'active', objectKind: 'user_spot', stableType: 'Room',
+          descriptor: { meshName: 'play', nodeRid: 'node-a' },
+          descriptorLifecycleGeneration: 3n,
+          capacity: { actors: 0, spots: 1 }
+        }, storeNow: new Date()
+      };
+    }
+  };
+  const resolver = new internal.ZLinkAuthoritySpotRouteResolver(
+    authority, meshName => meshName, undefined,
+    { remainingOwnerTokenLeaseMs: async () => 60_000 }, 15_000, () => 0
+  );
+  const owner = new ServiceStatefulRuntime({ setServiceIngress() {} }, 'node-a', 3n);
+  owner.setSpotAdmissionProvider({
+    isClosing: () => authorityState === 'closing',
+    runtimeState: () => runtimeState
+  });
+  const addressTransport = new internal.ZLinkHostSpotAddressTransport({
+    resolver: () => resolver,
+    routed: {
+      async sendToSpot() { throw new Error('send is not used.'); },
+      async requestToSpot(route) {
+        routedCalls++;
+        owner.validateDirectSpotFence({
+          spot: { spotId: String(route.spotId), generation: route.targetSpotGeneration },
+          targetNodeRid: String(route.targetNodeRid),
+          targetNodeGeneration: route.targetNodeGeneration,
+          authorityOwnerGeneration: route.authorityOwnerGeneration,
+          ownerLeaseGeneration: route.ownerLeaseGeneration,
+          storeVersion: route.authorityStoreVersion
+        });
+      }
+    },
+    meshNames: () => ['play'], meshNode: () => undefined,
+    completions: () => undefined, defaultRequestTimeoutMs: 1_000
+  });
+  const request = () => addressTransport.requestToSpotAddress('room-direct', new Lookup(), {});
+  await resolver.resolve('room-direct');
+  authorityState = 'closing';
+  await assert.rejects(request, error => error.kind === framework.ZLinkFrameworkErrorKind.Rejected);
+  runtimeState = framework.ZLinkFrameworkRuntimeState.Draining;
+  await assert.rejects(request, error => error.kind === framework.ZLinkFrameworkErrorKind.ShuttingDown);
+  runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
+  authorityState = 'creating';
+  resolver.invalidate('room-direct');
+  await assert.rejects(request, error => error.kind === framework.ZLinkFrameworkErrorKind.NotFound);
+  authorityState = 'missing';
+  await assert.rejects(request, error => error.kind === framework.ZLinkFrameworkErrorKind.NotFound);
+  assert.equal(routedCalls, 2);
+});
+
+test('owner ingress waits for the canonical Close CAS result before direct admission', async () => {
+  const { ServiceStatefulRuntime } = require(
+    '../../packages/framework/dist/runtime/foundation/service-stateful-runtime'
+  );
+  const owner = new ServiceStatefulRuntime({ setServiceIngress() {} }, 'node-a', 3n);
+  const fence = {
+    spot: { spotId: 'close-race-room', generation: 4n },
+    targetNodeRid: 'node-a', targetNodeGeneration: 3n,
+    authorityOwnerGeneration: 5n, ownerLeaseGeneration: 2n,
+    storeVersion: 'ready-v1'
+  };
+  owner.restoreUserSpotAuthority('close-race-room', 'Room', 4n, 5n);
+  owner.rememberSpotRoute(fence);
+  let committed = false;
+  let decision;
+  let dispatched = 0;
+  owner.enqueueApplicationFrame = () => { dispatched++; return 'application'; };
+  owner.setSpotAdmissionProvider({
+    isClosing: () => committed,
+    runtimeState: () => framework.ZLinkFrameworkRuntimeState.Serving,
+    awaitCloseDecision: () => decision
+  });
+  const ingress = { parts: [Buffer.alloc(0), Buffer.alloc(0)] };
+  const record = { kind: 'spotRequest', target: fence, correlation: 'corr-race' };
+
+  let finishCommit;
+  decision = new Promise(resolve => { finishCommit = resolve; });
+  // The store has applied Closing, but the CAS operation has not returned to
+  // the target owner yet. Its canonical operation Promise is still pending.
+  const committedIngress = owner.handleIngress(ingress, record, Buffer.alloc(0));
+  await Promise.resolve();
+  assert.equal(dispatched, 0);
+  committed = true;
+  finishCommit();
+  await assert.rejects(
+    committedIngress,
+    error => error.kind === framework.ZLinkFrameworkErrorKind.Rejected
+  );
+  assert.equal(dispatched, 0);
+
+  committed = false;
+  let finishFailedCas;
+  decision = new Promise(resolve => { finishFailedCas = resolve; });
+  const failedIngress = owner.handleIngress(ingress, record, Buffer.alloc(0));
+  await Promise.resolve();
+  assert.equal(dispatched, 0);
+  finishFailedCas();
+  assert.equal(await failedIngress, 'application');
+  assert.equal(dispatched, 1);
+});
+
+test('local loopback Spot request also waits for the Close CAS result', async () => {
+  const { ServiceStatefulRuntime } = require(
+    '../../packages/framework/dist/runtime/foundation/service-stateful-runtime'
+  );
+  const { encodeSpotHeader } = require(
+    '../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec'
+  );
+  const owner = new ServiceStatefulRuntime({ setServiceIngress() {} }, 'node-a', 3n);
+  const fence = {
+    spot: { spotId: 'local-close-race', generation: 4n },
+    targetNodeRid: 'node-a', targetNodeGeneration: 3n,
+    authorityOwnerGeneration: 5n, ownerLeaseGeneration: 2n,
+    storeVersion: 'ready-v1'
+  };
+  owner.restoreUserSpotAuthority('local-close-race', 'Room', 4n, 5n);
+  owner.rememberSpotRoute(fence);
+  let committed = false;
+  let decision;
+  let dispatched = 0;
+  owner.enqueueApplicationFrame = () => { dispatched++; return 'application'; };
+  owner.setSpotAdmissionProvider({
+    isClosing: () => committed,
+    runtimeState: () => framework.ZLinkFrameworkRuntimeState.Serving,
+    awaitCloseDecision: () => decision
+  });
+  const ingress = {
+    parts: [encodeSpotHeader('spotRequest', 'source-spot', fence, 1n), Buffer.alloc(0)]
+  };
+  let finishCommit;
+  decision = new Promise(resolve => { finishCommit = resolve; });
+  const request = owner.submitLocalRequest(ingress, { id: 1n }, 'spotRequest');
+  await Promise.resolve();
+  assert.equal(dispatched, 0);
+  committed = true;
+  finishCommit();
+  await assert.rejects(request, error => error.kind === framework.ZLinkFrameworkErrorKind.Rejected);
+  assert.equal(dispatched, 0);
+});
+
 test('authority Spot resolution does not re-cache a route invalidated during the read', async () => {
   let reads = 0;
   let nodeRid = 'node-a';
@@ -611,10 +843,14 @@ test('a failed direct Spot operation does not refresh and resubmit to a fresh ow
   assert.equal(refreshCount, 0);
 });
 
-test('a direct Spot request maps a confirmed draining target to ShuttingDown without retrying', async () => {
+test('a direct Spot handle request preserves a route disconnect despite a draining refresh', async () => {
   class Lookup {}
   let refreshCount = 0;
   let requestCount = 0;
+  const routeError = internal.createInternalFrameworkException(
+    ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+    'SpotNode router request failed with result 109.'
+  );
   const handle = internal.createSpotHandle('spot-1', {
     meshName: 'play',
     nodeRid: 'node-a',
@@ -637,16 +873,13 @@ test('a direct Spot request maps a confirmed draining target to ShuttingDown wit
       async sendToSpot() {},
       async requestToSpot() {
         requestCount += 1;
-        throw internal.createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RouteNotConnected,
-          'SpotNode router request failed with result 109.'
-        );
+        throw routeError;
       }
     }, handle, new Lookup()),
-    (error) => error.kind === framework.ZLinkFrameworkErrorKind.ShuttingDown
+    (error) => error === routeError && error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
   );
   assert.equal(requestCount, 1);
-  assert.equal(refreshCount, 1);
+  assert.equal(refreshCount, 0);
 });
 
 test('Spot address requests preserve the original route failure after invalidation', async () => {

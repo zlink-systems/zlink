@@ -34,6 +34,7 @@ type AdmissionOptions = Pick<
   | 'providerResolver'
   | 'runtimeEventPublisher'
   | 'routeToActorJoinPrewarm'
+  | 'isSpotClosing'
 >;
 
 export class ZLinkSpotActorAdmissionCoordinator {
@@ -96,6 +97,7 @@ export class ZLinkSpotActorAdmissionCoordinator {
         'TopicMessage'
       ),
       serial: activation.serial,
+      isSpotClosing: () => this.options.isSpotClosing(activation),
       actors: {
         resolveActor: (actorId) =>
           activation.hasDepartedActor(actorId)

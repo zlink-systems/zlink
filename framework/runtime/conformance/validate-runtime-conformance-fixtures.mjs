@@ -3442,4 +3442,29 @@ for (const row of relocationE2e.languageScenarioMatrix.rows) {
   }
 }
 
+const spotClose = await readFixture('./spot-close-v1.json');
+assert.equal(spotClose.fixture, 'zlink.framework.spot-close');
+assert.equal(spotClose.version, 1);
+assert.deepEqual(spotClose.closeSteps, [
+  'closingCommitted',
+  'admissionSealed',
+  'acceptedTurnsDrained',
+  'onClosing',
+  'localResourcesReleased',
+  'authorityReleased'
+]);
+assert.equal(spotClose.invariants.contextCloseReturnsValue, true);
+assert.equal(spotClose.invariants.onClosingCallsPerAcceptedClose, 1);
+assert.equal(spotClose.invariants.onClosingFailureChangesCloseResult, false);
+uniqueNames(spotClose.scenarios, 'name');
+const spotCloseResults = new Set([
+  true, false, 'failure', 'InvalidOperation', 'Unavailable'
+]);
+for (const scenario of spotClose.scenarios) {
+  const results = scenario.expect.results ?? [scenario.expect.result];
+  for (const result of results) assert.ok(spotCloseResults.has(result), scenario.name);
+  if (scenario.expect.onClosingCalls !== undefined)
+    assert.ok(scenario.expect.onClosingCalls <= spotClose.invariants.onClosingCallsPerAcceptedClose);
+}
+
 console.log('runtime conformance fixtures: PASS');

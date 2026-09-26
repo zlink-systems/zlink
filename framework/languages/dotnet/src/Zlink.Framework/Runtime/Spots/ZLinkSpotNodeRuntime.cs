@@ -1051,6 +1051,12 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         return await _spots.CloseAsync(spotId, cancellationToken);
     }
 
+    internal ValueTask<bool> CloseAsync(
+        string spotId,
+        ulong objectGeneration,
+        CancellationToken cancellationToken
+    ) => _spots.CloseAsync(spotId, objectGeneration, cancellationToken);
+
     internal ValueTask<ZLinkSpotDrainResult> TryDrainSpotsAsync(
         bool relocate,
         bool hostShutdown,

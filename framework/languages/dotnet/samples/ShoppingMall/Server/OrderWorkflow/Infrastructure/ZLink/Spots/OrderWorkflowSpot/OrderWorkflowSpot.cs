@@ -143,18 +143,16 @@ internal sealed class OrderWorkflowSpot(
     )
     {
         _ = request;
-        await Context.CloseAsync(cancellationToken);
+        _ = Context.CloseAsync(cancellationToken);
         return new CloseOrderWorkflowForPlannedRelocationRes(true);
     }
 
     // --8<-- [start:doc-sm-close-terminal]
-    private async ValueTask CloseIfTerminalAsync(
-        OrderState state,
-        CancellationToken cancellationToken
-    )
+    private ValueTask CloseIfTerminalAsync(OrderState state, CancellationToken cancellationToken)
     {
         if (state.Status is OrderStatuses.Confirmed or OrderStatuses.Failed)
-            await Context.CloseAsync(cancellationToken);
+            _ = Context.CloseAsync(cancellationToken);
+        return ValueTask.CompletedTask;
     }
     // --8<-- [end:doc-sm-close-terminal]
 }

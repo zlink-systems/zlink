@@ -63,6 +63,21 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         // Alternate backends may not expose raw relocation staging.
     }
 
+    /** Resolves Spot admission from the target owner's current authority. */
+    default void setSpotAdmissionResolver(SpotAdmissionResolver resolver) {
+        // Alternate backends may not expose raw target ingress.
+    }
+
+    @FunctionalInterface
+    interface SpotAdmissionResolver {
+        /** A null result admits an Instance intent against Ready authority. */
+        CompletionStage<? extends RuntimeException> resolve(
+                String spotId,
+                long authorityOwnerGeneration,
+                boolean instanceIntent,
+                boolean activationPresent);
+    }
+
     /**
      * Redirects an exact stale Spot route to the staged target through the existing application
      * wire. The redirect expires with Message Follow and never changes a different generation or

@@ -1831,6 +1831,29 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIMEOUT 30
     PROPERTIES
       RESOURCE_LOCK zlink_cpp_heavy_runtime)
+  add_executable(test_cpp_framework_spot_close_conformance
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_close_conformance.cpp)
+  target_compile_features(test_cpp_framework_spot_close_conformance PRIVATE cxx_std_20)
+  target_link_zlink_test_harness(test_cpp_framework_spot_close_conformance)
+  target_use_zlink_gtest_main(test_cpp_framework_spot_close_conformance)
+  target_link_libraries(test_cpp_framework_spot_close_conformance PRIVATE
+    zlink::framework
+    GTest::gtest_main
+    nlohmann_json::nlohmann_json)
+  target_include_directories(test_cpp_framework_spot_close_conformance PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_compile_definitions(test_cpp_framework_spot_close_conformance PRIVATE
+    ZLINK_SPOT_CLOSE_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/spot-close-v1.json")
+  zlink_framework_cpp_enable_test_assertions(test_cpp_framework_spot_close_conformance)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_spot_close_conformance
+    COMMAND test_cpp_framework_spot_close_conformance
+    LABELS "framework-unit;framework-regression;spot"
+    TIMEOUT 120
+    PROPERTIES
+      RESOURCE_LOCK zlink_cpp_heavy_runtime)
   add_zlink_framework_test(
     test_cpp_framework_handler_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_handler_registry.cpp

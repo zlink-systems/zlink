@@ -3159,6 +3159,38 @@ public sealed partial class StatefulServiceRuntimeTests
                 )
             );
             Assert.Equal(ZLinkUserSpotAuthorityState.Ready, retainedPayload.State);
+
+            // Spec §7: the owner has no local incarnation and the Store holds
+            // another generation of this Spot ID. The command 48 owner path and
+            // the owner's own manager Close both end InvalidOperation.
+            var staleOrphanFence = orphanFence with
+            {
+                ObjectGeneration = orphanFence.ObjectGeneration + 1,
+            };
+            Assert.Equal(
+                SubmitResult.Ok,
+                source.CloseUserSpot(
+                    targetRid,
+                    staleOrphanFence,
+                    checked((ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds()),
+                    out var staleOrphanOperation,
+                    TimeSpan.FromSeconds(3)
+                )
+            );
+            await WaitUntilAsync(() => source.Status().PendingInfrastructureMessages > 0);
+            var (staleCompletion, staleParts) = DrainCompletion(source, staleOrphanOperation);
+            ZLinkMessageParts.DisposeAll(staleParts);
+            Assert.Equal((int)RequestResult.Conflict, staleCompletion.TerminalResult);
+            Assert.Equal(
+                (int)ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale,
+                staleCompletion.FailureErrno
+            );
+            var directStale = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await runtime.CloseAsync(
+                    new SpotRef(orphanRid, staleOrphanFence.ObjectGeneration, "objects", targetRid)
+                )
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, directStale.Kind);
         }
         finally
         {

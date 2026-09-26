@@ -185,7 +185,7 @@ internal sealed class BingoRoom(
             _observerActor = null;
         logger.LogInformation("bingo-lifecycle room-leave actor={ActorId}", actor.ActorId);
         if (_actors.Count == 0 && _observerActor is null)
-            _ = await Context.CloseAsync(cancellationToken);
+            _ = Context.CloseAsync(cancellationToken);
     }
 
     public ValueTask OnDisconnectActorAsync(PlayerActor actor, CancellationToken cancellationToken)

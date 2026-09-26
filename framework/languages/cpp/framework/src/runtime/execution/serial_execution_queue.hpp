@@ -141,6 +141,11 @@ struct serial_work_options_t
     // refusal from a capacity/closed refusal. Only dereferenced inside the
     // synchronous post call.
     bool *actor_handoff_fence_refused = nullptr;
+    // A lifecycle item that waits outside a user callback returns its turn, so
+    // runnable application work proceeds (handler turn and execution gate §7).
+    // A relocation readiness boundary instead holds application jobs until it
+    // completes (Spot model §5.1).
+    bool holds_application_while_waiting = false;
 };
 
 using serial_submission_id_t = std::uint64_t;
@@ -189,7 +194,8 @@ class serial_execution_queue_t
                           serial_work_options_t options,
                           std::function<bool ()> stop_requested = {});
     bool try_post_deferred (std::string name, std::function<void ()> work);
-    result_t<std::shared_ptr<detail::deferred_barrier_t>> reserve_barrier_next (std::string name);
+    result_t<std::shared_ptr<detail::deferred_barrier_t>>
+    reserve_barrier_next (std::string name, bool holds_application_while_waiting = false);
     result_t<std::shared_ptr<detail::deferred_barrier_t>>
     reserve_handoff_barrier (std::string name);
     void post (std::string name, std::function<void ()> work);
@@ -220,6 +226,9 @@ class serial_execution_queue_t
         serial_submission_id_t submission_id = 0;
         std::function<void ()> cancel;
         std::shared_ptr<serial_turn_handle_impl_t> turn;
+        bool cancel_requested = false;
+        std::optional<std::function<void ()>> suspended_completion;
+        bool holds_application_while_waiting = false;
     };
 
     struct lane_state_t
@@ -246,6 +255,7 @@ class serial_execution_queue_t
         serial_submission_id_t submission_id = 0;
         std::shared_ptr<serial_turn_handle_impl_t> turn;
         std::function<void ()> cancel;
+        async_work_t ready_continuation;
         bool cancel_requested = false;
     };
 
@@ -255,6 +265,13 @@ class serial_execution_queue_t
     void complete_one (std::string name,
                        std::function<void ()> completion,
                        bool allow_inline_claim = true);
+    void complete_turn (std::string name,
+                        std::function<void ()> completion,
+                        const std::shared_ptr<serial_turn_handle_impl_t> &turn,
+                        bool allow_inline_claim);
+    void suspend_lifecycle (work_item_t item);
+    bool try_resume_suspended (const std::shared_ptr<serial_turn_handle_impl_t> &turn,
+                               std::function<void ()> work);
     lane_state_t &lane_locked (serial_work_lane_t lane) noexcept;
     const lane_state_t &lane_locked (serial_work_lane_t lane) const noexcept;
     bool enqueue_locked (std::string name,
@@ -280,6 +297,7 @@ class serial_execution_queue_t
     lane_state_t _lifecycle;
     std::vector<deferred_work_t> _deferred_after_active;
     std::optional<active_turn_t> _active_turn;
+    std::optional<work_item_t> _suspended_lifecycle;
     std::optional<serial_work_lane_t> _active_lane;
     std::size_t _active_bytes = 0;
     std::optional<std::chrono::steady_clock::time_point> _claim_started_at;

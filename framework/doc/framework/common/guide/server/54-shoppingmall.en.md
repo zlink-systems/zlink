@@ -593,9 +593,10 @@ When the read model is deleted or inconsistent, it is rebuilt from the event str
 
 ## 7. Termination and Lifecycle
 
-Once the order reaches `Confirmed` or `Failed`, the Spot may close itself — the .NET and Node
-implementations do. A request with the same `OrderId` after the close creates a Spot of a new
-generation, which replays the stream and returns the terminal state as it is.
+Once the order reaches `Confirmed` or `Failed`, the Spot may request closure through context `Close`.
+Context `Close` returns the close result when the termination outcome is settled. A request with the
+same `OrderId` after the close creates a new Spot generation, which replays the stream and returns
+the terminal state.
 
 <iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-lifecycle-en.html" title="Lifecycle and the failure boundary" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-shoppingmall-lifecycle-en.html" target="_blank">↗ View larger</a></p>

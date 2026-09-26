@@ -1594,17 +1594,10 @@ mesh_node_host_service_t::close_user_spot (const std::shared_ptr<detail::mesh_no
     const auto read =
       _location_store->read_authority (spot_authority_key (spot.spot_id ())).result ().value ();
     const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
+    // Without an authority no owner can hold this incarnation. Otherwise the
+    // row only addresses the owner, which classifies the request (§7.1).
     if (!snapshot)
         return task_t<bool> (result_t<bool>::success (false));
-    if (snapshot->object_generation != spot.object_generation ())
-        return task_t<bool> (result_t<bool>::failure (framework_error_kind_t::invalid_operation,
-                                                      "User Spot generation is stale"));
-    if (snapshot->allocation.object_kind != placement_object_kind_t::user_spot
-        || snapshot->allocation.state != placement_allocation_state_t::active
-        || snapshot->allocation.target.mesh_name != spot.mesh_name ()
-        || snapshot->allocation.target.node_rid.value () != spot.node_rid ().value ())
-        return task_t<bool> (result_t<bool>::failure (framework_error_kind_t::unavailable,
-                                                      "User Spot owner is moving"));
     const auto source_status = source->native_node ().status ();
     protocol::user_spot_close_header_t command{
       0,
@@ -1723,10 +1716,17 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
             registration->spot_state->close_user_spot = [this, source] (spot_ref_t spot) {
                 return close_user_spot (source, std::move (spot));
             };
+            registration->spot_state->begin_user_spot_close =
+              [source] (const spot_id_t &spot_id, std::uint64_t object_generation,
+                        std::uint64_t authority_owner_generation) {
+                  return source->native_node ().begin_local_user_spot_close (
+                    std::string (spot_id), object_generation, authority_owner_generation);
+              };
             _nodes[index]->configure_user_spot_operations (
-              store, [this, registration, source] (const stateful::object_ref_t &object,
-                                                   const std::string &stable_type,
-                                                   const std::vector<std::byte> &payload) {
+              store,
+              [this, registration, source] (const stateful::object_ref_t &object,
+                                            const std::string &stable_type,
+                                            const std::vector<std::byte> &payload) {
                   std::vector<std::uint8_t> rid_bytes;
                   rid_bytes.reserve (object.key.size ());
                   for (const auto value : object.key)
@@ -1772,6 +1772,18 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                     created->state == spot_create_state_t::created
                       || created->state == spot_create_state_t::existing,
                     std::move (application_reply)};
+              },
+              [registration] (const std::string &spot_id, host::spot_close_begin_t begin,
+                              host::spot_close_done_t done) {
+                  // The materializer registers the activation under this local id.
+                  std::vector<std::uint8_t> rid_bytes;
+                  rid_bytes.reserve (spot_id.size ());
+                  for (const auto value : spot_id)
+                      rid_bytes.push_back (
+                        static_cast<std::uint8_t> (static_cast<unsigned char> (value)));
+                  detail::spot_node_runtime_t (registration->spot_state)
+                    .close_user_spot_owner (zlink::routing_id_t::from (rid_bytes).to_string (),
+                                            std::move (begin), std::move (done));
               });
             if (!registration->spot_state->snapshot.instance_spot_names.empty ()) {
                 if (!instance_relocations)
@@ -1782,7 +1794,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   [source] (const spot_id_t &spot_id, std::string_view stable_type,
                             std::uint64_t object_generation,
                             std::uint64_t authority_owner_generation,
-                            std::function<bool ()> close_local) {
+                            std::function<void ()> close_local) {
                       return source->native_node ().evict_instance_spot (
                         std::string (stable_type), std::string (spot_id), object_generation,
                         authority_owner_generation, std::move (close_local));
@@ -2793,10 +2805,11 @@ void mesh_node_host_service_t::dispatch_application (
                                                     record.release_mailbox_reservation);
     std::shared_ptr<application_dispatch_terminal_owner_t> deferred_terminal;
     try {
+        // A draining runtime admits no new application work, whatever the target
+        // authority state is (Spot address messaging §9).
         if (reject_only || !record.before_application_handler) {
             reject_application_request (record, std::move (parts),
-                                        reject_only ? framework_error_kind_t::shutting_down
-                                                    : framework_error_kind_t::rejected,
+                                        framework_error_kind_t::shutting_down,
                                         "MeshNode is draining and rejects new application work");
             return;
         }

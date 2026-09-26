@@ -5,6 +5,7 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
@@ -999,7 +1000,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
     private CompletionStage<Void> publishActor(ZLinkSpotRetireControl.StageRequest request) {
         ActorTargetStage target = requireActorStage(request);
         if (target.directAdmission() != null) {
-            return publishDirectJoinActor(request, target);
+            target.publishRequested().complete(null);
+            return target.joinPublished();
         }
         var participant = request.participants().getFirst();
         return coordinator
@@ -1033,15 +1035,16 @@ final class ZLinkUserSpotRetireTargetEndpoint
     private CompletionStage<Void> publishDirectJoinActor(
             ZLinkSpotRetireControl.StageRequest request, ActorTargetStage target) {
         var participant = request.participants().getFirst();
-        return coordinator
-                .readTargetOwnerGenerations(
-                        expectedParticipants(request),
-                        new ZLinkAggregateFence(
-                                request.fence().aggregateId(),
-                                request.fence().aggregateGeneration()),
-                        new ZLinkLocationOwnerToken(
-                                request.targetOwnerId(), request.targetOwnerLeaseGeneration()),
-                        OPEN)
+        return ZLinkSerialExecutionQueue.yieldCurrent(
+                        coordinator.readTargetOwnerGenerations(
+                                expectedParticipants(request),
+                                new ZLinkAggregateFence(
+                                        request.fence().aggregateId(),
+                                        request.fence().aggregateGeneration()),
+                                new ZLinkLocationOwnerToken(
+                                        request.targetOwnerId(),
+                                        request.targetOwnerLeaseGeneration()),
+                                OPEN))
                 .thenCompose(
                         generations -> {
                             long targetOwnerGeneration =
@@ -1063,29 +1066,39 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                     target.requestWithSessionRoute(),
                                     targetOwnerGeneration);
                             target.published().set(true);
-                            return actorJoin
-                                    .notifyTargetJoined(target.directAdmission(), target.staged())
+                            return ZLinkSerialExecutionQueue.yieldCurrent(
+                                            actorJoin.notifyTargetJoined(
+                                                    target.directAdmission(), target.staged()))
                                     .thenCompose(
                                             ignored ->
-                                                    actorJoin.submitSourceLeave(
-                                                            request,
-                                                            target.previousMembership(),
-                                                            targetOwnerGeneration))
+                                                    ZLinkSerialExecutionQueue.yieldCurrent(
+                                                            actorJoin.submitSourceLeave(
+                                                                    request,
+                                                                    target.previousMembership(),
+                                                                    targetOwnerGeneration)))
                                     .thenCompose(
                                             ignored ->
-                                                    actorJoin.notifyTargetAccepted(
-                                                            target.directAdmission(),
-                                                            target.staged()))
+                                                    ZLinkSerialExecutionQueue.yieldCurrent(
+                                                            actorJoin.notifyTargetAccepted(
+                                                                    target.directAdmission(),
+                                                                    target.staged())))
                                     .thenRun(() -> actorStaging.openAdmission(target.staged()))
                                     .thenCompose(
                                             ignored ->
-                                                    actorStaging.replayDirectJoin(
-                                                            replay,
-                                                            productionActorReplayer(
-                                                                    target, request)));
+                                                    ZLinkSerialExecutionQueue.yieldCurrent(
+                                                            actorStaging.replayDirectJoin(
+                                                                    replay,
+                                                                    productionActorReplayer(
+                                                                            target, request))));
                         })
-                .thenCompose(ignored -> switchSessionRoutes(target.requestWithSessionRoute()))
-                .thenCompose(ignored -> normalizer.normalize(request))
+                .thenCompose(
+                        ignored ->
+                                ZLinkSerialExecutionQueue.yieldCurrent(
+                                        switchSessionRoutes(target.requestWithSessionRoute())))
+                .thenCompose(
+                        ignored ->
+                                ZLinkSerialExecutionQueue.yieldCurrent(
+                                        normalizer.normalize(request)))
                 .thenRun(
                         () -> {
                             releasePublishedActor(request, target);
@@ -1204,6 +1217,11 @@ final class ZLinkUserSpotRetireTargetEndpoint
 
     private CompletionStage<Void> abortActor(ZLinkSpotRetireControl.StageRequest request) {
         ActorTargetStage target = requireActorStage(request);
+        if (target.directAdmission() != null) {
+            target.publishRequested()
+                    .completeExceptionally(
+                            new IllegalStateException("canonical Actor Join target was aborted"));
+        }
         return actorStaging
                 .discard(target.staged())
                 .thenRun(
@@ -1294,7 +1312,9 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                             ? null
                                                             : request.sessionRoutes().getFirst()),
                                             directAdmission,
-                                            previousMembership);
+                                            previousMembership,
+                                            new CompletableFuture<>(),
+                                            new CompletableFuture<>());
                             if (directAdmission == null) {
                                 if (actorStages.putIfAbsent(request.fence(), target) == null) {
                                     return CompletableFuture.<Void>completedFuture(null);
@@ -1319,6 +1339,27 @@ final class ZLinkUserSpotRetireTargetEndpoint
                             //  this attempt (spec 15 §4.2 "이전 identity의 늦은 chunk와
                             //  Restore는 조립에 연결하지 않고 폐기한다").
                             UUID relocationId = request.fence().aggregateId();
+                            DefaultSpotContext context =
+                                    (DefaultSpotContext)
+                                            ((ZLinkSpot<?>) directAdmission.targetSpot()).context();
+                            context.enqueueLifecycle(
+                                            () ->
+                                                    ZLinkSerialExecutionQueue.yieldCurrent(
+                                                                    target.publishRequested())
+                                                            .thenCompose(
+                                                                    ignored ->
+                                                                            publishDirectJoinActor(
+                                                                                    request,
+                                                                                    target)))
+                                    .whenComplete(
+                                            (ignored, failure) -> {
+                                                if (failure == null) {
+                                                    target.joinPublished().complete(null);
+                                                } else {
+                                                    target.joinPublished()
+                                                            .completeExceptionally(failure);
+                                                }
+                                            });
                             try {
                                 actorJoin.completeMigration(
                                         relocationId,
@@ -1343,6 +1384,10 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                             //  Never block on the discard here — the
                                             //  registry monitor must stay non-blocking.
                                             if (actorStages.remove(request.fence(), target)) {
+                                                target.publishRequested()
+                                                        .completeExceptionally(
+                                                                new IllegalStateException(
+                                                                        "canonical Actor Join target was superseded"));
                                                 actorStaging
                                                         .discard(target.staged())
                                                         .exceptionally(
@@ -1361,6 +1406,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                             } catch (
                                     ZLinkActorJoinPrewarmRegistry.SupersededAttemptException
                                             superseded) {
+                                target.publishRequested().completeExceptionally(superseded);
                                 actorJoin.releasePrewarm(relocationId);
                                 return actorStaging
                                         .discard(staged)
@@ -1381,6 +1427,9 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                                                         "framework",
                                                                                 "zlink.actorJoin.superseded",
                                                                                         "true"))));
+                            } catch (RuntimeException failure) {
+                                target.publishRequested().completeExceptionally(failure);
+                                throw failure;
                             }
                             return CompletableFuture.completedFuture(null);
                         });
@@ -1407,7 +1456,9 @@ final class ZLinkUserSpotRetireTargetEndpoint
             AtomicBoolean published,
             AtomicReference<ZLinkSpotRetireControl.SessionRouteFence> sessionRoute,
             ZLinkActorJoinRelocationPort.Admission directAdmission,
-            ZLinkActorJoinCanonicalAdapter.PreviousMembership previousMembership) {
+            ZLinkActorJoinCanonicalAdapter.PreviousMembership previousMembership,
+            CompletableFuture<Void> publishRequested,
+            CompletableFuture<Void> joinPublished) {
         ActorTargetStage {
             Objects.requireNonNull(sessionRoute, "sessionRoute");
         }

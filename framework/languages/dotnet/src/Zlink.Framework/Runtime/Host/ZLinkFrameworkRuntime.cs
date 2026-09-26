@@ -65,6 +65,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     private readonly ZLinkStreamRuntimeManager _streams;
     private ZLinkMessageFlowTracer? _flow;
     private ILogger? _actorHandoffLogger;
+    private ILogger? _spotCloseLogger;
     private ILogger? _timerLogger;
     private ZLinkRuntimeErrorSink? _generationErrorSink = new();
     private int _lifecyclePhase;
@@ -206,6 +207,28 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             .GetService<ILoggerFactory>()
             ?.CreateLogger("Zlink.Framework.ActorHandoff");
         _actorHandoffLogger?.LogInformation("{ActorHandoffMarker}", marker);
+    }
+
+    // Spot context Close returns nothing, so its false, failed, merged and
+    // not-executed outcomes are recorded here (spec 06-spot-address-messaging §7).
+    internal void LogSpotContextClose(
+        string spotId,
+        ulong objectGeneration,
+        string outcome,
+        Exception? failure
+    )
+    {
+        _spotCloseLogger ??= Services
+            .GetService<ILoggerFactory>()
+            ?.CreateLogger("Zlink.Framework.SpotClose");
+        _spotCloseLogger?.Log(
+            failure is null ? LogLevel.Information : LogLevel.Warning,
+            failure,
+            "spot_context_close spot={SpotId} generation={ObjectGeneration} outcome={Outcome}",
+            spotId,
+            objectGeneration,
+            outcome
+        );
     }
 
     internal ZLinkRuntimeErrorSink ErrorSink =>

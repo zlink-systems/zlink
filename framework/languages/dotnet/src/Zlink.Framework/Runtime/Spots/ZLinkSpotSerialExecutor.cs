@@ -88,6 +88,13 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         CompleteChildLanes();
     }
 
+    internal void CloseAdmissionForClose()
+    {
+        Interlocked.Exchange(ref _spotStopping, 1);
+        Interlocked.Exchange(ref _stopping, 1);
+        _queue.CloseApplicationAdmission();
+    }
+
     public async ValueTask ExecuteAsync(
         Func<ZLinkSpotActivation, CancellationToken, ValueTask> operation,
         CancellationToken cancellationToken
@@ -278,9 +285,10 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         if (Volatile.Read(ref _spotStopping) != 0 || _isDisposed())
             return;
 
+        var callerFlow = ZLinkFlowContext.Current;
         await _queue
             .RunLifecycleAsync(
-                _ => ExecuteLifecycleOperationAsync(operation, cancellationToken),
+                _ => ExecuteLifecycleOperationAsync(operation, cancellationToken, callerFlow),
                 cancellationToken
             )
             .ConfigureAwait(false);
@@ -369,14 +377,79 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         }
     }
 
-    private async ValueTask ExecuteLifecycleOperationAsync(
-        Func<ZLinkSpotActivation, CancellationToken, ValueTask> operation,
-        CancellationToken cancellationToken
+    // Posts one Close attempt to the lifecycle lane. Only the queue's own
+    // admission decides. Null means the lane no longer admits work.
+    internal Task<bool>? PostCloseLifecycle(
+        Func<ZLinkSpotActivation, CancellationToken, ValueTask<bool>> close
     )
     {
+        var outcome = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var admission = _queue.TryPostNextWithAdmission(
+            ct =>
+                ExecuteLifecycleOperationAsync(
+                    async (activation, token) =>
+                    {
+                        try
+                        {
+                            outcome.TrySetResult(
+                                await close(activation, token).ConfigureAwait(false)
+                            );
+                        }
+                        catch (Exception exception)
+                        {
+                            // The Close caller owns the failure; the lane item ends normally.
+                            outcome.TrySetException(exception);
+                        }
+                    },
+                    ct
+                ),
+            out _
+        );
+        return admission == ZLinkSerialPostAdmission.Accepted ? outcome.Task : null;
+    }
+
+    // Close step 2. The seal answers new ingress with Closing.
+    internal async ValueTask AwaitCloseDrainAsync(CancellationToken cancellationToken)
+    {
+        ZLinkExecutionBarrierState barrier;
+        if (
+            !TryBeginRelocationBarrier(
+                holdAcceptedIngress: false,
+                allowActorClaims: false,
+                out barrier,
+                ZLinkAcceptedWorkAdmission.Closing
+            )
+        )
+        {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                "SPOT admission is already sealed by another lifecycle operation."
+            );
+        }
+        MarkBarrierBoundary(barrier.Generation);
+        var turn =
+            ZLinkSerialTurn.Current
+            ?? throw new InvalidOperationException("Close requires a lifecycle turn.");
+        await turn.YieldFrameworkCallAsync(
+                ct => new ValueTask(barrier.Quiescent.Task.WaitAsync(ct)),
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+    }
+
+    private async ValueTask ExecuteLifecycleOperationAsync(
+        Func<ZLinkSpotActivation, CancellationToken, ValueTask> operation,
+        CancellationToken cancellationToken,
+        ZLinkFlowValue? callerFlow = null
+    )
+    {
+        // A lifecycle item that a message started (Join, leave) keeps that
+        // message's flow; one without a caller flow starts a Lifecycle flow.
         using var flow = ZLinkFlowContext.Enter(
-            null,
-            null,
+            callerFlow?.FlowId,
+            callerFlow?.Origin,
             _flowCaptureEnabled(),
             ZLinkFlowOrigin.Lifecycle
         );
@@ -629,8 +702,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     {
         var result = RunBarrierState(() =>
         {
-            if (_relocationBarrier is { HoldAcceptedIngress: false })
-                return (ZLinkAcceptedWorkAdmission.Closed, Task.CompletedTask);
+            if (_relocationBarrier is { HoldAcceptedIngress: false } sealedBarrier)
+                return (sealedBarrier.SealedIngress, Task.CompletedTask);
             var callback = CreateAcceptedOperation(operation, relocationRelease);
             ZLinkAcceptedWorkAdmission admission;
             ZLinkSerialWorkItem item;
@@ -1528,7 +1601,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     private bool TryBeginRelocationBarrier(
         bool holdAcceptedIngress,
         bool allowActorClaims,
-        out ZLinkExecutionBarrierState barrier
+        out ZLinkExecutionBarrierState barrier,
+        ZLinkAcceptedWorkAdmission sealedIngress = ZLinkAcceptedWorkAdmission.Closed
     )
     {
         var result = RunBarrierState(() =>
@@ -1542,7 +1616,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                     ? _activeApplicationClaims - _activeActorClaims
                     : _activeApplicationClaims,
                 holdAcceptedIngress,
-                allowActorClaims
+                allowActorClaims,
+                sealedIngress
             );
             _relocationBarrier = created;
             _relocationAdmissionQueueOpened = false;
@@ -1624,7 +1699,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         ulong generation,
         int activeClaims,
         bool holdAcceptedIngress,
-        bool allowActorClaims
+        bool allowActorClaims,
+        ZLinkAcceptedWorkAdmission sealedIngress
     )
     {
         public ulong Generation { get; } = generation;
@@ -1634,6 +1710,10 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         public bool HoldAcceptedIngress { get; } = holdAcceptedIngress;
 
         public bool AllowActorClaims { get; } = allowActorClaims;
+
+        // The admission result a sealed, non-holding barrier gives new ingress:
+        // Closing for an explicit Close, Closed otherwise.
+        public ZLinkAcceptedWorkAdmission SealedIngress { get; } = sealedIngress;
 
         public bool BoundaryReached { get; set; }
 

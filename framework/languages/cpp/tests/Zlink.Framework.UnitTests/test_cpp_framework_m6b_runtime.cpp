@@ -12,6 +12,7 @@
 #include "runtime/execution/actor_execution_context.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/mesh/user_spot_terminal_mapping.hpp"
 #include "runtime/mesh/route_mesh_connection_policy.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
@@ -5689,13 +5690,16 @@ void verify_remote_user_spot_create_close_terminal_once ()
             if (close_during_instance_turn) {
                 const auto runtime = weak_target.lock ();
                 assert (runtime);
-                auto close = runtime->begin_instance_spot_close (
-                  activation.target.stable_type, activation.target.spot_id,
-                  authority_snapshot->object_generation,
-                  authority_snapshot->authority_owner_generation);
-                assert (close);
-                accepted_turn_terminal = [close = std::move (*close)] () mutable {
-                    assert (close (true));
+                auto close = runtime
+                               ->begin_instance_spot_close (
+                                 activation.target.stable_type, activation.target.spot_id,
+                                 authority_snapshot->object_generation,
+                                 authority_snapshot->authority_owner_generation)
+                               .result ();
+                assert (close && close.value ().release);
+                accepted_turn_terminal = [release = std::move (close.value ().release)] () mutable {
+                    const auto released = release ().result ();
+                    assert (released && released.value ());
                 };
             }
             return host::instance_spot_activation_result_t{
@@ -6256,6 +6260,65 @@ void verify_remote_user_spot_create_close_terminal_once ()
     const auto *after_expired_snapshot = std::get_if<authority_snapshot_t> (&after_expired_close);
     assert (after_expired_snapshot
             && after_expired_snapshot->store_version == ready->store_version);
+
+    // The target classifies each Close request once (§7.1, §9): another
+    // ObjectGeneration is SpotGenerationStale (33, source InvalidOperation);
+    // any other owner fence field is SpotMoving (34, source Unavailable). A
+    // wrong target node lifecycle ends at service admission before this step.
+    // The authority is unchanged in every case.
+    const auto classify_close =
+      [&] (std::uint64_t operation_low,
+           const std::function<void (protocol::user_spot_close_fence_t &)> &alter) {
+          auto rejected = expired_close;
+          rejected.operation = {99, operation_low};
+          rejected.deadline_unix_ms = static_cast<std::uint64_t> (
+            std::chrono::duration_cast<std::chrono::milliseconds> (
+              std::chrono::system_clock::now ().time_since_epoch () + 5s)
+              .count ());
+          alter (rejected.target);
+          std::optional<protocol::user_spot_close_reply_t> reply;
+          assert (source
+                    ->close_user_spot_remote (
+                      target->status ().routing_id (), rejected, 5s,
+                      [&] (foundation::operation_terminal_t terminal,
+                           protocol::user_spot_close_reply_t value) {
+                          assert (terminal == foundation::operation_terminal_t::completed);
+                          reply = std::move (value);
+                      })
+                    .result ()
+                    .value ());
+          const auto bound = std::chrono::steady_clock::now () + 5s;
+          while (!reply && std::chrono::steady_clock::now () < bound) {
+              (void) target->dispatch_ready (dispatch);
+              (void) source->dispatch_ready (dispatch);
+              std::this_thread::sleep_for (1ms);
+          }
+          assert (reply && !reply->closed && reply->header.terminal_result == 107);
+          const auto unchanged =
+            store->read_authority (zlink::framework::runtime::spot_authority_key (spot_id))
+              .result ()
+              .value ();
+          const auto *unchanged_snapshot = std::get_if<authority_snapshot_t> (&unchanged);
+          assert (unchanged_snapshot && unchanged_snapshot->store_version == ready->store_version);
+          return reply->header.failure_code;
+      };
+    const auto stale =
+      static_cast<std::uint32_t> (protocol::framework_error_code::spotGenerationStale);
+    const auto moving = static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving);
+    assert (stale == 33 && moving == 34);
+    assert (classify_close (20, [] (auto &fence) { ++fence.object_generation; }) == stale);
+    assert (classify_close (21, [] (auto &fence) { fence.expected_store_version += "-other"; })
+            == moving);
+    assert (classify_close (22, [] (auto &fence) { ++fence.authority_owner_generation; })
+            == moving);
+    assert (
+      zlink::framework::runtime::user_spot_terminal::map_user_spot_operation_failure (
+        foundation::operation_terminal_t::completed, protocol::reply_header_t{1, 107, stale}, false)
+      == zlink::framework::framework_error_kind_t::invalid_operation);
+    assert (zlink::framework::runtime::user_spot_terminal::map_user_spot_operation_failure (
+              foundation::operation_terminal_t::completed, protocol::reply_header_t{1, 107, moving},
+              false)
+            == zlink::framework::framework_error_kind_t::unavailable);
 
     // The expired cache miss must not create a terminal record. Once the
     // unrelated capacity filler expires, the same operation identity with a

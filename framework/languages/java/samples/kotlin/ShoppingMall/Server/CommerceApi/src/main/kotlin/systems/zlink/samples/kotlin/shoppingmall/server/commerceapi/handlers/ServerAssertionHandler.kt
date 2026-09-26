@@ -5,6 +5,7 @@ import systems.zlink.framework.handlers.ZLinkHandlerGroup
 import systems.zlink.framework.kotlin.ZLinkSuspendingRequestHandler
 import systems.zlink.samples.kotlin.shoppingmall.server.configuration.CommerceStore
 import systems.zlink.samples.kotlin.shoppingmall.server.configuration.CommerceStore.StoreEvidence
+import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.OrderStatuses
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.ServerAssertionReq
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.ServerAssertionRes
 
@@ -66,6 +67,12 @@ class ServerAssertionHandler(private val store: CommerceStore) :
                     "OrderConfirmedEvent",
                 ),
             ) && passed
+        val concurrentMapping = store.findIdempotency("order-concurrent-001")
+        val concurrentState = store.findReadModel(request.concurrentOrderId)
+        passed =
+            concurrentMapping?.orderId == request.concurrentOrderId &&
+                concurrentState?.status == OrderStatuses.Confirmed &&
+                passed
         passed =
             check(
                 lines,

@@ -187,6 +187,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     record: import('../../foundation/service-stateful-wire-codec').ServiceMessageFollowRecord
   ) => void;
   private dispatchErrors?: ZLinkDispatchErrorReporter;
+  private spotAdmissionProvider?: Parameters<ServiceStatefulRuntime['setSpotAdmissionProvider']>[0];
   private readonly peerDisconnectedHandlers = new Set<(endpoint: string) => void>();
   constructor(
     private readonly meshName: string,
@@ -240,6 +241,13 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   setDispatchErrorReporter(reporter: ZLinkDispatchErrorReporter): void {
     this.dispatchErrors = reporter;
     this.stateful?.setDispatchErrorReporter(reporter, this.meshName);
+  }
+
+  setSpotAdmissionProvider(
+    provider: Parameters<ServiceStatefulRuntime['setSpotAdmissionProvider']>[0]
+  ): void {
+    this.spotAdmissionProvider = provider;
+    this.stateful?.setSpotAdmissionProvider(provider);
   }
 
   setProtocolErrorHandler(
@@ -395,6 +403,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       descriptor.nodeRoutingId,
       descriptor.lifecycleGeneration
     );
+    if (this.spotAdmissionProvider !== undefined) {
+      this.stateful.setSpotAdmissionProvider(this.spotAdmissionProvider);
+    }
     if (this.dispatchErrors !== undefined) {
       this.stateful.setDispatchErrorReporter(this.dispatchErrors, this.meshName);
     }

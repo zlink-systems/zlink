@@ -804,6 +804,46 @@ bool actor_transfer_coordinator_t::source_leave_submitted (const std::string &ac
       .get ();
 }
 
+bool actor_transfer_coordinator_t::admit_attempt (const std::string &actor_key,
+                                                  const std::string &transfer_id)
+{
+    // Destroyed after the lane turn: releasing a lifecycle reservation must
+    // not run inside the coordinator lane.
+    std::optional<pending_actor_admission_t> displaced;
+    const auto admitted =
+      _lane
+        .run ([&, this] {
+            const auto moving = _moves.find (actor_key);
+            if (moving == _moves.end ())
+                return true;
+            if ((moving->second.phase != actor_move_phase_t::target_pending
+                 && moving->second.phase != actor_move_phase_t::target_committing)
+                || moving->second.transfer_id == transfer_id) {
+                return false;
+            }
+            //  A newer exact identity (different RelocationId/transfer_id)
+            //  for the same object displaces an older attempt that has not
+            //  yet reached commit-authority — the later attempt wins and
+            //  any arrivals it parked so far are discarded with it (spec 15
+            //  §4.2 "같은 object의 relocation temporary queue는 하나만
+            //  존재한다" / "나중 attempt가 유효하며"). This reclaims exactly
+            //  the state fail_commit/cleanup_expired already reclaim for a
+            //  dead attempt (_admissions/_moves/_backlogs). A
+            //  target_committing eviction leaves a narrow, self-healing
+            //  window: if PREPARE for the displaced identity is concurrently
+            //  between commit-authority and installing its staged Actor, the
+            //  caller must re-check is_current() before publishing that side
+            //  effect (spec 15 §4.2) — see prepare_remote_actor_to_spot.
+            if (auto node = _admissions.extract (moving->second.transfer_id))
+                displaced = std::move (node.mapped ());
+            _backlogs.erase (actor_key);
+            _moves.erase (moving);
+            return true;
+        })
+        .get ();
+    return admitted;
+}
+
 bool actor_transfer_coordinator_t::try_add_admission (std::string transfer_id,
                                                       pending_actor_admission_t admission)
 {
@@ -815,35 +855,9 @@ bool actor_transfer_coordinator_t::try_add_admission (std::string transfer_id,
               return false;
           }
           const auto actor_key = admission.actor_key;
-          if (const auto moving = _moves.find (actor_key); moving != _moves.end ()) {
-              if ((moving->second.phase != actor_move_phase_t::target_pending
-                   && moving->second.phase != actor_move_phase_t::target_committing)
-                  || moving->second.transfer_id == transfer_id) {
-                  return false;
-              }
-              //  A newer exact identity (different RelocationId/transfer_id) for
-              //  the same object displaces an older attempt that has not yet
-              //  reached commit-authority — the later attempt wins and any
-              //  arrivals it parked so far are discarded with it (spec 15 §4.2
-              //  "같은 object의 relocation temporary queue는 하나만 존재한다" /
-              //  "나중 attempt가 유효하며"). This reclaims exactly the state
-              //  fail_commit/cleanup_expired already reclaim for a dead attempt
-              //  (_admissions/_moves/_backlogs) — nothing more, nothing less.
-              //  A target_committing eviction leaves a narrow, self-healing
-              //  window: if PREPARE for the displaced identity is concurrently
-              //  between commit-authority and installing its staged Actor, the
-              //  caller must re-check is_current() before publishing that side
-              //  effect (spec 15 §4.2 "이전 identity의 늦은 ... Restore는 조립에
-              //  연결하지 않고 폐기한다") — see prepare_remote_actor_to_spot. If
-              //  PREPARE already finished and installed its staged Actor before
-              //  this eviction runs, that Actor is orphaned until the newer
-              //  identity's own PREPARE overwrites the same actor_key slot, which
-              //  is the same map-assignment the framework already relies on for
-              //  a retried PREPARE.
-              _admissions.erase (moving->second.transfer_id);
-              _backlogs.erase (actor_key);
-              _moves.erase (moving);
-          }
+          // admit_attempt displaced any older attempt before this admission ran.
+          if (_moves.contains (actor_key))
+              return false;
           _moves.emplace (actor_key, move_state_t{actor_move_phase_t::target_pending, transfer_id});
           _admissions.emplace (std::move (transfer_id), std::move (admission));
           return true;

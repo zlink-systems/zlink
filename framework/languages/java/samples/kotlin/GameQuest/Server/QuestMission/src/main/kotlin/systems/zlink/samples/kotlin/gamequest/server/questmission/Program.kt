@@ -284,7 +284,10 @@ class ClosePlayerQuestSpotHandler : ZLinkSpotPacketHandler<PlayerQuestSpot, Clos
     override fun handle(
         spot: PlayerQuestSpot,
         request: ClosePlayerQuestMsg,
-    ): CompletionStage<Void> = spot.context().close().thenApply { null }
+    ): CompletionStage<Void> {
+        spot.context().close()
+        return CompletableFuture.completedFuture(null)
+    }
 }
 
 // --8<-- [end:doc-gq-close-handler]

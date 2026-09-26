@@ -2419,6 +2419,10 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       }
     },
     dispatchMeshActorJoin: DefaultZLinkSpotManager.prototype.dispatchMeshActorJoin,
+    // The User Spot lifecycle-lane wrapper delegates to this body.
+    dispatchMeshActorJoinCore: (
+      DefaultZLinkSpotManager.prototype as unknown as { dispatchMeshActorJoinCore: unknown }
+    ).dispatchMeshActorJoinCore,
     async restoreCanonicalActorJoinRecovery(
       recovery: CanonicalActorJoinRecovery,
       signal?: AbortSignal

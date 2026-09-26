@@ -67,6 +67,10 @@ export class ZLinkSpotSerialTurnExecutor {
     return this.scheduler.close();
   }
 
+  closeAdmission(): void {
+    this.scheduler.closeAdmission();
+  }
+
   /** Distinguishes a gate-owning turn from a suspended AsyncLocalStorage tail. */
   isActiveTurn(turn: ZLinkSpotSerialTurn, turnId: number): boolean {
     return (
@@ -155,6 +159,11 @@ export class ZLinkSpotSerialTurnExecutor {
     workOptions?: ZLinkSerialWorkOptions
   ): Promise<T> {
     return this.enqueueFrameworkTurn(operation, workOptions);
+  }
+
+  /** Holds this Spot's lifecycle FIFO until the full operation result settles. */
+  executeLifecycleOperation<T>(operation: () => Promise<T> | T): Promise<T> {
+    return this.scheduler.submitLifecycleOperation(operation);
   }
 
   private async enqueueApplicationTurn<T>(
@@ -275,9 +284,7 @@ export class ZLinkSpotSerialTurnExecutor {
     resume: () => void,
     reject: (reason: unknown) => void
   ): boolean {
-    const barrier = this.executionBarrier;
-    const resumeClaim = barrier?.tryEnter();
-    if (barrier !== undefined && resumeClaim === undefined) {
+    if (!turn.resumeExecutionClaim()) {
       reject(
         createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.SpotMoving,
@@ -286,7 +293,6 @@ export class ZLinkSpotSerialTurnExecutor {
       );
       return true;
     }
-    turn.bindExecutionClaim(resumeClaim);
     void this.enqueueContinuationTurn(async () => {
       this.resumedOwnerTurn = turn;
       try {

@@ -2844,7 +2844,10 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 queued.get(2, TimeUnit.SECONDS);
                 ZLinkBackendSpot spot = spots.localSpot(spotId);
                 assertNotNull(spot);
-                spot.sealInstanceSpotAdmission();
+                spot.sealSpotAdmission(
+                        () ->
+                                new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.NOT_FOUND, "sealed"));
                 ZLinkBackendReceived accepted = spot.recvRoute(ZLinkBackendRecvMode.DONT_WAIT);
                 assertNotNull(accepted);
                 try (accepted;
@@ -2897,7 +2900,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             .toCompletableFuture()
                             .get(2, TimeUnit.SECONDS)
                             .spot();
-            spot.sealInstanceSpotAdmission();
+            spot.sealSpotAdmission(
+                    () -> new ZLinkFrameworkException(ZLinkFrameworkErrorKind.NOT_FOUND, "sealed"));
 
             try (Message packet = Message.from("Packet");
                     Message payload = Message.from("late")) {
@@ -2923,10 +2927,9 @@ final class ZLinkJavaRawSpotNodeM6BTest {
     }
 
     @Test
-    void instanceSpotAcceptsRequestAgainAfterFailedCloseRestoresAdmission() {
+    void sealedSpotRejectsNewRouteWhileAcceptedRouteRemainsDrainable() {
         ZLinkJavaRawSpot spot = new ZLinkJavaRawSpot(null, "failed-close-spot", 1);
-        spot.sealInstanceSpotAdmission();
-        spot.restoreInstanceSpotAdmission();
+        var rejection = new ZLinkFrameworkException(ZLinkFrameworkErrorKind.REJECTED, "closing");
 
         AtomicReference<String> reply = new AtomicReference<>();
         try (Message request = Message.from("request");
@@ -2944,6 +2947,45 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             () -> {},
                             "application/json");
             spot.enqueueRoute(received).toCompletableFuture().join();
+            spot.sealSpotAdmission(() -> rejection);
+            ZLinkBackendReceived late =
+                    new ZLinkBackendReceived(
+                            ZLinkBackendRequestResult.OK,
+                            Optional.empty(),
+                            Optional.empty(),
+                            Optional.empty(),
+                            new byte[0],
+                            new byte[0],
+                            List.of(Message.from("late")),
+                            parts -> {},
+                            () -> {},
+                            "application/json");
+            assertEquals(
+                    rejection,
+                    assertThrows(
+                                    java.util.concurrent.CompletionException.class,
+                                    () -> spot.enqueueRoute(late).toCompletableFuture().join())
+                            .getCause());
+            assertFalse(
+                    spot.enqueueTopic(
+                            new ZLinkBackendTopicMessage(
+                                    Optional.empty(), "updates", List.of(Message.from("late")))));
+            assertEquals(
+                    rejection,
+                    assertThrows(
+                                    java.util.concurrent.CompletionException.class,
+                                    () ->
+                                            spot.enqueueJoin(
+                                                            new systems.zlink.framework.runtime
+                                                                    .internal.backend
+                                                                    .ZLinkBackendActorJoinRequest(
+                                                                    null,
+                                                                    null,
+                                                                    List.of(Message.from("late")),
+                                                                    null))
+                                                    .toCompletableFuture()
+                                                    .join())
+                            .getCause());
             try (ZLinkBackendReceived accepted = spot.recvRoute(ZLinkBackendRecvMode.DONT_WAIT)) {
                 assertNotNull(accepted);
                 accepted.reply().accept(List.of(response));

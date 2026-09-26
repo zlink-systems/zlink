@@ -249,6 +249,7 @@ export class ZLinkFrameworkRuntimeHost
   private actorManager?: DefaultZLinkActorManager;
   private actorPlacement?: ZLinkActorPlacementCoordinator;
   private spotManager?: DefaultZLinkSpotManager;
+  private userSpotCoordinator?: ZLinkUserSpotCreationCoordinator;
   private ownerLeaseRecoveryRuntime?: ZLinkLocationRuntime;
   private ownerLeaseRecoveryHandler?: () => void;
   private registerUserSpotHandlers?: (runtime: ZLinkSpotNodeRuntimeManager) => void;
@@ -1641,6 +1642,11 @@ export class ZLinkFrameworkRuntimeHost
   ): void {
     for (const [meshName, node] of spotNodeRuntime.meshNodesByName) {
       const activationNode = node as typeof node & {
+        setSpotAdmissionProvider?: (provider: {
+          isClosing(spotId: string): boolean;
+          awaitCloseDecision(spotId: string): Promise<void> | undefined;
+          runtimeState(): ZLinkFrameworkRuntimeState;
+        }) => void;
         registerAsyncInstanceActivationAuthority?: (
           authority: ServiceAsyncInstanceActivationAuthority
         ) => void;
@@ -1656,6 +1662,11 @@ export class ZLinkFrameworkRuntimeHost
       };
       const spotManager = this.spotManager;
       if (spotManager !== undefined) {
+        activationNode.setSpotAdmissionProvider?.({
+          isClosing: (spotId) => spotManager.isSpotClosing(meshName, spotId),
+          awaitCloseDecision: (spotId) => spotManager.pendingSpotCloseDecision(meshName, spotId),
+          runtimeState: () => this.runtimeState
+        });
         this.registerInstanceApplicationLifecycle(meshName, activationNode, spotManager);
       }
       activationNode.registerAsyncInstanceActivationAuthority?.(
@@ -1939,6 +1950,19 @@ export class ZLinkFrameworkRuntimeHost
   setSpotManager(spotManager: DefaultZLinkSpotManager): void {
     this.spotManager = spotManager;
     for (const [meshName, node] of this.spotNodeRuntime?.meshNodesByName ?? []) {
+      const admissionNode = node as typeof node & {
+        setSpotAdmissionProvider?: (provider: {
+          isClosing(spotId: string): boolean;
+          awaitCloseDecision(spotId: string): Promise<void> | undefined;
+          runtimeState(): ZLinkFrameworkRuntimeState;
+        }) => void;
+      };
+      admissionNode.setSpotAdmissionProvider?.({
+        isClosing: (spotId: string) => spotManager.isSpotClosing(meshName, spotId),
+        awaitCloseDecision: (spotId: string) =>
+          spotManager.pendingSpotCloseDecision(meshName, spotId),
+        runtimeState: () => this.runtimeState
+      });
       this.registerInstanceApplicationLifecycle(meshName, node, spotManager);
     }
   }
@@ -2025,12 +2049,31 @@ export class ZLinkFrameworkRuntimeHost
             ?.meshNode(meshName)
             ?.completeClosedInstance?.(spotId, objectGeneration);
         },
-        beginInstanceIdleClosingAuthority: (meshName, spotId) =>
-          this.locationOwner.currentLifecycle?.beginInstanceSpotClosing(meshName, spotId) ??
-          Promise.resolve(undefined),
-        beginInstanceClosingAuthority: (meshName, spotId) =>
-          this.locationOwner.currentLifecycle?.beginInstanceSpotClosing(meshName, spotId) ??
-          Promise.resolve(undefined),
+        beginInstanceIdleClosingAuthority: (meshName, spotId, onCommitted) =>
+          this.locationOwner.currentLifecycle?.beginInstanceSpotClosing(
+            meshName,
+            spotId,
+            onCommitted
+          ) ?? Promise.resolve(undefined),
+        beginInstanceClosingAuthority: (meshName, spotId, onCommitted) =>
+          this.locationOwner.currentLifecycle?.beginInstanceSpotClosing(
+            meshName,
+            spotId,
+            onCommitted
+          ) ?? Promise.resolve(undefined),
+        beginUserClosingAuthority: async (meshName, spotId, objectGeneration, onCommitted) => {
+          const coordinator = this.userSpotCoordinator;
+          const nodeRid = this.spotNodeRuntime?.meshNode(meshName)?.status().routingId;
+          if (coordinator === undefined || nodeRid === undefined) {
+            throw new ZLinkConfigurationException(
+              'User Spot context Close requires its authority coordinator.'
+            );
+          }
+          return await coordinator.beginOwnerClose(
+            { spotId: spotId as never, objectGeneration, meshName, nodeRid },
+            onCommitted
+          );
+        },
         createLocationSpotRouteResolver: () => this.createLocationSpotRouteResolver(),
         boundSessionRelay: this.boundSessionRelay,
         actorHandoff: this.actorHandoff,
@@ -2156,7 +2199,7 @@ export class ZLinkFrameworkRuntimeHost
         };
       }
     });
-    const coordinator = new ZLinkUserSpotCreationCoordinator({
+    const coordinator = (this.userSpotCoordinator = new ZLinkUserSpotCreationCoordinator({
       store: locationStore,
       publishReadyRoute: (meshName, route) => {
         this.cachedLocationSpotRouteResolver?.invalidate?.(route.spot.spotId);
@@ -2264,7 +2307,7 @@ export class ZLinkFrameworkRuntimeHost
             localStatus.lifecycleGeneration === selected.lifecycleGeneration
         };
       }
-    });
+    }));
     const factories = new Map(
       [...this.options.registration.spotNodes].map(([meshName, node]) => [
         meshName,
@@ -2461,23 +2504,6 @@ export class ZLinkFrameworkRuntimeHost
             );
           },
           close: async (record, signal) => {
-            if (!local.hasActiveSpot(record.target.spotId as never)) {
-              throw createInternalFrameworkException(
-                ZLinkFrameworkInternalErrorKind.SpotMoving,
-                `User Spot '${record.target.spotId}' is not materialized on its authority owner.`,
-                true
-              );
-            }
-            if (!local.canCloseUserSpot(meshName, record.target.spotId as never)) {
-              return {
-                terminalResult: RequestResult.Ok,
-                failureCode: 0,
-                tail: {
-                  kind: 'userSpotClose' as const,
-                  closed: false
-                }
-              };
-            }
             return {
               terminalResult: RequestResult.Ok,
               failureCode: 0,
@@ -2485,8 +2511,15 @@ export class ZLinkFrameworkRuntimeHost
                 kind: 'userSpotClose' as const,
                 closed: await coordinator.handleRemoteClose(
                   record,
-                  (spot, closeSignal) => local.close(spot.meshName, spot.spotId, closeSignal),
-                  signal
+                  (spot, beginAuthority, closeSignal) =>
+                    local.closeUserWithAuthority(
+                      spot.meshName,
+                      spot.spotId,
+                      beginAuthority,
+                      closeSignal
+                    ),
+                  signal,
+                  (spot) => local.isSpotClosing(spot.meshName, spot.spotId)
                 )
               }
             };

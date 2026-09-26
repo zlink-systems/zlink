@@ -98,6 +98,7 @@ import type { ServiceInstanceActivationRecoveryEnvelope } from './service-instan
 import { validateServiceMetadataFrame } from './service-metadata-codec';
 import type { ServiceSessionBindingIngressPort } from './service-session-binding-ingress-port';
 import { ZLinkFrameworkException } from '../../contracts';
+import { ZLinkFrameworkRuntimeState } from '../../contracts/Locations';
 
 const ACTOR_ROUTE_STALE = 21;
 const SPOT_MOVING = 34;
@@ -408,6 +409,11 @@ export class ServiceStatefulRuntime {
     readonly owner: string;
   }) => void;
   private dispatchErrors?: ZLinkDispatchErrorReporter;
+  private spotAdmissionProvider?: {
+    readonly isClosing: (spotId: string) => boolean;
+    readonly runtimeState: () => ZLinkFrameworkRuntimeState;
+    readonly awaitCloseDecision?: (spotId: string) => Promise<void> | undefined;
+  };
   private dispatchErrorMeshName?: string;
   private readonly admittedUserSpotOperations = new Map<
     string,
@@ -435,6 +441,14 @@ export class ServiceStatefulRuntime {
     this.registry = new ServiceStatefulRegistry(nodeRid, nodeGeneration);
     this.registry.createEntrySpot(nodeRid);
     raw.setServiceIngress((record) => this.ingress(record));
+  }
+
+  setSpotAdmissionProvider(provider: {
+    readonly isClosing: (spotId: string) => boolean;
+    readonly runtimeState: () => ZLinkFrameworkRuntimeState;
+    readonly awaitCloseDecision?: (spotId: string) => Promise<void> | undefined;
+  }): void {
+    this.spotAdmissionProvider = provider;
   }
 
   setMailboxDropHandler(
@@ -2184,6 +2198,8 @@ export class ServiceStatefulRuntime {
       }
       case 'spotSend':
       case 'spotRequest': {
+        await this.spotAdmissionProvider?.awaitCloseDecision?.(record.target.spot.spotId);
+        this.requireDirectSpotAdmission(record.target.spot.spotId);
         const followed = this.holdOrRelaySpotMessage(ingress, record);
         if (followed !== undefined) return followed;
         this.validateDirectSpotFence(record.target);
@@ -4333,7 +4349,7 @@ export class ServiceStatefulRuntime {
           applicationJobOwner
         };
         try {
-          this.submitLocalRequest(localIngress, pending, operationKind, actor, deadlineUnixMs);
+          await this.submitLocalRequest(localIngress, pending, operationKind, actor, deadlineUnixMs);
         } catch (error) {
           this.operations.reply(pending.id, failure(error));
         } finally {
@@ -4434,7 +4450,7 @@ export class ServiceStatefulRuntime {
     );
   }
 
-  private submitLocalRequest(
+  private async submitLocalRequest(
     ingress: RawServiceIngressRecord,
     pending: ServiceStatefulPendingOperation,
     operationKind:
@@ -4448,7 +4464,7 @@ export class ServiceStatefulRuntime {
       | 'instanceSpotRequest',
     actor?: ServiceActorRef,
     deadlineUnixMs?: bigint
-  ): void {
+  ): Promise<void> {
     const canonicalActorJoin =
       operationKind === 'actorJoin' ? decodeActorJoin28(ingress.parts) : undefined;
     const decoded =
@@ -4499,6 +4515,7 @@ export class ServiceStatefulRuntime {
         this.resultFromReply(terminalResult, failureCode, replyPayload, tail, this.nodeRid, actor)
       );
     if (decoded.kind === 'spotRequest') {
+      await this.spotAdmissionProvider?.awaitCloseDecision?.(decoded.target.spot.spotId);
       this.validateDirectSpotFence(decoded.target);
       this.enqueueApplicationFrame(ingress, `spot:${decoded.target.spot.spotId}`, payloadFrame!, {
         receiveKind: ReceiveKind.SpotRequest,
@@ -4825,7 +4842,17 @@ export class ServiceStatefulRuntime {
     return spot;
   }
 
-  private validateDirectSpotFence(fence: ServiceSpotRouteFence): ServiceSpotState {
+  private validateDirectSpotFence(fence: ServiceDirectSpotRouteFence): ServiceSpotState {
+    if (
+      fence.targetNodeRid !== this.nodeRid ||
+      fence.targetNodeGeneration !== this.nodeGeneration
+    ) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.SpotMoving,
+        `Spot '${fence.spot.spotId}' targets an unavailable owner route.`
+      );
+    }
+    this.requireDirectSpotAdmission(fence.spot.spotId);
     const spot = this.registry.spot(fence.spot.spotId);
     if (spot === undefined) {
       throw createInternalFrameworkException(
@@ -4837,15 +4864,6 @@ export class ServiceStatefulRuntime {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.SpotMoving,
         `Spot '${fence.spot.spotId}' is not Ready.`
-      );
-    }
-    if (
-      fence.targetNodeRid !== this.nodeRid ||
-      fence.targetNodeGeneration !== this.nodeGeneration
-    ) {
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.SpotMoving,
-        `Spot '${fence.spot.spotId}' targets an unavailable owner route.`
       );
     }
     if (spot.kind === 'entry') {
@@ -4877,6 +4895,21 @@ export class ServiceStatefulRuntime {
       );
     }
     return spot;
+  }
+
+  private requireDirectSpotAdmission(spotId: string): void {
+    if (this.spotAdmissionProvider?.runtimeState() === ZLinkFrameworkRuntimeState.Draining) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RuntimeShutdown,
+        `Spot '${spotId}' owner is Draining.`
+      );
+    }
+    if (this.spotAdmissionProvider?.isClosing(spotId) === true) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RequestRejected,
+        `Spot '${spotId}' authority is Closing.`
+      );
+    }
   }
 
   private holdOrRelaySpotMessage(

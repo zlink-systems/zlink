@@ -507,12 +507,20 @@ public sealed partial class RegressionTests
             commerceWorkflowRouter,
             StringComparison.Ordinal
         );
-        Assert.Contains("CloseIfTerminalAsync", workflowSpot, StringComparison.Ordinal);
+        Assert.Contains("CloseIfTerminal", workflowSpot, StringComparison.Ordinal);
         Assert.Contains(
-            "Context.CloseAsync(cancellationToken)",
+            "new RebuildOrderProjectionReq(state.OrderId",
             workflowSpot,
             StringComparison.Ordinal
         );
+        Assert.DoesNotContain("state => CloseIfTerminal", workflowSpot, StringComparison.Ordinal);
+        Assert.Contains(
+            "CloseOrderWorkflowForPlannedRelocationRes(bool Requested)",
+            messages,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain("OrderNotClosed", workflowHostFactory, StringComparison.Ordinal);
+        Assert.Contains("Context.Close()", workflowSpot, StringComparison.Ordinal);
         Assert.Contains(
             ".InMesh(SampleNames.MeshName)",
             commerceWorkflowRouter,
