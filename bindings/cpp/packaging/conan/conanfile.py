@@ -13,7 +13,7 @@ required_conan_version = ">=2.1"
 
 class ZlinkCppConan(ConanFile):
     name = "zlink-cpp"
-    version = "1.7.0"
+    version = "1.10.0"
     package_type = "static-library"
     license = "MPL-2.0"
     homepage = "https://github.com/zlink-systems/zlink"
@@ -30,7 +30,7 @@ class ZlinkCppConan(ConanFile):
         cmake_layout(self)
 
     def requirements(self):
-        self.requires("zlink/1.1.0", transitive_headers=True, transitive_libs=True)
+        self.requires("zlink/1.10.0", transitive_headers=True, transitive_libs=True)
 
     def validate(self):
         if self.settings.compiler.get_safe("cppstd"):

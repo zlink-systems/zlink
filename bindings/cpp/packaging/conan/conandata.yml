@@ -1,6 +1,6 @@
-# Current public asset is incomplete. Replace this checksum after publishing
-# the complete bindings/cpp source unit (including the root LICENSE).
+# The SHA belongs to the previous release asset. Replace it with the digest
+# of the published source archive before submitting this recipe.
 sources:
-  "1.7.0":
-    url: "https://github.com/zlink-systems/zlink/releases/download/cpp/v1.7.0/zlink-cpp-1.7.0.tar.gz"
+  "1.10.0":
+    url: "https://github.com/zlink-systems/zlink/releases/download/cpp/v1.10.0/zlink-cpp-1.10.0.tar.gz"
     sha256: "b5fc1fdd6575184c9eb71c885445e87d3d3f075aa0f57fe40f4cc3012a43a736"

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(zlink_cpp VERSION 1.7.0 LANGUAGES CXX)
+project(zlink_cpp VERSION 1.10.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)

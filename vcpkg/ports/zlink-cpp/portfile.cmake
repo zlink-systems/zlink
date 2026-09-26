@@ -1,8 +1,8 @@
 vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 
-# This checksum identifies the currently published, header-only asset. The
-# release workflow must publish the complete source unit and update this hash
-# before this port can install from GitHub; do not skip checksum validation.
+# This checksum belongs to the previous release asset. The release workflow
+# must publish the complete 1.10.0 source unit and update this hash before
+# this port can install from GitHub; do not skip checksum validation.
 vcpkg_download_distfile(ARCHIVE
     URLS "https://github.com/zlink-systems/zlink/releases/download/cpp/v${VERSION}/zlink-cpp-${VERSION}.tar.gz"
     FILENAME "zlink-cpp-${VERSION}.tar.gz"
