@@ -303,6 +303,9 @@ owned by [Common Spec §6](../../32-stream-connector.en.md).
   waiter.** It doesn't cancel an already-started shared close work.
 - **Once a frame write has started, caller cancellation doesn't create
   a partial frame.**
+- **An operation the caller cancelled ends with the
+  `OperationCanceledException` of its `CancellationToken`**
+  ([Common Spec §5.2](../../32-stream-connector.en.md#52-request-correlation)).
 
 ## 7. Dispatch
 

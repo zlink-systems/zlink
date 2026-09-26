@@ -264,6 +264,8 @@ public interface IZlinkStreamCodecRegistration
 - **lifecycle waiter의 `CancellationToken`은 그 waiter만 취소한다.** 이미 시작된 공유 종료 작업을
   취소하지 않는다.
 - **frame write가 시작된 뒤에는 caller cancellation이 partial frame을 만들지 않는다.**
+- **caller가 취소한 operation은 그 `CancellationToken`의 `OperationCanceledException`으로 끝난다**
+  ([공통 스펙 §5.2](../../32-stream-connector.ko.md#52-request-correlation)).
 
 ## 7. Dispatch
 
