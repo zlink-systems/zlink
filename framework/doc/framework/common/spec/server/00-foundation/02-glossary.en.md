@@ -1275,7 +1275,7 @@ An execution unit serializing code that reads and writes one component's mutable
 <a id="application-lane"></a>
 ### Application Lane
 
-The FIFO classification retaining a serial execution object's business payloads and timer callbacks. It is distinct from the application/infrastructure execution-domain split.
+The FIFO classification retaining a serial execution object's application work; execution contract §7 defines which work it holds. It is distinct from the application/infrastructure execution-domain split.
 
 | Item | Content |
 |---|---|
@@ -1290,7 +1290,7 @@ The FIFO classification retaining a serial execution object's business payloads 
 <a id="lifecycle-lane"></a>
 ### Lifecycle Lane
 
-The FIFO classification retaining a serial execution object's join, leave, relocation, and lifecycle control work. User callbacks executed here also belong to the application execution domain.
+The FIFO classification retaining a serial execution object's lifecycle work; execution contract §7 defines which work it holds. User callbacks executed here also belong to the application execution domain.
 
 | Item | Content |
 |---|---|

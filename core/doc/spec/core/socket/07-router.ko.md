@@ -282,8 +282,11 @@ ZLINK_EXPORT uint64_t zlink_router_recv_route_generation(void *router_);
   이 readiness는 level이며, 그 뒤의 변경까지 반영한 snapshot이 성공할 때 해제된다. Snapshot과 경합한
   변경이 있으면 readiness가 남는다. Monitor event는 transport 관찰값이며 선택 route의 결과가 아니다.
   Standby pipe의 `ZLINK_EVENT_CONNECTION_READY`는 선택 route의 준비를 뜻하지 않는다.
-- **선택되지 않은 pipe의 record는 반환하지 않는다.** 선택이 바뀌면 물러난 pipe와 standby pipe의
-  대기 DATA·REQUEST를 그때 record 단위로 버리므로 `ZLINK_POLLIN`은 선택 route의 record만 반영한다.
+- **다른 pipe가 선택되면 물러난 pipe의 record는 반환하지 않는다.** 이 문서에서 pipe가 선택에서 물러난다는 것은
+  같은 RID에 다른 pipe가 선택되는 것이다. 그때 물러난 pipe와 standby pipe의 대기 DATA·REQUEST를 record 단위로
+  버리므로 `ZLINK_POLLIN`은 선택 route의 record와 후속 선택 없이 끝난 선택 pipe의 record만 반영한다. 선택 pipe가
+  후속 선택 없이 끝나면 그 RID의 snapshot 행은 없어지지만 그 pipe의 대기 record는 버리지 않고 받을 수 있으며,
+  그 뒤 그 RID에 다른 pipe가 선택되면 위 규칙대로 버린다.
   버퍼 부족으로 보류한 record도 그 사이 선택에서 물러났으면 재시도 때 반환하지 않는다 — 이는
   [같은 record를 다시 받는다는 보장](README.ko.md#zlink_recv-와-zlink_router_recv)의 유일한 예외다. 버린
   REQUEST에는 reply token을 발급하지 않는다. 두 Core는 [RID 중복 정책](README.ko.md#rid-중복-정책)으로 같은
@@ -292,7 +295,9 @@ ZLINK_EXPORT uint64_t zlink_router_recv_route_generation(void *router_);
 - **`zlink_router_recv_route_generation()`은 마지막으로 성공한 `zlink_router_recv()`가 반환한 record의
   route generation을 돌려준다.** 반환한 RID와 같은 수명(같은 socket의 다음 data recv 진입까지)이다.
   다음 data recv가 실패했거나 성공한 receive가 없으면 `0`이다. Caller는 record를 처리할 때 이 값을 그 RID의 현재 선택 route
-  generation과 비교해, 반환 뒤에 선택이 바뀐 record를 구분한다.
+  generation과 비교해, 반환 뒤에 선택이 바뀐 record를 구분한다. 그 RID에 선택 route 행이 없으면 그 record는
+  후속 선택 없이 끝난 pipe가 남긴 것이며 선택 변경으로 버려진 것이 아니다. 그 REQUEST의 reply 결과는
+  [§9](#9-raw-reply-submit)를 따른다.
 - **Socket마다 route 관찰자는 하나만 둔다.** Snapshot 호출과 `ZLINK_POLLROUTE` 처리는 같은 관찰자가
   한다. 두 thread가 snapshot을 동시에 호출하면 한쪽의 성공이 readiness를 해제할 수 있다.
 - `capacity_`가 선택 route 수보다 작으면 필요한 수를 `*route_count_out_`에 쓰고
@@ -377,6 +382,7 @@ test 하나로 이어진다.
 - non-blocking receive에 받을 record가 없으면 `ZLINK_RECV_NO_DATA`와 `EAGAIN`이다.
 - receive 성공 시 앞의 `*part_count_out_`개 슬롯 소유권이 caller에게 이동해 `zlink_multipart_close()`로 해제하고, 실패 시 소유권은 이동하지 않는다.
 - `parts_capacity_`가 record의 part 수보다 작으면 필요한 수와 `ZLINK_RECV_BUFFER_TOO_SMALL`+`ENOBUFS`를 반환하고 record를 소비하지 않으며, 충분한 배열로 재시도하면 같은 record를 받는다(선택에서 물러난 pipe의 record는 [§10.1](#101-선택-route-관찰)의 예외).
+- DEALER가 record 3개를 보내고 close한 뒤 ROUTER가 recv하면 3개를 모두 받는다. 그 RID에 다른 pipe가 선택된 뒤에는 끝난 pipe의 남은 record를 받지 않는다.
 - `zlink_router_recv()`에 reply나 error reply가 도착하면 payload를 반환하지 않고 `EPROTO`로 connection을 종료한다.
 - `zlink_router_recv()`가 반환한 DATA 또는 REQUEST payload를 raw send에 다시 사용해도 request-reply 의미가 나타나지 않는다.
 - 공통 `zlink_recv()`에 ROUTER를 넘기면 지원하지 않는 receive surface로 거부한다.

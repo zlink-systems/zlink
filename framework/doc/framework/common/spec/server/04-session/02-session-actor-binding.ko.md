@@ -146,7 +146,9 @@ session owner lifecycle 안에서만 유효하다. 다른 MeshNode가 bind하거
 
 STREAM packet은 먼저 session의 typed handler registry로 dispatch된다. Framework는 packet의
 `actor_slot`([Stream Connector 공통 스펙 §4.2](../../stream-connector/32-stream-connector.ko.md#42-header))을
-현재 binding으로 해석해 dispatch context의 Actor로 넣는다 — slot이 없으면 Actor 없음이다.
+현재 binding으로 해석해 dispatch context의 Actor로 넣는다 — slot이 없으면 Actor 없음이다. 이 해석은
+packet을 session의 application lane에 넣을 때 한 번 하므로, 그 뒤의 binding 교체는 이미 수락한 packet의 Actor를
+바꾸지 않는다.
 **현재 binding이 아닌 slot을 실은 packet(unbind 뒤 늦게 도착한 packet)은 session handler에 전달하지
 않는다.** `Request`는 같은 sequence의 `Error` reply(`InvalidOperation`)로 끝내고 `zlink.dispatch_error`에
 `surface=stream`, `message_kind=request`, `outcome=failed`, `reason=stale_target`, `action=reply_error`로
@@ -576,6 +578,10 @@ Session disconnect는 relocation 성공이나 실패의 증거가 아니며, Ses
 같은 session의 handler turn, binding mutation, close와 relocation barrier는 session
 owner가 직렬화한다. Actor에 제출한 뒤에는 Actor queue가 순서를 소유한다. Session
 turn과 Actor turn을 shared lock이나 callback stack으로 합치지 않는다.
+
+Session callback의 lane은 [실행 계약 §7](../01-execution/02-handler-turn-and-execution-gate.ko.md#execution-lanes)이 정한다. 연결 수립·오류·연결 종료
+callback은 packet callback과 같은 application lane에 도착 순서대로 들어가므로, 연결 수립 callback은 그
+연결의 첫 packet callback보다 먼저, 연결 종료 callback은 이미 수락한 packet callback 뒤에 실행된다.
 
 Request와 binding operation completion, binding update, relocation barrier와
 disconnect cleanup은 infrastructure task에서 진행한다. Session 또는 Actor application

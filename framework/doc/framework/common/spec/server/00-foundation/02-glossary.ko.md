@@ -1209,7 +1209,7 @@ Spot Logical Multicast와 물리 연결이나 subscription 상태를 공유하�
 <a id="application-lane"></a>
 ### Application lane
 
-직렬 실행 객체의 업무 payload와 timer callback을 보관하는 FIFO 분류다. Infrastructure와 나누는 실행 영역의 이름과는 다른 단위다.
+직렬 실행 객체의 application 작업을 보관하는 FIFO 분류다. 담는 작업은 실행 계약 §7이 정한다. Infrastructure와 나누는 실행 영역의 이름과는 다른 단위다.
 
 | 항목 | 내용 |
 |---|---|
@@ -1224,7 +1224,7 @@ Spot Logical Multicast와 물리 연결이나 subscription 상태를 공유하�
 <a id="lifecycle-lane"></a>
 ### Lifecycle lane
 
-직렬 실행 객체의 join·leave·relocation·lifecycle control 작업을 보관하는 FIFO 분류다. 여기서 실행하는 user callback도 application 실행 영역에 속한다.
+직렬 실행 객체의 lifecycle 작업을 보관하는 FIFO 분류다. 담는 작업은 실행 계약 §7이 정한다. 여기서 실행하는 user callback도 application 실행 영역에 속한다.
 
 | 항목 | 내용 |
 |---|---|
