@@ -371,11 +371,7 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_,
         pipe_t *const old_pipe = existing_outpipe->pipe;
         const bool old_locally_initiated = existing_outpipe->locally_initiated;
         const uint32_t old_peer_weight = existing_outpipe->weight;
-        if (socket_base_t *const held = discard_route_records (
-              old_pipe, &actions_->discarded,
-              &actions_->staged_route_source_pipe,
-              &actions_->staged_reply_token, &actions_->staged_reply_rid))
-            actions_->staged_hold_socket = held;
+        discard_route_records (old_pipe, &actions_->discarded);
         if (actions_ && old_pipe->retain_lifetime_ref ())
             actions_->superseded_pipe = old_pipe;
         erase_out_pipe (old_pipe);
@@ -423,20 +419,6 @@ void router_t::finish_route_adoption (pipe_t *adopted_pipe_,
     if (!actions_)
         return;
     finish_route_discard (&actions_->discarded);
-    if (actions_->staged_hold_socket) {
-        actions_->staged_hold_socket->end_public_part_receive_delivery_hold ();
-        actions_->staged_hold_socket = NULL;
-    }
-    if (actions_->staged_route_source_pipe) {
-        actions_->staged_route_source_pipe->release_lifetime_ref ();
-        actions_->staged_route_source_pipe = NULL;
-    }
-    if (actions_->staged_reply_token != 0) {
-        socket_reqrep_internal::revoke_router_reply_target (
-          make_socket_handle (this), &actions_->staged_reply_rid,
-          actions_->staged_reply_token);
-        actions_->staged_reply_token = 0;
-    }
     const bool route_published = actions_->cache_completion;
     if (actions_->superseded_pipe) {
         // A standby keeps its physical lanes, but supersession ends this

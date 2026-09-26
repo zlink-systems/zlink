@@ -261,7 +261,7 @@ int zlink::socket_poller_t::rebuild ()
     bool socket_only = true;
     for (items_t::iterator it = _items.begin (), end = _items.end ();
          it != end; ++it) {
-        if (!it->events)
+        if (!waits_on (*it))
             continue;
         ++_pollset_size;
         if (!it->socket)
@@ -271,13 +271,13 @@ int zlink::socket_poller_t::rebuild ()
 #if defined ZLINK_HAVE_WINDOWS
     if (_pollset_size > 0 && socket_only) {
         for (items_t::iterator it = _items.begin (), end = _items.end (); it != end; ++it) {
-            if (it->events
+            if (waits_on (*it)
                 && static_cast<mailbox_t *> (it->socket->get_mailbox ())
                      ->add_signaler (&_windows_signaler)
                      != 0) {
                 for (items_t::iterator added = _items.begin (); added != it;
                      ++added) {
-                    if (added->events)
+                    if (waits_on (*added))
                         static_cast<mailbox_t *> (
                           added->socket->get_mailbox ())
                           ->remove_signaler (&_windows_signaler);
@@ -295,7 +295,7 @@ int zlink::socket_poller_t::rebuild ()
 #endif
 
     for (items_t::iterator it = _items.begin (), end = _items.end (); it != end; ++it) {
-        if (!it->socket || !it->events)
+        if (!it->socket || !waits_on (*it))
             continue;
 
         mailbox_t *const mailbox =
@@ -346,7 +346,7 @@ int zlink::socket_poller_t::rebuild ()
     }
 
     for (items_t::iterator it = _items.begin (), end = _items.end (); it != end; ++it) {
-        if (it->events) {
+        if (waits_on (*it)) {
             if (it->socket) {
                 if (it->secondary_notification)
                     continue;
@@ -410,7 +410,7 @@ int zlink::socket_poller_t::rebuild ()
 
     //  Build the fd_sets for passing to select ().
     for (items_t::iterator it = _items.begin (), end = _items.end (); it != end; ++it) {
-        if (it->events) {
+        if (waits_on (*it)) {
             //  If the poll item is a 0MQ socket we are interested in input on the
             //  notification file descriptor retrieved by the ZLINK_INTERNAL_OPT_FD socket option.
             if (it->socket) {
@@ -561,7 +561,10 @@ int zlink::socket_poller_t::collect_socket_event (item_t &item_, event_t *event_
     }
 
     if (events & ZLINK_POLLERR) {
+        //  The socket reported its last event; the next wait no longer waits
+        //  on it.
         item_.terminal_event_delivered = true;
+        _need_rebuild = true;
         event_->socket = item_.socket;
         event_->fd = zlink::retired_fd;
         event_->user_data = item_.user_data;
@@ -665,11 +668,6 @@ int zlink::socket_poller_t::wait (zlink::socket_poller_t::event_t *events_,
                                   int n_events_,
                                   long timeout_)
 {
-    if (_items.empty () && timeout_ < 0) {
-        errno = EFAULT;
-        return -1;
-    }
-
     if (_need_rebuild) {
         const int rc = rebuild ();
         if (rc == -1)
@@ -687,35 +685,10 @@ int zlink::socket_poller_t::wait (zlink::socket_poller_t::event_t *events_,
                 zero_trail_events (events_, n_events_, socket_events);
             return socket_events;
         }
-
-        if (timeout_ < 0) {
-            // Fail instead of trying to sleep forever
-            errno = EFAULT;
-            return -1;
-        }
-        // A finite wait with no pollable descriptor is still a successful
-        // timeout. Public poll APIs reserve -1 for actual failures.
-        if (timeout_ == 0)
-            return 0;
-#if defined ZLINK_HAVE_WINDOWS
-        Sleep (timeout_ > 0 ? timeout_ : INFINITE);
+        //  No registration can become ready (see waits_on), so the wait
+        //  never sleeps. This matches zlink_poll with no items.
+        errno = 0;
         return 0;
-#elif defined ZLINK_HAVE_ANDROID
-        usleep (timeout_ * 1000);
-        return 0;
-#elif defined ZLINK_HAVE_OSX
-        usleep (timeout_ * 1000);
-        return 0;
-#elif defined ZLINK_HAVE_VXWORKS
-        struct timespec ns_;
-        ns_.tv_sec = timeout_ / 1000;
-        ns_.tv_nsec = timeout_ % 1000 * 1000000;
-        nanosleep (&ns_, 0);
-        return 0;
-#else
-        usleep (timeout_ * 1000);
-        return 0;
-#endif
     }
 
 #if defined ZLINK_HAVE_WINDOWS
@@ -796,23 +769,23 @@ int zlink::socket_poller_t::wait (zlink::socket_poller_t::event_t *events_,
             timeout = static_cast<int> (std::min<uint64_t> (remaining, INT_MAX));
         }
 
-        //  Wait for events.
+        //  Wait for events. A signal ends only this system wait; the loop
+        //  resumes it with what is left of the original deadline.
         const int rc = poll (_pollfds, _pollset_size, timeout);
-        if (rc == -1 && errno == EINTR) {
-            return -1;
-        }
-        errno_assert (rc >= 0);
+        if (rc == -1)
+            errno_assert (errno == EINTR);
+        else {
+            if (_socket_signaler_pollfd_index >= 0
+                && (_pollfds[_socket_signaler_pollfd_index].revents & POLLIN))
+                drain_socket_signaler ();
 
-        if (_socket_signaler_pollfd_index >= 0
-            && (_pollfds[_socket_signaler_pollfd_index].revents & POLLIN))
-            drain_socket_signaler ();
-
-        //  Check for the events.
-        const int found = check_events (events_, n_events_);
-        if (found) {
-            if (found > 0)
-                zero_trail_events (events_, n_events_, found);
-            return found;
+            //  Check for the events.
+            const int found = check_events (events_, n_events_);
+            if (found) {
+                if (found > 0)
+                    zero_trail_events (events_, n_events_, found);
+                return found;
+            }
         }
 
         if (timeout_ == 0)
@@ -862,7 +835,7 @@ int zlink::socket_poller_t::wait (zlink::socket_poller_t::event_t *events_,
             ptimeout = &timeout;
         }
 
-        //  Wait for events. Ignore interrupts if there's infinite timeout.
+        //  Wait for events.
         memcpy (inset.get (), _pollset_in.get (), valid_pollset_bytes (*_pollset_in.get ()));
         memcpy (outset.get (), _pollset_out.get (), valid_pollset_bytes (*_pollset_out.get ()));
         memcpy (errset.get (), _pollset_err.get (), valid_pollset_bytes (*_pollset_err.get ()));
@@ -877,21 +850,26 @@ int zlink::socket_poller_t::wait (zlink::socket_poller_t::event_t *events_,
 #else
         if (unlikely (rc == -1)) {
             errno_assert (errno == EINTR || errno == EBADF);
-            return -1;
+            if (errno != EINTR)
+                return -1;
         }
 #endif
 
-        if (_socket_signaler_active && _socket_signaler
-            && FD_ISSET (_socket_signaler->get_fd (), inset.get ()))
-            drain_socket_signaler ();
+        //  A signal ends only this system wait; the loop resumes it with what
+        //  is left of the original deadline.
+        if (rc != -1) {
+            if (_socket_signaler_active && _socket_signaler
+                && FD_ISSET (_socket_signaler->get_fd (), inset.get ()))
+                drain_socket_signaler ();
 
-        //  Check for the events.
-        const int found =
-          check_events (events_, n_events_, *inset.get (), *outset.get (), *errset.get ());
-        if (found) {
-            if (found > 0)
-                zero_trail_events (events_, n_events_, found);
-            return found;
+            //  Check for the events.
+            const int found = check_events (events_, n_events_, *inset.get (),
+                                            *outset.get (), *errset.get ());
+            if (found) {
+                if (found > 0)
+                    zero_trail_events (events_, n_events_, found);
+                return found;
+            }
         }
 
         if (timeout_ == 0)

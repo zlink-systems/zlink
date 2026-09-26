@@ -67,8 +67,10 @@ void zlink::router_t::copy_router_pipe_source_rid (
         return;
 
     size_t routing_id_size = 0;
-    // Only a selected pipe reaches routed receive. Selection publishes its
-    // source RID before the binding token, so no route-table fallback is needed.
+    // Only a pipe holding a route binding reaches routed receive: the selected
+    // pipe, or a selected pipe that ended without a successor. Selection
+    // publishes the source RID before the binding token, and ending keeps
+    // both, so no route-table fallback is needed.
     const bool published = pipe_->try_copy_router_route_binding (
           out_->data, sizeof (out_->data), &routing_id_size,
           route_binding_token_out_);

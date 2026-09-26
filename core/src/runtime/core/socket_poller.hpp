@@ -90,6 +90,14 @@ class socket_poller_t
 #endif
     } item_t;
 
+    //  The one rule for what a wait waits on: a registration with events
+    //  whose socket has not already reported its final POLLERR. Nothing else
+    //  can become ready, so a poller with no such item returns at once.
+    static bool waits_on (const item_t &item_)
+    {
+        return item_.events != 0 && !item_.terminal_event_delivered;
+    }
+
     // Poll registrations are normally few and live no longer than this
     // poller. Keep their storage with that lifecycle owner; larger pollsets
     // transparently fall back to the heap without changing the poll contract.

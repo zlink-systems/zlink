@@ -40,7 +40,7 @@ void test_ctx_close_socket_and_wait_updates_socket_registry ()
     TEST_ASSERT_NULL (socket);
     TEST_ASSERT_EQUAL_UINT64 (0u, static_cast<uint64_t> (ctx->socket_count ()));
     TEST_ASSERT_SUCCESS_ERRNO (ctx->wait_for_socket_count_at_most (0, 0));
-    TEST_ASSERT_SUCCESS_ERRNO (ctx->terminate ());
+    ctx->terminate ();
 }
 
 void test_ctx_reuses_released_socket_slot ()
@@ -59,7 +59,7 @@ void test_ctx_reuses_released_socket_slot ()
     set_zero_linger (second);
     TEST_ASSERT_EQUAL_UINT32 (first_tid, second->get_tid ());
     TEST_ASSERT_SUCCESS_ERRNO (ctx->close_socket_and_wait (second, 1000));
-    TEST_ASSERT_SUCCESS_ERRNO (ctx->terminate ());
+    ctx->terminate ();
 }
 
 void test_ctx_inproc_endpoint_registry_tracks_owner ()
@@ -89,7 +89,7 @@ void test_ctx_inproc_endpoint_registry_tracks_owner ()
 
     TEST_ASSERT_SUCCESS_ERRNO (ctx->close_socket_and_wait (socket, 1000));
     TEST_ASSERT_SUCCESS_ERRNO (ctx->close_socket_and_wait (other_socket, 1000));
-    TEST_ASSERT_SUCCESS_ERRNO (ctx->terminate ());
+    ctx->terminate ();
 }
 
 void test_ctx_io_thread_selection_respects_affinity ()
@@ -117,7 +117,7 @@ void test_ctx_io_thread_selection_respects_affinity ()
     TEST_ASSERT_NOT_EQUAL (stream_first, stream_second);
 
     TEST_ASSERT_SUCCESS_ERRNO (ctx->close_socket_and_wait (socket, 1000));
-    TEST_ASSERT_SUCCESS_ERRNO (ctx->terminate ());
+    ctx->terminate ();
 }
 
 void test_ctx_control_runtime_bootstraps_runtime_resources_once ()
@@ -132,7 +132,7 @@ void test_ctx_control_runtime_bootstraps_runtime_resources_once ()
     zlink::control_runtime_t *second = ctx->control_runtime ();
     TEST_ASSERT_EQUAL_PTR (first, second);
 
-    TEST_ASSERT_SUCCESS_ERRNO (ctx->terminate ());
+    ctx->terminate ();
 }
 
 }

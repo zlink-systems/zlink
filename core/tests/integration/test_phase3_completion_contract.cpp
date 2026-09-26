@@ -746,8 +746,11 @@ void test_dontwait_connect_before_bind_is_not_retained_and_can_be_retried ()
                         sizeof (receive_timeout)));
 
     char endpoint[MAX_SOCKET_STRING];
-    fd_t reserved = bind_socket_resolve_port ("127.0.0.1", "0", endpoint);
-    close (reserved);
+    // A plain listener holds the OS-assigned port until just before the
+    // receiver binds it, so a parallel test cannot be assigned the same port
+    // meanwhile. It never speaks ZMTP, so the sender never completes a
+    // handshake with it.
+    const fd_t reserved = bind_socket_resolve_port ("127.0.0.1", "0", endpoint);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_connect (sender, endpoint));
 
     int poller_tag = 41;
@@ -770,6 +773,7 @@ void test_dontwait_connect_before_bind_is_not_retained_and_can_be_retried ()
     assert_no_completion (sender);
     assert_writable_poller_quiet (poller);
 
+    TEST_ASSERT_EQUAL_INT (0, close (reserved));
     TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (receiver, endpoint));
     receive_writable_completion (poller, sender, &poller_tag, rejected_id,
                                  &rejected_context);
