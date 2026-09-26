@@ -834,7 +834,7 @@ reason, or the reconnect condition.
 | `Disconnected` — transport dropped | The in-progress operation fails | `Disconnected` | `TransportError` | Applied if the reconnect option is on |
 | `Disconnected` — `close` | The in-progress operation fails, and so does a connect, Send, Request or wait surface (§10.1) called after `close` | `Closed` | `ClientClose` | Not done |
 | `SendFailed` — sequence exhaustion | Only that operation fails | Kept | None | Not done |
-| `SendFailed` — transport write failure | That operation fails | `Disconnected` if the transport dropped; otherwise kept | `TransportError` if the transport dropped; otherwise none | Applied only if the transport dropped and the reconnect option is on |
+| `SendFailed` — transport write failure | That operation fails | Ended | `TransportError` | Applied if the reconnect option is on |
 | `FrameDecodeFailed` — frame/header | That frame isn't delivered, and the pending request fails | Ended | `ProtocolError` | Applied if the reconnect option is on |
 | `FrameDecodeFailed` — Error JSON payload | The `request_seq` recipient defined by [§5.2](#52-request-correlation) | Kept | None | Not done |
 | `FrameTooLarge` | That frame isn't delivered, and the pending request fails | Ended | `ProtocolError` | Applied if the reconnect option is on |
@@ -843,8 +843,8 @@ reason, or the reconnect condition.
 | `UserCallbackFailed`, `RemoteError` | Delivered as an error event or the related callback/request | Kept | None | Not done |
 
 An in-progress operation that fails because the connection ended fails with `Disconnected`, whatever ended the
-connection; the cause remains as the close reason (§6.2). When a transport write failure ends the connection,
-only the operation of that write fails with `SendFailed`.
+connection; the cause remains as the close reason (§6.2). A transport write failure ends the connection, and only the operation of that
+write fails with `SendFailed`.
 
 ### 9.1 The Closed Error Code Set
 
@@ -1025,7 +1025,7 @@ test name differs, the meaning must be the same.
 | **Browser bundle** | **The TypeScript package root bundle doesn't include a platform-only socket module** |
 | Typed request/reply | Correlation and matching rule follows §5.2 |
 | Error response | The `Error` payload is §5.3's JSON object, and splits into pending failure / stream error depending on `request_seq` presence |
-| Pending request cleanup | On timeout/close/disconnect, every pending fails and is removed. A pending that fails because the connection ended fails with `Disconnected`, whatever the cause (transport drop, `FrameDecodeFailed`, `FrameTooLarge`) (§5.2, §9) |
+| Pending request cleanup | On timeout/close/disconnect, every pending fails and is removed. A pending that fails because the connection ended fails with `Disconnected`, whatever the cause (transport drop, `FrameDecodeFailed`, `FrameTooLarge`); the operation of a failed write gets `SendFailed` under §9 (§5.2, §9) |
 | Payload bound | The send bound applies **before the transport write**, and receive checks the wire payload and decompression result each (§4.7) |
 | Metadata | Bound/duplicate/empty-key validation (§4.4) |
 | Packet name | UTF-8 length limit (§4.2), `$zlink.` prefix reservation (§4.6), the per-language exact interface's default name/override rule |
@@ -1051,6 +1051,6 @@ test name differs, the meaning must be the same.
 | **Both name forms** | **Receive registration, send and request at the connector and Actor handle levels, and the wait surfaces at the connector level, offer the named form and the type form, and both reach the same packet name (§5)** |
 | **Handlers and close** | **Push, error, disconnect, connection state, Actor bound and Actor unbound handlers and request callbacks all follow the registration order, callback failure and no-waiting rules, and the connector does not wait for a handler that never finishes. The connection state and disconnect callbacks that result from `close` run on the same path as other `Immediate` callbacks in `Immediate`, and at the next dispatch pump after `close` in `Manual`. A `close` called inside a handler returns after starting close. Disconnecting after the reconnect attempts are used up and on a transport error runs them in the same order and does not wait (§7)** |
 | **Close and unwritten frames** | **`close` returns even when the peer does not read; Sends and Requests whose frames were not written, or were still being written, to the transport fail with `Disconnected`, and a completed Send's frame has been written to the transport (§5.2, §7)** |
-| **Close reason — protocol violation and calls after close** | **A frame or header decode failure and an oversized frame end the connection with close reason `ProtocolError`; a transport read failure leaves `TransportError`. A connect, Send, Request or wait surface called after `close` fails with `Disconnected`; `close`, dispatch, unregistration and reading the close reason do not fail (§7, §9)** |
+| **Close reason — protocol violation and calls after close** | **A frame or header decode failure and an oversized frame end the connection with close reason `ProtocolError`; a transport read or write failure ends the connection with close reason `TransportError`; on a write failure only the operation of that write fails with `SendFailed`, and other in-progress operations fail with `Disconnected`. A connect, Send, Request or wait surface called after `close` fails with `Disconnected`; `close`, dispatch, unregistration and reading the close reason do not fail (§7, §9)** |
 | **Cancellation** | **An operation cancelled while queued writes no frame; a cancelled Request ends with the language's cancellation representation rather than a §9 code, and the reply received hook does not run (§5.2, §5.7)** |
 | **Close reason read surface** | **Code that did not receive the event reads the same value. A failed first connect still leaves a reason, and reconnecting does not clear it (§6.2)** |
