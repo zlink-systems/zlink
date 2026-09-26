@@ -240,7 +240,8 @@ boundary 전 relay 구간을 폐기하고 재전송된 batch 전체로 한 번�
 확정된다. 확인 값이 일치하면 target은 CAS와 queue 개방을 진행한다.
 
 대기 시간이 끝나도 검증된 cutover 없이 CAS나 application dispatch를 시작하지 않는다.
-Target은 `cutover_timeout` Warning을 기록한다. Restore absolute deadline에 source는
+Target은 `cutover_timeout` Warning을 기록한다. Restore absolute deadline은 그 relocation을 시작한
+operation의 [deadline](../00-foundation/02-glossary.ko.md#deadline)이다. 이 deadline에 source는
 [Location runtime §6.1·§10](01-location-runtime.ko.md#61-read와-cas)의 `Preserve` fence로
 authority를 확정한다. Source fence가 먼저 성공하면 target의 늦은 CAS는 실패하고 target은
 staging을 정리한다. Source는 §4.4의 보관 작업을 직접 처리하므로 이 경로에서 accepted request에
@@ -548,7 +549,7 @@ Relay 수신 준비 reply 이전의 명시적 실패는 기존 source 복원 절
 cutover submit 결과만으로 source dispatch를 열지 않는다. Restore absolute deadline에
 source는 `Preserve` fence로 판정하며, target CAS 재제출은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. Target commit이면 target queue를 열고, source fence가 이기면 source가 [§4.4](#44-ordered-relay와-one-way-cutover)의 보관 작업을 직접 처리한다. 불확정이면 양쪽이 작업을 보관한다.
 
-Store 장애가 Restore 유효시간까지 계속되면 Session은 별도의 seal timeout으로 종료될 수 있다.
+Store 장애가 Restore deadline까지 계속되면 Session은 별도의 seal timeout으로 종료될 수 있다.
 Store가 정상화된 뒤 새 Session connection은 이전 binding을 복원하지 않고 일반 location
 validation과 Actor·Spot 생성 또는 복구 절차를 다시 수행한다. 만료된 owner lease나 terminal
 relocation state를 새 연결의 authority로 사용하지 않는다.
