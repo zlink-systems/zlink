@@ -15,6 +15,19 @@ binaries:
     windows-x64:
       url: "https://github.com/zlink-systems/zlink/releases/download/core/v1.10.0/libzlink-windows-x64.tar.gz"
       sha256: "12db38cc38715cfb45bfd1bf9b7290ed084dcd231cc4bc36f2152567eb2f22b7"
+  "1.9.0":
+    linux-x64:
+      url: "https://github.com/zlink-systems/zlink/releases/download/core/v1.9.0/libzlink-linux-x64.tar.gz"
+      sha256: "3fd30fb4e326d17ca2da8d297743592bedc8e4d750f34ac290c0a17672e51b55"
+    linux-arm64:
+      url: "https://github.com/zlink-systems/zlink/releases/download/core/v1.9.0/libzlink-linux-arm64.tar.gz"
+      sha256: "4d3f2a216135a23ce2579469cf2d22a6f211769eea83bf38c0a8e686a5c011f7"
+    macos-arm64:
+      url: "https://github.com/zlink-systems/zlink/releases/download/core/v1.9.0/libzlink-macos-arm64.tar.gz"
+      sha256: "30c80def07bda5e78c503b6d37dae4ee13ba4a0ec7e6066c162dade7eea2f1cf"
+    windows-x64:
+      url: "https://github.com/zlink-systems/zlink/releases/download/core/v1.9.0/libzlink-windows-x64.tar.gz"
+      sha256: "b4782b176e1ce2400b9044bd2c061c717acbc306f7cce69d022b030b61250eb6"
   "1.8.0":
     linux-x64:
       url: "https://github.com/zlink-systems/zlink/releases/download/core/v1.8.0/libzlink-linux-x64.tar.gz"
@@ -111,6 +124,9 @@ sources:
   "1.10.0":
     url: "https://github.com/zlink-systems/zlink/releases/download/core/v1.10.0/zlink-1.10.0-source.tar.gz"
     sha256: "eb4f62fc024b70d5c0535dcfb174310c04b9961d03cbbc98d08a18a99e9f616b"
+  "1.9.0":
+    url: "https://github.com/zlink-systems/zlink/releases/download/core/v1.9.0/zlink-1.9.0-source.tar.gz"
+    sha256: "feeacf54d32f7412940c8192ee507d0ddc655c1e9fe0f49b602109fac60efc2a"
   "1.8.0":
     url: "https://github.com/zlink-systems/zlink/releases/download/core/v1.8.0/zlink-1.8.0-source.tar.gz"
     sha256: "658e1a82e574410e36f8680039d25b7b654a55e50e5ac4802b0802924c22e602"
