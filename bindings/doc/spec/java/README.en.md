@@ -191,8 +191,7 @@ receive boundary.
 - `Poller` accepts a monitor as a source in the same shape as a socket (common spec "Monitor sources in `Poller`"):
   `void add(SocketMonitor monitor, long slot, PollEventFlags... events)`,
   `void modify(SocketMonitor monitor, PollEventFlags... events)`, `boolean remove(SocketMonitor monitor)`.
-  Only `POLLIN` (or an empty mask) is valid for a monitor; any other mask is rejected with
-  `ZlinkConfigException(ConfigResult.INVALID_ARGUMENT)`. Drain with `monitor.recv(RecvFlags.DONT_WAIT)` after
+  The result of a monitor mask follows the common spec "Monitor sources in `Poller`". Drain with `monitor.recv(RecvFlags.DONT_WAIT)` after
   readiness; `PollEvent` reports the monitor through the same slot as a socket.
 
 ## Proposed Repository Layout

@@ -281,8 +281,8 @@ Public Spot and Actor creation, including service-owned timers, is specified by 
   `modify_monitor(&self, monitor: &SocketMonitor, events: i16) -> Result<(), ConfigError>` and
   `remove_monitor(&self, monitor: &SocketMonitor) -> Result<(), ConfigError>` (common spec "Monitor sources in
   `Poller`"). `SocketMonitor` does not implement the socket-only sealed `Pollable` (this protects the `proxy`
-  argument contract). Only `POLLIN` is valid for a monitor; any other mask is rejected with
-  `ConfigError(ConfigResult::InvalidArgument)`. Drain with `recv_with_flags(RecvFlags::DONT_WAIT)` after readiness;
+  argument contract). The result of a monitor mask follows the common spec "Monitor sources in `Poller`".
+  Drain with `recv_with_flags(RecvFlags::DONT_WAIT)` after readiness;
   `PollEvent` reports it as `PollSourceKind::Socket`.
 - `AtomicCounter::new()`, `Stopwatch::start()`, `Thread::start(...)` create caller-owned utility resources.
 - Version and capability lookup, strerror, proxy, sleep, and the multipart cleanup helper are public crate functions. The FFI calls behind these functions stay private.

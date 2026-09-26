@@ -180,8 +180,7 @@ Java 바인딩은 low-level socket recv API와 poller 기반 수신 경계를 �
 - `Poller`는 socket과 같은 형태로 monitor를 source로 받는다(공통 spec "`Poller`의 monitor source"):
   `void add(SocketMonitor monitor, long slot, PollEventFlags... events)`,
   `void modify(SocketMonitor monitor, PollEventFlags... events)`, `boolean remove(SocketMonitor monitor)`.
-  monitor에는 `POLLIN`(또는 빈 mask)만 유효하고 다른 mask는 `ZlinkConfigException(ConfigResult.INVALID_ARGUMENT)`로
-  거절한다. ready 뒤 `monitor.recv(RecvFlags.DONT_WAIT)`로 drain하며 `PollEvent`는 socket과 같은 slot으로 monitor를 보고한다.
+  monitor mask의 결과는 공통 spec "`Poller`의 monitor source"를 따른다. ready 뒤 `monitor.recv(RecvFlags.DONT_WAIT)`로 drain하며 `PollEvent`는 socket과 같은 slot으로 monitor를 보고한다.
 
 ## Proposed Repository Layout
 

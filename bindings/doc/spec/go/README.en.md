@@ -84,8 +84,8 @@ against a single poller.
 `(*Poller).ModifyMonitor(monitor *SocketMonitor, events PollEventFlag) error` and
 `(*Poller).RemoveMonitor(monitor *SocketMonitor) error` register, modify and remove a socket monitor as a poller
 source (common spec "Monitor sources in `Poller`"); the existing `AddSocket/ModifySocket/RemoveSocket`
-(`SocketTarget`) also accept a monitor. Only `POLLIN` is valid for a monitor; any other bit is rejected with a
-typed `ConfigResult` `InvalidArgument`. Drain with `monitor.Recv(RecvFlagsDontWait)` after readiness; the poll event reports
+(`SocketTarget`) also accept a monitor. The result of a monitor mask follows the common spec "Monitor sources in `Poller`".
+Drain with `monitor.Recv(RecvFlagsDontWait)` after readiness; the poll event reports
 the monitor through the same slot and source kind as a socket.
 
 ## Byte HWM and Auto-HWM
