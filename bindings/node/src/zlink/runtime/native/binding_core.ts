@@ -3,7 +3,6 @@
 import type { NativeHandle, NativeVersion, NullableNativeHandle } from './binding_types';
 
 export interface CoreNativeBinding {
-  errno: () => number;
   messageAllocate: (size: number) => { data?: Buffer; nativeMessage: unknown };
   messageFrameData: (nativeMessage: unknown) => Buffer;
   messageFrameCopyData: (nativeMessage: unknown) => Buffer;

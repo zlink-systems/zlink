@@ -2,6 +2,8 @@
 
 #include <zlink/Contracts/Core/utilities.hpp>
 
+#include <Runtime/Errors/result_from_errno.hpp>
+
 #include <zlink.h>
 
 #include <cerrno>
@@ -11,10 +13,28 @@
 namespace zlink
 {
 
+namespace
+{
+
+// Core returned no handle: the errno it set gives the result.
+[[noreturn]] void throw_creation_failure ()
+{
+    const int err = errno;
+    throw config_error_t (detail::result_from_errno (config_result_t{}, err), err);
+}
+
+// A moved-from or stopped object has no handle; the call does not reach Core.
+[[noreturn]] void throw_no_handle ()
+{
+    throw config_error_t (detail::result_from_errno (config_result_t{}, EFAULT), EFAULT);
+}
+
+} // namespace
+
 stopwatch_t::stopwatch_t () : _handle (zlink_stopwatch_start ())
 {
     if (!_handle)
-        throw config_error_t (config_result_t::invalid_handle, zlink_errno ());
+        throw_creation_failure ();
 }
 
 stopwatch_t::~stopwatch_t ()
@@ -45,14 +65,14 @@ bool stopwatch_t::valid () const noexcept
 uint64_t stopwatch_t::intermediate () const
 {
     if (!_handle)
-        throw config_error_t (config_result_t::invalid_handle, zlink_errno ());
+        throw_no_handle ();
     return static_cast<uint64_t> (zlink_stopwatch_intermediate (_handle));
 }
 
 uint64_t stopwatch_t::stop ()
 {
     if (!_handle)
-        throw config_error_t (config_result_t::invalid_handle, zlink_errno ());
+        throw_no_handle ();
     void *handle = _handle;
     _handle = nullptr;
     return static_cast<uint64_t> (zlink_stopwatch_stop (handle));
@@ -67,7 +87,7 @@ void stopwatch_t::close ()
 atomic_counter_t::atomic_counter_t () : _handle (zlink_atomic_counter_new ())
 {
     if (!_handle)
-        throw config_error_t (config_result_t::invalid_handle, zlink_errno ());
+        throw_creation_failure ();
 }
 
 atomic_counter_t::~atomic_counter_t ()
@@ -98,28 +118,28 @@ bool atomic_counter_t::valid () const noexcept
 void atomic_counter_t::set (int value_)
 {
     if (!_handle)
-        throw config_error_t (config_result_t::invalid_handle, zlink_errno ());
+        throw_no_handle ();
     zlink_atomic_counter_set (_handle, value_);
 }
 
 int atomic_counter_t::increment ()
 {
     if (!_handle)
-        throw config_error_t (config_result_t::invalid_handle, zlink_errno ());
+        throw_no_handle ();
     return zlink_atomic_counter_inc (_handle);
 }
 
 int atomic_counter_t::decrement ()
 {
     if (!_handle)
-        throw config_error_t (config_result_t::invalid_handle, zlink_errno ());
+        throw_no_handle ();
     return zlink_atomic_counter_dec (_handle);
 }
 
 int atomic_counter_t::value () const
 {
     if (!_handle)
-        throw config_error_t (config_result_t::invalid_handle, zlink_errno ());
+        throw_no_handle ();
     return zlink_atomic_counter_value (_handle);
 }
 
@@ -163,7 +183,7 @@ thread_t::thread_t (std::function<void ()> task_) :
         throw config_error_t (config_result_t::invalid_argument, EINVAL);
     _handle = zlink_thread_start (&thread_entry, _state.get ());
     if (!_handle)
-        throw config_error_t (config_result_t::invalid_handle, zlink_errno ());
+        throw_creation_failure ();
 }
 
 thread_t::~thread_t ()

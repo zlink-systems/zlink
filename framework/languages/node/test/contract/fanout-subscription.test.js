@@ -1,7 +1,5 @@
 const assert = require('node:assert/strict');
-const net = require('node:net');
 const test = require('node:test');
-const { once } = require('node:events');
 const framework = require('../../packages/framework/dist/internal');
 const {
   ZLinkChannelSocketRegistry
@@ -9,9 +7,8 @@ const {
 const fanoutWire = require('../../packages/framework/dist/runtime/channels/fanout-service-wire');
 
 test('fanout subscriber without subscribe receives events from different topics', async () => {
-  const endpoint = `tcp://127.0.0.1:${await reservePort()}`;
   const receivedTopics = [];
-  const runtime = await startFanoutPair(endpoint, [], receivedTopics);
+  const runtime = await startFanoutPair([], receivedTopics);
 
   try {
     await publishUntil(runtime.fanout, 'order.created', () => receivedTopics.includes('order.created'));
@@ -24,9 +21,8 @@ test('fanout subscriber without subscribe receives events from different topics'
 });
 
 test('fanout subscriber registered for order receives order.created but not payment', async () => {
-  const endpoint = `tcp://127.0.0.1:${await reservePort()}`;
   const receivedTopics = [];
-  const runtime = await startFanoutPair(endpoint, ['order'], receivedTopics);
+  const runtime = await startFanoutPair(['order'], receivedTopics);
 
   try {
     await publishUntil(
@@ -139,10 +135,21 @@ test('fanout builder treats duplicate subscribe calls as one subscription', () =
   assert.deepEqual(options.channels.events.subscriptions, ['order']);
 });
 
-async function startFanoutPair(endpoint, subscriptions, receivedTopics) {
+/**
+ * The publisher binds an OS-assigned port; the subscriber connects to the
+ * endpoint the publisher's listener status reports after start.
+ */
+async function startFanoutPair(subscriptions, receivedTopics) {
   const publisherRegistration = framework.createFrameworkRegistration({
-    channels: { events: { publisher: { bind: endpoint } } }
+    channels: { events: { publisher: { bind: 'tcp://127.0.0.1:*' } } }
   });
+  const publisherRuntime = new framework.ZLinkFrameworkRuntimeHost({ registration: publisherRegistration });
+  const fanout = new framework.DefaultZLinkFanoutClient(
+    publisherRegistration,
+    publisherRuntime.channelTransport
+  );
+  await publisherRuntime.start();
+  const endpoint = fanout.getListenerStatus('events').endpoint;
   const subscriberOptions = framework.createFrameworkOptions((builder) => {
     const channel = builder.addFanoutChannel('events').enableSubscriber(endpoint);
     for (const topic of subscriptions) channel.subscribe(topic);
@@ -156,15 +163,15 @@ async function startFanoutPair(endpoint, subscriptions, receivedTopics) {
     }
   }];
   const subscriberRegistration = framework.createFrameworkRegistration(subscriberOptions);
-  const publisherRuntime = new framework.ZLinkFrameworkRuntimeHost({ registration: publisherRegistration });
   const subscriberRuntime = new framework.ZLinkFrameworkRuntimeHost({ registration: subscriberRegistration });
-  await publisherRuntime.start();
-  await subscriberRuntime.start();
+  try {
+    await subscriberRuntime.start();
+  } catch (error) {
+    await publisherRuntime.stop();
+    throw error;
+  }
   return {
-    fanout: new framework.DefaultZLinkFanoutClient(
-      publisherRegistration,
-      publisherRuntime.channelTransport
-    ),
+    fanout,
     async stop() {
       await subscriberRuntime.stop();
       await publisherRuntime.stop();
@@ -193,14 +200,6 @@ async function publishUntil(fanout, topic, predicate) {
   assert.fail(`fanout topic '${topic}' was not received before timeout`);
 }
 
-async function reservePort() {
-  const server = net.createServer();
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const { port } = server.address();
-  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-  return port;
-}
 
 function fakeSubscriber() {
   return {

@@ -16,6 +16,7 @@
 #include <iostream>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <utility>
 
@@ -270,6 +271,11 @@ void verify_backpressured_send_waits_for_admission ()
     auto monitor = source.monitor_open (zlink::monitor_event::connection_ready);
     source.connect ("inproc://framework-backpressured-send-wait");
     assert (wait_for_monitor_event (monitor, zlink::monitor_event::connection_ready, 2s));
+    const auto pause_deadline = std::chrono::steady_clock::now () + 2s;
+    while (monitor.status ().flow_paused_connections == 0
+           && std::chrono::steady_clock::now () < pause_deadline)
+        std::this_thread::yield ();
+    assert (monitor.status ().flow_paused_connections == 1);
 
     zlink::poller_t source_poller;
     backend::raw_dealer_port_t source_port (source, nullptr, &source_poller);

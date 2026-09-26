@@ -59,7 +59,7 @@ fn assert_monitor_poller_lifecycle(endpoint: &str) {
     router.close().unwrap();
     wait_for_polled_monitor_event(&poller, &monitor, 73, |event| event.is_disconnected());
     poller.remove_monitor(&monitor).unwrap();
-    assert_eq!(poller.size(), 0);
+    assert_eq!(poller.size().unwrap(), 0);
 
     let endpoint_after_remove = if endpoint.starts_with("tcp://") {
         tcp_endpoint()
@@ -110,22 +110,63 @@ fn socket_monitor_poller_lifecycle_tcp() {
 }
 
 #[test]
-fn socket_monitor_poller_rejects_non_readable_masks() {
+fn socket_monitor_add_forwards_core_mask_results() {
     let ctx = Context::new().unwrap();
     let dealer = ctx.dealer_socket().unwrap();
     let monitor = SocketMonitor::open(&dealer).unwrap();
     let poller = Poller::new().unwrap();
 
-    for events in [POLLOUT, POLLCOMPLETION, POLLIN | POLLOUT] {
+    for (events, code, native_errno) in [
+        (POLLOUT, ConfigResult::NotSupported, libc::ENOTSUP),
+        (POLLCOMPLETION, ConfigResult::InvalidArgument, libc::EINVAL),
+        (POLLIN | POLLOUT, ConfigResult::NotSupported, libc::ENOTSUP),
+        (
+            POLLIN | POLLCOMPLETION,
+            ConfigResult::InvalidArgument,
+            libc::EINVAL,
+        ),
+        (
+            POLLOUT | POLLCOMPLETION,
+            ConfigResult::InvalidArgument,
+            libc::EINVAL,
+        ),
+    ] {
         let error = poller.add_monitor(&monitor, events, 1).unwrap_err();
-        assert_eq!(error.code(), ConfigResult::InvalidArgument);
-        assert_eq!(error.native_errno(), libc::EINVAL);
+        assert_eq!(error.code(), code);
+        assert_eq!(error.native_errno(), native_errno);
+        assert_eq!(poller.size().unwrap(), 0);
     }
-
     poller.add_monitor(&monitor, POLLIN, 1).unwrap();
-    let error = poller.modify_monitor(&monitor, POLLCOMPLETION).unwrap_err();
-    assert_eq!(error.code(), ConfigResult::InvalidArgument);
-    assert_eq!(error.native_errno(), libc::EINVAL);
+    poller.remove_monitor(&monitor).unwrap();
+}
+
+#[test]
+fn socket_monitor_modify_forwards_core_mask_results() {
+    let ctx = Context::new().unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    let monitor = SocketMonitor::open(&dealer).unwrap();
+    let poller = Poller::new().unwrap();
+    poller.add_monitor(&monitor, POLLIN, 1).unwrap();
+    for (events, code, native_errno) in [
+        (POLLOUT, ConfigResult::NotSupported, libc::ENOTSUP),
+        (POLLCOMPLETION, ConfigResult::InvalidArgument, libc::EINVAL),
+        (POLLIN | POLLOUT, ConfigResult::NotSupported, libc::ENOTSUP),
+        (
+            POLLIN | POLLCOMPLETION,
+            ConfigResult::InvalidArgument,
+            libc::EINVAL,
+        ),
+        (
+            POLLOUT | POLLCOMPLETION,
+            ConfigResult::InvalidArgument,
+            libc::EINVAL,
+        ),
+    ] {
+        let error = poller.modify_monitor(&monitor, events).unwrap_err();
+        assert_eq!(error.code(), code);
+        assert_eq!(error.native_errno(), native_errno);
+        assert_eq!(poller.size().unwrap(), 1);
+    }
     poller.remove_monitor(&monitor).unwrap();
 }
 

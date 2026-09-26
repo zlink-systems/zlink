@@ -41,19 +41,6 @@ def try_transport(name, fn):
     fn()
 
 
-def wait_for_socket_event(sock, events, timeout_ms):
-    with zlink.create_poller() as poller:
-        poller.add_socket(sock, events, 0)
-        poll_events = zlink.create_poll_events(1)
-        try:
-            ready = poller.wait(poll_events, timeout_ms)
-        except zlink.ZlinkError as exc:
-            if exc.native_errno == 11:
-                return False
-            raise
-    return bool(ready)
-
-
 def wait_connected(*monitors, timeout_s=5.0):
     del timeout_s
     for monitor in monitors:

@@ -6,6 +6,8 @@
 
 #include <zlink.h>
 
+#include <cerrno>
+
 namespace zlink
 {
 
@@ -80,10 +82,11 @@ std::optional<uint64_t> timer_t::recv ()
     uint64_t fire_count = 0;
     const recv_result_t result =
       static_cast<recv_result_t> (zlink_timer_recv (_impl->handle, &fire_count));
+    const int err = errno;
     if (result == recv_result_t::no_data)
         return std::nullopt;
     if (result != recv_result_t::ok)
-        throw recv_error_t (result, zlink_errno ());
+        throw recv_error_t (result, err);
     return std::optional<uint64_t> (fire_count);
 }
 

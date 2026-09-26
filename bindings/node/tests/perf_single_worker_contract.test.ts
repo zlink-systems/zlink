@@ -16,6 +16,8 @@ const {
   waitForMonitorConnectionReady,
   waitForPostReadySettle,
   waitForWorkerStatus,
+  workerBindEndpoint,
+  workerBoundEndpoint,
 } = require('../perf/single/perf_single_common');
 const { STOP_TOKEN_BYTES } = require('../perf/perf_stop_token');
 
@@ -39,12 +41,11 @@ test('WSS PUB worker survives blocking flow control and delivers its wire stop',
     ctx.recalculateAutoHwm();
     configureTlsClient(sub, 'wss');
     sub.setSubscription('');
-    sub.connect(endpoint);
 
     worker = spawnSenderWorker({
       kind: 'pubsub',
       transport: 'wss',
-      endpoint,
+      endpoint: workerBindEndpoint(endpoint),
       duration: 0.1,
       msgSize: 1024,
       runId: 1,
@@ -58,6 +59,7 @@ test('WSS PUB worker survives blocking flow control and delivers its wire stop',
       },
     });
     waitForWorkerStatus(worker, 1, 2_000);
+    sub.connect(workerBoundEndpoint(worker, endpoint));
     waitForMonitorConnectionReady(monitor, 2_000);
     waitForWorkerStatus(worker, 2, 2_000);
     waitForPostReadySettle(1_000);
@@ -133,14 +135,14 @@ test('single REQREP worker starts with complete data and echoes two parts', asyn
       worker = spawnSenderWorker({
         kind: 'socket_reqrep_replier',
         transport: 'tcp',
-        endpoint,
+        endpoint: workerBindEndpoint(endpoint),
         duration: 0,
         msgSize: 1024,
         runId: 1,
         options: { recvTimeoutMs: 100 },
       });
       waitForWorkerStatus(worker, 1, 2_000);
-      client.connect(endpoint);
+      client.connect(workerBoundEndpoint(worker, endpoint));
       waitForMonitorConnectionReady(monitor, 2_000);
       releaseSenderWorker(worker);
 

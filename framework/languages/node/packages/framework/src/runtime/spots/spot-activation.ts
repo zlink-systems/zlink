@@ -32,7 +32,6 @@ import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-con
 import { throwIfAborted } from '../abort';
 import { ZLinkConfigurationException } from '../configuration';
 import type {
-  ZLinkBackendReceived,
   ZLinkBackendSpot,
   ZLinkBackendSpotNode,
   ZLinkBackendTopicMessage
@@ -123,7 +122,6 @@ export interface ZLinkSpotActivationLifecycleOptions {
     spotId: RoutingId,
     authority?: ZLinkNativeSpotAuthority
   ) => ZLinkBackendSpot | undefined;
-  readonly createReceived?: () => ZLinkBackendReceived;
   readonly createTopicMessage?: () => ZLinkBackendTopicMessage;
   readonly nativeSpotNodeProvider?: (meshName: string) => ZLinkBackendSpotNode | undefined;
   readonly actorResolver?: (actorId: string) => ZLinkActor | undefined;

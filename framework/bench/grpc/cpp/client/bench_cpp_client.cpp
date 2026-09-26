@@ -458,7 +458,7 @@ class zlink_raw_driver_t : public driver_t
 {
   public:
     zlink_raw_driver_t (const options_t &options, int window, bool command_path) :
-        _options (options), _window (window), _command_path (command_path)
+        _options (options), _window (window), _command_path (command_path), _poller (_context)
     {
         _socket = std::make_unique<zlink::router_socket_t> (_context);
         const std::string client_rid =

@@ -150,6 +150,6 @@ pub fn multipart_close(parts: &mut [Message]) {
     runtime::multipart_close(parts);
 }
 
-pub fn poll(items: &mut [PollItem], timeout_ms: i64) -> Result<i32, RecvError> {
+pub fn poll(items: &mut [PollItem], timeout_ms: i64) -> Result<i32, ConfigError> {
     poller::poll(items, timeout_ms)
 }

@@ -659,30 +659,43 @@ napi_value create_subscribed_value (napi_env env,
 
 } // namespace
 
-napi_value throw_last_error (napi_env env, const char *prefix)
+namespace
 {
-    int err = zlink_errno ();
-    const char *msg = zlink_strerror (err);
-    char buf[256];
-    snprintf (buf, sizeof (buf), "%s: %s", prefix, msg ? msg : "error");
-    napi_throw_error (env, NULL, buf);
-    return NULL;
-}
-
-napi_value throw_submit_error (napi_env env, const char *prefix, int result)
+// Throws an Error that carries the errno read right after the failed Core call.
+// JavaScript reads that property, never a later zlink_errno(): N-API and V8
+// work between the throw and the catch may overwrite errno.
+napi_value throw_native_error (napi_env env, const char *message, int native_errno, const int *result)
 {
-    int err = zlink_errno ();
-    const char *msg = zlink_strerror (err);
-    char buf[256];
-    snprintf (buf, sizeof (buf), "%s: %s", prefix, msg ? msg : "error");
-
-    napi_value message;
+    napi_value text;
     napi_value error;
-    napi_create_string_utf8 (env, buf, NAPI_AUTO_LENGTH, &message);
-    napi_create_error (env, NULL, message, &error);
-    set_int64_property (env, error, "nativeResult", result);
+    napi_create_string_utf8 (env, message, NAPI_AUTO_LENGTH, &text);
+    napi_create_error (env, NULL, text, &error);
+    napi_value errno_value;
+    napi_create_int32 (env, native_errno, &errno_value);
+    napi_set_named_property (env, error, "nativeErrno", errno_value);
+    if (result)
+        set_int64_property (env, error, "nativeResult", *result);
     napi_throw (env, error);
     return NULL;
+}
+} // namespace
+
+napi_value throw_last_error (napi_env env, const char *prefix)
+{
+    const int err = zlink_errno ();
+    const char *msg = zlink_strerror (err);
+    char buf[256];
+    snprintf (buf, sizeof (buf), "%s: %s", prefix, msg ? msg : "error");
+    return throw_native_error (env, buf, err, NULL);
+}
+
+napi_value throw_result_error (napi_env env, const char *prefix, int result)
+{
+    const int err = zlink_errno ();
+    const char *msg = zlink_strerror (err);
+    char buf[256];
+    snprintf (buf, sizeof (buf), "%s: %s", prefix, msg ? msg : "error");
+    return throw_native_error (env, buf, err, &result);
 }
 
 std::string get_string (napi_env env, napi_value val)
@@ -1222,13 +1235,6 @@ napi_value version (napi_env env, napi_callback_info info)
     return arr;
 }
 
-napi_value errno_value (napi_env env, napi_callback_info info)
-{
-    napi_value out;
-    napi_create_int32 (env, zlink_errno (), &out);
-    return out;
-}
-
 napi_value strerror_value (napi_env env, napi_callback_info info)
 {
     napi_value argv[1];
@@ -1336,10 +1342,8 @@ napi_value ctx_term (napi_env env, napi_callback_info info)
     napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
     void *ctx = NULL;
     napi_get_value_external (env, argv[0], &ctx);
-    int rc;
-    do {
-        rc = zlink_ctx_term (ctx);
-    } while (rc != 0 && zlink_errno () == EINTR);
+    // Core continues the term wait across a signal; its result is final.
+    const int rc = zlink_ctx_term (ctx);
     if (rc != 0)
         return throw_last_error (env, "ctx_term failed");
     napi_value ok;
@@ -1691,10 +1695,10 @@ napi_value socket_bind (napi_env env, napi_callback_info info)
     std::string addr = get_string (env, argv[1]);
     int rc = zlink_bind (sock, addr.c_str ());
     if (rc != 0) {
+        const int err = zlink_errno ();
         char buf[128];
         snprintf (buf, sizeof (buf), "bind failed (result=%d)", rc);
-        napi_throw_error (env, NULL, buf);
-        return NULL;
+        return throw_native_error (env, buf, err, NULL);
     }
     napi_value ok;
     napi_get_undefined (env, &ok);
@@ -2458,7 +2462,7 @@ napi_value socket_publish (napi_env env, napi_callback_info info)
       zlink_publish (sock, topic, use_single_part ? &single_part : parts.data (),
                      use_single_part ? 1 : parts.size (), static_cast<zlink_send_flags_t> (flags));
     if (rc != ZLINK_SUBMIT_OK) {
-        return throw_submit_error (env, "publish failed", rc);
+        return throw_result_error (env, "publish failed", rc);
     }
     if (is_array || contains_native_frame)
         consume_native_message_value (env, argv[2]);
@@ -3025,7 +3029,7 @@ napi_value socket_reply (napi_env env, napi_callback_info info)
       router, &source_rid, reply_token, parts.data (), parts.size ());
     parts.release ();
     if (result != ZLINK_SUBMIT_OK)
-        return throw_submit_error (env, "reply failed", result);
+        return throw_result_error (env, "reply failed", result);
     consume_native_message_value (env, argv[3]);
     napi_value out;
     napi_get_undefined (env, &out);
@@ -3315,7 +3319,7 @@ napi_value poller_size (napi_env env, napi_callback_info info)
     zlink_config_result_t err = ZLINK_CONFIG_OK;
     int size = zlink_poller_size (poller, &err);
     if (err != ZLINK_CONFIG_OK)
-        return throw_last_error (env, "poller_size failed");
+        return throw_result_error (env, "poller_size failed", err);
     napi_value out;
     napi_create_int32 (env, size, &out);
     return out;
@@ -3335,7 +3339,7 @@ napi_value poller_add (napi_env env, napi_callback_info info)
     void *user_data = argc >= 3 ? get_external_or_null (env, argv[2]) : NULL;
     zlink_config_result_t rc = zlink_poller_add (poller, socket, user_data, (short) events);
     if (rc != ZLINK_CONFIG_OK)
-        return throw_last_error (env, "poller_add failed");
+        return throw_result_error (env, "poller_add failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -3354,7 +3358,7 @@ napi_value poller_modify (napi_env env, napi_callback_info info)
     napi_get_value_int32 (env, argv[2], &events);
     zlink_config_result_t rc = zlink_poller_modify (poller, socket, (short) events);
     if (rc != ZLINK_CONFIG_OK)
-        return throw_last_error (env, "poller_modify failed");
+        return throw_result_error (env, "poller_modify failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -3371,7 +3375,7 @@ napi_value poller_remove (napi_env env, napi_callback_info info)
     napi_get_value_external (env, argv[1], &socket);
     zlink_config_result_t rc = zlink_poller_remove (poller, socket);
     if (rc != ZLINK_CONFIG_OK)
-        return throw_last_error (env, "poller_remove failed");
+        return throw_result_error (env, "poller_remove failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -3390,7 +3394,7 @@ napi_value poller_add_fd (napi_env env, napi_callback_info info)
     void *user_data = argc >= 3 ? get_external_or_null (env, argv[2]) : NULL;
     zlink_config_result_t rc = zlink_poller_add_fd (poller, fd, user_data, (short) events);
     if (rc != ZLINK_CONFIG_OK)
-        return throw_last_error (env, "poller_add_fd failed");
+        return throw_result_error (env, "poller_add_fd failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -3408,7 +3412,7 @@ napi_value poller_modify_fd (napi_env env, napi_callback_info info)
     napi_get_value_int32 (env, argv[2], &events);
     zlink_config_result_t rc = zlink_poller_modify_fd (poller, fd, (short) events);
     if (rc != ZLINK_CONFIG_OK)
-        return throw_last_error (env, "poller_modify_fd failed");
+        return throw_result_error (env, "poller_modify_fd failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -3425,7 +3429,7 @@ napi_value poller_remove_fd (napi_env env, napi_callback_info info)
     napi_get_value_int32 (env, argv[1], &fd);
     zlink_config_result_t rc = zlink_poller_remove_fd (poller, fd);
     if (rc != ZLINK_CONFIG_OK)
-        return throw_last_error (env, "poller_remove_fd failed");
+        return throw_result_error (env, "poller_remove_fd failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -3443,7 +3447,7 @@ napi_value poller_add_timer (napi_env env, napi_callback_info info)
     void *user_data = argc >= 3 ? get_external_or_null (env, argv[2]) : NULL;
     zlink_config_result_t rc = zlink_poller_add_timer (poller, timer, user_data);
     if (rc != ZLINK_CONFIG_OK)
-        return throw_last_error (env, "poller_add_timer failed");
+        return throw_result_error (env, "poller_add_timer failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -3460,7 +3464,7 @@ napi_value poller_remove_timer (napi_env env, napi_callback_info info)
     napi_get_value_external (env, argv[1], &timer);
     zlink_config_result_t rc = zlink_poller_remove_timer (poller, timer);
     if (rc != ZLINK_CONFIG_OK)
-        return throw_last_error (env, "poller_remove_timer failed");
+        return throw_result_error (env, "poller_remove_timer failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -3480,7 +3484,7 @@ napi_value poller_wait (napi_env env, napi_callback_info info)
     zlink_config_result_t err = ZLINK_CONFIG_OK;
     int rc = zlink_poller_wait (poller, &event, 1, timeout, &err);
     if (err != ZLINK_CONFIG_OK)
-        return throw_last_error (env, "poller_wait failed");
+        return throw_result_error (env, "poller_wait failed", err);
     return create_poller_event_result (env, event, rc);
 }
 
@@ -3591,15 +3595,11 @@ napi_value poller_wait_into (napi_env env, napi_callback_info info)
     napi_get_value_external (env, argv[1], &events_ptr);
     napi_get_value_int32 (env, argv[2], &capacity);
     napi_get_value_int32 (env, argv[3], &timeout);
-    if (!events_ptr || capacity <= 0) {
-        napi_throw_range_error (env, NULL, "events capacity must be positive");
-        return NULL;
-    }
     zlink_config_result_t err = ZLINK_CONFIG_OK;
     int rc = zlink_poller_wait (poller, static_cast<zlink_poller_event_t *> (events_ptr), capacity,
                                 timeout, &err);
     if (err != ZLINK_CONFIG_OK)
-        return throw_last_error (env, "poller_wait_into failed");
+        return throw_result_error (env, "poller_wait_into failed", err);
     napi_value out;
     napi_create_int32 (env, rc, &out);
     return out;

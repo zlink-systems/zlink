@@ -1,7 +1,7 @@
 import type { Socket } from '@zlink-systems/zlink';
 import type { ZLinkBackendObject } from '../contracts';
 import {
-  closeWithBusyRetry,
+  closeBindingHandle,
   disableSocketLinger,
   isBindingNotFound,
   isContextTerminatedError,
@@ -52,7 +52,7 @@ export function wrapSocket<T extends { close(): void }>(
     async dispose(): Promise<void> {
       eventLoopPoller?.dispose();
       disableSocketLinger(nativeInstance);
-      await closeWithBusyRetry(nativeInstance);
+      closeBindingHandle(nativeInstance);
     },
     close(): void {
       eventLoopPoller?.dispose();

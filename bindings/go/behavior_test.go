@@ -224,6 +224,8 @@ func TestPollerWaitWritesCallerOwnedEvents(t *testing.T) {
 }
 
 func TestPollerRejectsEmptyEventSlice(t *testing.T) {
+	ctx := newContext(t)
+	defer ctx.Close()
 	poller, err := zlink.NewPoller()
 	if err != nil {
 		t.Fatalf("NewPoller() error = %v", err)
@@ -248,6 +250,8 @@ func TestPollEmptyItemsUsesTimeout(t *testing.T) {
 }
 
 func TestPollerTimerEventUsesSlot(t *testing.T) {
+	ctx := newContext(t)
+	defer ctx.Close()
 	timer, err := zlink.NewTimer()
 	if err != nil {
 		t.Fatalf("NewTimer() error = %v", err)

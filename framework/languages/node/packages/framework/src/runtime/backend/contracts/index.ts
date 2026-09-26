@@ -720,7 +720,6 @@ export interface ZLinkBackendSpot extends ZLinkBackendObject {
   recvActorLifecycle(flags: ZLinkBackendRecvFlags): unknown | null;
   drainReply(): number;
   drainChannelReply(subjectHandle: bigint): number;
-  recvRoute(result: Received, flags: ZLinkBackendRecvFlags): boolean;
   setDispatchHandler(handler: (info: ZLinkBackendSpotDispatchInfo) => void): void;
   requestToChannel(
     channelName: string,
@@ -788,7 +787,6 @@ export interface ZLinkMonitoringBackendAdapter {
 }
 
 export interface ZLinkBackendAdapterFactory {
-  createReceived(): Received;
   createTopicMessage(): TopicMessage;
   createChannelAdapter(): ZLinkChannelBackendAdapter;
   createMeshAdapter(): ZLinkMeshBackendAdapter;

@@ -103,14 +103,16 @@ async function start() {
   }
   locationQuery = app.get(nestjs.ZLINK_LOCATION_RUNTIME_QUERY, { strict: false });
   routeMeshRuntime = app.get(nestjs.ZLINK_ROUTE_MESH_RUNTIME, { strict: false });
-  await waitForPublishedNode();
+  // The published descriptor carries the endpoint this node bound.
+  const descriptor = await waitForPublishedNode();
   process.on('message', onMessage);
   process.once('SIGTERM', () => void stop(0));
   process.once('SIGINT', () => void stop(0));
   send({
     type: 'ready',
     role,
-    pid: process.pid
+    pid: process.pid,
+    endpoint: descriptor.endpoint
   });
 }
 

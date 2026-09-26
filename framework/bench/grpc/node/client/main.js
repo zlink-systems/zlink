@@ -162,7 +162,7 @@ function createRawTransport(options) {
     if (requestCompletionPump !== null) {
       throw new Error('raw request completion pump is already open');
     }
-    const poller = zlink.createPoller();
+    const poller = context.createPoller();
     const events = zlink.createPollEvents(1);
     try {
       // The request-backpressure loop owns exactly one completion poller for

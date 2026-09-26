@@ -36,7 +36,7 @@ test('request receive exposes opaque ReplyToken and reusable state resets', asyn
   const ctx = zlink.createContext();
   const router = zlink.createRouterSocket(ctx);
   const dealer = zlink.createDealerSocket(ctx);
-  const completions = new CompletionPollerDriver(dealer);
+  const completions = new CompletionPollerDriver(ctx, dealer);
   router.bind('inproc://dealer-router-reply-token');
   dealer.connect('inproc://dealer-router-reply-token');
   try {
@@ -63,7 +63,7 @@ test('ReplyToken from another RouterSocket is rejected before native submit', as
   const first = zlink.createRouterSocket(ctx);
   const second = zlink.createRouterSocket(ctx);
   const dealer = zlink.createDealerSocket(ctx);
-  const completions = new CompletionPollerDriver(dealer);
+  const completions = new CompletionPollerDriver(ctx, dealer);
   first.bind('inproc://reply-token-owner');
   dealer.connect('inproc://reply-token-owner');
   try {

@@ -18,7 +18,8 @@ func setNativeOption(raw unsafe.Pointer, closed bool, option C.zlink_option_t, p
 	if raw == nil || closed {
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
-	return configErrorFromResult(ConfigResult(C.zlink_set_option(raw, option, ptr, size)))
+	rc, cerr := C.zlink_set_option(raw, option, ptr, size)
+	return configErrorFromCall(rc, cerr)
 }
 
 func setNativeIntOption(raw unsafe.Pointer, closed bool, option C.zlink_option_t, value int32) error {
@@ -37,7 +38,8 @@ func setNativeReceiveFlowState(raw unsafe.Pointer, closed bool, value ReceiveFlo
 	if raw == nil || closed {
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
-	return configErrorFromResult(ConfigResult(C.zlink_socket_set_receive_flow_state(raw, C.zlink_receive_flow_state_t(value))))
+	rc, cerr := C.zlink_socket_set_receive_flow_state(raw, C.zlink_receive_flow_state_t(value))
+	return configErrorFromCall(rc, cerr)
 }
 
 func setNativePubBoolOption(raw unsafe.Pointer, closed bool, option C.zlink_pub_option_t, value bool) error {
@@ -48,7 +50,8 @@ func setNativePubBoolOption(raw unsafe.Pointer, closed bool, option C.zlink_pub_
 	if value {
 		rawValue = 1
 	}
-	return configErrorFromResult(ConfigResult(C.zlink_set_pub_option(raw, option, unsafe.Pointer(&rawValue), C.size_t(C.sizeof_int))))
+	rc, cerr := C.zlink_set_pub_option(raw, option, unsafe.Pointer(&rawValue), C.size_t(C.sizeof_int))
+	return configErrorFromCall(rc, cerr)
 }
 
 func getNativePubBoolOption(raw unsafe.Pointer, closed bool, option C.zlink_pub_option_t) (bool, error) {
@@ -57,7 +60,8 @@ func getNativePubBoolOption(raw unsafe.Pointer, closed bool, option C.zlink_pub_
 	}
 	var rawValue C.int
 	size := C.size_t(C.sizeof_int)
-	if err := configErrorFromResult(ConfigResult(C.zlink_get_pub_option(raw, option, unsafe.Pointer(&rawValue), &size))); err != nil {
+	rc, cerr := C.zlink_get_pub_option(raw, option, unsafe.Pointer(&rawValue), &size)
+	if err := configErrorFromCall(rc, cerr); err != nil {
 		return false, err
 	}
 	return rawValue != 0, nil

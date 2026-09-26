@@ -210,12 +210,9 @@ test('raw bound delivery survives a RID already removed by installed Core', { ti
   let client;
   let fixture;
   try {
-    const reservation = net.createServer();
-    reservation.listen(0, '127.0.0.1');
-    await once(reservation, 'listening');
-    const port = reservation.address().port;
-    await new Promise((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()));
-    socket.bind(`tcp://127.0.0.1:${port}`);
+    // Bind an OS-assigned port and connect to the port the socket bound.
+    socket.bind('tcp://127.0.0.1:*');
+    const port = Number(socket.options.lastEndpoint.split(':').pop());
     client = net.createConnection({ host: '127.0.0.1', port });
     await once(client, 'connect');
     client.resume();

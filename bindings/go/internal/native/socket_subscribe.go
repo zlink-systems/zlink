@@ -14,14 +14,24 @@ type subscribeSocket struct {
 }
 
 func (s *subscribeSocket) SetSubscription(filter string) error {
+	handle := s.raw()
+	if handle == nil {
+		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+	}
 	return s.withCString(filter, func(cstr *C.char) error {
-		return configErrorFromResult(C.zlink_set_subscription(s.raw(), cstr))
+		rc80, errno80 := C.zlink_set_subscription(handle, cstr)
+		return configErrorFromCall(rc80, errno80)
 	})
 }
 
 func (s *subscribeSocket) UnsetSubscription(filter string) error {
+	handle := s.raw()
+	if handle == nil {
+		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+	}
 	return s.withCString(filter, func(cstr *C.char) error {
-		return configErrorFromResult(C.zlink_unset_subscription(s.raw(), cstr))
+		rc81, errno81 := C.zlink_unset_subscription(handle, cstr)
+		return configErrorFromCall(rc81, errno81)
 	})
 }
 
@@ -29,8 +39,13 @@ func (s *subscribeSocket) Subscribe(out *TopicMessage, flags RecvFlags) (bool, e
 	if out == nil {
 		return false, &RecvError{Result: RecvInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
-	err := recvTopicMessageInto(out, func(rid **C.zlink_routing_id_t, topic *C.char, topicLen *C.size_t, parts *C.zlink_msg_t, capacity C.size_t, count *C.size_t, recvFlags C.zlink_recv_flags_t) C.zlink_recv_result_t {
-		return C.zlink_subscribe(s.raw(), rid, topic, recvTopicBufferCap, topicLen, parts, capacity, count, recvFlags)
+	handle := s.raw()
+	if handle == nil {
+		return false, &RecvError{Result: RecvInvalidHandle, nativeErrno: int(C.EFAULT)}
+	}
+	err := recvTopicMessageInto(out, func(rid **C.zlink_routing_id_t, topic *C.char, topicLen *C.size_t, parts *C.zlink_msg_t, capacity C.size_t, count *C.size_t, recvFlags C.zlink_recv_flags_t) (C.zlink_recv_result_t, error) {
+		result, cerr := C.zlink_subscribe(handle, rid, topic, recvTopicBufferCap, topicLen, parts, capacity, count, recvFlags)
+		return result, cerr
 	}, flags)
 	if err != nil {
 		if isNoData(err) {
@@ -49,9 +64,14 @@ func (s *xpubSubscribeSocket) ReceiveSubscriptionEvent(out *SubscriptionEvent, f
 	if out == nil {
 		return false, &RecvError{Result: RecvInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
+	handle := s.raw()
+	if handle == nil {
+		return false, &RecvError{Result: RecvInvalidHandle, nativeErrno: int(C.EFAULT)}
+	}
 	err := recvSubscriptionEventInto(out, func(rid *C.zlink_routing_id_t, subscribed *C.int, topic *C.char, topicLen *C.size_t, recvFlags C.zlink_recv_flags_t) error {
 		var sourceRID *C.zlink_routing_id_t
-		if err := recvErrorFromResult(C.zlink_xpub_recv(s.raw(), &sourceRID, subscribed, topic, recvTopicBufferCap, topicLen, recvFlags)); err != nil {
+		rc82, errno82 := C.zlink_xpub_recv(handle, &sourceRID, subscribed, topic, recvTopicBufferCap, topicLen, recvFlags)
+		if err := recvErrorFromCall(rc82, errno82); err != nil {
 			return err
 		}
 		if sourceRID != nil {

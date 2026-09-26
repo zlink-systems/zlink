@@ -261,97 +261,14 @@ class config_error_t : public binding_error_t
 namespace detail
 {
 
-inline bool is_invalid_handle_errno (int err_)
-{
-    return err_ == EFAULT || err_ == ENOTSOCK || err_ == EBADF || err_ == ESHUTDOWN;
-}
-
-inline config_result_t config_result_from_errno (int err_)
-{
-    if (err_ == ENOTSUP)
-        return config_result_t::not_supported;
-#if defined(EOPNOTSUPP) && EOPNOTSUPP != ENOTSUP
-    if (err_ == EOPNOTSUPP)
-        return config_result_t::not_supported;
-#endif
-    if (is_invalid_handle_errno (err_))
-        return config_result_t::invalid_handle;
-    return config_result_t::invalid_argument;
-}
-
-inline handler_result_t handler_result_from_errno (int err_)
-{
-    if (err_ == EBUSY)
-        return handler_result_t::busy;
-    if (err_ == EDEADLK)
-        return handler_result_t::deadlock;
-    if (err_ == ENOTSUP)
-        return handler_result_t::not_supported;
-#if defined(EOPNOTSUPP) && EOPNOTSUPP != ENOTSUP
-    if (err_ == EOPNOTSUPP)
-        return handler_result_t::not_supported;
-#endif
-    if (is_invalid_handle_errno (err_))
-        return handler_result_t::invalid_handle;
-    return handler_result_t::invalid_argument;
-}
-
-inline submit_result_t submit_result_from_errno (int err_)
-{
-    switch (err_) {
-        case 0:
-            return submit_result_t::ok;
-        case EAGAIN:
-        case ETIMEDOUT:
-        case ENOBUFS:
-#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
-        case EWOULDBLOCK:
-#endif
-            return submit_result_t::backpressured;
-        case ENOTCONN:
-        case EHOSTUNREACH:
-            return submit_result_t::not_connected;
-        case ENOENT:
-            return submit_result_t::not_found;
-        case ECONNREFUSED:
-        case EACCES:
-        case EPROTOTYPE:
-            return submit_result_t::not_admitted;
-        case ETERM:
-        case ESHUTDOWN:
-            return submit_result_t::terminated;
-        case EFAULT:
-            return submit_result_t::invalid_handle;
-        case EINVAL:
-        case EMSGSIZE:
-            return submit_result_t::invalid_argument;
-        case ENOTSUP:
-#if defined(EOPNOTSUPP) && EOPNOTSUPP != ENOTSUP
-        case EOPNOTSUPP:
-#endif
-            return submit_result_t::not_supported;
-        case EFSM:
-        case EBUSY:
-        case ESTALE:
-        case EALREADY:
-            return submit_result_t::invalid_state;
-        case EDEADLK:
-        case EPERM:
-        case EMTHREAD:
-            return submit_result_t::thread_violation;
-        case ENOMEM:
-            return submit_result_t::out_of_memory;
-        case EOVERFLOW:
-            return submit_result_t::seq_exhausted;
-        default:
-            return submit_result_t::internal_error;
-    }
-}
-
+// errno is read before the exception object is allocated, so it is the errno
+// of the failed call.
 template <typename ErrorT, typename ResultT> inline void throw_if_failed (ResultT result_)
 {
-    if (static_cast<int> (result_) != 0)
-        throw ErrorT (result_);
+    if (static_cast<int> (result_) != 0) {
+        const int internal_errno = current_errno ();
+        throw ErrorT (result_, internal_errno);
+    }
 }
 
 template <typename ErrorT, typename ResultT>

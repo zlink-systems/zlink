@@ -28,7 +28,7 @@ test('submit result reports immediate SEND and REQUEST admission', async () => {
     const context = zlink.createContext();
     const dealer = zlink.createDealerSocket(context);
     const router = zlink.createRouterSocket(context);
-    const completions = new completion_poller_1.CompletionPollerDriver(dealer);
+    const completions = new completion_poller_1.CompletionPollerDriver(context, dealer);
     const address = endpoint('immediate');
     router.bind(address);
     dealer.connect(address);

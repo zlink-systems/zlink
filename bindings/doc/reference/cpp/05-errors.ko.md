@@ -23,18 +23,18 @@
 |---|---|---|---|
 | `submit_error_t` | `submit_result_t`(Sockets category) | send/publish/request-submit API | `backpressured`(1, 정상 제어 흐름), `not_connected`(2), `not_found`(3), `terminated`(4), `invalid_handle`(5), `invalid_argument`(6), `not_supported`(7), `invalid_state`(8), `thread_violation`(9), `out_of_memory`(10), `seq_exhausted`(11), `internal_error`(12), `not_admitted`(13, 정상 제어 흐름) |
 | `request_error_t` | `request_result_t`(Messaging category) | `submit()` awaitable 또는 blocking request terminal | `timed_out`(101), `not_found`(102), `terminated`(103), `protocol_error`(104), `internal_error`(105), `rejected`(106), `conflict`(107), `busy`(108), `not_connected`(109), `invalid_argument`(110), `invalid_state`(111), `not_supported`(112), `backpressured`(113) |
-| `recv_error_t` | `recv_result_t`(Sockets category) | recv-family API | `no_data`(201), `busy`(202), `terminated`(203), `invalid_handle`(204), `not_supported`(205), `internal_error`(206) |
+| `recv_error_t` | `recv_result_t`(Sockets category) | recv-family API | `no_data`(201), `busy`(202), `terminated`(203), `invalid_handle`(204), `not_supported`(205), `internal_error`(206), `buffer_too_small`(207), `invalid_state`(208) |
 | `handler_error_t` | `handler_result_t` | 유지되는 result family; 현행 public completion/event 전달에는 등록형 handler가 없음 | `invalid_argument`(301), `busy`(302), `not_supported`(303), `deadlock`(304), `invalid_handle`(305), `internal_error`(306) |
 | `close_error_t` | `close_result_t` | `close()` 경로, `context_t::shutdown()` | `busy`(401), `shutdown`(402), `invalid_handle`(403), `internal_error`(404) |
 | `bind_error_t` | `bind_result_t` | `socket_t::bind(...)` | `invalid_argument`(501), `addr_in_use`(502), `not_supported`(503), `invalid_handle`(504), `internal_error`(505) |
-| `connect_error_t` | `connect_result_t` | `connect`/`unbind`/`disconnect`/`disconnect_rid` | `invalid_argument`(601), `not_supported`(602), `invalid_handle`(603), `internal_error`(604), `not_found`(605), `conflict`(606), `busy`(607) |
-| `config_error_t` | `config_result_t` | 모든 socket/context option getter/setter | `invalid_handle`(701), `invalid_argument`(702), `not_supported`(703), `internal_error`(704), `invalid_state`(705), `not_found`(706) |
+| `connect_error_t` | `connect_result_t` | `connect`/`unbind`/`disconnect`/`disconnect_rid` | `invalid_argument`(601), `not_supported`(602), `invalid_handle`(603), `internal_error`(604), `not_found`(605), `conflict`(606), `busy`(607), `auth_failed`(608) |
+| `config_error_t` | `config_result_t` | 모든 socket/context option getter/setter와 `poller_t` 등록·size 작업 | `invalid_handle`(701), `invalid_argument`(702), `not_supported`(703), `internal_error`(704), `invalid_state`(705), `not_found`(706), `conflict`(707), `buffer_too_small`(708), `busy`(709) |
 
-**언어간 비대칭.** 이 투영의 `config_result_t`는 값이 6개뿐이며
-`not_found`(706)에서 멈춘다 — dotnet의 `ZlinkConfigException.ErrorCode`는
-추가로 `Conflict`(707), `BufferTooSmall`(708), `Busy`(709)를 정의한다. 이
-투영의 `config_result_t`가 이 세 값을 가져야 하는지는 스펙 차원의 질문이며 이
-레퍼런스의 범위 밖이다 — 이 문서가 해결하는 게 아니다.
+**Core 결과와의 대응.** 각 enum은 [Public Result Enum 카탈로그](../../spec/README.ko.md#public-result-enum-카탈로그)의
+값을 모두 가진다. Core가 돌려준 결과는 그대로 전달하고, 닫힌 handle처럼 Core에 들어가지 않고 끝난
+호출은 Core의 errno 대응표와 같은 결과를 낸다. 예를 들어 사용자 close 뒤의 option 설정은
+`invalid_state`(705)/`ESHUTDOWN`, context close 뒤에는 `internal_error`(704)/`ETERM`이다.
+`poller_t::wait()` 실패는 `recv_error_t`로 보고한다. 예를 들어 Core의 `EBUSY`는 `busy`(202)가 된다. `poller_t::close()`의 `EBUSY`는 `close_error_t`의 `busy`(401)로 보고하며 poller는 유효한 상태로 남는다.
 
 **각 값 family가 실제로 뜻하는 것.** `submit_error_t`의 `backpressured`/
 `not_connected`/`not_found`/`not_admitted`는 예외적 실패가 아니라 정상적인 실행
