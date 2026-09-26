@@ -186,13 +186,13 @@ ZLINK_EXPORT zlink_close_result_t zlink_ctx_term(void *context_);
 Destroys the context. This call may block until all sockets created within the
 context have been closed. Any blocking operations on sockets belonging to the
 context will return with `ETERM` after `zlink_ctx_shutdown` is called or when
-all sockets are closed. Each context must be terminated exactly once.
+all sockets are closed. Each context must be terminated exactly once. When a signal interrupts this
+wait, Core resumes it, so `zlink_ctx_term` never fails with `EINTR`.
 
 **Returns:** `ZLINK_CLOSE_OK` on success; otherwise a `zlink_close_result_t` value. `zlink_errno()` retains the detailed internal errno for diagnostics.
 
 **Errors:**
 - `EFAULT` -- invalid context handle.
-- `EINTR` -- termination was interrupted by a signal; may be retried.
 
 **Thread safety:** Safe to call from any thread, but must be called exactly
 once per context. Do not use the context handle after this call returns.
@@ -384,7 +384,7 @@ test.
 - Calling `zlink_ctx_shutdown` causes blocking operations on sockets belonging to that context to return immediately with `ETERM`.
 - `zlink_ctx_term` succeeds exactly once per context and may block until every socket inside it has closed.
 - Calling `zlink_ctx_term` or `zlink_ctx_shutdown` with an invalid context handle produces `EFAULT`.
-- If a signal interrupts `zlink_ctx_term`, it fails with `EINTR` and may be retried.
+- When a signal interrupts the wait of `zlink_ctx_term`, Core resumes the wait, so it never fails with `EINTR`.
 
 **Options**
 - `zlink_ctx_set` with an unknown option or an invalid value produces `EINVAL`; with an invalid handle it produces `EFAULT` (`ZLINK_CONFIG_INVALID_HANDLE`).
