@@ -45,9 +45,9 @@ internal static class PerfPair
             var payload = new byte[payloadSize];
             Array.Fill(payload, (byte)'a');
 
-            if (!RunActivePhase(right, left, payload, size, durationSeconds,
-                    recvTimeoutMs, latencySampleCap, out long received,
-                    out var latencySamples))
+            if (!RunActivePhase(right, left, payload, size,
+                    durationSeconds, recvTimeoutMs, latencySampleCap,
+                    out long received, out var latencySamples))
             {
                 Console.Error.WriteLine(
                     $"single_pair_active_failed:received={received},samples={latencySamples.Count}");
@@ -75,9 +75,10 @@ internal static class PerfPair
         }
     }
 
-    private static bool RunActivePhase(IPairSocket sender, IPairSocket receiver,
-        byte[] payload, int msgSize, int durationSeconds, int recvTimeoutMs,
-        int latencyCap, out long receivedOut, out List<double> latencySamples)
+    private static bool RunActivePhase(IPairSocket sender,
+        IPairSocket receiver, byte[] payload, int msgSize, int durationSeconds,
+        int recvTimeoutMs, int latencyCap, out long receivedOut,
+        out List<double> latencySamples)
     {
         _ = recvTimeoutMs;
         long deadlineTicks = DeadlineTicksFromSeconds(durationSeconds);

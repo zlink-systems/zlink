@@ -7,8 +7,8 @@ using static PerfRunner;
 
 internal static class PerfMultiRoutedRelayServer
 {
-    internal static async Task<int> RunAsync(IRouterSocket server,
-        PollManager pollManager, int pollTimeoutMs, int drainTimeoutMs)
+    internal static async Task<int> RunAsync(IRouterSocket server, PollManager pollManager, int pollTimeoutMs,
+        int drainTimeoutMs)
     {
         var sockets = new[] { (ISocket)server };
         var eventMasks = new[]
@@ -59,8 +59,8 @@ internal static class PerfMultiRoutedRelayServer
                     break;
                 }
 
-                int readyCount = PollSocketEvents(pollManager, sockets,
-                    eventMasks, failureObservationPollMs);
+                int readyCount = PollSocketEvents(pollManager,
+                    sockets, eventMasks, failureObservationPollMs);
                 if (readyCount <= 0)
                     continue;
 
@@ -114,8 +114,8 @@ internal static class PerfMultiRoutedRelayServer
                         DebugFailure("async reply drain timed out", null);
                         return 2;
                     }
-                    _ = PollSocketEvents(pollManager, sockets, eventMasks,
-                        Math.Min(50, remainingMs));
+                    _ = PollSocketEvents(pollManager, sockets,
+                        eventMasks, Math.Min(50, remainingMs));
                 }
                 success = await replySender.Completion.ConfigureAwait(false);
             }

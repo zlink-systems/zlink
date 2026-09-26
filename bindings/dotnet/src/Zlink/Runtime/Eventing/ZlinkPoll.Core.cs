@@ -114,10 +114,6 @@ public static partial class ZlinkPoll
         if (count <= 0)
             return 0;
 
-        if (events != null)
-            for (var i = 0; i < count; i++)
-                EnumValidation.EnsureMonitorPollEvents(events[i]);
-
         long boundedTimeoutMs = Math.Max(0, timeoutMs);
         if (OperatingSystem.IsWindows())
         {

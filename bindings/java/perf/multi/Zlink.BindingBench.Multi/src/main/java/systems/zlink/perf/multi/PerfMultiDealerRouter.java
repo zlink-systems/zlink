@@ -123,8 +123,7 @@ final class PerfMultiDealerRouter {
         List<systems.zlink.contracts.sockets.Socket> socketsAsBase = new ArrayList<>(n);
         socketsAsBase.addAll(clients);
         systems.zlink.contracts.messaging.Received replyBuffer = new systems.zlink.contracts.messaging.Received();
-        try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
-                socketsAsBase, PollEventFlags.POLLIN,
+        try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(socketsAsBase, PollEventFlags.POLLIN,
                 PollEventFlags.POLLCOMPLETION)) {
             long activeEnd = System.nanoTime()
                 + (long) config.durationSeconds() * 1_000_000_000L;

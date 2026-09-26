@@ -64,8 +64,7 @@ final class PerfMultiSocketReqRep {
             PerfControl.emitReady(config.endpoint());
             PerfUtil.recalculateAutoHwm(ctx);
 
-            try (PerfSocketPollSet poller = PerfSocketPollSet.fromSockets(
-                     List.of(server), PollEventFlags.POLLIN);
+            try (PerfSocketPollSet poller = PerfSocketPollSet.fromSockets(List.of(server), PollEventFlags.POLLIN);
                  Received received = new Received()) {
                 while (!stopRequested.get()) {
                     int readyCount = poller.poll(AUX_POLL_WAIT_MS);
@@ -235,8 +234,7 @@ final class PerfMultiSocketReqRep {
         // its exact admitted() stage completes.
         try (RequestPayloadTemplates payloadTemplates =
                  new RequestPayloadTemplates(config.size(), clients.size());
-             PerfSocketPollSet completionPoller = PerfSocketPollSet.fromSockets(
-                 clients, PollEventFlags.POLLCOMPLETION)) {
+             PerfSocketPollSet completionPoller = PerfSocketPollSet.fromSockets(clients, PollEventFlags.POLLCOMPLETION)) {
             while (System.nanoTime() < activeEnd && failure.get() == null) {
                 boolean submitted = false;
                 for (int i = 0; i < clients.size(); i++) {

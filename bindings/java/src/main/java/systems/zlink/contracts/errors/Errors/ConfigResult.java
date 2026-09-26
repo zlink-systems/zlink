@@ -11,7 +11,10 @@ public enum ConfigResult {
     NOT_SUPPORTED(703),
     INTERNAL_ERROR(704),
     INVALID_STATE(705),
-    NOT_FOUND(706);
+    NOT_FOUND(706),
+    CONFLICT(707),
+    BUFFER_TOO_SMALL(708),
+    BUSY(709);
 
     private final int value;
 

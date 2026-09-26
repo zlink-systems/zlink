@@ -51,13 +51,28 @@ public class MonitorPollingContractTest {
                 ZlinkConfigException.class,
                 () -> poller.add(monitor, READY_SLOT,
                     PollEventFlags.POLLOUT));
-            assertEquals(ConfigResult.INVALID_ARGUMENT, pollout.getResult());
+            assertEquals(ConfigResult.NOT_SUPPORTED, pollout.getResult());
+            assertEquals(0, poller.size());
 
             ZlinkConfigException completion = assertThrows(
                 ZlinkConfigException.class,
                 () -> poller.add(monitor, READY_SLOT,
                     PollEventFlags.POLLCOMPLETION));
             assertEquals(ConfigResult.INVALID_ARGUMENT, completion.getResult());
+            assertEquals(0, poller.size());
+
+            ZlinkConfigException inCompletion = assertThrows(
+                ZlinkConfigException.class,
+                () -> poller.add(monitor, READY_SLOT,
+                    PollEventFlags.POLLIN, PollEventFlags.POLLCOMPLETION));
+            assertEquals(ConfigResult.INVALID_ARGUMENT, inCompletion.getResult());
+            assertEquals(0, poller.size());
+
+            ZlinkConfigException outCompletion = assertThrows(
+                ZlinkConfigException.class,
+                () -> poller.add(monitor, READY_SLOT,
+                    PollEventFlags.POLLOUT, PollEventFlags.POLLCOMPLETION));
+            assertEquals(ConfigResult.INVALID_ARGUMENT, outCompletion.getResult());
             assertEquals(0, poller.size());
         }
     }

@@ -46,8 +46,9 @@ final class PerfDealerRouter {
             receiver.bind(PerfUtil.bindEndpoint(endpoint, config.transport()));
             sender.connect(PerfUtil.connectedEndpoint(receiver, endpoint,
                 config.transport()));
-            PerfUtil.waitForMonitorEventWithActivity(receiverMonitor, receiver,
-                READY_EVENT, 1, readyTimeout, "dealer/router receiver ready");
+            PerfUtil.waitForMonitorEventWithActivity(receiverMonitor,
+                receiver, READY_EVENT, 1, readyTimeout,
+                "dealer/router receiver ready");
             PerfUtil.waitForMonitorEvent(senderMonitor, READY_EVENT, 1,
                 readyTimeout, "dealer/router sender ready");
             PerfUtil.recalculateAutoHwm(ctx);
@@ -58,8 +59,7 @@ final class PerfDealerRouter {
             // PERF_SINGLE_TEST_POLICY § 1.4: receiver waits with -1 and exits
             // on wire-level stop token.
             Thread receiverThread = new Thread(() -> {
-                try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
-                         List.of(receiver), PollEventFlags.POLLIN);
+                try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(List.of(receiver), PollEventFlags.POLLIN);
                      Received received = new Received()) {
                     while (true) {
                         pollSet.poll(-1);

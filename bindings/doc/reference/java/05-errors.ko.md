@@ -32,13 +32,7 @@ concrete exception(`public final`).
 | `ZlinkCloseException` | `CloseResult` | `close()` 경로, `Context.shutdown()` | `BUSY`(401), `SHUTDOWN`(402), `INVALID_HANDLE`(403), `INTERNAL_ERROR`(404) |
 | `ZlinkBindException` | `BindResult` | `Socket.bind(...)` | `INVALID_ARGUMENT`(501), `ADDR_IN_USE`(502), `NOT_SUPPORTED`(503), `INVALID_HANDLE`(504), `INTERNAL_ERROR`(505) |
 | `ZlinkConnectException` | `ConnectResult` | `connect`/`unbind`/`disconnect`/`disconnectRid` | `INVALID_ARGUMENT`(601), `NOT_SUPPORTED`(602), `INVALID_HANDLE`(603), `INTERNAL_ERROR`(604), `NOT_FOUND`(605), `CONFLICT`(606), `BUSY`(607) |
-| `ZlinkConfigException` | `ConfigResult` | 모든 socket/context option getter/setter | `INVALID_HANDLE`(701), `INVALID_ARGUMENT`(702), `NOT_SUPPORTED`(703), `INTERNAL_ERROR`(704), `INVALID_STATE`(705), `NOT_FOUND`(706) |
-
-**언어간 비대칭.** 이 binding의 `ConfigResult`는 값이 6개뿐이며
-`NOT_FOUND`(706)에서 멈춘다 — cpp의 `config_result_t`와 일치하지만,
-dotnet의 `ZlinkConfigException.ErrorCode`는 추가로 `Conflict`(707),
-`BufferTooSmall`(708), `Busy`(709)를 정의한다. 이 binding의 `ConfigResult`가
-이 세 값을 가져야 하는지는 스펙 차원의 질문이며 이 레퍼런스의 범위 밖이다.
+| `ZlinkConfigException` | `ConfigResult` | 모든 socket/context option getter/setter | `INVALID_HANDLE`(701), `INVALID_ARGUMENT`(702), `NOT_SUPPORTED`(703), `INTERNAL_ERROR`(704), `INVALID_STATE`(705), `NOT_FOUND`(706), `CONFLICT`(707), `BUFFER_TOO_SMALL`(708), `BUSY`(709) |
 
 **각 값 family가 실제로 뜻하는 것.** `SubmitResult`의 `BACKPRESSURED`/
 `NOT_CONNECTED`/`NOT_FOUND`/`NOT_ADMITTED`는 예외적 실패가 아니라 정상적인
@@ -74,8 +68,8 @@ try {
 | --- | --- |
 | `getCode()` | `int`, 실패를 분류하는 zlink result code |
 | `getNativeErrno()` | `int`, 밑에 깔린 native errno, 없으면 `0` |
-| `fromLastError(String operation)` / `fromLastError(ErrorCategory)` | static factory; 현재 native errno와 `ErrorCategory`(`CONFIG`/`BIND`/`CONNECT`/`CLOSE`/`HANDLER`/`RECV`/`REQUEST`/`SUBMIT`)로부터 올바른 타입의 exception을 만든다 — `String operation` overload는 operation 이름에서 category를 추론한다 |
-| `fromErrno(String operation, int errno)` / `fromErrno(ErrorCategory, int errno)` | static factory; `fromLastError`와 같은 매핑이지만 현재 native errno를 읽는 대신 명시적 `errno`를 받는다 |
+| `fromLastError(String operation)` / `fromLastError(ErrorCategory)` | static factory; 현재 native errno를 읽고 operation 이름에서 오류 category를 추론하거나 전달받은 category를 사용한다 |
+| `fromErrno(String operation, int errno)` / `fromErrno(ErrorCategory, int errno)` | static factory; native 호출이 반환할 때 수집한 `errno`와 `ErrorCategory`(`CONFIG`/`BIND`/`CONNECT`/`CLOSE`/`HANDLER`/`RECV`/`REQUEST`/`SUBMIT`)로부터 올바른 타입의 exception을 만든다 — `String operation` overload는 operation 이름에서 category를 추론한다 |
 
 **Completion result.** 해당 없음 — 이건 exception 계층 자체다.
 `TypedZlinkException`(중간 sealed class)은 package-private다 —
@@ -89,7 +83,8 @@ enum 타입의 `getResult()`를 호출하거나, exception 타입 전체에 걸�
 일반 exception으로 보고되지 않는다 — 대신 Sockets/Messaging category의
 `boolean` 반환 `recv`/`submit` 관례를 참고한다. raw errno로부터 올바른
 타입의 exception을 만들어야 하는 custom native interop 경로를 구현할
-때만 `ZlinkException.fromErrno(...)`/`fromLastError(...)`를 사용한다 — 일반
+때만 `ZlinkException.fromErrno(...)`를 사용한다 — errno는 실패한 native 호출이 반환할 때
+수집한 값이어야 하며, 호출 뒤 별도로 읽은 값이 아니어야 한다. 일반
 application 코드는 이걸 호출할 필요가 없다, 모든 내장 API가 이미 스스로
 올바른 타입의 exception을 던지기 때문이다.
 

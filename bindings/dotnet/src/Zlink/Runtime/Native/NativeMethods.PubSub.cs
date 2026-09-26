@@ -10,11 +10,11 @@ internal static partial class NativeMethods
     internal static unsafe partial int zlink_publish_utf8(IntPtr subject,
         byte* topicId, ref ZlinkMsg parts, nuint partCount, int flags);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_set_subscription(IntPtr handle,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string filter);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_unset_subscription(IntPtr handle,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string filter);
 

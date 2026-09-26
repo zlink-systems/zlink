@@ -8,17 +8,17 @@ internal static partial class NativeMethods
         SetLastError = true)]
     internal static extern IntPtr zlink_timer_new();
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_timer_destroy(ref IntPtr timer);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_timer_start(IntPtr timer,
         ulong intervalNs, ulong repeatCount);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_timer_stop(IntPtr timer);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
     internal static extern int zlink_timer_recv(IntPtr timer,
         out ulong fireCount);
 

@@ -45,7 +45,7 @@ internal static class CoreTestSupport
         {
             using ISocketMonitor monitor = socket.MonitorOpen(
                 SocketEvent.ConnectionReady);
-            using var poller = global::Systems.Zlink.Zlink.CreatePoller();
+            using var poller = Zlink.CreatePoller();
             poller.Add(monitor, PollEventFlags.PollIn, 0);
             var ready = new PollEvent[1];
             long deadline = Environment.TickCount64 + 5000;
@@ -493,6 +493,13 @@ internal static class CoreTestSupport
 
     private static string? FindCoreHeader()
     {
+        string? package = Environment.GetEnvironmentVariable("ZLINK_CORE_PACKAGE_PREFIX");
+        if (!string.IsNullOrWhiteSpace(package))
+        {
+            string installed = Path.Combine(package, "include", "zlink.h");
+            if (File.Exists(installed))
+                return installed;
+        }
         DirectoryInfo? current = new DirectoryInfo(Directory.GetCurrentDirectory());
         for (int i = 0; i < 10 && current != null; i++)
         {

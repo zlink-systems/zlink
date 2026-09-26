@@ -62,11 +62,13 @@ public static class SampleSupport
     private static void WaitConnectedMonitor(ISocketMonitor monitor,
         int timeoutMs)
     {
-        _ = WaitMonitorEvent(monitor, timeoutMs, SocketEvent.ConnectionReady);
+        _ = WaitMonitorEvent(monitor, timeoutMs,
+            SocketEvent.ConnectionReady);
     }
 
     public static MonitorEvent WaitMonitorEvent(ISocketMonitor monitor,
-        int timeoutMs, params SocketEvent[] expectedEvents)
+        int timeoutMs,
+        params SocketEvent[] expectedEvents)
     {
         if (expectedEvents == null || expectedEvents.Length == 0)
         {
@@ -74,7 +76,7 @@ public static class SampleSupport
                 nameof(expectedEvents));
         }
 
-        using var poller = global::Systems.Zlink.Zlink.CreatePoller();
+        using var poller = Zlink.CreatePoller();
         poller.Add(monitor, PollEventFlags.PollIn, 0);
         var ready = new PollEvent[1];
         long deadline = Environment.TickCount64 + timeoutMs;

@@ -99,12 +99,13 @@ internal static partial class PerfRunner
     internal static int PollSocketReadReady(PollManager pollManager,
         IReadOnlyList<ISocket> sockets, int timeoutMs)
     {
-        return pollManager.PollSockets(sockets, PollEventFlags.PollIn, timeoutMs);
+        return pollManager.PollSockets(sockets, PollEventFlags.PollIn,
+            timeoutMs);
     }
 
     internal static int PollSocketEvents(PollManager pollManager,
-        IReadOnlyList<ISocket> sockets, IReadOnlyList<PollEventFlags> eventMasks,
-        int timeoutMs)
+        IReadOnlyList<ISocket> sockets,
+        IReadOnlyList<PollEventFlags> eventMasks, int timeoutMs)
     {
         return pollManager.PollSockets(sockets, eventMasks, timeoutMs);
     }
