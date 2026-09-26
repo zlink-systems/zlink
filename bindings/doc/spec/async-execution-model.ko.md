@@ -67,8 +67,8 @@ C의 raw readiness, `zlink_completion_recv()`와 record 수명은
 - **고수준 바인딩은 socket마다 completion을 읽어 언어 terminal로 전달하는 completion owner를
   하나만 두며, 그 owner는 public poller에 `PollCompletion`으로 등록해 `wait()`를 구동하는
   thread뿐이다.** 같은 queue의 record를 두 주체가 소비하지 않도록 하기 위해서다. 등록하면 그
-  `wait()` 구동 thread가 owner가 된다. 등록 제거와 completion bit 해제는 아래의
-  진행 중인 operation 규칙을 따른다. **바인딩은 runtime(백그라운드) owner나 자동 completion drain thread를 두지 않는다**
+  `wait()` 구동 thread가 owner가 된다. 등록을 제거하거나 completion bit를 빼면 owner가 없는
+  상태가 된다. **바인딩은 runtime(백그라운드) owner나 자동 completion drain thread를 두지 않는다**
   — completion은 오직 caller가 구동하는 poller의 `wait()`(비동기 terminal) 또는 blocking
   terminal 자신의 in-line drain(아래)으로만 진행한다.
 - **비동기 completion-backed terminal(`admitted`·REQUEST `reply`)은 소켓이 `PollCompletion`
@@ -76,12 +76,6 @@ C의 raw readiness, `zlink_completion_recv()`와 record 수명은
   제출하면 바인딩은 **submit 시점에 진행 불가를 즉시 typed 오류(`InvalidState`)로 거부**하며,
   조용히 hang하거나 백그라운드 drain을 만들지 않는다. 오사용을 지연이 아니라 최전방에서 막기
   위해서다.
-- **진행 중인 비동기 completion-backed operation이 있으면 `PollCompletion` 등록 제거와
-  completion bit 해제를 `InvalidState`로 거부하고 기존 owner를 유지한다.** Operation의
-  `admitted`·`reply`가 terminal에 도달하고 Core completion과 대기 토큰이 모두 정리된 뒤에만
-  owner를 제거한다. 제거에 성공하면 owner가 없는 상태이며 새 비동기 제출은 위 규칙으로 거부한다.
-  Socket close·context termination은 [§6](#6-caller-wait-cancellation)의 lifecycle cleanup을 따른다.
-- **Poller close/destroy/Dispose/Drop도 teardown이 끝날 때까지 completion ownership을 유지한다.** Fallible close는 진행 중인 operation이 있으면 `InvalidState`를 반환한다. Infallible destructor는 영향받는 socket close와 poller destroy가 실제로 성공할 때까지 registration과 operation state를 유지한다. Context가 계속 살아 있으면 보관된 handle은 context close까지 남으며, 다른 cleanup trigger나 background drain thread는 만들지 않는다.
 - **고수준 바인딩은 native handle을 인자로 Core를 호출하는 동안 그 handle의 진입 기록을 유지한다.** 바인딩은 handle(context·socket·monitor·poller)마다 진행 중인 native 호출 수와 닫힘 여부를 원자적 값 하나로 기록하며, 이 값을 진입 기록이라 한다. 기록은 native 호출의 시작부터 반환까지만 포함하고, 언어 callback과 terminal 완료는 기록 밖에서 실행한다. 진입과 반환은 각각 lock 없는 원자적 갱신 한 번이다. 닫힘이 기록된 뒤의 호출은 Core에 들어가지 않으며, 사용자 close 뒤이면 `ESHUTDOWN`, context close 뒤이면 `ETERM`을 [Public Result Enum 카탈로그](README.ko.md#public-result-enum-카탈로그)의 해당 결과로 투영한 오류로 끝난다. 사용자 close·destroy는 닫힘을 기록하고, 같은 원자적 갱신에서 진행 중인 호출 수가 0이었을 때만 native close·destroy를 호출한다. 성공하면 registration과 operation state를 정확히 한 번 해제한다. 진행 중인 호출이 있었거나 Core가 `EBUSY`를 반환하면 native close를 다시 호출하지 않고, 닫힘 기록을 유지한 채 소유 context가 [§6](#6-caller-wait-cancellation)의 lifecycle cleanup을 위해 handle, registration, operation state를 보관한다. Binding context close는 context와 그 context에 속한 모든 handle에 닫힘을 기록하고 `zlink_ctx_shutdown`을 호출한다. 모든 진입 기록의 호출 수가 0이 되면 아직 닫히지 않은 socket·monitor를 닫고 소유한 poller를 파괴하며, 보관된 handle도 여기에 포함된다. 그 뒤에만 `zlink_ctx_term`을 호출한다. 마지막 native 호출이 반환하면서 대기 중인 context close에 알리며, 바인딩은 close 재시도나 호출 수 확인을 시간 간격을 두고 반복하지 않는다. `zlink_ctx_shutdown`이 poller wait를 끝내는 조건은 [Core Polling §5](../../../core/doc/spec/core/05-polling.ko.md#5-source-수명과-직렬화)가 정하며, 소유 poller의 `wait()`가 진행 중이면 context close는 그 `wait()`가 반환할 때까지 기다린다. 언어 runtime이 close와 다른 native 호출의 동시 실행을 구조적으로 배제하면(한 thread만 Core를 호출하는 runtime, 호출 중인 객체를 파괴할 수 없는 소유권 모델) 진입 기록 없이 위 결과를 만족한다.
 - **Public poller는 생성할 때 전달한 binding context가 파괴될 때까지 소유한다.** 다른 binding context의 socket을 등록하면 poller를 바꾸지 않고 `InvalidState`를 반환한다. 등록 항목이 없거나 모두 제거된 뒤에도 소유 context는 바뀌지 않는다.
 - **Blocking terminal(동기 request 등)은 호출 thread에서 자신의 completion을 in-line으로
@@ -170,9 +164,6 @@ C의 raw completion 관측은
   백그라운드 drain을 시작하지 않는다.** owner를 등록한 뒤 같은 제출은 정상 완료한다.
 - Blocking terminal은 poller owner 없이도 호출 thread의 in-line drain만으로 자신의 completion을
   한 번 받아 완료하며, 별도 thread를 만들지 않는다.
-- 진행 중인 operation이 있으면 `PollCompletion` 등록 제거와 completion bit 해제는 `InvalidState`를 반환하고 기존 owner는 남는다. Operation 정리 뒤 같은 제거는 성공한다.
-- Caller wait가 취소됐어도 Core wait token이 남아 있으면 명시적 owner 제거와 fallible poller close는 `InvalidState`를 반환한다.
-- 진행 중인 operation을 가진 poller의 infallible destructor는 영향받는 socket close와 poller destroy가 성공할 때까지 registration과 operation state를 유지하며, 정리와 registration 해제는 정확히 한 번 실행된다.
 - 사용자가 닫지 않은 socket과 monitor가 남은 context를 close하면 그 handle 때문에 대기하지 않고 반환한다. 이후 그 socket과 monitor는 닫힌 상태를 보고하며, 뒤이은 close는 native handle을 다시 해제하지 않고 성공한다.
 - Poller `wait()` 중 poller를 파괴하면 native destroy를 호출하지 않고 소유 context가 handle과 state를 보관한다. Context close는 shutdown, 진입 기록의 호출 수 0 대기, close/destroy, `zlink_ctx_term` 순서를 따르며 registration과 operation state를 정확히 한 번 해제한다.
 - Poller를 생성할 때 전달한 context와 다른 context의 socket을 등록하면 `InvalidState`를 반환하며 등록 항목과 소유 context는 바뀌지 않는다. Socket을 등록한 적이 없거나 모든 socket을 제거한 poller도 활성 `wait()` 중 파괴하면 생성 시 전달한 context가 보관한다.

@@ -189,7 +189,7 @@ Actor·Spot capacity projection과 등록한 type별 capability가 포함된다.
 | Node별 Spot limit | 기본값 `0`은 제한 없음이다. 양수 범위는 `1..2^31-1`이며 User Spot과 Instance Spot을 합산한다. 음수는 startup configuration error다. |
 | Spot stable type별 limit | 기본값 `0`은 제한 없음이다. 양수 범위는 `1..2^31-1`이며 해당 User·Instance Spot type에 적용한다. 음수는 startup configuration error다. |
 | Entry Spot | Object Server node마다 하나로 고정하며 configurable Spot limit에서 제외한다. |
-| Pending activation | 기본값 `128`이며 양수만 허용한다. Object population이 아니라 동시에 진행되는 activation admission을 제한한다. Actor 생성, User Spot 생성, Instance Spot cold activation과 relocation unit 하나의 target Restore만 각각 activation admission 하나로 센다. Target MeshNode가 그 작업을 받은 때부터 그 작업이 Ready 또는 target commit으로 끝나거나 거절·실패·정리로 끝날 때까지 센다. Entry Spot과 Actor Join은 세지 않는다. 여유가 없는 MeshNode는 새 activation admission을 받지 않는다. |
+| Pending activation | 기본값은 `128`이다. Target MeshNode는 자신이 진행 중인 activation 수가 이 limit 미만일 때 새 activation을 수락한다. |
 
 새 object를 만들거나 기존 object를 다른 node로 옮길 때는 Framework가 target
 MeshNode를 선택한다. Placement weight가 `0`인 MeshNode는 이 두 작업의 새 target
@@ -199,8 +199,8 @@ MeshNode를 선택한다. Placement weight가 `0`인 MeshNode는 이 두 작업�
 작업이 아니므로 이 weight만으로 차단하지 않는다. Weight를 `0`으로 바꿔도 이미
 확정된 reservation을 취소하지 않는다.
 
-Framework는 Active count와 reserved slot을 합해 설정한 Actor·Spot limit과 pending activation 여유를
-먼저 검사하고 그 뒤에 weight를 적용한다. Limit `0`은 검사를 생략한다. Capacity 조건을
+Framework는 Active count와 reserved slot을 합해 설정한 Actor·Spot limit을 먼저
+검사하고 그 뒤에 weight를 적용한다. Limit `0`은 검사를 생략한다. Capacity 조건을
 만족하는 node가 하나도 없으면 `Unavailable`이다. Descriptor의 count는
 후보 선택용 projection이며 Location Store의 atomic reservation이 최종 판정이다.
 남은 후보의 positive placement weight 합계는 최소 64-bit 정수로 계산하여

@@ -227,8 +227,14 @@ public record ZLinkStreamConnectorOptions(
 }
 ```
 
-`ZLinkStreamConnectorFactory.create(options)` throws `ZLinkStreamException` (§11)
-for option validation under [Common Spec §6.3](../../32-stream-connector.en.md#63-option-validation).
+**The option validation timing is owned by
+[Common Spec §6.3](../../32-stream-connector.en.md#63-option-validation).**
+In Java, `ZLinkStreamConnectorFactory.create(options)` checks every
+option, and on a validation failure it builds no `ZLinkStreamConnector`
+instance and fails with a `ZLinkStreamException` (§11). A single value
+out of range carries `VALIDATION_FAILED`, and a mismatch between
+options carries `CONFIGURATION_ERROR`. `maxReconnectAttempts` must be
+`UNLIMITED_RECONNECT_ATTEMPTS` or positive.
 
 `skipServerCertificateValidation` is used only for a test's self-signed
 certificate. The production default is `false`. Setting this value to
@@ -518,10 +524,7 @@ The error's meaning is owned by
 as a closed enum. The **dedicated exception type carrying the code**
 that
 [Common Spec §9.2](../../32-stream-connector.en.md#92-delivery--the-receiver-must-be-able-to-read-the-code)
-requires is `ZLinkStreamException`. The `CompletableFuture` of an
-operation the caller cancelled ends with `CancellationException`, not
-`ZLinkStreamException`
-([Common Spec §5.2](../../32-stream-connector.en.md#52-request-correlation)).
+requires is `ZLinkStreamException`.
 
 ```java
 public record ZLinkStreamError(

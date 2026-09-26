@@ -604,20 +604,12 @@ The close procedure proceeds in the following order.
    continues. Resuming Close does not invoke `OnClosing` again if it was already invoked.
 4. Releases authority with the same owner/generation fence.
 
-If the transition to `Closing` in step 1 is not committed, authority does not
-change and Close ends with a result listed below. Once the transition to
-`Closing` is committed, authority never returns to `Ready`. If work other than
-the `OnClosing` invocation in steps 2–4 fails, manager `Close` returns that
-failure to the caller (context `Close` follows the diagnostics rule above), and
-the target owner runtime continues the remaining work from the failed
-operation on the same owner and generation. Completed operations are not repeated.
-
 If that incarnation no longer exists, idempotent `false`; if a different
 generation of the same Spot ID exists, `InvalidOperation`; if sealing for a
 move, `Unavailable`. The framework doesn't re-find the current ref and
 close a new incarnation. An operation accepted before the seal can complete
-on the existing generation. The §9 table decides the result of a new admission that
-arrives after the seal.
+on the existing generation, but an operation after the seal ends with a
+closing or stale result.
 
 **If even one current Actor membership remains on a User Spot, Close ends
 with `false` and keeps admission and authority.** The framework doesn't
@@ -696,8 +688,7 @@ After seal, the source ingress hold is relayed via the committed Message Follow 
 | The target authority of a Spot direct send or request without Instance intent is `Missing` or `Creating` | `NotFound`. |
 | The generation of a control addressed by `ActorRef`/`SpotRef` differs from the current generation (a direct message doesn't compare generations, per [08-routing §2.6](08-routing.en.md#26-where-objectgeneration-is-used-and-where-its-not)) | `InvalidOperation`. |
 | The [owner fence](../00-foundation/02-glossary.en.md#owner-fence) differs | `Unavailable`. |
-| A Spot direct send or request without Instance intent finds target authority `Closing`, at the source or owner | `Rejected`. |
-| The runtime is `Draining` and takes no new admission (whatever the target authority state) | `ShuttingDown`. |
+| New admission requested on a `Closing` or `Draining` owner | Rejected. |
 | Ingress arrives on the source route after a relocation seal | Not rejected — retained in the relocation hold. |
 | A message arrives at a `Relocating` unit not yet sealed | Accepted, keeping existing owner admission. |
 | A request failed | Not bypassed by a different Spot ID, MeshName, or owner. |

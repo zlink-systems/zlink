@@ -192,23 +192,10 @@ peer·target 수는 현재 연결 상태를 그대로 제공한다. Host가 appl
 |---|---|
 | `starting` | 해당 topology의 listener, connection과 registration을 준비하고 있다. |
 | `ready` | Host가 `serving`이고 해당 topology가 application message를 처리할 수 있다. |
-| `degraded` | 일부 peer·target을 사용할 수 없거나 host가 [Location runtime §5](../05-location-relocation/01-location-runtime.ko.md#5-store-연결이-끊기면-이전-owner의-새-작업을-막는다)의 새 작업 차단 조건에 해당하여 해당 topology의 기능 전부를 제공할 수 없다. |
+| `degraded` | 일부 peer·target 또는 Location Store를 사용할 수 없어 해당 topology의 기능 전부를 제공할 수 없다. |
 | `stopping` | Host shutdown에 따라 해당 topology가 이미 수락한 작업과 연결을 정리하고 있다. |
 | `stopped` | 해당 topology의 작업과 연결 정리가 끝났다. |
 | `failed` | 해당 topology를 계속 운영할 수 없는 오류가 발생했다. |
-
-RouteMesh peer, ClientServer target, automatic fanout publisher와 placement 항목은 사용할 수 없을 때만
-reason을 가진다. 각 항목은 아래 조건 가운데 먼저 해당하는 것 하나를 reason으로 보고한다.
-
-| 조건 | Reason |
-|---|---|
-| Host state가 `preparing`, `stopped` 또는 `error`다 | `runtime_not_ready` |
-| Host state가 `relocating`, `relocated` 또는 `draining`이거나, 그 peer·target·publisher의 상태가 `draining`이다 | `draining` |
-| Host가 [Location runtime §5](../05-location-relocation/01-location-runtime.ko.md#5-store-연결이-끊기면-이전-owner의-새-작업을-막는다)의 새 작업 차단 조건에 해당한다 | `location_unavailable` |
-| RouteMesh peer의 상태가 `connecting` 또는 `not_connected`다 | `no_ready_peer` |
-| ClientServer target 또는 automatic fanout publisher가 ready가 아니다 | `no_ready_target` |
-| Placement weight가 `0`이거나 capacity·activation concurrency 여유가 없다 | `capacity_exceeded` |
-| 그 밖의 이유로 그 항목을 사용할 수 없다 | `internal_failure` |
 
 RouteMesh peer는 node의 transport identity인
 [Routing ID](../00-foundation/02-glossary.ko.md#routing-id)를 Node RID 값으로 제공한다. Endpoint,
