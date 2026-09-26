@@ -482,6 +482,14 @@ final class ZLinkChannelSocketRegistry {
             String connectionId,
             ZLinkClientServerServerDescriptor descriptor,
             ZLinkBackendDealerSocket dealer) {
+        addClientServerConnection(connectionId, descriptor, dealer, fence -> {});
+    }
+
+    void addClientServerConnection(
+            String connectionId,
+            ZLinkClientServerServerDescriptor descriptor,
+            ZLinkBackendDealerSocket dealer,
+            Consumer<AdmissionFence> restartAdmission) {
         // This method used to hold the registry monitor while adding the
         // physical DEALER. The absolute flow-state application happens before
         // that monitor is acquired so a binding call cannot block routing.
@@ -490,7 +498,8 @@ final class ZLinkChannelSocketRegistry {
                 () -> {
                     clientServerConnections.put(
                             connectionId,
-                            new ClientServerConnection(connectionId, descriptor, dealer, false));
+                            new ClientServerConnection(
+                                    connectionId, descriptor, dealer, false, restartAdmission));
                     ownedSockets.add(dealer);
                     return null;
                 });
@@ -611,29 +620,23 @@ final class ZLinkChannelSocketRegistry {
         current.outstandingProbeId = 0;
     }
 
-    void reconnectClientServerConnection(String connectionId) {
-        reconnectClientServerConnection(connectionId, null);
-    }
-
-    void reconnectClientServerConnection(
-            String connectionId, ZLinkBackendDealerSocket expectedDealer) {
-        ClientServerConnection current;
-        current =
+    void restartClientServerAdmission(String connectionId, AdmissionFence expectedFence) {
+        ClientServerConnection connection =
+                inStateLane(() -> clientServerConnections.get(connectionId));
+        if (connection == null) {
+            return;
+        }
+        AdmissionFence next =
                 inStateLane(
                         () -> {
-                            ClientServerConnection registered =
-                                    clientServerConnections.get(connectionId);
-                            if (registered != null
-                                    && (expectedDealer == null
-                                            || registered.dealer == expectedDealer)) {
-                                registered.ready = false;
-                                return registered;
+                            if (clientServerConnections.get(connectionId) != connection
+                                    || expectedFence == null
+                                    || !expectedFence.matches(connection)) {
+                                return null;
                             }
-                            return null;
+                            return invalidateClientServerAdmissionCore(connection);
                         });
-        if (current != null) {
-            reconnectClientServer(current);
-        }
+        dispatchClientServerAdmissionRestart(connection, next);
     }
 
     boolean admitClientServerConnection(
@@ -1062,8 +1065,8 @@ final class ZLinkChannelSocketRegistry {
                                     return ClientLivenessAction.NONE;
                                 }
                                 if (nowNanos >= connection.deadlineAtNanos) {
-                                    connection.ready = false;
-                                    return ClientLivenessAction.RECONNECT;
+                                    return new ClientLivenessAction(
+                                            invalidateClientServerAdmissionCore(connection), 0);
                                 } else if (nowNanos >= connection.nextProbeAtNanos) {
                                     connection.nextProbeAtNanos =
                                             nowNanos + CLIENT_SERVER_PROBE_INTERVAL_NANOS;
@@ -1072,12 +1075,12 @@ final class ZLinkChannelSocketRegistry {
                                                     ? allocateProbeIdCore()
                                                     : connection.outstandingProbeId;
                                     connection.outstandingProbeId = probeId;
-                                    return new ClientLivenessAction(false, probeId);
+                                    return new ClientLivenessAction(null, probeId);
                                 }
                                 return ClientLivenessAction.NONE;
                             });
-            if (action.reconnect()) {
-                reconnectClientServer(connection);
+            if (action.restartFence() != null) {
+                dispatchClientServerAdmissionRestart(connection, action.restartFence());
                 continue;
             }
             if (action.probeId() == 0) {
@@ -1251,7 +1254,7 @@ final class ZLinkChannelSocketRegistry {
 
     private void applyClientServerUpdate(
             ClientServerConnection connection, ZLinkClientServerServiceWire.Admission update) {
-        boolean reconnect =
+        AdmissionFence restart =
                 inStateLane(
                         () -> {
                             if (!connection.aliases.stream()
@@ -1260,7 +1263,7 @@ final class ZLinkChannelSocketRegistry {
                                                             clientServerConnections.get(alias)
                                                                     == connection)
                                     || !connection.ready) {
-                                return false;
+                                return null;
                             }
                             ZLinkClientServerServerDescriptor before = connection.descriptor;
                             if (!update.channelName().equals(before.channelName())
@@ -1268,44 +1271,38 @@ final class ZLinkChannelSocketRegistry {
                                     || update.lifecycleGeneration() != before.lifecycleGeneration()
                                     || !update.securityIdentity().equals(before.securityIdentity())
                                     || !update.advertisedEndpoint().equals(before.endpoint())) {
-                                connection.ready = false;
-                                return true;
+                                return invalidateClientServerAdmissionCore(connection);
                             } else if (update.descriptorRevision() >= before.descriptorRevision()) {
                                 ZLinkClientServerServerDescriptor candidate =
                                         descriptorFromAdmission(update, before);
                                 if (update.descriptorRevision() == before.descriptorRevision()) {
                                     if (!sameClientServerDescriptor(candidate, before)) {
-                                        connection.ready = false;
-                                        return true;
+                                        return invalidateClientServerAdmissionCore(connection);
                                     }
                                 } else {
                                     connection.descriptor = candidate;
                                 }
                             }
-                            return false;
+                            return null;
                         });
-        if (reconnect) {
-            reconnectClientServer(connection);
-        }
+        dispatchClientServerAdmissionRestart(connection, restart);
     }
 
     private void terminateClientServerProtocol(ClientServerConnection connection) {
-        boolean active =
+        AdmissionFence restart =
                 inStateLane(
                         () -> {
-                            if (!connection.aliases.stream()
-                                    .anyMatch(
-                                            alias ->
-                                                    clientServerConnections.get(alias)
-                                                            == connection)) {
-                                return false;
+                            if (!connection.ready
+                                    || !connection.aliases.stream()
+                                            .anyMatch(
+                                                    alias ->
+                                                            clientServerConnections.get(alias)
+                                                                    == connection)) {
+                                return null;
                             }
-                            connection.ready = false;
-                            return true;
+                            return invalidateClientServerAdmissionCore(connection);
                         });
-        if (active) {
-            reconnectClientServer(connection);
-        }
+        dispatchClientServerAdmissionRestart(connection, restart);
     }
 
     // Transport liveness spec 55 section 6: terminal cleanup never leaves a
@@ -1337,45 +1334,35 @@ final class ZLinkChannelSocketRegistry {
         monitor = close.monitor();
         receiveFlow = close.receiveFlow();
         closeReceiveFlowRegistration(receiveFlow);
-        synchronized (connection.transportLock) {
-            if (monitor != null) {
-                try {
-                    monitor.close();
-                } catch (RuntimeException ignored) {
-                }
-            }
+        if (monitor != null) {
             try {
-                connection.dealer.close();
+                monitor.close();
             } catch (RuntimeException ignored) {
             }
+        }
+        try {
+            connection.dealer.close();
+        } catch (RuntimeException ignored) {
         }
     }
 
-    private void reconnectClientServer(ClientServerConnection connection) {
-        String endpoint =
-                inStateLane(
-                        () -> {
-                            if (!connection.aliases.stream()
-                                    .anyMatch(
-                                            alias ->
-                                                    clientServerConnections.get(alias)
-                                                            == connection)) {
-                                return null;
-                            }
-                            connection.physicalGeneration++;
-                            connection.admissionGeneration++;
-                            connection.outstandingProbeId = 0;
-                            return connection.descriptor.endpoint();
-                        });
-        if (endpoint == null) {
-            return;
+    private AdmissionFence invalidateClientServerAdmissionCore(ClientServerConnection connection) {
+        if (!connection.aliases.stream()
+                .anyMatch(alias -> clientServerConnections.get(alias) == connection)) {
+            return null;
         }
-        synchronized (connection.transportLock) {
-            try {
-                connection.dealer.disconnect(endpoint);
-                connection.dealer.connect(endpoint);
-            } catch (RuntimeException ignored) {
-            }
+        connection.admissionGeneration++;
+        connection.ready = false;
+        connection.outstandingProbeId = 0;
+        connection.pendingLivenessAckId = 0;
+        return new AdmissionFence(
+                connection.physicalGeneration, connection.admissionGeneration, connection.dealer);
+    }
+
+    private void dispatchClientServerAdmissionRestart(
+            ClientServerConnection connection, AdmissionFence fence) {
+        if (fence != null) {
+            connection.restartAdmission.accept(fence);
         }
     }
 
@@ -1841,9 +1828,8 @@ final class ZLinkChannelSocketRegistry {
             List<ClientServerServerPeer> serverPeers,
             long controlCursor) {}
 
-    private record ClientLivenessAction(boolean reconnect, long probeId) {
-        private static final ClientLivenessAction NONE = new ClientLivenessAction(false, 0);
-        private static final ClientLivenessAction RECONNECT = new ClientLivenessAction(true, 0);
+    private record ClientLivenessAction(AdmissionFence restartFence, long probeId) {
+        private static final ClientLivenessAction NONE = new ClientLivenessAction(null, 0);
     }
 
     private record ServerPeerLivenessAction(boolean disconnect, long probeId) {
@@ -1879,10 +1865,10 @@ final class ZLinkChannelSocketRegistry {
 
     private static final class ClientServerConnection {
         private final String connectionId;
-        private final Object transportLock = new Object();
         private final Set<String> aliases = new HashSet<>();
         private ZLinkClientServerServerDescriptor descriptor;
         private final ZLinkBackendDealerSocket dealer;
+        private final Consumer<AdmissionFence> restartAdmission;
         private ZLinkBackendSocketMonitor monitor;
         private boolean ready;
         private boolean physicalClosed;
@@ -1897,10 +1883,12 @@ final class ZLinkChannelSocketRegistry {
                 String connectionId,
                 ZLinkClientServerServerDescriptor descriptor,
                 ZLinkBackendDealerSocket dealer,
-                boolean ready) {
+                boolean ready,
+                Consumer<AdmissionFence> restartAdmission) {
             this.connectionId = connectionId;
             this.descriptor = descriptor;
             this.dealer = dealer;
+            this.restartAdmission = restartAdmission;
             this.ready = ready;
             this.aliases.add(connectionId);
         }

@@ -869,7 +869,19 @@ public final class ZLinkChannelRuntime
                         1,
                         Instant.EPOCH);
         try {
-            sockets.addClientServerConnection(connectionId, pending, dealer);
+            sockets.addClientServerConnection(
+                    connectionId,
+                    pending,
+                    dealer,
+                    fence ->
+                            infrastructureExecutor.execute(
+                                    () ->
+                                            requestManualClientServerAdmission(
+                                                    connectionId,
+                                                    channelName,
+                                                    endpoint,
+                                                    dealer,
+                                                    fence)));
             ZLinkBackendSocketMonitor monitor =
                     clientServerMonitoringBackend.openSocketMonitor(dealer);
             sockets.registerClientServerMonitor(connectionId, monitor);
@@ -951,7 +963,7 @@ public final class ZLinkChannelRuntime
             ZLinkBackendReceived reply) {
         try (reply) {
             if (reply.result() != ZLinkBackendRequestResult.OK || reply.parts().size() != 1) {
-                sockets.reconnectClientServerConnection(connectionId, fence.dealer());
+                sockets.restartClientServerAdmission(connectionId, fence);
                 return;
             }
             ZLinkClientServerServiceWire.Control control =
@@ -959,7 +971,7 @@ public final class ZLinkChannelRuntime
             if (!(control instanceof ZLinkClientServerServiceWire.Admit admit)
                     || !admit.admission().channelName().equals(channelName)
                     || !admit.admission().securityIdentity().equals("default")) {
-                sockets.reconnectClientServerConnection(connectionId, fence.dealer());
+                sockets.restartClientServerAdmission(connectionId, fence);
                 return;
             }
             ZLinkClientServerServiceWire.Admission value = admit.admission();
@@ -978,7 +990,7 @@ public final class ZLinkChannelRuntime
                             Instant.EPOCH);
             sockets.admitClientServerConnection(connectionId, descriptor, fence);
         } catch (RuntimeException failure) {
-            sockets.reconnectClientServerConnection(connectionId, fence.dealer());
+            sockets.restartClientServerAdmission(connectionId, fence);
         }
     }
 

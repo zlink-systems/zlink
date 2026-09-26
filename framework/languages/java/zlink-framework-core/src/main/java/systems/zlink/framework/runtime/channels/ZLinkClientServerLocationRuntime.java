@@ -504,7 +504,34 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
                 closeUnregistered(dealer, monitor);
                 return;
             }
-            sockets.addClientServerConnection(connectionId, descriptor, dealer);
+            sockets.addClientServerConnection(
+                    connectionId,
+                    descriptor,
+                    dealer,
+                    fence ->
+                            infrastructureExecutor.execute(
+                                    () -> {
+                                        Connection current =
+                                                inStateLane(
+                                                        () -> {
+                                                            Connection registered =
+                                                                    connections.get(connectionId);
+                                                            if (registered == null
+                                                                    || registered.dealer()
+                                                                            != candidate.dealer()) {
+                                                                return null;
+                                                            }
+                                                            Connection pending =
+                                                                    registered.withExpected(
+                                                                            registered.expected(),
+                                                                            false);
+                                                            connections.put(connectionId, pending);
+                                                            return pending;
+                                                        });
+                                        if (current != null) {
+                                            requestAdmission(current, fence);
+                                        }
+                                    }));
             sockets.registerClientServerMonitor(connectionId, monitor);
             Connection acceptedConnection = connection;
             ZLinkBackendDealerSocket acceptedDealer = dealer;
