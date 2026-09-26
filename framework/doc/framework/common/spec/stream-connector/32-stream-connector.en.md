@@ -564,9 +564,10 @@ state.
   document. A client that keeps trying until the connection is restored
   specifies unlimited instead of writing a large number, which is what
   separates it from a configuration with a finite attempt count.
-- **The delay between attempts carries randomness.** The base delay
-  starts at the initial delay, is multiplied by the backoff factor on
-  each attempt, and stops at the maximum delay. What is actually waited
+- **The delay between attempts carries randomness.** The first base
+  delay is the smaller of the initial delay and the maximum delay. Each
+  later base delay is the smaller of the previous base delay times the
+  backoff factor and the maximum delay. What is actually waited
   is **a value drawn between 50% and 100% of that base delay.**
 
     With a deterministic delay, every client that was attached comes
@@ -665,7 +666,10 @@ configuration mistake from a connection failure.
   backoff factor, and max attempts, the send/receive payload bounds,
   the codec and compression settings, and the dispatch mode are **all
   checked.** The values checked are the
-  ones left after §6.1's defaults are applied.
+  ones left after §6.1's defaults are applied. Time values must be
+  positive and the backoff factor a finite positive number. Values of a
+  disabled heartbeat or reconnect are validated too. No ordering between
+  time values is required.
 
 - **Validation happens at the earliest point the language can report
   the failure.** A language whose creation surface can return a failure
