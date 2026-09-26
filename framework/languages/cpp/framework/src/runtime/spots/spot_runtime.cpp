@@ -9373,6 +9373,7 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
   std::string target_mesh_name,
   std::uint64_t target_node_lifecycle_generation,
   location_owner_token_t target_owner,
+  std::string expected_source_store_version,
   std::uint64_t *committed_previous_authority_owner_generation,
   std::uint64_t *committed_target_authority_owner_generation)
 {
@@ -9411,7 +9412,7 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
         return result_t<void>::failure (framework_error_kind_t::not_configured,
                                         "remote Actor authority commit requires a Location Store");
     }
-    if (source_authority_owner_generation == 0
+    if (expected_source_store_version.empty () || source_authority_owner_generation == 0
         || source_authority_owner_generation == std::numeric_limits<std::uint64_t>::max ()
         || target_mesh_name.empty () || target_node_lifecycle_generation == 0
         || target_owner.owner_id.empty () || target_owner.lease_generation <= 0) {
@@ -9479,7 +9480,8 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
             .owner_lease_generation = static_cast<std::uint64_t> (target_owner.lease_generation),
             .mesh_name = target_placement.mesh_name,
             .node_rid = target_placement.node_rid,
-            .node_generation = target_placement.node_lifecycle_generation}));
+            .node_generation = target_placement.node_lifecycle_generation}),
+          expected_source_store_version);
         if (published.status != runtime::stateful::authority_publish_status_t::published
             || !published.current) {
             published.current = plan.relocation_authority->read (source.kind, source.key);

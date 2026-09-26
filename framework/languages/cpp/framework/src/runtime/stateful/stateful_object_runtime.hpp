@@ -323,8 +323,12 @@ class stateful_object_runtime_t
     stateful_error_t commit_close_spot (const spot_close_token_t &token);
     stateful_error_t abort_close_spot (const spot_close_token_t &token);
 
-    stateful_error_t
-    enqueue (const object_ref_t &owner, turn_domain_t domain, turn_record_t record);
+    stateful_error_t enqueue (const object_ref_t &owner,
+                              turn_domain_t domain,
+                              turn_record_t record,
+                              std::function<void ()> *accepted_delivery = nullptr,
+                              bool restored = false,
+                              bool *relocation_handoff = nullptr);
     std::pair<stateful_error_t, std::optional<turn_record_t>> try_claim (const object_ref_t &owner,
                                                                          turn_domain_t domain);
     stateful_error_t complete_claim (const object_ref_t &owner, turn_domain_t domain);
@@ -348,8 +352,9 @@ class stateful_object_runtime_t
     // Atomically separates the ingress accepted since capture from ingress
     // that arrives afterwards.  The caller must perform transport work after
     // this method returns; no callback runs while the aggregate mutex is held.
-    std::pair<stateful_error_t, relocation_ingress_batch_t>
-    begin_relocation_boundary (std::uint64_t token);
+    std::pair<stateful_error_t, relocation_ingress_batch_t> begin_relocation_boundary (
+      std::uint64_t token,
+      std::function<void (const object_ref_t &, const turn_record_t &)> deliver = {});
     // Only an exact target abort before Cutover may reopen source dispatch.
     stateful_error_t abort_relocation_before_cutover (std::uint64_t token);
     // Makes the source permanently follow-only once Cutover has been queued
@@ -429,12 +434,7 @@ class stateful_object_runtime_t
         std::vector<frozen_object_state_t> frozen;
         relocation_ingress_phase_t ingress_phase = relocation_ingress_phase_t::holding;
         std::vector<std::vector<turn_record_t>> boundary_application;
-    };
-
-    struct relocation_hold_state_t
-    {
-        std::size_t record_count = 0;
-        std::size_t byte_count = 0;
+        std::function<void (const object_ref_t &, const turn_record_t &)> deliver;
     };
 
     static bool valid_text (const std::string &value);
@@ -473,7 +473,6 @@ class stateful_object_runtime_t
     std::map<std::uint64_t, membership_move_t> _membership_moves;
     std::map<std::uint64_t, spot_close_token_t> _spot_closes;
     std::map<std::uint64_t, relocation_seal_state_t> _relocation_seals;
-    std::map<std::uint64_t, relocation_hold_state_t> _relocation_holds;
     std::map<object_key_t, std::uint64_t> _relocation_restore_reservations;
     relocation_state_capture_t _relocation_state_capture;
     relocation_state_restore_t _relocation_state_restore;

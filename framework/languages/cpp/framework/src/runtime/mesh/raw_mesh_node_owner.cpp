@@ -1654,10 +1654,11 @@ task_t<bool>
 raw_mesh_node_owner_t::send_to_spot (const std::vector<std::uint8_t> &target_routing_id,
                                      const std::string &source_spot_id,
                                      const protocol::spot_route_fence_t &target,
-                                     const protocol::application_payload_t &application_payload)
+                                     const protocol::application_payload_t &application_payload,
+                                     std::optional<protocol::wire_operation_id_t> operation)
 {
     co_return co_await send_to_spot_result (target_routing_id, source_spot_id, target,
-                                            application_payload)
+                                            application_payload, operation)
       == zlink::submit_result_t::ok;
 }
 
@@ -1665,14 +1666,16 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_to_spot_result (
   const std::vector<std::uint8_t> &target_routing_id,
   const std::string &source_spot_id,
   const protocol::spot_route_fence_t &target,
-  const protocol::application_payload_t &application_payload)
+  const protocol::application_payload_t &application_payload,
+  std::optional<protocol::wire_operation_id_t> operation)
 {
     const auto sequence = next_operation_sequence ();
     const auto local = _topology.local_descriptor ();
     co_return co_await send_with_header_result (
       target_routing_id,
-      protocol::encode_spot_message_header (protocol::command::spotSend, source_spot_id, target,
-                                            {local.lifecycle_generation, sequence}),
+      protocol::encode_spot_message_header (
+        protocol::command::spotSend, source_spot_id, target,
+        operation.value_or (protocol::wire_operation_id_t{local.lifecycle_generation, sequence})),
       application_payload);
 }
 
@@ -1704,10 +1707,12 @@ task_t<bool> raw_mesh_node_owner_t::send_to_actor (
   const std::optional<std::pair<std::string, std::uint64_t>> &source_actor,
   const protocol::actor_route_fence_t &target,
   const protocol::application_payload_t &application_payload,
-  std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source)
+  std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source,
+  std::optional<protocol::wire_operation_id_t> operation)
 {
     co_return co_await send_to_actor_result (target_routing_id, source_actor, target,
-                                             application_payload, std::move (bound_session_source))
+                                             application_payload, std::move (bound_session_source),
+                                             operation)
       == zlink::submit_result_t::ok;
 }
 
@@ -1716,15 +1721,17 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_to_actor_result (
   const std::optional<std::pair<std::string, std::uint64_t>> &source_actor,
   const protocol::actor_route_fence_t &target,
   const protocol::application_payload_t &application_payload,
-  std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source)
+  std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source,
+  std::optional<protocol::wire_operation_id_t> operation)
 {
     const auto sequence = next_operation_sequence ();
     const auto local = _topology.local_descriptor ();
     co_return co_await send_with_header_result (
       target_routing_id,
-      protocol::encode_actor_message_header (protocol::command::actorSend, source_actor, target,
-                                             {local.lifecycle_generation, sequence}, std::nullopt,
-                                             0, std::move (bound_session_source)),
+      protocol::encode_actor_message_header (
+        protocol::command::actorSend, source_actor, target,
+        operation.value_or (protocol::wire_operation_id_t{local.lifecycle_generation, sequence}),
+        std::nullopt, 0, std::move (bound_session_source)),
       application_payload);
 }
 

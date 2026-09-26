@@ -1296,7 +1296,10 @@ export class ServiceStatefulRuntime {
     if (target === undefined) {
       return SubmitResult.NotFound;
     }
-    const header = encodeSpotHeader('spotSend', sourceSpotId, target);
+    const header = encodeSpotHeader('spotSend', sourceSpotId, target, undefined, {
+      high: this.nodeGeneration,
+      low: this.nextMessageFollowOperation++
+    });
     return this.submitOneWay(target.targetNodeRid, [header, encodeApplicationPayload(payload)]);
   }
 
@@ -1315,7 +1318,17 @@ export class ServiceStatefulRuntime {
       });
       return pending;
     }
-    const header = encodeSpotHeader('spotRequest', sourceSpotId, target, pending.id);
+    const header = encodeSpotHeader(
+      'spotRequest',
+      sourceSpotId,
+      target,
+      pending.id,
+      {
+        high: this.nodeGeneration,
+        low: this.nextMessageFollowOperation++
+      },
+      BigInt(Math.max(1, Math.ceil(timeoutMs)))
+    );
     this.submitRequest(
       pending,
       target.targetNodeRid,
@@ -1346,7 +1359,8 @@ export class ServiceStatefulRuntime {
         : {
             ...boundSession,
             sequence: this.nextSessionSequence++
-          }
+          },
+      { high: this.nodeGeneration, low: this.nextMessageFollowOperation++ }
     );
     return this.submitOneWay(target.nodeRid, [header, encodeApplicationPayload(payload)]);
   }
@@ -1379,7 +1393,9 @@ export class ServiceStatefulRuntime {
         : {
             ...boundSession,
             sequence: this.nextSessionSequence++
-          }
+          },
+      { high: this.nodeGeneration, low: this.nextMessageFollowOperation++ },
+      BigInt(Math.max(1, Math.ceil(timeoutMs)))
     );
     this.submitRequest(
       pending,
@@ -2026,7 +2042,12 @@ export class ServiceStatefulRuntime {
         }
         decoded = statefulActorJoinFromCanonical(canonicalActorJoin);
       } else {
-        decoded = decodeStatefulHeader(record.parts[0]!);
+        const metadata = (record.flags & M6bServiceWireFlag.metadata) !== 0;
+        decoded = decodeStatefulHeader(
+          record.parts[0]!,
+          record.parts[metadata ? 2 : 1],
+          metadata ? record.parts[1] : undefined
+        );
       }
       const hasPayload = [
         'spotSend',
@@ -2039,6 +2060,12 @@ export class ServiceStatefulRuntime {
       ].includes(decoded.kind);
       const instanceMetadata =
         decoded.kind === 'instanceSpot' && (record.flags & M6bServiceWireFlag.metadata) !== 0;
+      const statefulMetadata =
+        (decoded.kind === 'spotSend' ||
+          decoded.kind === 'spotRequest' ||
+          decoded.kind === 'actorSend' ||
+          decoded.kind === 'actorRequest') &&
+        (record.flags & M6bServiceWireFlag.metadata) !== 0;
       const userSpotInfrastructure =
         decoded.kind === 'userSpotCreate' ||
         decoded.kind === 'userSpotClose' ||
@@ -2047,16 +2074,19 @@ export class ServiceStatefulRuntime {
         decoded.kind === 'boundSessionReplaced';
       if (
         record.parts.length < 1 ||
-        record.parts.length > (instanceMetadata ? 3 : 2) ||
-        (hasPayload && decoded.kind !== 'actorJoin' && record.parts.length !== 2) ||
+        record.parts.length > (instanceMetadata || statefulMetadata ? 3 : 2) ||
+        (hasPayload &&
+          decoded.kind !== 'actorJoin' &&
+          record.parts.length !== ((record.flags & M6bServiceWireFlag.metadata) !== 0 ? 3 : 2)) ||
         (decoded.kind === 'instanceSpot' && record.parts.length !== (instanceMetadata ? 3 : 2)) ||
         (userSpotInfrastructure && record.parts.length !== 1)
       ) {
         return 'protocolError';
       }
-      const metadataFrame = instanceMetadata
-        ? validateServiceMetadataFrame(record.parts[1]!)
-        : undefined;
+      const metadataFrame =
+        instanceMetadata || statefulMetadata
+          ? validateServiceMetadataFrame(record.parts[1]!)
+          : undefined;
       const canonicalPayload =
         canonicalActorJoin?.payload === undefined
           ? undefined
@@ -4502,7 +4532,9 @@ export class ServiceStatefulRuntime {
           operationKind: OperationKind.ActorRequest,
           correlation: decoded.correlation,
           targetActor: current.ref,
-          ...(decoded.sourceActor === undefined ? {} : { sourceActor: decoded.sourceActor }),
+          ...(decoded.sourceActor === undefined
+            ? {}
+            : { sourceActor: { ...decoded.sourceActor, nodeRid: ingress.sourceRoutingId } }),
           ...(decoded.boundSession === undefined
             ? {}
             : { sourceBindingGeneration: decoded.boundSession.bindingGeneration }),
@@ -4801,7 +4833,7 @@ export class ServiceStatefulRuntime {
     return spot;
   }
 
-  private validateDirectSpotFence(fence: ServiceDirectSpotRouteFence): ServiceSpotState {
+  private validateDirectSpotFence(fence: ServiceSpotRouteFence): ServiceSpotState {
     const spot = this.registry.spot(fence.spot.spotId);
     if (spot === undefined) {
       throw createInternalFrameworkException(
@@ -4860,7 +4892,7 @@ export class ServiceStatefulRuntime {
     wire: Extract<ServiceStatefulWireRecord, { readonly kind: 'spotSend' | 'spotRequest' }>
   ): RawServicePumpResult | undefined {
     const state = this.spotMessageFollow.get(spotKey(wire.target.spot));
-    if (state === undefined || !sameDirectSpotRoute(state.source, wire.target)) {
+    if (state === undefined || !sameDirectSpotRouteIdentity(state.source, wire.target)) {
       return undefined;
     }
     if (state.expiresAtMs !== undefined && state.expiresAtMs <= performance.now()) {
@@ -4912,14 +4944,20 @@ export class ServiceStatefulRuntime {
         }
         const current = this.peekSpotMessageFollow(state)!;
         try {
+          const metadata = (current.ingress.parts[0]![4]! & M6bServiceWireFlag.metadata) !== 0;
           const parts = [
             encodeSpotHeader(
               current.wire.kind,
               current.wire.sourceSpotId,
               state.target,
-              current.wire.correlation!
+              current.wire.correlation,
+              current.wire.operation,
+              BigInt(Math.max(1, Math.ceil(state.expiresAtMs - performance.now()))),
+              current.wire.messageFollowHopCount + 1,
+              metadata ? current.ingress.parts[1] : undefined
             ),
-            current.ingress.parts[1]!
+            ...(metadata ? [current.ingress.parts[1]!] : []),
+            current.ingress.parts[metadata ? 2 : 1]!
           ];
           if (current.wire.kind === 'spotSend') {
             if (!(await this.raw.sendService(state.target.targetNodeRid, parts))) continue;
@@ -5317,13 +5355,12 @@ function serviceSpotPublishFailureReason(
   }
 }
 
-function isEntrySpotFence(fence: ServiceDirectSpotRouteFence): boolean {
+function isEntrySpotFence(fence: ServiceSpotRouteFence): boolean {
   return (
     fence.spot.spotId === fence.targetNodeRid &&
     fence.spot.generation === fence.targetNodeGeneration &&
     fence.authorityOwnerGeneration === fence.targetNodeGeneration &&
-    fence.ownerLeaseGeneration === fence.targetNodeGeneration &&
-    fence.storeVersion === `entry:${fence.targetNodeGeneration}`
+    fence.ownerLeaseGeneration === fence.targetNodeGeneration
   );
 }
 
@@ -5744,15 +5781,15 @@ function sameMessageFollowSpotSource(
 }
 
 function sameDirectSpotRouteIdentity(
-  left: ServiceDirectSpotRouteFence,
-  right: ServiceDirectSpotRouteFence
+  left: ServiceSpotRouteFence,
+  right: ServiceSpotRouteFence
 ): boolean {
   return sameDirectSpotOwnerIdentity(left, right) && left.spot.generation === right.spot.generation;
 }
 
 function sameDirectSpotOwnerIdentity(
-  left: ServiceDirectSpotRouteFence,
-  right: ServiceDirectSpotRouteFence
+  left: ServiceSpotRouteFence,
+  right: ServiceSpotRouteFence
 ): boolean {
   return (
     left.spot.spotId === right.spot.spotId &&

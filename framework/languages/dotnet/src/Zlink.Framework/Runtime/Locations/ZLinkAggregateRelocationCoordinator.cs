@@ -175,7 +175,7 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                         "preparing an aggregate relocation"
                     );
                 default:
-                    throw new InvalidOperationException(
+                    throw new ZLinkRelocationTargetSettledException(
                         "The aggregate relocation prepare was rejected."
                     );
             }
@@ -356,7 +356,7 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                     or ZLinkAggregateCommitResult.AlreadyCommitted
                 )
             )
-                throw new InvalidOperationException(
+                throw new ZLinkRelocationTargetSettledException(
                     $"The aggregate relocation commit failed with '{commit}'."
                 );
         }

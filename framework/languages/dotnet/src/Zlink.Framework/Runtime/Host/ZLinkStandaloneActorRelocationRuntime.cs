@@ -26,6 +26,19 @@ internal enum ZLinkStandaloneActorRelocationResult
     TargetRejected,
 }
 
+/// <summary>How the source settled one relocation attempt (relocation flow §4.4).</summary>
+internal enum ZLinkSourceSettlement
+{
+    TargetCommitted,
+    SourcePreserved,
+    SourceLeaseExpired,
+}
+
+internal readonly record struct ZLinkSourceSettlementResult(
+    ZLinkSourceSettlement Outcome,
+    ZLinkAuthoritySnapshot? Snapshot
+);
+
 /// <summary>
 /// Owns maintenance relocation for Actors that are attached to an Entry Spot.
 /// Application join admission is deliberately outside this module: a maintenance
@@ -39,7 +52,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
 )
 {
     internal const ulong InitialTargetAttemptGeneration = 1;
-    private static readonly TimeSpan TargetStageTtl = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan TargetAbortRetention = TimeSpan.FromMinutes(5);
     private readonly ConcurrentDictionary<AttemptKey, AttemptSlot> _targetAttempts = new();
     private int _targetAttemptAdmissionSealed;
 
@@ -154,6 +167,31 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             sourceAuthority.NodeGeneration,
             found.Snapshot.StoreVersion
         );
+        ZLinkSourceSettlement? settled = null;
+        //  Returns every retained copy to the source and reopens it: a failure
+        //  before the cutover submission or a confirmed source Preserve.
+        async ValueTask RestoreSourceAsync()
+        {
+            var cleanup = new ZLinkRelocationPublicationCoordinator(
+                authorityStore,
+                relocationStore
+            );
+            if (initialPrepared is not null)
+                await cleanup.DiscardPreparedAsync(initialPrepared).ConfigureAwait(false);
+            if (captureStarted)
+                await runtime
+                    .RestoreStandaloneActorRelocationSourceAsync(actorState)
+                    .ConfigureAwait(false);
+            if (sealedSession is { } session)
+                await AbortSessionRouteBestEffortAsync(
+                        actorState.ActorId,
+                        session,
+                        sessionRelocationContext,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+            sourceTerminalized = true;
+        }
         try
         {
             var route = default(ZLinkRemoteActorBoundSessionRoute);
@@ -306,31 +344,22 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     )
                 ))
                 .ToArray();
-            foreach (var record in data)
-                await canonical
-                    .SendCanonicalRelocationDataAsync(target.Rid, record, cancellationToken)
-                    .ConfigureAwait(false);
             //  Spec 28 §4.4: the cutover carries the boundary record
             //  count and the CRC-32C over the relayed pre-boundary
             //  records so the target can compare its staged relay span.
-            await canonical
-                .SendCanonicalRelocationCutoverAsync(
-                    target.Rid,
-                    new ZLinkServiceWireCodec.RelocationCutoverRecord(
-                        prepare.RelocationId,
-                        prepare.TargetAttemptGeneration,
-                        prepare.Coordinator,
-                        1,
-                        prepare.Object,
-                        checked((ulong)data.Length),
-                        ZLinkRelocationBoundaryBatch.ComputeChecksum(
-                            data.Select(static record => record.FrozenRecord.Encoded)
-                        )
-                    ),
-                    cancellationToken
+            var cutover = new ZLinkServiceWireCodec.RelocationCutoverRecord(
+                prepare.RelocationId,
+                prepare.TargetAttemptGeneration,
+                prepare.Coordinator,
+                1,
+                prepare.Object,
+                checked((ulong)data.Length),
+                ZLinkRelocationBoundaryBatch.ComputeChecksum(
+                    data.Select(static record => record.FrozenRecord.Encoded)
                 )
-                .ConfigureAwait(false);
-            var committedTarget = await WaitForCommittedTargetAuthorityAsync(
+            );
+            var boundaryCanonical = canonical;
+            var settlement = await SettleSourceAsync(
                     authorityStore,
                     ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorState.ActorId),
                     found.Snapshot,
@@ -338,9 +367,45 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     relocationId,
                     target,
                     prepare.TargetAttemptGeneration,
+                    deadline,
+                    () => IsOwnerLeaseValid(found.Snapshot),
+                    token =>
+                        SubmitBoundaryAsync(boundaryCanonical, target.Rid, data, cutover, token),
+                    registration.Locations.Options.PollingInterval,
                     cancellationToken
                 )
                 .ConfigureAwait(false);
+            if (settlement.Outcome != ZLinkSourceSettlement.TargetCommitted)
+            {
+                //  Relocation flow §4.4: a confirmed Preserve returns the
+                //  retained work to the source; an expired source lease ends
+                //  the unit without reopening its dispatch.
+                settled = settlement.Outcome;
+                var preserved = settlement.Outcome == ZLinkSourceSettlement.SourcePreserved;
+                if (preserved)
+                    await RestoreSourceAsync().ConfigureAwait(false);
+                else
+                    await runtime
+                        .FailStandaloneActorRelocationSourceAsync(actorState, sourceRef.Value)
+                        .ConfigureAwait(false);
+                relocationMetric.Complete(ZLinkRelocationMetricOutcome.Aborted);
+                throw new ZLinkActorRelocationFailureException(
+                    ZLinkFrameworkRelocationReason.RelocationFailed,
+                    preserved
+                        ? ZLinkRelocationCommitKnowledge.NotCommitted
+                        : ZLinkRelocationCommitKnowledge.Unknown,
+                    preserved,
+                    new ZLinkFrameworkException(
+                        preserved
+                            ? ZLinkFrameworkErrorKind.DeadlineExceeded
+                            : ZLinkFrameworkErrorKind.Unavailable,
+                        preserved
+                            ? $"Actor '{actorState.ActorId}' target commit was not confirmed before the Restore deadline; the source Preserve fence won."
+                            : $"Actor '{actorState.ActorId}' source owner lease expired before the Preserve fence."
+                    )
+                );
+            }
+            var committedTarget = settlement.Snapshot!;
             committed = true;
             await CompleteCommittedSourceAsync(
                     actor,
@@ -359,7 +424,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             relocationMetric.Complete(ZLinkRelocationMetricOutcome.Completed);
             return ZLinkStandaloneActorRelocationResult.Committed;
         }
-        catch (Exception error)
+        catch (Exception error) when (settled is null)
         {
             if (!committed)
             {
@@ -396,76 +461,13 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         requireStoreVersion: !restoredPrecommit
                     )
                 )
-                {
-                    if (
-                        initialPrepared is null
-                        || canonical is null
-                        || prepare is null
-                        || !IsExactCommittedTargetAuthority(
-                            authority,
-                            found.Snapshot,
-                            initialPrepared.Relocation,
-                            relocationId,
-                            target,
-                            prepare.TargetAttemptGeneration,
-                            requireActivated: false
-                        )
-                    )
-                        throw DataLost(
-                            $"Actor '{actorState.ActorId}' authority changed to an unrelated owner during relocation."
-                        );
-
-                    // Command 34 can be lost after the target CAS. Continue
-                    // the exact committed attempt instead of reopening or
-                    // selecting another target.
-                    committed = true;
-                    var committedTarget = await WaitForCommittedTargetAuthorityAsync(
-                            authorityStore,
-                            ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorState.ActorId),
-                            found.Snapshot,
-                            initialPrepared.Relocation,
-                            relocationId,
-                            target,
-                            prepare.TargetAttemptGeneration,
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false);
-                    await CompleteCommittedSourceAsync(
-                            actor,
-                            actorState,
-                            sourceRef.Value,
-                            sourceAuthority,
-                            found.Snapshot,
-                            target,
-                            acceptedCount,
-                            committedTarget.AuthorityOwnerGeneration,
-                            interruption,
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false);
-                    sourceTerminalized = true;
-                    relocationMetric.Complete(ZLinkRelocationMetricOutcome.Completed);
-                    return ZLinkStandaloneActorRelocationResult.Committed;
-                }
-                var cleanup = new ZLinkRelocationPublicationCoordinator(
-                    authorityStore,
-                    relocationStore
-                );
-                if (initialPrepared is not null)
-                    await cleanup.DiscardPreparedAsync(initialPrepared).ConfigureAwait(false);
-                if (captureStarted)
-                    await runtime
-                        .RestoreStandaloneActorRelocationSourceAsync(actorState)
-                        .ConfigureAwait(false);
-                if (sealedSession is { } session)
-                    await AbortSessionRouteBestEffortAsync(
-                            actorState.ActorId,
-                            session,
-                            sessionRelocationContext,
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false);
-                sourceTerminalized = true;
+                    //  A failure here happened before the cutover submission,
+                    //  so no target commit can exist (the settlement owns every
+                    //  outcome after it).
+                    throw DataLost(
+                        $"Actor '{actorState.ActorId}' authority changed to an unrelated owner during relocation."
+                    );
+                await RestoreSourceAsync().ConfigureAwait(false);
             }
             relocationMetric.Complete(
                 error is OperationCanceledException && runtime.ShutdownToken.IsCancellationRequested
@@ -599,7 +601,19 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         return true;
     }
 
-    internal static async ValueTask<ZLinkAuthoritySnapshot> WaitForCommittedTargetAuthorityAsync(
+    /// <summary>
+    /// Relocation flow §4.4, location runtime §6.1/§10: the source settles one
+    /// attempt from the authority record, once. Target commit with this
+    /// RelocationId → <see cref="ZLinkSourceSettlement.TargetCommitted"/>.
+    /// From the Restore deadline on, with the target commit unconfirmed, the
+    /// source runs its <c>Preserve</c> fence on the version the target CAS
+    /// expects → <see cref="ZLinkSourceSettlement.SourcePreserved"/>; its own
+    /// lease already ended → <see cref="ZLinkSourceSettlement.SourceLeaseExpired"/>.
+    /// A Store failure or a lost Preserve race is not an answer: the source
+    /// keeps every copy and reads again. A boundary batch whose submission
+    /// failed is submitted again (whole batch, then the cutover).
+    /// </summary>
+    internal static async ValueTask<ZLinkSourceSettlementResult> SettleSourceAsync(
         IZLinkLocationRepository authorityStore,
         ZLinkAuthorityKey authorityKey,
         ZLinkAuthoritySnapshot source,
@@ -607,16 +621,39 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         Guid relocationId,
         ZLinkMeshNodeDescriptor target,
         ulong targetAttemptGeneration,
+        TimeSpan restoreDeadline,
+        Func<bool> isSourceLeaseValid,
+        Func<CancellationToken, ValueTask<bool>> submitBoundary,
+        TimeSpan pollingInterval,
         CancellationToken cancellationToken
     )
     {
+        var precommit = new ZLinkStandaloneActorRelocationPrecommitCoordinator(authorityStore);
+        var boundarySubmitted = await submitBoundary(cancellationToken).ConfigureAwait(false);
         while (true)
         {
-            var read = await authorityStore
-                .ReadAuthorityAsync(authorityKey, cancellationToken)
-                .ConfigureAwait(false);
+            //  The Restore deadline is reached by time or by the caller's
+            //  cancellation; from then on the Store calls that settle the
+            //  attempt are no longer cancelled, and the source lease bounds
+            //  them (location runtime §6.1).
+            var settleNow =
+                cancellationToken.IsCancellationRequested
+                || Stopwatch.GetElapsedTime(0) >= restoreDeadline;
+            var token = settleNow ? CancellationToken.None : cancellationToken;
+            ZLinkAuthorityReadResult? read = null;
+            try
+            {
+                read = await authorityStore
+                    .ReadAuthorityAsync(authorityKey, token)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception) when (!token.IsCancellationRequested)
+            {
+                //  Indeterminate: keep every copy and read again.
+            }
             if (
-                IsExactCommittedTargetAuthority(
+                read is ZLinkAuthorityReadResult.Found found
+                && IsExactCommittedTargetAuthority(
                     read,
                     source,
                     root,
@@ -626,8 +663,107 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     requireActivated: true
                 )
             )
-                return ((ZLinkAuthorityReadResult.Found)read).Snapshot;
-            await Task.Delay(5, cancellationToken).ConfigureAwait(false);
+                return new(ZLinkSourceSettlement.TargetCommitted, found.Snapshot);
+            if (
+                read is ZLinkAuthorityReadResult.Missing
+                || read is ZLinkAuthorityReadResult.Found moved
+                    && !ZLinkStandaloneActorRelocationPrecommitCoordinator.IsSourcePrecommit(
+                        moved.Snapshot,
+                        relocationId
+                    )
+                    && !IsExactCommittedTargetAuthority(
+                        read,
+                        source,
+                        root,
+                        relocationId,
+                        target,
+                        targetAttemptGeneration,
+                        requireActivated: false
+                    )
+            )
+                throw DataLost(
+                    "Standalone Actor authority changed to an unrelated owner during relocation."
+                );
+            if (settleNow)
+            {
+                if (!isSourceLeaseValid())
+                    return new(ZLinkSourceSettlement.SourceLeaseExpired, null);
+                if (
+                    read is ZLinkAuthorityReadResult.Found captured
+                    && ZLinkStandaloneActorRelocationPrecommitCoordinator.IsSourcePrecommit(
+                        captured.Snapshot,
+                        relocationId
+                    )
+                )
+                {
+                    ZLinkAuthoritySnapshot? preserved = null;
+                    try
+                    {
+                        preserved = await precommit
+                            .TryPreserveSourceAsync(
+                                authorityKey,
+                                captured.Snapshot,
+                                relocationId,
+                                token
+                            )
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception)
+                    {
+                        //  Indeterminate Preserve: the next read decides.
+                    }
+                    if (preserved is not null)
+                        return new(ZLinkSourceSettlement.SourcePreserved, preserved);
+                }
+                await Task.Delay(pollingInterval, CancellationToken.None).ConfigureAwait(false);
+                continue;
+            }
+            if (!boundarySubmitted)
+                boundarySubmitted = await submitBoundary(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await Task.Delay(pollingInterval, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                //  Cancellation brings the Restore deadline forward.
+            }
+        }
+    }
+
+    /// <summary>
+    /// Relocation flow §4.4: submits the whole pre-boundary relay batch, then
+    /// the cutover, on the ordered connection. The submit terminal is neither
+    /// success nor failure of the relocation; <c>false</c> only tells the
+    /// settlement to submit the whole batch again while it waits.
+    /// </summary>
+    internal static async ValueTask<bool> SubmitBoundaryAsync(
+        IZLinkBackendCanonicalRelocation canonical,
+        RoutingId targetRid,
+        IReadOnlyList<ZLinkServiceWireCodec.RelocationDataRecord> data,
+        ZLinkServiceWireCodec.RelocationCutoverRecord cutover,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            foreach (var record in data)
+                await canonical
+                    .SendCanonicalRelocationDataAsync(targetRid, record, cancellationToken)
+                    .ConfigureAwait(false);
+            await canonical
+                .SendCanonicalRelocationCutoverAsync(targetRid, cutover, cancellationToken)
+                .ConfigureAwait(false);
+            return true;
+        }
+        catch (ZLinkFrameworkException exception)
+            when (exception.Kind == ZLinkFrameworkErrorKind.Unavailable)
+        {
+            return false;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return false;
         }
     }
 
@@ -690,6 +826,20 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             )
             .ConfigureAwait(false);
     }
+
+    private bool IsTargetOwnerLeaseValid(ZLinkActorAuthorityPayload targetAuthority) =>
+        IsOwnerLeaseValid(
+            new ZLinkLocationOwnerToken(
+                targetAuthority.OwnerId,
+                checked((long)targetAuthority.OwnerLeaseGeneration)
+            )
+        );
+
+    private bool IsOwnerLeaseValid(ZLinkAuthoritySnapshot owner) =>
+        IsOwnerLeaseValid(new ZLinkLocationOwnerToken(owner.OwnerId, owner.OwnerLeaseGeneration));
+
+    private bool IsOwnerLeaseValid(ZLinkLocationOwnerToken owner) =>
+        runtime.LocationLifecycle?.IsOwnerLeaseValid(owner) == true;
 
     private static TimeSpan RemainingTimeout(TimeSpan deadline)
     {
@@ -1114,7 +1264,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         CancellationToken cancellationToken
     )
     {
-        await SweepExpiredTargetStagesAsync().ConfigureAwait(false);
+        await SweepCompletedTargetAbortsAsync().ConfigureAwait(false);
         var key = new AttemptKey(
             prepare.RelocationId.High,
             prepare.RelocationId.Low,
@@ -1174,22 +1324,10 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     if (lease.Slot.Stage is not { } stage)
                         throw DataLost("Standalone Actor relocation data has no prepared target.");
                     stage.ValidateData(data, authenticatedSourceNodeRid);
-                    stage.TrackRelayRecord(data.FrozenRecord.Encoded.Span);
-                    var nextArrival = stage.NextArrivalIndex;
-                    var frame = ZLinkCanonicalActorAcceptedJournal
-                        .Decode(data.FrozenRecord.Encoded.Span, nextArrival)
-                        .Frame;
-                    if (stage.RemoteJoinRequest is not null)
-                        stage.ActorState.Handoff.AppendPreparedImport(
-                            stage.Envelope.AggregateId.ToString("N"),
-                            [frame]
-                        );
-                    else
-                        stage.ActorState.Handoff.AppendCanonicalMaintenanceImport(
-                            stage.Envelope.AggregateId.ToString("N"),
-                            [frame]
-                        );
-                    stage.Append(frame);
+                    //  Relocation flow §4.4: each relay record is kept as its
+                    //  own received record; it is staged only after the
+                    //  cutover verifies the boundary batch.
+                    stage.ReceiveRelayRecord(data.FrozenRecord.Encoded);
                     return ValueTask.CompletedTask;
                 })
                 .ConfigureAwait(false);
@@ -1200,22 +1338,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         }
     }
 
-    internal ValueTask CutoverTargetAsync(
+    internal async ValueTask CutoverTargetAsync(
         ZLinkServiceWireCodec.RelocationCutoverRecord cutover,
         RoutingId authenticatedSourceNodeRid,
-        CancellationToken cancellationToken
-    ) =>
-        CutoverTargetAsync(
-            cutover,
-            authenticatedSourceNodeRid,
-            verifyBoundary: true,
-            cancellationToken
-        );
-
-    private async ValueTask CutoverTargetAsync(
-        ZLinkServiceWireCodec.RelocationCutoverRecord cutover,
-        RoutingId authenticatedSourceNodeRid,
-        bool verifyBoundary,
         CancellationToken cancellationToken
     )
     {
@@ -1252,8 +1377,26 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         );
                         return;
                     }
-                    if (verifyBoundary)
-                        stage.ValidateBoundary(cutover);
+                    //  Relocation flow §4.5: the target CAS runs only after the
+                    //  received cutover verifies the whole boundary batch;
+                    //  only then are its records staged, in receive order.
+                    foreach (var record in stage.TakeVerifiedBoundary(cutover))
+                    {
+                        var frame = ZLinkCanonicalActorAcceptedJournal
+                            .Decode(record.Span, stage.NextArrivalIndex)
+                            .Frame;
+                        if (stage.RemoteJoinRequest is not null)
+                            stage.ActorState.Handoff.AppendPreparedImport(
+                                stage.Envelope.AggregateId.ToString("N"),
+                                [frame]
+                            );
+                        else
+                            stage.ActorState.Handoff.AppendCanonicalMaintenanceImport(
+                                stage.Envelope.AggregateId.ToString("N"),
+                                [frame]
+                            );
+                        stage.Append(frame);
+                    }
 
                     var store =
                         registration.Locations.ResolveStore()
@@ -1276,17 +1419,30 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         )
                     )
                     {
-                        var committed =
-                            await new ZLinkStandaloneActorRelocationPrecommitCoordinator(store)
-                                .CommitTargetAsync(
-                                    found.Snapshot,
-                                    stage.Envelope,
-                                    stage.Prepare,
-                                    stage.TargetAuthority,
-                                    stage.TargetAuthorityOwnerGeneration,
-                                    cancellationToken
-                                )
-                                .ConfigureAwait(false);
+                        ZLinkAuthoritySnapshot committed;
+                        try
+                        {
+                            committed =
+                                await new ZLinkStandaloneActorRelocationPrecommitCoordinator(store)
+                                    .CommitTargetAsync(
+                                        found.Snapshot,
+                                        stage.Envelope,
+                                        stage.Prepare,
+                                        stage.TargetAuthority,
+                                        stage.TargetAuthorityOwnerGeneration,
+                                        () => IsTargetOwnerLeaseValid(stage.TargetAuthority),
+                                        registration.Locations.Options.PollingInterval,
+                                        cancellationToken
+                                    )
+                                    .ConfigureAwait(false);
+                        }
+                        catch (ZLinkRelocationTargetSettledException)
+                        {
+                            //  Location runtime §10: the authority settled
+                            //  against this target; its staging is discarded.
+                            _ = BeginTargetAbortLocked(key, lease.Slot, stage);
+                            throw;
+                        }
                         if (
                             committed.AuthorityOwnerGeneration
                             != stage.TargetAuthorityOwnerGeneration
@@ -1394,18 +1550,22 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         }
     }
 
-    internal void ScheduleTargetCutoverFallback(
-        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
-        RoutingId authenticatedSourceNodeRid
+    internal void ScheduleTargetCutoverWarning(
+        ZLinkServiceWireCodec.RelocationPrepareRecord prepare
     ) =>
         runtime.RunDetached(
-            "standalone-actor-cutover-fallback",
-            _ => new ValueTask(RunTargetCutoverFallbackAsync(prepare, authenticatedSourceNodeRid))
+            "standalone-actor-cutover-warning",
+            _ => new ValueTask(RunTargetCutoverWarningAsync(prepare))
         );
 
-    private async Task RunTargetCutoverFallbackAsync(
-        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
-        RoutingId authenticatedSourceNodeRid
+    /// <summary>
+    /// Relocation flow §4.4: <c>RelocationCutoverWaitTimeout</c> is only a
+    /// Warning threshold. The target records <c>cutover_timeout</c> and keeps
+    /// waiting for the verified cutover or the authority settlement; it never
+    /// starts the CAS or dispatch from this timer.
+    /// </summary>
+    private async Task RunTargetCutoverWarningAsync(
+        ZLinkServiceWireCodec.RelocationPrepareRecord prepare
     )
     {
         try
@@ -1416,48 +1576,106 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     runtime.ShutdownToken
                 )
                 .ConfigureAwait(false);
-            var key = new AttemptKey(
-                prepare.RelocationId.High,
-                prepare.RelocationId.Low,
-                prepare.TargetAttemptGeneration
-            );
-            if (!TryAcquireTargetAttempt(key, out var lease))
+        }
+        catch (OperationCanceledException) when (runtime.ShutdownToken.IsCancellationRequested)
+        {
+            return;
+        }
+        var key = new AttemptKey(
+            prepare.RelocationId.High,
+            prepare.RelocationId.Low,
+            prepare.TargetAttemptGeneration
+        );
+        if (!TryAcquireTargetAttempt(key, out var lease))
+            return;
+        using (lease)
+            if (lease.Slot.Stage is not { } stage || stage.AuthorityPublished)
                 return;
-            using (lease)
-                if (lease.Slot.Stage is not { } stage || stage.AuthorityPublished)
-                    return;
-            ZLinkFrameworkDebugLog.SpotDiscovery("cutover_timeout object=actor");
-            //  Spec 28 §4.4/25 §5: the fallback proceeds to the CAS without
-            //  boundary completeness verification and is counted.
-            ZLinkRuntimeMetrics.RecordRelocationCutoverTimeout("actor");
-            await CutoverTargetAsync(
-                    new ZLinkServiceWireCodec.RelocationCutoverRecord(
-                        prepare.RelocationId,
-                        prepare.TargetAttemptGeneration,
-                        prepare.Coordinator,
-                        prepare.InitiatorRole,
-                        prepare.Object,
-                        0,
-                        0
-                    ),
-                    authenticatedSourceNodeRid,
-                    verifyBoundary: false,
-                    runtime.ShutdownToken
-                )
-                .ConfigureAwait(false);
+        ZLinkFrameworkDebugLog.SpotDiscovery("cutover_timeout object=actor");
+        ZLinkRuntimeMetrics.RecordRelocationCutoverTimeout("actor");
+        //  Location runtime §10: from here the target also reads its source
+        //  fence. Only a confirmed source Preserve (the fence moved to another
+        //  owner) or the end of the target's own lease discards the staging;
+        //  elapsed time alone never does.
+        var store =
+            registration.Locations.ResolveStore()
+            ?? throw new ZLinkConfigurationException("Location Store is not registered.");
+        try
+        {
+            while (await WatchUnverifiedTargetOnceAsync(key, store).ConfigureAwait(false))
+                await Task.Delay(
+                        registration.Locations.Options.PollingInterval,
+                        registration.TimeProvider,
+                        runtime.ShutdownToken
+                    )
+                    .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (runtime.ShutdownToken.IsCancellationRequested) { }
-        catch (Exception error)
+        catch (ZLinkRelocationDataLostException exception)
         {
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"location_update_failed object=actor error={error.GetType().Name}"
-            );
+            ZLinkFrameworkDebugLog.TaskFailure("standalone-actor-target-fence", exception);
         }
     }
 
-    private async ValueTask SweepExpiredTargetStagesAsync()
+    /// <summary>
+    /// One read of an unverified target's source fence. Returns whether the
+    /// staging is still waiting for its cutover or authority settlement.
+    /// </summary>
+    private async ValueTask<bool> WatchUnverifiedTargetOnceAsync(
+        AttemptKey key,
+        IZLinkLocationRepository store
+    )
     {
-        var cutoff = Stopwatch.GetElapsedTime(0) - TargetStageTtl;
+        if (!TryAcquireTargetAttempt(key, out var lease))
+            return false;
+        using var attemptLease = lease;
+        var waiting = false;
+        try
+        {
+            await lease
+                .Slot.RunAsync(async () =>
+                {
+                    if (lease.Slot.Stage is not { } stage || stage.AuthorityPublished)
+                        return;
+                    var targetOwner = new ZLinkLocationOwnerToken(
+                        stage.TargetAuthority.OwnerId,
+                        checked((long)stage.TargetAuthority.OwnerLeaseGeneration)
+                    );
+                    if (
+                        IsTargetOwnerLeaseValid(stage.TargetAuthority)
+                        && await ZLinkRelocationTargetFence
+                            .ReadAsync(
+                                store,
+                                stage.Participant.AuthorityKey,
+                                current =>
+                                    ZLinkStandaloneActorRelocationPrecommitCoordinator.HoldsTargetCommitFence(
+                                        current,
+                                        stage.Envelope,
+                                        stage.Prepare
+                                    ),
+                                targetOwner,
+                                runtime.ShutdownToken
+                            )
+                            .ConfigureAwait(false) != ZLinkRelocationTargetFenceReading.FenceChanged
+                    )
+                    {
+                        waiting = true;
+                        return;
+                    }
+                    _ = BeginTargetAbortLocked(key, lease.Slot, stage);
+                })
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            CloseTargetAttemptIfEmpty(key, lease.Slot);
+        }
+        return waiting;
+    }
+
+    private async ValueTask SweepCompletedTargetAbortsAsync()
+    {
+        var cutoff = Stopwatch.GetElapsedTime(0) - TargetAbortRetention;
         foreach (var pair in _targetAttempts)
         {
             if (!TryAcquireTargetAttempt(pair.Key, pair.Value, out var lease))
@@ -1466,8 +1684,13 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             {
                 try
                 {
+                    //  Location runtime §10: an unpublished stage is never
+                    //  discarded because time passed; only its authority
+                    //  settlement discards it (WatchUnverifiedTargetOnceAsync,
+                    //  CutoverTargetAsync, AbortTargetAsync). Retention bounds
+                    //  only completed aborts.
                     await pair
-                        .Value.RunAsync(async () =>
+                        .Value.RunAsync(() =>
                         {
                             if (
                                 pair.Value.Abort is { } abort
@@ -1475,24 +1698,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                                 && abort.CreatedAt <= cutoff
                             )
                                 pair.Value.TryRemoveAbort(abort);
-                            if (
-                                pair.Value.Stage is { } stage
-                                && !stage.AuthorityPublished
-                                && stage.CreatedAt <= cutoff
-                                && pair.Value.TryRemoveStage(stage)
-                            )
-                            {
-                                stage.ActorState.AbortRelocationSessionRoute(
-                                    stage.Envelope.AggregateId.ToString("N")
-                                );
-                                DetachTargetMembership(stage);
-                                await actorSessions
-                                    .RollbackTransferredActorAsync(
-                                        stage.ActorState.ActorId,
-                                        CancellationToken.None
-                                    )
-                                    .ConfigureAwait(false);
-                            }
+                            return ValueTask.CompletedTask;
                         })
                         .ConfigureAwait(false);
                 }
@@ -3342,30 +3548,39 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         internal IReadOnlyList<ZLinkActorHandoffFrame> AcceptedFrames => _acceptedFrames;
         internal long NextArrivalIndex =>
             _acceptedFrames.Count == 0 ? 1 : checked(_acceptedFrames[^1].ArrivalIndex + 1);
-        internal TimeSpan CreatedAt { get; } = Stopwatch.GetElapsedTime(0);
         internal bool AuthorityPublished { get; set; }
 
-        private uint _relayCrcState = uint.MaxValue;
-        private ulong _relayRecordCount;
+        private readonly List<ReadOnlyMemory<byte>> _relayRecords = [];
 
         internal void Append(ZLinkActorHandoffFrame frame) => _acceptedFrames.Add(frame);
 
-        internal void TrackRelayRecord(ReadOnlySpan<byte> encodedFrozenRecord)
-        {
-            ZLinkCrc32C.Append(ref _relayCrcState, encodedFrozenRecord);
-            _relayRecordCount = checked(_relayRecordCount + 1);
-        }
+        internal void ReceiveRelayRecord(ReadOnlyMemory<byte> encodedFrozenRecord) =>
+            _relayRecords.Add(encodedFrozenRecord.ToArray());
 
-        //  Spec 28 §4.4: on the ordered connection the boundary values always
-        //  match the staged relay span; a mismatch is an implementation
-        //  defect, not a retryable condition.
-        internal void ValidateBoundary(ZLinkServiceWireCodec.RelocationCutoverRecord cutover)
+        /// <summary>
+        /// Relocation flow §4.4: the boundary batch is the last
+        /// <c>count</c> records received on the ordered connection before
+        /// this cutover — the batch the source sent immediately before it, so
+        /// a retransmitted whole batch replaces an earlier partial copy. Its
+        /// count and CRC-32C must match the cutover; the verified records are
+        /// handed out once.
+        /// </summary>
+        internal IReadOnlyList<ReadOnlyMemory<byte>> TakeVerifiedBoundary(
+            ZLinkServiceWireCodec.RelocationCutoverRecord cutover
+        )
         {
+            if (cutover.BoundaryRecordCount > (ulong)_relayRecords.Count)
+                throw DataLost("Command 34 boundary count exceeds the received relay records.");
+            var batch = _relayRecords
+                .Skip(_relayRecords.Count - (int)cutover.BoundaryRecordCount)
+                .ToArray();
             if (
-                cutover.BoundaryRecordCount != _relayRecordCount
-                || cutover.BoundaryChecksumCrc32c != ~_relayCrcState
+                cutover.BoundaryChecksumCrc32c
+                != ZLinkRelocationBoundaryBatch.ComputeChecksum(batch)
             )
-                throw DataLost("Command 34 boundary values do not match the staged relay span.");
+                throw DataLost("Command 34 boundary values do not match the received relay batch.");
+            _relayRecords.Clear();
+            return batch;
         }
 
         internal void BeginReadySubmission()
@@ -3738,6 +3953,41 @@ internal sealed partial class ZLinkFrameworkRuntime
             turn.Dispose();
         }
         await Task.WhenAll(queued).ConfigureAwait(false);
+    }
+
+    internal async ValueTask FailStandaloneActorRelocationSourceAsync(
+        ZLinkActorRuntimeState actorState,
+        ZLinkBackendActorRef sourceActorRef
+    )
+    {
+        var frames = actorState.Handoff.ExpireSourceCapture(sourceActorRef);
+        var unavailable = new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.Unavailable,
+            $"Actor '{actorState.ActorId}' source owner lease expired during relocation."
+        );
+        await Task.WhenAll(
+                frames.Select(frame =>
+                    ZLinkActorBoundSessionRelay
+                        .ReplyStaleActorAsync(
+                            this,
+                            sourceActorRef,
+                            frame.SourceNodeRid.Length == 0
+                                ? default
+                                : RoutingId.From(frame.SourceNodeRid),
+                            frame.SourceSessionRid.Length == 0
+                                ? default
+                                : RoutingId.From(frame.SourceSessionRid),
+                            frame.RequestId,
+                            frame.Flags,
+                            frame.RouteContext.ReplyCapability,
+                            ZLinkStreamProtocolDefaults.DecodeHeader(frame.Header),
+                            unavailable,
+                            CancellationToken.None
+                        )
+                        .AsTask()
+                )
+            )
+            .ConfigureAwait(false);
     }
 
     internal async ValueTask CompleteStandaloneActorRelocationSourceAsync(

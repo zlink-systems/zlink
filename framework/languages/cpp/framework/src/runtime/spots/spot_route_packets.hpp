@@ -74,6 +74,7 @@ struct spot_actor_commit_route_request_t
     std::string actor_id;
     std::uint64_t actor_generation = 0;
     std::uint64_t actor_authority_owner_generation = 0;
+    std::string expected_actor_store_version;
     std::string completion_root_reference;
     std::uint32_t completion_root_checksum = 0;
     std::string target_spot_id;

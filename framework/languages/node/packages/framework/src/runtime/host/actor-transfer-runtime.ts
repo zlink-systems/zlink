@@ -810,6 +810,7 @@ export class ZLinkActorTransferRuntime {
       targetOwnerFence: ZLinkActorMessageFollowOwnerFence
     ): Promise<void>;
     rollback(): Promise<void>;
+    discard(reason: unknown): void;
   }> {
     relocationDebug('maintenance_session.begin', {
       actorId: actor.context.actorId,
@@ -865,6 +866,11 @@ export class ZLinkActorTransferRuntime {
             state.endMove();
             terminal = 'committed';
           }
+        },
+        discard: (reason) => {
+          if (terminal !== 'prepared') return;
+          terminal = 'rolledBack';
+          this.options.actorHandoff.failPending(actor.context.actorId, reason);
         },
         rollback: async () => {
           if (terminal !== 'prepared') return;

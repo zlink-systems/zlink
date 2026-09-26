@@ -84,15 +84,15 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
     {
     }
 
-    authority_publish_result_t
-    publish (const object_ref_t &source,
-             const object_ref_t &target,
-             location_owner_token_t target_owner,
-             object_creation_target_t target_placement,
-             std::string relocation_reference,
-             std::uint32_t checksum_crc32c,
-             inventory_digest_t inventory_digest,
-             std::vector<std::byte> target_application_payload = {}) override
+    authority_publish_result_t publish (const object_ref_t &source,
+                                        const object_ref_t &target,
+                                        location_owner_token_t target_owner,
+                                        object_creation_target_t target_placement,
+                                        std::string relocation_reference,
+                                        std::uint32_t checksum_crc32c,
+                                        inventory_digest_t inventory_digest,
+                                        std::vector<std::byte> target_application_payload = {},
+                                        std::string expected_store_version = {}) override
     {
         if (target.kind != source.kind || target.key != source.key
             || target.object_generation != source.object_generation
@@ -100,12 +100,12 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
             || target.mesh_name.empty () || target.node_id.empty ())
             return {authority_publish_status_t::failed, std::nullopt};
         const auto key = authority_key (source);
-        // The commit CAS is against the previous logical fence
-        // (ObjectGeneration + AuthorityOwnerGeneration), not against
-        // incidental store-version churn: the source owner's periodic lease
-        // renewal rewrites the same record without changing the fence. A
-        // version-only conflict therefore re-reads and retries; only a fence
-        // change is a genuine conflict.
+        // A relocation NewOwner CAS is conditioned on the StoreVersion the
+        // source fence carries (01 §6.1), so a source Preserve that changed
+        // only that version makes it conflict. Any other publish CAS is
+        // against the previous logical fence (ObjectGeneration +
+        // AuthorityOwnerGeneration): a version-only conflict re-reads and
+        // retries; only a fence change is a genuine conflict.
         constexpr int max_attempts = 8;
         for (int attempt = 0; attempt != max_attempts; ++attempt) {
             const auto read = _store->read_authority (key).result ().value ();
@@ -152,7 +152,9 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
             }
             const auto exchanged = _store
                                      ->compare_exchange_authority (
-                                       key, snapshot->store_version,
+                                       key,
+                                       expected_store_version.empty () ? snapshot->store_version
+                                                                       : expected_store_version,
                                        authority_retarget_t{source.kind == object_kind_t::actor
                                                               ? reference.application_payload
                                                               : encode (reference),
@@ -189,7 +191,7 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                 std::cerr << "zlink authority-publish stage=cas-conflict key=" << source.key
                           << " attempt=" << attempt << '\n';
             }
-            if (attempt + 1 == max_attempts)
+            if (!expected_store_version.empty () || attempt + 1 == max_attempts)
                 return {authority_publish_status_t::conflict, decode_current (conflict->current)};
         }
         return {authority_publish_status_t::failed, std::nullopt};
@@ -243,6 +245,67 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                     return output;
                 cursor = page->next_cursor;
             }
+        }
+        catch (...) {
+            return std::nullopt;
+        }
+    }
+
+    relocation_authority_t observe_relocation (const relocation_authority_fence_t &fence) override
+    {
+        try {
+            const auto read = _store
+                                ->read_authority (authority_key (
+                                  object_ref_t{.kind = fence.kind, .key = fence.key}))
+                                .result ()
+                                .value ();
+            return settlement_of (read, fence);
+        }
+        catch (...) {
+            return relocation_authority_t::unsettled;
+        }
+    }
+
+    relocation_authority_t preserve_relocation (const relocation_authority_fence_t &fence) override
+    {
+        try {
+            const auto key = authority_key (object_ref_t{.kind = fence.kind, .key = fence.key});
+            const auto read = _store->read_authority (key).result ().value ();
+            const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
+            if (const auto settled = settlement_of (read, fence);
+                settled != relocation_authority_t::unsettled || snapshot == nullptr)
+                return settled;
+            const auto source_live = owner_lease_live (fence.source_owner);
+            if (!source_live)
+                return relocation_authority_t::unsettled;
+            if (!*source_live)
+                return relocation_authority_t::source_lease_expired;
+            // Preserve keeps the owner and payload and changes only the
+            // StoreVersion the target NewOwner CAS expects (01 §6.1).
+            const auto exchanged =
+              _store
+                ->compare_exchange_authority (key, fence.expected_store_version,
+                                              authority_put_t{snapshot->payload})
+                .result ()
+                .value ();
+            if (std::holds_alternative<authority_stored_t> (exchanged))
+                return relocation_authority_t::source_preserved;
+            if (const auto *conflict = std::get_if<authority_conflict_t> (&exchanged))
+                return settlement_of (conflict->current, fence);
+            return relocation_authority_t::unsettled;
+        }
+        catch (...) {
+            return relocation_authority_t::unsettled;
+        }
+    }
+
+    std::optional<bool> owner_lease_live (const location_owner_token_t &owner) override
+    {
+        try {
+            const auto read = _store->read_owner_lease (owner.owner_id).result ().value ();
+            const auto *found = std::get_if<owner_lease_found_t> (&read);
+            return found != nullptr && same_owner (found->token, owner)
+                   && found->lease_expires_at > found->store_now;
         }
         catch (...) {
             return std::nullopt;
@@ -372,6 +435,22 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                             const location_owner_token_t &right) noexcept
     {
         return left.owner_id == right.owner_id && left.lease_generation == right.lease_generation;
+    }
+
+    /* The one reading of a unit's primary row (01 §6.1, §10): owned by the
+     * target -> committed; moved off the expected StoreVersion while not
+     * target-owned -> the target CAS can no longer commit. */
+    static relocation_authority_t settlement_of (const authority_read_result_t &read,
+                                                 const relocation_authority_fence_t &fence)
+    {
+        const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
+        if (snapshot == nullptr)
+            return relocation_authority_t::unsettled;
+        if (same_owner (snapshot->owner, fence.target_owner))
+            return relocation_authority_t::target_committed;
+        return snapshot->store_version == fence.expected_store_version
+                 ? relocation_authority_t::unsettled
+                 : relocation_authority_t::source_preserved;
     }
 
     static authority_key_t authority_key (const object_ref_t &object)
@@ -591,11 +670,13 @@ class public_aggregate_authority_adapter_t final : public aggregate_authority_po
                                         location_owner_token_t target_owner,
                                         std::string relocation_reference,
                                         std::uint32_t checksum_crc32c,
-                                        inventory_digest_t inventory_digest) override
+                                        inventory_digest_t inventory_digest,
+                                        std::string expected_primary_store_version) override
     {
         if (sources.size () < 2 || target_node_id.empty () || target_owner.owner_id.empty ()
-            || target_owner.lease_generation <= 0)
+            || target_owner.lease_generation <= 0 || expected_primary_store_version.empty ())
             return {};
+        const auto &primary = relocation_primary (sources);
         std::vector<std::pair<authority_snapshot_t, authority_relocation_reference_t>> snapshots;
         snapshots.reserve (sources.size ());
         placement_capacity_bundle_t capacity;
@@ -607,7 +688,9 @@ class public_aggregate_authority_adapter_t final : public aggregate_authority_po
                 .value ();
             const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
             if (!snapshot || snapshot->object_generation != source.object_generation
-                || snapshot->authority_owner_generation != source.authority_owner_generation)
+                || snapshot->authority_owner_generation != source.authority_owner_generation
+                || (&source == &primary
+                    && snapshot->store_version != expected_primary_store_version))
                 return {aggregate_publish_status_t::conflict, {}, {}};
             auto target = source;
             target.node_id = target_node_id;

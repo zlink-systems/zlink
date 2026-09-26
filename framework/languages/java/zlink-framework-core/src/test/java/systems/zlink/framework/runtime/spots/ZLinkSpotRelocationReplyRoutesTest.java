@@ -222,6 +222,7 @@ final class ZLinkSpotRelocationReplyRoutesTest {
                             replies.incrementAndGet();
                             return CompletableFuture.completedFuture(null);
                         },
+                        CompletableFuture::failedFuture,
                         () -> released.set(true))
                 .releaseForRelocation();
         RoutingId target = RoutingId.from("actor-target");

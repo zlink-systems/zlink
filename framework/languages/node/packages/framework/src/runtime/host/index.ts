@@ -167,6 +167,7 @@ import { ZLinkSpotNodeRuntimeOptionsFactory } from './spot-node-runtime-options-
 import { rollbackRuntimeStart, stopRuntimeParts } from './runtime-shutdown';
 import { ZLinkRuntimeAdmissionGate } from '../admission';
 import { ZLinkRetiringRollbackError, ZLinkRouteMeshRuntimeCoordinator } from './route-mesh-runtime';
+import { ServiceRelocationAuthorityError } from '../foundation/service-relocation-coordinator';
 import { ZLinkConfigurationException } from '../../contracts/Configuration/ConfigurationException';
 import { ZLinkStatefulAuthorityRouteRuntime } from './stateful-authority-route-runtime';
 import { ZLinkInstanceActivationAuthority } from './instance-activation-authority';
@@ -1037,6 +1038,17 @@ export class ZLinkFrameworkRuntimeHost
         stopStartingSignal
       );
       if (drained.kind === 'forceStopped') {
+        // Settled authority on both sides or an expired source owner lease
+        // ends the host in Error (spec 30 §13).
+        if (drained.error instanceof ServiceRelocationAuthorityError) {
+          return this.completeRelocation(
+            blockedRelocation(
+              mode,
+              effectiveTargetApplicationVersion,
+              ZLinkFrameworkRelocationReason.RelocationFailed
+            )
+          );
+        }
         return this.resetBlockedRelocation(
           blockedRelocation(
             mode,

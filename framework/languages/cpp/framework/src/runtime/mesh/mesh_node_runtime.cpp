@@ -1285,10 +1285,11 @@ runtime::protocol::session_relocation_route_t mesh_node_runtime_t::make_session_
        commit ? 0 : checkpoint.source.authority_owner_generation}};
 }
 
-task_t<runtime::stateful::relocation_result_t>
-mesh_node_runtime_t::relocate_application_actor (const actor_ref_t &actor,
-                                                 const mesh_node_descriptor_t &target,
-                                                 const authority_snapshot_t &authority)
+task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_application_actor (
+  const actor_ref_t &actor,
+  const mesh_node_descriptor_t &target,
+  const authority_snapshot_t &authority,
+  std::chrono::steady_clock::time_point restore_deadline)
 {
     const auto blocked = [] {
         return runtime::stateful::relocation_result_t{
@@ -1392,6 +1393,14 @@ mesh_node_runtime_t::relocate_application_actor (const actor_ref_t &actor,
           }
           co_return true;
       },
+      .send_application =
+        [this, target] (const runtime::stateful::object_ref_t &owner,
+                        const runtime::stateful::turn_record_t &record) {
+            _node->forward_relocation_application (
+              owner, record, target.rid.to_bytes (), target.lifecycle_generation,
+              static_cast<std::uint64_t> (target.lease_generation),
+              _state->default_request_timeout);
+        },
       .send_cutover = [this, target] (const runtime::protocol::relocation_cutover_t &cutover)
         -> task_t<runtime::stateful::eligible_relocation_unit_t::canonical_wire_context_t::
                     cutover_enqueue_t> {
@@ -1400,6 +1409,10 @@ mesh_node_runtime_t::relocate_application_actor (const actor_ref_t &actor,
             ? context_t::cutover_enqueue_t::enqueued
             : context_t::cutover_enqueue_t::not_enqueued;
       },
+      .restore_deadline = restore_deadline,
+      .source_stopped = [this] { return relocation_source_stopped (); },
+      .target_connected =
+        [this, target] { return has_admitted_peer (target.rid, target.lifecycle_generation); },
       .abort_target_before_cutover = [] { return true; }};
 
     std::vector<std::byte> inventory_bytes;
@@ -1477,7 +1490,8 @@ mesh_node_runtime_t::relocate_application_unit (
   std::vector<runtime::stateful::object_ref_t> sources,
   std::vector<std::string> stable_types,
   const mesh_node_descriptor_t &target,
-  const std::vector<authority_snapshot_t> &authorities)
+  const std::vector<authority_snapshot_t> &authorities,
+  std::chrono::steady_clock::time_point restore_deadline)
 {
     using namespace runtime::stateful;
     const auto blocked = [] {
@@ -1627,6 +1641,14 @@ mesh_node_runtime_t::relocate_application_unit (
           }
           co_return true;
       },
+      .send_application =
+        [this, target] (const runtime::stateful::object_ref_t &owner,
+                        const runtime::stateful::turn_record_t &record) {
+            _node->forward_relocation_application (
+              owner, record, target.rid.to_bytes (), target.lifecycle_generation,
+              static_cast<std::uint64_t> (target.lease_generation),
+              _state->default_request_timeout);
+        },
       .send_cutover = [this, target] (const runtime::protocol::relocation_cutover_t &cutover)
         -> task_t<eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t> {
           using context_t = eligible_relocation_unit_t::canonical_wire_context_t;
@@ -1634,6 +1656,10 @@ mesh_node_runtime_t::relocate_application_unit (
             ? context_t::cutover_enqueue_t::enqueued
             : context_t::cutover_enqueue_t::not_enqueued;
       },
+      .restore_deadline = restore_deadline,
+      .source_stopped = [this] { return relocation_source_stopped (); },
+      .target_connected =
+        [this, target] { return has_admitted_peer (target.rid, target.lifecycle_generation); },
       .abort_target_before_cutover = [] { return true; }};
 
     std::vector<std::byte> inventory;
@@ -3263,6 +3289,14 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
           }
           co_return true;
       },
+      .send_application =
+        [this, target = s->target] (const runtime::stateful::object_ref_t &owner,
+                                    const runtime::stateful::turn_record_t &record) {
+            _node->forward_relocation_application (
+              owner, record, target.node_rid.to_bytes (), target.node_generation,
+              static_cast<std::uint64_t> (target.owner.lease_generation),
+              _state->default_request_timeout);
+        },
       .send_cutover = [this, s] (const runtime::protocol::relocation_cutover_t &cutover)
         -> task_t<runtime::stateful::eligible_relocation_unit_t::canonical_wire_context_t::
                     cutover_enqueue_t> {
@@ -3271,6 +3305,9 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
             ? context_t::cutover_enqueue_t::enqueued
             : context_t::cutover_enqueue_t::not_enqueued;
       },
+      .restore_deadline = s->deadline,
+      .target_connected =
+        [this, s] { return has_admitted_peer (s->target.node_rid, s->target.node_generation); },
       .abort_target_before_cutover = [] { return true; }};
     const auto inventory_digest =
       runtime::stateful::maintenance_runtime_t::compute_inventory_digest ({s->source_actor});
@@ -3280,10 +3317,9 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
       inventory_digest, wire, {},
       negotiated_receive_chunk_limit_bytes (s->actor).value_or (
         detail::spot_actor_join_advertised_receive_chunk_limit_bytes));
-    const auto relocation_ambiguous =
-      relocated.terminal == runtime::stateful::relocation_terminal_t::recovery_required;
-    if (relocated.terminal != runtime::stateful::relocation_terminal_t::completed
-        && !relocation_ambiguous) {
+    /* The unit completes only after the source confirmed the target commit
+     * with this RelocationId (28 §4.4); every other terminal is settled. */
+    if (relocated.terminal != runtime::stateful::relocation_terminal_t::completed) {
         const auto data_lost =
           relocated.terminal == runtime::stateful::relocation_terminal_t::data_lost
           || relocated.reason == runtime::stateful::relocation_reason_t::checksum_mismatch;
@@ -3300,23 +3336,14 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
           "canonical Actor Join relocation did not complete");
     }
     try {
-        const auto authority_confirmation_deadline = std::max (
-          s->deadline, std::chrono::steady_clock::now () + _relocation_limits.cutover_wait_timeout);
-        while (std::chrono::steady_clock::now () < authority_confirmation_deadline
-               && s->committed_actor_authority_owner_generation == 0) {
-            const auto read = co_await _user_spot_store->read_authority (
-              runtime::actor_authority_key (s->actor.actor_id ().value ()));
-            const auto *committed = std::get_if<authority_snapshot_t> (&read);
-            if (committed && committed->object_generation == s->source_actor.object_generation
-                && committed->authority_owner_generation > s->actor_authority_owner_generation) {
-                s->committed_actor_authority_owner_generation =
-                  committed->authority_owner_generation;
-                break;
-            }
-            co_await detail::delay (std::chrono::milliseconds (1));
-        }
+        const auto read = co_await _user_spot_store->read_authority (
+          runtime::actor_authority_key (s->actor.actor_id ().value ()));
+        const auto *committed = std::get_if<authority_snapshot_t> (&read);
+        if (committed && committed->object_generation == s->source_actor.object_generation
+            && committed->authority_owner_generation > s->actor_authority_owner_generation)
+            s->committed_actor_authority_owner_generation = committed->authority_owner_generation;
         if (s->committed_actor_authority_owner_generation == 0) {
-            spot.fail_remote_actor_transfer (s->actor, relocation_ambiguous);
+            spot.fail_remote_actor_transfer (s->actor, true);
             co_return fail_remote_actor_join (*s,
                                               result_t<actor_join_reply_t>::failure (
                                                 framework_error_kind_t::unavailable,
@@ -4291,6 +4318,13 @@ host::node_status_t mesh_node_runtime_t::status () const
         throw configuration_error ("MeshNode has not started");
     }
     return _node->status ();
+}
+
+bool mesh_node_runtime_t::relocation_source_stopped () const
+{
+    const auto state = _node->status ().state;
+    return state == host::node_status_t::state_t::stopped
+           || state == host::node_status_t::state_t::error;
 }
 
 std::string mesh_node_runtime_t::mesh_name () const

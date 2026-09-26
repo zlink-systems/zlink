@@ -4170,15 +4170,15 @@ class actor_cutover_authority_t final
     using authority_publish_status_t =
       zlink::framework::runtime::stateful::authority_publish_status_t;
 
-    authority_publish_result_t
-    publish (const object_ref_t &source,
-             const object_ref_t &target,
-             zlink::framework::location_owner_token_t target_owner,
-             zlink::framework::object_creation_target_t,
-             std::string relocation_reference,
-             std::uint32_t checksum_crc32c,
-             inventory_digest_t inventory_digest,
-             std::vector<std::byte> target_application_payload = {}) override
+    authority_publish_result_t publish (const object_ref_t &source,
+                                        const object_ref_t &target,
+                                        zlink::framework::location_owner_token_t target_owner,
+                                        zlink::framework::object_creation_target_t,
+                                        std::string relocation_reference,
+                                        std::uint32_t checksum_crc32c,
+                                        inventory_digest_t inventory_digest,
+                                        std::vector<std::byte> target_application_payload = {},
+                                        std::string expected_store_version = {}) override
     {
         if (on_publish)
             on_publish ();
@@ -4193,6 +4193,7 @@ class actor_cutover_authority_t final
         {
             std::lock_guard lock (mutex);
             current = reference;
+            last_expected_store_version = std::move (expected_store_version);
         }
         return {authority_publish_status_t::published, std::move (reference)};
     }
@@ -4207,6 +4208,7 @@ class actor_cutover_authority_t final
     std::function<void ()> on_publish;
     std::mutex mutex;
     std::optional<authority_relocation_reference_t> current;
+    std::string last_expected_store_version;
 };
 
 class actor_cutover_probe_t final : public zlink::framework::actor_t
@@ -4575,6 +4577,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
       .actor_id = "actor-c2",
       .actor_generation = 7,
       .actor_authority_owner_generation = 19,
+      .expected_actor_store_version = "source-version",
       .target_spot_id = "target-spot",
       .target_spot_generation = 1,
       .source_mesh_name = "source-mesh",
@@ -4694,6 +4697,13 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     }
     if (!owner.completed_remote_actor_commit (transfer_id, actor, target->spot_id)) {
         return false;
+    }
+    {
+        std::lock_guard lock (authority->mutex);
+        if (authority->last_expected_store_version != "source-version") {
+            std::cerr << "remote Actor authority commit omitted the source StoreVersion fence\n";
+            return false;
+        }
     }
     // A duplicate internal finalize cannot reopen a completed target or
     // dispatch its retained backlog twice.

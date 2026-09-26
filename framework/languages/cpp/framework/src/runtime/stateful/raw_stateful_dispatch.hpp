@@ -79,6 +79,12 @@ class raw_stateful_dispatch_t
     }
 
     stateful_error_t ingest (const object_ref_t &owner);
+    task_t<bool> forward_accepted (object_ref_t owner,
+                                   turn_record_t turn,
+                                   std::vector<std::uint8_t> target_routing_id,
+                                   std::uint64_t target_generation,
+                                   std::uint64_t target_lease_generation,
+                                   std::chrono::milliseconds window);
     std::pair<stateful_error_t, std::optional<stateful_delivery_t>>
     try_claim (const object_ref_t &owner);
     task_t<stateful_error_t>
@@ -94,6 +100,11 @@ class raw_stateful_dispatch_t
                                      const protocol::reply_relay_t &relay,
                                      const std::optional<protocol::application_payload_t> &reply);
     stateful_error_t discard_pending (const object_ref_t &owner);
+    void release_relocated_payloads (const object_ref_t &owner);
+    /* The expired-owner relocation terminal (28 §4.4): each pending request
+     * of the owner gets one Unavailable terminal on its original reply
+     * route, then every pending record is dropped as by discard_pending. */
+    stateful_error_t fail_pending_unavailable (const object_ref_t &owner);
     stateful_error_t discard_pending (const object_ref_t &owner, std::uint64_t sequence);
 
   private:
@@ -121,6 +132,7 @@ class raw_stateful_dispatch_t
         bool relocated_completing = false;
     };
 
+    stateful_error_t discard_owner_pending (const object_ref_t &owner, bool reply_unavailable);
     static std::string mailbox_owner (const object_ref_t &owner);
     static bool matches_application_route (const object_ref_t &owner,
                                            const protocol::actor_route_fence_t &route);

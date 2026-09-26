@@ -78,13 +78,23 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         ZLinkStoreCancellation cancellation = () -> System.nanoTime() - deadline >= 0;
         AtomicReference<ZLinkStandaloneActorRelocationSourceBuilder.PreparedSource>
                 preparedForDeadline = new AtomicReference<>();
+        //  The Join deadline is also the Restore absolute deadline of its unit. Once relay
+        //  readiness is accepted only authority settlement ends the Join (spec 28 §4.4).
+        Instant restoreDeadline = Instant.now().plus(timeout);
+        AtomicBoolean relayReady = new AtomicBoolean();
         CompletionStage<Submission> operation =
                 lane.source()
                         .prepareDirectJoin(goal, cancellation)
                         .thenCompose(
                                 prepared -> {
                                     preparedForDeadline.set(prepared);
-                                    return executeSource(lane, goal, timeout, prepared);
+                                    return executeSource(
+                                            lane,
+                                            goal,
+                                            timeout,
+                                            restoreDeadline,
+                                            relayReady,
+                                            prepared);
                                 });
         //  Spec 15 §3/§4 — the Join computes one absolute deadline at
         //  Defer() and every asynchronously completed Join must reach a
@@ -106,7 +116,7 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         CompletableFuture.delayedExecutor(Math.max(1L, timeout.toMillis()), TimeUnit.MILLISECONDS)
                 .execute(
                         () -> {
-                            if (bounded.isDone()) {
+                            if (bounded.isDone() || !relayReady.compareAndSet(false, true)) {
                                 return;
                             }
                             //  The prepared source sealed the actor's queue; without an
@@ -131,6 +141,8 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
             Lane lane,
             Goal goal,
             Duration timeout,
+            Instant restoreDeadline,
+            AtomicBoolean relayReady,
             ZLinkStandaloneActorRelocationSourceBuilder.PreparedSource prepared) {
         SourceAttempt attempt = new SourceAttempt(goal, prepared);
         SourceAttempt previous = sources.putIfAbsent(goal.sourceActor().actorId(), attempt);
@@ -143,49 +155,85 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                                                     "canonical Actor Join source is already"
                                                             + " active")));
         }
-        return lane.client()
-                .stage(goal.targetNodeRid(), prepared.stageRequest(), timeout)
-                .thenCompose(ignored -> prepared.relayCapturedIngress(lane.client(), timeout))
-                .thenCompose(
-                        ignored ->
-                                lane.client()
-                                        .publish(
-                                                goal.targetNodeRid(),
-                                                prepared.stageRequest().fence(),
-                                                timeout)
-                                        .exceptionally(
-                                                failure -> {
-                                                    LOGGER.warning(
-                                                            "Actor Join CUTOVER submission failed;"
-                                                                    + " the armed target fallback"
-                                                                    + " remains authoritative: "
-                                                                    + unwrap(failure));
-                                                    return null;
-                                                }))
-                .thenApply(
-                        ignored -> {
-                            prepared.completeSourceQueueCommit();
-                            attempt.committed().complete(null);
-                            armAuthorityLossCleanup(attempt);
-                            return new Submission(
-                                    new ZLinkBackendActorRef(
-                                            goal.targetNodeRid(),
-                                            goal.sourceActor().actorId(),
-                                            goal.sourceActor().generation()));
-                        })
-                .exceptionallyCompose(
-                        failure -> {
-                            sources.remove(goal.sourceActor().actorId(), attempt);
-                            attempt.committed().completeExceptionally(unwrap(failure));
-                            return prepared.abort()
-                                    .handle(
-                                            (ignored, abortFailure) -> {
-                                                Throwable cause = unwrap(failure);
-                                                if (abortFailure != null) {
-                                                    cause.addSuppressed(unwrap(abortFailure));
-                                                }
-                                                throw new CompletionException(cause);
-                                            });
+        return ZLinkRelocationHandOff.run(
+                        lane.client(),
+                        prepared.stageRequest(),
+                        () ->
+                                relayReady.compareAndSet(false, true)
+                                        ? prepared.relayCapturedIngress(lane.client(), timeout)
+                                        : CompletableFuture.failedFuture(
+                                                new ZLinkFrameworkException(
+                                                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                                                        "Actor Join deadline elapsed before"
+                                                                + " relay")),
+                        timeout,
+                        restoreDeadline)
+                .handle(
+                        (settlement, failure) ->
+                                failure == null
+                                        ? settleSource(attempt, settlement)
+                                        : abortSource(attempt, unwrap(failure)))
+                .thenCompose(outcome -> outcome);
+    }
+
+    /** Applies the settled authority of the Join unit (spec 28 §4.4). */
+    private CompletionStage<Submission> settleSource(
+            SourceAttempt attempt, ZLinkRelocationTransitionClient.Settlement settlement) {
+        Goal goal = attempt.goal();
+        ZLinkStandaloneActorRelocationSourceBuilder.PreparedSource prepared = attempt.prepared();
+        return switch (settlement) {
+            case TARGET_COMMITTED -> {
+                prepared.completeSourceQueueCommit();
+                attempt.committed().complete(null);
+                armAuthorityLossCleanup(attempt);
+                yield CompletableFuture.completedFuture(
+                        new Submission(
+                                new ZLinkBackendActorRef(
+                                        goal.targetNodeRid(),
+                                        goal.sourceActor().actorId(),
+                                        goal.sourceActor().generation())));
+            }
+            //  The source Preserve fence won at the Join deadline: the Actor stays on
+            //  the source and the location change missed its deadline (spec 15).
+            case SOURCE_PRESERVED ->
+                    abortSource(
+                            attempt,
+                            new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                                    "Actor Join target commit was not confirmed before its"
+                                            + " deadline; the source Preserve fence won"));
+            case SOURCE_LEASE_EXPIRED -> {
+                sources.remove(goal.sourceActor().actorId(), attempt);
+                var expired =
+                        new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                "Actor Join source owner lease expired before the Preserve"
+                                        + " fence");
+                attempt.committed().completeExceptionally(expired);
+                yield prepared.discardAfterSourceLeaseExpiry()
+                        .handle(
+                                (ignored, discardFailure) -> {
+                                    if (discardFailure != null) {
+                                        expired.addSuppressed(unwrap(discardFailure));
+                                    }
+                                    throw new CompletionException(expired);
+                                });
+            }
+        };
+    }
+
+    /** Restores the source: a failure before relay readiness or a won Preserve fence. */
+    private CompletionStage<Submission> abortSource(SourceAttempt attempt, Throwable cause) {
+        sources.remove(attempt.goal().sourceActor().actorId(), attempt);
+        attempt.committed().completeExceptionally(cause);
+        return attempt.prepared()
+                .abort()
+                .handle(
+                        (ignored, abortFailure) -> {
+                            if (abortFailure != null) {
+                                cause.addSuppressed(unwrap(abortFailure));
+                            }
+                            throw new CompletionException(cause);
                         });
     }
 
