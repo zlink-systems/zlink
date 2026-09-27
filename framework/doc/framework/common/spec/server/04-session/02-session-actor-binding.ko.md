@@ -528,7 +528,8 @@ application 수준에서 재전송하지 않는다.** Session owner의 seal time
 
 `sessionRelocationRoute` commit에는
 relocation identity, ActorId, ObjectGeneration, target MeshName·NodeRid, Session
-identity, SessionRid와 binding generation을 넣는다. Session owner는 자신이 소유한
+identity, SessionRid와 binding generation을 넣는다. Target은 자신이 commit한 authority의
+`OwnerLeaseGeneration`도 넣으며, Session owner는 이 값을 route에 보관해 이후 envelope에 싣는다. Session owner는 자신이 소유한
 current Session과 binding에 필요한 값만 대조한다. 이를 적용할 때 route와 current
 `ActorRef` location snapshot을 한 번에 바꾼다. Route 적용, 보관한 message 제출과 seal
 해제는 모두 같은 직렬 실행 구간에서 일어나므로, **보관한 message는 seal이 풀린 뒤 도착한

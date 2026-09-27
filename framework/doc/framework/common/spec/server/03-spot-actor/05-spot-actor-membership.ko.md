@@ -463,11 +463,9 @@ Actor handler가 `JoinSpot(...)` 또는 `JoinEntrySpot(...)`을 호출한 뒤 �
    route 적용과 seal 해제를 one-way로 알린다. Session owner는 기본 3,000ms의
    `SessionRelocationSealTimeout` 안에 그 update를 받으면 route를 바꾸고 held message를 제출한
    뒤 seal을 해제한다. Timeout이면 physical STREAM connection을 종료하고 Session state를 정리한다.
-   이 step에서 target이 보내는 message가 command 44 `sessionRelocationRoute`이며,
-   commit에는 relocation identity, ActorId, ObjectGeneration, target MeshName·NodeRid, Session
-   identity, SessionRid와 binding generation을 담는다. Session owner가 이 값을 어떻게 검증하고
-   route·seal을 처리하는지는
-   [Session–Actor binding §8](../04-session/02-session-actor-binding.ko.md#8-actor-relocation-중-session의-책임)이
+   이 step에서 target이 보내는 message는 command 44 `sessionRelocationRoute`이며, commit에 담는
+   값과 Session owner의 처리 규칙은
+   [Session–Actor binding §8.2](../04-session/02-session-actor-binding.ko.md#82-control-message-424344)가
    정의한다.
 
 승인이 `Accepted`여도 그 뒤의 relocation policy 검사(`DisableRelocation`), capacity

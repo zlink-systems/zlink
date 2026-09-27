@@ -645,7 +645,9 @@ so no separate response wait or retransmission interval is added.
 
 The `sessionRelocationRoute` commit carries relocation identity, ActorId,
 ObjectGeneration, target MeshName/NodeRid, Session identity, SessionRid,
-and binding generation. The Session owner compares only the values needed
+and binding generation. The target also carries the `OwnerLeaseGeneration`
+of the authority it committed, and the Session owner keeps that value in
+the route and carries it in later envelopes. The Session owner compares only the values needed
 for the current Session and binding it owns. When applying it, the route
 and current `ActorRef` location snapshot are changed together. Route
 application, submission of held messages, and release of the seal all occur
