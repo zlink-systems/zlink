@@ -732,8 +732,7 @@ class provider_location_repository_t final : public location_repository_t
         const auto terminal_retention =
           std::chrono::ceil<std::chrono::milliseconds> (expires_at - store_now);
         if (terminal_retention <= std::chrono::milliseconds::zero ())
-            throw std::invalid_argument (
-              "creation terminal retention elapsed before publication");
+            throw std::invalid_argument ("creation terminal retention elapsed before publication");
         creation_terminal_record_t terminal{publication.operation, publication.terminal_envelope,
                                             expires_at};
         object_complete_creation_result_t result{object_creation_completion_stale_t{}};

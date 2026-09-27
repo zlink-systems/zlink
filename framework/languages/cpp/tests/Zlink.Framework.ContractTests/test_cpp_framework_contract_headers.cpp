@@ -342,8 +342,8 @@ static_assert (std::is_abstract_v<zlink::framework::route_mesh_runtime_options_t
 static_assert (std::is_abstract_v<zlink::framework::mesh_channel_runtime_options_t>);
 static_assert (std::is_abstract_v<zlink::framework::mesh_placement_runtime_options_t>);
 static_assert (
-  std::is_same_v<decltype (std::declval<zlink::framework::route_mesh_runtime_options_t &> ()
-                             .mesh (std::declval<std::string> ())),
+  std::is_same_v<decltype (std::declval<zlink::framework::route_mesh_runtime_options_t &> ().mesh (
+                   std::declval<std::string> ())),
                  zlink::framework::mesh_placement_runtime_options_t &>);
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::mesh_placement_runtime_options_t &> ()

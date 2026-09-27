@@ -124,7 +124,9 @@ final class ZLinkSpotActivationFactory {
 
     /** Activates a relocated User Spot on the target MeshNode {@code nodeRid}. */
     CompletionStage<SpotActivationCreateResult> activateRelocation(
-            Class<? extends ZLinkSpot<?>> spotType, ZLinkBackendSpot backendSpot, RoutingId nodeRid) {
+            Class<? extends ZLinkSpot<?>> spotType,
+            ZLinkBackendSpot backendSpot,
+            RoutingId nodeRid) {
         DefaultSpotContext context =
                 new DefaultSpotContext(
                         host,

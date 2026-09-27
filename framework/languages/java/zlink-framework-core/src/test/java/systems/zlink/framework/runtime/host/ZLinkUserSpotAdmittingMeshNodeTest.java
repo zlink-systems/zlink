@@ -22,9 +22,8 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 
 /**
- * A User Spot is activated on the MeshNode that admitted it (MeshNode §5, Location runtime §7):
- * a Spot created in the second MeshNode of a host reports that MeshNode and receives messages
- * there.
+ * A User Spot is activated on the MeshNode that admitted it (MeshNode §5, Location runtime §7): a
+ * Spot created in the second MeshNode of a host reports that MeshNode and receives messages there.
  */
 final class ZLinkUserSpotAdmittingMeshNodeTest {
     @Test
@@ -74,8 +73,10 @@ final class ZLinkUserSpotAdmittingMeshNodeTest {
                             .toCompletableFuture()
                             .get(10, TimeUnit.SECONDS)
                             .value());
-            assertEquals(1, runtime.routeMeshRuntime().snapshot("lobby").placement().activeSpotCount());
-            assertEquals(0, runtime.routeMeshRuntime().snapshot("game").placement().activeSpotCount());
+            assertEquals(
+                    1, runtime.routeMeshRuntime().snapshot("lobby").placement().activeSpotCount());
+            assertEquals(
+                    0, runtime.routeMeshRuntime().snapshot("game").placement().activeSpotCount());
         }
     }
 

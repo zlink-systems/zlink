@@ -39,7 +39,8 @@ struct http_listener_status_t
     std::string configured_endpoint;
     std::string bound_url;
 
-    friend bool operator== (const http_listener_status_t &, const http_listener_status_t &) = default;
+    friend bool operator== (const http_listener_status_t &,
+                            const http_listener_status_t &) = default;
 };
 
 struct observation_loss_t

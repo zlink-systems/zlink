@@ -94,10 +94,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                                         .thenApply(
                                                 ignored ->
                                                         new Staged(
-                                                                this,
-                                                                request,
-                                                                decoded,
-                                                                prepared,
+                                                                this, request, decoded, prepared,
                                                                 permit)))
                 .whenComplete(
                         (staged, failure) -> {

@@ -84,11 +84,13 @@ internal sealed class ZLinkStreamRuntimeManager(
             );
             runtime.AttachMonitor(monitoringAdapter.OpenSocketMonitor(socket));
             runtime.Start();
-            await state.ListenerRecords.RecordAsync(
-                ZLinkListenerKind.Stream,
-                streamNodeRegistration.StreamNodeName,
-                runtime.AdvertisedEndpoint!
-            ).ConfigureAwait(false);
+            await state
+                .ListenerRecords.RecordAsync(
+                    ZLinkListenerKind.Stream,
+                    streamNodeRegistration.StreamNodeName,
+                    runtime.AdvertisedEndpoint!
+                )
+                .ConfigureAwait(false);
         }
     }
 }

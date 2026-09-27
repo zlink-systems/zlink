@@ -807,11 +807,20 @@ public sealed class RuntimeConformanceFixtureTests
                 await using var observer = runtime
                     .ObserveAsync(meshName, observationTimeout.Token)
                     .GetAsyncEnumerator(observationTimeout.Token);
-                Assert.True(await observer.MoveNextAsync(), $"{name}:{meshName}: no status observed");
+                Assert.True(
+                    await observer.MoveNextAsync(),
+                    $"{name}:{meshName}: no status observed"
+                );
                 var status = observer.Current.Status;
-                while (status.Placement.IsAvailable != expectedAvailable || status.State != expectedState)
+                while (
+                    status.Placement.IsAvailable != expectedAvailable
+                    || status.State != expectedState
+                )
                 {
-                    Assert.True(await observer.MoveNextAsync(), $"{name}:{meshName}: observation ended");
+                    Assert.True(
+                        await observer.MoveNextAsync(),
+                        $"{name}:{meshName}: observation ended"
+                    );
                     status = observer.Current.Status;
                 }
                 var label = $"{name}:{meshName}";

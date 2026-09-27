@@ -2599,7 +2599,8 @@ final class ZLinkJavaRawMeshNode
             List<Message> parts,
             long deadlineNanos) {
         if (route.targetNodeRid().equals(routingId)) {
-            return dispatchLocalInstanceSpot(route, stableType, sourceSpotId, metadata, parts, false)
+            return dispatchLocalInstanceSpot(
+                            route, stableType, sourceSpotId, metadata, parts, false)
                     .thenAccept(replyParts -> replyParts.forEach(Message::close));
         }
         Optional<ZLinkServiceTopologyRegistry.Peer> peer =
@@ -2660,7 +2661,8 @@ final class ZLinkJavaRawMeshNode
             List<Message> parts,
             long deadlineNanos) {
         if (route.targetNodeRid().equals(routingId)) {
-            return dispatchLocalInstanceSpot(route, stableType, sourceSpotId, metadata, parts, true);
+            return dispatchLocalInstanceSpot(
+                    route, stableType, sourceSpotId, metadata, parts, true);
         }
         Optional<ZLinkServiceTopologyRegistry.Peer> peer =
                 topology == null ? Optional.empty() : topology.peer(route.targetNodeRid());

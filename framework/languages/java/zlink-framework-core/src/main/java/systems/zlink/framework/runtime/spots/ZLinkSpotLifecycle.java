@@ -4,22 +4,14 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkCloseException;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.messaging.ZLinkMessage;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.spots.ZLinkSpotIdValidator;
-import systems.zlink.framework.spots.SpotRef;
 import systems.zlink.framework.spots.ZLinkActorCreateResponse;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotCloseReason;
-import systems.zlink.framework.spots.ZLinkSpotCreateResult;
-import systems.zlink.framework.spots.ZLinkSpotCreateState;
-import systems.zlink.framework.spots.ZLinkSpotInfo;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -27,7 +19,6 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -489,8 +480,7 @@ final class ZLinkSpotLifecycle {
         for (SpotActivation spot : closingSpots) {
             cleanups.add(
                     locations
-                            .releaseUserSpotAsync(
-                                    spot.context.nodeRid(), spot.backendSpot.spotId())
+                            .releaseUserSpotAsync(spot.context.nodeRid(), spot.backendSpot.spotId())
                             .handle(
                                     (ignored, error) -> {
                                         recordCloseFailure(firstFailure, error);

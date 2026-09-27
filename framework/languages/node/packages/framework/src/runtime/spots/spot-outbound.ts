@@ -29,11 +29,7 @@ import { requireZLinkYieldTurn } from '../execution';
 import { resolveFrameworkPacketName } from '../messaging/packet-name';
 import type { ZLinkSpotRouteTarget } from './spot-routing-internal';
 import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
-import {
-  resolveSpotHandle,
-  type SpotHandle,
-  type ResolvedSpotHandle
-} from './spot-handle';
+import { resolveSpotHandle, type SpotHandle, type ResolvedSpotHandle } from './spot-handle';
 
 export interface DefaultZLinkSpotOutboundOptions {
   readonly serial: ZLinkSpotSerialTurnExecutor;

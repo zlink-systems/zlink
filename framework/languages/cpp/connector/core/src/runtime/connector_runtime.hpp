@@ -283,10 +283,10 @@ std::vector<TEntry> registered_handlers (connector_state_t &state,
 /* The number of handlers registered_handlers would return now: the pending
  * dispatch count of one handler event (stream-connector §7). */
 template <typename TEntry>
-std::function<std::size_t ()> registered_handler_count (
-  const std::shared_ptr<connector_state_t> &state,
-  std::vector<TEntry> connector_state_t::*registry,
-  std::vector<std::uint64_t> ids)
+std::function<std::size_t ()>
+registered_handler_count (const std::shared_ptr<connector_state_t> &state,
+                          std::vector<TEntry> connector_state_t::*registry,
+                          std::vector<std::uint64_t> ids)
 {
     return [weak = std::weak_ptr<connector_state_t> (state), registry, ids = std::move (ids)] {
         const auto locked = weak.lock ();

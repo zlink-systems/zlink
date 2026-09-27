@@ -718,11 +718,8 @@ var ZlinkStreamConnectorBundle = (() => {
   }
   function throwIfAborted(signal) {
     if ((signal == null ? void 0 : signal.aborted) === true) {
-      throw signal.reason;
+      throw connectorError("disconnected" /* Disconnected */, "Operation canceled.");
     }
-  }
-  function isCancellation(signal, error) {
-    return (signal == null ? void 0 : signal.aborted) === true && error === signal.reason;
   }
   function delay(delayMs, signal) {
     throwIfAborted(signal);
@@ -733,7 +730,7 @@ var ZlinkStreamConnectorBundle = (() => {
       }, delayMs);
       const onAbort = () => {
         clearTimeout(timeout);
-        reject(signal == null ? void 0 : signal.reason);
+        reject(connectorError("disconnected" /* Disconnected */, "Operation canceled."));
       };
       signal == null ? void 0 : signal.addEventListener("abort", onAbort, { once: true });
     });
@@ -1758,344 +1755,6 @@ var ZlinkStreamConnectorBundle = (() => {
     }
   };
 
-  // packages/stream-connector/src/Runtime/ZlinkStreamReceivedMessages.ts
-  var ZlinkStreamReceivedMessages = class {
-    /**
-     * @param deliverOnArrival `Immediate` runs registered handlers on the receive
-     *   path; `Manual` leaves them queued until {@link pump} runs them on the
-     *   caller's thread (spec stream-connector 32 §7). Wait surfaces observe the
-     *   queue in both modes, so they never depend on this flag.
-     */
-    constructor(events, deliverOnArrival) {
-      this.events = events;
-      this.deliverOnArrival = deliverOnArrival;
-      __publicField(this, "handlers", /* @__PURE__ */ new Map());
-      __publicField(this, "observers", /* @__PURE__ */ new Map());
-      // A handler can be registered after messages for another name arrive, so the
-      // queue is not a simple FIFO. Tombstones let us remove a deliverable entry
-      // without shifting every later message on the hot receive path.
-      __publicField(this, "queue", []);
-      __publicField(this, "queueHead", 0);
-      __publicField(this, "queuedCount", 0);
-      __publicField(this, "drainTask");
-      // True for as long as `drain` is on the stack, handler awaits included. It
-      // marks the execution context a registered handler runs in, so a `dispatch`
-      // made from inside a handler is recognised as re-entry rather than a fresh
-      // pump. It is not a lock: a single event loop admits no second thread, and
-      // nothing ever waits for this flag to fall.
-      __publicField(this, "draining", false);
-      // Spec stream-connector 32 §10: arrivals per packet name on the current
-      // connection. It is raised where a packet arrives, never where one is taken,
-      // so consuming does not lower it and the dispatch mode does not change it.
-      __publicField(this, "receivedCounts", /* @__PURE__ */ new Map());
-    }
-    on(name, handler) {
-      validateName(name);
-      let set = this.handlers.get(name);
-      if (set === void 0) {
-        set = /* @__PURE__ */ new Set();
-        this.handlers.set(name, set);
-      }
-      set.add(handler);
-      if (this.deliverOnArrival && this.hasQueuedMessage(name)) {
-        queueMicrotask(() => this.scheduleDrain());
-      }
-      return subscription(() => {
-        set.delete(handler);
-        if (set.size === 0 && this.handlers.get(name) === set) {
-          this.handlers.delete(name);
-        }
-      });
-    }
-    /**
-     * Registers a wait surface over the receive queue. Spec stream-connector 32
-     * §7: these are not registered callbacks — they observe and consume the
-     * packets the queue has not delivered yet, in both dispatch modes, so
-     * `Manual` needs no dispatch pump to complete a wait. The queue is scanned in
-     * a microtask so a message that arrived before the wait started is still
-     * observed, and so the caller has its subscription in hand by then.
-     *
-     * @param onConnectionEnded Called, instead of {@link observer}, when
-     *   {@link connectionEnded} abandons this registration because the
-     *   connection it was watching ended before a message matched (spec
-     *   stream-connector 32 §10.1.1: "연결이 끝나 대기를 이어갈 수 없으면
-     *   `Disconnected`다", released when that connection ends).
-     */
-    observe(name, observer, onConnectionEnded) {
-      validateName(name);
-      let set = this.observers.get(name);
-      if (set === void 0) {
-        set = /* @__PURE__ */ new Set();
-        this.observers.set(name, set);
-      }
-      const registration = { consume: observer, onConnectionEnded };
-      set.add(registration);
-      queueMicrotask(() => {
-        var _a;
-        if (((_a = this.observers.get(name)) == null ? void 0 : _a.has(registration)) === true) {
-          this.offerQueued(name, registration);
-        }
-      });
-      return subscription(() => {
-        set.delete(registration);
-        if (set.size === 0 && this.observers.get(name) === set) {
-          this.observers.delete(name);
-        }
-      });
-    }
-    /** Spec stream-connector 32 §10: arrivals under `name` on this connection. */
-    receivedCount(name) {
-      var _a;
-      return (_a = this.receivedCounts.get(name)) != null ? _a : 0;
-    }
-    /**
-     * Rebaselines the queue for a connection that was just established. Spec
-     * stream-connector 32 §10 (line ~649): the reference point is the moment a
-     * connection is established, so counts restart at 0 and whatever the
-     * previous connection left unconsumed goes with it — keeping the queue
-     * while only the counts reset would let counts and queue describe two
-     * different connections, and let `waitFor` hand back a packet from before
-     * the drop as if the new connection had delivered it.
-     *
-     * `ZlinkStreamMessage`/`ZlinkStreamEncodedPayload` are plain data (name,
-     * metadata, a `Uint8Array` payload) with no dispose/close of their own —
-     * unlike Java's queued frames, which `closeMessage` releases — so dropping
-     * the queue's references is the whole of the release here.
-     *
-     * Wait surfaces are not touched here. The ones of the previous connection
-     * were released by {@link connectionEnded} when that connection ended, and
-     * one registered since then is waiting for this connection.
-     */
-    resetForNewConnection() {
-      this.receivedCounts.clear();
-      const submittedCallbacks = this.queue.slice(this.queueHead).filter((item) => (item == null ? void 0 : item.kind) === "callback");
-      this.queue.length = 0;
-      this.queue.push(...submittedCallbacks);
-      this.queueHead = 0;
-      this.queuedCount = submittedCallbacks.length;
-    }
-    /**
-     * Releases every registered wait surface because the connection it was
-     * watching has ended — a transport loss, a server close, or `close()`.
-     * Spec stream-connector 32 §10.1.1: "푸는 시점은 연결이 끝난 때이지 다음
-     * 연결이 성립한 때가 아니다". The release belongs to the ending, so a wait
-     * does not hang until its own timeout when no next connection comes
-     * (reconnect off, attempts spent) and does not silently rebind to the next
-     * one when it does. The queue and the counts stay: they are rebaselined by
-     * the next {@link resetForNewConnection}, not by the ending (§10).
-     */
-    connectionEnded() {
-      if (this.observers.size === 0) {
-        return;
-      }
-      const abandoned = Array.from(this.observers.values()).flatMap((set) => Array.from(set));
-      this.observers.clear();
-      for (const registration of abandoned) {
-        registration.onConnectionEnded();
-      }
-    }
-    enqueue(message, signal) {
-      var _a, _b;
-      this.receivedCounts.set(message.name, ((_a = this.receivedCounts.get(message.name)) != null ? _a : 0) + 1);
-      for (const registration of Array.from((_b = this.observers.get(message.name)) != null ? _b : [])) {
-        if (registration.consume(message)) {
-          return;
-        }
-      }
-      this.queue.push({ kind: "message", message, signal });
-      this.queuedCount += 1;
-      if (this.deliverOnArrival) {
-        this.scheduleDrain();
-      }
-    }
-    enqueueCallback(callback) {
-      this.queue.push({ kind: "callback", callback });
-      this.queuedCount += 1;
-      if (this.deliverOnArrival) {
-        this.scheduleDrain();
-      }
-    }
-    /**
-     * Runs the registered handlers the receive path left queued. `Manual` calls
-     * this from `dispatch`; `Immediate` has already drained on arrival.
-     *
-     * A handler that calls `dispatch` arrives back here from inside the drain it
-     * was started by. `scheduleDrain` would find `drainTask` already set and
-     * return, and the await below would then be the drain waiting on itself —
-     * a deadlock with neither timeout nor error. The drain loop already takes
-     * every message a handler exists for, so there is nothing a second drain
-     * would deliver and returning is the whole of the correct behaviour.
-     */
-    async pump() {
-      if (this.draining) {
-        return;
-      }
-      this.scheduleDrain();
-      await this.drainTask;
-    }
-    offerQueued(name, registration) {
-      for (let index = this.queueHead; index < this.queue.length; index += 1) {
-        const queued = this.queue[index];
-        if (queued === void 0 || queued.kind !== "message" || queued.message.name !== name) {
-          continue;
-        }
-        if (!registration.consume(queued.message)) {
-          continue;
-        }
-        this.removeAt(index);
-        return;
-      }
-    }
-    scheduleDrain() {
-      if (this.drainTask !== void 0) {
-        return;
-      }
-      this.drainTask = this.drain().finally(() => {
-        this.drainTask = void 0;
-        if (this.deliverOnArrival && this.findDeliverableIndex() >= 0) {
-          this.scheduleDrain();
-        }
-      });
-    }
-    async drain() {
-      this.draining = true;
-      try {
-        for (let index = this.findDeliverableIndex(); index >= 0; index = this.findDeliverableIndex()) {
-          const queued = this.queue[index];
-          if (queued === void 0) continue;
-          this.removeAt(index);
-          if (queued.kind === "callback") {
-            await queued.callback();
-            continue;
-          }
-          const message = queued.message;
-          const signal = queued.signal;
-          const handlers = Array.from(this.handlers.get(message.name));
-          for (const handler of handlers) {
-            try {
-              await handler(message, signal);
-            } catch (cause) {
-              await this.events.publishError(
-                {
-                  code: "userCallbackFailed" /* UserCallbackFailed */,
-                  message: "Typed message handler failed.",
-                  cause
-                },
-                signal
-              );
-            }
-          }
-        }
-      } finally {
-        this.draining = false;
-      }
-    }
-    removeAt(index) {
-      this.queue[index] = void 0;
-      this.queuedCount -= 1;
-      this.advanceHead();
-      this.compactQueue();
-    }
-    findDeliverableIndex() {
-      var _a, _b;
-      for (let index = this.queueHead; index < this.queue.length; index += 1) {
-        const queued = this.queue[index];
-        if (queued !== void 0 && (queued.kind === "callback" || ((_b = (_a = this.handlers.get(queued.message.name)) == null ? void 0 : _a.size) != null ? _b : 0) > 0)) {
-          return index;
-        }
-      }
-      return -1;
-    }
-    hasQueuedMessage(name) {
-      for (let index = this.queueHead; index < this.queue.length; index += 1) {
-        const queued = this.queue[index];
-        if ((queued == null ? void 0 : queued.kind) === "message" && queued.message.name === name) return true;
-      }
-      return false;
-    }
-    advanceHead() {
-      while (this.queueHead < this.queue.length && this.queue[this.queueHead] === void 0) {
-        this.queueHead += 1;
-      }
-    }
-    compactQueue() {
-      if (this.queuedCount === 0) {
-        this.queue.length = 0;
-        this.queueHead = 0;
-        return;
-      }
-      if (this.queueHead >= 1024 && this.queueHead * 2 >= this.queue.length) {
-        this.queue.splice(0, this.queueHead);
-        this.queueHead = 0;
-      }
-    }
-  };
-
-  // packages/stream-connector/src/Runtime/ZlinkStreamFrameSender.ts
-  var ZlinkStreamFrameSender = class {
-    constructor(protocol) {
-      this.protocol = protocol;
-      __publicField(this, "pendingWrites", /* @__PURE__ */ new Set());
-    }
-    async send(connection, kind, name, payload, metadata, compress, requestSeq, signal, correlationId, actorSlot) {
-      throwIfAborted(signal);
-      await this.write(
-        connection,
-        this.protocol.encode(
-          kind,
-          name,
-          payload,
-          metadata,
-          compress,
-          requestSeq,
-          correlationId,
-          actorSlot
-        ),
-        signal
-      );
-    }
-    async sendControl(connection, name, signal) {
-      await this.write(connection, this.protocol.encodeControl(name), signal);
-    }
-    async drain(signal) {
-      while (this.pendingWrites.size > 0) {
-        throwIfAborted(signal);
-        await Promise.allSettled(Array.from(this.pendingWrites));
-      }
-    }
-    async write(connection, frame, signal) {
-      const write = connection.write(frame, signal);
-      this.pendingWrites.add(write);
-      try {
-        await write;
-      } finally {
-        this.pendingWrites.delete(write);
-      }
-    }
-  };
-
-  // packages/stream-connector/src/Runtime/Protocol/ZlinkSessionClosing.ts
-  var ZLINK_SESSION_CLOSING = "session-closing";
-  var reasons = {
-    1: "ClientClose",
-    2: "IdleTimeout",
-    3: "HeartbeatTimeout",
-    4: "ServerDrain",
-    5: "ProtocolError",
-    6: "TransportError"
-  };
-  function decodeSessionClosing(payload) {
-    if (payload.length < 4 || payload[0] !== 1)
-      throw new Error("Unsupported session-closing version.");
-    const closeReason = reasons[payload[1]];
-    if (closeReason === void 0) throw new Error("Unknown session-closing reason.");
-    const length = payload[2] << 8 | payload[3];
-    if (length > 512 || payload.length !== 4 + length)
-      throw new Error("Invalid session-closing diagnostic length.");
-    const diagnostic = length === 0 ? void 0 : new TextDecoder("utf-8", { fatal: true }).decode(payload.subarray(4));
-    return { closeReason, diagnostic };
-  }
-
   // packages/stream-connector/src/Runtime/ZlinkStreamActors.ts
   var ACTOR_BOUND = "$zlink.actor.bound";
   var ACTOR_UNBOUND = "$zlink.actor.unbound";
@@ -2480,17 +2139,12 @@ var ZlinkStreamConnectorBundle = (() => {
     get dispatching() {
       return this.draining;
     }
-    /**
-     * Spec stream-connector 32 §7: the callbacks the next dispatch pump runs with
-     * the handlers registered now, in either dispatch mode. A packet no
-     * registered handler receives is not counted.
-     */
     get pendingCallbacks() {
       let count = 0;
       for (let index = this.queueHead; index < this.queue.length; index += 1) {
         const queued = this.queue[index];
-        if (queued === void 0) continue;
-        count += queued.kind === "callback" ? queued.callbacks() : this.receiversOf(queued.message).length;
+        if ((queued == null ? void 0 : queued.kind) === "callback" && queued.callbacks() > 0) count += 1;
+        if ((queued == null ? void 0 : queued.kind) === "message" && this.receiversOf(queued.message).length > 0) count += 1;
       }
       return count;
     }
@@ -2613,7 +2267,7 @@ var ZlinkStreamConnectorBundle = (() => {
       this.advance();
     }
     cancel(operation, error) {
-      if (this.queue.delete(operation) || this.active === operation) operation.fail(error);
+      if (this.queue.has(operation) || this.active === operation) operation.fail(error);
     }
     /**
      * Spec stream-connector 32 §7: when the connection ends, frames that have not
@@ -2731,7 +2385,10 @@ var ZlinkStreamConnectorBundle = (() => {
       let settled = false;
       const promise = new Promise((resolve, reject) => {
         const cleanup = () => signal == null ? void 0 : signal.removeEventListener("abort", onAbort);
-        const onAbort = () => queue.cancel(operation, signal == null ? void 0 : signal.reason);
+        const onAbort = () => queue.cancel(
+          operation,
+          connectorError("disconnected" /* Disconnected */, "Operation canceled.")
+        );
         operation = {
           frame,
           complete: () => {
@@ -3033,7 +2690,9 @@ var ZlinkStreamConnectorBundle = (() => {
       var _a;
       throwIfAborted(signal);
       await ((_a = this.disconnectTask) == null ? void 0 : _a.catch(() => void 0));
-      this.throwIfClosed();
+      if (this.closeRequested || this.currentState === "closed" /* Closed */) {
+        throw connectorError("disconnected" /* Disconnected */, "Connector is closed.");
+      }
       if (this.currentState === "connected" /* Connected */) {
         return;
       }
@@ -3053,7 +2712,7 @@ var ZlinkStreamConnectorBundle = (() => {
      */
     async connectOnce(signal) {
       const attempts = new AbortController();
-      const forwardAbort = () => attempts.abort(signal == null ? void 0 : signal.reason);
+      const forwardAbort = () => attempts.abort();
       signal == null ? void 0 : signal.addEventListener("abort", forwardAbort, { once: true });
       this.connectAbort = attempts;
       this.setState("connecting" /* Connecting */, void 0, signal);
@@ -3090,7 +2749,7 @@ var ZlinkStreamConnectorBundle = (() => {
         }
         if ((signal == null ? void 0 : signal.aborted) === true) {
           this.setState("disconnected" /* Disconnected */, void 0, signal);
-          throw signal.reason;
+          throwIfAborted(signal);
         }
         const error = toStreamError(cause, "connectTimeout" /* ConnectTimeout */, "Connect failed.");
         this.closeReasonValue = "TransportError";
@@ -3112,7 +2771,9 @@ var ZlinkStreamConnectorBundle = (() => {
      */
     async close(signal) {
       var _a;
-      this.closeReasonValue = "ClientClose";
+      if (this.currentConnection !== void 0 || this.closeReasonValue === void 0) {
+        this.closeReasonValue = "ClientClose";
+      }
       this.closeRequested = true;
       if (this.closeTask === void 0 && this.currentState === "closed" /* Closed */) {
         return;
@@ -3125,17 +2786,6 @@ var ZlinkStreamConnectorBundle = (() => {
         return;
       }
       return await closeTask;
-    }
-    /**
-     * Spec stream-connector 32 §9: once close is called, connect, Send, Request
-     * and the wait surfaces fail with `Disconnected`. Send and Request reach
-     * that through the missing connection; connect and the wait surfaces ask
-     * here.
-     */
-    throwIfClosed() {
-      if (this.closeRequested) {
-        throw connectorError("disconnected" /* Disconnected */, "Connector is closed.");
-      }
     }
     async serverClosing(reason) {
       const error = {
@@ -3208,7 +2858,10 @@ var ZlinkStreamConnectorBundle = (() => {
     }
     async connectWithReconnect(signal) {
       let attempt = 0;
-      let delayMs = this.options.reconnect.initialDelayMs;
+      let delayMs = Math.min(
+        this.options.reconnect.initialDelayMs,
+        this.options.reconnect.maxDelayMs
+      );
       let lastError;
       const maxAttempts = this.options.reconnect.enabled ? this.options.reconnect.maxAttempts : 1;
       const unlimited = maxAttempts === null;
@@ -3661,7 +3314,7 @@ var ZlinkStreamConnectorBundle = (() => {
       return new Promise((resolve, reject) => {
         const onAbort = () => {
           this.readWaiter = void 0;
-          reject(signal == null ? void 0 : signal.reason);
+          reject(connectorError("disconnected" /* Disconnected */, "Operation canceled."));
         };
         signal == null ? void 0 : signal.addEventListener("abort", onAbort, { once: true });
         this.readWaiter = () => {
@@ -3705,7 +3358,7 @@ var ZlinkStreamConnectorBundle = (() => {
       const onOpen = () => finish();
       const onClose = () => finish(connectorError("connectTimeout" /* ConnectTimeout */, "Connect closed before opening."));
       const onError = () => finish(connectorError("connectTimeout" /* ConnectTimeout */, "Connect failed."));
-      const onAbort = () => finish(signal == null ? void 0 : signal.reason);
+      const onAbort = () => finish(connectorError("disconnected" /* Disconnected */, "Connect canceled."));
       const finish = (error) => {
         clearTimeout(timeout);
         socket.removeEventListener("open", onOpen);
@@ -3953,12 +3606,11 @@ var ZlinkStreamConnectorBundle = (() => {
         );
       }
       throwIfAborted(signal);
-      this.lifecycle.throwIfClosed();
       return new Promise((resolve, reject) => {
         let done = false;
         let timer;
         let disposable;
-        const onAbort = () => finish(signal == null ? void 0 : signal.reason);
+        const onAbort = () => finish(connectorError("disconnected" /* Disconnected */, "Operation canceled."));
         const finish = (error, message) => {
           if (done) {
             return;
@@ -4099,7 +3751,7 @@ var ZlinkStreamConnectorBundle = (() => {
           accepted.startTimeout
         );
         const canceled = new Promise((_, reject) => {
-          const onAbort = () => reject(signal == null ? void 0 : signal.reason);
+          const onAbort = () => reject(connectorError("disconnected" /* Disconnected */, "Operation canceled."));
           signal == null ? void 0 : signal.addEventListener("abort", onAbort, { once: true });
           stopCancellation = () => signal == null ? void 0 : signal.removeEventListener("abort", onAbort);
         });
@@ -4121,7 +3773,7 @@ var ZlinkStreamConnectorBundle = (() => {
         return reply.payload;
       } catch (error) {
         if (pending !== void 0) this.pendingRequests.cancel(pending.requestSeq);
-        if (isCancellation(signal, error)) throw error;
+        if ((signal == null ? void 0 : signal.aborted) === true) throw error;
         this.publishReplyReceived(
           {
             requestPacketName: name,

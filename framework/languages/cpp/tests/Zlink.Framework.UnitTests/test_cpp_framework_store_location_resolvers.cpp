@@ -584,10 +584,10 @@ class stream_roundtrip_client_t final : public zlink::framework::hosted_service_
     {
         for (int attempt = 0; attempt < 80; ++attempt) {
             try {
-                const auto endpoint = services.get_required<zlink::framework::framework_runtime_t> ()
-                                        .listener_status (zlink::framework::listener_kind_t::stream,
-                                                          "stream-node")
-                                        .endpoint;
+                const auto endpoint =
+                  services.get_required<zlink::framework::framework_runtime_t> ()
+                    .listener_status (zlink::framework::listener_kind_t::stream, "stream-node")
+                    .endpoint;
                 run_once (endpoint);
                 observed = true;
                 break;

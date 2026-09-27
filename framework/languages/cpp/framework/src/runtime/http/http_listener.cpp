@@ -122,10 +122,10 @@ class http_host_service_t::listener_t
     {
         const auto local = _acceptor.local_endpoint ();
         const auto address = local.address ();
-        const auto host = address.is_v6 () ? "[" + address.to_string () + "]"
-                                            : address.to_string ();
-        return {_endpoint->uri, _parsed.scheme + "://" + host + ":"
-                                  + std::to_string (local.port ())};
+        const auto host =
+          address.is_v6 () ? "[" + address.to_string () + "]" : address.to_string ();
+        return {_endpoint->uri,
+                _parsed.scheme + "://" + host + ":" + std::to_string (local.port ())};
     }
 
     void start ()
@@ -547,11 +547,14 @@ class http_host_service_t::listener_t
     std::optional<asio::ssl::context> _tls_context;
 #endif
 };
-http_host_service_t::http_host_service_t (http_options_snapshot_t options,
-                                          health_builder_t &health,
-                                          std::size_t handler_worker_count,
-                                          std::shared_ptr<listener_status_registry_t> listener_statuses) :
-    _options (std::move (options)), _health (&health), _handler_worker_count (handler_worker_count),
+http_host_service_t::http_host_service_t (
+  http_options_snapshot_t options,
+  health_builder_t &health,
+  std::size_t handler_worker_count,
+  std::shared_ptr<listener_status_registry_t> listener_statuses) :
+    _options (std::move (options)),
+    _health (&health),
+    _handler_worker_count (handler_worker_count),
     _listener_statuses (std::move (listener_statuses))
 {
 }

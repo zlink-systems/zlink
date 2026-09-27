@@ -7543,6 +7543,30 @@ int main ()
             barrier_events.clear ();
         }
 
+        {
+            zlink::framework::runtime::offload_executor_t handoff_executor (1);
+            zlink::framework::runtime::serial_execution_queue_t handoff_queue (handoff_executor);
+            auto reserved = handoff_queue.reserve_handoff_barrier ("handoff-after-queue-head");
+            if (!reserved)
+                return 74;
+            std::promise<void> queue_head;
+            auto queue_head_done = queue_head.get_future ();
+            if (!handoff_executor.try_submit_internal ([&] { queue_head.set_value (); }))
+                return 74;
+            queue_head_done.get ();
+
+            bool join_started = false;
+            const auto activated = reserved.value ()->activate_async ([&] (auto complete) {
+                join_started = true;
+                complete (zlink::framework::result_t<void>::success ());
+            });
+            if (!activated)
+                return 74;
+            handoff_queue.drain ();
+            if (!join_started)
+                return 74;
+        }
+
         zlink::framework::detail::actor_gateway_runtime_t actor_gateway;
         zlink::framework::serializer_registry_t actor_serializers;
         actor_gateway.bind_serializers (actor_serializers);

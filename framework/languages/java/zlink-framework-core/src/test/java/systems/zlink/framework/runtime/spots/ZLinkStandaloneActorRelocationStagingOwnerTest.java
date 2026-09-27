@@ -68,7 +68,8 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
         assertEquals(
                 ZLinkFrameworkErrorKind.UNAVAILABLE,
                 assertInstanceOf(ZLinkFrameworkException.class, full.getCause()).kind());
-        owner.publishHidden(owner.closeDurableBacklog(staged, root, actorReplayer(owner, staged)), 0);
+        owner.publishHidden(
+                owner.closeDurableBacklog(staged, root, actorReplayer(owner, staged)), 0);
         assertEquals(0, admission.snapshot().active());
 
         var discarded = owner.stage(request(relocationId, true), root).toCompletableFuture().join();

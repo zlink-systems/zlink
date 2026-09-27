@@ -32,8 +32,8 @@ public final class ZLinkActivationAdmission {
 
     /**
      * Takes one admission. This is the only place that decides what a full record answers: the
-     * operation fails with {@code UNAVAILABLE}. The spec does not define that answer yet
-     * (MeshNode §5.1); this follows the current .NET behavior until it does.
+     * operation fails with {@code UNAVAILABLE}. The spec does not define that answer yet (MeshNode
+     * §5.1); this follows the current .NET behavior until it does.
      */
     public Permit acquire(String operation) {
         while (true) {

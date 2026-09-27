@@ -12,7 +12,6 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
-import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 import systems.zlink.framework.locations.ZLinkObjectCapability;
 import systems.zlink.framework.locations.ZLinkPageRequest;
@@ -75,6 +74,7 @@ import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolv
 import systems.zlink.framework.runtime.internal.spots.ZLinkInstanceSpotCallRuntime;
 import systems.zlink.framework.runtime.locations.ZLinkLocationLifecycle;
 import systems.zlink.framework.runtime.locations.ZLinkLocationRuntime;
+import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
@@ -604,8 +604,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                     meshNode.registerInstanceSpotType(
                                             factory.stableType(),
                                             (stableType, route, backendSpot) ->
-                                                    activationAdmission(
-                                                                    nodeRegistration.meshName())
+                                                    activationAdmission(nodeRegistration.meshName())
                                                             .admit(
                                                                     "Instance Spot '"
                                                                             + route.targetSpotId()

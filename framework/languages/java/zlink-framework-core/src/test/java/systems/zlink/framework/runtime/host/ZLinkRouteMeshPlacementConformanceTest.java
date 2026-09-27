@@ -8,17 +8,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
-import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.messaging.ZLinkMessage;
-import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.monitoring.ZLinkMeshNodeSnapshot;
 import systems.zlink.framework.monitoring.ZLinkTopologyState;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
@@ -45,8 +45,8 @@ import java.util.concurrent.TimeUnit;
 /**
  * Consumes {@code framework/runtime/conformance/route-mesh-placement-v1.json}: RouteMesh placement
  * counts come from the reporting MeshNode's activation records, the activation admission record
- * counts only the operations of MeshNode §5.1, and {@code IsAvailable} follows runtime
- * monitoring §5.
+ * counts only the operations of MeshNode §5.1, and {@code IsAvailable} follows runtime monitoring
+ * §5.
  */
 final class ZLinkRouteMeshPlacementConformanceTest {
     private static final String SPOT_TYPE_PREFIX = "placement-spot-";

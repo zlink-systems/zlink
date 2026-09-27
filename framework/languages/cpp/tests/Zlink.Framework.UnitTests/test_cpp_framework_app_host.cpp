@@ -146,9 +146,10 @@ wait_for_http_listener (zlink::framework::app_t &app, const std::string &configu
     auto &runtime = provider.get_required<zlink::framework::framework_runtime_t> ();
     for (int attempt = 0; attempt < 100; ++attempt) {
         const auto statuses = runtime.http_listener_statuses ();
-        const auto found = std::find_if (statuses.begin (), statuses.end (), [&] (const auto &status) {
-            return status.configured_endpoint == configured_endpoint;
-        });
+        const auto found =
+          std::find_if (statuses.begin (), statuses.end (), [&] (const auto &status) {
+              return status.configured_endpoint == configured_endpoint;
+          });
         if (found != statuses.end ()) {
             auto result = *found;
             provider.close ();
@@ -1738,9 +1739,9 @@ int main (int test_argc, char **test_argv)
         secure_thread.join ();
         return 76;
     }
-    const auto https_client_base_url = endpoint_with_port (
-      ZLINK_FRAMEWORK_HTTP_TEST_HTTPS_CLIENT_BASE_URL,
-      port_from_endpoint (secure_status->bound_url));
+    const auto https_client_base_url =
+      endpoint_with_port (ZLINK_FRAMEWORK_HTTP_TEST_HTTPS_CLIENT_BASE_URL,
+                          port_from_endpoint (secure_status->bound_url));
     auto secure_client = make_app_host_test_client (https_client_base_url,
                                                     std::string (ZLINK_FRAMEWORK_HTTP_TEST_CERT));
     trace.phase = "secure app readiness";

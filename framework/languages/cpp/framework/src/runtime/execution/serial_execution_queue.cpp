@@ -907,6 +907,7 @@ serial_execution_queue_t::reserve_handoff_barrier (std::string name)
         }
     };
     auto barrier = std::make_shared<serial_deferred_barrier_t> (lower_fence);
+    barrier->hold_application ();
     const auto submission = try_post_cancellable_async (
       std::move (name),
       [barrier] (auto complete) mutable { barrier->reached (std::move (complete)); },
