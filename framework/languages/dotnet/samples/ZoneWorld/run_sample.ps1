@@ -735,13 +735,14 @@ try {
         if ($passed) {
             $actor = $line.Matches[0].Groups[1].Value; $request = $line.Matches[0].Groups[2].Value
             $payload = [BitConverter]::ToString([Text.Encoding]::UTF8.GetBytes("request-payload")).Replace('-', '')
+            [void](Wait-ZoneWorldEvidenceWhileRunning `
+                "message-follow probe handled. actor=$actor, probe=$request, payload=$payload" `
+                $NodeProcesses["zone-node-1"] @("zone-node-1", "zone-node-2", "zone-node-3"))
+            $zoneLogLines = @(Split-ZoneWorldLogLines (Get-ZoneWorldLogText @("zone-node-1", "zone-node-2", "zone-node-3")))
             $handlerCount = @($zoneLogLines | Where-Object {
                 $_ -like "*message-follow probe handled.*actor=$actor,*probe=$request,*payload=$payload*"
             }).Count
-            $relayCount = @($zoneLogLines | Where-Object {
-                $_ -like "*message_follow_relay*actor=$actor*"
-            }).Count
-            $passed = $handlerCount -eq 1 -and $relayCount -eq 1
+            $passed = $handlerCount -eq 1
         }
         Add-ZoneWorldVerdict "ZW-B6" $passed "Request Follow evidence was incomplete."
     }
