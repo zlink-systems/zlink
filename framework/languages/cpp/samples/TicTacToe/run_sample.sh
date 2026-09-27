@@ -175,7 +175,7 @@ TICTACTOE_CPP_REDIS_KEY_PREFIX="zlink:tictactoe-cpp:${RANDOM}:$$:room:"
 REDIS_KEY_PREFIX="$TICTACTOE_CPP_REDIS_KEY_PREFIX"
 
 cleanup() {
-  local code=$?
+  local code=${1:-$?}
   if [[ "$cleanup_done" == true ]]; then
     return
   fi
