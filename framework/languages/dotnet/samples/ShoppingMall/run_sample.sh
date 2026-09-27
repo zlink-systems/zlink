@@ -143,13 +143,12 @@ relocate_planned_order() {
         -H 'Content-Type: application/json' --data '{}')" || continue
       state="owner=$(zlink_json_field "${response}" isOwner) outcome=$(zlink_json_field "${response}" outcome) reason=$(zlink_json_field "${response}" reason)"
       if [[ "${state}" == "owner=true outcome=Started reason=None" || "${state}" == "owner=true outcome=AlreadyStarted reason=None" ]]; then
-        RELOCATION_ANCHOR_ID="$(zlink_json_field "${response}" anchorId)"
         source_instance="$(zlink_json_field "${response}" sourceInstanceId)"
         [[ "${source_instance}" == "null" ]] && source_instance=""
         case "${source_instance}" in
           workflow-a) RELOCATION_SOURCE_ENDPOINT="${SHOPPINGMALL_WORKFLOW_A_HTTP_URL}" ;;
           workflow-b) RELOCATION_SOURCE_ENDPOINT="${SHOPPINGMALL_WORKFLOW_B_HTTP_URL}" ;;
-          *) echo "Planned relocation returned no workflow source for ${RELOCATION_ANCHOR_ID}" >&2; return 1 ;;
+          *) echo "Planned relocation returned no workflow source for ${order_id}" >&2; return 1 ;;
         esac
         return 0
       fi
@@ -161,14 +160,14 @@ relocate_planned_order() {
   return 1
 }
 
-wait_relocated_anchor_owner() {
-  local anchor_id="$1"
+wait_relocated_order_owner() {
+  local order_id="$1"
   local endpoint
   local response
   for _ in $(seq 1 "${WAIT_ATTEMPTS}"); do
     for endpoint in "${SHOPPINGMALL_WORKFLOW_A_HTTP_URL}" "${SHOPPINGMALL_WORKFLOW_B_HTTP_URL}"; do
       [[ "${endpoint}" == "${RELOCATION_SOURCE_ENDPOINT}" ]] && continue
-      response="$(curl -fsS "${endpoint}/self-check/owner/${anchor_id}")" || continue
+      response="$(curl -fsS "${endpoint}/self-check/owner/${order_id}")" || continue
       if [[ "$(zlink_json_field "${response}" isOwner)" == "true" ]]; then
         return 0
       fi
@@ -177,37 +176,7 @@ wait_relocated_anchor_owner() {
   done
   curl -fsS "${RELOCATION_SOURCE_ENDPOINT}/self-check/relocation-status" \
     || true
-  echo "Relocation fixture did not acquire a new owner: ${anchor_id}" >&2
-  return 1
-}
-
-signal_relocation_ready() {
-  local response
-  local state
-  local outcome reason relocation_state
-  for _ in $(seq 1 "${WAIT_ATTEMPTS}"); do
-    response="$(curl -fsS "${RELOCATION_SOURCE_ENDPOINT}/self-check/relocation-status")" || {
-      sleep 0.1
-      continue
-    }
-    outcome="$(zlink_json_field "${response}" outcome)"
-    reason="$(zlink_json_field "${response}" reason)"
-    relocation_state="$(zlink_json_field "${response}" state)"
-    [[ "${relocation_state}" == "null" ]] && relocation_state=""
-    state="${outcome}:${reason}:${relocation_state}"
-    if [[ "${state}" == "InProgress:None:Relocating" ]]; then
-      response="$(curl -fsS -X POST "${RELOCATION_SOURCE_ENDPOINT}/self-check/relocation-ready/${RELOCATION_ANCHOR_ID}" \
-        -H 'Content-Type: application/json' --data '{}')" || return 1
-      [[ "$(zlink_json_field "${response}" deferred)" == "true" ]] && return 0
-      return 1
-    fi
-    if [[ "${state}" != "InProgress:None:Serving" && "${state}" != "InProgress:None:Preparing" ]]; then
-      echo "Planned relocation did not reach its application-signaled boundary: ${state}" >&2
-      return 1
-    fi
-    sleep 0.1
-  done
-  echo "Timed out waiting for the planned relocation application-signaled boundary" >&2
+  echo "Relocated order did not acquire a new owner: ${order_id}" >&2
   return 1
 }
 
@@ -384,7 +353,7 @@ RELOCATION_CHECKPOINT="$(curl -fsS -X POST "${SHOPPINGMALL_API_A_HTTP_URL}/self-
   --data "{\"cartId\":\"cart-success\",\"shippingAddressId\":\"addr-home\",\"paymentMethodId\":\"pm-ok\",\"idempotencyKey\":\"order-relocation-${RUN_ID}\"}")"
 RELOCATION_ORDER_ID="$(zlink_json_field "${RELOCATION_CHECKPOINT}" orderId)"
 relocate_planned_order "${RELOCATION_ORDER_ID}"
-wait_relocated_anchor_owner "${RELOCATION_ANCHOR_ID}"
+wait_relocated_order_owner "${RELOCATION_ORDER_ID}"
 wait_relocated_order_completed "${RELOCATION_ORDER_ID}"
 # Planned relocation is intentionally required. Do not print replay evidence from
 # store wiring: this wait can pass only when the sample actually drives relocation.

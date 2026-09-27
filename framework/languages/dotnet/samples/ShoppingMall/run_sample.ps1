@@ -73,10 +73,10 @@ function Invoke-ShoppingMallPlannedRelocation {
             if ($result.Outcome -in @("Started", "AlreadyStarted") -and $result.Reason -eq "None") {
                 $sourceInstanceId = [string]$result.SourceInstanceId
                 if ([string]::IsNullOrWhiteSpace($sourceInstanceId)) {
-                    throw "Planned relocation returned no workflow source for $($result.AnchorId)"
+                    throw "Planned relocation returned no workflow source for ${OrderId}"
                 }
                 if (-not $WorkflowUrls.ContainsKey($sourceInstanceId)) {
-                    throw "Planned relocation returned unknown workflow source '$sourceInstanceId' for $($result.AnchorId)"
+                    throw "Planned relocation returned unknown workflow source '$sourceInstanceId' for ${OrderId}"
                 }
                 $targetEntries = @($WorkflowUrls.GetEnumerator() |
                     Where-Object { $_.Key -ne $sourceInstanceId })
@@ -84,17 +84,9 @@ function Invoke-ShoppingMallPlannedRelocation {
                     throw "Planned relocation source '$sourceInstanceId' does not map to one workflow target"
                 }
                 $targetUrl = [string]$targetEntries[0].Value
-                # The relocated object is the planned-relocation fixture Spot, not
-                # the order Instance Spot: when normal placement co-locates the two,
-                # the relocate endpoint retires the order routing endpoint first, so
-                # the order id has no owner to observe. Ask about the anchor.
-                $anchorId = [string]$result.AnchorId
-                if ([string]::IsNullOrWhiteSpace($anchorId)) {
-                    throw "Planned relocation returned no anchor for ${OrderId}"
-                }
                 for ($statusAttempt = 0; $statusAttempt -lt $WaitAttempts; $statusAttempt++) {
                     try {
-                        $status = Invoke-RestMethod -Method Get -Uri "$targetUrl/self-check/owner/$anchorId"
+                        $status = Invoke-RestMethod -Method Get -Uri "$targetUrl/self-check/owner/$OrderId"
                     }
                     catch {
                         Start-Sleep -Milliseconds 100
@@ -105,7 +97,7 @@ function Invoke-ShoppingMallPlannedRelocation {
                     }
                     Start-Sleep -Milliseconds 100
                 }
-                throw "Relocation fixture did not acquire a new owner: $anchorId"
+                throw "Relocated order did not acquire a new owner: $OrderId"
             }
             $lastResult = "owner=true outcome=$($result.Outcome) reason=$($result.Reason)"
         }
@@ -120,7 +112,7 @@ function Wait-ShoppingMallRelocatedOrderCompleted {
         [Parameter(Mandatory = $true)][string]$ApiUrl
     )
 
-    # Only the relocated fixture's replay drives this order past its checkpoint,
+    # Only the relocated order's initialization drives it past the checkpoint,
     # so the runner observes the public read API instead of pushing the order
     # forward itself. Driving it here would confirm the order without the
     # relocation target ever resuming it.

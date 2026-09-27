@@ -15,7 +15,7 @@ internal sealed class OrderWorkflowSpot(
 {
     public IZLinkInstanceSpotContext Context { get; } = context;
 
-    public ValueTask OnInitializeAsync(CancellationToken cancellationToken)
+    public async ValueTask OnInitializeAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         logger.LogInformation(
@@ -23,7 +23,30 @@ internal sealed class OrderWorkflowSpot(
             Context.SpotId,
             Context.SpotId
         );
-        return ValueTask.CompletedTask;
+        if (
+            !await selfChecks.TryConsumePlannedRelocationReplayAsync(
+                Context.SpotId,
+                cancellationToken
+            )
+        )
+            return;
+
+        var repeatedExternalEffect = false;
+        await workflow.ContinueAsync(
+            new ContinueOrderWorkflowReq(Context.SpotId, $"continue:{Context.SpotId}"),
+            cancellationToken,
+            () => repeatedExternalEffect = true
+        );
+        logger.LogInformation(
+            "shoppingmall-order replayed order={OrderId} generation={Generation}",
+            Context.SpotId,
+            Context.ObjectGeneration
+        );
+        if (repeatedExternalEffect)
+            logger.LogWarning(
+                "shoppingmall-order external-effect-repeated order={OrderId}",
+                Context.SpotId
+            );
     }
 
     public ValueTask OnClosingAsync(
@@ -69,19 +92,6 @@ internal sealed class OrderWorkflowSpot(
             cancellationToken,
             () => repeatedExternalEffect = true
         );
-        if (
-            await selfChecks.TryConsumePlannedRelocationReplayAsync(
-                state.OrderId,
-                cancellationToken
-            )
-        )
-        {
-            logger.LogInformation(
-                "shoppingmall-order replayed order={OrderId} generation={Generation}",
-                state.OrderId,
-                Context.ObjectGeneration
-            );
-        }
         if (repeatedExternalEffect)
         {
             logger.LogWarning(
@@ -135,16 +145,6 @@ internal sealed class OrderWorkflowSpot(
         );
         await CloseIfTerminalAsync(state, cancellationToken);
         return new RebuildOrderProjectionRes(state);
-    }
-
-    public async ValueTask<CloseOrderWorkflowForPlannedRelocationRes> CloseForPlannedRelocationAsync(
-        CloseOrderWorkflowForPlannedRelocationReq request,
-        CancellationToken cancellationToken
-    )
-    {
-        _ = request;
-        _ = Context.CloseAsync(cancellationToken);
-        return new CloseOrderWorkflowForPlannedRelocationRes(true);
     }
 
     // --8<-- [start:doc-sm-close-terminal]
