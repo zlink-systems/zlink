@@ -186,7 +186,16 @@ internal sealed class ZLinkDeferredActorJoin(
         //  actually suspends.
         if (ZLinkSerialTurn.Current is { } turn)
         {
-            await turn.YieldFrameworkCallAsync(RunAsync, cancellationToken).ConfigureAwait(false);
+            await turn.YieldFrameworkCallAsync(
+                    ct =>
+                    {
+                        // Nested Join calls must not resume the submitting turn again.
+                        using var suppressed = ZLinkSerialTurn.Suppress();
+                        return RunAsync(ct);
+                    },
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
             return;
         }
         await RunAsync(cancellationToken).ConfigureAwait(false);
