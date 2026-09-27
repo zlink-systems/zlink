@@ -614,6 +614,45 @@ public sealed class StandaloneActorRelocationPrecommitTests
     }
 
     [Fact]
+    public async Task Source_settlement_recognizes_target_commit_after_target_starts_another_relocation()
+    {
+        var store = new ZLinkInMemoryLocationStore();
+        var source = await PrepareCapturedSourceAsync(store);
+        var coordinator = new ZLinkStandaloneActorRelocationPrecommitCoordinator(store);
+        var committed = await coordinator.CommitTargetAsync(
+            source.Captured,
+            source.Envelope,
+            source.Prepare,
+            source.TargetAuthority,
+            CancellationToken.None
+        );
+        _ = await coordinator.BeginPreparingAsync(
+            committed,
+            source.TargetAuthority,
+            Guid.NewGuid(),
+            applicationVersion: 1,
+            CancellationToken.None
+        );
+
+        var settlement = await ZLinkStandaloneActorRelocationRuntime.SettleSourceAsync(
+            store,
+            source.Key,
+            source.Steady,
+            new ZLinkRelocationStored(string.Empty, 0, default, default),
+            source.RelocationId,
+            source.Target,
+            source.Prepare.TargetAttemptGeneration,
+            Stopwatch.GetElapsedTime(0),
+            static () => true,
+            static _ => ValueTask.FromResult(true),
+            TimeSpan.FromMilliseconds(5),
+            CancellationToken.None
+        );
+
+        Assert.Equal(ZLinkSourceSettlement.TargetCommitted, settlement.Outcome);
+    }
+
+    [Fact]
     public async Task Target_fence_reading_keeps_staging_until_the_source_fence_settles()
     {
         var inner = new ZLinkInMemoryLocationStore();

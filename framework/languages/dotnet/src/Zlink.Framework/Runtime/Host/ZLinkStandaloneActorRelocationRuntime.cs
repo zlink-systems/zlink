@@ -550,6 +550,18 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             )
         )
         {
+            var nextRelocationFromTarget =
+                (
+                    canonical.RelocationHigh != ToWireId(relocationId).High
+                    || canonical.RelocationLow != ToWireId(relocationId).Low
+                )
+                && StringComparer.Ordinal.Equals(canonical.State.SourceOwnerId, target.OwnerId)
+                && canonical.State.SourceOwnerLeaseGeneration
+                    == checked((ulong)target.LeaseGeneration)
+                && StringComparer.Ordinal.Equals(canonical.State.SourceNodeRid, target.Rid.ToHex())
+                && canonical.State.SourceNodeGeneration == target.LifecycleGeneration;
+            if (nextRelocationFromTarget)
+                return true;
             var pointerMatches =
                 root.Reference.Length == 0
                     ? ZLinkStandaloneActorRelocationPrecommitCoordinator.IsDirectTransferReference(
