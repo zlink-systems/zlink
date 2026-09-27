@@ -131,6 +131,19 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                 || target_placement.node_rid.value () != target.node_id
                 || !same_owner (target_placement.owner, target_owner))
                 return {authority_publish_status_t::failed, std::nullopt};
+            std::string cas_version =
+              expected_store_version.empty () ? snapshot->store_version : expected_store_version;
+            if (source.kind == object_kind_t::actor && !expected_store_version.empty ()
+                && snapshot->store_version != expected_store_version) {
+                const auto source_payload =
+                  runtime::decode_direct_actor_authority_payload (snapshot->payload);
+                if (!source_payload || source_payload->relocation_phase != 2
+                    || source_payload->relocation_expected_store_version != expected_store_version)
+                    return {authority_publish_status_t::conflict, decode_current (read)};
+                // A captured source row advances StoreVersion while retaining
+                // the original coordinator fence for this relocation.
+                cas_version = snapshot->store_version;
+            }
             std::vector<std::byte> application_payload = target_application_payload;
             authority_relocation_reference_t reference{
               source,
@@ -152,9 +165,7 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
             }
             const auto exchanged = _store
                                      ->compare_exchange_authority (
-                                       key,
-                                       expected_store_version.empty () ? snapshot->store_version
-                                                                       : expected_store_version,
+                                       key, cas_version,
                                        authority_retarget_t{source.kind == object_kind_t::actor
                                                               ? reference.application_payload
                                                               : encode (reference),
