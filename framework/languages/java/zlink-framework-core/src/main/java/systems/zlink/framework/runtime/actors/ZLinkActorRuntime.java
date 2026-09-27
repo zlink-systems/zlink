@@ -2333,6 +2333,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     public CompletionStage<Optional<ActorRef>> find(String actorId) {
         rejectAfterRelocationReady("Actor find");
         requireActorId(actorId);
+        if (locations.hasStoreResolver()) {
+            return locations.findStoredActorRefExact(actorId);
+        }
         ZLinkActor local = actorRegistry.actor(actorId);
         if (local != null
                 && !actorRegistry.isPendingTransfer(actorId)
@@ -2341,7 +2344,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         }
         if (local != null && requireContext(local).moving()
                 || actorRegistry.isPendingTransfer(actorId)) {
-            return locations.findStoredActorRef(actorId);
+            return CompletableFuture.completedFuture(Optional.empty());
         }
         try {
             ZLinkBackendActorRef nativeActor = spotNode.actorLookup(actorId);
@@ -2354,7 +2357,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 throw ex;
             }
         }
-        return locations.findStoredActorRef(actorId);
+        return CompletableFuture.completedFuture(Optional.empty());
     }
 
     @Override
