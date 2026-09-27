@@ -2641,8 +2641,10 @@ bool mesh_node_host_service_t::publish_descriptor_state (framework_runtime_state
     std::lock_guard lock (_descriptor_publish_mutex);
     try {
         if (state == framework_runtime_state_t::draining) {
-            for (const auto &node : _nodes)
+            for (const auto &node : _nodes) {
+                node->request_stop ();
                 node->native_node ().transport ().publish_draining ().result ().value ();
+            }
         }
         const auto owner = current_location_owner ();
         if (!_location_store || !owner)

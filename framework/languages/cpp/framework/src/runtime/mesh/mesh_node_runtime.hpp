@@ -176,6 +176,7 @@ class mesh_node_runtime_t
     mesh_node_runtime_t &operator= (const mesh_node_runtime_t &) = delete;
 
     void start ();
+    void request_stop () noexcept;
     void stop () noexcept;
     void signal_dispatch_activity ();
     void bind_serializers (serializer_registry_t &serializers) noexcept;

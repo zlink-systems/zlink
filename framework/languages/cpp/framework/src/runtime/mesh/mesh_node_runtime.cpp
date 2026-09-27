@@ -1882,6 +1882,11 @@ task_t<bool> mesh_node_runtime_t::send_instance_spot_activation_remote (
       target_node, std::move (request), std::move (metadata), std::move (application_payload));
 }
 
+void mesh_node_runtime_t::request_stop () noexcept
+{
+    _stopping.store (true, std::memory_order_release);
+}
+
 void mesh_node_runtime_t::stop () noexcept
 {
     // Stop timer producers before draining their serial/worker consumers, and
@@ -3328,6 +3333,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
             : context_t::cutover_enqueue_t::not_enqueued;
       },
       .restore_deadline = s->deadline,
+      .source_stopped = [this] { return relocation_source_stopped (); },
       .target_connected =
         [this, s] { return has_admitted_peer (s->target.node_rid, s->target.node_generation); },
       .abort_target_before_cutover = [] { return true; }};
@@ -4348,6 +4354,8 @@ host::node_status_t mesh_node_runtime_t::status () const
 
 bool mesh_node_runtime_t::relocation_source_stopped () const
 {
+    if (_stopping.load (std::memory_order_acquire))
+        return true;
     const auto state = _node->status ().state;
     return state == host::node_status_t::state_t::stopped
            || state == host::node_status_t::state_t::error;
