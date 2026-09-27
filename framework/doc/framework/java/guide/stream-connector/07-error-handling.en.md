@@ -107,7 +107,7 @@ handling.
 | `disconnected` — transport dropped | the call in progress fails | disconnected; the close reason is a transport error | applies it when enabled |
 | `disconnected` caused by close | the call in progress fails | closed; the close reason is client close | no |
 | `SendFailed` — request sequence exhausted | only that call fails | kept | no |
-| `SendFailed` — transport write failed | only that write's call fails with `SendFailed`; other calls in progress fail with `Disconnected` | ends; close reason is `TransportError` | applies it when enabled |
+| `SendFailed` — transport write failed | only that write's call fails with `SendFailed`; other calls in progress fail with `disconnected` | ends; close reason is `TransportError` | applies it when enabled |
 | `FrameDecodeFailed` (frame or header) · `FrameTooLarge` | the frame is not delivered and pending requests fail | ends; the close reason is a protocol error | applies it when enabled |
 | `CompressionFailed` | only that send fails | kept | no |
 | `DecompressionFailed` | only that received packet or pending request fails | kept | no |

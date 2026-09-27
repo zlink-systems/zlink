@@ -149,12 +149,11 @@ close called inside a handler returns right after starting it, so a handler neve
 close of the path that runs it.
 
 **The connector does not wait for a handler to finish.** The connection state and disconnect
-handlers that result from closing follow the dispatch mode. In `Immediate` the close work puts them
-in the same order as every other callback and does not wait for them; callbacks run one at a time, so
-they run after a handler that is still running. In `Manual` they run at the next dispatch pump after
-the close. Either way the close does not observe whether they completed, and reconnection behaves the
-same way. That is why one handler that never finishes cannot block the close. Work inside a handler
-that must be finished is awaited outside the handler.
+handlers that result from closing follow the dispatch mode: in `Immediate` the close work runs them,
+and in `Manual` they run at the next dispatch pump after the close. Either way the close does not
+observe whether they completed, and reconnection behaves the same way. That is why one handler that
+never finishes cannot block the close. Work inside a handler that must be finished is awaited
+outside the handler.
 
 ## 8. Next Chapters
 

@@ -144,11 +144,10 @@ auto reason = connector.close_reason ();   // 끊긴 적이 없으면 빈 값이
 돌아온다. 따라서 handler가 자기를 실행하는 경로의 종료를 기다리지 않는다.
 
 **connector는 handler의 완료를 기다리지 않는다.** 종료로 생기는 연결 상태 handler와 끊김 handler는
-dispatch mode를 따른다. `Immediate`에서는 종료 작업이 이 handler를 다른 callback과 같은 실행 순서에
-넣고 기다리지 않는다. callback은 한 번에 하나씩 실행하므로 실행 중인 handler가 있으면 그 뒤에
-실행한다. `Manual`에서는 종료 뒤의 다음 dispatch pump에서 실행한다. 어느 경우든 그 handler가
-끝났는지는 보지 않으며, 재연결도 같다. 그래서 끝나지 않는 handler 하나가 종료를 막지 못한다.
-handler 안에서 반드시 끝내야 하는 일이 있으면 그 일을 handler 밖에서 기다린다.
+dispatch mode를 따른다. `Immediate`에서는 종료 작업이 실행하고, `Manual`에서는 종료 뒤의 다음
+dispatch pump에서 실행한다. 어느 경우든 그 handler가 끝났는지는 보지 않으며, 재연결도 같다. 그래서
+끝나지 않는 handler 하나가 종료를 막지 못한다. handler 안에서 반드시 끝내야 하는 일이 있으면 그 일을
+handler 밖에서 기다린다.
 
 ## 8. 다음 장
 

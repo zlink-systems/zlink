@@ -101,7 +101,7 @@ AutoCloseable errors = connector.onErrorReceived(error -> {
 | `disconnected` — transport 끊김 | 진행 중인 호출 실패 | 끊김, 종료 사유는 transport 오류 | 켜져 있으면 적용한다 |
 | 종료로 생긴 `disconnected` | 진행 중인 호출 실패 | 종료, 종료 사유는 client가 닫음 | 하지 않는다 |
 | `SendFailed` — request sequence 고갈 | 그 호출만 실패 | 유지 | 하지 않는다 |
-| `SendFailed` — transport 쓰기 실패 | 그 쓰기의 호출만 `SendFailed`로 실패하고 나머지 진행 중인 호출은 `Disconnected`로 실패 | 종료, 종료 사유는 `TransportError` | 켜져 있으면 적용한다 |
+| `SendFailed` — transport 쓰기 실패 | 그 쓰기의 호출만 `SendFailed`로 실패하고 나머지 진행 중인 호출은 `disconnected`로 실패 | 종료, 종료 사유는 `TransportError` | 켜져 있으면 적용한다 |
 | `FrameDecodeFailed`(frame·header) · `FrameTooLarge` | 그 frame을 전달하지 않고 대기 중인 request를 실패시킴 | 종료, 종료 사유는 프로토콜 오류 | 켜져 있으면 적용한다 |
 | `CompressionFailed` | 그 송신만 실패 | 유지 | 하지 않는다 |
 | `DecompressionFailed` | 그 수신 packet 또는 대기 중인 request만 실패 | 유지 | 하지 않는다 |

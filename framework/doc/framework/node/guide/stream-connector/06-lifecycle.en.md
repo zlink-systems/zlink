@@ -44,8 +44,7 @@ dropped" changes the reconnection decision.
 ## 2. Connecting and Closing
 
 The connect call completes once the connection and the receive path are ready. The close call closes
-the transport without writing frames that have not gone out or waiting for the frame being written,
-and fails the Sends and Requests of both,
+the transport without writing frames that have not gone out, and fails their Sends and Requests,
 together with the requests waiting for a reply, with `disconnected`. To know that a Send's frame was
 written, wait for that Send to complete before closing.
 
@@ -142,14 +141,14 @@ reconnecting does not clear it: the value keeps the reason of the last ending.
 ## 7. What Closing Waits For
 
 The close call waits for **the connector's own work only**: closing the transport and failing the
-operations that were waiting. It does not write frames that have not gone out, it does not wait for
-the frame being written to finish, and it does not wait for the peer to read or respond. A close called outside a handler returns once that work is done. A
+operations that were waiting. It does not write frames that have not gone out, and it does not wait
+for the peer to read or respond. A close called outside a handler returns once that work is done. A
 close called inside a handler returns right after starting it, so a handler never waits for the
 close of the path that runs it.
 
 **The connector does not wait for a handler to finish.** The connection state and disconnect
-handlers that result from closing follow the dispatch mode: in `Immediate` they run on the same
-path as any other `Immediate` callback, and in `Manual` they run at the next dispatch pump after the close. Either way the close does not
+handlers that result from closing follow the dispatch mode: in `Immediate` the close work runs them,
+and in `Manual` they run at the next dispatch pump after the close. Either way the close does not
 observe whether they completed, and reconnection behaves the same way. That is why one handler that
 never finishes cannot block the close. Work inside a handler that must be finished is awaited
 outside the handler.
