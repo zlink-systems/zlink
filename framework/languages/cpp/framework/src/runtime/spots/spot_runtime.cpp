@@ -9465,8 +9465,9 @@ task_t<void> spot_node_runtime_t::complete_remote_actor_transfer (
             // backlog to drain. The exact target Spot route can stage the
             // packet and acknowledge admission without creating that cycle.
             bool relayed = false;
+            std::optional<result_t<zlink::message_t>> terminal;
             try {
-                (void) co_await late_handoff_relay (
+                const auto reply = co_await late_handoff_relay (
                   source_actor, header, zlink::message_t::from (std::move (packet.payload)),
                   std::chrono::seconds (30),
                   preserves_terminal_route ? *handoff_source
@@ -9479,11 +9480,22 @@ task_t<void> spot_node_runtime_t::complete_remote_actor_transfer (
                     : runtime::protocol::wire_operation_id_t{},
                   preserves_terminal_route ? *handoff_reply_route : 0);
                 relayed = true;
+                if (packet.is_request && reply)
+                    terminal = result_t<zlink::message_t>::success (*reply);
             }
-            catch (...) {
+            catch (const framework_exception_t &error) {
+                terminal = result_t<zlink::message_t>::failure (error.kind (), error.what ());
+            }
+            catch (const std::exception &error) {
+                terminal = result_t<zlink::message_t>::failure (
+                  framework_error_kind_t::internal_failure, error.what ());
             }
             if (!relayed && actor_transfer_marker_enabled ()) {
                 emit_actor_transfer_marker ("handoff_late_relay_failed", source_actor, key);
+            }
+            if (packet.is_request && terminal) {
+                (void) co_await send_handoff_terminal (
+                  _state, handoff_terminal_route (header.metadata), *terminal);
             }
         }
         if (replay.completed) {
