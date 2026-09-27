@@ -2755,6 +2755,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
         return enqueueAdmittedLocalSpot(
                 target,
                 targetSpotId,
+                false,
                 new systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived(
                         systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult
                                 .OK,
@@ -2770,10 +2771,13 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
     }
 
     private CompletionStage<Void> enqueueAdmittedLocalSpot(
-            ZLinkJavaRawSpot target, String spotId, ZLinkBackendReceived received) {
+            ZLinkJavaRawSpot target,
+            String spotId,
+            boolean awaitHandlerCompletion,
+            ZLinkBackendReceived received) {
         ZLinkInternalSpotNode.SpotAdmissionResolver resolver = spotAdmissionResolver;
         if (resolver == null) {
-            return target.enqueueRoute(received);
+            return enqueueLocalSpot(target, received, awaitHandlerCompletion);
         }
         return resolver.resolve(spotId, 0, false, true)
                 .handle(
@@ -2790,8 +2794,16 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
                                 received.close();
                                 return CompletableFuture.failedFuture(rejection);
                             }
-                            return target.enqueueRoute(received);
+                            return enqueueLocalSpot(target, received, awaitHandlerCompletion);
                         });
+    }
+
+    private static CompletionStage<Void> enqueueLocalSpot(
+            ZLinkJavaRawSpot target,
+            ZLinkBackendReceived received,
+            boolean awaitHandlerCompletion) {
+        CompletionStage<Void> dispatch = target.enqueueRoute(received);
+        return awaitHandlerCompletion ? dispatch : CompletableFuture.completedFuture(null);
     }
 
     CompletionStage<ZLinkBackendReceived> requestToSpot(
@@ -2914,7 +2926,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode, ZLinkJavaAdmi
         Supplier<CompletionStage<ZLinkBackendReceived>> enqueue =
                 () -> {
                     handedOff[0] = true;
-                    enqueueAdmittedLocalSpot(target, targetSpotId, request)
+                    enqueueAdmittedLocalSpot(target, targetSpotId, true, request)
                             .whenComplete(
                                     (ignored, failure) -> {
                                         if (failure != null

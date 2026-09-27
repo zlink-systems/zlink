@@ -261,6 +261,46 @@ final class ZLinkJavaRawSpotNodeM6BTest {
     }
 
     @Test
+    void localSpotSendCompletesBeforeTargetHandler() throws Exception {
+        try (var context = Zlink.createContext();
+                var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            RoutingId nodeRid = RoutingId.from("jvm-local-send-boundary");
+            node.setRoutingId(nodeRid);
+            ZLinkBackendSpot source = node.spotNode().createSpot("source");
+            ZLinkBackendSpot target = node.spotNode().createSpot("target");
+            CompletableFuture<Void> handlerCompletion = new CompletableFuture<>();
+            target.onDispatchEvent(
+                    new ZLinkInternalAsyncSpotDispatchHandler() {
+                        @Override
+                        public CompletionStage<Void> handleAsync(
+                                systems.zlink.framework.runtime.internal.backend
+                                                .ZLinkBackendSpotDispatchInfo
+                                        info) {
+                            return handlerCompletion;
+                        }
+                    });
+
+            try (Message payload = Message.from("one-way")) {
+                CompletionStage<Void> send =
+                        source.sendToSpot(
+                                nodeRid,
+                                target.spotId(),
+                                target.lifecycleGeneration(),
+                                List.of(payload));
+                try {
+                    assertTrue(send.toCompletableFuture().isDone());
+                    send.toCompletableFuture().join();
+                } finally {
+                    handlerCompletion.complete(null);
+                }
+            }
+            try (var received = target.recvRoute(ZLinkBackendRecvMode.DONT_WAIT)) {
+                assertNotNull(received);
+            }
+        }
+    }
+
+    @Test
     void localSpotRouteRetainsWireContentType() {
         try (var context = Zlink.createContext();
                 var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
