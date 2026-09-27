@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -14,6 +15,7 @@ import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -34,6 +36,24 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkSerialExecutionQueueTest {
+    @Test
+    void completedTurnCarrierDoesNotOwnLaterYield() throws Exception {
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
+        AtomicReference<Object> carrier = new AtomicReference<>();
+        queue.enqueue(
+                        () -> {
+                            carrier.set(ZLinkSuspendInvocationContext.currentSerialExecutionTurn());
+                            return CompletableFuture.completedFuture(null);
+                        })
+                .toCompletableFuture()
+                .get(3, TimeUnit.SECONDS);
+
+        try (var ignored = ZLinkSuspendInvocationContext.enterSerialExecutionTurn(carrier.get())) {
+            CompletableFuture<Void> remote = new CompletableFuture<>();
+            assertSame(remote, ZLinkSerialExecutionQueue.yieldCurrent(remote));
+        }
+    }
+
     @Test
     void firstDrainDoesNotRunOnTheSubmitterStack() throws Exception {
         ZLinkSerialExecutionQueue queue =

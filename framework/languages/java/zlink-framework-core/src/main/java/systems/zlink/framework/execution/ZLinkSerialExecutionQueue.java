@@ -1444,15 +1444,21 @@ public final class ZLinkSerialExecutionQueue {
         Object propagated =
                 systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
                         .currentSerialExecutionTurn();
+        SerialTurn turn;
         if (queue != null && gate != null) {
             if (propagated instanceof SerialTurnCarrier carrier
                     && carrier.turn.queue == queue
                     && carrier.turn.gate == gate) {
-                return carrier.turn;
+                turn = carrier.turn;
+            } else {
+                turn = gate.isDone() ? null : new SerialTurn(queue, gate, null);
             }
-            return new SerialTurn(queue, gate, null);
+        } else {
+            turn = propagated instanceof SerialTurnCarrier carrier ? carrier.turn : null;
         }
-        return propagated instanceof SerialTurnCarrier carrier ? carrier.turn : null;
+        return turn != null && turn.entry != null && turn.entry.turnOrigin().result.isDone()
+                ? null
+                : turn;
     }
 
     private static void updateCarrier(Object context, SerialTurn turn) {
