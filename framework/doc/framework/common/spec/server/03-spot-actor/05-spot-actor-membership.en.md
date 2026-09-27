@@ -562,11 +562,9 @@ the following order after the handler ends normally.
    changes route, submits held messages, and releases the seal. On
    timeout it closes the physical STREAM connection and cleans Session
    state. The message the target sends in this step is command 44
-   `sessionRelocationRoute`, and its commit carries the relocation
-   identity, ActorId, ObjectGeneration, target MeshName/NodeRid, Session
-   identity, SessionRid, and binding generation. How the Session owner
-   validates these values and handles route/seal is defined by
-   [Session-Actor Binding §8](../04-session/02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation).
+   `sessionRelocationRoute`.
+   [Session–Actor Binding §8.2](../04-session/02-session-actor-binding.en.md#82-control-messages-42-43-44)
+   defines the values carried by the commit and the Session owner's handling.
 
 Even after an `Accepted` approval, the move may not start due to the later
 relocation policy check (`DisableRelocation`), a capacity conflict, or a
