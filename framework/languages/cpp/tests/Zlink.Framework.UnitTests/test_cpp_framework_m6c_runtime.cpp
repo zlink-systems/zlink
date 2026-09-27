@@ -3803,7 +3803,7 @@ void test_application_relocation_remote_production_path (test_context_t &test)
         && committed_binding->actor == expected_target
         && committed_binding->binding_generation == session_binding.binding_generation
         && committed_binding->target_node_generation == target.status ().lifecycle_generation ()
-        && committed_binding->owner_lease_generation == 0
+        && committed_binding->owner_lease_generation == target_descriptor.lease_generation
         && continued_inbound_error == stateful_error_t::none && continued_inbound_completed
         && continued_inbound->inbound_sequence == 2,
       "production relocation must commit authority only at the target, restore before the one-way "
