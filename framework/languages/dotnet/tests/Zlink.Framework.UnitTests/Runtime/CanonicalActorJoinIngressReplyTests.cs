@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.Net;
-using System.Net.Sockets;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.Contracts;
 
@@ -22,18 +20,12 @@ public sealed class CanonicalActorJoinIngressReplyTests
         var suffix = Guid.NewGuid().ToString("N");
         var sourceRid = RoutingId.From($"actor-join-source-{suffix}");
         var targetRid = RoutingId.From($"actor-join-target-{suffix}");
-        var sourceEndpoint = AllocateTcpEndpoint();
-        var targetEndpoint = AllocateTcpEndpoint();
         const string targetSpotId = "target-spot";
 
         source.SetRoutingId(sourceRid);
-        source.SetBind(sourceEndpoint);
+        source.SetBind("tcp://127.0.0.1:*");
         target.SetRoutingId(targetRid);
-        target.SetBind(targetEndpoint);
-        if (targetDialsSource)
-            target.ConnectPeer(sourceEndpoint, sourceRid);
-        else
-            source.ConnectPeer(targetEndpoint, targetRid);
+        target.SetBind("tcp://127.0.0.1:*");
         var targetSpot = (ZLinkManagedSpot)target.GetOrCreateSpot(targetSpotId, out var created);
         Assert.True(created);
         source.ObserveSpotAuthority(
@@ -46,6 +38,10 @@ public sealed class CanonicalActorJoinIngressReplyTests
         );
         target.Start();
         source.Start();
+        if (targetDialsSource)
+            target.ConnectPeer(source.Status().LocalEndpoint, sourceRid);
+        else
+            source.ConnectPeer(target.Status().LocalEndpoint, targetRid);
 
         await WaitUntilAsync(() =>
             source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
@@ -149,15 +145,12 @@ public sealed class CanonicalActorJoinIngressReplyTests
         var suffix = Guid.NewGuid().ToString("N");
         var sourceRid = RoutingId.From($"actor-join-source-{suffix}");
         var targetRid = RoutingId.From($"actor-join-target-{suffix}");
-        var sourceEndpoint = AllocateTcpEndpoint();
-        var targetEndpoint = AllocateTcpEndpoint();
         const string targetSpotId = "target-spot";
 
         source.SetRoutingId(sourceRid);
-        source.SetBind(sourceEndpoint);
+        source.SetBind("tcp://127.0.0.1:*");
         target.SetRoutingId(targetRid);
-        target.SetBind(targetEndpoint);
-        target.ConnectPeer(sourceEndpoint, sourceRid);
+        target.SetBind("tcp://127.0.0.1:*");
         var targetSpot = (ZLinkManagedSpot)target.GetOrCreateSpot(targetSpotId, out var created);
         Assert.True(created);
         source.ObserveSpotAuthority(
@@ -170,6 +163,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
         );
         source.Start();
         target.Start();
+        target.ConnectPeer(source.Status().LocalEndpoint, sourceRid);
 
         await WaitUntilAsync(() =>
             source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
@@ -246,7 +240,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
         // The lower source RID's outbound direction wins reciprocal HANDOVER.
         // Core ends the admitted attempt with NOT_CONNECTED, so the sender can
         // replay inside the original deadline without an artificial attempt cut.
-        source.ConnectPeer(targetEndpoint, targetRid);
+        source.ConnectPeer(target.Status().LocalEndpoint, targetRid);
 
         var retryIngress = await ReceiveActorJoinAsync(target, TimeSpan.FromSeconds(7));
         Assert.Equal(firstIngress.OperationId, retryIngress.OperationId);
@@ -784,8 +778,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
         var suffix = Guid.NewGuid().ToString("N");
         var sourceRid = RoutingId.From($"monitor-source-{suffix}");
         router.SetRoutingId(RoutingId.From($"monitor-target-{suffix}"));
-        var endpoint = AllocateTcpEndpoint();
-        router.Bind(endpoint);
+        router.Bind("tcp://127.0.0.1:*");
+        var endpoint = router.Options.LastEndpoint;
         using var monitor = router.MonitorOpen(
             SocketEvent.ConnectionReady | SocketEvent.Disconnected
         );
@@ -1235,14 +1229,6 @@ public sealed class CanonicalActorJoinIngressReplyTests
         }
     }
 
-    private static string AllocateTcpEndpoint()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var endpoint = Assert.IsType<IPEndPoint>(listener.LocalEndpoint);
-        return $"tcp://127.0.0.1:{endpoint.Port}";
-    }
-
     private sealed class ConnectedRuntime : IAsyncDisposable
     {
         private ConnectedRuntime(
@@ -1383,16 +1369,16 @@ public sealed class CanonicalActorJoinIngressReplyTests
             var suffix = Guid.NewGuid().ToString("N");
             var sourceRid = RoutingId.From($"actor-join-source-{suffix}");
             var targetRid = RoutingId.From($"actor-join-target-{suffix}");
-            var targetEndpoint = AllocateTcpEndpoint();
             var sourceEndpoint = $"inproc://actor-join-source-{suffix}";
             const string targetSpotId = "target-spot";
 
             target.SetRoutingId(targetRid);
             target.SetObjectRole(ZLinkMeshNodeObjectRole.Client);
-            target.SetBind(targetEndpoint);
+            target.SetBind("tcp://127.0.0.1:*");
             var targetSpot = target.GetOrCreateSpot(targetSpotId, out var created);
             Assert.True(created);
             target.Start();
+            var targetEndpoint = target.Status().LocalEndpoint;
 
             var source = context.CreateDealerSocket();
             var sourceCompletionOwner = new TestCompletionPollerDriver(source);
