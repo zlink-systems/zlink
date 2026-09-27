@@ -62,6 +62,73 @@ public sealed class UserSpotExecutionSchedulerTests
     }
 
     [Fact]
+    public async Task SpotWide_LifecycleCallback_Yield_ReleasesGateAndRetainsLifecycleOwner()
+    {
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        await using var executor = CreateExecutor(errorSink, ZLinkUserSpotExecutionMode.SpotWide);
+        var externalStarted = NewSignal();
+        var completeExternal = NewSignal();
+        var applicationRan = NewSignal();
+        var lifecycleResumed = NewSignal();
+        var laterLifecycleRan = NewSignal();
+
+        var lifecycle = executor
+            .ExecuteLifecycleAsync(
+                async (_, ct) =>
+                {
+                    var turn = ZLinkApplicationExecutionContext.RequireYieldTurn("joined callback");
+                    Assert.NotNull(turn.LifecycleOwner);
+                    await turn.YieldFrameworkCallAsync(
+                        async _ =>
+                        {
+                            externalStarted.TrySetResult();
+                            await completeExternal.Task.ConfigureAwait(false);
+                        },
+                        ct
+                    );
+                    Assert.NotNull(ZLinkSerialTurn.Current?.LifecycleOwner);
+                    lifecycleResumed.TrySetResult();
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        Assert.Same(
+            externalStarted.Task,
+            await Task.WhenAny(externalStarted.Task, lifecycle).WaitAsync(TimeSpan.FromSeconds(5))
+        );
+
+        var application = executor
+            .ExecuteAsync(
+                (_, _) =>
+                {
+                    applicationRan.TrySetResult();
+                    return ValueTask.CompletedTask;
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        await applicationRan.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var laterLifecycle = executor
+            .ExecuteLifecycleAsync(
+                (_, _) =>
+                {
+                    laterLifecycleRan.TrySetResult();
+                    return ValueTask.CompletedTask;
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        Assert.False(laterLifecycleRan.Task.IsCompleted);
+
+        completeExternal.TrySetResult();
+        await Task.WhenAll(lifecycle, application, laterLifecycle)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(lifecycleResumed.Task.IsCompleted);
+        Assert.True(laterLifecycleRan.Task.IsCompleted);
+    }
+
+    [Fact]
     public async Task SpotWide_Yield_ReleasesSpotGateButKeepsActorFifoClaim()
     {
         using var errorSink = new ZLinkRuntimeErrorSink();

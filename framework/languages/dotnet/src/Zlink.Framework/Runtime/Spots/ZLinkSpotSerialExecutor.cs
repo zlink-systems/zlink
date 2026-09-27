@@ -300,10 +300,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         CancellationToken cancellationToken
     )
     {
-        // A lifecycle item may need to notify application code after the
-        // authority transition. Run that callback on the application lane;
-        // do not execute it inline in the lifecycle lane, where Yield is not
-        // a valid application operation and waiting would block the lane.
+        // A lifecycle item may notify application code after the authority
+        // transition. Transferred callbacks use the application lane.
         if (
             ZLinkApplicationExecutionContext.Current is { YieldAllowed: true }
             && ZLinkSerialTurn.Current is not null
@@ -453,7 +451,12 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             _flowCaptureEnabled(),
             ZLinkFlowOrigin.Lifecycle
         );
-        await ExecuteOperationAsync(operation, null, cancellationToken, yieldAllowed: false)
+        await ExecuteOperationAsync(
+                operation,
+                null,
+                cancellationToken,
+                yieldAllowed: _executionMode == ZLinkUserSpotExecutionMode.SpotWide
+            )
             .ConfigureAwait(false);
     }
 
