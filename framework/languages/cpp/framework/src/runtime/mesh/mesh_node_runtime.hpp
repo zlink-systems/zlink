@@ -574,6 +574,7 @@ class mesh_node_runtime_t
       const session_relocation_checkpoint_t &checkpoint,
       const zlink::routing_id_t &target_node,
       std::uint64_t target_node_generation,
+      std::uint64_t target_owner_lease_generation,
       runtime::protocol::session_relocation_route_action_t action) const;
     task_t<bool>
     route_bound_sessions (const std::vector<session_relocation_checkpoint_t> &checkpoints,

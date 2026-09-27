@@ -550,7 +550,8 @@ export class ZLinkRemoteBoundSessionRelay {
         nodeRid: decodeWireRoutingId(committedRoute.targetNodeRid, undefined),
         bindingGeneration: value.session.bindingGeneration,
         ownershipGeneration: committedRoute.targetAuthorityOwnerGeneration,
-        ownerNodeGeneration: committedRoute.targetNodeGeneration
+        ownerNodeGeneration: committedRoute.targetNodeGeneration,
+        ownerLeaseGeneration: committedRoute.targetOwnerLeaseGeneration
       } as ActorRef;
       await owner.applyRelocation(value.actor.actorId, key, fingerprint, async () => {
         await runtime.commitActorRoute(targetActorRef, undefined, {

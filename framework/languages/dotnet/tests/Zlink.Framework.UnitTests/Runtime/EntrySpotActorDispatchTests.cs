@@ -2727,7 +2727,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 firstSeal,
                 targetOne,
                 targetNodeGeneration: 3,
-                targetAuthority: 12
+                targetAuthority: 12,
+                targetOwnerLeaseGeneration: 101
             );
             Assert.True(
                 runtime.RouteCanonicalSessionActor(
@@ -2800,7 +2801,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 secondSeal,
                 targetTwo,
                 targetNodeGeneration: 4,
-                targetAuthority: 13
+                targetAuthority: 13,
+                targetOwnerLeaseGeneration: 202
             );
             Assert.True(
                 runtime.RouteCanonicalSessionActor(
@@ -2883,7 +2885,8 @@ public sealed partial class EntrySpotActorDispatchTests
             ZLinkServiceWireCodec.SessionRelocationSealRecord seal,
             RoutingId targetNode,
             ulong targetNodeGeneration,
-            ulong targetAuthority
+            ulong targetAuthority,
+            ulong targetOwnerLeaseGeneration
         ) =>
             new(
                 seal.RelocationId,
@@ -2895,7 +2898,8 @@ public sealed partial class EntrySpotActorDispatchTests
                     seal.Actor.AuthorityOwnerGeneration,
                     targetAuthority,
                     targetNode,
-                    targetNodeGeneration
+                    targetNodeGeneration,
+                    targetOwnerLeaseGeneration
                 )
             );
     }
@@ -3053,7 +3057,8 @@ public sealed partial class EntrySpotActorDispatchTests
                     seal.Actor.AuthorityOwnerGeneration,
                     99,
                     targetNode,
-                    2
+                    2,
+                    101
                 )
             );
             Assert.True(

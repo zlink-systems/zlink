@@ -1033,7 +1033,7 @@ internal sealed class ZLinkSessionActorBindingTable
                         authenticatedRoute.MeshName,
                         request.Route.TargetNodeRid
                     );
-                    var targetOwnerLeaseGeneration = authenticatedRoute.OwnerLeaseGeneration;
+                    var targetOwnerLeaseGeneration = request.Route.TargetOwnerLeaseGeneration;
                     if (
                         !ZLinkSessionBindingRoute.TryCreateRelocated(
                             targetActor,
@@ -1066,8 +1066,6 @@ internal sealed class ZLinkSessionActorBindingTable
                         || authenticatedRoute.NodeGeneration != seal.Coordinator.NodeGeneration
                         || authenticatedRoute.AuthorityOwnerGeneration
                             != seal.Actor.AuthorityOwnerGeneration
-                        || authenticatedRoute.OwnerLeaseGeneration
-                            != seal.Actor.OwnerLeaseGeneration
                         || !string.Equals(
                             authenticatedRoute.MeshName,
                             entry.MeshName,

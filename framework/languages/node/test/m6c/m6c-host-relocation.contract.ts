@@ -355,7 +355,8 @@ test('Session relocation is exact 42-to-43 and command 44 is one-way', async () 
       previousAuthorityOwnerGeneration: 11n,
       targetAuthorityOwnerGeneration: 12n,
       targetNodeRid: 'target',
-      targetNodeGeneration: 6n
+      targetNodeGeneration: 6n,
+      targetOwnerLeaseGeneration: 7n
     }
   };
   //  A relocation whose Actor owner IS the session owner: the 42/44

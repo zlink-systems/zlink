@@ -4670,7 +4670,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                           session_id, route.binding_generation, route.actor.actor_id,
                           route.actor.object_generation,
                           route.route.previous_authority_owner_generation, std::move (target),
-                          route.route.target_node_generation, std::move (commit_projection));
+                          route.route.target_node_generation,
+                          route.route.target_owner_lease_generation, std::move (commit_projection));
                     } else {
                         admission = _sessions.acknowledge_remote_abort (
                           session_id, route.binding_generation, route.actor.actor_id,

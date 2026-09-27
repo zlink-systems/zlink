@@ -1300,6 +1300,7 @@ to_generated (const session_relocation_route_update_t &value)
             value.target_authority_owner_generation,
             value.target_node_routing_id,
             value.target_node_generation,
+            value.target_owner_lease_generation,
             value.current_authority_owner_generation};
 }
 
@@ -1311,7 +1312,8 @@ from_generated (const service_wire_pilot_session_route_update &value)
             value.target_authority_owner_generation,
             value.target_node_rid,
             value.target_node_generation,
-            value.current_authority_owner_generation};
+            value.current_authority_owner_generation,
+            value.target_owner_lease_generation};
 }
 
 void validate_session_relocation_route (const session_relocation_route_t &record)
@@ -1322,6 +1324,7 @@ void validate_session_relocation_route (const session_relocation_route_t &record
             || record.route.target_authority_owner_generation
                  <= record.route.previous_authority_owner_generation
             || record.route.target_node_generation == 0
+            || record.route.target_owner_lease_generation == 0
             || record.route.current_authority_owner_generation != 0)
             throw service_wire_error_t (
               "Session relocation commit route has an invalid authority fence");
@@ -1332,8 +1335,8 @@ void validate_session_relocation_route (const session_relocation_route_t &record
         || record.route.current_authority_owner_generation == 0
         || record.route.previous_authority_owner_generation != 0
         || record.route.target_authority_owner_generation != 0
-        || !record.route.target_node_routing_id.empty ()
-        || record.route.target_node_generation != 0)
+        || !record.route.target_node_routing_id.empty () || record.route.target_node_generation != 0
+        || record.route.target_owner_lease_generation != 0)
         throw service_wire_error_t (
           "Session relocation abort route has an invalid authority fence");
 }

@@ -6723,6 +6723,8 @@ task_t<bool> spot_node_runtime_t::activate_session_relocation_route (const std::
       admission->session_relocation_committed_previous_authority_owner_generation;
     route.route.target_authority_owner_generation =
       admission->session_relocation_committed_target_authority_owner_generation;
+    route.route.target_owner_lease_generation =
+      admission->session_relocation_target_owner_lease_generation;
     const auto native = native_node ();
     if (!native)
         co_return false;

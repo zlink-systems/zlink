@@ -1797,7 +1797,8 @@ export class ZLinkActorTransferRuntime {
             previousAuthorityOwnerGeneration: target.previousAuthorityOwnerGeneration,
             targetAuthorityOwnerGeneration: ownershipGeneration,
             targetNodeRid: String(actorRef.nodeRid),
-            targetNodeGeneration: authority.allocation.descriptorLifecycleGeneration
+            targetNodeGeneration: authority.allocation.descriptorLifecycleGeneration,
+            targetOwnerLeaseGeneration: authority.ownerLeaseGeneration
           }
         },
         this.options.shutdownSignal?.()

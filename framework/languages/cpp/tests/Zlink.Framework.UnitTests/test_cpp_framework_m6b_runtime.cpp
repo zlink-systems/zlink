@@ -871,7 +871,7 @@ void verify_session_relocation_gateway_commit_is_atomic ()
       session.to_bytes (),
       17,
       {protocol::session_relocation_route_action_t::commit, 11, 12,
-       zlink::routing_id_t::from (std::string ("target-node")).to_bytes (), 23, 0}};
+       zlink::routing_id_t::from (std::string ("target-node")).to_bytes (), 23, 0, 37}};
     const auto target_ref = actor_ref_access_t::make (node_rid_t::from_string ("target-node"),
                                                       "game.actor", "relocating-actor", 7);
     assert (gateway.update_actor_ref (target_ref));
@@ -1369,9 +1369,9 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
     ++target.authority_owner_generation;
     const auto committed = session_owner->sessions ().commit_remote_route (
       connection.connection_id, binding.binding_generation, previous.key,
-      previous.object_generation, previous.authority_owner_generation, target, 19);
+      previous.object_generation, previous.authority_owner_generation, target, 19, 23);
     assert (committed.error == stateful::stateful_error_t::none);
-    assert (committed.binding && committed.binding->owner_lease_generation == 0);
+    assert (committed.binding && committed.binding->owner_lease_generation == 23);
 
     auto gateway_state = std::make_shared<actor_gateway_state_t> ();
     actor_gateway_runtime_t gateway (gateway_state);
@@ -1448,7 +1448,7 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
     const auto lagging_projection = gateway.bound_session_route (previous_actor);
     assert (deliveries.load (std::memory_order_acquire) == 1);
     // Session-Actor binding §8.1: a push never rewrites the Session-owned route.
-    assert (current && current->owner_lease_generation == 0);
+    assert (current && current->owner_lease_generation == 23);
     assert (lagging_projection
             && lagging_projection->authority_owner_generation == previous.authority_owner_generation
             && lagging_projection->owner_lease_generation == 17);
@@ -2812,7 +2812,7 @@ void verify_session_route_supports_repeated_relocation ()
     ++remote.authority_owner_generation;
     const auto first_commit = sessions.commit_remote_route (
       connection.connection_id, binding.binding_generation, source.key, source.object_generation,
-      source.authority_owner_generation, remote, 12);
+      source.authority_owner_generation, remote, 12, 23);
     assert (first_commit.error == stateful::stateful_error_t::none);
     assert (first_commit.binding);
     assert (first_commit.binding->actor == remote);
@@ -2833,7 +2833,7 @@ void verify_session_route_supports_repeated_relocation ()
     ++returned.authority_owner_generation;
     const auto return_commit = sessions.commit_remote_route (
       connection.connection_id, binding.binding_generation, source.key, source.object_generation,
-      remote.authority_owner_generation, returned, 11);
+      remote.authority_owner_generation, returned, 11, 31);
     assert (return_commit.error == stateful::stateful_error_t::none);
     assert (return_commit.binding);
     assert (return_commit.binding->actor == returned);
@@ -2842,7 +2842,7 @@ void verify_session_route_supports_repeated_relocation ()
     assert (!sessions.remote_route_sealed (source.key));
 }
 
-void verify_session_route_commit_leaves_target_lease_to_target_owner ()
+void verify_session_route_commit_stores_target_lease ()
 {
     stateful::stream_session_registry_t sessions (
       [] (const std::string &) { return std::optional<stateful::object_ref_t>{}; });
@@ -2863,11 +2863,11 @@ void verify_session_route_commit_leaves_target_lease_to_target_owner ()
     bool registry_reentry_rejected = false;
     const auto committed = sessions.commit_remote_route (
       connection.connection_id, binding.binding_generation, source.key, source.object_generation,
-      source.authority_owner_generation, target, 19,
+      source.authority_owner_generation, target, 19, 23,
       [&] (const stateful::stream_route_admission_t &projected) {
           projection_hook_called = true;
           assert (projected.binding);
-          assert (projected.binding->owner_lease_generation == 0);
+          assert (projected.binding->owner_lease_generation == 23);
           projection_owns_registry_lane =
             zlink::framework::runtime::state_lane_t::current () != nullptr;
           try {
@@ -2880,7 +2880,7 @@ void verify_session_route_commit_leaves_target_lease_to_target_owner ()
       });
     assert (committed.error == stateful::stateful_error_t::none);
     assert (committed.binding);
-    assert (committed.binding->owner_lease_generation == 0);
+    assert (committed.binding->owner_lease_generation == 23);
     assert (projection_hook_called);
     assert (projection_owns_registry_lane);
     assert (registry_reentry_rejected);
@@ -3967,7 +3967,7 @@ void verify_same_node_session_seal_waits_for_active_ingress ()
       binding.binding_generation,
       {protocol::session_relocation_route_action_t::commit,
        actor_object->authority_owner_generation, target_authority_owner_generation,
-       status.routing_id ().to_bytes (), status.lifecycle_generation (), 0}};
+       status.routing_id ().to_bytes (), status.lifecycle_generation (), 0, 13}};
     assert (local->route_session_remote (status.routing_id (), route).result ().value ());
     assert (local->wait_for_dispatch_activity (-1ms, false));
     auto current = local->sessions ().current_binding (actor_object->key);
@@ -3980,7 +3980,7 @@ void verify_same_node_session_seal_waits_for_active_ingress ()
     assert (current
             && current->actor.authority_owner_generation == target_authority_owner_generation);
     assert (current->target_node_generation == status.lifecycle_generation ());
-    assert (current->owner_lease_generation == 0);
+    assert (current->owner_lease_generation == 13);
     assert (!local->sessions ().remote_route_sealed (actor_object->key));
 
     local->close ();
@@ -4105,7 +4105,7 @@ void verify_configured_session_seal_timeout_closes_actual_owner ()
       binding.binding_generation,
       {protocol::session_relocation_route_action_t::commit,
        actor_object->authority_owner_generation, target_authority_owner_generation,
-       status.routing_id ().to_bytes (), status.lifecycle_generation (), 0}};
+       status.routing_id ().to_bytes (), status.lifecycle_generation (), 0, 13}};
     assert (local->route_session_remote (status.routing_id (), late_route).result ().value ());
     (void) local->dispatch_ready (dispatch);
     assert (!local->sessions ().current_binding (actor_object->key));
@@ -6702,7 +6702,7 @@ int main (int argc, char **argv)
     verify_session_binding_and_terminal_once ();
     verify_session_ingress_sequence_is_scoped_by_actor_binding ();
     verify_session_route_supports_repeated_relocation ();
-    verify_session_route_commit_leaves_target_lease_to_target_owner ();
+    verify_session_route_commit_stores_target_lease ();
     verify_displaced_stream_binding_can_be_restored ();
     verify_verified_remote_stream_binding ();
     verify_message_follow_route_admission_and_suppression ();

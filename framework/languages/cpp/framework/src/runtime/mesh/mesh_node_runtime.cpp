@@ -1236,6 +1236,7 @@ mesh_node_runtime_t::capture_session_routes (
     for (const auto &checkpoint : outcome->checkpoints) {
         routes.push_back (make_session_relocation_route (
           checkpoint, target.rid, target.lifecycle_generation,
+          static_cast<std::uint64_t> (target.lease_generation),
           runtime::protocol::session_relocation_route_action_t::commit));
     }
     co_return routes;
@@ -1249,8 +1250,9 @@ task_t<bool> mesh_node_runtime_t::route_bound_sessions (
     if (!_node)
         co_return checkpoints.empty ();
     for (const auto &checkpoint : checkpoints) {
-        const auto route = make_session_relocation_route (checkpoint, target.rid,
-                                                          target.lifecycle_generation, action);
+        const auto route = make_session_relocation_route (
+          checkpoint, target.rid, target.lifecycle_generation,
+          static_cast<std::uint64_t> (target.lease_generation), action);
         try {
             if (!co_await _node->route_session_remote (checkpoint.session.session_owner_node,
                                                        route))
@@ -1267,6 +1269,7 @@ runtime::protocol::session_relocation_route_t mesh_node_runtime_t::make_session_
   const session_relocation_checkpoint_t &checkpoint,
   const zlink::routing_id_t &target_node,
   std::uint64_t target_node_generation,
+  std::uint64_t target_owner_lease_generation,
   runtime::protocol::session_relocation_route_action_t action) const
 {
     const auto commit = action == runtime::protocol::session_relocation_route_action_t::commit;
@@ -1286,7 +1289,8 @@ runtime::protocol::session_relocation_route_t mesh_node_runtime_t::make_session_
        commit ? checkpoint.source.authority_owner_generation + 1 : 0,
        commit ? target_node.to_bytes () : std::vector<std::uint8_t>{},
        commit ? target_node_generation : 0,
-       commit ? 0 : checkpoint.source.authority_owner_generation}};
+       commit ? 0 : checkpoint.source.authority_owner_generation,
+       commit ? target_owner_lease_generation : 0}};
 }
 
 task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_application_actor (
@@ -3135,6 +3139,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::seal_remote_application_actor_jo
         s->encoded_session_relocation_route =
           runtime::protocol::encode_session_relocation_route (make_session_relocation_route (
             s->session_seal.checkpoints.front (), s->target.node_rid, s->target.node_generation,
+            static_cast<std::uint64_t> (s->target.owner.lease_generation),
             runtime::protocol::session_relocation_route_action_t::commit));
     co_return co_await prepare_remote_application_actor_join (std::move (s));
 }

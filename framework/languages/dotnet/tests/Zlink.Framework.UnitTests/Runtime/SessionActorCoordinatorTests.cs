@@ -1595,7 +1595,8 @@ public sealed class SessionActorCoordinatorTests
                 identity.AuthorityOwnerGeneration,
                 targetAuthority,
                 targetNode,
-                targetNodeGeneration
+                targetNodeGeneration,
+                identity.OwnerLeaseGeneration
             )
         );
         locationStore.BlockReads();

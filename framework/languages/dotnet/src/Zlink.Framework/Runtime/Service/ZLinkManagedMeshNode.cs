@@ -7207,7 +7207,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                             expectedNodeGeneration,
                             _meshName,
                             expectedAuthorityOwnerGeneration,
-                            0
+                            route.Route.TargetOwnerLeaseGeneration
                         ),
                         _stop?.Token ?? CancellationToken.None
                     )

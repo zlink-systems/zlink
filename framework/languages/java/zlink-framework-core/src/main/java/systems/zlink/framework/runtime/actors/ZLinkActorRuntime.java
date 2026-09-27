@@ -2461,6 +2461,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         });
     }
 
+    void prepareRelocatedSessionBinding(
+            ZLinkBackendActorRef actor, long authorityOwnerGeneration, long ownerLeaseGeneration) {
+        spotNode.rememberActorAuthority(actor, authorityOwnerGeneration, ownerLeaseGeneration);
+    }
+
     @Override
     public CompletionStage<ActorRef> ensure(String actorId, ZLinkMessage createRequest) {
         requireActorId(actorId);
@@ -3217,6 +3222,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 0,
                 command42.actor().authorityOwnerGeneration(),
                 null,
+                0,
                 0);
     }
 
@@ -3266,7 +3272,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         authority.sourceAuthorityOwnerGeneration(),
                         authority.sourceAuthorityOwnerGeneration() + 1,
                         targetNodeRid,
-                        target.lifecycleGeneration());
+                        target.lifecycleGeneration(),
+                        target.leaseGeneration());
         return new systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec()
                 .encodeSessionRelocationRoute(command);
     }

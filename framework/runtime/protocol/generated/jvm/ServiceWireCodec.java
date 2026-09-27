@@ -101,7 +101,7 @@ final class ServiceWireCodec {
   record BoundSessionBindingTransitionTombstone(BoundSessionBindingState bindingState, NonzeroU64 retiredBindingGeneration) implements BoundSessionBindingTransition {}
   record RetiredBoundSessionRouteFence(Rid sessionOwnerNodeRid, NonzeroU64 sessionOwnerNodeGeneration, Text8 sessionOwnerId, NonzeroU64 sessionOwnerLeaseGeneration, Rid sessionRid, NonzeroU64 retiredBindingGeneration) {}
   sealed interface SessionRelocationRouteUpdate permits SessionRelocationRouteUpdateCommit, SessionRelocationRouteUpdateAbort {}
-  record SessionRelocationRouteUpdateCommit(SessionRelocationRouteAction action, NonzeroU64 previousAuthorityOwnerGeneration, NonzeroU64 targetAuthorityOwnerGeneration, Rid targetNodeRid, NonzeroU64 targetNodeGeneration) implements SessionRelocationRouteUpdate {}
+  record SessionRelocationRouteUpdateCommit(SessionRelocationRouteAction action, NonzeroU64 previousAuthorityOwnerGeneration, NonzeroU64 targetAuthorityOwnerGeneration, Rid targetNodeRid, NonzeroU64 targetNodeGeneration, NonzeroU64 targetOwnerLeaseGeneration) implements SessionRelocationRouteUpdate {}
   record SessionRelocationRouteUpdateAbort(SessionRelocationRouteAction action, NonzeroU64 currentAuthorityOwnerGeneration) implements SessionRelocationRouteUpdate {}
   sealed interface ObjectCreationKey permits ObjectCreationKeyActor, ObjectCreationKeyUserSpot, ObjectCreationKeyInstanceSpot {}
   record ObjectCreationKeyActor(StatefulObjectKind objectKind, Text8 actorId) implements ObjectCreationKey {}
@@ -702,7 +702,8 @@ final class ServiceWireCodec {
       NonzeroU64 targetAuthorityOwnerGeneration = decodeNonzeroU64(selected, c, flags);
       Rid targetNodeRid = decodeRid(selected, c, flags);
       NonzeroU64 targetNodeGeneration = decodeNonzeroU64(selected, c, flags);
-      selected.end("session-relocation-route-update"); return new SessionRelocationRouteUpdateCommit(action, previousAuthorityOwnerGeneration, targetAuthorityOwnerGeneration, targetNodeRid, targetNodeGeneration);
+      NonzeroU64 targetOwnerLeaseGeneration = decodeNonzeroU64(selected, c, flags);
+      selected.end("session-relocation-route-update"); return new SessionRelocationRouteUpdateCommit(action, previousAuthorityOwnerGeneration, targetAuthorityOwnerGeneration, targetNodeRid, targetNodeGeneration, targetOwnerLeaseGeneration);
     }
     else if(action==SessionRelocationRouteAction.ABORT) {
       NonzeroU64 currentAuthorityOwnerGeneration = decodeNonzeroU64(selected, c, flags);
@@ -719,6 +720,7 @@ final class ServiceWireCodec {
       encodeNonzeroU64(item.targetAuthorityOwnerGeneration(), selected, c, flags);
       encodeRid(item.targetNodeRid(), selected, c, flags);
       encodeNonzeroU64(item.targetNodeGeneration(), selected, c, flags);
+      encodeNonzeroU64(item.targetOwnerLeaseGeneration(), selected, c, flags);
       byte[] bytes=selected.result(); encodeU16(new U16(bytes.length),w,c,flags); w.bytes(bytes);
       return;
     }

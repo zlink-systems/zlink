@@ -161,6 +161,7 @@ class stream_session_registry_t
                                                   std::uint64_t previous_authority_owner_generation,
                                                   object_ref_t target,
                                                   std::uint64_t target_node_generation,
+                                                  std::uint64_t target_owner_lease_generation,
                                                   route_terminal_commit_t commit_terminal = {});
     stream_route_admission_t
     acknowledge_remote_abort (const std::string &connection_id,

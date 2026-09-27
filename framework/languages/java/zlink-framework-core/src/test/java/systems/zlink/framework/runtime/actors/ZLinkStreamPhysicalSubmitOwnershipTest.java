@@ -604,7 +604,8 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
                 9,
                 10,
                 NODE_B,
-                4);
+                4,
+                5);
     }
 
     private static ZLinkServiceM6BWireCodec.BoundSessionSend targetBoundSend() {

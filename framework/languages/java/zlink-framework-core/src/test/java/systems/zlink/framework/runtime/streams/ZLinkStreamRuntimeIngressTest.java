@@ -670,6 +670,7 @@ final class ZLinkStreamRuntimeIngressTest {
                         0,
                         7,
                         null,
+                        0,
                         0);
 
         assertThrows(

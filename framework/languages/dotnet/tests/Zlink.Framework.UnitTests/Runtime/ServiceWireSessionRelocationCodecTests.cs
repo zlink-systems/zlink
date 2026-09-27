@@ -37,7 +37,8 @@ public sealed class ServiceWireSessionRelocationCodecTests
                     11,
                     12,
                     RoutingId.From("target"),
-                    4
+                    4,
+                    5
                 )
             ),
             ZLinkServiceWireCodec.EncodeSessionRelocationRoute,
@@ -67,6 +68,7 @@ public sealed class ServiceWireSessionRelocationCodecTests
                 "TargetAuthorityOwnerGeneration",
                 "TargetNodeRid",
                 "TargetNodeGeneration",
+                "TargetOwnerLeaseGeneration",
                 "CurrentAuthorityOwnerGeneration",
             },
             PublicPropertyNames<ZLinkServiceWireCodec.SessionRelocationRouteUpdateRecord>()
@@ -104,7 +106,8 @@ public sealed class ServiceWireSessionRelocationCodecTests
                 11,
                 12,
                 RoutingId.From("target"),
-                4
+                4,
+                5
             )
         );
         Assert.Throws<ArgumentOutOfRangeException>(() =>

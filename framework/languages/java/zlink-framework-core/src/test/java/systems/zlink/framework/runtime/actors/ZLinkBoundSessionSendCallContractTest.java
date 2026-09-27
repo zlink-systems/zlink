@@ -206,7 +206,8 @@ final class ZLinkBoundSessionSendCallContractTest {
                 7,
                 8,
                 RoutingId.from("node-a"),
-                9);
+                9,
+                10);
     }
 
     private static ZLinkInternalSpotNode spotNode(

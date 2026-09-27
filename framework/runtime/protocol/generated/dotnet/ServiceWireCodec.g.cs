@@ -430,7 +430,7 @@ internal static class ServiceWireCodec
     internal sealed record RetiredBoundSessionRouteFence(Rid SessionOwnerNodeRid, NonzeroU64 SessionOwnerNodeGeneration, Text8 SessionOwnerId, NonzeroU64 SessionOwnerLeaseGeneration, Rid SessionRid, NonzeroU64 RetiredBindingGeneration);
 
     internal abstract record SessionRelocationRouteUpdate;
-    internal sealed record SessionRelocationRouteUpdateCase0(SessionRelocationRouteAction Action, NonzeroU64 PreviousAuthorityOwnerGeneration, NonzeroU64 TargetAuthorityOwnerGeneration, Rid TargetNodeRid, NonzeroU64 TargetNodeGeneration) : SessionRelocationRouteUpdate;
+    internal sealed record SessionRelocationRouteUpdateCase0(SessionRelocationRouteAction Action, NonzeroU64 PreviousAuthorityOwnerGeneration, NonzeroU64 TargetAuthorityOwnerGeneration, Rid TargetNodeRid, NonzeroU64 TargetNodeGeneration, NonzeroU64 TargetOwnerLeaseGeneration) : SessionRelocationRouteUpdate;
     internal sealed record SessionRelocationRouteUpdateCase1(SessionRelocationRouteAction Action, NonzeroU64 CurrentAuthorityOwnerGeneration) : SessionRelocationRouteUpdate;
 
     internal abstract record ObjectCreationKey;
@@ -2215,8 +2215,9 @@ internal static class ServiceWireCodec
             var TargetAuthorityOwnerGeneration = ReadNonzeroU64(selected, context);
             var TargetNodeRid = ReadRid(selected, context);
             var TargetNodeGeneration = ReadNonzeroU64(selected, context);
+            var TargetOwnerLeaseGeneration = ReadNonzeroU64(selected, context);
             selected.End("session-relocation-route-update");
-            var caseValue = new SessionRelocationRouteUpdateCase0(Action, PreviousAuthorityOwnerGeneration, TargetAuthorityOwnerGeneration, TargetNodeRid, TargetNodeGeneration);
+            var caseValue = new SessionRelocationRouteUpdateCase0(Action, PreviousAuthorityOwnerGeneration, TargetAuthorityOwnerGeneration, TargetNodeRid, TargetNodeGeneration, TargetOwnerLeaseGeneration);
             SessionRelocationRouteUpdate value = caseValue;
             return value;
         }
@@ -2243,6 +2244,7 @@ internal static class ServiceWireCodec
             WriteNonzeroU64(body, item.TargetAuthorityOwnerGeneration, context);
             WriteRid(body, item.TargetNodeRid, context);
             WriteNonzeroU64(body, item.TargetNodeGeneration, context);
+            WriteNonzeroU64(body, item.TargetOwnerLeaseGeneration, context);
             WriteU16(writer, new U16(checked((ushort)body.Length)), context);
             writer.Bytes(body.ToArray());
             break;

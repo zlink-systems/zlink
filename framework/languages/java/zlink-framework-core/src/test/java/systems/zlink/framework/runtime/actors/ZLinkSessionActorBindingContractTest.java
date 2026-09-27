@@ -629,7 +629,8 @@ final class ZLinkSessionActorBindingContractTest {
                 previousAuthorityOwnerGeneration,
                 currentAuthorityOwnerGeneration,
                 NODE_B,
-                4);
+                4,
+                5);
     }
 
     private static ZLinkServiceM6BWireCodec.SessionRelocationRoute abort(
@@ -652,6 +653,7 @@ final class ZLinkSessionActorBindingContractTest {
                 0,
                 currentAuthorityOwnerGeneration,
                 null,
+                0,
                 0);
     }
 

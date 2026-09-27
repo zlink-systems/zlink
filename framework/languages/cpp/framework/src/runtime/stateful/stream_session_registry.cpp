@@ -713,13 +713,15 @@ stream_session_registry_t::commit_remote_route (const std::string &connection_id
                                                 std::uint64_t previous_authority_owner_generation,
                                                 object_ref_t target,
                                                 std::uint64_t target_node_generation,
+                                                std::uint64_t target_owner_lease_generation,
                                                 route_terminal_commit_t commit_terminal)
 {
     auto admission =
       _lane
         .run ([this, &connection_id, binding_generation, &actor_id, object_generation,
                previous_authority_owner_generation, target = std::move (target),
-               target_node_generation, &commit_terminal] () mutable -> stream_route_admission_t {
+               target_node_generation, target_owner_lease_generation,
+               &commit_terminal] () mutable -> stream_route_admission_t {
             const auto connection = _connections.find (connection_id);
             auto *aggregate = current_aggregate_unlocked (actor_id);
             if (connection == _connections.end () || aggregate == nullptr
@@ -737,15 +739,14 @@ stream_session_registry_t::commit_remote_route (const std::string &connection_id
                 || target.kind != object_kind_t::actor || target.key != actor_id
                 || target.object_generation != object_generation
                 || target.authority_owner_generation <= previous_authority_owner_generation
-                || target_node_generation == 0 || !aggregate->ingress_drain->active.empty ()) {
+                || target_node_generation == 0 || target_owner_lease_generation == 0
+                || !aggregate->ingress_drain->active.empty ()) {
                 return {stateful_error_t::conflict, aggregate->binding, last_sequence, {}};
             }
             auto next = aggregate->binding;
             next.actor = std::move (target);
             next.target_node_generation = target_node_generation;
-            /* The target owner lease is learned by the target owner, not by the
-             * Session owner (Session-Actor binding §8.1). */
-            next.owner_lease_generation = 0;
+            next.owner_lease_generation = target_owner_lease_generation;
             auto retained = aggregate->route_publish_pending
                               ? std::vector<stream_retained_outbound_t>{}
                               : take_retained_outbound_unlocked (*aggregate);

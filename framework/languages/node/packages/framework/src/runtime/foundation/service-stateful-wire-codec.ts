@@ -350,6 +350,7 @@ export type ServiceSessionRelocationRoute =
         readonly targetAuthorityOwnerGeneration: bigint;
         readonly targetNodeRid: string;
         readonly targetNodeGeneration: bigint;
+        readonly targetOwnerLeaseGeneration: bigint;
       };
     }
   | {

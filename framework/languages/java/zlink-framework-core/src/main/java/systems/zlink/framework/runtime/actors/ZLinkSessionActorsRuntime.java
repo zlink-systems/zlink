@@ -850,6 +850,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                         current.meshName(),
                         current.nodeRid(),
                         bindingGeneration,
+                        0,
                         0));
         IngressGate previous =
                 ingressGates.put(
@@ -1871,7 +1872,11 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         try {
             preparation =
                     flight.actor()
-                            .prepareNativeActorRoute(flight.targetActor(), RELAY_SUBMIT_TIMEOUT);
+                            .prepareNativeActorRoute(
+                                    flight.targetActor(),
+                                    flight.command().currentAuthorityOwnerGeneration(),
+                                    flight.command().targetOwnerLeaseGeneration(),
+                                    RELAY_SUBMIT_TIMEOUT);
         } catch (RuntimeException failure) {
             preparation = CompletableFuture.failedFuture(failure);
         }
@@ -1929,7 +1934,9 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                 flight.actor().commitPreparedNativeActorRoute(flight.targetActor());
                                 bindingRoutes.put(
                                         flight.command().actor().actorId(),
-                                        current.toTarget(flight.update()));
+                                        current.toTarget(
+                                                flight.update(),
+                                                flight.command().targetOwnerLeaseGeneration()));
                                 seal.consume();
                                 gate.seal = null;
                                 held = gate.detachHeld();
@@ -2027,6 +2034,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             String meshName,
             RoutingId nodeRid,
             long bindingGeneration,
+            long ownerLeaseGeneration,
             long lastAcceptedSessionSequence) {
         boolean matchesSource(RelocationRouteUpdate update) {
             return actorId.equals(update.actorId())
@@ -2035,13 +2043,14 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     && bindingGeneration == update.bindingGeneration();
         }
 
-        StoredBindingRoute toTarget(RelocationRouteUpdate update) {
+        StoredBindingRoute toTarget(RelocationRouteUpdate update, long targetOwnerLeaseGeneration) {
             return new StoredBindingRoute(
                     actorId,
                     objectGeneration,
                     meshName,
                     update.targetNodeRid(),
                     bindingGeneration,
+                    targetOwnerLeaseGeneration,
                     lastAcceptedSessionSequence);
         }
 
@@ -2052,12 +2061,19 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     meshName,
                     targetActor.nodeRid(),
                     bindingGeneration,
+                    ownerLeaseGeneration,
                     lastAcceptedSessionSequence);
         }
 
         StoredBindingRoute withAcceptedHighWater(long highWater) {
             return new StoredBindingRoute(
-                    actorId, objectGeneration, meshName, nodeRid, bindingGeneration, highWater);
+                    actorId,
+                    objectGeneration,
+                    meshName,
+                    nodeRid,
+                    bindingGeneration,
+                    ownerLeaseGeneration,
+                    highWater);
         }
     }
 

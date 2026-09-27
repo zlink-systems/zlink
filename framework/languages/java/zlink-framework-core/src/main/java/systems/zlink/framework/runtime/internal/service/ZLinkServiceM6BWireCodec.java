@@ -923,7 +923,8 @@ public final class ZLinkServiceM6BWireCodec {
                                     route.previousAuthorityOwnerGeneration(),
                                     route.currentAuthorityOwnerGeneration(),
                                     route.targetNodeRid().toBytes(),
-                                    route.targetNodeGeneration())
+                                    route.targetNodeGeneration(),
+                                    route.targetOwnerLeaseGeneration())
                             : new ServiceWirePilotCodec.SessionRouteAbort(
                                     route.currentAuthorityOwnerGeneration());
             return ServiceWirePilotCodec.encodeSessionRelocationRoute44(
@@ -949,18 +950,21 @@ public final class ZLinkServiceM6BWireCodec {
             long current;
             RoutingId targetNodeRid;
             long targetNodeGeneration;
+            long targetOwnerLeaseGeneration;
             if (generated.route() instanceof ServiceWirePilotCodec.SessionRouteCommit commit) {
                 action = SessionRelocationRouteAction.COMMIT;
                 previous = commit.previousAuthorityOwnerGeneration();
                 current = commit.targetAuthorityOwnerGeneration();
                 targetNodeRid = RoutingId.from(commit.targetNodeRid());
                 targetNodeGeneration = commit.targetNodeGeneration();
+                targetOwnerLeaseGeneration = commit.targetOwnerLeaseGeneration();
             } else if (generated.route() instanceof ServiceWirePilotCodec.SessionRouteAbort abort) {
                 action = SessionRelocationRouteAction.ABORT;
                 previous = 0;
                 current = abort.currentAuthorityOwnerGeneration();
                 targetNodeRid = null;
                 targetNodeGeneration = 0;
+                targetOwnerLeaseGeneration = 0;
             } else {
                 throw protocol("unknown Session relocation route action");
             }
@@ -975,7 +979,8 @@ public final class ZLinkServiceM6BWireCodec {
                     previous,
                     current,
                     targetNodeRid,
-                    targetNodeGeneration);
+                    targetNodeGeneration,
+                    targetOwnerLeaseGeneration);
         } catch (IOException failure) {
             throw protocol("invalid sessionRelocationRoute command: " + failure.getMessage());
         }
@@ -1197,7 +1202,8 @@ public final class ZLinkServiceM6BWireCodec {
             long previousAuthorityOwnerGeneration,
             long currentAuthorityOwnerGeneration,
             RoutingId targetNodeRid,
-            long targetNodeGeneration) {
+            long targetNodeGeneration,
+            long targetOwnerLeaseGeneration) {
         public SessionRelocationRoute {
             Objects.requireNonNull(relocation, "relocation");
             Objects.requireNonNull(coordinator, "coordinator");
@@ -1215,7 +1221,8 @@ public final class ZLinkServiceM6BWireCodec {
                 Objects.requireNonNull(targetNodeRid, "targetNodeRid");
                 if (previousAuthorityOwnerGeneration <= 0
                         || currentAuthorityOwnerGeneration <= previousAuthorityOwnerGeneration
-                        || targetNodeGeneration == 0) {
+                        || targetNodeGeneration == 0
+                        || targetOwnerLeaseGeneration <= 0) {
                     throw protocol("commit route update is invalid");
                 }
             } else {
@@ -1224,7 +1231,8 @@ public final class ZLinkServiceM6BWireCodec {
                 }
                 if (previousAuthorityOwnerGeneration != 0
                         || targetNodeRid != null
-                        || targetNodeGeneration != 0) {
+                        || targetNodeGeneration != 0
+                        || targetOwnerLeaseGeneration != 0) {
                     throw protocol("abort route update contains commit fields");
                 }
             }

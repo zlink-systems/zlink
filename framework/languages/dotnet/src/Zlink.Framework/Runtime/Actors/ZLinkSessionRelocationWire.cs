@@ -132,7 +132,8 @@ internal static class ZLinkSessionRelocationWire
                 route.AuthorityOwnerGeneration,
                 pending.TargetAuthorityOwnerGeneration,
                 target.NodeRid,
-                pending.TargetNodeGeneration
+                pending.TargetNodeGeneration,
+                pending.TargetOwnerLeaseGeneration
             )
         );
     }

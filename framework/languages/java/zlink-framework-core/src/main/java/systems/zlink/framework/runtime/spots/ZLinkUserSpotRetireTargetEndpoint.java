@@ -920,7 +920,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 route.sourceAuthorityOwnerGeneration(),
                 targetOwnerGeneration,
                 request.targetNodeRid(),
-                request.targetNodeGeneration());
+                request.targetNodeGeneration(),
+                request.targetOwnerLeaseGeneration());
     }
 
     @Override

@@ -1205,7 +1205,7 @@ int relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_
       .session_routing_id = session_rid.to_bytes (),
       .binding_generation = 23,
       .route = {protocol::session_relocation_route_action_t::commit, 17, 29,
-                zlink::routing_id_t::from (std::string ("target-node")).to_bytes (), 31, 0}};
+                zlink::routing_id_t::from (std::string ("target-node")).to_bytes (), 31, 0, 37}};
     if (!gateway.prepare_session_relocation_target_route (route, 37)) {
         return 2;
     }
