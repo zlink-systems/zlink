@@ -311,7 +311,7 @@ export class ZLinkSpotActorMembership {
     operation: () => Promise<T> | T
   ): Promise<T> {
     const pending = activation.serial.executeLifecycleOperation(operation);
-    const turn = activation.serial.currentTurn;
+    const turn = activation.serial.isCurrentTurn ? activation.serial.currentTurn : undefined;
     return turn === undefined ? await pending : await turn.yieldFrameworkPromise(pending);
   }
 
