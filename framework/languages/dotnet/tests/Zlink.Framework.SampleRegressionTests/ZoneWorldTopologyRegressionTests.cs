@@ -377,9 +377,9 @@ public sealed partial class RegressionTests
         Assert.Contains("ZW-B1 ZW-B2 ZW-B3 ZW-B4 ZW-B5 ZW-B6", runner, StringComparison.Ordinal);
         Assert.Contains("pass ZW-B5", runner, StringComparison.Ordinal);
         Assert.Contains("pass ZW-B6", runner, StringComparison.Ordinal);
-        Assert.Contains("message_follow_relay", runner, StringComparison.Ordinal);
         Assert.Contains("payload=", runner, StringComparison.Ordinal);
-        Assert.Contains("relay_hits\" -eq 1", runner, StringComparison.Ordinal);
+        Assert.Contains("one_way_hits\" -eq 1", runner, StringComparison.Ordinal);
+        Assert.Contains("request_hits\" -eq 1", runner, StringComparison.Ordinal);
         Assert.DoesNotContain("ZW-B6 remains withheld", runner, StringComparison.Ordinal);
     }
 
