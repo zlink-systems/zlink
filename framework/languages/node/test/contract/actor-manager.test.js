@@ -2635,6 +2635,7 @@ test('target ownership publication submits one exact command 44 without a comple
       action: 'commit',
       previousAuthorityOwnerGeneration: 16n,
       targetAuthorityOwnerGeneration: 17n,
+      targetOwnerLeaseGeneration: 23n,
       targetNodeRid: 'target-node',
       targetNodeGeneration: 19n
     }

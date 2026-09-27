@@ -7310,6 +7310,7 @@ test('service-wire relocation replaces a learned source packet route before the 
       action: 'commit',
       previousAuthorityOwnerGeneration: 11n,
       targetAuthorityOwnerGeneration: 12n,
+      targetOwnerLeaseGeneration: 14n,
       targetNodeRid: 'target',
       targetNodeGeneration: 4n
     }
@@ -9321,6 +9322,7 @@ function serviceSessionRelocationRoute(seal, options = {}) {
             options.previousAuthorityOwnerGeneration ?? seal.actor.authorityOwnerGeneration,
           targetAuthorityOwnerGeneration:
             options.targetAuthorityOwnerGeneration ?? seal.actor.authorityOwnerGeneration + 1n,
+          targetOwnerLeaseGeneration: options.targetOwnerLeaseGeneration ?? 14n,
           targetNodeRid: options.targetNodeRid ?? 'target',
           targetNodeGeneration: options.targetNodeGeneration ?? 4n
         }
