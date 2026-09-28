@@ -1120,6 +1120,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     framework/src/runtime/foundation/operation_registry.cpp)
   target_compile_features(test_cpp_framework_operation_registry PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_operation_registry PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
   target_compile_definitions(test_cpp_framework_operation_registry PRIVATE
     ZLINK_COMPLETION_TERMINAL_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/completion-terminal-v1.json")
@@ -1327,6 +1328,16 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     NAME zlink_cpp_framework_mesh_node_vertical_test
     COMMAND zlink_cpp_framework_mesh_node_vertical_test
     LABELS "framework-unit;framework-zlink;framework-zlink-channel;framework-zlink-spot;framework-zlink-actor-gateway"
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME zlink_cpp_framework_mesh_monitor_pump_async_test
+    COMMAND zlink_cpp_framework_mesh_node_vertical_test --monitor-pump-async
+    LABELS "framework-unit;framework-zlink;framework-monitoring"
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME zlink_cpp_framework_mesh_monitor_snapshot_test
+    COMMAND zlink_cpp_framework_mesh_node_vertical_test --monitor-snapshot
+    LABELS "framework-unit;framework-zlink;framework-monitoring"
     TIMEOUT 30)
 
   find_package(GTest QUIET)

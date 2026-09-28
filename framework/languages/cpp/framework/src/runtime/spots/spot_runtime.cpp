@@ -13456,27 +13456,26 @@ bool spot_node_runtime_t::has_active_callbacks () const
 
 std::vector<actor_ref_t> spot_node_runtime_t::local_actor_refs () const
 {
-    return _state->lane
-      .run_checked ([&] {
-          std::vector<actor_ref_t> refs;
-          refs.reserve (_state->actor_spot_ids.size ());
-          const auto node_rid = detail::effective_spot_node_rid (_state->snapshot);
-          for (const auto &[key, spot_id] : _state->actor_spot_ids) {
-              const auto split = key.find (':');
-              if (split == std::string::npos) {
-                  continue;
-              }
-              const auto generation = _state->actor_generations.find (key);
-              if (generation == _state->actor_generations.end () || generation->second == 0) {
-                  continue;
-              }
-              refs.push_back (::zlink::framework::detail::actor_ref_access_t::make (
-                node_rid_t::from_string (node_rid), key.substr (0, split), key.substr (split + 1),
-                generation->second));
-          }
-          return refs;
-      })
-      .get ();
+    return _state->lane.run_checked ([this] { return local_actor_refs_on_lane (); }).get ();
+}
+
+std::vector<actor_ref_t> spot_node_runtime_t::local_actor_refs_on_lane () const
+{
+    std::vector<actor_ref_t> refs;
+    refs.reserve (_state->actor_spot_ids.size ());
+    const auto node_rid = detail::effective_spot_node_rid (_state->snapshot);
+    for (const auto &[key, spot_id] : _state->actor_spot_ids) {
+        const auto split = key.find (':');
+        if (split == std::string::npos)
+            continue;
+        const auto generation = _state->actor_generations.find (key);
+        if (generation == _state->actor_generations.end () || generation->second == 0)
+            continue;
+        refs.push_back (::zlink::framework::detail::actor_ref_access_t::make (
+          node_rid_t::from_string (node_rid), key.substr (0, split), key.substr (split + 1),
+          generation->second));
+    }
+    return refs;
 }
 
 std::optional<zlink::message_t>
@@ -13845,18 +13844,28 @@ bool spot_node_runtime_t::complete_relocation_ready (const spot_id_t &spot_id,
 
 std::size_t spot_node_runtime_t::active_user_spot_count () const
 {
-    return _state->lane
-      .run_checked ([&] {
-          return static_cast<std::size_t> (std::count_if (
-            _state->spot_contexts_by_id.begin (), _state->spot_contexts_by_id.end (),
-            [&] (const auto &entry) {
-                const auto &context = entry.second;
-                return !context._state->closed && !context._state->native_spot.expired ()
-                       && (!_state->snapshot.entry_spot_name
-                           || context._state->spot_name != *_state->snapshot.entry_spot_name);
-            }));
-      })
-      .get ();
+    return _state->lane.run_checked ([this] { return active_user_spot_count_on_lane (); }).get ();
+}
+
+std::size_t spot_node_runtime_t::active_user_spot_count_on_lane () const
+{
+    return static_cast<std::size_t> (std::count_if (
+      _state->spot_contexts_by_id.begin (), _state->spot_contexts_by_id.end (),
+      [&] (const auto &entry) {
+          const auto &context = entry.second;
+          return !context._state->closed && !context._state->native_spot.expired ()
+                 && (!_state->snapshot.entry_spot_name
+                     || context._state->spot_name != *_state->snapshot.entry_spot_name);
+      }));
+}
+
+task_t<std::pair<std::size_t, std::size_t>> spot_node_runtime_t::monitoring_counts_async () const
+{
+    return _state->lane.run_task ([state = _state] {
+        const spot_node_runtime_t owner (state);
+        return std::pair{owner.local_actor_refs_on_lane ().size (),
+                         owner.active_user_spot_count_on_lane ()};
+    });
 }
 
 bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &owner,

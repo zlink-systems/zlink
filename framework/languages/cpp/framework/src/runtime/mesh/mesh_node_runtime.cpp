@@ -4376,6 +4376,19 @@ host::node_status_t mesh_node_runtime_t::status () const
     return _node->status ();
 }
 
+task_t<std::tuple<std::vector<std::string>, std::int32_t, std::int32_t>>
+mesh_node_runtime_t::monitoring_configuration_async () const
+{
+    return _state->lane.run_task ([state = _state] {
+        return std::tuple{channel_names_on_lane (*state), state->actor_limit, state->spot_limit};
+    });
+}
+
+task_t<std::pair<std::size_t, std::size_t>> mesh_node_runtime_t::monitoring_counts_async () const
+{
+    return spot_node_runtime_t (_state->spot_state).monitoring_counts_async ();
+}
+
 bool mesh_node_runtime_t::relocation_source_stopped () const
 {
     if (_stopping.load (std::memory_order_acquire))
@@ -4418,15 +4431,18 @@ object_role_t mesh_node_runtime_t::object_role () const
 
 std::vector<std::string> mesh_node_runtime_t::channel_names () const
 {
-    return _state->lane
-      .run_checked ([&] {
-          std::vector<std::string> result;
-          result.reserve (_state->channels.size ());
-          for (const auto &[name, _] : _state->channels)
-              result.push_back (name);
-          return result;
-      })
+    return _state->lane.run_checked ([state = _state] { return channel_names_on_lane (*state); })
       .get ();
+}
+
+std::vector<std::string>
+mesh_node_runtime_t::channel_names_on_lane (const mesh_node_builder_state_t &state)
+{
+    std::vector<std::string> result;
+    result.reserve (state.channels.size ());
+    for (const auto &[name, _] : state.channels)
+        result.push_back (name);
+    return result;
 }
 
 std::map<std::string, int> mesh_node_runtime_t::channel_weights () const

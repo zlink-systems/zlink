@@ -21,22 +21,27 @@ namespace zlink::framework::runtime
 mesh_node_snapshot_t
 build_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &state,
                 std::string mesh_name);
+task_t<mesh_node_snapshot_t>
+build_snapshot_async (std::shared_ptr<route_mesh_runtime_service_t::state_t> state,
+                      std::string mesh_name,
+                      std::uint64_t sequence);
 
 namespace
 {
 
-mesh_node_state_t map_state (host::node_status_t::state_t state)
+mesh_node_state_t map_state (mesh::service_node_state_t state)
 {
     switch (state) {
-        case host::node_status_t::state_t::preparing:
+        case mesh::service_node_state_t::preparing:
             return mesh_node_state_t::starting;
-        case host::node_status_t::state_t::serving:
+        case mesh::service_node_state_t::serving:
             return mesh_node_state_t::ready;
-        case host::node_status_t::state_t::draining:
+        case mesh::service_node_state_t::draining:
+        case mesh::service_node_state_t::retiring:
             return mesh_node_state_t::stopping;
-        case host::node_status_t::state_t::stopped:
+        case mesh::service_node_state_t::stopped:
             return mesh_node_state_t::stopped;
-        case host::node_status_t::state_t::error:
+        case mesh::service_node_state_t::error:
             return mesh_node_state_t::failed;
     }
     return mesh_node_state_t::failed;
@@ -158,52 +163,50 @@ struct route_mesh_runtime_service_t::state_t
         return found->second;
     }
 
-    void broadcast (hub_t &hub, const mesh_node_snapshot_t &snapshot)
+    const std::string &mesh_name_for (const hub_t &hub) const
     {
-        std::vector<std::shared_ptr<observer_t>> current;
-        {
-            std::lock_guard lock (hub.mutex);
-            auto write = hub.observers.begin ();
-            for (auto read = hub.observers.begin (); read != hub.observers.end (); ++read) {
-                if (auto observer = read->lock ()) {
-                    current.push_back (observer);
-                    *write++ = *read;
-                }
-            }
-            hub.observers.erase (write, hub.observers.end ());
-        }
-        const bool terminal = snapshot.state == mesh_node_state_t::stopped
-                              || snapshot.state == mesh_node_state_t::failed;
-        for (const auto &observer : current)
-            observer->enqueue (snapshot.mesh_name, snapshot, terminal);
+        const auto found = std::find_if (hubs.begin (), hubs.end (), [&hub] (const auto &entry) {
+            return entry.second.get () == &hub;
+        });
+        if (found == hubs.end ())
+            throw invalid_runtime_call ("RouteMesh monitor hub is not configured");
+        return found->first;
     }
 
-    std::optional<mesh_node_snapshot_t> try_build_snapshot (hub_t &hub) noexcept
+    void retain_snapshot (hub_t &hub, const mesh_node_snapshot_t &snapshot, bool publish)
     {
-        try {
-            auto snapshot = build_snapshot (shared_from_this (), hub.node->mesh_name ());
-            {
-                std::lock_guard lock (hub.mutex);
-                hub.last_snapshot = snapshot;
+        const bool terminal = snapshot.state == mesh_node_state_t::stopped
+                              || snapshot.state == mesh_node_state_t::failed;
+        std::lock_guard lock (hub.mutex);
+        if ((hub.stopped.load (std::memory_order_acquire) && publish)
+            || (hub.last_snapshot && hub.last_snapshot->sequence >= snapshot.sequence))
+            return;
+        hub.last_snapshot = snapshot;
+        if (!publish)
+            return;
+        auto write = hub.observers.begin ();
+        for (auto read = hub.observers.begin (); read != hub.observers.end (); ++read) {
+            if (auto observer = read->lock ()) {
+                observer->enqueue (snapshot.mesh_name, snapshot, terminal);
+                *write++ = *read;
             }
-            return snapshot;
         }
-        catch (...) {
-            return std::nullopt;
-        }
+        hub.observers.erase (write, hub.observers.end ());
     }
 
     void publish_current_snapshot (hub_t &hub) noexcept
     {
-        try {
-            if (auto snapshot = try_build_snapshot (hub))
-                broadcast (hub, *snapshot);
-        }
-        catch (...) {
-            // Monitoring projection and delivery never change transport or
-            // host lifecycle results. A later change publishes a fresh full
-            // snapshot.
-        }
+        const auto &mesh_name = mesh_name_for (hub);
+        auto owner = require_hub (mesh_name);
+        auto state = shared_from_this ();
+        auto task = std::make_shared<task_t<mesh_node_snapshot_t>> (
+          build_snapshot_async (state, mesh_name, next_sequence (mesh_name)));
+        detail::observe_task_completion (
+          *task, [state, owner, task] (const result_t<mesh_node_snapshot_t> &result) {
+              if (!result)
+                  return;
+              state->retain_snapshot (*owner, result.value (), true);
+          });
     }
 
     void publish_snapshot_change (hub_t &hub) { publish_current_snapshot (hub); }
@@ -266,7 +269,7 @@ struct route_mesh_runtime_service_t::state_t
             return;
         if (status_for_log)
             detail::monitoring_runtime_t (monitoring)
-              .publish_location_changes (hub.node->mesh_name (), std::move (*status_for_log), true,
+              .publish_location_changes (mesh_name_for (hub), std::move (*status_for_log), true,
                                          std::nullopt, std::nullopt);
         publish_current_snapshot (hub);
     }
@@ -288,7 +291,7 @@ struct route_mesh_runtime_service_t::state_t
         try {
             location_page_request_t page;
             for (;;) {
-                auto listed = location_store->list_mesh_nodes (hub.node->mesh_name (), page);
+                auto listed = location_store->list_mesh_nodes (mesh_name_for (hub), page);
                 const auto &result = listed.result ();
                 if (!result)
                     return;
@@ -489,8 +492,8 @@ void route_mesh_runtime_service_t::stop () noexcept
             }
             hub->observers.clear ();
         }
-        auto terminal = _state->try_build_snapshot (*hub);
-        if (!terminal) {
+        std::optional<mesh_node_snapshot_t> terminal;
+        {
             std::lock_guard lock (hub->mutex);
             terminal = hub->last_snapshot;
         }
@@ -516,22 +519,28 @@ void route_mesh_runtime_service_t::stop () noexcept
         terminal->placement.unavailable_reason = topology_reason_t::runtime_not_ready;
         terminal->sequence = _state->next_sequence (terminal->mesh_name);
         terminal->observed_at = std::chrono::system_clock::now ();
+        _state->retain_snapshot (*hub, *terminal, false);
         for (const auto &observer : observers)
             observer->enqueue (terminal->mesh_name, *terminal, true);
     }
 }
 
 mesh_node_snapshot_t
-build_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &state,
-                std::string mesh_name)
+project_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &state,
+                  std::string mesh_name,
+                  const mesh::service_node_descriptor_t &descriptor,
+                  const std::vector<mesh::admitted_peer_t> &peers,
+                  const std::vector<mesh::service_node_descriptor_t> &not_required_peers,
+                  const std::vector<std::string> &channel_names,
+                  std::int32_t actor_limit,
+                  std::int32_t spot_limit,
+                  std::size_t active_actor_count,
+                  std::size_t active_spot_count,
+                  std::uint64_t sequence)
 {
     const auto hub = state->require_hub (mesh_name);
-    const auto status = hub->node->status ();
-    const auto descriptor = hub->node->native_node ().transport ().topology ().local_descriptor ();
-    const auto peers = hub->node->native_node ().transport ().topology ().peers ();
-    const auto not_required_peers =
-      hub->node->native_node ().transport ().topology ().not_required_peers ();
-    const auto transport_state = map_state (status.state);
+    const auto node_rid = zlink::routing_id_t::from (descriptor.node_routing_id);
+    const auto transport_state = map_state (descriptor.state);
 
     std::vector<mesh_node_descriptor_t> location_descriptors;
     {
@@ -614,9 +623,9 @@ build_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &st
 
     const auto local_location =
       std::find_if (location_descriptors.begin (), location_descriptors.end (),
-                    [&status] (const mesh_node_descriptor_t &candidate) {
-                        return candidate.rid == status.routing_id ()
-                               && candidate.lifecycle_generation == status.lifecycle_generation ();
+                    [&node_rid, &descriptor] (const mesh_node_descriptor_t &candidate) {
+                        return candidate.rid == node_rid
+                               && candidate.lifecycle_generation == descriptor.lifecycle_generation;
                     });
     const auto mapped_state = hub->stopped.load (std::memory_order_acquire)
                                 ? mesh_node_state_t::stopped
@@ -632,8 +641,7 @@ build_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &st
     for (const auto &channel : descriptor.channels)
         local_channels.emplace (channel.name, channel.weight);
     for (const auto &remote : location_descriptors) {
-        if (remote.rid == status.routing_id ()
-            || remote.state == framework_runtime_state_t::relocated
+        if (remote.rid == node_rid || remote.state == framework_runtime_state_t::relocated
             || remote.state == framework_runtime_state_t::stopped
             || remote.state == framework_runtime_state_t::error
             || !classified_peer_ids.insert (remote.rid.to_hex ()).second)
@@ -659,7 +667,7 @@ build_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &st
     }
 
     std::vector<mesh_channel_snapshot_t> channels;
-    for (const auto &name : hub->node->channel_names ()) {
+    for (const auto &name : channel_names) {
         const auto local_server = local_channels.find (name);
         const auto ready =
           (local_server != local_channels.end () && local_server->second > 0 ? std::uint64_t{1}
@@ -673,24 +681,24 @@ build_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &st
 
     mesh_node_descriptor_t placement;
     placement.mesh_name = mesh_name;
-    placement.rid = status.routing_id ();
-    placement.lifecycle_generation = status.lifecycle_generation ();
+    placement.rid = node_rid;
+    placement.lifecycle_generation = descriptor.lifecycle_generation;
     placement.descriptor_revision = descriptor.descriptor_revision;
-    placement.endpoint = status.local_endpoint ();
+    placement.endpoint = descriptor.advertised_endpoint;
     placement.object_role =
       descriptor.object_role == mesh::service_object_role_t::client   ? object_role_t::client
       : descriptor.object_role == mesh::service_object_role_t::server ? object_role_t::server
                                                                       : object_role_t::none;
     placement.placement_weight = descriptor.placement_weight;
-    placement.capacity.actors.limit = hub->node->actor_limit ();
-    placement.capacity.spots.limit = hub->node->spot_limit ();
+    placement.capacity.actors.limit = actor_limit;
+    placement.capacity.spots.limit = spot_limit;
     placement.activation_concurrency.limit = hub->node->activation_admission ().limit ();
     placement.activation_concurrency.active = hub->node->activation_admission ().active ();
     if (local_location != location_descriptors.end ())
         placement = *local_location;
     // Runtime monitoring §5: report this MeshNode's local activation records.
-    placement.capacity.actors.active = hub->node->active_actor_count ();
-    placement.capacity.spots.active = hub->node->active_spot_count ();
+    placement.capacity.actors.active = active_actor_count;
+    placement.capacity.spots.active = active_spot_count;
     const bool location_unavailable = state->location_store != nullptr && !location_is_healthy;
     const bool placement_available =
       placement.object_role == object_role_t::server && mapped_state == mesh_node_state_t::ready
@@ -736,18 +744,48 @@ build_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &st
                                                  : location_unavailable
                                                    ? topology_reason_t::location_unavailable
                                                    : topology_reason_t::capacity_exceeded}},
-      .sequence = state->next_sequence (descriptor.mesh_name),
+      .sequence = sequence,
       .observed_at = std::chrono::system_clock::now ()};
+}
+
+mesh_node_snapshot_t
+build_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &state,
+                std::string mesh_name)
+{
+    const auto hub = state->require_hub (mesh_name);
+    const auto sequence = state->next_sequence (mesh_name);
+    auto &topology = hub->node->native_node ().transport ().topology ();
+    const auto descriptor = topology.local_descriptor ();
+    const auto peers = topology.peers ();
+    const auto not_required = topology.not_required_peers ();
+    const auto names = hub->node->channel_names ();
+    const auto actor_limit = hub->node->actor_limit ();
+    const auto spot_limit = hub->node->spot_limit ();
+    const auto actor_count = hub->node->active_actor_count ();
+    const auto spot_count = hub->node->active_spot_count ();
+    return project_snapshot (state, std::move (mesh_name), descriptor, peers, not_required, names,
+                             actor_limit, spot_limit, actor_count, spot_count, sequence);
+}
+
+task_t<mesh_node_snapshot_t>
+build_snapshot_async (std::shared_ptr<route_mesh_runtime_service_t::state_t> state,
+                      std::string mesh_name,
+                      std::uint64_t sequence)
+{
+    const auto hub = state->require_hub (mesh_name);
+    auto &topology = hub->node->native_node ().transport ().topology ();
+    auto [descriptor, peers, not_required] = co_await topology.monitoring_snapshot_async ();
+    auto [names, actor_limit, spot_limit] = co_await hub->node->monitoring_configuration_async ();
+    auto [actor_count, spot_count] = co_await hub->node->monitoring_counts_async ();
+    co_return project_snapshot (state, std::move (mesh_name), descriptor, peers, not_required,
+                                names, actor_limit, spot_limit, actor_count, spot_count, sequence);
 }
 
 mesh_node_snapshot_t route_mesh_runtime_service_t::snapshot (std::string mesh_name) const
 {
     const auto hub = _state->require_hub (mesh_name);
     auto snapshot = build_snapshot (_state, std::move (mesh_name));
-    {
-        std::lock_guard lock (hub->mutex);
-        hub->last_snapshot = snapshot;
-    }
+    _state->retain_snapshot (*hub, snapshot, false);
     return snapshot;
 }
 
@@ -767,11 +805,13 @@ std::unique_ptr<mesh_runtime_observation_t> route_mesh_runtime_service_t::observ
     {
         std::lock_guard lock (hub->mutex);
         hub->observers.push_back (registered);
+        if (hub->last_snapshot && hub->last_snapshot->sequence > initial.sequence)
+            initial = *hub->last_snapshot;
+        const bool terminal =
+          initial.state == mesh_node_state_t::stopped || initial.state == mesh_node_state_t::failed;
+        const auto source_key = initial.mesh_name;
+        registered->enqueue (source_key, std::move (initial), terminal);
     }
-    const bool terminal =
-      initial.state == mesh_node_state_t::stopped || initial.state == mesh_node_state_t::failed;
-    const auto source_key = initial.mesh_name;
-    registered->enqueue (source_key, std::move (initial), terminal);
     return std::make_unique<observation_t> (std::move (registered));
 }
 

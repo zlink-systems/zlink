@@ -1633,6 +1633,7 @@ class spot_node_runtime_t
     void bind_drain_flag (std::shared_ptr<std::atomic_bool> flag);
     /* Entry spots are host infrastructure and are excluded. */
     std::size_t active_user_spot_count () const;
+    task_t<std::pair<std::size_t, std::size_t>> monitoring_counts_async () const;
     /* In-flight probe for the drain worker: true while any spot callback of
      * this node is still executing (graceful-drain-handoff §4-4). */
     bool has_active_callbacks () const;
@@ -2211,6 +2212,8 @@ class spot_node_runtime_t
     }
 
   private:
+    std::vector<actor_ref_t> local_actor_refs_on_lane () const;
+    std::size_t active_user_spot_count_on_lane () const;
     std::optional<std::string> spot_name_for_unlocked (const spot_id_t &spot_id) const;
 
     std::shared_ptr<service::spot_t>
