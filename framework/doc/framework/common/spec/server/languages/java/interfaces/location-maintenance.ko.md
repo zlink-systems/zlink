@@ -45,7 +45,7 @@ public record ZLinkStoreReadFound(ZLinkStoreValue value)
  implements ZLinkStoreReadResult {}
 
 public sealed interface ZLinkStoreCondition
- permits ZLinkStoreMissingCondition, ZLinkStoreVersionCondition {}
+ permits ZLinkStoreMissingCondition, ZLinkStoreVersionCondition, ZLinkStoreValueCondition {}
 
 public record ZLinkStoreMissingCondition(ZLinkStoreKey key)
  implements ZLinkStoreCondition {}
@@ -53,6 +53,11 @@ public record ZLinkStoreMissingCondition(ZLinkStoreKey key)
 public record ZLinkStoreVersionCondition(
  ZLinkStoreKey key,
  ZLinkStoreVersion expected)
+ implements ZLinkStoreCondition {}
+
+public record ZLinkStoreValueCondition(
+ ZLinkStoreKey key,
+ byte[] expected)
  implements ZLinkStoreCondition {}
 
 public sealed interface ZLinkStoreMutation

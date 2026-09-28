@@ -100,8 +100,13 @@ struct store_version_condition_t {
  store_version_t expected;
 };
 
+struct store_value_condition_t {
+ store_key_t key;
+ std::vector<std::byte> expected;
+};
+
 using store_condition_t =
- std::variant<store_missing_condition_t, store_version_condition_t>;
+ std::variant<store_missing_condition_t, store_version_condition_t, store_value_condition_t>;
 
 struct store_put_t {
  store_key_t key;
