@@ -168,7 +168,7 @@ raw_client_server_server_t::~raw_client_server_server_t () noexcept
 void raw_client_server_server_t::start ()
 {
     return _lane
-      .run ([this] {
+      .run_checked ([this] {
           if (_port) {
               return;
           }
@@ -228,17 +228,18 @@ void raw_client_server_server_t::close () noexcept
     application_job_queue_t::receive_flow_registration_t receive_flow_registration;
     try {
         _lane
-          .run ([this, &port, &router, &monitor_poller, &monitor, &receive_flow_registration] {
-              if (_closed) {
-                  return;
-              }
-              _closed = true;
-              port = std::move (_port);
-              router = std::move (_router);
-              monitor_poller = std::move (_monitor_poller);
-              monitor = std::move (_monitor);
-              receive_flow_registration = std::move (_receive_flow_registration);
-          })
+          .run_checked (
+            [this, &port, &router, &monitor_poller, &monitor, &receive_flow_registration] {
+                if (_closed) {
+                    return;
+                }
+                _closed = true;
+                port = std::move (_port);
+                router = std::move (_router);
+                monitor_poller = std::move (_monitor_poller);
+                monitor = std::move (_monitor);
+                receive_flow_registration = std::move (_receive_flow_registration);
+            })
           .get ();
     }
     catch (...) {
@@ -268,19 +269,19 @@ void raw_client_server_server_t::close () noexcept
 
 std::string raw_client_server_server_t::endpoint () const
 {
-    return _lane.run ([this] { return _options.descriptor.advertised_endpoint; }).get ();
+    return _lane.run_checked ([this] { return _options.descriptor.advertised_endpoint; }).get ();
 }
 
 protocol::client_server_server_admission_t raw_client_server_server_t::descriptor () const
 {
-    return _lane.run ([this] { return _options.descriptor; }).get ();
+    return _lane.run_checked ([this] { return _options.descriptor; }).get ();
 }
 
 void raw_client_server_server_t::update_descriptor (
   protocol::client_server_server_admission_t descriptor)
 {
     return _lane
-      .run ([this, descriptor = std::move (descriptor)] () mutable {
+      .run_checked ([this, descriptor = std::move (descriptor)] () mutable {
           if (descriptor.channel_name != _options.descriptor.channel_name
               || descriptor.server_routing_id != _options.descriptor.server_routing_id
               || descriptor.lifecycle_generation != _options.descriptor.lifecycle_generation
@@ -309,7 +310,7 @@ std::size_t raw_client_server_server_t::drain_monitor_events (
     for (;;) {
         const auto event =
           _lane
-            .run ([this] {
+            .run_checked ([this] {
                 if (!_monitor || !_monitor->valid ()) {
                     return std::optional<zlink::monitor_event_t>{};
                 }
@@ -353,7 +354,7 @@ std::size_t raw_client_server_server_t::drain_monitor_events (
                        + " client=" + routing_id_label (client);
             });
             _lane
-              .run ([this, &client] {
+              .run_checked ([this, &client] {
                   // The monitor value is a ready-count, not a physical connection
                   // identity.  The route id is the stable identity available at
                   // this framework boundary.
@@ -365,8 +366,9 @@ std::size_t raw_client_server_server_t::drain_monitor_events (
                 return "channel=" + _options.descriptor.channel_name
                        + " client=" + routing_id_label (client);
             });
-            _lane.run ([this, &client] { _connections.erase (client); }).get ();
-            (void) _lane.run ([this, &client] { return _liveness.disconnect (client, client); })
+            _lane.run_checked ([this, &client] { _connections.erase (client); }).get ();
+            (void) _lane
+              .run_checked ([this, &client] { return _liveness.disconnect (client, client); })
               .get ();
         }
     }
@@ -377,7 +379,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
   std::shared_ptr<application_job_queue_t::permit_t> application_permit)
 {
     const auto port = _lane
-                        .run ([this] {
+                        .run_checked ([this] {
                             _last_pump_bytes = 0;
                             return _port;
                         })
@@ -391,7 +393,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
         co_return client_server_pump_result_t::no_data;
     }
     _lane
-      .run ([this, &received] {
+      .run_checked ([this, &received] {
           for (const auto &part : received->parts)
               _last_pump_bytes += part.size ();
       })
@@ -429,7 +431,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
                 co_return client_server_pump_result_t::infrastructure;
             }
             _lane
-              .run ([this, &received, now] {
+              .run_checked ([this, &received, now] {
                   _connections.insert_or_assign (received->source_routing_id,
                                                  received->source_routing_id);
                   _liveness.admit (received->source_routing_id, received->source_routing_id, now);
@@ -451,7 +453,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
         }
         const auto connection =
           _lane
-            .run ([this, &received] {
+            .run_checked ([this, &received] {
                 const auto found = _connections.find (received->source_routing_id);
                 if (found != _connections.end ())
                     return std::optional<std::vector<std::uint8_t>>{found->second};
@@ -469,7 +471,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
             if (liveness.kind == protocol::command::livenessProbe) {
                 const auto acknowledged =
                   _lane
-                    .run ([this, &received, &connection, &liveness] {
+                    .run_checked ([this, &received, &connection, &liveness] {
                         return _liveness.acknowledge_probe (received->source_routing_id,
                                                             *connection, liveness.probe_id);
                     })
@@ -491,7 +493,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
                 }
             } else {
                 (void) _lane
-                  .run ([this, &received, &connection, &liveness, now] {
+                  .run_checked ([this, &received, &connection, &liveness, now] {
                       return _liveness.acknowledge (received->source_routing_id, *connection,
                                                     liveness.probe_id, now);
                   })
@@ -517,7 +519,7 @@ client_server_pump_result_t raw_client_server_server_t::enqueue_application_reco
     }
     const auto accepted =
       _lane
-        .run ([this, &received] {
+        .run_checked ([this, &received] {
             if (_connections.find (received.source_routing_id) == _connections.end ()) {
                 return false;
             }
@@ -534,7 +536,7 @@ client_server_pump_result_t raw_client_server_server_t::enqueue_application_reco
     const auto &envelope = header.value ();
     const auto matches_channel =
       _lane
-        .run (
+        .run_checked (
           [this, &envelope] { return envelope.channel_name == _options.descriptor.channel_name; })
         .get ();
     if (!matches_channel) {
@@ -572,7 +574,7 @@ client_server_pump_result_t raw_client_server_server_t::enqueue_application_reco
                                               permit.reset ();
                                           }};
     return _lane
-      .run ([this, &record] {
+      .run_checked ([this, &record] {
           return _mailbox.try_enqueue (std::move (record))
                    ? client_server_pump_result_t::application
                    : client_server_pump_result_t::backpressured;
@@ -582,14 +584,14 @@ client_server_pump_result_t raw_client_server_server_t::enqueue_application_reco
 
 std::size_t raw_client_server_server_t::last_pump_bytes () const
 {
-    return _lane.run ([this] { return _last_pump_bytes; }).get ();
+    return _lane.run_checked ([this] { return _last_pump_bytes; }).get ();
 }
 
 task_t<mesh::service_liveness_tick_t> raw_client_server_server_t::tick_liveness (
   mesh::service_liveness_registry_t::clock_t::time_point now)
 {
     auto prepared = _lane
-                      .run ([this, now] {
+                      .run_checked ([this, now] {
                           struct prepared_t
                           {
                               mesh::service_liveness_tick_t result;
@@ -627,7 +629,7 @@ task_t<mesh::service_liveness_tick_t> raw_client_server_server_t::tick_liveness 
 std::optional<mesh::service_liveness_registry_t::clock_t::time_point>
 raw_client_server_server_t::next_liveness_activity () const
 {
-    return _lane.run ([this] { return _liveness.next_activity (); }).get ();
+    return _lane.run_checked ([this] { return _liveness.next_activity (); }).get ();
 }
 
 bool raw_client_server_server_t::reply (const mesh::service_mailbox_record_t &request,
@@ -643,7 +645,7 @@ bool raw_client_server_server_t::reply (const mesh::service_mailbox_record_t &re
     if (!request_header) {
         throw std::invalid_argument ("ClientServer reply requires a decodable request envelope");
     }
-    const auto port = _lane.run ([this] { return _port; }).get ();
+    const auto port = _lane.run_checked ([this] { return _port; }).get ();
     if (!port)
         return false;
     zlink::framework::detail::channel_reply_writer_t writer;
@@ -678,7 +680,7 @@ bool raw_client_server_server_t::reply (const mesh::service_mailbox_record_t &re
     if (!request_header) {
         throw std::invalid_argument ("ClientServer reply requires a decodable request envelope");
     }
-    const auto port = _lane.run ([this] { return _port; }).get ();
+    const auto port = _lane.run_checked ([this] { return _port; }).get ();
     if (!port)
         return false;
     zlink::framework::detail::channel_reply_writer_t writer;
@@ -743,7 +745,7 @@ raw_client_server_client_t::~raw_client_server_client_t () noexcept
 void raw_client_server_client_t::start ()
 {
     return _lane
-      .run ([this] {
+      .run_checked ([this] {
           if (_port) {
               return;
           }
@@ -792,18 +794,19 @@ void raw_client_server_client_t::close () noexcept
     application_job_queue_t::receive_flow_registration_t receive_flow_registration;
     try {
         _lane
-          .run ([this, &port, &dealer, &monitor_poller, &monitor, &receive_flow_registration] {
-              if (_closed) {
-                  return;
-              }
-              _closed = true;
-              _ready = false;
-              port = std::move (_port);
-              dealer = std::move (_dealer);
-              monitor_poller = std::move (_monitor_poller);
-              monitor = std::move (_monitor);
-              receive_flow_registration = std::move (_receive_flow_registration);
-          })
+          .run_checked (
+            [this, &port, &dealer, &monitor_poller, &monitor, &receive_flow_registration] {
+                if (_closed) {
+                    return;
+                }
+                _closed = true;
+                _ready = false;
+                port = std::move (_port);
+                dealer = std::move (_dealer);
+                monitor_poller = std::move (_monitor_poller);
+                monitor = std::move (_monitor);
+                receive_flow_registration = std::move (_receive_flow_registration);
+            })
           .get ();
     }
     catch (...) {
@@ -832,7 +835,7 @@ void raw_client_server_client_t::close () noexcept
 
 bool raw_client_server_client_t::ready () const
 {
-    return _lane.run ([this] { return _ready; }).get ();
+    return _lane.run_checked ([this] { return _ready; }).get ();
 }
 
 task_t<std::size_t> raw_client_server_client_t::drain_monitor_events (
@@ -843,7 +846,7 @@ task_t<std::size_t> raw_client_server_client_t::drain_monitor_events (
     for (;;) {
         const auto event_and_port =
           _lane
-            .run ([this] {
+            .run_checked ([this] {
                 std::pair<std::optional<zlink::monitor_event_t>,
                           std::shared_ptr<detail::backend::raw_dealer_port_t>>
                   value;
@@ -889,7 +892,7 @@ task_t<std::size_t> raw_client_server_client_t::drain_monitor_events (
                                              : _options.client_routing_id);
             });
             _lane
-              .run ([this] {
+              .run_checked ([this] {
                   _connection_id = liveness_connection_identity (_options.expected_server);
                   ++_connection_generation;
                   _ready = false;
@@ -910,7 +913,7 @@ task_t<std::size_t> raw_client_server_client_t::drain_monitor_events (
             bool current = false;
             std::vector<std::uint8_t> connection;
             current = _lane
-                        .run ([this, &connection] {
+                        .run_checked ([this, &connection] {
                             connection = liveness_connection_identity (_options.expected_server);
                             const auto current = _connection_id == connection;
                             if (current) {
@@ -923,7 +926,7 @@ task_t<std::size_t> raw_client_server_client_t::drain_monitor_events (
                         .get ();
             if (current) {
                 (void) _lane
-                  .run ([this, &connection] {
+                  .run_checked ([this, &connection] {
                       return _liveness.disconnect (_options.expected_server.server_routing_id,
                                                    connection);
                   })
@@ -937,7 +940,7 @@ task_t<client_server_pump_result_t>
 raw_client_server_client_t::pump_one (mesh::service_liveness_registry_t::clock_t::time_point now)
 {
     const auto port = _lane
-                        .run ([this] {
+                        .run_checked ([this] {
                             _last_pump_bytes = 0;
                             return _port;
                         })
@@ -953,7 +956,7 @@ raw_client_server_client_t::pump_one (mesh::service_liveness_registry_t::clock_t
         co_return client_server_pump_result_t::no_data;
     }
     _lane
-      .run ([this, &received] {
+      .run_checked ([this, &received] {
           for (const auto &part : *received)
               _last_pump_bytes += part.size ();
       })
@@ -971,7 +974,7 @@ raw_client_server_client_t::pump_one (mesh::service_liveness_registry_t::clock_t
         }
         if (header.kind == protocol::command::reject) {
             (void) protocol::decode_reject (received->front ());
-            _lane.run ([this] { _ready = false; }).get ();
+            _lane.run_checked ([this] { _ready = false; }).get ();
             co_return client_server_pump_result_t::infrastructure;
         }
         if (header.kind == protocol::command::livenessProbe
@@ -979,11 +982,11 @@ raw_client_server_client_t::pump_one (mesh::service_liveness_registry_t::clock_t
             if (received->size () != 1) {
                 co_return client_server_pump_result_t::protocol_error;
             }
-            const auto connection = _lane.run ([this] { return _connection_id; }).get ();
+            const auto connection = _lane.run_checked ([this] { return _connection_id; }).get ();
             const auto liveness = protocol::decode_liveness (received->front ());
             if (liveness.kind == protocol::command::livenessProbe) {
                 const auto acknowledged = _lane
-                                            .run ([this, &connection, &liveness] {
+                                            .run_checked ([this, &connection, &liveness] {
                                                 return _liveness.acknowledge_probe (
                                                   _options.expected_server.server_routing_id,
                                                   connection, liveness.probe_id);
@@ -999,7 +1002,7 @@ raw_client_server_client_t::pump_one (mesh::service_liveness_registry_t::clock_t
                 }
             } else {
                 (void) _lane
-                  .run ([this, &connection, &liveness, now] {
+                  .run_checked ([this, &connection, &liveness, now] {
                       return _liveness.acknowledge (_options.expected_server.server_routing_id,
                                                     connection, liveness.probe_id, now);
                   })
@@ -1017,8 +1020,8 @@ raw_client_server_client_t::pump_one (mesh::service_liveness_registry_t::clock_t
 task_t<mesh::service_liveness_tick_t> raw_client_server_client_t::tick_liveness (
   mesh::service_liveness_registry_t::clock_t::time_point now)
 {
-    const auto result = _lane.run ([this, now] { return _liveness.tick (now); }).get ();
-    const auto port = _lane.run ([this] { return _port; }).get ();
+    const auto result = _lane.run_checked ([this, now] { return _liveness.tick (now); }).get ();
+    const auto port = _lane.run_checked ([this] { return _port; }).get ();
     if (port) {
         for (const auto &probe : result.probes) {
             //  Spec 51 §4 (ClientServer direction): the client-initiated
@@ -1028,7 +1031,7 @@ task_t<mesh::service_liveness_tick_t> raw_client_server_client_t::tick_liveness 
         }
     }
     if (!result.timed_out_nodes.empty ()) {
-        _lane.run ([this] { _ready = false; }).get ();
+        _lane.run_checked ([this] { _ready = false; }).get ();
     }
     co_return result;
 }
@@ -1036,7 +1039,7 @@ task_t<mesh::service_liveness_tick_t> raw_client_server_client_t::tick_liveness 
 std::optional<mesh::service_liveness_registry_t::clock_t::time_point>
 raw_client_server_client_t::next_liveness_activity () const
 {
-    return _lane.run ([this] { return _liveness.next_activity (); }).get ();
+    return _lane.run_checked ([this] { return _liveness.next_activity (); }).get ();
 }
 
 client_server_pump_result_t raw_client_server_client_t::accept_server_admission (
@@ -1047,7 +1050,7 @@ client_server_pump_result_t raw_client_server_client_t::accept_server_admission 
     const auto server = protocol::decode_client_server_server_admission (frame, kind);
     const auto state =
       _lane
-        .run ([this, &server] {
+        .run_checked ([this, &server] {
             struct state_t
             {
                 std::vector<std::uint8_t> connection;
@@ -1085,7 +1088,7 @@ client_server_pump_result_t raw_client_server_client_t::accept_server_admission 
                + " ready=" + (state.ready ? "true" : "false");
     });
     _lane
-      .run ([this, &server, &state, now] {
+      .run_checked ([this, &server, &state, now] {
           _liveness.admit (server.server_routing_id, state.connection, now);
       })
       .get ();
@@ -1097,7 +1100,7 @@ void raw_client_server_client_t::begin_admission_request (
 {
     const auto replies = _control_replies;
     const auto admitted = replies->lane
-                            .run ([replies] {
+                            .run_checked ([replies] {
                                 if (replies->admission_in_flight)
                                     return false;
                                 replies->admission_in_flight = true;
@@ -1107,7 +1110,7 @@ void raw_client_server_client_t::begin_admission_request (
     if (!admitted)
         return;
     const auto state = _lane
-                         .run ([this] {
+                         .run_checked ([this] {
                              struct state_t
                              {
                                  protocol::client_server_client_admission_t admission;
@@ -1124,7 +1127,7 @@ void raw_client_server_client_t::begin_admission_request (
     auto connection = state.connection;
     const auto connection_generation = state.connection_generation;
     if (connection.empty ()) {
-        replies->lane.run ([replies] { replies->admission_in_flight = false; }).get ();
+        replies->lane.run_checked ([replies] { replies->admission_in_flight = false; }).get ();
         return;
     }
     trace_client_server_lazy ("client-admission-request",
@@ -1162,7 +1165,8 @@ void raw_client_server_client_t::begin_probe_request (
   const std::shared_ptr<detail::backend::raw_dealer_port_t> &port, std::uint64_t probe_id)
 {
     const auto state =
-      _lane.run ([this] { return std::pair{_connection_id, _connection_generation}; }).get ();
+      _lane.run_checked ([this] { return std::pair{_connection_id, _connection_generation}; })
+        .get ();
     const auto &connection = state.first;
     const auto connection_generation = state.second;
     if (connection.empty ())
@@ -1192,7 +1196,7 @@ bool raw_client_server_client_t::apply_pending_control_replies (
     const auto replies = _control_replies;
     auto pending =
       replies->lane
-        .run ([replies] {
+        .run_checked ([replies] {
             std::pair<std::optional<control_reply_state_t::parked_reply_t>,
                       std::vector<std::pair<std::uint64_t, control_reply_state_t::parked_reply_t>>>
               value;
@@ -1204,7 +1208,8 @@ bool raw_client_server_client_t::apply_pending_control_replies (
     auto admission = std::move (pending.first);
     auto probes = std::move (pending.second);
     const auto current =
-      _lane.run ([this] { return std::pair{_connection_id, _connection_generation}; }).get ();
+      _lane.run_checked ([this] { return std::pair{_connection_id, _connection_generation}; })
+        .get ();
     const auto &current_connection = current.first;
     const auto current_generation = current.second;
     bool progressed = false;
@@ -1223,7 +1228,7 @@ bool raw_client_server_client_t::apply_pending_control_replies (
             //  The current (new) connection still needs its own admission.
             const auto retry_state =
               _lane
-                .run ([this] {
+                .run_checked ([this] {
                     std::pair<bool, std::shared_ptr<detail::backend::raw_dealer_port_t>> value;
                     value.first = !_closed && !_ready && !_connection_id.empty ();
                     if (value.first)
@@ -1243,7 +1248,7 @@ bool raw_client_server_client_t::apply_pending_control_replies (
                     (void) accept_server_admission (completion.parts.front (), header.kind, now);
                 } else if (header.kind == protocol::command::reject) {
                     (void) protocol::decode_reject (completion.parts.front ());
-                    _lane.run ([this] { _ready = false; }).get ();
+                    _lane.run_checked ([this] { _ready = false; }).get ();
                 } else {
                     trace_client_server ("client-admission-invalid-reply");
                 }
@@ -1256,7 +1261,7 @@ bool raw_client_server_client_t::apply_pending_control_replies (
             //  connection is still current and admission has not happened.
             const auto retry_state =
               _lane
-                .run ([this] {
+                .run_checked ([this] {
                     std::pair<bool, std::shared_ptr<detail::backend::raw_dealer_port_t>> value;
                     value.first = !_closed && !_ready && !_connection_id.empty ();
                     if (value.first)
@@ -1292,7 +1297,7 @@ bool raw_client_server_client_t::apply_pending_control_replies (
                 continue;
             }
             (void) _lane
-              .run ([this, &current_connection, &liveness, now] {
+              .run_checked ([this, &current_connection, &liveness, now] {
                   return _liveness.acknowledge (_options.expected_server.server_routing_id,
                                                 current_connection, liveness.probe_id, now);
               })
@@ -1313,7 +1318,7 @@ raw_client_server_client_t::send (const protocol::application_payload_t &payload
         throw std::invalid_argument ("ClientServer send timeout must be positive");
     }
     const auto state = _lane
-                         .run ([this] {
+                         .run_checked ([this] {
                              struct state_t
                              {
                                  std::shared_ptr<detail::backend::raw_dealer_port_t> port;
@@ -1366,7 +1371,7 @@ raw_client_server_client_t::request (const protocol::application_payload_t &payl
         throw std::invalid_argument ("ClientServer request timeout must be positive");
     }
     const auto state = _lane
-                         .run ([this] {
+                         .run_checked ([this] {
                              struct state_t
                              {
                                  std::shared_ptr<detail::backend::raw_dealer_port_t> port;
@@ -1464,7 +1469,7 @@ std::size_t raw_client_server_client_t::pending_request_count () const noexcept
 
 std::size_t raw_client_server_client_t::last_pump_bytes () const
 {
-    return _lane.run ([this] { return _last_pump_bytes; }).get ();
+    return _lane.run_checked ([this] { return _last_pump_bytes; }).get ();
 }
 
 } // namespace zlink::framework::runtime::client_server

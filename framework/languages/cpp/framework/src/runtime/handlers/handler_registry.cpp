@@ -105,7 +105,7 @@ task_t<void> continue_filter_chain (std::shared_ptr<filter_next_state_t> state,
                                     std::shared_ptr<filter_terminal_t> terminal)
 {
     state->lane
-      .run ([&] {
+      .run_checked ([&] {
           if (state->called) {
               state->duplicate = true;
               throw framework_exception_t (framework_error_kind_t::invalid_operation,
@@ -119,13 +119,13 @@ task_t<void> continue_filter_chain (std::shared_ptr<filter_next_state_t> state,
         auto message = co_await invoke_filter_level (filters, next_index, services, serializers,
                                                      std::move (context), terminal);
         state->lane
-          .run (
+          .run_checked (
             [&] { state->downstream = result_t<zlink::message_t>::success (std::move (message)); })
           .get ();
     }
     catch (const framework_exception_t &error) {
         state->lane
-          .run (
+          .run_checked (
             [&] { state->downstream = detail::result_access_t::failure<zlink::message_t> (error); })
           .get ();
         throw;
@@ -155,7 +155,7 @@ task_t<zlink::message_t> invoke_filter_level (std::shared_ptr<const filter_list_
 
     const auto downstream =
       next_state->lane
-        .run ([&] {
+        .run_checked ([&] {
             if (next_state->duplicate) {
                 throw framework_exception_t (framework_error_kind_t::invalid_operation,
                                              "handler filter next may be invoked at most once");

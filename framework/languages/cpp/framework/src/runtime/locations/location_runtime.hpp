@@ -3,6 +3,7 @@
 
 #include "runtime/diagnostics/runtime_metrics.hpp"
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 #include <runtime/locations/location_repository.hpp>
 
 #include <zlink/framework/contracts/locations/options.hpp>
@@ -68,7 +69,7 @@ class location_runtime_t
     std::optional<location_owner_token_t> current_owner_token () const
     {
         return _lane
-          .run ([this] {
+          .run_checked ([this] {
               return owner_lease_usable_on_lane () ? _owner_token
                                                    : std::optional<location_owner_token_t>{};
           })
@@ -102,22 +103,22 @@ class location_runtime_t
 
     bool owner_lease_healthy () const noexcept
     {
-        return _lane.run ([this] { return _owner_lease_healthy; }).get ();
+        return _lane.run_checked ([this] { return _owner_lease_healthy; }).get ();
     }
 
     bool owner_lease_usable () const noexcept
     {
-        return _lane.run ([this] { return owner_lease_usable_on_lane (); }).get ();
+        return _lane.run_checked ([this] { return owner_lease_usable_on_lane (); }).get ();
     }
 
     std::optional<std::chrono::system_clock::time_point> owner_lease_renewed_at () const
     {
-        return _lane.run ([this] { return _owner_lease_renewed_at; }).get ();
+        return _lane.run_checked ([this] { return _owner_lease_renewed_at; }).get ();
     }
 
     std::optional<std::string> last_error () const
     {
-        return _lane.run ([this] { return _last_error; }).get ();
+        return _lane.run_checked ([this] { return _last_error; }).get ();
     }
 
     void start (zlink::routing_id_t node_rid, std::stop_token cancellation = {})
@@ -145,7 +146,12 @@ class location_runtime_t
             throw;
         }
         _heartbeat_stop.store (false, std::memory_order_release);
-        _heartbeat = std::thread ([this] { heartbeat_loop (); });
+        _heartbeat = std::thread ([this] {
+#ifndef NDEBUG
+            runtime::infrastructure_wait_guard::infrastructure_scope_t scope (this);
+#endif
+            heartbeat_loop ();
+        });
     }
 
     void stop () noexcept
@@ -156,7 +162,7 @@ class location_runtime_t
         _heartbeat_stop.store (true, std::memory_order_release);
         _heartbeat_wake.notify_all ();
         if (_heartbeat.joinable ()) {
-            _heartbeat.join ();
+            runtime::infrastructure_wait_guard::join (_heartbeat, "location/heartbeat");
         }
         try {
             const auto token = current_owner_token_unchecked ();
@@ -164,7 +170,7 @@ class location_runtime_t
                 _store->remove_all_by_owner (*token).result ().value ();
                 _store->release_owner_lease (*token).result ().value ();
                 _lane
-                  .run ([this] {
+                  .run_checked ([this] {
                       _owner_token.reset ();
                       _owner_lease_admission_deadline.reset ();
                   })
@@ -187,7 +193,7 @@ class location_runtime_t
             _heartbeat_stop.store (true, std::memory_order_release);
             _heartbeat_wake.notify_all ();
             if (_heartbeat.joinable ()) {
-                _heartbeat.join ();
+                runtime::infrastructure_wait_guard::join (_heartbeat, "location/heartbeat");
             }
         }
         try {
@@ -196,7 +202,7 @@ class location_runtime_t
                 _store->remove_all_by_owner (*token).result ().value ();
                 _store->release_owner_lease (*token).result ().value ();
                 _lane
-                  .run ([this] {
+                  .run_checked ([this] {
                       _owner_token.reset ();
                       _owner_lease_admission_deadline.reset ();
                   })
@@ -223,7 +229,7 @@ class location_runtime_t
         std::optional<std::chrono::steady_clock::time_point> due_at;
         if (metrics_enabled) {
             due_at = _lane
-                       .run ([this] {
+                       .run_checked ([this] {
                            return _last_renew_started_at
                                     ? std::optional{*_last_renew_started_at
                                                     + _options.owner_lease_renew_interval}
@@ -234,7 +240,7 @@ class location_runtime_t
         const auto started_at = std::chrono::steady_clock::now ();
         if (metrics_enabled) {
             _lane
-              .run ([&] {
+              .run_checked ([&] {
                   _last_renew_started_at = started_at;
                   if (due_at && started_at > *due_at) {
                       metrics.histogram (
@@ -282,7 +288,7 @@ class location_runtime_t
                 ? expires_at - store_now - _options.owner_lease_fencing_margin
                 : std::chrono::system_clock::duration::zero ();
             _lane
-              .run ([&] {
+              .run_checked ([&] {
                   _owner_token = owner;
                   _owner_lease_healthy = true;
                   _owner_lease_renewed_at = store_now;
@@ -334,7 +340,7 @@ class location_runtime_t
                     return accept_lease (*token, renewed->lease_expires_at, renewed->store_now);
                 }
                 _lane
-                  .run ([this] {
+                  .run_checked ([this] {
                       _owner_token.reset ();
                       _owner_lease_admission_deadline.reset ();
                   })
@@ -428,7 +434,7 @@ class location_runtime_t
 
     std::optional<location_owner_token_t> current_owner_token_unchecked () const
     {
-        return _lane.run ([this] { return _owner_token; }).get ();
+        return _lane.run_checked ([this] { return _owner_token; }).get ();
     }
 
     static std::chrono::milliseconds
@@ -469,7 +475,7 @@ class location_runtime_t
                 ? found->lease_expires_at - found->store_now - _options.owner_lease_fencing_margin
                 : std::chrono::system_clock::duration::zero ();
             _lane
-              .run ([&] {
+              .run_checked ([&] {
                   _owner_token = found->token;
                   _owner_lease_healthy = true;
                   _owner_lease_renewed_at = found->store_now;
@@ -535,7 +541,7 @@ class location_runtime_t
             record_failure (error.what ());
         }
         _lane
-          .run ([this] {
+          .run_checked ([this] {
               _owner_token.reset ();
               _owner_lease_admission_deadline.reset ();
           })
@@ -555,9 +561,11 @@ class location_runtime_t
     {
         while (!_heartbeat_stop.load (std::memory_order_acquire)) {
             std::unique_lock lock (_heartbeat_gate);
-            _heartbeat_wake.wait_for (lock, _options.owner_lease_renew_interval, [this] {
-                return _heartbeat_stop.load (std::memory_order_acquire);
-            });
+            runtime::infrastructure_wait_guard::condition_wait_for (
+              _heartbeat_wake, lock, _options.owner_lease_renew_interval,
+              [this] { return _heartbeat_stop.load (std::memory_order_acquire); },
+              "location/heartbeat-input",
+              runtime::infrastructure_wait_guard::wait_relation_t::own_input);
             if (_heartbeat_stop.load (std::memory_order_acquire)) {
                 break;
             }
@@ -576,7 +584,7 @@ class location_runtime_t
     void record_failure (std::string message) const
     {
         _lane
-          .run ([&] {
+          .run_checked ([&] {
               _owner_lease_healthy = false;
               _last_error = std::move (message);
           })

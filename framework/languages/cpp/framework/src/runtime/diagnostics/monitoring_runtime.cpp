@@ -44,7 +44,7 @@ monitoring_builder_t &monitoring_builder_t::add_spot_events (std::string source_
     if (blank_monitoring_source (source_name))
         throw std::invalid_argument ("Spot monitoring source name must not be empty");
     _state->lane
-      .run ([&] {
+      .run_checked ([&] {
           if (std::find (_state->spot_sources.begin (), _state->spot_sources.end (), source_name)
               != _state->spot_sources.end ())
               throw std::invalid_argument ("Spot monitoring source is already registered");
@@ -58,7 +58,8 @@ monitoring_builder_t &monitoring_builder_t::on_spot_event (spot_event_handler_t 
 {
     if (!handler)
         throw std::invalid_argument ("Spot monitoring handler is required");
-    _state->lane.run ([&] { _state->spot_handlers.push_back (std::move (handler)); }).get ();
+    _state->lane.run_checked ([&] { _state->spot_handlers.push_back (std::move (handler)); })
+      .get ();
     return *this;
 }
 
@@ -322,7 +323,7 @@ void monitoring_runtime_t::publish_timer_failure (std::string source_name,
     std::vector<spot_event_handler_t> handlers;
     if (_state) {
         _state->lane
-          .run ([&] {
+          .run_checked ([&] {
               if (std::find (_state->spot_sources.begin (), _state->spot_sources.end (),
                              source_name)
                   != _state->spot_sources.end ())

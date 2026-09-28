@@ -172,7 +172,7 @@ serializer_registry_t::cache_serializer (std::type_index type,
                                          std::shared_ptr<const void> serializer) const
 {
     return _state->resolved_serializers_lane
-      .run ([&] {
+      .run_checked ([&] {
           const auto current =
             std::atomic_load_explicit (&_state->resolved_serializers, std::memory_order_acquire);
           if (const auto found = current->find (type); found != current->end ())
@@ -199,7 +199,7 @@ serializer_registry_t::cache_serializer (std::type_index type,
 void serializer_registry_t::invalidate_cached_serializer (std::type_index type) noexcept
 {
     _state->resolved_serializers_lane
-      .run ([&] {
+      .run_checked ([&] {
           const auto current =
             std::atomic_load_explicit (&_state->resolved_serializers, std::memory_order_acquire);
           if (current->find (type) == current->end ())

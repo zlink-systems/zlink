@@ -1658,7 +1658,7 @@ host_maintenance_runtime_t::host_maintenance_runtime_t (
 void host_maintenance_runtime_t::mark_serving ()
 {
     _lane
-      .run ([this] {
+      .run_checked ([this] {
           if (_state != maintenance_admission_state_t::preparing)
               throw std::logic_error ("host can become serving only from preparing");
           _state = maintenance_admission_state_t::serving;
@@ -1669,7 +1669,7 @@ void host_maintenance_runtime_t::mark_serving ()
 void host_maintenance_runtime_t::mark_error ()
 {
     _lane
-      .run ([this] {
+      .run_checked ([this] {
           if (_state != maintenance_admission_state_t::stopped)
               _state = maintenance_admission_state_t::error;
       })
@@ -1678,18 +1678,18 @@ void host_maintenance_runtime_t::mark_error ()
 
 maintenance_admission_state_t host_maintenance_runtime_t::state () const
 {
-    return _lane.run ([this] { return _state; }).get ();
+    return _lane.run_checked ([this] { return _state; }).get ();
 }
 
 std::optional<termination_result_t> host_maintenance_runtime_t::terminal_result () const
 {
-    return _lane.run ([this] { return _terminal; }).get ();
+    return _lane.run_checked ([this] { return _terminal; }).get ();
 }
 
 std::optional<termination_intent_t> host_maintenance_runtime_t::intent_snapshot () const
 {
     return _lane
-      .run ([this] () -> std::optional<termination_intent_t> {
+      .run_checked ([this] () -> std::optional<termination_intent_t> {
           if (_shutdown_claimed)
               return termination_intent_t::shutdown;
           return _effective_intent;
@@ -1708,7 +1708,7 @@ task_t<termination_result_t> host_maintenance_runtime_t::terminate (termination_
     };
     auto start =
       _lane
-        .run ([this, intent] {
+        .run_checked ([this, intent] {
             start_t start;
             if (_terminal)
                 start.immediate = *_terminal;
@@ -1813,11 +1813,11 @@ task_t<termination_result_t> host_maintenance_runtime_t::run_retire ()
         co_return termination_result_t{termination_intent_t::retire, termination_outcome_t::blocked,
                                        termination_reason_t::runtime_not_ready};
     }
-    _lane.run ([this] { _inventory_sealed = true; }).get ();
+    _lane.run_checked ([this] { _inventory_sealed = true; }).get ();
     for (const auto &object : *inventory) {
         if (object.state != object_state_t::ready) {
             _objects.end_maintenance_inventory ();
-            _lane.run ([this] { _inventory_sealed = false; }).get ();
+            _lane.run_checked ([this] { _inventory_sealed = false; }).get ();
             co_return termination_result_t{termination_intent_t::retire,
                                            termination_outcome_t::blocked,
                                            termination_reason_t::state_incompatible};
@@ -1848,7 +1848,7 @@ task_t<termination_result_t> host_maintenance_runtime_t::run_retire ()
     };
     const auto preflight_state =
       _lane
-        .run ([this, &preflight, exact_preflight] {
+        .run_checked ([this, &preflight, exact_preflight] {
             preflight_state_t state;
             if (_shutdown_claimed) {
                 _effective_intent = termination_intent_t::shutdown;
@@ -1896,9 +1896,9 @@ task_t<termination_result_t> host_maintenance_runtime_t::run_retire ()
             return termination_result_t{termination_intent_t::retire,
                                         termination_outcome_t::blocked, blocked_reason};
         }
-        _lane.run ([this] { _state = maintenance_admission_state_t::draining; }).get ();
+        _lane.run_checked ([this] { _state = maintenance_admission_state_t::draining; }).get ();
         _sessions.force_close_all ();
-        _lane.run ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
+        _lane.run_checked ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
         return termination_result_t{termination_intent_t::retire,
                                     termination_outcome_t::force_stopped,
                                     termination_reason_t::relocation_failed};
@@ -1963,15 +1963,15 @@ task_t<termination_result_t> host_maintenance_runtime_t::run_retire ()
         }
         ++committed_units;
     }
-    _lane.run ([this] { _state = maintenance_admission_state_t::draining; }).get ();
+    _lane.run_checked ([this] { _state = maintenance_admission_state_t::draining; }).get ();
     if (!_sessions.try_seal_all ()) {
         _sessions.force_close_all ();
-        _lane.run ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
+        _lane.run_checked ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
         co_return termination_result_t{termination_intent_t::retire,
                                        termination_outcome_t::force_stopped,
                                        termination_reason_t::relocation_failed};
     }
-    _lane.run ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
+    _lane.run_checked ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
     co_return termination_result_t{termination_intent_t::retire, termination_outcome_t::stopped,
                                    termination_reason_t::none};
 }
@@ -1980,7 +1980,7 @@ termination_result_t
 host_maintenance_runtime_t::run_shutdown (termination_intent_t effective_intent)
 {
     const auto acquire_inventory = _lane
-                                     .run ([this, effective_intent] {
+                                     .run_checked ([this, effective_intent] {
                                          _effective_intent = effective_intent;
                                          _state = maintenance_admission_state_t::draining;
                                          return !_inventory_sealed;
@@ -1989,16 +1989,16 @@ host_maintenance_runtime_t::run_shutdown (termination_intent_t effective_intent)
     if (acquire_inventory) {
         const auto inventory = _objects.try_begin_maintenance_inventory ();
         if (!inventory) {
-            _lane.run ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
+            _lane.run_checked ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
             return {effective_intent, termination_outcome_t::force_stopped,
                     termination_reason_t::teardown_failed};
         }
-        _lane.run ([this] { _inventory_sealed = true; }).get ();
+        _lane.run_checked ([this] { _inventory_sealed = true; }).get ();
     }
     const auto sealed = _sessions.try_seal_all ();
     if (!sealed)
         _sessions.force_close_all ();
-    _lane.run ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
+    _lane.run_checked ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
     return {effective_intent,
             sealed ? termination_outcome_t::stopped : termination_outcome_t::force_stopped,
             sealed ? termination_reason_t::none : termination_reason_t::teardown_failed};
@@ -2008,7 +2008,7 @@ void host_maintenance_runtime_t::complete_attempt (std::uint64_t attempt,
                                                    const termination_result_t &result)
 {
     const auto completion = _lane
-                              .run ([this, attempt, &result] {
+                              .run_checked ([this, attempt, &result] {
                                   struct completion_t
                                   {
                                       bool release_inventory = false;

@@ -167,7 +167,7 @@ void service_topology_registry_t::publish_local (service_node_descriptor_t descr
     }
     auto changed =
       _lane
-        .run ([&, this] {
+        .run_checked ([&, this] {
             std::function<void ()> changed;
             if (descriptor.mesh_name != _local.mesh_name
                 || descriptor.node_routing_id != _local.node_routing_id
@@ -203,12 +203,12 @@ void service_topology_registry_t::publish_local (service_node_descriptor_t descr
 
 void service_topology_registry_t::set_change_handler (std::function<void ()> handler)
 {
-    _lane.run ([&, this] { _change_handler = std::move (handler); }).get ();
+    _lane.run_checked ([&, this] { _change_handler = std::move (handler); }).get ();
 }
 
 service_node_descriptor_t service_topology_registry_t::local_descriptor () const
 {
-    return _lane.run ([this] { return _local; }).get ();
+    return _lane.run_checked ([this] { return _local; }).get ();
 }
 
 peer_admission_result_t service_topology_registry_t::admit (service_node_descriptor_t descriptor,
@@ -235,7 +235,7 @@ service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
     }
     const auto result =
       _lane
-        .run ([&, this] {
+        .run_checked ([&, this] {
             if (descriptor.mesh_name != _local.mesh_name) {
                 return std::pair{peer_admission_result_t::mesh_mismatch, std::function<void ()>{}};
             }
@@ -310,7 +310,7 @@ bool service_topology_registry_t::disconnect (const std::vector<std::uint8_t> &n
 {
     auto changed =
       _lane
-        .run ([&, this] {
+        .run_checked ([&, this] {
             std::function<void ()> changed;
             const auto found = _peers.find (node_routing_id);
             if (found == _peers.end () || found->second.connection_id != connection_id) {
@@ -331,7 +331,7 @@ bool service_topology_registry_t::disconnect (const std::vector<std::uint8_t> &n
 std::vector<admitted_peer_t> service_topology_registry_t::peers () const
 {
     return _lane
-      .run ([this] {
+      .run_checked ([this] {
           std::vector<admitted_peer_t> result;
           result.reserve (_peers.size ());
           for (const auto &[_, peer] : _peers) {
@@ -345,7 +345,7 @@ std::vector<admitted_peer_t> service_topology_registry_t::peers () const
 std::vector<service_node_descriptor_t> service_topology_registry_t::not_required_peers () const
 {
     return _lane
-      .run ([this] {
+      .run_checked ([this] {
           std::vector<service_node_descriptor_t> result;
           result.reserve (_not_required_peers.size ());
           for (const auto &[_, descriptor] : _not_required_peers)
@@ -359,7 +359,7 @@ std::optional<admitted_peer_t>
 service_topology_registry_t::peer (const std::vector<std::uint8_t> &node_routing_id) const
 {
     return _lane
-      .run ([&, this] () -> std::optional<admitted_peer_t> {
+      .run_checked ([&, this] () -> std::optional<admitted_peer_t> {
           const auto found = _peers.find (node_routing_id);
           if (found == _peers.end ()) {
               return std::nullopt;
@@ -524,7 +524,7 @@ service_topology_registry_t::select (const std::string &channel_name)
         return std::nullopt;
     }
     return _lane
-      .run ([&, this] () -> std::optional<std::vector<std::uint8_t>> {
+      .run_checked ([&, this] () -> std::optional<std::vector<std::uint8_t>> {
           const auto found = _selection_state.find (channel_name);
           if (found == _selection_state.end ()) {
               record_selection_failure (channel_name);
@@ -596,7 +596,7 @@ void service_topology_registry_t::observe_channel_metrics (
     auto observer = opentelemetry::nostd::get<
       opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObserverResultT<double>>> (result);
     _lane
-      .run ([&] {
+      .run_checked ([&] {
           // Selection already maintains the bounded member aggregates. No
           // application object, mailbox or Location Store traversal is needed.
           for (const auto &channel : _metric_channel_names) {
@@ -616,7 +616,7 @@ service_topology_registry_t::multicast_targets (const std::string &channel_name)
     if (channel_name.empty ())
         return {};
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           std::vector<admitted_peer_t> result;
           result.reserve (_peers.size ());
           for (const auto &[_, peer] : _peers) {

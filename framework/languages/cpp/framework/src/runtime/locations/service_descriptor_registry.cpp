@@ -30,7 +30,7 @@ service_descriptor_registry_t::publish (service_descriptor_record_t record,
     service_descriptor_event_t event{};
     const auto status =
       _lane
-        .run ([&] {
+        .run_checked ([&] {
             const auto found = _records.find (record.key);
             if (found == _records.end ()) {
                 if (expected_revision) {
@@ -79,7 +79,7 @@ bool service_descriptor_registry_t::remove (const service_descriptor_key_t &key,
     service_descriptor_event_t event{};
     const auto removed =
       _lane
-        .run ([&] {
+        .run_checked ([&] {
             const auto found = _records.find (key);
             if (found == _records.end () || found->second.descriptor_revision != expected_revision
                 || found->second.owner_id != expected_owner_id
@@ -107,7 +107,7 @@ service_descriptor_snapshot_t
 service_descriptor_registry_t::snapshot (service_descriptor_watch_filter_t filter) const
 {
     return _lane
-      .run ([&] {
+      .run_checked ([&] {
           service_descriptor_snapshot_t result{_change_stamp, {}};
           for (const auto &[key, record] : _records) {
               static_cast<void> (key);
@@ -127,7 +127,7 @@ std::uint64_t service_descriptor_registry_t::watch (service_descriptor_watch_fil
         throw std::invalid_argument ("descriptor watch callback is required");
     }
     return _lane
-      .run ([&] {
+      .run_checked ([&] {
           if (_next_watch_id == 0) {
               throw std::overflow_error ("descriptor watch id is exhausted");
           }
@@ -140,7 +140,7 @@ std::uint64_t service_descriptor_registry_t::watch (service_descriptor_watch_fil
 
 bool service_descriptor_registry_t::unwatch (std::uint64_t watch_id)
 {
-    return _lane.run ([&] { return _watchers.erase (watch_id) != 0; }).get ();
+    return _lane.run_checked ([&] { return _watchers.erase (watch_id) != 0; }).get ();
 }
 
 bool service_descriptor_registry_t::valid (const service_descriptor_record_t &record)

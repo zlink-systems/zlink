@@ -23,7 +23,7 @@ class listener_status_registry_t final
         if (name.empty () || endpoint.empty ())
             return;
         _lane
-          .run ([&] {
+          .run_checked ([&] {
               listener_status_t status{kind, name, std::move (endpoint),
                                        std::chrono::system_clock::now ()};
               _listeners[kind].insert_or_assign (std::move (name), std::move (status));
@@ -34,7 +34,7 @@ class listener_status_registry_t final
     void remove (listener_kind_t kind, const std::string &name) noexcept
     {
         _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto found = _listeners.find (kind);
               if (found == _listeners.end ())
                   return;
@@ -48,7 +48,7 @@ class listener_status_registry_t final
     std::optional<listener_status_t> find (listener_kind_t kind, const std::string &name) const
     {
         return _lane
-          .run ([&] () -> std::optional<listener_status_t> {
+          .run_checked ([&] () -> std::optional<listener_status_t> {
               const auto kind_found = _listeners.find (kind);
               if (kind_found == _listeners.end ())
                   return std::nullopt;
@@ -64,17 +64,17 @@ class listener_status_registry_t final
 
     void add_http (http_listener_status_t status)
     {
-        _lane.run ([&] { _http_listeners.push_back (std::move (status)); }).get ();
+        _lane.run_checked ([&] { _http_listeners.push_back (std::move (status)); }).get ();
     }
 
     void clear_http () noexcept
     {
-        _lane.run ([&] { _http_listeners.clear (); }).get ();
+        _lane.run_checked ([&] { _http_listeners.clear (); }).get ();
     }
 
     std::vector<http_listener_status_t> http_listeners () const
     {
-        return _lane.run ([&] { return _http_listeners; }).get ();
+        return _lane.run_checked ([&] { return _http_listeners; }).get ();
     }
 
   private:

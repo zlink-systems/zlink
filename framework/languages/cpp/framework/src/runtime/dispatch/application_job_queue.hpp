@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -406,7 +407,9 @@ class application_job_queue_t
             state->changed.notify_all ();
         });
         std::unique_lock lock (state->mutex);
-        state->changed.wait (lock, [&] { return state->completed; });
+        infrastructure_wait_guard::condition_wait (
+          state->changed, lock, [&] { return state->completed; }, "application-job/permit",
+          infrastructure_wait_guard::wait_relation_t::dependent_completion);
         return std::move (state->permit);
     }
 

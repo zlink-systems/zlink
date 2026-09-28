@@ -5,6 +5,7 @@
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/execution/actor_execution_context.hpp"
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/spots/spot_runtime.hpp"
@@ -313,6 +314,29 @@ TEST (ZLinkFrameworkSyncSubmit, SpotCallbackRejectsBeforeSideEffects)
     }));
     calls.expect_application_submission ();
 }
+
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+TEST (ZLinkFrameworkSyncSubmit, MeshReceiveCannotWaitForOccupiedSpotSerialQueue)
+{
+    ASSERT_DEATH (
+      {
+          runtime::offload_executor_t executor (1);
+          auto spot = std::make_shared<detail::spot_context_state_t> ();
+          spot->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (executor);
+          std::promise<void> entered;
+          std::promise<void> release;
+          auto released = release.get_future ();
+          ASSERT_TRUE (spot->serial_queue->try_post ("occupied", [&] {
+              entered.set_value ();
+              released.wait ();
+          }));
+          entered.get_future ().wait ();
+          runtime::infrastructure_wait_guard::mesh_receive_scope_t receive (spot.get ());
+          (void) spot->run_serial_sync ("spot-actor-admission", [] {});
+      },
+      "infrastructure wait guard: spot/run_serial_sync");
+}
+#endif
 
 TEST (ZLinkFrameworkSyncSubmit, StateLaneRejectsBeforeSideEffects)
 {

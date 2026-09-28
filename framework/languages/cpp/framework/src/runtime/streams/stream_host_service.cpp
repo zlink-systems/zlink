@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/streams/stream_host_service.hpp"
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 #include "runtime/transport/listener_identity.hpp"
 #include "runtime/configuration/service_scope.hpp"
 #include "runtime/dispatch/receive_batch_budget.hpp"
@@ -209,7 +210,12 @@ class stream_receive_scheduler_t final
             return;
         }
         _stopped = false;
-        _thread = std::thread ([this] { run (); });
+        _thread = std::thread ([this] {
+#ifndef NDEBUG
+            runtime::infrastructure_wait_guard::infrastructure_scope_t scope (this);
+#endif
+            run ();
+        });
     }
 
     lease_t register_connection ()
@@ -244,7 +250,7 @@ class stream_receive_scheduler_t final
     {
         request_stop ();
         if (_thread.joinable ()) {
-            _thread.join ();
+            runtime::infrastructure_wait_guard::join (_thread, "stream-listener/worker");
         }
     }
 
@@ -253,10 +259,14 @@ class stream_receive_scheduler_t final
                         const std::function<bool ()> &stop_requested) const
     {
         std::unique_lock lock (_mutex);
-        slot->changed.wait (lock, [&] {
-            return slot->granted || slot->closed || _stopped
-                   || (stop_requested && stop_requested ());
-        });
+        runtime::infrastructure_wait_guard::condition_wait (
+          slot->changed, lock,
+          [&] {
+              return slot->granted || slot->closed || _stopped
+                     || (stop_requested && stop_requested ());
+          },
+          "stream-listener/turn",
+          runtime::infrastructure_wait_guard::wait_relation_t::dependent_completion);
         return slot->granted && !slot->closed && !_stopped
                && !(stop_requested && stop_requested ());
     }
@@ -302,12 +312,16 @@ class stream_receive_scheduler_t final
             }
             if (candidates.empty ()) {
                 std::unique_lock lock (_mutex);
-                _changed.wait (lock, [this] {
-                    return _stopped
-                           || std::any_of (_slots.begin (), _slots.end (), [] (const auto &slot) {
-                                  return !slot->closed && !slot->granted;
-                              });
-                });
+                runtime::infrastructure_wait_guard::condition_wait (
+                  _changed, lock,
+                  [this] {
+                      return _stopped
+                             || std::any_of (_slots.begin (), _slots.end (), [] (const auto &slot) {
+                                    return !slot->closed && !slot->granted;
+                                });
+                  },
+                  "stream-scheduler/input",
+                  runtime::infrastructure_wait_guard::wait_relation_t::own_input);
                 continue;
             }
 
@@ -1061,8 +1075,8 @@ class stream_host_service_t::listener_t
                                  std::function<void ()> force_close)
     {
         _active_streams_lane
-          .run ([this, stream, liveness = std::move (liveness),
-                 force_close = std::move (force_close)] () mutable {
+          .run_checked ([this, stream, liveness = std::move (liveness),
+                         force_close = std::move (force_close)] () mutable {
               _active_streams.push_back (
                 active_session_t{stream, std::move (liveness), std::move (force_close)});
           })
@@ -1072,7 +1086,7 @@ class stream_host_service_t::listener_t
     void unregister_active_stream (const stream_t &stream)
     {
         _active_streams_lane
-          .run ([this, &stream] {
+          .run_checked ([this, &stream] {
               for (auto it = _active_streams.begin (); it != _active_streams.end (); ++it) {
                   if (it->stream.session_id () == stream.session_id ()) {
                       _active_streams.erase (it);
@@ -1086,7 +1100,7 @@ class stream_host_service_t::listener_t
     std::size_t active_session_count ()
     {
         const auto active =
-          _active_streams_lane.run ([this] { return _active_streams.size (); }).get ();
+          _active_streams_lane.run_checked ([this] { return _active_streams.size (); }).get ();
         const std::lock_guard lock (_core_sessions_mutex);
         return active + _core_sessions.size () + _retired_core_sessions.size ();
     }
@@ -1099,7 +1113,8 @@ class stream_host_service_t::listener_t
 
     void notify_sessions_closing (stream_close_reason_t reason, std::string_view diagnostic)
     {
-        auto sessions = _active_streams_lane.run ([this] { return _active_streams; }).get ();
+        auto sessions =
+          _active_streams_lane.run_checked ([this] { return _active_streams; }).get ();
         for (auto &entry : sessions) {
             _runtime.send_session_closing (entry.stream, reason, diagnostic);
         }
@@ -1110,7 +1125,8 @@ class stream_host_service_t::listener_t
      * connection would later be re-labeled by the liveness loop. */
     void force_close_sessions (stream_close_reason_t reason, std::string_view diagnostic)
     {
-        auto sessions = _active_streams_lane.run ([this] { return _active_streams; }).get ();
+        auto sessions =
+          _active_streams_lane.run_checked ([this] { return _active_streams; }).get ();
         for (auto &entry : sessions) {
             terminate_session (entry, reason, diagnostic);
         }
@@ -1134,7 +1150,8 @@ class stream_host_service_t::listener_t
      * per-session timers, one loop per node). */
     void sweep_liveness_once ()
     {
-        auto sessions = _active_streams_lane.run ([this] { return _active_streams; }).get ();
+        auto sessions =
+          _active_streams_lane.run_checked ([this] { return _active_streams; }).get ();
         for (auto &entry : sessions) {
             switch (entry.liveness->evaluate ()) {
                 case session_liveness_t::decision_t::none:
@@ -1303,7 +1320,10 @@ class stream_host_service_t::listener_t
     {
         std::unique_lock<std::mutex> lock (_ready_mutex);
         const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (30);
-        if (!_ready_cv.wait_until (lock, deadline, [&] { return _started || _start_failed; })) {
+        if (!runtime::infrastructure_wait_guard::condition_wait_until (
+              _ready_cv, lock, deadline, [&] { return _started || _start_failed; },
+              "stream-listener/start",
+              runtime::infrastructure_wait_guard::wait_relation_t::dependent_completion)) {
             throw framework_exception_t (framework_error_kind_t::internal_failure,
                                          "STREAM listener did not become ready: " + _stream.name);
         }
@@ -1358,7 +1378,7 @@ class stream_host_service_t::listener_t
             trace_stream_host ("stop-connections-join-workers", _stream);
             for (auto &worker : _workers) {
                 if (worker.joinable ()) {
-                    worker.join ();
+                    runtime::infrastructure_wait_guard::join (worker, "stream-connections/worker");
                 }
             }
             _workers.clear ();
@@ -2376,10 +2396,14 @@ class stream_host_service_t::listener_t
             if (_retired_core_sessions.empty ()) {
                 return;
             }
-            _core_sessions_changed.wait (lock, [this, observed_revision] {
-                return _retired_core_sessions.empty ()
-                       || _core_sessions_revision != observed_revision;
-            });
+            runtime::infrastructure_wait_guard::condition_wait (
+              _core_sessions_changed, lock,
+              [this, observed_revision] {
+                  return _retired_core_sessions.empty ()
+                         || _core_sessions_revision != observed_revision;
+              },
+              "stream/core-sessions",
+              runtime::infrastructure_wait_guard::wait_relation_t::dependent_completion);
         }
     }
 
@@ -2765,7 +2789,10 @@ class stream_host_service_t::listener_t
             owner->io.restart ();
             if (owner->io.run_one () == 0) {
                 lock.lock ();
-                operation->state->condition.wait_for (lock, std::chrono::milliseconds (100));
+                runtime::infrastructure_wait_guard::condition_wait_for (
+                  operation->state->condition, lock, std::chrono::milliseconds (100),
+                  "stream/io-completion",
+                  runtime::infrastructure_wait_guard::wait_relation_t::dependent_completion);
             } else {
                 lock.lock ();
             }
@@ -3645,7 +3672,12 @@ task_t<void> stream_host_service_t::start (service_provider_t &services)
               _monitoring, _mesh_node, _application_jobs, _session_replacement_callback_timeout);
             auto *raw = listener.get ();
             _listeners.push_back (std::move (listener));
-            _threads.emplace_back ([raw] { raw->run_guarded (); });
+            _threads.emplace_back ([raw] {
+#ifndef NDEBUG
+                runtime::infrastructure_wait_guard::infrastructure_scope_t scope (raw);
+#endif
+                raw->run_guarded ();
+            });
             raw->wait_started ();
             if (_listener_statuses)
                 _listener_statuses->update (listener_kind_t::stream, stream.name,
@@ -3656,6 +3688,9 @@ task_t<void> stream_host_service_t::start (service_provider_t &services)
          * the service drives every listener's sessions from a single
          * thread; no per-session timers exist. */
             _liveness_thread = std::thread ([this] {
+#ifndef NDEBUG
+                runtime::infrastructure_wait_guard::infrastructure_scope_t scope (this);
+#endif
                 auto last_sweep = std::chrono::steady_clock::now ();
                 while (!_stop.load (std::memory_order_acquire)) {
                     std::this_thread::sleep_for (std::chrono::milliseconds (100));
@@ -3752,14 +3787,14 @@ void stream_host_service_t::stop () noexcept
 {
     request_stop ();
     if (_liveness_thread.joinable ()) {
-        _liveness_thread.join ();
+        runtime::infrastructure_wait_guard::join (_liveness_thread, "stream/liveness");
     }
     for (auto &listener : _listeners) {
         listener->stop_connections ();
     }
     for (auto &thread : _threads) {
         if (thread.joinable ()) {
-            thread.join ();
+            runtime::infrastructure_wait_guard::join (thread, "stream/worker");
         }
     }
     _threads.clear ();

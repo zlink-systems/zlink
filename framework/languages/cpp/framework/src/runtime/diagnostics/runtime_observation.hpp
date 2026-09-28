@@ -2,6 +2,7 @@
 #pragma once
 
 #include <zlink/framework/contracts/monitoring/framework_runtime.hpp>
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 
 #include <algorithm>
 #include <condition_variable>
@@ -90,7 +91,10 @@ class runtime_observer_state_t final
         if (_callback_active && _callback_thread == std::this_thread::get_id ())
             return;
 
-        _idle.wait (lock, [this] { return !_scheduled && !_callback_active; });
+        runtime::infrastructure_wait_guard::condition_wait (
+          _idle, lock, [this] { return !_scheduled && !_callback_active; },
+          "runtime-observation/idle",
+          runtime::infrastructure_wait_guard::wait_relation_t::dependent_completion);
     }
 
   private:

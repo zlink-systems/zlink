@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/authority_key_codec.hpp"
@@ -1012,7 +1013,7 @@ void raw_relocation_replay_coordinator_t::release_target_activity (const key_t &
 {
     try {
         _lane
-          .run ([this, &target] {
+          .run_checked ([this, &target] {
               const auto found = _targets.find (target);
               if (found != _targets.end () && found->second.active_stages != 0)
                   --found->second.active_stages;
@@ -1053,7 +1054,7 @@ bool raw_relocation_replay_coordinator_t::register_target (
         return false;
     try {
         return _lane
-          .run ([this, registration = std::move (registration)] () mutable {
+          .run_checked ([this, registration = std::move (registration)] () mutable {
               const auto target_key =
                 key (registration.relocation, registration.target_attempt_generation,
                      registration.object);
@@ -1071,7 +1072,7 @@ bool raw_relocation_replay_coordinator_t::seal_target (const protocol::relocatio
                                                        const protocol::relocation_object_t &object)
 {
     return _lane
-      .run ([this, &relocation, target_attempt_generation, &object] {
+      .run_checked ([this, &relocation, target_attempt_generation, &object] {
           const auto found = _targets.find (key (relocation, target_attempt_generation, object));
           if (found == _targets.end () || found->second.closing || found->second.removing)
               return false;
@@ -1087,23 +1088,27 @@ bool raw_relocation_replay_coordinator_t::drain_target (const protocol::relocati
 {
     const auto target_key = key (relocation, target_attempt_generation, object);
     if (!_lane
-           .run ([this, &target_key] {
+           .run_checked ([this, &target_key] {
                const auto found = _targets.find (target_key);
                return found != _targets.end () && found->second.closing;
            })
            .get ())
         return false;
     std::unique_lock wait_lock (_activity_wait_mutex);
-    _activity_changed.wait (wait_lock, [this, &target_key] {
-        return _lane
-          .run ([this, &target_key] {
-              const auto current = _targets.find (target_key);
-              return current == _targets.end () || current->second.active_stages == 0;
-          })
-          .get ();
-    });
+    infrastructure_wait_guard::condition_wait (
+      _activity_changed, wait_lock,
+      [this, &target_key] {
+          return _lane
+            .run_checked ([this, &target_key] {
+                const auto current = _targets.find (target_key);
+                return current == _targets.end () || current->second.active_stages == 0;
+            })
+            .get ();
+      },
+      "relocation-target/activity",
+      infrastructure_wait_guard::wait_relation_t::dependent_completion);
     return _lane
-      .run ([this, &target_key] {
+      .run_checked ([this, &target_key] {
           const auto current = _targets.find (target_key);
           return current != _targets.end () && !current->second.removing
                  && current->second.active_stages == 0;
@@ -1118,7 +1123,7 @@ bool raw_relocation_replay_coordinator_t::unregister_target (
 {
     const auto target_key = key (relocation, target_attempt_generation, object);
     if (!_lane
-           .run ([this, &target_key] {
+           .run_checked ([this, &target_key] {
                const auto found = _targets.find (target_key);
                if (found == _targets.end () || found->second.removing)
                    return false;
@@ -1129,16 +1134,20 @@ bool raw_relocation_replay_coordinator_t::unregister_target (
            .get ())
         return false;
     std::unique_lock wait_lock (_activity_wait_mutex);
-    _activity_changed.wait (wait_lock, [this, &target_key] {
-        return _lane
-          .run ([this, &target_key] {
-              const auto current = _targets.find (target_key);
-              return current == _targets.end () || current->second.active_stages == 0;
-          })
-          .get ();
-    });
+    infrastructure_wait_guard::condition_wait (
+      _activity_changed, wait_lock,
+      [this, &target_key] {
+          return _lane
+            .run_checked ([this, &target_key] {
+                const auto current = _targets.find (target_key);
+                return current == _targets.end () || current->second.active_stages == 0;
+            })
+            .get ();
+      },
+      "relocation-target/activity",
+      infrastructure_wait_guard::wait_relation_t::dependent_completion);
     return _lane
-      .run ([this, &target_key] {
+      .run_checked ([this, &target_key] {
           const auto found = _targets.find (target_key);
           if (found == _targets.end () || found->second.active_stages != 0)
               return false;
@@ -1207,7 +1216,7 @@ raw_relocation_replay_coordinator_t::process_data (const mesh::service_mailbox_r
     };
     auto work =
       _lane
-        .run ([this, &state_key, &record, &data] {
+        .run_checked ([this, &state_key, &record, &data] {
             stage_work_t work;
             const auto found = _targets.find (state_key);
             if (found == _targets.end ()) {
@@ -1277,7 +1286,7 @@ bool raw_relocation_replay_coordinator_t::register_terminal_source (
         || registration.sequence == 0 || registration.reply_route_id == 0 || !registration.complete)
         return false;
     return _lane
-      .run ([this, registration = std::move (registration)] () mutable {
+      .run_checked ([this, registration = std::move (registration)] () mutable {
           return _terminal_sources
             .emplace (terminal_key (registration.relocation, registration.operation),
                       terminal_source_state_t{std::move (registration)})
@@ -1290,7 +1299,7 @@ bool raw_relocation_replay_coordinator_t::unregister_terminal_source (
   const protocol::relocation_id_t &relocation, const protocol::wire_operation_id_t &operation)
 {
     return _lane
-      .run ([this, &relocation, &operation] {
+      .run_checked ([this, &relocation, &operation] {
           return _terminal_sources.erase (terminal_key (relocation, operation)) != 0;
       })
       .get ();
@@ -1312,7 +1321,7 @@ bool raw_relocation_replay_coordinator_t::register_terminal_target (
     const auto bytes = retained_bytes (registration);
     const auto registered =
       _lane
-        .run ([this, registration = std::move (registration), bytes] () mutable {
+        .run_checked ([this, registration = std::move (registration), bytes] () mutable {
             const auto item_key =
               terminal_key (registration.relay.relocation, registration.relay.operation);
             const auto existing = _terminal_targets.find (item_key);
@@ -1347,7 +1356,7 @@ raw_relocation_replay_coordinator_t::retry_terminal_relays (clock_t::time_point 
         std::optional<protocol::application_payload_t> reply;
     };
     auto pending = _lane
-                     .run ([this, now] {
+                     .run_checked ([this, now] {
                          std::vector<pending_send_t> pending;
                          for (auto &[item_key, state] : _terminal_targets) {
                              if (state.acknowledging || state.next_retry > now)
@@ -1417,7 +1426,7 @@ task_t<raw_relocation_replay_result_t> raw_relocation_replay_coordinator_t::proc
     };
     auto work =
       _lane
-        .run ([this, &item_key, &relay, &record, &digest] {
+        .run_checked ([this, &item_key, &relay, &record, &digest] {
             completion_work_t work;
             const auto found = _terminal_sources.find (item_key);
             if (found == _terminal_sources.end ())
@@ -1466,7 +1475,7 @@ task_t<raw_relocation_replay_result_t> raw_relocation_replay_coordinator_t::proc
             persisted = false;
         }
         const auto completed = _lane
-                                 .run ([this, &item_key, persisted, &digest, &work] {
+                                 .run_checked ([this, &item_key, persisted, &digest, &work] {
                                      const auto found = _terminal_sources.find (item_key);
                                      if (found == _terminal_sources.end ())
                                          return raw_relocation_replay_result_t::not_registered;
@@ -1521,7 +1530,7 @@ raw_relocation_replay_coordinator_t::process_reply_relay_ack (
     };
     auto work =
       _lane
-        .run ([this, &item_key, &ack, &record] {
+        .run_checked ([this, &item_key, &ack, &record] {
             ack_work_t work;
             const auto found = _terminal_targets.find (item_key);
             if (found == _terminal_targets.end ())
@@ -1559,7 +1568,7 @@ raw_relocation_replay_coordinator_t::process_reply_relay_ack (
         persisted = false;
     }
     const auto result = _lane
-                          .run ([this, &item_key, persisted, &work] {
+                          .run_checked ([this, &item_key, persisted, &work] {
                               const auto found = _terminal_targets.find (item_key);
                               if (found == _terminal_targets.end ())
                                   return raw_relocation_replay_result_t::not_registered;
@@ -1590,7 +1599,7 @@ bool raw_relocation_replay_coordinator_t::confirm_terminal_source_lease_expired 
         bool proceed = false;
     };
     auto work = _lane
-                  .run ([this, &item_key, &exact_source] {
+                  .run_checked ([this, &item_key, &exact_source] {
                       expiry_work_t work;
                       const auto found = _terminal_targets.find (item_key);
                       if (found == _terminal_targets.end ()
@@ -1615,7 +1624,7 @@ bool raw_relocation_replay_coordinator_t::confirm_terminal_source_lease_expired 
     }
     bool retry_reactivated = false;
     const auto confirmed = _lane
-                             .run ([this, &item_key, persisted, &work, &retry_reactivated] {
+                             .run_checked ([this, &item_key, persisted, &work, &retry_reactivated] {
                                  const auto found = _terminal_targets.find (item_key);
                                  if (found == _terminal_targets.end ())
                                      return false;
@@ -1639,7 +1648,7 @@ bool raw_relocation_replay_coordinator_t::confirm_terminal_source_lease_expired 
 std::size_t raw_relocation_replay_coordinator_t::reap_terminal_tombstones (clock_t::time_point now)
 {
     return _lane
-      .run ([this, now] {
+      .run_checked ([this, now] {
           std::size_t removed = 0;
           for (auto iterator = _terminal_sources.begin (); iterator != _terminal_sources.end ();) {
               if (iterator->second.completed
@@ -1659,7 +1668,7 @@ std::optional<raw_relocation_replay_coordinator_t::clock_t::time_point>
 raw_relocation_replay_coordinator_t::next_activity () const
 {
     return _lane
-      .run ([this] {
+      .run_checked ([this] {
           std::optional<clock_t::time_point> next;
           const auto include = [&] (clock_t::time_point deadline) {
               if (!next || deadline < *next)
@@ -1680,12 +1689,12 @@ raw_relocation_replay_coordinator_t::next_activity () const
 
 std::size_t raw_relocation_replay_coordinator_t::pending_terminal_relays () const
 {
-    return _lane.run ([this] { return _terminal_targets.size (); }).get ();
+    return _lane.run_checked ([this] { return _terminal_targets.size (); }).get ();
 }
 
 std::size_t raw_relocation_replay_coordinator_t::terminal_retained_bytes () const
 {
-    return _lane.run ([this] { return _terminal_retained_bytes; }).get ();
+    return _lane.run_checked ([this] { return _terminal_retained_bytes; }).get ();
 }
 
 

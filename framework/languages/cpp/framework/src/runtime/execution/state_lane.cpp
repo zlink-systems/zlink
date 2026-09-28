@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 
 #include <string>
 
@@ -58,6 +59,7 @@ state_lane_t *state_lane_t::current () noexcept
     return _current_lane;
 }
 
+
 void state_lane_t::close ()
 {
     throw_if_reentrant ();
@@ -65,8 +67,10 @@ void state_lane_t::close ()
     schedule_drain (true);
 
     std::unique_lock lock (_mailbox_mutex);
-    _drained.wait (
-      lock, [this] { return _mailbox.empty () && !_scheduled.load (std::memory_order_acquire); });
+    infrastructure_wait_guard::condition_wait (
+      _drained, lock,
+      [this] { return _mailbox.empty () && !_scheduled.load (std::memory_order_acquire); },
+      "state-lane/close", infrastructure_wait_guard::wait_relation_t::dependent_completion);
 }
 
 bool state_lane_t::enqueue (std::function<void ()> work,
@@ -108,12 +112,21 @@ void state_lane_t::drain_loop ()
 {
     auto *previous_lane = _current_lane;
     _current_lane = this;
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+    const auto *previous_infrastructure_owner =
+      ::zlink::framework::detail::current_infrastructure_wait_owner;
+    ::zlink::framework::detail::current_infrastructure_wait_owner = this;
+#endif
     for (;;) {
         mailbox_item_t item;
         {
             std::lock_guard lock (_mailbox_mutex);
             if (_mailbox.empty ()) {
                 _current_lane = previous_lane;
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+                ::zlink::framework::detail::current_infrastructure_wait_owner =
+                  previous_infrastructure_owner;
+#endif
                 // Publish the idle transition with the empty-queue check so
                 // a concurrent enqueue must either join this drain or claim
                 // the next one. There is no resubmission queue between turns.

@@ -188,7 +188,7 @@ class actor_gateway_state_t
     template <typename Work> decltype (auto) sync (Work &&work) const
     {
         return lane
-          .run ([work = std::forward<Work> (work)] () mutable -> decltype (auto) {
+          .run_checked ([work = std::forward<Work> (work)] () mutable -> decltype (auto) {
               return std::invoke (work);
           })
           .get ();

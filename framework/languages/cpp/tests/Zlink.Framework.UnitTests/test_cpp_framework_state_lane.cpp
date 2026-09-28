@@ -2,6 +2,10 @@
 
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/execution/infrastructure_wait_guard.hpp"
+#include "runtime/timers/core_timer_drain_loop.hpp"
+
+#include <zlink/framework/contracts/dispatch/task.hpp>
 
 #include <gtest/gtest.h>
 
@@ -20,6 +24,175 @@ namespace
 
 using zlink::framework::runtime::offload_executor_t;
 using zlink::framework::runtime::state_lane_t;
+namespace wait_guard = zlink::framework::runtime::infrastructure_wait_guard;
+namespace state_lane_internal = zlink::framework::runtime::state_lane_internal;
+
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+TEST (ZLinkInfrastructureWaitGuard, RejectsPendingMeshReceiveWait)
+{
+    std::promise<void> pending;
+    auto future = pending.get_future ();
+    ASSERT_DEATH (
+      {
+          wait_guard::mesh_receive_scope_t scope (&pending);
+          state_lane_internal::wait (future, "mesh-pending-test");
+      },
+      "infrastructure wait guard: mesh-pending-test");
+}
+
+TEST (ZLinkInfrastructureWaitGuard, AcceptsReadyMeshReceiveResult)
+{
+    std::promise<void> ready;
+    auto future = ready.get_future ();
+    ready.set_value ();
+    wait_guard::mesh_receive_scope_t scope (&ready);
+    state_lane_internal::wait (future, "mesh-ready-test");
+}
+
+TEST (ZLinkInfrastructureWaitGuard, RejectsPendingTaskResultFor)
+{
+    ASSERT_DEATH (
+      {
+          zlink::framework::detail::task_completion_source_t<void> pending;
+          wait_guard::infrastructure_scope_t scope (&pending);
+          (void) pending.task ().result_for (std::chrono::milliseconds (1));
+      },
+      "infrastructure wait guard: task/result_for");
+}
+
+TEST (ZLinkInfrastructureWaitGuard, AcceptsDeferredInfrastructureResult)
+{
+    auto deferred = std::async (std::launch::deferred, [] { return 7; });
+    wait_guard::infrastructure_scope_t scope (&deferred);
+    EXPECT_EQ (7, state_lane_internal::get (deferred, "deferred-test"));
+}
+
+TEST (ZLinkInfrastructureWaitGuard, EvaluatesReadyConditionOnce)
+{
+    std::mutex mutex;
+    std::condition_variable condition;
+    std::unique_lock lock (mutex);
+    int evaluations = 0;
+    wait_guard::infrastructure_scope_t scope (&condition);
+    wait_guard::condition_wait (
+      condition, lock, [&] { return ++evaluations > 0; }, "ready-condition-test",
+      wait_guard::wait_relation_t::dependent_completion);
+    EXPECT_EQ (1, evaluations);
+}
+
+TEST (ZLinkInfrastructureWaitGuard, AcceptsAsynchronousLaneSubmission)
+{
+    offload_executor_t executor (1);
+    state_lane_t lane (executor);
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future ();
+    ASSERT_TRUE (lane.try_post ([&] {
+        entered.set_value ();
+        released.wait ();
+    }));
+    entered.get_future ().wait ();
+    std::future<int> result;
+    {
+        wait_guard::infrastructure_scope_t scope (&lane);
+        result = lane.run ([] { return 7; });
+    }
+    release.set_value ();
+    EXPECT_EQ (7, result.get ());
+}
+
+TEST (ZLinkInfrastructureWaitGuard, RejectsPendingLaneResultAtGet)
+{
+    ASSERT_DEATH (
+      {
+          offload_executor_t executor (1);
+          state_lane_t lane (executor);
+          std::promise<void> entered;
+          std::promise<void> release;
+          auto released = release.get_future ();
+          lane.try_post ([&] {
+              entered.set_value ();
+              released.wait ();
+          });
+          entered.get_future ().wait ();
+          wait_guard::infrastructure_scope_t scope (&lane);
+          lane.run_checked ([] { return 7; }).get ();
+      },
+      "infrastructure wait guard: state-lane/get");
+}
+
+TEST (ZLinkInfrastructureWaitGuard, RejectsPendingStateLaneWait)
+{
+    ASSERT_DEATH (
+      {
+          offload_executor_t executor (1);
+          state_lane_t lane (executor);
+          std::promise<void> pending;
+          auto future = pending.get_future ();
+          lane.run ([&] { state_lane_internal::wait (future, "lane-pending-test"); }).get ();
+      },
+      "infrastructure wait guard: lane-pending-test");
+}
+
+TEST (ZLinkInfrastructureWaitGuard, RejectsPendingInfrastructureCompletion)
+{
+    std::promise<void> pending;
+    auto future = pending.get_future ();
+    ASSERT_DEATH (
+      {
+          wait_guard::infrastructure_scope_t scope (&pending);
+          state_lane_internal::wait (future, "completion-test");
+      },
+      "infrastructure wait guard: completion-test");
+}
+
+TEST (ZLinkInfrastructureWaitGuard, RejectsSelfJoin)
+{
+    ASSERT_DEATH (
+      {
+          std::promise<void> published;
+          auto ready = published.get_future ();
+          std::thread worker;
+          worker = std::thread ([&] {
+              ready.wait ();
+              wait_guard::before_join (worker, "self-join-test");
+          });
+          published.set_value ();
+          worker.join ();
+      },
+      "infrastructure wait guard: self-join-test");
+}
+
+TEST (ZLinkInfrastructureWaitGuard, DetectsLastTimerOwnerReleasedOnTimerThread)
+{
+    ASSERT_DEATH (
+      {
+          struct timer_owner_t
+          {
+              zlink::framework::detail::core_timer_drain_loop_t timer;
+          };
+          auto owner = std::make_shared<timer_owner_t> ();
+          std::weak_ptr<timer_owner_t> weak = owner;
+          std::promise<void> entered;
+          std::promise<void> release;
+          std::promise<void> finished;
+          auto released = release.get_future ().share ();
+          owner->timer.start (std::chrono::nanoseconds (1), 1,
+                              [weak, &entered, &finished, released] (std::uint64_t) {
+                                  if (auto active = weak.lock ()) {
+                                      entered.set_value ();
+                                      released.wait ();
+                                  }
+                                  finished.set_value ();
+                              });
+          entered.get_future ().wait ();
+          owner.reset ();
+          release.set_value ();
+          finished.get_future ().wait ();
+      },
+      "infrastructure wait guard: core-timer/self-join");
+}
+#endif
 
 struct move_constructible_snapshot_t
 {

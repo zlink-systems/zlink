@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/http/http_host_service.hpp"
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/http/http_request_pipeline.hpp"
 #include "runtime/utils/poll_interval_wait.hpp"
@@ -132,13 +133,18 @@ class http_host_service_t::listener_t
     {
         // async captures every exception from the thread in its future;
         // join consumes it after all listeners have been stopped.
-        _run = std::async (std::launch::async, [this] { _io.run (); });
+        _run = std::async (std::launch::async, [this] {
+#ifndef NDEBUG
+            runtime::infrastructure_wait_guard::infrastructure_scope_t scope (this);
+#endif
+            _io.run ();
+        });
     }
 
     void join ()
     {
         if (_run.valid ()) {
-            _run.get ();
+            runtime::state_lane_internal::get (_run, "http-listener/run");
         }
     }
 

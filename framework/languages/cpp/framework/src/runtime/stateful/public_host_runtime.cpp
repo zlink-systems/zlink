@@ -660,7 +660,7 @@ zlink::submit_result_t spot_handle_t::publish (const std::string &channel_name,
     local.domain = ready_domain_t::application;
     local.source_node_rid = _host->status ().routing_id ();
     _host->_local_dispatch_completion_lane
-      .run ([&] {
+      .run_checked ([&] {
           _host->_local_application_dispatches.push_back (
             local_application_dispatch_t{std::move (owner), std::move (local), parts});
       })
@@ -834,7 +834,7 @@ public_host_runtime_t::public_host_runtime_t (host_options_t options) :
     _sessions (
       [this] (const std::string &actor_id) {
           return _spot_actor_index_lane
-            .run ([&] {
+            .run_checked ([&] {
                 const auto found = _actors.find (actor_id);
                 return found == _actors.end () ? std::optional<stateful::object_ref_t>{}
                                                : std::make_optional (found->second.second);
@@ -876,7 +876,7 @@ void public_host_runtime_t::configure_stateful_dispatch (
     if (!resolver)
         throw std::invalid_argument ("stateful dispatch authority resolver must not be empty");
     _lifecycle_configuration_lane
-      .run ([&] {
+      .run_checked ([&] {
           if (_started || _stateful_dispatch)
               throw std::logic_error (
                 "stateful dispatch must be configured once before host start");
@@ -886,7 +886,7 @@ void public_host_runtime_t::configure_stateful_dispatch (
               const stateful::accepted_record_authority_query_t &query) {
                 auto accepted =
                   _relocation_session_terminal_lane
-                    .run ([&] () -> std::optional<stateful::accepted_record_authority_t> {
+                    .run_checked ([&] () -> std::optional<stateful::accepted_record_authority_t> {
                         for (const auto &[key, attempt] : _relocation_target_attempts) {
                             const auto &prepare = attempt.prepare;
                             if (prepare.source_node_routing_id != query.source_node_routing_id
@@ -935,7 +935,8 @@ void public_host_runtime_t::forward_relocation_application (
 void public_host_runtime_t::configure_message_follow_handler (
   std::function<void (const protocol::message_follow_notice_t &)> handler)
 {
-    _lifecycle_configuration_lane.run ([&] { _message_follow_handler = std::move (handler); })
+    _lifecycle_configuration_lane
+      .run_checked ([&] { _message_follow_handler = std::move (handler); })
       .get ();
 }
 
@@ -949,7 +950,7 @@ void public_host_runtime_t::configure_actor_join_relocation (
     if (!prepare_validator || !recovery_consumer || !authority_spot_resolver || !authority_adopter)
         throw std::invalid_argument ("Actor Join relocation callbacks must not be empty");
     _lifecycle_configuration_lane
-      .run ([&] {
+      .run_checked ([&] {
           if (_started)
               throw std::logic_error ("Actor Join relocation must be configured before start");
           _actor_join_relocation_prepare_validator = std::move (prepare_validator);
@@ -968,7 +969,7 @@ void public_host_runtime_t::configure_bound_session_operations (
         || !operations.commit_relocation_route || !operations.prepare_relocation_target_route)
         throw std::invalid_argument ("bound Session operations must all be configured");
     _lifecycle_configuration_lane
-      .run ([&] {
+      .run_checked ([&] {
           if (_started)
               throw std::logic_error ("bound Session operations must be configured before start");
           _bound_session_operations = std::move (operations);
@@ -980,7 +981,7 @@ void public_host_runtime_t::configure_late_session_route_update (
   std::function<void (const protocol::session_relocation_route_t &)> reporter)
 {
     _lifecycle_configuration_lane
-      .run ([&] {
+      .run_checked ([&] {
           if (_started)
               throw std::logic_error (
                 "late Session route reporter must be configured before start");
@@ -993,7 +994,7 @@ void public_host_runtime_t::start ()
 {
     std::function<void ()> maintenance_started;
     _lifecycle_configuration_lane
-      .run ([&] {
+      .run_checked ([&] {
           if (_started || _closing) {
               return;
           }
@@ -1012,7 +1013,7 @@ void public_host_runtime_t::close () noexcept
     std::function<void ()> maintenance_closing;
     {
         _lifecycle_configuration_lane
-          .run ([&] {
+          .run_checked ([&] {
               if (!_started || _closing) {
                   return;
               }
@@ -1031,14 +1032,15 @@ void public_host_runtime_t::close () noexcept
         catch (...) {
         }
     }
-    _lifecycle_configuration_lane.run ([&] { _started = false; }).get ();
+    _lifecycle_configuration_lane.run_checked ([&] { _started = false; }).get ();
     _relocation_session_terminal_lane
-      .run ([&] {
+      .run_checked ([&] {
           _session_seal_terminals.clear ();
           _session_journal_terminals.clear ();
       })
       .get ();
-    _local_dispatch_completion_lane.run ([&] { _local_application_dispatches.clear (); }).get ();
+    _local_dispatch_completion_lane.run_checked ([&] { _local_application_dispatches.clear (); })
+      .get ();
     auto retained_outbound = _sessions.take_all_retained_outbound ();
     for (auto &settle : retained_outbound) {
         if (!settle)
@@ -1050,7 +1052,7 @@ void public_host_runtime_t::close () noexcept
         }
     }
     _transport->close ();
-    _lifecycle_configuration_lane.run ([&] { _closing = false; }).get ();
+    _lifecycle_configuration_lane.run_checked ([&] { _closing = false; }).get ();
 }
 
 bool public_host_runtime_t::connect_peer (const std::string &endpoint,
@@ -1071,7 +1073,7 @@ bool public_host_runtime_t::connect_peer (const std::string &endpoint,
     }
     if (connected) {
         _peer_endpoint_lane
-          .run ([&] {
+          .run_checked ([&] {
               _peer_endpoints.insert_or_assign (endpoint,
                                                 expected ? expected->to_string () : std::string{});
           })
@@ -1101,7 +1103,7 @@ void public_host_runtime_t::forget_peer (const std::string &endpoint,
 
 void public_host_runtime_t::disconnect_peer (const std::string &endpoint) noexcept
 {
-    _peer_endpoint_lane.run ([&] { _peer_endpoints.erase (endpoint); }).get ();
+    _peer_endpoint_lane.run_checked ([&] { _peer_endpoints.erase (endpoint); }).get ();
     _transport->disconnect_peer (endpoint);
 }
 
@@ -1110,7 +1112,7 @@ bool public_host_runtime_t::disconnect_peer (const std::vector<std::uint8_t> &ex
 {
     const auto endpoint_retained = _transport->disconnect_peer (expected_routing_id, endpoint);
     if (!endpoint_retained) {
-        _peer_endpoint_lane.run ([&] { _peer_endpoints.erase (endpoint); }).get ();
+        _peer_endpoint_lane.run_checked ([&] { _peer_endpoints.erase (endpoint); }).get ();
     }
     return endpoint_retained;
 }
@@ -1195,7 +1197,7 @@ public_host_runtime_t::destroy_application_actor (std::string_view actor_id,
     stateful::object_ref_t object;
     const auto generation_stale =
       _spot_actor_index_lane
-        .run ([&] {
+        .run_checked ([&] {
             const auto found = _actors.find (std::string (actor_id));
             if (found != _actors.end ()) {
                 if (found->second.second.object_generation != object_generation)
@@ -1219,7 +1221,7 @@ public_host_runtime_t::destroy_application_actor (std::string_view actor_id,
     if (destroyed != stateful::stateful_error_t::none)
         return destroyed;
     _spot_actor_index_lane
-      .run ([&] {
+      .run_checked ([&] {
           const auto found = _actors.find (std::string (actor_id));
           if (found != _actors.end ()
               && found->second.second.object_generation == object_generation)
@@ -1248,13 +1250,13 @@ void public_host_runtime_t::configure_user_spot_operations (
         throw std::invalid_argument (
           "User Spot operations require a Location Store and materializer");
     _lifecycle_configuration_lane
-      .run ([&] {
+      .run_checked ([&] {
           if (_started)
               throw std::logic_error ("User Spot operations must be configured before start");
           _user_spot_store = std::move (store);
           _user_spot_materializer = std::move (materializer);
           _user_spot_closer = std::move (closer);
-          _route_cache_lane.run ([this] { _spot_route_fences.clear (); }).get ();
+          _route_cache_lane.run_checked ([this] { _spot_route_fences.clear (); }).get ();
       })
       .get ();
 }
@@ -1263,19 +1265,20 @@ void public_host_runtime_t::configure_spot_route_fence_resolver (
   spot_route_fence_resolver_t resolver)
 {
     _lifecycle_configuration_lane
-      .run ([&] {
+      .run_checked ([&] {
           if (_started)
               throw std::logic_error (
                 "Spot route fence resolver must be configured before host start");
           _spot_route_fence_resolver = std::move (resolver);
-          _route_cache_lane.run ([this] { _spot_route_fences.clear (); }).get ();
+          _route_cache_lane.run_checked ([this] { _spot_route_fences.clear (); }).get ();
       })
       .get ();
 }
 
 void public_host_runtime_t::configure_peer_readiness_resolver (peer_readiness_resolver_t resolver)
 {
-    _lifecycle_configuration_lane.run ([&] { _peer_readiness_resolver = std::move (resolver); })
+    _lifecycle_configuration_lane
+      .run_checked ([&] { _peer_readiness_resolver = std::move (resolver); })
       .get ();
 }
 
@@ -1285,7 +1288,7 @@ void public_host_runtime_t::configure_actor_create_operations (
     if (!target)
         throw std::invalid_argument ("Actor create operation target is required");
     _lifecycle_configuration_lane
-      .run ([&] {
+      .run_checked ([&] {
           if (_started || _actor_create_target)
               throw std::logic_error (
                 "Actor create operations must be configured once before host start");
@@ -1299,7 +1302,7 @@ void public_host_runtime_t::configure_actor_join_operations (actor_join_operatio
     if (!target)
         throw std::invalid_argument ("Actor join operation target is required");
     _lifecycle_configuration_lane
-      .run ([&] {
+      .run_checked ([&] {
           if (_started || _actor_join_target)
               throw std::logic_error (
                 "Actor join operations must be configured once before host start");
@@ -1318,7 +1321,7 @@ void public_host_runtime_t::configure_instance_spot_operations (
         throw std::invalid_argument ("Instance Spot operations require Location and Relocation "
                                      "Stores, an owner lease resolver, and a materializer");
     _lifecycle_configuration_lane
-      .run ([&] {
+      .run_checked ([&] {
           if (_started)
               throw std::logic_error ("Instance Spot operations must be configured before start");
           _user_spot_store = std::move (store);
@@ -1412,7 +1415,7 @@ public_host_runtime_t::begin_instance_spot_close (const std::string &stable_type
     std::shared_ptr<zlink::framework::location_repository_t> store;
     std::function<std::optional<location_owner_token_t> ()> instance_owner_resolver;
     _lifecycle_configuration_lane
-      .run ([&] {
+      .run_checked ([&] {
           store = _user_spot_store;
           instance_owner_resolver = _instance_spot_owner;
       })
@@ -1541,7 +1544,7 @@ public_host_runtime_t::begin_user_spot_close (protocol::user_spot_close_fence_t 
     std::shared_ptr<zlink::framework::location_repository_t> store;
     std::function<std::optional<location_owner_token_t> ()> owner_resolver;
     _lifecycle_configuration_lane
-      .run ([&] {
+      .run_checked ([&] {
           store = _user_spot_store;
           owner_resolver = _session_route_owner_resolver;
       })
@@ -1636,7 +1639,8 @@ public_host_runtime_t::begin_user_spot_close (protocol::user_spot_close_fence_t 
                     return result_t<bool>::success (true);
                 },
                 [self, key] {
-                    self->_spot_actor_index_lane.run ([&] { self->_spots.erase (key); }).get ();
+                    self->_spot_actor_index_lane.run_checked ([&] { self->_spots.erase (key); })
+                      .get ();
                 });
           };
 
@@ -1717,7 +1721,7 @@ void public_host_runtime_t::configure_session_route_owner (
     if (!owner_resolver)
         throw std::invalid_argument ("Session route owner resolver is required");
     _lifecycle_configuration_lane
-      .run ([&] { _session_route_owner_resolver = std::move (owner_resolver); })
+      .run_checked ([&] { _session_route_owner_resolver = std::move (owner_resolver); })
       .get ();
 }
 
@@ -1727,7 +1731,7 @@ void public_host_runtime_t::configure_session_relocation_store (
     if (!relocations)
         throw std::invalid_argument ("Session relocation Store is required");
     _lifecycle_configuration_lane
-      .run ([&] {
+      .run_checked ([&] {
           if (_started)
               throw std::logic_error ("Session relocation Store must be configured before start");
           _session_relocations = std::move (relocations);
@@ -1754,25 +1758,26 @@ public_host_runtime_t::admit_session_relocation_seal (
     bool existing_terminal = false;
     const auto existing_result =
       _relocation_session_terminal_lane
-        .run ([&] () -> std::optional<
-                       std::pair<bool, std::optional<protocol::session_relocation_sealed_t>>> {
-            const auto cached = _session_seal_terminals.find (relocation_key);
-            if (cached != _session_seal_terminals.end ()) {
-                existing_terminal = true;
-                if (cached->second.seal != seal)
-                    return {{false, std::nullopt}};
-                if (cached->second.consumed && !cached->second.ready)
-                    return {{false, std::nullopt}};
-                if (!response_routing_id.empty ())
-                    cached->second.response_routing_id = std::move (response_routing_id);
-                if (cached->second.ready)
-                    return {{true, cached->second.sealed}};
-                if (local_completion)
-                    cached->second.local_completions.push_back (std::move (local_completion));
-                return {{true, std::nullopt}};
-            }
-            return std::nullopt;
-        })
+        .run_checked (
+          [&] () -> std::optional<
+                   std::pair<bool, std::optional<protocol::session_relocation_sealed_t>>> {
+              const auto cached = _session_seal_terminals.find (relocation_key);
+              if (cached != _session_seal_terminals.end ()) {
+                  existing_terminal = true;
+                  if (cached->second.seal != seal)
+                      return {{false, std::nullopt}};
+                  if (cached->second.consumed && !cached->second.ready)
+                      return {{false, std::nullopt}};
+                  if (!response_routing_id.empty ())
+                      cached->second.response_routing_id = std::move (response_routing_id);
+                  if (cached->second.ready)
+                      return {{true, cached->second.sealed}};
+                  if (local_completion)
+                      cached->second.local_completions.push_back (std::move (local_completion));
+                  return {{true, std::nullopt}};
+              }
+              return std::nullopt;
+          })
         .get ();
     if (existing_terminal)
         return *existing_result;
@@ -1799,7 +1804,7 @@ public_host_runtime_t::admit_session_relocation_seal (
     bool inserted = false;
     std::optional<protocol::session_relocation_sealed_t> immediate;
     _relocation_session_terminal_lane
-      .run ([&] {
+      .run_checked ([&] {
           session_seal_terminal_record_t record{seal,
                                                 ack,
                                                 admission.last_accepted_sequence,
@@ -1839,7 +1844,7 @@ public_host_runtime_t::admit_session_relocation_seal (
         (void) _sessions.abort_barrier (admission.barrier);
         const auto stored_matches =
           _relocation_session_terminal_lane
-            .run ([&] {
+            .run_checked ([&] {
                 const auto stored = _session_seal_terminals.find (relocation_key);
                 return stored != _session_seal_terminals.end () && stored->second.seal == seal;
             })
@@ -1864,7 +1869,7 @@ public_host_runtime_t::seal_session_remote (const zlink::routing_id_t &session_o
     std::optional<session_relocation_seal_result_t> cached_result;
     std::shared_ptr<stateful::relocation_store_port_t> relocations;
     const auto journal_admitted = _relocation_session_terminal_lane
-                                    .run ([&] {
+                                    .run_checked ([&] {
                                         const auto cached =
                                           _session_journal_terminals.find (relocation_key);
                                         if (cached != _session_journal_terminals.end ()) {
@@ -1939,7 +1944,7 @@ public_host_runtime_t::seal_session_remote (const zlink::routing_id_t &session_o
               std::optional<session_relocation_seal_result_t> existing_result;
               bool conflicting_terminal = false;
               host->_relocation_session_terminal_lane
-                .run ([&] {
+                .run_checked ([&] {
                     const auto [stored, inserted] = host->_session_journal_terminals.emplace (
                       relocation_key, std::pair{expected, result});
                     if (!inserted) {
@@ -1968,7 +1973,8 @@ public_host_runtime_t::seal_session_remote (const zlink::routing_id_t &session_o
     const auto local = status ();
     if (local.routing_id ().to_bytes () == session_owner_node.to_bytes ()) {
         std::function<std::optional<location_owner_token_t> ()> owner_resolver;
-        _lifecycle_configuration_lane.run ([&] { owner_resolver = _session_route_owner_resolver; })
+        _lifecycle_configuration_lane
+          .run_checked ([&] { owner_resolver = _session_route_owner_resolver; })
           .get ();
         if (local.lifecycle_generation () != seal.session_owner_node_generation || !owner_resolver)
             co_return false;
@@ -2134,7 +2140,7 @@ std::size_t public_host_runtime_t::recover_instance_spot_activations ()
     std::shared_ptr<stateful::relocation_store_port_t> relocations;
     instance_spot_activation_materializer_t materializer;
     _lifecycle_configuration_lane
-      .run ([&] {
+      .run_checked ([&] {
           store = _user_spot_store;
           relocations = _instance_spot_relocations;
           materializer = _instance_spot_materializer;
@@ -2318,7 +2324,7 @@ public_host_runtime_t::create_actor_remote (const zlink::routing_id_t &target_no
         throw std::invalid_argument ("Actor create completion is required");
     if (target_node == status ().routing_id ()) {
         actor_create_operation_target_t target;
-        _lifecycle_configuration_lane.run ([&] { target = _actor_create_target; }).get ();
+        _lifecycle_configuration_lane.run_checked ([&] { target = _actor_create_target; }).get ();
         if (!target)
             co_return false;
         auto completed = std::make_shared<std::atomic_bool> (false);
@@ -2424,7 +2430,7 @@ spot_handle_t public_host_runtime_t::get_or_create_spot (std::string spot_id)
 {
     const auto &key = spot_id;
     const auto existing = _spot_actor_index_lane
-                            .run ([&] () -> std::optional<stateful::object_ref_t> {
+                            .run_checked ([&] () -> std::optional<stateful::object_ref_t> {
                                 const auto found = _spots.find (key);
                                 if (found != _spots.end ()) {
                                     return found->second;
@@ -2453,14 +2459,14 @@ spot_handle_t public_host_runtime_t::get_or_create_spot (std::string spot_id)
     if (!object) {
         throw std::runtime_error ("framework Spot authority is unavailable");
     }
-    _spot_actor_index_lane.run ([&] { _spots.insert_or_assign (key, *object); }).get ();
+    _spot_actor_index_lane.run_checked ([&] { _spots.insert_or_assign (key, *object); }).get ();
     return spot_handle_t (shared_from_this (), *object);
 }
 
 spot_handle_t public_host_runtime_t::bind_relocation_spot (stateful::object_ref_t object)
 {
     const auto bound = _spot_actor_index_lane
-                         .run ([&] {
+                         .run_checked ([&] {
                              const auto [found, _] =
                                _spots.insert_or_assign (object.key, std::move (object));
                              return found->second;
@@ -2473,7 +2479,7 @@ stateful::stateful_error_t
 public_host_runtime_t::advance_local_actor_authority (const stateful::object_ref_t &committed)
 {
     return _spot_actor_index_lane
-      .run ([&] {
+      .run_checked ([&] {
           const auto found = _actors.find (committed.key);
           if (found == _actors.end ()) {
               return stateful::stateful_error_t::none;
@@ -2491,7 +2497,7 @@ actor_handle_t public_host_runtime_t::create_actor (std::string actor_type, std:
 {
     const auto existing =
       _spot_actor_index_lane
-        .run ([&] () -> std::optional<std::pair<actor_ref_t, stateful::object_ref_t>> {
+        .run_checked ([&] () -> std::optional<std::pair<actor_ref_t, stateful::object_ref_t>> {
             const auto found = _actors.find (actor_id);
             if (found != _actors.end ()) {
                 return std::make_pair (
@@ -2523,7 +2529,8 @@ actor_handle_t public_host_runtime_t::create_actor (std::string actor_type, std:
         throw std::runtime_error ("framework Actor authority is unavailable");
     }
     _spot_actor_index_lane
-      .run ([&] { _actors.insert_or_assign (actor_id, std::make_pair (actor_type, *object)); })
+      .run_checked (
+        [&] { _actors.insert_or_assign (actor_id, std::make_pair (actor_type, *object)); })
       .get ();
     return actor_handle_t (shared_from_this (), framework_actor_ref (*object, actor_type), *object);
 }
@@ -2535,7 +2542,7 @@ actor_handle_t public_host_runtime_t::create_reserved_actor (std::string actor_t
         throw std::invalid_argument ("reserved Actor reference has an invalid object kind");
     const auto existing =
       _spot_actor_index_lane
-        .run ([&] () -> std::optional<actor_handle_t> {
+        .run_checked ([&] () -> std::optional<actor_handle_t> {
             const auto found = _actors.find (reserved.key);
             if (found != _actors.end ()) {
                 if (found->second.second.object_generation != reserved.object_generation
@@ -2571,7 +2578,8 @@ actor_handle_t public_host_runtime_t::create_reserved_actor (std::string actor_t
     if (!object)
         throw std::runtime_error ("reserved framework Actor authority is unavailable");
     _spot_actor_index_lane
-      .run ([&] { _actors.insert_or_assign (reserved.key, std::make_pair (actor_type, *object)); })
+      .run_checked (
+        [&] { _actors.insert_or_assign (reserved.key, std::make_pair (actor_type, *object)); })
       .get ();
     return actor_handle_t (shared_from_this (), framework_actor_ref (*object, actor_type), *object);
 }
@@ -2584,7 +2592,7 @@ public_host_runtime_t::resolve_spot_route_fence (const zlink::routing_id_t &targ
     spot_route_fence_resolver_t resolver;
     std::shared_ptr<zlink::framework::location_repository_t> store;
     _lifecycle_configuration_lane
-      .run ([&] {
+      .run_checked ([&] {
           resolver = _spot_route_fence_resolver;
           store = _user_spot_store;
       })
@@ -2600,7 +2608,7 @@ public_host_runtime_t::resolve_spot_route_fence (const zlink::routing_id_t &targ
 
     const auto key = spot_route_cache_key (target_node_rid, target_spot_id, target_spot_generation);
     const auto cached = _route_cache_lane
-                          .run ([this, &key] () -> std::optional<route_fence_t> {
+                          .run_checked ([this, &key] () -> std::optional<route_fence_t> {
                               const auto found = _spot_route_fences.find (key);
                               if (found == _spot_route_fences.end ())
                                   return std::nullopt;
@@ -2628,7 +2636,7 @@ public_host_runtime_t::resolve_spot_route_fence (const zlink::routing_id_t &targ
                       _options.route_cache_max_age),
                     *read->admission_lifetime);
         _route_cache_lane
-          .run ([this, &key, fence = read->fence, expires_at = measured_at + lifetime] {
+          .run_checked ([this, &key, fence = read->fence, expires_at = measured_at + lifetime] {
               _spot_route_fences.insert_or_assign (
                 key, cached_spot_route_fence_t{std::move (fence), expires_at});
           })
@@ -2650,7 +2658,7 @@ void public_host_runtime_t::invalidate_spot_route_fence (
     const route_fence_t source_fence{source->authority_owner_generation,
                                      source->owner_lease_generation};
     _route_cache_lane
-      .run ([this, &key, &source_fence] {
+      .run_checked ([this, &key, &source_fence] {
           const auto found = _spot_route_fences.find (key);
           if (found != _spot_route_fences.end () && found->second.fence == source_fence)
               _spot_route_fences.erase (found);
@@ -2677,7 +2685,8 @@ task_t<zlink::submit_result_t> public_host_runtime_t::send_to_actor (
         co_return zlink::submit_result_t::not_connected;
     }
     peer_readiness_resolver_t readiness_resolver;
-    _lifecycle_configuration_lane.run ([&] { readiness_resolver = _peer_readiness_resolver; })
+    _lifecycle_configuration_lane
+      .run_checked ([&] { readiness_resolver = _peer_readiness_resolver; })
       .get ();
     if (readiness_resolver && !readiness_resolver (target_routing_id)) {
         co_return zlink::submit_result_t::not_connected;
@@ -2756,7 +2765,8 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
         co_return zlink::submit_result_t::not_connected;
     }
     peer_readiness_resolver_t readiness_resolver;
-    _lifecycle_configuration_lane.run ([&] { readiness_resolver = _peer_readiness_resolver; })
+    _lifecycle_configuration_lane
+      .run_checked ([&] { readiness_resolver = _peer_readiness_resolver; })
       .get ();
     if (readiness_resolver && !readiness_resolver (target_routing_id)) {
         co_return zlink::submit_result_t::not_connected;
@@ -2971,7 +2981,7 @@ void public_host_runtime_t::poll_relocation_target_attempts ()
     std::size_t cutover_warnings = 0;
     const auto now = std::chrono::steady_clock::now ();
     _relocation_session_terminal_lane
-      .run ([&] {
+      .run_checked ([&] {
           for (auto &[key, attempt] : _relocation_target_attempts) {
               if (attempt.target_finalized
                   || attempt.next_finalize_at == std::chrono::steady_clock::time_point{}
@@ -3002,7 +3012,7 @@ void public_host_runtime_t::poll_relocation_target_attempts ()
         if (observe_relocation_target (fence) != relocation_target_settlement_t::discard)
             continue;
         _relocation_session_terminal_lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto found = _relocation_target_attempts.find (key);
               if (found == _relocation_target_attempts.end () || found->second.cutover_received)
                   return;
@@ -3022,7 +3032,7 @@ void public_host_runtime_t::flush_pending_session_relocation_seals ()
     std::vector<session_relocation_key_t> expired;
     const auto now = std::chrono::steady_clock::now ();
     _relocation_session_terminal_lane
-      .run ([&] {
+      .run_checked ([&] {
           for (const auto &[key, record] : _session_seal_terminals) {
               if (!record.consumed && record.expires_at <= now)
                   expired.push_back (key);
@@ -3036,7 +3046,7 @@ void public_host_runtime_t::flush_pending_session_relocation_seals ()
         std::vector<session_seal_local_completion_t> local_completions;
         const auto expired_current =
           _relocation_session_terminal_lane
-            .run ([&] {
+            .run_checked ([&] {
                 const auto found = _session_seal_terminals.find (key);
                 if (found == _session_seal_terminals.end () || found->second.consumed
                     || found->second.expires_at > now)
@@ -3057,7 +3067,7 @@ void public_host_runtime_t::flush_pending_session_relocation_seals ()
     for (const auto &key : pending) {
         stateful::stream_barrier_t barrier;
         const auto pending_current = _relocation_session_terminal_lane
-                                       .run ([&] {
+                                       .run_checked ([&] {
                                            const auto found = _session_seal_terminals.find (key);
                                            if (found == _session_seal_terminals.end ()
                                                || found->second.consumed || found->second.ready)
@@ -3075,7 +3085,7 @@ void public_host_runtime_t::flush_pending_session_relocation_seals ()
         std::vector<session_seal_local_completion_t> local_completions;
         const auto completed =
           _relocation_session_terminal_lane
-            .run ([&] {
+            .run_checked ([&] {
                 const auto found = _session_seal_terminals.find (key);
                 if (found == _session_seal_terminals.end () || found->second.consumed)
                     return false;
@@ -3115,7 +3125,7 @@ task_t<void> public_host_runtime_t::submit_relocation_session_routes (relocation
     std::vector<due_route_t> due;
     const auto routes_current =
       _relocation_session_terminal_lane
-        .run ([&] {
+        .run_checked ([&] {
             const auto found = _relocation_target_attempts.find (key);
             if (found == _relocation_target_attempts.end ()
                 || found->second.authority_committed_at == std::chrono::steady_clock::time_point{})
@@ -3152,7 +3162,7 @@ task_t<void> public_host_runtime_t::submit_relocation_session_routes (relocation
         std::shared_ptr<stateful::relocation_store_port_t> session_relocations;
         const auto route_current =
           _relocation_session_terminal_lane
-            .run ([&] {
+            .run_checked ([&] {
                 const auto found = _relocation_target_attempts.find (key);
                 if (found == _relocation_target_attempts.end ()
                     || pending.index >= found->second.session_routes.size ())
@@ -3353,7 +3363,7 @@ bool public_host_runtime_t::submit_relocation_target_authority (
                                                attempt.prepare.relocation.low,
                                                attempt.prepare.target_attempt_generation};
             _relocation_session_terminal_lane
-              .run ([&] {
+              .run_checked ([&] {
                   const auto found = _relocation_target_attempts.find (key);
                   if (found != _relocation_target_attempts.end ()
                       && found->second.prepare == attempt.prepare)
@@ -3428,7 +3438,7 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
     relocation_target_attempt_t attempt;
     const auto attempt_current =
       _relocation_session_terminal_lane
-        .run ([&] {
+        .run_checked ([&] {
             const auto found = _relocation_target_attempts.find (key);
             if (found == _relocation_target_attempts.end ())
                 return false;
@@ -3457,7 +3467,7 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
     if (settlement == relocation_target_settlement_t::discard) {
         std::vector<relocation_target_attempt_t> discarded;
         _relocation_session_terminal_lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto found = _relocation_target_attempts.find (key);
               if (found == _relocation_target_attempts.end () || found->second.target_finalized)
                   return;
@@ -3478,7 +3488,7 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
      * the target_resume window forward. */
     const auto stamped =
       _relocation_session_terminal_lane
-        .run ([&] {
+        .run_checked ([&] {
             const auto found = _relocation_target_attempts.find (key);
             if (found == _relocation_target_attempts.end ())
                 return false;
@@ -3545,7 +3555,7 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
 
     const auto actor_indexes_current =
       _spot_actor_index_lane
-        .run ([&] {
+        .run_checked ([&] {
             for (std::size_t index = 0; index != attempt.targets.size (); ++index) {
                 const auto &target = attempt.targets[index];
                 if (target.kind != stateful::object_kind_t::actor)
@@ -3570,7 +3580,7 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
           attempt.prepare.relocation, attempt.prepare.target_attempt_generation, object);
 
     const auto finalized = _relocation_session_terminal_lane
-                             .run ([&] {
+                             .run_checked ([&] {
                                  const auto found = _relocation_target_attempts.find (key);
                                  if (found == _relocation_target_attempts.end ())
                                      return false;
@@ -3697,7 +3707,8 @@ void public_host_runtime_t::activate_relocation_assembly (
     }
     const auto inserted =
       _relocation_session_terminal_lane
-        .run ([&] { return _relocation_target_attempts.emplace (key, std::move (attempt)).second; })
+        .run_checked (
+          [&] { return _relocation_target_attempts.emplace (key, std::move (attempt)).second; })
         .get ();
     if (!inserted) {
         reply_relocation_assembly_failure (pending, protocol::framework_error_code::requestFailed);
@@ -3710,7 +3721,7 @@ void public_host_runtime_t::activate_relocation_assembly (
                          pending.prepare.object, protocol::relocation_role_t::target});
     if (ready_sent) {
         _relocation_session_terminal_lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto found = _relocation_target_attempts.find (key);
               if (found != _relocation_target_attempts.end ())
                   found->second.next_finalize_at =
@@ -3721,7 +3732,7 @@ void public_host_runtime_t::activate_relocation_assembly (
     }
     std::optional<relocation_target_attempt_t> aborted;
     _relocation_session_terminal_lane
-      .run ([&] {
+      .run_checked ([&] {
           const auto found = _relocation_target_attempts.find (key);
           if (found != _relocation_target_attempts.end ()) {
               aborted.emplace (std::move (found->second));
@@ -4070,7 +4081,7 @@ bool public_host_runtime_t::register_relocation_target_queue (
                 * cutover can only be the source's retransmission of the
                 * batch the target already took, so it is not staged again. */
                return _relocation_session_terminal_lane
-                 .run ([&] {
+                 .run_checked ([&] {
                      const auto found = _relocation_target_attempts.find (attempt_key);
                      if (found == _relocation_target_attempts.end ())
                          return false;
@@ -4136,7 +4147,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
     std::function<void (const protocol::session_relocation_route_t &)>
       late_session_route_update_reporter;
     _lifecycle_configuration_lane
-      .run ([&] {
+      .run_checked ([&] {
           store = _user_spot_store;
           materializer = _user_spot_materializer;
           user_spot_closer = _user_spot_closer;
@@ -4154,7 +4165,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
     std::vector<pending_relocation_assembly_t> expired_relocation_assemblies;
     const auto now = std::chrono::steady_clock::now ();
     _relocation_session_terminal_lane
-      .run ([&] {
+      .run_checked ([&] {
           for (auto pending = _relocation_assemblies.begin ();
                pending != _relocation_assemblies.end ();) {
               if (pending->second.expires_at > now) {
@@ -4322,7 +4333,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                                        prepare->target_attempt_generation};
                     const auto prepare_state =
                       _relocation_session_terminal_lane
-                        .run ([&] {
+                        .run_checked ([&] {
                             const auto found = _relocation_target_attempts.find (key);
                             if (found == _relocation_target_attempts.end ())
                                 return 0;
@@ -4349,7 +4360,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         || prepare->payload_chunk_count > protocol::relocationChunkCount)
                         continue;
                     _relocation_session_terminal_lane
-                      .run ([&] {
+                      .run_checked ([&] {
                           const auto found = _relocation_assemblies.find (key);
                           if (found != _relocation_assemblies.end ()) {
                               if (found->second.prepare == *prepare)
@@ -4390,7 +4401,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     std::optional<pending_relocation_assembly_t> failed;
                     const auto assembly_current =
                       _relocation_session_terminal_lane
-                        .run ([&] {
+                        .run_checked ([&] {
                             const auto found = _relocation_assemblies.find (key);
                             if (found == _relocation_assemblies.end ()
                                 || found->second.prepare.coordinator != state->coordinator
@@ -4444,7 +4455,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                       verified;
                     std::optional<relocation_target_attempt_t> mismatched;
                     _relocation_session_terminal_lane
-                      .run ([&] {
+                      .run_checked ([&] {
                           const auto found = _relocation_target_attempts.find (key);
                           if (found == _relocation_target_attempts.end ()
                               || found->second.prepare.coordinator != cutover->coordinator
@@ -4498,7 +4509,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         for (const auto &[target, data] : *verified)
                             staged = staged && stage_relocation_record (target, data);
                         _relocation_session_terminal_lane
-                          .run ([&] {
+                          .run_checked ([&] {
                               const auto found = _relocation_target_attempts.find (key);
                               if (found == _relocation_target_attempts.end ())
                                   return;
@@ -4592,7 +4603,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     bool late_session_route_update = false;
                     const auto route_matches_seal =
                       _relocation_session_terminal_lane
-                        .run ([&] {
+                        .run_checked ([&] {
                             const auto sealed = _session_seal_terminals.find (relocation_key);
                             if (sealed == _session_seal_terminals.end ()
                                 || sealed->second.consumed) {
@@ -4683,7 +4694,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     }
 
                     _relocation_session_terminal_lane
-                      .run ([&] {
+                      .run_checked ([&] {
                           const auto sealed = _session_seal_terminals.find (relocation_key);
                           if (sealed != _session_seal_terminals.end () && !sealed->second.consumed
                               && sealed->second.ready)
@@ -5159,7 +5170,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                                request.source_node_generation, request.operation);
                     std::optional<user_spot_terminal_record_t> cached;
                     _user_spot_terminal_lane
-                      .run ([&] {
+                      .run_checked ([&] {
                           const auto now = unix_milliseconds_now ();
                           std::erase_if (_user_spot_terminals, [this, now] (const auto &entry) {
                               return !entry.second.header.empty ()
@@ -5212,7 +5223,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                                                      result, spot, generation),
                             application_reply};
                           _user_spot_terminal_lane
-                            .run ([&] {
+                            .run_checked ([&] {
                                 _user_spot_terminals.insert_or_assign (operation_key,
                                                                        std::move (stored));
                             })
@@ -5409,7 +5420,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         continue;
                     }
                     _spot_actor_index_lane
-                      .run ([&] { _spots.insert_or_assign (exact_ref.key, exact_ref); })
+                      .run_checked ([&] { _spots.insert_or_assign (exact_ref.key, exact_ref); })
                       .get ();
                     terminal (0, 0, protocol::user_spot_create_result_t::created, request.spot_id,
                               exact_ref.object_generation,
@@ -5439,7 +5450,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                 std::optional<user_spot_terminal_record_t> cached;
                 const auto admission =
                   _user_spot_terminal_lane
-                    .run ([&] {
+                    .run_checked ([&] {
                         const auto now = unix_milliseconds_now ();
                         std::erase_if (_user_spot_terminals, [this, now] (const auto &entry) {
                             return !entry.second.header.empty ()
@@ -5494,7 +5505,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                                                      bool closed) {
                     std::vector<std::pair<mesh::service_mailbox_record_t, std::uint64_t>> waiting;
                     _user_spot_terminal_lane
-                      .run ([&] {
+                      .run_checked ([&] {
                           auto &stored = _user_spot_terminals[operation_key];
                           stored.header = protocol::encode_user_spot_close_reply (
                             correlation, terminal_result, failure_code, closed);
@@ -5599,7 +5610,8 @@ bool public_host_runtime_t::dispatch_bound_session_send (
         || mailbox_record.source_node_generation != record.actor.target_node_generation)
         return false;
     bound_session_operations_t operations;
-    _lifecycle_configuration_lane.run ([&] { operations = _bound_session_operations; }).get ();
+    _lifecycle_configuration_lane.run_checked ([&] { operations = _bound_session_operations; })
+      .get ();
     if (!operations.capture_send && !operations.send)
         return false;
     const auto application =
@@ -5695,7 +5707,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
                 std::optional<local_application_dispatch_t> pending;
                 bool skip = false;
                 _local_dispatch_completion_lane
-                  .run ([&] {
+                  .run_checked ([&] {
                       if (_local_application_dispatches.empty ())
                           return;
                       pending = std::move (_local_application_dispatches.front ());
@@ -5969,7 +5981,7 @@ std::size_t public_host_runtime_t::dispatch_application_claim (
                       mailbox_record.bound_session_source->session_sequence;
                 }
                 const auto actor_type = _spot_actor_index_lane
-                                          .run ([&] {
+                                          .run_checked ([&] {
                                               std::string actor_type;
                                               const auto found =
                                                 _actors.find (actor.target.actor_id);
@@ -6063,13 +6075,13 @@ bool public_host_runtime_t::wait_for_dispatch_activity (std::chrono::millisecond
     try {
         if (accept_application_receive) {
             if (_local_dispatch_completion_lane
-                  .run ([&] { return !_local_application_dispatches.empty (); })
+                  .run_checked ([&] { return !_local_application_dispatches.empty (); })
                   .get ())
                 return true;
         }
         auto next = _relocation_wire->next_activity ();
         _relocation_session_terminal_lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto include = [&] (std::chrono::steady_clock::time_point deadline) {
                   if (!next || deadline < *next)
                       next = deadline;
@@ -6162,7 +6174,7 @@ std::optional<stateful::object_ref_t>
 public_host_runtime_t::resolve_actor (const actor_ref_t &actor) const
 {
     return _spot_actor_index_lane
-      .run ([&] () -> std::optional<stateful::object_ref_t> {
+      .run_checked ([&] () -> std::optional<stateful::object_ref_t> {
           const auto found = _actors.find (std::string (actor.actor_id ().value ()));
           if (found == _actors.end ()
               || found->second.second.object_generation != actor.object_generation ()) {
@@ -6177,7 +6189,7 @@ std::optional<stateful::object_ref_t>
 public_host_runtime_t::resolve_spot (const std::string &spot_id) const
 {
     return _spot_actor_index_lane
-      .run ([&] {
+      .run_checked ([&] {
           const auto found = _spots.find (spot_id);
           return found == _spots.end () ? std::optional<stateful::object_ref_t>{}
                                         : std::make_optional (found->second);
@@ -6306,7 +6318,7 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
                                                std::chrono::milliseconds timeout)
 {
     return _lifecycle_configuration_lane
-      .run ([&] {
+      .run_checked ([&] {
           if (!_started || _closing)
               return zlink::submit_result_t::terminated;
           const auto current = resolve_actor (actor);
@@ -6395,7 +6407,7 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
                                                            result, reply);
             };
           _local_dispatch_completion_lane
-            .run ([&] {
+            .run_checked ([&] {
                 try {
                     _local_application_dispatches.push_back (
                       local_application_dispatch_t{std::move (owner), std::move (record), parts});
@@ -6442,7 +6454,7 @@ bool public_host_runtime_t::complete_local_actor_join (pending_operation_t opera
               } else {
                   const auto actor = framework_actor_ref (current, actor_type);
                   _spot_actor_index_lane
-                    .run ([&] {
+                    .run_checked ([&] {
                         const auto found = _actors.find (current.key);
                         if (found != _actors.end ())
                             found->second.second = current;
@@ -6497,12 +6509,12 @@ zlink::submit_result_t public_host_runtime_t::enqueue_local_actor_message (
     }
     const auto submitted =
       _lifecycle_configuration_lane
-        .run ([&] {
+        .run_checked ([&] {
             if (!_started || _closing) {
                 return zlink::submit_result_t::terminated;
             }
             return _local_dispatch_completion_lane
-              .run ([&] {
+              .run_checked ([&] {
                   if (operation) {
                       register_local_completion (*operation, timeout, {}, {},
                                                  mesh_request_surface_t::actor);
@@ -6560,12 +6572,12 @@ public_host_runtime_t::enqueue_local_spot_send (const protocol::spot_route_fence
 
     const auto submitted =
       _lifecycle_configuration_lane
-        .run ([&] {
+        .run_checked ([&] {
             if (!_started || _closing) {
                 return zlink::submit_result_t::terminated;
             }
             return _local_dispatch_completion_lane
-              .run ([&] {
+              .run_checked ([&] {
                   _local_application_dispatches.push_back (
                     local_application_dispatch_t{std::move (owner), std::move (record), parts});
                   return zlink::submit_result_t::ok;
@@ -6606,12 +6618,12 @@ public_host_runtime_t::enqueue_local_spot_request (const protocol::spot_route_fe
     record.spot_route = target;
     const auto submitted =
       _lifecycle_configuration_lane
-        .run ([&] {
+        .run_checked ([&] {
             if (!_started || _closing) {
                 return zlink::submit_result_t::terminated;
             }
             return _local_dispatch_completion_lane
-              .run ([&] {
+              .run_checked ([&] {
                   register_local_completion (operation, timeout, std::move (completion), {},
                                              mesh_request_surface_t::spot);
                   record.operation_id = operation.id;
@@ -6740,7 +6752,7 @@ bool actor_transfer_token_t::commit (std::uint64_t membership_epoch)
     _terminal = true;
     if (error == stateful::stateful_error_t::none) {
         host->_spot_actor_index_lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto found = host->_actors.find (_membership.actor.key);
               if (found != host->_actors.end ())
                   found->second.second = current;
@@ -6759,7 +6771,7 @@ bool actor_transfer_token_t::activate ()
     _terminal = true;
     if (error == stateful::stateful_error_t::none) {
         host->_spot_actor_index_lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto found = host->_actors.find (_membership.actor.key);
               if (found != host->_actors.end ())
                   found->second.second = current;

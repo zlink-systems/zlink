@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/channels/channel_host_service.hpp"
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 #include "runtime/configuration/service_scope.hpp"
 
 #include "runtime/channels/channel_packet_dispatcher.hpp"
@@ -590,7 +591,12 @@ task_t<void> channel_host_service_t::start (service_provider_t &services)
               _core_context, _application_jobs, _listener_statuses);
             auto *raw = loop.get ();
             _loops.push_back (std::move (loop));
-            _threads.emplace_back ([raw] { raw->run (); });
+            _threads.emplace_back ([raw] {
+#ifndef NDEBUG
+                runtime::infrastructure_wait_guard::infrastructure_scope_t scope (raw);
+#endif
+                raw->run ();
+            });
         }
         for (const auto &channel : _channels) {
             if (!channel.subscriber.enabled || channel.subscriber.discovery
@@ -604,7 +610,12 @@ task_t<void> channel_host_service_t::start (service_provider_t &services)
               _stop, _core_context, _application_jobs);
             auto *raw = loop.get ();
             _subscriber_loops.push_back (std::move (loop));
-            _threads.emplace_back ([raw] { raw->run (); });
+            _threads.emplace_back ([raw] {
+#ifndef NDEBUG
+                runtime::infrastructure_wait_guard::infrastructure_scope_t scope (raw);
+#endif
+                raw->run ();
+            });
         }
     }
     catch (...) {
@@ -628,7 +639,7 @@ void channel_host_service_t::stop () noexcept
     request_stop ();
     for (auto &thread : _threads) {
         if (thread.joinable ()) {
-            thread.join ();
+            runtime::infrastructure_wait_guard::join (thread, "channel-host/worker");
         }
     }
     for (auto &loop : _loops) {

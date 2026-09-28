@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/stateful/stream_session_registry.hpp"
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 
 #include <iterator>
 #include <limits>
@@ -50,8 +51,8 @@ stream_connection_t stream_session_registry_t::open (std::string connection_id,
     }
     auto [connection, displaced] =
       _lane
-        .run ([this, connection_id = std::move (connection_id),
-               close_connection = std::move (close_connection)] () mutable {
+        .run_checked ([this, connection_id = std::move (connection_id),
+                       close_connection = std::move (close_connection)] () mutable {
             std::vector<stream_retained_outbound_t> displaced;
             const auto generation = ++_last_connection_generation[connection_id];
             stream_connection_t connection{std::move (connection_id), generation};
@@ -83,7 +84,7 @@ bool stream_session_registry_t::close (const stream_connection_t &connection)
 {
     auto [closed, discarded] =
       _lane
-        .run ([this, &connection] {
+        .run_checked ([this, &connection] {
             std::vector<stream_retained_outbound_t> discarded;
             const auto current = _connections.find (connection.connection_id);
             if (current == _connections.end () || current->second.connection != connection) {
@@ -112,7 +113,7 @@ std::vector<stream_binding_t>
 stream_session_registry_t::bindings (const stream_connection_t &connection) const
 {
     return _lane
-      .run ([this, &connection] {
+      .run_checked ([this, &connection] {
           const auto current = _connections.find (connection.connection_id);
           if (current == _connections.end () || current->second.connection != connection) {
               return std::vector<stream_binding_t>{};
@@ -169,8 +170,8 @@ stream_session_registry_t::bind_verified (const stream_connection_t &connection,
 {
     auto [result, displaced] =
       _lane
-        .run ([this, &connection, &actor, target_node_generation, owner_lease_generation,
-               route_publish_pending, binding_generation] {
+        .run_checked ([this, &connection, &actor, target_node_generation, owner_lease_generation,
+                       route_publish_pending, binding_generation] {
             std::vector<stream_retained_outbound_t> displaced;
             if (_all_sealed)
                 return std::make_pair (std::pair{stateful_error_t::moving, stream_binding_t{}},
@@ -258,7 +259,7 @@ std::optional<std::vector<stream_retained_outbound_t>>
 stream_session_registry_t::complete_route_publish (const stream_binding_t &binding)
 {
     return _lane
-      .run ([this, &binding] () -> std::optional<std::vector<stream_retained_outbound_t>> {
+      .run_checked ([this, &binding] () -> std::optional<std::vector<stream_retained_outbound_t>> {
           auto *aggregate = current_aggregate_unlocked (binding.actor.key);
           if (aggregate == nullptr || aggregate->binding != binding
               || !aggregate->route_publish_pending) {
@@ -277,7 +278,7 @@ stateful_error_t stream_session_registry_t::unbind (const stream_binding_t &bind
 {
     auto [result, discarded] =
       _lane
-        .run ([this, &binding] {
+        .run_checked ([this, &binding] {
             std::vector<stream_retained_outbound_t> discarded;
             const auto current = _connections.find (binding.connection.connection_id);
             if (current == _connections.end () || current->second.connection != binding.connection
@@ -306,7 +307,7 @@ stateful_error_t stream_session_registry_t::unbind (const stream_binding_t &bind
 stateful_error_t stream_session_registry_t::restore (const stream_binding_t &binding)
 {
     return _lane
-      .run ([this, &binding] {
+      .run_checked ([this, &binding] {
           if (_all_sealed) {
               return stateful_error_t::moving;
           }
@@ -345,26 +346,27 @@ std::pair<stateful_error_t, std::optional<stream_dispatch_t>>
 stream_session_registry_t::admit_inbound (const stream_binding_t &binding)
 {
     return _lane
-      .run ([this, &binding] () -> std::pair<stateful_error_t, std::optional<stream_dispatch_t>> {
-          if (_all_sealed)
-              return {stateful_error_t::moving, std::nullopt};
-          const auto current = _connections.find (binding.connection.connection_id);
-          if (current == _connections.end () || current->second.connection != binding.connection
-              || !current->second.bindings.contains (binding.actor.key)
-              || current->second.bindings.at (binding.actor.key).binding != binding) {
-              return {stateful_error_t::conflict, std::nullopt};
-          }
-          auto &aggregate = current->second.bindings.at (binding.actor.key);
-          if (aggregate.barrier_token)
-              return {stateful_error_t::moving, std::nullopt};
-          if (aggregate.next_inbound_sequence == std::numeric_limits<std::uint64_t>::max ()) {
-              return {stateful_error_t::conflict, std::nullopt};
-          }
-          const auto sequence = aggregate.next_inbound_sequence++;
-          aggregate.ingress_drain->active.emplace (binding.binding_generation, sequence);
-          return {stateful_error_t::none,
-                  stream_dispatch_t{binding, sequence, aggregate.ingress_drain}};
-      })
+      .run_checked (
+        [this, &binding] () -> std::pair<stateful_error_t, std::optional<stream_dispatch_t>> {
+            if (_all_sealed)
+                return {stateful_error_t::moving, std::nullopt};
+            const auto current = _connections.find (binding.connection.connection_id);
+            if (current == _connections.end () || current->second.connection != binding.connection
+                || !current->second.bindings.contains (binding.actor.key)
+                || current->second.bindings.at (binding.actor.key).binding != binding) {
+                return {stateful_error_t::conflict, std::nullopt};
+            }
+            auto &aggregate = current->second.bindings.at (binding.actor.key);
+            if (aggregate.barrier_token)
+                return {stateful_error_t::moving, std::nullopt};
+            if (aggregate.next_inbound_sequence == std::numeric_limits<std::uint64_t>::max ()) {
+                return {stateful_error_t::conflict, std::nullopt};
+            }
+            const auto sequence = aggregate.next_inbound_sequence++;
+            aggregate.ingress_drain->active.emplace (binding.binding_generation, sequence);
+            return {stateful_error_t::none,
+                    stream_dispatch_t{binding, sequence, aggregate.ingress_drain}};
+        })
       .get ();
 }
 
@@ -382,7 +384,7 @@ stream_session_registry_t::admit_inbound (const std::string &connection_id,
     using result_t = std::pair<stateful_error_t, std::optional<stream_dispatch_t>>;
     const auto attempt = [this, &connection_id, binding_generation, &actor_id, expected_sequence] {
         return _lane
-          .run ([this, &connection_id, binding_generation, &actor_id, expected_sequence] {
+          .run_checked ([this, &connection_id, binding_generation, &actor_id, expected_sequence] {
               std::optional<result_t> result;
               const auto connection = _connections.find (connection_id);
               const auto aggregate = current_aggregate_unlocked (actor_id);
@@ -418,9 +420,14 @@ stream_session_registry_t::admit_inbound (const std::string &connection_id,
     const auto deadline = std::chrono::steady_clock::now () + timeout;
     for (;;) {
         std::unique_lock lock (_changed_mutex);
-        if (!_changed.wait_until (lock, deadline, [&] {
-                return _changed_generation.load (std::memory_order_acquire) != observed_generation;
-            })) {
+        if (!infrastructure_wait_guard::condition_wait_until (
+              _changed, lock, deadline,
+              [&] {
+                  return _changed_generation.load (std::memory_order_acquire)
+                         != observed_generation;
+              },
+              "stream-session/change",
+              infrastructure_wait_guard::wait_relation_t::dependent_completion)) {
             return {stateful_error_t::moving, std::nullopt};
         }
         lock.unlock ();
@@ -433,7 +440,7 @@ stream_session_registry_t::admit_inbound (const std::string &connection_id,
 stateful_error_t stream_session_registry_t::complete_inbound (const stream_dispatch_t &dispatch)
 {
     return _lane
-      .run ([this, &dispatch] {
+      .run_checked ([this, &dispatch] {
           if (!dispatch.drain || !dispatch.drain->accepts_completion)
               return stateful_error_t::conflict;
           const auto active = dispatch.drain->active.find (
@@ -453,7 +460,7 @@ stream_session_registry_t::try_seal_actor (const object_ref_t &actor)
     if (actor.kind != object_kind_t::actor)
         return {stateful_error_t::invalid, {}};
     return _lane
-      .run ([this, &actor] () -> std::pair<stateful_error_t, stream_barrier_t> {
+      .run_checked ([this, &actor] () -> std::pair<stateful_error_t, stream_barrier_t> {
           auto *affected = current_aggregate_unlocked (actor.key);
           if (affected != nullptr && exact_actor (affected->binding.actor, actor)) {
               if (affected->barrier_token)
@@ -478,7 +485,7 @@ stateful_error_t stream_session_registry_t::abort_barrier (const stream_barrier_
 {
     auto [result, released] =
       _lane
-        .run ([this, &barrier] {
+        .run_checked ([this, &barrier] {
             std::vector<stream_retained_outbound_t> released;
             const auto found = _barriers.find (barrier.token);
             if (found == _barriers.end () || !exact_actor (found->second, barrier.actor))
@@ -504,7 +511,7 @@ stateful_error_t stream_session_registry_t::commit_barrier (const stream_barrier
 {
     auto [result, released] =
       _lane
-        .run ([this, &barrier, &target] {
+        .run_checked ([this, &barrier, &target] {
             std::vector<stream_retained_outbound_t> released;
             const auto found = _barriers.find (barrier.token);
             if (found == _barriers.end () || !exact_actor (found->second, barrier.actor)
@@ -540,8 +547,8 @@ stream_session_registry_t::seal_remote_route (const std::string &connection_id,
                                               std::uint64_t object_generation)
 {
     return _lane
-      .run ([this, &connection_id, binding_generation, &actor_id,
-             object_generation] () -> stream_route_seal_admission_t {
+      .run_checked ([this, &connection_id, binding_generation, &actor_id,
+                     object_generation] () -> stream_route_seal_admission_t {
           const auto connection = _connections.find (connection_id);
           auto *aggregate = current_aggregate_unlocked (actor_id);
           if (connection == _connections.end () || aggregate == nullptr
@@ -573,7 +580,7 @@ stream_session_registry_t::seal_remote_route (const std::string &connection_id,
 bool stream_session_registry_t::remote_route_seal_ready (const stream_barrier_t &barrier) const
 {
     return _lane
-      .run ([this, &barrier] {
+      .run_checked ([this, &barrier] {
           const auto found = _barriers.find (barrier.token);
           if (found == _barriers.end () || !exact_actor (found->second, barrier.actor))
               return false;
@@ -589,7 +596,7 @@ bool stream_session_registry_t::close_remote_route_seal (const stream_barrier_t 
 {
     auto [closed, discarded, close_connection] =
       _lane
-        .run (
+        .run_checked (
           [this, &barrier] ()
             -> std::tuple<bool, std::vector<stream_retained_outbound_t>, std::function<void ()>> {
               const auto found = _barriers.find (barrier.token);
@@ -639,7 +646,7 @@ bool stream_session_registry_t::close_remote_route_seal (const stream_barrier_t 
 bool stream_session_registry_t::remote_route_sealed (const std::string &actor_id) const
 {
     return _lane
-      .run ([this, &actor_id] {
+      .run_checked ([this, &actor_id] {
           const auto *aggregate = current_aggregate_unlocked (actor_id);
           return aggregate != nullptr && aggregate->barrier_token.has_value ();
       })
@@ -653,8 +660,8 @@ stream_session_registry_t::admit_outbound (const std::string &actor_id,
                                            stream_retained_outbound_t retained)
 {
     return _lane
-      .run ([this, &actor_id, object_generation, binding_generation,
-             retained = std::move (retained)] () mutable -> stream_outbound_admission_t {
+      .run_checked ([this, &actor_id, object_generation, binding_generation,
+                     retained = std::move (retained)] () mutable -> stream_outbound_admission_t {
           auto *aggregate = current_aggregate_unlocked (actor_id);
           if (aggregate == nullptr || aggregate->binding.actor.kind != object_kind_t::actor
               || aggregate->binding.binding_generation != binding_generation
@@ -676,7 +683,7 @@ stream_session_registry_t::discard_retained_outbound (const std::string &actor_i
                                                       std::uint64_t binding_generation)
 {
     return _lane
-      .run ([this, &actor_id, binding_generation] {
+      .run_checked ([this, &actor_id, binding_generation] {
           auto *aggregate = current_aggregate_unlocked (actor_id);
           if (aggregate == nullptr || aggregate->binding.binding_generation != binding_generation)
               return std::vector<stream_retained_outbound_t>{};
@@ -692,7 +699,7 @@ stream_session_registry_t::discard_retained_outbound (const std::string &actor_i
 std::vector<stream_retained_outbound_t> stream_session_registry_t::take_all_retained_outbound ()
 {
     return _lane
-      .run ([this] {
+      .run_checked ([this] {
           std::vector<stream_retained_outbound_t> retained;
           for (auto &[_, connection] : _connections) {
               for (auto &[__, aggregate] : connection.bindings) {
@@ -718,10 +725,10 @@ stream_session_registry_t::commit_remote_route (const std::string &connection_id
 {
     auto admission =
       _lane
-        .run ([this, &connection_id, binding_generation, &actor_id, object_generation,
-               previous_authority_owner_generation, target = std::move (target),
-               target_node_generation, target_owner_lease_generation,
-               &commit_terminal] () mutable -> stream_route_admission_t {
+        .run_checked ([this, &connection_id, binding_generation, &actor_id, object_generation,
+                       previous_authority_owner_generation, target = std::move (target),
+                       target_node_generation, target_owner_lease_generation,
+                       &commit_terminal] () mutable -> stream_route_admission_t {
             const auto connection = _connections.find (connection_id);
             auto *aggregate = current_aggregate_unlocked (actor_id);
             if (connection == _connections.end () || aggregate == nullptr
@@ -786,8 +793,8 @@ stream_route_admission_t stream_session_registry_t::acknowledge_remote_abort (
 {
     auto admission =
       _lane
-        .run ([this, &connection_id, binding_generation, &actor_id, object_generation,
-               current_authority_owner_generation] () -> stream_route_admission_t {
+        .run_checked ([this, &connection_id, binding_generation, &actor_id, object_generation,
+                       current_authority_owner_generation] () -> stream_route_admission_t {
             const auto connection = _connections.find (connection_id);
             auto *aggregate = current_aggregate_unlocked (actor_id);
             if (connection == _connections.end () || aggregate == nullptr
@@ -831,7 +838,7 @@ std::optional<stream_binding_t>
 stream_session_registry_t::current_binding (const std::string &actor_id) const
 {
     return _lane
-      .run ([this, &actor_id] {
+      .run_checked ([this, &actor_id] {
           const auto *aggregate = current_aggregate_unlocked (actor_id);
           return aggregate == nullptr ? std::nullopt : std::make_optional (aggregate->binding);
       })
@@ -841,7 +848,7 @@ stream_session_registry_t::current_binding (const std::string &actor_id) const
 bool stream_session_registry_t::try_seal_all ()
 {
     return _lane
-      .run ([this] {
+      .run_checked ([this] {
           if (_all_sealed)
               return true;
           for (const auto &[_, state] : _connections) {
@@ -858,7 +865,7 @@ bool stream_session_registry_t::try_seal_all ()
 void stream_session_registry_t::release_all () noexcept
 {
     _lane
-      .run ([this] {
+      .run_checked ([this] {
           _all_sealed = false;
           notify_changed ();
       })
@@ -868,7 +875,7 @@ void stream_session_registry_t::release_all () noexcept
 void stream_session_registry_t::force_close_all () noexcept
 {
     auto closed = _lane
-                    .run ([this] {
+                    .run_checked ([this] {
                         decltype (_connections) closed;
                         _all_sealed = true;
                         _barriers.clear ();
@@ -902,7 +909,7 @@ void stream_session_registry_t::force_close_all () noexcept
 bool stream_session_registry_t::is_current (const stream_binding_t &binding) const
 {
     return _lane
-      .run ([this, &binding] {
+      .run_checked ([this, &binding] {
           const auto current = _connections.find (binding.connection.connection_id);
           return current != _connections.end () && current->second.connection == binding.connection
                  && current->second.bindings.contains (binding.actor.key)
@@ -915,7 +922,7 @@ bool stream_session_registry_t::is_current_for_connection (const stream_connecti
                                                            const stream_binding_t &binding) const
 {
     return _lane
-      .run ([this, &connection, &binding] {
+      .run_checked ([this, &connection, &binding] {
           if (binding.connection != connection)
               return false;
           const auto owner = _connections.find (connection.connection_id);

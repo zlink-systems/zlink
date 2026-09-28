@@ -3,6 +3,9 @@
 
 #include <zlink/framework/contracts/errors/result.hpp>
 #include <zlink/framework/detail/runtime/dispatch/application_job_context.hpp>
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+#include <zlink/framework/detail/infrastructure_wait_context.hpp>
+#endif
 
 #include <chrono>
 #include <condition_variable>
@@ -24,6 +27,7 @@ template <typename T> class task_t;
 
 namespace detail
 {
+
 
 using task_scheduler_t = std::function<void (std::function<void ()>)>;
 
@@ -312,6 +316,9 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     const result_t<T> &result ()
     {
         std::unique_lock lock (_mutex);
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+        check_infrastructure_wait (_result.has_value (), "task/result");
+#endif
         _ready.wait (lock, [&] { return _result.has_value (); });
         return *_result;
     }
@@ -326,6 +333,11 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     {
         std::stop_callback wake_waiter (cancellation, [this] { _ready.notify_all (); });
         std::unique_lock lock (_mutex);
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+        if (timeout > std::chrono::milliseconds::zero ())
+            check_infrastructure_wait (_result.has_value () || cancellation.stop_requested (),
+                                       "task/result_for");
+#endif
         if (!_ready.wait_for (
               lock, timeout, [&] { return _result.has_value () || cancellation.stop_requested (); })
             || !_result) {

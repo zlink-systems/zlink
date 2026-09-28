@@ -914,7 +914,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
         if (!owner || owner->lane.is_on_lane ())
             return std::invoke (work);
         return owner->lane
-          .run ([work = std::forward<Work> (work)] () mutable -> decltype (auto) {
+          .run_checked ([work = std::forward<Work> (work)] () mutable -> decltype (auto) {
               return std::invoke (work);
           })
           .get ();
@@ -962,7 +962,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
 
         const auto reservation =
           owner->lane
-            .run ([this, &owner] {
+            .run_checked ([this, &owner] {
                 if (close_reservation != 0)
                     return std::make_pair (close_reservation, false);
                 return std::make_pair (
@@ -980,7 +980,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
         if (reservation.second) {
             // A Close that merged into this teardown finds no incarnation left.
             auto merged = owner->lane
-                            .run ([this, token = reservation.first] {
+                            .run_checked ([this, token = reservation.first] {
                                 clear_close_reservation_core (token);
                                 return std::exchange (merged_close_results, {});
                             })
@@ -1152,7 +1152,8 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
             return spot_serial_executor;
         if (!owner->lane.is_on_lane ())
             return owner->lane
-              .run ([this, owner] { return ensure_spot_serial_executor_on_lane (owner->lane); })
+              .run_checked (
+                [this, owner] { return ensure_spot_serial_executor_on_lane (owner->lane); })
               .get ();
         return ensure_spot_serial_executor_on_lane (owner->lane);
     }
@@ -1243,7 +1244,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
             return false;
         const auto sealed =
           owner->lane
-            .run ([this, &owner, reservation] {
+            .run_checked ([this, &owner, reservation] {
                 return reservation != 0 && close_reservation == reservation
                        && close_reservation_kind == close_reservation_kind_t::idle
                        && node.get () == owner.get () && !closed && actor_count == 0
@@ -1263,7 +1264,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
             return;
         const auto committed =
           owner->lane
-            .run ([this, reservation] {
+            .run_checked ([this, reservation] {
                 if (close_reservation != reservation
                     || close_reservation_kind != close_reservation_kind_t::idle || closed)
                     return false;
@@ -1361,7 +1362,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     {
         auto work =
           owner->lane
-            .run ([this, &owner, token] {
+            .run_checked ([this, &owner, token] {
                 if (close_reservation != token || node.get () != owner.get ())
                     return application_detach_work_t{};
                 return application_detach_work_t{std::move (spot_instance), lifecycle.on_closing};
@@ -1384,7 +1385,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
         // to this coordinator. Timer/native callbacks remain outside state turns.
         cancel_timers ();
         auto scope = owner->lane
-                       .run ([this, token] {
+                       .run_checked ([this, token] {
                            if (close_reservation != token)
                                return std::shared_ptr<service_scope_t>{};
                            timer_handler_instances.clear ();
@@ -1395,7 +1396,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
         if (scope)
             scope->close ();
         owner->lane
-          .run ([this, &owner, token, &scope] {
+          .run_checked ([this, &owner, token, &scope] {
               if (close_reservation != token)
                   return;
               if (activation_scope == scope)
@@ -1433,7 +1434,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
 
         auto *location_lifecycle =
           owner->lane
-            .run ([this, &owner, token] {
+            .run_checked ([this, &owner, token] {
                 return close_reservation == token ? owner->location_lifecycle : nullptr;
             })
             .get ();
@@ -1443,12 +1444,13 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
             }
         }
         catch (...) {
-            owner->lane.run ([this, token] { clear_close_reservation_core (token); }).get ();
+            owner->lane.run_checked ([this, token] { clear_close_reservation_core (token); })
+              .get ();
             throw;
         }
 
         owner->lane
-          .run ([this, &owner, &rid, token] {
+          .run_checked ([this, &owner, &rid, token] {
               if (close_reservation != token)
                   return;
               const auto context = owner->spot_contexts_by_id.find (rid);
@@ -1998,7 +2000,7 @@ class spot_node_runtime_t
     {
         const auto key = actor_key (actor_ref);
         auto instance = _state->lane
-                          .run ([&] {
+                          .run_checked ([&] {
                               const auto found = _state->actor_instances.find (key);
                               return found == _state->actor_instances.end ()
                                        ? std::shared_ptr<void>{}
@@ -2026,7 +2028,7 @@ class spot_node_runtime_t
         serializer_registry_t *serializers = nullptr;
         auto context =
           _state->lane
-            .run ([&] () -> std::optional<spot_context_t> {
+            .run_checked ([&] () -> std::optional<spot_context_t> {
                 auto selected = find_context_core (spot_id);
                 if (!selected)
                     return std::nullopt;
@@ -2086,7 +2088,7 @@ class spot_node_runtime_t
         };
         entry_selection_t selection = entry_selection_t::context_missing;
         auto context = _state->lane
-                         .run ([&] () -> std::optional<spot_context_t> {
+                         .run_checked ([&] () -> std::optional<spot_context_t> {
                              if (spot_node_rid.empty ()
                                  || spot_node_rid.value ()
                                       != detail::effective_spot_node_rid (_state->snapshot)) {
@@ -2162,7 +2164,7 @@ class spot_node_runtime_t
         const auto key = actor_key (actor_ref);
         const auto stale =
           _state->lane
-            .run ([&] {
+            .run_checked ([&] {
                 const auto found_location = _state->actor_spot_ids.find (key);
                 if (found_location == _state->actor_spot_ids.end ())
                     return false;
@@ -2296,7 +2298,7 @@ class spot_node_runtime_t
                                                   bool refuse_destroyed = false) const
     {
         return _state->lane
-          .run ([&] {
+          .run_checked ([&] {
               auto &slot = _state->actor_instances[key];
               if (!slot) {
                   if (refuse_destroyed && _state->destroyed_actor_keys.contains (key)) {
@@ -2346,7 +2348,7 @@ class spot_node_runtime_t
 
     std::optional<spot_context_t> find_context (const spot_id_t &spot_id) const
     {
-        return _state->lane.run ([&] { return find_context_core (spot_id); }).get ();
+        return _state->lane.run_checked ([&] { return find_context_core (spot_id); }).get ();
     }
 
     template <typename TSpot, typename TActor>
@@ -2426,7 +2428,7 @@ class spot_node_runtime_t
 
         const auto prepared =
           _state->lane
-            .run ([&] {
+            .run_checked ([&] {
                 const auto found =
                   _state->spot_contexts_by_id.find (std::string (target_state->spot_id));
                 if (found == _state->spot_contexts_by_id.end ()
@@ -2489,7 +2491,7 @@ class spot_node_runtime_t
 
         const auto route_committed =
           _state->lane
-            .run ([&] {
+            .run_checked ([&] {
                 const auto found =
                   _state->spot_contexts_by_id.find (std::string (target_state->spot_id));
                 if (found == _state->spot_contexts_by_id.end ()
@@ -2516,7 +2518,7 @@ class spot_node_runtime_t
         actor_task_callback_projection_t callback;
         const auto key = actor_key (actor_ref);
         _state->lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto found_location = _state->actor_spot_ids.find (key);
               if (found_location == _state->actor_spot_ids.end ())
                   return;

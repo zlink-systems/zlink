@@ -13,14 +13,14 @@ namespace zlink::framework::detail
 
 void actor_transfer_coordinator_t::set_activity_handler (std::function<void ()> handler)
 {
-    _lane.run ([&] { _activity_handler = std::move (handler); }).get ();
+    _lane.run_checked ([&] { _activity_handler = std::move (handler); }).get ();
 }
 
 std::optional<std::chrono::steady_clock::time_point>
 actor_transfer_coordinator_t::next_activity () const
 {
     return _lane
-      .run ([this] {
+      .run_checked ([this] {
           std::optional<std::chrono::steady_clock::time_point> next;
           const auto include = [&] (std::chrono::steady_clock::time_point deadline) {
               if (!next || deadline < *next)
@@ -67,7 +67,7 @@ bool actor_transfer_coordinator_t::try_reserve_source (const std::string &actor_
                                                        std::string transfer_id)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           return _moves
             .emplace (actor_key,
                       move_state_t{actor_move_phase_t::source_reserved, std::move (transfer_id)})
@@ -79,7 +79,7 @@ bool actor_transfer_coordinator_t::try_reserve_source (const std::string &actor_
 bool actor_transfer_coordinator_t::try_begin_local (const std::string &actor_key)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           if (auto found = _moves.find (actor_key); found != _moves.end ()) {
               if (found->second.phase != actor_move_phase_t::source_reserved)
                   return false;
@@ -96,7 +96,7 @@ bool actor_transfer_coordinator_t::try_begin_source_remote (const std::string &a
                                                             std::string transfer_id)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           if (auto found = _moves.find (actor_key); found != _moves.end ()) {
               if (found->second.phase != actor_move_phase_t::source_reserved)
                   return false;
@@ -117,7 +117,7 @@ bool actor_transfer_coordinator_t::try_begin_source_remote (const std::string &a
 void actor_transfer_coordinator_t::cancel_move (const std::string &actor_key)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           if (_activity_handler)
               _activity_handler ();
           _moves.erase (actor_key);
@@ -132,7 +132,7 @@ void actor_transfer_coordinator_t::mark_reconcile (
   std::optional<reconcile_target_context_t> context)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           if (_activity_handler)
               _activity_handler ();
           const auto deadline = std::chrono::steady_clock::now () + bound;
@@ -155,7 +155,7 @@ std::vector<expired_reconcile_t>
 actor_transfer_coordinator_t::take_due_reconciles (std::chrono::steady_clock::time_point now)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           std::vector<expired_reconcile_t> expired;
           for (auto &[key, move] : _moves) {
               if (move.phase == actor_move_phase_t::reconcile && move.next_reconcile_at
@@ -174,7 +174,7 @@ std::optional<std::chrono::steady_clock::duration>
 actor_transfer_coordinator_t::complete_move (const std::string &actor_key)
 {
     return _lane
-      .run ([&, this] () -> std::optional<std::chrono::steady_clock::duration> {
+      .run_checked ([&, this] () -> std::optional<std::chrono::steady_clock::duration> {
           if (_activity_handler)
               _activity_handler ();
           const auto found = _moves.find (actor_key);
@@ -195,7 +195,7 @@ actor_move_completion_t
 actor_transfer_coordinator_t::complete_move_and_take_backlog (const std::string &actor_key)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           if (_activity_handler)
               _activity_handler ();
           const auto found = _moves.find (actor_key);
@@ -220,7 +220,7 @@ actor_move_completion_t
 actor_transfer_coordinator_t::finish_move_replay (const std::string &actor_key)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           if (_activity_handler)
               _activity_handler ();
           const auto found = _moves.find (actor_key);
@@ -247,7 +247,8 @@ handoff_append_result_t
 actor_transfer_coordinator_t::try_append_backlog (const std::string &actor_key,
                                                   handoff_packet_t packet)
 {
-    return _lane.run ([&, this] { return try_append_backlog_unlocked (actor_key, packet); }).get ();
+    return _lane.run_checked ([&, this] { return try_append_backlog_unlocked (actor_key, packet); })
+      .get ();
 }
 
 handoff_append_result_t
@@ -301,7 +302,7 @@ bool actor_transfer_coordinator_t::stage_commit_backlog (const std::string &tran
                                                          std::vector<handoff_packet_t> backlog)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           const auto admission = _admissions.find (transfer_id);
           if (admission == _admissions.end ())
               return false;
@@ -351,7 +352,7 @@ std::vector<handoff_packet_t>
 actor_transfer_coordinator_t::take_backlog (const std::string &actor_key)
 {
     return _lane
-      .run ([&, this] () -> std::vector<handoff_packet_t> {
+      .run_checked ([&, this] () -> std::vector<handoff_packet_t> {
           const auto found = _backlogs.find (actor_key);
           if (found == _backlogs.end ()) {
               return {};
@@ -373,7 +374,7 @@ void actor_transfer_coordinator_t::activate_message_follow (
   std::string transfer_id)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           if (_activity_handler)
               _activity_handler ();
           auto &routes = _message_follow_routes[actor_key];
@@ -408,7 +409,7 @@ bool actor_transfer_coordinator_t::matches_message_follow_source (
   const std::string &actor_key, const runtime::protocol::actor_route_fence_t &source_fence) const
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           return matches_message_follow_source_unlocked (actor_key, source_fence,
                                                          std::chrono::steady_clock::now ());
       })
@@ -432,7 +433,7 @@ actor_transfer_dispatch_state_snapshot_t actor_transfer_coordinator_t::project_d
   const std::string &actor_key, const runtime::protocol::actor_route_fence_t *source_fence) const
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           return project_dispatch_state_unlocked (actor_key, source_fence,
                                                   std::chrono::steady_clock::now ());
       })
@@ -460,7 +461,7 @@ actor_transfer_packet_admission_t actor_transfer_coordinator_t::admit_dispatch_p
   handoff_packet_t packet)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           const auto projected = project_dispatch_state_unlocked (
             actor_key, source_fence, std::chrono::steady_clock::now ());
           const bool targets_committed_source =
@@ -481,7 +482,7 @@ std::optional<actor_message_follow_target_t> actor_transfer_coordinator_t::messa
   const std::string &actor_key, const runtime::protocol::actor_route_fence_t &source_fence) const
 {
     return _lane
-      .run ([&, this] () -> std::optional<actor_message_follow_target_t> {
+      .run_checked ([&, this] () -> std::optional<actor_message_follow_target_t> {
           const auto found = _message_follow_routes.find (actor_key);
           if (found == _message_follow_routes.end ())
               return std::nullopt;
@@ -502,7 +503,7 @@ bool actor_transfer_coordinator_t::message_follow_targets_node (
   const std::string &actor_key, const zlink::routing_id_t &node) const
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           const auto found = _message_follow_routes.find (actor_key);
           if (found == _message_follow_routes.end ())
               return false;
@@ -521,7 +522,7 @@ bool actor_transfer_coordinator_t::message_follow_targets_node (
 bool actor_transfer_coordinator_t::has_message_follow_route (const std::string &actor_key) const
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           const auto found = _message_follow_routes.find (actor_key);
           if (found == _message_follow_routes.end ())
               return false;
@@ -537,7 +538,7 @@ actor_transfer_coordinator_t::message_follow_source_for_generation (const std::s
                                                                     std::uint64_t generation) const
 {
     return _lane
-      .run ([&, this] () -> std::optional<runtime::protocol::actor_route_fence_t> {
+      .run_checked ([&, this] () -> std::optional<runtime::protocol::actor_route_fence_t> {
           const auto found = _message_follow_routes.find (actor_key);
           if (found == _message_follow_routes.end ())
               return std::nullopt;
@@ -564,7 +565,7 @@ actor_transfer_coordinator_t::try_acquire_message_follow (
 {
     constexpr std::size_t max_hops = zlink::framework::runtime::protocol::messageFollowHopCount;
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           const auto found = _message_follow_routes.find (actor_key);
           if (found == _message_follow_routes.end ()) {
               return result_t<std::optional<actor_message_follow_target_t>>::success (std::nullopt);
@@ -612,7 +613,7 @@ void actor_transfer_coordinator_t::release_message_follow (
   std::size_t payload_bytes)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           const auto found = _message_follow_routes.find (actor_key);
           if (found == _message_follow_routes.end ())
               return;
@@ -635,7 +636,7 @@ bool actor_transfer_coordinator_t::try_begin_message_follow_notification (
   const runtime::protocol::actor_route_fence_t &target_fence)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           const auto found = _message_follow_routes.find (actor_key);
           if (found == _message_follow_routes.end ())
               return false;
@@ -657,7 +658,7 @@ bool actor_transfer_coordinator_t::complete_message_follow_notification (
   bool transport_accepted)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           const auto found = _message_follow_routes.find (actor_key);
           if (found == _message_follow_routes.end ())
               return false;
@@ -679,7 +680,7 @@ actor_transfer_coordinator_t::remove_expired_message_follow (
   std::chrono::steady_clock::time_point now)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           std::vector<removed_actor_message_follow_t> removed;
           for (auto found = _message_follow_routes.begin ();
                found != _message_follow_routes.end ();) {
@@ -711,7 +712,7 @@ std::optional<removed_actor_message_follow_t> actor_transfer_coordinator_t::remo
   const runtime::protocol::actor_route_fence_t &target_fence)
 {
     return _lane
-      .run ([&, this] () -> std::optional<removed_actor_message_follow_t> {
+      .run_checked ([&, this] () -> std::optional<removed_actor_message_follow_t> {
           const auto found = _message_follow_routes.find (actor_key);
           if (found == _message_follow_routes.end ())
               return std::nullopt;
@@ -736,14 +737,14 @@ std::optional<removed_actor_message_follow_t> actor_transfer_coordinator_t::remo
 
 bool actor_transfer_coordinator_t::blocks_dispatch (const std::string &actor_key) const
 {
-    return _lane.run ([&, this] { return _moves.contains (actor_key); }).get ();
+    return _lane.run_checked ([&, this] { return _moves.contains (actor_key); }).get ();
 }
 
 std::optional<actor_move_phase_t>
 actor_transfer_coordinator_t::phase (const std::string &actor_key) const
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           const auto found = _moves.find (actor_key);
           return found == _moves.end () ? std::nullopt : std::make_optional (found->second.phase);
       })
@@ -754,7 +755,7 @@ std::optional<std::string>
 actor_transfer_coordinator_t::transfer_id (const std::string &actor_key) const
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           const auto found = _moves.find (actor_key);
           return found == _moves.end () || found->second.transfer_id.empty ()
                    ? std::nullopt
@@ -767,7 +768,7 @@ bool actor_transfer_coordinator_t::matches_source_remote_transfer (
   const std::string &actor_key, const std::string &transfer_id) const
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           const auto found = _moves.find (actor_key);
           return found != _moves.end () && found->second.phase == actor_move_phase_t::source_remote
                  && found->second.transfer_id == transfer_id;
@@ -779,7 +780,7 @@ bool actor_transfer_coordinator_t::try_submit_source_leave (const std::string &a
                                                             const std::string &transfer_id)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           const auto found = _moves.find (actor_key);
           if (found == _moves.end () || found->second.phase != actor_move_phase_t::source_remote
               || found->second.transfer_id != transfer_id || found->second.source_leave_submitted) {
@@ -795,7 +796,7 @@ bool actor_transfer_coordinator_t::source_leave_submitted (const std::string &ac
                                                            const std::string &transfer_id) const
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           const auto found = _moves.find (actor_key);
           return found != _moves.end () && found->second.phase == actor_move_phase_t::source_remote
                  && found->second.transfer_id == transfer_id
@@ -812,7 +813,7 @@ bool actor_transfer_coordinator_t::admit_attempt (const std::string &actor_key,
     std::optional<pending_actor_admission_t> displaced;
     const auto admitted =
       _lane
-        .run ([&, this] {
+        .run_checked ([&, this] {
             const auto moving = _moves.find (actor_key);
             if (moving == _moves.end ())
                 return true;
@@ -848,7 +849,7 @@ bool actor_transfer_coordinator_t::try_add_admission (std::string transfer_id,
                                                       pending_actor_admission_t admission)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           if (_activity_handler)
               _activity_handler ();
           if (_admissions.contains (transfer_id) || _completed_admissions.contains (transfer_id)) {
@@ -869,7 +870,7 @@ bool actor_transfer_coordinator_t::is_current (const std::string &actor_key,
                                                const std::string &transfer_id) const
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           const auto moving = _moves.find (actor_key);
           return moving != _moves.end () && moving->second.transfer_id == transfer_id;
       })
@@ -880,7 +881,7 @@ std::optional<pending_actor_admission_t>
 actor_transfer_coordinator_t::admission (const std::string &transfer_id) const
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           const auto found = _admissions.find (transfer_id);
           return found == _admissions.end () ? std::nullopt : std::make_optional (found->second);
       })
@@ -891,7 +892,7 @@ std::optional<pending_actor_admission_t> actor_transfer_coordinator_t::begin_com
   const std::string &transfer_id, const actor_ref_t &source_actor, const spot_id_t &target_spot_id)
 {
     return _lane
-      .run ([&, this] () -> std::optional<pending_actor_admission_t> {
+      .run_checked ([&, this] () -> std::optional<pending_actor_admission_t> {
           const auto found = _admissions.find (transfer_id);
           if (found == _admissions.end ()) {
               return std::nullopt;
@@ -930,7 +931,7 @@ actor_transfer_coordinator_t::pending_commit (const std::string &transfer_id,
                                               const spot_id_t &target_spot_id) const
 {
     return _lane
-      .run ([&, this] () -> std::optional<pending_actor_admission_t> {
+      .run_checked ([&, this] () -> std::optional<pending_actor_admission_t> {
           const auto found = _admissions.find (transfer_id);
           if (found == _admissions.end ()) {
               return std::nullopt;
@@ -960,7 +961,7 @@ actor_transfer_coordinator_t::completed_commit (const std::string &transfer_id,
                                                 const spot_id_t &target_spot_id) const
 {
     return _lane
-      .run ([&, this] () -> std::optional<pending_actor_admission_t> {
+      .run_checked ([&, this] () -> std::optional<pending_actor_admission_t> {
           const auto found = _completed_admissions.find (transfer_id);
           if (found == _completed_admissions.end ()
               || found->second.deadline <= std::chrono::steady_clock::now ()
@@ -980,7 +981,7 @@ actor_transfer_coordinator_t::complete_commit_and_take_backlog (const std::strin
                                                                 const spot_id_t &target_spot_id)
 {
     return _lane
-      .run ([&, this] () -> std::optional<std::vector<handoff_packet_t>> {
+      .run_checked ([&, this] () -> std::optional<std::vector<handoff_packet_t>> {
           const auto found = _admissions.find (transfer_id);
           if (found == _admissions.end ())
               return std::nullopt;
@@ -1022,7 +1023,7 @@ bool actor_transfer_coordinator_t::stage_session_relocation_route (
     if (route.empty () || actor_type.empty () || target_owner_lease_generation == 0)
         return false;
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           auto found = _admissions.find (transfer_id);
           if (found == _admissions.end ()) {
               found = _completed_admissions.find (transfer_id);
@@ -1054,7 +1055,7 @@ bool actor_transfer_coordinator_t::commit_session_relocation_route_authority (
         || target_authority_owner_generation <= previous_authority_owner_generation)
         return false;
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           auto found = _admissions.find (transfer_id);
           if (found == _admissions.end ()) {
               found = _completed_admissions.find (transfer_id);
@@ -1083,7 +1084,7 @@ std::optional<pending_actor_admission_t>
 actor_transfer_coordinator_t::session_relocation_admission (const std::string &transfer_id) const
 {
     return _lane
-      .run ([&, this] () -> std::optional<pending_actor_admission_t> {
+      .run_checked ([&, this] () -> std::optional<pending_actor_admission_t> {
           if (const auto found = _admissions.find (transfer_id); found != _admissions.end ())
               return found->second;
           if (const auto found = _completed_admissions.find (transfer_id);
@@ -1097,7 +1098,7 @@ actor_transfer_coordinator_t::session_relocation_admission (const std::string &t
 void actor_transfer_coordinator_t::fail_commit (const std::string &transfer_id, bool reconcile)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           if (_activity_handler)
               _activity_handler ();
           const auto found = _admissions.find (transfer_id);
@@ -1129,7 +1130,7 @@ void actor_transfer_coordinator_t::fail_commit (const std::string &transfer_id, 
 void actor_transfer_coordinator_t::complete_commit (const std::string &transfer_id)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           if (_activity_handler)
               _activity_handler ();
           const auto found = _admissions.find (transfer_id);
@@ -1147,7 +1148,7 @@ std::vector<expired_actor_admission_t>
 actor_transfer_coordinator_t::cleanup_expired (std::chrono::steady_clock::time_point now)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           std::vector<expired_actor_admission_t> removed;
           for (auto found = _admissions.begin (); found != _admissions.end ();) {
               const auto moving = _moves.find (found->second.actor_key);
@@ -1176,12 +1177,13 @@ actor_transfer_coordinator_t::cleanup_expired (std::chrono::steady_clock::time_p
 
 std::size_t actor_transfer_coordinator_t::pending_count () const
 {
-    return _lane.run ([&, this] { return _admissions.size (); }).get ();
+    return _lane.run_checked ([&, this] { return _admissions.size (); }).get ();
 }
 
 std::string actor_transfer_coordinator_t::next_transfer_id (const std::string &node_rid)
 {
-    return _lane.run ([&, this] { return node_rid + ":" + std::to_string (_next_transfer_id++); })
+    return _lane
+      .run_checked ([&, this] { return node_rid + ":" + std::to_string (_next_transfer_id++); })
       .get ();
 }
 

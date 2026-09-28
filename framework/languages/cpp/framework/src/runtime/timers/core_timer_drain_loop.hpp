@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include "runtime/execution/infrastructure_wait_guard.hpp"
+
 #include <zlink/Contracts/Eventing/poller.hpp>
 #include <zlink/Contracts/Eventing/timers.hpp>
 
@@ -71,8 +73,9 @@ class core_timer_drain_loop_t
             if (_worker.joinable ())
                 worker = std::move (_worker);
         }
-        if (worker.joinable ())
-            worker.join ();
+        if (worker.joinable ()) {
+            runtime::infrastructure_wait_guard::join (worker, "core-timer/self-join");
+        }
         std::exception_ptr failure;
         try {
             _poller.close ();
@@ -95,6 +98,9 @@ class core_timer_drain_loop_t
   private:
     void run () noexcept
     {
+#ifndef NDEBUG
+        runtime::infrastructure_wait_guard::infrastructure_scope_t infrastructure_scope (this);
+#endif
         std::array<zlink::poll_event_t, 1> events{};
         while (!_stop.load (std::memory_order_acquire)) {
             try {

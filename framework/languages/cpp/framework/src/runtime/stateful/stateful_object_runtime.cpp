@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/stateful/stateful_object_runtime.hpp"
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -69,9 +70,10 @@ void stateful_object_runtime_t::notify_quiescence () noexcept
 void stateful_object_runtime_t::wait_for_quiescence_change (std::uint64_t observed)
 {
     std::unique_lock lock (_quiescence_mutex);
-    _quiescence.wait (lock, [this, observed] {
-        return _quiescence_epoch.load (std::memory_order_acquire) != observed;
-    });
+    infrastructure_wait_guard::condition_wait (
+      _quiescence, lock,
+      [this, observed] { return _quiescence_epoch.load (std::memory_order_acquire) != observed; },
+      "stateful/quiescence", infrastructure_wait_guard::wait_relation_t::dependent_completion);
 }
 
 void stateful_object_runtime_t::configure_relocation_state (relocation_state_capture_t capture,
@@ -80,7 +82,7 @@ void stateful_object_runtime_t::configure_relocation_state (relocation_state_cap
     if (!capture || !restore)
         throw std::invalid_argument ("Relocation state callbacks must not be empty");
     return _lane
-      .run ([&, this] () -> void {
+      .run_checked ([&, this] () -> void {
           _relocation_state_capture = std::move (capture);
           _relocation_state_restore = std::move (restore);
       })
@@ -95,7 +97,7 @@ void stateful_object_runtime_t::configure_relocation_materialization (
     if (!materialize || !commit || !abort)
         throw std::invalid_argument ("Relocation materialization callbacks must not be empty");
     return _lane
-      .run ([&, this] () -> void {
+      .run_checked ([&, this] () -> void {
           _relocation_state_materialize = std::move (materialize);
           _relocation_state_commit = std::move (commit);
           _relocation_state_abort = std::move (abort);
@@ -111,13 +113,14 @@ void stateful_object_runtime_t::replace_placement_candidates (
                          return candidate.weight < 0 || candidate.weight > 10000;
                      }))
         throw std::invalid_argument ("placement weight must be in range 0..10000");
-    return _lane.run ([&, this] () -> void { _candidates = std::move (candidates); }).get ();
+    return _lane.run_checked ([&, this] () -> void { _candidates = std::move (candidates); })
+      .get ();
 }
 
 create_result_t stateful_object_runtime_t::begin_create (const create_request_t &request)
 {
     return _lane
-      .run ([&, this] () -> create_result_t {
+      .run_checked ([&, this] () -> create_result_t {
           if (!valid_text (request.key) || !valid_text (request.stable_type)
               || request.creation_request.size () > max_creation_request_bytes) {
               return {create_status_t::failed, stateful_error_t::invalid, 0, {}, false};
@@ -196,7 +199,7 @@ stateful_object_runtime_t::begin_reserved_object (const object_ref_t &reserved,
                                                   std::vector<std::uint8_t> creation_request)
 {
     return _lane
-      .run ([&, this] () -> create_result_t {
+      .run_checked ([&, this] () -> create_result_t {
           if ((reserved.kind != object_kind_t::actor && reserved.kind != object_kind_t::user_spot)
               || !valid_text (reserved.key) || !valid_text (stable_type)
               || reserved.object_generation == 0 || reserved.authority_owner_generation == 0
@@ -252,7 +255,7 @@ stateful_object_runtime_t::adopt_reserved_actor_owner (const object_ref_t &reser
                                                        const std::string &stable_type)
 {
     return _lane
-      .run ([&, this] () -> stateful_error_t {
+      .run_checked ([&, this] () -> stateful_error_t {
           if (reserved.kind != object_kind_t::actor || !valid_text (reserved.key)
               || !valid_text (stable_type) || reserved.object_generation == 0
               || reserved.authority_owner_generation == 0 || !valid_text (reserved.mesh_name)
@@ -289,7 +292,7 @@ stateful_object_runtime_t::advance_local_actor_authority (const object_ref_t &co
                                                           const std::string &stable_type)
 {
     return _lane
-      .run ([&, this] () -> stateful_error_t {
+      .run_checked ([&, this] () -> stateful_error_t {
           if (committed.kind != object_kind_t::actor || !valid_text (committed.key)
               || !valid_text (stable_type) || committed.object_generation == 0
               || committed.authority_owner_generation == 0 || !valid_text (committed.mesh_name)
@@ -328,7 +331,7 @@ stateful_error_t stateful_object_runtime_t::reconcile_relocation_restore_authori
   const relocation_restore_identity_t &identity)
 {
     return _lane
-      .run ([&, this] () -> stateful_error_t {
+      .run_checked ([&, this] () -> stateful_error_t {
           if (staged.kind != committed.kind || staged.key != committed.key
               || staged.object_generation != committed.object_generation
               || staged.mesh_name != committed.mesh_name || staged.node_id != committed.node_id
@@ -357,7 +360,7 @@ stateful_error_t stateful_object_runtime_t::reconcile_relocation_restore_authori
 stateful_error_t stateful_object_runtime_t::commit_create (std::uint64_t attempt)
 {
     return _lane
-      .run ([&, this] () -> stateful_error_t {
+      .run_checked ([&, this] () -> stateful_error_t {
           const auto attempt_entry = _attempts.find (attempt);
           if (attempt_entry == _attempts.end ()) {
               return stateful_error_t::conflict;
@@ -386,7 +389,7 @@ stateful_error_t stateful_object_runtime_t::commit_create (std::uint64_t attempt
 stateful_error_t stateful_object_runtime_t::abort_create (std::uint64_t attempt)
 {
     return _lane
-      .run ([&, this] () -> stateful_error_t {
+      .run_checked ([&, this] () -> stateful_error_t {
           const auto attempt_entry = _attempts.find (attempt);
           if (attempt_entry == _attempts.end ()) {
               return stateful_error_t::conflict;
@@ -442,7 +445,7 @@ std::optional<object_ref_t> stateful_object_runtime_t::find (object_kind_t kind,
                                                              const std::string &key) const
 {
     return _lane
-      .run ([&, this] () -> std::optional<object_ref_t> {
+      .run_checked ([&, this] () -> std::optional<object_ref_t> {
           const auto record = _objects.find ({kind, key});
           if (record == _objects.end () || record->second.state != object_state_t::ready) {
               return std::nullopt;
@@ -457,7 +460,7 @@ stateful_object_runtime_t::begin_membership_move (const object_ref_t &actor,
                                                   const object_ref_t &target_spot)
 {
     return _lane
-      .run ([&, this] () -> std::pair<stateful_error_t, membership_token_t> {
+      .run_checked ([&, this] () -> std::pair<stateful_error_t, membership_token_t> {
           if (_maintenance_inventory_active)
               return {stateful_error_t::moving, {}};
           stateful_error_t actor_error = stateful_error_t::none;
@@ -498,7 +501,7 @@ stateful_object_runtime_t::begin_remote_membership_move (const object_ref_t &act
                                                          object_ref_t target_spot)
 {
     return _lane
-      .run ([&, this] () -> std::pair<stateful_error_t, membership_token_t> {
+      .run_checked ([&, this] () -> std::pair<stateful_error_t, membership_token_t> {
           if (_maintenance_inventory_active)
               return {stateful_error_t::moving, {}};
           stateful_error_t actor_error = stateful_error_t::none;
@@ -529,7 +532,7 @@ std::pair<stateful_error_t, object_ref_t>
 stateful_object_runtime_t::commit_membership_move (const membership_token_t &token)
 {
     return _lane
-      .run ([&, this] () -> std::pair<stateful_error_t, object_ref_t> {
+      .run_checked ([&, this] () -> std::pair<stateful_error_t, object_ref_t> {
           const auto move = _membership_moves.find (token.value);
           if (move == _membership_moves.end () || move->second.token != token) {
               return {stateful_error_t::conflict, {}};
@@ -564,7 +567,7 @@ stateful_object_runtime_t::commit_membership_move (const membership_token_t &tok
 stateful_error_t stateful_object_runtime_t::abort_membership_move (const membership_token_t &token)
 {
     return _lane
-      .run ([&, this] () -> stateful_error_t {
+      .run_checked ([&, this] () -> stateful_error_t {
           const auto move = _membership_moves.find (token.value);
           if (move == _membership_moves.end () || move->second.token != token) {
               return stateful_error_t::conflict;
@@ -588,7 +591,7 @@ std::optional<std::string>
 stateful_object_runtime_t::actor_membership (const object_ref_t &actor) const
 {
     return _lane
-      .run ([&, this] () -> std::optional<std::string> {
+      .run_checked ([&, this] () -> std::optional<std::string> {
           stateful_error_t error = stateful_error_t::none;
           const auto *record = find_record_locked (actor, error);
           if (record == nullptr || actor.kind != object_kind_t::actor) {
@@ -602,7 +605,7 @@ stateful_object_runtime_t::actor_membership (const object_ref_t &actor) const
 stateful_error_t stateful_object_runtime_t::destroy_actor (const object_ref_t &actor)
 {
     return _lane
-      .run ([&, this] () -> stateful_error_t {
+      .run_checked ([&, this] () -> stateful_error_t {
           if (_maintenance_inventory_active)
               return stateful_error_t::moving;
           stateful_error_t error = stateful_error_t::none;
@@ -646,7 +649,7 @@ stateful_object_runtime_t::begin_close_spot (const object_ref_t &spot)
 {
     auto [error, token, quiet] =
       _lane
-        .run ([&, this] {
+        .run_checked ([&, this] {
             if (_maintenance_inventory_active)
                 return std::tuple{stateful_error_t::moving, std::optional<spot_close_token_t>{},
                                   true};
@@ -689,7 +692,7 @@ stateful_object_runtime_t::begin_close_spot (const object_ref_t &spot)
     while (true) {
         const auto observed = _quiescence_epoch.load (std::memory_order_acquire);
         quiet = _lane
-                  .run ([this, &token] {
+                  .run_checked ([this, &token] {
                       const auto closing = _spot_closes.find (token->value);
                       const auto record = _objects.find (key_for (token->spot));
                       return closing != _spot_closes.end () && closing->second == *token
@@ -710,7 +713,7 @@ stateful_object_runtime_t::begin_close_spot (const object_ref_t &spot)
 stateful_error_t stateful_object_runtime_t::commit_close_spot (const spot_close_token_t &token)
 {
     return _lane
-      .run ([&, this] () -> stateful_error_t {
+      .run_checked ([&, this] () -> stateful_error_t {
           const auto closing = _spot_closes.find (token.value);
           const auto record = _objects.find (key_for (token.spot));
           if (closing == _spot_closes.end () || closing->second != token
@@ -737,7 +740,7 @@ std::optional<spot_close_token_t>
 stateful_object_runtime_t::closing_spot_token (const object_ref_t &spot)
 {
     return _lane
-      .run ([&, this] () -> std::optional<spot_close_token_t> {
+      .run_checked ([&, this] () -> std::optional<spot_close_token_t> {
           const auto record = _objects.find (key_for (spot));
           if (record == _objects.end () || !same_exact_ref (record->second.reference, spot)
               || record->second.state != object_state_t::closing)
@@ -753,7 +756,7 @@ stateful_object_runtime_t::closing_spot_token (const object_ref_t &spot)
 stateful_error_t stateful_object_runtime_t::abort_close_spot (const spot_close_token_t &token)
 {
     return _lane
-      .run ([&, this] () -> stateful_error_t {
+      .run_checked ([&, this] () -> stateful_error_t {
           const auto closing = _spot_closes.find (token.value);
           const auto record = _objects.find (key_for (token.spot));
           if (closing == _spot_closes.end () || closing->second != token
@@ -782,7 +785,7 @@ stateful_error_t stateful_object_runtime_t::enqueue (const object_ref_t &owner,
     std::function<void ()> deliver;
     const auto result =
       _lane
-        .run ([&, this] () -> stateful_error_t {
+        .run_checked ([&, this] () -> stateful_error_t {
             stateful_error_t error = stateful_error_t::none;
             auto *object = find_record_locked (owner, error);
             if (object == nullptr) {
@@ -860,7 +863,7 @@ std::pair<stateful_error_t, std::optional<turn_record_t>>
 stateful_object_runtime_t::try_claim (const object_ref_t &owner, turn_domain_t domain)
 {
     return _lane
-      .run ([&, this] () -> std::pair<stateful_error_t, std::optional<turn_record_t>> {
+      .run_checked ([&, this] () -> std::pair<stateful_error_t, std::optional<turn_record_t>> {
           stateful_error_t error = stateful_error_t::none;
           auto *object = find_record_locked (owner, error);
           if (object == nullptr) {
@@ -905,7 +908,7 @@ stateful_error_t stateful_object_runtime_t::complete_claim (const object_ref_t &
                                                             turn_domain_t domain)
 {
     return _lane
-      .run ([&, this] () -> stateful_error_t {
+      .run_checked ([&, this] () -> stateful_error_t {
           stateful_error_t error = stateful_error_t::none;
           auto *object = find_record_locked (owner, error);
           if (object == nullptr) {
@@ -931,7 +934,7 @@ stateful_error_t stateful_object_runtime_t::yield_claim (const object_ref_t &own
                                                          turn_record_t continuation)
 {
     return _lane
-      .run ([&, this] () -> stateful_error_t {
+      .run_checked ([&, this] () -> stateful_error_t {
           stateful_error_t error = stateful_error_t::none;
           auto *object = find_record_locked (owner, error);
           if (object == nullptr) {
@@ -956,7 +959,7 @@ std::size_t stateful_object_runtime_t::pending (const object_ref_t &owner,
                                                 turn_domain_t domain) const
 {
     return _lane
-      .run ([&, this] () -> std::size_t {
+      .run_checked ([&, this] () -> std::size_t {
           stateful_error_t error = stateful_error_t::none;
           const auto *object = find_record_locked (owner, error);
           if (object == nullptr) {
@@ -985,7 +988,7 @@ std::size_t stateful_object_runtime_t::pending_bytes (const object_ref_t &owner,
                                                       turn_domain_t domain) const
 {
     return _lane
-      .run ([&, this] () -> std::size_t {
+      .run_checked ([&, this] () -> std::size_t {
           stateful_error_t error = stateful_error_t::none;
           const auto *object = find_record_locked (owner, error);
           if (object == nullptr)
@@ -1014,7 +1017,7 @@ stateful_error_t stateful_object_runtime_t::discard_application (const object_re
                                                                  std::uint64_t sequence)
 {
     return _lane
-      .run ([&, this] () -> stateful_error_t {
+      .run_checked ([&, this] () -> stateful_error_t {
           stateful_error_t error = stateful_error_t::none;
           auto *object = find_record_locked (owner, error);
           if (object == nullptr)
@@ -1083,7 +1086,7 @@ stateful_error_t stateful_object_runtime_t::register_timer (const object_ref_t &
         return stateful_error_t::invalid;
     }
     return _lane
-      .run ([&, this] () -> stateful_error_t {
+      .run_checked ([&, this] () -> stateful_error_t {
           stateful_error_t error = stateful_error_t::none;
           auto *object = find_record_locked (owner, error);
           if (object == nullptr) {
@@ -1105,7 +1108,7 @@ stateful_error_t stateful_object_runtime_t::cancel_timer (const object_ref_t &ow
                                                           std::uint64_t timer_id)
 {
     return _lane
-      .run ([&, this] () -> stateful_error_t {
+      .run_checked ([&, this] () -> stateful_error_t {
           stateful_error_t error = stateful_error_t::none;
           auto *object = find_record_locked (owner, error);
           if (object == nullptr) {
@@ -1126,7 +1129,7 @@ stateful_error_t stateful_object_runtime_t::enqueue_timer_tick (const object_ref
                                                                 std::vector<std::uint8_t> payload)
 {
     return _lane
-      .run ([&, this] () -> stateful_error_t {
+      .run_checked ([&, this] () -> stateful_error_t {
           stateful_error_t error = stateful_error_t::none;
           auto *object = find_record_locked (owner, error);
           if (object == nullptr) {
@@ -1153,7 +1156,7 @@ stateful_error_t stateful_object_runtime_t::enqueue_timer_tick (const object_ref
 std::vector<logical_timer_t> stateful_object_runtime_t::timers (const object_ref_t &owner) const
 {
     return _lane
-      .run ([&, this] () -> std::vector<logical_timer_t> {
+      .run_checked ([&, this] () -> std::vector<logical_timer_t> {
           stateful_error_t error = stateful_error_t::none;
           const auto *object = find_record_locked (owner, error);
           if (object == nullptr) {
@@ -1173,7 +1176,7 @@ std::vector<logical_timer_t> stateful_object_runtime_t::timers (const object_ref
 std::vector<object_inventory_t> stateful_object_runtime_t::inventory () const
 {
     return _lane
-      .run ([&, this] () -> std::vector<object_inventory_t> {
+      .run_checked ([&, this] () -> std::vector<object_inventory_t> {
           std::vector<object_inventory_t> result;
           result.reserve (_objects.size ());
           for (const auto &[_, object] : _objects) {
@@ -1191,7 +1194,7 @@ std::optional<std::vector<object_inventory_t>>
 stateful_object_runtime_t::try_begin_maintenance_inventory ()
 {
     return _lane
-      .run ([&, this] () -> std::optional<std::vector<object_inventory_t>> {
+      .run_checked ([&, this] () -> std::optional<std::vector<object_inventory_t>> {
           if (_maintenance_inventory_active)
               return std::nullopt;
           _maintenance_inventory_active = true;
@@ -1210,7 +1213,8 @@ stateful_object_runtime_t::try_begin_maintenance_inventory ()
 
 void stateful_object_runtime_t::end_maintenance_inventory () noexcept
 {
-    return _lane.run ([&, this] () -> void { _maintenance_inventory_active = false; }).get ();
+    return _lane.run_checked ([&, this] () -> void { _maintenance_inventory_active = false; })
+      .get ();
 }
 
 task_t<aggregate_relocation_seal_attempt_t>
@@ -1233,7 +1237,7 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
 
     auto plan =
       _lane
-        .run ([&, this] {
+        .run_checked ([&, this] {
             seal_plan_t plan;
             if (_next_relocation_token == 0)
                 return plan;
@@ -1282,7 +1286,7 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
         const auto observed = _quiescence_epoch.load (std::memory_order_acquire);
         const auto quiescent =
           _lane
-            .run ([this, &plan] {
+            .run_checked ([this, &plan] {
                 for (std::size_t index = 0; index != plan.keys.size (); ++index) {
                     const auto found = _objects.find (plan.keys[index]);
                     if (found == _objects.end () || found->second.state != object_state_t::moving
@@ -1328,7 +1332,7 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
                 application_states[index] = plan.capture (
                   plan.sources[index],
                   _lane
-                    .run ([this, &plan, index] {
+                    .run_checked ([this, &plan, index] {
                         const auto found = _objects.find (plan.keys[index]);
                         return found == _objects.end () ? std::string{} : found->second.stable_type;
                     })
@@ -1350,7 +1354,7 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
 
     auto result =
       _lane
-        .run ([this, &plan, &application_states] {
+        .run_checked ([this, &plan, &application_states] {
             std::vector<frozen_object_state_t> frozen_participants;
             try {
                 frozen_participants.reserve (plan.keys.size ());
@@ -1412,7 +1416,7 @@ stateful_object_runtime_t::begin_relocation_boundary (
   std::uint64_t token, std::function<void (const object_ref_t &, const turn_record_t &)> deliver)
 {
     return _lane
-      .run ([&, this] () -> std::pair<stateful_error_t, relocation_ingress_batch_t> {
+      .run_checked ([&, this] () -> std::pair<stateful_error_t, relocation_ingress_batch_t> {
           auto seal = _relocation_seals.find (token);
           if (seal == _relocation_seals.end ())
               return {stateful_error_t::not_found, {}};
@@ -1452,7 +1456,7 @@ stateful_object_runtime_t::begin_relocation_boundary (
 stateful_error_t stateful_object_runtime_t::abort_relocation_before_cutover (std::uint64_t token)
 {
     return _lane
-      .run ([&, this] () -> stateful_error_t {
+      .run_checked ([&, this] () -> stateful_error_t {
           const auto seal = _relocation_seals.find (token);
           if (seal == _relocation_seals.end ()) {
               return stateful_error_t::not_found;
@@ -1494,7 +1498,7 @@ stateful_error_t stateful_object_runtime_t::abort_relocation_before_cutover (std
 stateful_error_t stateful_object_runtime_t::finalize_relocation_cutover (std::uint64_t token)
 {
     return _lane
-      .run ([&, this] () -> stateful_error_t {
+      .run_checked ([&, this] () -> stateful_error_t {
           const auto seal = _relocation_seals.find (token);
           if (seal == _relocation_seals.end ())
               return stateful_error_t::not_found;
@@ -1524,7 +1528,7 @@ stateful_object_runtime_t::commit_relocation_aggregate (std::uint64_t token,
         return {stateful_error_t::invalid, {}};
     }
     return _lane
-      .run ([&, this] () -> std::pair<stateful_error_t, std::vector<object_ref_t>> {
+      .run_checked ([&, this] () -> std::pair<stateful_error_t, std::vector<object_ref_t>> {
           const auto seal = _relocation_seals.find (token);
           if (seal == _relocation_seals.end ()) {
               return {stateful_error_t::not_found, {}};
@@ -1575,7 +1579,7 @@ try {
 
     auto plan =
       _lane
-        .run ([&, this] {
+        .run_checked ([&, this] {
             restore_plan_t plan;
             if (!valid_text (frozen.stable_type) || frozen.owner.kind != target.kind
                 || frozen.owner.key != target.key
@@ -1736,7 +1740,7 @@ try {
     }
 
     return _lane
-      .run ([this, &target, &plan, restored] {
+      .run_checked ([this, &target, &plan, restored] {
           const auto key = key_for (target);
           const auto owned = _relocation_restore_reservations.find (key);
           if (owned == _relocation_restore_reservations.end () || owned->second != plan.reservation)
@@ -1765,7 +1769,7 @@ stateful_object_runtime_t::commit_relocation_restore (const object_ref_t &target
     relocation_state_commit_t commit;
     const auto preflight =
       _lane
-        .run ([&, this] {
+        .run_checked ([&, this] {
             stateful_error_t error = stateful_error_t::none;
             auto *record = find_record_locked (target, error);
             if (!record)
@@ -1792,7 +1796,7 @@ stateful_object_runtime_t::commit_relocation_restore (const object_ref_t &target
         }
     }
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           stateful_error_t error = stateful_error_t::none;
           auto *record = find_record_locked (target, error);
           if (!record)
@@ -1815,7 +1819,7 @@ stateful_error_t stateful_object_runtime_t::commit_relocation_restore_aggregate 
     relocation_state_commit_t commit;
     const auto preflight =
       _lane
-        .run ([&, this] {
+        .run_checked ([&, this] {
             if (targets.size () < 2)
                 return stateful_error_t::invalid;
             for (const auto &target : targets) {
@@ -1844,7 +1848,7 @@ stateful_error_t stateful_object_runtime_t::commit_relocation_restore_aggregate 
         }
     }
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           std::vector<object_record_t *> records;
           records.reserve (targets.size ());
           for (const auto &target : targets) {
@@ -1875,7 +1879,7 @@ stateful_object_runtime_t::abort_relocation_restore (const object_ref_t &target,
 {
     relocation_state_abort_t abort;
     const auto preflight = _lane
-                             .run ([&, this] {
+                             .run_checked ([&, this] {
                                  const auto found = _objects.find (key_for (target));
                                  if (found == _objects.end ())
                                      return stateful_error_t::already_exists;
@@ -1898,7 +1902,7 @@ stateful_object_runtime_t::abort_relocation_restore (const object_ref_t &target,
         }
     }
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           const auto key = key_for (target);
           const auto found = _objects.find (key);
           if (found == _objects.end ())
@@ -1925,7 +1929,7 @@ stateful_error_t stateful_object_runtime_t::abort_relocation_restore_aggregate (
     relocation_state_abort_t abort;
     const auto preflight =
       _lane
-        .run ([&, this] {
+        .run_checked ([&, this] {
             if (targets.size () < 2)
                 return stateful_error_t::invalid;
             for (const auto &target : targets) {
@@ -1950,7 +1954,7 @@ stateful_error_t stateful_object_runtime_t::abort_relocation_restore_aggregate (
         }
     }
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           std::vector<object_key_t> keys;
           keys.reserve (targets.size ());
           for (const auto &target : targets) {
@@ -1990,7 +1994,7 @@ try {
     relocation_state_abort_t abort;
     auto staged =
       _lane
-        .run ([&, this] {
+        .run_checked ([&, this] {
             if (frozen.size () < 2 || frozen.size () != targets.size ()
                 || identity.reference.empty ())
                 return stateful_error_t::invalid;
@@ -2201,7 +2205,7 @@ try {
         }
     }
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           const auto owns_all =
             std::all_of (keys.begin (), keys.end (), [&] (const object_key_t &key) {
                 const auto found = _relocation_restore_reservations.find (key);

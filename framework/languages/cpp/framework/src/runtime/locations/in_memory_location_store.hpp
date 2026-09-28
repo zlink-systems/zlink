@@ -42,7 +42,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (!valid_mesh_node_descriptor (descriptor))
             throw std::invalid_argument ("mesh node descriptor is incomplete");
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto now = clock_t::now ();
               const auto key = mesh_node_key (descriptor.mesh_name, descriptor.rid);
               const auto found = _mesh_nodes.find (key);
@@ -97,7 +97,7 @@ class in_memory_location_repository_t : public location_repository_t
                                                       location_owner_token_t owner) override
     {
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto found = _mesh_nodes.find (mesh_node_key (key.mesh_name, key.rid));
               if (found == _mesh_nodes.end () || found->second.owner_id != owner.owner_id
                   || found->second.lease_generation != owner.lease_generation)
@@ -113,7 +113,7 @@ class in_memory_location_repository_t : public location_repository_t
     list_mesh_nodes (std::string mesh_name, location_page_request_t page = {}) override
     {
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               std::vector<mesh_node_descriptor_t> matched;
               for (const auto &[_, descriptor] : _mesh_nodes) {
                   if (descriptor.mesh_name == mesh_name) {
@@ -145,7 +145,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (!valid_client_server_descriptor (descriptor))
             throw std::invalid_argument ("ClientServer descriptor is incomplete");
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto now = clock_t::now ();
               const auto key = client_server_key (descriptor.channel_name, descriptor.server_rid);
               const auto found = _client_servers.find (key);
@@ -196,7 +196,7 @@ class in_memory_location_repository_t : public location_repository_t
                                                           location_owner_token_t owner) override
     {
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto found =
                 _client_servers.find (client_server_key (key.channel_name, key.server_rid));
               if (found == _client_servers.end () || found->second.owner_id != owner.owner_id
@@ -214,7 +214,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (channel_name.empty () || page.page_size < 1 || page.page_size > 1000)
             throw std::invalid_argument ("ClientServer list arguments are invalid");
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               std::vector<client_server_server_descriptor_t> matched;
               for (const auto &[_, descriptor] : _client_servers) {
                   if (descriptor.channel_name == channel_name)
@@ -243,7 +243,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (!valid_fanout_descriptor (descriptor))
             throw std::invalid_argument ("fanout publisher descriptor is incomplete");
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto now = clock_t::now ();
               const auto key = fanout_key (descriptor.channel_name, descriptor.publisher_rid);
               const auto found = _fanout_publishers.find (key);
@@ -301,7 +301,7 @@ class in_memory_location_repository_t : public location_repository_t
                                                              location_owner_token_t owner) override
     {
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto found =
                 _fanout_publishers.find (fanout_key (key.channel_name, key.publisher_rid));
               if (found == _fanout_publishers.end () || found->second.owner_id != owner.owner_id
@@ -319,7 +319,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (channel_name.empty () || page.page_size < 1 || page.page_size > 1000)
             throw std::invalid_argument ("fanout publisher list arguments are invalid");
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto offset =
                 page.continuation_token ? parse_offset (*page.continuation_token) : 0;
               location_page_t<fanout_publisher_descriptor_t> result;
@@ -353,7 +353,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (owner_id.empty () || lease_ttl.count () <= 0)
             throw std::invalid_argument ("owner lease claim is incomplete");
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto now = clock_t::now ();
               const auto existing = _leases.find (owner_id);
               if (existing != _leases.end () && existing->second.lease_expires_at > now)
@@ -378,7 +378,7 @@ class in_memory_location_repository_t : public location_repository_t
     task_t<owner_lease_read_result_t> read_owner_lease (std::string owner_id) override
     {
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto now = clock_t::now ();
               const auto lease = _leases.find (owner_id);
               const auto generation = _active_lease_generations.find (owner_id);
@@ -401,7 +401,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (lease_ttl.count () <= 0)
             throw std::invalid_argument ("owner lease TTL must be positive");
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto now = clock_t::now ();
               const auto lease = _leases.find (token.owner_id);
               if (!owner_token_is_live (token, now))
@@ -417,7 +417,7 @@ class in_memory_location_repository_t : public location_repository_t
     task_t<owner_lease_release_result_t> release_owner_lease (location_owner_token_t token) override
     {
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto now = clock_t::now ();
               if (!owner_token_is_live (token, now))
                   return completed (owner_lease_release_result_t{owner_lease_stale_t{}});
@@ -434,7 +434,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (cancellation.stop_requested ())
             return cancelled<authority_read_result_t> ();
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto now = clock_t::now ();
               const auto found = _authorities.find (key.value);
               if (found == _authorities.end ())
@@ -455,7 +455,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (cancellation.stop_requested ())
             return cancelled<authority_compare_exchange_result_t> ();
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto now = clock_t::now ();
               auto found = _authorities.find (key.value);
               if (found == _authorities.end ()
@@ -584,7 +584,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (limit == 0 || limit > 1000)
             throw std::invalid_argument ("authority scan limit must be between 1 and 1000");
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto now = clock_t::now ();
               cleanup_scans (now);
 
@@ -647,7 +647,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (cancellation.stop_requested ())
             return cancelled<std::optional<creation_terminal_record_t>> ();
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto key = creation_operation_key (operation);
               const auto found = _creation_terminals.find (key);
               if (found == _creation_terminals.end ()
@@ -674,7 +674,7 @@ class in_memory_location_repository_t : public location_repository_t
             throw std::invalid_argument ("creation terminal envelope is too large");
         const auto expires_at = publication.operation_deadline + std::chrono::minutes (5);
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto now = clock_t::now ();
               if (expires_at <= now)
                   throw std::invalid_argument ("creation terminal expiry is not in the future");
@@ -747,7 +747,7 @@ class in_memory_location_repository_t : public location_repository_t
             || request.intent.request_encoded_size > 1024u * 1024u)
             throw std::invalid_argument ("object reservation payload exceeds 1 MiB");
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto now = clock_t::now ();
               const auto key = object_key (request.key);
               if (request.key.kind != placement_object_kind_t::actor) {
@@ -825,7 +825,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (request.ready_payload.size () > 1024u * 1024u)
             throw std::invalid_argument ("object commit payload exceeds 1 MiB");
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto key = object_key (request.key);
               const auto reservation = _reservations.find (key);
               if (reservation == _reservations.end ())
@@ -877,7 +877,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (cancellation.stop_requested ())
             return cancelled<object_abort_result_t> ();
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto key = object_key (request.key);
               const auto reservation = _reservations.find (key);
               if (reservation == _reservations.end ())
@@ -913,7 +913,7 @@ class in_memory_location_repository_t : public location_repository_t
             return cancelled<aggregate_prepare_result_t> ();
         const auto inventory_tree = aggregate_inventory::build_tree (request.participants);
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               if (request.aggregate_generation == 0 || request.aggregate_generation > max_generation
                   || request.participants.empty () || all_zero (request.aggregate_id.value)
                   || request.target_owner.owner_id.empty ()
@@ -1006,7 +1006,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (cancellation.stop_requested ())
             return cancelled<aggregate_commit_result_t> ();
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto aggregate = _aggregates.find (aggregate_id_key (fence.aggregate_id));
               if (aggregate == _aggregates.end ()
                   || aggregate->second.request.aggregate_generation != fence.aggregate_generation)
@@ -1096,7 +1096,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (cancellation.stop_requested ())
             return cancelled<aggregate_abort_result_t> ();
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto aggregate = _aggregates.find (aggregate_id_key (fence.aggregate_id));
               if (aggregate == _aggregates.end ()
                   || aggregate->second.request.aggregate_generation != fence.aggregate_generation)
@@ -1126,7 +1126,7 @@ class in_memory_location_repository_t : public location_repository_t
         if (cancellation.stop_requested ())
             return cancelled<std::optional<std::vector<aggregate_participant_t>>> ();
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto aggregate = _aggregates.find (aggregate_id_key (fence.aggregate_id));
               if (aggregate == _aggregates.end ()
                   || aggregate->second.request.aggregate_generation != fence.aggregate_generation
@@ -1143,7 +1143,7 @@ class in_memory_location_repository_t : public location_repository_t
     task_t<std::int64_t> remove_all_by_owner (location_owner_token_t owner) override
     {
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               if (!owner_token_is_live (owner, clock_t::now ()))
                   return completed (std::int64_t{0});
               std::int64_t removed = 0;

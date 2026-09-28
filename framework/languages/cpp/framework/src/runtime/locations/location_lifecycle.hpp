@@ -44,7 +44,7 @@ class location_lifecycle_t
     {
         try {
             _state->lane
-              .run ([state = _state] {
+              .run_checked ([state = _state] {
                   state->active = false;
                   state->actors.clear ();
                   state->spots.clear ();
@@ -70,7 +70,7 @@ class location_lifecycle_t
         const auto generation = actor.actor_ref->object_generation ();
 
         return _state->lane
-          .run ([&] {
+          .run_checked ([&] {
               if (_state->active) {
                   _state->actors[actor_key (actor)] =
                     actor_claim_t{actor, generation, std::move (deactivate)};
@@ -86,7 +86,7 @@ class location_lifecycle_t
         actor_claim_t tracked;
         const auto key = actor_key (actor);
         const auto found = _state->lane
-                             .run ([&] {
+                             .run_checked ([&] {
                                  const auto found = _state->actors.find (key);
                                  if (found == _state->actors.end ()) {
                                      return false;
@@ -99,7 +99,7 @@ class location_lifecycle_t
             return {location_write_status_t::ignored_stale, 0, {}};
         }
         return _state->lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto found = _state->actors.find (key);
               if (found == _state->actors.end ())
                   return location_write_result_t{location_write_status_t::ignored_stale, 0, {}};
@@ -118,7 +118,8 @@ class location_lifecycle_t
 
     bool owns_actor (actor_location_key_t key) const
     {
-        return _state->lane.run ([&] { return _state->actors.contains (actor_key (key)); }).get ();
+        return _state->lane.run_checked ([&] { return _state->actors.contains (actor_key (key)); })
+          .get ();
     }
 
     std::optional<location_owner_token_t> current_owner_token () const
@@ -131,7 +132,7 @@ class location_lifecycle_t
     {
         const auto now = std::chrono::system_clock::now ();
         return _state->lane
-          .run ([&] {
+          .run_checked ([&] {
               if (_state->active) {
                   _state->spots[spot_key (spot)] = spot;
               }
@@ -144,7 +145,7 @@ class location_lifecycle_t
     {
         spot_location_t spot;
         const auto found = _state->lane
-                             .run ([&] {
+                             .run_checked ([&] {
                                  const auto found = _state->spots.find (spot_key (key));
                                  if (found == _state->spots.end ()) {
                                      return false;
@@ -157,7 +158,7 @@ class location_lifecycle_t
             return {location_write_status_t::ignored_stale, 0, {}};
         }
         return _state->lane
-          .run ([&] {
+          .run_checked ([&] {
               _state->spots.erase (spot_key (spot));
               return location_write_result_t{location_write_status_t::stored, spot.generation,
                                              std::chrono::system_clock::now ()};
@@ -169,7 +170,7 @@ class location_lifecycle_t
     {
         actor_location_t actor;
         return _state->lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto found = _state->actors.find (actor_key (key));
               if (found == _state->actors.end ()) {
                   return location_write_result_t{location_write_status_t::ignored_stale, 0, {}};
@@ -190,7 +191,7 @@ class location_lifecycle_t
     {
         actor_claim_t claim;
         return _state->lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto found = _state->actors.find (actor_key (key));
               if (found == _state->actors.end ()) {
                   return location_write_result_t{location_write_status_t::ignored_stale, 0, {}};
@@ -208,7 +209,7 @@ class location_lifecycle_t
 
     std::size_t tracked_actor_count () const
     {
-        return _state->lane.run ([this] { return _state->actors.size (); }).get ();
+        return _state->lane.run_checked ([this] { return _state->actors.size (); }).get ();
     }
 
   private:
@@ -252,7 +253,7 @@ class location_lifecycle_t
     {
         actor_claim_t claim;
         claim = state.lane
-                  .run ([&] {
+                  .run_checked ([&] {
                       if (!state.active) {
                           return actor_claim_t{};
                       }
@@ -274,7 +275,7 @@ class location_lifecycle_t
     {
         std::vector<actor_claim_t> claims;
         claims = state.lane
-                   .run ([&] {
+                   .run_checked ([&] {
                        std::vector<actor_claim_t> claims;
                        if (!state.active) {
                            return claims;

@@ -3,6 +3,7 @@
 #include "runtime/diagnostics/mesh_trace.hpp"
 
 #include "runtime/mesh/mesh_node_host_service.hpp"
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/actors/actor_manager_access.hpp"
@@ -75,7 +76,9 @@ struct mesh_node_host_service_t::actor_destroy_callback_gate_t
     {
         std::unique_lock lock (mutex);
         stopping = true;
-        changed.wait (lock, [this] { return active == 0; });
+        runtime::infrastructure_wait_guard::condition_wait (
+          changed, lock, [this] { return active == 0; }, "mesh-dispatch/terminal",
+          runtime::infrastructure_wait_guard::wait_relation_t::dependent_completion);
     }
 };
 
@@ -2404,6 +2407,10 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   }
               });
             _threads.emplace_back ([this, node, registration, receive_permit] {
+#ifndef NDEBUG
+                runtime::infrastructure_wait_guard::mesh_receive_scope_t infrastructure_scope (
+                  this);
+#endif
                 application_supply_slot_t supply (
                   _application_jobs, [node] { node->native_node ().signal_dispatch_activity (); });
                 auto &application_permit = *receive_permit;
@@ -2620,9 +2627,11 @@ bool mesh_node_host_service_t::wait_for_accepted_callbacks_until (
         });
     };
     while (!settled () && std::chrono::steady_clock::now () < deadline) {
-        _dispatch_gate_changed.wait_until (
-          lock,
-          std::min (deadline, std::chrono::steady_clock::now () + std::chrono::milliseconds (1)));
+        runtime::infrastructure_wait_guard::condition_wait_until (
+          _dispatch_gate_changed, lock,
+          std::min (deadline, std::chrono::steady_clock::now () + std::chrono::milliseconds (1)),
+          "mesh-dispatch/drain",
+          runtime::infrastructure_wait_guard::wait_relation_t::dependent_completion);
     }
     return settled ();
 }
@@ -2769,7 +2778,7 @@ void mesh_node_host_service_t::stop () noexcept
     trace_mesh_host_stop ("pump-join-begin");
     for (auto &thread : _threads) {
         if (thread.joinable ())
-            thread.join ();
+            runtime::infrastructure_wait_guard::join (thread, "mesh-receive/worker");
     }
     trace_mesh_host_stop ("pump-join-end");
     _threads.clear ();

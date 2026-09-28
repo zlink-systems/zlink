@@ -457,7 +457,7 @@ raw_mesh_node_owner_t::~raw_mesh_node_owner_t () noexcept
 void raw_mesh_node_owner_t::start ()
 {
     return _lane
-      .run ([this] {
+      .run_checked ([this] {
           std::lock_guard lifecycle_lock (_lifecycle_mutex);
           if (_port) {
               return;
@@ -512,7 +512,7 @@ task_t<void> raw_mesh_node_owner_t::publish_draining ()
 {
     const auto publication =
       _lane
-        .run ([this] {
+        .run_checked ([this] {
             auto descriptor = _topology.local_descriptor ();
             if (descriptor.state != service_node_state_t::draining) {
                 if (descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ())
@@ -530,12 +530,13 @@ task_t<void> raw_mesh_node_owner_t::publish_draining ()
 
 void raw_mesh_node_owner_t::publish_descriptor_update (service_node_descriptor_t descriptor)
 {
-    const auto publication = _lane
-                               .run ([this, descriptor = std::move (descriptor)] () mutable {
-                                   _topology.publish_local (descriptor);
-                                   return std::pair{std::move (descriptor), _topology.peers ()};
-                               })
-                               .get ();
+    const auto publication =
+      _lane
+        .run_checked ([this, descriptor = std::move (descriptor)] () mutable {
+            _topology.publish_local (descriptor);
+            return std::pair{std::move (descriptor), _topology.peers ()};
+        })
+        .get ();
     send_descriptor_update (publication.first, publication.second);
 }
 
@@ -557,7 +558,7 @@ void raw_mesh_node_owner_t::close () noexcept
     application_job_queue_t::receive_flow_registration_t receive_flow_registration;
     try {
         _lane
-          .run ([this, &port, &router, &ingress_poller, &receive_flow_registration] {
+          .run_checked ([this, &port, &router, &ingress_poller, &receive_flow_registration] {
               std::lock_guard lifecycle_lock (_lifecycle_mutex);
               if (_closed) {
                   return;
@@ -593,7 +594,7 @@ bool raw_mesh_node_owner_t::started () const noexcept
 {
     try {
         return _lane
-          .run ([this] {
+          .run_checked ([this] {
               std::lock_guard lifecycle_lock (_lifecycle_mutex);
               return static_cast<bool> (_port);
           })
@@ -612,7 +613,7 @@ std::string raw_mesh_node_owner_t::endpoint () const
 zlink::context_t &raw_mesh_node_owner_t::context ()
 {
     return _lane
-      .run ([this] () -> zlink::context_t & {
+      .run_checked ([this] () -> zlink::context_t & {
           std::lock_guard lifecycle_lock (_lifecycle_mutex);
           if (!_router || !_context) {
               throw std::logic_error ("raw mesh node owner is not started");
@@ -640,7 +641,7 @@ service_mailbox_t &raw_mesh_node_owner_t::mailbox () noexcept
 bool raw_mesh_node_owner_t::connect_peer (const std::string &endpoint)
 {
     return _lane
-      .run ([this, &endpoint] {
+      .run_checked ([this, &endpoint] {
           std::lock_guard lifecycle_lock (_lifecycle_mutex);
           if (!_router || endpoint.empty ()) {
               return false;
@@ -663,7 +664,8 @@ bool raw_mesh_node_owner_t::connect_peer (const std::string &endpoint,
                                           service_node_descriptor_t expected_descriptor)
 {
     return _lane
-      .run ([this, &endpoint, expected_descriptor = std::move (expected_descriptor)] () mutable {
+      .run_checked ([this, &endpoint,
+                     expected_descriptor = std::move (expected_descriptor)] () mutable {
           std::lock_guard lifecycle_lock (_lifecycle_mutex);
           if (!_router || endpoint.empty ()) {
               return false;
@@ -724,7 +726,7 @@ bool raw_mesh_node_owner_t::disconnect_peer (const std::vector<std::uint8_t> &ex
         return false;
     try {
         return _lane
-          .run ([this, &expected_routing_id, &endpoint] {
+          .run_checked ([this, &expected_routing_id, &endpoint] {
               std::lock_guard lifecycle_lock (_lifecycle_mutex);
               if (!_router)
                   return false;
@@ -811,7 +813,7 @@ void raw_mesh_node_owner_t::expect_peer (service_node_descriptor_t expected_desc
         || expected_descriptor.advertised_endpoint.empty ())
         return;
     return _lane
-      .run ([this, expected_descriptor = std::move (expected_descriptor)] () mutable {
+      .run_checked ([this, expected_descriptor = std::move (expected_descriptor)] () mutable {
           std::lock_guard lifecycle_lock (_lifecycle_mutex);
           _expected_peers.insert_or_assign (expected_descriptor.node_routing_id,
                                             std::move (expected_descriptor));
@@ -823,7 +825,7 @@ void raw_mesh_node_owner_t::forget_peer (const std::vector<std::uint8_t> &node_r
                                          const std::string &endpoint)
 {
     return _lane
-      .run ([this, &node_routing_id, &endpoint] {
+      .run_checked ([this, &node_routing_id, &endpoint] {
           std::lock_guard lifecycle_lock (_lifecycle_mutex);
           const auto found = _expected_peers.find (node_routing_id);
           if (found != _expected_peers.end () && found->second.advertised_endpoint != endpoint)
@@ -850,8 +852,8 @@ raw_mesh_node_owner_t::admit_peer (service_node_descriptor_t descriptor,
                                    service_liveness_registry_t::clock_t::time_point now)
 {
     return _lane
-      .run ([this, descriptor = std::move (descriptor), connection_id = std::move (connection_id),
-             now] () mutable {
+      .run_checked ([this, descriptor = std::move (descriptor),
+                     connection_id = std::move (connection_id), now] () mutable {
           peer_admission_result_t admitted;
           std::lock_guard lifecycle_lock (_lifecycle_mutex);
           if (!_router) {
@@ -1072,9 +1074,10 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
     };
     auto start =
       _lane
-        .run ([this, &header, &request_metric, requested_correlation, timeout,
-               callback = std::move (callback), target_routing_id = std::move (target_routing_id),
-               encoded_payload = std::move (encoded_payload)] () mutable {
+        .run_checked ([this, &header, &request_metric, requested_correlation, timeout,
+                       callback = std::move (callback),
+                       target_routing_id = std::move (target_routing_id),
+                       encoded_payload = std::move (encoded_payload)] () mutable {
             std::shared_ptr<detail::backend::raw_route_port_t> port;
             {
                 std::lock_guard lifecycle_lock (_lifecycle_mutex);
@@ -1139,8 +1142,9 @@ raw_mesh_node_owner_t::start_send (std::vector<std::uint8_t> target_routing_id,
     };
     auto start =
       _lane
-        .run ([this, parts = std::move (parts), trace = std::move (trace), needs_public_completion,
-               target_routing_id = std::move (target_routing_id)] () mutable {
+        .run_checked ([this, parts = std::move (parts), trace = std::move (trace),
+                       needs_public_completion,
+                       target_routing_id = std::move (target_routing_id)] () mutable {
             std::shared_ptr<detail::backend::raw_route_port_t> port;
             {
                 std::lock_guard lifecycle_lock (_lifecycle_mutex);
@@ -1466,7 +1470,7 @@ bool raw_mesh_node_owner_t::reply_relocation_ready (const service_mailbox_record
     if (request.source_routing_id.empty () || !request.reply_token)
         return false;
     const auto port = _lane
-                        .run ([this] {
+                        .run_checked ([this] {
                             std::lock_guard lifecycle_lock (_lifecycle_mutex);
                             return _port;
                         })
@@ -1485,7 +1489,7 @@ bool raw_mesh_node_owner_t::reply_relocation_failed (const service_mailbox_recor
     if (request.source_routing_id.empty () || !request.reply_token)
         return false;
     const auto port = _lane
-                        .run ([this] {
+                        .run_checked ([this] {
                             std::lock_guard lifecycle_lock (_lifecycle_mutex);
                             return _port;
                         })
@@ -1507,7 +1511,7 @@ bool raw_mesh_node_owner_t::reply (const service_mailbox_record_t &request,
         throw std::invalid_argument ("raw mesh reply requires a request mailbox record");
     }
     const auto port = _lane
-                        .run ([this] {
+                        .run_checked ([this] {
                             std::lock_guard lifecycle_lock (_lifecycle_mutex);
                             return _port;
                         })
@@ -1539,7 +1543,7 @@ bool raw_mesh_node_owner_t::reply_failure (const service_mailbox_record_t &reque
     if (!request.reply_token)
         return false;
     const auto port = _lane
-                        .run ([this] {
+                        .run_checked ([this] {
                             std::lock_guard lifecycle_lock (_lifecycle_mutex);
                             return _port;
                         })
@@ -1569,8 +1573,8 @@ std::optional<foundation::call_id_t> raw_mesh_node_owner_t::register_local_opera
     if (!callback)
         throw std::invalid_argument ("local operation callback is required");
     return _lane
-      .run ([this, deadline, callback = std::move (callback), requested,
-             request_surface] () mutable -> std::optional<foundation::call_id_t> {
+      .run_checked ([this, deadline, callback = std::move (callback), requested,
+                     request_surface] () mutable -> std::optional<foundation::call_id_t> {
           foundation::call_id_t operation;
           {
               std::lock_guard lifecycle_lock (_lifecycle_mutex);
@@ -2495,13 +2499,13 @@ void raw_mesh_node_owner_t::publish_peer_metrics (opentelemetry::metrics::Observ
     const auto &registration = *static_cast<peer_metric_registration_t *> (state);
     auto &owner = *registration.owner;
     if (registration.index == 3) {
-        const auto closed = owner._lane.run ([&] { return owner._closed; }).get ();
+        const auto closed = owner._lane.run_checked ([&] { return owner._closed; }).get ();
         owner._topology.observe_channel_metrics (result, closed);
         return;
     }
     const auto count =
       owner._lane
-        .run ([&] () -> std::size_t {
+        .run_checked ([&] () -> std::size_t {
             if (registration.index == 1)
                 return owner._closed ? 0 : owner._routes.size ();
             const auto peers = owner._topology.peers ();
@@ -2617,7 +2621,7 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
             };
             const auto expectation =
               _lane
-                .run ([this, &received, &descriptor] {
+                .run_checked ([this, &received, &descriptor] {
                     admission_expectation_t value;
                     std::lock_guard lifecycle_lock (_lifecycle_mutex);
                     const auto expected = _expected_peers.find (received->source_routing_id);
@@ -2652,22 +2656,23 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
             };
             const auto committed =
               _lane
-                .run ([this, &received, &descriptor, &expectation, &connection_id, now, header] {
-                    admission_commit_t value;
-                    std::lock_guard lifecycle_lock (_lifecycle_mutex);
-                    value.result = expectation.expected_descriptor
-                                     ? _topology.admit (descriptor, connection_id,
-                                                        *expectation.expected_descriptor)
-                                     : _topology.admit (descriptor, connection_id);
-                    trace_admission_phase (received->source_routing_id,
-                                           descriptor.lifecycle_generation, header.kind,
-                                           value.result);
-                    if (value.result == peer_admission_result_t::admitted) {
-                        _liveness.admit (descriptor.node_routing_id, connection_id, now);
-                    }
-                    value.local = _topology.local_descriptor ();
-                    return value;
-                })
+                .run_checked (
+                  [this, &received, &descriptor, &expectation, &connection_id, now, header] {
+                      admission_commit_t value;
+                      std::lock_guard lifecycle_lock (_lifecycle_mutex);
+                      value.result = expectation.expected_descriptor
+                                       ? _topology.admit (descriptor, connection_id,
+                                                          *expectation.expected_descriptor)
+                                       : _topology.admit (descriptor, connection_id);
+                      trace_admission_phase (received->source_routing_id,
+                                             descriptor.lifecycle_generation, header.kind,
+                                             value.result);
+                      if (value.result == peer_admission_result_t::admitted) {
+                          _liveness.admit (descriptor.node_routing_id, connection_id, now);
+                      }
+                      value.local = _topology.local_descriptor ();
+                      return value;
+                  })
                 .get ();
             const auto admission = committed.result;
             if (admission == peer_admission_result_t::not_required) {
@@ -2679,7 +2684,7 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
                     // NotRequired ends this configured connection intent; the
                     // same manual configuration generation does not reconnect it.
                     _lane
-                      .run ([this, &descriptor] {
+                      .run_checked ([this, &descriptor] {
                           std::lock_guard lifecycle_lock (_lifecycle_mutex);
                           try {
                               std::lock_guard socket_lock (_socket_mutex);
@@ -2718,7 +2723,7 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
             }
             (void) protocol::decode_reject (received->parts.front ());
             _lane
-              .run ([this, &received] {
+              .run_checked ([this, &received] {
                   const auto peer = _topology.peer (received->source_routing_id);
                   if (!peer)
                       return;
@@ -2771,7 +2776,7 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
             if (record.kind == protocol::command::livenessProbe) {
                 const auto ack =
                   _lane
-                    .run ([this, &received, &admitted, &record] {
+                    .run_checked ([this, &received, &admitted, &record] {
                         return _liveness.acknowledge_probe (
                           received->source_routing_id, admitted->connection_id, record.probe_id);
                     })
@@ -2785,7 +2790,7 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
                     co_return raw_mesh_pump_result_t::protocol_error;
             } else {
                 (void) _lane
-                  .run ([this, &received, &admitted, &record, now] {
+                  .run_checked ([this, &received, &admitted, &record, now] {
                       return _liveness.acknowledge (received->source_routing_id,
                                                     admitted->connection_id, record.probe_id, now);
                   })
@@ -3327,7 +3332,7 @@ bool raw_mesh_node_owner_t::wait_for_activity (std::chrono::milliseconds timeout
                 timeout = remaining;
         }
         port = _lane
-                 .run ([this] {
+                 .run_checked ([this] {
                      std::lock_guard lock (_lifecycle_mutex);
                      return _port;
                  })
@@ -3363,7 +3368,7 @@ void raw_mesh_node_owner_t::signal_activity () noexcept
 std::uint64_t raw_mesh_node_owner_t::next_operation_sequence ()
 {
     return _lane
-      .run ([this] {
+      .run_checked ([this] {
           std::lock_guard lifecycle_lock (_lifecycle_mutex);
           if (!_port)
               throw std::logic_error ("raw mesh node is not started");
@@ -3435,7 +3440,7 @@ std::size_t raw_mesh_node_owner_t::apply_route_snapshot ()
     };
     const auto observation =
       _lane
-        .run ([this] {
+        .run_checked ([this] {
             observation_t value;
             std::lock_guard lifecycle_lock (_lifecycle_mutex);
             if (!_router)
@@ -3496,7 +3501,7 @@ task_t<service_liveness_tick_t>
 raw_mesh_node_owner_t::tick_liveness (service_liveness_registry_t::clock_t::time_point now)
 {
     const auto prepared = _lane
-                            .run ([this, now] {
+                            .run_checked ([this, now] {
                                 struct prepared_t
                                 {
                                     service_liveness_tick_t result;
@@ -3516,7 +3521,7 @@ raw_mesh_node_owner_t::tick_liveness (service_liveness_registry_t::clock_t::time
           protocol::encode_liveness (protocol::command::livenessProbe, probe.probe_id));
     }
     _lane
-      .run ([this, &prepared] {
+      .run_checked ([this, &prepared] {
           std::lock_guard lifecycle_lock (_lifecycle_mutex);
           for (const auto &timed_out : prepared.result.timed_out_nodes) {
               const auto peer = _topology.peer (timed_out);

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/channels/channel_runtime.hpp"
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/channels/channel_runtime_manager.hpp"
 #include "runtime/client_server/client_server_location_runtime.hpp"
@@ -238,7 +239,8 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         }
         for (auto &loop : _loops) {
             if (loop.thread.joinable ())
-                loop.thread.join ();
+                runtime::infrastructure_wait_guard::join (loop.thread,
+                                                          "location-auto-connect/worker");
             for (const auto &[_, target] : loop.active)
                 stop_target (loop, target);
         }

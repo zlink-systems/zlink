@@ -2,6 +2,7 @@
 
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 
 #include <condition_variable>
 #include <memory>
@@ -33,7 +34,9 @@ struct operation_registry_drain_state_t
     void wait () noexcept
     {
         std::unique_lock lock (mutex);
-        drained.wait (lock, [&] { return outstanding == 0; });
+        infrastructure_wait_guard::condition_wait (
+          drained, lock, [&] { return outstanding == 0; }, "operation-registry/drain",
+          infrastructure_wait_guard::wait_relation_t::dependent_completion);
     }
 
     std::mutex mutex;
@@ -133,7 +136,8 @@ class operation_completion_dispatcher_t
             _worker.detach ();
             return;
         }
-        _worker.join ();
+        ::zlink::framework::runtime::infrastructure_wait_guard::join (
+          _worker, "operation-completion/worker");
     }
 
     std::unique_ptr<operation_completion_item_t>
@@ -194,7 +198,10 @@ class operation_completion_dispatcher_t
             std::unique_ptr<operation_completion_item_t> completion;
             {
                 std::unique_lock lock (state->mutex);
-                state->ready.wait (lock, [&] { return state->stopping || state->head; });
+                infrastructure_wait_guard::condition_wait (
+                  state->ready, lock, [&] { return state->stopping || state->head; },
+                  "operation-completion/input",
+                  infrastructure_wait_guard::wait_relation_t::own_input);
                 if (!state->head) {
                     if (state->stopping)
                         return;

@@ -24,33 +24,33 @@ const std::string &route_channel_runtime_t::router_channel_id () const noexcept
 
 void route_channel_runtime_t::routing_id (zlink::routing_id_t routing_id)
 {
-    return _lane.run ([&, this] { _routing_id = std::move (routing_id); }).get ();
+    return _lane.run_checked ([&, this] { _routing_id = std::move (routing_id); }).get ();
 }
 
 std::optional<zlink::routing_id_t> route_channel_runtime_t::routing_id () const
 {
-    return _lane.run ([&, this] { return _routing_id; }).get ();
+    return _lane.run_checked ([&, this] { return _routing_id; }).get ();
 }
 
 void route_channel_runtime_t::default_request_timeout (std::chrono::milliseconds timeout)
 {
-    return _lane.run ([&, this] { _default_request_timeout = timeout; }).get ();
+    return _lane.run_checked ([&, this] { _default_request_timeout = timeout; }).get ();
 }
 
 std::chrono::milliseconds route_channel_runtime_t::default_request_timeout () const
 {
-    return _lane.run ([&, this] { return _default_request_timeout; }).get ();
+    return _lane.run_checked ([&, this] { return _default_request_timeout; }).get ();
 }
 
 void route_channel_runtime_t::start ()
 {
-    return _lane.run ([&, this] { _running = true; }).get ();
+    return _lane.run_checked ([&, this] { _running = true; }).get ();
 }
 
 void route_channel_runtime_t::stop ()
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           _running = false;
           _pending_requests.clear ();
           _send_backend = {};
@@ -61,18 +61,20 @@ void route_channel_runtime_t::stop ()
 
 bool route_channel_runtime_t::running () const
 {
-    return _lane.run ([&, this] { return _running; }).get ();
+    return _lane.run_checked ([&, this] { return _running; }).get ();
 }
 
 bool route_channel_runtime_t::connect (std::string endpoint)
 {
-    return _lane.run ([&, this] { return _connections.connect (std::move (endpoint)); }).get ();
+    return _lane.run_checked ([&, this] { return _connections.connect (std::move (endpoint)); })
+      .get ();
 }
 
 bool route_channel_runtime_t::connect (zlink::routing_id_t peer_rid, std::string endpoint)
 {
     return _lane
-      .run ([&, this] { return _connections.connect (std::move (peer_rid), std::move (endpoint)); })
+      .run_checked (
+        [&, this] { return _connections.connect (std::move (peer_rid), std::move (endpoint)); })
       .get ();
 }
 
@@ -80,7 +82,7 @@ bool route_channel_runtime_t::disconnect (const std::string &endpoint)
 {
     const auto normalized_endpoint = runtime::transport::normalize_endpoint (endpoint);
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           const auto targets = _connections.targets ();
           const bool removed = _connections.disconnect (normalized_endpoint);
           if (removed) {
@@ -100,7 +102,7 @@ bool route_channel_runtime_t::disconnect (const zlink::routing_id_t &peer_rid,
 {
     const auto normalized_endpoint = runtime::transport::normalize_endpoint (endpoint);
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           const bool removed = _connections.disconnect (peer_rid, normalized_endpoint);
           if (removed)
               _ready_peer_rids.erase (peer_rid.to_string ());
@@ -111,41 +113,43 @@ bool route_channel_runtime_t::disconnect (const zlink::routing_id_t &peer_rid,
 
 std::vector<std::string> route_channel_runtime_t::list_connections () const
 {
-    return _lane.run ([&, this] { return _connections.list (); }).get ();
+    return _lane.run_checked ([&, this] { return _connections.list (); }).get ();
 }
 
 std::vector<route_connection_set_t::target_t>
 route_channel_runtime_t::list_connection_targets () const
 {
-    return _lane.run ([&, this] { return _connections.targets (); }).get ();
+    return _lane.run_checked ([&, this] { return _connections.targets (); }).get ();
 }
 
 void route_channel_runtime_t::mark_peer_ready (const zlink::routing_id_t &peer_rid)
 {
-    return _lane.run ([&, this] { _ready_peer_rids.insert (peer_rid.to_string ()); }).get ();
+    return _lane.run_checked ([&, this] { _ready_peer_rids.insert (peer_rid.to_string ()); })
+      .get ();
 }
 
 void route_channel_runtime_t::mark_peer_disconnected (const zlink::routing_id_t &peer_rid)
 {
-    return _lane.run ([&, this] { _ready_peer_rids.erase (peer_rid.to_string ()); }).get ();
+    return _lane.run_checked ([&, this] { _ready_peer_rids.erase (peer_rid.to_string ()); }).get ();
 }
 
 void route_channel_runtime_t::bind_endpoint (std::string endpoint)
 {
     return _lane
-      .run ([&, this] { _bind_endpoint = runtime::transport::normalize_endpoint (endpoint); })
+      .run_checked (
+        [&, this] { _bind_endpoint = runtime::transport::normalize_endpoint (endpoint); })
       .get ();
 }
 
 std::string route_channel_runtime_t::bind_endpoint () const
 {
-    return _lane.run ([&, this] { return _bind_endpoint; }).get ();
+    return _lane.run_checked ([&, this] { return _bind_endpoint; }).get ();
 }
 
 void route_channel_runtime_t::manual_connections (std::vector<std::string> endpoints)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           _manual_connections.clear ();
           _manual_connections.reserve (endpoints.size ());
           for (auto &endpoint : endpoints) {
@@ -157,7 +161,7 @@ void route_channel_runtime_t::manual_connections (std::vector<std::string> endpo
 
 std::vector<std::string> route_channel_runtime_t::manual_connections () const
 {
-    return _lane.run ([&, this] { return _manual_connections; }).get ();
+    return _lane.run_checked ([&, this] { return _manual_connections; }).get ();
 }
 
 result_t<void>
@@ -175,7 +179,7 @@ route_channel_runtime_t::submit_send_parts (const zlink::routing_id_t &target_no
         return ready;
     }
     auto prepared = _lane
-                      .run ([&, this] {
+                      .run_checked ([&, this] {
                           if (auto connected = ensure_connected (); !connected) {
                               return connected;
                           }
@@ -204,7 +208,7 @@ route_channel_runtime_t::submit_request_parts (const zlink::routing_id_t &target
                                                runtime::messaging::message_parts_t parts)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           if (auto connected = ensure_connected (); !connected) {
               return detail::propagate_failure<std::uint64_t> (connected,
                                                                "route channel is not connected");
@@ -231,7 +235,7 @@ route_channel_runtime_t::request_reply_parts (const zlink::routing_id_t &target_
     }
     auto prepared =
       _lane
-        .run ([&, this] {
+        .run_checked ([&, this] {
             if (auto connected = ensure_connected (); !connected) {
                 return detail::propagate_failure<runtime::messaging::message_parts_t> (
                   connected, "route channel is not connected");
@@ -251,7 +255,7 @@ route_channel_runtime_t::request_reply_parts (const zlink::routing_id_t &target_
     if (!prepared)
         return prepared;
     auto reply = backend (target_node_rid, std::nullopt, parts, timeout);
-    _lane.run ([&, this] { _pending_requests.remove (request_seq); }).get ();
+    _lane.run_checked ([&, this] { _pending_requests.remove (request_seq); }).get ();
     return reply;
 }
 
@@ -271,7 +275,7 @@ route_channel_runtime_t::submit_spot_send_parts (const zlink::routing_id_t &targ
         return ready;
     }
     auto prepared = _lane
-                      .run ([&, this] {
+                      .run_checked ([&, this] {
                           if (auto connected = ensure_connected (); !connected) {
                               return connected;
                           }
@@ -304,7 +308,7 @@ route_channel_runtime_t::request_to_spot_parts (const zlink::routing_id_t &targe
     std::uint64_t request_seq = 0;
     auto registered =
       _lane
-        .run ([&, this] {
+        .run_checked ([&, this] {
             if (auto connected = ensure_connected (); !connected) {
                 return detail::propagate_failure<std::uint64_t> (connected,
                                                                  "route channel is not connected");
@@ -321,7 +325,7 @@ route_channel_runtime_t::request_to_spot_parts (const zlink::routing_id_t &targe
         return registered;
     if (backend) {
         auto reply = backend (target_node_rid, target_spot_id, parts, default_request_timeout ());
-        _lane.run ([&, this] { _pending_requests.remove (request_seq); }).get ();
+        _lane.run_checked ([&, this] { _pending_requests.remove (request_seq); }).get ();
         if (!reply) {
             return result_t<std::uint64_t>::failure (reply.error_kind (),
                                                      reply.error () ? reply.error ()->what ()
@@ -349,7 +353,7 @@ route_channel_runtime_t::request_reply_spot_parts (const zlink::routing_id_t &ta
     }
     auto prepared =
       _lane
-        .run ([&, this] {
+        .run_checked ([&, this] {
             if (auto connected = ensure_connected (); !connected) {
                 return detail::propagate_failure<runtime::messaging::message_parts_t> (
                   connected, "route channel is not connected");
@@ -369,14 +373,14 @@ route_channel_runtime_t::request_reply_spot_parts (const zlink::routing_id_t &ta
     if (!prepared)
         return prepared;
     auto reply = backend (target_node_rid, target_spot_id, parts, timeout);
-    _lane.run ([&, this] { _pending_requests.remove (request_seq); }).get ();
+    _lane.run_checked ([&, this] { _pending_requests.remove (request_seq); }).get ();
     return reply;
 }
 
 result_t<void> route_channel_runtime_t::complete_request (std::uint64_t request_seq)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           if (!_pending_requests.remove (request_seq)) {
               return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                               "routed reply does not match a pending request");
@@ -388,22 +392,22 @@ result_t<void> route_channel_runtime_t::complete_request (std::uint64_t request_
 
 void route_channel_runtime_t::set_send_backend (send_backend_t backend)
 {
-    return _lane.run ([&, this] { _send_backend = std::move (backend); }).get ();
+    return _lane.run_checked ([&, this] { _send_backend = std::move (backend); }).get ();
 }
 
 void route_channel_runtime_t::set_request_backend (request_backend_t backend)
 {
-    return _lane.run ([&, this] { _request_backend = std::move (backend); }).get ();
+    return _lane.run_checked ([&, this] { _request_backend = std::move (backend); }).get ();
 }
 
 std::vector<route_outbound_packet_t> route_channel_runtime_t::outbound_packets () const
 {
-    return _lane.run ([&, this] { return _outbound_packets; }).get ();
+    return _lane.run_checked ([&, this] { return _outbound_packets; }).get ();
 }
 
 std::size_t route_channel_runtime_t::pending_request_count () const
 {
-    return _lane.run ([&, this] { return _pending_requests.count (); }).get ();
+    return _lane.run_checked ([&, this] { return _pending_requests.count (); }).get ();
 }
 
 route_outbound_packet_t &
@@ -455,7 +459,7 @@ route_channel_runtime_t::wait_until_peer_ready (const zlink::routing_id_t &targe
     for (;;) {
         auto observed =
           _lane
-            .run ([&, this] () -> std::optional<result_t<void>> {
+            .run_checked ([&, this] () -> std::optional<result_t<void>> {
                 const auto targets = _connections.targets ();
                 if (!_running) {
                     return last;
@@ -501,7 +505,7 @@ route_channel_runtime_t::wait_until_connected (std::chrono::milliseconds timeout
                                                    "route channel is not connected");
     for (;;) {
         auto observed = _lane
-                          .run ([&, this] () -> std::optional<result_t<void>> {
+                          .run_checked ([&, this] () -> std::optional<result_t<void>> {
                               last = ensure_connected ();
                               if (!_running) {
                                   return last;

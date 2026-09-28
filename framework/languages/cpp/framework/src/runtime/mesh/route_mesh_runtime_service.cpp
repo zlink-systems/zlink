@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/mesh/route_mesh_runtime_service.hpp"
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/mesh/route_mesh_connection_policy.hpp"
 #include "runtime/diagnostics/runtime_observation.hpp"
@@ -445,6 +446,9 @@ void route_mesh_runtime_service_t::start ()
         // Store read on every query.
         state->poll_location_descriptors (*hub);
         hub->pump = std::thread ([state, hub] {
+#ifndef NDEBUG
+            runtime::infrastructure_wait_guard::infrastructure_scope_t scope (hub.get ());
+#endif
             while (!hub->stopped.load (std::memory_order_acquire)) {
                 state->publish_application_claim_change (*hub);
                 state->poll_location (*hub);
@@ -475,7 +479,7 @@ void route_mesh_runtime_service_t::stop () noexcept
     for (const auto &[_, hub] : _state->hubs) {
         if (!hub->pump.joinable ())
             continue;
-        hub->pump.join ();
+        runtime::infrastructure_wait_guard::join (hub->pump, "route-mesh/monitor-pump");
         std::vector<std::shared_ptr<state_t::observer_t>> observers;
         {
             std::lock_guard lock (hub->mutex);

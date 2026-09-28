@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/execution/serial_execution_queue.hpp"
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -957,9 +958,10 @@ void serial_execution_queue_t::run (std::string name, std::function<void ()> wor
 void serial_execution_queue_t::drain ()
 {
     std::unique_lock<std::mutex> lock (_mutex);
-    _empty.wait (lock, [&] {
-        return !has_queued_locked () && _active == 0 && !_draining && !_drain_scheduled;
-    });
+    infrastructure_wait_guard::condition_wait (
+      _empty, lock,
+      [&] { return !has_queued_locked () && _active == 0 && !_draining && !_drain_scheduled; },
+      "serial-queue/drain", infrastructure_wait_guard::wait_relation_t::dependent_completion);
 }
 
 void serial_execution_queue_t::close ()

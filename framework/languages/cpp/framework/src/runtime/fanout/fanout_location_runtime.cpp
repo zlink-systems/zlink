@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/fanout/fanout_location_runtime.hpp"
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 #include "runtime/transport/listener_identity.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include <runtime/locations/location_repository.hpp>
@@ -187,7 +188,12 @@ void fanout_location_runtime_t::start ()
         reconcile_subscribers ();
         publish_snapshot_changes ();
         _channel_runtime.mark_auto_connect_active ();
-        _thread = std::thread ([this] { run (); });
+        _thread = std::thread ([this] {
+#ifndef NDEBUG
+            runtime::infrastructure_wait_guard::infrastructure_scope_t scope (this);
+#endif
+            run ();
+        });
     }
     catch (...) {
         stop ();
@@ -708,7 +714,7 @@ void fanout_location_runtime_t::stop () noexcept
     const bool was_stopped = _stop.exchange (true, std::memory_order_acq_rel);
     _wake_timer.signal ();
     if (_thread.joinable ())
-        _thread.join ();
+        runtime::infrastructure_wait_guard::join (_thread, "fanout-location/worker");
     if (_application_supply) {
         _application_supply->close ();
         _application_supply.reset ();

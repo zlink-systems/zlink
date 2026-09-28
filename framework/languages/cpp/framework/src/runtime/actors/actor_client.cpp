@@ -118,7 +118,7 @@ actor_create_call_t &actor_create_call_t::operator= (actor_create_call_t &&) noe
 actor_create_call_t &actor_create_call_t::in_mesh (std::string mesh_name)
 {
     _state->lane
-      .run ([&] {
+      .run_checked ([&] {
           require_call_option (_state->mesh_set, "in_mesh");
           _state->mesh_name = std::move (mesh_name);
       })
@@ -129,7 +129,7 @@ actor_create_call_t &actor_create_call_t::in_mesh (std::string mesh_name)
 actor_create_call_t &actor_create_call_t::creation_request (message_t request)
 {
     _state->lane
-      .run ([&] {
+      .run_checked ([&] {
           require_call_option (_state->request_set, "creation_request");
           _state->request = std::move (request);
       })
@@ -140,7 +140,7 @@ actor_create_call_t &actor_create_call_t::creation_request (message_t request)
 actor_create_call_t &actor_create_call_t::timeout (std::chrono::milliseconds timeout)
 {
     _state->lane
-      .run ([&] {
+      .run_checked ([&] {
           require_call_option (_state->timeout_set, "timeout");
           if (timeout <= std::chrono::milliseconds::zero ())
               throw framework_exception_t (framework_error_kind_t::invalid_operation,
@@ -154,7 +154,7 @@ actor_create_call_t &actor_create_call_t::timeout (std::chrono::milliseconds tim
 task_t<actor_create_result_t> actor_create_call_t::async ()
 {
     return _state->lane
-      .run ([&] {
+      .run_checked ([&] {
           if (_state->submitted)
               return task_t<actor_create_result_t> (result_t<actor_create_result_t>::failure (
                 framework_error_kind_t::invalid_operation,

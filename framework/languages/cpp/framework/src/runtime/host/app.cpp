@@ -4,6 +4,7 @@
 #include <runtime/locations/location_repository.hpp>
 
 #include "runtime/actors/actor_client.hpp"
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/channels/channel_host_service.hpp"
 #include "runtime/channels/channel_runtime.hpp"
@@ -424,7 +425,7 @@ class app_state_t
         ~relocation_operation_t ()
         {
             if (worker.joinable ())
-                worker.join ();
+                runtime::infrastructure_wait_guard::join (worker, "host-relocation/worker");
         }
     };
 
@@ -442,7 +443,7 @@ class app_state_t
         ~termination_operation_t ()
         {
             if (worker.joinable ()) {
-                worker.join ();
+                runtime::infrastructure_wait_guard::join (worker, "host-termination/worker");
             }
         }
     };
@@ -584,7 +585,7 @@ class framework_runtime_status_source_t
             return;
         _changed.notify_all ();
         if (_worker.joinable ())
-            _worker.join ();
+            runtime::infrastructure_wait_guard::join (_worker, "host-observer/worker");
     }
 
     std::shared_ptr<framework_observer_state_t>
@@ -650,8 +651,10 @@ void framework_runtime_status_source_t::run () noexcept
                 observer->enqueue ("framework-runtime", status, terminal);
         }
         std::unique_lock lock (_observers_mutex);
-        _changed.wait_for (lock, std::chrono::milliseconds (10),
-                           [&] { return _closed.load (std::memory_order_acquire); });
+        runtime::infrastructure_wait_guard::condition_wait_for (
+          _changed, lock, std::chrono::milliseconds (10),
+          [&] { return _closed.load (std::memory_order_acquire); }, "host-observer/input",
+          runtime::infrastructure_wait_guard::wait_relation_t::own_input);
     }
 }
 
@@ -1303,7 +1306,7 @@ void app_t::_apply_zlink_framework ()
       detail::zlink_builder_access_t::shared_core_context (_state->zlink);
     for (const auto &registration : mesh_node_registrations) {
         registration->lane
-          .run ([&] {
+          .run_checked ([&] {
               registration->core_context = shared_core_context;
               registration->application_jobs = _state->application_job_queue;
           })
@@ -1316,7 +1319,8 @@ void app_t::_apply_zlink_framework ()
             return true;
         }
         for (const auto &registration : mesh_node_registrations) {
-            if (registration->lane.run ([&] { return !registration->peer_connections.empty (); })
+            if (registration->lane
+                  .run_checked ([&] { return !registration->peer_connections.empty (); })
                   .get ())
                 return true;
         }
@@ -3161,7 +3165,8 @@ task_t<relocation_result_t> app_t::relocate (relocation_options_t options,
         }
     }
     if (completed_worker.joinable ()) {
-        completed_worker.join ();
+        runtime::infrastructure_wait_guard::join (completed_worker,
+                                                  "host-relocation/completed-worker");
     }
 
     relocation_preflight_t preflight;
@@ -3859,8 +3864,10 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
     {
         std::unique_lock lock (state.termination_teardown_mutex);
         if (state.run_active) {
-            teardown_completed = state.termination_teardown_changed.wait_until (
-              lock, deadline_at, [&] { return state.teardown_complete; });
+            teardown_completed = runtime::infrastructure_wait_guard::condition_wait_until (
+              state.termination_teardown_changed, lock, deadline_at,
+              [&] { return state.teardown_complete; }, "host/termination-teardown",
+              runtime::infrastructure_wait_guard::wait_relation_t::dependent_completion);
         }
     }
     if (!teardown_completed && terminal.outcome == termination_outcome_t::stopped) {

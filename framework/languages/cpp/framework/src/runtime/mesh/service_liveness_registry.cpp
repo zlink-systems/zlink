@@ -35,7 +35,7 @@ void service_liveness_registry_t::admit (std::vector<std::uint8_t> node_routing_
           "service liveness admission requires node and connection identities");
     }
     _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           auto key = node_routing_id;
           _peers.insert_or_assign (std::move (key),
                                    peer_t{std::move (connection_id), now + _peer_timeout,
@@ -48,7 +48,7 @@ bool service_liveness_registry_t::disconnect (const std::vector<std::uint8_t> &n
                                               const std::vector<std::uint8_t> &connection_id)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           const auto found = _peers.find (node_routing_id);
           if (found == _peers.end () || found->second.connection_id != connection_id) {
               return false;
@@ -65,7 +65,7 @@ bool service_liveness_registry_t::acknowledge (const std::vector<std::uint8_t> &
                                                clock_t::time_point now)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           const auto found = _peers.find (node_routing_id);
           if (found == _peers.end () || found->second.connection_id != connection_id
               || !found->second.outstanding_probe || *found->second.outstanding_probe != probe_id) {
@@ -87,7 +87,7 @@ service_liveness_registry_t::acknowledge_probe (const std::vector<std::uint8_t> 
         return std::nullopt;
     }
     return _lane
-      .run ([&, this] () -> std::optional<service_probe_t> {
+      .run_checked ([&, this] () -> std::optional<service_probe_t> {
           const auto found = _peers.find (node_routing_id);
           if (found == _peers.end () || found->second.connection_id != connection_id) {
               return std::nullopt;
@@ -100,7 +100,7 @@ service_liveness_registry_t::acknowledge_probe (const std::vector<std::uint8_t> 
 service_liveness_tick_t service_liveness_registry_t::tick (clock_t::time_point now)
 {
     return _lane
-      .run ([&, this] {
+      .run_checked ([&, this] {
           service_liveness_tick_t result;
           for (auto entry = _peers.begin (); entry != _peers.end ();) {
               if (entry->second.deadline <= now) {
@@ -132,7 +132,7 @@ std::optional<service_liveness_registry_t::clock_t::time_point>
 service_liveness_registry_t::next_activity () const
 {
     return _lane
-      .run ([this] {
+      .run_checked ([this] {
           std::optional<clock_t::time_point> result;
           for (const auto &[_, peer] : _peers) {
               const auto candidate = std::min (peer.deadline, peer.next_probe);
@@ -146,7 +146,7 @@ service_liveness_registry_t::next_activity () const
 
 std::size_t service_liveness_registry_t::size () const
 {
-    return _lane.run ([this] { return _peers.size (); }).get ();
+    return _lane.run_checked ([this] { return _peers.size (); }).get ();
 }
 
 } // namespace zlink::framework::runtime::mesh

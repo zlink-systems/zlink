@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include <zlink/framework/contracts/channels/call.hpp>
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -57,10 +58,10 @@ class logical_multicast_executor_t
         if (waiting)
             waiting->completion->complete (runtime_shutdown ());
         if (_handoff_worker.joinable ())
-            _handoff_worker.join ();
+            runtime::infrastructure_wait_guard::join (_handoff_worker, "multicast/handoff");
         for (auto &worker : _workers) {
             if (worker.joinable ())
-                worker.join ();
+                runtime::infrastructure_wait_guard::join (worker, "multicast/worker");
         }
     }
 
@@ -152,7 +153,9 @@ class logical_multicast_executor_t
             multicast_job_t job;
             {
                 std::unique_lock lock (_mutex);
-                _changed.wait (lock, [&] { return _stopping || !_jobs.empty (); });
+                runtime::infrastructure_wait_guard::condition_wait (
+                  _changed, lock, [&] { return _stopping || !_jobs.empty (); }, "multicast/input",
+                  runtime::infrastructure_wait_guard::wait_relation_t::own_input);
                 if (_stopping && _jobs.empty ())
                     return;
                 job = std::move (_jobs.front ());
@@ -184,7 +187,10 @@ class logical_multicast_executor_t
             std::optional<multicast_job_t> expired;
             {
                 std::unique_lock lock (_mutex);
-                _changed.wait (lock, [this] { return _stopping || _handoff.has_value (); });
+                runtime::infrastructure_wait_guard::condition_wait (
+                  _changed, lock, [this] { return _stopping || _handoff.has_value (); },
+                  "multicast/handoff-input",
+                  runtime::infrastructure_wait_guard::wait_relation_t::own_input);
                 if (_stopping)
                     return;
                 while (_handoff && !_stopping) {
@@ -202,8 +208,11 @@ class logical_multicast_executor_t
                         break;
                     }
                     const auto deadline = _handoff->deadline;
-                    if (!_changed.wait_until (lock, deadline,
-                                              [this] { return _stopping || _available != 0; })) {
+                    if (!runtime::infrastructure_wait_guard::condition_wait_until (
+                          _changed, lock, deadline, [this] { return _stopping || _available != 0; },
+                          "multicast/capacity",
+                          runtime::infrastructure_wait_guard::wait_relation_t::
+                            dependent_completion)) {
                         expired = std::move (_handoff);
                         _handoff.reset ();
                         _changed.notify_all ();

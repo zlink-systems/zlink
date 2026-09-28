@@ -30,7 +30,7 @@ class actor_location_observer_t
     bool accepts (const actor_location_t &row)
     {
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto key = location_key_codec_t::encode_actor_key (
                 actor_location_key_t{row.mesh_name, row.actor_id});
               const auto version =
@@ -74,7 +74,7 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
 
     void set_actor_mesh_name (std::string mesh_name)
     {
-        _lane.run ([&] { _actor_mesh_name = std::move (mesh_name); }).get ();
+        _lane.run_checked ([&] { _actor_mesh_name = std::move (mesh_name); }).get ();
     }
 
     explicit store_location_resolvers_t (
@@ -168,14 +168,14 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
 
     void invalidate_spot_address (std::string_view spot_id) override
     {
-        _lane.run ([&] { _spot_routes.erase (std::string (spot_id)); }).get ();
+        _lane.run_checked ([&] { _spot_routes.erase (std::string (spot_id)); }).get ();
     }
 
     bool invalidate_spot_address_if_matches (std::string_view spot_id,
                                              const spot_address_t &expected) override
     {
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto found = _spot_routes.find (std::string (spot_id));
               if (found == _spot_routes.end ())
                   return false;
@@ -197,7 +197,7 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
     void invalidate_all_routes_after_store_recovery () override
     {
         _lane
-          .run ([this] {
+          .run_checked ([this] {
               _spot_routes.clear ();
               _actor_routes.clear ();
               ++_store_recovery_generation;
@@ -230,14 +230,14 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
 
     void invalidate_actor_address (std::string_view actor_id) override
     {
-        _lane.run ([&] { _actor_routes.erase (std::string (actor_id)); }).get ();
+        _lane.run_checked ([&] { _actor_routes.erase (std::string (actor_id)); }).get ();
     }
 
     bool invalidate_actor_address_if_matches (std::string_view actor_id,
                                               const spot_address_t &expected) override
     {
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto found = _actor_routes.find (std::string (actor_id));
               if (found == _actor_routes.end ())
                   return false;
@@ -289,7 +289,7 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
             return std::nullopt;
         }
         return _lane
-          .run ([&] {
+          .run_checked ([&] {
               const auto found = routes.find (std::string (key));
               if (found == routes.end ()) {
                   return std::optional<spot_address_t>{};
@@ -329,7 +329,7 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
             return;
         }
         _lane
-          .run ([&] {
+          .run_checked ([&] {
               routes.insert_or_assign (
                 std::move (key),
                 cached_address_t{address, measured_at + lifetime, _store_recovery_generation});

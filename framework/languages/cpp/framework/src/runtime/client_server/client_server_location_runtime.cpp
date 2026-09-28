@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/client_server/client_server_location_runtime.hpp"
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 #include "runtime/client_server/client_server_failure_mapper.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
@@ -440,7 +441,8 @@ bool client_server_location_runtime_t::snapshot_equivalent (
 client_server_channel_snapshot_t
 client_server_location_runtime_t::snapshot (std::string channel_name) const
 {
-    return _lane.run ([this, &channel_name] { return build_snapshot_locked (channel_name); })
+    return _lane
+      .run_checked ([this, &channel_name] { return build_snapshot_locked (channel_name); })
       .get ();
 }
 
@@ -454,7 +456,7 @@ std::unique_ptr<mesh_runtime_observation_t> client_server_location_runtime_t::ob
     auto value = std::make_shared<observer_t> (capacity, std::move (observer));
     value->start ();
     auto initial = _lane
-                     .run ([this, &channel_name, &value] {
+                     .run_checked ([this, &channel_name, &value] {
                          _observers[channel_name].push_back (value);
                          const auto current = build_snapshot_locked (channel_name);
                          return client_server_runtime_event_t{
@@ -483,7 +485,7 @@ void client_server_location_runtime_t::publish_snapshot_changes ()
       notifications;
     notifications =
       _lane
-        .run ([this] {
+        .run_checked ([this] {
             std::vector<std::pair<std::shared_ptr<observer_t>, client_server_runtime_event_t>>
               result;
             std::set<std::string> channel_names;
@@ -549,7 +551,12 @@ void client_server_location_runtime_t::start ()
         }
         reconcile ();
         _channel_runtime.mark_auto_connect_active ();
-        _thread = std::thread ([this] { run (); });
+        _thread = std::thread ([this] {
+#ifndef NDEBUG
+            runtime::infrastructure_wait_guard::infrastructure_scope_t scope (this);
+#endif
+            run ();
+        });
     }
     catch (...) {
         stop ();
@@ -639,8 +646,10 @@ bool client_server_location_runtime_t::publish_descriptor_state (
     _wake_timer->signal ();
 
     std::unique_lock lock (_descriptor_publish_mutex);
-    if (!_descriptor_publish_changed.wait_for (lock, std::chrono::seconds (5),
-                                               [this] { return !_descriptor_publish_pending; })) {
+    if (!runtime::infrastructure_wait_guard::condition_wait_for (
+          _descriptor_publish_changed, lock, std::chrono::seconds (5),
+          [this] { return !_descriptor_publish_pending; }, "client-server/descriptor-publish",
+          runtime::infrastructure_wait_guard::wait_relation_t::dependent_completion)) {
         return false;
     }
     return _descriptor_publish_result;
@@ -824,7 +833,7 @@ void client_server_location_runtime_t::reconcile_channel (client_channel_t &chan
         bool exists = false;
         {
             _lane
-              .run ([&] {
+              .run_checked ([&] {
                   const auto found = channel.connections.find (key);
                   if (found != channel.connections.end ()) {
                       if (found->second.descriptor.endpoint != descriptor.endpoint
@@ -877,7 +886,7 @@ void client_server_location_runtime_t::reconcile_channel (client_channel_t &chan
                                                                  _channel_runtime.core_context ());
         raw->start ();
         _lane
-          .run ([&] {
+          .run_checked ([&] {
               channel.selector_dirty = true;
               channel.connections.emplace (key, client_connection_t{descriptor, std::move (raw)});
           })
@@ -886,7 +895,7 @@ void client_server_location_runtime_t::reconcile_channel (client_channel_t &chan
 
     {
         _lane
-          .run ([&] {
+          .run_checked ([&] {
               for (auto it = channel.connections.begin (); it != channel.connections.end ();) {
                   if (desired.contains (it->first)) {
                       ++it;
@@ -999,7 +1008,7 @@ void client_server_location_runtime_t::pump ()
         _client_pump_cursor = (start + 1) % _client_pump_snapshot.size ();
     }
     _lane
-      .run ([this] {
+      .run_checked ([this] {
           for (auto &[_, channel] : _clients) {
               for (auto &[__, connection] : channel->connections) {
                   const bool ready =
@@ -1020,7 +1029,7 @@ void client_server_location_runtime_t::pump ()
 void client_server_location_runtime_t::refresh_client_pump_snapshot ()
 {
     _lane
-      .run ([this] {
+      .run_checked ([this] {
           _client_pump_snapshot.clear ();
           for (auto &[_, channel] : _clients) {
               for (auto &[__, connection] : channel->connections)
@@ -1315,7 +1324,7 @@ client_server_location_runtime_t::select_ready (const std::string &channel_name,
 {
     auto task =
       _lane
-        .run ([this, &channel_name, deadline] {
+        .run_checked ([this, &channel_name, deadline] {
             auto selected = select_ready_locked (channel_name);
             if (selected || selected.error_kind () != framework_error_kind_t::not_found
                 || std::chrono::steady_clock::now () >= deadline) {
@@ -1389,7 +1398,7 @@ void client_server_location_runtime_t::complete_ready_waiters (
     std::vector<std::pair<std::shared_ptr<completion_t>, result_t<client_t>>> completed;
     completed =
       _lane
-        .run ([this, now] {
+        .run_checked ([this, now] {
             std::vector<std::pair<std::shared_ptr<completion_t>, result_t<client_t>>> result;
             auto write = _ready_waiters.begin ();
             for (auto read = _ready_waiters.begin (); read != _ready_waiters.end (); ++read) {
@@ -1417,7 +1426,7 @@ std::optional<std::chrono::steady_clock::time_point>
 client_server_location_runtime_t::next_ready_waiter_deadline () const
 {
     return _lane
-      .run ([this] {
+      .run_checked ([this] {
           std::optional<std::chrono::steady_clock::time_point> deadline;
           for (const auto &waiter : _ready_waiters) {
               if (!deadline || waiter->deadline < *deadline)
@@ -1440,7 +1449,7 @@ void client_server_location_runtime_t::stop () noexcept
     _wake_timer->signal ();
     complete_ready_waiters (std::chrono::steady_clock::now ());
     if (_thread.joinable ())
-        _thread.join ();
+        runtime::infrastructure_wait_guard::join (_thread, "client-server-location/worker");
     if (_application_supply) {
         _application_supply->close ();
         _application_supply.reset ();
@@ -1450,7 +1459,7 @@ void client_server_location_runtime_t::stop () noexcept
     bool has_servers = false;
     bool has_clients = false;
     _lane
-      .run ([this, &client_channels, &has_servers, &has_clients] {
+      .run_checked ([this, &client_channels, &has_servers, &has_clients] {
           client_channels.reserve (_clients.size ());
           for (const auto &[channel_name, _] : _clients)
               client_channels.push_back (channel_name);
@@ -1478,7 +1487,7 @@ void client_server_location_runtime_t::stop_clients () noexcept
 {
     std::vector<std::shared_ptr<raw_client_server_client_t>> clients;
     _lane
-      .run ([this, &clients] {
+      .run_checked ([this, &clients] {
           for (auto &[_, channel] : _clients) {
               for (auto &[__, connection] : channel->connections)
                   clients.push_back (connection.owner);
@@ -1496,7 +1505,7 @@ void client_server_location_runtime_t::stop_servers () noexcept
 {
     std::map<std::string, std::unique_ptr<server_entry_t>> servers;
     _lane
-      .run ([this, &servers] {
+      .run_checked ([this, &servers] {
           servers.swap (_servers);
           _server_pump_snapshot.clear ();
       })

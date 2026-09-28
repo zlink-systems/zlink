@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/channels/channel_outbound_exchange.hpp"
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 
 #include "runtime/channels/channel_runtime_manager.hpp"
 #include "runtime/channels/channel_socket_options.hpp"
@@ -106,7 +107,7 @@ bool can_wait_for_client_endpoint (const std::shared_ptr<channel_runtime_state_t
     if (!capability->discovery) {
         return false;
     }
-    return state->lane.run ([&] { return state->auto_connect_active; }).get ();
+    return state->lane.run_checked ([&] { return state->auto_connect_active; }).get ();
 }
 
 std::optional<channel_runtime_state_t::client_server_send_t>
@@ -114,7 +115,7 @@ client_server_sender (const std::shared_ptr<channel_runtime_state_t> &state,
                       const std::string &channel_name)
 {
     return state->lane
-      .run ([&] {
+      .run_checked ([&] {
           const auto found = state->client_server_senders.find (channel_name);
           return found == state->client_server_senders.end ()
                    ? std::nullopt
@@ -128,7 +129,7 @@ client_server_requester (const std::shared_ptr<channel_runtime_state_t> &state,
                          const std::string &channel_name)
 {
     return state->lane
-      .run ([&] {
+      .run_checked ([&] {
           const auto found = state->client_server_requesters.find (channel_name);
           return found == state->client_server_requesters.end ()
                    ? std::nullopt
@@ -143,7 +144,7 @@ fanout_publisher (const std::shared_ptr<channel_runtime_state_t> &state,
                   const std::string &channel_name)
 {
     return state->lane
-      .run ([&] {
+      .run_checked ([&] {
           const auto found = state->fanout_publishers.find (channel_name);
           return found == state->fanout_publishers.end ()
                    ? std::nullopt
@@ -286,7 +287,7 @@ resolve_channel_wait_timeout (const std::shared_ptr<channel_runtime_state_t> &st
         return timeout;
     }
     return state->lane
-      .run ([&] {
+      .run_checked ([&] {
           const auto found = state->channels.find (channel_name);
           if (found != state->channels.end () && found->second.default_request_timeout) {
               return *found->second.default_request_timeout;
@@ -307,7 +308,7 @@ make_client_endpoint_provider (std::shared_ptr<channel_runtime_state_t> state,
 {
     return [state = std::move (state), channel_name = std::move (channel_name)] {
         return state->lane
-          .run ([&] {
+          .run_checked ([&] {
               detail::channel_runtime_manager_t manager (state);
               auto &bundle = manager.get_or_create_client_bundle (channel_name);
               return channel_endpoint_snapshot_t{.endpoints = bundle.list_manual_connections (),
@@ -536,6 +537,10 @@ class channel_native_client_t
         {
             monitor_thread = std::thread ([this, runtime = std::move (runtime),
                                            channel_name = std::move (channel_name)] () mutable {
+#ifndef NDEBUG
+                ::zlink::framework::runtime::infrastructure_wait_guard::infrastructure_scope_t
+                  scope (this);
+#endif
                 while (!monitor_stop.load (std::memory_order_acquire)) {
                     try {
                         zlink::poll_event_t poll_event;
@@ -568,7 +573,8 @@ class channel_native_client_t
         {
             monitor_stop.store (true, std::memory_order_release);
             if (monitor_thread.joinable ()) {
-                monitor_thread.join ();
+                runtime::infrastructure_wait_guard::join (monitor_thread,
+                                                          "channel-outbound/monitor");
             }
             const std::lock_guard lock (mutex);
             if (socket) {
@@ -800,7 +806,7 @@ admit_native_publisher (const std::shared_ptr<channel_runtime_state_t> &state,
 {
     std::shared_ptr<runtime::listener_status_registry_t> listener_statuses;
     auto admitted = state->lane
-                      .run ([&] () -> std::shared_ptr<channel_native_publisher_t> {
+                      .run_checked ([&] () -> std::shared_ptr<channel_native_publisher_t> {
                           if (state->closed || state->shutdown)
                               return nullptr;
                           auto &stored = state->native_publishers[channel_name];
@@ -825,7 +831,7 @@ void initialize_manual_channel_publishers (const std::shared_ptr<channel_runtime
     std::map<std::string, std::string> advertise_hosts;
     std::shared_ptr<zlink::context_t> core_context;
     state->lane
-      .run ([&] {
+      .run_checked ([&] {
           if (state->closed || state->shutdown)
               return;
           advertise_hosts = state->fanout_publisher_advertise_hosts;
@@ -861,7 +867,7 @@ void close_manual_channel_publishers (
         return;
     std::vector<std::shared_ptr<channel_native_publisher_t>> publishers;
     state->lane
-      .run ([&] {
+      .run_checked ([&] {
           for (auto &[_, publisher] : state->native_publishers) {
               if (publisher)
                   publishers.push_back (std::move (publisher));
@@ -880,7 +886,7 @@ void close_native_channel_transports (
     std::vector<std::shared_ptr<channel_native_publisher_t>> publishers;
     std::set<channel_native_client_t *> seen_clients;
     state->lane
-      .run ([&] {
+      .run_checked ([&] {
           for (auto &[_, client] : state->native_clients) {
               if (client && seen_clients.insert (client.get ()).second) {
                   clients.push_back (client);
@@ -1045,7 +1051,7 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
     channel_request_terminal_trace_t terminal_trace (state->dispatch, channel_name,
                                                      call_packet_name);
     state->lane
-      .run ([&] {
+      .run_checked ([&] {
           state->outbound_calls.push_back (
             {"request", channel_name, "", call_packet_name, timeout, metadata});
       })
@@ -1156,7 +1162,7 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
             }
             auto native_selection =
               state->lane
-                .run ([&] {
+                .run_checked ([&] {
                     if (!channel_runtime_accepts_outbound_locked (*state)) {
                         const auto error = detail::make_boundary_exception (
                           channel_runtime_outbound_error_state_locked (*state),
@@ -1271,7 +1277,7 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
       flow_origin_t::application, detail::message_flow_tracer_t (state->dispatch).mode ());
     const auto call_packet_name = std::move (packet_name);
     state->lane
-      .run ([&] {
+      .run_checked ([&] {
           if (!channel_runtime_accepts_outbound_locked (*state)) {
               throw detail::make_boundary_exception (
                 channel_runtime_outbound_error_state_locked (*state),
@@ -1342,7 +1348,7 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
             }
             auto native_client =
               state->lane
-                .run ([&] {
+                .run_checked ([&] {
                     if (!channel_runtime_accepts_outbound_locked (*state)) {
                         throw detail::make_boundary_exception (
                           channel_runtime_outbound_error_state_locked (*state),
@@ -1404,7 +1410,7 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
       flow_origin_t::application, detail::message_flow_tracer_t (state->dispatch).mode ());
     const auto call_packet_name = std::move (packet_name);
     state->lane
-      .run ([&] {
+      .run_checked ([&] {
           if (!channel_runtime_accepts_outbound_locked (*state)) {
               throw detail::make_boundary_exception (
                 channel_runtime_outbound_error_state_locked (*state),
@@ -1463,7 +1469,7 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
             std::shared_ptr<runtime::listener_status_registry_t> created_listener_statuses;
             auto native_publisher =
               state->lane
-                .run ([&] {
+                .run_checked ([&] {
                     if (!channel_runtime_accepts_outbound_locked (*state)) {
                         throw detail::make_boundary_exception (
                           channel_runtime_outbound_error_state_locked (*state),

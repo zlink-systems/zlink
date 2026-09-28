@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/dispatch/offload_executor.hpp"
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -137,8 +138,10 @@ bool offload_executor_t::drain_until (std::chrono::steady_clock::time_point dead
     _ready.notify_all ();
     {
         std::unique_lock lock (_mutex);
-        if (!_empty.wait_until (lock, deadline,
-                                [this] { return _queue.empty () && _active == 0; })) {
+        if (!infrastructure_wait_guard::condition_wait_until (
+              _empty, lock, deadline, [this] { return _queue.empty () && _active == 0; },
+              "offload-executor/drain",
+              infrastructure_wait_guard::wait_relation_t::dependent_completion)) {
             if (trace_enabled) {
                 std::cerr << "zlink-cpp-host-stop stage=offload-drain-timeout name=" << _thread_name
                           << std::endl;
@@ -148,7 +151,7 @@ bool offload_executor_t::drain_until (std::chrono::steady_clock::time_point dead
     }
     for (auto &worker : _workers) {
         if (worker.joinable ()) {
-            worker.join ();
+            runtime::infrastructure_wait_guard::join (worker, "offload-executor/worker");
         }
     }
     if (trace_enabled) {
@@ -198,11 +201,14 @@ void offload_executor_t::worker_loop ()
             ++_idle_workers;
             bool ready = false;
             if (_idle_timeout.count () == 0) {
-                _ready.wait (lock, [this] { return _stopping || !_queue.empty (); });
+                infrastructure_wait_guard::condition_wait (
+                  _ready, lock, [this] { return _stopping || !_queue.empty (); },
+                  "offload-executor/input", infrastructure_wait_guard::wait_relation_t::own_input);
                 ready = true;
             } else {
-                ready = _ready.wait_for (lock, _idle_timeout,
-                                         [this] { return _stopping || !_queue.empty (); });
+                ready = infrastructure_wait_guard::condition_wait_for (
+                  _ready, lock, _idle_timeout, [this] { return _stopping || !_queue.empty (); },
+                  "offload-executor/input", infrastructure_wait_guard::wait_relation_t::own_input);
             }
             --_idle_workers;
             if (!ready && _queue.empty ()) {
