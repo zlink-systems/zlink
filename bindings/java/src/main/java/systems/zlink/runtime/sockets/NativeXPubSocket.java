@@ -10,8 +10,10 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.PublishOperation;
 import systems.zlink.contracts.messaging.SubscriptionEvent;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.runtime.messaging.MessageOperations;
+import systems.zlink.runtime.nativeapi.Native;
 import java.util.List;
 final class NativeXPubSocket extends NativeSocketBase implements XPubSocket {
     private final PubSocketOptions options = ContractAccess.pubSocketOptions(this);
@@ -53,7 +55,13 @@ final class NativeXPubSocket extends NativeSocketBase implements XPubSocket {
 
         @Override
         public void submit(List<Message> parts, SendFlags flags) {
-            runtime().publishParts(topicId, parts, SendFlag.fromValue(flags.value()), false);
+            SendResult result = runtime().publishNoWaitResult(topicId, parts);
+            if (result == SendResult.SENT)
+                return;
+            int errno = Native.errno();
+            throw result == SendResult.BACKPRESSURED
+                ? new ZlinkSubmitException(SubmitResult.BACKPRESSURED, errno)
+                : new ZlinkSubmitException(SubmitResult.NOT_CONNECTED, errno);
         }
     }
     public boolean receiveSubscriptionEvent(SubscriptionEvent result, RecvFlags flags) { return runtime().receiveSubscriptionEvent(result, ReceiveFlag.fromValue(flags.value())); }
