@@ -315,11 +315,11 @@ over an expired one. Extending expiry and normal release don't change the value.
 counter reaches `2^63-1`, it's `GenerationExhausted`. Retrying this result doesn't
 succeed, and it doesn't change the Store record or counter.
 
-Extending an owner lease doesn't change the record bytes; it only extends the expiry. A
-Store change conditioned on the owner lease uses a
-[`Value` condition](02-location-store-redis.en.md#4-conditional-atomic-batch) on the current host run's owner lease bytes, not
-the provider version. So an extension by the same host doesn't reject that change, and a
-change isn't committed with an expired, replaced, or deleted eligibility.
+Renewing an owner lease preserves its SPI value bytes while updating its expiry and provider
+version. When a Store batch doesn't mutate the owner lease and checks the current host run's
+eligibility, the Framework uses a
+[`Value` condition](02-location-store-redis.en.md#4-conditional-atomic-batch) on that lease's
+value bytes. The condition checks existence, non-expiry, and byte equality at commit time.
 
 ### 3.2 Object Re-Creation and Owner Change Use Different Generation Numbers
 

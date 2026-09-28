@@ -359,6 +359,9 @@ record golden fixture. Each item maps to one test.
 - An expired value is `Missing` by the provider clock, and a durable value is
   kept until explicit delete.
 - If one condition fails, every mutation and version increment is zero.
+- `Value` stays true when a `Put` of the same bytes changes the version and
+  expiry, and is false when the bytes change or the key is deleted or expires;
+  the batch mutation is then zero.
 - Up to 2,048 unique keys and a 4 MiB encoded request apply as one atomic
   commit.
 - Scan pages use the same snapshot, and `Expired` is returned if the

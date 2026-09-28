@@ -286,10 +286,11 @@ Framework는 필요한 `OwnerId` record를 직접 읽는다. Store 전체의 own
 `GenerationExhausted`다. 이 결과는 다시 시도해도 성공하지 않으며 Store record와 counter를
 변경하지 않는다.
 
-Owner lease 연장은 record bytes를 바꾸지 않고 만료 시각만 늘린다. Owner lease를 조건으로
-거는 Store 변경은 provider version이 아니라 현재 host 실행 조합의 owner lease bytes를
-[`Value` 조건](02-location-store-redis.ko.md#4-conditional-atomic-batch)으로 건다. 따라서 같은 host의 연장이 그
-변경을 거절시키지 않고, 만료·교체·삭제된 자격으로는 변경이 확정되지 않는다.
+Owner lease를 연장할 때 SPI value bytes는 유지하고 만료 시각과 provider version을 갱신한다.
+Framework가 owner lease 자체를 변경하지 않고 현재 host 실행 조합의 자격을 검사하는 Store
+batch에는, 해당 lease의 value bytes에 대한
+[`Value` 조건](02-location-store-redis.ko.md#4-conditional-atomic-batch)을 사용한다. 조건은 commit
+시점의 존재·미만료·bytes 일치를 검사한다.
 
 ### 3.2 Object 재생성과 owner 변경은 다른 세대 번호를 사용한다
 
