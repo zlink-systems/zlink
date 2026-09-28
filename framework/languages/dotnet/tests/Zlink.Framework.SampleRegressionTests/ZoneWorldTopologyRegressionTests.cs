@@ -6,6 +6,32 @@ namespace Zlink.Framework.SampleRegressionTests;
 public sealed partial class RegressionTests
 {
     [Fact]
+    public void ZoneWorld_Bot_Boundary_Is_Observed_After_Destination_Maintenance()
+    {
+        var source = ReadSource(
+            Path.Combine(ResolveSampleRoot("ZoneWorld"), "Client", "Scenarios.cs")
+        );
+        var methodStart = source.IndexOf(
+            "private static async ValueTask F4BotReversesOnRejection(",
+            StringComparison.Ordinal
+        );
+        Assert.True(methodStart >= 0);
+        var methodEnd = source.IndexOf(
+            "private static int? BotX(",
+            methodStart,
+            StringComparison.Ordinal
+        );
+        var method = source[methodStart..methodEnd];
+        var maintenanceApplied = method.IndexOf("await enabledObserved;", StringComparison.Ordinal);
+        var boundaryObserved = method.IndexOf("var boundary = (", StringComparison.Ordinal);
+
+        Assert.True(
+            maintenanceApplied >= 0 && boundaryObserved > maintenanceApplied,
+            "the destination maintenance status must arrive before the boundary observation"
+        );
+    }
+
+    [Fact]
     public void ZoneWorld_Uses_The_Framework_Request_Deadline()
     {
         var sampleRoot = ResolveSampleRoot("ZoneWorld");
