@@ -2555,6 +2555,8 @@ class spot_node_runtime_t
                                  callback, std::addressof (actor));
     }
 
+    std::shared_ptr<spot_context_state_t>
+    find_active_remote_actor_join_target (const spot_id_t &target_spot_id) const;
     bool materialize_actor_relocation_state (
       const runtime::stateful::frozen_object_state_t &frozen,
       const runtime::stateful::object_ref_t &target,
