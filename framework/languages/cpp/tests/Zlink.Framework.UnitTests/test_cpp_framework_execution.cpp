@@ -28,6 +28,7 @@
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/stateful/public_store_adapters.hpp"
 #include "runtime/streams/session_serial_executor.hpp"
+#include "runtime/timers/core_timer_drain_loop.hpp"
 #include "runtime/timers/timer_runtime.hpp"
 
 #include <zlink/framework/contracts/spots/spot.hpp>
@@ -3672,6 +3673,36 @@ bool verify_idle_instance_spot_eviction_closes_local_context ()
     return result;
 }
 
+bool verify_idle_timer_closes_before_executor_releases_last_node_reference ()
+{
+    using namespace zlink::framework::detail;
+    auto state = std::make_shared<spot_node_builder_state_t> ("idle-timer-lifetime-node");
+    auto timer_worker = std::make_shared<zlink::framework::runtime::offload_executor_t> ();
+    std::weak_ptr<zlink::framework::runtime::offload_executor_t> weak_timer_worker = timer_worker;
+    state->worker_executor = timer_worker;
+    state->instance_spot_idle_timer = std::make_unique<core_timer_drain_loop_t> ();
+    state->instance_spot_idle_timer->start (std::chrono::hours (1), 1,
+                                            [timer_worker] (std::uint64_t) {});
+    timer_worker.reset ();
+    spot_node_runtime_t (state).cancel_pending_work ();
+    spot_node_runtime_t (state).detach_native_node ();
+    if (state->instance_spot_idle_timer || !weak_timer_worker.expired ())
+        return false;
+
+    zlink::framework::runtime::offload_executor_t executor;
+    std::weak_ptr<spot_node_builder_state_t> weak_state = state;
+    auto finished = std::make_shared<std::promise<void>> ();
+    auto completion = finished->get_future ();
+    auto last_owner = std::move (state);
+    if (!executor.try_submit_internal ([last_owner = std::move (last_owner), finished] () mutable {
+            last_owner.reset ();
+            finished->set_value ();
+        }))
+        return false;
+    completion.wait ();
+    return weak_state.expired ();
+}
+
 bool verify_explicit_instance_spot_close_releases_authority_after_callback ()
 {
     using namespace zlink::framework;
@@ -6725,6 +6756,9 @@ int verify_deferred_join_waits_for_handler_terminal_across_yield ()
 
 int main ()
 {
+    if (!verify_idle_timer_closes_before_executor_releases_last_node_reference ()) {
+        return 138;
+    }
     if (const auto failed = verify_deferred_work_keeps_lifecycle_fifo_position (); failed != 0) {
         std::cerr << "verify_deferred_work_keeps_lifecycle_fifo_position failed: " << failed
                   << '\n';

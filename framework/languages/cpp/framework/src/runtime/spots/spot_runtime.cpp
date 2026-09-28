@@ -9372,17 +9372,18 @@ task_t<void> spot_node_runtime_t::complete_remote_actor_transfer (
     const auto source_spot_generation =
       source.native ? source.native->status ().lifecycle_generation () : 0;
     const auto source_spot_id = source.spot_id;
+    const auto now = std::chrono::steady_clock::now ();
+    // Keep the old-generation Message Follow route independent from the actor's
+    // newer local target. The coordinator owns this route and source-leave state;
+    // complete its turns before entering the node lane.
+    _state->actor_transfer_coordinator.activate_message_follow (
+      key, source_fence, target_actor, target_route, target_fence,
+      now + _state->message_follow_duration, transfer_id);
+    const auto source_leave_submitted =
+      _state->actor_transfer_coordinator.source_leave_submitted (key, transfer_id);
     bool replay_pending_leave = false;
     _state->lane
       .run_checked ([&] {
-          const auto now = std::chrono::steady_clock::now ();
-          // Keep the old-generation Message Follow route independent from the actor's
-          // A later relocation can return the same Actor incarnation to this node.
-          // Retain the committed source fence; the authority owner generation, node
-          // lifecycle, and owner lease distinguish it from the newer local target.
-          _state->actor_transfer_coordinator.activate_message_follow (
-            key, source_fence, target_actor, target_route, target_fence,
-            now + _state->message_follow_duration, transfer_id);
           if (const auto current = _state->actor_authority_fences.find (key);
               current != _state->actor_authority_fences.end () && current->second == source_fence) {
               _state->actor_authority_fences.erase (current);
@@ -9392,8 +9393,6 @@ task_t<void> spot_node_runtime_t::complete_remote_actor_transfer (
           // Commit acknowledgement fixes the new owner and Message Follow route first.
           // Releasing stale source ownership is post-commit housekeeping: losing the
           // source process now cannot roll back the accepted target generation.
-          const auto source_leave_submitted =
-            _state->actor_transfer_coordinator.source_leave_submitted (key, transfer_id);
           _state->pending_remote_source_cleanups.push_back (
             spot_node_builder_state_t::pending_remote_source_cleanup_t{
               .source_actor = source_actor,
@@ -13263,11 +13262,11 @@ void spot_node_runtime_t::attach_native_node (std::shared_ptr<service::mesh_node
 
 void spot_node_runtime_t::detach_native_node ()
 {
-    detail::core_timer_drain_loop_t *idle_timer = nullptr;
+    std::unique_ptr<detail::core_timer_drain_loop_t> idle_timer;
     auto native_spots = _state->lane
                           .run_checked ([&] {
                               std::vector<std::shared_ptr<service::spot_t>> result;
-                              idle_timer = _state->instance_spot_idle_timer.get ();
+                              idle_timer = std::move (_state->instance_spot_idle_timer);
                               result.reserve (_state->native_spots_by_id.size ());
                               for (const auto &[_, native] : _state->native_spots_by_id) {
                                   if (native)
@@ -13284,7 +13283,7 @@ void spot_node_runtime_t::detach_native_node ()
                           .get ();
     if (idle_timer) {
         try {
-            idle_timer->stop ();
+            idle_timer->close ();
         }
         catch (...) {
         }
