@@ -19,6 +19,7 @@ import systems.zlink.framework.locationprovider.ZLinkStoreScanCursor;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanExpired;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanPageResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
+import systems.zlink.framework.locationprovider.ZLinkStoreValueCondition;
 import systems.zlink.framework.locationprovider.ZLinkStoreVersionCondition;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
@@ -65,7 +66,6 @@ import java.util.function.Function;
  */
 final class ZLinkProviderDescriptorRepository {
     private static final ObjectMapper CANONICAL_JSON = new ObjectMapper();
-    private static final int OWNER_LEASE_WRITE_RETRIES = 3;
     private static final int DEFAULT_MESH_PAGE = 100;
     private static final int DEFAULT_CHANNEL_PAGE = 256;
     private static final int MAXIMUM_PAGE_SIZE = 1000;
@@ -279,8 +279,7 @@ final class ZLinkProviderDescriptorRepository {
                                                                                     Math.addExact(
                                                                                             record
                                                                                                     .generation(),
-                                                                                            1),
-                                                                                    OWNER_LEASE_WRITE_RETRIES);
+                                                                                            1));
                                                                         });
                                                     }
                                                     rowCondition =
@@ -305,8 +304,7 @@ final class ZLinkProviderDescriptorRepository {
                                                         liveLease,
                                                         rowCondition,
                                                         encoded,
-                                                        generation,
-                                                        OWNER_LEASE_WRITE_RETRIES);
+                                                        generation);
                                             });
                         });
     }
@@ -316,14 +314,15 @@ final class ZLinkProviderDescriptorRepository {
             ZLinkStoreReadFound liveLease,
             ZLinkStoreCondition rowCondition,
             byte[] encoded,
-            long generation,
-            int retriesRemaining) {
+            long generation) {
         var request =
                 new ZLinkStoreWriteRequest(
                         List.of(
-                                new ZLinkStoreVersionCondition(
+                                new ZLinkStoreValueCondition(
                                         ownerKey(decodeOwnerId(liveLease.value().bytes())),
-                                        liveLease.value().version()),
+                                        ZLinkOwnerLeaseRecordCodec.encode(
+                                                decodeOwnerId(liveLease.value().bytes()),
+                                                decodeOwnerGeneration(liveLease.value().bytes()))),
                                 rowCondition),
                         List.of(new ZLinkStorePut(rowKey, encoded, null)));
         CompletionStage<systems.zlink.framework.locationprovider.ZLinkStoreWriteResult> write;
@@ -342,32 +341,7 @@ final class ZLinkProviderDescriptorRepository {
                                         ZLinkLocationWriteResult.stored(
                                                 generation, applied.storeNow()));
                             }
-                            if (retriesRemaining <= 0) {
-                                return completed(ZLinkLocationWriteResult.ignoredStale());
-                            }
-                            String ownerId = decodeOwnerId(liveLease.value().bytes());
-                            long leaseGeneration = decodeOwnerGeneration(liveLease.value().bytes());
-                            return provider.read(ownerKey(ownerId), active())
-                                    .thenCompose(
-                                            currentLease -> {
-                                                if (!(currentLease
-                                                                instanceof
-                                                                ZLinkStoreReadFound refreshed)
-                                                        || decodeOwnerGeneration(
-                                                                        refreshed.value().bytes())
-                                                                != leaseGeneration) {
-                                                    return completed(
-                                                            ZLinkLocationWriteResult
-                                                                    .ignoredStale());
-                                                }
-                                                return writeDescriptor(
-                                                        rowKey,
-                                                        refreshed,
-                                                        rowCondition,
-                                                        encoded,
-                                                        generation,
-                                                        retriesRemaining - 1);
-                                            });
+                            return completed(ZLinkLocationWriteResult.ignoredStale());
                         })
                 .thenCompose(stage -> stage);
     }
