@@ -442,9 +442,9 @@ Actor handler가 `JoinSpot(...)` 또는 `JoinEntrySpot(...)`을 호출한 뒤 �
    수신 상한을 함께 싣는다 — 이 값은 재계산에도 낮아지지 않는 안정 하한 기반의 보수값이다.
    `Accepted`이면 계속하고, `Rejected`이면 target이 같은 처리 안에서 등록한 temporary
    queue와 준비한 factory 자원을 제거하며 source membership을 유지한 채 끝낸다. Target이
-   Entry Spot이면 `OnActorJoin`을 호출하지 않는다. Join 요청을 받은 node는 target Spot이
-   그 node에서 활성 상태일 때만 처리하며, 활성 상태가 아니면 Spot을 만들지 않고
-   [TargetNotFound](../00-foundation/02-glossary.ko.md#target-not-found)로 거절한다.
+   Entry Spot이면 `OnActorJoin`을 호출하지 않는다. Join 요청을 받은 node는 자기 node의 활성 target Spot
+   항목으로만 Join을 수락한다. 항목이 없거나 비활성 상태이면 Spot을 생성하지 않고
+   `Unavailable`로 거절한다.
 3. Framework가 relocation policy와 target capacity를 확인한다. 이동을 진행할 수 있으면
    source Actor의 새 message 처리를 잠시 막고, application state와 현재 Actor queue를
    capture해 source memory에 유지한다. Relocation payload는 저장소를 거치지 않고
