@@ -7,6 +7,7 @@ import {
   ZLinkFrameworkException
 } from '../../packages/framework/src/contracts/Errors/ZLinkFrameworkException';
 import { DefaultZLinkSpotManager } from '../../packages/framework/src/runtime/spots';
+import { wireReplyFailureException } from '../../packages/framework/src/runtime/framework-errors-internal';
 import {
   ZLinkFormalRemoteActorAdmissionRegistry,
   type ZLinkParkedActorArrival
@@ -45,6 +46,47 @@ const OBJECT_GENERATION = 5n;
 const MESH_NAME = 'mesh-a';
 const NODE_RID = 'target' as unknown as RoutingId;
 const SPOT_ID = 'spot-1' as unknown as RoutingId;
+
+test('canonical Join rejects missing and closing local targets as Unavailable', async () => {
+  for (const state of ['missing-user', 'missing-null', 'closing-user', 'missing-entry']) {
+    const replies: Array<{ terminal: number; code: number }> = [];
+    let dispatched = false;
+    const activation = {
+      domain: { kind: 'user' },
+      spotId: SPOT_ID,
+      serial: { executeLifecycleOperation: async (callback: () => Promise<void>) => callback() }
+    };
+    const manager = {
+      activations: { resolve: () => (state === 'closing-user' ? activation : undefined) },
+      async dispatchMeshActorJoinCore() {
+        dispatched = true;
+      },
+      options: { entryNodeRid: state === 'missing-entry' ? SPOT_ID : NODE_RID },
+      isSpotClosing: () => state === 'closing-user'
+    };
+    await DefaultZLinkSpotManager.prototype.dispatchMeshActorJoin.call(
+      manager as never,
+      MESH_NAME,
+      { spotId: state === 'missing-null' ? null : SPOT_ID } as never,
+      {
+        kindData: {
+          kind: 'actorControl',
+          currentActor: { actorId: ACTOR_ID },
+          canonicalActorJoin: { handoffId: state }
+        },
+        parts: [],
+        replyFailure(terminal: number, code: number) {
+          replies.push({ terminal, code });
+          return 0;
+        }
+      } as never
+    );
+    assert.deepEqual(replies, [{ terminal: 105, code: 13 }], state);
+    const failure = wireReplyFailureException(replies[0]!.terminal, replies[0]!.code, 'Actor Join');
+    assert.equal(failure.kind, ZLinkFrameworkErrorKind.Unavailable, state);
+    assert.equal(dispatched, false, state);
+  }
+});
 
 function fallbackRef(objectGeneration = OBJECT_GENERATION): ActorRef {
   return {
