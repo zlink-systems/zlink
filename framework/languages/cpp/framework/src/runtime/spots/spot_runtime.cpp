@@ -2990,6 +2990,7 @@ void spot_context_state_t::complete_relocation_ready (spot_relocation_ready_outc
         }
         return;
     }
+    (void) run_serial_sync ("relocation-ready-completed", complete);
 }
 
 void spot_context_state_t::drain_serial ()
