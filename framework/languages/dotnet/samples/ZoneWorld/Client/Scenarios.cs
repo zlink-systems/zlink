@@ -2043,13 +2043,19 @@ public static class Scenarios
                 await resetObserved;
             ZlinkStreamAssert.Ensure(!reset.Enabled, $"{nodeId} starts outside maintenance");
         }
-        await using var player = await GameClient.ConnectAsync(options, Unique("f4"), ct);
-        await player.JoinWorldAsync(ct);
-
-        var targetZone = ZoneIds.NorthEast;
-        var targetNodeId = observed
-            .Nodes.Single(node => node.Zones.Contains(targetZone, StringComparer.Ordinal))
-            .NodeId;
+        var targetNode = observed.Nodes.Single(node =>
+            !node.Zones.Contains(ZoneIds.NorthWest, StringComparer.Ordinal)
+        );
+        var targetZone = targetNode.Zones.First(zone =>
+            zone is ZoneIds.NorthEast or ZoneIds.SouthWest
+        );
+        var targetNodeId = targetNode.NodeId;
+        var (botSuffix, coordinate) = targetZone switch
+        {
+            ZoneIds.NorthEast => ("-x", (Func<PlayerView, int>)(bot => bot.X)),
+            ZoneIds.SouthWest => ("-y", bot => bot.Y),
+            _ => throw new InvalidOperationException("No adjacent cross-owner zone was found."),
+        };
 
         var enabledObserved = ops
             .Connector.WaitFor<NodeStatusNotify>()
@@ -2064,43 +2070,66 @@ public static class Scenarios
         await enabledObserved;
         try
         {
-            var boundary = (
-                await player
-                    .Connector.WaitFor<ZoneStateNotify>()
-                    .Where(message => FindAboutToCross(message.Payload) is not null)
-                    .Timeout(TimeSpan.FromSeconds(30))
-                    .Async(ct)
-            ).Payload;
-            var botAtBoundary =
-                FindAboutToCross(boundary)
-                ?? throw new ScenarioFailure("the boundary observation lost its bot");
+            // The player joins the unaffected north-west node after the destination node has
+            // reported maintenance. Its STREAM session starts when the bot observation starts.
+            await using var player = await GameClient.ConnectAsync(options, Unique("f4"), ct);
+            await player.JoinWorldAsync(ct);
 
-            // The next X step enters the maintained destination. A rejected entry reverses
-            // the direction, so the same bot must move away from the boundary afterwards.
-            var botId = botAtBoundary.PlayerId;
-            var peak = botAtBoundary.X;
+            var previousPosition = new Dictionary<string, int>(StringComparer.Ordinal);
+            long lastObservedTick = -1;
+            string? approachingBotId = null;
+            var peak = 0;
+            // A newer north-west snapshot must show a bot advancing to the cross-owner
+            // boundary and then moving back. Both observations use this one public wait.
+            await player
+                .Connector.WaitFor<ZoneStateNotify>()
+                .Where(message =>
+                {
+                    var state = message.Payload;
+                    if (state.ZoneId != ZoneIds.NorthWest || state.Tick <= lastObservedTick)
+                        return false;
+                    lastObservedTick = state.Tick;
 
-            // It is refused at the boundary and walks back the way it came.
-            var reversed = (
-                await player
-                    .Connector.WaitFor<ZoneStateNotify>()
-                    .Where(message =>
+                    if (approachingBotId is not null)
                     {
-                        var x = BotX(message.Payload, botId);
-                        if (x is null)
+                        var bot = state.Players.FirstOrDefault(bot =>
+                            bot.PlayerId == approachingBotId
+                        );
+                        if (bot is null)
                             return false;
-                        if (x > peak)
-                            peak = x.Value;
-                        return x < peak;
-                    })
-                    .Timeout(TimeSpan.FromSeconds(30))
-                    .Async(ct)
-            ).Payload;
+                        var position = coordinate(bot);
+                        if (position > peak)
+                            peak = position;
+                        return position < peak;
+                    }
 
-            ZlinkStreamAssert.Ensure(
-                BotX(reversed, botId) < peak,
-                "a bot refused entry to a node under maintenance turns around"
-            );
+                    foreach (var bot in state.Players)
+                    {
+                        if (
+                            !bot.IsBot
+                            || !bot.PlayerId.EndsWith(botSuffix, StringComparison.Ordinal)
+                            || bot.ZoneId != ZoneIds.NorthWest
+                        )
+                            continue;
+                        var position = coordinate(bot);
+                        var advancing =
+                            previousPosition.TryGetValue(bot.PlayerId, out var before)
+                            && position > before;
+                        previousPosition[bot.PlayerId] = position;
+                        if (
+                            advancing
+                            && position + ZoneWorldSpec.BotStep >= ZoneWorldSpec.ZoneSplit
+                        )
+                        {
+                            approachingBotId = bot.PlayerId;
+                            peak = position;
+                            break;
+                        }
+                    }
+                    return false;
+                })
+                .Timeout(TimeSpan.FromSeconds(30))
+                .Async(ct);
         }
         finally
         {
@@ -2116,20 +2145,6 @@ public static class Scenarios
                 await disabledObserved;
         }
     }
-
-    private static int? BotX(ZoneStateNotify state, string botId) =>
-        state.Players.FirstOrDefault(p => p.PlayerId == botId)?.X;
-
-    /// <summary>
-    /// A bot approaching the north-west zone's eastern boundary from the west.
-    /// </summary>
-    private static PlayerView? FindAboutToCross(ZoneStateNotify state) =>
-        state.Players.FirstOrDefault(p =>
-            p.IsBot
-            && p.PlayerId.EndsWith("-x", StringComparison.Ordinal)
-            && p.ZoneId == ZoneIds.NorthWest
-            && p.X + ZoneWorldSpec.BotStep >= ZoneWorldSpec.ZoneSplit
-        );
 
     private static string Unique(string prefix) => $"{prefix}-{Guid.NewGuid().ToString("n")[..6]}";
 }
