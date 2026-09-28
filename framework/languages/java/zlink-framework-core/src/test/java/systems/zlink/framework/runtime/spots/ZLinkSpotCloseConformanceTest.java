@@ -113,7 +113,7 @@ final class ZLinkSpotCloseConformanceTest {
     static final AtomicBoolean HOLD_JOIN_CALLBACK = new AtomicBoolean();
     static volatile CompletableFuture<Void> handlerBlock = CompletableFuture.completedFuture(null);
     static volatile CompletableFuture<Void> handlerEntered = new CompletableFuture<>();
-    static volatile CompletableFuture<Void> spotJoined = new CompletableFuture<>();
+    static volatile CompletableFuture<Void> joinCallbackEntered = new CompletableFuture<>();
     static volatile CompletableFuture<Void> joinCallbackRelease = new CompletableFuture<>();
     static volatile CompletableFuture<Void> joinCompleted = new CompletableFuture<>();
 
@@ -288,7 +288,7 @@ final class ZLinkSpotCloseConformanceTest {
             case "joinAcceptedThenManagerClose" -> {
                 HOLD_JOIN_CALLBACK.set(true);
                 scheduleJoin(runtime, spotId);
-                spotJoined.get(WAIT_SECONDS, TimeUnit.SECONDS);
+                joinCallbackEntered.get(WAIT_SECONDS, TimeUnit.SECONDS);
                 CompletableFuture<Boolean> close = closeStage(runtime, ref);
                 close.whenComplete((ignored, failure) -> EVENTS.add("closeCompleted"));
                 joinCallbackRelease.complete(null);
@@ -516,7 +516,7 @@ final class ZLinkSpotCloseConformanceTest {
         HOLD_JOIN_CALLBACK.set(false);
         handlerBlock = CompletableFuture.completedFuture(null);
         handlerEntered = new CompletableFuture<>();
-        spotJoined = new CompletableFuture<>();
+        joinCallbackEntered = new CompletableFuture<>();
         joinCallbackRelease = new CompletableFuture<>();
         joinCompleted = new CompletableFuture<>();
     }
@@ -706,16 +706,16 @@ final class ZLinkSpotCloseConformanceTest {
         @Override
         public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
                 String actorId, ZLinkMessage request) {
+            if (HOLD_JOIN_CALLBACK.compareAndSet(true, false)) {
+                joinCallbackEntered.complete(null);
+                return joinCallbackRelease.thenApply(ignored -> ZLinkSpotActorJoinResult.accept());
+            }
             return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
         }
 
         @Override
         public CompletionStage<Void> onJoinedActor(Player actor) {
             EVENTS.add("joinCompleted");
-            spotJoined.complete(null);
-            if (HOLD_JOIN_CALLBACK.compareAndSet(true, false)) {
-                return joinCallbackRelease;
-            }
             return CompletableFuture.completedFuture(null);
         }
 

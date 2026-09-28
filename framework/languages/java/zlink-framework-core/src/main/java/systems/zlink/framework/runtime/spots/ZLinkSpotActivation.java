@@ -491,15 +491,24 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
             var queuedOwnership = ownership;
             tail =
                     prior.thenCompose(
-                            ignored ->
-                                    host.runQueuedApplicationJob(
-                                            queuedOwnership,
-                                            () -> dispatchActorJoinAsync(request)));
+                                    ignored ->
+                                            context.enqueueLifecycle(
+                                                    () ->
+                                                            host.runQueuedApplicationJob(
+                                                                            queuedOwnership,
+                                                                            () ->
+                                                                                    dispatchActorJoinAsync(
+                                                                                            request))
+                                                                    .thenCompose(
+                                                                            membership ->
+                                                                                    membership)))
+                            .whenComplete((result, error) -> queuedOwnership.close());
         }
         return tail;
     }
 
-    private CompletionStage<Void> dispatchActorJoinAsync(ZLinkBackendActorJoinRequest request) {
+    private CompletionStage<CompletionStage<Void>> dispatchActorJoinAsync(
+            ZLinkBackendActorJoinRequest request) {
         Message payloadCopy = actorJoinPayload(request.parts());
         request.parts().forEach(Message::close);
         systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
@@ -513,10 +522,17 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                                 try (Message emptyReply = Message.from(new byte[0])) {
                                     backendSpot.replyActorJoin(request, 1, List.of(emptyReply));
                                 }
-                                return null;
+                                return CompletableFuture.<Void>completedFuture(null);
                             }
                             ZLinkSpotActorJoinResult effective =
                                     response == null ? ZLinkSpotActorJoinResult.reject() : response;
+                            boolean accepted = effective.accepted();
+                            CompletionStage<Void> membership =
+                                    accepted
+                                            ? host.actorAdmissions()
+                                                    .localJoinCompletion(
+                                                            request.targetActor().actorId())
+                                            : CompletableFuture.completedFuture(null);
                             Message reply =
                                     effective.reply() == null
                                             ? Message.from(new byte[0])
@@ -524,13 +540,12 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                                                     effective.reply(), host.serializerForSpot());
                             try {
                                 backendSpot.replyActorJoin(
-                                        request, effective.accepted() ? 0 : 1, List.of(reply));
+                                        request, accepted ? 0 : 1, List.of(reply));
                             } finally {
                                 reply.close();
                             }
-                            return null;
+                            return membership;
                         })
-                .thenApply(ignored -> (Void) null)
                 .whenComplete((ignored, error) -> payloadCopy.close());
     }
 
