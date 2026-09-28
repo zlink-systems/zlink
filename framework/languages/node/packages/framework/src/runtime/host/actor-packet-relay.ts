@@ -20,10 +20,7 @@ import {
   type ZLinkRemoteActorPacketTarget,
   type ZLinkRemoteBoundSessionTarget
 } from '../actors';
-import {
-  mergeRemoteBoundSessionTarget,
-  preferredRemoteBoundSessionTarget
-} from '../actors/actor-runtime-state';
+import { preferredRemoteBoundSessionTarget } from '../actors/actor-runtime-state';
 import type { DefaultZLinkActorManager } from '../actors';
 import {
   decodeRemoteActorSessionBinding,
@@ -322,19 +319,15 @@ export class ZLinkActorPacketRelay {
               })
             | undefined
         )?.bindingGeneration;
-        const refreshedTarget = mergeRemoteBoundSessionTarget(
+        state.installBoundSessionBinding(
           {
             ...target,
             sessionNodeRid,
             sessionRid,
             ...(bindingGeneration === undefined ? {} : { bindingGeneration })
           },
-          preferredRemoteBoundSessionTarget(
-            state.remoteBoundSessionTarget,
-            state.boundSessionTransferTarget
-          )
+          'remote'
         );
-        state.setRemoteBoundSessionTarget(refreshedTarget);
         return { ok: true, response: { acknowledged: true } };
       }
       if (frameHeader.name === ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET) {
@@ -342,7 +335,7 @@ export class ZLinkActorPacketRelay {
         this.options
           .actorManager()
           ?.getState(relay.actorId)
-          ?.setRemoteBoundSessionTarget(undefined);
+          ?.installBoundSessionBinding(undefined, 'remote');
         await this.notifyLocalActorDisconnectedById(relay.actorId);
         return {
           ok: true,
@@ -561,7 +554,24 @@ export class ZLinkActorPacketRelay {
     options?: { readonly waitForAcknowledgement?: boolean }
   ): Promise<void> {
     const target = this.targets.targetForActorRef(actor);
-    if (target === undefined) return;
+    if (target === undefined) {
+      if (this.targets.isLocalActorRef(actor)) {
+        const sessionTarget =
+          this.options.meshRouters.remoteBoundSessionTargetForSource(sessionNodeRid);
+        const bindingGeneration = (actor as ActorRef & { readonly bindingGeneration?: bigint })
+          .bindingGeneration;
+        if (sessionTarget !== undefined && bindingGeneration !== undefined) {
+          this.options
+            .actorManager()
+            ?.getState(actor.actorId)
+            ?.installBoundSessionBinding(
+              { ...sessionTarget, sessionNodeRid, sessionRid, bindingGeneration },
+              'transfer'
+            );
+        }
+      }
+      return;
+    }
     const header = encodeStreamHeader({
       kind: ZLinkStreamMessageKind.Send,
       codec: ZLinkStreamCodec.Json,
@@ -730,6 +740,7 @@ export class ZLinkActorPacketRelay {
         boundSessionTargetNodeRid: localNodeRid === undefined ? undefined : String(localNodeRid),
         boundSessionSpotId: localNodeRid === undefined ? undefined : String(localNodeRid),
         bindingActorRef: storedActorRef,
+        bindingGeneration: storedRoute?.bindingGeneration,
         header: messageToBytes(header),
         payload: messageToBytes(payload),
         returnResponse,

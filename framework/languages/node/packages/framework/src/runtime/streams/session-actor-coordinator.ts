@@ -354,7 +354,13 @@ export class ZLinkSessionActorCoordinator {
             true
           );
         }
-        route.actor.updateRef(normalizedActorRef);
+        route.actor.updateRef(
+          withBindingGeneration(
+            normalizedActorRef,
+            bindingGenerationOf(route.actor.ref),
+            route.actor.ref
+          )
+        );
         if (authorityFence !== undefined) {
           await this.routes.updateAuthorityFence(normalizedActorRef.actorId, authorityFence);
         }

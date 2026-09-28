@@ -25,6 +25,9 @@ const {
   ZLinkRemoteBoundSessionRelay
 } = require('../../packages/framework/dist/runtime/host/remote-bound-session-relay');
 const {
+  ZLinkActorTransferRuntime
+} = require('../../packages/framework/dist/runtime/host/actor-transfer-runtime');
+const {
   ZLinkBoundSessionRelay
 } = require('../../packages/framework/dist/runtime/host/bound-session-relay');
 const {
@@ -71,6 +74,14 @@ const {
   ServiceWireProtocolError
 } = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 const zlink = require('@zlink-systems/zlink');
+
+function setRemoteBoundSessionTarget(state, target) {
+  state.installBoundSessionBinding(target, 'remote');
+}
+
+function setBoundSessionTransferTarget(state, target) {
+  state.installBoundSessionBinding(target, 'transfer');
+}
 
 test('stream runtime is exported from framework root surface', () => {
   assert.equal(typeof framework.ZLinkStreamBindingRuntime, 'function');
@@ -1216,6 +1227,112 @@ test('remote actor session binding uses a non-correlated command over the actor 
   assert.equal(routed[0].request.boundSessionSpotId, 'session-node');
 });
 
+test('local Session binding installs the Actor transfer route before relocation', async () => {
+  const actorId = 'actor-local-session-transfer';
+  const state = new framework.ZLinkActorRuntimeState(actorId);
+  const relay = new ZLinkActorPacketRelay({
+    routeTransport: {},
+    streamBindingRuntime: () => ({}),
+    meshRouters: {
+      defaultSpotRouterChannelId: () => 'room.route',
+      defaultRouterChannelId: () => undefined,
+      remoteBoundSessionTargetForSource: (sourceNodeRid) => ({
+        routerChannelId: 'room.route',
+        targetNodeRid: sourceNodeRid,
+        spotId: sourceNodeRid
+      })
+    },
+    actorManager: () => ({ getState: () => state }),
+    spotManager: () => undefined,
+    spotNodeRuntime: () => ({
+      primaryMeshNode: { status: () => ({ routingId: 'local-node' }) }
+    }),
+    detachedTaskRunner: {},
+    errorSink: () => ({ reportRuntimeTaskException() {} })
+  });
+
+  await relay.confirmRemoteSessionBinding(
+    {
+      actorId,
+      nodeRid: 'local-node',
+      objectGeneration: 2n,
+      meshName: 'room.route',
+      bindingGeneration: 7n
+    },
+    'local-node',
+    'session-rid'
+  );
+
+  assert.equal(state.boundSessionTransferTarget.sessionRid, 'session-rid');
+  assert.equal(state.boundSessionTransferTarget.bindingGeneration, 7n);
+  assert.equal(state.boundSessionTransferTarget.routerChannelId, 'room.route');
+});
+
+test('remote Actor relay carries the current Session binding generation after aggregate route selection', async () => {
+  const actorId = 'actor-aggregate-route-generation';
+  const actorRef = {
+    actorId,
+    nodeRid: 'actor-node',
+    objectGeneration: 2n,
+    meshName: 'room.route'
+  };
+  const streamRuntime = {
+    captureBoundSessionResponseTarget: async () => undefined,
+    sessionRouteFence: async () => ({
+      actor: { ...actorRef, bindingGeneration: 7n },
+      sessionRid: 'session-rid',
+      bindingGeneration: 7n
+    })
+  };
+  registerActorSessionBindingRuntimeOwner(streamRuntime, {
+    committedRoute: async () => ({ actor: actorRef })
+  });
+  let submitted;
+  const relay = new ZLinkActorPacketRelay({
+    routeTransport: {
+      async sendToSpot(_target, request) { submitted = request; }
+    },
+    streamBindingRuntime: () => streamRuntime,
+    meshRouters: {
+      defaultSpotRouterChannelId: () => 'room.route',
+      defaultRouterChannelId: () => undefined
+    },
+    actorManager: () => ({
+      getState: () => ({
+        remoteActorPacketTarget: {
+          routerChannelId: 'room.route',
+          targetNodeRid: 'actor-node',
+          spotId: 'actor-node',
+          spotKind: framework.ZLinkSpotKind.User
+        }
+      })
+    }),
+    spotManager: () => undefined,
+    spotNodeRuntime: () => ({
+      primaryMeshNode: { status: () => ({ routingId: 'session-node' }) }
+    }),
+    detachedTaskRunner: {},
+    errorSink: () => ({ reportRuntimeTaskException() {} })
+  });
+  const payload = zlink.Message.from('payload');
+  try {
+    await relay.relayRemoteActorPacket(
+      { actorId, ref: actorRef },
+      {
+        kind: streamProtocol.ZLinkStreamMessageKind.Send,
+        codec: streamProtocol.ZLinkStreamCodec.Json,
+        flags: streamProtocol.ZLinkStreamHeaderFlags.None,
+        name: 'GameStateNotify',
+        metadata: { values: new Map() }
+      },
+      payload
+    );
+  } finally {
+    payload.close();
+  }
+  assert.equal(submitted.bindingGeneration, '7');
+});
+
 test('one-way remote actor session bind completes only after its route send is submitted', async () => {
   const actorRef = {
     nodeRid: 'actor-node',
@@ -1430,7 +1547,7 @@ test('remote actor session binding keeps its declared return route before peer d
       getState() {
         return {
           nativeActorRef: actorRef,
-          setRemoteBoundSessionTarget(value) { remoteTarget = value; }
+          installBoundSessionBinding(value) { remoteTarget = value; }
         };
       }
     }),
@@ -1518,6 +1635,25 @@ test('managed stream actor route commit rebinds the native gateway for a new own
     timeoutMs: 1234
   });
   assert.equal(socket.boundActorSends.length, 0);
+});
+
+test('same-node Actor route commit retains the Session owner binding generation', async () => {
+  const socket = new FakeStreamSocket();
+  const runtime = new framework.ZLinkStreamBindingRuntime();
+  const context = runtime.createSessionContext(new framework.ZLinkManagedStream(socket, 'backend-rid', 'public-session'));
+  const actorRef = { nodeRid: 'node-a', actorId: 'actor-same-node', generation: 1n, bindingGeneration: 7n };
+
+  await context.actors.bind(actorRef);
+  assert.equal((await runtime.sessionRouteFence(actorRef.actorId)).bindingGeneration, 7n);
+
+  await runtime.commitActorRoute({
+    nodeRid: actorRef.nodeRid,
+    actorId: actorRef.actorId,
+    generation: actorRef.generation,
+    bindingGeneration: 1n
+  });
+
+  assert.equal((await runtime.sessionRouteFence(actorRef.actorId)).bindingGeneration, 7n);
 });
 
 test('managed stream actor bind failure does not create stale local binding', async () => {
@@ -2197,7 +2333,7 @@ test('runtime host local spot join preserves routed Session target for stream-bo
   };
 
   await manager.getOrCreateWithNativeRef('actor-routed-local-join', 'player', actorRef);
-  manager.getState('actor-routed-local-join').setRemoteBoundSessionTarget(remoteTarget);
+  setRemoteBoundSessionTarget(manager.getState('actor-routed-local-join'), remoteTarget);
 
   await host.createSpotManagerOptions().actorTransferRuntime.getOrCreateRoutedActor(
     'actor-routed-local-join',
@@ -4589,7 +4725,7 @@ test('relocation target binding republish delivers the post-Join bound-session p
   targetState.setNativeActorRef({ nodeRid: 'target', actorId, generation: 5n });
   targetState.setLocationGeneration(12n);
   targetState.setOwnerLeaseGeneration(14n);
-  targetState.setBoundSessionTransferTarget({
+  setBoundSessionTransferTarget(targetState, {
     routerChannelId: 'session.route',
     targetNodeRid: 'session-owner',
     spotId: 'session-entry',
@@ -5912,7 +6048,7 @@ test('runtime host remote bound session target does not overwrite actor packet r
 
 test('actor state keeps opaque session binding coordinates across packet target refreshes', () => {
   const state = new framework.ZLinkActorRuntimeState('actor-session-coordinates');
-  state.setRemoteBoundSessionTarget({
+  setRemoteBoundSessionTarget(state, {
     routerChannelId: 'room.route',
     targetNodeRid: 'session-node',
     spotId: 'session-entry',
@@ -5920,7 +6056,7 @@ test('actor state keeps opaque session binding coordinates across packet target 
     sessionRid: zlink.RoutingId.fromHex('00000001')
   });
 
-  state.setRemoteBoundSessionTarget({
+  setRemoteBoundSessionTarget(state, {
     routerChannelId: 'room.route',
     targetNodeRid: 'session-node',
     spotId: 'session-entry'
@@ -5960,7 +6096,7 @@ test('Session binding refresh preserves the staged relocation fence for the same
   assert.equal(refreshed.bindingGeneration, 7n);
 
   const state = new framework.ZLinkActorRuntimeState('actor-session-transfer-refresh');
-  state.setBoundSessionTransferTarget({
+  setBoundSessionTransferTarget(state, {
     ...target,
     serviceWireRelocation: {
       relocation: { high: 21n, low: 22n },
@@ -5981,7 +6117,7 @@ test('Session binding refresh preserves the staged relocation fence for the same
       }
     }
   });
-  state.setBoundSessionTransferTarget({
+  setBoundSessionTransferTarget(state, {
     routerChannelId: 'room.route',
     targetNodeRid: zlink.RoutingId.from('session-node'),
     spotId: zlink.RoutingId.from('refreshed-session-entry'),
@@ -6001,7 +6137,7 @@ test('Session binding refresh preserves the staged relocation fence for the same
 
 test('Session binding refresh does not preserve the staged relocation fence when the Session identity changes (successor binding)', () => {
   const state = new framework.ZLinkActorRuntimeState('actor-session-successor-refresh');
-  state.setBoundSessionTransferTarget({
+  setBoundSessionTransferTarget(state, {
     routerChannelId: 'room.route',
     targetNodeRid: zlink.RoutingId.from('session-node'),
     spotId: zlink.RoutingId.from('session-entry'),
@@ -6033,7 +6169,7 @@ test('Session binding refresh does not preserve the staged relocation fence when
   // explicit sessionRid (spec 48 §125: reconnection creates a new Session
   // that never inherits the previous Session's binding). The previously
   // staged relocation fence must not carry forward onto it.
-  state.setBoundSessionTransferTarget({
+  setBoundSessionTransferTarget(state, {
     routerChannelId: 'room.route',
     targetNodeRid: zlink.RoutingId.from('session-node'),
     spotId: zlink.RoutingId.from('session-entry'),
@@ -6062,8 +6198,8 @@ test('authority-confirmed successor binding replaces every Actor route projectio
     bindingGeneration: 100n,
     relocationSealId: 'seal-predecessor'
   };
-  state.setRemoteBoundSessionTarget(predecessor);
-  state.setBoundSessionTransferTarget(predecessor);
+  setRemoteBoundSessionTarget(state, predecessor);
+  setBoundSessionTransferTarget(state, predecessor);
   state.setBoundSessionBindingGeneration(100n);
 
   assert.equal(state.installBoundSessionBinding({
@@ -6412,12 +6548,12 @@ test('target Actor materialization preserves only an exact bound-session relocat
     targetNodeRid: 'actor-target',
     spotId: 'room'
   });
-  state.setRemoteBoundSessionTarget({
+  setRemoteBoundSessionTarget(state, {
     routerChannelId: 'room.route',
     targetNodeRid: 'session-node',
     spotId: 'session-entry'
   });
-  state.setBoundSessionTransferTarget({
+  setBoundSessionTransferTarget(state, {
     routerChannelId: 'room.route',
     targetNodeRid: 'session-node',
     spotId: 'session-entry',
@@ -6440,13 +6576,53 @@ test('target Actor materialization preserves only an exact bound-session relocat
     targetNodeRid: 'actor-target',
     spotId: 'room'
   });
-  ordinary.setBoundSessionTransferTarget({
+  setBoundSessionTransferTarget(ordinary, {
     routerChannelId: 'room.route',
     targetNodeRid: 'session-node',
     spotId: 'session-entry'
   });
   ordinary.prepareForRemoteReentry();
   assert.equal(ordinary.boundSessionTransferTarget, undefined);
+});
+
+test('target materialization preserves a binding installed before Actor reentry without a transferred target', async () => {
+  const actorId = 'actor-binding-before-reentry';
+  const state = new framework.ZLinkActorRuntimeState(actorId);
+  const binding = {
+    routerChannelId: 'room.route',
+    targetNodeRid: zlink.RoutingId.from('session-node'),
+    spotId: zlink.RoutingId.from('session-entry'),
+    sessionNodeRid: zlink.RoutingId.from('session-node'),
+    sessionRid: zlink.RoutingId.fromHex('00000001'),
+    sessionOwnerNodeGeneration: 3n,
+    sessionOwnerId: 'session-owner',
+    sessionOwnerLeaseGeneration: 4n,
+    bindingGeneration: 7n
+  };
+  state.setRemoteActorPacketTarget({
+    routerChannelId: 'room.route',
+    targetNodeRid: zlink.RoutingId.from('actor-source'),
+    spotId: zlink.RoutingId.from('room')
+  });
+  assert.equal(state.installBoundSessionBinding(binding), true);
+  const actor = { context: { actorId } };
+  const actorRef = { nodeRid: zlink.RoutingId.from('actor-target'), actorId, generation: 2n };
+  const manager = {
+    async materializeTransferredActor() {
+      state.prepareForRemoteReentry();
+      return { actor, actorRef };
+    },
+    getState: () => state
+  };
+  const runtime = new ZLinkActorTransferRuntime({ actorManager: () => manager });
+
+  await runtime.materializeRoutedActor(
+    actorId, 'player', undefined, zlink.Message.from('transfer'), undefined, undefined
+  );
+
+  assert.equal(state.remoteActorPacketTarget, undefined);
+  assert.equal(state.boundSessionTransferTarget.sessionRid.toHex(), '00000001');
+  assert.equal(state.boundSessionTransferTarget.bindingGeneration, 7n);
 });
 
 test('formal transfer route remains preferred over a lightweight remote bind refresh', () => {
@@ -6474,7 +6650,7 @@ test('formal transfer route remains preferred over a lightweight remote bind ref
 
 test('actor state applies a later native binding generation to the transfer target', () => {
   const state = new framework.ZLinkActorRuntimeState('actor-session-generation');
-  state.setBoundSessionTransferTarget({
+  setBoundSessionTransferTarget(state, {
     routerChannelId: 'room.route',
     targetNodeRid: 'session-node',
     spotId: 'session-entry'
@@ -6486,9 +6662,49 @@ test('actor state applies a later native binding generation to the transfer targ
   assert.equal(state.boundSessionTransferTarget.bindingGeneration, 17n);
 });
 
+test('native Actor generation does not replace the confirmed Session owner binding generation', () => {
+  const state = new framework.ZLinkActorRuntimeState('actor-owner-binding-generation');
+  state.installBoundSessionBinding({
+    routerChannelId: 'room.route',
+    targetNodeRid: 'session-node',
+    spotId: 'session-node',
+    sessionNodeRid: 'session-node',
+    sessionRid: 'session-rid',
+    bindingGeneration: 1n,
+    relocationSealId: 'seal-owner',
+    serviceWireRelocation: {
+      relocation: { high: 1n, low: 2n },
+      coordinator: {
+        ownerId: 'actor-owner', leaseGeneration: 3n,
+        nodeRid: 'actor-node', nodeGeneration: 4n,
+        expectedAuthorityStoreVersion: 'version'
+      },
+      session: {
+        sessionOwnerNodeRid: 'session-node', sessionOwnerNodeGeneration: 5n,
+        sessionOwnerId: 'session-owner', sessionOwnerLeaseGeneration: 6n,
+        sessionRid: 'session-rid', bindingGeneration: 1n
+      }
+    }
+  }, 'transfer');
+
+  state.setBoundSessionBindingGeneration(5n);
+  state.installBoundSessionBinding({
+    routerChannelId: 'room.route',
+    targetNodeRid: 'session-node',
+    spotId: 'session-node',
+    sessionNodeRid: 'session-node',
+    sessionRid: 'session-rid',
+    bindingGeneration: 5n
+  }, 'remote');
+
+  assert.equal(state.boundSessionBindingGeneration, 5n);
+  assert.equal(state.boundSessionTransferTarget.bindingGeneration, 1n);
+  assert.equal(state.remoteBoundSessionTarget.bindingGeneration, 1n);
+});
+
 test('actor state does not regress a bound-session generation from a stale Core refresh', () => {
   const state = new framework.ZLinkActorRuntimeState('actor-session-generation-monotonic');
-  state.setRemoteBoundSessionTarget({
+  setRemoteBoundSessionTarget(state, {
     routerChannelId: 'room.route',
     targetNodeRid: 'session-node',
     spotId: 'session-entry',

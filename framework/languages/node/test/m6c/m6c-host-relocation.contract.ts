@@ -211,7 +211,7 @@ test('pre-cutover rollback restores the source queue and state before one-way Se
     get boundSessionTransferTarget() {
       return undefined;
     },
-    setRemoteBoundSessionTarget(value: typeof remoteTarget) {
+    installBoundSessionBinding(value: typeof remoteTarget) {
       remoteTarget = value;
     },
     beginMove() {
@@ -2233,14 +2233,9 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         setJoinedSpot(spotId: unknown) {
           this.spotId = spotId;
         },
-        setRemoteBoundSessionTarget(value: unknown) {
+        installBoundSessionBinding(value: unknown) {
           this.remoteBoundSessionTarget = value;
-        },
-        setBoundSessionTransferTarget(value: unknown) {
           this.boundSessionTransferTarget = value;
-        },
-        setBoundSessionBindingGeneration(value: bigint) {
-          this.bindingGeneration = value;
         }
       };
       return targetActor;

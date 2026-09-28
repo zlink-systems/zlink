@@ -14,6 +14,9 @@ const {
   ZLinkActorTransferRuntime
 } = require('../../packages/framework/dist/runtime/host/actor-transfer-runtime');
 const {
+  ZLinkNativeFallbackBoundSession
+} = require('../../packages/framework/dist/runtime/streams/native-fallback-bound-session');
+const {
   ZLinkEntryActorRuntimeService
 } = require('../../packages/framework/dist/runtime/host/entry-actor-runtime');
 const {
@@ -371,11 +374,11 @@ test('transferred actor materialization creates a fresh actor before restoring s
   assert.equal(String(result.actorRef.nodeRid), 'target-node');
   assert.deepEqual(lifecycle, ['factory']);
 
-  manager.getState('alice').setRemoteBoundSessionTarget({
+  manager.getState('alice').installBoundSessionBinding({
     routerChannelId: 'session-route',
     targetNodeRid: 'session-a',
     spotId: 'session-entry'
-  });
+  }, 'remote');
   await manager.rollbackTransferredActor(result.actor);
   assert.equal(manager.getState('alice'), undefined);
   assert.deepEqual(lifecycle, ['factory', 'destroy:alice:2', 'cleanup:alice']);
@@ -2768,10 +2771,111 @@ test('ordinary remote Session binding does not publish command 44 before relocat
   assert.equal(routeSubmissions, 0);
 });
 
+test('relocation seals a confirmed transfer-only Session target and routes target bound sends to its owner', async () => {
+  const actorId = 'actor-transfer-only';
+  const actor = { context: { actorId } };
+  const relocation = { high: 7n, low: 9n };
+  let transferTarget = {
+    routerChannelId: 'session.route',
+    targetNodeRid: rid('session-node'),
+    spotId: rid('session-entry'),
+    sessionNodeRid: rid('session-node'),
+    sessionRid: rid('session-rid'),
+    bindingGeneration: 11n
+  };
+  let remoteTarget;
+  const state = {
+    nativeActorRef: { nodeRid: rid('source-node'), actorId, generation: 9n },
+    locationGeneration: 3n,
+    ownerLeaseGeneration: 5n,
+    get remoteBoundSessionTarget() { return remoteTarget; },
+    get boundSessionTransferTarget() { return transferTarget; },
+    installBoundSessionBinding(value) { transferTarget = value; remoteTarget = value; },
+    beginMove() {},
+    endMove() {}
+  };
+  const seals = [];
+  const submissions = [];
+  const runtime = new ZLinkActorTransferRuntime({
+    routeTransport: {},
+    spotManager: () => undefined,
+    actorManager: () => ({ getState: () => state }),
+    primaryMeshNode: () => ({
+      status() { return { routingId: rid('source-node'), lifecycleGeneration: 2n }; }
+    }),
+    locationLifecycle: () => undefined,
+    actorHandoff: {
+      begin() {},
+      sealConnectionBoundIngress() {},
+      snapshot() { return []; }
+    },
+    actorTransferRegistry: {},
+    authorityStore: () => ({
+      async readAuthority() {
+        return {
+          kind: 'snapshot',
+          storeVersion: { value: 'authority-source-1' },
+          objectGeneration: 9n,
+          authorityOwnerGeneration: 3n,
+          ownerId: 'source-owner',
+          ownerLeaseGeneration: 5n,
+          allocation: { descriptor: { rid: rid('source-node') }, descriptorLifecycleGeneration: 2n }
+        };
+      }
+    }),
+    liveDescriptors: async () => [{
+      rid: rid('session-node'),
+      lifecycleGeneration: 4n,
+      ownerId: 'session-owner',
+      leaseGeneration: 8n
+    }],
+    sessionRelocationWire: () => ({
+      async requestSessionRelocationSeal(meshName, targetNodeRid, request) {
+        seals.push({ meshName, targetNodeRid, request });
+        return { relocation: request.relocation, coordinator: request.coordinator,
+          actor: request.actor, session: request.session };
+      }
+    }),
+    clearRemoteActorPacketTarget() {}
+  });
+
+  const prepared = await runtime.prepareMaintenanceSession(actor, state, undefined, false, relocation);
+  assert.equal(seals.length, 1);
+  assert.equal(seals[0].meshName, 'session.route');
+  assert.equal(String(seals[0].targetNodeRid), 'session-node');
+  assert.equal(prepared.target.relocationSealId, '7:9:actor-transfer-only:9:session-rid:11');
+  assert.deepEqual(prepared.target.serviceWireRelocation.session, seals[0].request.session);
+
+  const targetBoundSession = new ZLinkNativeFallbackBoundSession({
+    runtime: {
+      async submitLocalBoundSession() { return { status: 'targetNotFound' }; }
+    },
+    routedTransport: {
+      async submitInfrastructure(meshName, targetNodeRid, packetName, payload) {
+        submissions.push({ meshName, targetNodeRid, packetName, payload });
+        return { status: 'submitted' };
+      }
+    },
+    actorRefProvider: () => undefined,
+    nativeActorNodeProvider: () => undefined,
+    localActorProvider: () => true,
+    remoteBoundSessionTargetProvider: () => prepared.target,
+    remoteActorPacketTargetProvider: () => undefined,
+    actorId,
+    reportError: () => undefined
+  });
+  await targetBoundSession.send({ roomId: 'room' }).packetName('JoinGameNotify').submit();
+  assert.equal(submissions.length, 1);
+  assert.equal(submissions[0].meshName, 'session.route');
+  assert.equal(submissions[0].targetNodeRid, 'session-node');
+  assert.ok(submissions[0].payload);
+});
+
 test('source command 42 seal captures the exact fence and rollback submits one-way command 44 abort', async () => {
   const actor = { context: { actorId: 'actor-seal' } };
   let moving = false;
-  let remoteTarget = {
+  let remoteTarget;
+  let transferTarget = {
     routerChannelId: 'session.route',
     targetNodeRid: rid('session-node'),
     spotId: 'session-entry',
@@ -2785,7 +2889,8 @@ test('source command 42 seal captures the exact fence and rollback submits one-w
     locationGeneration: 3n,
     ownerLeaseGeneration: 5n,
     get remoteBoundSessionTarget() { return remoteTarget; },
-    setRemoteBoundSessionTarget(value) { remoteTarget = value; },
+    get boundSessionTransferTarget() { return transferTarget; },
+    installBoundSessionBinding(value) { transferTarget = value; remoteTarget = value; },
     beginMove() { assert.equal(moving, false); moving = true; },
     endMove() { moving = false; }
   };
@@ -3045,7 +3150,7 @@ test('precommit abort reopens source admission and replays backlog before one-wa
     locationGeneration: 3n,
     ownerLeaseGeneration: 5n,
     get remoteBoundSessionTarget() { return remoteTarget; },
-    setRemoteBoundSessionTarget(value) { remoteTarget = value; },
+    installBoundSessionBinding(value) { remoteTarget = value; },
     beginMove() { moving = true; },
     endMove() { moving = false; }
   };

@@ -24,7 +24,6 @@ import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkBackendActorRef, ZLinkBackendMeshNode } from '../backend';
 import {
   toFrameworkActorRef,
-  mergeRemoteBoundSessionTarget,
   preferredRemoteBoundSessionTarget,
   type ZLinkActorHandoffCoordinator,
   type ZLinkActorHandoffPrefixAdmission,
@@ -551,10 +550,15 @@ export class ZLinkActorTransferRuntime {
     let sourceLeaveStarted = false;
     let sealId: string | undefined;
     try {
-      if (state.remoteBoundSessionTarget !== undefined) {
+      if (
+        preferredRemoteBoundSessionTarget(
+          state.remoteBoundSessionTarget,
+          state.boundSessionTransferTarget
+        ) !== undefined
+      ) {
         sealId = randomUUID();
         const sealedTarget = await this.sealBoundSessionRoute(actor, state, signal, relocation);
-        state.setRemoteBoundSessionTarget(sealedTarget);
+        state.installBoundSessionBinding(sealedTarget, 'transfer');
         this.options.actorHandoff.sealConnectionBoundIngress(actor.context.actorId);
       }
       const transfer = await this.options.actorTransferRegistry.transferOut(
@@ -751,10 +755,16 @@ export class ZLinkActorTransferRuntime {
     });
     let sealId: string | undefined;
     try {
-      if (state.remoteBoundSessionTarget !== undefined) {
+      if (
+        preferredRemoteBoundSessionTarget(
+          state.remoteBoundSessionTarget,
+          state.boundSessionTransferTarget
+        ) !== undefined
+      ) {
         sealId = randomUUID();
-        state.setRemoteBoundSessionTarget(
-          await this.sealBoundSessionRoute(actor, state, signal, relocation)
+        state.installBoundSessionBinding(
+          await this.sealBoundSessionRoute(actor, state, signal, relocation),
+          'transfer'
         );
         this.options.actorHandoff.sealConnectionBoundIngress(actor.context.actorId);
       }
@@ -762,7 +772,10 @@ export class ZLinkActorTransferRuntime {
       let terminal: 'prepared' | 'committed' | 'rolledBack' = 'prepared';
       let replayResults: readonly import('../actors').ZLinkActorHandoffResult[] = [];
       return {
-        target: state.remoteBoundSessionTarget,
+        target: preferredRemoteBoundSessionTarget(
+          state.remoteBoundSessionTarget,
+          state.boundSessionTransferTarget
+        ),
         handoffBacklog,
         takeRelocationRelay: () =>
           this.options.actorHandoff.takeRelocationRelay(actor.context.actorId),
@@ -927,7 +940,10 @@ export class ZLinkActorTransferRuntime {
     signal?: AbortSignal,
     relocation?: ServiceWireOperationId
   ): Promise<ZLinkRemoteBoundSessionTarget> {
-    const target = state.remoteBoundSessionTarget;
+    const target = preferredRemoteBoundSessionTarget(
+      state.remoteBoundSessionTarget,
+      state.boundSessionTransferTarget
+    );
     const actorRef = state.nativeActorRef;
     if (
       target === undefined ||
@@ -1204,7 +1220,7 @@ export class ZLinkActorTransferRuntime {
     }
     if (actorRef !== undefined) {
       state.setNativeActorRef(actorRef as unknown as ZLinkBackendActorRef);
-      state.setRemoteBoundSessionTarget(remoteBoundSessionTarget);
+      state.installBoundSessionBinding(remoteBoundSessionTarget, 'remote');
       return { actor, actorRef: actorRef as unknown as ZLinkBackendActorRef };
     }
     return { actor, actorRef: state.ensureNativeActorRef(this.options.primaryMeshNode()) };
@@ -1234,15 +1250,7 @@ export class ZLinkActorTransferRuntime {
       throw new Error(`Actor '${actorId}' transfer state was not created.`);
     }
     if (actorEntryNodeRid !== undefined) state.setEntryNodeRid(actorEntryNodeRid);
-    state.setBoundSessionTransferTarget(remoteBoundSessionTarget);
-    if (remoteBoundSessionTarget !== undefined) {
-      state.setRemoteBoundSessionTarget(
-        mergeRemoteBoundSessionTarget(remoteBoundSessionTarget, state.remoteBoundSessionTarget)
-      );
-    }
-    if (remoteBoundSessionTarget?.bindingGeneration !== undefined) {
-      state.setBoundSessionBindingGeneration(remoteBoundSessionTarget.bindingGeneration);
-    }
+    state.installBoundSessionBinding(remoteBoundSessionTarget, 'transfer');
     return {
       actor: materialized.actor,
       actorRef: materialized.actorRef as unknown as ZLinkBackendActorRef
@@ -1428,13 +1436,7 @@ export class ZLinkActorTransferRuntime {
     if (state === undefined) {
       return;
     }
-    state.setBoundSessionTransferTarget(target);
-    state.setRemoteBoundSessionTarget(
-      mergeRemoteBoundSessionTarget(target, state.remoteBoundSessionTarget)
-    );
-    if (target.bindingGeneration !== undefined) {
-      state.setBoundSessionBindingGeneration(target.bindingGeneration);
-    }
+    state.installBoundSessionBinding(target, 'transfer');
   }
 
   commitRoutedActor(actor: ZLinkActor, spotId: RoutingId, spot: ZLinkSpot): void {

@@ -588,7 +588,7 @@ test('runtime host normalizes remote actor join bound-session route ids', async 
       assert.equal(actorId, 'player-1');
       return {
         setNativeActorRef() {},
-        setRemoteBoundSessionTarget(target) {
+        installBoundSessionBinding(target) {
           capturedTarget = target;
         },
         setJoinedSpot() {}

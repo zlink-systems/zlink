@@ -155,8 +155,7 @@ export class ZLinkRemoteActorPacketTargetStore {
 
   targetForActorRef(actorRef: ActorRef): ZLinkRemoteActorPacketTarget | undefined {
     const targetNodeRid = actorRef.nodeRid as RoutingId;
-    const localNodeRid = this.options.primaryNodeRid();
-    if (localNodeRid !== undefined && routingIdsEqual(localNodeRid, targetNodeRid)) {
+    if (this.isLocalActorRef(actorRef)) {
       return undefined;
     }
     const meshName = actorRef.meshName;
@@ -174,6 +173,11 @@ export class ZLinkRemoteActorPacketTargetStore {
       spotId: targetNodeRid,
       spotKind: ZLinkSpotKind.Entry
     };
+  }
+
+  isLocalActorRef(actorRef: ActorRef): boolean {
+    const localNodeRid = this.options.primaryNodeRid();
+    return localNodeRid !== undefined && routingIdsEqual(localNodeRid, actorRef.nodeRid);
   }
 
   tenureKeyForActor(actor: ZLinkSessionActor): string {

@@ -212,7 +212,7 @@ function receiverFor(options: {
     remoteBoundSessionTarget: undefined,
     boundSessionTransferTarget: undefined,
     setNativeActorRef: () => undefined,
-    setRemoteBoundSessionTarget: () => undefined,
+    installBoundSessionBinding: () => undefined,
     setJoinedSpot: () => undefined,
     clearJoinedSpot: () => undefined
   };

@@ -4600,11 +4600,7 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
     if (hidden.actor === undefined || payload.byteLength === 0) return;
     const target = decodeActorSession(payload);
     const state = this.requireActorManager().getState(hidden.actor.context.actorId)!;
-    state.setRemoteBoundSessionTarget(target);
-    state.setBoundSessionTransferTarget(target);
-    if (target.bindingGeneration !== undefined) {
-      state.setBoundSessionBindingGeneration(target.bindingGeneration);
-    }
+    state.installBoundSessionBinding(target, 'transfer');
   }
 
   async replayQueuedMessage(

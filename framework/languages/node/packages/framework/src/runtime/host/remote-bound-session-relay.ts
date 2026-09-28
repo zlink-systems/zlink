@@ -596,7 +596,7 @@ export class ZLinkRemoteBoundSessionRelay {
     actorId: string,
     target: ZLinkRemoteBoundSessionTarget | undefined
   ): void {
-    this.options.actorManager()?.getState(actorId)?.setRemoteBoundSessionTarget(target);
+    this.options.actorManager()?.getState(actorId)?.installBoundSessionBinding(target, 'remote');
   }
 
   resolveRemoteBoundSessionTarget(

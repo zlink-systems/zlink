@@ -115,7 +115,7 @@ async function startTarget() {
     remoteBoundSessionTarget: remoteTarget,
     beginMove() { this.moving = true; },
     endMove() { this.moving = false; },
-    setRemoteBoundSessionTarget(value) { this.remoteBoundSessionTarget = value; }
+    installBoundSessionBinding(value) { this.boundSessionTransferTarget = value; }
   };
   authority = authoritySnapshot('source', 2n, 'source-owner', 13n, 11n, 'store-v17');
   const sessionRelocationWire = {
