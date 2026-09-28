@@ -22,7 +22,7 @@ public final class OrderWorkflowSpot implements ZLinkInstanceSpot {
     // --8<-- [start:doc-sm-close-terminal]
     public CompletionStage<Void> closeIfTerminal(Messages.OrderState state) {
         if (isTerminal(state)) {
-            return context.close().thenApply(closed -> null);
+            context.close();
         }
         return CompletableFuture.completedFuture(null);
     }

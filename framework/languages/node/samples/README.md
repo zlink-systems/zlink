@@ -33,10 +33,11 @@ Bash blocks run on Linux, macOS, and WSL; PowerShell blocks run on Windows Power
 - **Docker Desktop (or Docker Engine) running.** Nothing else. Each sample runner creates its own
   Redis container (`redis:7.2-alpine`) and removes it when it exits, so you never install or start
   Redis yourself.
-- **Samples that need Chromium install Playwright inside their own directory.** All six samples
+- **Standalone samples that need Chromium install Playwright inside their own directory.** All six samples
   except `ShoppingMall.Ts` (including `ZoneWorld`) run their client in a real Chromium — see the
   "Client runtime" column above. After `npm install`, run `npm run browser:install` once in that
-  sample's directory. `ShoppingMall.Ts` uses a plain Node.js HTTP client, so it never needs this.
+  sample's directory. In the repository, use the workspace command below instead. `ShoppingMall.Ts`
+  uses a plain Node.js HTTP client, so it never needs this.
 
 ## Download and install
 
@@ -66,17 +67,37 @@ Repeat with the other sample names in place of `Bingo.Ts` (`DeliveryDispatch.Ts`
 plan to check is fine.
 
 Inside the repository, sharing the Node framework workspace, you can prepare everything at once
-from the workspace root instead.
+from the workspace root instead. Build the local binding and HTTP client packages before `npm ci`:
+the workspace depends on a tarball under `.artifacts/node-install/npm/`. Then build the framework
+so the samples can link its `dist` output. Do not run `npm install` in individual sample directories.
 
-```bash
+**Linux · WSL — bash (from the repository root)**
+
+```bash title="linux"
+scripts/local-package/build-wsl.sh node
+scripts/local-package/http-client/build-wsl.sh node
 cd framework/languages/node
+npm ci
+npm run build
+npm run browser:install
+```
+
+**Windows — PowerShell 7 (from the repository root)**
+
+```powershell title="windows"
+$prefix = & .\scripts\local-package\core\fetch-release.ps1
+.\scripts\local-package\node\build-windows.ps1 -CorePrefix $prefix
+.\framework\languages\node\build-windows.ps1 -SkipSamples
+Set-Location framework/languages/node
 npm ci
 npm run browser:install
 ```
 
+The Windows framework build creates the local HTTP client tarball and framework `dist` output.
+
 ## Build
 
-There is no separate build step. Each sample's `npm run sample` (which `run_sample.*` calls)
+There is no separate sample build step after installation. Each sample's `npm run sample` (which `run_sample.*` calls)
 runs `npm run build` automatically before it runs. To pre-build several samples at once on
 Windows, use `build_samples.ps1`.
 

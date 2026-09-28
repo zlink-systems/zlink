@@ -26,17 +26,14 @@ function fixture(request) {
   });
   const target = descriptor('target-node');
   const incoming = [];
-  const events = [];
+  const routes = new Map();
+  let nextRouteGeneration = 1n;
   const attempts = [];
   const router = {
     setRoutingId() {}, setReceiveFlowState() {}, bind() {}, connectToRoutingId() {}, connect() {},
     disconnect() {}, disconnectRid() {}, close() {}, localEndpoint: () => 'inproc://source-node',
     receive: () => incoming.shift(), send: async () => {},
-    monitor: () => ({ statusReady: () => true, close() {}, drain(handler) {
-      const batch = events.splice(0);
-      for (const event of batch) handler(event);
-      return batch.length;
-    } }),
+    routesSnapshot: () => [...routes].map(([routingId, routeGeneration]) => ({ routingId, routeGeneration })),
     request: async (rid, parts, timeoutMs) => {
       const record = parts[0][3] === 28 ? decodeActorJoin28(parts) : wire.decodeStatefulHeader(parts[0]);
       const attempt = { rid, parts, timeoutMs, record };
@@ -62,20 +59,19 @@ function fixture(request) {
     authorityOwnerGeneration: 5n, targetNodeRid: 'target-node', targetNodeGeneration: 7n,
     targetOwnerId: 'target-owner', targetOwnerLeaseGeneration: 7n, pendingCapacityDelta: 1
   };
-  const monitor = event => ({ event, value: 1n, flags: 1, routingId: 'target-node', connectionId: 1n,
-    localAddress: 'inproc://source-node', remoteAddress: target.advertisedEndpoint });
   return {
     raw, runtime, attempts, target,
     async admit() {
-      events.push(monitor(0x1000));
-      await raw.drainMonitorEvents();
-      incoming.push({ sourceRid: target.nodeRoutingId,
+      const routeGeneration = nextRouteGeneration++;
+      routes.set(target.nodeRoutingId, routeGeneration);
+      await raw.observeSelectedRoutes();
+      incoming.push({ sourceRid: target.nodeRoutingId, routeGeneration,
         parts: [meshWire.encodeRouteMeshAdmission(meshWire.M6aServiceWireCommand.hello, target)], close() {} });
       assert.equal(await raw.pumpOne(), 'infrastructure');
     },
     async disconnectTransport() {
-      events.push(monitor(0x0200));
-      await raw.drainMonitorEvents();
+      routes.delete(target.nodeRoutingId);
+      await raw.observeSelectedRoutes();
       assert.equal(raw.topology.peer(target.nodeRoutingId), undefined);
     },
     start(kind, timeoutMs = 80) {

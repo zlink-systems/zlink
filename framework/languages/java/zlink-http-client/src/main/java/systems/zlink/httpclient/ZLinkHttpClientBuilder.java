@@ -152,7 +152,7 @@ public final class ZLinkHttpClientBuilder {
     }
 
     public ZLinkHttpServerClient buildServer(ZLinkHttpExecutionTurn executionTurn) {
-        return new ZLinkHttpServerClient(build(), executionTurn, Throwable::printStackTrace);
+        return new ZLinkHttpServerClient(build(), executionTurn);
     }
 
     public ZLinkHttpRequestBuilder get(String path) {

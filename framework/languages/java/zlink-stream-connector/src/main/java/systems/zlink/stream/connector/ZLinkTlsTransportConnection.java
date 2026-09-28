@@ -15,6 +15,7 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.codec.ByteToMessageDecoder;
+import io.netty.handler.codec.DecoderException;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslHandler;
@@ -175,11 +176,20 @@ final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnectio
         return current != null && current.isActive();
     }
 
+    /**
+     * Spec 32 7: closing the transport does not wait for the peer. {@code Channel.close()} would
+     * pass through the {@link SslHandler}, which queues close_notify behind the frames not yet
+     * flushed and keeps the socket open until the peer reads them or its flush timeout ends. The
+     * close starts at the SslHandler's own context instead, which hands it to the socket below that
+     * handler. A channel whose pipeline no longer has the handler is already closed.
+     */
     @Override
     public void close() {
         Channel current = channel;
-        if (current != null) {
-            current.close();
+        ChannelHandlerContext tls =
+                current == null ? null : current.pipeline().context(SslHandler.class);
+        if (tls != null) {
+            tls.close();
         }
         fail(new EOFException("tls transport closed"));
     }
@@ -259,7 +269,11 @@ final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnectio
 
         @Override
         public void exceptionCaught(ChannelHandlerContext context, Throwable cause) {
-            connection.fail(cause);
+            //  Netty wraps what the frame decoder threw; the read fails with that failure.
+            connection.fail(
+                    cause instanceof DecoderException && cause.getCause() != null
+                            ? cause.getCause()
+                            : cause);
             context.close();
         }
     }

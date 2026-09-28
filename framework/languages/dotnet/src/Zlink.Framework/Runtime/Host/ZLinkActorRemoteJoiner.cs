@@ -376,7 +376,16 @@ internal sealed class ZLinkActorRemoteJoiner(
         }
         catch (Exception transactionFailure)
         {
-            if (!targetAccepted)
+            //  An expired source lease settles the unit without a Preserve:
+            //  the source must not reopen it (relocation flow §4.4).
+            if (
+                !targetAccepted
+                && transactionFailure
+                    is not ZLinkActorRelocationFailureException
+                    {
+                        CommitKnowledge: ZLinkRelocationCommitKnowledge.Unknown,
+                    }
+            )
             {
                 try
                 {
@@ -1019,38 +1028,31 @@ internal sealed class ZLinkActorRemoteJoiner(
                         ZLinkCanonicalActorAcceptedJournal.Encode(accepted, actorRef)
                 )
                 .ToArray();
-            foreach (var encodedRecord in boundaryRecords)
-                await canonical
-                    .SendCanonicalRelocationDataAsync(
-                        targetNodeRid,
-                        new ZLinkServiceWireCodec.RelocationDataRecord(
-                            prepare.RelocationId,
-                            prepare.TargetAttemptGeneration,
-                            prepare.Coordinator,
-                            1,
-                            prepare.Object,
-                            new ZLinkServiceWireCodec.FrozenRecord(encodedRecord)
-                        ),
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-            await canonical
-                .SendCanonicalRelocationCutoverAsync(
-                    targetNodeRid,
-                    new ZLinkServiceWireCodec.RelocationCutoverRecord(
-                        prepare.RelocationId,
-                        prepare.TargetAttemptGeneration,
-                        prepare.Coordinator,
-                        1,
-                        prepare.Object,
-                        checked((ulong)boundaryRecords.Length),
-                        ZLinkRelocationBoundaryBatch.ComputeChecksum(boundaryRecords)
-                    ),
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            var published = await ZLinkStandaloneActorRelocationRuntime
-                .WaitForCommittedTargetAuthorityAsync(
+            var boundaryData = boundaryRecords
+                .Select(encodedRecord => new ZLinkServiceWireCodec.RelocationDataRecord(
+                    prepare.RelocationId,
+                    prepare.TargetAttemptGeneration,
+                    prepare.Coordinator,
+                    1,
+                    prepare.Object,
+                    new ZLinkServiceWireCodec.FrozenRecord(encodedRecord)
+                ))
+                .ToArray();
+            var cutover = new ZLinkServiceWireCodec.RelocationCutoverRecord(
+                prepare.RelocationId,
+                prepare.TargetAttemptGeneration,
+                prepare.Coordinator,
+                1,
+                prepare.Object,
+                checked((ulong)boundaryRecords.Length),
+                ZLinkRelocationBoundaryBatch.ComputeChecksum(boundaryRecords)
+            );
+            var sourceOwner = new ZLinkLocationOwnerToken(
+                sourceAuthoritySnapshot.OwnerId,
+                sourceAuthoritySnapshot.OwnerLeaseGeneration
+            );
+            var settlement = await ZLinkStandaloneActorRelocationRuntime
+                .SettleSourceAsync(
                     authorityStore,
                     authorityKey,
                     sourceAuthoritySnapshot,
@@ -1058,9 +1060,44 @@ internal sealed class ZLinkActorRemoteJoiner(
                     relocationId,
                     targetDescriptor,
                     prepare.TargetAttemptGeneration,
+                    deadline.Monotonic,
+                    () => runtime.LocationLifecycle?.IsOwnerLeaseValid(sourceOwner) == true,
+                    token =>
+                        ZLinkStandaloneActorRelocationRuntime.SubmitBoundaryAsync(
+                            canonical,
+                            targetNodeRid,
+                            boundaryData,
+                            cutover,
+                            token
+                        ),
+                    registration.Locations.Options.PollingInterval,
                     cancellationToken
                 )
                 .ConfigureAwait(false);
+            //  Relocation flow §4.4: a confirmed Preserve returns the retained
+            //  work to the source (the caller's rollback); an expired source
+            //  lease ends the unit without reopening its dispatch.
+            if (settlement.Outcome == ZLinkSourceSettlement.SourcePreserved)
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.DeadlineExceeded,
+                    $"Actor '{actor.Context.ActorId}' target commit was not confirmed before the Join deadline; the source Preserve fence won."
+                );
+            if (settlement.Outcome == ZLinkSourceSettlement.SourceLeaseExpired)
+            {
+                await runtime
+                    .FailStandaloneActorRelocationSourceAsync(actorState, actorRef)
+                    .ConfigureAwait(false);
+                throw new ZLinkActorRelocationFailureException(
+                    ZLinkFrameworkRelocationReason.RelocationFailed,
+                    ZLinkRelocationCommitKnowledge.Unknown,
+                    false,
+                    new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.Unavailable,
+                        $"Actor '{actor.Context.ActorId}' source owner lease expired before the Preserve fence."
+                    )
+                );
+            }
+            var published = settlement.Snapshot!;
             var resultActorRef = targetActor;
             setTargetAccepted(resultActorRef, admissionReplyMessage);
             if (resultActorRef.Generation != actorRef.Generation)

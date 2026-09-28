@@ -27,7 +27,7 @@ class RebuildOrderProjectionHandler implements ZLinkSpotRequestHandler<
       response.state.status === OrderStatuses.Confirmed ||
       response.state.status === OrderStatuses.Failed
     ) {
-      await spot.context.close();
+      void spot.context.close();
     }
     return response;
   }

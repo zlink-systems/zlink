@@ -120,7 +120,6 @@ assembly Systems.Zlink.Stream.Connector
     property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDispatchMode DispatchMode { get; init; } [nullability=read:not-null,write:not-null]
     property required System.Uri Endpoint { get; init; } [nullability=read:not-null,write:not-null]
     property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamHeartbeatOptions Heartbeat { get; init; } [nullability=read:not-null,write:not-null]
-    property System.Int32 MaxPendingDispatchCallbacks { get; init; } [nullability=read:not-null,write:not-null]
     property System.Int32 MaxReceivePayloadSize { get; init; } [nullability=read:not-null,write:not-null]
     property System.Int32 MaxSendPayloadSize { get; init; } [nullability=read:not-null,write:not-null]
     property Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamPacketNameResolver NameResolver { get; init; } [nullability=read:not-null,write:not-null]

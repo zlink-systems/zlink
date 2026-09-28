@@ -32,6 +32,11 @@ content-type은 startup에서 parameter가 없는 ASCII media type으로 정규�
 `runtime-state-v1.json`은 public 7-state 값, readiness authority, work admission과
 maintenance·discovery bounded context로 보내는 단방향 projection을 정의한다.
 
+`spot-close-v1.json`은 Spot Close의 공개 결과를 정의한다. 없는 incarnation, 다른 generation,
+Actor membership, Closing 확정 전 실패, `OnClosing` 실패 기록, 먼저 수락된 Join 뒤의 Close가
+대상이다. Context Close는 manager Close와 같은 완료 결과를 반환한다.
+네 언어의 unit test가 이 fixture를 읽고 scenario마다 실제 runtime 결과를 대조한다.
+
 `relocation-behavior-v1.json`은 Actor와 Spot relocation에서 application과 runtime port가
 관찰하는 lifecycle, traffic identity, terminal settlement를 정의한다. `actorJoin`,
 `actorHostHandoff`, `perActorUserSpot`, `spotWideUserSpot`, `instanceSpot` profile은 공통 사건을
@@ -45,6 +50,18 @@ Actor Join의 public terminal은 `publicJoinCompleted`, Host relocation terminal
 `relocationTerminalDelivered`, Session route terminal은 `sessionRouteTerminalDelivered`로 서로
 구분한다. Bound Session이 있는 profile만 optional route branch를 관찰하며, 이 branch가 없어도
 successful relocation의 공통 필수 사건을 생략할 수 없다.
+
+`route-mesh-placement-v1.json`은 한 host에 MeshNode 두 개를 두고 한쪽에만 object를 만들었을 때
+RouteMesh status가 MeshNode마다 보고하는 active Actor·Spot 수, `IsAvailable`과 topology state를
+정의한다. 개수는 status를 보고하는 MeshNode의 activation 기록에서 정하며 Location Store
+projection에서 가져오지 않는다. Scenario는 첫 번째·두 번째 MeshNode의 User Spot, Actor, 두 limit의
+소진과 startup 뒤 placement weight `0`을 다룬다.
+Actor 생성, User Spot 생성과 Instance Spot cold activation은 진행 중인 동안 activation admission
+하나를 차지하고, Actor Join과 Entry Spot은 차지하지 않는다. Relocation target의 Restore는 언어별
+focused test가 확인한다. Host 전체 drain 잔여 개수는 이 fixture의 대상이 아니다. 계약은
+[runtime monitoring §5](../../doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md)와
+[MeshNode §5.1](../../doc/framework/common/spec/server/03-spot-actor/03-mesh-node.ko.md#51-weight와-capacity)가
+소유한다.
 
 `bound-session-relocation-v1.json`은 공통 relocation 동작 중 bound Session seal, 보관한 traffic,
 Message Follow와 route convergence만 Actor capability로 projection한다. Wire command와 byte

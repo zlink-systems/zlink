@@ -34,6 +34,10 @@ final class ZLinkActorLocationCoordinator {
         this.resolvers = resolvers;
     }
 
+    boolean hasStoreResolver() {
+        return resolvers != null;
+    }
+
     void setSpotMeshResolver(Function<String, String> spotMeshResolver) {
         this.spotMeshResolver = spotMeshResolver == null ? ignored -> null : spotMeshResolver;
     }

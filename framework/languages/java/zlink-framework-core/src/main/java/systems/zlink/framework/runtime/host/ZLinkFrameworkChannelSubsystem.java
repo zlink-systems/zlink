@@ -15,24 +15,20 @@ import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDisp
 
 final class ZLinkFrameworkChannelSubsystem {
     private final ZLinkChannelRuntime channels;
-    private final ZLinkBackendContext backendContext;
 
-    private ZLinkFrameworkChannelSubsystem(
-            ZLinkChannelRuntime channels, ZLinkBackendContext backendContext) {
+    private ZLinkFrameworkChannelSubsystem(ZLinkChannelRuntime channels) {
         this.channels = channels;
-        this.backendContext = backendContext;
     }
 
     static ZLinkFrameworkChannelSubsystem create(
             DefaultZLinkFrameworkOptions options,
+            ZLinkChannelBackendAdapter channelBackend,
+            ZLinkBackendContext backendContext,
             ZLinkBackendAdapterProvider backendFactory,
             ZLinkBackendAdapterOptions adapterOptions,
             ZLinkMessageSerializer serializer,
             ZLinkHandlerActivator.MutableServices runtimeHandlers,
             ZLinkRuntimeEventDispatcher eventDispatcher) {
-        ZLinkChannelBackendAdapter channelBackend =
-                backendFactory.createChannelAdapter(adapterOptions);
-        ZLinkBackendContext backendContext = channelBackend.createContext();
         backendContext.configureCoreHwm(options.registration().inboundDispatch());
         ZLinkChannelRuntime channels =
                 new ZLinkChannelRuntime(
@@ -47,14 +43,10 @@ final class ZLinkFrameworkChannelSubsystem {
         runtimeHandlers.add(ZLinkClient.class, channels);
         runtimeHandlers.add(ZLinkFanoutClient.class, channels);
         runtimeHandlers.add(ZLinkRouteClient.class, channels);
-        return new ZLinkFrameworkChannelSubsystem(channels, backendContext);
+        return new ZLinkFrameworkChannelSubsystem(channels);
     }
 
     ZLinkChannelRuntime channels() {
         return channels;
-    }
-
-    ZLinkBackendContext backendContext() {
-        return backendContext;
     }
 }

@@ -1,27 +1,13 @@
 cmake_minimum_required(VERSION 3.20)
-project(zlink_framework_cpp VERSION 0.25.0 LANGUAGES C CXX)
+project(zlink_framework_cpp VERSION 0.26.0 LANGUAGES C CXX)
+set(ZLINK_FRAMEWORK_CPP_DIR "${CMAKE_CURRENT_LIST_DIR}")
+include("${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-project-defaults.cmake")
 
 # IDE project trees (Visual Studio, Xcode): group targets into solution
 # folders via the FOLDER target property instead of leaving them flat.
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
-option(ZLINK_FRAMEWORK_CPP_SHARED
-  "Build the distributable Framework C++ libraries as shared libraries" OFF)
-
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-  # Source builds retain their historical hidden-by-default executable policy.
-  # The prebuilt shared libraries deliberately keep Framework-owned symbols at
-  # default visibility; their ELF export surface is restricted per target below.
-  if(NOT ZLINK_FRAMEWORK_CPP_SHARED)
-    add_compile_options(
-      $<$<COMPILE_LANGUAGE:CXX>:-fvisibility=hidden>
-      $<$<COMPILE_LANGUAGE:CXX>:-fvisibility-inlines-hidden>)
-  else()
-    # Keep out-of-line Framework definitions default-visible for the shared
-    # package, but do not accidentally publish third-party header templates.
-    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fvisibility-inlines-hidden>)
-  endif()
-  add_compile_options($<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:GNU>>:-fno-gnu-unique>)
   if(UNIX AND NOT APPLE AND NOT ZLINK_FRAMEWORK_CPP_SHARED)
     add_link_options($<$<LINK_LANGUAGE:CXX>:-Wl,--exclude-libs,ALL>)
   endif()
@@ -32,13 +18,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   endif()
 endif()
 
-if(MSVC)
-  add_compile_definitions(NOMINMAX)
-  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/utf-8>)
-endif()
-
 include(GNUInstallDirs)
-include(FetchContent)
 include(CMakePackageConfigHelpers)
 find_package(Threads REQUIRED)
 
@@ -47,27 +27,17 @@ option(ZLINK_FRAMEWORK_CPP_BUILD_TESTS "Build C++ framework tests" ON)
 option(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS "Build isolated C++ service foundation tests" ON)
 option(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES "Build C++ framework samples (opt-in; samples/sample-build-common.sh enables it for each samples/<Sample>/run_sample.sh)" OFF)
 option(ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE "Build the C++ cross-language e2e host" ON)
-option(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK "Build and install C++ framework and HTTP client package artifacts" ON)
+option(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK "Install C++ framework and HTTP client package artifacts" ON)
 option(ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES
   "Stage Core and the C++ binding in a standalone Framework install" ON)
-if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
-  find_package(opentelemetry-cpp CONFIG REQUIRED COMPONENTS api)
-endif()
-option(ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT "Build Stream Connector e2e client helpers" ON)
-option(ZLINK_STREAM_CONNECTOR_BUILD_UNREAL "Build Unreal Stream Connector source adapter" ON)
-option(ZLINK_STREAM_CONNECTOR_BUILD_GODOT "Build Godot Stream Connector source adapter" ON)
-option(ZLINK_STREAM_CONNECTOR_BUILD_AXMOL "Build Axmol Stream Connector source adapter" ON)
 option(ZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4 "Enable C++ framework STREAM LZ4 compression" ON)
-option(ZLINK_STREAM_CONNECTOR_WITH_LZ4 "Enable Stream Connector LZ4 compression" ON)
-option(ZLINK_STREAM_CONNECTOR_WITH_TLS "Enable Stream Connector TLS transport" ON)
-option(ZLINK_STREAM_CONNECTOR_WITH_WEBSOCKET "Enable Stream Connector WebSocket transport" ON)
+find_package(opentelemetry-cpp CONFIG REQUIRED COMPONENTS api)
 option(ZLINK_FRAMEWORK_CPP_ENABLE_COVERAGE "Enable C++ framework gcov coverage instrumentation" OFF)
 option(ZLINK_FRAMEWORK_CPP_REQUIRE_HTTP_PERF_REPORT
   "Register the external HTTP performance comparison as a required CTest gate" OFF)
 set(ZLINK_FRAMEWORK_CPP_COVERAGE_THRESHOLD 80 CACHE STRING
   "Minimum C++ framework runtime line coverage percentage")
 
-set(ZLINK_FRAMEWORK_CPP_DIR "${CMAKE_CURRENT_LIST_DIR}")
 # framework/include headers include <zlink/json_profile.hpp>; every target built here sees it.
 include_directories(${ZLINK_FRAMEWORK_CPP_DIR}/common/include)
 set(ZLINK_FRAMEWORK_CPP_REPO_ROOT "${ZLINK_FRAMEWORK_CPP_DIR}/../../.." CACHE PATH
@@ -86,7 +56,6 @@ if(NOT EXISTS "${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp/service
 endif()
 option(ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST
   "Use packaged Boost instead of the repository's vendored Boost" ${_zlink_use_system_boost})
-list(APPEND CMAKE_MODULE_PATH "${ZLINK_FRAMEWORK_CPP_DIR}/cmake")
 set(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT "$ENV{ZLINK_LOCAL_PACKAGE_ROOT}" CACHE PATH
   "Root directory containing local package outputs")
 set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "1.10.0" CACHE STRING
@@ -121,7 +90,6 @@ set(ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX "${_zlink_default_cpp_prefix}" CA
   "Local zlink_cpp package install prefix (empty: wherever find_package locates it)")
 set(ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX "${_zlink_default_core_prefix}" CACHE PATH
   "Local zlink Core package install prefix used by zlink_cpp (empty: wherever find_package locates it)")
-if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
 if(NOT TARGET zlink::cpp)
   foreach(_zlink_prefix IN ITEMS
       "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}"
@@ -210,7 +178,6 @@ if(WIN32 AND EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}")
     VERBATIM)
 endif()
 
-endif()
 
 set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
   framework/src/runtime/backend/raw_dealer_port.cpp
@@ -263,16 +230,6 @@ function(zlink_framework_cpp_configure_msvc_target target_name)
   endif()
 endfunction()
 
-if(ZLINK_FRAMEWORK_CPP_SHARED)
-  set(ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE SHARED)
-  set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-else()
-  set(ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE STATIC)
-endif()
-if(ZLINK_FRAMEWORK_CPP_SHARED AND WIN32)
-  find_package(Python3 REQUIRED COMPONENTS Interpreter)
-  set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
-endif()
 if(ZLINK_FRAMEWORK_CPP_SHARED AND APPLE)
   # Xcode 16.4's libc++ keeps C++20 stop_token behind this switch. Apply it
   # before creating the object libraries and export it to archive consumers.
@@ -280,55 +237,8 @@ if(ZLINK_FRAMEWORK_CPP_SHARED AND APPLE)
   add_link_options(-fexperimental-library)
 endif()
 
-function(zlink_framework_cpp_configure_shared_library target_name)
-  if(NOT ZLINK_FRAMEWORK_CPP_SHARED)
-    return()
-  endif()
+include("${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-shared-library.cmake")
 
-  set_target_properties(${target_name} PROPERTIES
-    VERSION ${PROJECT_VERSION}
-    SOVERSION ${PROJECT_VERSION_MAJOR}
-    POSITION_INDEPENDENT_CODE ON
-    # Keep the linker input independent of its temporary build directory so
-    # GNU's content-derived build ID remains reproducible after installation.
-    BUILD_WITH_INSTALL_RPATH ON)
-  if(WIN32)
-    set_target_properties(${target_name} PROPERTIES
-      MSVC_RUNTIME_LIBRARY MultiThreadedDLL
-      CXX_LINKER_LAUNCHER
-        "${Python3_EXECUTABLE};${CMAKE_CURRENT_LIST_DIR}/cmake/filter-windows-exports.py")
-  elseif(UNIX AND NOT APPLE)
-    set_property(TARGET ${target_name} PROPERTY INSTALL_RPATH "$ORIGIN")
-    target_link_options(${target_name} PRIVATE
-      "-Wl,--exclude-libs,ALL"
-      "-Wl,--version-script=${CMAKE_CURRENT_LIST_DIR}/cmake/zlink-framework-shared-symbols.map")
-  elseif(APPLE)
-    set(_zlink_apple_exports
-      "${CMAKE_CURRENT_BINARY_DIR}/zlink-framework-exported-symbols.list")
-    get_property(_zlink_apple_exports_generated GLOBAL
-      PROPERTY ZLINK_FRAMEWORK_CPP_APPLE_EXPORTS_GENERATED)
-    if(NOT _zlink_apple_exports_generated)
-      file(REMOVE "${_zlink_apple_exports}")
-      file(STRINGS
-        "${CMAKE_CURRENT_LIST_DIR}/cmake/zlink-framework-shared-symbols.map"
-        _zlink_apple_export_lines REGEX "^# APPLE_EXPORT: ")
-      foreach(_zlink_apple_export_line IN LISTS _zlink_apple_export_lines)
-        string(REGEX REPLACE "^# APPLE_EXPORT: " ""
-          _zlink_apple_export "${_zlink_apple_export_line}")
-        file(APPEND "${_zlink_apple_exports}" "${_zlink_apple_export}\n")
-      endforeach()
-      set_property(GLOBAL PROPERTY
-        ZLINK_FRAMEWORK_CPP_APPLE_EXPORTS_GENERATED TRUE)
-    endif()
-    set_target_properties(${target_name} PROPERTIES
-      INSTALL_NAME_DIR "@loader_path"
-      INSTALL_RPATH "@loader_path")
-    target_link_options(${target_name} PRIVATE
-      "-Wl,-exported_symbols_list,${_zlink_apple_exports}")
-  endif()
-endfunction()
-
-if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
 add_library(zlink_framework_provider_abstractions ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   framework/src/runtime/dispatch/provider_task_context.cpp)
 add_library(zlink::framework_provider_abstractions ALIAS
@@ -473,51 +383,9 @@ endif()
 if(WIN32)
   target_link_libraries(zlink_framework PUBLIC bcrypt)
 endif()
-endif()
 
-set(ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR "" CACHE PATH
-  "Boost include directory used by the C++ framework and stream connector")
-if(NOT ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST AND NOT ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR
-    AND EXISTS "${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/core/external/boost/boost/asio.hpp")
-  set(ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR
-    "${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/core/external/boost" CACHE PATH
-    "Boost include directory used by the C++ framework and stream connector" FORCE)
-endif()
-if(ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST OR NOT ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR)
-  find_package(Boost REQUIRED)
-endif()
-function(zlink_framework_cpp_add_boost_headers target_name)
-  if(NOT ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST AND ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR)
-    # Keep the bundled Boost tree ahead of transitive package include paths. A
-    # framework target and the standalone HTTP client are linked into the same
-    # consumer; selecting different Asio headers in those targets is an ABI
-    # violation even though the headers are nominally header-only.
-    target_include_directories(${target_name} BEFORE PRIVATE
-      "${ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR}")
-  elseif(TARGET Boost::headers)
-    target_link_libraries(${target_name} PRIVATE Boost::headers)
-  elseif(Boost_FOUND AND Boost_INCLUDE_DIRS)
-    target_include_directories(${target_name} BEFORE PRIVATE ${Boost_INCLUDE_DIRS})
-  elseif(Boost_FOUND AND Boost_INCLUDE_DIR)
-    target_include_directories(${target_name} BEFORE PRIVATE ${Boost_INCLUDE_DIR})
-  else()
-    message(FATAL_ERROR
-      "Boost headers were not found. Install Boost, configure with vcpkg, "
-      "or make sure core/external/boost exists in the repository checkout.")
-  endif()
-endfunction()
+include("${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-boost.cmake")
 
-# Boost.Asio owns the socket implementation and keeps the runtime free of
-# platform-specific transport branches. Windows still requires the Winsock
-# libraries at final link time, including when a static connector is consumed
-# by an engine module.
-function(zlink_framework_cpp_add_asio_system_libraries target_name)
-  if(WIN32)
-    target_link_libraries(${target_name} PRIVATE ws2_32 mswsock)
-  endif()
-endfunction()
-
-if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
 zlink_framework_cpp_add_boost_headers(zlink_framework)
 # The M6 objects are linked into zlink_framework, so they must see the same
 # Boost headers as the rest of its translation units.
@@ -525,18 +393,8 @@ zlink_framework_cpp_add_boost_headers(zlink_framework_m6a_objects)
 zlink_framework_cpp_add_boost_headers(zlink_framework_m6b_objects)
 zlink_framework_cpp_add_boost_headers(zlink_framework_m6c_objects)
 zlink_framework_cpp_add_asio_system_libraries(zlink_framework)
-endif()
 
-find_package(nlohmann_json QUIET)
-if(NOT nlohmann_json_FOUND)
-  FetchContent_Declare(
-    nlohmann_json
-    URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
-  FetchContent_MakeAvailable(nlohmann_json)
-endif()
 find_package(OpenSSL QUIET)
-if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
 # These object libraries compile Framework headers before they are consumed by
 # zlink_framework, so they need the JSON include usage requirement directly.
 foreach(M6ObjectTarget IN ITEMS
@@ -553,9 +411,7 @@ if(OpenSSL_FOUND)
   target_link_libraries(zlink_framework PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 endif()
 
-endif()
 
-if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
 add_library(zlink_http_client ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   http-client/src/client.cpp
   http-client/src/runtime/compression.cpp
@@ -654,149 +510,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   endif()
 endif()
 
-endif()
 
-add_library(zlink_stream_connector ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
-  connector/core/src/runtime/calls/zlink_stream_calls.cpp
-  connector/core/src/runtime/connector_runtime.cpp
-  connector/core/src/runtime/protocol/compression/lz4_compression_codec.cpp
-  connector/core/src/runtime/protocol/framing/frame_codec.cpp
-  connector/core/src/runtime/protocol/framing.cpp
-  connector/core/src/runtime/protocol/header_codec.cpp
-  connector/core/src/runtime/protocol/metadata_codec.cpp
-  connector/core/src/runtime/protocol/packet_name_resolver.cpp
-  connector/core/src/runtime/transport/stream_connection.cpp
-  connector/core/src/runtime/transport/stream_transport_factory.cpp
-  connector/core/src/runtime/transport/websocket_connection.cpp)
-add_library(zlink::stream_connector ALIAS zlink_stream_connector)
-set_target_properties(zlink_stream_connector PROPERTIES
-  EXPORT_NAME stream_connector)
-zlink_framework_cpp_configure_shared_library(zlink_stream_connector)
-target_compile_features(zlink_stream_connector PUBLIC cxx_std_20)
-zlink_framework_cpp_configure_msvc_target(zlink_stream_connector)
-target_include_directories(zlink_stream_connector PUBLIC
-  $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/connector/core/include>
-  $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/common/include>
-  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-target_include_directories(zlink_stream_connector PRIVATE
-  ${ZLINK_FRAMEWORK_CPP_DIR}/connector/core/src)
-zlink_framework_cpp_add_boost_headers(zlink_stream_connector)
-zlink_framework_cpp_add_asio_system_libraries(zlink_stream_connector)
-target_link_libraries(zlink_stream_connector PRIVATE Threads::Threads nlohmann_json::nlohmann_json)
-if(ZLINK_STREAM_CONNECTOR_WITH_TLS AND OpenSSL_FOUND)
-  target_compile_definitions(zlink_stream_connector PRIVATE
-    ZLINK_STREAM_CONNECTOR_WITH_OPENSSL)
-  target_link_libraries(zlink_stream_connector PRIVATE
-    OpenSSL::SSL
-    OpenSSL::Crypto)
-  set(ZLINK_STREAM_CONNECTOR_EXPORT_OPENSSL_DEPENDENCY
-    "find_dependency(OpenSSL)")
-else()
-  set(ZLINK_STREAM_CONNECTOR_EXPORT_OPENSSL_DEPENDENCY "")
-endif()
-if(ZLINK_STREAM_CONNECTOR_WITH_WEBSOCKET)
-  target_compile_definitions(zlink_stream_connector PRIVATE
-    ZLINK_STREAM_CONNECTOR_WITH_WEBSOCKET)
-endif()
-if(ZLINK_STREAM_CONNECTOR_WITH_LZ4
-    OR (ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK AND ZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4))
+if(ZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4)
   find_package(lz4 REQUIRED)
-  if(ZLINK_STREAM_CONNECTOR_WITH_LZ4)
-    target_link_libraries(zlink_stream_connector PRIVATE lz4::lz4)
-    set(ZLINK_STREAM_CONNECTOR_EXPORT_LZ4_DEPENDENCY "find_dependency(lz4)")
-  endif()
-  if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK AND ZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4)
-    target_link_libraries(zlink_framework PRIVATE lz4::lz4)
-    set(ZLINK_FRAMEWORK_EXPORT_LZ4_DEPENDENCY "find_dependency(lz4)")
-  endif()
+  target_link_libraries(zlink_framework PRIVATE lz4::lz4)
+  set(ZLINK_FRAMEWORK_EXPORT_LZ4_DEPENDENCY "find_dependency(lz4)")
 endif()
-if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
-  target_compile_definitions(zlink_framework PRIVATE
-    $<$<BOOL:${ZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4}>:ZLINK_FRAMEWORK_STREAM_WITH_LZ4>)
-endif()
-target_compile_definitions(zlink_stream_connector PRIVATE
-  $<$<BOOL:${ZLINK_STREAM_CONNECTOR_WITH_LZ4}>:ZLINK_STREAM_CONNECTOR_WITH_LZ4>)
-
-add_library(zlink_stream_connector_codecs INTERFACE)
-add_library(zlink::stream_connector_codecs ALIAS zlink_stream_connector_codecs)
-set_target_properties(zlink_stream_connector_codecs PROPERTIES
-  EXPORT_NAME stream_connector_codecs)
-target_compile_features(zlink_stream_connector_codecs INTERFACE cxx_std_20)
-target_include_directories(zlink_stream_connector_codecs INTERFACE
-  $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/framework/include>
-  $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/common/include>
-  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-target_link_libraries(zlink_stream_connector_codecs INTERFACE
-  zlink::stream_connector
-  nlohmann_json::nlohmann_json)
-
-if(ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT)
-  add_library(zlink_stream_e2e_client INTERFACE)
-  add_library(zlink::stream_e2e_client ALIAS zlink_stream_e2e_client)
-  set_target_properties(zlink_stream_e2e_client PROPERTIES
-    EXPORT_NAME stream_e2e_client)
-  target_compile_features(zlink_stream_e2e_client INTERFACE cxx_std_20)
-  target_include_directories(zlink_stream_e2e_client INTERFACE
-    $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/connector/e2e-client/include>
-    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-  target_link_libraries(zlink_stream_e2e_client INTERFACE
-    zlink::stream_connector
-    zlink::stream_connector_codecs)
-endif()
-
-add_library(zlink_stream_connector_throwing INTERFACE)
-add_library(zlink::stream_connector_throwing ALIAS zlink_stream_connector_throwing)
-set_target_properties(zlink_stream_connector_throwing PROPERTIES
-  EXPORT_NAME stream_connector_throwing)
-target_compile_features(zlink_stream_connector_throwing INTERFACE cxx_std_20)
-target_include_directories(zlink_stream_connector_throwing INTERFACE
-  $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/connector/throwing-adapter/include>
-  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-target_link_libraries(zlink_stream_connector_throwing INTERFACE
-  zlink::stream_connector)
-
-if(ZLINK_STREAM_CONNECTOR_BUILD_UNREAL)
-  add_library(zlink_unreal_stream_connector STATIC
-    connector/engines/unreal/Source/ZLinkStreamConnector/Private/ZLinkStreamConnector.cpp)
-  set_target_properties(zlink_unreal_stream_connector PROPERTIES
-    EXPORT_NAME unreal_stream_connector)
-  target_compile_features(zlink_unreal_stream_connector PUBLIC cxx_std_20)
-  target_include_directories(zlink_unreal_stream_connector PUBLIC
-    $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/connector/engines/unreal/Source/ZLinkStreamConnector/Public>
-    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/ZLinkStreamConnector>)
-  target_link_libraries(zlink_unreal_stream_connector PRIVATE
-    zlink::stream_connector
-    zlink::stream_connector_codecs)
-  zlink_framework_cpp_add_asio_system_libraries(zlink_unreal_stream_connector)
-  if(ZLINK_STREAM_CONNECTOR_WITH_LZ4)
-    target_link_libraries(zlink_unreal_stream_connector PRIVATE lz4::lz4)
-  endif()
-  target_compile_definitions(zlink_unreal_stream_connector PRIVATE
-    $<$<BOOL:${ZLINK_STREAM_CONNECTOR_WITH_LZ4}>:ZLINK_UNREAL_STREAM_CONNECTOR_WITH_LZ4>)
-endif()
-
-if(ZLINK_STREAM_CONNECTOR_BUILD_GODOT)
-  add_library(zlink_godot_stream_connector STATIC
-    connector/engines/godot/src/zlink_godot_stream_connector.cpp)
-  target_compile_features(zlink_godot_stream_connector PUBLIC cxx_std_20)
-  target_include_directories(zlink_godot_stream_connector PUBLIC
-    $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/connector/engines/godot/include>)
-  target_link_libraries(zlink_godot_stream_connector
-    PUBLIC zlink::stream_connector
-    PRIVATE zlink::stream_connector_codecs)
-endif()
-
-if(ZLINK_STREAM_CONNECTOR_BUILD_AXMOL)
-  add_library(zlink_axmol_stream_connector STATIC
-    connector/engines/axmol/src/zlink_axmol_stream_connector.cpp)
-  target_compile_features(zlink_axmol_stream_connector PUBLIC cxx_std_20)
-  target_include_directories(zlink_axmol_stream_connector PUBLIC
-    $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/connector/engines/axmol/include>)
-  target_link_libraries(zlink_axmol_stream_connector
-    PUBLIC zlink::stream_connector
-    PRIVATE zlink::stream_connector_codecs)
-endif()
-
+target_compile_definitions(zlink_framework PRIVATE
+  $<$<BOOL:${ZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4}>:ZLINK_FRAMEWORK_STREAM_WITH_LZ4>)
+add_subdirectory(connector)
 function(zlink_enable_coverage target_name)
   if(ZLINK_FRAMEWORK_CPP_ENABLE_COVERAGE)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -809,10 +531,8 @@ function(zlink_enable_coverage target_name)
   endif()
 endfunction()
 
-if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
-  zlink_enable_coverage(zlink_framework)
-  zlink_enable_coverage(zlink_http_client)
-endif()
+zlink_enable_coverage(zlink_framework)
+zlink_enable_coverage(zlink_http_client)
 zlink_enable_coverage(zlink_stream_connector)
 if(TARGET zlink_unreal_stream_connector)
   zlink_enable_coverage(zlink_unreal_stream_connector)
@@ -824,7 +544,6 @@ if(TARGET zlink_axmol_stream_connector)
   zlink_enable_coverage(zlink_axmol_stream_connector)
 endif()
 
-if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
 function(add_zlink_framework_codec_extension target_name alias_name include_dir)
   add_library(${target_name} INTERFACE)
   add_library(${alias_name} ALIAS ${target_name})
@@ -936,7 +655,6 @@ elseif(TARGET libuv::uv)
     "find_dependency(libuv CONFIG)\n")
 endif()
 
-endif()
 
 set(ZLINK_FRAMEWORK_CPP_PACKAGE_DEPENDENCY_PREFIX_PATH
   ${CMAKE_PREFIX_PATH})
@@ -971,24 +689,6 @@ if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
     zlink_http_client
     EXPORT zlink_http_client_cppTargets
     COMPONENT HttpClient)
-endif()
-install(TARGETS
-  zlink_stream_connector
-  zlink_stream_connector_codecs
-  zlink_stream_connector_throwing
-  EXPORT zlink_stream_connector_cppTargets
-  COMPONENT StreamConnector)
-if(TARGET zlink_unreal_stream_connector)
-  install(TARGETS
-    zlink_unreal_stream_connector
-    EXPORT zlink_stream_connector_cppTargets
-    COMPONENT StreamConnector)
-endif()
-if(ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT)
-  install(TARGETS
-    zlink_stream_e2e_client
-    EXPORT zlink_stream_connector_cppTargets
-    COMPONENT StreamConnector)
 endif()
 if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK
     AND ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES
@@ -1088,8 +788,6 @@ if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     COMPONENT HttpClient
     FILES_MATCHING PATTERN "*.hpp")
-endif()
-if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
   install(DIRECTORY extensions/framework-codec-protobuf/include/
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     COMPONENT Framework
@@ -1102,41 +800,6 @@ if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     COMPONENT Framework
     FILES_MATCHING PATTERN "*.hpp")
-endif()
-install(DIRECTORY connector/core/include/
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-  COMPONENT StreamConnector
-  FILES_MATCHING PATTERN "*.hpp")
-install(DIRECTORY common/include/
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-  COMPONENT StreamConnector
-  FILES_MATCHING PATTERN "*.hpp")
-install(FILES
-  framework/include/zlink/framework/codecs/json_stream_connector.hpp
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/zlink/framework/codecs
-  COMPONENT StreamConnector)
-if(ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT)
-  install(FILES framework/include/zlink/framework/codecs/json_stream_e2e_client.hpp
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/zlink/framework/codecs
-    COMPONENT StreamConnector)
-endif()
-if(ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT)
-  install(DIRECTORY connector/e2e-client/include/
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-    COMPONENT StreamConnector
-    FILES_MATCHING PATTERN "*.hpp")
-endif()
-install(DIRECTORY connector/throwing-adapter/include/
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-  COMPONENT StreamConnector
-  FILES_MATCHING PATTERN "*.hpp")
-if(TARGET zlink_unreal_stream_connector)
-  install(DIRECTORY connector/engines/unreal/Source/ZLinkStreamConnector/Public/
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ZLinkStreamConnector
-    COMPONENT StreamConnector
-    FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp")
-endif()
-if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
   install(EXPORT zlink_framework_cppTargets
     NAMESPACE zlink::
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlink_framework_cpp
@@ -1156,14 +819,9 @@ if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlink_http_client_cpp
     COMPONENT HttpClient)
 endif()
-install(EXPORT zlink_stream_connector_cppTargets
-  NAMESPACE zlink::
-  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlink_stream_connector_cpp
-  COMPONENT StreamConnector)
 
 set(ZLINK_FRAMEWORK_CPP_CONFIG_IMPLEMENTATION_DEPENDENCIES "")
 set(ZLINK_HTTP_CLIENT_CONFIG_IMPLEMENTATION_DEPENDENCIES "")
-set(ZLINK_STREAM_CONNECTOR_CONFIG_IMPLEMENTATION_DEPENDENCIES "")
 set(ZLINK_FRAMEWORK_CONFIG_IMPLEMENTATION_DEPENDENCIES "")
 if(NOT ZLINK_FRAMEWORK_CPP_SHARED)
   string(CONCAT ZLINK_FRAMEWORK_CPP_CONFIG_IMPLEMENTATION_DEPENDENCIES
@@ -1183,36 +841,17 @@ if(NOT ZLINK_FRAMEWORK_CPP_SHARED)
   string(CONCAT ZLINK_HTTP_CLIENT_CONFIG_IMPLEMENTATION_DEPENDENCIES
     "find_dependency(Boost)\n"
     "${ZLINK_HTTP_CLIENT_EXPORT_OPENSSL_DEPENDENCY}")
-  string(CONCAT ZLINK_STREAM_CONNECTOR_CONFIG_IMPLEMENTATION_DEPENDENCIES
-    "find_dependency(Boost)\n"
-    "${ZLINK_STREAM_CONNECTOR_EXPORT_OPENSSL_DEPENDENCY}\n"
-    "set(_zlink_saved_module_path \"\${CMAKE_MODULE_PATH}\")\n"
-    "list(APPEND CMAKE_MODULE_PATH \"\${CMAKE_CURRENT_LIST_DIR}\")\n"
-    "${ZLINK_STREAM_CONNECTOR_EXPORT_LZ4_DEPENDENCY}\n"
-    "set(CMAKE_MODULE_PATH \"\${_zlink_saved_module_path}\")\n"
-    "unset(_zlink_saved_module_path)")
   string(CONCAT ZLINK_FRAMEWORK_CONFIG_IMPLEMENTATION_DEPENDENCIES
     "find_package(protobuf CONFIG QUIET)\n"
     "if(NOT protobuf_FOUND)\n"
     "  find_dependency(Protobuf)\n"
     "endif()\n"
     "find_dependency(Boost)")
-else()
-  set(ZLINK_STREAM_CONNECTOR_EXPORT_OPENSSL_DEPENDENCY "")
 endif()
-
-foreach(_package zlink_framework_cpp zlink_stream_connector_cpp)
-  if(_package STREQUAL "zlink_framework_cpp" AND NOT ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
-    continue()
-  endif()
-  if(_package STREQUAL "zlink_framework_cpp")
-    set(_component Framework)
-  else()
-    set(_component StreamConnector)
-  endif()
+if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
   install(FILES "${CMAKE_CURRENT_LIST_DIR}/cmake/Findlz4.cmake"
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${_package} COMPONENT ${_component})
-endforeach()
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlink_framework_cpp COMPONENT Framework)
+endif()
 
 configure_package_config_file(
   "${CMAKE_CURRENT_LIST_DIR}/cmake/zlink_framework_cppConfig.cmake.in"
@@ -1222,10 +861,6 @@ configure_package_config_file(
   "${CMAKE_CURRENT_LIST_DIR}/cmake/zlink_http_client_cppConfig.cmake.in"
   "${CMAKE_CURRENT_BINARY_DIR}/zlink_http_client_cppConfig.cmake"
   INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlink_http_client_cpp)
-configure_package_config_file(
-  "${CMAKE_CURRENT_LIST_DIR}/cmake/zlink_stream_connector_cppConfig.cmake.in"
-  "${CMAKE_CURRENT_BINARY_DIR}/zlink_stream_connector_cppConfig.cmake"
-  INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlink_stream_connector_cpp)
 if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
   install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/zlink_framework_cppConfig.cmake"
@@ -1236,10 +871,6 @@ if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlink_http_client_cpp
     COMPONENT HttpClient)
 endif()
-install(FILES
-  "${CMAKE_CURRENT_BINARY_DIR}/zlink_stream_connector_cppConfig.cmake"
-  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlink_stream_connector_cpp
-  COMPONENT StreamConnector)
 
 if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
   configure_package_config_file(
@@ -1613,6 +1244,38 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     COMMAND test_cpp_framework_m6c_runtime
     LABELS "framework-unit;framework-m6-runtime;maintenance;relocation;recovery;resource"
     TIMEOUT 30)
+
+  add_executable(test_cpp_framework_route_mesh_placement_conformance
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_route_mesh_placement_conformance.cpp)
+  target_compile_features(test_cpp_framework_route_mesh_placement_conformance PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_route_mesh_placement_conformance PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  target_compile_definitions(test_cpp_framework_route_mesh_placement_conformance PRIVATE
+    ZLINK_ROUTE_MESH_PLACEMENT_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/route-mesh-placement-v1.json")
+  target_link_libraries(test_cpp_framework_route_mesh_placement_conformance PRIVATE
+    zlink_framework
+    Threads::Threads
+    nlohmann_json::nlohmann_json)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_route_mesh_placement_conformance
+    COMMAND test_cpp_framework_route_mesh_placement_conformance
+    LABELS "framework-unit;framework-m6-runtime"
+    TIMEOUT 120)
+
+  add_executable(test_cpp_framework_activation_admission
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_activation_admission.cpp)
+  target_compile_features(test_cpp_framework_activation_admission PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_activation_admission PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_link_libraries(test_cpp_framework_activation_admission PRIVATE
+    zlink_framework
+    Threads::Threads)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_activation_admission
+    COMMAND test_cpp_framework_activation_admission
+    LABELS "framework-unit;framework-m6-runtime"
+    TIMEOUT 60)
 
   add_executable(test_cpp_framework_host_lifecycle
     tests/Zlink.Framework.UnitTests/test_cpp_framework_host_lifecycle.cpp)
@@ -2200,6 +1863,29 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIMEOUT 30
     PROPERTIES
       RESOURCE_LOCK zlink_cpp_heavy_runtime)
+  add_executable(test_cpp_framework_spot_close_conformance
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_close_conformance.cpp)
+  target_compile_features(test_cpp_framework_spot_close_conformance PRIVATE cxx_std_20)
+  target_link_zlink_test_harness(test_cpp_framework_spot_close_conformance)
+  target_use_zlink_gtest_main(test_cpp_framework_spot_close_conformance)
+  target_link_libraries(test_cpp_framework_spot_close_conformance PRIVATE
+    zlink::framework
+    GTest::gtest_main
+    nlohmann_json::nlohmann_json)
+  target_include_directories(test_cpp_framework_spot_close_conformance PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_compile_definitions(test_cpp_framework_spot_close_conformance PRIVATE
+    ZLINK_SPOT_CLOSE_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/spot-close-v1.json")
+  zlink_framework_cpp_enable_test_assertions(test_cpp_framework_spot_close_conformance)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_spot_close_conformance
+    COMMAND test_cpp_framework_spot_close_conformance
+    LABELS "framework-unit;framework-regression;spot"
+    TIMEOUT 120
+    PROPERTIES
+      RESOURCE_LOCK zlink_cpp_heavy_runtime)
   add_zlink_framework_test(
     test_cpp_framework_handler_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_handler_registry.cpp
@@ -2250,11 +1936,28 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_link_libraries(test_cpp_framework_channel_reply_admission PRIVATE
     GTest::gtest_main)
   add_zlink_framework_test(
+    test_cpp_framework_channel_core_admission
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_channel_core_admission.cpp
+    "framework-unit;framework-regression;channel;admission")
+  target_include_directories(test_cpp_framework_channel_core_admission PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_compile_definitions(test_cpp_framework_channel_core_admission PRIVATE
+    ZLINK_FRAMEWORK_CPP_SOURCE_DIR="${ZLINK_FRAMEWORK_CPP_DIR}")
+  target_link_libraries(test_cpp_framework_channel_core_admission PRIVATE
+    GTest::gtest_main)
+  add_zlink_framework_test(
     test_cpp_framework_route_mesh_weight_update
     tests/Zlink.Framework.UnitTests/test_cpp_framework_route_mesh_weight_update.cpp
     "framework-unit;framework-regression;channel;messaging")
   target_use_zlink_gtest_main(test_cpp_framework_route_mesh_weight_update)
   target_include_directories(test_cpp_framework_route_mesh_weight_update PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_mesh_selected_route
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_selected_route.cpp
+    "framework-unit;framework-regression;channel;topology;liveness")
+  target_use_zlink_gtest_main(test_cpp_framework_mesh_selected_route)
+  target_include_directories(test_cpp_framework_mesh_selected_route PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
     test_cpp_framework_application_job_queue

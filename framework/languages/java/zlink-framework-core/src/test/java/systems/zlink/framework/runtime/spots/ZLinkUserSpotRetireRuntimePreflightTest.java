@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
@@ -235,6 +236,35 @@ final class ZLinkUserSpotRetireRuntimePreflightTest {
         assertEquals(false, completion.toCompletableFuture().isDone());
 
         second.complete(null);
+        var failure =
+                assertThrows(
+                        CompletionException.class, () -> completion.toCompletableFuture().join());
+        //  spot-b completed (target commit confirmed) while spot-a stayed on the source:
+        //  authority is split across source and target, so the host enters Error with
+        //  Blocked/RelocationFailed (spec 30 §13); the first unit failure is the cause.
+        var split =
+                assertInstanceOf(
+                        ZLinkUserSpotRetireRuntime.RelocationAuthorityErrorException.class,
+                        failure.getCause());
+        assertEquals("first", split.getCause().getMessage());
+    }
+
+    @Test
+    void executePlanKeepsTheFirstFailureWhenNoUnitCommitted() {
+        var completion =
+                ZLinkUserSpotRetireRuntime.executePlan(
+                        new ZLinkUserSpotRetireRuntime.RelocationPlan(
+                                List.of("spot-a", "spot-b"), List.of()),
+                        spotId -> CompletableFuture.completedFuture(null),
+                        actorId -> CompletableFuture.completedFuture(null),
+                        () -> {},
+                        () -> false,
+                        spotId ->
+                                CompletableFuture.failedFuture(
+                                        new IllegalStateException(
+                                                spotId.equals("spot-a") ? "first" : "second")),
+                        actorId -> CompletableFuture.completedFuture(null));
+
         var failure =
                 assertThrows(
                         CompletionException.class, () -> completion.toCompletableFuture().join());

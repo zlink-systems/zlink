@@ -1,10 +1,12 @@
 namespace Zlink.Framework.Runtime.Spots;
 
 /// <summary>
-/// Owns the node-wide permit count for object factory activation. Population
-/// reservations and active objects are tracked by the Location Store; this
-/// admission only bounds the work between native materialization and factory
-/// initialization completion.
+/// The MeshNode's single activation admission record (MeshNode §5.1 "Pending activation").
+/// Actor creation, User Spot creation, Instance Spot cold activation and relocation-target
+/// Restore each hold one <see cref="Lease"/> from the moment the target MeshNode receives the
+/// operation until Ready, target commit, rejection, failure or cleanup. Entry Spot and Actor
+/// Join never acquire one. Status, <c>IsAvailable</c> headroom and the limit all read this
+/// record; population reservations are tracked separately by the Location Store.
 /// </summary>
 internal sealed class ZLinkActivationConcurrencyAdmission
 {
@@ -27,7 +29,11 @@ internal sealed class ZLinkActivationConcurrencyAdmission
 
     internal int Limit => _limit;
 
-    internal void Acquire(string objectDescription)
+    /// <summary>
+    /// Takes one admission for <paramref name="objectDescription"/>, or rejects the operation
+    /// with <see cref="ZLinkFrameworkErrorKind.Unavailable"/> when the limit is reached.
+    /// </summary>
+    internal Lease Acquire(string objectDescription)
     {
         while (true)
         {
@@ -44,11 +50,11 @@ internal sealed class ZLinkActivationConcurrencyAdmission
                 continue;
 
             _activeChanged?.Invoke(next);
-            return;
+            return new Lease(this);
         }
     }
 
-    internal void Release()
+    private void Release()
     {
         while (true)
         {
@@ -65,5 +71,18 @@ internal sealed class ZLinkActivationConcurrencyAdmission
             _activeChanged?.Invoke(next);
             return;
         }
+    }
+
+    /// <summary>
+    /// One held admission. The operation that ends it (Ready, commit, rejection, failure or
+    /// cleanup) releases it; a second release of the same lease is a no-op.
+    /// </summary>
+    internal sealed class Lease
+    {
+        private ZLinkActivationConcurrencyAdmission? _owner;
+
+        internal Lease(ZLinkActivationConcurrencyAdmission owner) => _owner = owner;
+
+        internal void Release() => Interlocked.Exchange(ref _owner, null)?.Release();
     }
 }

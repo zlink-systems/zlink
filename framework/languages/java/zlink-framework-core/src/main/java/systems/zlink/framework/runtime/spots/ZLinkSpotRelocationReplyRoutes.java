@@ -2,10 +2,14 @@ package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -90,6 +94,21 @@ final class ZLinkSpotRelocationReplyRoutes {
                                         return CompletableFuture.failedFuture(failure);
                                     }
                                 };
+                        plan.route().failure =
+                                error -> {
+                                    List<Message> messages =
+                                            ZLinkFrameworkErrorReply.create(
+                                                    error.kind(),
+                                                    error.getMessage(),
+                                                    ZLinkFrameworkErrorOrigin.frameworkMetadata());
+                                    try {
+                                        reply.accept(messages);
+                                        return CompletableFuture.completedFuture(null);
+                                    } catch (RuntimeException failure) {
+                                        messages.forEach(Message::close);
+                                        return CompletableFuture.failedFuture(failure);
+                                    }
+                                };
                     }
                     return null;
                 });
@@ -109,6 +128,7 @@ final class ZLinkSpotRelocationReplyRoutes {
         }
         Route route =
                 new Route(
+                        false,
                         spotId,
                         objectGeneration,
                         frozen.sourceOwnerId(),
@@ -139,6 +159,7 @@ final class ZLinkSpotRelocationReplyRoutes {
             String actorId,
             long objectGeneration,
             Function<List<byte[]>, CompletionStage<Void>> reply,
+            Function<ZLinkFrameworkException, CompletionStage<Void>> failure,
             Runnable relocationRelease) {
         return inStateLane(
                 () ->
@@ -147,6 +168,7 @@ final class ZLinkSpotRelocationReplyRoutes {
                                 actorId,
                                 objectGeneration,
                                 reply,
+                                failure,
                                 relocationRelease));
     }
 
@@ -155,6 +177,7 @@ final class ZLinkSpotRelocationReplyRoutes {
             String actorId,
             long objectGeneration,
             Function<List<byte[]>, CompletionStage<Void>> reply,
+            Function<ZLinkFrameworkException, CompletionStage<Void>> failure,
             Runnable relocationRelease) {
         Objects.requireNonNull(reply, "reply");
         Objects.requireNonNull(relocationRelease, "relocationRelease");
@@ -173,6 +196,7 @@ final class ZLinkSpotRelocationReplyRoutes {
         }
         Route route =
                 new Route(
+                        true,
                         actorId,
                         objectGeneration,
                         frozen.sourceOwnerId(),
@@ -182,6 +206,7 @@ final class ZLinkSpotRelocationReplyRoutes {
                         frozen.replyRouteId().orElseThrow(),
                         Instant.now().plus(RETENTION));
         route.delivery = parts -> reply.apply(parts.stream().map(byte[]::clone).toList());
+        route.failure = Objects.requireNonNull(failure, "failure");
         Route previous = routes.putIfAbsent(operation, route);
         if (previous != null) {
             throw new IllegalStateException("duplicate accepted relocation operation identity");
@@ -194,11 +219,18 @@ final class ZLinkSpotRelocationReplyRoutes {
             String actorId,
             long objectGeneration,
             Function<List<byte[]>, CompletionStage<Void>> reply,
+            Function<ZLinkFrameworkException, CompletionStage<Void>> failure,
             Runnable relocationRelease) {
         return new LazyRegistration(
                 acceptedRecord,
                 record ->
-                        registerActor(record, actorId, objectGeneration, reply, relocationRelease));
+                        registerActor(
+                                record,
+                                actorId,
+                                objectGeneration,
+                                reply,
+                                failure,
+                                relocationRelease));
     }
 
     void completeLocal(OperationId operation) {
@@ -503,6 +535,48 @@ final class ZLinkSpotRelocationReplyRoutes {
                         });
     }
 
+    /**
+     * Expired-owner terminal (spec 28 §4.4): every pending request of this object without an
+     * observed terminal receives {@code Unavailable} once on its original reply route. A route
+     * whose target reply is being delivered already has its terminal; one-way sends have no route.
+     * A reply after the requester's own deadline has no waiter, so the original deadline stays
+     * authoritative.
+     */
+    CompletionStage<Void> failUnavailable(boolean actor, String objectId, long objectGeneration) {
+        List<Route> pending =
+                inStateLane(
+                        () -> {
+                            removeExpired(Instant.now());
+                            List<Route> selected = new ArrayList<>();
+                            for (Route route : routes.values()) {
+                                if (route.actor == actor
+                                        && route.spotId.equals(objectId)
+                                        && route.objectGeneration == objectGeneration
+                                        && route.failure != null
+                                        && !route.delivered
+                                        && !route.relayInProgress) {
+                                    route.delivered = true;
+                                    selected.add(route);
+                                }
+                            }
+                            return selected;
+                        });
+        var unavailable =
+                new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        "relocation source owner lease expired before authority settled");
+        CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
+        for (Route route : pending) {
+            chain =
+                    chain.thenCompose(
+                            ignored ->
+                                    route.failure
+                                            .apply(unavailable)
+                                            .handle((delivered, failure) -> null));
+        }
+        return chain;
+    }
+
     CompletionStage<Ack> relay(Relay relay, RoutingId transportSource) {
         Objects.requireNonNull(relay, "relay");
         Objects.requireNonNull(transportSource, "transportSource");
@@ -772,6 +846,7 @@ final class ZLinkSpotRelocationReplyRoutes {
     }
 
     private static final class Route {
+        private final boolean actor;
         private final String spotId;
         private final long objectGeneration;
         private final String sourceOwnerId;
@@ -781,6 +856,7 @@ final class ZLinkSpotRelocationReplyRoutes {
         private final long replyRouteId;
         private final Instant expiresAt;
         private Delivery delivery;
+        private Function<ZLinkFrameworkException, CompletionStage<Void>> failure;
         private RoutingId targetNodeRid;
         private long targetNodeGeneration;
         private long targetAttemptGeneration;
@@ -791,6 +867,7 @@ final class ZLinkSpotRelocationReplyRoutes {
         private long participantId;
 
         private Route(
+                boolean actor,
                 String spotId,
                 long objectGeneration,
                 String sourceOwnerId,
@@ -799,6 +876,7 @@ final class ZLinkSpotRelocationReplyRoutes {
                 long sourceNodeGeneration,
                 long replyRouteId,
                 Instant expiresAt) {
+            this.actor = actor;
             this.spotId = spotId;
             this.objectGeneration = objectGeneration;
             this.sourceOwnerId = sourceOwnerId;

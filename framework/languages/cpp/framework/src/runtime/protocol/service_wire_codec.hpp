@@ -548,6 +548,7 @@ struct session_relocation_route_update_t
     std::vector<std::uint8_t> target_node_routing_id;
     std::uint64_t target_node_generation = 0;
     std::uint64_t current_authority_owner_generation = 0;
+    std::uint64_t target_owner_lease_generation = 0;
 
     friend bool operator== (const session_relocation_route_update_t &,
                             const session_relocation_route_update_t &) = default;

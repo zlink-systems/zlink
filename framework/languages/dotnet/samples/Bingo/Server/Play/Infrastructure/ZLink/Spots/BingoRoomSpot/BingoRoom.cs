@@ -90,24 +90,15 @@ internal sealed class BingoRoom(
         }
         else
         {
-            GetPlayerRecordRes record;
-            try
-            {
-                // --8<-- [start:doc-bingo-room-join]
-                // Yield releases the Spot execution turn while the API owns the player record lookup.
-                record = await Context
-                    .Outbound.RequestToChannel(
-                        SampleNames.ApiChannel,
-                        new GetPlayerRecordReq { ActorId = actor.ActorId }
-                    )
-                    .Yield<GetPlayerRecordRes>(cancellationToken);
-                // --8<-- [end:doc-bingo-room-join]
-            }
-            catch
-            {
-                _pendingJoins.Remove(actor.ActorId);
-                throw;
-            }
+            // --8<-- [start:doc-bingo-room-join]
+            // Yield releases the Spot execution turn while the API owns the player record lookup.
+            var record = await Context
+                .Outbound.RequestToChannel(
+                    SampleNames.ApiChannel,
+                    new GetPlayerRecordReq { ActorId = actor.ActorId }
+                )
+                .Yield<GetPlayerRecordRes>(cancellationToken);
+            // --8<-- [end:doc-bingo-room-join]
 
             if (
                 !_pendingJoins.TryGetValue(actor.ActorId, out var resumed)
@@ -185,7 +176,7 @@ internal sealed class BingoRoom(
             _observerActor = null;
         logger.LogInformation("bingo-lifecycle room-leave actor={ActorId}", actor.ActorId);
         if (_actors.Count == 0 && _observerActor is null)
-            _ = await Context.CloseAsync(cancellationToken);
+            _ = Context.CloseAsync(cancellationToken);
     }
 
     public ValueTask OnDisconnectActorAsync(PlayerActor actor, CancellationToken cancellationToken)

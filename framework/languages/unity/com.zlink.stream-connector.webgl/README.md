@@ -79,15 +79,22 @@ into the emitted `framework.js` in a later build step, so emscripten's JavaScrip
 optimizer never sees this package.
 
 The optimizer is worth naming anyway, because a toolchain that does pass this content to
-it breaks. Emscripten 3.1.38 - what Unity 2023.2 and later bundle, as `3.1.38-unity` -
-has a dead-code pass that deletes destructuring declarations from `--pre-js` content at
-`-O2` and above. The link succeeds and the player then fails at runtime, the first
-symptom being `ReferenceError: message is not defined` when a message is delivered. The
-embedded bundle is built for es2019 so that the optimizer's parser and its pre-ES2020
-tree converter both accept it.
+it can break. Emscripten 3.1.38 - what Unity 2023.2 and later bundle, as `3.1.38-unity` -
+has a dead-code pass that, at `-O2` and above, deletes any destructuring declaration in a
+scope with no reference to the identifier `undefined` (its `node.id.name` read is
+`undefined` for a destructuring pattern, so the pass treats the declaration as an unused
+binding literally named `undefined`). The link still succeeds; only the player fails at
+runtime, on whatever the deleted declaration's name was. The embedded bundle is built for
+es2019 so that the optimizer's parser and its pre-ES2020 tree converter both accept it,
+and its receive-message drain no longer has a destructuring declaration in that shape -
+see `ZlinkStreamReceivedMessages.ts` in the npm package root - so this specific bundle
+currently has none the pass can delete. The bug itself is emscripten's and stays live for
+whatever a future change might reintroduce.
 
 `framework/languages/node/test/browser/unity-webgl-emscripten.test.js` links the plugins
-with emcc directly, where that pass does run, and reports which levels they survive.
+with emcc directly, where that pass does run: it links at every level Unity's own
+optimization settings map to, and counts the bundle's destructuring declarations before
+and after that pass to guard against a future one landing where it can be deleted.
 
 ## Differences from the native package
 

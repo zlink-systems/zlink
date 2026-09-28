@@ -84,6 +84,7 @@ public sealed class MaintenanceRuntimeTests
             new ZLinkFrameworkHostLifecycleState(),
             static (_, _, _) => ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
             static _ => ValueTask.FromResult(true),
+            static (_, _) => throw new NotSupportedException(),
             safeToShutdownSnapshot: () => safeToShutdown
         );
 
@@ -105,6 +106,7 @@ public sealed class MaintenanceRuntimeTests
             new ZLinkFrameworkHostLifecycleState(),
             static (_, _, _) => ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
             static _ => ValueTask.FromResult(true),
+            static (_, _) => throw new NotSupportedException(),
             safeToShutdownSnapshot: () => safeToShutdown,
             subscribeSafeToShutdownChanged: handler => changeHandler = handler
         );
@@ -169,6 +171,7 @@ public sealed class MaintenanceRuntimeTests
             new ZLinkFrameworkHostLifecycleState(),
             static (_, _, _) => ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
             static _ => ValueTask.FromResult(true),
+            static (_, _) => throw new NotSupportedException(),
             capacitySnapshot: () => capacity.GetStatus(),
             resetCapacityMetrics: capacity.ResetMetrics
         );
@@ -318,6 +321,7 @@ public sealed class MaintenanceRuntimeTests
                         new InvalidOperationException("descriptor rollback failed"),
                     ])
                 ),
+            static (_, _) => throw new NotSupportedException(),
             sourceApplicationVersion: 7
         );
         runtime.MarkServing();
@@ -714,6 +718,7 @@ public sealed class MaintenanceRuntimeTests
                     static (_, _, _) => ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null)
                 ),
             static _ => ValueTask.FromResult(true),
+            static (_, _) => throw new NotSupportedException(),
             sourceApplicationVersion
         );
         return new Fixture(runtime, drain, executor);

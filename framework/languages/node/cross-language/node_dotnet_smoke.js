@@ -151,13 +151,12 @@ function opaqueStoreKey(value) {
 }
 
 async function nodeClientToDotnetChannelServer(tempDir) {
-  const port = await reservePort();
-  const endpoint = `tcp://127.0.0.1:${port}`;
+  let endpoint;
   const eventFile = path.join(tempDir, 'node-client-dotnet-channel.events');
   const host = startDotnetHost(tempDir, 'node-client-dotnet-channel', [
     'channel-server',
     '--channel-name', 'profiles',
-    '--server-endpoint', endpoint,
+    '--server-endpoint', 'tcp://127.0.0.1:0',
     '--event-file', eventFile
   ]);
   class TestHostProfileRequest {
@@ -179,7 +178,7 @@ async function nodeClientToDotnetChannelServer(tempDir) {
   let app;
 
   try {
-    await host.ready;
+    endpoint = (await host.ready).endpoint;
     app = await NestFactory.createApplicationContext(ClientModule, { logger: false, abortOnError: false });
     const clientServerRuntime = app.get(nestjs.ZLINK_CLIENT_SERVER_RUNTIME, { strict: false });
     try {
@@ -227,8 +226,6 @@ async function nodeClientToDotnetChannelServer(tempDir) {
 }
 
 async function nodePublisherToDotnetFanoutSubscriber(tempDir) {
-  const port = await reservePort();
-  const endpoint = `tcp://127.0.0.1:${port}`;
   const eventFile = path.join(tempDir, 'node-publisher-dotnet-subscriber.events');
   class TestHostPublishedEvent {
     constructor(value) { this.value = value; }
@@ -238,7 +235,7 @@ async function nodePublisherToDotnetFanoutSubscriber(tempDir) {
     imports: [nestjs.ZLinkModule.forRootFactory({
       useFactory: () => nestjs.zlinkFramework()
         .addFanoutChannel('profiles')
-          .enablePublisher(endpoint)
+          .enablePublisher(0)
         .build()
     })]
   })(PublisherModule);
@@ -246,6 +243,8 @@ async function nodePublisherToDotnetFanoutSubscriber(tempDir) {
 
   try {
     app = await NestFactory.createApplicationContext(PublisherModule, { logger: false, abortOnError: false });
+    const endpoint = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false })
+      .getListenerStatus('fanout', 'profiles').endpoint;
     const publisher = app.get(nestjs.ZLINK_FANOUT_CLIENT, { strict: false });
     const host = startDotnetHost(tempDir, 'node-publisher-dotnet-subscriber', [
       'channel-subscriber',
@@ -271,8 +270,7 @@ async function nodePublisherToDotnetFanoutSubscriber(tempDir) {
 }
 
 async function dotnetPublisherToNodeFanoutSubscriber(tempDir) {
-  const port = await reservePort();
-  const endpoint = `tcp://127.0.0.1:${port}`;
+  let endpoint;
   const topic = 'profile.changed';
   const received = [];
   class TestHostPublishedEventHandler {
@@ -297,15 +295,15 @@ async function dotnetPublisherToNodeFanoutSubscriber(tempDir) {
   let app;
   let host;
   try {
-    app = await NestFactory.createApplicationContext(SubscriberModule, { logger: false, abortOnError: false });
     host = startDotnetHost(tempDir, 'dotnet-publisher-node-subscriber', [
       'channel-publisher',
       '--channel-name', 'profiles',
-      '--publisher-endpoint', endpoint,
+      '--publisher-endpoint', 'tcp://127.0.0.1:0',
       '--publish-topic', topic,
       '--publish-value', 'dotnet-publish-to-node'
     ]);
-    await host.ready;
+    endpoint = (await host.ready).endpoint;
+    app = await NestFactory.createApplicationContext(SubscriberModule, { logger: false, abortOnError: false });
     await waitForCondition(
       () => received.includes(`${topic}:dotnet-publish-to-node`),
       7000,
@@ -319,8 +317,6 @@ async function dotnetPublisherToNodeFanoutSubscriber(tempDir) {
 }
 
 async function dotnetClientToNodeChannelServer(tempDir) {
-  const port = await reservePort();
-  const endpoint = `tcp://127.0.0.1:${port}`;
   const eventFile = path.join(tempDir, 'dotnet-client-node-channel.events');
   class TestHostProfileRequestHandler {
     async handle(payload) {
@@ -336,7 +332,7 @@ async function dotnetClientToNodeChannelServer(tempDir) {
         const builder = nestjs.zlinkFramework();
         builder.addClientServerChannel('profiles').server()
           .setBindHost('127.0.0.1')
-          .listen(port)
+          .listen(0)
           .addRequestHandler('TestHostProfileRequest', TestHostProfileRequestHandler);
         return builder.build();
       }
@@ -347,6 +343,8 @@ async function dotnetClientToNodeChannelServer(tempDir) {
 
   try {
     app = await NestFactory.createApplicationContext(ServerModule, { logger: false, abortOnError: false });
+    const endpoint = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false })
+      .getListenerStatus('clientServer', 'profiles').endpoint;
     const host = startDotnetHost(tempDir, 'dotnet-client-node-channel', [
       'channel-client',
       '--channel-name', 'profiles',
@@ -367,8 +365,7 @@ async function dotnetClientToNodeChannelServer(tempDir) {
 }
 
 async function nodeRouteClientToDotnetRouteServer(tempDir) {
-  const port = await reservePort();
-  const endpoint = `tcp://127.0.0.1:${port}`;
+  let endpoint;
   const eventFile = path.join(tempDir, 'node-route-dotnet-route.events');
   class TestHostRouteRequest {
     constructor(value) { this.value = value; }
@@ -391,9 +388,9 @@ async function nodeRouteClientToDotnetRouteServer(tempDir) {
   let host;
   try {
     host = startDotnetHost(tempDir, 'node-route-dotnet-route', [
-      'route-server', '--channel-name', 'cross.route', '--server-endpoint', endpoint, '--event-file', eventFile
+      'route-server', '--channel-name', 'cross.route', '--server-endpoint', 'tcp://127.0.0.1:0', '--event-file', eventFile
     ]);
-    await host.ready;
+    endpoint = (await host.ready).endpoint;
     app = await NestFactory.createApplicationContext(RouteClientModule, { logger: false, abortOnError: false });
     const routeMeshRuntime = app.get(nestjs.ZLINK_ROUTE_MESH_RUNTIME, { strict: false });
     await waitForCondition(
@@ -414,8 +411,6 @@ async function nodeRouteClientToDotnetRouteServer(tempDir) {
 }
 
 async function dotnetRouteClientToNodeRouteServer(tempDir) {
-  const port = await reservePort();
-  const endpoint = `tcp://127.0.0.1:${port}`;
   const eventFile = path.join(tempDir, 'dotnet-route-node-route.events');
   class TestHostRouteRequestHandler {
     async handle(payload) {
@@ -430,7 +425,7 @@ async function dotnetRouteClientToNodeRouteServer(tempDir) {
       useFactory: () => {
         const builder = nestjs.zlinkFramework();
         builder.addRouteMesh('cross.route')
-          .listen(endpoint)
+          .listen('tcp://127.0.0.1:0')
           .routingId('node-route')
           .addRequestHandler('TestHostRouteRequest', TestHostRouteRequestHandler)
           .channel('cross.route').server();
@@ -443,6 +438,8 @@ async function dotnetRouteClientToNodeRouteServer(tempDir) {
   let host;
   try {
     app = await NestFactory.createApplicationContext(RouteServerModule, { logger: false, abortOnError: false });
+    const endpoint = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false })
+      .getListenerStatus('routeMesh', 'cross.route').endpoint;
     host = startDotnetHost(tempDir, 'dotnet-route-node-route', [
       'route-client', '--channel-name', 'cross.route', '--server-endpoint', endpoint,
       '--event-file', eventFile, '--publish-value', 'dotnet-route-to-node'
@@ -465,8 +462,7 @@ async function dotnetRouteClientToNodeRouteServer(tempDir) {
  * (c) application handler failure — typed kind preserved, marker absent.
  */
 async function nodeSpotRouteClientToDotnetHost(tempDir) {
-  const port = await reservePort();
-  const endpoint = `tcp://127.0.0.1:${port}`;
+  let endpoint;
   const eventFile = path.join(tempDir, 'node-spotroute-dotnet.events');
   class TestHostSpotRouteRequest {
     constructor(value) { this.value = value; }
@@ -495,10 +491,10 @@ async function nodeSpotRouteClientToDotnetHost(tempDir) {
   let host;
   try {
     host = startDotnetHost(tempDir, 'node-spotroute-dotnet', [
-      'route-server', '--channel-name', 'cross.spotroute', '--server-endpoint', endpoint,
+      'route-server', '--channel-name', 'cross.spotroute', '--server-endpoint', 'tcp://127.0.0.1:0',
       '--event-file', eventFile
     ]);
-    await host.ready;
+    endpoint = (await host.ready).endpoint;
     app = await NestFactory.createApplicationContext(SpotRouteClientModule, { logger: false, abortOnError: false });
     const routeMeshRuntime = app.get(nestjs.ZLINK_ROUTE_MESH_RUNTIME, { strict: false });
     await waitForCondition(
@@ -554,8 +550,6 @@ async function nodeSpotRouteClientToDotnetHost(tempDir) {
  * behavior; see the harness convergence report.
  */
 async function dotnetSpotRouteClientToNodeHost(tempDir) {
-  const port = await reservePort();
-  const endpoint = `tcp://127.0.0.1:${port}`;
   const eventFile = path.join(tempDir, 'dotnet-spotroute-node.events');
   class TestHostSpotRouteRequestHandler {
     async handle(payload) {
@@ -576,7 +570,7 @@ async function dotnetSpotRouteClientToNodeHost(tempDir) {
       useFactory: () => {
         const builder = nestjs.zlinkFramework();
         builder.addRouteMesh('cross.spotroute')
-          .listen(endpoint)
+          .listen('tcp://127.0.0.1:0')
           .routingId('node-spot-route')
           .addRequestHandler('TestHostSpotRouteRequest', TestHostSpotRouteRequestHandler)
           .addRequestHandler('TestHostSpotRouteFailRequest', TestHostSpotRouteFailRequestHandler)
@@ -590,6 +584,8 @@ async function dotnetSpotRouteClientToNodeHost(tempDir) {
   let host;
   try {
     app = await NestFactory.createApplicationContext(SpotRouteServerModule, { logger: false, abortOnError: false });
+    const endpoint = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false })
+      .getListenerStatus('routeMesh', 'cross.spotroute').endpoint;
     host = startDotnetHost(tempDir, 'dotnet-spotroute-node', [
       'spot-route-client', '--channel-name', 'cross.spotroute', '--server-endpoint', endpoint,
       '--peer-rid', 'node-spot-route', '--event-file', eventFile,
@@ -620,19 +616,17 @@ async function captureSpotRouteError(operation) {
 }
 
 async function nodeConnectorToDotnetStreamServer(tempDir) {
-  const port = await reservePort();
-  const endpoint = `ws://127.0.0.1:${port}`;
   const eventFile = path.join(tempDir, 'node-connector-dotnet-stream.events');
   const host = startDotnetHost(tempDir, 'node-connector-dotnet-stream', [
     'stream-raw',
-    '--stream-endpoint', endpoint,
+    '--stream-endpoint', 'ws://127.0.0.1:0',
     '--event-file', eventFile
   ]);
   let instance;
 
   try {
     instance = await createBrowserConnectorDriver();
-    await host.ready;
+    const endpoint = (await host.ready).endpoint;
     await instance.connect(endpoint);
     const reply = await withTimeout(
       instance.request('RawPing', 'ping', true),
@@ -654,8 +648,6 @@ async function nodeConnectorToDotnetStreamServer(tempDir) {
 }
 
 async function dotnetConnectorToNodeStreamServer(tempDir) {
-  const port = await reservePort();
-  const endpoint = `tcp://127.0.0.1:${port}`;
   const eventFile = path.join(tempDir, 'dotnet-connector-node-stream.events');
   const flowFile = path.join(tempDir, 'dotnet-connector-node-stream.flow');
   const loggerProvider = new LoggerProvider({
@@ -696,7 +688,7 @@ async function dotnetConnectorToNodeStreamServer(tempDir) {
         builder.configureDispatch()
           .messageFlow('normal');
         builder.addStreamNode('cross-language-stream')
-          .bind(endpoint)
+          .bind('tcp://127.0.0.1:0')
           .registerSession(NodeStreamSessionFactory);
         return builder.build();
       }
@@ -707,6 +699,8 @@ async function dotnetConnectorToNodeStreamServer(tempDir) {
 
   try {
     app = await NestFactory.createApplicationContext(StreamServerModule, { logger: false, abortOnError: false });
+    const endpoint = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false })
+      .getListenerStatus('stream', 'cross-language-stream').endpoint;
     const host = startDotnetHost(tempDir, 'dotnet-connector-node-stream', [
       'stream-client',
       '--stream-endpoint', endpoint,
@@ -739,17 +733,15 @@ async function dotnetConnectorToNodeStreamServer(tempDir) {
 }
 
 async function nodeConnectorObservesDotnetSessionClosing(tempDir) {
-  const port = await reservePort();
-  const endpoint = `ws://127.0.0.1:${port}`;
   const eventFile = path.join(tempDir, 'dotnet-drain-node-connector.events');
   const host = startDotnetHost(tempDir, 'dotnet-drain-node-connector', [
     'stream-raw',
-    '--stream-endpoint', endpoint,
+    '--stream-endpoint', 'ws://127.0.0.1:0',
     '--event-file', eventFile
   ]);
   const instance = await createBrowserConnectorDriver();
   try {
-    await host.ready;
+    const endpoint = (await host.ready).endpoint;
     await instance.connect(endpoint);
     const reply = await instance.request('RawPing', 'drain-probe');
     assert.equal(reply, 'pong');
@@ -764,8 +756,6 @@ async function nodeConnectorObservesDotnetSessionClosing(tempDir) {
 }
 
 async function dotnetConnectorObservesNodeSessionClosing(tempDir) {
-  const port = await reservePort();
-  const endpoint = `tcp://127.0.0.1:${port}`;
   const eventFile = path.join(tempDir, 'node-drain-dotnet-connector.events');
   class NodeStreamSessionFactory {
     async create(sessionContext) {
@@ -785,7 +775,7 @@ async function dotnetConnectorObservesNodeSessionClosing(tempDir) {
       useFactory: () => {
         const builder = nestjs.zlinkFramework();
         builder.addStreamNode('cross-language-drain-stream')
-          .bind(endpoint)
+          .bind('tcp://127.0.0.1:0')
           .registerSession(NodeStreamSessionFactory);
         return builder.build();
       }
@@ -796,6 +786,8 @@ async function dotnetConnectorObservesNodeSessionClosing(tempDir) {
   let host;
   try {
     app = await NestFactory.createApplicationContext(StreamServerModule, { logger: false, abortOnError: false });
+    const endpoint = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false })
+      .getListenerStatus('stream', 'cross-language-drain-stream').endpoint;
     host = startDotnetHost(tempDir, 'node-drain-dotnet-connector', [
       'stream-client',
       '--stream-endpoint', endpoint,
@@ -865,8 +857,7 @@ async function waitForReadyFile(readyFile, exit, output, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      await fs.access(readyFile);
-      return;
+      return JSON.parse(await fs.readFile(readyFile, 'utf8'));
     } catch {
       const exited = await pollExit(exit);
       if (exited !== undefined) {
@@ -958,17 +949,6 @@ async function pollExit(exit) {
     Promise.resolve(marker)
   ]);
   return result === marker ? undefined : result;
-}
-
-async function reservePort() {
-  const server = net.createServer();
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  const { port } = server.address();
-  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-  return port;
 }
 
 async function runInTempDir(callback) {

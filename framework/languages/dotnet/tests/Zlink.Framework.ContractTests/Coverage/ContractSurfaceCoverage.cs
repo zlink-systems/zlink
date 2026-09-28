@@ -1738,7 +1738,7 @@ public sealed class ContractSurfaceCoverage
                     CSharpSyntaxTree.ParseText(
                         document.ExactInterface
                             ? ExactInterfaceBindingPrefix + document.Body
-                            : CommonSourceBindingPrefix + document.Body,
+                            : CommonSourceBindingPrefix + Environment.NewLine + document.Body,
                         parseOptions,
                         path: $"{document.Document}#{document.Ordinal}"
                     )

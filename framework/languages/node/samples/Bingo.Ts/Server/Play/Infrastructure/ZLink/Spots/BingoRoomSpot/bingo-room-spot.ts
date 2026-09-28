@@ -231,7 +231,7 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     );
     console.error(`bingo-lifecycle room-leave actor=${actorId} spot=${this.context.spotId}`);
     if (this.cleanupStarted && this.playerIds.size === 0) {
-      await this.context.close();
+      void this.context.close();
     }
   }
 

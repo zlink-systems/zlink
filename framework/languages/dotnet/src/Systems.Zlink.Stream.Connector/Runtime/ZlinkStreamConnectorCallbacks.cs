@@ -2,12 +2,11 @@ namespace Systems.Zlink.Stream.Connector.Runtime;
 
 internal sealed class ZlinkStreamConnectorCallbacks(
     ZlinkStreamTaskRunner taskRunner,
-    ZlinkStreamDispatchMode dispatchMode,
-    int maxPendingDispatchCallbacks
+    ZlinkStreamDispatchMode dispatchMode
 )
 {
     private readonly object _dispatchGate = new();
-    private readonly LinkedList<QueuedCallback> _dispatchQueue = new();
+    private readonly LinkedList<ZlinkStreamDispatchEntry> _dispatchQueue = new();
 
     private readonly ZlinkStreamHandlerList<
         Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask>
@@ -28,12 +27,21 @@ internal sealed class ZlinkStreamConnectorCallbacks(
     > _replyReceived = new();
 
     private bool _accepting = true;
-    private int _admittedDispatchCount;
-    private int _boundedDispatchCount;
-    private int _pendingDispatchCount;
-    private int _waitingBoundedDispatchCount;
 
-    public int PendingDispatchCount => Volatile.Read(ref _pendingDispatchCount);
+    public int PendingDispatchCount
+    {
+        get
+        {
+            lock (_dispatchGate)
+            {
+                var count = 0;
+                foreach (var entry in _dispatchQueue)
+                    if (entry.PendingCallbacks > 0)
+                        count++;
+                return count;
+            }
+        }
+    }
 
     public bool IsCurrentCallback => ZlinkStreamCallbackExecutionContext.IsActiveCallbackFor(this);
 
@@ -44,13 +52,7 @@ internal sealed class ZlinkStreamConnectorCallbacks(
         lock (_dispatchGate)
         {
             _accepting = false;
-            foreach (var queued in _dispatchQueue)
-                queued.StopWaiting();
             _dispatchQueue.Clear();
-            _admittedDispatchCount = 0;
-            _boundedDispatchCount = 0;
-            _waitingBoundedDispatchCount = 0;
-            Volatile.Write(ref _pendingDispatchCount, 0);
         }
 
         _connectionStateChanged.Clear();
@@ -144,28 +146,20 @@ internal sealed class ZlinkStreamConnectorCallbacks(
         if (handlers.Count == 0)
             return;
 
-        await DispatchUserCallbackAsync(
-                async dispatchedToken =>
-                {
-                    foreach (var registration in handlers)
-                    {
-                        // A registration disposed after this snapshot was taken must not
-                        // run on this dispatch (stream-connector spec §7).
-                        if (registration.IsRemoved)
-                            continue;
+        // One entry per handler. A registration disposed after this snapshot was taken
+        // neither runs on the dispatch nor counts as pending (stream-connector spec §7).
+        var entries = new ZlinkStreamDispatchEntry[handlers.Count];
+        for (var index = 0; index < handlers.Count; index++)
+        {
+            var registration = handlers[index];
+            entries[index] = new CallbackEntry(
+                token => invoke(registration.Handler, token),
+                reportErrors,
+                () => !registration.IsRemoved
+            );
+        }
 
-                        await InvokeUserCallbackAsync(
-                                token => invoke(registration.Handler, token),
-                                dispatchedToken,
-                                reportErrors
-                            )
-                            .ConfigureAwait(false);
-                    }
-                },
-                cancellationToken,
-                reportErrors: false
-            )
-            .ConfigureAwait(false);
+        await DispatchEntriesAsync(entries, cancellationToken, null).ConfigureAwait(false);
     }
 
     public async ValueTask NotifyDisconnectedAsync(
@@ -205,23 +199,97 @@ internal sealed class ZlinkStreamConnectorCallbacks(
             .ConfigureAwait(false);
     }
 
-    public async ValueTask DispatchUserCallbackAsync(
+    /// <param name="isLive">
+    ///     Whether the handler behind <paramref name="callback" /> is still registered; a
+    ///     callback whose handler was removed neither runs nor counts as pending.
+    /// </param>
+    public ValueTask DispatchUserCallbackAsync(
         Func<CancellationToken, ValueTask> callback,
         CancellationToken cancellationToken,
-        bool reportErrors = true
+        bool reportErrors = true,
+        Func<bool>? isLive = null
     )
     {
         if (callback is null)
             throw new ArgumentNullException(nameof(callback));
 
+        return DispatchEntriesAsync(
+            [new CallbackEntry(callback, reportErrors, isLive)],
+            cancellationToken,
+            null
+        );
+    }
+
+    /// <summary>
+    ///     Hands <paramref name="callbacks" /> to the dispatch mode in one step and runs
+    ///     <paramref name="handedOff" /> in that same step: under the dispatch queue lock in
+    ///     <see cref="ZlinkStreamDispatchMode.Manual" />, before the first callback runs in
+    ///     <see cref="ZlinkStreamDispatchMode.Immediate" />. What <paramref name="handedOff" />
+    ///     records is therefore never visible before <c>Dispatch</c> can run the callbacks.
+    /// </summary>
+    public ValueTask DispatchUserCallbacksAsync(
+        IReadOnlyList<Func<CancellationToken, ValueTask>> callbacks,
+        CancellationToken cancellationToken,
+        bool reportErrors,
+        Action? handedOff
+    )
+    {
+        var entries = new ZlinkStreamDispatchEntry[callbacks.Count];
+        for (var index = 0; index < callbacks.Count; index++)
+            entries[index] = new CallbackEntry(callbacks[index], reportErrors, null);
+        return DispatchEntriesAsync(entries, cancellationToken, handedOff);
+    }
+
+    /// <summary>
+    ///     Hands <paramref name="entries" /> to the dispatch mode and runs
+    ///     <paramref name="handedOff" /> in the same step. <c>Immediate</c> dispatches each
+    ///     entry now; one that has nothing to run yet - a packet no handler takes - stays
+    ///     queued for a later dispatch. <c>Manual</c> queues them all for the next pump.
+    /// </summary>
+    public async ValueTask DispatchEntriesAsync(
+        IReadOnlyList<ZlinkStreamDispatchEntry> entries,
+        CancellationToken cancellationToken,
+        Action? handedOff
+    )
+    {
         if (dispatchMode == ZlinkStreamDispatchMode.Immediate)
         {
-            await InvokeUserCallbackAsync(callback, cancellationToken, reportErrors)
-                .ConfigureAwait(false);
+            handedOff?.Invoke();
+            foreach (var entry in entries)
+            {
+                Func<CancellationToken, ValueTask>? work;
+                lock (_dispatchGate)
+                {
+                    work = entry.Take(out var keep);
+                    if (work is null && keep && _accepting)
+                        _dispatchQueue.AddLast(entry);
+                }
+
+                if (work is not null)
+                    await InvokeUserCallbackAsync(work, cancellationToken, entry.ReportErrors)
+                        .ConfigureAwait(false);
+            }
             return;
         }
 
-        await EnqueueAsync(callback, reportErrors, cancellationToken).ConfigureAwait(false);
+        lock (_dispatchGate)
+        {
+            if (_accepting)
+                foreach (var entry in entries)
+                    _dispatchQueue.AddLast(entry);
+            handedOff?.Invoke();
+        }
+    }
+
+    /// <summary>
+    ///     A handler was registered. In <c>Immediate</c> the registration is the dispatch
+    ///     point for what is queued, so the packets it now takes run here; in <c>Manual</c>
+    ///     they wait for the next pump (stream-connector spec §7, §10).
+    /// </summary>
+    public void HandlerRegistered()
+    {
+        if (dispatchMode == ZlinkStreamDispatchMode.Immediate)
+            DispatchAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult();
     }
 
     internal ValueTask InvokeUserCallbackInlineAsync(
@@ -229,32 +297,38 @@ internal sealed class ZlinkStreamConnectorCallbacks(
         CancellationToken cancellationToken
     ) => InvokeUserCallbackAsync(callback, cancellationToken, reportErrors: true);
 
+    /// <summary>
+    ///     Runs the queued entries in order. Each entry decides at this point what it runs:
+    ///     a packet goes to the handlers registered now, and one no handler takes stays
+    ///     queued for a later handler or a wait (stream-connector spec §7, §10).
+    /// </summary>
     public async ValueTask DispatchAsync(CancellationToken cancellationToken)
     {
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            QueuedCallback queued;
+            Func<CancellationToken, ValueTask>? work = null;
+            var reportErrors = false;
             lock (_dispatchGate)
             {
-                if (_dispatchQueue.First is not { } first)
-                    return;
-                queued = first.Value;
-                if (!queued.IsAdmitted)
-                    throw new InvalidOperationException(
-                        "The first dispatch callback must be admitted."
-                    );
-                _dispatchQueue.RemoveFirst();
-                queued.Node = null;
-                _admittedDispatchCount--;
-                if (queued.CountsAgainstLimit)
+                for (var node = _dispatchQueue.First; node is not null; )
                 {
-                    _boundedDispatchCount--;
-                    AdmitNextWaitingCallbackLocked();
+                    var next = node.Next;
+                    work = node.Value.Take(out var keep);
+                    if (work is not null || !keep)
+                        _dispatchQueue.Remove(node);
+                    if (work is not null)
+                    {
+                        reportErrors = node.Value.ReportErrors;
+                        break;
+                    }
+                    node = next;
                 }
-                Volatile.Write(ref _pendingDispatchCount, _admittedDispatchCount);
             }
-            await InvokeUserCallbackAsync(queued.Callback, cancellationToken, queued.ReportErrors)
+
+            if (work is null)
+                return;
+            await InvokeUserCallbackAsync(work, cancellationToken, reportErrors)
                 .ConfigureAwait(false);
         }
     }
@@ -288,7 +362,16 @@ internal sealed class ZlinkStreamConnectorCallbacks(
             }
             catch (Exception ex)
             {
-                var error = new ZlinkStreamError(ZlinkStreamErrorCode.SendFailed, ex.Message, ex);
+                // Write failures are classified by the frame sender. Other
+                // exceptions retain their cause instead of claiming a write
+                // failed when the request never reached the transport.
+                var code = ex switch
+                {
+                    ArgumentException => ZlinkStreamErrorCode.ValidationFailed,
+                    IOException => ZlinkStreamErrorCode.Disconnected,
+                    _ => ZlinkStreamErrorCode.UserCallbackFailed,
+                };
+                var error = new ZlinkStreamError(code, ex.Message, ex);
                 completion = _ =>
                 {
                     callback(failure(error));
@@ -296,11 +379,12 @@ internal sealed class ZlinkStreamConnectorCallbacks(
                 };
             }
 
-            await DispatchRequestCompletionAsync(completion).ConfigureAwait(false);
+            await DispatchUserCallbackAsync(completion, CancellationToken.None)
+                .ConfigureAwait(false);
         });
     }
 
-    private async ValueTask InvokeUserCallbackAsync(
+    private ValueTask InvokeUserCallbackAsync(
         Func<CancellationToken, ValueTask> callback,
         CancellationToken cancellationToken,
         bool reportErrors
@@ -309,20 +393,35 @@ internal sealed class ZlinkStreamConnectorCallbacks(
         using var permit = ZlinkStreamCallbackExecutionContext.EnterCallback(this);
         try
         {
-            await callback(cancellationToken).ConfigureAwait(false);
+            var completion = callback(cancellationToken);
+            if (completion.IsCompletedSuccessfully)
+                completion.GetAwaiter().GetResult();
+            else
+                _ = ObserveUserCallbackCompletionAsync(completion, cancellationToken, reportErrors);
         }
-        catch (Exception ex) when (reportErrors)
+        catch (Exception ex)
         {
-            var report = ReportUserCallbackErrorAsync(ex, cancellationToken);
-            if (dispatchMode == ZlinkStreamDispatchMode.Immediate)
-            {
-                await report.ConfigureAwait(false);
-                return;
-            }
-            if (!report.IsCompletedSuccessfully)
-                _ = report.AsTask();
+            if (reportErrors)
+                _ = ReportUserCallbackErrorAsync(ex, cancellationToken);
         }
-        catch { }
+        return default;
+    }
+
+    private async Task ObserveUserCallbackCompletionAsync(
+        ValueTask completion,
+        CancellationToken cancellationToken,
+        bool reportErrors
+    )
+    {
+        try
+        {
+            await completion.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            if (reportErrors)
+                await ReportUserCallbackErrorAsync(ex, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private async ValueTask ReportUserCallbackErrorAsync(
@@ -349,122 +448,40 @@ internal sealed class ZlinkStreamConnectorCallbacks(
             .ConfigureAwait(false);
     }
 
-    private async ValueTask DispatchRequestCompletionAsync(
-        Func<CancellationToken, ValueTask> callback
-    )
-    {
-        if (dispatchMode == ZlinkStreamDispatchMode.Immediate)
-        {
-            await InvokeUserCallbackAsync(callback, CancellationToken.None, true)
-                .ConfigureAwait(false);
-            return;
-        }
-
-        lock (_dispatchGate)
-        {
-            if (!_accepting)
-                return;
-            var queued = new QueuedCallback(callback, true, false, isAdmitted: true);
-            queued.Node = _dispatchQueue.AddLast(queued);
-            _admittedDispatchCount++;
-            Volatile.Write(ref _pendingDispatchCount, _admittedDispatchCount);
-        }
-    }
-
-    private async ValueTask EnqueueAsync(
+    private sealed class CallbackEntry(
         Func<CancellationToken, ValueTask> callback,
         bool reportErrors,
-        CancellationToken cancellationToken
-    )
+        Func<bool>? isLive
+    ) : ZlinkStreamDispatchEntry
     {
-        QueuedCallback queued;
-        lock (_dispatchGate)
-        {
-            if (!_accepting)
-                return;
-            var admitNow =
-                _boundedDispatchCount < maxPendingDispatchCallbacks
-                && _waitingBoundedDispatchCount == 0;
-            queued = new QueuedCallback(callback, reportErrors, true, admitNow);
-            queued.Node = _dispatchQueue.AddLast(queued);
-            if (admitNow)
-            {
-                _boundedDispatchCount++;
-                _admittedDispatchCount++;
-            }
-            else
-                _waitingBoundedDispatchCount++;
-            Volatile.Write(ref _pendingDispatchCount, _admittedDispatchCount);
-        }
+        public override bool ReportErrors => reportErrors;
 
-        if (queued.IsAdmitted)
-            return;
+        public override int PendingCallbacks => isLive is null || isLive() ? 1 : 0;
 
-        try
+        public override Func<CancellationToken, ValueTask>? Take(out bool keep)
         {
-            await queued.Admission.WaitAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            lock (_dispatchGate)
-            {
-                if (queued.IsAdmitted)
-                    return;
-                if (queued.Node?.List is not null)
-                {
-                    _dispatchQueue.Remove(queued.Node);
-                    queued.Node = null;
-                    _waitingBoundedDispatchCount--;
-                }
-            }
-            throw;
+            keep = false;
+            return isLive is null || isLive() ? callback : null;
         }
     }
+}
 
-    private void AdmitNextWaitingCallbackLocked()
-    {
-        if (_waitingBoundedDispatchCount == 0)
-            return;
-        for (var node = _dispatchQueue.First; node is not null; node = node.Next)
-        {
-            var queued = node.Value;
-            if (queued.IsAdmitted || !queued.CountsAgainstLimit)
-                continue;
-            _waitingBoundedDispatchCount--;
-            _boundedDispatchCount++;
-            _admittedDispatchCount++;
-            queued.Admit();
-            return;
-        }
-        throw new InvalidOperationException("A waiting dispatch callback is missing.");
-    }
+/// <summary>
+///     One item of the dispatch queue: a callback, or a received packet whose handlers are
+///     decided when it is dispatched (stream-connector spec §7, §10).
+/// </summary>
+internal abstract class ZlinkStreamDispatchEntry
+{
+    public abstract bool ReportErrors { get; }
 
-    private sealed class QueuedCallback(
-        Func<CancellationToken, ValueTask> callback,
-        bool reportErrors,
-        bool countsAgainstLimit,
-        bool isAdmitted
-    )
-    {
-        private readonly TaskCompletionSource<bool> _admission = new(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
+    /// <summary>Callbacks the entry runs if it is dispatched with the handlers registered now.</summary>
+    public abstract int PendingCallbacks { get; }
 
-        internal Func<CancellationToken, ValueTask> Callback { get; } = callback;
-        internal bool ReportErrors { get; } = reportErrors;
-        internal bool CountsAgainstLimit { get; } = countsAgainstLimit;
-        internal bool IsAdmitted { get; private set; } = isAdmitted;
-        internal Task Admission => _admission.Task;
-        internal LinkedListNode<QueuedCallback>? Node { get; set; }
-
-        internal void Admit()
-        {
-            IsAdmitted = true;
-            _admission.TrySetResult(true);
-        }
-
-        internal void StopWaiting() => _admission.TrySetResult(true);
-    }
+    /// <summary>
+    ///     Returns what the entry runs when it is dispatched now, or <see langword="null" />
+    ///     with <paramref name="keep" /> telling whether it stays queued for a later dispatch.
+    /// </summary>
+    public abstract Func<CancellationToken, ValueTask>? Take(out bool keep);
 }
 
 /// <summary>

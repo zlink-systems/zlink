@@ -110,10 +110,10 @@ test('browser transport retains many unread payload-sized messages without disco
     }
 
     assert.equal(FakeWebSocket.last.closed, false);
-    for (let index = 0; index < 40; index += 1) {
-      await instance.dispatch();
-    }
-    assert.equal(received, 40);
+    // The receive loop takes the backlog in both dispatch modes; each dispatch
+    // runs what it has queued so far (spec stream-connector 32 §7).
+    await pumpUntil(instance, () => received === 40);
+    assert.equal(FakeWebSocket.last.closed, false);
     await instance.close();
   } finally {
     if (originalWebSocket === undefined) delete globalThis.WebSocket;
@@ -123,7 +123,7 @@ test('browser transport retains many unread payload-sized messages without disco
   }
 });
 
-test('browser close waits for the WebSocket close event', async () => {
+test('browser close does not wait for the peer to answer the WebSocket close', async () => {
   const originalWebSocket = globalThis.WebSocket;
   const originalCrypto = globalThis.crypto;
   globalThis.WebSocket = ControlledCloseWebSocket;
@@ -136,15 +136,14 @@ test('browser close waits for the WebSocket close event', async () => {
     });
     await instance.connect();
 
-    let resolved = false;
-    const closing = instance.close().then(() => { resolved = true; });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Spec stream-connector 32 §7: close starts the WebSocket close and does
+    // not wait for the peer's close frame, which this socket never delivers.
+    let timer;
+    await Promise.race([
+      instance.close(),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('close waited for the peer')), 1000); })
+    ]).finally(() => clearTimeout(timer));
     assert.equal(FakeWebSocket.last.closeRequested, true);
-    assert.equal(resolved, false);
-
-    FakeWebSocket.last.finishClose();
-    await closing;
-    assert.equal(resolved, true);
   } finally {
     if (originalWebSocket === undefined) delete globalThis.WebSocket;
     else globalThis.WebSocket = originalWebSocket;
@@ -273,12 +272,6 @@ class FakeWebSocket {
 class ControlledCloseWebSocket extends FakeWebSocket {
   close() {
     this.closeRequested = true;
-  }
-
-  finishClose() {
-    this.closed = true;
-    this.readyState = 3;
-    this.emit('close', {});
   }
 }
 

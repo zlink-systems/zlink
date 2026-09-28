@@ -398,7 +398,8 @@ public sealed partial class StreamConnectorTests
         await connector.Connect.Async();
 
         var receivedError = await error.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(ZlinkStreamErrorCode.DecompressionFailed, receivedError.Code);
+        // Spec §4.7: a decompressed result over the receive limit is FrameTooLarge.
+        Assert.Equal(ZlinkStreamErrorCode.FrameTooLarge, receivedError.Code);
         await server;
     }
 

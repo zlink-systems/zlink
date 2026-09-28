@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol.Compression;
@@ -8,6 +9,23 @@ using Xunit;
 
 public sealed partial class StreamConnectorTests
 {
+    [Fact]
+    public void ExhaustedRequestSequenceFailsWithoutReusingAnEarlierValue()
+    {
+        var requests = new ZlinkStreamPendingRequests();
+        typeof(ZlinkStreamPendingRequests)
+            .GetField("_nextRequestSeq", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(requests, -2L);
+
+        Assert.Equal(ulong.MaxValue, requests.Create("last.request").RequestSeq.Value);
+        var exception = Assert.Throws<ZlinkStreamException>(() => requests.Create("next.request"));
+        Assert.Equal(ZlinkStreamErrorCode.SendFailed, exception.Error.Code);
+        var subsequent = Assert.Throws<ZlinkStreamException>(() =>
+            requests.Create("later.request")
+        );
+        Assert.Equal(ZlinkStreamErrorCode.SendFailed, subsequent.Error.Code);
+    }
+
     [Fact]
     public async Task PendingResponseIgnoresLegacyReplyPacketName()
     {
@@ -22,11 +40,13 @@ public sealed partial class StreamConnectorTests
             ZlinkStreamMetadata.Empty
         );
 
-        Assert.True(
-            requests.TryComplete(
+        var selected = requests.TakeReply(header);
+        Assert.Same(pending, selected);
+        selected!.Complete(
+            new ZlinkStreamPendingCompletion(
                 header,
                 new ZlinkStreamFrame(ReadOnlyMemory<byte>.Empty, ReadOnlyMemory<byte>.Empty),
-                _ => new ZlinkStreamError(ZlinkStreamErrorCode.RemoteError, "unused")
+                null
             )
         );
 
@@ -255,28 +275,6 @@ public sealed partial class StreamConnectorTests
         {
             return payload;
         }
-    }
-
-    [Theory]
-    [InlineData("MaxPendingDispatchCallbacks")]
-    public async Task QueueLimitsMustBePositive(string optionName)
-    {
-        var options = optionName switch
-        {
-            "MaxPendingDispatchCallbacks" => new ZlinkStreamConnectorOptions
-            {
-                Endpoint = new Uri("tcp://127.0.0.1:1"),
-                MaxPendingDispatchCallbacks = 0,
-            },
-            _ => throw new ArgumentOutOfRangeException(nameof(optionName), optionName, null),
-        };
-
-        var exception = Assert.Throws<ZlinkStreamException>(() =>
-            ZlinkStreamConnectorFactory.Create(options)
-        );
-
-        Assert.Equal(ZlinkStreamErrorCode.ValidationFailed, exception.Error.Code);
-        await Task.CompletedTask;
     }
 
     [Fact]

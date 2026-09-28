@@ -47,6 +47,8 @@ struct actor_authority_payload_t
     node_rid_t node_rid;
     std::uint64_t node_generation = 0;
     bool has_relocation_state = false;
+    std::uint8_t relocation_phase = 0;
+    std::string relocation_expected_store_version;
 };
 
 struct actor_authority_projection_t
@@ -320,7 +322,9 @@ inline bool read_optional_text8 (reader_t &reader, bool *present = nullptr)
 inline bool read_actor_authority_relocation_state (
   reader_t &body_reader,
   std::optional<std::uint64_t> root_aggregate_generation = std::nullopt,
-  bool *has_relocation_state = nullptr)
+  bool *has_relocation_state = nullptr,
+  std::uint8_t *relocation_phase = nullptr,
+  std::string *relocation_expected_store_version = nullptr)
 {
     const auto has_relocation = body_reader.u8 ();
     if (has_relocation > 1)
@@ -357,8 +361,7 @@ inline bool read_actor_authority_relocation_state (
     if (relocation_reader.u64be () == 0 || relocation_reader.take (relocation_reader.u8 ()).empty ()
         || relocation_reader.u64be () == 0)
         return false;
-    if (!read_optional_text8 (relocation_reader))
-        return false;
+    const auto expected_version = relocation_reader.text8 ();
     const auto phase = relocation_reader.u8 ();
     if (phase == 0 || phase > 9 || (relocation_reader.u64be () & (std::uint64_t{1} << 63)) != 0
         || relocation_reader.u8 () > 2)
@@ -381,11 +384,18 @@ inline bool read_actor_authority_relocation_state (
     const auto has_target = target_attempt_generation != 0 && !target_node_rid.empty ()
                             && target_node_generation != 0 && target_owner_present
                             && target_owner_lease_generation != 0;
-    if (source_only)
-        return !has_target && target_attempt_generation == 0 && target_node_rid.empty ()
-               && target_node_generation == 0 && !target_owner_present
-               && target_owner_lease_generation == 0;
-    return has_target;
+    const bool valid = source_only
+                         ? !has_target && target_attempt_generation == 0 && target_node_rid.empty ()
+                             && target_node_generation == 0 && !target_owner_present
+                             && target_owner_lease_generation == 0
+                         : has_target;
+    if (valid) {
+        if (relocation_phase)
+            *relocation_phase = phase;
+        if (relocation_expected_store_version)
+            *relocation_expected_store_version = expected_version;
+    }
+    return valid;
 }
 
 } // namespace actor_authority_detail
@@ -839,22 +849,32 @@ decode_direct_actor_authority_payload (std::span<const std::byte> encoded)
         const auto node_rid_bytes = body_reader.take (node_rid_size);
         const auto node_generation = body_reader.u64be ();
         bool has_relocation_state = false;
+        std::uint8_t relocation_phase = 0;
+        std::string relocation_expected_store_version;
         if (owner_lease_generation == 0 || node_generation == 0
             || !actor_authority_detail::read_actor_authority_relocation_state (
-              body_reader, std::nullopt, &has_relocation_state)
+              body_reader, std::nullopt, &has_relocation_state, &relocation_phase,
+              &relocation_expected_store_version)
             || body_reader.u8 () != 0 || body_reader.u32be () != 0 || !body_reader.done ())
             return std::nullopt;
         std::string node_rid;
         node_rid.reserve (node_rid_bytes.size ());
         for (const auto byte : node_rid_bytes)
             node_rid.push_back (static_cast<char> (std::to_integer<std::uint8_t> (byte)));
-        return actor_authority_payload_t{
-          state,           stable_type,
-          actor_id,        spot_id,
-          spot_generation, spot_kind,
-          owner_id,        owner_lease_generation,
-          mesh_name,       node_rid_t::from_string (std::move (node_rid)),
-          node_generation, has_relocation_state};
+        return actor_authority_payload_t{state,
+                                         stable_type,
+                                         actor_id,
+                                         spot_id,
+                                         spot_generation,
+                                         spot_kind,
+                                         owner_id,
+                                         owner_lease_generation,
+                                         mesh_name,
+                                         node_rid_t::from_string (std::move (node_rid)),
+                                         node_generation,
+                                         has_relocation_state,
+                                         relocation_phase,
+                                         std::move (relocation_expected_store_version)};
     }
     catch (...) {
         return std::nullopt;
@@ -880,6 +900,61 @@ decode_actor_authority_payload (const std::vector<std::byte> &bytes,
                                         payload->owner_id,
                                         payload->owner_lease_generation,
                                         payload->node_generation};
+}
+
+// Payload of an Instance Spot authority whose Close committed Closing (§7 step 1).
+struct instance_closing_state_t
+{
+    std::string stable_type;
+    std::string spot_id;
+    std::uint64_t object_generation = 0;
+    std::uint64_t authority_owner_generation = 0;
+};
+
+inline std::vector<std::byte> encode_instance_closing_state (const instance_closing_state_t &state)
+{
+    const std::string value = "zlink:instance-spot:closing:v1\n" + state.stable_type + "\n"
+                              + state.spot_id + "\n" + std::to_string (state.object_generation)
+                              + "\n" + std::to_string (state.authority_owner_generation);
+    std::vector<std::byte> result;
+    result.reserve (value.size ());
+    for (const auto character : value)
+        result.push_back (static_cast<std::byte> (static_cast<unsigned char> (character)));
+    return result;
+}
+
+inline std::optional<instance_closing_state_t>
+decode_instance_closing_state (const std::vector<std::byte> &payload)
+{
+    std::string value;
+    value.reserve (payload.size ());
+    for (const auto character : payload)
+        value.push_back (static_cast<char> (std::to_integer<unsigned char> (character)));
+    constexpr std::string_view prefix = "zlink:instance-spot:closing:v1\n";
+    if (value.rfind (prefix, 0) != 0)
+        return std::nullopt;
+    std::vector<std::string> fields;
+    std::size_t begin = prefix.size ();
+    while (begin <= value.size ()) {
+        const auto end = value.find ('\n', begin);
+        fields.push_back (
+          value.substr (begin, end == std::string::npos ? std::string::npos : end - begin));
+        if (end == std::string::npos)
+            break;
+        begin = end + 1;
+    }
+    if (fields.size () != 4 || fields[0].empty () || fields[1].empty ())
+        return std::nullopt;
+    try {
+        const auto object_generation = std::stoull (fields[2]);
+        const auto owner_generation = std::stoull (fields[3]);
+        if (object_generation == 0 || owner_generation == 0)
+            return std::nullopt;
+        return instance_closing_state_t{fields[0], fields[1], object_generation, owner_generation};
+    }
+    catch (...) {
+        return std::nullopt;
+    }
 }
 
 } // namespace zlink::framework::runtime

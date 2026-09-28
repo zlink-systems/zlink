@@ -11,8 +11,6 @@ internal interface IZlinkStreamConnectorInternal : IZlinkStreamConnector
         ushort? actorSlot
     );
 
-    ValueTask SendFrameAsync(ZlinkStreamOutboundFrame frame, CancellationToken cancellationToken);
-
     ValueTask SubmitFrameAsync(ZlinkStreamOutboundFrame frame, CancellationToken cancellationToken);
 
     ValueTask<ZlinkStreamEncodedPayload> RequestEncodedAsync(

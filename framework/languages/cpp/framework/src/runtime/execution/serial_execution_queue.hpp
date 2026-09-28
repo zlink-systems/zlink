@@ -25,6 +25,8 @@ namespace zlink::framework::runtime
 {
 
 class serial_turn_handle_impl_t;
+struct serial_deferred_slot_t;
+struct serial_turn_chain_t;
 
 enum class serial_work_lane_t
 {
@@ -141,6 +143,11 @@ struct serial_work_options_t
     // refusal from a capacity/closed refusal. Only dereferenced inside the
     // synchronous post call.
     bool *actor_handoff_fence_refused = nullptr;
+    // A lifecycle item that waits outside a user callback returns its turn, so
+    // runnable application work proceeds (handler turn and execution gate §7).
+    // A relocation readiness boundary instead holds application jobs until it
+    // completes (Spot model §5.1).
+    bool holds_application_while_waiting = false;
 };
 
 using serial_submission_id_t = std::uint64_t;
@@ -189,7 +196,8 @@ class serial_execution_queue_t
                           serial_work_options_t options,
                           std::function<bool ()> stop_requested = {});
     bool try_post_deferred (std::string name, std::function<void ()> work);
-    result_t<std::shared_ptr<detail::deferred_barrier_t>> reserve_barrier_next (std::string name);
+    result_t<std::shared_ptr<detail::deferred_barrier_t>>
+    reserve_barrier_next (std::string name, bool holds_application_while_waiting = false);
     result_t<std::shared_ptr<detail::deferred_barrier_t>>
     reserve_handoff_barrier (std::string name);
     void post (std::string name, std::function<void ()> work);
@@ -216,29 +224,29 @@ class serial_execution_queue_t
         async_work_t work;
         serial_work_lane_t lane = serial_work_lane_t::application;
         std::size_t byte_cost = fixed_work_byte_cost;
-        bool after_active_phase = false;
         serial_submission_id_t submission_id = 0;
         std::function<void ()> cancel;
         std::shared_ptr<serial_turn_handle_impl_t> turn;
+        bool cancel_requested = false;
+        std::optional<std::function<void ()>> suspended_completion;
+        bool holds_application_while_waiting = false;
+        // The handler this item continues after a Yield; empty otherwise.
+        std::shared_ptr<serial_turn_chain_t> chain;
+        // The deferred-work position this item holds; empty otherwise.
+        std::shared_ptr<serial_deferred_slot_t> slot;
+    };
+
+    struct item_origin_t
+    {
+        std::shared_ptr<serial_turn_chain_t> chain;
+        std::shared_ptr<serial_deferred_slot_t> slot;
     };
 
     struct lane_state_t
     {
         std::deque<work_item_t> queue;
-        // Work registered by the current turn is released as a dedicated
-        // after-active phase. It must run before a reserved deferred barrier
-        // can be reached, but it is still a normal serial turn rather than
-        // inline execution inside completion.
-        std::deque<work_item_t> after_active_queue;
         std::size_t messages = 0;
         std::size_t bytes = 0;
-    };
-
-    struct deferred_work_t
-    {
-        std::string name;
-        std::function<void ()> work;
-        std::size_t byte_cost = fixed_work_byte_cost;
     };
 
     struct active_turn_t
@@ -246,6 +254,7 @@ class serial_execution_queue_t
         serial_submission_id_t submission_id = 0;
         std::shared_ptr<serial_turn_handle_impl_t> turn;
         std::function<void ()> cancel;
+        async_work_t ready_continuation;
         bool cancel_requested = false;
     };
 
@@ -255,17 +264,41 @@ class serial_execution_queue_t
     void complete_one (std::string name,
                        std::function<void ()> completion,
                        bool allow_inline_claim = true);
+    void complete_turn (std::string name,
+                        std::function<void ()> completion,
+                        const std::shared_ptr<serial_turn_handle_impl_t> &turn,
+                        bool allow_inline_claim);
+    void suspend_lifecycle (work_item_t item);
+    bool try_resume_suspended (const std::shared_ptr<serial_turn_handle_impl_t> &turn,
+                               std::function<void ()> work);
     lane_state_t &lane_locked (serial_work_lane_t lane) noexcept;
     const lane_state_t &lane_locked (serial_work_lane_t lane) const noexcept;
     bool enqueue_locked (std::string name,
                          async_work_t work,
                          serial_work_options_t options,
                          serial_submission_id_t submission_id = 0,
-                         std::function<void ()> cancel = {});
+                         std::function<void ()> cancel = {},
+                         item_origin_t origin = {});
+    /* Accepts the FIFO position of work a handler defers to its terminal
+     * (handler turn and execution gate §5, §7). The item is registered in the
+     * lifecycle lane now and stays unrunnable until the handler terminal fills
+     * or discards it. */
+    bool enqueue_deferred_slot (std::string name, std::shared_ptr<serial_deferred_slot_t> slot);
+    /* A lifecycle operation that released its turn (Yield) keeps the lifecycle
+     * lane until its terminal (§7): only its own continuation runs there. */
+    bool try_post_continuation (std::string name,
+                                async_work_t work,
+                                serial_work_lane_t lane,
+                                std::shared_ptr<serial_turn_chain_t> chain);
+    void hold_lifecycle (std::shared_ptr<serial_turn_chain_t> chain);
+    void release_lifecycle_hold (const serial_turn_chain_t *chain);
+    void schedule_after_settle ();
     std::shared_ptr<serial_turn_handle_impl_t>
-    create_turn (const std::string &name, serial_work_lane_t lane, bool after_active_phase);
+    create_turn (const std::string &name, serial_work_lane_t lane, item_origin_t origin);
     void activate_turn_locked (work_item_t &item) noexcept;
-    bool has_ready_locked () const noexcept;
+    std::deque<work_item_t>::iterator next_lifecycle_locked () noexcept;
+    bool has_queued_locked () const noexcept;
+    bool has_ready_locked () noexcept;
     work_item_t take_next_locked ();
     void report_deferred_error (const std::string &name,
                                 const std::exception_ptr &error) const noexcept;
@@ -278,8 +311,9 @@ class serial_execution_queue_t
     std::condition_variable _empty;
     lane_state_t _application;
     lane_state_t _lifecycle;
-    std::vector<deferred_work_t> _deferred_after_active;
+    std::shared_ptr<serial_turn_chain_t> _lifecycle_hold;
     std::optional<active_turn_t> _active_turn;
+    std::optional<work_item_t> _suspended_lifecycle;
     std::optional<serial_work_lane_t> _active_lane;
     std::size_t _active_bytes = 0;
     std::optional<std::chrono::steady_clock::time_point> _claim_started_at;

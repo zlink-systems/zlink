@@ -8,7 +8,6 @@ public static class SampleNames
     public const string OrderProjectionTopic = "shoppingmall.order.projection";
     public const string OrderProjectionChannel = "shoppingmall.order.projection.channel";
     public const string OrderWorkflowSpotType = "shoppingmall.order-workflow";
-    public const string PlannedRelocationSpotType = "shoppingmall.planned-relocation";
 }
 
 public static class OrderStatuses

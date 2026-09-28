@@ -1,10 +1,11 @@
 package systems.zlink.framework.runtime.internal.service;
 
-import systems.zlink.contracts.core.RoutingId;
-
 import java.util.Objects;
 
-/** Validates one admission and selects one physical pipe per peer lifecycle. */
+/**
+ * Validates one admission against the expected route. Core selects the physical pipe of each RID
+ * (Core ROUTER §10.1); this guard only checks the logical identity carried by the handshake.
+ */
 public final class ZLinkServiceAdmissionGuard {
     private ZLinkServiceAdmissionGuard() {}
 
@@ -19,51 +20,5 @@ public final class ZLinkServiceAdmissionGuard {
                         || expectedSecurityIdentity.equals(incoming.securityIdentity()))
                 && (expectedLifecycleGeneration == 0
                         || expectedLifecycleGeneration == incoming.lifecycleGeneration());
-    }
-
-    public static DuplicateConnectionDecision selectConnection(
-            RoutingId localRid,
-            RoutingId peerRid,
-            long currentLifecycleGeneration,
-            ConnectionDirection currentDirection,
-            String currentDiscriminator,
-            long incomingLifecycleGeneration,
-            ConnectionDirection incomingDirection,
-            String incomingDiscriminator) {
-        Objects.requireNonNull(localRid, "localRid");
-        Objects.requireNonNull(peerRid, "peerRid");
-        Objects.requireNonNull(currentDirection, "currentDirection");
-        Objects.requireNonNull(incomingDirection, "incomingDirection");
-        Objects.requireNonNull(currentDiscriminator, "currentDiscriminator");
-        Objects.requireNonNull(incomingDiscriminator, "incomingDiscriminator");
-
-        if (currentLifecycleGeneration != 0
-                && currentLifecycleGeneration != incomingLifecycleGeneration) {
-            return DuplicateConnectionDecision.NOT_DUPLICATE;
-        }
-
-        ConnectionDirection preferredDirection =
-                localRid.toHex().compareTo(peerRid.toHex()) < 0
-                        ? ConnectionDirection.OUTBOUND
-                        : ConnectionDirection.INBOUND;
-        if (currentDirection != incomingDirection) {
-            return currentDirection == preferredDirection
-                    ? DuplicateConnectionDecision.KEEP_CURRENT
-                    : DuplicateConnectionDecision.USE_INCOMING;
-        }
-        return currentDiscriminator.compareTo(incomingDiscriminator) <= 0
-                ? DuplicateConnectionDecision.KEEP_CURRENT
-                : DuplicateConnectionDecision.USE_INCOMING;
-    }
-
-    public enum ConnectionDirection {
-        INBOUND,
-        OUTBOUND
-    }
-
-    public enum DuplicateConnectionDecision {
-        NOT_DUPLICATE,
-        KEEP_CURRENT,
-        USE_INCOMING
     }
 }

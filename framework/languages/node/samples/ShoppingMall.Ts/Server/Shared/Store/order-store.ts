@@ -136,6 +136,13 @@ class OrderStore {
   }
   // --8<-- [end:doc-sm-api-start]
 
+  getOrderByIdempotencyKey(idempotencyKey: string): OrderState | undefined {
+    const mapping = this.readCommerce().mappings[idempotencyKey];
+    if (mapping === undefined) return undefined;
+    const order = this.readOrder(mapping.orderId);
+    return order.stream.length > 0 ? this.fold(order.stream) : undefined;
+  }
+
   createPendingMapping(
     idempotencyKey: string,
     orderId: string,

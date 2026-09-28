@@ -233,7 +233,7 @@ TEST (ChannelHostReplyAdmission, MissingRouteTerminatesOnceWithOrdinaryEnvelopeO
       {.packet_name = request_t::packet_name});
 
     zlink::framework::runtime::channel_host_service_t host (
-      builder.message_bus (), runtime.channel_snapshots (), handlers, serializers);
+      builder.message_bus (), runtime.channel_snapshots (), handlers, serializers, {});
     host.start (provider);
 
     zlink::router_socket_t source (*context);

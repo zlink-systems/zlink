@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Spots;
@@ -24,9 +25,8 @@ internal abstract partial class ZLinkSpotActivation
 
         return ReferenceEquals(ZLinkSpotAmbientContext.CurrentOrDefault, this)
             ? LeaveActorCoreAsync(actor, cancellationToken)
-            : ExecuteSerializedAsync(
-                static (activation, state, ct) => activation.LeaveActorCoreAsync(state, ct),
-                actor,
+            : _serial.ExecuteLifecycleAsync(
+                (activation, ct) => activation.LeaveActorCoreAsync(actor, ct),
                 cancellationToken
             );
     }
@@ -89,8 +89,8 @@ internal abstract partial class ZLinkSpotActivation
             return state.Result;
         }
 
-        await ExecuteSerializedAsync(
-            static async (activation, state, ct) =>
+        await _serial.ExecuteLifecycleAsync(
+            async (activation, ct) =>
             {
                 state.Result = await activation.InvokeActorJoinAsync(
                     state.Descriptor,
@@ -103,7 +103,6 @@ internal abstract partial class ZLinkSpotActivation
                         .CommitActorJoinCoreAsync(state.Actor, ct, state.AbsoluteDeadline)
                         .ConfigureAwait(false);
             },
-            state,
             cancellationToken
         );
 
@@ -604,7 +603,15 @@ internal abstract partial class ZLinkSpotActivation
         DateTimeOffset? absoluteDeadline = null
     )
     {
-        await _membershipPublicationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        if (ZLinkSerialTurn.Current is { } membershipTurn)
+            await membershipTurn
+                .YieldFrameworkCallAsync(
+                    ct => new ValueTask(_membershipPublicationGate.WaitAsync(ct)),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+        else
+            await _membershipPublicationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         ZLinkSpotActivation? previousActivation;
         try
         {
@@ -620,28 +627,34 @@ internal abstract partial class ZLinkSpotActivation
                     actor,
                     async ct =>
                     {
-                        if (_runtime.LocationLifecycle is not { } locations)
-                            return;
-                        var spotGeneration =
+                        if (ZLinkSerialTurn.Current is { } authorityTurn)
+                            await authorityTurn
+                                .YieldFrameworkCallAsync(WriteAuthorityAsync, ct)
+                                .ConfigureAwait(false);
+                        else
+                            await WriteAuthorityAsync(ct).ConfigureAwait(false);
+
+                        async ValueTask WriteAuthorityAsync(CancellationToken writeToken)
+                        {
+                            if (_runtime.LocationLifecycle is not { } locations)
+                                return;
+                            var spotGeneration =
+                                await locations
+                                    .SpotLocations.GetTrackedGenerationAsync(RuntimeSpotId)
+                                    .ConfigureAwait(false)
+                                ?? 0;
                             await locations
-                                .SpotLocations.GetTrackedGenerationAsync(RuntimeSpotId)
-                                .ConfigureAwait(false)
-                            ?? 0;
-                        await locations
-                            .ActorOwnership.NotifyActorJoinedSpotAsync(
-                                actor.Context.ActorId,
-                                SpotId,
-                                spotGeneration,
-                                ct
-                            )
-                            .ConfigureAwait(false);
-                        //  Same-node join commits the location authority just as
-                        //  a cross-node handoff does, so it reports the commit on
-                        //  the same channel. Using the debug console here left
-                        //  the marker invisible to anything reading ILogger.
-                        _runtime.LogActorHandoff(
-                            $"location_committed actor={actor.Context.ActorId} spot={SpotId}"
-                        );
+                                .ActorOwnership.NotifyActorJoinedSpotAsync(
+                                    actor.Context.ActorId,
+                                    SpotId,
+                                    spotGeneration,
+                                    writeToken
+                                )
+                                .ConfigureAwait(false);
+                            _runtime.LogActorHandoff(
+                                $"location_committed actor={actor.Context.ActorId} spot={SpotId}"
+                            );
+                        }
                     },
                     () =>
                     {

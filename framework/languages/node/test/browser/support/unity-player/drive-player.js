@@ -16,7 +16,6 @@
 // runner has no way to skip on.
 const fs = require('node:fs');
 const http = require('node:http');
-const net = require('node:net');
 const path = require('node:path');
 const childProcess = require('node:child_process');
 
@@ -85,10 +84,8 @@ async function main() {
 async function run(player, label) {
   const { chromium } = require('playwright');
   const index = findIndex(player);
-  const streamPort = await freePort();
-  const endpoint = `ws://127.0.0.1:${streamPort}`;
-
-  const streamServer = await startStreamServer(endpoint);
+  const streamServer = await startStreamServer('ws://127.0.0.1:0');
+  const endpoint = streamServer.endpoint;
   const staticServer = await startStaticServer(player, index);
   // Unity's player loop is requestAnimationFrame. Headless Chromium throttles
   // rAF for a renderer it considers backgrounded or occluded, and a throttled
@@ -231,16 +228,18 @@ function startStreamServer(endpoint) {
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk) => {
       buffered += chunk;
-      for (const line of buffered.split('\n')) {
+      for (const line of buffered.split('\n').slice(0, -1)) {
         if (!line.trim().startsWith('{')) continue;
         try {
-          if (JSON.parse(line).event === 'ready') {
+          const ready = JSON.parse(line);
+          if (ready.event === 'ready') {
             clearTimeout(timer);
+            child.endpoint = ready.endpoint;
             resolve(child);
             return;
           }
         } catch {
-          // A partial line; the next chunk completes it.
+          // Ignore non-JSON output from the server process.
         }
       }
     });
@@ -266,17 +265,6 @@ function stopChild(child) {
 
 function closeServer(server) {
   return new Promise((resolve) => (server ? server.close(() => resolve()) : resolve()));
-}
-
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const probe = net.createServer();
-    probe.on('error', reject);
-    probe.listen(0, '127.0.0.1', () => {
-      const { port } = probe.address();
-      probe.close(() => resolve(port));
-    });
-  });
 }
 
 function argument(name) {

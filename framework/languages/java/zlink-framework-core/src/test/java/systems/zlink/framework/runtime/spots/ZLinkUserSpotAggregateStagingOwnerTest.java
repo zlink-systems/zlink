@@ -6,7 +6,10 @@ import org.junit.jupiter.api.Test;
 
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 
@@ -59,6 +62,42 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
         assertTrue(
                 backend.operations.indexOf("timers:publish")
                         < backend.operations.indexOf("replay:spot:1"));
+    }
+
+    @Test
+    void relocationTargetRestoreHoldsOneActivationAdmissionUntilCommitOrDiscard() {
+        var admission = new ZLinkActivationAdmission(1);
+        FakeBackend backend = new FakeBackend();
+        ZLinkUserSpotAggregateStagingOwner owner =
+                new ZLinkUserSpotAggregateStagingOwner(backend, admission);
+
+        // MeshNode §5.1: the Restore holds one admission from reception to target commit.
+        var staged = owner.stage(request(), () -> false).toCompletableFuture().join();
+        assertEquals(1, admission.snapshot().active());
+        CompletionException full =
+                assertThrows(
+                        CompletionException.class,
+                        () -> owner.stage(request(), () -> false).toCompletableFuture().join());
+        assertEquals(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                assertInstanceOf(ZLinkFrameworkException.class, full.getCause()).kind());
+        owner.publishAndReplay(staged, (lane, record) -> CompletableFuture.completedFuture(null))
+                .toCompletableFuture()
+                .join();
+        assertEquals(0, admission.snapshot().active());
+
+        // Discarding a staged Restore returns its admission.
+        var discarded = owner.stage(request(), () -> false).toCompletableFuture().join();
+        assertEquals(1, admission.snapshot().active());
+        owner.discard(discarded).toCompletableFuture().join();
+        assertEquals(0, admission.snapshot().active());
+
+        // A failed Restore returns its admission as well.
+        backend.failActor = "actor-b";
+        assertThrows(
+                CompletionException.class,
+                () -> owner.stage(request(), () -> false).toCompletableFuture().join());
+        assertEquals(0, admission.snapshot().active());
     }
 
     @Test

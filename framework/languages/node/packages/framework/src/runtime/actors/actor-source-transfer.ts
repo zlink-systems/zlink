@@ -27,36 +27,23 @@ export interface ZLinkPreparedActorSource {
 
 export interface ZLinkActorSourceTransfer {
   /** Starts the ingress handoff before target route lookup. */
-  beginDeferredActorHandoff?(
-    actor: ZLinkActor,
-    state: ZLinkActorRuntimeState,
-    operationId: string
-  ): void;
+  beginDeferredActorHandoff?(actor: ZLinkActor, state: ZLinkActorRuntimeState): void;
   /** Changes a provisional ingress fence into a relocation handoff. */
-  promoteDeferredActorHandoff?(
-    actor: ZLinkActor,
-    state: ZLinkActorRuntimeState,
-    operationId: string
-  ): void;
+  promoteDeferredActorHandoff?(actor: ZLinkActor, state: ZLinkActorRuntimeState): void;
   /** Finishes a same-node deferred Join handoff after completion callback. */
   completeDeferredActorHandoff?(
     actor: ZLinkActor,
     target: ZLinkSpotRouteTarget,
-    targetActorRef: ActorRef,
-    operationId: string
+    targetActorRef: ActorRef
   ): Promise<void>;
   /** Releases an early handoff when Join cannot commit. */
-  cancelDeferredActorHandoff?(
-    actor: ZLinkActor,
-    state: ZLinkActorRuntimeState,
-    operationId: string
-  ): Promise<void>;
+  cancelDeferredActorHandoff?(actor: ZLinkActor, state: ZLinkActorRuntimeState): Promise<void>;
   prepareSource(
     actor: ZLinkActor,
     state: ZLinkActorRuntimeState,
     signal?: AbortSignal,
     lifecycleAuthority?: 'framework' | 'core',
-    deferredOperationId?: string,
+    deferredJoin?: boolean,
     relocation?: ServiceWireOperationId
   ): Promise<ZLinkPreparedActorSource>;
 }

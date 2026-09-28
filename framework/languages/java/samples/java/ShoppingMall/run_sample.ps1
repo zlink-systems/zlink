@@ -85,7 +85,7 @@ function Protect-ConfigFile {
 function Write-ConfigFile {
     param([string]$Name, [string[]]$Lines)
     $path = Join-Path $RunDir "$Name.properties"
-    Set-ZlinkSampleUtf8File -Path $path -Value $Lines
+    Set-ZlinkSampleProperties -Path $path -Value $Lines
     Protect-ConfigFile $path
     return $path
 }
@@ -176,7 +176,7 @@ try {
 
     $redisKeyPrefix = "shoppingmall:java:${PID}:$([Guid]::NewGuid().ToString('N')):"
     $commonConfig = @(
-        "sample.logDirectory=$($LogDir.Replace('\', '/'))",
+        "sample.logDirectory=$LogDir",
         "sample.redisEndpoint=$redisEndpoint",
         "sample.redisKeyPrefix=$redisKeyPrefix"
     )

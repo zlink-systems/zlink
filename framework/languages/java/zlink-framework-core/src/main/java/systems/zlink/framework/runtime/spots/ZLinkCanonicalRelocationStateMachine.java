@@ -13,16 +13,21 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityConflict;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityEntry;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityGenerationTransition;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPage;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityScanCursor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityScanExpired;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityStored;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseFound;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
 import systems.zlink.framework.runtime.internal.locations.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.internal.locations.ZLinkSpotTypeCapacityDelta;
@@ -82,7 +87,6 @@ final class ZLinkCanonicalRelocationStateMachine
     private final Map<Fence, SourceAttempt> sources = new HashMap<>();
     private final Map<Fence, TargetAttempt> targets = new HashMap<>();
     private final Map<Fence, TerminalTarget> terminalTargets = new HashMap<>();
-    private final Map<Fence, RetainedSource> retainedSources = new HashMap<>();
     private final AtomicInteger openSourceQuiescenceWindows = new AtomicInteger();
 
     CompletionStage<Void> awaitAcceptedTargetRelocations() {
@@ -295,81 +299,192 @@ final class ZLinkCanonicalRelocationStateMachine
                         prepare.object(),
                         batch.recordCount(),
                         batch.checksumCrc32c());
-        Fence key = Fence.from(fence);
         byte[] encodedCutover = ZLinkCanonicalRelocationProtocol.encodeCutover(cutover);
-        return send(targetNodeRid, encodedCutover)
-                .whenComplete(
-                        (ignored, failure) -> {
-                            //  Cutover submit terminal (S1). The payload and boundary
-                            //  batch copies stay retained for the retransmission window
-                            //  regardless of the submit result (spec 28 §4.4).
-                            inStateLane(() -> sources.remove(key, attempt));
-                            retainSourceCopies(key, attempt, encodedCutover);
-                        });
+        //  Cutover submit terminal only: the source attempt, its payload and the whole
+        //  boundary batch stay retained until settle() confirms authority (spec 28 §4.4).
+        attempt.cutover(encodedCutover);
+        return send(targetNodeRid, encodedCutover);
     }
 
-    private void retainSourceCopies(Fence key, SourceAttempt attempt, byte[] encodedCutover) {
-        RetainedSource retained =
-                new RetainedSource(
-                        attempt.request().targetNodeRid(),
-                        attempt.batch().encodedFrames(),
-                        encodedCutover);
-        boolean retainedNew =
-                inStateLane(
-                        () -> {
-                            if (retainedSources.containsKey(key)) {
-                                return false;
-                            }
-                            retainedSources.put(key, retained);
-                            return true;
-                        });
-        if (!retainedNew) {
-            return;
-        }
-        long submitNanos = System.nanoTime();
+    /**
+     * Settles the source side of one relocation attempt from the Location Store authority (spec 28
+     * §4.4, spec 01 §10). Before {@code preserveAt} the source only reads the primary authority
+     * record; from {@code preserveAt} it runs the {@code Preserve} fence — an expected-StoreVersion
+     * CAS that keeps the source owner. The source attempt, its payload and the boundary batch stay
+     * retained until one of the outcomes is definitive. A transport reconnect observed while
+     * waiting resends the whole boundary batch and the cutover.
+     */
+    @Override
+    public CompletionStage<Settlement> settle(
+            RoutingId targetNodeRid, ZLinkSpotRetireControl.Fence fence, Instant preserveAt) {
+        Objects.requireNonNull(preserveAt, "preserveAt");
+        Fence key = Fence.from(fence);
+        SourceAttempt attempt = requireSource(key, targetNodeRid);
+        long settleNanos = System.nanoTime();
         openSourceQuiescenceWindows.incrementAndGet();
-        Instant now = Instant.now();
-        //  Exactly-once copy cleanup after the retransmission window.
-        retentionScheduler.schedule(
-                now.plus(transferOptions.cutoverWaitTimeout()),
-                () -> inStateLane(() -> retainedSources.remove(key, retained)));
-        //  Source quiescence (SafeToShutdown component): the unit is done
-        //  when both the retransmission window and the Message Follow route
-        //  window (S4) have elapsed — both source-local (spec 30 §11).
-        Duration quiescence =
-                transferOptions
-                                        .cutoverWaitTimeout()
-                                        .compareTo(transferOptions.messageFollowDuration())
-                                >= 0
-                        ? transferOptions.cutoverWaitTimeout()
-                        : transferOptions.messageFollowDuration();
-        retentionScheduler.schedule(
-                now.plus(quiescence),
-                () -> {
-                    openSourceQuiescenceWindows.decrementAndGet();
-                    ZLinkRuntimeMetrics.record(
-                            "zlink.relocation.route_convergence",
-                            Duration.ofNanos(System.nanoTime() - submitNanos),
-                            Map.of());
+        CompletableFuture<Settlement> result = new CompletableFuture<>();
+        settleSource(attempt, preserveAt, true, result);
+        return result.whenComplete(
+                (settlement, failure) -> {
+                    inStateLane(() -> sources.remove(key, attempt));
+                    if (settlement != Settlement.TARGET_COMMITTED) {
+                        openSourceQuiescenceWindows.decrementAndGet();
+                        return;
+                    }
+                    //  Source quiescence (SafeToShutdown component) stays open for the
+                    //  Message Follow route window after the target commit (spec 30 §11).
+                    retentionScheduler.schedule(
+                            Instant.now().plus(transferOptions.messageFollowDuration()),
+                            () -> {
+                                openSourceQuiescenceWindows.decrementAndGet();
+                                ZLinkRuntimeMetrics.record(
+                                        "zlink.relocation.route_convergence",
+                                        Duration.ofNanos(System.nanoTime() - settleNanos),
+                                        Map.of());
+                            });
+                });
+    }
+
+    private void settleSource(
+            SourceAttempt attempt,
+            Instant preserveAt,
+            boolean transportConnected,
+            CompletableFuture<Settlement> result) {
+        var prepare = attempt.prepare();
+        String key = primary(attempt.request().participants()).authorityKey();
+        String expected = prepare.coordinator().expectedAuthorityStoreVersion();
+        boolean fence = !Instant.now().isBefore(preserveAt);
+        CompletionStage<Optional<Settlement>> step =
+                locations
+                        .read(key, OPEN)
+                        .thenCompose(
+                                read -> {
+                                    Optional<Settlement> observed =
+                                            settlementOf(read, attempt.request(), expected);
+                                    if (observed.isPresent()) {
+                                        return CompletableFuture.completedFuture(observed);
+                                    }
+                                    var owner = prepare.coordinator();
+                                    return leaseLive(owner.ownerId(), owner.ownerLeaseGeneration())
+                                            .thenCompose(
+                                                    live -> {
+                                                        if (!live) {
+                                                            return CompletableFuture
+                                                                    .completedFuture(
+                                                                            Optional.of(
+                                                                                    Settlement
+                                                                                            .SOURCE_LEASE_EXPIRED));
+                                                        }
+                                                        return fence
+                                                                        && read
+                                                                                instanceof
+                                                                                ZLinkAuthoritySnapshot
+                                                                                        current
+                                                                ? preserveSource(
+                                                                        attempt, key, expected,
+                                                                        current)
+                                                                : CompletableFuture.completedFuture(
+                                                                        Optional
+                                                                                .<Settlement>
+                                                                                        empty());
+                                                    });
+                                });
+        step.whenComplete(
+                (settled, failure) -> {
+                    if (failure == null && settled.isPresent()) {
+                        if (settled.get() == Settlement.SOURCE_PRESERVED) {
+                            //  Release the target's pending aggregate reservation; the fence
+                            //  already decided authority, so this cleanup is best effort.
+                            coordinator
+                                    .abortPreparedFence(
+                                            new ZLinkAggregateFence(
+                                                    prepare.id(),
+                                                    prepare.targetAttemptGeneration()),
+                                            OPEN)
+                                    .exceptionally(ignored -> null);
+                        }
+                        result.complete(settled.get());
+                        return;
+                    }
+                    //  Uncertain or not yet committed: keep every copy and ask again. A
+                    //  reconnect after a lost transport resends the whole batch and cutover.
+                    boolean connected = node.isPeerTransportConnected(attempt.targetNodeRid());
+                    CompletionStage<Void> resend =
+                            connected && !transportConnected && !fence
+                                    ? retransmitBoundaryBatch(attempt)
+                                    : CompletableFuture.completedFuture(null);
+                    resend.whenComplete(
+                            (ignored, resendFailure) ->
+                                    delayScheduler.schedule(
+                                            STORE_RETRY_DELAY,
+                                            () ->
+                                                    settleSource(
+                                                            attempt,
+                                                            preserveAt,
+                                                            connected,
+                                                            result)));
                 });
     }
 
     /**
-     * Resends the boundary batch and cutover on the current connection while the retransmission
-     * window is open. The target replaces its partially received pre-boundary section with the
-     * whole batch (spec 28 §4.4).
+     * The source {@code Preserve} fence (spec 01 §6.1): an expected-StoreVersion CAS on the version
+     * the target NewOwner CAS expects, keeping the source owner. The caller checks the live source
+     * owner lease before submitting this CAS (spec 28 §4.4).
      */
-    CompletionStage<Void> retransmitBoundaryBatch(ZLinkSpotRetireControl.Fence fence) {
-        RetainedSource retained = inStateLane(() -> retainedSources.get(Fence.from(fence)));
-        if (retained == null) {
+    private CompletionStage<Optional<Settlement>> preserveSource(
+            SourceAttempt attempt, String key, String expected, ZLinkAuthoritySnapshot current) {
+        return locations
+                .compareExchange(
+                        key,
+                        new ZLinkAuthorityExpectFound(expected),
+                        new ZLinkAuthorityPut(current.payload()),
+                        OPEN)
+                .thenApply(
+                        written -> {
+                            if (written instanceof ZLinkAuthorityStored) {
+                                return Optional.of(Settlement.SOURCE_PRESERVED);
+                            }
+                            //  A conflict is reconciled from the current
+                            //  record; anything else is indeterminate.
+                            return written instanceof ZLinkAuthorityConflict conflict
+                                    ? settlementOf(conflict.current(), attempt.request(), expected)
+                                    : Optional.<Settlement>empty();
+                        });
+    }
+
+    /**
+     * Classifies one read of the primary authority record against the source fence: target owner
+     * means the target commit is confirmed; any other StoreVersion means the target commit can no
+     * longer succeed, so the source keeps authority.
+     */
+    private static Optional<Settlement> settlementOf(
+            ZLinkAuthorityReadResult read,
+            ZLinkSpotRetireControl.StageRequest request,
+            String expectedStoreVersion) {
+        if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
+            return Optional.empty();
+        }
+        if (snapshot.ownerId().equals(request.targetOwnerId())
+                && snapshot.ownerLeaseGeneration() == request.targetOwnerLeaseGeneration()) {
+            return Optional.of(Settlement.TARGET_COMMITTED);
+        }
+        return snapshot.storeVersion().equals(expectedStoreVersion)
+                ? Optional.empty()
+                : Optional.of(Settlement.SOURCE_PRESERVED);
+    }
+
+    /** Resends the whole boundary batch and the cutover after a transport reconnect. */
+    private CompletionStage<Void> retransmitBoundaryBatch(SourceAttempt attempt) {
+        byte[] cutover = attempt.cutover();
+        if (cutover == null) {
             return CompletableFuture.completedFuture(null);
         }
+        RoutingId targetRid = attempt.targetNodeRid();
         CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
-        for (byte[] frame : retained.dataFrames()) {
-            chain = chain.thenCompose(ignored -> send(retained.targetNodeRid(), frame));
+        for (byte[] frame : attempt.batch().encodedFrames()) {
+            chain = chain.thenCompose(ignored -> send(targetRid, frame));
         }
-        return chain.thenCompose(
-                ignored -> send(retained.targetNodeRid(), retained.encodedCutover()));
+        return chain.thenCompose(ignored -> send(targetRid, cutover));
     }
 
     @Override
@@ -615,7 +730,7 @@ final class ZLinkCanonicalRelocationStateMachine
         CompletableFuture<Void> publication = created;
         publication.whenComplete(
                 (ignored, failure) -> {
-                    if (failure != null && !attempt.fallbackArmed()) {
+                    if (failure != null && !attempt.relayReadyAccepted()) {
                         // READY is a one-way submission. Its transport or source-side
                         // conflict failure leaves the prepared target intact so an
                         // exact PREPARE can submit READY again with the same fence.
@@ -626,9 +741,8 @@ final class ZLinkCanonicalRelocationStateMachine
         //  stage may run this chain's synchronous prefix and reenter here.
         attempt.ready()
                 .thenCompose(ignored -> sendReady(source, attempt.prepare()))
-                .thenRun(() -> armCutoverFallback(fence, attempt))
-                .exceptionallyCompose(
-                        failure -> rollbackReadySubmission(fence, attempt, unwrap(failure)))
+                .thenRun(() -> acceptRelayReady(fence, attempt))
+                .exceptionallyCompose(failure -> rollbackReadySubmission(attempt, unwrap(failure)))
                 .whenComplete(
                         (ignored, failure) -> {
                             if (failure == null) {
@@ -641,48 +755,14 @@ final class ZLinkCanonicalRelocationStateMachine
     }
 
     private CompletionStage<Void> rollbackReadySubmission(
-            Fence fence, TargetAttempt attempt, Throwable readyFailure) {
-        if (attempt.fallbackArmed()) {
+            TargetAttempt attempt, Throwable readyFailure) {
+        if (attempt.relayReadyAccepted()) {
             return failed(readyFailure);
-        }
-        ZLinkAggregateRelocationCoordinator.Prepared prepared = completedValue(attempt.prepared());
-        if (prepared != null) {
-            retentionScheduler.schedule(
-                    prepared.restoreDeadline(), () -> expireReadySubmission(fence, attempt));
         }
         //  Do not abort here.  This is a retryable READY submission failure,
         //  not an explicit pre-relay-ready abort: target.abort removes the
         //  Actor target stage that the exact retry must publish.
         return failed(readyFailure);
-    }
-
-    private void expireReadySubmission(Fence fence, TargetAttempt attempt) {
-        boolean removed = inStateLane(() -> targets.remove(fence, attempt));
-        if (!removed || attempt.fallbackArmed()) {
-            return;
-        }
-        ZLinkSpotRetireControl.StageRequest request = completedValue(attempt.request());
-        if (request != null) {
-            target.abort(request)
-                    .exceptionally(
-                            failure -> {
-                                LOGGER.warning(
-                                        "Canonical relocation READY retry expiry "
-                                                + "could not discard target stage: "
-                                                + unwrap(failure));
-                                return null;
-                            })
-                    .whenComplete(
-                            (ignored, failure) -> {
-                                if (failure == null) {
-                                    attempt.terminal().complete(null);
-                                } else {
-                                    attempt.terminal().completeExceptionally(unwrap(failure));
-                                }
-                            });
-        } else {
-            attempt.terminal().complete(null);
-        }
     }
 
     private static <T> T completedValue(CompletableFuture<T> future) {
@@ -733,14 +813,14 @@ final class ZLinkCanonicalRelocationStateMachine
                                                         unwrap(failure),
                                                         attempt.prepare().object().kind())));
                             }
-                            armCutoverFallback(fence, attempt);
+                            acceptRelayReady(fence, attempt);
                             return encodeReady(attempt.prepare());
                         });
     }
 
-    private void armCutoverFallback(Fence fence, TargetAttempt attempt) {
-        attempt.fallbackArmed(true);
-        scheduleCutoverFallback(fence, attempt);
+    private void acceptRelayReady(Fence fence, TargetAttempt attempt) {
+        attempt.relayReadyAccepted(true);
+        scheduleCutoverWarning(fence, attempt);
     }
 
     private CompletionStage<Void> publishFailure(
@@ -966,15 +1046,15 @@ final class ZLinkCanonicalRelocationStateMachine
                 || !data.object().equals(attempt.prepare().object())) {
             return failed(new IllegalArgumentException("canonical relocation data fence differs"));
         }
+        if (attempt.receivedCutover() != null) {
+            //  A resent batch after the verified cutover is a late duplicate.
+            LOGGER.warning("Late canonical relay DATA after a verified CUTOVER is a no-op");
+            return CompletableFuture.completedFuture(null);
+        }
+        //  The pre-boundary section is staged only after the cutover verifies it,
+        //  so a resent whole batch replaces a partially received one (spec 28 §4.4).
         attempt.boundary().append(data.frozenRecord());
-        return attempt.ready()
-                .thenCompose(
-                        ignored ->
-                                attempt.request()
-                                        .thenCompose(
-                                                request ->
-                                                        target.stageRelayedRecord(
-                                                                request, data.frozenRecord())));
+        return CompletableFuture.completedFuture(null);
     }
 
     private CompletionStage<Void> onCutover(
@@ -1004,13 +1084,17 @@ final class ZLinkCanonicalRelocationStateMachine
             return failed(
                     new IllegalArgumentException("canonical relocation cutover fence differs"));
         }
-        RelayBoundary.Snapshot boundary = attempt.boundary().snapshot();
-        if (boundary.recordCount() != cutover.boundaryRecordCount()
-                || boundary.checksumCrc32c() != cutover.boundaryChecksumCrc32c()) {
-            //  Replacement by a retransmitted batch: discard the partially
-            //  received pre-boundary section and wait for the whole batch —
-            //  on an ordered connection a mismatch at first receipt is a
-            //  defect signal (spec 28 §4.4).
+        if (attempt.receivedCutover() != null) {
+            LOGGER.warning("Late or duplicate canonical CUTOVER is a no-op: " + fence.id());
+            return CompletableFuture.completedFuture(null);
+        }
+        Optional<List<byte[]>> batch =
+                attempt.boundary()
+                        .verifiedBatch(
+                                cutover.boundaryRecordCount(), cutover.boundaryChecksumCrc32c());
+        if (batch.isEmpty()) {
+            //  On an ordered connection a mismatch is a defect signal. The target
+            //  keeps waiting for a resent whole batch and never opens without it.
             LOGGER.severe(
                     "Canonical CUTOVER boundary record count or checksum differs"
                             + " from the received relay section: "
@@ -1019,31 +1103,67 @@ final class ZLinkCanonicalRelocationStateMachine
                     new IllegalStateException("canonical relocation cutover boundary differs"));
         }
         attempt.receivedCutover(ZLinkCanonicalRelocationProtocol.encodeCutover(cutover));
-        return publishTarget(fence, attempt, false);
+        return publishTarget(fence, attempt, batch.get());
     }
 
-    private void scheduleCutoverFallback(Fence fence, TargetAttempt attempt) {
+    /**
+     * The cutover wait is a Warning threshold only (spec 28 §4.4): it never starts the target CAS
+     * or dispatch. From then on the target also reads the Location Store so a confirmed source
+     * {@code Preserve} or a lost target lease discards the staging (spec 01 §10).
+     */
+    private void scheduleCutoverWarning(Fence fence, TargetAttempt attempt) {
         delayScheduler.schedule(
                 transferOptions.cutoverWaitTimeout(),
-                () -> publishTarget(fence, attempt, true).exceptionally(ignored -> null));
+                () -> {
+                    if (attempt.publication() != null) {
+                        return;
+                    }
+                    LOGGER.warning(
+                            "cutover_timeout: relay-ready wait elapsed without a verified"
+                                    + " CUTOVER; target CAS and dispatch stay closed: "
+                                    + fence.id());
+                    ZLinkRuntimeMetrics.increment("zlink.relocation.cutover_timeout", Map.of());
+                    watchUnverifiedTarget(fence, attempt);
+                });
     }
 
-    private CompletionStage<Void> publishTarget(
-            Fence fence, TargetAttempt attempt, boolean fallback) {
+    private void watchUnverifiedTarget(Fence fence, TargetAttempt attempt) {
+        if (attempt.publication() != null) {
+            return;
+        }
+        ZLinkSpotRetireControl.StageRequest request = completedValue(attempt.request());
+        if (request == null) {
+            return;
+        }
+        observeTarget(attempt.prepare(), request)
+                .whenComplete(
+                        (observed, failure) -> {
+                            if (failure == null
+                                    && (observed == TargetAuthority.SOURCE_PRESERVED
+                                            || observed == TargetAuthority.TARGET_LEASE_LOST)) {
+                                discardTarget(
+                                        fence,
+                                        attempt,
+                                        new IllegalStateException(
+                                                "relocation target staging ends: " + observed));
+                                return;
+                            }
+                            delayScheduler.schedule(
+                                    STORE_RETRY_DELAY, () -> watchUnverifiedTarget(fence, attempt));
+                        });
+    }
+
+    private void discardTarget(Fence fence, TargetAttempt attempt, Throwable cause) {
         CompletableFuture<Void> created = new CompletableFuture<>();
-        PublicationClaim claim = attempt.claimPublication(created);
-        if (!claim.owner()) {
-            return claim.publication();
+        if (!attempt.claimPublication(created).owner()) {
+            return;
         }
-        if (fallback) {
-            //  The cutover wait elapsed without a cutover or retransmit.
-            LOGGER.warning(
-                    "cutover_timeout: relay-ready wait elapsed without a"
-                            + " CUTOVER; continuing with target-only CAS: "
-                            + fence.id());
-            ZLinkRuntimeMetrics.increment("zlink.relocation.cutover_timeout", Map.of());
-        }
-        CompletableFuture<Void> publication = created;
+        settleTargetTerminal(fence, attempt, created);
+        created.completeExceptionally(cause);
+    }
+
+    private void settleTargetTerminal(
+            Fence fence, TargetAttempt attempt, CompletableFuture<Void> publication) {
         publication.whenComplete(
                 (ignored, failure) -> {
                     if (failure != null && !attempt.committed()) {
@@ -1064,10 +1184,33 @@ final class ZLinkCanonicalRelocationStateMachine
                         retainTerminalTarget(fence, attempt);
                     }
                 });
+    }
+
+    private CompletionStage<Void> publishTarget(
+            Fence fence, TargetAttempt attempt, List<byte[]> verifiedBatch) {
+        CompletableFuture<Void> created = new CompletableFuture<>();
+        PublicationClaim claim = attempt.claimPublication(created);
+        if (!claim.owner()) {
+            return claim.publication();
+        }
+        CompletableFuture<Void> publication = created;
+        settleTargetTerminal(fence, attempt, publication);
         //  Publish the claim before completed prepare/commit stages can run
         //  inline and make the target attempt observable again.
-        attempt.prepared()
-                .thenCompose(this::commitUntilRestoreExpiry)
+        attempt.request()
+                .thenCompose(
+                        request -> {
+                            CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
+                            for (byte[] record : verifiedBatch) {
+                                chain =
+                                        chain.thenCompose(
+                                                ignored ->
+                                                        target.stageRelayedRecord(request, record));
+                            }
+                            return chain;
+                        })
+                .thenCompose(ignored -> attempt.prepared())
+                .thenCompose(prepared -> commitUntilSettled(attempt, prepared))
                 .thenApply(
                         published -> {
                             //  S2 — target owner CAS confirmed.
@@ -1101,7 +1244,6 @@ final class ZLinkCanonicalRelocationStateMachine
     }
 
     private void retainTerminalTarget(Fence fence, TargetAttempt attempt) {
-        ZLinkAggregateRelocationCoordinator.Prepared prepared = attempt.prepared().join();
         var prepare = attempt.prepare();
         TerminalTarget terminal =
                 new TerminalTarget(
@@ -1119,30 +1261,32 @@ final class ZLinkCanonicalRelocationStateMachine
                         });
         if (current == null) {
             retentionScheduler.schedule(
-                    prepared.restoreDeadline(),
+                    Instant.now().plus(transferOptions.messageFollowDuration()),
                     () -> inStateLane(() -> terminalTargets.remove(fence, terminal)));
         }
         inStateLane(() -> targets.remove(fence, attempt));
         attempt.terminal().complete(null);
     }
 
-    private CompletionStage<ZLinkAggregateRelocationCoordinator.Published> commitUntilRestoreExpiry(
-            ZLinkAggregateRelocationCoordinator.Prepared prepared) {
+    private CompletionStage<ZLinkAggregateRelocationCoordinator.Published> commitUntilSettled(
+            TargetAttempt attempt, ZLinkAggregateRelocationCoordinator.Prepared prepared) {
         CompletableFuture<ZLinkAggregateRelocationCoordinator.Published> result =
                 new CompletableFuture<>();
-        commitUntilRestoreExpiry(prepared, result);
+        commitUntilSettled(attempt, prepared, result);
         return result;
     }
 
-    private void commitUntilRestoreExpiry(
+    /**
+     * Target authority settlement (spec 01 §10): the target submits its original NewOwner CAS with
+     * the same RelocationId and expected StoreVersion. A transient or indeterminate result is
+     * resubmitted while the target owner lease is valid — no separate timeout and no fixed count. A
+     * definitive conflict (after the coordinator's reconciliation), a confirmed source {@code
+     * Preserve} fence or a lost target lease discards the staging.
+     */
+    private void commitUntilSettled(
+            TargetAttempt attempt,
             ZLinkAggregateRelocationCoordinator.Prepared prepared,
             CompletableFuture<ZLinkAggregateRelocationCoordinator.Published> result) {
-        if (!Instant.now().isBefore(prepared.restoreDeadline())) {
-            result.completeExceptionally(
-                    new TimeoutException(
-                            "relocation Restore validity expired before target owner CAS"));
-            return;
-        }
         coordinator
                 .commit(prepared, OPEN)
                 .whenComplete(
@@ -1159,23 +1303,83 @@ final class ZLinkCanonicalRelocationStateMachine
                                     || cause
                                             instanceof
                                             ZLinkAggregateRelocationCoordinator
-                                                    .RelocationDataLostException
-                                    || !Instant.now().isBefore(prepared.restoreDeadline())) {
+                                                    .RelocationDataLostException) {
                                 result.completeExceptionally(cause);
                                 return;
                             }
-                            long remainingMillis =
-                                    Math.max(
-                                            1L,
-                                            Duration.between(
-                                                            Instant.now(),
-                                                            prepared.restoreDeadline())
-                                                    .toMillis());
-                            CompletableFuture.delayedExecutor(
-                                            Math.min(STORE_RETRY_DELAY.toMillis(), remainingMillis),
-                                            TimeUnit.MILLISECONDS)
-                                    .execute(() -> commitUntilRestoreExpiry(prepared, result));
+                            attempt.request()
+                                    .thenCompose(
+                                            request -> observeTarget(attempt.prepare(), request))
+                                    .whenComplete(
+                                            (authority, readFailure) -> {
+                                                if (readFailure == null
+                                                        && authority != TargetAuthority.SUBMIT) {
+                                                    result.completeExceptionally(
+                                                            new IllegalStateException(
+                                                                    "relocation target staging"
+                                                                            + " ends: "
+                                                                            + authority));
+                                                    return;
+                                                }
+                                                delayScheduler.schedule(
+                                                        STORE_RETRY_DELAY,
+                                                        () ->
+                                                                commitUntilSettled(
+                                                                        attempt, prepared, result));
+                                            });
                         });
+    }
+
+    /**
+     * Reads the authority the target settlement depends on: the primary record against the source
+     * fence, then the target owner lease.
+     */
+    private CompletionStage<TargetAuthority> observeTarget(
+            ZLinkCanonicalRelocationProtocol.Prepare prepare,
+            ZLinkSpotRetireControl.StageRequest request) {
+        String key = primary(request.participants()).authorityKey();
+        return locations
+                .read(key, OPEN)
+                .thenCompose(
+                        read -> {
+                            Optional<Settlement> settled =
+                                    settlementOf(
+                                            read,
+                                            request,
+                                            prepare.coordinator().expectedAuthorityStoreVersion());
+                            if (settled.isPresent()) {
+                                return CompletableFuture.completedFuture(
+                                        settled.get() == Settlement.TARGET_COMMITTED
+                                                ? TargetAuthority.SUBMIT
+                                                : TargetAuthority.SOURCE_PRESERVED);
+                            }
+                            return leaseLive(
+                                            request.targetOwnerId(),
+                                            request.targetOwnerLeaseGeneration())
+                                    .thenApply(
+                                            live ->
+                                                    live
+                                                            ? TargetAuthority.SUBMIT
+                                                            : TargetAuthority.TARGET_LEASE_LOST);
+                        });
+    }
+
+    private CompletionStage<Boolean> leaseLive(String ownerId, long leaseGeneration) {
+        return locations
+                .readOwnerLease(ownerId)
+                .thenApply(
+                        read ->
+                                read instanceof ZLinkOwnerLeaseFound found
+                                        && found.token().leaseGeneration() == leaseGeneration
+                                        && found.leaseExpiresAt().isAfter(found.storeNow()));
+    }
+
+    /** Target-side reading of the Location Store authority (spec 01 §10). */
+    private enum TargetAuthority {
+        /** Submit the original CAS again: no definitive outcome and the target lease is valid. */
+        SUBMIT,
+        SOURCE_PRESERVED,
+        TARGET_LEASE_LOST
     }
 
     private CompletionStage<ZLinkCanonicalRelocationProtocol.Prepare> sourcePrepare(
@@ -1886,7 +2090,8 @@ final class ZLinkCanonicalRelocationStateMachine
             ZLinkCanonicalRelocationProtocol.Prepare prepare,
             CompletableFuture<Void> ready,
             AtomicInteger activeWaiters,
-            RelayBatch batch) {
+            RelayBatch batch,
+            AtomicReference<byte[]> encodedCutover) {
         SourceAttempt(
                 ZLinkSpotRetireControl.StageRequest request,
                 ZLinkCanonicalRelocationProtocol.Prepare prepare) {
@@ -1895,7 +2100,20 @@ final class ZLinkCanonicalRelocationStateMachine
                     prepare,
                     new CompletableFuture<>(),
                     new AtomicInteger(),
-                    new RelayBatch());
+                    new RelayBatch(),
+                    new AtomicReference<>());
+        }
+
+        RoutingId targetNodeRid() {
+            return request.targetNodeRid();
+        }
+
+        byte[] cutover() {
+            return encodedCutover.get();
+        }
+
+        void cutover(byte[] value) {
+            encodedCutover.set(value.clone());
         }
     }
 
@@ -1939,41 +2157,39 @@ final class ZLinkCanonicalRelocationStateMachine
     /** Target-side pre-boundary relay accounting the cutover is checked against (spec 28 §4.4). */
     private static final class RelayBoundary {
         private final ZLinkStateLane stateLane = new ZLinkStateLane();
-        private final java.util.zip.CRC32C checksum = new java.util.zip.CRC32C();
-        private long recordCount;
+        private final List<byte[]> records = new ArrayList<>();
 
         void append(byte[] frozenRecord) {
-            inStateLane(
-                    () -> {
-                        checksum.update(frozenRecord, 0, frozenRecord.length);
-                        recordCount++;
-                        return null;
-                    });
+            inStateLane(() -> records.add(frozenRecord.clone()));
         }
 
-        Snapshot snapshot() {
-            return inStateLane(() -> new Snapshot(recordCount, checksum.getValue()));
+        /**
+         * Returns the whole pre-boundary batch the cutover describes: the last {@code count}
+         * received records whose CRC-32C matches. A partially received section before a resent
+         * whole batch is replaced, never merged (spec 28 §4.4).
+         */
+        Optional<List<byte[]>> verifiedBatch(long count, long checksumCrc32c) {
+            return inStateLane(
+                    () -> {
+                        if (count < 0 || count > records.size()) {
+                            return Optional.<List<byte[]>>empty();
+                        }
+                        List<byte[]> batch =
+                                List.copyOf(
+                                        records.subList(
+                                                records.size() - (int) count, records.size()));
+                        java.util.zip.CRC32C checksum = new java.util.zip.CRC32C();
+                        for (byte[] record : batch) {
+                            checksum.update(record, 0, record.length);
+                        }
+                        return checksum.getValue() == checksumCrc32c
+                                ? Optional.of(batch)
+                                : Optional.<List<byte[]>>empty();
+                    });
         }
 
         private <T> T inStateLane(java.util.function.Supplier<T> work) {
             return awaitStateLane(stateLane, work);
-        }
-
-        private record Snapshot(long recordCount, long checksumCrc32c) {}
-    }
-
-    /** Retained copies for the cutover retransmission window (spec 28 §4.4). */
-    private record RetainedSource(
-            RoutingId targetNodeRid, List<byte[]> dataFrames, byte[] encodedCutover) {
-        private RetainedSource {
-            Objects.requireNonNull(targetNodeRid, "targetNodeRid");
-            dataFrames = List.copyOf(dataFrames);
-            encodedCutover = encodedCutover.clone();
-        }
-
-        @Override
-        public byte[] encodedCutover() {
-            return encodedCutover.clone();
         }
     }
 
@@ -2022,7 +2238,7 @@ final class ZLinkCanonicalRelocationStateMachine
         private final CompletableFuture<Void> terminal = new CompletableFuture<>();
         private CompletionStage<Void> publication;
         private CompletionStage<Void> readyPublication;
-        private boolean fallbackArmed;
+        private boolean relayReadyAccepted;
         private boolean committed;
         private volatile long committedNanos;
         private volatile byte[] receivedCutover;
@@ -2144,14 +2360,14 @@ final class ZLinkCanonicalRelocationStateMachine
                     });
         }
 
-        boolean fallbackArmed() {
-            return inStateLane(() -> fallbackArmed);
+        boolean relayReadyAccepted() {
+            return inStateLane(() -> relayReadyAccepted);
         }
 
-        void fallbackArmed(boolean value) {
+        void relayReadyAccepted(boolean value) {
             inStateLane(
                     () -> {
-                        fallbackArmed = value;
+                        relayReadyAccepted = value;
                         return null;
                     });
         }

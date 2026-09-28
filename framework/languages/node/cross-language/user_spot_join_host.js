@@ -46,6 +46,23 @@ function appendEvent(line) {
   if (args['event-file']) fs.appendFileSync(args['event-file'], `${line}\n`);
 }
 
+async function waitForEvent(file, marker) {
+  if (fs.readFileSync(file, 'utf8').includes(marker)) return;
+  await new Promise((resolve, reject) => {
+    const changed = () => {
+      if (!fs.readFileSync(file, 'utf8').includes(marker)) return;
+      clearTimeout(deadline);
+      fs.unwatchFile(file, changed);
+      resolve();
+    };
+    fs.watchFile(file, { interval: 50 }, changed);
+    const deadline = setTimeout(() => {
+      fs.unwatchFile(file, changed);
+      reject(new Error(`timed out waiting for ${marker}`));
+    }, 60_000);
+  });
+}
+
 function appendFlow(line) {
   if (args['event-file']) fs.appendFileSync(`${args['event-file']}.flow`, `${line}\n`);
 }
@@ -123,6 +140,12 @@ function installCanonicalWireProbe(app, meshName) {
       } catch (error) {
         appendFlow(`canonical actorJoin: wire_command=decode-failed error=${String(error)}`);
       }
+    }
+    if (parts[0]?.[3] === 22) {
+      appendEvent(`stateful-22-wire|target=${targetNodeRid}|bytes=${parts[0].length}`);
+    }
+    if (parts[0]?.[3] === 25) {
+      appendEvent(`stateful-25-wire|target=${targetNodeRid}|bytes=${parts[0].length}`);
     }
     return originalRequestService.call(this, targetNodeRid, parts, timeoutMs);
   };
@@ -465,6 +488,65 @@ async function userSpotJoinSource() {
     `user-spot-join-request-reply|accepted=${reply.accepted === true}`
     + `|actor=${reply.actorId}|spot=${reply.targetSpotId}`
   );
+
+  if (process.env.ZLINK_NODE_JAVA_STATEFUL_PROBE === '1') {
+    const javaEvents = path.join(path.dirname(require_('event-file')), 'java-user-spot-target.events');
+    await waitForEvent(javaEvents, 'user-spot-probe|nodeRid=java-user-spot-join-target');
+    const spots = app.get(nestjs.ZLINK_SPOT_MANAGER, { strict: false });
+    const targetSpot = await spots.find(targetSpotId);
+    if (targetSpot?.nodeRid !== 'java-user-spot-join-target') {
+      throw new Error(`Spot lookup reached ${targetSpot?.nodeRid}`);
+    }
+    const spotOutbound = app.get(nestjs.ZLINK_SPOT_OUTBOUND, { strict: false });
+    try {
+      await spotOutbound.requestToSpot(targetSpotId, new UserSpotProbeReq('node-java-wire-22'))
+        .timeout(5_000).submit();
+      throw new Error('Spot request unexpectedly found a handler');
+    } catch (error) {
+      if (error.message === 'Spot request unexpectedly found a handler') throw error;
+      if (!String(error.message).includes("HANDLER_MISSING for packet 'UserSpotProbeReq'")) throw error;
+      appendEvent(`stateful-22|kind=${errorKindName(error.kind)}|target=${targetSpot.nodeRid}`);
+    }
+
+    // The ordinary Actor client captures handoff and relays remote requests through Spot (22).
+    // This test selects the same backend's direct Actor request path to verify command 25.
+    const runtime = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false });
+    const resolution = await runtime.createActorLocationResolver().resolveDirectActorRoute(actorId);
+    if (resolution.kind !== 'ready') throw new Error(`Actor route is ${resolution.kind}`);
+    const actorRoute = resolution.route;
+    if (actorRoute.actorRef.nodeRid !== 'java-user-spot-join-target') {
+      throw new Error(`Actor route still points to ${actorRoute.actorRef.nodeRid}`);
+    }
+    const backend = runtime.spotNodeRuntime.meshNode(meshName);
+    backend.stateful.rememberActorRoute({
+      actor: {
+        nodeRid: actorRoute.actorRef.nodeRid,
+        actorId: actorRoute.actorRef.actorId,
+        generation: actorRoute.actorRef.objectGeneration
+      },
+      targetNodeGeneration: actorRoute.ownerNodeGeneration,
+      authorityOwnerGeneration: actorRoute.authorityOwnerGeneration,
+      ownerLeaseGeneration: actorRoute.ownerLeaseGeneration
+    });
+    const directActorClient = new actorClient.constructor({
+      ...actorClient.options,
+      routeTransport: undefined,
+      handoffCapture: undefined,
+      staleActorRefPredicate: undefined,
+      locationResolver: () => ({
+        resolveDirectActorRoute: async () => resolution,
+        invalidateActorRoute() {}
+      })
+    });
+    const actorProbe = await directActorClient
+      .requestToActor(actorId, new UserSpotProbeReq('node-java-wire-25'))
+      .timeout(5_000)
+      .submit();
+    if (actorProbe.nodeRid !== 'java-user-spot-join-target') {
+      throw new Error(`Actor request reached ${actorProbe.nodeRid}`);
+    }
+    appendEvent(`stateful-25|nodeRid=${actorProbe.nodeRid}|actor=${actorProbe.actorId}`);
+  }
 
   await new Promise(() => {});
   await app.close();

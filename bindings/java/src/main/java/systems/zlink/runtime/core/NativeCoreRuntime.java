@@ -28,7 +28,7 @@ final class NativeCoreRuntime {
         Objects.requireNonNull(capability, "capability");
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment cap = NativeHelpers.toCString(arena, capability);
-            return Native.has(cap) != 0;
+            return Native.has(cap);
         }
     }
 

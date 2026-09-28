@@ -21,7 +21,12 @@ internal sealed class ZlinkStreamHeartbeatMonitor(ZlinkStreamHeartbeatOptions op
 
     public async Task RunAsync(
         Func<CancellationToken, ValueTask>? sendHeartbeatPing,
-        Func<ZlinkStreamError, CancellationToken, ValueTask> handleTransportErrorAsync,
+        Func<
+            ZlinkStreamError,
+            ZlinkStreamCloseReason,
+            CancellationToken,
+            ValueTask
+        > handleTransportErrorAsync,
         CancellationToken cancellationToken
     )
     {
@@ -37,11 +42,14 @@ internal sealed class ZlinkStreamHeartbeatMonitor(ZlinkStreamHeartbeatOptions op
                 var now = Stopwatch.GetTimestamp();
                 if (Elapsed(now, Interlocked.Read(ref _lastInboundTicks)) >= options.Timeout)
                 {
+                    // The silence is detected here, so the close reason is decided here
+                    // (stream-connector spec §6.2).
                     await handleTransportErrorAsync(
                             new ZlinkStreamError(
                                 ZlinkStreamErrorCode.Disconnected,
                                 "Heartbeat timed out."
                             ),
+                            ZlinkStreamCloseReason.HeartbeatTimeout,
                             CancellationToken.None
                         )
                         .ConfigureAwait(false);
@@ -65,7 +73,12 @@ internal sealed class ZlinkStreamHeartbeatMonitor(ZlinkStreamHeartbeatOptions op
                     "Heartbeat send failed.",
                     ex
                 );
-            await handleTransportErrorAsync(error, CancellationToken.None).ConfigureAwait(false);
+            await handleTransportErrorAsync(
+                    error,
+                    ZlinkStreamCloseReason.TransportError,
+                    CancellationToken.None
+                )
+                .ConfigureAwait(false);
         }
     }
 

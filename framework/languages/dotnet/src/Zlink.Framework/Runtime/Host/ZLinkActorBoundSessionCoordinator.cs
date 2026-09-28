@@ -97,16 +97,10 @@ internal sealed class ZLinkActorBoundSessionCoordinator
     internal async ValueTask<RemotePushDelivery> AdmitRemoteSessionFrameAsync(
         ZLinkRemoteSessionPushRelay identity,
         byte[] frame,
-        RoutingId sourceNodeRid,
         CancellationToken cancellationToken
     )
     {
-        var admission = await PrepareRemoteSessionFrameAdmissionAsync(
-                identity,
-                frame,
-                sourceNodeRid,
-                cancellationToken
-            )
+        var admission = await AdmitRemoteSessionFrameCoreAsync(identity, frame)
             .ConfigureAwait(false);
         return await CompleteOutboundAdmissionAsync(admission, cancellationToken)
             .ConfigureAwait(false);
@@ -115,16 +109,10 @@ internal sealed class ZLinkActorBoundSessionCoordinator
     internal async ValueTask<RemotePushDelivery> AdmitRemoteSessionFrameOneWayAsync(
         ZLinkRemoteSessionPushRelay identity,
         byte[] frame,
-        RoutingId sourceNodeRid,
         CancellationToken cancellationToken
     )
     {
-        var admission = await PrepareRemoteSessionFrameAdmissionAsync(
-                identity,
-                frame,
-                sourceNodeRid,
-                cancellationToken
-            )
+        var admission = await AdmitRemoteSessionFrameCoreAsync(identity, frame)
             .ConfigureAwait(false);
         if (admission.Kind == ZLinkSessionOutboundAdmissionKind.Retained)
             return RemotePushDelivery.Retained;
@@ -132,37 +120,23 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             .ConfigureAwait(false);
     }
 
-    private async ValueTask<ZLinkSessionOutboundAdmission> PrepareRemoteSessionFrameAdmissionAsync(
+    // 04-session/02-session-actor-binding §8.1: transport already authenticated
+    // the peer; the Session owner admits the push by binding identity only.
+    private ValueTask<ZLinkSessionOutboundAdmission> AdmitRemoteSessionFrameCoreAsync(
         ZLinkRemoteSessionPushRelay identity,
-        byte[] frame,
-        RoutingId sourceNodeRid,
-        CancellationToken cancellationToken
-    )
-    {
-        var targetNodeRid = RoutingId.FromHex(identity.TargetNodeRid);
-        if (sourceNodeRid != targetNodeRid)
-            return new ZLinkSessionOutboundAdmission(
-                ZLinkSessionOutboundAdmissionKind.WrongSession
-            );
-        var sessionRid = RoutingId.FromHex(identity.SessionRid);
-        var tenure = new ZLinkSessionOutboundTenure(
-            identity.ActorId,
-            identity.ObjectGeneration,
-            identity.MeshName,
-            targetNodeRid,
-            identity.TargetNodeGeneration,
-            identity.AuthorityOwnerGeneration,
-            identity.OwnerLeaseGeneration,
-            identity.BindingToken,
-            identity.BindingGeneration,
-            identity.SessionOwnerNodeGeneration,
-            sessionRid
+        byte[] frame
+    ) =>
+        _sessionBindings.AdmitOutboundAsync(
+            new ZLinkSessionOutboundTenure(
+                identity.ActorId,
+                identity.ObjectGeneration,
+                identity.BindingToken,
+                identity.BindingGeneration,
+                identity.SessionOwnerNodeGeneration,
+                RoutingId.FromHex(identity.SessionRid)
+            ),
+            frame
         );
-        var admission = await _sessionBindings
-            .AdmitOutboundAsync(tenure, frame)
-            .ConfigureAwait(false);
-        return admission;
-    }
 
     private static async ValueTask<RemotePushDelivery> CompleteOutboundAdmissionAsync(
         ZLinkSessionOutboundAdmission admission,
@@ -179,7 +153,6 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                     .Capability!.Completion.WaitAsync(cancellationToken)
                     .ConfigureAwait(false)
             ),
-            ZLinkSessionOutboundAdmissionKind.Backpressured => RemotePushDelivery.Backpressured,
             ZLinkSessionOutboundAdmissionKind.NoBinding => RemotePushDelivery.NoBinding,
             _ => RemotePushDelivery.WrongSession,
         };
@@ -910,36 +883,11 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                 Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"bound_session_send_local actor={actorId}"
                 );
-                var targetNodeRid = state.NativeActorRef?.NodeRid;
-                if (
-                    targetNodeRid is null
-                    && AwaitStateLane(
-                        _sessionBindings.GetBindingAsync(actorId, session.BindingToken)
-                    )
-                        is { } currentBinding
-                )
-                    targetNodeRid = currentBinding.Route.Ref.NodeRid;
-                if (targetNodeRid is null)
-                    throw Error(
-                        ZLinkFrameworkErrorKind.NotFound,
-                        $"Actor '{actorId}' does not have an accepted route.",
-                        ZLinkRetryAdvice.DoNotRetry
-                    );
-                var tenure = new ZLinkSessionOutboundTenure(
-                    actorId,
-                    session.ObjectGeneration,
-                    session.MeshName.Value,
-                    targetNodeRid.Value,
-                    session.TargetNodeGeneration,
-                    session.AuthorityOwnerGeneration,
-                    session.OwnerLeaseGeneration,
-                    session.BindingToken,
-                    session.BindingGeneration,
-                    session.SessionOwnerNodeGeneration,
-                    session.SessionRid
-                );
                 var admission = AwaitStateLane(
-                    _sessionBindings.AdmitOutboundAsync(tenure, ConcatParts(parts))
+                    _sessionBindings.AdmitOutboundAsync(
+                        OutboundTenure(actorId, session),
+                        ConcatParts(parts)
+                    )
                 );
                 return admission.Kind switch
                 {
@@ -1046,36 +994,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                 throw new InvalidOperationException(
                     "A local actor bound-session send requires one encoded stream frame."
                 );
-            var targetNodeRid = state.NativeActorRef?.NodeRid;
-            if (
-                targetNodeRid is null
-                && await _sessionBindings
-                    .GetBindingAsync(actorId, session.BindingToken)
-                    .ConfigureAwait(false)
-                    is { } currentBinding
-            )
-                targetNodeRid = currentBinding.Route.Ref.NodeRid;
-            if (targetNodeRid is null)
-                throw Error(
-                    ZLinkFrameworkErrorKind.NotFound,
-                    $"Actor '{actorId}' does not have an accepted route.",
-                    ZLinkRetryAdvice.DoNotRetry
-                );
-            var tenure = new ZLinkSessionOutboundTenure(
-                actorId,
-                session.ObjectGeneration,
-                session.MeshName.Value,
-                targetNodeRid.Value,
-                session.TargetNodeGeneration,
-                session.AuthorityOwnerGeneration,
-                session.OwnerLeaseGeneration,
-                session.BindingToken,
-                session.BindingGeneration,
-                session.SessionOwnerNodeGeneration,
-                session.SessionRid
-            );
             var admission = await _sessionBindings
-                .AdmitOutboundAsync(tenure, ConcatParts(parts))
+                .AdmitOutboundAsync(OutboundTenure(actorId, session), ConcatParts(parts))
                 .ConfigureAwait(false);
             var status = admission.Kind switch
             {
@@ -1091,8 +1011,6 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                 // 04-session/02-session-actor-binding §8.1: seal 중 보관된
                 // message는 route 전환 시 제출된다 — 제출 완료로 보고한다.
                 ZLinkSessionOutboundAdmissionKind.Retained => ZLinkOneWaySubmitStatus.Submitted,
-                ZLinkSessionOutboundAdmissionKind.Backpressured =>
-                    ZLinkOneWaySubmitStatus.Backpressured,
                 _ => ZLinkOneWaySubmitStatus.TargetNotFound,
             };
             return new ZLinkOneWaySubmitResult(status);
@@ -1381,6 +1299,21 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         );
         return submitted;
     }
+
+    // 04-session/02-session-actor-binding §3 item 3: the source sends by
+    // binding identity only; owner lifecycle fields are not send conditions.
+    private static ZLinkSessionOutboundTenure OutboundTenure(
+        string actorId,
+        ZLinkActorBoundSession session
+    ) =>
+        new(
+            actorId,
+            session.ObjectGeneration,
+            session.BindingToken,
+            session.BindingGeneration,
+            session.SessionOwnerNodeGeneration,
+            session.SessionRid
+        );
 
     private static byte[] ConcatParts(IReadOnlyList<Message> parts)
     {

@@ -920,64 +920,73 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                     cancellationToken
                 )
                 .ConfigureAwait(false);
-            if (authority.State == ZLinkInstanceSpotAuthorityState.Creating)
+            // Recovery re-materializes the Instance Spot under the activation admission the
+            // prepared Spot holds; a failure before publication completes discards it.
+            try
             {
-                var pending =
-                    snapshot.ReservedCreation
-                    ?? throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.ProtocolError,
-                        $"Instance Spot '{authority.SpotId}' reservation is incomplete."
-                    );
-                var readyAuthority = authority with
+                if (authority.State == ZLinkInstanceSpotAuthorityState.Creating)
                 {
-                    State = ZLinkInstanceSpotAuthorityState.Ready,
-                    ActivationRecovery = recovery,
-                };
-                var reservation = new ZLinkObjectReservation(
-                    entry.Key,
-                    snapshot.StoreVersion,
-                    snapshot.ObjectGeneration,
-                    snapshot.AuthorityOwnerGeneration,
-                    pending.ReservationId,
-                    snapshot.Allocation.Descriptor,
-                    snapshot.Allocation.DescriptorLifecycleGeneration,
-                    new ZLinkLocationOwnerToken(snapshot.OwnerId, snapshot.OwnerLeaseGeneration)
-                );
-                var committed = await authorityStore
-                    .CommitAsync(
-                        reservation,
-                        ZLinkInstanceSpotAuthorityPayloadCodec.Encode(readyAuthority),
+                    var pending =
+                        snapshot.ReservedCreation
+                        ?? throw new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.ProtocolError,
+                            $"Instance Spot '{authority.SpotId}' reservation is incomplete."
+                        );
+                    var readyAuthority = authority with
+                    {
+                        State = ZLinkInstanceSpotAuthorityState.Ready,
+                        ActivationRecovery = recovery,
+                    };
+                    var reservation = new ZLinkObjectReservation(
+                        entry.Key,
+                        snapshot.StoreVersion,
+                        snapshot.ObjectGeneration,
+                        snapshot.AuthorityOwnerGeneration,
+                        pending.ReservationId,
+                        snapshot.Allocation.Descriptor,
+                        snapshot.Allocation.DescriptorLifecycleGeneration,
+                        new ZLinkLocationOwnerToken(snapshot.OwnerId, snapshot.OwnerLeaseGeneration)
+                    );
+                    var committed = await authorityStore
+                        .CommitAsync(
+                            reservation,
+                            ZLinkInstanceSpotAuthorityPayloadCodec.Encode(readyAuthority),
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                    snapshot = committed switch
+                    {
+                        ZLinkObjectCommitResult.Committed value => value.Snapshot,
+                        ZLinkObjectCommitResult.AlreadyCommitted value => value.Snapshot,
+                        _ => throw new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.Unavailable,
+                            $"Instance Spot '{authority.SpotId}' recovery lost its reservation.",
+                            ZLinkRetryAdvice.RetryAfterBackoff
+                        ),
+                    };
+                    authority = readyAuthority;
+                }
+                else if (authority.State != ZLinkInstanceSpotAuthorityState.Ready)
+                {
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.ProtocolError,
+                        $"Instance Spot '{authority.SpotId}' authority state is invalid."
+                    );
+                }
+                await catalog
+                    .PublishInstanceReservedAsync(
+                        prepared,
+                        snapshot.ObjectGeneration,
+                        snapshot.AuthorityOwnerGeneration,
                         cancellationToken
                     )
                     .ConfigureAwait(false);
-                snapshot = committed switch
-                {
-                    ZLinkObjectCommitResult.Committed value => value.Snapshot,
-                    ZLinkObjectCommitResult.AlreadyCommitted value => value.Snapshot,
-                    _ => throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.Unavailable,
-                        $"Instance Spot '{authority.SpotId}' recovery lost its reservation.",
-                        ZLinkRetryAdvice.RetryAfterBackoff
-                    ),
-                };
-                authority = readyAuthority;
             }
-            else if (authority.State != ZLinkInstanceSpotAuthorityState.Ready)
+            catch
             {
                 await catalog.DiscardReservedAsync(prepared).ConfigureAwait(false);
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.ProtocolError,
-                    $"Instance Spot '{authority.SpotId}' authority state is invalid."
-                );
+                throw;
             }
-            await catalog
-                .PublishInstanceReservedAsync(
-                    prepared,
-                    snapshot.ObjectGeneration,
-                    snapshot.AuthorityOwnerGeneration,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
             activation = prepared.Activation;
         }
 

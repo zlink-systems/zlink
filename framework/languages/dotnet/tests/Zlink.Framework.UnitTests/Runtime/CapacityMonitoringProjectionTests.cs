@@ -47,7 +47,7 @@ public sealed class CapacityMonitoringProjectionTests
         {
             SpotNodeName = "mesh",
             MaxActiveObjects = 0,
-            MaxPendingActivations = 64,
+            ActivationConcurrencyLimit = 64,
         };
         registration.SpotRelocations.Add(
             "room",

@@ -14,6 +14,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
@@ -201,6 +202,15 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         return ownerTokenSnapshot();
     }
 
+    /**
+     * The owner token a new Store change may carry. It is empty once the local admission deadline
+     * has passed: accepted work may still finish and clean up, but an expired owner makes no new
+     * Store change (Location runtime §5).
+     */
+    public Optional<ZLinkLocationOwnerToken> admittedOwnerToken() {
+        return inStateLane(this::admittedOwnerTokenCore);
+    }
+
     public ZLinkLocationOwnerToken recoveryPreviousOwnerToken() {
         return inStateLane(() -> recoveryPreviousOwnerToken);
     }
@@ -276,7 +286,8 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                             started = false;
                             ScheduledTask heartbeat = heartbeatTask;
                             heartbeatTask = null;
-                            return new StopState(shouldStop, heartbeat, ownerToken);
+                            return new StopState(
+                                    shouldStop, heartbeat, admittedOwnerTokenCore().orElse(null));
                         });
         cancel(state.heartbeat());
         if (!state.shouldStop()) {
@@ -852,6 +863,10 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         return ownerToken != null
                 && ownerAdmissionDeadlineNanos != 0L
                 && System.nanoTime() - ownerAdmissionDeadlineNanos < 0L;
+    }
+
+    private Optional<ZLinkLocationOwnerToken> admittedOwnerTokenCore() {
+        return isOwnerAdmissionOpenCore() ? Optional.of(ownerToken) : Optional.empty();
     }
 
     private void ensureOwnerAdmissionOpenCore() {

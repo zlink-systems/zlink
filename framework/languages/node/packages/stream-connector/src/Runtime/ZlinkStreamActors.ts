@@ -201,39 +201,18 @@ export class ZlinkStreamActors {
     actor: ZlinkStreamActor,
     signal?: AbortSignal
   ): void {
-    this.receivedMessages.enqueueCallback(() => {
-      for (const handler of Array.from(handlers)) {
-        this.invoke(handler, actor, signal);
-      }
-    });
-  }
-
-  private invoke(
-    handler: (actor: ZlinkStreamActor, signal?: AbortSignal) => Promise<void> | void,
-    actor: ZlinkStreamActor,
-    signal?: AbortSignal
-  ): void {
-    try {
-      Promise.resolve(handler(actor, signal)).catch((cause) => {
-        void this.events.publishError(
-          {
-            code: ZlinkStreamErrorCode.UserCallbackFailed,
-            message: 'Actor lifecycle handler failed.',
-            cause
-          },
-          signal
-        );
-      });
-    } catch (cause) {
-      void this.events.publishError(
-        {
-          code: ZlinkStreamErrorCode.UserCallbackFailed,
-          message: 'Actor lifecycle handler failed.',
-          cause
-        },
-        signal
-      );
-    }
+    this.receivedMessages.enqueueCallback(
+      () => {
+        for (const handler of Array.from(handlers)) {
+          this.events.runUserCallback(
+            () => handler(actor, signal),
+            'Actor lifecycle handler failed.',
+            signal
+          );
+        }
+      },
+      () => handlers.size
+    );
   }
 }
 

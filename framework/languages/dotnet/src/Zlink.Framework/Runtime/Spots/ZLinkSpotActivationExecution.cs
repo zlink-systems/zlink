@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Numerics;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
@@ -62,6 +63,73 @@ internal abstract partial class ZLinkSpotActivation
         return new ValueTask(state.Item1);
     }
 
+    // Local activation resources (message follow routes, timers, outbound,
+    // native Spot, handler instances, handler scope) are released one by one,
+    // in this order, and each at most once. Close step 3 runs the release inside
+    // its lifecycle item; finalization runs it when no Close did. A release that
+    // failed is not complete: finalization retries it and skips the ones
+    // already released (spec §7 step 3).
+    internal Task<AggregateException?> ReleaseLocalResourcesAsync() =>
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                // The release runs off the state lane; do not carry the lane
+                // context into it.
+                using (ExecutionContext.SuppressFlow())
+                    return _localResourceRelease = _localResourceRelease
+                        .ContinueWith(
+                            _ => ReleaseRemainingLocalResourcesAsync(),
+                            CancellationToken.None,
+                            TaskContinuationOptions.None,
+                            TaskScheduler.Default
+                        )
+                        .Unwrap();
+            })
+        );
+
+    // Releases not yet completed; runs serialized by _localResourceRelease.
+    internal int PendingLocalResourceReleases =>
+        LocalResourceCount
+        - BitOperations.PopCount((uint)Volatile.Read(ref _releasedLocalResources));
+
+    private const int LocalResourceCount = 6;
+
+    private async Task<AggregateException?> ReleaseRemainingLocalResourcesAsync()
+    {
+        Func<ValueTask>[] releases =
+        [
+            () =>
+            {
+                DisposePendingMessageFollowRoutes();
+                return ValueTask.CompletedTask;
+            },
+            _timers.DisposeAsync,
+            _outbound.DisposeAsync,
+            NativeSpot.DisposeAsync,
+            _handlerInstances.DisposeAsync,
+            _scope.DisposeAsync,
+        ];
+        List<Exception>? failures = null;
+        for (var index = 0; index < LocalResourceCount; index++)
+        {
+            var released = 1 << index;
+            if ((Volatile.Read(ref _releasedLocalResources) & released) != 0)
+                continue;
+            try
+            {
+                await releases[index]().ConfigureAwait(false);
+                Volatile.Write(ref _releasedLocalResources, _releasedLocalResources | released);
+            }
+            catch (Exception exception)
+            {
+                (failures ??= []).Add(exception);
+            }
+        }
+        return failures is null ? null : new AggregateException(failures);
+    }
+
+    internal void CloseAdmissionForClose() => _serial.CloseAdmissionForClose();
+
     private async Task CompleteFinalizationAsync(TaskCompletionSource completion)
     {
         try
@@ -79,14 +147,10 @@ internal abstract partial class ZLinkSpotActivation
     {
         var failures = new List<Exception>();
         Capture(RequestStop);
-        Capture(DisposePendingMessageFollowRoutes);
-        await CaptureAsync(_timers.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(_serial.DisposeAsync).ConfigureAwait(false);
-        await CaptureAsync(_outbound.DisposeAsync).ConfigureAwait(false);
-        await CaptureAsync(NativeSpot.DisposeAsync).ConfigureAwait(false);
+        if (await ReleaseLocalResourcesAsync().ConfigureAwait(false) is { } releaseFailure)
+            failures.AddRange(releaseFailure.InnerExceptions);
         Capture(_stopSource.Dispose);
-        await CaptureAsync(_handlerInstances.DisposeAsync).ConfigureAwait(false);
-        await CaptureAsync(_scope.DisposeAsync).ConfigureAwait(false);
         ThrowFailures(failures);
 
         async ValueTask CaptureAsync(Func<ValueTask> cleanup)
@@ -340,8 +404,22 @@ internal abstract partial class ZLinkSpotActivation
     protected ValueTask<bool> CloseFromContextAsync(CancellationToken cancellationToken)
     {
         EnsureContextOperationAllowed();
-        return _runtime.CloseCurrentSpotAsync(SpotId, cancellationToken);
+        if (
+            ZLinkApplicationExecutionContext.Current is null
+            || ZLinkSerialTurn.Current is not { } turn
+        )
+            throw new InvalidOperationException(
+                "Spot context Close requires a handler or timer turn."
+            );
+        return turn.YieldFrameworkCallAsync(
+            ct => _runtime.CloseCurrentSpotAsync(SpotNodeName, SpotId, ObjectGeneration, ct),
+            cancellationToken
+        );
     }
+
+    internal Task<bool>? PostCloseLifecycle(
+        Func<ZLinkSpotActivation, CancellationToken, ValueTask<bool>> close
+    ) => _serial.PostCloseLifecycle(close);
 
     internal void AttachNativeDispatch()
     {
@@ -838,6 +916,26 @@ internal abstract partial class ZLinkSpotActivation
                 cancellationToken
             )
             .ConfigureAwait(false);
+    }
+
+    internal ValueTask AwaitCloseDrainAsync(CancellationToken cancellationToken) =>
+        _serial.AwaitCloseDrainAsync(cancellationToken);
+
+    internal async ValueTask InvokeExplicitClosingAsync(
+        ZLinkSpotCloseReason reason,
+        DateTimeOffset deadline
+    )
+    {
+        if (Interlocked.Exchange(ref _closingInvoked, 1) != 0)
+            return;
+        try
+        {
+            await InvokeClosingAsync(reason, deadline).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            _runtime.ErrorSink.ReportRuntimeTaskException("spot-on-closing", exception);
+        }
     }
 
     internal bool HasIdleRelocationParticipation

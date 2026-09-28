@@ -765,11 +765,6 @@ internal sealed class ZLinkSpotRuntimeManager(
                     .ConfigureAwait(false);
                 if (read is not ZLinkAuthorityReadResult.Found found)
                     break;
-                if (found.Snapshot.ObjectGeneration != spot.ObjectGeneration)
-                    throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.InvalidOperation,
-                        $"User Spot '{spotId}' generation is stale."
-                    );
                 if (
                     ZLinkUserSpotAuthorityPayloadCodec.TryDecode(
                         found.Snapshot.Payload.Span,
@@ -777,7 +772,11 @@ internal sealed class ZLinkSpotRuntimeManager(
                     )
                     && found.Snapshot.Allocation.State == ZLinkPlacementAllocationState.Active
                     && found.Snapshot.Allocation.ObjectKind == ZLinkPlacementObjectKind.UserSpot
-                    && authority.State == ZLinkUserSpotAuthorityState.Ready
+                    // A Closing authority belongs to a Close that failed after
+                    // step 1; its owner resumes it for this generation.
+                    && authority.State
+                        is ZLinkUserSpotAuthorityState.Ready
+                            or ZLinkUserSpotAuthorityState.Closing
                 )
                 {
                     if (!string.Equals(authority.MeshName, spot.MeshName, StringComparison.Ordinal))
@@ -803,7 +802,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                                 authority.NodeRid,
                                 new UserSpotCloseFence(
                                     spotId,
-                                    found.Snapshot.ObjectGeneration,
+                                    spot.ObjectGeneration,
                                     authority.NodeRid,
                                     authority.NodeGeneration,
                                     found.Snapshot.AuthorityOwnerGeneration,
@@ -816,24 +815,19 @@ internal sealed class ZLinkSpotRuntimeManager(
                             .ConfigureAwait(false);
                         return closed.Closed;
                     }
-                    else
-                    {
-                        foreach (var node in state.SpotNodes.Values)
-                        {
-                            if (
-                                await node.CloseAsync(spotId, cancellationToken)
-                                    .ConfigureAwait(false)
-                            )
-                                return true;
-                            if (
-                                await node.GetAsync(spotId, cancellationToken).ConfigureAwait(false)
-                                is not null
-                            )
-                                return false;
-                        }
-                    }
+                    if (source is not null)
+                        return await source
+                            .CloseAsync(spotId, spot.ObjectGeneration, cancellationToken)
+                            .ConfigureAwait(false);
                 }
 
+                // Only an incarnation of this generation in a transient state is
+                // waited for; another generation ends the Close now (spec §7).
+                ZLinkSpotNodeCatalog.ThrowIfOtherIncarnation(
+                    spotId,
+                    spot.ObjectGeneration,
+                    found.Snapshot.ObjectGeneration
+                );
                 if (Stopwatch.GetElapsedTime(0) >= deadlineAt)
                     throw CloseDeadlineElapsed(spotId);
                 await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken)
@@ -841,7 +835,10 @@ internal sealed class ZLinkSpotRuntimeManager(
             }
         }
         foreach (var node in state.SpotNodes.Values)
-            if (await node.CloseAsync(spotId, cancellationToken).ConfigureAwait(false))
+            if (
+                await node.CloseAsync(spotId, spot.ObjectGeneration, cancellationToken)
+                    .ConfigureAwait(false)
+            )
                 return true;
 
         return false;
@@ -853,22 +850,18 @@ internal sealed class ZLinkSpotRuntimeManager(
             $"User Spot '{spotId}' close was not admitted before its deadline."
         );
 
-    internal ValueTask<bool> CloseLocalByIdAsync(
+    internal async ValueTask<bool> CloseLocalByIdAsync(
         ZLinkFrameworkComponentState state,
+        string spotNodeName,
         string spotId,
-        CancellationToken cancellationToken
-    ) => CloseLocalAsync(state, spotId, cancellationToken);
-
-    private static async ValueTask<bool> CloseLocalAsync(
-        ZLinkFrameworkComponentState state,
-        string spotId,
+        ulong objectGeneration,
         CancellationToken cancellationToken
     )
     {
-        foreach (var node in state.SpotNodes.Values)
-            if (await node.CloseAsync(spotId, cancellationToken))
-                return true;
-        return false;
+        return state.SpotNodes.TryGetValue(spotNodeName, out var node)
+            && await node
+                .Catalog.CloseFromContextAsync(spotId, objectGeneration, cancellationToken)
+                .ConfigureAwait(false);
     }
 
     public async ValueTask<ZLinkSpotActorJoinResult> JoinActorAsync(

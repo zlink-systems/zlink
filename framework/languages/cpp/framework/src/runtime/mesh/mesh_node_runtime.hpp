@@ -135,7 +135,6 @@ struct mesh_node_builder_state_t
     std::int32_t actor_limit = 0;
     std::int32_t spot_limit = 0;
     std::chrono::milliseconds instance_spot_idle_timeout{0};
-    std::int32_t activation_concurrency_limit = 128;
     std::map<std::string, mesh_channel_registration_t> channels;
     std::function<void (const std::string &)> channel_name_observer;
     route_handler_registry_t handlers;
@@ -177,13 +176,15 @@ class mesh_node_runtime_t
     mesh_node_runtime_t &operator= (const mesh_node_runtime_t &) = delete;
 
     void start ();
+    void request_stop () noexcept;
     void stop () noexcept;
     void signal_dispatch_activity ();
     void bind_serializers (serializer_registry_t &serializers) noexcept;
     void bind_descriptor_publisher (
       std::function<void (const std::map<std::string, int> &, int, std::uint64_t)> publisher);
     void configure_user_spot_operations (std::shared_ptr<location_repository_t> store,
-                                         host::user_spot_materializer_t materializer);
+                                         host::user_spot_materializer_t materializer,
+                                         host::user_spot_closer_t closer = {});
     void configure_spot_route_fence_resolver (
       host::spot_route_fence_resolver_t resolver,
       std::chrono::milliseconds route_cache_max_age,
@@ -207,7 +208,8 @@ class mesh_node_runtime_t
     task_t<runtime::stateful::relocation_result_t>
     relocate_application_actor (const actor_ref_t &actor,
                                 const mesh_node_descriptor_t &target,
-                                const authority_snapshot_t &authority);
+                                const authority_snapshot_t &authority,
+                                std::chrono::steady_clock::time_point restore_deadline);
     bool application_actor_transfer_in_progress (const actor_ref_t &actor) const;
     result_t<void> cleanup_application_actor_stateful (const actor_ref_t &actor);
     result_t<bool> destroy_application_actor (const actor_ref_t &actor);
@@ -215,7 +217,8 @@ class mesh_node_runtime_t
     relocate_application_unit (std::vector<runtime::stateful::object_ref_t> sources,
                                std::vector<std::string> stable_types,
                                const mesh_node_descriptor_t &target,
-                               const std::vector<authority_snapshot_t> &authorities);
+                               const std::vector<authority_snapshot_t> &authorities,
+                               std::chrono::steady_clock::time_point restore_deadline);
     void configure_session_route_owner (
       std::function<std::optional<location_owner_token_t> ()> owner_resolver);
     void configure_bound_session_relocation_resolver (
@@ -480,7 +483,11 @@ class mesh_node_runtime_t
     void set_placement_weight (int weight);
     std::int32_t actor_limit () const;
     std::int32_t spot_limit () const;
-    std::int32_t activation_concurrency_limit () const;
+    /* Actors and Spots activated on this MeshNode in this process (runtime monitoring §5). */
+    std::uint64_t active_actor_count () const;
+    std::uint64_t active_spot_count () const;
+    /* MeshNode §5.1: this MeshNode's one activation admission record. */
+    detail::activation_admission_t &activation_admission () const;
     void application_work_enqueued () noexcept;
     void application_work_started () noexcept;
     void application_work_finished () noexcept;
@@ -530,11 +537,11 @@ class mesh_node_runtime_t
     prepare_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state);
     task_t<actor_join_reply_t>
     finalize_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state);
-    result_t<void> deliver_remote_actor_join (const remote_actor_join_state_t &state,
-                                              const result_t<actor_join_reply_t> &joined);
-    result_t<actor_join_reply_t> fail_remote_actor_join (const remote_actor_join_state_t &state,
-                                                         const result_t<actor_join_reply_t> &failed,
-                                                         std::string message);
+    task_t<result_t<void>> deliver_remote_actor_join (const remote_actor_join_state_t &state,
+                                                      const result_t<actor_join_reply_t> &joined);
+    task_t<actor_join_reply_t> fail_remote_actor_join (const remote_actor_join_state_t &state,
+                                                       const result_t<actor_join_reply_t> &failed,
+                                                       std::string message);
     task_t<bool> abort_remote_actor_join_seal (std::shared_ptr<remote_actor_join_state_t> state);
     task_t<actor_join_reply_t>
     complete_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state);
@@ -547,6 +554,8 @@ class mesh_node_runtime_t
                                                   observed_spot_authority_t observed);
 
   private:
+    bool relocation_source_stopped () const;
+
     //  Coroutine: parameters are taken by value so the frame owns them for
     //  the whole suspended seal exchange (callers pass temporaries).
     task_t<session_relocation_seal_outcome_t> seal_bound_sessions (
@@ -566,6 +575,7 @@ class mesh_node_runtime_t
       const session_relocation_checkpoint_t &checkpoint,
       const zlink::routing_id_t &target_node,
       std::uint64_t target_node_generation,
+      std::uint64_t target_owner_lease_generation,
       runtime::protocol::session_relocation_route_action_t action) const;
     task_t<bool>
     route_bound_sessions (const std::vector<session_relocation_checkpoint_t> &checkpoints,
@@ -597,6 +607,7 @@ class mesh_node_runtime_t
     serializer_registry_t *_serializers = nullptr;
     std::shared_ptr<location_repository_t> _user_spot_store;
     host::user_spot_materializer_t _user_spot_materializer;
+    host::user_spot_closer_t _user_spot_closer;
     host::spot_route_fence_resolver_t _spot_route_fence_resolver;
     std::function<std::optional<runtime::spot_address_t> (const actor_ref_t &)>
       _actor_route_resolver;

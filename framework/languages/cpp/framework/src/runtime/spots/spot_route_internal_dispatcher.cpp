@@ -547,7 +547,7 @@ void spot_route_internal_dispatcher_t::dispatch_actor_commit_request (
               location_owner_token_t{
                 request.target_owner_id,
                 static_cast<std::int64_t> (request.target_owner_lease_generation)},
-              &committed_previous_authority_owner_generation,
+              request.expected_actor_store_version, &committed_previous_authority_owner_generation,
               &committed_authority_owner_generation);
             if (!authority_committed) {
                 complete (detail::propagate_failure<zlink::message_t> (

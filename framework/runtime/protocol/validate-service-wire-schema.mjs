@@ -5600,6 +5600,7 @@ function validateServiceInvariants(schema, types, fail) {
         { name: "targetAuthorityOwnerGeneration", $ref: "nonzero-u64" },
         { name: "targetNodeRid", $ref: "rid" },
         { name: "targetNodeGeneration", $ref: "nonzero-u64" },
+        { name: "targetOwnerLeaseGeneration", $ref: "nonzero-u64" },
       ])
       || JSON.stringify(fieldShape(sessionAbort?.fields)) !== JSON.stringify([
         { name: "currentAuthorityOwnerGeneration", $ref: "nonzero-u64" },

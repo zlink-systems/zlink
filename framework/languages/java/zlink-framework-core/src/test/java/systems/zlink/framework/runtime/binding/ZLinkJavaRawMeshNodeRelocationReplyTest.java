@@ -12,7 +12,6 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
 
-import java.net.ServerSocket;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
@@ -41,7 +40,6 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
 
     @Test
     void command33And46UseIndependentRawInfrastructureSends() throws Exception {
-        String endpoint = "tcp://127.0.0.1:" + availableTcpPort();
         String targetEndpoint = "inproc://jvm-relocation-reply-target-" + System.nanoTime();
         RoutingId sourceRid = RoutingId.from("jvm-reply-source");
         RoutingId targetRid = RoutingId.from("jvm-reply-target");
@@ -54,7 +52,7 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
                 var source = new ZLinkJavaRawMeshNode(context, "mesh");
                 var target = new ZLinkJavaRawMeshNode(context, "mesh")) {
             source.setRoutingId(sourceRid);
-            source.setBind(endpoint);
+            source.setBind("tcp://127.0.0.1:0");
             target.setRoutingId(targetRid);
             target.setBind(targetEndpoint);
             source.setPeerAuthorityResolver(
@@ -90,6 +88,7 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
                                                 1)));
                     });
             source.start();
+            String endpoint = source.status().localEndpoint();
             target.start();
             target.connectPeer(endpoint, sourceRid);
 
@@ -244,7 +243,6 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
 
     @Test
     void command33LandsOnRelocationSourceDistinctFromRequestSourceFence() throws Exception {
-        String endpoint = "tcp://127.0.0.1:" + availableTcpPort();
         String targetEndpoint = "inproc://jvm-relocation-reply-landing-" + System.nanoTime();
         RoutingId landingRid = RoutingId.from("jvm-reply-landing");
         RoutingId targetRid = RoutingId.from("jvm-reply-relayer");
@@ -257,7 +255,7 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
                 var landing = new ZLinkJavaRawMeshNode(context, "mesh");
                 var target = new ZLinkJavaRawMeshNode(context, "mesh")) {
             landing.setRoutingId(landingRid);
-            landing.setBind(endpoint);
+            landing.setBind("tcp://127.0.0.1:0");
             target.setRoutingId(targetRid);
             target.setBind(targetEndpoint);
             landing.setPeerAuthorityResolver(
@@ -291,6 +289,7 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
                                                     expectedSource,
                                                     1))));
             landing.start();
+            String endpoint = landing.status().localEndpoint();
             target.start();
             target.connectPeer(endpoint, landingRid);
 
@@ -378,13 +377,6 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
                                             .toCompletableFuture()
                                             .get(2, TimeUnit.SECONDS));
             assertNotNull(wrongLanding.getCause());
-        }
-    }
-
-    private static int availableTcpPort() throws Exception {
-        try (var socket = new ServerSocket(0)) {
-            socket.setReuseAddress(true);
-            return socket.getLocalPort();
         }
     }
 

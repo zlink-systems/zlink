@@ -151,43 +151,6 @@ internal sealed class ZLinkActorHandoffAdmissions(
         ZLinkRemoteActorAdmissionReply reply
     ) => RegisterReservedAsync(request, targetSpotId, reply);
 
-    public ValueTask RegisterRecoveredReservationAsync(
-        ZLinkRemoteActorJoinRequest request,
-        string targetSpotId,
-        DateTimeOffset deadline
-    )
-    {
-        var admission = new ZLinkRemoteActorAdmissionRequest(
-            request.ActorId,
-            request.ActorType,
-            request.SourceSpotId,
-            request.SourceNodeRid,
-            request.RequestContentType,
-            request.Request,
-            request.HandoffId,
-            deadline.ToUnixTimeMilliseconds(),
-            request.ActorGeneration,
-            request.ActorAuthorityOwnerGeneration,
-            request.ReservedPayloadBytes,
-            request.TargetSpotGeneration,
-            request.TargetSpotAuthorityOwnerGeneration
-        );
-        var reply = new ZLinkRemoteActorAdmissionReply(
-            true,
-            ZLinkEnvelopeCodec.DefaultContentType,
-            [],
-            deadline.ToUnixTimeMilliseconds(),
-            request.ReservationToken,
-            request.ReservedPayloadBytes,
-            request.TargetNodeRid,
-            request.TargetNodeGeneration,
-            request.TargetSpotGeneration,
-            request.TargetAuthorityOwnerGeneration,
-            request.TargetSpotAuthorityOwnerGeneration
-        );
-        return RegisterReservedAsync(admission, targetSpotId, reply);
-    }
-
     private async ValueTask RegisterReservedAsync(
         ZLinkRemoteActorAdmissionRequest request,
         string targetSpotId,

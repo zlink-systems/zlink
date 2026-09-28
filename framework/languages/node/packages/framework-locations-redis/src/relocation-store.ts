@@ -121,10 +121,14 @@ function requirePayload(payload: Uint8Array): void {
 }
 
 function requireRetention(retentionMs: number): number {
-  if (!Number.isSafeInteger(retentionMs) || retentionMs < 1) {
-    throw new RangeError('Relocation Store retention must be a positive safe integer.');
+  if (
+    !Number.isFinite(retentionMs) ||
+    retentionMs <= 0 ||
+    !Number.isSafeInteger(Math.ceil(retentionMs))
+  ) {
+    throw new RangeError('Relocation Store retention must round to a positive safe integer.');
   }
-  return retentionMs;
+  return Math.ceil(retentionMs);
 }
 
 function asBuffer(value: unknown): Buffer {

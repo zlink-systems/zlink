@@ -46,6 +46,10 @@ internal abstract partial class ZLinkSpotActivation
     private int _closingInvoked;
     private ZLinkSpotHandlerInvoker? _handlerInvoker;
     private Task? _finalization;
+    private Task<AggregateException?> _localResourceRelease = Task.FromResult<AggregateException?>(
+        null
+    );
+    private int _releasedLocalResources;
     private object? _spot;
     private ZLinkPerActorShellRelocationPlan? _perActorShellRelocation;
 

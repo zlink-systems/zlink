@@ -373,7 +373,8 @@ test('commands 42, 43, and 44 match the shared Session golden vectors', () => {
       previousAuthorityOwnerGeneration: 11n,
       targetAuthorityOwnerGeneration: 12n,
       targetNodeRid: 'target',
-      targetNodeGeneration: 4n
+      targetNodeGeneration: 4n,
+      targetOwnerLeaseGeneration: 5n
     }
   };
   const abort: ServiceSessionRelocationRoute = {

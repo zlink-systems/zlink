@@ -88,8 +88,9 @@ public sealed class ZlinkStreamClientBehaviour : MonoBehaviour
 ```
 
 `Update()`에서 `Dispatch.Async()`를 호출하지 않으면 handler와 event는 실행되지 않는다.
-`PendingDispatchCount`로 아직 처리하지 않은 callback 수를 확인한다. 대기 queue에는
-상한이 없고 callback을 버리지 않는다.
+`PendingDispatchCount`로 지금 등록된 handler로 다음 dispatch가 실행할 callback 수를
+확인한다. **대기 queue에는 상한이 없고 callback을 버리지 않는다. 모든 callback은 다음
+`Dispatch.Async()`까지 기다린다.**
 
 ## 일시 정지 처리
 

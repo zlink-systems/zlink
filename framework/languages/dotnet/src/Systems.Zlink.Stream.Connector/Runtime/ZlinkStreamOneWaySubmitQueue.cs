@@ -2,22 +2,38 @@ using System.Threading.Channels;
 
 namespace Systems.Zlink.Stream.Connector.Runtime;
 
+/// <summary>
+///     Frame write queue shared by <c>Send</c> and <c>Request</c>. It writes frames one at a time and completes each
+///     operation once its frame is written to the transport (stream-connector spec §5.2).
+///     An operation that waits follows its own timeout or cancellation.
+/// </summary>
 internal sealed class ZlinkStreamOneWaySubmitQueue
 {
     private const int Capacity = 4096;
-    private readonly ZlinkStreamConnectorCallbacks _callbacks;
     private readonly Task _completion;
     private readonly Channel<SubmitItem> _queue;
-    private readonly Func<ZlinkStreamOutboundFrame, CancellationToken, ValueTask> _sendAsync;
-    private int _accepting = 1;
+    private readonly Func<IZlinkStreamConnection?> _connectionProvider;
+    private readonly Func<
+        IZlinkStreamConnection,
+        ZlinkStreamOutboundFrame,
+        CancellationToken,
+        ValueTask
+    > _sendAsync;
+    private readonly object _gate = new();
+    private bool _accepting = true;
 
     public ZlinkStreamOneWaySubmitQueue(
         ZlinkStreamTaskRunner taskRunner,
-        ZlinkStreamConnectorCallbacks callbacks,
-        Func<ZlinkStreamOutboundFrame, CancellationToken, ValueTask> sendAsync
+        Func<IZlinkStreamConnection?> connectionProvider,
+        Func<
+            IZlinkStreamConnection,
+            ZlinkStreamOutboundFrame,
+            CancellationToken,
+            ValueTask
+        > sendAsync
     )
     {
-        _callbacks = callbacks;
+        _connectionProvider = connectionProvider;
         _sendAsync = sendAsync;
         _queue = Channel.CreateBounded<SubmitItem>(
             new BoundedChannelOptions(Capacity)
@@ -31,22 +47,32 @@ internal sealed class ZlinkStreamOneWaySubmitQueue
         _completion = taskRunner.Run(DrainAsync);
     }
 
-    public async ValueTask SubmitAsync(
+    /// <summary>
+    ///     Accepts <paramref name="frame" /> and completes once it is written to the
+    ///     transport. Acceptance failures throw synchronously; waiting for the write is
+    ///     asynchronous.
+    /// </summary>
+    public ValueTask SendAsync(ZlinkStreamOutboundFrame frame, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var connection = GetConnection();
+        return SendAcceptedAsync(connection, frame, cancellationToken);
+    }
+
+    private async ValueTask SendAcceptedAsync(
+        IZlinkStreamConnection connection,
         ZlinkStreamOutboundFrame frame,
         CancellationToken cancellationToken
     )
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (Volatile.Read(ref _accepting) == 0)
-            throw ZlinkStreamConnector.Error(
-                ZlinkStreamErrorCode.SendFailed,
-                "Connector is not accepting one-way sends."
-            );
+        var written = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         try
         {
             await _queue
                 .Writer.WriteAsync(
-                    new SubmitItem(frame, null, CancellationToken.None),
+                    new SubmitItem(connection, frame, written, cancellationToken),
                     cancellationToken
                 )
                 .ConfigureAwait(false);
@@ -54,41 +80,51 @@ internal sealed class ZlinkStreamOneWaySubmitQueue
         catch (ChannelClosedException)
         {
             throw ZlinkStreamConnector.Error(
-                ZlinkStreamErrorCode.SendFailed,
-                "Connector is not accepting one-way sends."
+                ZlinkStreamErrorCode.Disconnected,
+                "Connector is closed."
             );
         }
+        await written.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async ValueTask SendAsync(
+    public ValueTask SubmitRequestAsync(
         ZlinkStreamOutboundFrame frame,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Action onAccepted
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (Volatile.Read(ref _accepting) == 0)
-            throw ZlinkStreamConnector.Error(
-                ZlinkStreamErrorCode.SendFailed,
-                "Connector is not accepting outbound frames."
-            );
-
-        var completion = new TaskCompletionSource<bool>(
+        var written = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        if (!_queue.Writer.TryWrite(new SubmitItem(frame, completion, cancellationToken)))
-            throw ZlinkStreamConnector.Error(
-                ZlinkStreamErrorCode.SendFailed,
-                "Connector outbound frame queue is full."
-            );
-
-        await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        lock (_gate)
+        {
+            var connection = GetConnection();
+            if (
+                !_queue.Writer.TryWrite(
+                    new SubmitItem(connection, frame, written, cancellationToken)
+                )
+            )
+                throw ZlinkStreamConnector.Error(
+                    ZlinkStreamErrorCode.SendFailed,
+                    "Connector outbound frame queue is full."
+                );
+            onAccepted();
+        }
+        return new ValueTask(written.Task.WaitAsync(cancellationToken));
     }
 
+    /// <summary>
+    ///     Stops accepting. Operations accepted before this call still reach a terminal: a
+    ///     frame whose connection has ended fails without being written.
+    /// </summary>
     public void Complete()
     {
-        if (Interlocked.Exchange(ref _accepting, 0) == 0)
-            return;
-        _queue.Writer.TryComplete();
+        lock (_gate)
+        {
+            _accepting = false;
+            _queue.Writer.TryComplete();
+        }
     }
 
     public ValueTask WaitForCompletionAsync() => new(_completion);
@@ -99,50 +135,71 @@ internal sealed class ZlinkStreamOneWaySubmitQueue
             var item in _queue.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false)
         )
         {
-            if (item.CancellationToken.IsCancellationRequested)
-            {
-                item.Completion?.TrySetCanceled(item.CancellationToken);
-                continue;
-            }
-
             try
             {
+                if (item.CancellationToken.IsCancellationRequested)
+                {
+                    item.Written.TrySetCanceled(item.CancellationToken);
+                    continue;
+                }
+
+                // A frame is written only to the connection that accepted it. Once that
+                // connection has ended (a transport loss or Close) the frame is not written
+                // and its operation fails (stream-connector spec §7).
+                if (!ReferenceEquals(item.Connection, _connectionProvider()))
+                {
+                    item.Written.TrySetException(
+                        ZlinkStreamConnector.Error(
+                            ZlinkStreamErrorCode.Disconnected,
+                            "The accepted connection ended before this frame was written."
+                        )
+                    );
+                    continue;
+                }
+
                 // Once a frame starts writing, connector lifetime owns the write.
                 // Caller cancellation must not interrupt a partially written frame.
-                await _sendAsync(item.Frame, cancellationToken).ConfigureAwait(false);
-                item.Completion?.TrySetResult(true);
+                await _sendAsync(item.Connection, item.Frame, cancellationToken)
+                    .ConfigureAwait(false);
+                item.Written.TrySetResult(true);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                item.Completion?.TrySetCanceled(cancellationToken);
+                item.Written.TrySetCanceled(cancellationToken);
                 return;
             }
             catch (ZlinkStreamException exception)
             {
-                // SendFrameAsync publishes the transport failure and updates
-                // lifecycle state before returning the exception here.
-                item.Completion?.TrySetException(exception);
+                // The connector's send path classifies the failure and updates lifecycle
+                // state before returning the exception here.
+                item.Written.TrySetException(exception);
             }
             catch (Exception exception)
             {
-                item.Completion?.TrySetException(exception);
-                await _callbacks
-                    .PublishErrorAsync(
-                        new ZlinkStreamError(
-                            ZlinkStreamErrorCode.SendFailed,
-                            "Accepted one-way stream send failed.",
-                            exception
-                        ),
-                        CancellationToken.None
+                item.Written.TrySetException(
+                    ZlinkStreamConnector.Error(
+                        ZlinkStreamErrorCode.SendFailed,
+                        "Stream frame write failed.",
+                        exception
                     )
-                    .ConfigureAwait(false);
+                );
             }
         }
     }
 
+    private IZlinkStreamConnection GetConnection()
+    {
+        return (_accepting ? _connectionProvider() : null)
+            ?? throw ZlinkStreamConnector.Error(
+                ZlinkStreamErrorCode.Disconnected,
+                "Connector is not connected."
+            );
+    }
+
     private sealed record SubmitItem(
+        IZlinkStreamConnection Connection,
         ZlinkStreamOutboundFrame Frame,
-        TaskCompletionSource<bool>? Completion,
+        TaskCompletionSource<bool> Written,
         CancellationToken CancellationToken
     );
 }

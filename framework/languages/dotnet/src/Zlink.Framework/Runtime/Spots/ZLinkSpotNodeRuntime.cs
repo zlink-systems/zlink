@@ -63,7 +63,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         _timerScheduler = timerScheduler;
         _locationLifecycle = locationLifecycle;
         _activationAdmission = new(
-            registration.MaxPendingActivations,
+            registration.ActivationConcurrencyLimit,
             active => runtime.SetActivationConcurrency(spotChannelName, active)
         );
         if (node is IZLinkBackendActorMessageFollowIngress messageFollowIngress)
@@ -533,6 +533,8 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     }
 
     public IReadOnlyCollection<ZLinkSpotActivation> Spots => _spots.Spots;
+
+    internal int ActiveSpotCount => _spots.ActiveSpotCount;
 
     internal ZLinkEntrySpotActivation? EntrySpotActivation => _entrySpotActivation;
 
@@ -1050,6 +1052,12 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     {
         return await _spots.CloseAsync(spotId, cancellationToken);
     }
+
+    internal ValueTask<bool> CloseAsync(
+        string spotId,
+        ulong objectGeneration,
+        CancellationToken cancellationToken
+    ) => _spots.CloseAsync(spotId, objectGeneration, cancellationToken);
 
     internal ValueTask<ZLinkSpotDrainResult> TryDrainSpotsAsync(
         bool relocate,

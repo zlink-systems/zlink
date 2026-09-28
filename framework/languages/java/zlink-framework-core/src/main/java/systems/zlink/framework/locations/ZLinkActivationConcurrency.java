@@ -9,4 +9,9 @@ public record ZLinkActivationConcurrency(int active, int limit) {
                     "activation concurrency requires 0 <= active <= limit and limit > 0");
         }
     }
+
+    /** Whether one more activation admission fits under the limit (MeshNode §5.1). */
+    public boolean hasRoom() {
+        return active < limit;
+    }
 }

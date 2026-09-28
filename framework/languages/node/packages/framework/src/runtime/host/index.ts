@@ -1,3 +1,4 @@
+import { ZLinkListenerRecords } from '../foundation/listener-records';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
@@ -35,6 +36,8 @@ import type {
   ZLinkClientServerRuntime,
   ZLinkFanoutRuntime,
   ZLinkFrameworkRuntime,
+  ZLinkListenerKind,
+  ZLinkListenerStatus,
   ZLinkFrameworkLifecycleOptions,
   ZLinkFrameworkRelocationOptions,
   ZLinkFrameworkRelocationResult,
@@ -163,7 +166,9 @@ import { ZLinkChannelRuntimeOptionsFactory } from './channel-runtime-options-fac
 import { ZLinkSpotNodeRuntimeOptionsFactory } from './spot-node-runtime-options-factory';
 import { rollbackRuntimeStart, stopRuntimeParts } from './runtime-shutdown';
 import { ZLinkRuntimeAdmissionGate } from '../admission';
+import { ZLinkActivationAdmission } from '../activation-admission';
 import { ZLinkRetiringRollbackError, ZLinkRouteMeshRuntimeCoordinator } from './route-mesh-runtime';
+import { ServiceRelocationAuthorityError } from '../foundation/service-relocation-coordinator';
 import { ZLinkConfigurationException } from '../../contracts/Configuration/ConfigurationException';
 import { ZLinkStatefulAuthorityRouteRuntime } from './stateful-authority-route-runtime';
 import { ZLinkInstanceActivationAuthority } from './instance-activation-authority';
@@ -245,6 +250,7 @@ export class ZLinkFrameworkRuntimeHost
   private actorManager?: DefaultZLinkActorManager;
   private actorPlacement?: ZLinkActorPlacementCoordinator;
   private spotManager?: DefaultZLinkSpotManager;
+  private userSpotCoordinator?: ZLinkUserSpotCreationCoordinator;
   private ownerLeaseRecoveryRuntime?: ZLinkLocationRuntime;
   private ownerLeaseRecoveryHandler?: () => void;
   private registerUserSpotHandlers?: (runtime: ZLinkSpotNodeRuntimeManager) => void;
@@ -256,6 +262,19 @@ export class ZLinkFrameworkRuntimeHost
   private readonly metricRegistrations: import('../diagnostics').ZLinkRuntimeMetricRegistration[] =
     [];
   private readonly admission = new ZLinkRuntimeAdmissionGate(() => this.ownerAdmissionOpen());
+  private readonly activationAdmission = new ZLinkActivationAdmission(
+    (meshName) =>
+      this.options.registration.spotNodes.get(meshName)?.activationConcurrencyLimit ?? 128,
+    (meshName) => {
+      void this.spotNodeRuntime
+        ?.publishMeshNodeState(
+          this.runtimeState,
+          this.executionState?.abortController.signal,
+          meshName
+        )
+        .catch(() => undefined);
+    }
+  );
   private cachedLocationSpotRouteResolver?: ZLinkSpotRouteResolver;
   private actorClientLocationResolver?: ZLinkStoreLocationResolvers;
   // Shared, runtime-mutable message-flow mode cell — installed once so
@@ -698,7 +717,6 @@ export class ZLinkFrameworkRuntimeHost
       actorTransferRegistry: this.actorTransferRegistry,
       authorityStore: () => this.locationOwner.currentStores?.locationStore,
       currentOwner: () => this.locationOwner.currentRuntime?.currentOwnerToken,
-      relocationStore: () => this.options.registration.locations.relocationStoreInstance,
       liveDescriptors: (meshName, signal) => {
         const runtime = this.locationOwner.currentRuntime;
         if (runtime === undefined) {
@@ -795,7 +813,8 @@ export class ZLinkFrameworkRuntimeHost
       reconcileStatefulAuthorityRoutes: (signal) =>
         this.statefulAuthorityRoutes?.reconcile(signal) ?? Promise.resolve(),
       runtimeEventPublisher: this.runtimeEventPublisher,
-      metrics: this.metrics
+      metrics: this.metrics,
+      activationAdmission: this.activationAdmission
     });
     this.actorTransferAuthorityRuntime = new ZLinkActorTransferAuthorityRuntime({
       store: () => this.locationOwner.actorTransferStore() as never,
@@ -828,6 +847,7 @@ export class ZLinkFrameworkRuntimeHost
       },
       hostState: () => this.runtimeState,
       admission: this.admission,
+      activationAdmission: this.activationAdmission,
       publishRetiring: (meshName, signal) => this.publishMeshRetiring(meshName, signal),
       rollbackRetiring: (meshName, signal) => this.publishMeshServing(meshName, signal),
       publishDraining: (meshName, signal) => this.publishMeshDraining(meshName, signal),
@@ -866,6 +886,19 @@ export class ZLinkFrameworkRuntimeHost
       sequence: this.runtimeSequence,
       observedAt: new Date()
     };
+  }
+
+  // Bound listener records of the current runtime generation.
+  private listenerRecords = new ZLinkListenerRecords();
+
+  getListenerStatus(kind: ZLinkListenerKind, name: string): ZLinkListenerStatus {
+    const endpoint = this.listenerRecords.endpoint(kind, name);
+    if (endpoint === undefined || endpoint.length === 0) {
+      throw new ZLinkConfigurationException(
+        `Listener '${kind}:${name}' is not configured or has not bound.`
+      );
+    }
+    return { kind, name, endpoint, observedAt: new Date() };
   }
 
   observe(signal?: AbortSignal): AsyncIterable<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>> {
@@ -1021,6 +1054,17 @@ export class ZLinkFrameworkRuntimeHost
         stopStartingSignal
       );
       if (drained.kind === 'forceStopped') {
+        // Settled authority on both sides or an expired source owner lease
+        // ends the host in Error (spec 30 §13).
+        if (drained.error instanceof ServiceRelocationAuthorityError) {
+          return this.completeRelocation(
+            blockedRelocation(
+              mode,
+              effectiveTargetApplicationVersion,
+              ZLinkFrameworkRelocationReason.RelocationFailed
+            )
+          );
+        }
         return this.resetBlockedRelocation(
           blockedRelocation(
             mode,
@@ -1322,6 +1366,8 @@ export class ZLinkFrameworkRuntimeHost
 
     this.setRuntimeState(ZLinkFrameworkRuntimeState.Preparing);
     this.lifecycleSink?.push('framework:start');
+    const listenerRecords = new ZLinkListenerRecords();
+    this.listenerRecords = listenerRecords;
     const channelAdapter = this.backendAdapterFactory.createChannelAdapter();
     const context = channelAdapter.createContext();
     const coreHwm = this.options.registration.coreHwm;
@@ -1344,13 +1390,14 @@ export class ZLinkFrameworkRuntimeHost
         channelAdapter,
         context,
         this.options.providerResolver,
-        this.createChannelRuntimeOptions()
+        { ...this.createChannelRuntimeOptions(), listenerRecords }
       );
       this.channelRuntime = channelRuntime;
       channelRuntime.prepareMeshDispatch(this.executionState.taskRunner);
-      spotNodeRuntime = new ZLinkSpotNodeRuntimeManager(
-        this.createSpotNodeRuntimeOptions(context, dispatchErrors)
-      );
+      spotNodeRuntime = new ZLinkSpotNodeRuntimeManager({
+        ...this.createSpotNodeRuntimeOptions(context, dispatchErrors),
+        listenerRecords
+      });
       await spotNodeRuntime.start();
       this.spotNodeRuntime = spotNodeRuntime;
       this.registerUserSpotHandlers?.(spotNodeRuntime);
@@ -1386,6 +1433,7 @@ export class ZLinkFrameworkRuntimeHost
         }
       }
       streamRuntime = new ZLinkStreamRuntimeManager({
+        listenerRecords,
         registration: this.options.registration,
         backendAdapterFactory: this.backendAdapterFactory,
         context,
@@ -1477,7 +1525,7 @@ export class ZLinkFrameworkRuntimeHost
           reserved: capacity.reserved,
           limit: capacity.limit
         })),
-        activation: descriptor?.activationConcurrency ?? { active: 0, limit: 0 },
+        activation: this.activationAdmission.current(meshName),
         instanceSpots: []
       });
     }
@@ -1515,6 +1563,7 @@ export class ZLinkFrameworkRuntimeHost
       serviceRelocation: this.serviceRelocation,
       ownedStores: registeredRuntimeStores(this.options.registration)
     });
+    this.listenerRecords.clear();
     this.lifecycleSink?.push('framework:stopped');
     if (this.shutdownOperation === undefined) {
       this.setRuntimeState(ZLinkFrameworkRuntimeState.Stopped);
@@ -1608,6 +1657,11 @@ export class ZLinkFrameworkRuntimeHost
   ): void {
     for (const [meshName, node] of spotNodeRuntime.meshNodesByName) {
       const activationNode = node as typeof node & {
+        setSpotAdmissionProvider?: (provider: {
+          isClosing(spotId: string): boolean;
+          awaitCloseDecision(spotId: string): Promise<void> | undefined;
+          runtimeState(): ZLinkFrameworkRuntimeState;
+        }) => void;
         registerAsyncInstanceActivationAuthority?: (
           authority: ServiceAsyncInstanceActivationAuthority
         ) => void;
@@ -1623,6 +1677,11 @@ export class ZLinkFrameworkRuntimeHost
       };
       const spotManager = this.spotManager;
       if (spotManager !== undefined) {
+        activationNode.setSpotAdmissionProvider?.({
+          isClosing: (spotId) => spotManager.isSpotClosing(meshName, spotId),
+          awaitCloseDecision: (spotId) => spotManager.pendingSpotCloseDecision(meshName, spotId),
+          runtimeState: () => this.runtimeState
+        });
         this.registerInstanceApplicationLifecycle(meshName, activationNode, spotManager);
       }
       activationNode.registerAsyncInstanceActivationAuthority?.(
@@ -1906,6 +1965,19 @@ export class ZLinkFrameworkRuntimeHost
   setSpotManager(spotManager: DefaultZLinkSpotManager): void {
     this.spotManager = spotManager;
     for (const [meshName, node] of this.spotNodeRuntime?.meshNodesByName ?? []) {
+      const admissionNode = node as typeof node & {
+        setSpotAdmissionProvider?: (provider: {
+          isClosing(spotId: string): boolean;
+          awaitCloseDecision(spotId: string): Promise<void> | undefined;
+          runtimeState(): ZLinkFrameworkRuntimeState;
+        }) => void;
+      };
+      admissionNode.setSpotAdmissionProvider?.({
+        isClosing: (spotId: string) => spotManager.isSpotClosing(meshName, spotId),
+        awaitCloseDecision: (spotId: string) =>
+          spotManager.pendingSpotCloseDecision(meshName, spotId),
+        runtimeState: () => this.runtimeState
+      });
       this.registerInstanceApplicationLifecycle(meshName, node, spotManager);
     }
   }
@@ -1926,11 +1998,13 @@ export class ZLinkFrameworkRuntimeHost
     | 'boundSessionFactory'
     | 'shutdownSignal'
     | 'admission'
+    | 'activationAdmission'
     | 'placementCreate'
   > {
     this.ensureLocationRuntime();
     return {
       ...this.actorRuntimeOptionsFactory().createActorManagerOptions(),
+      activationAdmission: this.activationAdmission,
       placementCreate: async (actorId, actorType, createOnly, call, signal) => {
         const placement = this.actorPlacement;
         if (placement === undefined) {
@@ -1992,12 +2066,31 @@ export class ZLinkFrameworkRuntimeHost
             ?.meshNode(meshName)
             ?.completeClosedInstance?.(spotId, objectGeneration);
         },
-        beginInstanceIdleClosingAuthority: (meshName, spotId) =>
-          this.locationOwner.currentLifecycle?.beginInstanceSpotClosing(meshName, spotId) ??
-          Promise.resolve(undefined),
-        beginInstanceClosingAuthority: (meshName, spotId) =>
-          this.locationOwner.currentLifecycle?.beginInstanceSpotClosing(meshName, spotId) ??
-          Promise.resolve(undefined),
+        beginInstanceIdleClosingAuthority: (meshName, spotId, onCommitted) =>
+          this.locationOwner.currentLifecycle?.beginInstanceSpotClosing(
+            meshName,
+            spotId,
+            onCommitted
+          ) ?? Promise.resolve(undefined),
+        beginInstanceClosingAuthority: (meshName, spotId, onCommitted) =>
+          this.locationOwner.currentLifecycle?.beginInstanceSpotClosing(
+            meshName,
+            spotId,
+            onCommitted
+          ) ?? Promise.resolve(undefined),
+        beginUserClosingAuthority: async (meshName, spotId, objectGeneration, onCommitted) => {
+          const coordinator = this.userSpotCoordinator;
+          const nodeRid = this.spotNodeRuntime?.meshNode(meshName)?.status().routingId;
+          if (coordinator === undefined || nodeRid === undefined) {
+            throw new ZLinkConfigurationException(
+              'User Spot context Close requires its authority coordinator.'
+            );
+          }
+          return await coordinator.beginOwnerClose(
+            { spotId: spotId as never, objectGeneration, meshName, nodeRid },
+            onCommitted
+          );
+        },
         createLocationSpotRouteResolver: () => this.createLocationSpotRouteResolver(),
         boundSessionRelay: this.boundSessionRelay,
         actorHandoff: this.actorHandoff,
@@ -2008,17 +2101,7 @@ export class ZLinkFrameworkRuntimeHost
         admission: this.admission,
         statefulExecutionAllowed: () => this.ownerAdmissionOpen()
       }).create(this.actorTransferRuntime),
-      activationConcurrencyLimitProvider: (meshName: string) =>
-        this.options.registration.spotNodes.get(meshName)?.activationConcurrencyLimit ?? 128,
-      onInstanceActivationConcurrencyChanged: (meshName: string) => {
-        void this.spotNodeRuntime
-          ?.publishMeshNodeState(
-            this.runtimeState,
-            this.executionState?.abortController.signal,
-            meshName
-          )
-          .catch(() => undefined);
-      }
+      activationAdmission: this.activationAdmission
     };
   }
 
@@ -2123,7 +2206,7 @@ export class ZLinkFrameworkRuntimeHost
         };
       }
     });
-    const coordinator = new ZLinkUserSpotCreationCoordinator({
+    const coordinator = (this.userSpotCoordinator = new ZLinkUserSpotCreationCoordinator({
       store: locationStore,
       publishReadyRoute: (meshName, route) => {
         this.cachedLocationSpotRouteResolver?.invalidate?.(route.spot.spotId);
@@ -2231,7 +2314,7 @@ export class ZLinkFrameworkRuntimeHost
             localStatus.lifecycleGeneration === selected.lifecycleGeneration
         };
       }
-    });
+    }));
     const factories = new Map(
       [...this.options.registration.spotNodes].map(([meshName, node]) => [
         meshName,
@@ -2428,23 +2511,6 @@ export class ZLinkFrameworkRuntimeHost
             );
           },
           close: async (record, signal) => {
-            if (!local.hasActiveSpot(record.target.spotId as never)) {
-              throw createInternalFrameworkException(
-                ZLinkFrameworkInternalErrorKind.SpotMoving,
-                `User Spot '${record.target.spotId}' is not materialized on its authority owner.`,
-                true
-              );
-            }
-            if (!local.canCloseUserSpot(meshName, record.target.spotId as never)) {
-              return {
-                terminalResult: RequestResult.Ok,
-                failureCode: 0,
-                tail: {
-                  kind: 'userSpotClose' as const,
-                  closed: false
-                }
-              };
-            }
             return {
               terminalResult: RequestResult.Ok,
               failureCode: 0,
@@ -2452,8 +2518,15 @@ export class ZLinkFrameworkRuntimeHost
                 kind: 'userSpotClose' as const,
                 closed: await coordinator.handleRemoteClose(
                   record,
-                  (spot, closeSignal) => local.close(spot.meshName, spot.spotId, closeSignal),
-                  signal
+                  (spot, beginAuthority, closeSignal) =>
+                    local.closeUserWithAuthority(
+                      spot.meshName,
+                      spot.spotId,
+                      beginAuthority,
+                      closeSignal
+                    ),
+                  signal,
+                  (spot) => local.isSpotClosing(spot.meshName, spot.spotId)
                 )
               }
             };
@@ -2655,15 +2728,7 @@ export class ZLinkFrameworkRuntimeHost
           record,
           this.executionState?.abortController.signal
         ),
-      instanceActivationConcurrencyProvider: (meshName: string) => {
-        return (
-          this.spotManager?.instanceActivationConcurrency(meshName) ?? {
-            active: 0,
-            limit:
-              this.options.registration.spotNodes.get(meshName)?.activationConcurrencyLimit ?? 128
-          }
-        );
-      }
+      activationConcurrency: (meshName: string) => this.activationAdmission.current(meshName)
     };
   }
 

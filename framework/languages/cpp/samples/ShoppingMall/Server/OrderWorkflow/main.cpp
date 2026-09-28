@@ -169,7 +169,7 @@ class order_workflow_spot_t : public instance_spot_t
     task_t<void> close_if_terminal (const order_state_t &state)
     {
         if (state.status == order_status_t::confirmed || state.status == order_status_t::failed) {
-            (void) co_await _context.close ();
+            (void) _context.close ();
         }
         co_return;
     }

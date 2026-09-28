@@ -15,16 +15,17 @@ public sealed partial class StatefulServiceRuntimeTests
         await using var context = Systems.Zlink.Zlink.CreateContext();
         var ownerContext = new CapturingMeshSocketContext(context);
         await using var owner = NewNode(ownerContext, "mesh-mid");
-        var ownerEndpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
-        var endpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
-        owner.SetBind(ownerEndpoint);
+        owner.SetBind("tcp://127.0.0.1:0");
         var spot = (ZLinkManagedSpot)owner.GetOrCreateSpot("zone-nw", out _);
         owner.Start();
+        var ownerEndpoint = Assert.IsType<string>(owner.Status().LocalEndpoint);
         ulong oldIntent;
+        string endpoint;
         await using (var old = NewNode(context, "mesh-z-old"))
         {
-            old.SetBind(endpoint);
+            old.SetBind("tcp://127.0.0.1:0");
             old.Start();
+            endpoint = Assert.IsType<string>(old.Status().LocalEndpoint);
             oldIntent = owner.ConnectPeer(endpoint, old.RoutingId);
             await WaitUntilAsync(() =>
                 owner.Status().AdmittedPeerCount == 1 && old.Status().AdmittedPeerCount == 1
@@ -211,22 +212,36 @@ public sealed partial class StatefulServiceRuntimeTests
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var owner = NewNode(context, "mesh-mid");
-        await using var replacement = NewNode(context, "mesh-z-replacement");
-        var endpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
-        owner.SetBind($"tcp://127.0.0.1:{FindFreeTcpPort()}");
+        var scheduler = new GatedTaskScheduler();
+        await using var replacement = new ZLinkManagedMeshNode(
+            context,
+            "mesh",
+            routedSubmitScheduler: scheduler
+        );
+        replacement.SetRoutingId(RoutingId.From("mesh-z-replacement"));
+        replacement.SetBind("tcp://127.0.0.1:0");
+        replacement.Start();
+        var endpoint = Assert.IsType<string>(replacement.Status().LocalEndpoint);
+        owner.SetBind("tcp://127.0.0.1:0");
         owner.Start();
         var staleIntent = owner.ConnectPeer(endpoint, replacement.RoutingId);
         var replacementIntent = owner.ConnectPeer(endpoint, replacement.RoutingId);
-
-        Assert.True(owner.RemovePeerConnectionIfNotAdmitted(staleIntent));
-        Assert.Equal(replacementIntent, Assert.Single(owner.Peers()).ConnectionIntentId);
-        replacement.SetBind(endpoint);
-        replacement.Start();
-        await WaitUntilAsync(() =>
-            owner.Status().AdmittedPeerCount == 1 && replacement.Status().AdmittedPeerCount == 1
-        );
-        Assert.Equal(replacementIntent, Assert.Single(owner.Peers()).ConnectionIntentId);
-        Assert.False(owner.RemovePeerConnectionIfNotAdmitted(replacementIntent));
+        try
+        {
+            await scheduler.Queued.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(owner.RemovePeerConnectionIfNotAdmitted(staleIntent));
+            Assert.Equal(replacementIntent, Assert.Single(owner.Peers()).ConnectionIntentId);
+            scheduler.Release();
+            await WaitUntilAsync(() =>
+                owner.Status().AdmittedPeerCount == 1 && replacement.Status().AdmittedPeerCount == 1
+            );
+            Assert.Equal(replacementIntent, Assert.Single(owner.Peers()).ConnectionIntentId);
+            Assert.False(owner.RemovePeerConnectionIfNotAdmitted(replacementIntent));
+        }
+        finally
+        {
+            scheduler.Release();
+        }
     }
 
     private sealed class CapturingMeshSocketContext(IContext inner) : IContext

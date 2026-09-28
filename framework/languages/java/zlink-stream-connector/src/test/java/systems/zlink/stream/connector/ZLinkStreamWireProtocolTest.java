@@ -123,9 +123,13 @@ final class ZLinkStreamWireProtocolTest {
     void frameProtocol_rejectsPayloadAboveReceiveLimitBeforeBodyAllocation() {
         byte[] prefixOnly = hex("00 00 00 00 00 02");
 
-        assertThrows(
-                IllegalArgumentException.class,
-                () -> ZLinkStreamWireProtocol.decodeFrame(prefixOnly, 1));
+        //  Spec 32 9: a payload over the receive limit is FrameTooLarge.
+        assertEquals(
+                ZLinkStreamErrorCode.FRAME_TOO_LARGE,
+                assertThrows(
+                                ZLinkStreamException.class,
+                                () -> ZLinkStreamWireProtocol.decodeFrame(prefixOnly, 1))
+                        .errorCode());
     }
 
     @Test

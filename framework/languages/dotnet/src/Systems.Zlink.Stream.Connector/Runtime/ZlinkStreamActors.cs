@@ -120,7 +120,7 @@ internal sealed class ZlinkStreamActors(
         {
             if (_bySlot.ContainsKey(slot) || _byId.ContainsKey(actorId))
                 throw DecodeError("Actor bound control duplicates an open binding.");
-            var actor = new ZlinkStreamActor(connector, actorId, slot);
+            var actor = new ZlinkStreamActor(connector, actorId, slot, callbacks.HandlerRegistered);
             _bySlot.Add(slot, actor);
             _byId.Add(actorId, actor);
             return actor;
@@ -158,7 +158,8 @@ internal sealed class ZlinkStreamActors(
             await callbacks
                 .DispatchUserCallbackAsync(
                     token => registration.Handler(actor, token),
-                    cancellationToken
+                    cancellationToken,
+                    isLive: () => !registration.IsRemoved
                 )
                 .ConfigureAwait(false);
         }
@@ -176,7 +177,8 @@ internal interface IZlinkStreamActorRuntime : IZlinkStreamActor
 internal sealed class ZlinkStreamActor(
     IZlinkStreamConnectorInternal connector,
     string actorId,
-    ushort slot
+    ushort slot,
+    Action? handlerRegistered = null
 ) : IZlinkStreamActorRuntime
 {
     private readonly ZlinkStreamTypedHandlerRegistry _handlers = new();
@@ -210,7 +212,10 @@ internal sealed class ZlinkStreamActor(
         if (handler is null)
             throw new ArgumentNullException(nameof(handler));
         ZlinkStreamConnector.ValidateName(name);
-        return _handlers.Add(name, handler);
+        var registration = _handlers.Add(name, handler);
+        // Packets of this Actor already queued may now have a handler (spec §5.6, §10).
+        handlerRegistered?.Invoke();
+        return registration;
     }
 
     internal IReadOnlyList<ZlinkStreamTypedHandlerRegistry.TypedHandler> Handlers(string name) =>

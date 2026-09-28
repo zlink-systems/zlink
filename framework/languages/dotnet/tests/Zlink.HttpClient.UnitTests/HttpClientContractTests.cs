@@ -7,6 +7,7 @@ using System.Text.Json;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using MessagePack;
+using Microsoft.AspNetCore.Http;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Xunit;
 using Zlink.Framework.Codecs.MessagePack;
@@ -31,7 +32,7 @@ public sealed class HttpClientContractTests
         string? seen = null;
         using var server = new TestHttpServer(async ctx =>
         {
-            seen = ctx.Request.HttpMethod;
+            seen = ctx.Request.Method;
             await ctx.Response.WriteAsync(200, "{}");
         });
         using var client = ZLinkHttpClient.Create(server.BaseUrl).Build();
@@ -57,7 +58,7 @@ public sealed class HttpClientContractTests
         using var server = new TestHttpServer(async ctx =>
         {
             ctx.Response.StatusCode = 200;
-            ctx.Response.AddHeader("x-marker", "present");
+            ctx.Response.Headers.Append("x-marker", "present");
             await Task.CompletedTask;
         });
         using var client = ZLinkHttpClient.Create(server.BaseUrl).Build();
@@ -75,7 +76,7 @@ public sealed class HttpClientContractTests
         string? rawUrl = null;
         using var server = new TestHttpServer(async ctx =>
         {
-            rawUrl = ctx.Request.Url!.PathAndQuery;
+            rawUrl = $"{ctx.Request.Path}{ctx.Request.QueryString}";
             await ctx.Response.WriteAsync(200, "{}");
         });
         using var client = ZLinkHttpClient.Create(server.BaseUrl).Build();
@@ -114,7 +115,7 @@ public sealed class HttpClientContractTests
         using var server = new TestHttpServer(async ctx =>
         {
             received = JsonSerializer.Deserialize<CreateGameReq>(
-                ctx.Request.ReadBody(),
+                await ctx.Request.ReadBodyAsync(),
                 new JsonSerializerOptions(JsonSerializerDefaults.Web)
             );
             await ctx.Response.WriteAsync(200, """{"id":"game-7","ranked":true}""");
@@ -139,7 +140,7 @@ public sealed class HttpClientContractTests
         using var server = new TestHttpServer(async ctx =>
         {
             contentType = ctx.Request.ContentType;
-            received = StringValue.Parser.ParseFrom(ctx.Request.ReadBodyBytes());
+            received = StringValue.Parser.ParseFrom(await ctx.Request.ReadBodyBytesAsync());
             await ctx.Response.WriteBytesAsync(
                 200,
                 new StringValue { Value = "pong" }.ToByteArray(),
@@ -169,7 +170,9 @@ public sealed class HttpClientContractTests
         using var server = new TestHttpServer(async ctx =>
         {
             contentType = ctx.Request.ContentType;
-            received = MessagePackSerializer.Deserialize<PackedPlayer>(ctx.Request.ReadBodyBytes());
+            received = MessagePackSerializer.Deserialize<PackedPlayer>(
+                await ctx.Request.ReadBodyBytesAsync()
+            );
             await ctx.Response.WriteBytesAsync(
                 200,
                 MessagePackSerializer.Serialize(new PackedPlayer { Id = 9, Name = "reply" }),
@@ -232,7 +235,7 @@ public sealed class HttpClientContractTests
         using var server = new TestHttpServer(async ctx =>
         {
             contentType = ctx.Request.ContentType;
-            body = ctx.Request.ReadBody();
+            body = await ctx.Request.ReadBodyAsync();
             await ctx.Response.WriteAsync(200, "{}");
         });
         using var client = ZLinkHttpClient.Create(server.BaseUrl).Build();
@@ -251,7 +254,7 @@ public sealed class HttpClientContractTests
         using var server = new TestHttpServer(async ctx =>
         {
             contentType = ctx.Request.ContentType;
-            body = ctx.Request.ReadBody();
+            body = await ctx.Request.ReadBodyAsync();
             await ctx.Response.WriteAsync(200, "{}");
         });
         using var client = ZLinkHttpClient.Create(server.BaseUrl).Build();
@@ -270,7 +273,7 @@ public sealed class HttpClientContractTests
         using var server = new TestHttpServer(async ctx =>
         {
             contentType = ctx.Request.ContentType;
-            body = ctx.Request.ReadBody();
+            body = await ctx.Request.ReadBodyAsync();
             await ctx.Response.WriteAsync(200, "{}");
         });
         using var client = ZLinkHttpClient.Create(server.BaseUrl).Build();
@@ -361,14 +364,14 @@ public sealed class HttpClientContractTests
         string? finalMethod = null;
         using var server = new TestHttpServer(async ctx =>
         {
-            if (ctx.Request.Url!.AbsolutePath == "/start")
+            if (ctx.Request.Path.Value == "/start")
             {
                 ctx.Response.StatusCode = 303;
-                ctx.Response.AddHeader("Location", "/result");
+                ctx.Response.Headers.Append("Location", "/result");
                 return;
             }
 
-            finalMethod = ctx.Request.HttpMethod;
+            finalMethod = ctx.Request.Method;
             await ctx.Response.WriteAsync(200, """{"id":"game-1","ranked":false}""");
         });
         using var client = ZLinkHttpClient.Create(server.BaseUrl).FollowRedirects(3).Build();
@@ -388,14 +391,14 @@ public sealed class HttpClientContractTests
         string? finalPath = null;
         using var server = new TestHttpServer(async ctx =>
         {
-            if (ctx.Request.Url!.AbsolutePath == "/games/start")
+            if (ctx.Request.Path.Value == "/games/start")
             {
                 ctx.Response.StatusCode = 307;
-                ctx.Response.AddHeader("Location", "result");
+                ctx.Response.Headers.Append("Location", "result");
                 return;
             }
 
-            finalPath = ctx.Request.Url.AbsolutePath;
+            finalPath = ctx.Request.Path.Value;
             await ctx.Response.WriteAsync(200, "{}");
         });
         using var client = ZLinkHttpClient.Create(server.BaseUrl).FollowRedirects(3).Build();
@@ -421,10 +424,10 @@ public sealed class HttpClientContractTests
         string? authAtResult = null;
         using var server = new TestHttpServer(async ctx =>
         {
-            if (ctx.Request.Url!.AbsolutePath == "/start")
+            if (ctx.Request.Path.Value == "/start")
             {
                 ctx.Response.StatusCode = 307;
-                ctx.Response.AddHeader("Location", "/result");
+                ctx.Response.Headers.Append("Location", "/result");
                 return;
             }
 
@@ -454,7 +457,7 @@ public sealed class HttpClientContractTests
         using var origin = new TestHttpServer(async ctx =>
         {
             ctx.Response.StatusCode = 307;
-            ctx.Response.AddHeader("Location", $"{other.BaseUrl}/result");
+            ctx.Response.Headers.Append("Location", $"{other.BaseUrl}/result");
             await Task.CompletedTask;
         });
         using var client = ZLinkHttpClient
@@ -478,16 +481,16 @@ public sealed class HttpClientContractTests
         {
             authAtOther = ctx.Request.Headers["authorization"];
             ctx.Response.StatusCode = 307;
-            ctx.Response.AddHeader("Location", $"{origin!.BaseUrl}/returned");
+            ctx.Response.Headers.Append("Location", $"{origin!.BaseUrl}/returned");
             await Task.CompletedTask;
         });
         using (
             origin = new TestHttpServer(async ctx =>
             {
-                if (ctx.Request.Url!.AbsolutePath == "/start")
+                if (ctx.Request.Path.Value == "/start")
                 {
                     ctx.Response.StatusCode = 307;
-                    ctx.Response.AddHeader("Location", $"{other.BaseUrl}/hop");
+                    ctx.Response.Headers.Append("Location", $"{other.BaseUrl}/hop");
                     return;
                 }
 
@@ -516,7 +519,7 @@ public sealed class HttpClientContractTests
         using var server = new TestHttpServer(async ctx =>
         {
             ctx.Response.StatusCode = 302;
-            ctx.Response.AddHeader("Location", "/loop");
+            ctx.Response.Headers.Append("Location", "/loop");
             await Task.CompletedTask;
         });
         using var client = ZLinkHttpClient.Create(server.BaseUrl).FollowRedirects(2).Build();
@@ -587,10 +590,10 @@ public sealed class HttpClientContractTests
         string? cookieAtRoot = null;
         using var server = new TestHttpServer(async ctx =>
         {
-            switch (ctx.Request.Url!.AbsolutePath)
+            switch (ctx.Request.Path.Value)
             {
                 case "/login":
-                    ctx.Response.AddHeader("Set-Cookie", "session=abc; Path=/secure");
+                    ctx.Response.Headers.Append("Set-Cookie", "session=abc; Path=/secure");
                     await ctx.Response.WriteAsync(200, "{}");
                     break;
                 case "/secure/data":
@@ -625,9 +628,9 @@ public sealed class HttpClientContractTests
             var compressed = Compress(raw, encoding);
             ctx.Response.StatusCode = 200;
             ctx.Response.ContentType = "application/json";
-            ctx.Response.AddHeader("Content-Encoding", encoding);
-            ctx.Response.ContentLength64 = compressed.Length;
-            await ctx.Response.OutputStream.WriteAsync(compressed);
+            ctx.Response.Headers.Append("Content-Encoding", encoding);
+            ctx.Response.ContentLength = compressed.Length;
+            await ctx.Response.Body.WriteAsync(compressed);
         });
         using var client = ZLinkHttpClient.Create(server.BaseUrl).Compression().Build();
 
@@ -772,16 +775,16 @@ public sealed class HttpClientContractTests
         string? cookieAfterDelete = null;
         using var server = new TestHttpServer(async ctx =>
         {
-            switch (ctx.Request.Url!.AbsolutePath)
+            switch (ctx.Request.Path.Value)
             {
                 case "/set-secure":
-                    ctx.Response.AddHeader("Set-Cookie", "sid=abc; Secure");
-                    ctx.Response.AddHeader("Set-Cookie", "keep=1");
+                    ctx.Response.Headers.Append("Set-Cookie", "sid=abc; Secure");
+                    ctx.Response.Headers.Append("Set-Cookie", "keep=1");
                     await ctx.Response.WriteAsync(200, "{}");
                     break;
                 case "/check-1":
                     cookieAfterSecure = ctx.Request.Headers["cookie"];
-                    ctx.Response.AddHeader("Set-Cookie", "keep=; Max-Age=0");
+                    ctx.Response.Headers.Append("Set-Cookie", "keep=; Max-Age=0");
                     await ctx.Response.WriteAsync(200, "{}");
                     break;
                 default:
@@ -806,10 +809,10 @@ public sealed class HttpClientContractTests
         using var server = new TestHttpServer(async ctx =>
         {
             ctx.Response.StatusCode = 200;
-            ctx.Response.AddHeader("Content-Encoding", "gzip");
+            ctx.Response.Headers.Append("Content-Encoding", "gzip");
             var garbage = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 };
-            ctx.Response.ContentLength64 = garbage.Length;
-            await ctx.Response.OutputStream.WriteAsync(garbage);
+            ctx.Response.ContentLength = garbage.Length;
+            await ctx.Response.Body.WriteAsync(garbage);
         });
         using var client = ZLinkHttpClient.Create(server.BaseUrl).Compression().Build();
 
@@ -921,7 +924,7 @@ public sealed class HttpClientContractTests
         string? method = null;
         using var server = new TestHttpServer(async ctx =>
         {
-            method = ctx.Request.HttpMethod;
+            method = ctx.Request.Method;
             await ctx.Response.WriteAsync(200, """{"id":3,"name":"OneShot"}""");
         });
 

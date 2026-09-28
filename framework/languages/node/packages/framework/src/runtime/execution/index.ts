@@ -66,15 +66,13 @@ export class ZLinkSpotSerialTurn {
     readonly yieldAllowed: boolean
   ) {}
 
-  bindExecutionClaim(claim: ZLinkExecutionBarrierClaim | undefined): void {
-    if (this.executionClaim !== undefined) {
-      throw new Error('ZLink Spot serial turn already owns an execution claim.');
-    }
-    this.executionClaim = claim;
-  }
-
   get isSuspended(): boolean {
     return this.suspendSignaled;
+  }
+
+  /** False when a seal that does not drain yielded turns won before this resume. */
+  resumeExecutionClaim(): boolean {
+    return this.executionClaim?.resume() ?? true;
   }
 
   releaseBoundExecutionClaim(): void {
@@ -94,6 +92,14 @@ export class ZLinkSpotSerialTurn {
 
   bindOwner(owner: Promise<unknown>): void {
     this.owner = owner;
+  }
+
+  /** Settles when the whole turn ends by any path, including yielded continuations. */
+  get completion(): Promise<void> {
+    return (this.owner ?? Promise.resolve()).then(
+      () => undefined,
+      () => undefined
+    );
   }
 
   blockFrameworkOperations(): void {
@@ -150,7 +156,7 @@ export class ZLinkSpotSerialTurn {
       return;
     }
     this.suspendSignaled = true;
-    this.releaseBoundExecutionClaim();
+    this.executionClaim?.suspend();
     this.suspendedResolve?.();
   }
 
@@ -235,10 +241,19 @@ export function isCurrentZLinkSpotSerialTurn(executor: ZLinkSpotSerialTurnExecut
 
 export interface ZLinkExecutionBarrierSeal {
   readonly generation: bigint;
+  /**
+   * A Spot Close seal waits for yielded turns accepted before it and lets them
+   * resume (Spot address messaging §7 step 2); a relocation seal does not, and
+   * their continuation fails (execution gate §4).
+   */
+  readonly drainsYieldedTurns: boolean;
 }
 
 export interface ZLinkExecutionBarrierClaim {
   release(): void;
+  /** The turn yielded; it no longer runs until resume() admits it again. */
+  suspend(): void;
+  resume(): boolean;
 }
 
 interface ZLinkExecutionBarrierWaiter {
@@ -254,10 +269,15 @@ interface ZLinkExecutionBarrierWaiter {
 export class ZLinkExecutionBarrier {
   private generation = 0n;
   private activeClaims = 0;
+  private suspendedClaims = 0;
   private currentSeal: ZLinkExecutionBarrierSeal | undefined;
   private readonly admissionWaiters: ZLinkExecutionBarrierWaiter[] = [];
   private readonly quiescenceWaiters = new Set<() => void>();
   private committed = false;
+
+  get isSealed(): boolean {
+    return this.currentSeal !== undefined || this.committed;
+  }
 
   async enter(): Promise<ZLinkExecutionBarrierClaim> {
     if (this.committed) {
@@ -274,19 +294,7 @@ export class ZLinkExecutionBarrier {
     return this.createClaim();
   }
 
-  /**
-   * Re-enters a previously yielded application turn only while admission is
-   * open. A continuation must fail instead of waiting behind a relocation
-   * seal that already won the turn-boundary race.
-   */
-  tryEnter(): ZLinkExecutionBarrierClaim | undefined {
-    if (this.committed || this.currentSeal !== undefined) {
-      return undefined;
-    }
-    return this.createClaim();
-  }
-
-  seal(): ZLinkExecutionBarrierSeal {
+  seal(drainsYieldedTurns = false): ZLinkExecutionBarrierSeal {
     if (this.committed) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.SpotMoving,
@@ -296,17 +304,19 @@ export class ZLinkExecutionBarrier {
     if (this.currentSeal !== undefined) {
       throw new Error('ZLink execution barrier is already sealed.');
     }
-    const seal = Object.freeze({ generation: ++this.generation });
+    const seal = Object.freeze({ generation: ++this.generation, drainsYieldedTurns });
     this.currentSeal = seal;
     return seal;
   }
 
   async waitForQuiescence(seal: ZLinkExecutionBarrierSeal, signal?: AbortSignal): Promise<void> {
     this.requireCurrent(seal);
-    if (this.activeClaims === 0) return;
+    if (this.isQuiescent(seal)) return;
     if (signal?.aborted === true) throw signal.reason;
     await new Promise<void>((resolve, reject) => {
       const complete = () => {
+        if (!this.isQuiescent(seal)) return;
+        this.quiescenceWaiters.delete(complete);
         signal?.removeEventListener('abort', abort);
         resolve();
       };
@@ -345,18 +355,46 @@ export class ZLinkExecutionBarrier {
     return this.currentSeal?.generation === seal.generation;
   }
 
+  private isQuiescent(seal: ZLinkExecutionBarrierSeal): boolean {
+    return this.activeClaims === 0 && (!seal.drainsYieldedTurns || this.suspendedClaims === 0);
+  }
+
+  private notifyQuiescence(): void {
+    for (const waiter of [...this.quiescenceWaiters]) waiter();
+  }
+
   private createClaim(): ZLinkExecutionBarrierClaim {
     this.activeClaims++;
-    let released = false;
+    let state: 'active' | 'suspended' | 'released' = 'active';
+    const release = () => {
+      if (state === 'released') return;
+      if (state === 'active') this.activeClaims--;
+      else this.suspendedClaims--;
+      state = 'released';
+      this.notifyQuiescence();
+    };
     return {
-      release: () => {
-        if (released) return;
-        released = true;
+      release,
+      suspend: () => {
+        if (state !== 'active') return;
+        state = 'suspended';
         this.activeClaims--;
-        if (this.activeClaims === 0) {
-          for (const waiter of this.quiescenceWaiters) waiter();
-          this.quiescenceWaiters.clear();
+        this.suspendedClaims++;
+        this.notifyQuiescence();
+      },
+      resume: () => {
+        if (state !== 'suspended') return state === 'active';
+        if (
+          this.committed ||
+          (this.currentSeal !== undefined && !this.currentSeal.drainsYieldedTurns)
+        ) {
+          release();
+          return false;
         }
+        state = 'active';
+        this.suspendedClaims--;
+        this.activeClaims++;
+        return true;
       }
     };
   }

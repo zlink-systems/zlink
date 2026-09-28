@@ -71,33 +71,28 @@ internal sealed class ZlinkStreamFrameSender(
             null
         );
         ValidateSendReady(frame.HeaderBytes, frame.PayloadBytes);
-        await SendPacketAsync(frame.HeaderBytes, frame.PayloadBytes, cancellationToken)
+        var connection =
+            connectionProvider()
+            ?? throw ZlinkStreamConnector.Error(
+                ZlinkStreamErrorCode.Disconnected,
+                "Connector is not connected."
+            );
+        await SendPacketAsync(connection, frame.HeaderBytes, frame.PayloadBytes, cancellationToken)
             .ConfigureAwait(false);
     }
 
     public void ValidateSendReady(ReadOnlyMemory<byte> header, ReadOnlyMemory<byte> payload)
     {
         ZlinkStreamFrameCodec.ValidateSendFrame(header.Length, payload.Length);
-        if (connectionProvider() is null)
-            throw ZlinkStreamConnector.Error(
-                ZlinkStreamErrorCode.Disconnected,
-                "Connector is not connected."
-            );
     }
 
     public async ValueTask SendPacketAsync(
+        IZlinkStreamConnection connection,
         ReadOnlyMemory<byte> header,
         ReadOnlyMemory<byte> payload,
         CancellationToken cancellationToken
     )
     {
-        var connection = connectionProvider();
-        if (connection is null)
-            throw ZlinkStreamConnector.Error(
-                ZlinkStreamErrorCode.Disconnected,
-                "Connector is not connected."
-            );
-
         try
         {
             await sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -167,6 +162,11 @@ internal sealed class ZlinkStreamFrameSender(
         }
     }
 
+    /// <summary>
+    ///     Decompresses a received payload. A payload the codec cannot decompress is
+    ///     DecompressionFailed; a result over the receive limit is FrameTooLarge, the code of
+    ///     a received payload over the limit (stream-connector spec §4.7, §9).
+    /// </summary>
     public ReadOnlyMemory<byte> DecompressIfNeeded(
         ZlinkStreamHeader header,
         ReadOnlyMemory<byte> payload
@@ -181,11 +181,12 @@ internal sealed class ZlinkStreamFrameSender(
                 "Compression codec is not configured."
             );
 
+        ReadOnlyMemory<byte> decompressed;
         try
         {
-            return compressionCodec.Decompress(payload, int.MaxValue);
+            decompressed = compressionCodec.Decompress(payload, options.MaxReceivePayloadSize);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not ZlinkStreamException)
         {
             throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.DecompressionFailed,
@@ -193,6 +194,15 @@ internal sealed class ZlinkStreamFrameSender(
                 ex
             );
         }
+
+        // A custom codec may not apply the limit it is given, so the result is checked here.
+        if (decompressed.Length > options.MaxReceivePayloadSize)
+            throw ZlinkStreamConnector.Error(
+                ZlinkStreamErrorCode.FrameTooLarge,
+                "Decompressed payload exceeds MaxReceivePayloadSize."
+            );
+
+        return decompressed;
     }
 
     private ReadOnlyMemory<byte> CompressPayload(ReadOnlyMemory<byte> payload)

@@ -76,6 +76,24 @@ final class ZLinkRedisRelocationBlobBoundTest {
         }
     }
 
+    @Test
+    void roundsFractionalMillisecondRetentionUpForStoredExpiry() throws Exception {
+        try (FakeRedis redis = new FakeRedis(2)) {
+            ZLinkBlobStored stored =
+                    assertInstanceOf(
+                            ZLinkBlobStored.class,
+                            redis.store
+                                    .put(
+                                            new ZLinkBlobReference("chunk-a"),
+                                            new byte[] {42},
+                                            Duration.ofNanos(1_500_000),
+                                            () -> false)
+                                    .toCompletableFuture()
+                                    .join());
+            assertEquals(Instant.ofEpochMilli(1002), stored.expiresAt());
+        }
+    }
+
     private static final class FakeRedis implements AutoCloseable {
         final ZLinkRedisRelocationStore store =
                 new ZLinkRedisRelocationStore(
@@ -85,9 +103,15 @@ final class ZLinkRedisRelocationBlobBoundTest {
         int commandAcquisitions;
         int puts;
         byte[] payload;
+        final long expectedRetentionMs;
+
+        FakeRedis() throws Exception {
+            this(2000);
+        }
 
         @SuppressWarnings("unchecked")
-        FakeRedis() throws Exception {
+        FakeRedis(long expectedRetentionMs) throws Exception {
+            this.expectedRetentionMs = expectedRetentionMs;
             RedisAsyncCommands<String, byte[]> commands =
                     (RedisAsyncCommands<String, byte[]>)
                             Proxy.newProxyInstance(
@@ -108,7 +132,7 @@ final class ZLinkRedisRelocationBlobBoundTest {
                                         byte[][] values = (byte[][]) arguments[3];
                                         payload = values[0];
                                         assertEquals(
-                                                "2000",
+                                                Long.toString(expectedRetentionMs),
                                                 new String(values[1], StandardCharsets.UTF_8));
                                         var result =
                                                 new AsyncCommand<String, byte[], List<Object>>(
@@ -117,7 +141,8 @@ final class ZLinkRedisRelocationBlobBoundTest {
                                                                 new NestedMultiOutput<>(
                                                                         ZLinkRedisStringByteArrayCodec
                                                                                 .INSTANCE)));
-                                        result.complete(List.of("stored", 1000L, 2000L));
+                                        result.complete(
+                                                List.of("stored", 1000L, expectedRetentionMs));
                                         return result;
                                     });
             StatefulRedisConnection<String, byte[]> transport =

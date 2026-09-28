@@ -33,6 +33,47 @@ export function normalizeOptions(
   validatePositive(options.maxReceivePayloadSize ?? 64 * 1024, 'MaxReceivePayloadSize');
   validateHeartbeat(options.heartbeat);
   validateReconnect(options.reconnect);
+  if (options.heartbeat?.enabled !== undefined && typeof options.heartbeat.enabled !== 'boolean') {
+    throw connectorError(
+      ZlinkStreamErrorCode.ValidationFailed,
+      'Heartbeat enabled must be boolean.'
+    );
+  }
+  if (options.reconnect?.enabled !== undefined && typeof options.reconnect.enabled !== 'boolean') {
+    throw connectorError(
+      ZlinkStreamErrorCode.ValidationFailed,
+      'Reconnect enabled must be boolean.'
+    );
+  }
+  if (
+    options.compressionCodec !== undefined &&
+    !hasMethods(options.compressionCodec, 'compress', 'decompress')
+  ) {
+    throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Compression codec is invalid.');
+  }
+  if (options.codec !== undefined && !hasMethods(options.codec, 'encode', 'decode')) {
+    throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Payload codec is invalid.');
+  }
+  if (options.nameResolver !== undefined && !hasMethods(options.nameResolver, 'resolve')) {
+    throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Packet name resolver is invalid.');
+  }
+  if (options.transportFactory !== undefined && !hasMethods(options.transportFactory, 'connect')) {
+    throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Transport factory is invalid.');
+  }
+  if (
+    !Object.values(ZlinkStreamDispatchMode).includes(
+      options.dispatchMode ?? ZlinkStreamDispatchMode.Manual
+    )
+  ) {
+    throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'DispatchMode is invalid.');
+  }
+  if (
+    !Object.values(ZlinkStreamCompression).includes(
+      options.compression ?? ZlinkStreamCompression.Lz4
+    )
+  ) {
+    throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Compression is invalid.');
+  }
 
   return {
     endpoint,
@@ -101,41 +142,28 @@ function resolveCompressionCodec(options: ZlinkStreamConnectorOptions) {
 }
 
 function validatePositive(value: number, name: string): void {
-  if (value <= 0) {
+  if (!Number.isFinite(value) || value <= 0) {
     throw connectorError(ZlinkStreamErrorCode.ValidationFailed, `${name} must be positive.`);
   }
 }
 
+function hasMethods(value: unknown, ...names: string[]): boolean {
+  if (value === null || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  return names.every((name) => typeof candidate[name] === 'function');
+}
+
 function validateHeartbeat(options: ZlinkStreamHeartbeatOptions | undefined): void {
-  const enabled = options?.enabled ?? true;
   const intervalMs = options?.intervalMs ?? 1000;
   const timeoutMs = options?.timeoutMs ?? 5000;
-  if (!enabled) {
-    return;
-  }
   validatePositive(intervalMs, 'Heartbeat interval');
   validatePositive(timeoutMs, 'Heartbeat timeout');
-  if (timeoutMs <= intervalMs) {
-    throw connectorError(
-      ZlinkStreamErrorCode.ValidationFailed,
-      'Heartbeat timeout must be greater than the heartbeat interval.'
-    );
-  }
 }
 
 function validateReconnect(options: ZlinkStreamReconnectOptions | undefined): void {
-  const enabled = options?.enabled ?? true;
-  if (!enabled) {
-    return;
-  }
   validatePositive(options?.initialDelayMs ?? 250, 'Reconnect InitialDelay');
   validatePositive(options?.maxDelayMs ?? 5000, 'Reconnect MaxDelay');
-  if ((options?.backoffFactor ?? 2.0) < 1.0) {
-    throw connectorError(
-      ZlinkStreamErrorCode.ValidationFailed,
-      'Reconnect BackoffFactor must be at least 1.0.'
-    );
-  }
+  validatePositive(options?.backoffFactor ?? 2.0, 'Reconnect BackoffFactor');
   // Spec stream-connector 32 §6: `null` is how this option says "unlimited".
   // Only a stated number is range-checked.
   const maxAttempts = options?.maxAttempts === undefined ? 3 : options.maxAttempts;

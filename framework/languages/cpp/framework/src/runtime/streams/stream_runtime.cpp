@@ -404,17 +404,56 @@ class stream_session_dispatcher_t
     stream_state_t &_stream;
 };
 
-task_t<void> dispatch_packet_session (packet_stream_session_t *session,
-                                      stream_t stream,
-                                      std::shared_ptr<stream_header_t> header,
-                                      std::shared_ptr<session_message_context_t> context,
-                                      std::shared_ptr<zlink::message_t> payload)
+task_t<void> dispatch_packet_session_callback (packet_stream_session_t *session,
+                                               stream_t stream,
+                                               std::shared_ptr<stream_header_t> header,
+                                               std::shared_ptr<session_message_context_t> context,
+                                               std::shared_ptr<zlink::message_t> payload)
 {
     auto task = [&] {
         const stream_relay_dispatch_scope_t relay_scope (*header);
         return session->on_packet (stream, *context, *payload);
     }();
     co_return co_await task;
+}
+
+task_t<void> dispatch_packet_session (packet_stream_session_t *session,
+                                      stream_t stream,
+                                      std::shared_ptr<stream_header_t> header,
+                                      std::shared_ptr<session_message_context_t> context,
+                                      std::shared_ptr<zlink::message_t> payload,
+                                      session_actor_manager_t *actors,
+                                      detail::message_flow_tracer_t flow_tracer)
+{
+    if (auto actor_slot = header->actor_slot ()) {
+        auto actor = actors
+                       ? detail::session_actor_manager_access_t::find_slot (*actors, *actor_slot)
+                       : std::nullopt;
+        if (!actor) {
+            if (header->kind () == stream_message_kind_t::send) {
+                flow_tracer.trace (message_flow_outcome_t::dropped, [&] {
+                    return message_flow_event_t{
+                      .outcome = message_flow_outcome_t::dropped,
+                      .surface = dispatch_error_surface_t::stream_session,
+                      .message_kind = dispatch_message_kind_t::send,
+                      .packet_name = std::string (header->packet_name ()),
+                      .correlation_id =
+                        header->correlation_id ()
+                          ? std::make_optional (std::string (*header->correlation_id ()))
+                          : std::nullopt,
+                      .reason = message_flow_reason_t::stale_target};
+                });
+                return task_t<void> (result_t<void>::success ());
+            }
+            return task_t<void> (detail::result_access_t::failure<void> (
+              detail::make_origin_exception (framework_error_kind_t::invalid_operation,
+                                             detail::failure_origin_t::stale_actor_slot,
+                                             "STREAM Actor slot is not a current binding")));
+        }
+        context->actor = std::make_shared<session_actor_t> (std::move (*actor));
+    }
+    return dispatch_packet_session_callback (session, std::move (stream), std::move (header),
+                                             std::move (context), std::move (payload));
 }
 
 void configure_stream_dispatch_executor ()
@@ -1769,45 +1808,19 @@ result_t<void> stream_runtime_t::dispatch_packet (packet_stream_session_t &sessi
     dispatch_context->packet_name = std::string (header.packet_name ());
     dispatch_context->metadata = message_metadata_t (header.metadata ().values ());
     dispatch_context->can_reply = header.request_seq ().has_value ();
-    if (auto actor_slot = header.actor_slot ()) {
-        auto *actors = stream._state->actors.load (std::memory_order_acquire);
-        auto actor = actors
-                       ? detail::session_actor_manager_access_t::find_slot (*actors, *actor_slot)
-                       : std::nullopt;
-        if (!actor) {
-            if (header.kind () == stream_message_kind_t::send) {
-                flow_tracer.trace (message_flow_outcome_t::dropped, [&] {
-                    return message_flow_event_t{
-                      .outcome = message_flow_outcome_t::dropped,
-                      .surface = dispatch_error_surface_t::stream_session,
-                      .message_kind = dispatch_message_kind_t::send,
-                      .packet_name = std::string (header.packet_name ()),
-                      .correlation_id =
-                        header.correlation_id ()
-                          ? std::make_optional (std::string (*header.correlation_id ()))
-                          : std::nullopt,
-                      .reason = message_flow_reason_t::stale_target};
-                });
-                return result_t<void>::success ();
-            }
-            return detail::result_access_t::failure<void> (detail::make_origin_exception (
-              framework_error_kind_t::invalid_operation, detail::failure_origin_t::stale_actor_slot,
-              "STREAM Actor slot is not a current binding"));
-        }
-        dispatch_context->actor = std::make_shared<session_actor_t> (std::move (*actor));
-    }
     auto dispatch_payload = std::make_shared<zlink::message_t> (std::move (handler_payload));
     return dispatch_application (
       stream, "packet:" + std::string (header.packet_name ()),
       [session = &session, dispatch_stream = std::move (dispatch_stream),
        dispatch_header = std::move (dispatch_header),
        dispatch_context = std::move (dispatch_context),
-       dispatch_payload = std::move (dispatch_payload),
-       current_flow = std::move (current_flow)] () mutable {
+       dispatch_payload = std::move (dispatch_payload), current_flow = std::move (current_flow),
+       flow_tracer] () mutable {
           runtime::flow_context_t::scope_t callback_flow (std::move (current_flow));
+          auto *actors = dispatch_stream._state->actors.load (std::memory_order_acquire);
           return dispatch_packet_session (session, std::move (dispatch_stream),
                                           std::move (dispatch_header), std::move (dispatch_context),
-                                          std::move (dispatch_payload));
+                                          std::move (dispatch_payload), actors, flow_tracer);
       });
 }
 
@@ -1882,45 +1895,19 @@ result_t<void> stream_runtime_t::dispatch_packet_async (packet_stream_session_t 
     dispatch_context->packet_name = std::string (header.packet_name ());
     dispatch_context->metadata = message_metadata_t (header.metadata ().values ());
     dispatch_context->can_reply = header.request_seq ().has_value ();
-    if (auto actor_slot = header.actor_slot ()) {
-        auto *actors = stream._state->actors.load (std::memory_order_acquire);
-        auto actor = actors
-                       ? detail::session_actor_manager_access_t::find_slot (*actors, *actor_slot)
-                       : std::nullopt;
-        if (!actor) {
-            if (header.kind () == stream_message_kind_t::send) {
-                flow_tracer.trace (message_flow_outcome_t::dropped, [&] {
-                    return message_flow_event_t{
-                      .outcome = message_flow_outcome_t::dropped,
-                      .surface = dispatch_error_surface_t::stream_session,
-                      .message_kind = dispatch_message_kind_t::send,
-                      .packet_name = std::string (header.packet_name ()),
-                      .correlation_id =
-                        header.correlation_id ()
-                          ? std::make_optional (std::string (*header.correlation_id ()))
-                          : std::nullopt,
-                      .reason = message_flow_reason_t::stale_target};
-                });
-                return result_t<void>::success ();
-            }
-            return detail::result_access_t::failure<void> (detail::make_origin_exception (
-              framework_error_kind_t::invalid_operation, detail::failure_origin_t::stale_actor_slot,
-              "STREAM Actor slot is not a current binding"));
-        }
-        dispatch_context->actor = std::make_shared<session_actor_t> (std::move (*actor));
-    }
     auto dispatch_payload = std::make_shared<zlink::message_t> (std::move (handler_payload));
     return dispatch_application_async (
       stream, "packet:" + std::string (header.packet_name ()),
       [session = &session, dispatch_stream = std::move (dispatch_stream),
        dispatch_header = std::move (dispatch_header),
        dispatch_context = std::move (dispatch_context),
-       dispatch_payload = std::move (dispatch_payload),
-       current_flow = std::move (current_flow)] () mutable {
+       dispatch_payload = std::move (dispatch_payload), current_flow = std::move (current_flow),
+       flow_tracer] () mutable {
           runtime::flow_context_t::scope_t callback_flow (std::move (current_flow));
+          auto *actors = dispatch_stream._state->actors.load (std::memory_order_acquire);
           return dispatch_packet_session (session, std::move (dispatch_stream),
                                           std::move (dispatch_header), std::move (dispatch_context),
-                                          std::move (dispatch_payload));
+                                          std::move (dispatch_payload), actors, flow_tracer);
       },
       std::move (completion), std::move (started), std::move (cancelled));
 }

@@ -8,6 +8,10 @@ internal sealed class ZLinkSerialTurn
     private readonly Func<Func<CancellationToken, ValueTask>, bool> _postCallback;
     private readonly Action<Exception> _reportError;
     private readonly CancellationToken _executionToken;
+    internal ZLinkSerialWorkItem Item { get; }
+
+    internal ZLinkSerialWorkItem? LifecycleOwner =>
+        Item.LifecycleOwner ?? (Item.Lane == ZLinkSerialWorkLane.Lifecycle ? Item : null);
     private Task? _ownerTask;
 
     private TaskCompletionSource _suspended = new(
@@ -20,13 +24,15 @@ internal sealed class ZLinkSerialTurn
         Func<ZLinkSerialTurn, Action, ZLinkSerialPostAdmission> postResume,
         Func<Func<CancellationToken, ValueTask>, bool> postCallback,
         Action<Exception> reportError,
-        CancellationToken executionToken
+        CancellationToken executionToken,
+        ZLinkSerialWorkItem item
     )
     {
         _postResume = postResume;
         _postCallback = postCallback;
         _reportError = reportError;
         _executionToken = executionToken;
+        Item = item;
     }
 
     public static ZLinkSerialTurn? Current => CurrentTurn.Value;

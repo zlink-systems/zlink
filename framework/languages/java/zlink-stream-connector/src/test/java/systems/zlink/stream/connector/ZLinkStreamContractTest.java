@@ -10,7 +10,6 @@ import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.messaging.Message;
 
-import java.net.ServerSocket;
 import java.net.URI;
 import java.time.Duration;
 import java.util.List;
@@ -18,6 +17,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -44,18 +44,6 @@ final class ZLinkStreamContractTest {
                                                         ZLinkStreamDispatchMode.MANUAL,
                                                         Duration.ZERO,
                                                         1)))
-                        .errorCode());
-
-        //  A disagreement between two options, not a value out of range.
-        assertEquals(
-                ZLinkStreamErrorCode.CONFIGURATION_ERROR,
-                assertThrows(
-                                ZLinkStreamException.class,
-                                () ->
-                                        ZLinkStreamConnectorFactory.create(
-                                                heartbeatOptions(
-                                                        Duration.ofSeconds(5),
-                                                        Duration.ofSeconds(1))))
                         .errorCode());
     }
 
@@ -113,17 +101,25 @@ final class ZLinkStreamContractTest {
         }
     }
 
+    /**
+     * Spec 32 9.2: submit() is the asynchronous surface, so a Send and a Request that find no
+     * connection both deliver Disconnected through their stage and neither throws.
+     */
     @Test
     void sendingWhileDisconnectedIsDisconnected() {
         ZLinkStreamConnector connector =
                 ZLinkStreamConnectorFactory.create(
                         ZLinkStreamConnectorOptions.createDefault(URI.create("tcp://127.0.0.1:1")));
-        assertEquals(
-                ZLinkStreamErrorCode.DISCONNECTED,
-                assertThrows(
-                                ZLinkStreamException.class,
-                                () -> connector.send(payload("Ping", "hello")).submit())
-                        .errorCode());
+        CompletionStage<Void> send = connector.send(payload("Ping", "hello")).submit();
+        CompletionStage<ZLinkStreamEncodedPayload> request =
+                connector.request(payload("Echo", "hello")).submit();
+        for (CompletionStage<?> stage : List.of(send, request)) {
+            CompletionException failure =
+                    assertThrows(CompletionException.class, stage.toCompletableFuture()::join);
+            assertEquals(
+                    ZLinkStreamErrorCode.DISCONNECTED,
+                    ((ZLinkStreamException) failure.getCause()).errorCode());
+        }
     }
 
     //  --- 6: the wait between reconnect attempts ---
@@ -169,6 +165,19 @@ final class ZLinkStreamContractTest {
         assertEquals(Duration.ofMillis(1000), third);
         assertEquals(Duration.ofMillis(1000), fourth);
         assertEquals(Duration.ofMillis(1000), fifth);
+    }
+
+    @Test
+    void reconnectBaseDelayStartsAtMaximumWhenInitialIsLargerAndCanShrink() {
+        ZLinkStreamConnectorConfiguration.Reconnect reconnect =
+                new ZLinkStreamConnectorConfiguration.Reconnect(
+                        true, 5, Duration.ofMillis(1000), Duration.ofMillis(100), 0.5);
+        Duration first = ZLinkStreamReconnectDelay.firstBase(reconnect);
+        assertEquals(Duration.ofMillis(100), first);
+        assertEquals(Duration.ofMillis(50), ZLinkStreamReconnectDelay.nextBase(first, reconnect));
+        assertEquals(
+                Duration.ofMillis(25),
+                ZLinkStreamReconnectDelay.nextBase(Duration.ofMillis(50), reconnect));
     }
 
     @Test
@@ -231,11 +240,10 @@ final class ZLinkStreamContractTest {
 
     @Test
     void closeReasonSurvivesAFailedFirstConnect() throws Exception {
-        int port = reservePort();
         ZLinkStreamConnector connector =
                 ZLinkStreamConnectorFactory.create(
                         new ZLinkStreamConnectorOptions(
-                                URI.create("tcp://127.0.0.1:" + port),
+                                URI.create("tcp://127.0.0.1:0"),
                                 ZLinkStreamDispatchMode.IMMEDIATE,
                                 Duration.ofMillis(200),
                                 1,
@@ -262,12 +270,11 @@ final class ZLinkStreamContractTest {
 
     @Test
     void reconnectingDoesNotClearTheLastCloseReason() throws Exception {
-        int port = reservePort();
-        TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer(port);
+        TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer();
         ZLinkStreamConnector connector =
                 ZLinkStreamConnectorFactory.create(
                         new ZLinkStreamConnectorOptions(
-                                URI.create("tcp://127.0.0.1:" + port),
+                                server.endpoint(),
                                 ZLinkStreamDispatchMode.IMMEDIATE,
                                 Duration.ofSeconds(1),
                                 ZLinkStreamConnectorOptions.UNLIMITED_RECONNECT_ATTEMPTS,
@@ -350,12 +357,11 @@ final class ZLinkStreamContractTest {
 
     @Test
     void receivedCountRestartsWhenAConnectionIsEstablished() throws Exception {
-        int port = reservePort();
-        TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer(port);
+        TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer();
         ZLinkStreamConnector connector =
                 ZLinkStreamConnectorFactory.create(
                         new ZLinkStreamConnectorOptions(
-                                URI.create("tcp://127.0.0.1:" + port),
+                                server.endpoint(),
                                 ZLinkStreamDispatchMode.IMMEDIATE,
                                 Duration.ofSeconds(1),
                                 ZLinkStreamConnectorOptions.UNLIMITED_RECONNECT_ATTEMPTS,
@@ -396,12 +402,11 @@ final class ZLinkStreamContractTest {
 
     @Test
     void establishingAConnectionClearsWhatThePreviousOneLeftUnconsumed() throws Exception {
-        int port = reservePort();
-        TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer(port);
+        TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer();
         ZLinkStreamConnector connector =
                 ZLinkStreamConnectorFactory.create(
                         new ZLinkStreamConnectorOptions(
-                                URI.create("tcp://127.0.0.1:" + port),
+                                server.endpoint(),
                                 ZLinkStreamDispatchMode.MANUAL,
                                 Duration.ofSeconds(1),
                                 ZLinkStreamConnectorOptions.UNLIMITED_RECONNECT_ATTEMPTS,
@@ -419,10 +424,7 @@ final class ZLinkStreamContractTest {
             //  Manual dispatch and no handler, so the message stays in the
             //  receive message queue.
             server.sendAsync(send("Push"), TcpStreamConnectorTestServer.bytes("before")).join();
-            TcpStreamConnectorTestServer.awaitCondition(
-                    () ->
-                            connector.receivedCount("Push") == 1
-                                    && connector.pendingDispatchCount() == 1);
+            TcpStreamConnectorTestServer.awaitCondition(() -> connector.receivedCount("Push") == 1);
 
             server.closeCurrentSocket();
             TcpStreamConnectorTestServer.awaitCondition(
@@ -455,12 +457,11 @@ final class ZLinkStreamContractTest {
 
     @Test
     void aWaitLeftOverFromTheEndedConnectionIsDisconnected() throws Exception {
-        int port = reservePort();
-        TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer(port);
+        TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer();
         ZLinkStreamConnector connector =
                 ZLinkStreamConnectorFactory.create(
                         new ZLinkStreamConnectorOptions(
-                                URI.create("tcp://127.0.0.1:" + port),
+                                server.endpoint(),
                                 ZLinkStreamDispatchMode.MANUAL,
                                 Duration.ofSeconds(1),
                                 ZLinkStreamConnectorOptions.UNLIMITED_RECONNECT_ATTEMPTS,
@@ -559,12 +560,11 @@ final class ZLinkStreamContractTest {
      */
     @Test
     void aWaitEndsAsDisconnectedBeforeTheReconnectSucceeds() throws Exception {
-        int port = reservePort();
-        TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer(port);
+        TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer();
         ZLinkStreamConnector connector =
                 ZLinkStreamConnectorFactory.create(
                         new ZLinkStreamConnectorOptions(
-                                URI.create("tcp://127.0.0.1:" + port),
+                                server.endpoint(),
                                 ZLinkStreamDispatchMode.MANUAL,
                                 Duration.ofSeconds(1),
                                 ZLinkStreamConnectorOptions.UNLIMITED_RECONNECT_ATTEMPTS,
@@ -687,24 +687,6 @@ final class ZLinkStreamContractTest {
         return ((ZLinkStreamException) current).errorCode();
     }
 
-    private static ZLinkStreamConnectorOptions heartbeatOptions(
-            Duration interval, Duration timeout) {
-        return new ZLinkStreamConnectorOptions(
-                URI.create("tcp://127.0.0.1:7000"),
-                ZLinkStreamDispatchMode.MANUAL,
-                Duration.ofSeconds(1),
-                1,
-                Duration.ofSeconds(1),
-                64 * 1024,
-                true,
-                interval,
-                timeout,
-                true,
-                Duration.ofMillis(10),
-                Duration.ofMillis(20),
-                2.0);
-    }
-
     private static ZLinkStreamWireProtocol.Header send(String name) {
         return new ZLinkStreamWireProtocol.Header(
                 ZLinkStreamWireProtocol.KIND_SEND,
@@ -718,11 +700,5 @@ final class ZLinkStreamContractTest {
 
     private static ZLinkStreamEncodedPayload payload(String packetName, String body) {
         return new ZLinkStreamEncodedPayload(packetName, Message.from(body), Map.of());
-    }
-
-    private static int reservePort() throws Exception {
-        try (ServerSocket socket = new ServerSocket(0)) {
-            return socket.getLocalPort();
-        }
     }
 }

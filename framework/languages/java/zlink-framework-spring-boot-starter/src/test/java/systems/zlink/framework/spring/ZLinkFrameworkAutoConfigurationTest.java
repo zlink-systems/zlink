@@ -36,6 +36,7 @@ import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 import systems.zlink.framework.channels.ZLinkRouteMessageContext;
 import systems.zlink.framework.channels.ZLinkRouteRequestHandler;
+import systems.zlink.framework.configuration.ZLinkEndpointConnections;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.handlers.ZLinkHandlerGroup;
 import systems.zlink.framework.handlers.ZLinkPacket;
@@ -46,9 +47,11 @@ import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkFanoutRuntime;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
+import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
@@ -77,8 +80,7 @@ import systems.zlink.framework.testkit.FakeZLinkBackendAdapterFactory;
 import systems.zlink.httpclient.ZLinkFrameworkHttpExecutionTurn;
 import systems.zlink.httpclient.ZLinkHttpExecutionTurn;
 
-import java.io.IOException;
-import java.net.ServerSocket;
+import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
@@ -92,9 +94,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkFrameworkAutoConfigurationTest {
-    private static final AtomicInteger NEXT_PORT =
-            new AtomicInteger(31_000 + (int) (ProcessHandle.current().pid() % 1_000));
-
     @Test
     void autoConfigurationStartsFrameworkLifecycleAndExposesClientBean() {
         try (AnnotationConfigApplicationContext context =
@@ -548,8 +547,8 @@ final class ZLinkFrameworkAutoConfigurationTest {
 
     @Test
     void routeMeshExplicitHandlersAreCreatedThroughSpringDependencyInjection() {
-        String sourceEndpoint = tcpEndpoint();
-        String targetEndpoint = tcpEndpoint();
+        AtomicReference<ZLinkEndpointConnections> sourceConnections = new AtomicReference<>();
+        AtomicReference<ZLinkEndpointConnections> targetConnections = new AtomicReference<>();
         RoutingId sourceRid = RoutingId.from("spring-route-source");
         RoutingId targetRid = RoutingId.from("spring-route-target");
 
@@ -557,7 +556,7 @@ final class ZLinkFrameworkAutoConfigurationTest {
                 new AnnotationConfigApplicationContext()) {
             context.registerBean(
                     RouteMeshEndpoints.class,
-                    () -> new RouteMeshEndpoints(sourceEndpoint, targetEndpoint, targetRid));
+                    () -> new RouteMeshEndpoints(targetRid, targetConnections));
             context.register(RouteMeshHandlerConfig.class, ZLinkFrameworkAutoConfiguration.class);
             context.refresh();
 
@@ -572,13 +571,18 @@ final class ZLinkFrameworkAutoConfigurationTest {
                                     var channel =
                                             ZLinkLegacyTopology.addRouteMeshChannel(
                                                     options, "route");
-                                    channel.enableServer(sourceEndpoint);
+                                    channel.enableServer("tcp://127.0.0.1:0");
                                     channel.setRoutingId(sourceRid);
-                                    channel.enableClient(targetEndpoint);
+                                    sourceConnections.set(channel.clientConnections());
                                 });
                 sourceContext.register(
                         SourceRouteMeshConfig.class, ZLinkFrameworkAutoConfiguration.class);
                 sourceContext.refresh();
+
+                ZLinkFrameworkRuntime source = sourceContext.getBean(ZLinkFrameworkRuntime.class);
+                ZLinkFrameworkRuntime target = context.getBean(ZLinkFrameworkRuntime.class);
+                sourceConnections.get().connect(legacyRouteBoundEndpoint(target, "route"));
+                targetConnections.get().connect(legacyRouteBoundEndpoint(source, "route"));
 
                 String reply =
                         sourceContext
@@ -1087,9 +1091,9 @@ final class ZLinkFrameworkAutoConfigurationTest {
         ZLinkFrameworkConfigurer routeMeshHandlerConfigurer(RouteMeshEndpoints endpoints) {
             return options -> {
                 var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route");
-                channel.enableServer(endpoints.targetEndpoint());
+                channel.enableServer("tcp://127.0.0.1:0");
                 channel.setRoutingId(endpoints.targetRid());
-                channel.enableClient(endpoints.sourceEndpoint());
+                endpoints.targetConnections().set(channel.clientConnections());
                 channel.addRequestHandler(
                         InjectedRouteRequestHandler.class,
                         SpringRouteRequest.class,
@@ -1535,7 +1539,8 @@ final class ZLinkFrameworkAutoConfigurationTest {
 
     public record ProfileReply(String value) {}
 
-    record RouteMeshEndpoints(String sourceEndpoint, String targetEndpoint, RoutingId targetRid) {}
+    record RouteMeshEndpoints(
+            RoutingId targetRid, AtomicReference<ZLinkEndpointConnections> targetConnections) {}
 
     interface ProfileDecorator {
         String decorate(String value);
@@ -1605,29 +1610,6 @@ final class ZLinkFrameworkAutoConfigurationTest {
         }
     }
 
-    private static String tcpEndpoint() {
-        return "tcp://127.0.0.1:" + nextPort();
-    }
-
-    private static int nextPort() {
-        for (int attempt = 0; attempt < 200; attempt++) {
-            int port = NEXT_PORT.getAndIncrement();
-            if (isBindable(port)) {
-                return port;
-            }
-        }
-        throw new IllegalStateException("failed to allocate tcp port");
-    }
-
-    private static boolean isBindable(int port) {
-        try (ServerSocket server = new ServerSocket(port)) {
-            server.setReuseAddress(false);
-            return true;
-        } catch (IOException ignored) {
-            return false;
-        }
-    }
-
     private static ZLinkMessageContext requestContext() {
         return new ZLinkMessageContext() {
             @Override
@@ -1660,5 +1642,23 @@ final class ZLinkFrameworkAutoConfigurationTest {
                 return Optional.empty();
             }
         };
+    }
+
+    /**
+     * Reads the endpoint a legacy route channel ROUTER actually bound, straight from the router
+     * that owns it. Legacy route channels are not public listeners, so listenerStatus does not
+     * report them.
+     */
+    private static String legacyRouteBoundEndpoint(
+            ZLinkFrameworkRuntime runtime, String channelName) {
+        try {
+            Method router =
+                    ZLinkChannelRuntime.class.getDeclaredMethod("requireRouteRouter", String.class);
+            router.setAccessible(true);
+            return ((ZLinkBackendRouterSocket) router.invoke(runtime.client(), channelName))
+                    .lastEndpoint();
+        } catch (ReflectiveOperationException error) {
+            throw new IllegalStateException(error);
+        }
     }
 }

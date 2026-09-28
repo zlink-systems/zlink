@@ -48,8 +48,6 @@ public sealed class InstanceSpotContracts
             .InMesh("play")
             .Async();
 
-        // Closing carries why and by when, and the instance closes itself
-        // through the context rather than through a manager.
         Assert.True(await context.CloseAsync());
         await spot.OnClosingAsync(
             new ZLinkSpotClosingContext(

@@ -15,6 +15,9 @@ class compression_codec_t
     virtual ~compression_codec_t () = default;
 
     virtual std::vector<std::uint8_t> compress (const std::vector<std::uint8_t> &payload) const = 0;
+    /// Throws std::length_error when the decompressed payload would exceed
+    /// `max_decompressed_size`; the connector reports that as frame_too_large
+    /// (stream-connector §4.7). Any other exception is decompression_failed.
     virtual std::vector<std::uint8_t> decompress (const std::vector<std::uint8_t> &payload,
                                                   std::size_t max_decompressed_size) const = 0;
 };

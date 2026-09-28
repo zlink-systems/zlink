@@ -16,6 +16,7 @@ import type { ZLinkLocationLifecycle } from '../locations';
 import type { ZLinkActorRuntimeState } from './actor-runtime-state';
 import type { ZLinkActorTransferRegistry } from './actor-transfer-registry';
 import type { ZLinkRuntimeAdmissionGate } from '../admission';
+import type { ZLinkActivationAdmission } from '../activation-admission';
 
 export interface ZLinkActorJoinRuntimeResult<TReply> {
   readonly accepted: boolean;
@@ -61,6 +62,7 @@ export interface ZLinkActorManagerOptions {
   readonly shutdownSignal?: AbortSignal;
   readonly metrics?: import('../diagnostics').ZLinkRuntimeMetrics;
   readonly admission?: ZLinkRuntimeAdmissionGate;
+  readonly activationAdmission?: ZLinkActivationAdmission;
   readonly placementCreate?: (
     actorId: string,
     actorType: string,
@@ -92,16 +94,8 @@ export interface ZLinkActorJoinCoordinator {
    * lookup. This is an internal ordering fence; it is not part of the public
    * actor context contract.
    */
-  beginDeferredJoin?(
-    actor: ZLinkActor,
-    state: ZLinkActorRuntimeState,
-    operationId: import('../../contracts').ZLinkActorJoinOperationId
-  ): void;
-  abortDeferredJoin?(
-    actor: ZLinkActor,
-    state: ZLinkActorRuntimeState,
-    operationId: import('../../contracts').ZLinkActorJoinOperationId
-  ): Promise<void>;
+  beginDeferredJoin?(actor: ZLinkActor, state: ZLinkActorRuntimeState): void;
+  abortDeferredJoin?(actor: ZLinkActor, state: ZLinkActorRuntimeState): Promise<void>;
   joinSpot(
     actor: ZLinkActor,
     state: ZLinkActorRuntimeState,

@@ -45,7 +45,7 @@ PIDS=()
 declare -A ROLE_PID
 REDIS_CONTAINER_NAME=""
 cleanup() {
-  local code=$?
+  local code=${1:-$?}
   if [[ "$code" -ne 0 ]]; then
     for log in "$LOG_DIR"/*.log; do
       [[ -f "$log" ]] || continue

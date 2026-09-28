@@ -58,6 +58,9 @@ public sealed class FrameworkRuntimeContracts
     {
         private ulong _sequence;
 
+        public ZLinkListenerStatus GetListenerStatus(ZLinkListenerKind kind, string name) =>
+            throw new NotSupportedException();
+
         public ZLinkFrameworkRuntimeStatus Status { get; private set; } =
             Create(ZLinkFrameworkRuntimeState.Serving, sequence: 0);
 

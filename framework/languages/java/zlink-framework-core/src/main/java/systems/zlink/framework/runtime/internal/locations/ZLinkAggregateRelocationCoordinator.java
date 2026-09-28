@@ -8,8 +8,6 @@ import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.time.Duration;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -34,9 +32,6 @@ import java.util.zip.CRC32C;
  * §4.2) — no store round-trip.
  */
 public final class ZLinkAggregateRelocationCoordinator {
-    /** Restore operation absolute validity (spec 28 §4.5 retry deadline). */
-    private static final Duration RESTORE_VALIDITY = Duration.ofHours(24);
-
     private static final ZLinkStoreCancellation NEVER_CANCELLED = () -> false;
 
     private final ZLinkLocationRepository authorityStore;
@@ -344,7 +339,6 @@ public final class ZLinkAggregateRelocationCoordinator {
 
     private CompletionStage<Prepared> prepareAuthority(
             Request request, byte[] digest, ZLinkStoreCancellation cancellation) {
-        Instant restoreDeadline = Instant.now().plus(RESTORE_VALIDITY);
         List<ZLinkAggregateParticipant> mutations = new ArrayList<>();
         for (Participant participant : canonical(request.participants())) {
             byte[] authorityPayload =
@@ -395,7 +389,7 @@ public final class ZLinkAggregateRelocationCoordinator {
                                     return failed(new AuthorityConflictException(attempt.result()));
                                 }
                                 return CompletableFuture.completedFuture(
-                                        new Prepared(fence, request, digest, restoreDeadline));
+                                        new Prepared(fence, request, digest));
                             }
                             Throwable original = unwrap(attempt.failure());
                             return abortAfterAmbiguousPrepare(expectedFence)
@@ -413,8 +407,7 @@ public final class ZLinkAggregateRelocationCoordinator {
                                                                             new Prepared(
                                                                                     expectedFence,
                                                                                     request,
-                                                                                    digest,
-                                                                                    restoreDeadline))));
+                                                                                    digest))));
                         });
     }
 
@@ -650,14 +643,9 @@ public final class ZLinkAggregateRelocationCoordinator {
         }
     }
 
-    public record Prepared(
-            ZLinkAggregateFence fence,
-            Request request,
-            byte[] inventoryDigest,
-            Instant restoreDeadline) {
+    public record Prepared(ZLinkAggregateFence fence, Request request, byte[] inventoryDigest) {
         public Prepared {
             inventoryDigest = inventoryDigest.clone();
-            Objects.requireNonNull(restoreDeadline, "restoreDeadline");
         }
 
         @Override

@@ -528,7 +528,7 @@ export class ZLinkRemoteBoundSessionRelay {
     const owner = actorSessionBindingRuntimeOwner(runtime);
     const fingerprint = encodeSessionRelocationRoute(value).toString('base64');
     if (value.route.action === 'abort') {
-      await owner.applyRelocation(value.actor.actorId, key, fingerprint, 'abort', async () => {
+      await owner.applyRelocation(value.actor.actorId, key, fingerprint, async () => {
         if (!(await runtime.abortActorRouteSeal(value.actor.actorId, key))) {
           throw new ZLinkRemoteBoundSessionFenceError(
             `Actor '${value.actor.actorId}' command 44 abort lost its Session seal.`
@@ -550,9 +550,10 @@ export class ZLinkRemoteBoundSessionRelay {
         nodeRid: decodeWireRoutingId(committedRoute.targetNodeRid, undefined),
         bindingGeneration: value.session.bindingGeneration,
         ownershipGeneration: committedRoute.targetAuthorityOwnerGeneration,
-        ownerNodeGeneration: committedRoute.targetNodeGeneration
+        ownerNodeGeneration: committedRoute.targetNodeGeneration,
+        ownerLeaseGeneration: committedRoute.targetOwnerLeaseGeneration
       } as ActorRef;
-      await owner.applyRelocation(value.actor.actorId, key, fingerprint, 'commit', async () => {
+      await owner.applyRelocation(value.actor.actorId, key, fingerprint, async () => {
         await runtime.commitActorRoute(targetActorRef, undefined, {
           confirmRemoteSessionBinding: 'send',
           releaseSeal: { sealId: key }

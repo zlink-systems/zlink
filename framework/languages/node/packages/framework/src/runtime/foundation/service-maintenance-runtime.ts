@@ -145,12 +145,27 @@ export class ServiceMaintenanceRuntime {
 
   private async runUnits(signal: AbortSignal, stopStartingSignal?: AbortSignal): Promise<void> {
     const pending = new Set<Promise<void>>();
+    // A unit failure is recorded before its promise leaves `pending`, so no
+    // failure is lost. Every started unit runs to its own terminal before the
+    // first failure is reported: the host result follows the settled
+    // authority of each unit (spec 30 §13).
+    const failures: unknown[] = [];
+    const reportFailure = async (): Promise<void> => {
+      if (failures.length === 0) return;
+      await Promise.allSettled(pending);
+      throw failures[0];
+    };
     for (;;) {
+      await reportFailure();
       const queued = await this.lane.run(() => this.units.length > 0);
-      if (!queued && pending.size === 0) return;
+      if (!queued && pending.size === 0) {
+        await reportFailure();
+        return;
+      }
       signal.throwIfAborted();
       if (stopStartingSignal?.aborted === true) {
         await Promise.allSettled(pending);
+        await reportFailure();
         stopStartingSignal.throwIfAborted();
       }
       let admitted = false;
@@ -173,19 +188,25 @@ export class ServiceMaintenanceRuntime {
         admitted = true;
         let running!: Promise<void>;
         running = startOutsideStateLane(() =>
-          unit.relocate(signal).finally(async () => {
-            const publication = await this.lane.run(() => {
-              this.activeOutbound--;
-              pending.delete(running);
-              return this.publishCore();
-            });
-            this.notify(publication);
-          })
+          unit
+            .relocate(signal)
+            .catch((error: unknown) => {
+              failures.push(error);
+            })
+            .finally(async () => {
+              const publication = await this.lane.run(() => {
+                this.activeOutbound--;
+                pending.delete(running);
+                return this.publishCore();
+              });
+              this.notify(publication);
+            })
         );
         pending.add(running);
         this.notify(claim.publication);
       }
       if (pending.size === 0) {
+        await reportFailure();
         if (!admitted) throw new Error('No relocation unit is ready to start.');
       } else {
         await Promise.race(pending);

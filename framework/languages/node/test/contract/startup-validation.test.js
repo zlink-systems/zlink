@@ -650,3 +650,98 @@ async function assertNestStartupRejects(options, pattern) {
     pattern
   );
 }
+
+// A STREAM node whose bind fails must fail startup and let the process end.
+// The node's socket has to be owned by the runtime from the moment it exists:
+// an unowned socket keeps the context from terminating, and context
+// termination blocks the event loop, so this runs in a child process that the
+// test can stop.
+test('STREAM node bind failure fails startup and releases the context', async () => {
+  const childProcess = require('node:child_process');
+  const net = require('node:net');
+  const path = require('node:path');
+  const holder = net.createServer();
+  await new Promise((resolve) => holder.listen(0, '127.0.0.1', resolve));
+  const endpoint = `ws://127.0.0.1:${holder.address().port}`;
+  const script = `
+    require('reflect-metadata');
+    const { Injectable, Module } = require('@nestjs/common');
+    const { NestFactory } = require('@nestjs/core');
+    const { ZLinkModule, zlinkFramework } = require('@zlink-systems/nestjs');
+    class Session { async onDispatch() {} }
+    class SessionFactory { async create() { return new Session(); } }
+    Injectable()(SessionFactory);
+    class AppModule {}
+    Module({
+      imports: [ZLinkModule.forRootFactory({ useFactory: () => {
+        const builder = zlinkFramework();
+        builder.addStreamNode('gateway').bind(${JSON.stringify(endpoint)}).registerSession(SessionFactory);
+        return builder.build();
+      } })],
+      providers: [SessionFactory]
+    })(AppModule);
+    NestFactory.createApplicationContext(AppModule, { logger: false, abortOnError: false }).then(
+      () => { console.log('started'); process.exit(0); },
+      (error) => { console.log('startup failed: ' + error.message); }
+    );
+  `;
+  const child = childProcess.spawn(process.execPath, ['-e', script], {
+    cwd: path.resolve(__dirname, '../..'),
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  let output = '';
+  child.stdout.on('data', (chunk) => { output += chunk; });
+  child.stderr.on('data', (chunk) => { output += chunk; });
+  let timer;
+  try {
+    const exit = await Promise.race([
+      new Promise((resolve) => child.once('exit', (code) => resolve(code))),
+      new Promise((resolve) => { timer = setTimeout(() => resolve('timeout'), 20_000); })
+    ]);
+    assert.notEqual(exit, 'timeout', `startup did not end after a bind failure: ${output}`);
+    assert.match(output, /startup failed: .*bind/i);
+  } finally {
+    clearTimeout(timer);
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await new Promise((resolve) => holder.close(resolve));
+  }
+});
+
+// A STREAM node's readable poller belongs to the node runtime, which disposes
+// it. A start that fails before the runtime exists must not leave a poller
+// behind that nothing disposes.
+test('STREAM node start failure leaves no readable poller undisposed', async () => {
+  const { ZLinkStreamRuntimeManager } = require('../../packages/framework/dist/runtime/streams');
+  const pollers = { created: 0, disposed: 0 };
+  const socket = {
+    maxMessageSize: 0,
+    lastEndpoint: 'tcp://127.0.0.1:28199',
+    bind() {},
+    async dispose() {}
+  };
+  const manager = new ZLinkStreamRuntimeManager({
+    context: {},
+    applicationJobQueue: {},
+    registration: {
+      streamNodes: new Map([['gateway', { bind: 'tcp://127.0.0.1:0', session: class {} }]]),
+      spotNodes: new Map(),
+      messageSerializers: new Map()
+    },
+    backendAdapterFactory: {
+      createStreamAdapter: () => ({
+        createStreamSocket: () => socket,
+        createStreamPacket: () => ({}),
+        createReadablePoller: () => {
+          pollers.created += 1;
+          return { dispose() { pollers.disposed += 1; } };
+        }
+      }),
+      createMonitoringAdapter: () => ({
+        openSocketMonitor: () => { throw new Error('monitor open failed'); }
+      })
+    }
+  });
+  assert.throws(() => manager.start(), /monitor open failed/);
+  await manager.dispose();
+  assert.equal(pollers.disposed, pollers.created);
+});

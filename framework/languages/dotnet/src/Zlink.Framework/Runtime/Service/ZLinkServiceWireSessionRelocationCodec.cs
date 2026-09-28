@@ -53,6 +53,7 @@ internal static partial class ZLinkServiceWireCodec
         ulong TargetAuthorityOwnerGeneration,
         RoutingId TargetNodeRid,
         ulong TargetNodeGeneration,
+        ulong TargetOwnerLeaseGeneration,
         ulong CurrentAuthorityOwnerGeneration
     )
     {
@@ -60,7 +61,8 @@ internal static partial class ZLinkServiceWireCodec
             ulong previousAuthorityOwnerGeneration,
             ulong targetAuthorityOwnerGeneration,
             RoutingId targetNodeRid,
-            ulong targetNodeGeneration
+            ulong targetNodeGeneration,
+            ulong targetOwnerLeaseGeneration
         ) =>
             new(
                 SessionRelocationRouteAction.Commit,
@@ -68,6 +70,7 @@ internal static partial class ZLinkServiceWireCodec
                 targetAuthorityOwnerGeneration,
                 targetNodeRid,
                 targetNodeGeneration,
+                targetOwnerLeaseGeneration,
                 0
             );
 
@@ -79,6 +82,7 @@ internal static partial class ZLinkServiceWireCodec
                 0,
                 0,
                 default,
+                0,
                 0,
                 currentAuthorityOwnerGeneration
             );
@@ -285,6 +289,7 @@ internal static partial class ZLinkServiceWireCodec
                 || route.TargetAuthorityOwnerGeneration <= route.PreviousAuthorityOwnerGeneration
                 || route.TargetNodeRid.IsEmpty
                 || route.TargetNodeGeneration == 0
+                || route.TargetOwnerLeaseGeneration == 0
                 || route.CurrentAuthorityOwnerGeneration != 0
             )
                 throw new ArgumentOutOfRangeException(nameof(route));
@@ -298,6 +303,7 @@ internal static partial class ZLinkServiceWireCodec
             || route.TargetAuthorityOwnerGeneration != 0
             || !route.TargetNodeRid.IsEmpty
             || route.TargetNodeGeneration != 0
+            || route.TargetOwnerLeaseGeneration != 0
         )
             throw new ArgumentOutOfRangeException(nameof(route));
     }
@@ -356,7 +362,8 @@ internal static partial class ZLinkServiceWireCodec
                 value.PreviousAuthorityOwnerGeneration,
                 value.TargetAuthorityOwnerGeneration,
                 value.TargetNodeRid.ToBytes().ToArray(),
-                value.TargetNodeGeneration
+                value.TargetNodeGeneration,
+                value.TargetOwnerLeaseGeneration
             ),
             SessionRelocationRouteAction.Abort => new ServiceWirePilotCodec.SessionRouteAbort(
                 value.CurrentAuthorityOwnerGeneration
@@ -374,7 +381,8 @@ internal static partial class ZLinkServiceWireCodec
                     commit.PreviousAuthorityOwnerGeneration,
                     commit.TargetAuthorityOwnerGeneration,
                     RoutingId.From(commit.TargetNodeRid),
-                    commit.TargetNodeGeneration
+                    commit.TargetNodeGeneration,
+                    commit.TargetOwnerLeaseGeneration
                 ),
             ServiceWirePilotCodec.SessionRouteAbort abort =>
                 SessionRelocationRouteUpdateRecord.Abort(abort.CurrentAuthorityOwnerGeneration),

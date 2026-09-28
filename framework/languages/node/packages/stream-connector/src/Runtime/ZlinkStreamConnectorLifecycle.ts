@@ -14,7 +14,11 @@ import { ZLINK_STREAM_HEARTBEAT_PING } from './Protocol/ZlinkStreamFrameProtocol
 import type { ZlinkStreamConnectorEvents } from './ZlinkStreamConnectorEvents';
 import type { ZlinkStreamFrameSender } from './ZlinkStreamFrameSender';
 import type { ZlinkStreamPendingRequests } from './ZlinkStreamPendingRequests';
-import type { ZlinkStreamReceiveDispatcher } from './ZlinkStreamReceiveDispatcher';
+import {
+  closeReasonFor,
+  ZlinkStreamConnectionEnd,
+  type ZlinkStreamReceiveDispatcher
+} from './ZlinkStreamReceiveDispatcher';
 import type { ZlinkStreamReceivedMessages } from './ZlinkStreamReceivedMessages';
 import { connectorError, delay, throwIfAborted, toStreamError } from './ZlinkStreamSupport';
 import type { ZlinkStreamActors } from './ZlinkStreamActors';
@@ -42,6 +46,7 @@ export class ZlinkStreamConnectorLifecycle {
   private lastInboundAt = 0;
   private closeTask: Promise<void> | undefined;
   private connectTask: Promise<void> | undefined;
+  private connectAbort: AbortController | undefined;
   private disconnectTask: Promise<void> | undefined;
   private closeRequested = false;
   private disconnectedPublished = false;
@@ -88,10 +93,20 @@ export class ZlinkStreamConnectorLifecycle {
     return await this.connectTask;
   }
 
+  /**
+   * Spec stream-connector 32 §7: close does not wait for a connect attempt or a
+   * reconnect delay to run its course. The attempts listen to one controller
+   * the lifecycle owns; close aborts it, and the caller's signal is forwarded
+   * to it.
+   */
   private async connectOnce(signal?: AbortSignal): Promise<void> {
-    await this.setState(ZlinkStreamConnectionState.Connecting, undefined, signal);
+    const attempts = new AbortController();
+    const forwardAbort = (): void => attempts.abort();
+    signal?.addEventListener('abort', forwardAbort, { once: true });
+    this.connectAbort = attempts;
+    this.setState(ZlinkStreamConnectionState.Connecting, undefined, signal);
     try {
-      const connection = await this.connectWithReconnect(signal);
+      const connection = await this.connectWithReconnect(attempts.signal);
       if (this.closeRequested) {
         try {
           await connection.close(signal);
@@ -106,6 +121,10 @@ export class ZlinkStreamConnectorLifecycle {
       }
       this.currentConnection = connection;
       this.connectionGeneration += 1;
+      const generation = this.connectionGeneration;
+      this.frameSender.open(connection, (error) => {
+        void this.disconnectForTransportFailure(error, connection, generation);
+      });
       this.disconnectedPublished = false;
       // Spec stream-connector 32 §10 (line ~649): the baseline for
       // `receivedCount` is the moment a connection is established, so each
@@ -115,15 +134,22 @@ export class ZlinkStreamConnectorLifecycle {
       // them when that connection ended (§10.1.1).
       this.receivedMessages.resetForNewConnection();
       this.lastInboundAt = Date.now();
-      await this.setState(ZlinkStreamConnectionState.Connected, undefined, signal);
+      this.setState(ZlinkStreamConnectionState.Connected, undefined, signal);
       this.startHeartbeat();
       this.startReceiveLoop();
     } catch (cause) {
       if (this.closeRequested) {
+        // Spec stream-connector 32 §9: an operation that close ends fails with
+        // `Disconnected`, whatever the attempt it interrupted had reported.
         const message =
           cause instanceof Error ? cause.message : 'Connector closed while connecting.';
-        const error = toStreamError(cause, ZlinkStreamErrorCode.Disconnected, message);
-        throw new ZlinkStreamException(error);
+        throw connectorError(ZlinkStreamErrorCode.Disconnected, message, cause);
+      }
+      if (signal?.aborted === true) {
+        // Spec stream-connector 32 §5.2: a connect the caller canceled ends as
+        // that cancellation, not as a §9 failure of the attempt.
+        this.setState(ZlinkStreamConnectionState.Disconnected, undefined, signal);
+        throwIfAborted(signal);
       }
       const error = toStreamError(cause, ZlinkStreamErrorCode.ConnectTimeout, 'Connect failed.');
       // Spec stream-connector 32 §6.2 and the §9 impact table: `ConnectTimeout`
@@ -131,34 +157,47 @@ export class ZlinkStreamConnectorLifecycle {
       // connection was ever established — the TypeScript disconnect handler
       // takes no argument and reads `closeReason`, so it has to be set before
       // the handler runs.
-      this.closeReasonValue ??= 'TransportError';
-      void this.setState(ZlinkStreamConnectionState.Disconnected, error, signal);
+      this.closeReasonValue = 'TransportError';
+      this.setState(ZlinkStreamConnectionState.Disconnected, error, signal);
       // Spec stream-connector 32 §6: once the attempts are spent the state is
       // `Disconnected` and the registered disconnect handler runs. A caller
       // that only subscribed to that handler learns about the failure here,
       // not only through the rejected `connect`.
-      this.publishDisconnectedWithoutWaiting(signal);
+      this.disconnectedPublished = false;
+      this.publishDisconnected(signal);
       throw new ZlinkStreamException(error);
+    } finally {
+      signal?.removeEventListener('abort', forwardAbort);
+      this.connectAbort = undefined;
     }
   }
 
+  /**
+   * Spec stream-connector 32 §7: a `close` called outside the registered
+   * handlers and callbacks returns once the close work has ended. One called
+   * from inside them returns right after starting it; the result goes to the
+   * outside caller, so a callback never waits for the close of the path that
+   * is running it.
+   */
   async close(signal?: AbortSignal): Promise<void> {
-    this.closeReasonValue = 'ClientClose';
-    this.closeRequested = true;
-    if (this.closeTask !== undefined) {
-      return await this.closeTask;
+    if (this.currentConnection !== undefined || this.closeReasonValue === undefined) {
+      this.closeReasonValue = 'ClientClose';
     }
-    if (this.currentState === ZlinkStreamConnectionState.Closed) {
+    this.closeRequested = true;
+    if (this.closeTask === undefined && this.currentState === ZlinkStreamConnectionState.Closed) {
       return;
     }
-    this.closeTask = this.closeOnce(signal).finally(() => {
+    const closeTask = (this.closeTask ??= this.closeOnce(signal).finally(() => {
       this.closeTask = undefined;
-    });
-    return await this.closeTask;
+    }));
+    if (this.receivedMessages.dispatching) {
+      void closeTask.catch(() => undefined);
+      return;
+    }
+    return await closeTask;
   }
 
   async serverClosing(reason: ZlinkStreamCloseReason): Promise<void> {
-    this.closeReasonValue = reason;
     const error = {
       code: ZlinkStreamErrorCode.Disconnected,
       message: `Server closed the session: ${reason}.`
@@ -166,42 +205,30 @@ export class ZlinkStreamConnectorLifecycle {
     await this.disconnectForTransportFailure(
       error,
       this.currentConnection,
-      this.connectionGeneration
+      this.connectionGeneration,
+      reason
     );
   }
 
   private async closeOnce(signal?: AbortSignal): Promise<void> {
+    this.connectAbort?.abort();
     await this.connectTask?.catch(() => undefined);
     await this.disconnectTask?.catch(() => undefined);
-    const connection = this.currentConnection;
-    this.stopHeartbeat();
-    this.stopReceiveLoop();
-    this.currentConnection = undefined;
     const errors: unknown[] = [];
     if (this.lateConnectCleanupError !== undefined) {
       errors.push(this.lateConnectCleanupError);
       this.lateConnectCleanupError = undefined;
     }
     try {
-      await this.frameSender.drain(signal);
+      await this.tearDownConnection(
+        { code: ZlinkStreamErrorCode.Disconnected, message: 'Connector closed.' },
+        signal
+      );
     } catch (error) {
       errors.push(error);
     }
-    try {
-      await connection?.close(signal);
-    } catch (error) {
-      errors.push(error);
-    }
-    this.pendingRequests.failAll({
-      code: ZlinkStreamErrorCode.Disconnected,
-      message: 'Connector closed.'
-    });
-    // Spec stream-connector 32 §10.1.1: closing the connector ends the
-    // connection a wait was observing, and the wait ends with it.
-    this.receivedMessages.connectionEnded();
-    this.actors.closeAll(signal);
-    this.queueState(ZlinkStreamConnectionState.Closed, undefined, signal);
-    this.queueDisconnected(signal);
+    this.setState(ZlinkStreamConnectionState.Closed, undefined, signal);
+    this.publishDisconnected(signal);
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) throw new AggregateError(errors, 'Stream connector close failed.');
   }
@@ -220,7 +247,7 @@ export class ZlinkStreamConnectorLifecycle {
     if (this.options.dispatchMode !== ZlinkStreamDispatchMode.Immediate) {
       await this.settleReceiveLoop();
     }
-    await this.receivedMessages.pump();
+    this.receivedMessages.pump();
   }
 
   connectionForSend(): ZlinkStreamConnection {
@@ -239,11 +266,8 @@ export class ZlinkStreamConnectorLifecycle {
     signal?: AbortSignal
   ): Promise<boolean> {
     throwIfAborted(signal);
-    const result = await this.receiveDispatcher.readAndDispatch(
-      connection,
-      signal,
-      () => this.isCurrentConnection(connection, generation),
-      () => this.connectionForSend()
+    const result = await this.receiveDispatcher.readAndDispatch(connection, signal, () =>
+      this.isCurrentConnection(connection, generation)
     );
     if (result.inbound && this.isCurrentConnection(connection, generation)) {
       this.lastInboundAt = Date.now();
@@ -253,7 +277,10 @@ export class ZlinkStreamConnectorLifecycle {
 
   private async connectWithReconnect(signal?: AbortSignal): Promise<ZlinkStreamConnection> {
     let attempt = 0;
-    let delayMs = this.options.reconnect.initialDelayMs;
+    let delayMs = Math.min(
+      this.options.reconnect.initialDelayMs,
+      this.options.reconnect.maxDelayMs
+    );
     let lastError: ZlinkStreamError | undefined;
     // Spec stream-connector 32 §6: `null` attempts means unlimited, so the loop
     // has no upper bound and only a successful connect or a close leaves it.
@@ -266,10 +293,14 @@ export class ZlinkStreamConnectorLifecycle {
         return await this.options.transportFactory.connect(this.options, signal);
       } catch (cause) {
         lastError = toStreamError(cause, ZlinkStreamErrorCode.ConnectTimeout, 'Connect failed.');
-        if (!this.options.reconnect.enabled || (!unlimited && attempt >= maxAttempts)) {
+        if (
+          this.closeRequested ||
+          !this.options.reconnect.enabled ||
+          (!unlimited && attempt >= maxAttempts)
+        ) {
           break;
         }
-        await this.setState(ZlinkStreamConnectionState.Reconnecting, lastError, signal);
+        this.setState(ZlinkStreamConnectionState.Reconnecting, lastError, signal);
         await delay(randomizedDelay(delayMs), signal);
         delayMs = Math.min(
           this.options.reconnect.maxDelayMs,
@@ -353,12 +384,8 @@ export class ZlinkStreamConnectorLifecycle {
       }
     } catch (cause) {
       if (signal.aborted) return;
-      const error = toStreamError(
-        cause,
-        ZlinkStreamErrorCode.FrameDecodeFailed,
-        'Receive loop failed.'
-      );
-      await this.disconnectForTransportFailure(error, connection, generation);
+      if (!(cause instanceof ZlinkStreamConnectionEnd)) throw cause;
+      await this.disconnectForTransportFailure(cause.error, connection, generation);
     } finally {
       this.receiveLoopSleeping = false;
       this.releaseReceiveLoopSettled();
@@ -427,37 +454,37 @@ export class ZlinkStreamConnectorLifecycle {
       return;
     }
     if (Date.now() - this.lastInboundAt > this.options.heartbeat.timeoutMs) {
-      this.closeReasonValue = 'HeartbeatTimeout';
       const error = { code: ZlinkStreamErrorCode.Disconnected, message: 'Heartbeat timed out.' };
       await this.disconnectForTransportFailure(
         error,
         this.currentConnection,
-        this.connectionGeneration
+        this.connectionGeneration,
+        'HeartbeatTimeout'
       );
       return;
     }
-    const connection = this.currentConnection;
-    const generation = this.connectionGeneration;
-    try {
-      await this.frameSender.sendControl(this.connectionForSend(), ZLINK_STREAM_HEARTBEAT_PING);
-    } catch (cause) {
-      const error = toStreamError(cause, ZlinkStreamErrorCode.SendFailed, 'Heartbeat send failed.');
-      await this.disconnectForTransportFailure(error, connection, generation);
-    }
+    // A failed ping write ends the connection through the write queue (§9).
+    await this.frameSender.sendControl(this.connectionForSend(), ZLINK_STREAM_HEARTBEAT_PING);
   }
 
+  /**
+   * @param reason Given only where the reason is not read from `error`: a
+   *   server `session-closing` and the heartbeat timeout. Every other ending
+   *   takes it from {@link closeReasonFor}.
+   */
   private async disconnectForTransportFailure(
     error: ZlinkStreamError,
     origin: ZlinkStreamConnection | undefined,
-    generation: number
+    generation: number,
+    reason: ZlinkStreamCloseReason = closeReasonFor(error)
   ): Promise<void> {
-    this.closeReasonValue ??= 'TransportError';
     if (this.closeRequested || this.currentState === ZlinkStreamConnectionState.Closed) {
       return;
     }
     if (origin !== undefined && !this.isCurrentConnection(origin, generation)) {
       return;
     }
+    this.closeReasonValue = reason;
     if (this.disconnectTask !== undefined) {
       return await this.disconnectTask;
     }
@@ -465,11 +492,14 @@ export class ZlinkStreamConnectorLifecycle {
     // `connect` waits on it. Everything application code can hold open — the
     // state handler, the disconnect handler — stays outside it: a disconnect
     // handler that calls `connect` would otherwise wait for the task its own
-    // caller has not yet left, and one whose promise never settles would keep
-    // the `Promise.allSettled` in `publishDisconnected` from ever returning.
-    this.disconnectTask = this.tearDownConnection(error).finally(() => {
-      this.disconnectTask = undefined;
-    });
+    // caller has not yet left.
+    this.disconnectTask = this.tearDownConnection(error)
+      .catch(() => {
+        // The original transport failure remains the connector-visible error.
+      })
+      .finally(() => {
+        this.disconnectTask = undefined;
+      });
     await this.disconnectTask;
     await this.announceDisconnect(error);
   }
@@ -485,23 +515,33 @@ export class ZlinkStreamConnectorLifecycle {
     );
   }
 
-  /** Transport teardown only — no application callback runs from here. */
-  private async tearDownConnection(error: ZlinkStreamError): Promise<void> {
+  /**
+   * Ends the current connection, for close and for transport loss alike. No
+   * application callback runs from here. Spec stream-connector 32 §7 and §9:
+   * every operation the ending connection fails (the frames it has not
+   * written, the one it is writing and the pending requests) fails with
+   * `Disconnected`, whatever ended it; the cause stays in the close reason.
+   * The transport is closed without waiting for the frames.
+   */
+  private async tearDownConnection(error: ZlinkStreamError, signal?: AbortSignal): Promise<void> {
     this.stopHeartbeat();
     this.stopReceiveLoop();
     const connection = this.currentConnection;
     this.currentConnection = undefined;
-    this.pendingRequests.failAll(error);
+    const disconnected = { code: ZlinkStreamErrorCode.Disconnected, message: error.message };
+    if (connection !== undefined) {
+      this.frameSender.failUnwritten(
+        connection,
+        connectorError(disconnected.code, disconnected.message)
+      );
+    }
+    this.pendingRequests.failAll(disconnected);
     // Spec stream-connector 32 §10.1.1: a wait is released when the
     // connection it observed ends, here, and not when the reconnect that may
     // follow establishes the next one.
     this.receivedMessages.connectionEnded();
-    this.actors.closeAll();
-    try {
-      await connection?.close();
-    } catch {
-      // The original transport failure remains the connector-visible error.
-    }
+    this.actors.closeAll(signal);
+    await connection?.close(signal);
   }
 
   /**
@@ -514,8 +554,8 @@ export class ZlinkStreamConnectorLifecycle {
    */
   private async announceDisconnect(error: ZlinkStreamError): Promise<void> {
     if (this.closeRequested) return;
-    this.queueState(ZlinkStreamConnectionState.Disconnected, error);
-    this.queueDisconnected();
+    this.setState(ZlinkStreamConnectionState.Disconnected, error);
+    this.publishDisconnected();
     if (this.shouldReconnect()) {
       queueMicrotask(() => {
         void this.connect().catch(() => undefined);
@@ -527,103 +567,28 @@ export class ZlinkStreamConnectorLifecycle {
     return this.options.reconnect.enabled && !this.closeRequested;
   }
 
-  // Synchronous test-and-set, taken before any await, so the single disconnect
-  // notification the spec promises is claimed by exactly one caller even when
-  // the publishing itself is deferred.
-  private claimDisconnectedPublish(): boolean {
-    if (this.disconnectedPublished) return false;
-    this.disconnectedPublished = true;
-    return true;
-  }
-
-  private async publishDisconnectedOnce(signal?: AbortSignal): Promise<void> {
-    if (!this.claimDisconnectedPublish()) return;
-    await this.events.publishDisconnected(signal);
-  }
-
   /**
-   * Spec stream-connector 32 §7: the connector runs the registered handler, it
-   * does not wait for it to finish. `close` returns once its own work is done —
-   * the drain, the transport close, the pending requests — having run the
-   * disconnect handler but without looking at whether that handler has ended.
-   *
-   * Starting the publish without awaiting it still runs every handler right
-   * here: an `async` function body runs synchronously up to its first `await`,
-   * and `publishDisconnected` reaches each handler before that point. So the
-   * handler has run by the time `close` returns, which is what the spec asks
-   * for, while a handler that calls `close` no longer waits for the very
-   * `closeTask` it is running inside. Java and C++ hand the handler to a queue
-   * and return the same way.
-   *
-   * `claimDisconnectedPublish` is taken by the same call and before any await,
-   * so deferring the completion never turns the one notification into two.
-   *
-   * Nothing awaits the promise, so a rejection would reach the process as an
-   * unhandled rejection and kill it. Handler failures are already contained
-   * where they were before this call stopped waiting — the `Promise.allSettled`
-   * in `publishDisconnected` — and this `catch` covers what is left rather than
-   * reporting the same failure a second time on the error surface.
+   * Spec stream-connector 32 §6 and §7: one disconnect notification per
+   * lifecycle event, handed to the dispatch queue. The connector does not wait
+   * for the handler; `Manual` runs it when the application pumps dispatch.
+   * The flag is tested and set synchronously, so concurrent callers for the
+   * same event claim it once.
    */
-  private publishDisconnectedWithoutWaiting(signal?: AbortSignal): void {
-    void this.publishDisconnectedOnce(signal).catch(() => undefined);
+  private publishDisconnected(signal?: AbortSignal): void {
+    if (this.disconnectedPublished) return;
+    this.disconnectedPublished = true;
+    this.events.publishDisconnected(signal);
   }
 
-  private queueDisconnected(signal?: AbortSignal): void {
-    if (!this.claimDisconnectedPublish()) return;
-    this.receivedMessages.enqueueCallback(() => {
-      void this.events.publishDisconnected(signal).catch(() => undefined);
-    });
-  }
-
-  private queueState(
+  private setState(
     current: ZlinkStreamConnectionState,
     error: ZlinkStreamError | undefined,
     signal?: AbortSignal
   ): void {
-    const change = this.transitionState(current, error);
-    if (change === undefined) return;
-    this.receivedMessages.enqueueCallback(() => {
-      void this.publishStateChange(change, signal).catch(() => undefined);
-    });
-  }
-
-  private async setState(
-    current: ZlinkStreamConnectionState,
-    error: ZlinkStreamError | undefined,
-    signal?: AbortSignal
-  ): Promise<void> {
-    const change = this.transitionState(current, error);
-    if (change === undefined) return;
-    await this.publishStateChange(change, signal);
-  }
-
-  private transitionState(
-    current: ZlinkStreamConnectionState,
-    error: ZlinkStreamError | undefined
-  ):
-    | {
-        readonly previous: ZlinkStreamConnectionState;
-        readonly current: ZlinkStreamConnectionState;
-        readonly error?: ZlinkStreamError;
-      }
-    | undefined {
     const previous = this.currentState;
     this.currentState = current;
-    if (previous === current && error === undefined) {
-      return undefined;
-    }
-    return { previous, current, error };
-  }
-
-  private async publishStateChange(
-    change: {
-      readonly previous: ZlinkStreamConnectionState;
-      readonly current: ZlinkStreamConnectionState;
-      readonly error?: ZlinkStreamError;
-    },
-    signal?: AbortSignal
-  ): Promise<void> {
-    await this.events.publishStateChanged(change, signal);
-    if (change.error !== undefined) await this.events.publishError(change.error, signal);
+    if (previous === current && error === undefined) return;
+    this.events.publishStateChanged({ previous, current, error }, signal);
+    if (error !== undefined) this.events.publishError(error, signal);
   }
 }

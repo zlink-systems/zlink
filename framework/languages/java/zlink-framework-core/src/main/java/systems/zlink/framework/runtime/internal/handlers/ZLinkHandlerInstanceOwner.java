@@ -19,6 +19,7 @@ public final class ZLinkHandlerInstanceOwner implements AutoCloseable {
     // still owns FIFO and non-reentrant access to the scope's state.
     private final ZLinkStateLane stateLane = new ZLinkStateLane(Runnable::run);
     private boolean closed;
+    private boolean activationClosed;
 
     public ZLinkHandlerInstanceOwner(ZLinkHandlerActivator activator) {
         this.activator = Objects.requireNonNull(activator, "activator");
@@ -40,47 +41,57 @@ public final class ZLinkHandlerInstanceOwner implements AutoCloseable {
                 });
     }
 
+    /**
+     * Releases the owned handler instances and the activation scope. A release that fails stays
+     * owned, so a later call retries only the failed releases; completed releases are not repeated.
+     */
     @Override
     public void close() {
-        List<Object> owned;
-        owned =
+        Map<Class<?>, Object> owned =
                 inStateLane(
                         () -> {
-                            if (closed) {
-                                return null;
-                            }
                             closed = true;
-                            List<Object> current = new ArrayList<>(instances.values());
+                            Map<Class<?>, Object> current = new LinkedHashMap<>(instances);
                             instances.clear();
                             return current;
                         });
-        if (owned == null) {
-            return;
-        }
+        List<Map.Entry<Class<?>, Object>> releases = new ArrayList<>(owned.entrySet());
+        Map<Class<?>, Object> failed = new LinkedHashMap<>();
         RuntimeException firstFailure = null;
-        for (int index = owned.size() - 1; index >= 0; index--) {
+        for (int index = releases.size() - 1; index >= 0; index--) {
+            Map.Entry<Class<?>, Object> release = releases.get(index);
             try {
-                activation.destroy(owned.get(index));
+                activation.destroy(release.getValue());
             } catch (RuntimeException failure) {
-                if (firstFailure == null) {
-                    firstFailure = failure;
-                } else {
-                    firstFailure.addSuppressed(failure);
-                }
+                failed.put(release.getKey(), release.getValue());
+                firstFailure = addFailure(firstFailure, failure);
             }
         }
-        try {
-            activation.close();
-        } catch (RuntimeException failure) {
-            if (firstFailure == null) {
-                firstFailure = failure;
-            } else {
-                firstFailure.addSuppressed(failure);
+        boolean closeActivation = inStateLane(() -> !activationClosed);
+        if (closeActivation) {
+            try {
+                activation.close();
+                inStateLane(() -> activationClosed = true);
+            } catch (RuntimeException failure) {
+                firstFailure = addFailure(firstFailure, failure);
             }
         }
         if (firstFailure != null) {
+            inStateLane(
+                    () -> {
+                        instances.putAll(failed);
+                        return null;
+                    });
             throw firstFailure;
         }
+    }
+
+    private static RuntimeException addFailure(RuntimeException first, RuntimeException failure) {
+        if (first == null) {
+            return failure;
+        }
+        first.addSuppressed(failure);
+        return first;
     }
 
     private <T> T inStateLane(Supplier<T> work) {

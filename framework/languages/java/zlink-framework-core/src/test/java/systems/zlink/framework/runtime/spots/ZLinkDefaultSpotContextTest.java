@@ -45,6 +45,46 @@ import java.util.function.Supplier;
 
 final class ZLinkDefaultSpotContextTest {
     @Test
+    void contextCloseReturnsTheFinalHostResult() throws Exception {
+        assertEquals(
+                CompletionStage.class,
+                systems.zlink.framework.spots.ZLinkSpotContext.class
+                        .getMethod("close")
+                        .getReturnType());
+        assertEquals(
+                CompletionStage.class,
+                systems.zlink.framework.spots.ZLinkInstanceSpotContext.class
+                        .getMethod("close")
+                        .getReturnType());
+
+        TestHost host = new TestHost();
+        CompletableFuture<Boolean> closeResult = new CompletableFuture<>();
+        host.userCloseResult = closeResult;
+        DefaultSpotContext context = host.userContext(ZLinkUserSpotExecutionMode.PER_ACTOR);
+        AtomicReference<CompletionStage<Boolean>> requested = new AtomicReference<>();
+        context.enqueueActorDispatch(
+                        "first",
+                        0,
+                        () -> {
+                            requested.set(context.close());
+                            return CompletableFuture.completedFuture(null);
+                        })
+                .toCompletableFuture()
+                .join();
+        assertEquals(1, host.userCloseRequests.get());
+        assertEquals(1L, host.userCloseGeneration.get());
+        assertFalse(requested.get().toCompletableFuture().isDone());
+        closeResult.complete(false);
+        assertFalse(requested.get().toCompletableFuture().join());
+
+        try (ZLinkWorkerPool workers = new ZLinkWorkerPool(1, 1, Duration.ofSeconds(5))) {
+            DefaultInstanceSpotContext instance = host.instanceContext(workers);
+            assertTrue(instance.close().toCompletableFuture().join());
+            assertEquals(1, host.instanceCloseRequests.get());
+        }
+    }
+
+    @Test
     void blockingTerminalsFailInsideSpotCallbacks() {
         TestHost host = new TestHost();
         try (Message sendPayload = Message.from("send");
@@ -529,6 +569,92 @@ final class ZLinkDefaultSpotContextTest {
     }
 
     @Test
+    void instanceClosingWaitsForYieldedContinuation() throws Exception {
+        ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+        try (ZLinkWorkerPool workerPool = new ZLinkWorkerPool(0, 1, Duration.ofSeconds(1))) {
+            TestHost host = new TestHost(executor);
+            DefaultInstanceSpotContext context = host.instanceContext(workerPool);
+            CompletableFuture<Void> started = new CompletableFuture<>();
+            CompletableFuture<Void> continuation = new CompletableFuture<>();
+            CompletableFuture<Void> probe = new CompletableFuture<>();
+            AtomicInteger closingCalls = new AtomicInteger();
+
+            CompletionStage<Void> accepted =
+                    context.enqueueDispatch(
+                            () -> {
+                                started.complete(null);
+                                return ZLinkSerialExecutionQueue.yieldCurrent(continuation);
+                            });
+            started.get(2, TimeUnit.SECONDS);
+            CompletionStage<Void> closing =
+                    context.runClosing(
+                            () -> {
+                                closingCalls.incrementAndGet();
+                                return CompletableFuture.completedFuture(null);
+                            });
+
+            context.enqueueDispatch(
+                    () -> {
+                        probe.complete(null);
+                        return CompletableFuture.completedFuture(null);
+                    });
+            probe.get(2, TimeUnit.SECONDS);
+            assertFalse(closing.toCompletableFuture().isDone());
+            assertEquals(0, closingCalls.get());
+            continuation.complete(null);
+            accepted.toCompletableFuture().get(2, TimeUnit.SECONDS);
+            closing.toCompletableFuture().get(2, TimeUnit.SECONDS);
+            assertEquals(1, closingCalls.get());
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void instanceClosingDrainsAcceptedTurnWhenInitiatorYields() throws Exception {
+        ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+        try (ZLinkWorkerPool workerPool = new ZLinkWorkerPool(0, 1, Duration.ofSeconds(1))) {
+            TestHost host = new TestHost(executor);
+            DefaultInstanceSpotContext context = host.instanceContext(workerPool);
+            CompletableFuture<Void> firstStarted = new CompletableFuture<>();
+            CompletableFuture<Void> beginClose = new CompletableFuture<>();
+            CompletableFuture<Void> secondStarted = new CompletableFuture<>();
+            CompletableFuture<Void> secondRelease = new CompletableFuture<>();
+            CopyOnWriteArrayList<String> events = new CopyOnWriteArrayList<>();
+
+            CompletionStage<Void> first =
+                    context.enqueueDispatch(
+                            () -> {
+                                firstStarted.complete(null);
+                                beginClose.join();
+                                return ZLinkSerialExecutionQueue.yieldCurrent(
+                                        context.runClosing(
+                                                () -> {
+                                                    events.add("closing");
+                                                    return CompletableFuture.completedFuture(null);
+                                                }));
+                            });
+            firstStarted.get(2, TimeUnit.SECONDS);
+            CompletionStage<Void> second =
+                    context.enqueueDispatch(
+                            () -> {
+                                events.add("accepted");
+                                secondStarted.complete(null);
+                                return secondRelease;
+                            });
+            beginClose.complete(null);
+            secondStarted.get(2, TimeUnit.SECONDS);
+            assertEquals(List.of("accepted"), events);
+            secondRelease.complete(null);
+            CompletableFuture.allOf(first.toCompletableFuture(), second.toCompletableFuture())
+                    .get(2, TimeUnit.SECONDS);
+            assertEquals(List.of("accepted", "closing"), events);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void spotWideYieldReleasesSharedGateButRetainsActorQueueClaim() throws Exception {
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         try {
@@ -696,6 +822,13 @@ final class ZLinkDefaultSpotContextTest {
     private static final class TestHost extends ZLinkSpotContextHost {
         private final Executor executor;
         private final AtomicInteger actorDispatchSubmissions = new AtomicInteger();
+        private final AtomicInteger userCloseRequests = new AtomicInteger();
+        private final AtomicInteger instanceCloseRequests = new AtomicInteger();
+        private final CompletableFuture<Void> userCloseSeen = new CompletableFuture<>();
+        private CompletionStage<Boolean> userCloseResult = CompletableFuture.completedFuture(true);
+        private final CompletableFuture<Void> instanceCloseSeen = new CompletableFuture<>();
+        private final java.util.concurrent.atomic.AtomicLong userCloseGeneration =
+                new java.util.concurrent.atomic.AtomicLong();
         private final ZLinkBackendSpot backendSpot = backendSpot();
 
         TestHost() {
@@ -787,12 +920,17 @@ final class ZLinkDefaultSpotContextTest {
         }
 
         @Override
-        CompletionStage<Boolean> closeSpot(String spotId) {
-            return CompletableFuture.completedFuture(true);
+        CompletionStage<Boolean> closeSpot(String spotId, long objectGeneration) {
+            userCloseRequests.incrementAndGet();
+            userCloseGeneration.set(objectGeneration);
+            userCloseSeen.complete(null);
+            return userCloseResult;
         }
 
         @Override
         CompletionStage<Boolean> closeInstanceSpot(String spotId, long objectGeneration) {
+            instanceCloseRequests.incrementAndGet();
+            instanceCloseSeen.complete(null);
             return CompletableFuture.completedFuture(true);
         }
 

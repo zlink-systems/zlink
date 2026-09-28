@@ -114,12 +114,14 @@ final class ZLinkClientServerM6ARuntimeTest {
         ZLinkBackendDealerSocket newDealer = dealer("new");
 
         sockets.addClientServerConnection("same", value, oldDealer);
-        sockets.admitClientServerConnection("same", value);
+        ZLinkChannelSocketRegistry.AdmissionFence oldFence =
+                sockets.clientServerTransportReady("same");
+        sockets.admitClientServerConnection("same", value, oldFence);
         sockets.addClientServerConnection("same", value, newDealer);
         sockets.admitClientServerConnection("same", value);
 
         sockets.removeClientServerConnection("same", oldDealer);
-        sockets.reconnectClientServerConnection("same", oldDealer);
+        sockets.restartClientServerAdmission("same", oldFence);
 
         assertSame(newDealer, sockets.clientForOutbound("orders"));
     }
@@ -249,6 +251,52 @@ final class ZLinkClientServerM6ARuntimeTest {
                 received(ZLinkClientServerServiceWire.encodeUpdate(conflict, Integer.MAX_VALUE)));
         sockets.tickClientServerLiveness(System.nanoTime());
         assertNull(sockets.clientForOutbound("orders"));
+    }
+
+    @Test
+    void peerDeadlineLeavesCoreConnectIntentIntact() {
+        ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
+        ControlledDealer dealer = new ControlledDealer();
+        var value =
+                descriptor("orders", RoutingId.from("server"), 7, 1, "tcp://127.0.0.1:7001", 100);
+        sockets.addClientServerConnection("manual", value, dealer);
+        var fence = sockets.clientServerTransportReady("manual");
+        assertTrue(sockets.admitClientServerConnection("manual", value, fence));
+
+        sockets.tickClientServerLiveness(System.nanoTime() + TimeUnit.SECONDS.toNanos(16));
+
+        assertNull(sockets.clientForOutbound("orders"));
+        assertEquals(0, dealer.disconnects);
+        assertEquals(0, dealer.connects);
+    }
+
+    @Test
+    void peerFailureRestartsLogicalAdmissionOnExistingDealer() {
+        ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
+        ControlledDealer dealer = new ControlledDealer();
+        List<ZLinkChannelSocketRegistry.AdmissionFence> restarts = new ArrayList<>();
+        var value =
+                descriptor("orders", RoutingId.from("server"), 7, 1, "tcp://127.0.0.1:7001", 100);
+        sockets.addClientServerConnection("manual", value, dealer, restarts::add);
+        var first = sockets.clientServerTransportReady("manual");
+        assertTrue(sockets.admitClientServerConnection("manual", value, first));
+
+        sockets.tickClientServerLiveness(System.nanoTime() + TimeUnit.SECONDS.toNanos(16));
+        assertEquals(1, restarts.size());
+        var second = restarts.getFirst();
+        assertEquals(first.physicalGeneration(), second.physicalGeneration());
+        assertNotEquals(first.admissionGeneration(), second.admissionGeneration());
+        assertFalse(sockets.admitClientServerConnection("manual", value, first));
+        assertTrue(sockets.admitClientServerConnection("manual", value, second));
+
+        dealer.inbound.add(received(new byte[] {1, 2, 3}));
+        sockets.tickClientServerLiveness(System.nanoTime());
+        assertEquals(2, restarts.size());
+        var third = restarts.getLast();
+        assertFalse(sockets.admitClientServerConnection("manual", value, second));
+        assertTrue(sockets.admitClientServerConnection("manual", value, third));
+        assertEquals(0, dealer.disconnects);
+        assertEquals(0, dealer.connects);
     }
 
     @Test
@@ -1016,6 +1064,8 @@ final class ZLinkClientServerM6ARuntimeTest {
         private final Deque<ZLinkBackendReceived> inbound = new ArrayDeque<>();
         private final List<byte[]> sent = new ArrayList<>();
         private final List<byte[]> requests = new ArrayList<>();
+        private int connects;
+        private int disconnects;
 
         @Override
         public void setReceiveFlowState(systems.zlink.contracts.sockets.ReceiveFlowState state) {}
@@ -1032,10 +1082,14 @@ final class ZLinkClientServerM6ARuntimeTest {
         public void bind(String endpoint) {}
 
         @Override
-        public void connect(String endpoint) {}
+        public void connect(String endpoint) {
+            connects++;
+        }
 
         @Override
-        public void disconnect(String endpoint) {}
+        public void disconnect(String endpoint) {
+            disconnects++;
+        }
 
         @Override
         public CompletionStage<Void> send(List<Message> parts) {

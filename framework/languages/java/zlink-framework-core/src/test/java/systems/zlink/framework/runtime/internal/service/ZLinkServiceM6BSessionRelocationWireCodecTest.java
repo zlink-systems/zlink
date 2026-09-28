@@ -113,6 +113,7 @@ final class ZLinkServiceM6BSessionRelocationWireCodecTest {
                                 0,
                                 11,
                                 null,
+                                0,
                                 0));
         assertThrows(
                 ZLinkServiceWireException.class,
@@ -127,7 +128,8 @@ final class ZLinkServiceM6BSessionRelocationWireCodecTest {
                                 11,
                                 11,
                                 TARGET,
-                                4));
+                                4,
+                                5));
         assertThrows(
                 ZLinkServiceWireException.class,
                 () ->
@@ -159,7 +161,8 @@ final class ZLinkServiceM6BSessionRelocationWireCodecTest {
                 11,
                 12,
                 TARGET,
-                4);
+                4,
+                5);
     }
 
     private static SessionRelocationRoute abort() {
@@ -173,6 +176,7 @@ final class ZLinkServiceM6BSessionRelocationWireCodecTest {
                 0,
                 11,
                 null,
+                0,
                 0);
     }
 

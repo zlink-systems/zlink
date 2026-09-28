@@ -35,6 +35,7 @@ internal interface IZLinkSpotRetireTarget
     ValueTask<ulong> PublishAsync(
         ZLinkSpotRetireReservation reservation,
         ZLinkAggregateRelocationPublished relocation,
+        DateTimeOffset restoreDeadline,
         CancellationToken cancellationToken
     );
 
@@ -572,10 +573,6 @@ internal sealed class ZLinkSpotRetireScheduler(
             // the ordered relocation connection. The target owns CAS,
             // queue publication and dispatch opening from this boundary.
             interruption.Complete();
-            // A lost one-way submit result is ambiguous because the target
-            // may already have observed cutover. Never reopen source
-            // admission after this point.
-            committed = true;
             await CompleteCommittedWithinDeadlineAsync().ConfigureAwait(false);
             return ZLinkRelocationUnitResult.Completed();
         }
@@ -834,7 +831,12 @@ internal sealed class ZLinkSpotRetireScheduler(
             if (!targetPublished)
             {
                 targetAuthorityOwnerGeneration = await target
-                    .PublishAsync(reservation, committedPublication, completionToken)
+                    .PublishAsync(
+                        reservation,
+                        committedPublication,
+                        deadline,
+                        CancellationToken.None
+                    )
                     .ConfigureAwait(false);
                 targetPublished = true;
             }

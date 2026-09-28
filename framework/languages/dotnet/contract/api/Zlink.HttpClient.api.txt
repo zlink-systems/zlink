@@ -97,7 +97,6 @@ assembly Zlink.HttpClient
     method virtual Zlink.HttpClient.ZLinkHttpServerRequestBuilder Post(System.String path [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method virtual Zlink.HttpClient.ZLinkHttpServerRequestBuilder Put(System.String path [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type sealed-class Zlink.HttpClient.ZLinkHttpServerRequestBuilder : Zlink.HttpClient.ZLinkHttpRequestBuilder
-    method System.Threading.Tasks.ValueTask Async(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method virtual Zlink.HttpClient.ZLinkHttpServerRequestBuilder BodyStream(System.Func<System.Byte[]?> provider [nullability=read:not-null,write:not-null], System.String contentType [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method virtual Zlink.HttpClient.ZLinkHttpServerRequestBuilder Body(System.String content [nullability=read:not-null,write:not-null], System.String contentType [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method virtual Zlink.HttpClient.ZLinkHttpServerRequestBuilder Body<T>(T? value [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]

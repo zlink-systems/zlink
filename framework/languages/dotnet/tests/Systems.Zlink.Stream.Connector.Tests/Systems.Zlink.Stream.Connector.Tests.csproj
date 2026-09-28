@@ -25,6 +25,7 @@
     </ItemGroup>
 
     <ItemGroup>
+        <FrameworkReference Include="Microsoft.AspNetCore.App" />
         <ProjectReference Include="../../src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj"/>
         <ProjectReference Include="../../src/Zlink.Framework.Contracts/Zlink.Framework.Contracts.csproj"/>
         <ProjectReference Include="../../src/Zlink.Framework.Codecs.MessagePack/Zlink.Framework.Codecs.MessagePack.csproj"/>
@@ -39,9 +40,12 @@
         <Compile Include="Protocol/HeaderCodecTests.cs"/>
         <Compile Include="Support/StreamConnectorTestSupport.cs"/>
         <Compile Include="Transport/ActorBindingTests.cs"/>
+        <Compile Include="Transport/CloseAndWriteCompletionTests.cs"/>
+        <Compile Include="Transport/ConnectionEndingTests.cs"/>
         <Compile Include="Transport/DispatchTests.cs"/>
         <Compile Include="Transport/LifecycleTests.cs"/>
         <Compile Include="Transport/ReceiveQueueConcurrencyTests.cs"/>
+        <Compile Include="Transport/ReviewRegressionTests.cs"/>
         <Compile Include="Transport/RequestHookTests.cs"/>
         <Compile Include="Transport/RuntimeMetricsTests.cs"/>
         <Compile Include="Transport/TestHelperTests.cs"/>

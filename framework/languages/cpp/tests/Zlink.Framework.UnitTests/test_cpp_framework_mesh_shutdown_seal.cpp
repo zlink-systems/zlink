@@ -29,7 +29,7 @@ mesh::raw_mesh_node_options_t options (char rid,
 void pump (mesh::raw_mesh_node_owner_t &node)
 {
     const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-    node.drain_monitor_events (now).result ().value ();
+    node.observe_routes ();
     assert (node.pump_one (now).result ().value () != mesh::raw_mesh_pump_result_t::protocol_error);
 }
 
@@ -64,7 +64,7 @@ void connect (mesh::raw_mesh_node_owner_t &source, mesh::raw_mesh_node_owner_t &
     }
 }
 
-void verify_monitor_wakes_ingress_without_application_permit ()
+void verify_route_change_wakes_ingress_without_application_permit ()
 {
     mesh::raw_mesh_node_owner_t source (options ('g'));
     mesh::raw_mesh_node_owner_t target (options ('h'));
@@ -76,10 +76,7 @@ void verify_monitor_wakes_ingress_without_application_permit ()
     assert (source.connect_peer (target.endpoint (), target.topology ().local_descriptor ()));
     assert (waiting.wait_for (500ms) == std::future_status::ready);
     assert (waiting.get ());
-    assert (target.drain_monitor_events (mesh::service_liveness_registry_t::clock_t::now ())
-              .result ()
-              .value ()
-            > 0);
+    assert (target.observe_routes () > 0);
 }
 
 void verify_close_wakes_unbounded_ingress_wait ()
@@ -126,21 +123,9 @@ void verify_restart (bool sealed, bool draining)
       options ('b', endpoint, std::make_shared<std::atomic_bool> (sealed)));
     target->start ();
     std::size_t ready_events = 0;
-    until ([&] { return ready_events != 0; },
-           [&] {
-               ready_events +=
-                 source.drain_monitor_events (mesh::service_liveness_registry_t::clock_t::now ())
-                   .result ()
-                   .value ();
-           });
+    until ([&] { return ready_events != 0; }, [&] { ready_events += source.observe_routes (); });
     std::size_t remote_ready = 0;
-    until ([&] { return remote_ready != 0; },
-           [&] {
-               remote_ready +=
-                 target->drain_monitor_events (mesh::service_liveness_registry_t::clock_t::now ())
-                   .result ()
-                   .value ();
-           });
+    until ([&] { return remote_ready != 0; }, [&] { remote_ready += target->observe_routes (); });
     if (sealed) {
         const auto deadline = std::chrono::steady_clock::now () + 200ms;
         while (std::chrono::steady_clock::now () < deadline) {
@@ -193,8 +178,8 @@ void verify_inbound_hello (bool sealed)
         until ([&] { return hello_received; },
                [&] {
                    const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-                   source.drain_monitor_events (now).result ().value ();
-                   target.drain_monitor_events (now).result ().value ();
+                   source.observe_routes ();
+                   target.observe_routes ();
                    const auto result = target.pump_one (now).result ().value ();
                    assert (result == mesh::raw_mesh_pump_result_t::no_data
                            || result == mesh::raw_mesh_pump_result_t::infrastructure);
@@ -316,7 +301,7 @@ void verify_crossed_admission_diagnostics ()
         assert (found);
     }
     const auto before = source.topology ().peer ({'f'});
-    assert (source.topology ().admit (before->descriptor, before->connection_id, before->direction)
+    assert (source.topology ().admit (before->descriptor, before->connection_id)
             == mesh::peer_admission_result_t::duplicate_connection);
     assert (source.topology ().peer ({'f'})->admission_epoch == before->admission_epoch);
 }
@@ -329,7 +314,7 @@ int main ()
 #else
     setenv ("ZLINK_CPP_MESH_TRACE", "1", 1);
 #endif
-    verify_monitor_wakes_ingress_without_application_permit ();
+    verify_route_change_wakes_ingress_without_application_permit ();
     verify_close_wakes_unbounded_ingress_wait ();
     verify_inbound_hello (true);
     verify_inbound_hello (false);

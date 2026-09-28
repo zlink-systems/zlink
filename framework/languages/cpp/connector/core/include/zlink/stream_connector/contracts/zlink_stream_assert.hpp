@@ -8,7 +8,7 @@
  * throwing, so they exist only where exceptions are enabled. The connector core
  * itself reports by value and stays usable in an engine build that disables
  * them. */
-#if ZLINK_STREAM_CONNECTOR_HAS_EXCEPTIONS
+#if ZLINK_HAS_EXCEPTIONS
 
 #include <functional>
 #include <optional>
@@ -115,4 +115,4 @@ template <typename TAction> error_t expect_timeout (TAction &&action)
 
 } // namespace zlink::stream_connector::assertions
 
-#endif // ZLINK_STREAM_CONNECTOR_HAS_EXCEPTIONS
+#endif // ZLINK_HAS_EXCEPTIONS

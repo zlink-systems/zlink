@@ -17,6 +17,11 @@
         <ProjectReference Include="../Zlink.Framework.Provider.Abstractions/Zlink.Framework.Provider.Abstractions.csproj"/>
     </ItemGroup>
 
+    <ItemGroup>
+        <Compile Include="../Shared/ZLinkStoreRetention.cs"
+                 Link="Internal/ZLinkStoreRetention.cs"/>
+    </ItemGroup>
+
     <Target Name="PinProviderAbstractionsPackageDependency"
             AfterTargets="_GetProjectReferenceVersions">
         <ItemGroup>

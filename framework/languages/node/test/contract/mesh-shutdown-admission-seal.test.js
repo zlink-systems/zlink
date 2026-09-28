@@ -23,6 +23,11 @@ for (const withChannel of [true, false]) {
       let resolvePublished;
       const published = new Promise(resolve => { resolvePublished = resolve; });
       t.mock.method(raw.router, 'receive', () => incoming.shift());
+      // Both peers have a Core selected route of generation 1 (Core ROUTER §10.1).
+      t.mock.method(raw.router, 'routesSnapshot', () => [
+        { routingId: 'admitted-peer', routeGeneration: 1n },
+        { routingId: 'new-peer', routeGeneration: 1n }
+      ]);
       t.mock.method(raw.router, 'send', async (target, parts) => {
         sent.push({ target, parts: parts.map(part => Buffer.from(part)) });
         if (wire.decodeHeader(parts[0]).command === wire.M6aServiceWireCommand.update) resolvePublished();
@@ -35,7 +40,7 @@ for (const withChannel of [true, false]) {
         ...local, nodeRoutingId: 'new-peer', advertisedEndpoint: 'inproc://new-peer'
       };
       const receive = async (peer, parts) => {
-        incoming.push({ sourceRid: peer.nodeRoutingId, parts, close() {} });
+        incoming.push({ sourceRid: peer.nodeRoutingId, routeGeneration: 1n, parts, close() {} });
         return raw.pumpOne();
       };
       assert.equal(await receive(admitted, [wire.encodeRouteMeshAdmission(

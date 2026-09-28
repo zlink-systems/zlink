@@ -540,7 +540,7 @@ public sealed partial class RegressionTests
         );
         Assert.DoesNotContain("spots.FindAsync", missionProgram, StringComparison.Ordinal);
         Assert.Contains(
-            "Context.CloseAsync(cancellationToken)",
+            "spot.Context.CloseAsync(cancellationToken)",
             playerQuestSpot,
             StringComparison.Ordinal
         );

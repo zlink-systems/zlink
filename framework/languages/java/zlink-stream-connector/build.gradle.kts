@@ -21,3 +21,12 @@ dependencies {
     implementation("org.lz4:lz4-java:1.8.0")
     testImplementation(project(":zlink-framework-core"))
 }
+
+val buildNodeStreamConnector by tasks.registering(Exec::class) {
+    workingDir = rootProject.file("../node")
+    commandLine("npm", "run", "build")
+}
+
+tasks.named("test") {
+    dependsOn(buildNodeStreamConnector)
+}

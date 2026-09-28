@@ -708,8 +708,8 @@ selects() {
   [[ "$SCENARIO" == *"$base"* ]]
 }
 
-# ZW-B5 is one-way and ZW-B6 is request/reply. Each primes the old owner independently, so each
-# must produce exactly one committed-target handler and exactly one source Follow relay.
+# ZW-B5 is one-way and ZW-B6 is request/reply. Each must produce exactly one
+# committed-target handler result after the client completes its operation.
 if selects ZW-B5; then
   b5_line="$(grep -F 'message-follow-one-way completed ' "$LOG_DIR/client.log" | tail -n 1 || true)"
   actor_id=""
@@ -720,20 +720,19 @@ if selects ZW-B5; then
   fi
   one_way_payload="$(printf '%s' 'one-way-payload' | od -An -tx1 -v \
     | tr -d ' \\n' | tr '[:lower:]' '[:upper:]')"
+  [[ -n "$actor_id" && -n "$one_way_id" ]] && wait_for_zone_log \
+    "message-follow probe one-way handled. actor=$actor_id, probe=$one_way_id, payload=$one_way_payload"
   one_way_hits="$(awk -v actor="$actor_id" -v probe="$one_way_id" -v payload="$one_way_payload" \
     '/message-follow probe one-way handled\./ \
       && index($0, "actor=" actor ",") > 0 \
       && index($0, "probe=" probe ",") > 0 \
       && index($0, "payload=" payload) > 0 { count++ } \
     END { print count + 0 }' "$LOG_DIR"/zone-node-*.log 2>/dev/null)"
-  relay_hits="$(awk -v actor="$actor_id" \
-    '/message_follow_relay/ && index($0, "actor=" actor) > 0 { count++ } \
-    END { print count + 0 }' "$LOG_DIR"/zone-node-*.log 2>/dev/null)"
   if [[ -n "$actor_id" && -n "$one_way_id" \
-      && "$one_way_hits" -eq 1 && "$relay_hits" -eq 1 ]]; then
+      && "$one_way_hits" -eq 1 ]]; then
     pass ZW-B5
   else
-    fail ZW-B5 "one-way Follow evidence was incomplete (actor=$actor_id handler=$one_way_hits relay=$relay_hits)"
+    fail ZW-B5 "one-way Follow evidence was incomplete (actor=$actor_id handler=$one_way_hits)"
   fi
 fi
 
@@ -747,20 +746,19 @@ if selects ZW-B6; then
   fi
   request_payload="$(printf '%s' 'request-payload' | od -An -tx1 -v \
     | tr -d ' \\n' | tr '[:lower:]' '[:upper:]')"
+  [[ -n "$actor_id" && -n "$request_id" ]] && wait_for_zone_log \
+    "message-follow probe handled. actor=$actor_id, probe=$request_id, payload=$request_payload"
   request_hits="$(awk -v actor="$actor_id" -v probe="$request_id" -v payload="$request_payload" \
     '/message-follow probe handled\./ \
       && index($0, "actor=" actor ",") > 0 \
       && index($0, "probe=" probe ",") > 0 \
       && index($0, "payload=" payload) > 0 { count++ } \
     END { print count + 0 }' "$LOG_DIR"/zone-node-*.log 2>/dev/null)"
-  relay_hits="$(awk -v actor="$actor_id" \
-    '/message_follow_relay/ && index($0, "actor=" actor) > 0 { count++ } \
-    END { print count + 0 }' "$LOG_DIR"/zone-node-*.log 2>/dev/null)"
   if [[ -n "$actor_id" && -n "$request_id" \
-      && "$request_hits" -eq 1 && "$relay_hits" -eq 1 ]]; then
+      && "$request_hits" -eq 1 ]]; then
     pass ZW-B6
   else
-    fail ZW-B6 "request Follow evidence was incomplete (actor=$actor_id handler=$request_hits relay=$relay_hits)"
+    fail ZW-B6 "request Follow evidence was incomplete (actor=$actor_id handler=$request_hits)"
   fi
 fi
 

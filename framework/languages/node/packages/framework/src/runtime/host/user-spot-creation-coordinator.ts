@@ -17,6 +17,7 @@ import type {
 import { ZLinkFrameworkException, ZLinkSpotCreateState } from '../../contracts';
 import {
   decodeServiceReadySpotAuthority,
+  decodeServiceClosingSpotAuthority,
   encodeServiceUserSpotAuthorityPayload
 } from '../foundation/service-authority-payload-codec';
 import { encodeAuthorityKey } from '../locations/authority-key-codec';
@@ -332,55 +333,34 @@ export class ZLinkUserSpotCreationCoordinator {
 
   async close(
     spot: SpotRef,
-    closeOwner: (current: SpotRef, snapshot: ZLinkAuthoritySnapshot) => Promise<boolean>,
-    signal?: AbortSignal,
-    ownerPresent?: (current: SpotRef) => boolean,
-    ownerCanClose?: (current: SpotRef) => boolean
+    closeOwner: (
+      current: SpotRef,
+      beginAuthority: (onCommitted: () => void) => Promise<{ release(): Promise<void> }>
+    ) => Promise<boolean>,
+    signal?: AbortSignal
   ): Promise<boolean> {
     const resolved = await this.resolveCloseTarget(spot, signal);
     if (resolved === undefined) return false;
     const { spot: currentRef, snapshot: current } = resolved;
     const key = encodeAuthorityKey('user_spot', String(spot.spotId));
-    if (ownerPresent?.(currentRef) === false) {
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.SpotMoving,
-        `User Spot '${String(spot.spotId)}' is missing from its authority owner.`,
-        true
-      );
-    }
-    if (ownerCanClose?.(currentRef) === false) return false;
-    const closing = await this.beginClosing(key, current, String(spot.spotId), signal);
-    let closed: boolean;
-    try {
-      closed = await closeOwner(currentRef, closing);
-    } catch (error) {
-      await this.restoreReady(key, closing, String(spot.spotId), signal);
-      throw error;
-    }
-    if (!closed) {
-      await this.restoreReady(key, closing, String(spot.spotId), signal);
-      return false;
-    }
-    const deleted = await this.options.store.compareExchangeAuthority(
-      key,
-      closing.storeVersion,
-      { kind: 'delete' },
-      signal
+    return await closeOwner(currentRef, async (onCommitted) =>
+      this.commitCloseAuthority(key, current, String(spot.spotId), onCommitted)
     );
-    if (deleted.kind === 'deleted') {
-      this.forgetReadyRoute(currentRef.spotId, current);
-      return true;
-    }
-    if (deleted.kind === 'conflict') {
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.SpotMoving,
-        `User Spot '${String(spot.spotId)}' authority changed while closing.`,
-        true
-      );
-    }
-    throw createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.SpotGenerationStale,
-      `User Spot '${String(spot.spotId)}' generation cannot be closed.`
+  }
+
+  /** Commits Closing for the owner's own incarnation when its context requests Close. */
+  async beginOwnerClose(
+    spot: SpotRef,
+    onCommitted: () => void
+  ): Promise<{ release(): Promise<void> } | undefined> {
+    const resolved = await this.resolveCloseTarget(spot);
+    if (resolved === undefined) return undefined;
+    const spotId = String(spot.spotId);
+    return await this.commitCloseAuthority(
+      encodeAuthorityKey('user_spot', spotId),
+      resolved.snapshot,
+      spotId,
+      onCommitted
     );
   }
 
@@ -391,29 +371,14 @@ export class ZLinkUserSpotCreationCoordinator {
     const key = encodeAuthorityKey('user_spot', String(spot.spotId));
     const current = await this.options.store.readAuthority(key, signal);
     if (current.kind === 'missing') return undefined;
-    if (current.objectGeneration !== spot.objectGeneration) {
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.SpotGenerationStale,
-        `User Spot '${String(spot.spotId)}' generation is stale.`
-      );
-    }
-    const currentRef = spotRef(current, {
-      meshName: current.allocation.descriptor.meshName,
-      spotId: spot.spotId,
-      stableType: current.allocation.stableType,
-      requestPayload: Buffer.alloc(0),
-      timeoutMs: 1
-    });
-    if (
-      String(current.allocation.descriptor.rid) !== String(spot.nodeRid) ||
-      current.allocation.descriptor.meshName !== spot.meshName
-    ) {
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.SpotGenerationStale,
-        `User Spot '${String(spot.spotId)}' owner route is stale.`
-      );
-    }
-    return { spot: currentRef, snapshot: current };
+    return {
+      spot: requireCloseTarget(current, String(spot.spotId), {
+        objectGeneration: spot.objectGeneration,
+        nodeRid: String(spot.nodeRid),
+        meshName: spot.meshName
+      }),
+      snapshot: current
+    };
   }
 
   async handleRemoteCreate(
@@ -672,65 +637,71 @@ export class ZLinkUserSpotCreationCoordinator {
 
   async handleRemoteClose(
     record: ServiceUserSpotCloseRecord,
-    closeOwner: (spot: SpotRef, signal?: AbortSignal) => Promise<boolean>,
-    signal?: AbortSignal
+    closeOwner: (
+      spot: SpotRef,
+      beginAuthority: (onCommitted: () => void) => Promise<{ release(): Promise<void> }>,
+      signal?: AbortSignal
+    ) => Promise<boolean>,
+    signal?: AbortSignal,
+    canResume?: (spot: SpotRef) => boolean
   ): Promise<boolean> {
     const key = encodeAuthorityKey('user_spot', record.target.spotId);
     const current = await this.options.store.readAuthority(key, signal);
     if (current.kind === 'missing') return false;
-    if (current.objectGeneration !== record.target.objectGeneration) {
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.SpotGenerationStale,
-        `User Spot '${record.target.spotId}' generation is stale.`
-      );
-    }
-    if (
-      current.authorityOwnerGeneration !== record.target.authorityOwnerGeneration ||
-      current.storeVersion.value !== record.target.expectedStoreVersion ||
-      String(current.allocation.descriptor.rid) !== record.target.targetNodeRid ||
-      current.allocation.descriptorLifecycleGeneration !== record.target.targetNodeGeneration ||
-      current.allocation.objectKind !== 'user_spot' ||
-      current.allocation.state !== 'active'
-    ) {
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.SpotMoving,
-        `User Spot '${record.target.spotId}' close authority is moving.`,
-        true
-      );
-    }
-    const spot: SpotRef = {
+    const candidate: SpotRef = {
       spotId: record.target.spotId as RoutingId,
       objectGeneration: current.objectGeneration,
       meshName: current.allocation.descriptor.meshName,
       nodeRid: current.allocation.descriptor.rid
     };
-    const closing = await this.beginClosing(key, current, record.target.spotId, signal);
-    let closed: boolean;
-    try {
-      closed = await closeOwner(spot, signal);
-    } catch (error) {
-      await this.restoreReady(key, closing, record.target.spotId, signal);
-      throw error;
-    }
-    if (!closed) {
-      await this.restoreReady(key, closing, record.target.spotId, signal);
-      return false;
-    }
-    const deleted = await this.options.store.compareExchangeAuthority(
-      key,
-      closing.storeVersion,
-      { kind: 'delete' },
+    // A Closing committed by this owner is resumed, so its store version has
+    // advanced past the one the source observed.
+    const resuming =
+      canResume?.(candidate) === true &&
+      decodeServiceClosingSpotAuthority(current.payload)?.kind === 'user_spot';
+    const spot = requireCloseTarget(current, record.target.spotId, {
+      objectGeneration: record.target.objectGeneration,
+      nodeRid: record.target.targetNodeRid,
+      nodeGeneration: record.target.targetNodeGeneration,
+      authorityOwnerGeneration: record.target.authorityOwnerGeneration,
+      storeVersion: resuming ? undefined : record.target.expectedStoreVersion
+    });
+    return await closeOwner(
+      spot,
+      async (onCommitted) =>
+        this.commitCloseAuthority(key, current, record.target.spotId, onCommitted),
       signal
     );
-    if (deleted.kind === 'deleted') {
-      this.forgetReadyRoute(record.target.spotId as RoutingId, current);
-      return true;
-    }
-    throw createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.SpotMoving,
-      `User Spot '${record.target.spotId}' authority changed while closing.`,
-      true
-    );
+  }
+
+  private async commitCloseAuthority(
+    key: ReturnType<typeof encodeAuthorityKey>,
+    current: ZLinkAuthoritySnapshot,
+    spotId: string,
+    onCommitted: () => void
+  ): Promise<{ release(): Promise<void> }> {
+    const closing = await this.beginClosing(key, current, spotId);
+    const authority = {
+      release: async () => {
+        this.forgetReadyRoute(spotId as RoutingId, current);
+        const deleted = await this.options.store.compareExchangeAuthority(
+          key,
+          closing.storeVersion,
+          {
+            kind: 'delete'
+          }
+        );
+        if (deleted.kind !== 'deleted') {
+          throw createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.SpotMoving,
+            `User Spot '${spotId}' authority changed while closing.`,
+            true
+          );
+        }
+      }
+    };
+    onCommitted();
+    return authority;
   }
 
   forgetReadyRoute(spotId: RoutingId, snapshot: ZLinkAuthoritySnapshot): void {
@@ -743,8 +714,7 @@ export class ZLinkUserSpotCreationCoordinator {
   private async beginClosing(
     key: ReturnType<typeof encodeAuthorityKey>,
     current: ZLinkAuthoritySnapshot,
-    spotId: string,
-    signal?: AbortSignal
+    spotId: string
   ): Promise<ZLinkAuthoritySnapshot> {
     const ready = decodeServiceReadySpotAuthority(current.payload);
     if (
@@ -766,7 +736,7 @@ export class ZLinkUserSpotCreationCoordinator {
         payload: userSpotAuthorityPayload(current, spotId, 'closing'),
         generationTransition: 'preserve'
       },
-      signal
+      undefined
     );
     if (closing.kind === 'stored') {
       const { kind: _kind, ...snapshot } = closing;
@@ -777,31 +747,6 @@ export class ZLinkUserSpotCreationCoordinator {
       `User Spot authority changed while entering Closing.`,
       true
     );
-  }
-
-  private async restoreReady(
-    key: ReturnType<typeof encodeAuthorityKey>,
-    closing: ZLinkAuthoritySnapshot,
-    spotId: string,
-    signal?: AbortSignal
-  ): Promise<void> {
-    const restored = await this.options.store.compareExchangeAuthority(
-      key,
-      closing.storeVersion,
-      {
-        kind: 'put',
-        payload: userSpotAuthorityPayload(closing, spotId, 'ready'),
-        generationTransition: 'preserve'
-      },
-      signal
-    );
-    if (restored.kind !== 'stored') {
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.SpotMoving,
-        'User Spot Ready authority could not be restored after close was declined.',
-        true
-      );
-    }
   }
 
   private async awaitReady(
@@ -923,6 +868,66 @@ function readySpotRoute(
     authorityOwnerGeneration: snapshot.authorityOwnerGeneration,
     ownerLeaseGeneration: snapshot.ownerLeaseGeneration,
     storeVersion: snapshot.storeVersion.value
+  };
+}
+
+/** The Close fence a caller observed; omitted parts are not part of that caller's fence. */
+interface ZLinkUserSpotCloseFence {
+  readonly objectGeneration: bigint;
+  readonly nodeRid: string;
+  readonly meshName?: string;
+  readonly nodeGeneration?: bigint;
+  readonly authorityOwnerGeneration?: bigint;
+  readonly storeVersion?: string;
+}
+
+/**
+ * The single classifier of a Close target (§7, §9): another ObjectGeneration is
+ * SpotGenerationStale; any owner fence difference or an authority that is not
+ * in a Framework-owned Ready or Closing state is SpotMoving.
+ */
+function requireCloseTarget(
+  current: ZLinkAuthoritySnapshot,
+  spotId: string,
+  fence: ZLinkUserSpotCloseFence
+): SpotRef {
+  if (current.objectGeneration !== fence.objectGeneration) {
+    throw createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.SpotGenerationStale,
+      `User Spot '${spotId}' generation is stale.`
+    );
+  }
+  // A committed Closing stays the close target: its owner resumes that Close.
+  const decoded =
+    decodeServiceReadySpotAuthority(current.payload) ??
+    decodeServiceClosingSpotAuthority(current.payload);
+  const allocation = current.allocation;
+  if (
+    decoded?.kind !== 'user_spot' ||
+    decoded.spotId !== spotId ||
+    decoded.ownerId !== current.ownerId ||
+    decoded.ownerLeaseGeneration !== current.ownerLeaseGeneration ||
+    allocation.objectKind !== 'user_spot' ||
+    allocation.state !== 'active' ||
+    String(allocation.descriptor.rid) !== fence.nodeRid ||
+    (fence.meshName !== undefined && allocation.descriptor.meshName !== fence.meshName) ||
+    (fence.nodeGeneration !== undefined &&
+      allocation.descriptorLifecycleGeneration !== fence.nodeGeneration) ||
+    (fence.authorityOwnerGeneration !== undefined &&
+      current.authorityOwnerGeneration !== fence.authorityOwnerGeneration) ||
+    (fence.storeVersion !== undefined && current.storeVersion.value !== fence.storeVersion)
+  ) {
+    throw createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.SpotMoving,
+      `User Spot '${spotId}' owner fence changed or the Spot is moving.`,
+      true
+    );
+  }
+  return {
+    spotId: spotId as RoutingId,
+    objectGeneration: current.objectGeneration,
+    meshName: allocation.descriptor.meshName,
+    nodeRid: allocation.descriptor.rid
   };
 }
 

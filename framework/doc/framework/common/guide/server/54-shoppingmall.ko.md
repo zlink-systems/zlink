@@ -589,9 +589,10 @@ read model이 지워지거나 어긋나면 event stream만으로 다시 만든�
 
 ## 7. 종료와 lifecycle
 
-주문이 `Confirmed`나 `Failed`에 도달하면 Spot은 자신을 닫을 수 있다 — .NET과 Node 구현이 그렇게
-한다. 닫힌 뒤 같은 `OrderId`로 온 요청은 새 generation의 Spot을 만들고, 그 Spot은 stream을 replay해
-terminal 상태를 그대로 돌려준다.
+주문이 `Confirmed`나 `Failed`에 도달하면 Spot은 context `Close`로 종료를 요청할 수 있다.
+Context `Close`는 종료 결과를 반환하며, 종료 절차의 결과가 확정되면 완료된다. 닫힌 뒤 같은
+`OrderId`로 온 요청은 새 generation의 Spot을 만들고, 그 Spot은 stream을 replay해 terminal 상태를
+그대로 돌려준다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-lifecycle.html" title="Lifecycle과 실패 경계" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-shoppingmall-lifecycle.html" target="_blank">↗ 크게 보기</a></p>

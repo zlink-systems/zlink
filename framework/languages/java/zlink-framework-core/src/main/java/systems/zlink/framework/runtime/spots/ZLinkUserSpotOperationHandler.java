@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.spots;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.messaging.ZLinkMessage;
@@ -16,14 +17,18 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
+import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
 import systems.zlink.framework.spots.ZLinkSpot;
+import systems.zlink.framework.spots.ZLinkSpotCloseReason;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkUserSpotOperationHandler
         implements ZLinkInternalMeshNode.UserSpotOperationHandler {
@@ -36,7 +41,9 @@ final class ZLinkUserSpotOperationHandler
     private final String meshName;
     private final ZLinkInternalMeshNode node;
     private final ZLinkLocationRepository authorityStore;
+    private final ZLinkSpotRuntime runtime;
     private final ZLinkSpotLifecycle lifecycle;
+    private final ZLinkActivationAdmission activationAdmission;
     private final ZLinkMessageSerializer serializer;
     private final Map<String, RelocatableSpotFactory<?>> factories;
     private final ZLinkServiceAuthorityPayloadCodec authorities =
@@ -47,19 +54,30 @@ final class ZLinkUserSpotOperationHandler
             String meshName,
             ZLinkInternalMeshNode node,
             ZLinkLocationRepository authorityStore,
+            ZLinkSpotRuntime runtime,
             ZLinkSpotLifecycle lifecycle,
             ZLinkMessageSerializer serializer,
-            Map<String, RelocatableSpotFactory<?>> factories) {
+            Map<String, RelocatableSpotFactory<?>> factories,
+            ZLinkActivationAdmission activationAdmission) {
         this.meshName = meshName;
         this.node = node;
         this.authorityStore = authorityStore;
+        this.runtime = runtime;
         this.lifecycle = lifecycle;
+        this.activationAdmission = activationAdmission;
         this.serializer = serializer;
         this.factories = Map.copyOf(factories);
     }
 
     @Override
     public CompletionStage<ZLinkInternalMeshNode.UserSpotCreateResponse> create(
+            ZLinkInternalMeshNode.UserSpotCreateRequest request) {
+        // MeshNode §5.1: the received create holds one activation admission until its terminal.
+        return activationAdmission.admit(
+                "User Spot '" + request.intent().spotId() + "'", () -> createAdmitted(request));
+    }
+
+    private CompletionStage<ZLinkInternalMeshNode.UserSpotCreateResponse> createAdmitted(
             ZLinkInternalMeshNode.UserSpotCreateRequest request) {
         String key = ZLinkAuthorityKeyCodec.spot(request.intent().spotId());
         return authorityStore
@@ -100,6 +118,7 @@ final class ZLinkUserSpotOperationHandler
                                     (Class<? extends ZLinkSpot<?>>) admission.factory().spotType();
                             return lifecycle
                                     .prepareReserved(
+                                            meshName,
                                             spotType,
                                             request.intent().spotId(),
                                             snapshot.objectGeneration(),
@@ -126,45 +145,109 @@ final class ZLinkUserSpotOperationHandler
     public CompletionStage<ZLinkInternalMeshNode.UserSpotCloseResponse> close(
             ZLinkInternalMeshNode.UserSpotCloseRequest request) {
         var fence = request.intent().target();
+        SpotActivation activation = lifecycle.spotActivationFor(fence.spotId());
+        if (activation == null) {
+            return closeOnLifecycle(fence)
+                    .thenApply(ZLinkInternalMeshNode.UserSpotCloseResponse::new);
+        }
+        CompletableFuture<ZLinkInternalMeshNode.UserSpotCloseResponse> result =
+                new CompletableFuture<>();
+        activation
+                .context
+                .enqueueLifecycle(
+                        () ->
+                                closeOnLifecycle(fence)
+                                        .handle(
+                                                (closed, failure) -> {
+                                                    if (failure == null) {
+                                                        result.complete(
+                                                                new ZLinkInternalMeshNode
+                                                                        .UserSpotCloseResponse(
+                                                                        closed));
+                                                    } else {
+                                                        result.completeExceptionally(failure);
+                                                    }
+                                                    return null;
+                                                }))
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null) {
+                                result.completeExceptionally(failure);
+                            }
+                        });
+        return result;
+    }
+
+    /**
+     * Runs the target owner's Close for {@code fence}. The caller runs this on the User Spot
+     * lifecycle lane when the activation exists, so a Join or leave accepted earlier on that lane
+     * has decided its membership before the membership check here.
+     */
+    CompletionStage<Boolean> closeOnLifecycle(ZLinkServiceM6BWireCodec.UserSpotCloseFence fence) {
+        ZLinkSpotCloseCoordinator retained =
+                runtime.closingCoordinator(
+                        fence.spotId(),
+                        fence.objectGeneration(),
+                        fence.authorityOwnerGeneration(),
+                        fence);
+        if (retained != null) {
+            return retained.close();
+        }
         String key = ZLinkAuthorityKeyCodec.spot(fence.spotId());
         return authorityStore
                 .read(key, OPEN)
                 .thenCompose(
                         read -> {
                             if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
-                                return CompletableFuture.completedFuture(
-                                        new ZLinkInternalMeshNode.UserSpotCloseResponse(false));
+                                return CompletableFuture.completedFuture(false);
                             }
                             var authority =
                                     authorities
                                             .decode(snapshot.payload())
                                             .orElseThrow(
-                                                    () -> stale("invalid User Spot authority"));
-                            require(
-                                    authority.user().isPresent()
-                                            && authority.state()
-                                                    == ZLinkServiceAuthorityPayloadCodec.State.READY
-                                            && authority.spotId().equals(fence.spotId())
-                                            && authority.meshName().equals(meshName)
-                                            && authority.nodeRid().equals(node.status().routingId())
-                                            && authority.nodeGeneration()
-                                                    == node.status().lifecycleGeneration()
-                                            && snapshot.allocation().state()
-                                                    == ZLinkPlacementAllocationState.ACTIVE
-                                            && snapshot.allocation().objectKind()
-                                                    == ZLinkPlacementObjectKind.USER_SPOT
-                                            && snapshot.objectGeneration()
-                                                    == fence.objectGeneration()
-                                            && snapshot.authorityOwnerGeneration()
-                                                    == fence.authorityOwnerGeneration()
-                                            && snapshot.storeVersion().equals(fence.storeVersion()),
-                                    "stale User Spot close fence");
+                                                    () -> moving("invalid User Spot authority"));
+                            if (snapshot.objectGeneration() != fence.objectGeneration()) {
+                                throw stale("User Spot generation is stale");
+                            }
+                            if (authority.user().isEmpty()
+                                    || !authority.spotId().equals(fence.spotId())
+                                    || snapshot.allocation().objectKind()
+                                            != ZLinkPlacementObjectKind.USER_SPOT
+                                    || !authority.meshName().equals(meshName)
+                                    || !authority.nodeRid().equals(node.status().routingId())
+                                    || authority.nodeGeneration()
+                                            != node.status().lifecycleGeneration()
+                                    || snapshot.allocation().state()
+                                            != ZLinkPlacementAllocationState.ACTIVE
+                                    || snapshot.authorityOwnerGeneration()
+                                            != fence.authorityOwnerGeneration()
+                                    || !snapshot.storeVersion().equals(fence.storeVersion())) {
+                                throw moving("User Spot owner fence has changed");
+                            }
+                            if (authority.state()
+                                    == ZLinkServiceAuthorityPayloadCodec.State.CLOSING) {
+                                ZLinkSpotCloseCoordinator closing =
+                                        runtime.retainedClosingCoordinator(
+                                                fence.spotId(),
+                                                fence.objectGeneration(),
+                                                fence.authorityOwnerGeneration());
+                                if (closing == null) {
+                                    return failed(
+                                            TERMINAL_INVALID_STATE,
+                                            FAILURE_SPOT_MOVING,
+                                            "Closing User Spot is missing its owner coordinator");
+                                }
+                                return closing.close();
+                            }
+                            if (authority.state()
+                                    != ZLinkServiceAuthorityPayloadCodec.State.READY) {
+                                throw moving("User Spot is moving");
+                            }
                             ZLinkSpotLifecycle.CloseReadiness readiness =
                                     lifecycle.closeReadiness(
                                             fence.spotId(), fence.objectGeneration());
                             if (readiness == ZLinkSpotLifecycle.CloseReadiness.HAS_ACTORS) {
-                                return CompletableFuture.completedFuture(
-                                        new ZLinkInternalMeshNode.UserSpotCloseResponse(false));
+                                return CompletableFuture.completedFuture(false);
                             }
                             if (readiness == ZLinkSpotLifecycle.CloseReadiness.LOCAL_MISSING) {
                                 return failed(
@@ -188,73 +271,361 @@ final class ZLinkUserSpotOperationHandler
                                             meshName,
                                             node.status().routingId(),
                                             node.status().lifecycleGeneration());
-                            return authorityStore
-                                    .compareExchange(
-                                            key,
-                                            new ZLinkAuthorityExpectFound(snapshot.storeVersion()),
-                                            new ZLinkAuthorityPut(closing),
-                                            OPEN)
-                                    .thenCompose(
-                                            closingWrite -> {
-                                                if (!(closingWrite
-                                                        instanceof ZLinkAuthorityStored stored)) {
-                                                    throw stale(
-                                                            "User Spot authority changed before"
-                                                                    + " Closing");
-                                                }
-                                                return lifecycle
-                                                        .closeReserved(
-                                                                fence.spotId(),
-                                                                fence.objectGeneration())
-                                                        .handle(
-                                                                (closed, failure) ->
-                                                                        new CloseAttempt(
-                                                                                failure == null
-                                                                                        && Boolean
-                                                                                                .TRUE
-                                                                                                .equals(
-                                                                                                        closed),
-                                                                                failure))
-                                                        .thenCompose(
-                                                                attempt -> {
-                                                                    if (!attempt.closed()) {
-                                                                        return rollbackClosing(
-                                                                                key,
-                                                                                stored
-                                                                                        .storeVersion(),
-                                                                                snapshot,
-                                                                                authority,
-                                                                                attempt.failure());
-                                                                    }
-                                                                    return authorityStore
-                                                                            .compareExchange(
-                                                                                    key,
-                                                                                    new ZLinkAuthorityExpectFound(
-                                                                                            stored
-                                                                                                    .storeVersion()),
-                                                                                    new ZLinkAuthorityDelete(),
-                                                                                    OPEN)
-                                                                            .thenCompose(
-                                                                                    deleted -> {
-                                                                                        if (!(deleted
-                                                                                                instanceof
-                                                                                                ZLinkAuthorityDeleted)) {
-                                                                                            return failed(
-                                                                                                    TERMINAL_INVALID_STATE,
-                                                                                                    FAILURE_SPOT_MOVING,
-                                                                                                    "User Spot"
-                                                                                                            + " authority"
-                                                                                                            + " changed"
-                                                                                                            + " while"
-                                                                                                            + " closing");
+                            SpotActivation activation = lifecycle.spotActivationFor(fence.spotId());
+                            if (activation == null) {
+                                return failed(
+                                        TERMINAL_INVALID_STATE,
+                                        FAILURE_SPOT_MOVING,
+                                        "Ready User Spot is missing local activation");
+                            }
+                            AtomicReference<String> closingVersion = new AtomicReference<>();
+                            AtomicReference<ZLinkSpotCloseCoordinator> coordinatorOwner =
+                                    new AtomicReference<>();
+                            ZLinkSpotCloseCoordinator coordinator =
+                                    activation.closeCoordinator(
+                                            () ->
+                                                    new ZLinkSpotCloseCoordinator(
+                                                            () ->
+                                                                    authorityStore
+                                                                            .read(key, OPEN)
+                                                                            .handle(
+                                                                                    (current,
+                                                                                            readFailure) -> {
+                                                                                        if (readFailure
+                                                                                                != null) {
+                                                                                            throw new ZLinkSpotCloseCoordinator
+                                                                                                    .UncertainCommitFailure(
+                                                                                                    readFailure,
+                                                                                                    readFailure);
                                                                                         }
+                                                                                        return current;
+                                                                                    })
+                                                                            .thenCompose(
+                                                                                    current -> {
+                                                                                        if (current
+                                                                                                        instanceof
+                                                                                                        ZLinkAuthoritySnapshot
+                                                                                                                committed
+                                                                                                && committed
+                                                                                                                .objectGeneration()
+                                                                                                        == fence
+                                                                                                                .objectGeneration()
+                                                                                                && committed
+                                                                                                                .authorityOwnerGeneration()
+                                                                                                        == fence
+                                                                                                                .authorityOwnerGeneration()
+                                                                                                && java
+                                                                                                        .util
+                                                                                                        .Arrays
+                                                                                                        .equals(
+                                                                                                                committed
+                                                                                                                        .payload(),
+                                                                                                                closing)) {
+                                                                                            closingVersion
+                                                                                                    .set(
+                                                                                                            committed
+                                                                                                                    .storeVersion());
+                                                                                            return CompletableFuture
+                                                                                                    .completedFuture(
+                                                                                                            true);
+                                                                                        }
+                                                                                        if (!(current
+                                                                                                        instanceof
+                                                                                                        ZLinkAuthoritySnapshot
+                                                                                                                ready)
+                                                                                                || !ready.storeVersion()
+                                                                                                        .equals(
+                                                                                                                snapshot
+                                                                                                                        .storeVersion())) {
+                                                                                            return CompletableFuture
+                                                                                                    .failedFuture(
+                                                                                                            moving(
+                                                                                                                    "User Spot authority changed before Closing"));
+                                                                                        }
+                                                                                        return authorityStore
+                                                                                                .compareExchange(
+                                                                                                        key,
+                                                                                                        new ZLinkAuthorityExpectFound(
+                                                                                                                snapshot
+                                                                                                                        .storeVersion()),
+                                                                                                        new ZLinkAuthorityPut(
+                                                                                                                closing),
+                                                                                                        OPEN)
+                                                                                                .thenApply(
+                                                                                                        write -> {
+                                                                                                            if (!(write
+                                                                                                                    instanceof
+                                                                                                                    ZLinkAuthorityStored
+                                                                                                                            stored)) {
+                                                                                                                throw moving(
+                                                                                                                        "User Spot authority changed before Closing");
+                                                                                                            }
+                                                                                                            closingVersion
+                                                                                                                    .set(
+                                                                                                                            stored
+                                                                                                                                    .storeVersion());
+                                                                                                            return true;
+                                                                                                        })
+                                                                                                .exceptionallyCompose(
+                                                                                                        failure ->
+                                                                                                                authorityStore
+                                                                                                                        .read(
+                                                                                                                                key,
+                                                                                                                                OPEN)
+                                                                                                                        .handle(
+                                                                                                                                (observed,
+                                                                                                                                        readFailure) -> {
+                                                                                                                                    if (readFailure
+                                                                                                                                            != null) {
+                                                                                                                                        throw new ZLinkSpotCloseCoordinator
+                                                                                                                                                .UncertainCommitFailure(
+                                                                                                                                                failure,
+                                                                                                                                                readFailure);
+                                                                                                                                    }
+                                                                                                                                    return observed;
+                                                                                                                                })
+                                                                                                                        .thenCompose(
+                                                                                                                                observed -> {
+                                                                                                                                    if (observed
+                                                                                                                                                    instanceof
+                                                                                                                                                    ZLinkAuthoritySnapshot
+                                                                                                                                                            committed
+                                                                                                                                            && committed
+                                                                                                                                                            .objectGeneration()
+                                                                                                                                                    == fence
+                                                                                                                                                            .objectGeneration()
+                                                                                                                                            && committed
+                                                                                                                                                            .authorityOwnerGeneration()
+                                                                                                                                                    == fence
+                                                                                                                                                            .authorityOwnerGeneration()
+                                                                                                                                            && java
+                                                                                                                                                    .util
+                                                                                                                                                    .Arrays
+                                                                                                                                                    .equals(
+                                                                                                                                                            committed
+                                                                                                                                                                    .payload(),
+                                                                                                                                                            closing)) {
+                                                                                                                                        closingVersion
+                                                                                                                                                .set(
+                                                                                                                                                        committed
+                                                                                                                                                                .storeVersion());
+                                                                                                                                        coordinatorOwner
+                                                                                                                                                .get()
+                                                                                                                                                .markCommitted();
+                                                                                                                                    }
+                                                                                                                                    return CompletableFuture
+                                                                                                                                            .failedFuture(
+                                                                                                                                                    failure);
+                                                                                                                                }));
+                                                                                    }),
+                                                            List.of(
+                                                                    ZLinkSpotCloseCoordinator.Step
+                                                                            .operation(
+                                                                                    () -> {
+                                                                                        activation
+                                                                                                .backendSpot
+                                                                                                .sealSpotAdmission(
+                                                                                                        () ->
+                                                                                                                activation
+                                                                                                                        .host
+                                                                                                                        .spotAdmissionFailure(
+                                                                                                                                fence
+                                                                                                                                        .spotId()));
                                                                                         return CompletableFuture
                                                                                                 .completedFuture(
-                                                                                                        new ZLinkInternalMeshNode
-                                                                                                                .UserSpotCloseResponse(
-                                                                                                                true));
-                                                                                    });
-                                                                });
+                                                                                                        null);
+                                                                                    }),
+                                                                    ZLinkSpotCloseCoordinator.Step
+                                                                            .operation(
+                                                                                    () -> {
+                                                                                        activation
+                                                                                                .context
+                                                                                                .sealTimerAdmission();
+                                                                                        return CompletableFuture
+                                                                                                .completedFuture(
+                                                                                                        null);
+                                                                                    }),
+                                                                    ZLinkSpotCloseCoordinator.Step
+                                                                            .operation(
+                                                                                    () ->
+                                                                                            activation
+                                                                                                    .context
+                                                                                                    .awaitAllLanes(
+                                                                                                            ZLinkSerialExecutionQueue
+                                                                                                                    .Quiescence
+                                                                                                                    .APPLICATION)),
+                                                                    ZLinkSpotCloseCoordinator.Step
+                                                                            .onClosing(
+                                                                                    () ->
+                                                                                            activation
+                                                                                                    .closingStage(
+                                                                                                            ZLinkSpotCloseReason
+                                                                                                                    .EXPLICIT_CLOSE,
+                                                                                                            Instant
+                                                                                                                    .now())),
+                                                                    ZLinkSpotCloseCoordinator.Step
+                                                                            .operation(
+                                                                                    () -> {
+                                                                                        activation
+                                                                                                .closePendingActorMessage();
+                                                                                        return CompletableFuture
+                                                                                                .completedFuture(
+                                                                                                        null);
+                                                                                    }),
+                                                                    ZLinkSpotCloseCoordinator.Step
+                                                                            .operation(
+                                                                                    () -> {
+                                                                                        activation
+                                                                                                .closeActiveRouteReceives();
+                                                                                        return CompletableFuture
+                                                                                                .completedFuture(
+                                                                                                        null);
+                                                                                    }),
+                                                                    ZLinkSpotCloseCoordinator.Step
+                                                                            .operation(
+                                                                                    () -> {
+                                                                                        activation
+                                                                                                .context
+                                                                                                .closeTimers();
+                                                                                        return CompletableFuture
+                                                                                                .completedFuture(
+                                                                                                        null);
+                                                                                    }),
+                                                                    ZLinkSpotCloseCoordinator.Step
+                                                                            .operation(
+                                                                                    () -> {
+                                                                                        activation
+                                                                                                .context
+                                                                                                .closeHandlerInstances();
+                                                                                        return CompletableFuture
+                                                                                                .completedFuture(
+                                                                                                        null);
+                                                                                    }),
+                                                                    ZLinkSpotCloseCoordinator.Step
+                                                                            .operation(
+                                                                                    () -> {
+                                                                                        activation
+                                                                                                .backendSpot
+                                                                                                .close();
+                                                                                        return CompletableFuture
+                                                                                                .completedFuture(
+                                                                                                        null);
+                                                                                    }),
+                                                                    ZLinkSpotCloseCoordinator.Step
+                                                                            .operation(
+                                                                                    () -> {
+                                                                                        lifecycle
+                                                                                                .retireClosed(
+                                                                                                        activation);
+                                                                                        return CompletableFuture
+                                                                                                .completedFuture(
+                                                                                                        null);
+                                                                                    }),
+                                                                    ZLinkSpotCloseCoordinator.Step
+                                                                            .operation(
+                                                                                    () ->
+                                                                                            authorityStore
+                                                                                                    .read(
+                                                                                                            key,
+                                                                                                            OPEN)
+                                                                                                    .thenCompose(
+                                                                                                            current -> {
+                                                                                                                if (current
+                                                                                                                        instanceof
+                                                                                                                        ZLinkAuthorityMissing) {
+                                                                                                                    return CompletableFuture
+                                                                                                                            .completedFuture(
+                                                                                                                                    null);
+                                                                                                                }
+                                                                                                                if (!(current
+                                                                                                                                instanceof
+                                                                                                                                ZLinkAuthoritySnapshot
+                                                                                                                                        closingSnapshot)
+                                                                                                                        || !closingSnapshot
+                                                                                                                                .storeVersion()
+                                                                                                                                .equals(
+                                                                                                                                        closingVersion
+                                                                                                                                                .get())
+                                                                                                                        || closingSnapshot
+                                                                                                                                        .objectGeneration()
+                                                                                                                                != fence
+                                                                                                                                        .objectGeneration()
+                                                                                                                        || closingSnapshot
+                                                                                                                                        .authorityOwnerGeneration()
+                                                                                                                                != fence
+                                                                                                                                        .authorityOwnerGeneration()) {
+                                                                                                                    runtime
+                                                                                                                            .releaseClosingCoordinator(
+                                                                                                                                    fence
+                                                                                                                                            .spotId(),
+                                                                                                                                    fence
+                                                                                                                                            .objectGeneration(),
+                                                                                                                                    fence
+                                                                                                                                            .authorityOwnerGeneration(),
+                                                                                                                                    activation
+                                                                                                                                            .existingCloseCoordinator());
+                                                                                                                    throw moving(
+                                                                                                                            "User Spot authority changed while closing");
+                                                                                                                }
+                                                                                                                return authorityStore
+                                                                                                                        .compareExchange(
+                                                                                                                                key,
+                                                                                                                                new ZLinkAuthorityExpectFound(
+                                                                                                                                        closingVersion
+                                                                                                                                                .get()),
+                                                                                                                                new ZLinkAuthorityDelete(),
+                                                                                                                                OPEN)
+                                                                                                                        .thenApply(
+                                                                                                                                deleted -> {
+                                                                                                                                    if (!(deleted
+                                                                                                                                            instanceof
+                                                                                                                                            ZLinkAuthorityDeleted)) {
+                                                                                                                                        throw moving(
+                                                                                                                                                "User Spot authority changed while closing");
+                                                                                                                                    }
+                                                                                                                                    return null;
+                                                                                                                                });
+                                                                                                            })
+                                                                                                    .thenApply(
+                                                                                                            ignored -> {
+                                                                                                                runtime
+                                                                                                                        .releaseClosingCoordinator(
+                                                                                                                                fence
+                                                                                                                                        .spotId(),
+                                                                                                                                fence
+                                                                                                                                        .objectGeneration(),
+                                                                                                                                fence
+                                                                                                                                        .authorityOwnerGeneration(),
+                                                                                                                                activation
+                                                                                                                                        .existingCloseCoordinator());
+                                                                                                                return null;
+                                                                                                            }))),
+                                                            failure ->
+                                                                    activation.host
+                                                                            .reportSpotClosingFailure(
+                                                                                    fence.spotId(),
+                                                                                    failure)));
+                            coordinatorOwner.set(coordinator);
+                            runtime.retainClosingCoordinator(
+                                    fence.spotId(),
+                                    fence.objectGeneration(),
+                                    fence.authorityOwnerGeneration(),
+                                    coordinator,
+                                    fence);
+                            return coordinator
+                                    .close()
+                                    .whenComplete(
+                                            (closed, failure) -> {
+                                                if (!coordinator.committed()
+                                                        && !ZLinkSpotCloseCoordinator
+                                                                .isUncertainCommit(failure)) {
+                                                    activation.clearUncommittedClose(coordinator);
+                                                    runtime.releaseClosingCoordinator(
+                                                            fence.spotId(),
+                                                            fence.objectGeneration(),
+                                                            fence.authorityOwnerGeneration(),
+                                                            coordinator);
+                                                }
                                             });
                         });
     }
@@ -407,36 +778,9 @@ final class ZLinkUserSpotOperationHandler
         }
     }
 
-    private CompletionStage<ZLinkInternalMeshNode.UserSpotCloseResponse> rollbackClosing(
-            String key,
-            String closingStoreVersion,
-            ZLinkAuthoritySnapshot snapshot,
-            ZLinkServiceAuthorityPayloadCodec.SpotAuthority authority,
-            Throwable failure) {
-        byte[] ready =
-                authorities.encodeUser(
-                        ZLinkServiceAuthorityPayloadCodec.State.READY,
-                        authority.stableType(),
-                        authority.spotId(),
-                        snapshot.ownerId(),
-                        snapshot.ownerLeaseGeneration(),
-                        meshName,
-                        node.status().routingId(),
-                        node.status().lifecycleGeneration());
-        return authorityStore
-                .compareExchange(
-                        key,
-                        new ZLinkAuthorityExpectFound(closingStoreVersion),
-                        new ZLinkAuthorityPut(ready),
-                        OPEN)
-                .thenCompose(
-                        ignored ->
-                                failed(
-                                        TERMINAL_INVALID_STATE,
-                                        FAILURE_SPOT_MOVING,
-                                        failure == null
-                                                ? "User Spot local admission changed after Closing"
-                                                : message(failure)));
+    private static ZLinkUserSpotOperationException moving(String message) {
+        return new ZLinkUserSpotOperationException(
+                TERMINAL_INVALID_STATE, FAILURE_SPOT_MOVING, message);
     }
 
     private static ZLinkUserSpotOperationException stale(String message) {
@@ -482,6 +826,4 @@ final class ZLinkUserSpotOperationHandler
             ZLinkObjectReservation reservation,
             ZLinkPendingObjectCreation pending,
             RelocatableSpotFactory<?> factory) {}
-
-    private record CloseAttempt(boolean closed, Throwable failure) {}
 }

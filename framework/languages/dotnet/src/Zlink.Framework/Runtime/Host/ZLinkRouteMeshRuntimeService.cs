@@ -68,7 +68,13 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
         var peerChannels = peers.Select(peer => SnapshotPeerChannels(nodeRuntime, peer)).ToArray();
         var state = MapNodeState(status.State);
         var placement = hub.LocalDescriptor(status.RoutingId);
-        var fallbackCapacity = BuildPopulationCapacity(nodeRuntime.Registration);
+        var capacity = placement?.Capacity ?? BuildPopulationCapacity(nodeRuntime.Registration);
+        // Active counts come from this MeshNode's local activations.
+        capacity = capacity with
+        {
+            Actors = capacity.Actors with { Active = _runtime.GetActiveActorCount(meshName) },
+            Spots = capacity.Spots with { Active = nodeRuntime.ActiveSpotCount },
+        };
         return new ZLinkMeshNodeSnapshot(
             meshName,
             status.RoutingId,
@@ -97,7 +103,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
             ObjectRole = placement?.ObjectRole ?? nodeRuntime.Registration.ObjectRole,
             PlacementWeight =
                 placement?.PlacementWeight ?? nodeRuntime.Registration.PlacementWeight,
-            PopulationCapacity = placement?.Capacity ?? fallbackCapacity,
+            PopulationCapacity = capacity,
             ActivationConcurrency = new ZLinkActivationConcurrency(
                 nodeRuntime.ActivationAdmission.Active,
                 nodeRuntime.ActivationAdmission.Limit
@@ -175,7 +181,6 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
                 channel.ReadyMemberCount
             ))
             .ToArray();
-        var counts = _runtime.GetDrainRemainderCounts();
         var hasRemainingCapacity =
             HasRemainingCapacity(snapshot.PopulationCapacity.Actors)
             || HasRemainingCapacity(snapshot.PopulationCapacity.Spots);
@@ -195,8 +200,8 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
             peers,
             new ZLinkPlacementStatus(
                 placementAvailable,
-                counts.Actors,
-                counts.Spots,
+                snapshot.PopulationCapacity.Actors.Active,
+                snapshot.PopulationCapacity.Spots.Active,
                 placementAvailable ? null
                     : state == ZLinkTopologyState.Stopping ? ZLinkTopologyReason.Draining
                     : locationUnavailable ? ZLinkTopologyReason.LocationUnavailable

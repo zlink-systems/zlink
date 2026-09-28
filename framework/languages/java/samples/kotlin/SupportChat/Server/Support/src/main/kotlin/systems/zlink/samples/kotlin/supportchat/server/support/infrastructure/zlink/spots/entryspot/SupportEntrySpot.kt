@@ -1,8 +1,6 @@
 package systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.spots.entryspot
 
-import systems.zlink.framework.actors.ZLinkActorManager
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpot
-import systems.zlink.framework.kotlin.await
 import systems.zlink.framework.kotlin.decode
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.spots.ZLinkActorCreateResponse
@@ -17,7 +15,6 @@ class SupportEntrySpot(
     override val context: ZLinkEntrySpotContext,
     private val directory: SupportActorDirectory,
     private val assignment: AgentAssignmentService,
-    private val actorManager: ZLinkActorManager,
 ) : ZLinkSuspendingEntrySpot<SupportUserActor>() {
     override suspend fun onCreateActorSuspending(
         actor: SupportUserActor,
@@ -25,12 +22,7 @@ class SupportEntrySpot(
     ): ZLinkActorCreateResponse {
         val request = createRequest.decode<EnsureSupportUserActorReq>()
         actor.setIdentity(request.displayName, request.role, request.participantId)
-        val actorRef =
-            actorManager.find(actor.actorId).await().orElse(null)
-                ?: throw IllegalStateException(
-                    "Support actor ref is not available. actor=${actor.actorId}"
-                )
-        directory.addOrUpdate(actor, actorRef)
+        directory.addOrUpdate(actor)
         return ZLinkActorCreateResponse.accept()
     }
 

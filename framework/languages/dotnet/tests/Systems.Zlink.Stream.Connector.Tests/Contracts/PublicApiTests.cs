@@ -263,7 +263,6 @@ public sealed partial class StreamConnectorTests
         Assert.Equal(TimeSpan.FromSeconds(5), options.WaitTimeout);
         Assert.Equal(64 * 1024, options.MaxSendPayloadSize);
         Assert.Equal(64 * 1024, options.MaxReceivePayloadSize);
-        Assert.Equal(1024, options.MaxPendingDispatchCallbacks);
         Assert.False(options.SkipServerCertificateValidation);
         Assert.Equal(ZlinkStreamDispatchMode.Manual, options.DispatchMode);
         Assert.Equal(ZlinkStreamCompression.Lz4, options.Compression);

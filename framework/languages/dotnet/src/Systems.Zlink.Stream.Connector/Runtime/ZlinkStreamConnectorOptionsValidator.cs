@@ -46,8 +46,6 @@ internal static class ZlinkStreamConnectorOptionsValidator
             throw Validation("MaxSendPayloadSize must be positive.");
         if (options.MaxReceivePayloadSize <= 0)
             throw Validation("MaxReceivePayloadSize must be positive.");
-        if (options.MaxPendingDispatchCallbacks <= 0)
-            throw Validation("MaxPendingDispatchCallbacks must be positive.");
         if (!Enum.IsDefined(typeof(ZlinkStreamDispatchMode), options.DispatchMode))
             throw Validation("DispatchMode is invalid.");
 
@@ -56,26 +54,20 @@ internal static class ZlinkStreamConnectorOptionsValidator
 
     private static void ValidateHeartbeat(ZlinkStreamHeartbeatOptions heartbeat)
     {
-        if (!heartbeat.Enabled)
-            return;
         if (heartbeat.Interval <= TimeSpan.Zero)
             throw Validation("Heartbeat interval must be positive.");
         if (heartbeat.Timeout <= TimeSpan.Zero)
             throw Validation("Heartbeat timeout must be positive.");
-        if (heartbeat.Timeout <= heartbeat.Interval)
-            throw Validation("Heartbeat timeout must be greater than the heartbeat interval.");
     }
 
     private static void ValidateReconnect(ZlinkStreamReconnectOptions reconnect)
     {
-        if (!reconnect.Enabled)
-            return;
         if (reconnect.InitialDelay <= TimeSpan.Zero)
             throw Validation("Reconnect InitialDelay must be positive.");
         if (reconnect.MaxDelay <= TimeSpan.Zero)
             throw Validation("Reconnect MaxDelay must be positive.");
-        if (reconnect.BackoffFactor < 1.0)
-            throw Validation("Reconnect BackoffFactor must be at least 1.0.");
+        if (!double.IsFinite(reconnect.BackoffFactor) || reconnect.BackoffFactor <= 0.0)
+            throw Validation("Reconnect BackoffFactor must be finite and positive.");
         if (reconnect.MaxAttempts <= 0)
             throw Validation("Reconnect MaxAttempts must be null or positive.");
     }

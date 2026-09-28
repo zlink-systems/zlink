@@ -121,7 +121,6 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
     {
         ValidatePositiveLimit(limit, "Activation concurrency");
         registration.ActivationConcurrencyLimit = limit;
-        registration.MaxPendingActivations = limit;
         return this;
     }
 
@@ -425,10 +424,6 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
     {
         if (placement.MaxActiveObjects is <= 0)
             throw new ZLinkConfigurationException("MaxActiveObjects must be greater than zero.");
-        if (placement.MaxPendingActivations is <= 0)
-            throw new ZLinkConfigurationException(
-                "MaxPendingActivations must be greater than zero."
-            );
     }
 
     private static void ValidateUserSpotFactoryOptions(ZLinkUserSpotFactoryConfiguration options)

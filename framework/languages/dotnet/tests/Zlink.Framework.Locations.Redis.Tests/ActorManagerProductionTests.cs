@@ -1,6 +1,4 @@
 using System.Globalization;
-using System.Net;
-using System.Net.Sockets;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -28,25 +26,23 @@ public sealed class ActorManagerProductionTests
         var repository = new ZLinkProviderLocationRepository(inner);
         var capacityRace = new CapacityRaceLocationStore(inner);
         var suffix = Guid.NewGuid().ToString("N");
-        var firstEndpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
-        var secondEndpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
-        var sourceEndpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
+        const string bindEndpoint = "tcp://127.0.0.1:0";
 
         await using var firstProvider = BuildServer(
             capacityRace,
-            firstEndpoint,
+            bindEndpoint,
             "z-high",
             placementWeight: 300,
             actorLimit: 1
         );
         await using var secondProvider = BuildServer(
             capacityRace,
-            secondEndpoint,
+            bindEndpoint,
             "a-low",
             placementWeight: 100,
             actorLimit: 1
         );
-        await using var sourceProvider = BuildClient(capacityRace, sourceEndpoint);
+        await using var sourceProvider = BuildClient(capacityRace, bindEndpoint);
         var first = firstProvider.GetRequiredService<ZLinkFrameworkRuntime>();
         var second = secondProvider.GetRequiredService<ZLinkFrameworkRuntime>();
         var source = sourceProvider.GetRequiredService<ZLinkFrameworkRuntime>();
@@ -56,6 +52,12 @@ public sealed class ActorManagerProductionTests
         await firstHost.StartAsync(CancellationToken.None);
         await secondHost.StartAsync(CancellationToken.None);
         await sourceHost.StartAsync(CancellationToken.None);
+        var firstEndpoint = Assert.IsType<string>(
+            first.GetSpotNodeRuntime("objects").Node.MeshStatus().LocalEndpoint
+        );
+        var secondEndpoint = Assert.IsType<string>(
+            second.GetSpotNodeRuntime("objects").Node.MeshStatus().LocalEndpoint
+        );
         try
         {
             var firstRid = first.GetSpotNodeRuntime("objects").Node.RoutingId;
@@ -119,11 +121,13 @@ public sealed class ActorManagerProductionTests
             conflictsBeforeSuccess: 1
         );
         var suffix = Guid.NewGuid().ToString("N");
-        var endpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
-        await using var provider = BuildServer(store, endpoint);
+        await using var provider = BuildServer(store, "tcp://127.0.0.1:0");
         var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
         var host = FrameworkHost(provider);
         await host.StartAsync(CancellationToken.None);
+        var endpoint = Assert.IsType<string>(
+            runtime.GetSpotNodeRuntime("objects").Node.MeshStatus().LocalEndpoint
+        );
         try
         {
             var rid = runtime.GetSpotNodeRuntime("objects").Node.RoutingId;
@@ -168,11 +172,13 @@ public sealed class ActorManagerProductionTests
             inner,
             conflictsBeforeSuccess: int.MaxValue
         );
-        var endpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
-        await using var provider = BuildServer(store, endpoint);
+        await using var provider = BuildServer(store, "tcp://127.0.0.1:0");
         var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
         var host = FrameworkHost(provider);
         await host.StartAsync(CancellationToken.None);
+        var endpoint = Assert.IsType<string>(
+            runtime.GetSpotNodeRuntime("objects").Node.MeshStatus().LocalEndpoint
+        );
         try
         {
             var rid = runtime.GetSpotNodeRuntime("objects").Node.RoutingId;
@@ -228,12 +234,14 @@ public sealed class ActorManagerProductionTests
         var store = new ZLinkInMemoryProviderLocationStore();
         var repository = new ZLinkProviderLocationRepository(store);
         var suffix = Guid.NewGuid().ToString("N");
-        var endpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
-        await using var provider = BuildServer(store, endpoint);
+        await using var provider = BuildServer(store, "tcp://127.0.0.1:0");
         var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
         var host = FrameworkHost(provider);
         Assert.NotNull(provider.GetService<TestActorFactory>());
         await host.StartAsync(CancellationToken.None);
+        var endpoint = Assert.IsType<string>(
+            runtime.GetSpotNodeRuntime("objects").Node.MeshStatus().LocalEndpoint
+        );
         try
         {
             var rid = runtime.GetSpotNodeRuntime("objects").Node.RoutingId;
@@ -304,13 +312,6 @@ public sealed class ActorManagerProductionTests
             node.Objects().Client();
         });
         return services.BuildServiceProvider();
-    }
-
-    private static int FindFreeTcpPort()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
     private static async Task PublishServerDescriptorAsync(

@@ -889,6 +889,6 @@ unsafe extern "C" {
     pub fn zlink_thread_join(thread: *mut c_void);
 
     pub fn zlink_proxy(frontend: *mut c_void, backend: *mut c_void, capture: *mut c_void) -> c_int;
-    pub fn zlink_has(capability: *const c_char) -> c_int;
+    pub fn zlink_has(capability: *const c_char) -> bool;
     pub fn zlink_sleep(seconds: c_int);
 }

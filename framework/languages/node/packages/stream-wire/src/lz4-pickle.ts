@@ -13,11 +13,13 @@ export function lz4PickleUncompressed(payload: Uint8Array): Uint8Array {
   return pickled;
 }
 
-export function lz4UnpicklePayload(payload: Uint8Array, maxSize?: number): Uint8Array {
-  const maxDecompressedSize = maxSize ?? defaultMaxDecompressedPayloadSize;
-  if (payload.length === 0) {
-    return new Uint8Array();
-  }
+interface Lz4Pickle {
+  readonly data: Uint8Array;
+  readonly resultDiff: number;
+  readonly resultLength: number;
+}
+
+function readLz4Pickle(payload: Uint8Array): Lz4Pickle {
   const header = payload[0];
   if ((header & 0x07) !== 0) {
     throw new Error('Unexpected LZ4 pickle version.');
@@ -29,7 +31,20 @@ export function lz4UnpicklePayload(payload: Uint8Array, maxSize?: number): Uint8
   }
   const data = payload.subarray(dataOffset);
   const resultDiff = sizeOfDiff === 0 ? 0 : readLittleEndian(payload, 1, sizeOfDiff);
-  const resultLength = data.length + resultDiff;
+  return { data, resultDiff, resultLength: data.length + resultDiff };
+}
+
+/** The length the pickle header declares for the decompressed payload. */
+export function lz4PickledLength(payload: Uint8Array): number {
+  return payload.length === 0 ? 0 : readLz4Pickle(payload).resultLength;
+}
+
+export function lz4UnpicklePayload(payload: Uint8Array, maxSize?: number): Uint8Array {
+  const maxDecompressedSize = maxSize ?? defaultMaxDecompressedPayloadSize;
+  if (payload.length === 0) {
+    return new Uint8Array();
+  }
+  const { data, resultDiff, resultLength } = readLz4Pickle(payload);
   if (resultLength > maxDecompressedSize) {
     throw new Error('LZ4 decoded payload exceeds maximum stream payload size.');
   }

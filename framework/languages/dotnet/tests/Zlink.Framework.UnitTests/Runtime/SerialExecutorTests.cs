@@ -1389,6 +1389,215 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
+    public async Task SerialExecutionQueue_SuspendedLifecycle_RetainsFifoWhileApplicationRuns()
+    {
+        await using var queue = CreateQueue(CancellationToken.None);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var applicationRan = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var laterLifecycleRan = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+
+        var first = queue
+            .RunLifecycleAsync(
+                async ct =>
+                {
+                    var turn = ZLinkSerialTurn.Current!;
+                    await turn.YieldFrameworkCallAsync(
+                        async _ =>
+                        {
+                            entered.TrySetResult();
+                            await release.Task.ConfigureAwait(false);
+                        },
+                        ct
+                    );
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var second = queue
+            .RunLifecycleAsync(
+                _ =>
+                {
+                    laterLifecycleRan.TrySetResult();
+                    return ValueTask.CompletedTask;
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        var application = queue
+            .RunAsync(
+                _ =>
+                {
+                    applicationRan.TrySetResult();
+                    return ValueTask.CompletedTask;
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        try
+        {
+            await applicationRan.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(laterLifecycleRan.Task.IsCompleted);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+        await application.WaitAsync(TimeSpan.FromSeconds(5));
+        await first.WaitAsync(TimeSpan.FromSeconds(5));
+        await second.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task SerialExecutionQueue_LifecycleContinuationRetainsOwnerAcrossTwoYields()
+    {
+        await using var queue = CreateQueue(CancellationToken.None);
+        var firstWait = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var secondWait = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var firstStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var secondStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var laterRan = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var first = queue
+            .RunLifecycleAsync(
+                async ct =>
+                {
+                    var turn = ZLinkSerialTurn.Current!;
+                    await turn.YieldFrameworkCallAsync(
+                        async _ =>
+                        {
+                            firstStarted.TrySetResult();
+                            await firstWait.Task.ConfigureAwait(false);
+                        },
+                        ct
+                    );
+                    await turn.YieldFrameworkCallAsync(
+                        async _ =>
+                        {
+                            secondStarted.TrySetResult();
+                            await secondWait.Task.ConfigureAwait(false);
+                        },
+                        ct
+                    );
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var later = queue
+            .RunLifecycleAsync(
+                _ =>
+                {
+                    laterRan.TrySetResult();
+                    return ValueTask.CompletedTask;
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        try
+        {
+            firstWait.TrySetResult();
+            await secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(laterRan.Task.IsCompleted);
+        }
+        finally
+        {
+            firstWait.TrySetResult();
+            secondWait.TrySetResult();
+        }
+        await first.WaitAsync(TimeSpan.FromSeconds(5));
+        await later.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task SerialExecutionQueue_SealDrainsAcceptedApplicationContinuationDuringLifecycleWait()
+    {
+        await using var queue = CreateQueue(CancellationToken.None);
+        using var sealCancellation = new CancellationTokenSource();
+        var acceptedStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseAccepted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var lifecycleStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseLifecycle = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+
+        Assert.Equal(
+            ZLinkAcceptedWorkAdmission.Accepted,
+            queue.TryPostAccepted(
+                ReadOnlyMemory<byte>.Empty,
+                async ct =>
+                {
+                    await ZLinkSerialTurn.Current!.YieldFrameworkCallAsync(
+                        async _ =>
+                        {
+                            acceptedStarted.TrySetResult();
+                            await releaseAccepted.Task.ConfigureAwait(false);
+                        },
+                        ct
+                    );
+                },
+                static () => { },
+                out var accepted
+            )
+        );
+        await acceptedStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var lifecycle = queue
+            .RunLifecycleAsync(
+                async ct =>
+                {
+                    await ZLinkSerialTurn.Current!.YieldFrameworkCallAsync(
+                        async _ =>
+                        {
+                            lifecycleStarted.TrySetResult();
+                            await releaseLifecycle.Task.ConfigureAwait(false);
+                        },
+                        ct
+                    );
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        await lifecycleStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var seal = queue.SealRelocationAsync(sealCancellation.Token).AsTask();
+        try
+        {
+            releaseAccepted.TrySetResult();
+            await accepted.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(seal.IsCompleted);
+            releaseLifecycle.TrySetResult();
+            await lifecycle.WaitAsync(TimeSpan.FromSeconds(5));
+            var committed = await seal.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(queue.TryAbortRelocation(committed));
+        }
+        finally
+        {
+            sealCancellation.Cancel();
+            releaseAccepted.TrySetResult();
+            releaseLifecycle.TrySetResult();
+        }
+        await lifecycle.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
     public async Task SerialExecutionQueue_AutomaticTurn_Allows_Later_Work_Then_Resumes_On_Line()
     {
         await using var queue = CreateQueue(CancellationToken.None);

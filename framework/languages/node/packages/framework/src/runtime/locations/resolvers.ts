@@ -29,7 +29,10 @@ import type {
   ZLinkRouteLocationStore,
   ZLinkSpotLocationStore
 } from './internal-store-contracts';
-import { decodeServiceReadySpotAuthority } from '../foundation/service-authority-payload-codec';
+import {
+  decodeServiceClosingSpotAuthority,
+  decodeServiceReadySpotAuthority
+} from '../foundation/service-authority-payload-codec';
 import { serviceRelocationAuthorityApplicationPayload } from '../foundation/service-relocation-runtime';
 import { decodeActorAuthorityIdentity } from '../actors/actor-authority-publication';
 import { encodeAuthorityKey } from './authority-key-codec';
@@ -930,9 +933,10 @@ export class ZLinkAuthoritySpotRouteResolver implements ZLinkSpotRouteResolver {
 
       const current = await this.store.readAuthority(encodeAuthorityKey('user_spot', key), signal);
       if (current.kind === 'snapshot' && current.allocation.state === 'active') {
-        const decoded = decodeServiceReadySpotAuthority(
-          serviceRelocationAuthorityApplicationPayload(current.payload)
-        );
+        const authorityPayload = serviceRelocationAuthorityApplicationPayload(current.payload);
+        const ready = decodeServiceReadySpotAuthority(authorityPayload);
+        const closing = decodeServiceClosingSpotAuthority(authorityPayload);
+        const decoded = ready ?? closing;
         if (
           decoded !== undefined &&
           decoded.spotId === String(spotId) &&
@@ -975,15 +979,17 @@ export class ZLinkAuthoritySpotRouteResolver implements ZLinkSpotRouteResolver {
               signal
             )
           };
-          await this.lane.run(() =>
-            this.cacheResolutionCore(
-              key,
-              prepared.epoch,
-              target,
-              remainingLeaseMs,
-              current.storeVersion.value
-            )
-          );
+          if (ready !== undefined) {
+            await this.lane.run(() =>
+              this.cacheResolutionCore(
+                key,
+                prepared.epoch,
+                target,
+                remainingLeaseMs,
+                current.storeVersion.value
+              )
+            );
+          }
           return target;
         }
       }

@@ -59,9 +59,10 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
 
     internal void RemoveManual(string endpoint) => Remove($"manual:{endpoint}");
 
-    internal void AddLocal(string endpoint, ZLinkClientServerServerIdentity identity)
+    internal async ValueTask AddLocalAsync(ZLinkClientServerServerIdentity identity)
     {
-        var snapshot = AwaitStateLane(identity.ReadAsync());
+        var endpoint = identity.AdvertisedEndpoint;
+        var snapshot = await identity.ReadAsync().ConfigureAwait(false);
         var key = $"local:{identity.ServerRid.ToHex()}:{identity.LifecycleGeneration}";
         AddOrReplace(key, endpoint, LocalDescriptor(identity, endpoint, snapshot));
         identity.SnapshotChanged += changed =>
@@ -647,7 +648,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         private Task? _controlTask;
         private Task? _livenessTask;
         private Task? _monitorTask;
-        private bool _terminationRequested;
         private readonly Action<Connection, string> _onAdmitted;
         private readonly Action<bool> _onStateChanged;
         private ReadyTarget? _readyTarget;
@@ -713,7 +713,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     + $"attempt={_admissionAttempt};"
                     + $"admissionStarted={_admissionStarted};"
                     + $"admissionCompleted={_admissionCompleted};"
-                    + $"terminationRequested={_terminationRequested};"
                     + $"current={_currentAdmission is not null}"
                 );
         }
@@ -953,7 +952,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         return;
                     var shouldStartAdmission = RunState(() =>
                     {
-                        if (_disposed || _terminationRequested)
+                        if (_disposed)
                             return false;
                         if (
                             _expected is { } expected
@@ -973,35 +972,20 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     break;
                 case ZLinkSocketNativeEventType.Disconnected:
                 case ZLinkSocketNativeEventType.Closed:
-                    lock (_socketLifecycleGate)
+                    // Core owns the endpoint reconnect (transport liveness §6);
+                    // the connect intent stays and the next READY re-admits.
+                    RunState(() =>
                     {
-                        var restoreIntent = RunState(() =>
-                        {
-                            if (_disposed)
-                                return false;
-                            if (_terminationRequested)
-                            {
-                                if (!StringComparer.Ordinal.Equals(value.RemoteAddr, _endpoint))
-                                    return false;
-                                _terminationRequested = false;
-                                return true;
-                            }
+                        if (!_disposed)
                             FencePhysicalConnection("transport:disconnected");
-                            return false;
-                        });
-                        // Explicit endpoint termination removes connect intent.
-                        // Restore it once, after that endpoint's close event.
-                        // Ordinary transport loss retains Core's existing intent.
-                        if (restoreIntent)
-                            Socket.Connect(_endpoint);
-                    }
+                    });
                     break;
                 case ZLinkSocketNativeEventType.HandshakeFailedNoDetail:
                 case ZLinkSocketNativeEventType.HandshakeFailedProtocol:
                 case ZLinkSocketNativeEventType.HandshakeFailedAuth:
                     RunState(() =>
                     {
-                        if (!_disposed && !_terminationRequested)
+                        if (!_disposed)
                             FencePhysicalConnection("transport:handshake-failed");
                     });
                     break;
@@ -1036,7 +1020,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         {
             RunState(() =>
             {
-                if (_disposed || _terminationRequested || _admissionStarted || _admissionCompleted)
+                if (_disposed || _admissionStarted || _admissionCompleted)
                     return;
                 _admissionStarted = true;
                 var physicalGeneration = _physicalGeneration;
@@ -1322,10 +1306,10 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     var restartReason = ZLinkClientServerControlProtocol.IsControl(received.Parts)
                         ? "protocol:pushed-control"
                         : "protocol:unsolicited-application";
-                    // Release native receive parts before disconnecting the
-                    // socket that produced them.
+                    // Release the native receive parts before restarting the
+                    // admission on the same socket.
                     received.Dispose();
-                    RequestEndpointTermination(restartReason);
+                    RestartAdmission(restartReason);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -1372,7 +1356,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     return false;
                 });
                 if (timedOut)
-                    RequestEndpointTermination("liveness:timeout");
+                    RestartAdmission("liveness:timeout");
             }
         }
 
@@ -1505,21 +1489,21 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             PublishReadyTargetUnderLock();
         }
 
-        private void RequestEndpointTermination(string diagnostics)
+        // A peer deadline or an invalid pushed control ends only the current
+        // logical admission. The connect intent stays with Core, which owns
+        // the endpoint reconnect (transport liveness §6); the next service
+        // handshake starts on the existing admission path.
+        private void RestartAdmission(string diagnostics)
         {
-            lock (_socketLifecycleGate)
+            var restart = RunState(() =>
             {
-                var terminate = RunState(() =>
-                {
-                    if (_disposed || _terminationRequested || _currentAdmission is null)
-                        return false;
-                    _terminationRequested = true;
-                    FencePhysicalConnection(diagnostics);
-                    return true;
-                });
-                if (terminate)
-                    Socket.Disconnect(_endpoint);
-            }
+                if (_disposed || _currentAdmission is null)
+                    return false;
+                FencePhysicalConnection(diagnostics);
+                return true;
+            });
+            if (restart)
+                TryStartAdmission();
         }
 
         private void ApplyUpdate(ZLinkClientServerControlProtocol.Admission update)

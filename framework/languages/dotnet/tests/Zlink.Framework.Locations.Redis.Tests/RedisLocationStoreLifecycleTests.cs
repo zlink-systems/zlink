@@ -181,7 +181,7 @@ public sealed class RedisLocationStoreLifecycleTests
                 )
         );
 
-        Assert.IsType<ZLinkBlobPutResult.Stored>(
+        var stored = Assert.IsType<ZLinkBlobPutResult.Stored>(
             await store.PutAsync(
                 new ZLinkBlobReference("fractional-retention"),
                 new byte[] { 1 },
@@ -190,6 +190,7 @@ public sealed class RedisLocationStoreLifecycleTests
         );
 
         Assert.Equal(2L, (long)command.LastValues![1]);
+        Assert.Equal(TimeSpan.FromMilliseconds(2), stored.ExpiresAt - stored.StoreNow);
     }
 
     [Fact]

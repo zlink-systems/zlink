@@ -3,11 +3,10 @@
 
 #include "../../../Configuration/sample_names.hpp"
 #include "../../../Configuration/sample_topology.hpp"
-#include "../../../../Shared/Contracts/messages.hpp"
+#include "../../../../Shared/Contracts/stream_message_codec.hpp"
 
 
 #include <zlink/framework.hpp>
-#include <zlink/codecs/protobuf.hpp>
 
 namespace zlink::samples::bingo
 {
@@ -65,10 +64,7 @@ class authenticate_session_handler_t
         authenticate_res_t reply_payload;
         reply_payload.set_actor_id (authenticated.actor_id ());
         reply_payload.set_display_name (authenticated.display_name ());
-        const auto reply_message = zlink::message_t::from (
-          zlink::stream_connector::codecs::codec_traits<authenticate_res_t>::encode (
-            reply_payload));
-        stream.reply_packet (reply_message).async ();
+        stream.reply_packet (encode_authenticate_response (reply_payload)).async ();
         // --8<-- [end:doc-bingo-session-bind]
 
         co_return actor;

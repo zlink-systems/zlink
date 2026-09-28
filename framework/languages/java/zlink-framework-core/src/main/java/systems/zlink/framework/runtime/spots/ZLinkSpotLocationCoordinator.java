@@ -46,43 +46,15 @@ final class ZLinkSpotLocationCoordinator {
         return node == null ? null : node.meshName();
     }
 
-    String meshNameForSpot(String spotId, RoutingId primaryNodeRid, boolean localUserSpot) {
+    String entrySpotMeshName(String spotId) {
         if (spotId == null) {
             return null;
         }
-        NodeLocation node =
-                localUserSpot
-                        ? nodes.get(primaryNodeRid)
-                        : nodes.values().stream()
-                                .filter(candidate -> candidate.entrySpotId().equals(spotId))
-                                .findFirst()
-                                .orElse(null);
-        return node == null ? null : node.meshName();
-    }
-
-    CompletionStage<ZLinkLocationWriteStatus> claimUserSpotAsync(
-            RoutingId primaryNodeRid,
-            String spotId,
-            long spotGeneration,
-            Class<?> spotType,
-            Runnable deactivate) {
-        if (lifecycle == null) {
-            return CompletableFuture.completedFuture(ZLinkLocationWriteStatus.STORED);
-        }
-        NodeLocation node = nodes.get(primaryNodeRid);
-        if (node == null) {
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("Location runtime is not available."));
-        }
-        return lifecycle.claimSpot(
-                node.meshName(),
-                spotId,
-                spotGeneration,
-                spotType.getName(),
-                node.nodeRid(),
-                ZLinkSpotKind.USER,
-                node.routeEndpoint(),
-                deactivate);
+        return nodes.values().stream()
+                .filter(candidate -> candidate.entrySpotId().equals(spotId))
+                .findFirst()
+                .map(NodeLocation::meshName)
+                .orElse(null);
     }
 
     CompletionStage<Void> claimEntrySpotsAsync() {
@@ -98,11 +70,11 @@ final class ZLinkSpotLocationCoordinator {
         return chain;
     }
 
-    CompletionStage<Void> releaseUserSpotAsync(RoutingId primaryNodeRid, String spotId) {
+    CompletionStage<Void> releaseUserSpotAsync(RoutingId nodeRid, String spotId) {
         if (lifecycle == null) {
             return CompletableFuture.completedFuture(null);
         }
-        NodeLocation node = nodes.get(primaryNodeRid);
+        NodeLocation node = nodes.get(nodeRid);
         if (node == null) {
             return CompletableFuture.completedFuture(null);
         }

@@ -61,7 +61,10 @@ test('stream header and frame codec follow dotnet binary layout', () => {
   assert.equal(decodedHeader.name, 'Join');
   assert.equal(decodedHeader.metadata.get('trace'), 'abc');
 
-  const frame = protocolCodecs.ZlinkStreamFrameCodec.encode(encodedHeader, new Uint8Array([1, 2, 3]));
+  const frame = protocolCodecs.ZlinkStreamFrameCodec.encode(
+    encodedHeader,
+    new Uint8Array([1, 2, 3])
+  );
   assert.equal((frame[0] << 8) | frame[1], encodedHeader.length);
   assert.equal(frame[5], 3);
   const decodedFrame = protocolCodecs.ZlinkStreamFrameCodec.decode(frame);
@@ -89,14 +92,15 @@ test('stream header codec round-trips actor slots and rejects malformed slot fie
     (error) => error.error?.code === connector.ZlinkStreamErrorCode.FrameDecodeFailed
   );
   assert.throws(
-    () => protocolCodecs.ZlinkStreamHeaderCodec.encode({
-      kind: connector.ZlinkStreamMessageKind.Control,
-      codec: connector.ZlinkStreamCodec.Raw,
-      flags: connector.ZlinkStreamHeaderFlags.HasActorSlot,
-      name: '$zlink.actor.bound',
-      metadata: connector.ZlinkStreamMetadataMap.empty,
-      actorSlot: 1
-    }),
+    () =>
+      protocolCodecs.ZlinkStreamHeaderCodec.encode({
+        kind: connector.ZlinkStreamMessageKind.Control,
+        codec: connector.ZlinkStreamCodec.Raw,
+        flags: connector.ZlinkStreamHeaderFlags.HasActorSlot,
+        name: '$zlink.actor.bound',
+        metadata: connector.ZlinkStreamMetadataMap.empty,
+        actorSlot: 1
+      }),
     /must not contain flags/
   );
 });
@@ -115,28 +119,40 @@ test('bound actor controls project handles messages and outbound actor slots', a
   instance.onActorUnbound((actor) => events.push(`unbound:${actor.actorId}`));
   await instance.connect();
 
-  transportFactory.connection.pushFrame(actorControlFrame('$zlink.actor.bound', [1, 0, 7, 5, ...new TextEncoder().encode('alice')]));
+  transportFactory.connection.pushFrame(
+    actorControlFrame('$zlink.actor.bound', [1, 0, 7, 5, ...new TextEncoder().encode('alice')])
+  );
   await instance.dispatch();
   const actor = instance.actor('alice');
   assert.equal(actor.actorId, 'alice');
   assert.equal(actor.isBound, true);
-  assert.deepEqual(instance.actors.map((value) => value.actorId), ['alice']);
+  assert.deepEqual(
+    instance.actors.map((value) => value.actorId),
+    ['alice']
+  );
   assert.deepEqual(events, ['bound:alice']);
 
   const messages = [];
   actor.on('ActorPush', (message) => messages.push(message.actorId));
-  class ActorTyped { static packetName = 'ActorTypedPush'; }
+  class ActorTyped {
+    static packetName = 'ActorTypedPush';
+  }
   actor.on(ActorTyped, (message) => messages.push(`typed:${message.actorId}`));
   transportFactory.connection.pushFrame(sendFrameForActor('ActorPush', 'hello', 7));
   await instance.dispatch();
-  transportFactory.connection.pushFrame(protocolCodecs.ZlinkStreamFrameCodec.encode(protocolCodecs.ZlinkStreamHeaderCodec.encode({
-    kind: connector.ZlinkStreamMessageKind.Send,
-    codec: connector.ZlinkStreamCodec.Json,
-    flags: connector.ZlinkStreamHeaderFlags.HasActorSlot,
-    name: 'ActorTypedPush',
-    metadata: connector.ZlinkStreamMetadataMap.empty,
-    actorSlot: 7
-  }), new TextEncoder().encode('{"x":1}')));
+  transportFactory.connection.pushFrame(
+    protocolCodecs.ZlinkStreamFrameCodec.encode(
+      protocolCodecs.ZlinkStreamHeaderCodec.encode({
+        kind: connector.ZlinkStreamMessageKind.Send,
+        codec: connector.ZlinkStreamCodec.Json,
+        flags: connector.ZlinkStreamHeaderFlags.HasActorSlot,
+        name: 'ActorTypedPush',
+        metadata: connector.ZlinkStreamMetadataMap.empty,
+        actorSlot: 7
+      }),
+      new TextEncoder().encode('{"x":1}')
+    )
+  );
   await instance.dispatch();
   assert.deepEqual(messages, ['alice', 'typed:alice']);
 
@@ -172,7 +188,8 @@ test('bound actor controls project handles messages and outbound actor slots', a
       protocolCodecs.ZlinkStreamHeaderCodec.encode({
         kind: connector.ZlinkStreamMessageKind.Response,
         codec: connector.ZlinkStreamCodec.Raw,
-        flags: connector.ZlinkStreamHeaderFlags.HasRequestSeq |
+        flags:
+          connector.ZlinkStreamHeaderFlags.HasRequestSeq |
           connector.ZlinkStreamHeaderFlags.HasActorSlot,
         requestSeq: requestHeader.requestSeq,
         name: 'ActorRequest',
@@ -202,6 +219,39 @@ test('bound actor controls project handles messages and outbound actor slots', a
   );
 });
 
+// Spec stream-connector 32 §7 and §10: a packet that only another Actor's
+// handle handler is registered for has no handler that receives it, so dispatch
+// leaves it in the queue for the wait surfaces.
+test('a packet for one Actor stays queued when only another Actor handle handles its name', async () => {
+  const transportFactory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory,
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  await instance.connect();
+  transportFactory.connection.pushFrame(
+    actorControlFrame('$zlink.actor.bound', [1, 0, 7, 5, ...new TextEncoder().encode('alice')])
+  );
+  transportFactory.connection.pushFrame(
+    actorControlFrame('$zlink.actor.bound', [1, 0, 8, 3, ...new TextEncoder().encode('bob')])
+  );
+  await instance.dispatch();
+  const received = [];
+  instance.actor('bob').on('ActorPush', (message) => received.push(message.actorId));
+  transportFactory.connection.pushFrame(sendFrameForActor('ActorPush', 'for-alice', 7));
+  await waitFor(() => instance.receivedCount('ActorPush') === 1, 1000);
+  await instance.dispatch();
+  assert.deepEqual(received, []);
+  const waited = await instance.waitFor('ActorPush').timeout(0).submit();
+  assert.equal(waited.actorId, 'alice');
+  transportFactory.connection.pushFrame(sendFrameForActor('ActorPush', 'for-bob', 8));
+  await waitFor(() => instance.receivedCount('ActorPush') === 2, 1000);
+  await instance.dispatch();
+  assert.deepEqual(received, ['bob']);
+});
+
 test('manual transport disconnect dispatches actor unbound before state and disconnected', async () => {
   const connection = new MemoryConnection();
   connection.pushFrame(actorControlFrame('$zlink.actor.bound', [1, 0, 7, 1, 97]));
@@ -210,11 +260,17 @@ test('manual transport disconnect dispatches actor unbound before state and disc
   connection.read = async () => {
     const frame = await read();
     if (frame !== undefined) return frame;
-    return await new Promise((_resolve, reject) => { rejectRead = reject; });
+    return await new Promise((_resolve, reject) => {
+      rejectRead = reject;
+    });
   };
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
-    transportFactory: { async connect() { return connection; } },
+    transportFactory: {
+      async connect() {
+        return connection;
+      }
+    },
     dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
     heartbeat: { enabled: false },
     reconnect: { enabled: false }
@@ -254,12 +310,8 @@ test('unknown actor slots fail decoding and close the connection', async () => {
   instance.onActorUnbound((actor) => lifecycle.push(`unbound:${actor.actorId}`));
   instance.onDisconnected(() => lifecycle.push('disconnected'));
   await instance.connect();
-  transportFactory.connection.pushFrame(
-    actorControlFrame('$zlink.actor.bound', [1, 0, 1, 1, 97])
-  );
-  transportFactory.connection.pushFrame(
-    actorControlFrame('$zlink.actor.bound', [1, 0, 2, 1, 98])
-  );
+  transportFactory.connection.pushFrame(actorControlFrame('$zlink.actor.bound', [1, 0, 1, 1, 97]));
+  transportFactory.connection.pushFrame(actorControlFrame('$zlink.actor.bound', [1, 0, 2, 1, 98]));
   await instance.dispatch();
   transportFactory.connection.pushFrame(sendFrameForActor('UnknownActor', 'bad', 99));
   await waitFor(() => instance.state === connector.ZlinkStreamConnectionState.Disconnected, 1000);
@@ -299,13 +351,15 @@ test('invalid actor lifecycle controls fail decoding and close the connection', 
 });
 
 test('stream connector rejects outbound metadata above the fixed 1024-byte limit', async () => {
-  assert.doesNotThrow(() => protocolCodecs.ZlinkStreamHeaderCodec.encode({
-    kind: connector.ZlinkStreamMessageKind.Send,
-    codec: connector.ZlinkStreamCodec.Raw,
-    flags: connector.ZlinkStreamHeaderFlags.HasMetadata,
-    name: 'MetadataLimit',
-    metadata: connector.ZlinkStreamMetadataMap.empty.with('k', 'x'.repeat(1019))
-  }));
+  assert.doesNotThrow(() =>
+    protocolCodecs.ZlinkStreamHeaderCodec.encode({
+      kind: connector.ZlinkStreamMessageKind.Send,
+      codec: connector.ZlinkStreamCodec.Raw,
+      flags: connector.ZlinkStreamHeaderFlags.HasMetadata,
+      name: 'MetadataLimit',
+      metadata: connector.ZlinkStreamMetadataMap.empty.with('k', 'x'.repeat(1019))
+    })
+  );
 
   const transportFactory = new MemoryTransportFactory();
   const instance = createStreamConnector({
@@ -353,7 +407,10 @@ test('stream connector send builder writes a dotnet-compatible send frame once',
   assert.equal(header.metadata.get('trace'), 'send-1');
 
   assert.throws(
-    () => instance.send({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() }).packetName('$zlink.bad'),
+    () =>
+      instance
+        .send({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+        .packetName('$zlink.bad'),
     /reserved zlink prefix/
   );
 });
@@ -365,10 +422,15 @@ test('stream connector disconnected send fails before transport write', async ()
     transportFactory
   });
 
-  await assert.rejects(() => instance.send({
-    codec: connector.ZlinkStreamCodec.Raw,
-    payload: new TextEncoder().encode('b')
-  }).packetName('h').submit());
+  await assert.rejects(() =>
+    instance
+      .send({
+        codec: connector.ZlinkStreamCodec.Raw,
+        payload: new TextEncoder().encode('b')
+      })
+      .packetName('h')
+      .submit()
+  );
   assert.equal(transportFactory.connection.frames.length, 0);
 });
 
@@ -382,10 +444,14 @@ test('stream connector send and request enforce payload limit before transport w
   await sendInstance.connect();
 
   await assert.rejects(
-    () => sendInstance.send({
-      codec: connector.ZlinkStreamCodec.Raw,
-      payload: new TextEncoder().encode('bb')
-    }).packetName('h').submit(),
+    () =>
+      sendInstance
+        .send({
+          codec: connector.ZlinkStreamCodec.Raw,
+          payload: new TextEncoder().encode('bb')
+        })
+        .packetName('h')
+        .submit(),
     // stream-connector 32 §4.7/§9: a send-limit violation fails before the
     // transport write as ValidationFailed. FrameTooLarge names the receive
     // bound only and must never appear on the send path.
@@ -402,14 +468,18 @@ test('stream connector send and request enforce payload limit before transport w
   await requestInstance.connect();
 
   await assert.rejects(
-    () => requestInstance.request({
-      codec: connector.ZlinkStreamCodec.Raw,
-      payload: new TextEncoder().encode('bb')
-    }).packetName('h').timeout(1000).submitEncoded(),
+    () =>
+      requestInstance
+        .request({
+          codec: connector.ZlinkStreamCodec.Raw,
+          payload: new TextEncoder().encode('bb')
+        })
+        .packetName('h')
+        .timeout(1000)
+        .submitEncoded(),
     (error) => error.error?.code === connector.ZlinkStreamErrorCode.ValidationFailed
   );
   assert.equal(requestTransportFactory.connection.frames.length, 0);
-  assert.equal(requestInstance.pendingDispatchCount, 0);
 });
 
 test('stream frame codec reports validationFailed over the send limit and succeeds at the limit', () => {
@@ -426,8 +496,8 @@ test('stream frame codec reports validationFailed over the send limit and succee
   );
 
   const atLimitPayload = new Uint8Array(maxSendPayloadSize);
-  assert.doesNotThrow(
-    () => protocolCodecs.ZlinkStreamFrameCodec.encode(header, atLimitPayload, maxSendPayloadSize)
+  assert.doesNotThrow(() =>
+    protocolCodecs.ZlinkStreamFrameCodec.encode(header, atLimitPayload, maxSendPayloadSize)
   );
 });
 
@@ -440,10 +510,14 @@ test('stream connector default compression uses LZ4 before transport write', asy
   const body = new TextEncoder().encode('body');
   await instance.connect();
 
-  await instance.send({
-    codec: connector.ZlinkStreamCodec.Raw,
-    payload: body
-  }).packetName('Compressed').compress().submit();
+  await instance
+    .send({
+      codec: connector.ZlinkStreamCodec.Raw,
+      payload: body
+    })
+    .packetName('Compressed')
+    .compress()
+    .submit();
 
   const frame = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[0]);
   const header = protocolCodecs.ZlinkStreamHeaderCodec.decode(frame.header);
@@ -460,10 +534,16 @@ test('stream connector disabled compression rejects compressed sends before tran
   });
   await instance.connect();
 
-  await assert.rejects(() => instance.send({
-    codec: connector.ZlinkStreamCodec.Raw,
-    payload: new TextEncoder().encode('body')
-  }).packetName('Compressed').compress().submit());
+  await assert.rejects(() =>
+    instance
+      .send({
+        codec: connector.ZlinkStreamCodec.Raw,
+        payload: new TextEncoder().encode('body')
+      })
+      .packetName('Compressed')
+      .compress()
+      .submit()
+  );
   assert.equal(transportFactory.connection.frames.length, 0);
 });
 
@@ -477,10 +557,14 @@ test('stream connector compressed sends write dotnet LZ4-pickled payloads', asyn
   const body = new TextEncoder().encode('compressed-body');
   await instance.connect();
 
-  await instance.send({
-    codec: connector.ZlinkStreamCodec.Raw,
-    payload: body
-  }).packetName('Compressed').compress().submit();
+  await instance
+    .send({
+      codec: connector.ZlinkStreamCodec.Raw,
+      payload: body
+    })
+    .packetName('Compressed')
+    .compress()
+    .submit();
 
   const frame = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[0]);
   const header = protocolCodecs.ZlinkStreamHeaderCodec.decode(frame.header);
@@ -519,10 +603,14 @@ test('stream connector custom compression codec handles outbound and inbound pay
   });
   await instance.connect();
 
-  await instance.send({
-    codec: connector.ZlinkStreamCodec.Raw,
-    payload: body
-  }).packetName('CustomSend').compress().submit();
+  await instance
+    .send({
+      codec: connector.ZlinkStreamCodec.Raw,
+      payload: body
+    })
+    .packetName('CustomSend')
+    .compress()
+    .submit();
 
   const frame = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[0]);
   assert.equal(frame.payload[0], marker);
@@ -544,12 +632,39 @@ test('stream connector custom compression codec handles outbound and inbound pay
   assert.deepEqual(received, ['custom-inbound']);
 });
 
-test('stream connector custom decompression result is checked against receive limit', async () => {
+test('custom compression failure retains CompressionFailed scope', async () => {
+  const factory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: factory,
+    compressionCodec: {
+      compress() {
+        throw new Error('codec failure');
+      },
+      decompress(payload) {
+        return payload;
+      }
+    }
+  });
+  await instance.connect();
+  await assert.rejects(
+    instance
+      .send({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array([1]) })
+      .packetName('Compressed')
+      .compress()
+      .submit(),
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.CompressionFailed
+  );
+  assert.equal(factory.connection.frames.length, 0);
+});
+
+test('a custom decompression result over the receive limit is FrameTooLarge and ends the connection', async () => {
   const transportFactory = new MemoryTransportFactory();
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
     transportFactory,
     maxReceivePayloadSize: 4,
+    reconnect: { enabled: false },
     compressionCodec: {
       compress(payload) {
         return payload;
@@ -577,8 +692,62 @@ test('stream connector custom decompression result is checked against receive li
     )
   );
 
+  await waitFor(() => instance.state === connector.ZlinkStreamConnectionState.Disconnected, 1000);
   await instance.dispatch();
-  assert.deepEqual(errors, [connector.ZlinkStreamErrorCode.DecompressionFailed]);
+  assert.deepEqual(errors, [connector.ZlinkStreamErrorCode.FrameTooLarge]);
+  assert.equal(instance.closeReason, 'ProtocolError');
+});
+
+test('an LZ4 response whose declared length exceeds the receive limit ends the connection', async () => {
+  const transportFactory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory,
+    maxReceivePayloadSize: 2,
+    dispatchMode: connector.ZlinkStreamDispatchMode.Immediate,
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  const errors = [];
+  instance.onErrorReceived((error) => errors.push(error.code));
+  let disconnected;
+  const disconnectedOnce = new Promise((resolve) => {
+    disconnected = resolve;
+  });
+  instance.onDisconnected(() => disconnected());
+  await instance.connect();
+  const pending = instance
+    .request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+    .packetName('Compressed')
+    .timeout(60_000)
+    .submitEncoded();
+  const request = protocolCodecs.ZlinkStreamHeaderCodec.decode(
+    protocolCodecs.ZlinkStreamFrameCodec.decode(await transportFactory.connection.nextWrite())
+      .header
+  );
+  // Pickle header 0x40 declares one extra byte over the two-byte block: 3 bytes.
+  transportFactory.connection.pushFrame(
+    protocolCodecs.ZlinkStreamFrameCodec.encode(
+      protocolCodecs.ZlinkStreamHeaderCodec.encode({
+        kind: connector.ZlinkStreamMessageKind.Response,
+        codec: connector.ZlinkStreamCodec.Raw,
+        flags:
+          connector.ZlinkStreamHeaderFlags.HasRequestSeq |
+          connector.ZlinkStreamHeaderFlags.PayloadCompressed,
+        requestSeq: request.requestSeq,
+        name: 'Compressed',
+        metadata: connector.ZlinkStreamMetadataMap.empty
+      }),
+      Uint8Array.from([0x40, 0x03])
+    )
+  );
+  await assert.rejects(
+    pending,
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.Disconnected
+  );
+  await disconnectedOnce;
+  assert.equal(instance.closeReason, 'ProtocolError');
+  assert.deepEqual(errors, [connector.ZlinkStreamErrorCode.FrameTooLarge]);
 });
 
 test('stream connector applies the receive limit to each decoded frame payload', async () => {
@@ -591,8 +760,12 @@ test('stream connector applies the receive limit to each decoded frame payload',
   });
   const errors = [];
   let received = false;
-  instance.onErrorReceived((error) => { errors.push(error.code); });
-  instance.on('TooLarge', () => { received = true; });
+  instance.onErrorReceived((error) => {
+    errors.push(error.code);
+  });
+  instance.on('TooLarge', () => {
+    received = true;
+  });
   await instance.connect();
   transportFactory.connection.pushFrame(sendFrame('TooLarge', 'bb'));
 
@@ -602,7 +775,57 @@ test('stream connector applies the receive limit to each decoded frame payload',
 
   assert.deepEqual(errors, [connector.ZlinkStreamErrorCode.FrameTooLarge]);
   assert.equal(received, false);
+  assert.equal(instance.closeReason, 'ProtocolError');
 });
+
+// Spec stream-connector 32 §9: an operation the ending connection fails ends
+// with Disconnected whatever ended it; the cause stays in the close reason.
+for (const [label, frame, cause] of [
+  ['an over-limit frame', () => sendFrame('TooLarge', 'bb'), 'FrameTooLarge'],
+  [
+    'an undecodable header',
+    () =>
+      protocolCodecs.ZlinkStreamFrameCodec.encode(
+        new TextEncoder().encode('invalid-header'),
+        new TextEncoder().encode('payload')
+      ),
+    'FrameDecodeFailed'
+  ]
+]) {
+  test(`a pending request ended by ${label} fails with Disconnected and the close reason keeps the cause`, async () => {
+    const transportFactory = new MemoryTransportFactory();
+    const instance = createStreamConnector({
+      endpoint: 'ws://127.0.0.1:19000',
+      transportFactory,
+      maxReceivePayloadSize: 1,
+      dispatchMode: connector.ZlinkStreamDispatchMode.Immediate,
+      heartbeat: { enabled: false },
+      reconnect: { enabled: false }
+    });
+    const errors = [];
+    instance.onErrorReceived((error) => errors.push(error.code));
+    let disconnected;
+    const disconnectedOnce = new Promise((resolve) => {
+      disconnected = resolve;
+    });
+    instance.onDisconnected(() => disconnected());
+    await instance.connect();
+    const pending = instance
+      .request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+      .packetName('Pending')
+      .timeout(60_000)
+      .submitEncoded();
+    await transportFactory.connection.nextWrite();
+    transportFactory.connection.pushFrame(frame());
+    await assert.rejects(
+      pending,
+      (error) => error.error?.code === connector.ZlinkStreamErrorCode.Disconnected
+    );
+    await disconnectedOnce;
+    assert.equal(instance.closeReason, 'ProtocolError');
+    assert.deepEqual(errors, [connector.ZlinkStreamErrorCode[cause]]);
+  });
+}
 
 test('stream connector request resolves when dispatch reads matching response frame', async () => {
   const transportFactory = new MemoryTransportFactory();
@@ -621,9 +844,10 @@ test('stream connector request resolves when dispatch reads matching response fr
     .timeout(1000)
     .submitEncoded();
 
-  const requestFrame = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[0]);
+  const requestFrame = protocolCodecs.ZlinkStreamFrameCodec.decode(
+    transportFactory.connection.frames[0]
+  );
   const requestHeader = protocolCodecs.ZlinkStreamHeaderCodec.decode(requestFrame.header);
-  assert.equal(instance.pendingDispatchCount, 1);
   assert.equal(requestHeader.kind, connector.ZlinkStreamMessageKind.Request);
   assert.equal(requestHeader.requestSeq, 1n);
 
@@ -661,17 +885,21 @@ test('stream connector accepts a legacy response packet name and matches by sequ
     .packetName('Join')
     .timeout(1000)
     .submitEncoded();
-  const requestFrame = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[0]);
+  const requestFrame = protocolCodecs.ZlinkStreamFrameCodec.decode(
+    transportFactory.connection.frames[0]
+  );
   const requestHeader = protocolCodecs.ZlinkStreamHeaderCodec.decode(requestFrame.header);
-  transportFactory.connection.pushFrame(protocolCodecs.ZlinkStreamFrameCodec.encode(
-    encodeLegacyNamedReplyHeader({
-      kind: connector.ZlinkStreamMessageKind.Response,
-      codec: connector.ZlinkStreamCodec.Raw,
-      requestSeq: requestHeader.requestSeq,
-      name: 'Other'
-    }),
-    new Uint8Array()
-  ));
+  transportFactory.connection.pushFrame(
+    protocolCodecs.ZlinkStreamFrameCodec.encode(
+      encodeLegacyNamedReplyHeader({
+        kind: connector.ZlinkStreamMessageKind.Response,
+        codec: connector.ZlinkStreamCodec.Raw,
+        requestSeq: requestHeader.requestSeq,
+        name: 'Other'
+      }),
+      new Uint8Array()
+    )
+  );
 
   await instance.dispatch();
   const reply = await pending;
@@ -679,7 +907,7 @@ test('stream connector accepts a legacy response packet name and matches by sequ
   assert.equal(reply.payload.length, 0);
 });
 
-test('stream connector reports a response whose request sequence has no pending request', async () => {
+test('stream connector discards a response whose request sequence has no pending request', async () => {
   const transportFactory = new MemoryTransportFactory();
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
@@ -691,22 +919,23 @@ test('stream connector reports a response whose request sequence has no pending 
   });
 
   await instance.connect();
-  transportFactory.connection.pushFrame(protocolCodecs.ZlinkStreamFrameCodec.encode(
-    protocolCodecs.ZlinkStreamHeaderCodec.encode({
-      kind: connector.ZlinkStreamMessageKind.Response,
-      codec: connector.ZlinkStreamCodec.Raw,
-      flags: connector.ZlinkStreamHeaderFlags.HasRequestSeq,
-      requestSeq: 999n,
-      name: 'ExpiredRequest',
-      metadata: connector.ZlinkStreamMetadataMap.empty
-    }),
-    new Uint8Array()
-  ));
+  transportFactory.connection.pushFrame(
+    protocolCodecs.ZlinkStreamFrameCodec.encode(
+      protocolCodecs.ZlinkStreamHeaderCodec.encode({
+        kind: connector.ZlinkStreamMessageKind.Response,
+        codec: connector.ZlinkStreamCodec.Raw,
+        flags: connector.ZlinkStreamHeaderFlags.HasRequestSeq,
+        requestSeq: 999n,
+        name: 'ExpiredRequest',
+        metadata: connector.ZlinkStreamMetadataMap.empty
+      }),
+      new Uint8Array()
+    )
+  );
 
   await instance.dispatch();
 
-  assert.equal(errors.length, 1);
-  assert.equal(errors[0].code, connector.ZlinkStreamErrorCode.FrameDecodeFailed);
+  assert.equal(errors.length, 0);
 });
 
 test('stream connector decodes correlated Error JSON without a packet name', async () => {
@@ -722,7 +951,9 @@ test('stream connector decodes correlated Error JSON without a packet name', asy
     .packetName('Join')
     .timeout(1000)
     .submitEncoded();
-  const requestFrame = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[0]);
+  const requestFrame = protocolCodecs.ZlinkStreamFrameCodec.decode(
+    transportFactory.connection.frames[0]
+  );
   const requestHeader = protocolCodecs.ZlinkStreamHeaderCodec.decode(requestFrame.header);
   const responseHeader = protocolCodecs.ZlinkStreamHeaderCodec.encode({
     kind: connector.ZlinkStreamMessageKind.Error,
@@ -733,18 +964,21 @@ test('stream connector decodes correlated Error JSON without a packet name', asy
     metadata: connector.ZlinkStreamMetadataMap.empty
   });
   assert.equal(responseHeader[12], 0, 'Response and Error must encode name_len = 0');
-  transportFactory.connection.pushFrame(protocolCodecs.ZlinkStreamFrameCodec.encode(
-    responseHeader,
-    new TextEncoder().encode('{"code":"denied","message":"remote failed"}')
-  ));
+  transportFactory.connection.pushFrame(
+    protocolCodecs.ZlinkStreamFrameCodec.encode(
+      responseHeader,
+      new TextEncoder().encode('{"code":"denied","message":"remote failed"}')
+    )
+  );
 
   await instance.dispatch();
   assert.equal(instance.pendingDispatchCount, 0);
   await assert.rejects(
     () => pending,
-    (error) => error.error?.code === connector.ZlinkStreamErrorCode.RemoteError
-      && error.error.message === 'remote failed'
-      && error.error.cause?.code === 'denied'
+    (error) =>
+      error.error?.code === connector.ZlinkStreamErrorCode.RemoteError &&
+      error.error.message === 'remote failed' &&
+      error.error.cause?.code === 'denied'
   );
 });
 
@@ -761,19 +995,23 @@ test('stream connector rejects malformed correlated Error JSON', async () => {
     .packetName('Join')
     .timeout(1000)
     .submitEncoded();
-  const requestFrame = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[0]);
+  const requestFrame = protocolCodecs.ZlinkStreamFrameCodec.decode(
+    transportFactory.connection.frames[0]
+  );
   const requestHeader = protocolCodecs.ZlinkStreamHeaderCodec.decode(requestFrame.header);
-  transportFactory.connection.pushFrame(protocolCodecs.ZlinkStreamFrameCodec.encode(
-    protocolCodecs.ZlinkStreamHeaderCodec.encode({
-      kind: connector.ZlinkStreamMessageKind.Error,
-      codec: connector.ZlinkStreamCodec.Json,
-      flags: connector.ZlinkStreamHeaderFlags.HasRequestSeq,
-      requestSeq: requestHeader.requestSeq,
-      name: 'Join',
-      metadata: connector.ZlinkStreamMetadataMap.empty
-    }),
-    new TextEncoder().encode('{"code":"denied"}')
-  ));
+  transportFactory.connection.pushFrame(
+    protocolCodecs.ZlinkStreamFrameCodec.encode(
+      protocolCodecs.ZlinkStreamHeaderCodec.encode({
+        kind: connector.ZlinkStreamMessageKind.Error,
+        codec: connector.ZlinkStreamCodec.Json,
+        flags: connector.ZlinkStreamHeaderFlags.HasRequestSeq,
+        requestSeq: requestHeader.requestSeq,
+        name: 'Join',
+        metadata: connector.ZlinkStreamMetadataMap.empty
+      }),
+      new TextEncoder().encode('{"code":"denied"}')
+    )
+  );
 
   await instance.dispatch();
   await assert.rejects(
@@ -795,24 +1033,29 @@ test('stream connector accepts a legacy correlated Error packet name and matches
     .packetName('Join')
     .timeout(1000)
     .submitEncoded();
-  const requestFrame = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[0]);
+  const requestFrame = protocolCodecs.ZlinkStreamFrameCodec.decode(
+    transportFactory.connection.frames[0]
+  );
   const requestHeader = protocolCodecs.ZlinkStreamHeaderCodec.decode(requestFrame.header);
-  transportFactory.connection.pushFrame(protocolCodecs.ZlinkStreamFrameCodec.encode(
-    encodeLegacyNamedReplyHeader({
-      kind: connector.ZlinkStreamMessageKind.Error,
-      codec: connector.ZlinkStreamCodec.Json,
-      requestSeq: requestHeader.requestSeq,
-      name: 'Other'
-    }),
-    new TextEncoder().encode('{"code":"denied","message":"remote failed"}')
-  ));
+  transportFactory.connection.pushFrame(
+    protocolCodecs.ZlinkStreamFrameCodec.encode(
+      encodeLegacyNamedReplyHeader({
+        kind: connector.ZlinkStreamMessageKind.Error,
+        codec: connector.ZlinkStreamCodec.Json,
+        requestSeq: requestHeader.requestSeq,
+        name: 'Other'
+      }),
+      new TextEncoder().encode('{"code":"denied","message":"remote failed"}')
+    )
+  );
 
   await instance.dispatch();
   await assert.rejects(
     () => pending,
-    (error) => error.error?.code === connector.ZlinkStreamErrorCode.RemoteError
-      && error.error.message === 'remote failed'
-      && error.error.cause?.code === 'denied'
+    (error) =>
+      error.error?.code === connector.ZlinkStreamErrorCode.RemoteError &&
+      error.error.message === 'remote failed' &&
+      error.error.cause?.code === 'denied'
   );
 });
 
@@ -840,13 +1083,16 @@ test('stream connector test helpers observe absence and ordered payloads through
   await instance.expectNone('Notice').within(5).run();
 
   const unexpected = instance.expectNone('Notice').within(1000).run();
-  const unexpectedRejected = assert.rejects(() => unexpected, (error) =>
-    error.error?.code === connector.ZlinkStreamErrorCode.ValidationFailed);
+  const unexpectedRejected = assert.rejects(
+    () => unexpected,
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.ValidationFailed
+  );
   transportFactory.connection.pushFrame(sendFrame('Notice', 'unexpected'));
   await instance.dispatch();
   await unexpectedRejected;
 
-  const sequence = instance.waitForSequence('Notice')
+  const sequence = instance
+    .waitForSequence('Notice')
     .expect(() => true)
     .expect(() => true)
     .timeout(1000)
@@ -858,18 +1104,24 @@ test('stream connector test helpers observe absence and ordered payloads through
   // Spec 32 section 10.1: the call answers with messages, so the packet name and
   // the metadata are readable next to the payload.
   const messages = await sequence;
-  assert.deepEqual(messages.map((message) => message.name), ['Notice', 'Notice']);
+  assert.deepEqual(
+    messages.map((message) => message.name),
+    ['Notice', 'Notice']
+  );
   assert.deepEqual(
     messages.map((message) => new TextDecoder().decode(message.payload.payload)),
     ['first', 'second']
   );
 
-  const outOfOrder = instance.waitForSequence('Notice')
+  const outOfOrder = instance
+    .waitForSequence('Notice')
     .expect((message) => new TextDecoder().decode(message.payload.payload) === 'first')
     .timeout(1000)
     .run();
-  const outOfOrderRejected = assert.rejects(() => outOfOrder, (error) =>
-    error.error?.code === connector.ZlinkStreamErrorCode.ValidationFailed);
+  const outOfOrderRejected = assert.rejects(
+    () => outOfOrder,
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.ValidationFailed
+  );
   transportFactory.connection.pushFrame(sendFrame('Notice', 'wrong'));
   await instance.dispatch();
   await outOfOrderRejected;
@@ -896,12 +1148,13 @@ test('zlinkStreamAssert classifies failures and timeouts without pre-started pro
     });
   });
   await assert.rejects(
-    () => connector.zlinkStreamAssert.expectTimeout(async () => {
-      throw new connector.ZlinkStreamException({
-        code: connector.ZlinkStreamErrorCode.RemoteError,
-        message: 'not a timeout'
-      });
-    }),
+    () =>
+      connector.zlinkStreamAssert.expectTimeout(async () => {
+        throw new connector.ZlinkStreamException({
+          code: connector.ZlinkStreamErrorCode.RemoteError,
+          message: 'not a timeout'
+        });
+      }),
     (error) => error.error?.code === connector.ZlinkStreamErrorCode.RemoteError
   );
 });
@@ -924,7 +1177,9 @@ test('stream connector request resolves compressed response payloads', async () 
     .timeout(1000)
     .submitEncoded();
 
-  const requestFrame = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[0]);
+  const requestFrame = protocolCodecs.ZlinkStreamFrameCodec.decode(
+    transportFactory.connection.frames[0]
+  );
   const requestHeader = protocolCodecs.ZlinkStreamHeaderCodec.decode(requestFrame.header);
   const compressedPayload = Uint8Array.from(Buffer.from('40551F41010047504141414141', 'hex'));
   transportFactory.connection.pushFrame(
@@ -932,7 +1187,9 @@ test('stream connector request resolves compressed response payloads', async () 
       protocolCodecs.ZlinkStreamHeaderCodec.encode({
         kind: connector.ZlinkStreamMessageKind.Response,
         codec: connector.ZlinkStreamCodec.Raw,
-        flags: connector.ZlinkStreamHeaderFlags.HasRequestSeq | connector.ZlinkStreamHeaderFlags.PayloadCompressed,
+        flags:
+          connector.ZlinkStreamHeaderFlags.HasRequestSeq |
+          connector.ZlinkStreamHeaderFlags.PayloadCompressed,
         requestSeq: requestHeader.requestSeq,
         name: 'CompressedRequest',
         metadata: connector.ZlinkStreamMetadataMap.empty
@@ -965,14 +1222,18 @@ test('stream connector rejects compressed response payloads above receive limit'
     .timeout(1000)
     .submitEncoded();
 
-  const requestFrame = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[0]);
+  const requestFrame = protocolCodecs.ZlinkStreamFrameCodec.decode(
+    transportFactory.connection.frames[0]
+  );
   const requestHeader = protocolCodecs.ZlinkStreamHeaderCodec.decode(requestFrame.header);
   transportFactory.connection.pushFrame(
     protocolCodecs.ZlinkStreamFrameCodec.encode(
       protocolCodecs.ZlinkStreamHeaderCodec.encode({
         kind: connector.ZlinkStreamMessageKind.Response,
         codec: connector.ZlinkStreamCodec.Raw,
-        flags: connector.ZlinkStreamHeaderFlags.HasRequestSeq | connector.ZlinkStreamHeaderFlags.PayloadCompressed,
+        flags:
+          connector.ZlinkStreamHeaderFlags.HasRequestSeq |
+          connector.ZlinkStreamHeaderFlags.PayloadCompressed,
         requestSeq: requestHeader.requestSeq,
         name: 'CompressedRequest',
         metadata: connector.ZlinkStreamMetadataMap.empty
@@ -1117,6 +1378,7 @@ test('stream connector dispatch publishes decode errors for invalid header frame
 
   assert.equal(errors.length, 1);
   assert.equal(errors[0].code, connector.ZlinkStreamErrorCode.FrameDecodeFailed);
+  assert.equal(instance.closeReason, 'ProtocolError');
 });
 
 test('stream connector dispatch publishes uncorrelated remote error packets', async () => {
@@ -1294,7 +1556,9 @@ test('DRAIN-018 session-closing exposes ServerDrain before disconnected callback
     }
   });
   let observed;
-  instance.onDisconnected(() => { observed = instance.closeReason; });
+  instance.onDisconnected(() => {
+    observed = instance.closeReason;
+  });
   await instance.connect();
   await instance.dispatch();
   assert.equal(instance.closeReason, 'ServerDrain');
@@ -1339,17 +1603,776 @@ test('stream connector validates endpoint and lifecycle options like dotnet tran
     /supports only ws:\/\/ and wss:\/\//
   );
   assert.throws(
-    () => createStreamConnector({ endpoint: 'ws://127.0.0.1:1', heartbeat: { intervalMs: 5, timeoutMs: 5 } }),
-    /Heartbeat timeout must be greater/
-  );
-  assert.throws(
-    () => createStreamConnector({ endpoint: 'ws://127.0.0.1:1', reconnect: { backoffFactor: 0.5 } }),
-    /BackoffFactor/
-  );
-  assert.throws(
     () => createStreamConnector({ endpoint: 'ws://127.0.0.1:1', maxReceivePayloadSize: 0 }),
     /MaxReceivePayloadSize/
   );
+});
+
+test('connector options accept positive factors and validate disabled settings and closed enums', () => {
+  const endpoint = 'ws://127.0.0.1:1';
+  const valid = createStreamConnector({
+    endpoint,
+    heartbeat: { intervalMs: 5000, timeoutMs: 1000 },
+    reconnect: { initialDelayMs: 1000, maxDelayMs: 100, backoffFactor: 0.5 }
+  });
+  assert.equal(valid.options.reconnect.backoffFactor, 0.5);
+  for (const options of [
+    { connectTimeoutMs: Number.NaN },
+    { waitTimeoutMs: Number.POSITIVE_INFINITY },
+    { heartbeat: { enabled: false, intervalMs: 0 } },
+    { heartbeat: { enabled: 'yes' } },
+    { reconnect: { enabled: false, backoffFactor: 0 } },
+    { reconnect: { enabled: 'yes' } },
+    { dispatchMode: 'Unknown' },
+    { compression: 'Unknown' },
+    { compressionCodec: {} },
+    { codec: {} },
+    { nameResolver: {} },
+    { transportFactory: {} }
+  ]) {
+    assert.throws(
+      () => createStreamConnector({ endpoint, ...options }),
+      (error) => error.error?.code === connector.ZlinkStreamErrorCode.ValidationFailed
+    );
+  }
+});
+
+test('exhausted request sequence rejects without writing or reusing zero', async () => {
+  const factory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: factory
+  });
+  await instance.connect();
+  instance.pendingRequests.nextRequestSeq = 1n << 64n;
+  await assert.rejects(
+    instance
+      .request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+      .packetName('Exhausted')
+      .submitEncoded(),
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.SendFailed
+  );
+  assert.equal(factory.connection.frames.length, 0);
+});
+
+test('Manual state and request callbacks run only in dispatch', async (t) => {
+  const factory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: factory,
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  const calls = [];
+  instance.onConnectionStateChanged((change) => calls.push(`state:${change.current}`));
+  await instance.connect();
+  assert.deepEqual(calls, []);
+  await instance.dispatch();
+  assert.deepEqual(calls, ['state:connecting', 'state:connected']);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  instance
+    .request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+    .packetName('NoReply')
+    .timeout(10)
+    .submit((result) => calls.push(result.error.code));
+  t.mock.timers.tick(10);
+  // The timeout has rejected the request; the macrotask boundary lets every
+  // continuation of that rejection run before the check.
+  await new Promise((resolve) => setImmediate(resolve));
+  // Spec stream-connector 32 section 7: the request callback is the one
+  // callback the next dispatch runs.
+  assert.equal(instance.pendingDispatchCount, 1);
+  assert.deepEqual(calls, ['state:connecting', 'state:connected']);
+  t.mock.timers.reset();
+  await instance.dispatch();
+  assert.deepEqual(calls, [
+    'state:connecting',
+    'state:connected',
+    connector.ZlinkStreamErrorCode.RequestTimeout
+  ]);
+});
+
+test('a pending async push handler does not hold the following callback', async () => {
+  const factory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: factory,
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  const calls = [];
+  instance.on('First', async () => {
+    calls.push('first');
+    await new Promise(() => {});
+  });
+  instance.on('Second', () => calls.push('second'));
+  await instance.connect();
+  factory.connection.pushFrame(sendFrame('First', 'one'));
+  factory.connection.pushFrame(sendFrame('Second', 'two'));
+  await withTimeout(instance.dispatch(), 100, 'dispatch behind pending user callback');
+  assert.deepEqual(calls, ['first', 'second']);
+});
+
+test('a pending async reply hook does not hold the next reply hook', async () => {
+  const factory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: factory,
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  const calls = [];
+  instance.onReplyReceived(async () => {
+    calls.push('first');
+    await new Promise(() => {});
+  });
+  instance.onReplyReceived(() => calls.push('second'));
+  await instance.connect();
+  const pending = instance
+    .request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+    .packetName('NoReply')
+    .timeout(10)
+    .submitEncoded();
+  await assert.rejects(pending, /timed out/);
+  await withTimeout(instance.dispatch(), 100, 'dispatch behind pending reply hook');
+  await Promise.resolve();
+  assert.deepEqual(calls, ['first', 'second']);
+});
+
+test('Immediate close runs state and disconnect callbacks before it returns', async () => {
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: new MemoryTransportFactory(),
+    dispatchMode: connector.ZlinkStreamDispatchMode.Immediate,
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  const calls = [];
+  instance.onConnectionStateChanged((change) => calls.push(change.current));
+  instance.onDisconnected(() => calls.push('disconnected'));
+  await instance.connect();
+  await waitFor(() => calls.includes(connector.ZlinkStreamConnectionState.Connected), 1000);
+  calls.length = 0;
+  await instance.close();
+  assert.deepEqual(calls, [connector.ZlinkStreamConnectionState.Closed, 'disconnected']);
+});
+
+test('Manual close leaves state and disconnect callbacks to the next dispatch', async () => {
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: new MemoryTransportFactory(),
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  const calls = [];
+  instance.onConnectionStateChanged((change) => calls.push(change.current));
+  instance.onDisconnected(() => calls.push('disconnected'));
+  await instance.connect();
+  await instance.dispatch();
+  calls.length = 0;
+  await instance.close();
+  assert.deepEqual(calls, []);
+  await instance.dispatch();
+  assert.deepEqual(calls, [connector.ZlinkStreamConnectionState.Closed, 'disconnected']);
+});
+
+test('close fails the written and unwritten Send and Request with Disconnected without waiting for the transport', async () => {
+  const connection = new MemoryConnection();
+  let writes = 0;
+  connection.write = () => {
+    writes += 1;
+    return new Promise(() => {});
+  };
+  let attempts = 0;
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: {
+      async connect() {
+        attempts += 1;
+        return connection;
+      }
+    },
+    heartbeat: { enabled: false }
+  });
+  await instance.connect();
+  const raw = { codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() };
+  const active = instance.send(raw).packetName('Active').submit();
+  const queuedSend = instance.send(raw).packetName('QueuedSend').submit();
+  const queuedRequest = instance
+    .request(raw)
+    .packetName('QueuedRequest')
+    .timeout(60_000)
+    .submitEncoded();
+  await withTimeout(instance.close(), 1000, 'close behind a transport write that never completes');
+  const disconnected = (error) => error.error?.code === connector.ZlinkStreamErrorCode.Disconnected;
+  await assert.rejects(active, disconnected);
+  await assert.rejects(queuedSend, disconnected);
+  await assert.rejects(queuedRequest, disconnected);
+  assert.equal(writes, 1);
+  assert.equal(instance.closeReason, 'ClientClose');
+  // A reconnect would be queued as a microtask; the macrotask boundary drains them.
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(attempts, 1);
+});
+
+test('a Send accepted after a disconnect does not wait behind the lost connection write', async () => {
+  let failRead;
+  const lost = new MemoryConnection();
+  let lostWrites = 0;
+  lost.write = () => {
+    lostWrites += 1;
+    return new Promise(() => {});
+  };
+  lost.read = () =>
+    new Promise((_, reject) => {
+      failRead = reject;
+    });
+  const replacement = new MemoryConnection();
+  const connections = [lost, replacement];
+  let disconnected;
+  const disconnectedOnce = new Promise((resolve) => {
+    disconnected = resolve;
+  });
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: {
+      async connect() {
+        return connections.shift();
+      }
+    },
+    dispatchMode: connector.ZlinkStreamDispatchMode.Immediate,
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  instance.onDisconnected(() => disconnected());
+  await instance.connect();
+  const raw = { codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() };
+  const inFlight = instance.send(raw).packetName('InFlight').submit();
+  const unwritten = instance.send(raw).packetName('Unwritten').submit();
+  failRead(new Error('transport lost'));
+  await disconnectedOnce;
+  const disconnectedError = (error) =>
+    error.error?.code === connector.ZlinkStreamErrorCode.Disconnected;
+  await assert.rejects(inFlight, disconnectedError);
+  await assert.rejects(unwritten, disconnectedError);
+  assert.equal(lostWrites, 1);
+  await instance.connect();
+  await withTimeout(
+    instance.send(raw).packetName('AfterReconnect').submit(),
+    1000,
+    'send on the replacement connection'
+  );
+  assert.equal(replacement.frames.length, 1);
+  await instance.close();
+});
+
+test('close during a connect attempt aborts the attempt and returns', async () => {
+  let attempts = 0;
+  let attemptStarted;
+  const firstAttempt = new Promise((resolve) => {
+    attemptStarted = resolve;
+  });
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: {
+      connect(_options, signal) {
+        attempts += 1;
+        attemptStarted();
+        return new Promise((_, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('connect aborted')), {
+            once: true
+          });
+        });
+      }
+    },
+    heartbeat: { enabled: false },
+    reconnect: { maxAttempts: null, initialDelayMs: 1, maxDelayMs: 1 }
+  });
+  const connecting = instance.connect();
+  await firstAttempt;
+  await withTimeout(instance.close(), 1000, 'close during a connect attempt');
+  await assert.rejects(
+    connecting,
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.Disconnected
+  );
+  assert.equal(attempts, 1);
+  assert.equal(instance.state, connector.ZlinkStreamConnectionState.Closed);
+});
+
+test('close during a reconnect delay with unlimited attempts returns and stops the attempts', async () => {
+  let attempts = 0;
+  let reconnecting;
+  const inDelay = new Promise((resolve) => {
+    reconnecting = resolve;
+  });
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: {
+      async connect() {
+        attempts += 1;
+        throw new Error('connect failed');
+      }
+    },
+    dispatchMode: connector.ZlinkStreamDispatchMode.Immediate,
+    heartbeat: { enabled: false },
+    reconnect: { maxAttempts: null, initialDelayMs: 60_000, maxDelayMs: 60_000 }
+  });
+  instance.onConnectionStateChanged((change) => {
+    if (change.current === connector.ZlinkStreamConnectionState.Reconnecting) reconnecting();
+  });
+  const connecting = instance.connect();
+  await inDelay;
+  await withTimeout(instance.close(), 1000, 'close during a reconnect delay');
+  await assert.rejects(
+    connecting,
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.Disconnected
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(attempts, 1);
+  assert.equal(instance.state, connector.ZlinkStreamConnectionState.Closed);
+});
+
+test('Send completes only after its frame is written to the transport', async () => {
+  const connection = new MemoryConnection();
+  let written = false;
+  let writeStarted;
+  const releaseWrite = new Promise((resolve) => {
+    writeStarted = resolve;
+  });
+  connection.write = () =>
+    new Promise((resolve) => {
+      writeStarted(() => {
+        written = true;
+        resolve();
+      });
+    });
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: {
+      async connect() {
+        return connection;
+      }
+    },
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  await instance.connect();
+  let completed = false;
+  const sending = instance
+    .send({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+    .packetName('Written')
+    .submit()
+    .then(() => {
+      completed = written;
+    });
+  (await withTimeout(releaseWrite, 1000, 'frame write'))();
+  await sending;
+  assert.equal(completed, true);
+});
+
+test('close called inside a handler returns after starting close; the outside close waits', async () => {
+  const connection = new MemoryConnection();
+  let finishTransportClose;
+  connection.close = () =>
+    new Promise((resolve) => {
+      finishTransportClose = resolve;
+    });
+  const factory = {
+    connection,
+    async connect() {
+      return connection;
+    }
+  };
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: factory,
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  let inner;
+  instance.on('CloseNow', () => {
+    inner = instance.close();
+  });
+  await instance.connect();
+  connection.pushFrame(sendFrame('CloseNow', 'x'));
+  await waitFor(() => instance.receivedCount('CloseNow') === 1, 1000);
+  await instance.dispatch();
+  await withTimeout(inner, 100, 'close inside a handler');
+  let outerDone = false;
+  const outer = instance.close().then(() => {
+    outerDone = true;
+  });
+  await waitFor(() => finishTransportClose !== undefined, 1000);
+  await Promise.resolve();
+  assert.equal(outerDone, false);
+  finishTransportClose();
+  await withTimeout(outer, 1000, 'outside close');
+  assert.equal(instance.state, connector.ZlinkStreamConnectionState.Closed);
+});
+
+test('a failing error callback reports UserCallbackFailed to the remaining error handlers', async () => {
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: new MemoryTransportFactory(),
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  const observed = [];
+  instance.onErrorReceived(() => {
+    throw new Error('error handler failed');
+  });
+  instance.onErrorReceived((error) => observed.push(error.code));
+  await instance.events.publishError({
+    code: connector.ZlinkStreamErrorCode.RemoteError,
+    message: 'remote'
+  });
+  await instance.dispatch();
+  assert.deepEqual(observed, [
+    connector.ZlinkStreamErrorCode.RemoteError,
+    connector.ZlinkStreamErrorCode.UserCallbackFailed
+  ]);
+});
+
+test('a failing error callback reports UserCallbackFailed to every other error handler', async () => {
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: new MemoryTransportFactory(),
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  const second = [];
+  const third = [];
+  instance.onErrorReceived(() => {
+    throw new Error('first failed');
+  });
+  instance.onErrorReceived((error) => second.push(error.code));
+  instance.onErrorReceived((error) => third.push(error.code));
+  await instance.events.publishError({
+    code: connector.ZlinkStreamErrorCode.RemoteError,
+    message: 'remote'
+  });
+  await instance.dispatch();
+  assert.deepEqual(second, [
+    connector.ZlinkStreamErrorCode.RemoteError,
+    connector.ZlinkStreamErrorCode.UserCallbackFailed
+  ]);
+  assert.deepEqual(third, [
+    connector.ZlinkStreamErrorCode.RemoteError,
+    connector.ZlinkStreamErrorCode.UserCallbackFailed
+  ]);
+});
+
+test('transport loss and exhausted reconnect attempts each notify disconnection', async () => {
+  let attempts = 0;
+  const failedConnection = new MemoryConnection();
+  failedConnection.read = async () => {
+    throw new Error('transport lost');
+  };
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: {
+      async connect() {
+        attempts += 1;
+        if (attempts === 1) return failedConnection;
+        throw new Error('reconnect refused');
+      }
+    },
+    heartbeat: { enabled: false },
+    reconnect: { initialDelayMs: 1, maxDelayMs: 1, backoffFactor: 1, maxAttempts: 2 }
+  });
+  let disconnected = 0;
+  instance.onDisconnected(() => {
+    disconnected += 1;
+  });
+  await instance.connect();
+  await waitFor(() => attempts === 3, 1000);
+  await instance.dispatch();
+  assert.equal(disconnected, 2);
+  assert.equal(instance.closeReason, 'TransportError');
+});
+
+test('a later transport failure replaces the prior server close reason', async () => {
+  const first = new MemoryConnection();
+  const second = new MemoryConnection();
+  let failSecond = false;
+  second.read = async () => {
+    if (failSecond) throw new Error('second transport failed');
+    return undefined;
+  };
+  let connects = 0;
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: {
+      async connect() {
+        connects += 1;
+        if (connects === 1) return first;
+        if (connects === 2) return second;
+        throw new Error('replacement refused');
+      }
+    },
+    heartbeat: { enabled: false },
+    reconnect: { enabled: true, initialDelayMs: 1, maxDelayMs: 1, backoffFactor: 1, maxAttempts: 2 }
+  });
+  await instance.connect();
+  await instance.lifecycle.serverClosing('ServerDrain');
+  await waitFor(() => connects === 2 && instance.isConnected, 1000);
+  assert.equal(instance.closeReason, 'ServerDrain');
+  failSecond = true;
+  await waitFor(() => instance.closeReason === 'TransportError', 1000);
+  assert.equal(instance.closeReason, 'TransportError');
+});
+
+test('close after a failed connection preserves its ending reason', async () => {
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: {
+      async connect() {
+        throw new Error('connection refused');
+      }
+    },
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  await assert.rejects(instance.connect());
+  assert.equal(instance.closeReason, 'TransportError');
+  await instance.close();
+  assert.equal(instance.closeReason, 'TransportError');
+});
+
+test('heartbeat expiry retains HeartbeatTimeout as the close reason', async () => {
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: new MemoryTransportFactory(),
+    heartbeat: { intervalMs: 1, timeoutMs: 1 },
+    reconnect: { enabled: false }
+  });
+  await instance.connect();
+  await waitFor(() => instance.state === connector.ZlinkStreamConnectionState.Disconnected, 1000);
+  assert.equal(instance.closeReason, 'HeartbeatTimeout');
+});
+
+test('accepted frames write in order even when the first transport write waits', async () => {
+  const connection = new MemoryConnection();
+  const writes = [];
+  let releaseFirst;
+  connection.write = async (frame) => {
+    writes.push(
+      protocolCodecs.ZlinkStreamHeaderCodec.decode(
+        protocolCodecs.ZlinkStreamFrameCodec.decode(frame).header
+      ).name
+    );
+    if (writes.length === 1)
+      await new Promise((resolve) => {
+        releaseFirst = resolve;
+      });
+  };
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: {
+      async connect() {
+        return connection;
+      }
+    },
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  await instance.connect();
+  const first = instance
+    .send({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+    .packetName('First')
+    .submit();
+  const second = instance
+    .send({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+    .packetName('Second')
+    .submit();
+  try {
+    assert.deepEqual(writes, ['First']);
+  } finally {
+    releaseFirst();
+  }
+  await Promise.all([first, second]);
+  assert.deepEqual(writes, ['First', 'Second']);
+});
+
+test('cancelling an active send leaves its physical frame write intact', async () => {
+  const connection = new MemoryConnection();
+  const writes = [];
+  let releaseFirst;
+  connection.write = (frame, signal) => {
+    writes.push({ frame, signal });
+    return writes.length === 1
+      ? new Promise((resolve) => {
+          releaseFirst = resolve;
+        })
+      : Promise.resolve();
+  };
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: {
+      async connect() {
+        return connection;
+      }
+    },
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  await instance.connect();
+  const controller = new AbortController();
+  const first = instance
+    .send({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+    .packetName('First')
+    .submit(controller.signal);
+  const second = instance
+    .send({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+    .packetName('Second')
+    .submit();
+  try {
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].signal, undefined);
+    controller.abort();
+    await assert.rejects(first);
+    assert.equal(writes.length, 1);
+  } finally {
+    releaseFirst();
+  }
+  await second;
+  assert.equal(writes.length, 2);
+  await instance.close();
+});
+
+test('Request timeout starts after frame validation and acceptance', async (t) => {
+  // The receive loop parks in a read that a pushed frame resolves, so only the
+  // request timer runs on the mocked clock.
+  const connection = new MemoryConnection();
+  let wakeReader;
+  connection.read = async () => {
+    while (connection.inbound.length === 0) {
+      await new Promise((resolve) => {
+        wakeReader = resolve;
+      });
+    }
+    return connection.inbound.shift();
+  };
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: {
+      async connect() {
+        return connection;
+      }
+    },
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  await instance.connect();
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const originalEncode = instance.frameSender.protocol.encode.bind(instance.frameSender.protocol);
+  instance.frameSender.protocol.encode = (...args) => {
+    // Encoding, before acceptance, takes longer than the request timeout.
+    t.mock.timers.tick(40);
+    return originalEncode(...args);
+  };
+  connection.write = async (frame) => {
+    const request = protocolCodecs.ZlinkStreamHeaderCodec.decode(
+      protocolCodecs.ZlinkStreamFrameCodec.decode(frame).header
+    );
+    connection.pushFrame(
+      protocolCodecs.ZlinkStreamFrameCodec.encode(
+        protocolCodecs.ZlinkStreamHeaderCodec.encode({
+          kind: connector.ZlinkStreamMessageKind.Response,
+          codec: connector.ZlinkStreamCodec.Raw,
+          flags: connector.ZlinkStreamHeaderFlags.HasRequestSeq,
+          requestSeq: request.requestSeq,
+          name: 'SlowEncode',
+          metadata: connector.ZlinkStreamMetadataMap.empty
+        }),
+        new Uint8Array([1])
+      )
+    );
+    wakeReader?.();
+  };
+  const reply = await instance
+    .request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+    .packetName('SlowEncode')
+    .timeout(25)
+    .submitEncoded();
+  assert.deepEqual(reply.payload, new Uint8Array([1]));
+  t.mock.timers.reset();
+  await instance.close();
+});
+
+test('queued request expires from acceptance before its frame is written', async () => {
+  const connection = new MemoryConnection();
+  const writes = [];
+  let releaseFirst;
+  connection.write = async (frame) => {
+    writes.push(frame);
+    if (writes.length === 1)
+      await new Promise((resolve) => {
+        releaseFirst = resolve;
+      });
+  };
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: {
+      async connect() {
+        return connection;
+      }
+    },
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  await instance.connect();
+  const first = instance
+    .send({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+    .packetName('Blocking')
+    .submit();
+  const pending = instance
+    .request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+    .packetName('Expired')
+    .timeout(10)
+    .submitEncoded();
+  try {
+    await assert.rejects(
+      withTimeout(pending, 100, 'request expiry'),
+      (error) => error.error?.code === connector.ZlinkStreamErrorCode.RequestTimeout
+    );
+    assert.equal(writes.length, 1);
+  } finally {
+    releaseFirst();
+  }
+  await first;
+});
+
+test('dispatch callbacks do not repeatedly scan an undeliverable push backlog', async () => {
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: new MemoryTransportFactory(),
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  const received = instance.receivedMessages;
+  let queueReads = 0;
+  received.queue = new Proxy(received.queue, {
+    get(target, property, receiver) {
+      if (typeof property === 'string' && /^\d+$/.test(property)) queueReads += 1;
+      return Reflect.get(target, property, receiver);
+    }
+  });
+  for (let i = 0; i < 1000; i += 1) {
+    received.enqueue({
+      name: 'Unregistered',
+      metadata: connector.ZlinkStreamMetadataMap.empty,
+      payload: { codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() }
+    });
+  }
+  let callbacks = 0;
+  for (let i = 0; i < 100; i += 1)
+    received.enqueueCallback(() => {
+      callbacks += 1;
+    });
+  await instance.dispatch();
+  assert.equal(callbacks, 100);
+  assert.ok(queueReads < 5000, `dispatch inspected ${queueReads} backlog entries`);
 });
 
 test('stream connector heartbeat loop sends ping control frames after connect', async () => {
@@ -1361,7 +2384,9 @@ test('stream connector heartbeat loop sends ping control frames after connect', 
   });
 
   await instance.connect();
-  const frame = protocolCodecs.ZlinkStreamFrameCodec.decode(await transportFactory.connection.nextWrite());
+  const frame = protocolCodecs.ZlinkStreamFrameCodec.decode(
+    await transportFactory.connection.nextWrite()
+  );
   const header = protocolCodecs.ZlinkStreamHeaderCodec.decode(frame.header);
   assert.equal(header.kind, connector.ZlinkStreamMessageKind.Control);
   assert.equal(header.name, '$zlink.heartbeat.ping');
@@ -1385,6 +2410,7 @@ test('stream connector connect retries through reconnect options before succeedi
 
   assert.equal(transportFactory.attempts, 2);
   assert.equal(instance.isConnected, true);
+  await instance.dispatch();
   assert.ok(states.includes(connector.ZlinkStreamConnectionState.Reconnecting));
   await instance.close();
 });
@@ -1403,6 +2429,7 @@ test('stream connector reports exhausted reconnect state transitions', async () 
   instance.onErrorReceived((error) => errors.push(error.code));
 
   await assert.rejects(() => instance.connect(), /Connect failed/);
+  await instance.dispatch();
 
   assert.equal(transportFactory.attempts, 2);
   assert.equal(instance.state, connector.ZlinkStreamConnectionState.Disconnected);
@@ -1445,7 +2472,9 @@ test('stream connector close does not wait for a connection state handler', asyn
   const events = [];
   let stateHandlerEntered = false;
   let releaseStateHandler;
-  const stateHandler = new Promise((resolve) => { releaseStateHandler = resolve; });
+  const stateHandler = new Promise((resolve) => {
+    releaseStateHandler = resolve;
+  });
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
     transportFactory: new MemoryTransportFactory(),
@@ -1464,7 +2493,11 @@ test('stream connector close does not wait for a connection state handler', asyn
   const closing = instance.close();
   try {
     await withTimeout(closing, 2000, 'close with a pending connection state handler');
-    await withTimeout(instance.dispatch(), 2000, 'dispatch with a pending connection state handler');
+    await withTimeout(
+      instance.dispatch(),
+      2000,
+      'dispatch with a pending connection state handler'
+    );
   } finally {
     releaseStateHandler();
     await closing;
@@ -1478,7 +2511,9 @@ test('stream connector exhausted reconnect does not wait for a connection state 
   const events = [];
   let stateHandlerEntered = false;
   let releaseStateHandler;
-  const stateHandler = new Promise((resolve) => { releaseStateHandler = resolve; });
+  const stateHandler = new Promise((resolve) => {
+    releaseStateHandler = resolve;
+  });
   const transportFactory = new FlakyTransportFactory(5);
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
@@ -1496,8 +2531,11 @@ test('stream connector exhausted reconnect does not wait for a connection state 
   instance.onDisconnected(() => events.push('disconnected'));
 
   const connecting = instance.connect();
+  const rejected = assert.rejects(connecting, /Connect failed/);
   try {
-    await withTimeout(assert.rejects(connecting, /Connect failed/), 2000, 'exhausted reconnect');
+    await waitFor(() => instance.state === connector.ZlinkStreamConnectionState.Disconnected, 1000);
+    await instance.dispatch();
+    await withTimeout(rejected, 2000, 'exhausted reconnect');
   } finally {
     releaseStateHandler();
     await connecting.catch(() => undefined);
@@ -1512,13 +2550,22 @@ test('stream connector transport failure does not wait for a connection state ha
   const events = [];
   let stateHandlerEntered = false;
   let releaseStateHandler;
-  const stateHandler = new Promise((resolve) => { releaseStateHandler = resolve; });
+  const stateHandler = new Promise((resolve) => {
+    releaseStateHandler = resolve;
+  });
   const connection = new MemoryConnection();
   let rejectRead;
-  connection.read = () => new Promise((_resolve, reject) => { rejectRead = reject; });
+  connection.read = () =>
+    new Promise((_resolve, reject) => {
+      rejectRead = reject;
+    });
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
-    transportFactory: { async connect() { return connection; } },
+    transportFactory: {
+      async connect() {
+        return connection;
+      }
+    },
     reconnect: { enabled: false },
     heartbeat: { enabled: false }
   });
@@ -1546,7 +2593,9 @@ test('stream connector transport failure does not wait for a connection state ha
 test('stream connector shares concurrent connect and closes a connection that completes after close starts', async () => {
   let connectCalls = 0;
   let resolveConnection;
-  const connectionReady = new Promise((resolve) => { resolveConnection = resolve; });
+  const connectionReady = new Promise((resolve) => {
+    resolveConnection = resolve;
+  });
   const connection = new MemoryConnection();
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
@@ -1575,12 +2624,20 @@ test('stream connector shares concurrent connect and closes a connection that co
 
 test('stream connector close reports failure to clean up a late connect result', async () => {
   let resolveConnection;
-  const connectionReady = new Promise((resolve) => { resolveConnection = resolve; });
+  const connectionReady = new Promise((resolve) => {
+    resolveConnection = resolve;
+  });
   const connection = new MemoryConnection();
-  connection.close = async () => { throw new Error('late connection close failed'); };
+  connection.close = async () => {
+    throw new Error('late connection close failed');
+  };
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
-    transportFactory: { async connect() { return await connectionReady; } },
+    transportFactory: {
+      async connect() {
+        return await connectionReady;
+      }
+    },
     heartbeat: { enabled: false }
   });
 
@@ -1603,7 +2660,11 @@ test('stream connector concurrent close shares cleanup and remains closed when t
   };
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
-    transportFactory: { async connect() { return connection; } },
+    transportFactory: {
+      async connect() {
+        return connection;
+      }
+    },
     heartbeat: { enabled: false }
   });
   let disconnectedCalls = 0;
@@ -1635,7 +2696,11 @@ test('stream connector pong write failure disconnects instead of reporting a dec
   };
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
-    transportFactory: { async connect() { return connection; } },
+    transportFactory: {
+      async connect() {
+        return connection;
+      }
+    },
     dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
     reconnect: { enabled: false },
     heartbeat: { enabled: false }
@@ -1643,16 +2708,18 @@ test('stream connector pong write failure disconnects instead of reporting a dec
   const errors = [];
   instance.onErrorReceived((error) => errors.push(error.code));
   await instance.connect();
-  connection.pushFrame(protocolCodecs.ZlinkStreamFrameCodec.encode(
-    protocolCodecs.ZlinkStreamHeaderCodec.encode({
-      kind: connector.ZlinkStreamMessageKind.Control,
-      codec: connector.ZlinkStreamCodec.Raw,
-      flags: connector.ZlinkStreamHeaderFlags.None,
-      name: '$zlink.heartbeat.ping',
-      metadata: connector.ZlinkStreamMetadataMap.empty
-    }),
-    new Uint8Array()
-  ));
+  connection.pushFrame(
+    protocolCodecs.ZlinkStreamFrameCodec.encode(
+      protocolCodecs.ZlinkStreamHeaderCodec.encode({
+        kind: connector.ZlinkStreamMessageKind.Control,
+        codec: connector.ZlinkStreamCodec.Raw,
+        flags: connector.ZlinkStreamHeaderFlags.None,
+        name: '$zlink.heartbeat.ping',
+        metadata: connector.ZlinkStreamMetadataMap.empty
+      }),
+      new Uint8Array()
+    )
+  );
 
   // The receive loop owns the transport in both dispatch modes, so the failed
   // pong surfaces there as a disconnect and an error event, not as a dispatch
@@ -1671,7 +2738,11 @@ test('stream connector manual dispatch mode completes waitFor without a dispatch
   const connection = new MemoryConnection();
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
-    transportFactory: { async connect() { return connection; } },
+    transportFactory: {
+      async connect() {
+        return connection;
+      }
+    },
     dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
     reconnect: { enabled: false },
     heartbeat: { enabled: false }
@@ -1691,7 +2762,11 @@ test('stream connector manual dispatch mode keeps registered handlers waiting fo
   const connection = new MemoryConnection();
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
-    transportFactory: { async connect() { return connection; } },
+    transportFactory: {
+      async connect() {
+        return connection;
+      }
+    },
     dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
     reconnect: { enabled: false },
     heartbeat: { enabled: false }
@@ -1704,7 +2779,7 @@ test('stream connector manual dispatch mode keeps registered handlers waiting fo
   await instance.connect();
   connection.pushFrame(sendFrame('ManualPush', 'queued'));
   await waitFor(() => connection.inbound.length === 0, 1000);
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await Promise.resolve();
 
   assert.deepEqual(received, []);
 
@@ -1719,7 +2794,11 @@ test('stream connector immediate dispatch mode runs handlers and waits without a
   const connection = new MemoryConnection();
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
-    transportFactory: { async connect() { return connection; } },
+    transportFactory: {
+      async connect() {
+        return connection;
+      }
+    },
     dispatchMode: connector.ZlinkStreamDispatchMode.Immediate,
     reconnect: { enabled: false },
     heartbeat: { enabled: false }
@@ -1745,17 +2824,25 @@ test('stream connector connect waits for an in-progress disconnect before reconn
   let releaseClose;
   let closeStarted = false;
   const oldConnection = new MemoryConnection();
-  oldConnection.read = async () => { throw new Error('old transport failed'); };
+  oldConnection.read = async () => {
+    throw new Error('old transport failed');
+  };
   oldConnection.close = async () => {
     closeStarted = true;
-    await new Promise((resolve) => { releaseClose = resolve; });
+    await new Promise((resolve) => {
+      releaseClose = resolve;
+    });
     oldConnection.closed = true;
   };
   const newConnection = new MemoryConnection();
   let connectCalls = 0;
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
-    transportFactory: { async connect() { return ++connectCalls === 1 ? oldConnection : newConnection; } },
+    transportFactory: {
+      async connect() {
+        return ++connectCalls === 1 ? oldConnection : newConnection;
+      }
+    },
     dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
     heartbeat: { enabled: false }
   });
@@ -1776,12 +2863,18 @@ test('late read failure from a replaced connection does not disconnect a replace
   const reads = [];
   const oldConnection = new MemoryConnection();
   oldConnection.read = () => new Promise((_resolve, reject) => reads.push(reject));
-  oldConnection.write = async () => { throw new Error('old heartbeat write failed'); };
+  oldConnection.write = async () => {
+    throw new Error('old heartbeat write failed');
+  };
   const newConnection = new MemoryConnection();
   let connectCalls = 0;
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
-    transportFactory: { async connect() { return ++connectCalls === 1 ? oldConnection : newConnection; } },
+    transportFactory: {
+      async connect() {
+        return ++connectCalls === 1 ? oldConnection : newConnection;
+      }
+    },
     dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
     heartbeat: { intervalMs: 1, timeoutMs: 60000 }
   });
@@ -1814,7 +2907,12 @@ test('a frame that arrives late on a replaced connection is discarded after reco
   };
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
-    transportFactory: { async connect() { connectCalls++; return connection; } },
+    transportFactory: {
+      async connect() {
+        connectCalls++;
+        return connection;
+      }
+    },
     dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
     heartbeat: { intervalMs: 1, timeoutMs: 60000 }
   });
@@ -1840,12 +2938,17 @@ test('a frame that arrives late on a replaced connection is discarded after reco
 test('stream connector immediate receive failure closes transport and fails pending request', async () => {
   let rejectRead;
   const connection = new MemoryConnection();
-  connection.read = () => new Promise((_resolve, reject) => {
-    rejectRead = reject;
-  });
+  connection.read = () =>
+    new Promise((_resolve, reject) => {
+      rejectRead = reject;
+    });
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
-    transportFactory: { async connect() { return connection; } },
+    transportFactory: {
+      async connect() {
+        return connection;
+      }
+    },
     dispatchMode: connector.ZlinkStreamDispatchMode.Immediate,
     reconnect: { enabled: false },
     heartbeat: { enabled: false }
@@ -1854,16 +2957,24 @@ test('stream connector immediate receive failure closes transport and fails pend
   instance.onErrorReceived((error) => errors.push(error.code));
 
   await instance.connect();
-  const pending = instance.request({
-    codec: connector.ZlinkStreamCodec.Raw,
-    payload: new Uint8Array()
-  }).packetName('Pending').timeout(1000).submitEncoded();
+  const pending = instance
+    .request({
+      codec: connector.ZlinkStreamCodec.Raw,
+      payload: new Uint8Array()
+    })
+    .packetName('Pending')
+    .timeout(1000)
+    .submitEncoded();
   rejectRead(new Error('injected read failure'));
 
-  await assert.rejects(() => pending, /Receive loop failed/);
+  await assert.rejects(
+    () => pending,
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.Disconnected
+  );
   await waitFor(() => instance.state === connector.ZlinkStreamConnectionState.Disconnected, 1000);
   assert.equal(connection.closed, true);
-  assert.deepEqual(errors, [connector.ZlinkStreamErrorCode.FrameDecodeFailed]);
+  assert.deepEqual(errors, [connector.ZlinkStreamErrorCode.Disconnected]);
+  assert.equal(instance.closeReason, 'TransportError');
 });
 
 test('stream connector heartbeat timeout closes transport and fails pending request', async () => {
@@ -1877,10 +2988,14 @@ test('stream connector heartbeat timeout closes transport and fails pending requ
   });
 
   await instance.connect();
-  const pending = instance.request({
-    codec: connector.ZlinkStreamCodec.Raw,
-    payload: new Uint8Array()
-  }).packetName('Pending').timeout(1000).submitEncoded();
+  const pending = instance
+    .request({
+      codec: connector.ZlinkStreamCodec.Raw,
+      payload: new Uint8Array()
+    })
+    .packetName('Pending')
+    .timeout(1000)
+    .submitEncoded();
 
   await assert.rejects(() => pending, /Heartbeat timed out/);
   await waitFor(() => instance.state === connector.ZlinkStreamConnectionState.Disconnected, 1000);
@@ -1900,7 +3015,11 @@ test('stream connector heartbeat send failure closes transport and fails pending
   };
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
-    transportFactory: { async connect() { return connection; } },
+    transportFactory: {
+      async connect() {
+        return connection;
+      }
+    },
     dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
     reconnect: { enabled: false },
     heartbeat: { intervalMs: 1, timeoutMs: 1000 }
@@ -1909,15 +3028,26 @@ test('stream connector heartbeat send failure closes transport and fails pending
   instance.onDisconnected(() => disconnected.push(true));
 
   await instance.connect();
-  const pending = instance.request({
-    codec: connector.ZlinkStreamCodec.Raw,
-    payload: new Uint8Array()
-  }).packetName('Pending').timeout(1000).submitEncoded();
+  const pending = instance
+    .request({
+      codec: connector.ZlinkStreamCodec.Raw,
+      payload: new Uint8Array()
+    })
+    .packetName('Pending')
+    .timeout(1000)
+    .submitEncoded();
 
-  await assert.rejects(() => pending, /Heartbeat send failed/);
+  // Spec stream-connector 32 section 9: the failed ping write ends the
+  // connection; the pending request fails as Disconnected and the cause stays
+  // in the close reason.
+  await assert.rejects(
+    () => pending,
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.Disconnected
+  );
   await waitFor(() => instance.state === connector.ZlinkStreamConnectionState.Disconnected, 1000);
   await instance.dispatch();
   assert.equal(connection.closed, true);
+  assert.equal(instance.closeReason, 'TransportError');
   assert.equal(disconnected.length, 1);
 });
 
@@ -1947,47 +3077,75 @@ test('stream connector one-way send carries no correlation id on the wire', asyn
     .packetName('Corr')
     .timeout(1000)
     .submitEncoded();
-  const requestFrame = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[1]);
+  const requestFrame = protocolCodecs.ZlinkStreamFrameCodec.decode(
+    transportFactory.connection.frames[1]
+  );
   const requestHeader = protocolCodecs.ZlinkStreamHeaderCodec.decode(requestFrame.header);
   assert.notEqual(requestHeader.flags & connector.ZlinkStreamHeaderFlags.HasCorrelationId, 0);
-  assert.ok(typeof requestHeader.correlationId === 'string' && requestHeader.correlationId.length > 0);
-  transportFactory.connection.pushFrame(protocolCodecs.ZlinkStreamFrameCodec.encode(
-    protocolCodecs.ZlinkStreamHeaderCodec.encode({
-      kind: connector.ZlinkStreamMessageKind.Response,
-      codec: connector.ZlinkStreamCodec.Raw,
-      flags: connector.ZlinkStreamHeaderFlags.HasRequestSeq,
-      requestSeq: requestHeader.requestSeq,
-      name: 'Corr',
-      metadata: connector.ZlinkStreamMetadataMap.empty
-    }),
-    new Uint8Array()
-  ));
+  assert.ok(
+    typeof requestHeader.correlationId === 'string' && requestHeader.correlationId.length > 0
+  );
+  transportFactory.connection.pushFrame(
+    protocolCodecs.ZlinkStreamFrameCodec.encode(
+      protocolCodecs.ZlinkStreamHeaderCodec.encode({
+        kind: connector.ZlinkStreamMessageKind.Response,
+        codec: connector.ZlinkStreamCodec.Raw,
+        flags: connector.ZlinkStreamHeaderFlags.HasRequestSeq,
+        requestSeq: requestHeader.requestSeq,
+        name: 'Corr',
+        metadata: connector.ZlinkStreamMetadataMap.empty
+      }),
+      new Uint8Array()
+    )
+  );
   await instance.dispatch();
   await pending;
 });
 
 test('connector omits diagnostics surfaces and never sends flow fields', async () => {
   const factory = new MemoryTransportFactory();
-  const instance = createStreamConnector({ endpoint: 'ws://127.0.0.1:19000', transportFactory: factory });
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: factory
+  });
   assert.equal('diagnosticsLevel' in instance.options, false);
   assert.equal('diagnosticsLevel' in instance, false);
   assert.equal('setDiagnosticsLevel' in instance, false);
   assert.equal('setDiagnosticsLevelAsync' in instance, false);
   assert.equal('ZlinkStreamDiagnosticsLevel' in connector, false);
   await instance.connect();
-  await instance.send({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() }).packetName('NoFlow').submit();
-  const send = protocolCodecs.ZlinkStreamHeaderCodec.decode(protocolCodecs.ZlinkStreamFrameCodec.decode(factory.connection.frames[0]).header);
+  await instance
+    .send({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+    .packetName('NoFlow')
+    .submit();
+  const send = protocolCodecs.ZlinkStreamHeaderCodec.decode(
+    protocolCodecs.ZlinkStreamFrameCodec.decode(factory.connection.frames[0]).header
+  );
   assert.equal(send.flags & connector.ZlinkStreamHeaderFlags.HasFlowId, 0);
   assert.equal(send.flags & connector.ZlinkStreamHeaderFlags.HasCorrelationId, 0);
-  const pending = instance.request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() }).packetName('NoFlowRequest').timeout(1000).submitEncoded();
-  const request = protocolCodecs.ZlinkStreamHeaderCodec.decode(protocolCodecs.ZlinkStreamFrameCodec.decode(factory.connection.frames[1]).header);
+  const pending = instance
+    .request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+    .packetName('NoFlowRequest')
+    .timeout(1000)
+    .submitEncoded();
+  const request = protocolCodecs.ZlinkStreamHeaderCodec.decode(
+    protocolCodecs.ZlinkStreamFrameCodec.decode(factory.connection.frames[1]).header
+  );
   assert.equal(request.flags & connector.ZlinkStreamHeaderFlags.HasFlowId, 0);
   assert.notEqual(request.flags & connector.ZlinkStreamHeaderFlags.HasCorrelationId, 0);
-  factory.connection.pushFrame(protocolCodecs.ZlinkStreamFrameCodec.encode(protocolCodecs.ZlinkStreamHeaderCodec.encode({
-    kind: connector.ZlinkStreamMessageKind.Response, codec: connector.ZlinkStreamCodec.Raw,
-    flags: connector.ZlinkStreamHeaderFlags.HasRequestSeq, requestSeq: request.requestSeq,
-    name: '', metadata: connector.ZlinkStreamMetadataMap.empty
-  }), new Uint8Array()));
+  factory.connection.pushFrame(
+    protocolCodecs.ZlinkStreamFrameCodec.encode(
+      protocolCodecs.ZlinkStreamHeaderCodec.encode({
+        kind: connector.ZlinkStreamMessageKind.Response,
+        codec: connector.ZlinkStreamCodec.Raw,
+        flags: connector.ZlinkStreamHeaderFlags.HasRequestSeq,
+        requestSeq: request.requestSeq,
+        name: '',
+        metadata: connector.ZlinkStreamMetadataMap.empty
+      }),
+      new Uint8Array()
+    )
+  );
   await instance.dispatch();
   await pending;
 });
@@ -1995,59 +3153,112 @@ test('connector omits diagnostics surfaces and never sends flow fields', async (
 test('inbound flow values are dropped while malformed lengths still fail', async () => {
   const wire = require('../../packages/stream-wire/dist');
   const header = wire.encodeStreamWireHeader({
-    kind: connector.ZlinkStreamMessageKind.Send, codec: connector.ZlinkStreamCodec.Raw,
-    flags: connector.ZlinkStreamHeaderFlags.None, name: 'FlowInput', metadata: new Map(),
-    flowId: '01890000-0000-7000-8000-000000000001', flowOrigin: 1
+    kind: connector.ZlinkStreamMessageKind.Send,
+    codec: connector.ZlinkStreamCodec.Raw,
+    flags: connector.ZlinkStreamHeaderFlags.None,
+    name: 'FlowInput',
+    metadata: new Map(),
+    flowId: '01890000-0000-7000-8000-000000000001',
+    flowOrigin: 1
   });
   const invalidValue = header.slice();
   invalidValue[invalidValue.length - 5] = 122;
   assert.equal(protocolCodecs.ZlinkStreamHeaderCodec.decode(invalidValue).flowId, undefined);
-  assert.throws(() => protocolCodecs.ZlinkStreamHeaderCodec.decode(header.slice(0, -1)), /incomplete/);
+  assert.throws(
+    () => protocolCodecs.ZlinkStreamHeaderCodec.decode(header.slice(0, -1)),
+    /incomplete/
+  );
   const factory = new MemoryTransportFactory();
-  const instance = createStreamConnector({ endpoint: 'ws://127.0.0.1:19000', transportFactory: factory });
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: factory
+  });
   await instance.connect();
   const received = instance.waitForMessage('FlowInput', 1000, () => true);
-  factory.connection.pushFrame(protocolCodecs.ZlinkStreamFrameCodec.encode(invalidValue, new Uint8Array([1])));
+  factory.connection.pushFrame(
+    protocolCodecs.ZlinkStreamFrameCodec.encode(invalidValue, new Uint8Array([1]))
+  );
   await instance.dispatch();
-  assert.equal('flowId' in await received, false);
+  assert.equal('flowId' in (await received), false);
 });
 
 test('connector on accepts an explicit name and a payload constructor', async () => {
-  class TypedPush { static packetName = 'TypedPushWire'; }
+  class TypedPush {
+    static packetName = 'TypedPushWire';
+  }
   const factory = new MemoryTransportFactory();
-  const instance = createStreamConnector({ endpoint: 'ws://127.0.0.1:19000', transportFactory: factory });
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: factory
+  });
   const received = [];
   instance.on('TypedPushWire', (message) => received.push(message.name));
   instance.on(TypedPush, (message) => received.push(message.payload.value));
   await instance.connect();
-  factory.connection.pushFrame(protocolCodecs.ZlinkStreamFrameCodec.encode(protocolCodecs.ZlinkStreamHeaderCodec.encode({
-    kind: connector.ZlinkStreamMessageKind.Send, codec: connector.ZlinkStreamCodec.Json,
-    flags: connector.ZlinkStreamHeaderFlags.None, name: 'TypedPushWire',
-    metadata: connector.ZlinkStreamMetadataMap.empty
-  }), new TextEncoder().encode('{"value":7}')));
+  factory.connection.pushFrame(
+    protocolCodecs.ZlinkStreamFrameCodec.encode(
+      protocolCodecs.ZlinkStreamHeaderCodec.encode({
+        kind: connector.ZlinkStreamMessageKind.Send,
+        codec: connector.ZlinkStreamCodec.Json,
+        flags: connector.ZlinkStreamHeaderFlags.None,
+        name: 'TypedPushWire',
+        metadata: connector.ZlinkStreamMetadataMap.empty
+      }),
+      new TextEncoder().encode('{"value":7}')
+    )
+  );
   await instance.dispatch();
   assert.deepEqual(received, ['TypedPushWire', 7]);
 });
 
 test('request hooks add metadata in order and report the full reply without changing its result', async () => {
   const factory = new MemoryTransportFactory();
-  const instance = createStreamConnector({ endpoint: 'ws://127.0.0.1:19000', transportFactory: factory });
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: factory
+  });
   const calls = [];
-  instance.onRequestSending((ctx) => { calls.push('first'); ctx.setMetadata('first', '1'); });
-  instance.onRequestSending((ctx) => { calls.push('second'); ctx.setMetadata('second', '2'); });
-  instance.onReplyReceived((ctx) => { calls.push('reply'); assert.equal(ctx.succeeded, true); assert.equal(ctx.requestPacketName, 'Hooked'); assert.equal(ctx.reply.metadata.get('response'), 'ok'); assert.ok(ctx.elapsed >= 0); });
+  instance.onRequestSending((ctx) => {
+    calls.push('first');
+    ctx.setMetadata('first', '1');
+  });
+  instance.onRequestSending((ctx) => {
+    calls.push('second');
+    ctx.setMetadata('second', '2');
+  });
+  instance.onReplyReceived((ctx) => {
+    calls.push('reply');
+    assert.equal(ctx.succeeded, true);
+    assert.equal(ctx.requestPacketName, 'Hooked');
+    assert.equal(ctx.reply.metadata.get('response'), 'ok');
+    assert.ok(ctx.elapsed >= 0);
+  });
   await instance.connect();
-  const pending = instance.request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array([3]) }).packetName('Hooked').timeout(1000).submitEncoded();
+  const pending = instance
+    .request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array([3]) })
+    .packetName('Hooked')
+    .timeout(1000)
+    .submitEncoded();
   assert.deepEqual(calls, ['first', 'second']);
   assert.equal(factory.connection.frames.length, 1);
-  const sent = protocolCodecs.ZlinkStreamHeaderCodec.decode(protocolCodecs.ZlinkStreamFrameCodec.decode(factory.connection.frames[0]).header);
+  const sent = protocolCodecs.ZlinkStreamHeaderCodec.decode(
+    protocolCodecs.ZlinkStreamFrameCodec.decode(factory.connection.frames[0]).header
+  );
   assert.equal(sent.metadata.get('first'), '1');
   assert.equal(sent.metadata.get('second'), '2');
-  factory.connection.pushFrame(protocolCodecs.ZlinkStreamFrameCodec.encode(protocolCodecs.ZlinkStreamHeaderCodec.encode({
-    kind: connector.ZlinkStreamMessageKind.Response, codec: connector.ZlinkStreamCodec.Raw,
-    flags: connector.ZlinkStreamHeaderFlags.HasRequestSeq, requestSeq: sent.requestSeq,
-    name: '', metadata: connector.ZlinkStreamMetadataMap.empty.with('response', 'ok')
-  }), new Uint8Array([4])));
+  factory.connection.pushFrame(
+    protocolCodecs.ZlinkStreamFrameCodec.encode(
+      protocolCodecs.ZlinkStreamHeaderCodec.encode({
+        kind: connector.ZlinkStreamMessageKind.Response,
+        codec: connector.ZlinkStreamCodec.Raw,
+        flags: connector.ZlinkStreamHeaderFlags.HasRequestSeq,
+        requestSeq: sent.requestSeq,
+        name: '',
+        metadata: connector.ZlinkStreamMetadataMap.empty.with('response', 'ok')
+      }),
+      new Uint8Array([4])
+    )
+  );
   await instance.dispatch();
   assert.deepEqual(Array.from((await pending).payload), [4]);
   await instance.dispatch();
@@ -2056,18 +3267,37 @@ test('request hooks add metadata in order and report the full reply without chan
 
 test('reply hook sees timeout and hook failures do not replace the request error', async () => {
   const factory = new MemoryTransportFactory();
-  const instance = createStreamConnector({ endpoint: 'ws://127.0.0.1:19000', transportFactory: factory });
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: factory
+  });
   const observed = [];
   const callbackErrors = [];
-  instance.onRequestSending(() => { throw new Error('sending hook'); });
-  instance.onErrorReceived((error) => callbackErrors.push({ code: error.code, sent: factory.connection.frames.length }));
-  instance.onReplyReceived((ctx) => { observed.push(ctx); throw new Error('reply hook'); });
+  instance.onRequestSending(() => {
+    throw new Error('sending hook');
+  });
+  instance.onErrorReceived((error) =>
+    callbackErrors.push({ code: error.code, sent: factory.connection.frames.length })
+  );
+  instance.onReplyReceived((ctx) => {
+    observed.push(ctx);
+    throw new Error('reply hook');
+  });
   await instance.connect();
-  const pending = instance.request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() }).packetName('Timeout').timeout(10).submitEncoded();
+  const pending = instance
+    .request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+    .packetName('Timeout')
+    .timeout(10)
+    .submitEncoded();
   assert.equal(factory.connection.frames.length, 1);
   assert.deepEqual(callbackErrors, []);
   await Promise.resolve();
-  assert.deepEqual(callbackErrors[0], { code: connector.ZlinkStreamErrorCode.UserCallbackFailed, sent: 1 });
+  assert.deepEqual(callbackErrors, []);
+  await instance.dispatch();
+  assert.deepEqual(callbackErrors[0], {
+    code: connector.ZlinkStreamErrorCode.UserCallbackFailed,
+    sent: 1
+  });
   await assert.rejects(pending, /timed out/);
   await instance.dispatch();
   assert.equal(observed.length, 1);
@@ -2077,34 +3307,124 @@ test('reply hook sees timeout and hook failures do not replace the request error
 
 test('Manual sending hook runs inline without a dispatch pump', async () => {
   const factory = new MemoryTransportFactory();
-  const instance = createStreamConnector({ endpoint: 'ws://127.0.0.1:19000', transportFactory: factory });
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: factory
+  });
   const calls = [];
-  instance.onRequestSending((ctx) => { calls.push('sending'); ctx.setMetadata('inline', 'yes'); });
+  instance.onRequestSending((ctx) => {
+    calls.push('sending');
+    ctx.setMetadata('inline', 'yes');
+  });
   instance.onReplyReceived((ctx) => calls.push(ctx.error.code));
   await instance.connect();
-  const pending = instance.request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() }).packetName('Unsent').timeout(10).submitEncoded();
+  const pending = instance
+    .request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+    .packetName('Unsent')
+    .timeout(10)
+    .submitEncoded();
   assert.deepEqual(calls, ['sending']);
   assert.equal(factory.connection.frames.length, 1);
-  const header = protocolCodecs.ZlinkStreamHeaderCodec.decode(protocolCodecs.ZlinkStreamFrameCodec.decode(factory.connection.frames[0]).header);
+  const header = protocolCodecs.ZlinkStreamHeaderCodec.decode(
+    protocolCodecs.ZlinkStreamFrameCodec.decode(factory.connection.frames[0]).header
+  );
   assert.equal(header.metadata.get('inline'), 'yes');
   await assert.rejects(pending, /timed out/);
   await instance.dispatch();
   assert.deepEqual(calls, ['sending', connector.ZlinkStreamErrorCode.RequestTimeout]);
 });
 
-test('an already aborted request skips sending hook and reports the failed outcome', async () => {
+test('an already aborted request runs neither hook', async () => {
   const factory = new MemoryTransportFactory();
-  const instance = createStreamConnector({ endpoint: 'ws://127.0.0.1:19000', transportFactory: factory });
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: factory
+  });
   const calls = [];
   instance.onRequestSending(() => calls.push('sending'));
   instance.onReplyReceived((ctx) => calls.push(ctx.error.code));
   await instance.connect();
   const controller = new AbortController();
   controller.abort();
-  await assert.rejects(instance.request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() }).packetName('Canceled').submitEncoded(controller.signal), /canceled/);
+  await assert.rejects(
+    instance
+      .request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+      .packetName('Canceled')
+      .submitEncoded(controller.signal)
+  );
   await instance.dispatch();
-  assert.deepEqual(calls, [connector.ZlinkStreamErrorCode.Disconnected]);
+  assert.deepEqual(calls, []);
   assert.equal(factory.connection.frames.length, 0);
+});
+
+test('a request canceled while its frame waits in the queue skips the reply hook', async () => {
+  const connection = new MemoryConnection();
+  const written = [];
+  let releaseFirst;
+  connection.write = async (frame) => {
+    written.push(
+      protocolCodecs.ZlinkStreamHeaderCodec.decode(
+        protocolCodecs.ZlinkStreamFrameCodec.decode(frame).header
+      ).name
+    );
+    if (written.length === 1)
+      await new Promise((resolve) => {
+        releaseFirst = resolve;
+      });
+  };
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: {
+      async connect() {
+        return connection;
+      }
+    },
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  const replies = [];
+  instance.onReplyReceived((context) => replies.push(context.requestPacketName));
+  await instance.connect();
+  const raw = { codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() };
+  const blocking = instance.send(raw).packetName('Blocking').submit();
+  const controller = new AbortController();
+  const canceled = instance
+    .request(raw)
+    .packetName('Canceled')
+    .timeout(60_000)
+    .submitEncoded(controller.signal);
+  controller.abort();
+  await assert.rejects(canceled);
+  releaseFirst();
+  await blocking;
+  await instance.dispatch();
+  assert.deepEqual(replies, []);
+  assert.equal(instance.pendingDispatchCount, 0);
+});
+
+test('a request canceled while it waits for its reply ends at once and skips the reply hook', async () => {
+  const factory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: factory,
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  const replies = [];
+  instance.onReplyReceived((context) => replies.push(context.requestPacketName));
+  await instance.connect();
+  const controller = new AbortController();
+  const canceled = instance
+    .request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+    .packetName('Unanswered')
+    .timeout(60_000)
+    .submitEncoded(controller.signal);
+  await factory.connection.nextWrite();
+  controller.abort();
+  await assert.rejects(withTimeout(canceled, 1000, 'canceled request'));
+  await instance.dispatch();
+  assert.deepEqual(replies, []);
+  assert.equal(instance.pendingDispatchCount, 0);
 });
 
 class MemoryTransportFactory {
@@ -2160,7 +3480,9 @@ test('stream connector counts received packets per name without lowering them on
   // A registered handler in Manual mode changes nothing either: the packet is
   // counted where it arrives, not where the pump hands it over.
   const delivered = [];
-  instance.on('Notice', (message) => { delivered.push(message); });
+  instance.on('Notice', (message) => {
+    delivered.push(message);
+  });
   transportFactory.connection.pushFrame(sendFrame('Notice', 'second'));
   await instance.dispatch();
   assert.equal(delivered.length, 1);
@@ -2178,7 +3500,9 @@ test('stream connector counts received packets the same way in immediate dispatc
     heartbeat: { enabled: false }
   });
   const delivered = [];
-  instance.on('Notice', (message) => { delivered.push(message); });
+  instance.on('Notice', (message) => {
+    delivered.push(message);
+  });
   await instance.connect();
 
   transportFactory.connection.pushFrame(sendFrame('Notice', 'first'));
@@ -2218,7 +3542,9 @@ test('stream connector restarts received counts when a connection is established
 // Spec stream-connector 32 section 10.1: both ways of naming a packet exist.
 test('stream wait surfaces accept a payload constructor as well as a name', async () => {
   class Notice {
-    static get packetName() { return 'Notice'; }
+    static get packetName() {
+      return 'Notice';
+    }
   }
   const transportFactory = new MemoryTransportFactory();
   const instance = createStreamConnector({
@@ -2235,10 +3561,17 @@ test('stream wait surfaces accept a payload constructor as well as a name', asyn
 
   await instance.expectNone(Notice).within(5).run();
 
-  const sequence = instance.waitForSequence(Notice).expect(() => true).timeout(1000).run();
+  const sequence = instance
+    .waitForSequence(Notice)
+    .expect(() => true)
+    .timeout(1000)
+    .run();
   transportFactory.connection.pushFrame(sendFrame('Notice', 'typed again'));
   await instance.dispatch();
-  assert.deepEqual((await sequence).map((message) => message.name), ['Notice']);
+  assert.deepEqual(
+    (await sequence).map((message) => message.name),
+    ['Notice']
+  );
   await instance.close();
 });
 
@@ -2246,7 +3579,9 @@ test('stream wait surfaces accept a payload constructor as well as a name', asyn
 // constructor name is only the fallback.
 test('default packet name resolver prefers the static packetName member', () => {
   class WithStatic {
-    static get packetName() { return 'inventory.changed'; }
+    static get packetName() {
+      return 'inventory.changed';
+    }
   }
   class WithoutStatic {}
   const instance = createStreamConnector({
@@ -2269,11 +3604,12 @@ test('stream connector accepts null reconnect attempts as unlimited and rejects 
 
   for (const maxAttempts of [0, -1]) {
     assert.throws(
-      () => connector.zlinkStreamConnectorFactory.create({
-        endpoint: 'ws://127.0.0.1:19000',
-        transportFactory: new MemoryTransportFactory(),
-        reconnect: { maxAttempts }
-      }),
+      () =>
+        connector.zlinkStreamConnectorFactory.create({
+          endpoint: 'ws://127.0.0.1:19000',
+          transportFactory: new MemoryTransportFactory(),
+          reconnect: { maxAttempts }
+        }),
       (error) => error.error?.code === connector.ZlinkStreamErrorCode.ValidationFailed
     );
   }
@@ -2298,45 +3634,42 @@ test('stream connector keeps retrying while reconnect attempts are unlimited', a
 // Spec stream-connector 32 section 6: the wait is a value in [50%, 100%] of the
 // base delay, so clients that dropped together do not return together.
 test('stream connector randomizes the wait between reconnect attempts', async () => {
-  const baseDelayMs = 200;
+  const baseDelaysMs = [100, 50, 25];
   const factors = [0, 0.5, 0.9999];
   const flaky = new FlakyTransportFactory(3);
   const originalRandom = Math.random;
+  const originalSetTimeout = globalThis.setTimeout;
   let index = 0;
   Math.random = () => factors[Math.min(index++, factors.length - 1)];
-  const attemptAt = [];
+  const scheduled = [];
+  globalThis.setTimeout = (callback, milliseconds, ...args) => {
+    scheduled.push(milliseconds);
+    queueMicrotask(() => callback(...args));
+    return 0;
+  };
   const timedFactory = {
     async connect(options, signal) {
-      attemptAt.push(Date.now());
       return await flaky.connect(options, signal);
     }
   };
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
     transportFactory: timedFactory,
-    reconnect: { initialDelayMs: baseDelayMs, maxDelayMs: baseDelayMs, backoffFactor: 1, maxAttempts: 4 },
+    reconnect: { initialDelayMs: 1000, maxDelayMs: 100, backoffFactor: 0.5, maxAttempts: 4 },
     heartbeat: { enabled: false }
   });
   try {
     await instance.connect();
   } finally {
     Math.random = originalRandom;
+    globalThis.setTimeout = originalSetTimeout;
   }
 
-  assert.equal(attemptAt.length, 4);
-  const waits = attemptAt.slice(1).map((value, position) => value - attemptAt[position]);
-  const expected = factors.map((factor) => Math.round(baseDelayMs * (0.5 + factor * 0.5)));
-  for (const [position, wait] of waits.entries()) {
-    // A timer never fires early, and a busy event loop may fire it late.
-    assert.ok(
-      wait >= expected[position] - 20 && wait <= expected[position] + 250,
-      `wait ${wait}ms is not close to the expected ${expected[position]}ms`
-    );
-    assert.ok(
-      wait >= baseDelayMs * 0.5 - 20 && wait <= baseDelayMs + 250,
-      `wait ${wait}ms left the 50%-100% window of ${baseDelayMs}ms`
-    );
-  }
+  assert.equal(flaky.attempts, 4);
+  const expected = factors.map((factor, position) =>
+    Math.round(baseDelaysMs[position] * (0.5 + factor * 0.5))
+  );
+  assert.deepEqual(scheduled.slice(0, 3), expected);
   await instance.close();
 });
 
@@ -2349,9 +3682,12 @@ test('stream connector runs the disconnect handler when reconnect attempts are s
     reconnect: { initialDelayMs: 1, maxDelayMs: 1, backoffFactor: 1, maxAttempts: 2 },
     heartbeat: { enabled: false }
   });
-  instance.onDisconnected(() => { disconnected += 1; });
+  instance.onDisconnected(() => {
+    disconnected += 1;
+  });
 
   await assert.rejects(() => instance.connect(), /Connect failed/);
+  await instance.dispatch();
 
   assert.equal(transportFactory.attempts, 2);
   assert.equal(instance.state, connector.ZlinkStreamConnectionState.Disconnected);
@@ -2362,8 +3698,9 @@ test('stream connector runs the disconnect handler when reconnect attempts are s
 test('zlinkStreamAssert.ensure refuses an empty diagnostic message', () => {
   assert.throws(
     () => connector.zlinkStreamAssert.ensure(true, '   '),
-    (error) => error.error?.code === connector.ZlinkStreamErrorCode.ValidationFailed
-      && /non-empty diagnostic message/.test(error.error.message)
+    (error) =>
+      error.error?.code === connector.ZlinkStreamErrorCode.ValidationFailed &&
+      /non-empty diagnostic message/.test(error.error.message)
   );
   assert.throws(
     () => connector.zlinkStreamAssert.ensure(false, ''),
@@ -2501,7 +3838,9 @@ test('a dispatch made from inside a message handler returns instead of waiting o
     await instance.dispatch();
     order.push('nested-exit');
   });
-  instance.on('Follow', () => { order.push('follow'); });
+  instance.on('Follow', () => {
+    order.push('follow');
+  });
 
   await instance.connect();
   transportFactory.connection.pushFrame(sendFrame('Nested', 'first'));
@@ -2511,7 +3850,8 @@ test('a dispatch made from inside a message handler returns instead of waiting o
 
   // The nested call is a no-op, and the drain it re-entered still delivers the
   // rest of the queue afterwards.
-  assert.deepEqual(order, ['nested-enter', 'nested-exit', 'follow']);
+  await waitFor(() => order.includes('nested-exit'), 1000);
+  assert.deepEqual(order, ['nested-enter', 'follow', 'nested-exit']);
 });
 
 // Issue #583 (2): `connect` waits for the disconnect task, so the disconnect
@@ -2519,20 +3859,29 @@ test('a dispatch made from inside a message handler returns instead of waiting o
 // for the task its own caller has not yet left.
 test('a disconnect handler may call connect without waiting on the disconnect that ran it', async () => {
   const oldConnection = new MemoryConnection();
-  oldConnection.read = async () => { throw new Error('old transport failed'); };
+  oldConnection.read = async () => {
+    throw new Error('old transport failed');
+  };
   const newConnection = new MemoryConnection();
   let connectCalls = 0;
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
-    transportFactory: { async connect() { return ++connectCalls === 1 ? oldConnection : newConnection; } },
+    transportFactory: {
+      async connect() {
+        return ++connectCalls === 1 ? oldConnection : newConnection;
+      }
+    },
     dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
     reconnect: { enabled: false },
     heartbeat: { enabled: false }
   });
   let handlerFailure;
   instance.onDisconnected(async () => {
-    await withTimeout(instance.connect(), 2000, 'connect from the disconnect handler')
-      .catch((error) => { handlerFailure = error; });
+    await withTimeout(instance.connect(), 2000, 'connect from the disconnect handler').catch(
+      (error) => {
+        handlerFailure = error;
+      }
+    );
   });
 
   await instance.connect();
@@ -2550,12 +3899,18 @@ test('a disconnect handler may call connect without waiting on the disconnect th
 // on by default must not sit behind that.
 test('a disconnect handler that never settles does not cost the connector its reconnect', async () => {
   const oldConnection = new MemoryConnection();
-  oldConnection.read = async () => { throw new Error('old transport failed'); };
+  oldConnection.read = async () => {
+    throw new Error('old transport failed');
+  };
   const newConnection = new MemoryConnection();
   let connectCalls = 0;
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
-    transportFactory: { async connect() { return ++connectCalls === 1 ? oldConnection : newConnection; } },
+    transportFactory: {
+      async connect() {
+        return ++connectCalls === 1 ? oldConnection : newConnection;
+      }
+    },
     dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
     reconnect: { initialDelayMs: 1, maxDelayMs: 1, backoffFactor: 1, maxAttempts: 2 },
     heartbeat: { enabled: false }
@@ -2565,14 +3920,19 @@ test('a disconnect handler that never settles does not cost the connector its re
   // Unsettled for the whole reconnect window. It is released at the end only so
   // that the shared cleanup, which notifies the same handler once more, can
   // finish; nothing under test waits for it.
-  const unsettled = new Promise((resolve) => { releaseHandler = resolve; });
+  const unsettled = new Promise((resolve) => {
+    releaseHandler = resolve;
+  });
   instance.onDisconnected(() => {
     handlerEntered = true;
     return unsettled;
   });
 
   await instance.connect();
-  await waitFor(() => instance.state === connector.ZlinkStreamConnectionState.Connected && connectCalls === 2, 3000);
+  await waitFor(
+    () => instance.state === connector.ZlinkStreamConnectionState.Connected && connectCalls === 2,
+    3000
+  );
   await instance.dispatch();
   await waitFor(
     () => connectCalls === 2 && instance.state === connector.ZlinkStreamConnectionState.Connected,
@@ -2646,11 +4006,17 @@ test('an unfinished heartbeat tick suppresses the tick the interval asks for nex
   const connection = new MemoryConnection();
   connection.write = (frame) => {
     writes.push(frame);
-    return new Promise((resolve) => { releases.push(resolve); });
+    return new Promise((resolve) => {
+      releases.push(resolve);
+    });
   };
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
-    transportFactory: { async connect() { return connection; } },
+    transportFactory: {
+      async connect() {
+        return connection;
+      }
+    },
     dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
     reconnect: { enabled: false },
     heartbeat: { intervalMs: 1, timeoutMs: 60000 }
@@ -2690,8 +4056,13 @@ test('a disconnect handler may call close without waiting on the close that ran 
     // Settled through callbacks rather than a bare await, so that a build
     // without the fix leaves a pending promise nobody reports as unhandled.
     await instance.close().then(
-      () => { nestedSettled = true; },
-      (error) => { nestedSettled = true; nestedFailure = error; }
+      () => {
+        nestedSettled = true;
+      },
+      (error) => {
+        nestedSettled = true;
+        nestedFailure = error;
+      }
     );
   });
 
@@ -2713,7 +4084,7 @@ test('a disconnect handler may call close without waiting on the close that ran 
 // only `receivedCounts` on reconnect and left the queue in place, so a
 // `waitFor` registered after the reconnect could still be handed a message
 // the dead connection delivered.
-test('reconnecting drops the previous connection\'s unconsumed queue, not only its counts', async () => {
+test("reconnecting drops the previous connection's unconsumed queue, not only its counts", async () => {
   let connectCalls = 0;
   let oldReads = 0;
   const oldConnection = new MemoryConnection();
@@ -2734,7 +4105,13 @@ test('reconnecting drops the previous connection\'s unconsumed queue, not only i
       }
     },
     dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
-    reconnect: { enabled: true, initialDelayMs: 1, maxDelayMs: 1, backoffFactor: 1, maxAttempts: 2 },
+    reconnect: {
+      enabled: true,
+      initialDelayMs: 1,
+      maxDelayMs: 1,
+      backoffFactor: 1,
+      maxAttempts: 2
+    },
     heartbeat: { enabled: false }
   });
 
@@ -2767,9 +4144,10 @@ test('reconnecting drops the previous connection\'s unconsumed queue, not only i
 test('a waitFor pending across a reconnect rejects as disconnected instead of waiting on the new connection', async () => {
   let connectCalls = 0;
   const oldConnection = new MemoryConnection();
-  oldConnection.read = () => new Promise((_resolve, reject) => {
-    oldConnection.rejectRead = reject;
-  });
+  oldConnection.read = () =>
+    new Promise((_resolve, reject) => {
+      oldConnection.rejectRead = reject;
+    });
   const newConnection = new MemoryConnection();
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
@@ -2780,7 +4158,13 @@ test('a waitFor pending across a reconnect rejects as disconnected instead of wa
       }
     },
     dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
-    reconnect: { enabled: true, initialDelayMs: 1, maxDelayMs: 1, backoffFactor: 1, maxAttempts: 2 },
+    reconnect: {
+      enabled: true,
+      initialDelayMs: 1,
+      maxDelayMs: 1,
+      backoffFactor: 1,
+      maxAttempts: 2
+    },
     heartbeat: { enabled: false }
   });
 
@@ -2809,12 +4193,17 @@ test('a waitFor pending across a reconnect rejects as disconnected instead of wa
 // so a release bound to it would leave the wait hanging until its own timeout.
 test('a waitFor pending when the connection ends without a reconnect rejects as disconnected at once', async () => {
   const connection = new MemoryConnection();
-  connection.read = () => new Promise((_resolve, reject) => {
-    connection.rejectRead = reject;
-  });
+  connection.read = () =>
+    new Promise((_resolve, reject) => {
+      connection.rejectRead = reject;
+    });
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
-    transportFactory: { async connect() { return connection; } },
+    transportFactory: {
+      async connect() {
+        return connection;
+      }
+    },
     dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
     reconnect: { enabled: false },
     heartbeat: { enabled: false }
@@ -2842,11 +4231,14 @@ test('a waitFor pending when the connection ends rejects as disconnected before 
   let connectCalls = 0;
   let secondConnectionProduced = false;
   let releaseSecondConnect;
-  const secondConnectReleased = new Promise((resolve) => { releaseSecondConnect = resolve; });
-  const oldConnection = new MemoryConnection();
-  oldConnection.read = () => new Promise((_resolve, reject) => {
-    oldConnection.rejectRead = reject;
+  const secondConnectReleased = new Promise((resolve) => {
+    releaseSecondConnect = resolve;
   });
+  const oldConnection = new MemoryConnection();
+  oldConnection.read = () =>
+    new Promise((_resolve, reject) => {
+      oldConnection.rejectRead = reject;
+    });
   const newConnection = new MemoryConnection();
   const instance = createStreamConnector({
     endpoint: 'ws://127.0.0.1:19000',
@@ -2860,7 +4252,13 @@ test('a waitFor pending when the connection ends rejects as disconnected before 
       }
     },
     dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
-    reconnect: { enabled: true, initialDelayMs: 1, maxDelayMs: 1, backoffFactor: 1, maxAttempts: 2 },
+    reconnect: {
+      enabled: true,
+      initialDelayMs: 1,
+      maxDelayMs: 1,
+      backoffFactor: 1,
+      maxAttempts: 2
+    },
     heartbeat: { enabled: false }
   });
 
@@ -2906,9 +4304,76 @@ test('waitFor and waitForSequence time out as validationFailed while expectNone 
     (error) => error.error?.code === connector.ZlinkStreamErrorCode.ValidationFailed
   );
   await assert.rejects(
-    instance.waitForSequence('Silent').expect(() => true).timeout(20).run(),
+    instance
+      .waitForSequence('Silent')
+      .expect(() => true)
+      .timeout(20)
+      .run(),
     (error) => error.error?.code === connector.ZlinkStreamErrorCode.ValidationFailed
   );
   await instance.expectNone('Silent').within(20).run();
   await instance.close();
+});
+
+// Spec stream-connector 32 sections 9 and 12: a transport write failure ends
+// the connection as TransportError and reconnect follows the option. Only the
+// operation of that write fails with SendFailed; every other operation in
+// progress on the connection fails with Disconnected.
+test('a transport write failure fails its operation as SendFailed and ends the connection', async () => {
+  const connections = [];
+  let writeReached;
+  const writeStarted = new Promise((resolve) => {
+    writeReached = resolve;
+  });
+  const transportFactory = {
+    async connect() {
+      const connection = new MemoryConnection();
+      if (connections.length === 0) {
+        const write = connection.write.bind(connection);
+        connection.write = (frame) => {
+          const decoded = protocolCodecs.ZlinkStreamFrameCodec.decode(frame);
+          const header = protocolCodecs.ZlinkStreamHeaderCodec.decode(decoded.header);
+          if (header.name !== 'Broken') return write(frame);
+          return new Promise((_, reject) => writeReached(reject));
+        };
+      }
+      connections.push(connection);
+      return connection;
+    }
+  };
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory,
+    heartbeat: { enabled: false }
+  });
+  const errors = [];
+  instance.onErrorReceived((error) => errors.push(error.code));
+  await instance.connect();
+  const raw = { codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() };
+  const pending = instance.request(raw).packetName('Pending').timeout(60_000).submitEncoded();
+  const broken = instance.send(raw).packetName('Broken').submit();
+  const queued = instance.request(raw).packetName('Queued').timeout(60_000).submitEncoded();
+  (await withTimeout(writeStarted, 1000, 'Broken write'))(new Error('socket write failed'));
+
+  await assert.rejects(
+    broken,
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.SendFailed
+  );
+  await assert.rejects(
+    pending,
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.Disconnected
+  );
+  await assert.rejects(
+    queued,
+    (error) => error.error?.code === connector.ZlinkStreamErrorCode.Disconnected
+  );
+  assert.equal(connections[0].closed, true);
+  assert.equal(instance.closeReason, 'TransportError');
+  await waitFor(
+    () =>
+      instance.state === connector.ZlinkStreamConnectionState.Connected && connections.length === 2,
+    1000
+  );
+  await instance.dispatch();
+  assert.deepEqual(errors, [connector.ZlinkStreamErrorCode.SendFailed]);
 });

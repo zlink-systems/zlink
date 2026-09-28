@@ -115,6 +115,7 @@ internal sealed partial class ZLinkActorSessionManager
         CancellationToken cancellationToken
     )
     {
+        await state.Handoff.WaitForSourceCompletionAsync(cancellationToken).ConfigureAwait(false);
         var retired = await state
             .ExecuteLockedAsync(() => state.RetiredLocalActorRef, cancellationToken)
             .ConfigureAwait(false);

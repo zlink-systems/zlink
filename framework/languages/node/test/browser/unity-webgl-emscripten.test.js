@@ -20,7 +20,6 @@ const assert = require('node:assert/strict');
 const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const http = require('node:http');
-const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { after, before, describe, it } = require('node:test');
@@ -111,7 +110,7 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
     const harness = fs.readFileSync(HARNESS_SOURCE, 'utf8');
     const externs = [...harness.matchAll(/^extern [\w *]+?\**(\w+)\(/gm)].map(([, name]) => name).sort();
 
-    assert.equal(declared.length, 20, 'the C# boundary should declare 20 entry points');
+    assert.equal(declared.length, 19, 'the C# boundary should declare 19 entry points');
     assert.deepEqual(externs, declared, 'the C harness must declare the same boundary as the C# side');
 
     const linked = fs.readFileSync(built.js, 'utf8');
@@ -146,13 +145,13 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
   });
 
   it('drives a real STREAM server through the linked boundary', async () => {
-    const port = await freePort();
-    streamServer = await startStreamServer(`ws://127.0.0.1:${port}`);
+    streamServer = await startStreamServer('ws://127.0.0.1:0');
+    const endpoint = streamServer.endpoint;
     const report = await page.evaluate(async (endpoint) => {
       const zl = window.zl;
       const steps = {};
       zl.create({ ...window.connectorOptions, endpoint });
-      steps.beforeConnect = { state: zl.raw.state(), diagnosticsLevel: zl.raw.diagnosticsLevel() };
+      steps.beforeConnect = { state: zl.raw.state() };
 
       await zl.connect();
       steps.afterConnect = { state: zl.raw.state(), isConnected: zl.raw.isConnected() === 1 };
@@ -174,8 +173,12 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
 
       // A registered handler takes the next one instead, and must not run before Dispatch.
       zl.raw.registerHandler('EchoPush');
+      const pendingBeforeSend = zl.raw.pendingDispatch();
       await zl.send(JSON.stringify({ value: 'emscripten-send' }), { codec: 1, packetName: 'EchoReq' });
-      await zl.untilPending(10000);
+      // Waits for a queue count above the pre-send baseline, not just "> 0": a
+      // connection-state item is already queued from connect() by this point, so
+      // "> 0" would resolve before the send's own EchoPush item ever arrived.
+      await zl.untilPending(pendingBeforeSend, 10000);
       steps.beforeDispatch = { pending: zl.raw.pendingDispatch(), handlerRuns: zl.raw.handlerRuns() };
       await zl.dispatch(10000);
       steps.afterDispatch = { pending: zl.raw.pendingDispatch(), log: zl.handlerLog() };
@@ -186,11 +189,11 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
       steps.stateChanges = zl.stateLog();
       steps.snapshot = zl.snapshot();
       return steps;
-    }, `ws://127.0.0.1:${port}`);
+    }, endpoint);
 
     // Spec 32 sections 2.2 and 6.1: manual dispatch is the game-engine default and
-    // the connector starts in Created with Errors diagnostics.
-    assert.deepEqual(report.beforeConnect, { state: 0, diagnosticsLevel: 1 });
+    // the connector starts in Created.
+    assert.deepEqual(report.beforeConnect, { state: 0 });
     assert.deepEqual(report.afterConnect, { state: 2, isConnected: true });
     assert.equal(JSON.parse(report.reply.payload).value, 'emscripten-request');
     assert.equal(JSON.parse(report.reply.text).codec, 1);
@@ -227,8 +230,8 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
   });
 
   it('refuses a nested pump and never delivers an event twice', async () => {
-    const port = await freePort();
-    streamServer = await startStreamServer(`ws://127.0.0.1:${port}`);
+    streamServer = await startStreamServer('ws://127.0.0.1:0');
+    const endpoint = streamServer.endpoint;
     const report = await page.evaluate(async (endpoint) => {
       const zl = window.zl;
       zl.create({ ...window.connectorOptions, endpoint });
@@ -249,7 +252,7 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
       zl.raw.setNestedPump(0);
       zl.raw.destroy();
       return { snapshot, log };
-    }, `ws://127.0.0.1:${port}`);
+    }, endpoint);
 
     assert.ok(report.snapshot.nestedPumpCalls > 0, 'the sink ran at least once');
     assert.equal(
@@ -269,8 +272,8 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
   });
 
   it('frees every boundary buffer it allocates', async () => {
-    const port = await freePort();
-    streamServer = await startStreamServer(`ws://127.0.0.1:${port}`);
+    streamServer = await startStreamServer('ws://127.0.0.1:0');
+    const endpoint = streamServer.endpoint;
     const rounds = 60;
     const report = await page.evaluate(async ([endpoint, iterations]) => {
       const zl = window.zl;
@@ -279,7 +282,11 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
       zl.raw.observe('EchoPush');
 
       // One warm-up round trip so dlmalloc's arena is at its steady state before
-      // the baseline is taken.
+      // the baseline is taken. No Dispatch in the loop: nothing registered a
+      // reply received hook (zlh_register_reply_received_hook), so
+      // ZlinkStreamSetReplyReceivedInterest never turned on and the JS boundary
+      // never subscribes - see "only receives reply-received events while a
+      // hook is registered" below, which is what actually pins this.
       const round = async (value) => {
         await zl.request(JSON.stringify({ value }), { codec: 1, packetName: 'EchoReq', timeoutMs: 10000 });
         await zl.waitFor('EchoPush', 10000);
@@ -294,7 +301,7 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
       zl.raw.destroy();
       const afterDestroy = { heapInUse: zl.raw.heapInUse(), liveAllocs: zl.raw.liveAllocs() };
       return { baseline, settled, afterDestroy, sinkCalls: zl.raw.sinkCalls(), violations: zl.raw.violations() };
-    }, [`ws://127.0.0.1:${port}`, rounds]);
+    }, [endpoint, rounds]);
 
     process.stdout.write(
       `# leak check: ${rounds} round trips, ${report.sinkCalls} sink calls, ` +
@@ -318,6 +325,80 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
     streamServer = undefined;
   });
 
+  // ZlinkStreamWebGlConnector.cs's OnReplyReceived hook set is the one owner of
+  // ZlinkStreamSetReplyReceivedInterest (Runtime/ZlinkStreamWebGlConnector.cs),
+  // told only on the set's 0/1 transition. Before this, ZlinkStreamRuntime.jspre
+  // subscribed to onReplyReceived unconditionally, which defeated
+  // ZlinkStreamConnector.ts's own no-hook early return
+  // (`publishReplyReceived`'s `if (this.replyReceivedHandlers.size === 0)
+  // return`) for every WebGL connector - the WebGL boundary's own permanent
+  // subscription always counted as one hook. Each phase below uses the same
+  // leak-check shape as the previous test: heap use must return to its baseline
+  // either way, and zlh_reply_received_runs() is the deterministic count of how
+  // many reply-received events actually reached this harness.
+  it('only receives reply-received events while a hook is registered', async () => {
+    streamServer = await startStreamServer('ws://127.0.0.1:0');
+    const endpoint = streamServer.endpoint;
+    const rounds = 5;
+    const report = await page.evaluate(async ([endpoint, iterations]) => {
+      const zl = window.zl;
+      zl.create({ ...window.connectorOptions, endpoint });
+      await zl.connect();
+
+      const round = async (value) => {
+        await zl.request(JSON.stringify({ value }), { codec: 1, packetName: 'EchoReq', timeoutMs: 10000 });
+        await zl.dispatch(10000);
+      };
+      const phase = async (value) => {
+        await round(`${value}-warmup`);
+        const before = { liveAllocs: zl.raw.liveAllocs(), runs: zl.raw.replyReceivedRuns() };
+        for (let index = 0; index < iterations; index += 1) await round(`${value}-${index}`);
+        const after = { liveAllocs: zl.raw.liveAllocs(), runs: zl.raw.replyReceivedRuns() };
+        return { before, after };
+      };
+
+      const noHook = await phase('no-hook');
+
+      zl.raw.registerReplyReceivedHook();
+      const withHook = await phase('with-hook');
+
+      zl.raw.unregisterReplyReceivedHook();
+      const afterUnregister = await phase('after-unregister');
+
+      await zl.close(10000);
+      zl.raw.destroy();
+      return { noHook, withHook, afterUnregister };
+    }, [endpoint, rounds]);
+
+    // No hook: no reply-received event ever reaches the harness, so the round
+    // trips leave nothing on the heap to free and the count never moves.
+    assert.equal(report.noHook.after.liveAllocs, report.noHook.before.liveAllocs);
+    assert.equal(report.noHook.after.runs, report.noHook.before.runs);
+    assert.equal(report.noHook.after.runs, 0, 'no hook registered: no reply received event should reach the harness');
+
+    // One hook registered: one event arrives per round trip, is freed once
+    // Dispatch runs (spec 32 section 5.7: the hook follows dispatch mode like
+    // any other callback), and the count advances by exactly one per round.
+    assert.equal(report.withHook.after.liveAllocs, report.withHook.before.liveAllocs);
+    assert.equal(
+      report.withHook.after.runs - report.withHook.before.runs,
+      rounds,
+      'one hook registered: exactly one reply received event should run per round trip'
+    );
+
+    // Hook disposed: back to the no-hook behaviour, and no event reaches the
+    // harness even though requests keep succeeding.
+    assert.equal(report.afterUnregister.after.liveAllocs, report.afterUnregister.before.liveAllocs);
+    assert.equal(
+      report.afterUnregister.after.runs,
+      report.afterUnregister.before.runs,
+      'hook disposed: no further reply received events should reach the harness'
+    );
+
+    await stopChild(streamServer);
+    streamServer = undefined;
+  });
+
   // ZlinkStreamConnector.jslib declares `malloc` and `free` in a __deps list, so
   // emscripten pulls the _malloc and _free bindings in on the library's own say-so.
   // This build drops them from -sEXPORTED_FUNCTIONS: the boundary must still
@@ -330,8 +411,8 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
         flag.startsWith('-sEXPORTED_FUNCTIONS')),
       'this build must not export the allocator'
     );
-    const port = await freePort();
-    streamServer = await startStreamServer(`ws://127.0.0.1:${port}`);
+    streamServer = await startStreamServer('ws://127.0.0.1:0');
+    const endpoint = streamServer.endpoint;
     const other = await context.newPage();
     try {
       await other.goto(`${staticServer.url}/no-allocator/`);
@@ -358,7 +439,7 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
         steps.snapshot = zl.snapshot();
         zl.raw.destroy();
         return steps;
-      }, `ws://127.0.0.1:${port}`);
+      }, endpoint);
 
       assert.equal(JSON.parse(report.rejected).code, 'configurationError', 'TakeLastError must allocate');
       assert.equal(JSON.parse(report.reply).value, 'no-allocator-export');
@@ -377,8 +458,8 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
   // waiting for events that had stopped coming. The fault is injected from the page
   // so the path is exercised without the adapter having to be broken.
   it('reports a pump failure to the managed side instead of going quiet', async () => {
-    const port = await freePort();
-    streamServer = await startStreamServer(`ws://127.0.0.1:${port}`);
+    streamServer = await startStreamServer('ws://127.0.0.1:0');
+    const endpoint = streamServer.endpoint;
     const report = await page.evaluate(async (endpoint) => {
       const zl = window.zl;
       zl.create({ ...window.connectorOptions, endpoint });
@@ -398,7 +479,7 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
       await zl.close(10000);
       zl.raw.destroy();
       return { result, after, recovered };
-    }, `ws://127.0.0.1:${port}`);
+    }, endpoint);
 
     assert.equal(report.result, -2, 'a failed pump must not look like a count');
     assert.equal(report.after.failures, 1);
@@ -437,18 +518,20 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
   // declaration registers a binding literally named "undefined". A scope with no
   // reference to the identifier `undefined` therefore has one that is defined and
   // never used, and the cleanup deletes every declarator whose id.name is undefined
-  // - the destructuring declarations. The connector's message drain loses
-  // `const { message, signal } = queued` and the player fails at runtime with
-  // "ReferenceError: message is not defined", after a link that reported success.
+  // - the destructuring declarations. The bug is emscripten's; the codebase's own
+  // fix is to avoid destructuring in the source the browser bundle is built from.
+  // ZlinkStreamReceivedMessages.ts's drain loop used to read
+  // `const { message, signal } = queued`, deleted the same way, with the player
+  // failing at runtime on "ReferenceError: message is not defined" after a link
+  // that reported success; it reads `queued.message`/`queued.signal` now.
   //
-  // What does work, verified by the assertion below: --extern-pre-js puts the same
-  // bundle outside the module, where emscripten emits it after the optimizer has
-  // run. Unity's importer only ever passes --pre-js for a .jspre, so reaching it
-  // needs PlayerSettings.WebGL.emscriptenArgs.
-  it('leaves the bundle intact at a Unity release optimization level', { todo: 'emscripten 3.1.38 JSDCE deletes destructuring declarations from --pre-js content' }, () => {
-    // The --extern-pre-js link is the same bundle with the optimizer skipped, so
-    // it says how many destructuring declarations the bundle has. Counting them
-    // in both outputs reports every one JSDCE deleted, not just the known name.
+  // This is a regression guard, not a language-level property: a future
+  // destructuring declaration landing in a JSDCE-vulnerable scope reproduces the
+  // same failure, and the fix is the same rewrite. --extern-pre-js is the
+  // control - the same bundle with the optimizer skipped, so it says how many
+  // destructuring declarations the bundle has. Counting them in both outputs
+  // reports every one JSDCE deletes, not just a known name.
+  it('leaves the bundle intact at a Unity release optimization level', () => {
     const counted = destructuringDeclarations();
     assert.equal(
       counted.optimized,
@@ -460,7 +543,10 @@ describe('Unity WebGL adapter linked by emscripten', { skip: emscripten ? false 
   it('leaves the bundle intact when the optimizer never sees it', () => {
     const output = link('extern', { optimization: '-O2', externBundle: true });
     const linked = fs.readFileSync(output, 'utf8');
-    assert.match(linked, /const \{ message, signal \} = queued/, '--extern-pre-js content must reach the output unrewritten');
+    // --extern-pre-js content must reach the output unrewritten. The bundle's
+    // own destructuring declarations are the check for that (below); none of
+    // them names a fixed source line, because ZlinkStreamReceivedMessages.ts's
+    // drain loop no longer has one to name - see the comment there.
     assert.ok(
       (linked.match(DESTRUCTURING) ?? []).length > 0,
       'the untouched bundle is the baseline for how many destructuring declarations there are'
@@ -534,34 +620,27 @@ function startStreamServer(endpoint) {
     stdio: ['ignore', 'pipe', 'pipe']
   });
   let output = '';
-  child.stdout.on('data', (chunk) => { output += chunk; });
+  let stdout = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk; output += chunk; });
   child.stderr.on('data', (chunk) => { output += chunk; });
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`Stream server start timeout: ${output}`)), 15_000);
     const check = () => {
-      if (!output.includes('"event":"ready"')) return;
+      const readyLine = stdout.split('\n').slice(0, -1)
+        .find((line) => line.includes('"event":"ready"'));
+      if (readyLine === undefined) return;
       clearTimeout(timer);
       child.stdout.off('data', check);
       child.capturedOutput = () => output;
+      child.endpoint = JSON.parse(readyLine).endpoint;
       resolve(child);
     };
     child.stdout.on('data', check);
     child.once('exit', (code) => {
-      if (!output.includes('"event":"ready"')) {
+      if (!stdout.includes('"event":"ready"')) {
         clearTimeout(timer);
         reject(new Error(`Stream server exited ${code}: ${output}`));
       }
-    });
-  });
-}
-
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address();
-      server.close(() => resolve(port));
     });
   });
 }

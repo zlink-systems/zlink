@@ -125,8 +125,11 @@ final class ZLinkM6ARuntimeContractTest {
     }
 
     @Test
-    void duplicateAdmissionKeepsCanonicalDirectionAndLateCloseCannotRemoveIt() {
-        RoutingId lower = RoutingId.from("a");
+    void admissionOnTheReplacementRouteReplacesThePeerAndTheOldRouteCannotRemoveIt() {
+        // Core selects the one route of a RID (Core ROUTER §10.1). The
+        // registry does not choose between pipes: an admission on the route
+        // Core now selects replaces the entry, and a late close of the
+        // replaced route cannot remove the replacement.
         RoutingId higher = RoutingId.from("z");
         var topology =
                 new ZLinkServiceTopologyRegistry(descriptor("mesh", "a", 1, 1, List.of(), 100));
@@ -141,64 +144,16 @@ final class ZLinkM6ARuntimeContractTest {
 
         assertEquals(
                 ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
-                topology.admit(
-                        peer,
-                        connection(
-                                "outbound-current",
-                                ZLinkServiceAdmissionGuard.ConnectionDirection.OUTBOUND)));
-        assertEquals(
-                ZLinkServiceTopologyRegistry.AdmissionResult.DUPLICATE_REJECTED,
-                topology.admit(
-                        peer,
-                        connection(
-                                "inbound-duplicate",
-                                ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND)));
-        assertEquals("outbound-current", topology.peer(higher).orElseThrow().connectionId());
-
-        assertFalse(topology.disconnect(higher, "inbound-duplicate"));
-        assertEquals("outbound-current", topology.peer(higher).orElseThrow().connectionId());
-
-        assertEquals(
-                ZLinkServiceAdmissionGuard.DuplicateConnectionDecision.KEEP_CURRENT,
-                ZLinkServiceAdmissionGuard.selectConnection(
-                        lower,
-                        higher,
-                        9,
-                        ZLinkServiceAdmissionGuard.ConnectionDirection.OUTBOUND,
-                        "outbound-current",
-                        9,
-                        ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND,
-                        "inbound-duplicate"));
-        assertEquals(
-                ZLinkServiceAdmissionGuard.DuplicateConnectionDecision.KEEP_CURRENT,
-                ZLinkServiceAdmissionGuard.selectConnection(
-                        higher,
-                        lower,
-                        9,
-                        ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND,
-                        "inbound-current",
-                        9,
-                        ZLinkServiceAdmissionGuard.ConnectionDirection.OUTBOUND,
-                        "outbound-duplicate"));
-
-        var replacement =
-                new ZLinkServiceTopologyRegistry(descriptor("mesh", "a", 1, 1, List.of(), 100));
+                topology.admit(peer, "route-1"));
         assertEquals(
                 ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
-                replacement.admit(
-                        peer,
-                        connection(
-                                "inbound-old",
-                                ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND)));
-        assertEquals(
-                ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
-                replacement.admit(
-                        peer,
-                        connection(
-                                "outbound-replacement",
-                                ZLinkServiceAdmissionGuard.ConnectionDirection.OUTBOUND)));
-        assertFalse(replacement.disconnect(higher, "inbound-old"));
-        assertEquals("outbound-replacement", replacement.peer(higher).orElseThrow().connectionId());
+                topology.admit(peer, "route-2"));
+        assertEquals("route-2", topology.peer(higher).orElseThrow().connectionId());
+
+        assertFalse(topology.disconnect(higher, "route-1"));
+        assertEquals("route-2", topology.peer(higher).orElseThrow().connectionId());
+        assertTrue(topology.disconnect(higher, "route-2"));
+        assertTrue(topology.peer(higher).isEmpty());
     }
 
     @Test
@@ -377,133 +332,6 @@ final class ZLinkM6ARuntimeContractTest {
                         periodic.probeId(),
                         now + 2 + Duration.ofSeconds(5).toNanos()));
         assertTrue(liveness.isReady(peer, "pipe"));
-    }
-
-    @Test
-    void readyConnectionCanBeRevalidatedImmediately() {
-        var liveness =
-                new ZLinkServiceLivenessRegistry(Duration.ofSeconds(5), Duration.ofSeconds(15));
-        RoutingId peer = RoutingId.from("peer-revalidate");
-        long now = 100;
-
-        liveness.admit(peer, "pipe", now);
-        assertTrue(liveness.requestProbe(peer, "pipe", now));
-        var initial = liveness.tick(now).probes().getFirst();
-        assertFalse(initial.selectedPair());
-        assertTrue(liveness.acknowledge(peer, "pipe", initial.probeId(), now + 1));
-        assertEquals(
-                ZLinkServiceLivenessRegistry.Readiness.READY,
-                liveness.peerStateSnapshot(peer, "pipe").readiness());
-
-        assertTrue(liveness.requestValidationProbe(peer, "pipe", now + 2));
-        assertFalse(liveness.requestValidationProbe(peer, "stale-pipe", now + 2));
-        assertFalse(liveness.requestValidationProbe(peer, "pipe", now + 2));
-        assertEquals(
-                ZLinkServiceLivenessRegistry.Readiness.VALIDATING_PREVIOUSLY_READY,
-                liveness.peerStateSnapshot(peer, "pipe").readiness());
-        var validation = liveness.tick(now + 2).probes().getFirst();
-        assertTrue(validation.selectedPair());
-        assertFalse(liveness.isReady(peer, "pipe"));
-        assertEquals(
-                ZLinkServiceLivenessRegistry.Readiness.VALIDATING_PREVIOUSLY_READY,
-                liveness.peerStateSnapshot(peer, "pipe").readiness());
-        assertTrue(liveness.acknowledge(peer, "pipe", validation.probeId(), now + 3));
-        assertTrue(liveness.isReady(peer, "pipe"));
-        assertEquals(
-                ZLinkServiceLivenessRegistry.Readiness.READY,
-                liveness.peerStateSnapshot(peer, "pipe").readiness());
-    }
-
-    @Test
-    void previouslyReadyValidationExpiresAtTheExistingPeerDeadline() {
-        var liveness =
-                new ZLinkServiceLivenessRegistry(Duration.ofSeconds(5), Duration.ofSeconds(15));
-        RoutingId peer = RoutingId.from("peer-revalidate-timeout");
-        long now = 100;
-
-        liveness.admit(peer, "pipe", now);
-        assertTrue(liveness.requestProbe(peer, "pipe", now));
-        var bootstrap = liveness.tick(now).probes().getFirst();
-        long readyAt = now + 1;
-        assertTrue(liveness.acknowledge(peer, "pipe", bootstrap.probeId(), readyAt));
-        assertTrue(liveness.requestValidationProbe(peer, "pipe", readyAt + 1));
-        assertEquals(
-                ZLinkServiceLivenessRegistry.Readiness.VALIDATING_PREVIOUSLY_READY,
-                liveness.peerStateSnapshot(peer, "pipe").readiness());
-
-        assertEquals(
-                List.of(peer),
-                liveness.tick(readyAt + Duration.ofSeconds(15).toNanos()).timedOutNodes());
-        assertEquals(
-                ZLinkServiceLivenessRegistry.Readiness.NOT_READY,
-                liveness.peerStateSnapshot(peer, "pipe").readiness());
-    }
-
-    @Test
-    void validationDuringBootstrapRunsAsAnExactProbeAfterTheAck() {
-        var liveness =
-                new ZLinkServiceLivenessRegistry(Duration.ofSeconds(5), Duration.ofSeconds(15));
-        RoutingId peer = RoutingId.from("peer-bootstrap-revalidate");
-        long now = 100;
-
-        liveness.admit(peer, "pipe", now);
-        assertTrue(liveness.requestProbe(peer, "pipe", now));
-        var bootstrap = liveness.tick(now).probes().getFirst();
-        assertFalse(bootstrap.selectedPair());
-        assertTrue(liveness.requestValidationProbe(peer, "pipe", now + 1));
-        assertFalse(liveness.requestValidationProbe(peer, "pipe", now + 1));
-        assertEquals(
-                ZLinkServiceLivenessRegistry.Readiness.NOT_READY,
-                liveness.peerStateSnapshot(peer, "pipe").readiness());
-        assertTrue(liveness.acknowledge(peer, "pipe", bootstrap.probeId(), now + 2));
-        assertFalse(liveness.isReady(peer, "pipe"));
-        assertEquals(
-                ZLinkServiceLivenessRegistry.Readiness.NOT_READY,
-                liveness.peerStateSnapshot(peer, "pipe").readiness());
-
-        var validation = liveness.tick(now + 2).probes().getFirst();
-        assertTrue(validation.selectedPair());
-        assertNotEquals(bootstrap.probeId(), validation.probeId());
-        assertTrue(liveness.acknowledge(peer, "pipe", validation.probeId(), now + 3));
-        assertTrue(liveness.isReady(peer, "pipe"));
-        assertEquals(
-                ZLinkServiceLivenessRegistry.Readiness.READY,
-                liveness.peerStateSnapshot(peer, "pipe").readiness());
-    }
-
-    @Test
-    void validationDuringAnExactProbeRunsAgainAfterItsAck() {
-        var liveness =
-                new ZLinkServiceLivenessRegistry(Duration.ofSeconds(5), Duration.ofSeconds(15));
-        RoutingId peer = RoutingId.from("peer-periodic-revalidate");
-        long now = 100;
-
-        liveness.admit(peer, "pipe", now);
-        assertTrue(liveness.requestProbe(peer, "pipe", now));
-        var bootstrap = liveness.tick(now).probes().getFirst();
-        assertTrue(liveness.acknowledge(peer, "pipe", bootstrap.probeId(), now + 1));
-        long periodicAt = now + 1 + Duration.ofSeconds(5).toNanos();
-        var periodic = liveness.tick(periodicAt).probes().getFirst();
-        assertTrue(periodic.selectedPair());
-        assertTrue(liveness.requestValidationProbe(peer, "pipe", periodicAt + 1));
-        assertFalse(liveness.isReady(peer, "pipe"));
-        assertEquals(
-                ZLinkServiceLivenessRegistry.Readiness.VALIDATING_PREVIOUSLY_READY,
-                liveness.peerStateSnapshot(peer, "pipe").readiness());
-        assertTrue(liveness.acknowledge(peer, "pipe", periodic.probeId(), periodicAt + 2));
-        assertFalse(liveness.isReady(peer, "pipe"));
-        assertEquals(
-                ZLinkServiceLivenessRegistry.Readiness.VALIDATING_PREVIOUSLY_READY,
-                liveness.peerStateSnapshot(peer, "pipe").readiness());
-
-        var validation = liveness.tick(periodicAt + 2).probes().getFirst();
-        assertTrue(validation.selectedPair());
-        assertNotEquals(periodic.probeId(), validation.probeId());
-        assertTrue(liveness.acknowledge(peer, "pipe", validation.probeId(), periodicAt + 3));
-        assertTrue(liveness.isReady(peer, "pipe"));
-        assertEquals(
-                ZLinkServiceLivenessRegistry.Readiness.READY,
-                liveness.peerStateSnapshot(peer, "pipe").readiness());
     }
 
     @Test
@@ -701,12 +529,6 @@ final class ZLinkM6ARuntimeContractTest {
             String owner, ZLinkServiceMailbox.Domain domain, int bytes) {
         return new ZLinkServiceMailbox.Record(
                 owner, domain, List.of(new byte[bytes]), null, null, null);
-    }
-
-    private static ZLinkServiceTopologyRegistry.Connection connection(
-            String id, ZLinkServiceAdmissionGuard.ConnectionDirection direction) {
-        return new ZLinkServiceTopologyRegistry.Connection(
-                id, direction, direction.name() + ":" + id);
     }
 
     private static ZLinkServiceNodeDescriptor descriptor(

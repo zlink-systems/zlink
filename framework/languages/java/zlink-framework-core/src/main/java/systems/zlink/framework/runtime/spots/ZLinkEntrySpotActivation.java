@@ -5,7 +5,6 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
@@ -250,9 +249,7 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
                             packet.packetName(),
                             backendSpot.spotId(),
                             ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
-                            new ZLinkFrameworkException(
-                                    ZLinkFrameworkErrorKind.REJECTED,
-                                    "Actor application admission is sealed"));
+                            host.spotAdmissionFailure(backendSpot.spotId()));
                 }
                 closeRouteReceived(received);
                 return;
@@ -285,9 +282,7 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
                             packet.packetName(),
                             backendSpot.spotId(),
                             ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
-                            new ZLinkFrameworkException(
-                                    ZLinkFrameworkErrorKind.REJECTED,
-                                    "SPOT application admission is sealed"));
+                            host.spotAdmissionFailure(backendSpot.spotId()));
                 }
                 closeRouteReceived(received);
                 return;
@@ -560,7 +555,7 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
         host.awaitClosing(
                 closingCallback(
                         () ->
-                                context.enqueueDispatch(
+                                context.enqueueLifecycle(
                                         () ->
                                                 host.runWithOutbound(
                                                         context.dispatchOutbound(),

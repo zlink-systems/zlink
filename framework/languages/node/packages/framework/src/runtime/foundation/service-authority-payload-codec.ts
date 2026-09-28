@@ -189,6 +189,16 @@ export function decodeServiceReadySpotAuthority(
   return decoded?.state === 'ready' && decoded.operationKind === 0 ? decoded : undefined;
 }
 
+export function decodeServiceClosingSpotAuthority(
+  payload: Uint8Array
+): ServiceReadySpotAuthority | undefined {
+  const decoded = decodeSpotAuthority(payload);
+  return decoded?.operationKind === 3 &&
+    (decoded.kind === 'user_spot' || decoded.state === 'closing')
+    ? decoded
+    : undefined;
+}
+
 export function decodeServiceInstanceAuthorityPayload(
   payload: Uint8Array
 ): ServiceDecodedInstanceAuthority | undefined {

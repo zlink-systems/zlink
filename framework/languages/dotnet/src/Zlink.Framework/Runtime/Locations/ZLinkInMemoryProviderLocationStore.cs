@@ -75,19 +75,22 @@ internal sealed class ZLinkInMemoryProviderLocationStore(TimeProvider? timeProvi
                 {
                     case ZLinkStoreMutation.Put put:
                     {
+                        var expiresAt = put.Retention is { } retention
+                            ? now
+                                + TimeSpan.FromMilliseconds(
+                                    Zlink.Framework.Internal.ZLinkStoreRetention.ToMilliseconds(
+                                        retention
+                                    )
+                                )
+                            : (DateTimeOffset?)null;
                         var version = new ZLinkStoreVersion(
                             checked(++_version).ToString(CultureInfo.InvariantCulture)
                         );
-                        _entries[put.Key] = new Entry(
-                            put.Bytes.ToArray(),
-                            version,
-                            put.Retention is { } retention ? now + retention : null
-                        );
-                        if (put.Retention is { } putRetention)
+                        _entries[put.Key] = new Entry(put.Bytes.ToArray(), version, expiresAt);
+                        if (expiresAt is { } putExpiry)
                         {
-                            var expiresAt = now + putRetention;
-                            if (_nextEntryExpiry is null || expiresAt < _nextEntryExpiry.Value)
-                                _nextEntryExpiry = expiresAt;
+                            if (_nextEntryExpiry is null || putExpiry < _nextEntryExpiry.Value)
+                                _nextEntryExpiry = putExpiry;
                         }
                         versions.Add(put.Key, version);
                         break;

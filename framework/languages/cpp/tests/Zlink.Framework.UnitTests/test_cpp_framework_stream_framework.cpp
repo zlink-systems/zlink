@@ -5,11 +5,12 @@
 
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
+#include "runtime/diagnostics/listener_status_registry.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/streams/stream_host_service.hpp"
 #include "runtime/streams/stream_runtime.hpp"
+#include "../support/loopback_tcp_endpoint.hpp"
 
-#include "loopback_tcp_endpoint.hpp"
 
 #include <boost/asio/error.hpp>
 #include <boost/asio/io_context.hpp>
@@ -1511,6 +1512,44 @@ int main ()
         return 234;
     }
 
+    /* Session Actor binding §5: resolve a slot when its packet turn starts.
+     * A binding published while an earlier packet owns the turn is current
+     * for the queued packet. */
+    auto slot_stream = runtime.open_session ("client-stream");
+    zlink::framework::detail::actor_gateway_runtime_t slot_gateway;
+    auto slot_manager = slot_gateway.manager ();
+    zlink::framework::detail::session_actor_manager_access_t::attach (slot_manager, slot_stream);
+    delayed_reply_session_t slot_blocker;
+    auto slot_blocker_source = std::make_shared<std::promise<zlink::framework::result_t<void>>> ();
+    auto slot_blocker_completion = slot_blocker_source->get_future ();
+    if (!runtime.dispatch_packet_async (
+          slot_blocker, slot_stream, request_header, zlink::message_t::from ("slot-blocker"),
+          [slot_blocker_source] (const auto &result) { slot_blocker_source->set_value (result); }))
+        return 326;
+    slot_blocker.wait_until_suspended ();
+    auto queued_slot_header = request_header;
+    queued_slot_header.with_actor_slot (1);
+    sample_session_t slot_session;
+    auto slot_packet_source = std::make_shared<std::promise<zlink::framework::result_t<void>>> ();
+    auto slot_packet_completion = slot_packet_source->get_future ();
+    const auto slot_submitted = runtime.dispatch_packet_async (
+      slot_session, slot_stream, queued_slot_header, zlink::message_t::from ("queued-slot"),
+      [slot_packet_source] (const auto &result) { slot_packet_source->set_value (result); });
+    auto slot_ref = zlink::framework::detail::actor_ref_access_t::make (
+      zlink::framework::node_rid_t::from_string ("actor-node"), "PlayerActor", "queued-actor", 1);
+    const auto slot_bound = slot_manager.bind (std::move (slot_ref)).async ().result ();
+    slot_blocker.resume ();
+    const auto blocker_done =
+      slot_blocker_completion.wait_for (std::chrono::seconds (2)) == std::future_status::ready
+      && slot_blocker_completion.get ();
+    const auto packet_done =
+      slot_submitted
+      && slot_packet_completion.wait_for (std::chrono::seconds (2)) == std::future_status::ready
+      && slot_packet_completion.get ();
+    if (!slot_submitted || !slot_bound || !blocker_done || !packet_done
+        || slot_session.last_actor_id != "queued-actor")
+        return 327;
+
     /* Actor binding replacement is queued behind the same session lane. A
      * normal callback retains its owner through completion and executes once. */
     auto replacement_stream = runtime.open_session ("client-stream");
@@ -2271,6 +2310,8 @@ int main ()
         }}},
       std::chrono::milliseconds{30'000}, core_mesh, {}, core_listeners);
     core_host.start (core_provider);
+    const auto core_stream_endpoint =
+      core_listeners->find (zlink::framework::listener_kind_t::stream, "core-stream")->endpoint;
 
     zlink::stream_connector::connector_options_t core_connector_options;
     core_connector_options.endpoint =

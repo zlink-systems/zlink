@@ -12,13 +12,8 @@ vcpkg_check_features(OUT_FEATURE_OPTIONS FEATURE_OPTIONS
 )
 
 vcpkg_cmake_configure(
-  SOURCE_PATH "${SOURCE_PATH}/framework/languages/cpp"
+  SOURCE_PATH "${SOURCE_PATH}/framework/languages/cpp/connector"
   OPTIONS
-    -DZLINK_FRAMEWORK_CPP_BUILD_TESTS=OFF
-    -DZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS=OFF
-    -DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=OFF
-    -DZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=OFF
-    -DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF
     -DZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST=ON
     -DZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT=OFF
     -DZLINK_STREAM_CONNECTOR_BUILD_UNREAL=OFF
@@ -28,6 +23,8 @@ vcpkg_cmake_configure(
 )
 
 vcpkg_cmake_install()
-vcpkg_cmake_config_fixup(PACKAGE_NAME zlink_stream_connector_cpp)
+vcpkg_cmake_config_fixup(
+  PACKAGE_NAME zlink_stream_connector_cpp
+  CONFIG_PATH lib/cmake/zlink_stream_connector_cpp)
 file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug/include")
 vcpkg_install_copyright(FILE_LIST "${SOURCE_PATH}/LICENSE")

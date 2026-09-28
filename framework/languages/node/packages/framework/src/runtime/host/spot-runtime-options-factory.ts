@@ -49,12 +49,20 @@ export interface ZLinkSpotRuntimeOptionsFactoryOptions {
   ) => Promise<void>;
   readonly beginInstanceIdleClosingAuthority: (
     meshName: string,
-    spotId: string
-  ) => Promise<{ restoreReady(): Promise<void> } | undefined>;
+    spotId: string,
+    onCommitted: () => void
+  ) => Promise<{ release(): Promise<void> } | undefined>;
   readonly beginInstanceClosingAuthority: (
     meshName: string,
-    spotId: string
-  ) => Promise<{ restoreReady(): Promise<void> } | undefined>;
+    spotId: string,
+    onCommitted: () => void
+  ) => Promise<{ release(): Promise<void> } | undefined>;
+  readonly beginUserClosingAuthority: (
+    meshName: string,
+    spotId: string,
+    objectGeneration: bigint,
+    onCommitted: () => void
+  ) => Promise<{ release(): Promise<void> } | undefined>;
   readonly createLocationSpotRouteResolver: () => ZLinkSpotRouteResolver | undefined;
   readonly boundSessionRelay: ZLinkBoundSessionRelay;
   readonly actorHandoff: ZLinkActorHandoffCoordinator;
@@ -149,10 +157,17 @@ export class ZLinkSpotRuntimeOptionsFactory {
       locationLifecycle: this.options.locationLifecycle(),
       releaseInstanceAuthority: (meshName, spotId, objectGeneration) =>
         this.options.releaseInstanceAuthority(meshName, String(spotId), objectGeneration),
-      beginInstanceIdleClosingAuthority: (meshName, spotId) =>
-        this.options.beginInstanceIdleClosingAuthority(meshName, String(spotId)),
-      beginInstanceClosingAuthority: (meshName, spotId) =>
-        this.options.beginInstanceClosingAuthority(meshName, String(spotId)),
+      beginInstanceIdleClosingAuthority: (meshName, spotId, onCommitted) =>
+        this.options.beginInstanceIdleClosingAuthority(meshName, String(spotId), onCommitted),
+      beginInstanceClosingAuthority: (meshName, spotId, onCommitted) =>
+        this.options.beginInstanceClosingAuthority(meshName, String(spotId), onCommitted),
+      beginUserClosingAuthority: (meshName, spotId, objectGeneration, onCommitted) =>
+        this.options.beginUserClosingAuthority(
+          meshName,
+          String(spotId),
+          objectGeneration,
+          onCommitted
+        ),
       instanceSpotApplicationTargetProvider: (meshName, spotId) =>
         this.options
           .spotNodeRuntime()
@@ -270,6 +285,7 @@ export class ZLinkSpotRuntimeOptionsFactory {
       metrics: this.options.metrics,
       admission: this.options.admission,
       statefulExecutionAllowed: this.options.statefulExecutionAllowed,
+      closeErrorSink: this.options.runtimeOrPreStartErrorSink,
       dispatchErrors: this.options.dispatchErrorReporter(this.options.runtimeOrPreStartErrorSink)
     };
   }

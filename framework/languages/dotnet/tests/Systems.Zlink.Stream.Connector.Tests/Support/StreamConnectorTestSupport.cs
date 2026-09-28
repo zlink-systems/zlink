@@ -1,7 +1,5 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
-using System.Net;
-using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -76,13 +74,6 @@ public sealed partial class StreamConnectorTests
         } while (!result.EndOfMessage);
 
         return stream.ToArray();
-    }
-
-    private static int GetFreeTcpPort()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
     private static async Task DispatchUntilAsync(

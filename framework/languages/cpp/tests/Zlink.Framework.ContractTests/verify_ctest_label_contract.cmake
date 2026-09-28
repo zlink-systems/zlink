@@ -52,6 +52,10 @@ set(required_labels
   connector-unreal-contract
   connector-unreal-compile
   connector-unreal-smoke
+  connector-godot-contract
+  connector-godot-e2e
+  connector-axmol-contract
+  connector-axmol-e2e
   # test_cpp_framework_sample_parity is a contract test that always registers under
   # ZLINK_FRAMEWORK_CPP_BUILD_TESTS; unlike the sample programs themselves (built only under
   # ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES), its "framework-sample-parity" label is present

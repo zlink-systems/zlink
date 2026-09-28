@@ -12,7 +12,6 @@ const {
 } = require('../../packages/framework/dist/runtime/messaging/submission-result');
 const channelEnvelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const {
-  isPollerInterruptedError,
   submitBindingPublish,
   submitBindingRequest,
   submitBindingSyncSend,
@@ -123,17 +122,6 @@ test('backend adapter factory exposes the supported backend adapters', () => {
   assert.equal(typeof factory.createStreamAdapter, 'function');
   assert.equal(typeof factory.createMonitoringAdapter, 'function');
   assert.equal(factory.createRegistryAdapter, undefined);
-});
-
-test('poller interruption is treated as an empty progress turn', () => {
-  assert.equal(
-    isPollerInterruptedError(new zlink.RecvError(zlink.RecvResult.NoData, 4)),
-    true
-  );
-  assert.equal(
-    isPollerInterruptedError(new zlink.RecvError(zlink.RecvResult.NoData, 11)),
-    false
-  );
 });
 
 test('binding synchronous send uses the flag-free finalized terminal', () => {

@@ -16,7 +16,6 @@
 #include "runtime/timers/async_delay.hpp"
 
 #include <zlink/framework/contracts/locations/stores.hpp>
-#include <zlink/framework/contracts/monitoring/route_mesh_runtime.hpp>
 
 #include <atomic>
 #include <cassert>
@@ -380,52 +379,10 @@ namespace
 
 task_t<result_t<messaging::message_parts_t>>
 wait_for_actor_completion (detail::mesh_node_runtime_t &node,
-                           const detail::host::pending_operation_t &operation_id,
-                           const zlink::routing_id_t &target_rid,
-                           live_location_reader_t &locations,
-                           const location_owner_token_t &owner,
-                           route_mesh_runtime_t *route_runtime,
-                           const std::string &mesh_name,
-                           std::chrono::milliseconds timeout)
+                           const detail::host::pending_operation_t &operation_id)
 {
-    (void) timeout;
-    const auto target_is_unavailable = [&] {
-        const auto owner_lifetime = locations.owner_admission_lifetime (owner);
-        const auto local_rid = node.routing_id ();
-        if (local_rid && local_rid->to_bytes () == target_rid.to_bytes ()) {
-            // The local RouteMesh node is not listed as its own topology peer.
-            // A relocation can retire the old owner admission while an
-            // already-accepted request is preserved by handoff. That state is
-            // not a transport loss, so the caller's deadline remains a normal
-            // timeout.
-            return false;
-        }
-        bool public_route_ready = true;
-        if (route_runtime) {
-            try {
-                const auto snapshot = route_runtime->snapshot (mesh_name);
-                const auto peer = std::find_if (snapshot.peers.begin (), snapshot.peers.end (),
-                                                [&target_rid] (const auto &candidate) {
-                                                    return candidate.node_rid == target_rid;
-                                                });
-                public_route_ready =
-                  peer != snapshot.peers.end () && peer->state == peer_state_t::ready;
-            }
-            catch (...) {
-                public_route_ready = true;
-            }
-        }
-        return !node.has_admitted_peer (target_rid) || !owner_lifetime || !public_route_ready;
-    };
     try {
         auto completion = co_await node.await_completion (operation_id);
-        if (completion.record.terminal_result
-              == static_cast<int> (zlink::request_result_t::timed_out)
-            && target_is_unavailable ()) {
-            co_return result_t<messaging::message_parts_t>::failure (
-              framework_error_kind_t::unavailable,
-              "actor request target RouteMesh peer became unavailable");
-        }
         if (completion.record.terminal_result != 0) {
             runtime::messaging::request_failure_mapper_t failure_mapper;
             const auto mapped = failure_mapper.reply_header_exception (
@@ -437,12 +394,6 @@ wait_for_actor_completion (detail::mesh_node_runtime_t &node,
           messaging::message_parts_t (std::move (completion.parts)));
     }
     catch (const framework_exception_t &error) {
-        if (error.kind () == framework_error_kind_t::deadline_exceeded
-            && target_is_unavailable ()) {
-            co_return result_t<messaging::message_parts_t>::failure (
-              framework_error_kind_t::unavailable,
-              "actor request target RouteMesh peer became unavailable");
-        }
         co_return detail::result_access_t::failure<messaging::message_parts_t> (error);
     }
 }
@@ -456,14 +407,12 @@ class actor_client_impl_t final : public actor_client_t
                          serializer_registry_t &serializers,
                          std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> mesh_nodes,
                          std::shared_ptr<actor_location_observer_t> actor_locations,
-                         location_options_t options,
-                         route_mesh_runtime_t *route_runtime) :
+                         location_options_t options) :
         _store (&store),
         _serializers (&serializers),
         _mesh_nodes (std::move (mesh_nodes)),
         _actor_locations (std::move (actor_locations)),
-        _location_options (std::move (options)),
-        _route_runtime (route_runtime)
+        _location_options (std::move (options))
     {
         _message_follow_subscriptions.reserve (_mesh_nodes.size ());
         try {
@@ -944,10 +893,7 @@ class actor_client_impl_t final : public actor_client_t
                   runtime::messaging::map_submit_result_error_kind (submit),
                   "actor request was not accepted");
             }
-            auto reply = co_await wait_for_actor_completion (
-              runtime, operation_id,
-              zlink::routing_id_t::from (std::string (actor.native_ref.node_rid ().value ())),
-              *_store, actor.owner, _route_runtime, actor.mesh_name, timeout);
+            auto reply = co_await wait_for_actor_completion (runtime, operation_id);
             if (!reply) {
                 co_return detail::propagate_failure<std::optional<zlink::message_t>> (
                   reply, std::string ("actor request completion failed for node/generation '")
@@ -1075,7 +1021,6 @@ class actor_client_impl_t final : public actor_client_t
     std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> _mesh_nodes;
     std::shared_ptr<actor_location_observer_t> _actor_locations;
     location_options_t _location_options;
-    route_mesh_runtime_t *_route_runtime = nullptr;
     std::vector<std::pair<std::shared_ptr<detail::mesh_node_runtime_t>,
                           detail::mesh_node_runtime_t::message_follow_subscription_id_t>>
       _message_follow_subscriptions;
@@ -1097,12 +1042,10 @@ make_actor_client (live_location_reader_t &store,
                    serializer_registry_t &serializers,
                    std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> mesh_nodes,
                    std::shared_ptr<actor_location_observer_t> actor_locations,
-                   location_options_t options,
-                   route_mesh_runtime_t *route_runtime = nullptr)
+                   location_options_t options)
 {
     return std::make_shared<actor_client_impl_t> (store, serializers, std::move (mesh_nodes),
-                                                  std::move (actor_locations), std::move (options),
-                                                  route_runtime);
+                                                  std::move (actor_locations), std::move (options));
 }
 
 task_t<void> send_to_actor_ref (actor_client_t &client,

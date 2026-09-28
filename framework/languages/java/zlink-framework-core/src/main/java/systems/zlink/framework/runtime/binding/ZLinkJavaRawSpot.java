@@ -28,6 +28,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 /**
  * Framework-owned local Spot mailbox. Raw bindings provide transport only; Spot identity, lifecycle
@@ -44,6 +45,7 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot, ZLinkJavaAdmissionBack
     private final AtomicBoolean closed = new AtomicBoolean();
     private volatile String spotId;
     private volatile ZLinkBackendSpotDispatchHandler dispatchHandler;
+    private volatile Supplier<? extends RuntimeException> admissionRejection;
 
     ZLinkJavaRawSpot(ZLinkJavaRawSpotNode owner, String spotId, long lifecycleGeneration) {
         this.owner = owner;
@@ -241,52 +243,74 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot, ZLinkJavaAdmissionBack
     }
 
     CompletionStage<Void> enqueueRoute(ZLinkBackendReceived received) {
-        if (closed.get()) {
-            received.close();
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("target Spot is closed"));
+        synchronized (this) {
+            Supplier<? extends RuntimeException> rejection = admissionRejection;
+            if (rejection != null) {
+                received.close();
+                return CompletableFuture.failedFuture(rejection.get());
+            }
+            if (closed.get()) {
+                received.close();
+                return CompletableFuture.failedFuture(
+                        new IllegalStateException("target Spot is closed"));
+            }
+            routes.add(received);
         }
-        routes.add(received);
         return raise(ZLinkBackendSpotDispatchEvent.ROUTED_READABLE);
     }
 
+    @Override
+    public synchronized void sealSpotAdmission(Supplier<? extends RuntimeException> rejection) {
+        admissionRejection = java.util.Objects.requireNonNull(rejection, "rejection");
+    }
+
     boolean enqueueTopic(ZLinkBackendTopicMessage message) {
-        if (closed.get()) {
-            message.parts().forEach(Message::close);
-            return false;
+        synchronized (this) {
+            if (closed.get() || admissionRejection != null) {
+                message.parts().forEach(Message::close);
+                return false;
+            }
+            subscriptions.add(message);
         }
-        subscriptions.add(message);
         raise(ZLinkBackendSpotDispatchEvent.SUBSCRIBE_READABLE);
         return true;
     }
 
     CompletionStage<Void> enqueueJoin(ZLinkBackendActorJoinRequest request) {
-        if (closed.get()) {
-            request.parts().forEach(Message::close);
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("target Spot is closed"));
+        synchronized (this) {
+            if (closed.get() || admissionRejection != null) {
+                request.parts().forEach(Message::close);
+                return CompletableFuture.failedFuture(
+                        admissionRejection == null
+                                ? new IllegalStateException("target Spot is closed")
+                                : admissionRejection.get());
+            }
+            actorJoins.add(request);
         }
-        actorJoins.add(request);
         return raise(ZLinkBackendSpotDispatchEvent.ACTOR_JOIN_READABLE);
     }
 
     CompletionStage<Void> enqueueLifecycle(ZLinkBackendActorLifecycleEvent event) {
-        if (closed.get()) {
-            return CompletableFuture.completedFuture(null);
+        synchronized (this) {
+            if (closed.get() || admissionRejection != null) {
+                return CompletableFuture.completedFuture(null);
+            }
+            lifecycles.add(event);
         }
-        lifecycles.add(event);
         return raise(ZLinkBackendSpotDispatchEvent.ACTOR_LIFECYCLE_READABLE);
     }
 
     CompletionStage<Void> enqueueActor(List<ZLinkBackendActorReceived> messages) {
-        if (closed.get()) {
-            messages.forEach(ZLinkBackendActorReceived::close);
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("target Spot is closed"));
+        synchronized (this) {
+            if (closed.get() || admissionRejection != null) {
+                messages.forEach(ZLinkBackendActorReceived::close);
+                return CompletableFuture.failedFuture(
+                        admissionRejection == null
+                                ? new IllegalStateException("target Spot is closed")
+                                : admissionRejection.get());
+            }
         }
-        CompletionStage<Void> raised =
-                raise(ZLinkBackendSpotDispatchEvent.ACTOR_READABLE, messages);
-        return raised;
+        return raise(ZLinkBackendSpotDispatchEvent.ACTOR_READABLE, messages);
     }
 
     private CompletionStage<Void> raise(ZLinkBackendSpotDispatchEvent event) {
@@ -310,8 +334,12 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot, ZLinkJavaAdmissionBack
 
     @Override
     public void close() {
-        if (!closed.compareAndSet(false, true)) {
-            return;
+        synchronized (this) {
+            if (owner.localSpot(spotId) != this) {
+                return;
+            }
+            closed.set(true);
+            owner.removeSpot(this);
         }
         ZLinkBackendReceived route;
         while ((route = routes.poll()) != null) {
@@ -329,7 +357,6 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot, ZLinkJavaAdmissionBack
             }
         }
         lifecycles.clear();
-        owner.removeSpot(this);
     }
 
     static List<Message> copy(List<Message> parts) {

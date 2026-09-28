@@ -61,23 +61,49 @@ serves one of those folders and drives it in Chromium.
 
 ## Why two optimization levels
 
-`BuildTimes` is emcc `-O1`, the level the adapter README tells consumers to build
-at. `RuntimeSpeed` is `-O2`, where emscripten runs JSDCE over the concatenated
-`--pre-js` content. Emscripten 3.1.38's JSDCE reads `node.id.name` for every
-variable declarator, which is `undefined` for a destructuring pattern, so the
-declaration registers a binding named `undefined` and is deleted as unused. The
-player links and then dies on the first delivered message.
+`BuildTimes` and `RuntimeSpeed` are Unity's "Shorter Build Time" and "Runtime
+Speed" Code Optimization presets. Neither is a setting the adapter README
+recommends - `com.zlink.stream-connector.webgl`'s README says any Code
+Optimization level works, because Unity's own plugin pipeline never hands
+`.jspre` content to the JS optimizer at either preset, and its own emcc link
+is `-O3` at both (`.github/workflows/framework-unity-webgl.yml` reads the
+actual flags out of `Library/Bee` to confirm this rather than assume it).
 
-Unity 6000.0 through 6000.4 bundle `3.1.38-unity`, whose
-`tools/acorn-optimizer.js` is upstream 3.1.38's byte for byte apart from the
-`require` path for acorn. Running that fork's JSDCE over the committed bundle by
-hand does delete `const { message, signal } = queued`.
+A *direct* emcc link is where the risk this project rules out actually lives.
+At `-O2` and above, emscripten runs its JSDCE dead-code pass over `--pre-js`
+content that reached it, and Emscripten 3.1.38's JSDCE reads `node.id.name`
+for every variable declarator - `undefined` for a destructuring pattern - so
+the declaration registers as a binding named `undefined` and is deleted as
+unused: a link that reports success and a player that then dies on whatever
+the deleted declaration's name was. Unity 6000.0 through 6000.4 bundle
+`3.1.38-unity`, whose `tools/acorn-optimizer.js` is upstream 3.1.38's byte for
+byte apart from the `require` path for acorn, so running that fork's JSDCE
+over the committed bundle by hand still deletes a destructuring declaration in
+any scope with no reference to the identifier `undefined` - the bug is in
+emscripten, not in this specific bundle.
 
-Unity's own builds do not. In both players the `.jspre` content arrives verbatim
-- comments, indentation and all five destructuring declarations - while
-emscripten's generated JavaScript beside it is whitespace-minified, at both
-optimization levels. The optimizer runs and never sees the plugin content. The
-workflow reads the link arguments out of `Library/Bee` to say why.
+`test/browser/unity-webgl-emscripten.test.js` (framework/languages/node) links
+the bundle with emcc directly - no placeholder, no later merge - so that risk
+is exercised there, and counts destructuring declarations before and after
+JSDCE runs as a regression guard. It used to catch exactly one, `const
+{ message, signal } = queued` in `ZlinkStreamReceivedMessages.ts`'s drain
+loop, deleted the same way and breaking that direct link's player at runtime
+after it reported success. That line reads `queued.message`/`queued.signal`
+now, so the committed bundle has none left in a JSDCE-vulnerable scope - the
+guard test currently reports all three of its remaining destructuring
+declarations as untouched - but a future change can still reintroduce one,
+and this fork's JSDCE would still delete it.
+
+Unity's own builds - both of them - never reach that pass at all: it links
+emcc against a `.jspre` placeholder and merges the real plugin text into the
+emitted `framework.js` in a later build step ("Merging JavaScript Code"), so
+JSDCE never sees this package. In both players the `.jspre` content arrives
+verbatim - comments, indentation and whatever destructuring declarations the
+bundle currently has - while emscripten's generated JavaScript beside it is
+whitespace-minified, at both optimization levels. The workflow's own assertion
+checks exactly that survival, not JSDCE's behavior, which is why fixing
+emscripten's JSDCE bug would not change its result (the workflow's "Assert Unity
+linked the adapter plugins" step).
 
 That is what the two levels are here to compare, so the comparison stays: the
 driver asserts the outcome it expects for each rather than accepting whatever

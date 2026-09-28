@@ -10,6 +10,7 @@ import { connectorError } from './ZlinkStreamSupport';
 export interface PendingZlinkStreamRequest {
   readonly requestSeq: bigint;
   readonly promise: Promise<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>;
+  startTimeout(): void;
 }
 
 interface TrackedPendingRequest {
@@ -18,39 +19,40 @@ interface TrackedPendingRequest {
   resolve(value: ZlinkStreamMessage<ZlinkStreamEncodedPayload>): void;
   reject(error: ZlinkStreamError): void;
   cancel(): void;
+  startTimeout(): void;
 }
 
 export class ZlinkStreamPendingRequests {
   private nextRequestSeq = 1n;
   private readonly active = new Map<bigint, TrackedPendingRequest>();
 
-  get count(): number {
-    return this.active.size;
-  }
-
   create(packetName: string, timeoutMs: number): PendingZlinkStreamRequest {
+    if (this.nextRequestSeq > 0xffff_ffff_ffff_ffffn) {
+      throw connectorError(ZlinkStreamErrorCode.SendFailed, 'Request sequence is exhausted.');
+    }
     const requestSeq = this.nextRequestSeq++;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let resolvePending!: (value: ZlinkStreamMessage<ZlinkStreamEncodedPayload>) => void;
     let rejectPending!: (error: ZlinkStreamError) => void;
     const promise = new Promise<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>(
       (resolve, reject) => {
-        timeout = setTimeout(() => {
-          this.active.delete(requestSeq);
-          reject(
-            connectorError(
-              ZlinkStreamErrorCode.RequestTimeout,
-              `Request '${packetName}' timed out.`
-            )
-          );
-        }, timeoutMs);
         resolvePending = resolve;
         rejectPending = (error) => reject(connectorError(error.code, error.message, error.cause));
       }
     );
-    this.active.set(requestSeq, {
+    const tracked: TrackedPendingRequest = {
       packetName,
       promise,
+      startTimeout: () => {
+        if (timeout !== undefined || this.active.get(requestSeq) !== tracked) return;
+        timeout = setTimeout(() => {
+          this.active.delete(requestSeq);
+          rejectPending({
+            code: ZlinkStreamErrorCode.RequestTimeout,
+            message: `Request '${packetName}' timed out.`
+          });
+        }, timeoutMs);
+      },
       resolve: (value) => {
         if (timeout !== undefined) {
           clearTimeout(timeout);
@@ -68,22 +70,24 @@ export class ZlinkStreamPendingRequests {
           clearTimeout(timeout);
         }
       }
-    });
-    return { requestSeq, promise };
+    };
+    this.active.set(requestSeq, tracked);
+    return { requestSeq, promise, startTimeout: tracked.startTimeout };
   }
 
   /* stream connector spec §5.2: a pending request is matched by request_seq alone. */
   resolve(
     requestSeq: bigint,
-    value: ZlinkStreamEncodedPayload,
+    value: () => ZlinkStreamEncodedPayload,
     metadata: ZlinkStreamMetadata
   ): boolean {
     const pending = this.active.get(requestSeq);
     if (pending === undefined) {
       return false;
     }
+    const payload = value();
     this.active.delete(requestSeq);
-    pending.resolve({ name: pending.packetName, metadata, payload: value });
+    pending.resolve({ name: pending.packetName, metadata, payload });
     return true;
   }
 

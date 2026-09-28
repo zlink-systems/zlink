@@ -167,9 +167,26 @@ class JslibConnector {
     return { dispose: () => this.actorUnboundHandlers.delete(handler) };
   }
 
+  // this.replyHandlers is the one decision point for
+  // ZlinkStreamSetReplyReceivedInterest, mirroring
+  // ZlinkStreamWebGlConnector.cs's OnReplyReceived: only its 0/1 transition
+  // tells the JS boundary interest changed, not every add/remove. Since
+  // ZlinkStreamRuntime.jspre no longer subscribes unconditionally, skipping
+  // this call would mean this connector never receives EVENT_REPLY_RECEIVED
+  // at all.
   onReplyReceived(handler) {
     this.replyHandlers.add(handler);
-    return { dispose: () => this.replyHandlers.delete(handler) };
+    if (this.replyHandlers.size === 1) {
+      this.library.ZlinkStreamSetReplyReceivedInterest(this.handle, 1);
+    }
+    return {
+      dispose: () => {
+        if (!this.replyHandlers.delete(handler)) return;
+        if (this.replyHandlers.size === 0) {
+          this.library.ZlinkStreamSetReplyReceivedInterest(this.handle, 0);
+        }
+      }
+    };
   }
 
   receivedCount(name) {

@@ -3,6 +3,7 @@ const test = require('node:test');
 
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
+const { RequestResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 const {
   ZLinkSpotNativeActorJoinAdmission
 } = require('../../packages/framework/dist/runtime/spots/spot-native-actor-join-admission');
@@ -1318,6 +1319,42 @@ test('ZLinkActorContext delegates join calls to coordinator with timeout', async
   replyMessage.close();
 });
 
+test('Entry Spot Join keeps its request Message until the target submission consumes it', async () => {
+  const replyMessage = zlink.Message.from('joined');
+  const consumed = [];
+  class PlayerActor {
+    constructor(actorId, context) {
+      this.actorId = actorId;
+      this.context = context;
+    }
+  }
+  const joinCoordinator = {
+    async joinEntrySpot(_actor, _state, _nodeRid, request) {
+      // Target resolution completes asynchronously before submission reads
+      // the payload; the Join operation still owns the Message here.
+      await new Promise((resolve) => setImmediate(resolve));
+      consumed.push(request.data().toString());
+      return {
+        accepted: true,
+        actor: { nodeRid: 'node-b', actorId: 'alice', generation: 1n },
+        reply: replyMessage
+      };
+    }
+  };
+  const manager = createActorManager({
+    actorFactories: new Map([['player', class { create(context) { return new PlayerActor(context.actorId, context); } }]]),
+    joinCoordinator
+  });
+  const actor = await manager.getOrCreateActor('alice', 'player');
+  const result = await submitDeferredActorJoin(
+    actor,
+    actor.context.joinEntrySpot(encodedMessage('entry-payload')).timeout(50)
+  );
+  assert.equal(result.status, 'accepted');
+  assert.deepEqual(consumed, ['entry-payload']);
+  replyMessage.close();
+});
+
 test('SpotWide actor join defer yields the current Spot turn while waiting', async () => {
   const events = [];
   let releaseJoin;
@@ -2196,6 +2233,58 @@ test('remote actor join retains the complete Ready authority snapshot for packet
   });
 });
 
+test('remote actor join keeps a timed-out completion when the peer is no longer ready', async () => {
+  class PlayerActor {
+    constructor(actorId, context) {
+      this.actorId = actorId;
+      this.context = context;
+    }
+  }
+  class PlayerFactory {
+    create(context) {
+      return new PlayerActor(context.actorId, context);
+    }
+  }
+  const node = createMockSpotNode({
+    routingId: rid('node-source'),
+    createActor(actorId) {
+      return { nodeRid: rid('node-source'), actorId, generation: 1n };
+    },
+    joinActor(_actorRef, _targetNodeRid, _targetSpotId, _request, callback) {
+      callback(
+        { result: RequestResult.TimedOut, failureErrno: 0, joinResultCode: 0, actor: null },
+        []
+      );
+      return true;
+    }
+  });
+  const manager = createActorManager({
+    actorFactories: new Map([['player', PlayerFactory]]),
+    joinCoordinator: new framework.ZLinkActorNativeJoinCoordinator({
+      node,
+      completionTableProvider: () => node.completionTable,
+      spotRouteResolver: {
+        async resolve(spotId) {
+          return {
+            routerChannelId: 'play.route',
+            targetNodeRid: rid('node-target'),
+            spotId,
+            spotKind: framework.ZLinkSpotKind.User,
+            targetSpotGeneration: 9n,
+            targetNodeGeneration: 4n
+          };
+        }
+      }
+    })
+  });
+  const actor = await manager.getOrCreateActor('alice', 'player');
+
+  await assert.rejects(
+    submitDeferredActorJoin(actor, actor.context.joinSpot('room-target', encodedMessage('join'))),
+    { kind: framework.ZLinkFrameworkErrorKind.DeadlineExceeded }
+  );
+});
+
 test('remote relocation failures before READY preserve source ownership and never bind the target', async () => {
   async function runFailure(failurePoint) {
     const events = [];
@@ -2546,6 +2635,7 @@ test('target ownership publication submits one exact command 44 without a comple
       action: 'commit',
       previousAuthorityOwnerGeneration: 16n,
       targetAuthorityOwnerGeneration: 17n,
+      targetOwnerLeaseGeneration: 23n,
       targetNodeRid: 'target-node',
       targetNodeGeneration: 19n
     }
@@ -5398,7 +5488,7 @@ function createMockSpotNode(overrides) {
 function legacyJoinCompletion(result, parts, spotId) {
   return {
     terminalResult: result.result,
-    failureErrno: result.result === 0 ? 0 : 1,
+    failureErrno: result.failureErrno ?? (result.result === 0 ? 0 : 1),
     operationKind: 7,
     kindData: {
       kind: 'actorJoinCompletion',

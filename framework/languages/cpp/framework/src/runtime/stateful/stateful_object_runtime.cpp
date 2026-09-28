@@ -53,18 +53,9 @@ std::size_t stateful_object_runtime_t::retained_bytes (const turn_record_t &reco
 void stateful_object_runtime_t::move_held_application_locked (object_record_t &object)
 {
     auto &queue = object.queue;
-    const auto held_records = queue.held_application.size ();
-    const auto held_bytes = queue.held_application_bytes;
     while (!queue.held_application.empty ()) {
         queue.application.push_back (std::move (queue.held_application.front ()));
         queue.held_application.pop_front ();
-    }
-    if (object.state == object_state_t::moving) {
-        const auto hold = _relocation_holds.find (object.barrier_generation);
-        if (hold != _relocation_holds.end ()) {
-            hold->second.record_count -= std::min (hold->second.record_count, held_records);
-            hold->second.byte_count -= std::min (hold->second.byte_count, held_bytes);
-        }
     }
     queue.held_application_bytes = 0;
 }
@@ -742,6 +733,23 @@ stateful_error_t stateful_object_runtime_t::commit_close_spot (const spot_close_
       .get ();
 }
 
+std::optional<spot_close_token_t>
+stateful_object_runtime_t::closing_spot_token (const object_ref_t &spot)
+{
+    return _lane
+      .run ([&, this] () -> std::optional<spot_close_token_t> {
+          const auto record = _objects.find (key_for (spot));
+          if (record == _objects.end () || !same_exact_ref (record->second.reference, spot)
+              || record->second.state != object_state_t::closing)
+              return std::nullopt;
+          const auto closing = _spot_closes.find (record->second.barrier_generation);
+          if (closing == _spot_closes.end ())
+              return std::nullopt;
+          return closing->second;
+      })
+      .get ();
+}
+
 stateful_error_t stateful_object_runtime_t::abort_close_spot (const spot_close_token_t &token)
 {
     return _lane
@@ -764,18 +772,63 @@ stateful_error_t stateful_object_runtime_t::abort_close_spot (const spot_close_t
 
 stateful_error_t stateful_object_runtime_t::enqueue (const object_ref_t &owner,
                                                      turn_domain_t domain,
-                                                     turn_record_t record)
+                                                     turn_record_t record,
+                                                     std::function<void ()> *accepted_delivery,
+                                                     bool restored,
+                                                     bool *relocation_handoff)
 {
-    return _lane
-      .run ([&, this] () -> stateful_error_t {
-          stateful_error_t error = stateful_error_t::none;
-          auto *object = find_record_locked (owner, error);
-          if (object == nullptr) {
-              return error;
-          }
-          return enqueue_locked (*object, domain, std::move (record));
-      })
-      .get ();
+    if (relocation_handoff)
+        *relocation_handoff = false;
+    std::function<void ()> deliver;
+    const auto result =
+      _lane
+        .run ([&, this] () -> stateful_error_t {
+            stateful_error_t error = stateful_error_t::none;
+            auto *object = find_record_locked (owner, error);
+            if (object == nullptr) {
+                return error;
+            }
+            if (domain == turn_domain_t::application) {
+                const auto seal = object->state == object_state_t::moving
+                                    ? _relocation_seals.find (object->barrier_generation)
+                                    : _relocation_seals.end ();
+                if (seal != _relocation_seals.end ()) {
+                    auto &attempt = seal->second;
+                    const auto source =
+                      std::find (attempt.sources.begin (), attempt.sources.end (), owner);
+                    const auto index = static_cast<std::size_t> (source - attempt.sources.begin ());
+                    if (source == attempt.sources.end ())
+                        return stateful_error_t::conflict;
+                    if (attempt.deliver)
+                        deliver = [forward = attempt.deliver, owner, record] {
+                            forward (owner, record);
+                        };
+                    if (attempt.ingress_phase != relocation_ingress_phase_t::follow_only) {
+                        attempt.boundary_application[index].push_back (std::move (record));
+                    }
+                    if (relocation_handoff)
+                        *relocation_handoff = true;
+                    return stateful_error_t::none;
+                }
+                if (object->state == object_state_t::recovering && object->restore_identity
+                    && relocation_handoff)
+                    *relocation_handoff = true;
+                // Saved work and the verified boundary precede ordinary ingress
+                // held by the recovering object's existing execution gate.
+                if (restored && object->state == object_state_t::recovering) {
+                    object->queue.application_bytes += retained_bytes (record);
+                    object->queue.application.push_back (std::move (record));
+                    return stateful_error_t::none;
+                }
+            }
+            return enqueue_locked (*object, domain, std::move (record));
+        })
+        .get ();
+    if (accepted_delivery)
+        *accepted_delivery = std::move (deliver);
+    else if (deliver)
+        deliver ();
+    return result;
 }
 
 stateful_error_t stateful_object_runtime_t::enqueue_locked (object_record_t &object,
@@ -785,22 +838,12 @@ stateful_error_t stateful_object_runtime_t::enqueue_locked (object_record_t &obj
     auto &queue = object.queue;
     const auto bytes = retained_bytes (record);
     const auto application = domain == turn_domain_t::application;
-    const auto relocating = application && object.state == object_state_t::moving
-                            && _relocation_holds.contains (object.barrier_generation);
-    std::map<std::uint64_t, relocation_hold_state_t>::iterator hold;
-    if (relocating) {
-        hold = _relocation_holds.find (object.barrier_generation);
-    }
     if (application
         && (object.state == object_state_t::moving || object.state == object_state_t::recovering
             || object.state == object_state_t::closing)) {
         queue.held_application.push_back (std::move (record));
         queue.application_bytes += bytes;
         queue.held_application_bytes += bytes;
-        if (relocating) {
-            ++hold->second.record_count;
-            hold->second.byte_count += bytes;
-        }
         return stateful_error_t::none;
     }
     if (application) {
@@ -919,6 +962,18 @@ std::size_t stateful_object_runtime_t::pending (const object_ref_t &owner,
           if (object == nullptr) {
               return 0;
           }
+          if (domain == turn_domain_t::application) {
+              const auto seal = _relocation_seals.find (object->barrier_generation);
+              if (seal != _relocation_seals.end ()) {
+                  const auto source =
+                    std::find (seal->second.sources.begin (), seal->second.sources.end (), owner);
+                  const auto index =
+                    static_cast<std::size_t> (source - seal->second.sources.begin ());
+                  if (index < seal->second.boundary_application.size ())
+                      return object->queue.application.size ()
+                             + seal->second.boundary_application[index].size ();
+              }
+          }
           return domain == turn_domain_t::application
                    ? object->queue.application.size () + object->queue.held_application.size ()
                    : object->queue.infrastructure.size ();
@@ -935,6 +990,20 @@ std::size_t stateful_object_runtime_t::pending_bytes (const object_ref_t &owner,
           const auto *object = find_record_locked (owner, error);
           if (object == nullptr)
               return 0;
+          if (domain == turn_domain_t::application) {
+              const auto seal = _relocation_seals.find (object->barrier_generation);
+              if (seal != _relocation_seals.end ()) {
+                  const auto source =
+                    std::find (seal->second.sources.begin (), seal->second.sources.end (), owner);
+                  const auto index =
+                    static_cast<std::size_t> (source - seal->second.sources.begin ());
+                  std::size_t bytes = 0;
+                  if (index < seal->second.boundary_application.size ())
+                      for (const auto &record : seal->second.boundary_application[index])
+                          bytes += retained_bytes (record);
+                  return object->queue.application_bytes + bytes;
+              }
+          }
           return domain == turn_domain_t::application ? object->queue.application_bytes
                                                       : object->queue.infrastructure_bytes;
       })
@@ -950,6 +1019,26 @@ stateful_error_t stateful_object_runtime_t::discard_application (const object_re
           auto *object = find_record_locked (owner, error);
           if (object == nullptr)
               return error;
+          const auto seal = _relocation_seals.find (object->barrier_generation);
+          if (seal != _relocation_seals.end ()) {
+              const auto source =
+                std::find (seal->second.sources.begin (), seal->second.sources.end (), owner);
+              const auto index = static_cast<std::size_t> (source - seal->second.sources.begin ());
+              const auto discard = [sequence] (std::vector<turn_record_t> &records) {
+                  const auto record = std::find_if (
+                    records.begin (), records.end (),
+                    [sequence] (const turn_record_t &entry) { return entry.sequence == sequence; });
+                  if (record == records.end ())
+                      return false;
+                  records.erase (record);
+                  return true;
+              };
+              if ((index < seal->second.boundary_application.size ()
+                   && discard (seal->second.boundary_application[index]))
+                  || (index < seal->second.frozen.size ()
+                      && discard (seal->second.frozen[index].pending_application)))
+                  return stateful_error_t::none;
+          }
           const auto queued = std::find_if (
             object->queue.application.begin (), object->queue.application.end (),
             [sequence] (const turn_record_t &record) { return record.sequence == sequence; });
@@ -970,24 +1059,12 @@ stateful_error_t stateful_object_runtime_t::discard_application (const object_re
           } else if (bytes > object->queue.application_bytes) {
               return stateful_error_t::conflict;
           }
-          auto hold = _relocation_holds.end ();
-          if (in_held && object->state == object_state_t::moving
-              && object->barrier_generation != 0) {
-              hold = _relocation_holds.find (object->barrier_generation);
-              if (hold == _relocation_holds.end () || hold->second.record_count == 0
-                  || hold->second.byte_count < bytes)
-                  return stateful_error_t::conflict;
-          }
           object->queue.application_bytes -= bytes;
           if (in_held) {
               object->queue.held_application_bytes -= bytes;
               object->queue.held_application.erase (held);
           } else {
               object->queue.application.erase (queued);
-          }
-          if (hold != _relocation_holds.end ()) {
-              --hold->second.record_count;
-              hold->second.byte_count -= bytes;
           }
           if (!in_held) {
               notify_quiescence ();
@@ -1179,7 +1256,9 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
             }
             plan.token = _next_relocation_token++;
             try {
-                _relocation_holds.emplace (plan.token, relocation_hold_state_t{});
+                relocation_seal_state_t seal{plan.keys, plan.sources, {}};
+                seal.boundary_application.resize (plan.keys.size ());
+                _relocation_seals.emplace (plan.token, std::move (seal));
             }
             catch (...) {
                 plan.token = 0;
@@ -1198,23 +1277,7 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
     if (plan.error != stateful_error_t::none)
         co_return result_t<aggregate_relocation_seal_attempt_t>::success ({plan.error, {}});
 
-    const auto release = [this, &plan] {
-        _lane
-          .run ([this, &plan] {
-              for (const auto &key : plan.keys) {
-                  const auto found = _objects.find (key);
-                  if (found == _objects.end () || found->second.state != object_state_t::moving
-                      || found->second.barrier_generation != plan.token)
-                      continue;
-                  move_held_application_locked (found->second);
-                  found->second.state = object_state_t::ready;
-                  found->second.barrier_generation = 0;
-              }
-              _relocation_holds.erase (plan.token);
-              notify_quiescence ();
-          })
-          .get ();
-    };
+    const auto release = [this, &plan] { (void) abort_relocation_before_cutover (plan.token); };
     while (true) {
         const auto observed = _quiescence_epoch.load (std::memory_order_acquire);
         const auto quiescent =
@@ -1319,34 +1382,23 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
                     }
                     frozen_participants.push_back (std::move (frozen));
                 }
-                _relocation_seals.emplace (
-                  plan.token,
-                  relocation_seal_state_t{plan.keys, plan.sources, frozen_participants});
+                _relocation_seals.at (plan.token).frozen = frozen_participants;
                 for (const auto &key : plan.keys) {
                     auto &queue = _objects.find (key)->second.queue;
                     queue.application.clear ();
-                    queue.application_bytes = queue.held_application_bytes;
+                    queue.application_bytes = 0;
                 }
                 return aggregate_relocation_seal_attempt_t{
                   stateful_error_t::none,
                   aggregate_relocation_seal_t{plan.token, std::move (frozen_participants)}};
             }
             catch (...) {
-                for (const auto &key : plan.keys) {
-                    const auto found = _objects.find (key);
-                    if (found == _objects.end () || found->second.state != object_state_t::moving
-                        || found->second.barrier_generation != plan.token)
-                        continue;
-                    move_held_application_locked (found->second);
-                    found->second.state = object_state_t::ready;
-                    found->second.barrier_generation = 0;
-                }
-                _relocation_holds.erase (plan.token);
-                notify_quiescence ();
                 return aggregate_relocation_seal_attempt_t{stateful_error_t::conflict, {}};
             }
         })
         .get ();
+    if (result.error != stateful_error_t::none)
+        release ();
     co_return result_t<aggregate_relocation_seal_attempt_t>::success (std::move (result));
 }
 
@@ -1356,7 +1408,8 @@ stateful_error_t stateful_object_runtime_t::abort_relocation (std::uint64_t toke
 }
 
 std::pair<stateful_error_t, relocation_ingress_batch_t>
-stateful_object_runtime_t::begin_relocation_boundary (std::uint64_t token)
+stateful_object_runtime_t::begin_relocation_boundary (
+  std::uint64_t token, std::function<void (const object_ref_t &, const turn_record_t &)> deliver)
 {
     return _lane
       .run ([&, this] () -> std::pair<stateful_error_t, relocation_ingress_batch_t> {
@@ -1365,13 +1418,13 @@ stateful_object_runtime_t::begin_relocation_boundary (std::uint64_t token)
               return {stateful_error_t::not_found, {}};
           if (seal->second.ingress_phase != relocation_ingress_phase_t::holding)
               return {stateful_error_t::conflict, {}};
+          if (seal->second.frozen.size () != seal->second.keys.size ())
+              return {stateful_error_t::conflict, {}};
 
           relocation_ingress_batch_t batch;
           batch.token = token;
           try {
               batch.participants.reserve (seal->second.keys.size ());
-              seal->second.boundary_application.clear ();
-              seal->second.boundary_application.reserve (seal->second.keys.size ());
               for (std::size_t index = 0; index != seal->second.keys.size (); ++index) {
                   const auto object = _objects.find (seal->second.keys[index]);
                   if (object == _objects.end () || object->second.state != object_state_t::moving
@@ -1381,10 +1434,7 @@ stateful_object_runtime_t::begin_relocation_boundary (std::uint64_t token)
                   }
                   relocation_ingress_batch_t::participant_t participant{object->second.reference,
                                                                         {}};
-                  participant.records.insert (participant.records.end (),
-                                              object->second.queue.held_application.begin (),
-                                              object->second.queue.held_application.end ());
-                  seal->second.boundary_application.push_back (participant.records);
+                  participant.records = seal->second.boundary_application[index];
                   batch.participants.push_back (std::move (participant));
               }
           }
@@ -1392,11 +1442,7 @@ stateful_object_runtime_t::begin_relocation_boundary (std::uint64_t token)
               return {stateful_error_t::backpressured, {}};
           }
 
-          for (const auto &key : seal->second.keys) {
-              auto &queue = _objects.find (key)->second.queue;
-              queue.held_application.clear ();
-              queue.held_application_bytes = 0;
-          }
+          seal->second.deliver = std::move (deliver);
           seal->second.ingress_phase = relocation_ingress_phase_t::post_boundary;
           return {stateful_error_t::none, std::move (batch)};
       })
@@ -1422,9 +1468,11 @@ stateful_error_t stateful_object_runtime_t::abort_relocation_before_cutover (std
           }
           for (std::size_t index = 0; index != seal->second.keys.size (); ++index) {
               auto &record = _objects.find (seal->second.keys[index])->second;
-              for (auto &pending : seal->second.frozen[index].pending_application) {
-                  record.queue.application_bytes += retained_bytes (pending);
-                  record.queue.application.push_back (std::move (pending));
+              if (index < seal->second.frozen.size ()) {
+                  for (auto &pending : seal->second.frozen[index].pending_application) {
+                      record.queue.application_bytes += retained_bytes (pending);
+                      record.queue.application.push_back (std::move (pending));
+                  }
               }
               if (index < seal->second.boundary_application.size ()) {
                   for (auto &pending : seal->second.boundary_application[index]) {
@@ -1436,8 +1484,8 @@ stateful_error_t stateful_object_runtime_t::abort_relocation_before_cutover (std
               record.state = object_state_t::ready;
               record.barrier_generation = 0;
           }
-          _relocation_holds.erase (token);
           _relocation_seals.erase (seal);
+          notify_quiescence ();
           return stateful_error_t::none;
       })
       .get ();
@@ -1461,7 +1509,8 @@ stateful_error_t stateful_object_runtime_t::finalize_relocation_cutover (std::ui
               }
           }
           seal->second.ingress_phase = relocation_ingress_phase_t::follow_only;
-          _relocation_holds.erase (token);
+          seal->second.frozen.clear ();
+          seal->second.boundary_application.clear ();
           return stateful_error_t::none;
       })
       .get ();
@@ -1500,7 +1549,8 @@ stateful_object_runtime_t::commit_relocation_aggregate (std::uint64_t token,
               result.push_back (std::move (target));
           }
           seal->second.ingress_phase = relocation_ingress_phase_t::follow_only;
-          _relocation_holds.erase (token);
+          seal->second.frozen.clear ();
+          seal->second.boundary_application.clear ();
           return {stateful_error_t::none, std::move (result)};
       })
       .get ();

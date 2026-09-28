@@ -32,3 +32,16 @@ export class ServiceRelocationPostCommitError extends Error {
     this.name = 'ServiceRelocationPostCommitError';
   }
 }
+
+/**
+ * A relocation whose settled authority leaves the host in `Error` with
+ * `Blocked/RelocationFailed` (spec 30 §13): the source owner lease ended
+ * before its Preserve fence succeeded, or units settled on both the source
+ * and the target.
+ */
+export class ServiceRelocationAuthorityError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'ServiceRelocationAuthorityError';
+  }
+}

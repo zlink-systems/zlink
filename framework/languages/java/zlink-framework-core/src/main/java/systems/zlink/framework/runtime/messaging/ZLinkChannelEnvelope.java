@@ -280,6 +280,19 @@ public final class ZLinkChannelEnvelope {
         return decodeHeader(parts.get(0), captureFlow);
     }
 
+    /** Packet name and payload selected from the decoded envelope or an internal raw frame. */
+    public record DispatchPacket(String packetName, Message payload, Header header) {}
+
+    public static DispatchPacket decodeDispatchPacket(List<Message> parts, Header decodedHeader) {
+        Header header = decodedHeader == null ? decodeDispatchHeader(parts, false) : decodedHeader;
+        if (header != null) {
+            return new DispatchPacket(header.messageName(), decodeBody(parts), header);
+        }
+        return parts.size() >= 2
+                ? new DispatchPacket(parts.get(0).toUtf8String(), parts.get(1), null)
+                : new DispatchPacket("", parts.get(0), null);
+    }
+
     /** Two or more parts whose first frame starts with a JSON object byte. */
     public static boolean looksLikeEnvelope(List<Message> parts) {
         if (parts == null || parts.size() < 2 || parts.get(0).size() == 0) {

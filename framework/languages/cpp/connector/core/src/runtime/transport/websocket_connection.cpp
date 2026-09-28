@@ -65,66 +65,6 @@ template <typename TStream> class websocket_stream_connection_t final : public s
     }
 #endif
 
-    bool is_open () const override
-    {
-        return run_serialized_sync (_io_context, _strand, [this] { return _stream.is_open (); });
-    }
-
-    std::size_t available (boost::system::error_code &error) override
-    {
-        return run_serialized_sync (_io_context, _strand,
-                                    [this, &error] { return available_impl (error); });
-    }
-
-    std::size_t
-    read_some (std::uint8_t *buffer, std::size_t size, boost::system::error_code &error) override
-    {
-        return run_serialized_sync (_io_context, _strand, [this, buffer, size, &error] {
-            return read_some_impl (buffer, size, error);
-        });
-    }
-
-    std::size_t available_impl (boost::system::error_code &error)
-    {
-        if (!_read_buffer.empty ()) {
-            return _read_buffer.size () - _read_offset;
-        }
-
-        const auto tcp_available = beast::get_lowest_layer (_stream).available (error);
-        if (error || tcp_available == 0) {
-            return 0;
-        }
-
-        beast::flat_buffer buffer;
-        _stream.read (buffer, error);
-        if (error) {
-            return 0;
-        }
-
-        _read_buffer.resize (buffer.size ());
-        asio::buffer_copy (asio::buffer (_read_buffer), buffer.data ());
-        _read_offset = 0;
-        return _read_buffer.size ();
-    }
-
-    std::size_t
-    read_some_impl (std::uint8_t *buffer, std::size_t size, boost::system::error_code &error)
-    {
-        if (available_impl (error) == 0 || error) {
-            return 0;
-        }
-
-        const auto remaining = _read_buffer.size () - _read_offset;
-        const auto copied = std::min (remaining, size);
-        std::copy_n (_read_buffer.data () + _read_offset, copied, buffer);
-        _read_offset += copied;
-        if (_read_offset == _read_buffer.size ()) {
-            _read_buffer.clear ();
-            _read_offset = 0;
-        }
-        return copied;
-    }
-
     void async_read_some (std::size_t max_size,
                           std::function<void (boost::system::error_code, std::vector<std::uint8_t>)>
                             completion) override
@@ -139,6 +79,12 @@ template <typename TStream> class websocket_stream_connection_t final : public s
                                              boost::system::error_code error, std::size_t) mutable {
                                       if (error) {
                                           buffer->consume (buffer->size ());
+                                          /* A message over the read limit reaches
+                                           * the connector as the transport-neutral
+                                           * message_size (stream-connector §4.7). */
+                                          if (error == websocket::error::message_too_big) {
+                                              error = asio::error::message_size;
+                                          }
                                           if (completion) {
                                               completion (error, {});
                                           }
@@ -150,14 +96,6 @@ template <typename TStream> class websocket_stream_connection_t final : public s
                                           completion (error, std::move (bytes));
                                       }
                                   }));
-        });
-    }
-
-    void write (const std::vector<std::uint8_t> &bytes) override
-    {
-        run_serialized_sync (_io_context, _strand, [this, &bytes] {
-            _stream.binary (true);
-            _stream.write (asio::buffer (bytes));
         });
     }
 
@@ -207,12 +145,6 @@ template <typename TStream> class websocket_stream_connection_t final : public s
         });
     }
 
-    void close (boost::system::error_code &error) override
-    {
-        run_serialized_sync (_io_context, _strand,
-                             [this, &error] { beast::get_lowest_layer (_stream).close (error); });
-    }
-
     void set_read_message_limit (std::size_t limit) override { _read_message_limit = limit; }
 
   private:
@@ -224,8 +156,6 @@ template <typename TStream> class websocket_stream_connection_t final : public s
 #endif
     websocket::stream<TStream> _stream;
     asio::strand<asio::io_context::executor_type> _strand;
-    std::vector<std::uint8_t> _read_buffer;
-    std::size_t _read_offset = 0;
     std::size_t _read_message_limit = 64u * 1024u + 65535u + 6u;
 };
 

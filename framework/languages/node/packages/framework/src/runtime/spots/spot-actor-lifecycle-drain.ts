@@ -53,25 +53,27 @@ export class ZLinkSpotActorLifecycleDrain {
         continue;
       }
       if (actorRef === null || actorRef === undefined) continue;
-      await this.options.serial.execute(() => {
-        const actor = this.options.resolveActor(actorId);
-        if (actor === undefined) {
+      await this.options.serial.executeLifecycleOperation(() =>
+        this.options.serial.execute(() => {
+          const actor = this.options.resolveActor(actorId);
+          if (actor === undefined) {
+            return undefined;
+          }
+          const target = this.options.getTarget();
+          if (event.kind === ZLINK_SPOT_ACTOR_LIFECYCLE_JOINED) {
+            return target.onJoinedActor?.(actor);
+          }
+          if (event.kind === ZLINK_SPOT_ACTOR_LIFECYCLE_LEFT) {
+            return Promise.resolve(target.onLeaveActor?.(actor)).then(() => {
+              this.options.commitActorDeparture?.(actorId);
+            });
+          }
+          if (event.kind === ZLINK_SPOT_ACTOR_LIFECYCLE_DISCONNECTED) {
+            return target.onDisconnectActor?.(actor);
+          }
           return undefined;
-        }
-        const target = this.options.getTarget();
-        if (event.kind === ZLINK_SPOT_ACTOR_LIFECYCLE_JOINED) {
-          return target.onJoinedActor?.(actor);
-        }
-        if (event.kind === ZLINK_SPOT_ACTOR_LIFECYCLE_LEFT) {
-          return Promise.resolve(target.onLeaveActor?.(actor)).then(() => {
-            this.options.commitActorDeparture?.(actorId);
-          });
-        }
-        if (event.kind === ZLINK_SPOT_ACTOR_LIFECYCLE_DISCONNECTED) {
-          return target.onDisconnectActor?.(actor);
-        }
-        return undefined;
-      });
+        })
+      );
     }
   }
 }

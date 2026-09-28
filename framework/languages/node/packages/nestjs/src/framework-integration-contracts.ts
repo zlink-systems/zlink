@@ -40,7 +40,7 @@ export interface ZLinkWorkerOptions {
 
 export interface ZLinkNestIntegrationRuntimeHost extends Pick<
   import('@zlink-systems/framework').ZLinkFrameworkRuntime,
-  'shutdown'
+  'shutdown' | 'getListenerStatus'
 > {
   readonly channelRuntimeOptions: unknown;
   readonly routeMeshRuntimeOptions: import('@zlink-systems/framework').ZLinkRouteMeshRuntimeOptions;

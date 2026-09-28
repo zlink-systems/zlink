@@ -4,14 +4,13 @@ import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.errors.ZlinkRecvException;
-import systems.zlink.contracts.eventing.MonitorEventType;
-import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.messaging.ReplyToken;
 import systems.zlink.contracts.messaging.RequestSubmitOperation;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RecvResult;
+import systems.zlink.contracts.sockets.RouterRoute;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireCodec;
@@ -57,16 +56,26 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     }
 
     RouterSocket openRouter(RoutingId routingId) {
-        return inStateLane(() -> openRouterOnLane(routingId));
+        return openRouter(routingId, false);
     }
 
-    private RouterSocket openRouterOnLane(RoutingId routingId) {
+    /**
+     * {@code observesRoutes} makes the caller's receive loop this ROUTER's one route observer: its
+     * waits report {@code POLLROUTE}, and it must read {@link #routesSnapshot} on each report (Core
+     * ROUTER §10.1).
+     */
+    RouterSocket openRouter(RoutingId routingId, boolean observesRoutes) {
+        return inStateLane(() -> openRouterOnLane(routingId, observesRoutes));
+    }
+
+    private RouterSocket openRouterOnLane(RoutingId routingId, boolean observesRoutes) {
         ensureOpen();
         RouterSocket router = context.createRouterSocket();
         boolean accepted = false;
         try {
             router.setRoutingId(Objects.requireNonNull(routingId, "routingId"));
-            receivePollers.put(router, new ZLinkJavaSocketReceivePoller(router));
+            receivePollers.put(
+                    router, new ZLinkJavaSocketReceivePoller(router, true, observesRoutes));
             accepted = true;
             return router;
         } finally {
@@ -268,11 +277,12 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         }
     }
 
-    SocketMonitor openMonitor(RouterSocket router, MonitorEventType... eventTypes) {
+    /** Reads Core's selected routes. Only the socket's route observer calls this. */
+    List<RouterRoute> routesSnapshot(RouterSocket router) {
         return inStateLane(
                 () -> {
                     ensureOwnedOnLane(router);
-                    return router.monitorOpen(eventTypes);
+                    return router.routesSnapshot();
                 });
     }
 
@@ -285,9 +295,14 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     }
 
     boolean waitForReadable(RouterSocket router, Duration timeout) {
+        return (waitForReady(router, timeout) & ZLinkJavaSocketReceivePoller.READABLE) != 0;
+    }
+
+    /** Waits once and returns {@link ZLinkJavaSocketReceivePoller} readiness bits. */
+    int waitForReady(RouterSocket router, Duration timeout) {
         Objects.requireNonNull(timeout, "timeout");
         ZLinkJavaSocketReceivePoller receivePoller = inStateLane(() -> receivePollerOnLane(router));
-        return receivePoller != null && receivePoller.waitForReadable(timeout);
+        return receivePoller == null ? 0 : receivePoller.waitForReady(timeout);
     }
 
     Optional<Inbound> receiveNow(RouterSocket router) {
@@ -408,6 +423,11 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         @Override
         public List<byte[]> frames() {
             return frames;
+        }
+
+        /** The Core route generation that delivered this record (Core ROUTER §10.1). */
+        long routeGeneration() {
+            return received.routeGeneration();
         }
 
         @Override

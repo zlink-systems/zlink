@@ -9,7 +9,6 @@ import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.messaging.Message;
 
-import java.net.ServerSocket;
 import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -125,8 +124,8 @@ final class LifecycleTest {
 
     @Test
     void unlimitedAutomaticReconnectWaitsForALateServer() throws Exception {
-        int port = reservePort();
-        TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer(port);
+        TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer();
+        int port = server.endpoint().getPort();
         ZLinkStreamConnectorOptions options =
                 new ZLinkStreamConnectorOptions(
                         URI.create("tcp://127.0.0.1:" + port),
@@ -387,12 +386,6 @@ final class LifecycleTest {
 
     private static ZLinkStreamEncodedPayload payload(String packetName, String body) {
         return new ZLinkStreamEncodedPayload(packetName, Message.from(body), Map.of());
-    }
-
-    private static int reservePort() throws Exception {
-        try (ServerSocket socket = new ServerSocket(0)) {
-            return socket.getLocalPort();
-        }
     }
 
     private static ZLinkStreamWireProtocol.Header control(String name) {

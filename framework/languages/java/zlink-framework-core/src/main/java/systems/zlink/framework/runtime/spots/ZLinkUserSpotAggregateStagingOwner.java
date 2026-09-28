@@ -9,6 +9,7 @@ import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapterRegistry;
+import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
 import systems.zlink.framework.spots.ZLinkSpot;
 
 import java.util.ArrayList;
@@ -32,36 +33,49 @@ import java.util.function.Supplier;
  */
 final class ZLinkUserSpotAggregateStagingOwner {
     private final StagingBackend backend;
+    private final ZLinkActivationAdmission activationAdmission;
 
     ZLinkUserSpotAggregateStagingOwner(
-            ZLinkSpotLifecycle spots,
-            ZLinkActorSessionCoordinator actorSessions,
-            ZLinkRelocationAdapterRegistry adapters) {
-        backend =
-                new ProductionBackend(
-                        Objects.requireNonNull(spots, "spots"),
-                        Objects.requireNonNull(actorSessions, "actorSessions").runtime(),
-                        Objects.requireNonNull(adapters, "adapters"));
-    }
-
-    ZLinkUserSpotAggregateStagingOwner(
-            ZLinkSpotRuntime spots, ZLinkRelocationAdapterRegistry adapters) {
+            ZLinkSpotRuntime spots, ZLinkRelocationAdapterRegistry adapters, String meshName) {
         Objects.requireNonNull(spots, "spots");
         backend =
                 new ProductionBackend(
                         spots.spotLifecycle(),
                         spots.actorSessions().runtime(),
                         Objects.requireNonNull(adapters, "adapters"),
-                        spots);
+                        spots,
+                        Objects.requireNonNull(meshName, "meshName"));
+        activationAdmission = spots.activationAdmission(meshName);
     }
 
-    ZLinkUserSpotAggregateStagingOwner(StagingBackend backend) {
+    /** A staging owner over a test backend, bounded by {@code activationAdmission}. */
+    ZLinkUserSpotAggregateStagingOwner(
+            StagingBackend backend, ZLinkActivationAdmission activationAdmission) {
         this.backend = Objects.requireNonNull(backend, "backend");
+        this.activationAdmission =
+                Objects.requireNonNull(activationAdmission, "activationAdmission");
     }
 
+    /** A staging owner over a test backend whose MeshNode limit is never reached. */
+    ZLinkUserSpotAggregateStagingOwner(StagingBackend backend) {
+        this(backend, new ZLinkActivationAdmission(Integer.MAX_VALUE));
+    }
+
+    /**
+     * Restores the aggregate as this MeshNode's relocation target. The Restore holds one activation
+     * admission until the aggregate is published (target commit) or discarded (MeshNode §5.1).
+     */
     CompletionStage<Staged> stage(Request request, ZLinkRelocationCancellation cancellation) {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(cancellation, "cancellation");
+        ZLinkActivationAdmission.Permit permit;
+        try {
+            permit =
+                    activationAdmission.acquire(
+                            "User Spot relocation target '" + request.spotId() + "'");
+        } catch (ZLinkFrameworkException full) {
+            return CompletableFuture.failedFuture(full);
+        }
         List<Object> preparedActors = new ArrayList<>();
         return prepareAndRestoreSpot(request, cancellation)
                 .thenCompose(
@@ -75,7 +89,8 @@ final class ZLinkUserSpotAggregateStagingOwner {
                                                                 preparedSpot,
                                                                 preparedActors,
                                                                 backend.beginIngressHold(
-                                                                        preparedSpot)))
+                                                                        preparedSpot),
+                                                                permit))
                                         .exceptionallyCompose(
                                                 failure ->
                                                         discardPartial(preparedSpot, preparedActors)
@@ -84,7 +99,13 @@ final class ZLinkUserSpotAggregateStagingOwner {
                                                                                 CompletableFuture
                                                                                         .failedFuture(
                                                                                                 unwrap(
-                                                                                                        failure)))));
+                                                                                                        failure)))))
+                .whenComplete(
+                        (staged, failure) -> {
+                            if (failure != null) {
+                                permit.close();
+                            }
+                        });
     }
 
     /**
@@ -237,6 +258,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
         }
         backend.publishSpot(staged.spot);
         staged.published = true;
+        staged.restorePermit.close();
     }
 
     void openAdmission(Staged staged) {
@@ -548,6 +570,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
                             }
                             staged.ingressClosed = true;
                             staged.terminal = true;
+                            staged.restorePermit.close();
                             List<PendingIngress> captured =
                                     new ArrayList<>(
                                             staged.relayedIngress.size()
@@ -804,6 +827,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
         private final Object spot;
         private final List<Object> actors;
         private final Object ingressHold;
+        private final ZLinkActivationAdmission.Permit restorePermit;
         private final List<PendingIngress> relayedIngress = new ArrayList<>();
         private final List<PendingIngress> pendingIngress = new ArrayList<>();
         private final ZLinkStateLane stateLane = new ZLinkStateLane();
@@ -819,12 +843,14 @@ final class ZLinkUserSpotAggregateStagingOwner {
                 Request request,
                 Object spot,
                 List<Object> actors,
-                Object ingressHold) {
+                Object ingressHold,
+                ZLinkActivationAdmission.Permit restorePermit) {
             this.owner = owner;
             this.request = request;
             this.spot = spot;
             this.actors = List.copyOf(actors);
             this.ingressHold = ingressHold;
+            this.restorePermit = restorePermit;
         }
 
         int actorCount() {
@@ -862,19 +888,15 @@ final class ZLinkUserSpotAggregateStagingOwner {
         private final ZLinkActorRuntime actors;
         private final ZLinkRelocationAdapterRegistry adapters;
         private final ZLinkSpotRuntime runtime;
-
-        private ProductionBackend(
-                ZLinkSpotLifecycle spots,
-                ZLinkActorRuntime actors,
-                ZLinkRelocationAdapterRegistry adapters) {
-            this(spots, actors, adapters, null);
-        }
+        private final String meshName;
 
         private ProductionBackend(
                 ZLinkSpotLifecycle spots,
                 ZLinkActorRuntime actors,
                 ZLinkRelocationAdapterRegistry adapters,
-                ZLinkSpotRuntime runtime) {
+                ZLinkSpotRuntime runtime,
+                String meshName) {
+            this.meshName = meshName;
             this.spots = spots;
             this.actors = actors;
             this.adapters = adapters;
@@ -884,7 +906,10 @@ final class ZLinkUserSpotAggregateStagingOwner {
         @Override
         public CompletionStage<Object> prepareSpot(Request request) {
             return spots.prepareRelocationReserved(
-                            request.spotType(), request.spotId(), request.objectGeneration())
+                            meshName,
+                            request.spotType(),
+                            request.spotId(),
+                            request.objectGeneration())
                     .thenApply(value -> value);
         }
 

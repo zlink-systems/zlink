@@ -287,7 +287,8 @@ public sealed class SharedAsyncDisposalTests
                 ZLinkApplicationJobQueueProfile.Balanced,
                 8,
                 1
-            )
+            ),
+            new ZLinkListenerRecords()
         );
 
         var first = state.DisposeAsync().AsTask();

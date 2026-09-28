@@ -61,9 +61,11 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     private readonly ZLinkSpotRouteRouterDispatcher _spotRouteRouter;
     private readonly ZLinkSpotRuntimeManager _spots;
     private readonly ZLinkFrameworkComponentStateFactory _stateFactory;
+    private ZLinkListenerRecords _listenerRecords = new();
     private readonly ZLinkStreamRuntimeManager _streams;
     private ZLinkMessageFlowTracer? _flow;
     private ILogger? _actorHandoffLogger;
+    private ILogger? _spotCloseLogger;
     private ILogger? _timerLogger;
     private ZLinkRuntimeErrorSink? _generationErrorSink = new();
     private int _lifecyclePhase;
@@ -205,6 +207,28 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             .GetService<ILoggerFactory>()
             ?.CreateLogger("Zlink.Framework.ActorHandoff");
         _actorHandoffLogger?.LogInformation("{ActorHandoffMarker}", marker);
+    }
+
+    // Spot context Close returns nothing, so its false, failed, merged and
+    // not-executed outcomes are recorded here (spec 06-spot-address-messaging §7).
+    internal void LogSpotContextClose(
+        string spotId,
+        ulong objectGeneration,
+        string outcome,
+        Exception? failure
+    )
+    {
+        _spotCloseLogger ??= Services
+            .GetService<ILoggerFactory>()
+            ?.CreateLogger("Zlink.Framework.SpotClose");
+        _spotCloseLogger?.Log(
+            failure is null ? LogLevel.Information : LogLevel.Warning,
+            failure,
+            "spot_context_close spot={SpotId} generation={ObjectGeneration} outcome={Outcome}",
+            spotId,
+            objectGeneration,
+            outcome
+        );
     }
 
     internal ZLinkRuntimeErrorSink ErrorSink =>
@@ -684,6 +708,20 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             .ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Actors activated on the named MeshNode in this process (runtime monitoring §5).
+    /// Host-wide drain remainder counts stay in <see cref="GetDrainRemainderCounts"/>.
+    /// </summary>
+    internal int GetActiveActorCount(string meshName) =>
+        _actorSessionManager.CountActiveActors(meshName);
+
+    /// <summary>
+    /// Location runtime §5: the host's single new-work decision (local admission deadline and
+    /// host execution combination). A host without a Location Store has no such block.
+    /// </summary>
+    internal bool IsOwnerAdmissionOpen =>
+        _locationRuntime is null || _locationRuntime.IsOwnerAdmissionOpen;
+
     internal ZLinkDrainRemainderCounts GetDrainRemainderCounts()
     {
         var actors = _actorSessionManager
@@ -856,14 +894,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         var admission = AwaitStateLane(
             _stateLane.RunAsync(() =>
             {
-                if (
-                    _drainAdmission.IsSealed
-                    || (
-                        ownsObjectWork
-                        && _locationRuntime is not null
-                        && !_locationRuntime.IsOwnerAdmissionOpen
-                    )
-                )
+                if (_drainAdmission.IsSealed || (ownsObjectWork && !IsOwnerAdmissionOpen))
                 {
                     return (
                         Admitted: (ZLinkFrameworkComponentState?)null,
@@ -1051,7 +1082,10 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             Volatile.Write(ref _lifecyclePhase, (int)ZLinkRuntimeLifecyclePhase.Starting);
             try
             {
-                _state = await _stateFactory.CreateAsync().ConfigureAwait(false);
+                // Each start owns a new record store, published before any listener binds.
+                var listenerRecords = new ZLinkListenerRecords();
+                Volatile.Write(ref _listenerRecords, listenerRecords);
+                _state = await _stateFactory.CreateAsync(listenerRecords).ConfigureAwait(false);
                 // A published relocation is not replayed during process startup.
                 // Recovery remains an explicit same-process operation; a new
                 // process must rediscover the current owner through the normal
@@ -1112,6 +1146,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             _gate.Release();
         }
     }
+
+    internal ZLinkListenerRecords ListenerRecords => Volatile.Read(ref _listenerRecords);
 
     /// <summary>
     /// Stops a runtime after the drain deadline has already expired. Unlike
@@ -1256,6 +1292,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             await CaptureAsync(workerPool.DisposeAsync).ConfigureAwait(false);
         if (logicalMulticastWorkerPool is not null && !logicalMulticastPoolDisposed)
             await CaptureAsync(logicalMulticastWorkerPool.DisposeAsync).ConfigureAwait(false);
+        await ListenerRecords.ClearAsync().ConfigureAwait(false);
         return failures;
 
         async ValueTask CaptureAsync(Func<ValueTask> cleanup)
@@ -1358,8 +1395,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             : Volatile.Read(ref _lifecyclePhase) != (int)ZLinkRuntimeLifecyclePhase.Running
                 ? $"lifecycle phase is {(ZLinkRuntimeLifecyclePhase)Volatile.Read(ref _lifecyclePhase)}"
             : _state is null ? "runtime state is not created"
-            : _locationRuntime is not null && !_locationRuntime.IsOwnerAdmissionOpen
-                ? "owner admission is closed"
+            : !IsOwnerAdmissionOpen ? "owner admission is closed"
             : null;
         if (refusal is not null)
             throw new InvalidOperationException(

@@ -180,10 +180,10 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
         actorTimers.values().forEach(ZLinkSpotTimerRegistry::freeze);
     }
 
-    CompletionStage<Void> awaitAllLanes() {
+    CompletionStage<Void> awaitAllLanes(ZLinkSerialExecutionQueue.Quiescence spotScope) {
         List<CompletionStage<Void>> lanes = new ArrayList<>();
-        lanes.add(serials.awaitAllLanes());
-        timerContexts.forEach(context -> lanes.add(context.awaitAllLanes()));
+        lanes.add(serials.awaitAllLanes(spotScope));
+        timerContexts.forEach(context -> lanes.add(context.awaitAllLanes(spotScope)));
         return CompletableFuture.allOf(
                 lanes.stream()
                         .map(CompletionStage::toCompletableFuture)
@@ -199,6 +199,19 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
     public CompletionStage<Void> enqueueDispatch(
             long payloadBytes, Supplier<CompletionStage<Void>> operation) {
         host.ensureOwnerAdmissionOpen();
+        return enqueueAccepted(payloadBytes, operation);
+    }
+
+    /**
+     * Runs a lifecycle callback of this Entry Spot, such as {@code onClosing}. Cleanup of accepted
+     * work runs even after the owner admission deadline (Location runtime §5).
+     */
+    CompletionStage<Void> enqueueLifecycle(Supplier<CompletionStage<Void>> operation) {
+        return enqueueAccepted(0, operation);
+    }
+
+    private CompletionStage<Void> enqueueAccepted(
+            long payloadBytes, Supplier<CompletionStage<Void>> operation) {
         return dispatchQueue.enqueueWithPayloadBytes(
                 payloadBytes,
                 () ->
@@ -374,6 +387,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     private final ZLinkSpotHandlerLoader handlerLoader;
     private final RoutingId nodeRid;
     private final ZLinkBackendSpot backendSpot;
+    private final long objectGeneration;
     private final DefaultSpotOutbound outbound;
     private final ZLinkSpotTimerRegistry timers;
     private final ZLinkHandlerInstanceOwner handlerInstances;
@@ -490,6 +504,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         this.handlerLoader = handlerLoader;
         this.nodeRid = nodeRid;
         this.backendSpot = backendSpot;
+        this.objectGeneration = backendSpot.lifecycleGeneration();
         this.executionMode = Objects.requireNonNull(executionMode, "executionMode");
         this.relocationCoordinationMode =
                 Objects.requireNonNull(relocationCoordinationMode, "relocationCoordinationMode");
@@ -529,7 +544,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
 
     @Override
     public long objectGeneration() {
-        return backendSpot.lifecycleGeneration();
+        return objectGeneration;
     }
 
     @Override
@@ -571,7 +586,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     @Override
     public CompletionStage<Boolean> close() {
         rejectAfterRelocationReady("close");
-        return host.closeSpot(spotId());
+        return ZLinkSerialExecutionQueue.yieldCurrent(host.closeSpot(spotId(), objectGeneration));
     }
 
     @Override
@@ -774,8 +789,12 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         return serials.usesSharedExecutionGate();
     }
 
-    CompletionStage<Void> awaitAllLanes() {
-        return serials.awaitAllLanes();
+    CompletionStage<Void> awaitAllLanes(ZLinkSerialExecutionQueue.Quiescence spotScope) {
+        return serials.awaitAllLanes(spotScope);
+    }
+
+    boolean isCurrentSpotTurn() {
+        return serials.isCurrentSpotTurn();
     }
 
     Map<String, ZLinkSerialExecutionQueue> relocationLanes() {

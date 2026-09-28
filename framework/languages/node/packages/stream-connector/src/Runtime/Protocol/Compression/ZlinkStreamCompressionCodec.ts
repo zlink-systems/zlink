@@ -1,11 +1,16 @@
 import {
   type ZlinkStreamCompressionCodec,
   ZlinkStreamCompression,
-  ZlinkStreamErrorCode
+  ZlinkStreamErrorCode,
+  ZlinkStreamException
 } from '../../../Contracts';
 import { ZlinkStreamHeaderFlags } from '../../../Contracts/ZlinkStreamEnums';
 import type { ZlinkStreamHeader } from '../../../Contracts/ZlinkStreamModels';
-import { lz4PickleUncompressed, lz4UnpicklePayload } from '@zlink-systems/stream-wire';
+import {
+  lz4PickledLength,
+  lz4PickleUncompressed,
+  lz4UnpicklePayload
+} from '@zlink-systems/stream-wire';
 import { connectorError } from '../../ZlinkStreamSupport';
 
 export const zlinkStreamLz4CompressionCodec: ZlinkStreamCompressionCodec = {
@@ -13,6 +18,15 @@ export const zlinkStreamLz4CompressionCodec: ZlinkStreamCompressionCodec = {
     return lz4PickleUncompressed(payload);
   },
   decompress(payload, maxDecompressedSize) {
+    // Spec stream-connector 32 §4.7: a result over the receive limit is
+    // `FrameTooLarge`. The pickle header declares the result length, so the
+    // limit is checked before anything is allocated.
+    if (lz4PickledLength(payload) > maxDecompressedSize) {
+      throw connectorError(
+        ZlinkStreamErrorCode.FrameTooLarge,
+        'LZ4 decoded payload exceeds MaxReceivePayloadSize.'
+      );
+    }
     return lz4UnpicklePayload(payload, maxDecompressedSize);
   }
 };
@@ -30,7 +44,11 @@ export function compressPayload(
     );
   }
 
-  return codec.compress(payload);
+  try {
+    return codec.compress(payload);
+  } catch (cause) {
+    throw connectorError(ZlinkStreamErrorCode.CompressionFailed, 'Compression failed.', cause);
+  }
 }
 
 export function decompressIfNeeded(
@@ -51,15 +69,21 @@ export function decompressIfNeeded(
     );
   }
 
+  let decompressed: Uint8Array;
   try {
-    const decompressed = codec.decompress(payload, maxDecompressedSize);
-    if (decompressed.length > maxDecompressedSize) {
-      throw new Error('Decoded payload exceeds MaxReceivePayloadSize.');
-    }
-    return decompressed;
+    decompressed = codec.decompress(payload, maxDecompressedSize);
   } catch (cause) {
+    if (cause instanceof ZlinkStreamException) throw cause;
     throw connectorError(ZlinkStreamErrorCode.DecompressionFailed, 'Decompression failed.', cause);
   }
+  // A custom codec may not apply the limit it is given, so the result is checked here.
+  if (decompressed.length > maxDecompressedSize) {
+    throw connectorError(
+      ZlinkStreamErrorCode.FrameTooLarge,
+      'Decompressed payload exceeds MaxReceivePayloadSize.'
+    );
+  }
+  return decompressed;
 }
 
 function resolveCompressionCodec(

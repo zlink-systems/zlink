@@ -1,9 +1,7 @@
 package systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.spots.entryspot.handlers
 
 import systems.zlink.framework.ZLinkMessageContext
-import systems.zlink.framework.actors.ZLinkActorManager
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpotActorRequestHandler
-import systems.zlink.framework.kotlin.await
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SupportChatRoles
 import systems.zlink.samples.kotlin.supportchat.server.support.application.AgentAssignmentService
 import systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.actors.SupportActorDirectory
@@ -14,7 +12,6 @@ import systems.zlink.samples.kotlin.supportchat.shared.contracts.SetAgentAvailab
 
 class SetAgentAvailableHandler(
     private val assignment: AgentAssignmentService,
-    private val actors: ZLinkActorManager,
     private val directory: SupportActorDirectory,
 ) :
     ZLinkSuspendingEntrySpotActorRequestHandler<
@@ -33,12 +30,7 @@ class SetAgentAvailableHandler(
         if (actor.role != SupportChatRoles.Agent) {
             throw IllegalStateException("Only agent actors can set availability.")
         }
-        val actorRef =
-            actors.find(actor.actorId).await().orElse(null)
-                ?: throw IllegalStateException(
-                    "Support actor ref is not available. actor=${actor.actorId}"
-                )
-        directory.addOrUpdate(actor, actorRef)
+        directory.addOrUpdate(actor)
         assignment.setAvailable(actor.actorId, actor.displayName, request.isAvailable)
         return SetAgentAvailableRes(request.isAvailable)
     }

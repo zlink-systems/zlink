@@ -12,15 +12,15 @@ public sealed record ZoneTickOutput(
 );
 
 /// <summary>
-/// One tick of a zone (§2.5): advance the counter, build the player list the clients see,
-/// build the border snapshot for each adjacent zone, then drop the adjacent snapshots
-/// that stopped arriving.
+/// One tick of a zone (§7.3): advance the counter, drop adjacent snapshots that stopped
+/// arriving, then build the player list and border snapshots for this tick.
 /// </summary>
 public static class ZoneTickUseCase
 {
     public static ZoneTickOutput Advance(ZoneState state)
     {
         var tick = state.NextTick();
+        state.ExpireStaleSnapshots();
         var notify = new ZoneStateNotify(state.ZoneId, tick, state.VisiblePlayers());
 
         var borderEvents = World
@@ -36,8 +36,6 @@ public static class ZoneTickUseCase
         // Bots are not push targets: they have no bound session, so a push addressed to
         // one would be a message with nowhere to go (§2.7, ZW-F3).
         var pushTargets = Humans(state);
-
-        state.ExpireStaleSnapshots();
 
         return new ZoneTickOutput(notify, pushTargets, borderEvents);
     }

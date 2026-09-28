@@ -12,11 +12,19 @@ export class ZLinkNodeEventLoopPoller {
   private readableHandler: () => void;
   private disposed = false;
 
-  constructor(socket: Socket, pollCompletion: boolean, readableHandler: () => void) {
+  constructor(
+    socket: Socket,
+    pollCompletion: boolean,
+    readableHandler: () => void,
+    pollRoute = false
+  ) {
     this.readableHandler = readableHandler;
     try {
       const pollEvents: PollEventFlagValue[] = [zlink.PollEventFlag.PollIn];
       if (pollCompletion) pollEvents.push(zlink.PollEventFlag.PollCompletion);
+      // A ROUTER selected-route change (Core ROUTER §10.1) wakes the same
+      // handler, whose owner is the socket's one route observer.
+      if (pollRoute) pollEvents.push(zlink.PollEventFlag.PollRoute);
       this.poller.add(socket as BaseSocket, pollEvents, 0);
       socket.setReadableHandler(this.onReady);
     } catch (error) {
@@ -40,7 +48,11 @@ export class ZLinkNodeEventLoopPoller {
   private readonly onReady = (): void => {
     if (this.disposed) return;
     const ready = this.poller.wait(this.events, 0);
-    if (ready === 0 || this.events.hasEvent(0, zlink.PollEventFlag.PollIn)) {
+    if (
+      ready === 0 ||
+      this.events.hasEvent(0, zlink.PollEventFlag.PollIn) ||
+      this.events.hasEvent(0, zlink.PollEventFlag.PollRoute)
+    ) {
       this.readableHandler();
     }
   };

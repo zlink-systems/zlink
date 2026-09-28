@@ -21,6 +21,7 @@
       takeLastError: module.cwrap('zlh_take_last_error', 'string', []),
       destroy: module.cwrap('zlh_destroy', null, []),
       frame: module.cwrap('zlh_frame', 'number', []),
+      startAdvance: module.cwrap('zlh_start_advance', null, []),
       pump: module.cwrap('zlh_pump', 'number', []),
       connect: module.cwrap('zlh_connect', 'number', []),
       close: module.cwrap('zlh_close', 'number', []),
@@ -35,6 +36,9 @@
       observe: module.cwrap('zlh_observe', 'number', ['string']),
       unobserve: module.cwrap('zlh_unobserve', null, ['string']),
       registerHandler: module.cwrap('zlh_register_handler', null, ['string']),
+      registerReplyReceivedHook: module.cwrap('zlh_register_reply_received_hook', null, []),
+      unregisterReplyReceivedHook: module.cwrap('zlh_unregister_reply_received_hook', null, []),
+      replyReceivedRuns: module.cwrap('zlh_reply_received_runs', 'number', []),
       pendingDispatch: module.cwrap('zlh_pending_dispatch', 'number', []),
       jslibPendingDispatch: module.cwrap('zlh_jslib_pending_dispatch', 'number', []),
       runDispatchQueue: module.cwrap('zlh_run_dispatch_queue', 'number', []),
@@ -43,7 +47,6 @@
       isConnected: module.cwrap('zlh_is_connected', 'number', []),
       state: module.cwrap('zlh_state', 'number', []),
       closeReason: module.cwrap('zlh_close_reason', 'number', []),
-      diagnosticsLevel: module.cwrap('zlh_diagnostics_level', 'number', []),
       setNestedPump: module.cwrap('zlh_set_nested_pump', null, ['number']),
       nestedPumpCalls: module.cwrap('zlh_nested_pump_calls', 'number', []),
       nestedPumpNotRefused: module.cwrap('zlh_nested_pump_not_refused', 'number', []),
@@ -146,15 +149,21 @@
         }
       },
 
-      async untilPending(timeoutMs) {
-        await untilTrue(() => api.pendingDispatch() > 0, 'a queued callback', timeoutMs);
+      // `above` is the pendingDispatch() count read before whatever the caller is
+      // waiting on, so this waits for a genuinely new item rather than one already
+      // queued (a connection-state change, an earlier reply) before the call.
+      async untilPending(above, timeoutMs) {
+        await untilTrue(() => api.pendingDispatch() > above, 'a queued callback', timeoutMs);
       },
 
       // Unity's Update(): Dispatch reads the transport, then the registered
-      // handlers run. The connector permits one pending stream read, so this
-      // waits for the Dispatch the frame loop already has in flight instead of
-      // starting a second one.
+      // handlers run. zlh_frame's own advance call only starts while connected
+      // (ZlinkStreamWebGlConnector.cs's wait/drive paths do the same), so the
+      // explicit Dispatch step starts one itself first - unconditionally, like
+      // RunDispatchAsync - before falling into the same wait zlh_frame's callers
+      // use, so it can still flush Close()'s queued callbacks once disconnected.
       async dispatch(timeoutMs) {
+        api.startAdvance();
         api.frame();
         const deadline = Date.now() + (timeoutMs ?? 15_000);
         for (;;) {
@@ -181,7 +190,6 @@
           state: api.state(),
           isConnected: api.isConnected() === 1,
           closeReason: api.closeReason(),
-          diagnosticsLevel: api.diagnosticsLevel(),
           pendingDispatch: api.pendingDispatch(),
           jslibPendingDispatch: api.jslibPendingDispatch(),
           sinkCalls: api.sinkCalls(),
@@ -191,6 +199,7 @@
           disconnects: api.disconnectCount(),
           errors: api.errorCount(),
           stateChanges: api.stateChangeCount(),
+          replyReceivedRuns: api.replyReceivedRuns(),
           nestedPumpCalls: api.nestedPumpCalls(),
           nestedPumpNotRefused: api.nestedPumpNotRefused(),
           violations: api.violations(),

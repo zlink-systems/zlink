@@ -45,7 +45,10 @@ final class ZLinkStreamLz4Pickler {
         }
         PickleHeader header = decodeHeader(source);
         if (header.resultLength() > maxDecompressedSize) {
-            throw new IllegalArgumentException(
+            //  Spec 32 4.7, 9: a decompressed payload over the receive limit is
+            //  FrameTooLarge.
+            throw ZLinkStreamException.of(
+                    ZLinkStreamErrorCode.FRAME_TOO_LARGE,
                     "LZ4 decoded stream payload exceeds maximum stream payload size");
         }
         if (!header.compressed()) {

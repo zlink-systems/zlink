@@ -166,7 +166,7 @@ class ClosePlayerQuestSpotHandler implements ZLinkSpotPacketHandler<
 
   async handle(spot: PlayerQuestSpot, _message: ClosePlayerQuestMsg): Promise<void> {
     this.events.closeOwner(spot.playerId, this.missionName);
-    await spot.context.close();
+    void spot.context.close();
   }
 }
 // --8<-- [end:doc-gq-close-handler]

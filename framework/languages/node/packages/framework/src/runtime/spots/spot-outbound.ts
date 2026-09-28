@@ -1,10 +1,8 @@
 import {
   ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException,
-  internalFrameworkErrorKind
+  createInternalFrameworkException
 } from '../framework-errors-internal';
-import { ZLinkFrameworkRuntimeState, ZLinkSpotKind } from '../../contracts';
-import { ZLinkFrameworkException } from '../../contracts/Errors';
+import { ZLinkSpotKind } from '../../contracts';
 import type {
   RoutingId,
   ZLinkChannelClient,
@@ -31,12 +29,7 @@ import { requireZLinkYieldTurn } from '../execution';
 import { resolveFrameworkPacketName } from '../messaging/packet-name';
 import type { ZLinkSpotRouteTarget } from './spot-routing-internal';
 import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
-import {
-  resolveSpotHandle,
-  refreshSpotHandle,
-  type SpotHandle,
-  type ResolvedSpotHandle
-} from './spot-handle';
+import { resolveSpotHandle, type SpotHandle, type ResolvedSpotHandle } from './spot-handle';
 
 export interface DefaultZLinkSpotOutboundOptions {
   readonly serial: ZLinkSpotSerialTurnExecutor;
@@ -680,29 +673,7 @@ export async function requestToSpotHandle<TReply = unknown>(
     return transport.requestToSpot<TReply>(target, request, transportOptions);
   };
 
-  const resolved = await requireSpotRef(spot, options.signal);
-  try {
-    return await requestResolved(resolved);
-  } catch (error) {
-    if (!shouldRefreshAfterRouteDisconnect(resolved, error)) {
-      throw error;
-    }
-    let refreshed: ResolvedSpotHandle | undefined;
-    try {
-      refreshed = await refreshSpotHandle(spot, options.signal);
-    } catch {
-      throw error;
-    }
-    if (isShutdownTargetState(refreshed?.targetNodeState)) {
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.RuntimeShutdown,
-        `Spot '${String(spot.spotId)}' target host is shutting down.`,
-        false,
-        error
-      );
-    }
-    throw error;
-  }
+  return requestResolved(await requireSpotRef(spot, options.signal));
 }
 
 async function requireSpotRef(
@@ -728,20 +699,6 @@ function spotRefToSpotRouteTarget(
     targetSpotGeneration: spot.spotGeneration,
     targetNodeState: spot.targetNodeState
   };
-}
-
-function shouldRefreshAfterRouteDisconnect(target: ResolvedSpotHandle, error: unknown): boolean {
-  return (
-    target.targetNodeState === ZLinkFrameworkRuntimeState.Serving &&
-    error instanceof ZLinkFrameworkException &&
-    internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.RouteNotConnected
-  );
-}
-
-function isShutdownTargetState(state: ResolvedSpotHandle['targetNodeState']): boolean {
-  return (
-    state === ZLinkFrameworkRuntimeState.Draining || state === ZLinkFrameworkRuntimeState.Stopped
-  );
 }
 
 function normalizeSpotRefRoutingId(routingId: RoutingId): RoutingId {

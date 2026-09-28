@@ -197,6 +197,14 @@ internal sealed class ZLinkSpotNodeInitializer(
                     )
                     .ConfigureAwait(false);
                 ConnectManualPeers(spotNodeRegistration, nodeRuntime);
+                if (actualEndpoint is not null)
+                    await state
+                        .ListenerRecords.RecordAsync(
+                            ZLinkListenerKind.RouteMesh,
+                            spotNodeRegistration.SpotNodeName,
+                            actualEndpoint
+                        )
+                        .ConfigureAwait(false);
             }
             catch (Exception initializationFailure)
             {

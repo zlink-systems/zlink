@@ -33,10 +33,11 @@ bash 블록은 Linux·macOS·WSL에서, PowerShell 블록은 Windows PowerShell 
 - **Docker Desktop(또는 Docker Engine)이 실행 중이어야 한다.** 추가 요구 사항은 없다. 각 sample runner가
   Redis container(`redis:7.2-alpine`)를 직접 만들고 종료 시 제거하므로, Redis를 따로 설치하거나
   실행할 필요가 없다.
-- **Chromium이 필요한 샘플은 Playwright를 그 샘플 디렉터리에서 설치한다.** `ShoppingMall.Ts`를 뺀
+- **독립 sample에서 Chromium이 필요하면 Playwright를 그 sample 디렉터리에 설치한다.** `ShoppingMall.Ts`를 뺀
   나머지 sample(`ZoneWorld` 포함)이 client를 실제 Chromium에서 실행한다 — 위 표의 「client 실행
-  환경」 참고. `npm install` 뒤 그 샘플 디렉터리에서 `npm run browser:install`을 한 번 실행하면
-  된다. `ShoppingMall.Ts`는 Node.js HTTP client이므로 이 설치가 필요 없다.
+  환경」 참고. `npm install` 뒤 그 sample 디렉터리에서 `npm run browser:install`을 한 번 실행하면
+  된다. 저장소 안에서는 아래 workspace 명령을 사용한다. `ShoppingMall.Ts`는 Node.js HTTP
+  client이므로 이 설치가 필요 없다.
 
 ## 내려받기와 설치
 
@@ -66,17 +67,37 @@ npm run browser:install   # Chromium을 쓰는 샘플만(ShoppingMall.Ts 제외)
 sample만 설치해도 된다.
 
 저장소 안에서 Node framework workspace를 함께 쓰는 경우에는 workspace root에서 한 번에
-준비할 수 있다.
+준비할 수 있다. workspace가 `.artifacts/node-install/npm/`의 로컬 tarball을 참조하므로
+`npm ci` 전에 binding과 HTTP client package를 만든다. sample이 연결할 framework `dist`도
+빌드한다. sample 디렉터리마다 `npm install`을 실행하지 않는다.
 
-```bash
+**Linux · WSL — bash (저장소 root에서)**
+
+```bash title="linux"
+scripts/local-package/build-wsl.sh node
+scripts/local-package/http-client/build-wsl.sh node
 cd framework/languages/node
+npm ci
+npm run build
+npm run browser:install
+```
+
+**Windows — PowerShell 7 (저장소 root에서)**
+
+```powershell title="windows"
+$prefix = & .\scripts\local-package\core\fetch-release.ps1
+.\scripts\local-package\node\build-windows.ps1 -CorePrefix $prefix
+.\framework\languages\node\build-windows.ps1 -SkipSamples
+Set-Location framework/languages/node
 npm ci
 npm run browser:install
 ```
 
+Windows framework 빌드가 로컬 HTTP client tarball과 framework `dist`를 만든다.
+
 ## 빌드
 
-따로 빌드하지 않는다. 각 샘플의 `npm run sample`(→ `run_sample.*`가 부른다)이 실행 전에
+설치 뒤에 sample을 따로 빌드하지 않는다. 각 샘플의 `npm run sample`(→ `run_sample.*`가 부른다)이 실행 전에
 `npm run build`를 자동으로 호출한다. Windows에서 여러 샘플을 미리 한꺼번에 빌드해 두려면
 `build_samples.ps1`을 쓴다.
 

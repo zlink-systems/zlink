@@ -165,6 +165,10 @@ function pendingCanonicalJoinHarness() {
     formalRemoteActorAdmissions: registry,
     formalRemoteTransfers: { has: () => false, delete() {} },
     activations: { resolve: () => undefined },
+    // The User Spot lifecycle-lane wrapper delegates to this body.
+    dispatchMeshActorJoinCore: (
+      DefaultZLinkSpotManager.prototype as unknown as { dispatchMeshActorJoinCore: unknown }
+    ).dispatchMeshActorJoinCore,
     options: {
       entryNodeRid: SPOT_ID,
       canonicalActorJoinResolver: () => validation,

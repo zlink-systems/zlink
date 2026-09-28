@@ -185,7 +185,12 @@ var ZlinkStreamWebGlRuntime = (function () {
         nextActorHandle: 1,
         sink: null,
         pumping: false,
-        subscriptions: []
+        subscriptions: [],
+        // Not in `subscriptions`: C# owns this one's lifetime through
+        // setReplyReceivedInterest (ZlinkStreamSetReplyReceivedInterest), on the
+        // 0/1 transition of its own hook set, rather than it always existing for
+        // `destroy` to tear down. `destroy` still disposes it if interest was on.
+        replyReceivedSubscription: null
       };
       state.subscriptions.push(connector.onErrorReceived(function (error) {
         push(state, {
@@ -194,24 +199,6 @@ var ZlinkStreamWebGlRuntime = (function () {
           value: 0,
           text: JSON.stringify({ code: error.code, message: error.message || '' }),
           bytes: null
-        });
-      }));
-      state.subscriptions.push(connector.onReplyReceived(function (context) {
-        var reply = context.reply;
-        push(state, {
-          type: EVENT_REPLY_RECEIVED,
-          id: 0,
-          value: context.succeeded ? reply.payload.codec : -1,
-          text: JSON.stringify({
-            requestPacketName: context.requestPacketName,
-            actorId: context.actorId || null,
-            succeeded: context.succeeded,
-            name: reply ? reply.name : null,
-            metadata: reply ? metadataToObject(reply.metadata) : null,
-            error: context.error ? describeError({ error: context.error }) : null,
-            elapsed: context.elapsed
-          }),
-          bytes: reply ? reply.payload.payload : null
         });
       }));
       state.subscriptions.push(connector.onDisconnected(function () {
@@ -273,6 +260,10 @@ var ZlinkStreamWebGlRuntime = (function () {
       for (var index = 0; index < state.subscriptions.length; index += 1) {
         try { state.subscriptions[index].dispose(); } catch (ignored) { /* teardown is best effort */ }
       }
+      if (state.replyReceivedSubscription) {
+        try { state.replyReceivedSubscription.dispose(); } catch (ignored) { /* teardown is best effort */ }
+        state.replyReceivedSubscription = null;
+      }
       for (var name in state.observers) {
         if (Object.prototype.hasOwnProperty.call(state.observers, name)) {
           try { state.observers[name].subscription.dispose(); } catch (ignored) { /* teardown is best effort */ }
@@ -284,6 +275,45 @@ var ZlinkStreamWebGlRuntime = (function () {
         var closing = state.connector.close();
         if (closing && typeof closing.catch === 'function') closing.catch(function () { /* already closed */ });
       } catch (ignored) { /* the connector may already be closed */ }
+    },
+
+    // ZlinkStreamSetReplyReceivedInterest: C#'s _replyReceivedHandlers count is
+    // the one decision point (ZlinkStreamWebGlConnector.cs's OnReplyReceived and
+    // its hook registration's Dispose), telling JS only on the 0/1 transition
+    // rather than every call. Subscribing unconditionally here defeated
+    // ZlinkStreamConnector.ts's own no-hook early return
+    // (publishReplyReceived's `if (this.replyReceivedHandlers.size === 0)
+    // return`) for every WebGL connector, since this subscription itself always
+    // counted as one - every request paid the JSON.stringify and payload copy
+    // below even with nothing in C# to deliver it to.
+    setReplyReceivedInterest: function (handle, interested) {
+      var state = instances[handle];
+      if (!state) return;
+      if (interested) {
+        if (state.replyReceivedSubscription) return;
+        state.replyReceivedSubscription = state.connector.onReplyReceived(function (context) {
+          var reply = context.reply;
+          push(state, {
+            type: EVENT_REPLY_RECEIVED,
+            id: 0,
+            value: context.succeeded ? reply.payload.codec : -1,
+            text: JSON.stringify({
+              requestPacketName: context.requestPacketName,
+              actorId: context.actorId || null,
+              succeeded: context.succeeded,
+              name: reply ? reply.name : null,
+              metadata: reply ? metadataToObject(reply.metadata) : null,
+              error: context.error ? describeError({ error: context.error }) : null,
+              elapsed: context.elapsed
+            }),
+            bytes: reply ? reply.payload.payload : null
+          });
+        });
+        return;
+      }
+      if (!state.replyReceivedSubscription) return;
+      try { state.replyReceivedSubscription.dispose(); } catch (ignored) { /* teardown is best effort */ }
+      state.replyReceivedSubscription = null;
     },
 
     setEventSink: function (handle, sink) {

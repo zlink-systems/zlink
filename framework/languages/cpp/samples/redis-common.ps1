@@ -304,12 +304,17 @@ function Get-ZlinkSampleSelfShellPath {
     throw "Could not locate the current PowerShell host executable ($exeName) to relaunch a child lane."
 }
 
-# The C++ tree this runner's binaries are built in: the framework checkout when
-# samples/ sits inside one (framework/languages/cpp/build), otherwise the root
-# of the downloaded samples archive (bootstrap.cmake configures its build/).
-# One rule, mirrored by samples/sample-build-common.sh for the Bash runners.
+# ZLINK_CPP_BUILD_DIR overrides the default location. Otherwise, the configured
+# samples/build from bootstrap.cmake takes precedence in either tree. Without
+# it, repository runners use framework/languages/cpp/build and downloaded-package
+# runners use samples/build.
+# The Bash runners use the same precedence in sample-build-common.sh.
 function Get-ZlinkCppSampleTreeRoot {
     $samplesRoot = (Resolve-Path (Join-Path $PSScriptRoot ".")).Path
+    if (-not $env:ZLINK_CPP_BUILD_DIR -and
+        (Test-Path (Join-Path $samplesRoot "build/CMakeCache.txt") -PathType Leaf)) {
+        return $samplesRoot
+    }
     $cppRoot = Join-Path $samplesRoot ".."
     if ((Test-Path (Join-Path $cppRoot "CMakeLists.txt") -PathType Leaf) -and
         (Test-Path (Join-Path $cppRoot "framework/include/zlink/framework.hpp") -PathType Leaf)) {

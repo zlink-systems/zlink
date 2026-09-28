@@ -1775,65 +1775,6 @@ public sealed class StandaloneActorRelocationRuntimeTests
             EntrySpotId = "target-entry",
         };
 
-    private static async ValueTask<(
-        ZLinkMeshNodeDescriptor Descriptor,
-        ZLinkLocationOwnerToken Owner
-    )> PublishActorNodeAsync(
-        IZLinkLocationRepository store,
-        string ownerId,
-        RoutingId rid,
-        ulong lifecycleGeneration
-    )
-    {
-        var owner = Assert
-            .IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
-                await store.ClaimOwnerLeaseAsync(ownerId, TimeSpan.FromMinutes(5))
-            )
-            .Token;
-        var descriptor = new ZLinkMeshNodeDescriptor(
-            "mesh",
-            rid,
-            lifecycleGeneration,
-            1,
-            $"tcp://127.0.0.1:{FindFreeTcpPort()}",
-            new Dictionary<string, int>(StringComparer.Ordinal),
-            ZLinkTransportSecurityIdentity.Plaintext,
-            owner.OwnerId,
-            owner.LeaseGeneration,
-            DateTimeOffset.UtcNow
-        )
-        {
-            EntrySpotId = $"{rid}-entry-{Guid.NewGuid():D}",
-            State = ZLinkFrameworkRuntimeState.Serving,
-            ObjectRole = ZLinkMeshNodeObjectRole.Server,
-            ObjectCapabilities =
-            [
-                new ZLinkObjectCapability(
-                    ZLinkPlacementObjectKind.Actor,
-                    "player",
-                    ZLinkObjectMaintenancePolicyKind.Recreate,
-                    false,
-                    0
-                ),
-            ],
-            Capacity = new ZLinkPlacementCapacity(
-                new ZLinkPopulationCapacity(0, 0, 100),
-                new ZLinkPopulationCapacity(0, 0, 100),
-                []
-            ),
-        };
-        var write = await store.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim);
-        Assert.Equal(ZLinkLocationWriteStatus.Stored, write.Status);
-        return (descriptor, owner);
-    }
-
-    private static int FindFreeTcpPort()
-    {
-        using var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
-        listener.Start();
-        return ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
-    }
-
     private static ZLinkActorHandoffFrame AcceptedFrame(
         long arrivalIndex,
         ZLinkServiceWireCodec.RequestSourceFence? requestSource = null,

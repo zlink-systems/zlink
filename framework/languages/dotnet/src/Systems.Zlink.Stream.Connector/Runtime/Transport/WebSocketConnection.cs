@@ -97,20 +97,21 @@ internal sealed class WebSocketConnection(ClientWebSocket webSocket, int maxRece
             .ConfigureAwait(false);
     }
 
-    public async ValueTask CloseAsync(CancellationToken cancellationToken)
+    /// <summary>
+    ///     Aborts the socket. A frame being written fails, and nothing waits for the peer to
+    ///     read or to answer a close frame (stream-connector spec §7).
+    /// </summary>
+    /// <remarks>
+    ///     A close handshake is not attempted: <c>CloseOutputAsync</c> queues behind a send in
+    ///     progress and waits while its own close frame is written, so a peer that stops
+    ///     reading would hold <c>Close</c> open. A message the receive loop still holds is
+    ///     left to the collector rather than returned to the pool, because the receive loop
+    ///     may be copying from it on another thread.
+    /// </remarks>
+    public ValueTask CloseAsync(CancellationToken cancellationToken)
     {
-        ReturnPendingMessage();
-        try
-        {
-            if (webSocket.State is WebSocketState.Open or WebSocketState.CloseReceived)
-                await webSocket
-                    .CloseAsync(WebSocketCloseStatus.NormalClosure, "closed", cancellationToken)
-                    .ConfigureAwait(false);
-        }
-        finally
-        {
-            webSocket.Dispose();
-        }
+        webSocket.Dispose();
+        return default;
     }
 
     private static void EnsureCapacity(ref byte[] buffer, int existingLength, int requiredCapacity)
@@ -126,16 +127,5 @@ internal sealed class WebSocketConnection(ClientWebSocket webSocket, int maxRece
         buffer.AsSpan(0, existingLength).CopyTo(next);
         ArrayPool<byte>.Shared.Return(buffer);
         buffer = next;
-    }
-
-    private void ReturnPendingMessage()
-    {
-        if (_pendingMessage is null)
-            return;
-
-        ArrayPool<byte>.Shared.Return(_pendingMessage);
-        _pendingMessage = null;
-        _pendingLength = 0;
-        _pendingOffset = 0;
     }
 }

@@ -185,12 +185,13 @@ zlinkFramework().addFanoutChannel("lobby.events").enableSubscriber("lobby-1:7001
 | `.enableSubscriber()` (raw builder, no endpoint) | — | automatic subscriber. Finds every valid publisher of the same ChannelName from the Location Store |
 | `.enableSubscriber(endpoint)` (NestJS builder) / `.connect(endpoint)` (raw builder) | — | manual subscriber. Uses only the specified endpoint |
 | `.subscriberConnections()` (raw builder) | — | Returns a runtime handle (`ZLinkEndpointConnections`: `connect`/`disconnect`/`listConnections`) over the set of manual subscriber endpoints |
-| `.getListenerStatus(channelName)` (runtime, `ZLinkFanoutClient`) | — | Queries the current advertised endpoint after the publisher listener has bound |
 
 **Completion result.** Registers synchronously with no return value. Configuring both automatic
 subscriber and manual subscriber on the same fanout channel surfaces as a startup failure.
-`getListenerStatus(...)` fails with `ZLinkConfigurationException` if the host has not started, or
-that channel is not registered as a publisher.
+After the Framework runtime starts, `getListenerStatus(kind, name)` returns the current advertised
+endpoint and observation time for a bound `routeMesh`, `clientServer`, `fanout`, or `stream` listener.
+`name` is the configured MeshName, ChannelName, or StreamNodeName. An unknown listener or one that
+has not bound raises `ZLinkConfigurationException`.
 
 **When to use.** Use this when creating a new observation/notification channel where the
 publisher need not know its subscribers. If a reply is needed, use RouteMesh Channel or

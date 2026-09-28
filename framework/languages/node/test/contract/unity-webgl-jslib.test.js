@@ -8,7 +8,6 @@
 const assert = require('node:assert/strict');
 const childProcess = require('node:child_process');
 const fs = require('node:fs');
-const net = require('node:net');
 const path = require('node:path');
 const test = require('node:test');
 const { createHarness, packageRoot } = require('./helpers/unity-webgl-jslib-harness');
@@ -162,8 +161,7 @@ test('Unity C# actor lifecycle dispatch resolves mode and subscriptions at execu
 });
 
 test('jslib boundary drives a real STREAM server over ws', { timeout: 120_000 }, async (t) => {
-  const port = await freePort();
-  const server = await startStreamServer(`ws://127.0.0.1:${port}`);
+  const server = await startStreamServer('ws://127.0.0.1:0');
   const harness = createHarness();
   let connector;
   t.after(async () => {
@@ -175,7 +173,7 @@ test('jslib boundary drives a real STREAM server over ws', { timeout: 120_000 },
   });
 
   connector = new JslibConnector(harness, JSON.stringify({
-    endpoint: `ws://127.0.0.1:${port}`,
+    endpoint: server.endpoint,
     dispatchMode: 'manual',
     heartbeat: { enabled: false },
     reconnect: { enabled: false }
@@ -250,8 +248,7 @@ test('jslib boundary drives a real STREAM server over ws', { timeout: 120_000 },
 });
 
 test('the pump never re-enters the event sink and frees every boundary buffer', { timeout: 120_000 }, async (t) => {
-  const port = await freePort();
-  const server = await startStreamServer(`ws://127.0.0.1:${port}`);
+  const server = await startStreamServer('ws://127.0.0.1:0');
   const harness = createHarness();
   let connector;
   t.after(async () => {
@@ -263,7 +260,7 @@ test('the pump never re-enters the event sink and frees every boundary buffer', 
   });
 
   connector = new JslibConnector(harness, JSON.stringify({
-    endpoint: `ws://127.0.0.1:${port}`,
+    endpoint: server.endpoint,
     dispatchMode: 'manual',
     heartbeat: { enabled: false },
     reconnect: { enabled: false }
@@ -430,37 +427,30 @@ function validationFailed(actorId) {
   };
 }
 
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address();
-      server.close((error) => (error ? reject(error) : resolve(port)));
-    });
-  });
-}
-
 function startStreamServer(endpoint) {
   const child = childProcess.spawn(process.execPath, [serverScript, '--endpoint', endpoint], {
     cwd: workspaceRoot,
     stdio: ['ignore', 'pipe', 'pipe']
   });
   let output = '';
-  child.stdout.on('data', (chunk) => { output += chunk; });
+  let stdout = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk; output += chunk; });
   child.stderr.on('data', (chunk) => { output += chunk; });
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`Stream server start timeout: ${output}`)), 30_000);
     const check = () => {
-      if (!output.includes('"event":"ready"')) return;
+      const readyLine = stdout.split('\n').slice(0, -1)
+        .find((line) => line.includes('"event":"ready"'));
+      if (readyLine === undefined) return;
       clearTimeout(timer);
       child.stdout.off('data', check);
+      child.endpoint = JSON.parse(readyLine).endpoint;
       resolve(child);
     };
 
     child.stdout.on('data', check);
     child.once('exit', (code) => {
-      if (!output.includes('"event":"ready"')) {
+      if (!stdout.includes('"event":"ready"')) {
         clearTimeout(timer);
         reject(new Error(`Stream server exited ${code}: ${output}`));
       }

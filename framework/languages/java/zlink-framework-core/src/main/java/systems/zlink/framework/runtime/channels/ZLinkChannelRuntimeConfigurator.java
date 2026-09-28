@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.channels;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendPublisherSocket;
@@ -76,6 +77,13 @@ final class ZLinkChannelRuntimeConfigurator {
         for (String endpoint : channel.serverBinds()) {
             router.bind(endpoint);
         }
+        sockets.recordListener(
+                ZLinkListenerKind.CLIENT_SERVER,
+                channel.name(),
+                ZLinkChannelSocketRegistry.advertisedEndpoint(
+                        channel.serverBinds().getFirst(),
+                        router,
+                        channel.clientServerAdvertiseHost()));
         dispatchRegistry.registerClientServer(
                 channel.name(), handlers.sendHandlers(channel), handlers.requestHandlers(channel));
         startRequestLoop.accept(channel.name(), router);
@@ -95,6 +103,15 @@ final class ZLinkChannelRuntimeConfigurator {
                 publisher.bind(endpoint);
             }
             sockets.registerPublisher(channel.name(), publisherRoutingId, publisher);
+            if (!channel.publisherBinds().isEmpty()) {
+                sockets.recordListener(
+                        ZLinkListenerKind.FANOUT,
+                        channel.name(),
+                        ZLinkChannelSocketRegistry.advertisedEndpoint(
+                                channel.publisherBinds().getFirst(),
+                                publisher,
+                                channel.fanoutAdvertiseHost()));
+            }
         }
         if (!channel.subscriberEnabled()) {
             return;

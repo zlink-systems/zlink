@@ -143,7 +143,7 @@ std::vector<std::uint8_t> to_packet_payload (const TMessage &message, long)
 {
     std::string bytes;
     if (!message.SerializeToString (&bytes)) {
-#if ZLINK_STREAM_CONNECTOR_HAS_EXCEPTIONS
+#if ZLINK_HAS_EXCEPTIONS
         throw std::runtime_error ("typed protobuf payload serialization failed");
 #else
         bytes.clear ();
@@ -174,7 +174,7 @@ template <typename TMessage>
 void apply_packet_payload (TMessage &message, const std::vector<std::uint8_t> &payload, long)
 {
     if (!message.ParseFromString (std::string (payload.begin (), payload.end ()))) {
-#if ZLINK_STREAM_CONNECTOR_HAS_EXCEPTIONS
+#if ZLINK_HAS_EXCEPTIONS
         throw std::runtime_error ("typed protobuf payload parse failed");
 #endif
     }
@@ -209,7 +209,7 @@ auto apply_packet_payload (TMessage &message,
 template <typename TMessage>
 void apply_packet_payload (TMessage &message, const std::vector<std::uint8_t> &payload, ...)
 {
-#if ZLINK_STREAM_CONNECTOR_HAS_EXCEPTIONS
+#if ZLINK_HAS_EXCEPTIONS
     message = zlink::detail::json_profile::parse (payload.begin (), payload.end ())
                 .template get<TMessage> ();
 #else
@@ -226,7 +226,7 @@ void apply_packet_payload (TMessage &message, const std::vector<std::uint8_t> &p
 template <typename TMessage>
 result_t<TMessage> decode_typed_message (codec_t codec, const std::vector<std::uint8_t> &payload)
 {
-#if ZLINK_STREAM_CONNECTOR_HAS_EXCEPTIONS
+#if ZLINK_HAS_EXCEPTIONS
     try {
         TMessage message{};
         apply_packet_payload (message, codec, payload, 0);

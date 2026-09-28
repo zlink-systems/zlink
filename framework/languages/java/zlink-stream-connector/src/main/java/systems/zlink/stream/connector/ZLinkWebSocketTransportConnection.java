@@ -1,5 +1,6 @@
 package systems.zlink.stream.connector;
 
+import java.io.ByteArrayOutputStream;
 import java.io.EOFException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -20,6 +21,9 @@ final class ZLinkWebSocketTransportConnection
     private volatile WebSocket webSocket;
     private volatile Throwable failure;
     private final int maxReceivePayloadSize;
+    //  The parts of the message being received. Only the listener thread
+    //  touches it: the JDK delivers one onBinary call at a time.
+    private final ByteArrayOutputStream message = new ByteArrayOutputStream();
 
     private ZLinkWebSocketTransportConnection(int maxReceivePayloadSize) {
         this.maxReceivePayloadSize = maxReceivePayloadSize;
@@ -48,30 +52,34 @@ final class ZLinkWebSocketTransportConnection
     }
 
     @Override
+    /**
+     * Collects the parts the JDK hands over into one message and decodes it once the last part
+     * arrives. A message that grows past the receive limit while it is collected is {@code
+     * FrameTooLarge} (spec 32 9); its remaining parts are not kept.
+     */
     public CompletionStage<?> onBinary(WebSocket socket, ByteBuffer data, boolean last) {
-        if (!last) {
-            fail(
-                    ZLinkStreamException.of(
-                            ZLinkStreamErrorCode.FRAME_DECODE_FAILED,
-                            "fragmented WebSocket frames are not supported"));
-            socket.request(1);
-            return CompletableFuture.completedFuture(null);
-        }
-        if (data.remaining() > ZLinkStreamWireProtocol.maxFrameLength(maxReceivePayloadSize)) {
-            //  Spec 32 9: a received frame over the limit is FrameTooLarge.
-            fail(
-                    ZLinkStreamException.of(
-                            ZLinkStreamErrorCode.FRAME_TOO_LARGE,
-                            "websocket frame exceeds max receive payload size"));
-            socket.request(1);
-            return CompletableFuture.completedFuture(null);
-        }
-        byte[] frame = new byte[data.remaining()];
-        data.get(frame);
-        try {
-            enqueue(ZLinkStreamWireProtocol.decodeFrame(frame, maxReceivePayloadSize));
-        } catch (RuntimeException ex) {
-            fail(ex);
+        if (failure == null) {
+            if ((long) message.size() + data.remaining()
+                    > ZLinkStreamWireProtocol.maxFrameLength(maxReceivePayloadSize)) {
+                message.reset();
+                fail(
+                        ZLinkStreamException.of(
+                                ZLinkStreamErrorCode.FRAME_TOO_LARGE,
+                                "websocket message exceeds max receive payload size"));
+            } else {
+                byte[] part = new byte[data.remaining()];
+                data.get(part);
+                message.writeBytes(part);
+                if (last) {
+                    byte[] frame = message.toByteArray();
+                    message.reset();
+                    try {
+                        enqueue(ZLinkStreamWireProtocol.decodeFrame(frame, maxReceivePayloadSize));
+                    } catch (RuntimeException ex) {
+                        fail(ex);
+                    }
+                }
+            }
         }
         socket.request(1);
         return CompletableFuture.completedFuture(null);

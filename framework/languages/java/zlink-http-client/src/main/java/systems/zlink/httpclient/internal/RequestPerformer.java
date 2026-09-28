@@ -5,6 +5,8 @@ import systems.zlink.httpclient.ZLinkHttpMethod;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.UncheckedIOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -135,21 +137,40 @@ public final class RequestPerformer {
                 && RedirectPolicy.isRedirect(status)
                 && location != null
                 && !location.isEmpty()) {
-            closeQuietly(response.body());
             if (redirectsLeft == 0) {
+                closeQuietly(response.body());
                 throw HttpClientErrors.protocol("HTTP request exceeded the redirect limit");
+            }
+            Duration remaining = remaining(deadlineNanos);
+            if (remaining == null) {
+                closeQuietly(response.body());
+                return CompletableFuture.failedFuture(
+                        new HttpTimeoutException("HTTP request attempt timed out"));
             }
             RedirectPolicy.Rewrite rewrite =
                     RedirectPolicy.rewriteMethodAndBody(status, method, body);
-            return hop(
-                    spec,
-                    RedirectPolicy.resolveLocation(current, location),
-                    origin,
-                    rewrite.method(),
-                    rewrite.body(),
-                    null,
-                    redirectsLeft - 1,
-                    deadlineNanos);
+            return readWithDeadline(
+                            response.body(),
+                            Math.max(1L, remaining.toMillis()),
+                            () -> {
+                                try {
+                                    response.body().transferTo(OutputStream.nullOutputStream());
+                                } catch (IOException cause) {
+                                    throw new UncheckedIOException(cause);
+                                }
+                                return null;
+                            })
+                    .thenCompose(
+                            ignored ->
+                                    hop(
+                                            spec,
+                                            RedirectPolicy.resolveLocation(current, location),
+                                            origin,
+                                            rewrite.method(),
+                                            rewrite.body(),
+                                            null,
+                                            redirectsLeft - 1,
+                                            deadlineNanos));
         }
 
         Map<String, String> headers = ResponseBodyReader.collectHeaders(response.headers().map());
@@ -191,37 +212,57 @@ public final class RequestPerformer {
      * connection rather than leaving them hung — and the deadline is cancelled once the read
      * finishes.
      */
-    private CompletableFuture<RawResult> readWithDeadline(
-            InputStream stream, long timeoutMillis, Supplier<RawResult> read) {
+    private <T> CompletableFuture<T> readWithDeadline(
+            InputStream stream, long timeoutMillis, Supplier<T> read) {
         AtomicBoolean timedOut = new AtomicBoolean();
-        ScheduledFuture<?> deadline =
-                timeoutScheduler.schedule(
-                        () -> {
-                            timedOut.set(true);
-                            closeQuietly(stream);
-                        },
-                        timeoutMillis,
-                        TimeUnit.MILLISECONDS);
-        return CompletableFuture.supplyAsync(
+        AtomicBoolean closed = new AtomicBoolean();
+        Runnable closeStream =
                 () -> {
-                    try {
-                        RawResult result = read.get();
-                        if (timedOut.get()) {
-                            throw new CompletionException(
-                                    new HttpTimeoutException("HTTP request attempt timed out"));
-                        }
-                        return result;
-                    } catch (RuntimeException cause) {
-                        if (timedOut.get()) {
-                            throw new CompletionException(
-                                    new HttpTimeoutException("HTTP request attempt timed out"));
-                        }
-                        throw cause;
-                    } finally {
-                        deadline.cancel(false);
+                    if (closed.compareAndSet(false, true)) {
+                        closeQuietly(stream);
                     }
-                },
-                executor);
+                };
+        ScheduledFuture<?> deadline;
+        try {
+            deadline =
+                    timeoutScheduler.schedule(
+                            () -> {
+                                timedOut.set(true);
+                                closeStream.run();
+                            },
+                            timeoutMillis,
+                            TimeUnit.MILLISECONDS);
+        } catch (RuntimeException cause) {
+            closeStream.run();
+            return CompletableFuture.failedFuture(cause);
+        }
+        try {
+            return CompletableFuture.supplyAsync(
+                    () -> {
+                        try {
+                            T result = read.get();
+                            if (timedOut.get()) {
+                                throw new CompletionException(
+                                        new HttpTimeoutException("HTTP request attempt timed out"));
+                            }
+                            return result;
+                        } catch (RuntimeException cause) {
+                            if (timedOut.get()) {
+                                throw new CompletionException(
+                                        new HttpTimeoutException("HTTP request attempt timed out"));
+                            }
+                            throw cause;
+                        } finally {
+                            deadline.cancel(false);
+                            closeStream.run();
+                        }
+                    },
+                    executor);
+        } catch (RuntimeException cause) {
+            deadline.cancel(false);
+            closeStream.run();
+            return CompletableFuture.failedFuture(cause);
+        }
     }
 
     private HttpRequest buildRequest(

@@ -354,6 +354,11 @@ final class ZLinkSpotRuntimeTargetSelectionTest {
     }
 
     private static final class RecordingMeshNode implements ZLinkInternalMeshNode {
+        @Override
+        public String advertisedEndpoint() {
+            return status().localEndpoint();
+        }
+
         private final RoutingId localRid = RoutingId.from("source-node");
         private String endpoint;
         private RoutingId routingId;

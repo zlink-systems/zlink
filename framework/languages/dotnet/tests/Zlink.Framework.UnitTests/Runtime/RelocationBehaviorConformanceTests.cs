@@ -1,7 +1,5 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Net;
-using System.Net.Sockets;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Text.Json;
@@ -330,6 +328,7 @@ public sealed class RelocationBehaviorConformanceTests
             );
             Assert.Equal(before.Count, GetTargetAttemptState(target.Runtime).Count);
             transport.ReleaseCutoverSend.TrySetResult();
+            await transport.CutoverSendSubmitted.Task.WaitAsync(TimeSpan.FromSeconds(3));
             await trace.WaitAsync("targetLifecycleStarted");
 
             using var drainCancellation = new CancellationTokenSource();
@@ -526,7 +525,118 @@ public sealed class RelocationBehaviorConformanceTests
     }
 
     [Fact]
-    public async Task ActorJoin_target_fallback_commits_after_one_second_and_late_cutover_is_inert()
+    public async Task ActorJoin_retransmitted_boundary_batch_replaces_the_earlier_copy()
+    {
+        var trace = new RelocationBehaviorTrace();
+        var cutover = new CanonicalRelocationTransportProbe(trace)
+        {
+            ResendBoundaryBatchBeforeCutover = true,
+        };
+        var locationStore = new RecordingLocationStore(
+            new ZLinkInMemoryProviderLocationStore(),
+            trace
+        );
+        var relocationStore = new SynchronizedRelocationStore();
+        var actorId = $"behavior-resend-actor-{Guid.NewGuid():N}";
+        var targetSpotId = $"behavior-resend-spot-{Guid.NewGuid():N}";
+        trace.ActorId = actorId;
+
+        await using var source = await RelocationBehaviorHost.StartAsync(
+            "source",
+            trace,
+            locationStore,
+            relocationStore,
+            registerTargetSpot: false,
+            canonicalTransportProbe: cutover
+        );
+        var created = Assert.IsType<ZLinkActorCreateResult.Created>(
+            await source
+                .Services.GetRequiredService<IZLinkActorManager>()
+                .GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
+                .InMesh(RelocationBehaviorHost.MeshName)
+                .Request(new BehaviorCreate(7))
+                .Timeout(TimeSpan.FromSeconds(10))
+                .Async()
+        );
+        trace.SourceObjectGeneration = created.Actor.ObjectGeneration;
+        trace.SourceNodeRid = created.Actor.NodeRid;
+        await locationStore.ObserveActorAuthorityAsync(actorId);
+
+        await using var target = await RelocationBehaviorHost.StartAsync(
+            "target",
+            trace,
+            locationStore,
+            relocationStore,
+            registerTargetSpot: true,
+            canonicalTransportProbe: cutover
+        );
+        await WaitUntilAsync(() =>
+            source
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+            && target
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+        );
+        var spot = await source
+            .Services.GetRequiredService<IZLinkSpotManager>()
+            .GetOrCreate(targetSpotId, RelocationBehaviorHost.SpotType)
+            .InMesh(RelocationBehaviorHost.MeshName)
+            .Request(ZLinkMessage.Empty)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Async();
+        trace.TargetNodeRid = target.LocalNodeRid;
+        Assert.Equal(target.LocalNodeRid, spot.Spot.NodeRid);
+
+        var client = source.Services.GetRequiredService<IZLinkActorClient>();
+        var join = client
+            .RequestToActor(actorId, new BeginBehaviorJoin(targetSpotId))
+            .Timeout(TimeSpan.FromSeconds(15))
+            .Async<BehaviorAck>()
+            .AsTask();
+        await trace.WaitAsync("relocationRequested");
+        trace.ReleaseJoinHandler.TrySetResult();
+        _ = await join.WaitAsync(TimeSpan.FromSeconds(15));
+        await trace.WaitAsync("targetAdmissionReplied");
+
+        try
+        {
+            await cutover.PrepareCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            var prefix = client
+                .RequestToActor(actorId, new BehaviorWork("prefix"))
+                .Timeout(TimeSpan.FromSeconds(15))
+                .Async<BehaviorAck>()
+                .AsTask();
+            await Task.Delay(100);
+            cutover.ReleasePrepareCall.TrySetResult();
+            await cutover.CutoverSendStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.True(cutover.DataSendCount > 0);
+
+            //  Relocation flow §4.4: the target keeps each received record and
+            //  verifies the last `count` of them — the whole batch the source
+            //  sent right before the cutover — so the copy sent twice commits
+            //  and every record runs once.
+            cutover.ReleaseCutoverSend.TrySetResult();
+            await cutover.CutoverSendSubmitted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            await trace.WaitAsync("targetLifecycleStarted");
+            trace.ReleaseTargetLifecycle.TrySetResult();
+            trace.ReleaseSourceLeave.TrySetResult();
+            _ = await prefix.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(new[] { "prefix" }, trace.DeliveredMarkers);
+        }
+        finally
+        {
+            cutover.ReleasePrepareCall.TrySetResult();
+            cutover.ReleaseCutoverSend.TrySetResult();
+            trace.ReleaseTargetLifecycle.TrySetResult();
+            trace.ReleaseSourceLeave.TrySetResult();
+        }
+    }
+
+    [Fact]
+    public async Task ActorJoin_target_cutover_wait_is_a_warning_and_only_the_verified_cutover_commits()
     {
         var trace = new RelocationBehaviorTrace();
         var targetTime = new ControllableTimeProvider();
@@ -636,10 +746,20 @@ public sealed class RelocationBehaviorConformanceTests
             );
             Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, duplicateFailure.Kind);
 
-            targetTime.AdvanceMonotonic(TimeSpan.FromMilliseconds(100));
+            //  Relocation flow §4.4: RelocationCutoverWaitTimeout (1,000 ms) is
+            //  only a Warning threshold. Without a verified cutover the target
+            //  starts neither its authority CAS nor dispatch.
+            targetTime.AdvanceMonotonic(TimeSpan.FromMilliseconds(5_000));
+            await Task.Delay(TimeSpan.FromMilliseconds(300));
+            Assert.False(trace.HasTargetAuthorityMutation);
+            Assert.DoesNotContain("targetLifecycleStarted", trace.Events);
+
+            //  The received cutover verifies the boundary batch and alone
+            //  opens the CAS.
+            cutover.ReleaseCutoverSend.TrySetResult();
+            await cutover.CutoverSendSubmitted.Task;
             await trace.WaitForTargetAuthorityMutationAsync();
             await trace.WaitAsync("targetLifecycleStarted");
-            Assert.False(cutover.CutoverSendSubmitted.Task.IsCompleted);
             trace.ReleaseTargetLifecycle.TrySetResult();
             await cutover.SourceLeaveSubmitted.Task;
             await trace.WaitAsync("publicJoinCompleted");
@@ -650,15 +770,6 @@ public sealed class RelocationBehaviorConformanceTests
             var lifecycleAttempts = trace.TargetLifecycleAttemptCount;
             var publicCompletions = trace.Events.Count(static value =>
                 value == "publicJoinCompleted"
-            );
-
-            cutover.ReleaseCutoverSend.TrySetResult();
-            await cutover.CutoverSendSubmitted.Task;
-            Assert.Equal(authorityMutations, trace.TargetAuthorityMutationCount);
-            Assert.Equal(lifecycleAttempts, trace.TargetLifecycleAttemptCount);
-            Assert.Equal(
-                publicCompletions,
-                trace.Events.Count(static value => value == "publicJoinCompleted")
             );
 
             await cutover.ReplayCutoverAsync(CancellationToken.None);
@@ -782,6 +893,12 @@ public sealed class RelocationBehaviorConformanceTests
                     out _
                 )
             );
+            //  Relocation flow §4.4–4.5: READY alone never starts the target
+            //  CAS. The source's own Prepare reaches the reused staging, and
+            //  only its verified cutover opens the CAS and the lifecycle.
+            transport.ReleasePrepareCall.TrySetResult();
+            transport.ReleaseCutoverSend.TrySetResult();
+            await transport.CutoverSendSubmitted.Task.WaitAsync(TimeSpan.FromSeconds(10));
             await trace.WaitAsync("targetLifecycleStarted");
         }
         finally
@@ -1629,10 +1746,22 @@ internal sealed class RelocationBehaviorTrace
         );
     }
 
-    internal async Task WaitAsync(string name) =>
-        await _signals
-            .GetOrAdd(name, static _ => Signal())
-            .Task.WaitAsync(TimeSpan.FromSeconds(15));
+    internal async Task WaitAsync(string name)
+    {
+        try
+        {
+            await _signals
+                .GetOrAdd(name, static _ => Signal())
+                .Task.WaitAsync(TimeSpan.FromSeconds(15));
+        }
+        catch (TimeoutException failure)
+        {
+            throw new TimeoutException(
+                $"Timed out waiting for '{name}'. Observed: {string.Join(", ", Events)}",
+                failure
+            );
+        }
+    }
 
     internal async Task WaitForTargetAuthorityAsync() =>
         await TargetAuthorityObserved.Task.WaitAsync(TimeSpan.FromSeconds(15));
@@ -1904,7 +2033,7 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
                 pollingInterval ?? TimeSpan.FromMilliseconds(10);
             var objects = options
                 .AddRouteMesh(MeshName)
-                .Listen(ReserveTcpEndpoint())
+                .Listen("tcp://127.0.0.1:0")
                 .SetRoutingIdPrefix($"behavior-{node}")
                 .SetActorLimit(100)
                 .SetSpotLimit(100)
@@ -1949,15 +2078,6 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
     }
 
     internal Task StopAsync() => _hosted.StopAsync(CancellationToken.None);
-
-    private static string ReserveTcpEndpoint()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return $"tcp://127.0.0.1:{port}";
-    }
 }
 
 internal sealed record BehaviorNode(string Name);
@@ -2425,8 +2545,18 @@ internal sealed class CanonicalRelocationTransportProbe
         await transport
             .SendCanonicalRelocationDataAsync(targetNodeRid, data, cancellationToken)
             .ConfigureAwait(false);
+        lock (_sentData)
+            _sentData.Add(data);
         Interlocked.Increment(ref DataSendCount);
     }
+
+    private readonly List<ZLinkServiceWireCodec.RelocationDataRecord> _sentData = [];
+
+    /// <summary>
+    /// Sends the whole boundary batch a second time right before the cutover,
+    /// as a source does after a lost connection (relocation flow §4.4).
+    /// </summary>
+    internal bool ResendBoundaryBatchBeforeCutover { get; init; }
 
     internal async ValueTask SendCutoverAsync(
         IZLinkBackendCanonicalRelocation transport,
@@ -2440,6 +2570,16 @@ internal sealed class CanonicalRelocationTransportProbe
         _cutover = cutover;
         CutoverSendStarted.TrySetResult();
         await ReleaseCutoverSend.Task.WaitAsync(cancellationToken);
+        if (ResendBoundaryBatchBeforeCutover)
+        {
+            ZLinkServiceWireCodec.RelocationDataRecord[] batch;
+            lock (_sentData)
+                batch = [.. _sentData];
+            foreach (var data in batch)
+                await transport
+                    .SendCanonicalRelocationDataAsync(targetNodeRid, data, cancellationToken)
+                    .ConfigureAwait(false);
+        }
         await transport
             .SendCanonicalRelocationCutoverAsync(targetNodeRid, cutover, cancellationToken)
             .ConfigureAwait(false);

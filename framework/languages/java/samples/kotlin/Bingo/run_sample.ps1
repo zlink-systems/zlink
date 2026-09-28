@@ -159,7 +159,7 @@ sample.session-a-stream-endpoint=tcp://$($sessionAStream.Host):$($sessionAStream
 sample.session-b-stream-endpoint=tcp://$($sessionBStream.Host):$($sessionBStream.Port)
 sample.redis-endpoint=$redisEndpoint
 sample.redis-key-prefix=$redisKeyPrefix
-sample.log-directory=$($env:BINGO_LOG_DIR.Replace('\', '/'))
+sample.log-directory=$env:BINGO_LOG_DIR
 sample.api-node=a
 sample.play-node=a
 sample.session-node=a
@@ -172,7 +172,7 @@ sample.session-node=a
         } else {
             "tcp://$($apiAMatchmaking.Host):$($apiAMatchmaking.Port)"
         }
-        Set-ZlinkSampleUtf8File -Path $path -Value "$commonProperties`nsample.api-matchmaking-router-endpoint=$matchmakingEndpoint`nsample.$RoleName=$RoleValue"
+        Set-ZlinkSampleProperties -Path $path -Value "$commonProperties`nsample.api-matchmaking-router-endpoint=$matchmakingEndpoint`nsample.$RoleName=$RoleValue"
         Protect-ConfigFile $path
         return $path
     }

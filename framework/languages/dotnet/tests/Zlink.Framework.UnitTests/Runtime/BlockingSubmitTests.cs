@@ -1,5 +1,3 @@
-using System.Net;
-using System.Net.Sockets;
 using System.Threading.Tasks.Sources;
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.AspNetCore;
@@ -398,50 +396,55 @@ public sealed class BlockingSubmitTests
 
         public static async Task<Peers> StartAsync()
         {
-            int port;
-            using (var listener = new TcpListener(IPAddress.Loopback, 0))
-            {
-                listener.Start();
-                port = ((IPEndPoint)listener.LocalEndpoint).Port;
-            }
             var serverServices = new ServiceCollection();
             serverServices.AddSingleton<HandlerProbe>();
             serverServices.AddZLinkFramework(options =>
                 options
                     .AddClientServerChannel("work")
                     .Server()
-                    .Listen(port)
+                    .Listen(0)
                     .AddSendHandler<SendHandler, SendMessage>()
                     .AddRequestHandler<RequestHandler, RequestMessage, ReplyMessage>()
             );
-            var clientServices = new ServiceCollection();
-            clientServices.AddZLinkFramework(options =>
-                options.AddClientServerChannel("work").Client().Connect($"tcp://127.0.0.1:{port}")
-            );
-            var peers = new Peers(
-                serverServices.BuildServiceProvider(),
-                clientServices.BuildServiceProvider()
-            );
+            var server = serverServices.BuildServiceProvider();
+            ServiceProvider? client = null;
             try
             {
-                await peers.StartRuntimesAsync();
-                return peers;
+                var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
+                await serverRuntime.StartAsync(CancellationToken.None);
+                var serverState = await serverRuntime.GetStartedStateForRoutingAsync(
+                    CancellationToken.None
+                );
+                var endpoint = (
+                    await serverState
+                        .ClientServerServerBundles.Values.Single()
+                        .ClientServerServer!.ReadAsync()
+                ).AdvertisedEndpoint;
+                var clientServices = new ServiceCollection();
+                clientServices.AddZLinkFramework(options =>
+                    options.AddClientServerChannel("work").Client().Connect(endpoint)
+                );
+                client = clientServices.BuildServiceProvider();
+                await client
+                    .GetRequiredService<ZLinkFrameworkRuntime>()
+                    .StartAsync(CancellationToken.None);
+                return new Peers(server, client);
             }
             catch
             {
-                await peers.DisposeAsync();
+                if (client is not null)
+                {
+                    await client
+                        .GetRequiredService<ZLinkFrameworkRuntime>()
+                        .StopAsync(CancellationToken.None);
+                    await client.DisposeAsync();
+                }
+                await server
+                    .GetRequiredService<ZLinkFrameworkRuntime>()
+                    .StopAsync(CancellationToken.None);
+                await server.DisposeAsync();
                 throw;
             }
-        }
-
-        private async Task StartRuntimesAsync()
-        {
-            await server
-                .GetRequiredService<ZLinkFrameworkRuntime>()
-                .StartAsync(CancellationToken.None);
-            await client
-                .GetRequiredService<ZLinkFrameworkRuntime>()
-                .StartAsync(CancellationToken.None);
         }
 
         public async ValueTask DisposeAsync()

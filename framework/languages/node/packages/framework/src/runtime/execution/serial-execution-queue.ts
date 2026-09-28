@@ -38,6 +38,7 @@ export interface ZLinkSerialWorkPreparation {
 
 type SerialWorkRecord<T> = Omit<ZLinkSerialWorkRecord<T>, 'acceptedSequence'> & {
   acceptedSequence: bigint;
+  readonly operationEnvelope: boolean;
   readonly preparation?: ZLinkSerialWorkPreparation;
   preparationState: 'idle' | 'pending' | 'canceling' | 'ready' | 'failed';
   preparationController?: AbortController;
@@ -55,6 +56,7 @@ interface ZLinkSerialAdmissionLane {
 export class ZLinkSerialExecutionQueue {
   private readonly application: ZLinkSerialAdmissionLane;
   private readonly lifecycle: ZLinkSerialAdmissionLane;
+  private activeLifecycle?: ZLinkSerialWorkRecord<unknown>;
   private readonly ownerTimeBudget: number;
   private readonly lifecycleBurstLimit: number;
   private nextAcceptedSequence = 1n;
@@ -138,23 +140,17 @@ export class ZLinkSerialExecutionQueue {
     return this.admit(operation, options, context);
   }
 
-  snapshot(): {
-    readonly applicationMessages: number;
-    readonly applicationBytes: number;
-    readonly lifecycleMessages: number;
-    readonly lifecycleBytes: number;
-  } {
-    return {
-      applicationMessages: this.application.records.length,
-      applicationBytes: 0,
-      lifecycleMessages: this.lifecycle.records.length,
-      lifecycleBytes: 0
-    };
+  /** Holds lifecycle FIFO through an operation result while its application turns can run. */
+  submitLifecycleOperation<T>(operation: () => Promise<T> | T): Promise<T> {
+    return this.admit(operation, { lane: 'lifecycle' }, undefined, undefined, true);
   }
 
   get hasPendingWork(): boolean {
     return (
-      this.draining || this.application.records.length > 0 || this.lifecycle.records.length > 0
+      this.draining ||
+      this.activeLifecycle !== undefined ||
+      this.application.records.length > 0 ||
+      this.lifecycle.records.length > 0
     );
   }
 
@@ -165,15 +161,21 @@ export class ZLinkSerialExecutionQueue {
 
   /** Stops new submissions while allowing the accepted FIFO to finish. */
   close(): Promise<void> {
-    this.closed = true;
+    this.closeAdmission();
     return this.whenIdle();
+  }
+
+  /** Stops admission within the lifecycle operation that owns this queue's close. */
+  closeAdmission(): void {
+    this.closed = true;
   }
 
   private admit<T>(
     operation: () => Promise<T> | T,
     options: ZLinkSerialWorkOptions,
     context?: unknown,
-    preparation?: ZLinkSerialWorkPreparation
+    preparation?: ZLinkSerialWorkPreparation,
+    operationEnvelope = false
   ): Promise<T> {
     if (this.closed) throw new Error('The serial execution queue is closed.');
     const lane = options.lane ?? 'application';
@@ -189,6 +191,14 @@ export class ZLinkSerialExecutionQueue {
     const release = (): void => {
       if (released) return;
       released = true;
+      if (this.activeLifecycle === record) {
+        this.activeLifecycle = undefined;
+        if (this.application.records.length > 0 || this.lifecycle.records.length > 0) {
+          this.scheduleDrain();
+        } else if (!this.draining) {
+          this.resolveIdleWaiters();
+        }
+      }
     };
     const resolve = (value: T): void => {
       if (settled) return;
@@ -204,6 +214,7 @@ export class ZLinkSerialExecutionQueue {
       acceptedSequence: 0n,
       lane,
       operation,
+      operationEnvelope,
       context,
       preparation,
       preparationState: preparation === undefined ? 'ready' : 'idle',
@@ -275,7 +286,25 @@ export class ZLinkSerialExecutionQueue {
         }
         this.claimStartedAt ??= performance.now();
         try {
-          await this.executeRecord(record);
+          if (record.operationEnvelope) {
+            try {
+              const outcome = record.operation();
+              void Promise.resolve(outcome).then(
+                (value) => {
+                  record.resolve(value);
+                  record.release();
+                },
+                (error) => {
+                  record.reject(error);
+                  record.release();
+                }
+              );
+            } catch (error) {
+              record.fail(error);
+            }
+          } else {
+            await this.executeRecord(record);
+          }
         } catch (error) {
           record.fail(error);
         } finally {
@@ -291,11 +320,12 @@ export class ZLinkSerialExecutionQueue {
       this.claimStartedAt = undefined;
       if (
         !waitingForPreparation &&
-        (this.application.records.length > 0 || this.lifecycle.records.length > 0)
+        (this.application.records.length > 0 ||
+          (this.activeLifecycle === undefined && this.lifecycle.records.length > 0))
       ) {
         this.scheduleDrain();
       } else {
-        if (this.application.records.length === 0 && this.lifecycle.records.length === 0) {
+        if (!this.hasPendingWork) {
           this.resolveIdleWaiters();
         }
       }
@@ -309,7 +339,7 @@ export class ZLinkSerialExecutionQueue {
       }
     | undefined {
     const applicationReady = this.application.records.length > 0;
-    const lifecycleReady = this.lifecycle.records.length > 0;
+    const lifecycleReady = this.activeLifecycle === undefined && this.lifecycle.records.length > 0;
     if (!applicationReady && !lifecycleReady) return undefined;
     if (!applicationReady) {
       return { lane: 'lifecycle', record: this.lifecycle.records[0]! };
@@ -339,7 +369,9 @@ export class ZLinkSerialExecutionQueue {
     if (this.application.records.length > 0 && this.lifecycleStreak >= this.lifecycleBurstLimit) {
       this.lifecycleDebt = true;
     }
-    return this.lifecycle.records.shift()!;
+    const record = this.lifecycle.records.shift()!;
+    this.activeLifecycle = record;
+    return record;
   }
 
   private takeApplication(): ZLinkSerialWorkRecord<unknown> {

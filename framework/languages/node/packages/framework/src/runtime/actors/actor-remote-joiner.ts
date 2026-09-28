@@ -14,7 +14,6 @@ import { lookupNativeActorRef } from './actor-native-lookup';
 import { ZLinkPostCommitActorLocation } from './post-commit-actor-location';
 import { ZLinkLocalNativeActorJoin } from './actor-local-native-join';
 import { ZLinkPostCommitActorBinder } from './post-commit-actor-binder';
-import { operationIdentityKey } from '../foundation/operation-identity';
 import type { ZLinkActorJoinRelocation } from './actor-join-relocation';
 
 export interface ZLinkActorNativeJoinCoordinatorOptions {
@@ -71,28 +70,12 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
     });
   }
 
-  beginDeferredJoin(
-    actor: ZLinkActor,
-    state: ZLinkActorRuntimeState,
-    operationId: import('../../contracts').ZLinkActorJoinOperationId
-  ): void {
-    this.options.sourceTransfer?.beginDeferredActorHandoff?.(
-      actor,
-      state,
-      operationIdentityKey(operationId)
-    );
+  beginDeferredJoin(actor: ZLinkActor, state: ZLinkActorRuntimeState): void {
+    this.options.sourceTransfer?.beginDeferredActorHandoff?.(actor, state);
   }
 
-  async abortDeferredJoin(
-    actor: ZLinkActor,
-    state: ZLinkActorRuntimeState,
-    operationId: import('../../contracts').ZLinkActorJoinOperationId
-  ): Promise<void> {
-    await this.options.sourceTransfer?.cancelDeferredActorHandoff?.(
-      actor,
-      state,
-      operationIdentityKey(operationId)
-    );
+  async abortDeferredJoin(actor: ZLinkActor, state: ZLinkActorRuntimeState): Promise<void> {
+    await this.options.sourceTransfer?.cancelDeferredActorHandoff?.(actor, state);
   }
 
   async joinSpot(
@@ -184,7 +167,6 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
     operationId: import('../../contracts').ZLinkActorJoinOperationId | undefined
   ): ZLinkActorJoinRuntimeResult<Message> {
     if (operationId === undefined || this.options.sourceTransfer === undefined) return result;
-    const key = operationIdentityKey(operationId);
     return {
       ...result,
       finalizeDeferredJoin: async () => {
@@ -192,11 +174,10 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
           await this.options.sourceTransfer!.completeDeferredActorHandoff?.(
             actor,
             target,
-            result.actor,
-            key
+            result.actor
           );
         } else {
-          await this.options.sourceTransfer!.cancelDeferredActorHandoff?.(actor, state, key);
+          await this.options.sourceTransfer!.cancelDeferredActorHandoff?.(actor, state);
         }
       }
     };

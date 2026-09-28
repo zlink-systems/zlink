@@ -41,6 +41,8 @@ import { DefaultZLinkActorManager } from '../../packages/framework/src/runtime/a
 import { decodeFrameworkCreationPayload } from '../../packages/framework/src/runtime/messaging/creation-payload-codec';
 import {
   internalFrameworkErrorKind,
+  internalFrameworkWireReply,
+  wireReplyFailureException,
   ZLinkFrameworkInternalErrorKind
 } from '../../packages/framework/src/runtime/framework-errors-internal';
 import { ZLinkRuntimeAdmissionGate } from '../../packages/framework/src/runtime/admission';
@@ -1004,7 +1006,7 @@ test('public User Spot coordinator hides Pending, runs one factory, then publish
     });
   }
   assert.deepEqual(publicationOrder, ['route', 'publish']);
-  assert.equal(await coordinator.close(created.spot, async () => true), true);
+  assert.equal(await coordinator.close(created.spot, closeOwnerWithAuthority), true);
   assert.equal(forgottenMesh, 'mesh');
   assert.deepEqual(forgottenRoute, publishedRoute);
   assert.deepEqual(publicationOrder, ['route', 'publish', 'forget']);
@@ -1526,9 +1528,9 @@ test('User Spot close fences the exact generation and deletes authority only aft
   );
   let ownerClosed = false;
   assert.equal(
-    await coordinator.close(created.spot, async () => {
+    await coordinator.close(created.spot, async (current, beginAuthority) => {
       ownerClosed = true;
-      return true;
+      return await closeOwnerWithAuthority(current, beginAuthority);
     }),
     true
   );
@@ -1892,7 +1894,7 @@ test('remote User Spot close remains deleted when the terminal reply is lost', a
           correlation: 1n,
           operation: { high: 1n, low: 1n }
         },
-        async () => true
+        closeOwnerWithAuthority
       );
       throw new Error('terminal reply lost');
     }
@@ -1901,6 +1903,128 @@ test('remote User Spot close remains deleted when the terminal reply is lost', a
   await assert.rejects(() => manager.close(spot), /terminal reply lost/);
   assert.equal((await store.readAuthority(authorityKey('reply-loss-close'))).kind, 'missing');
   assert.equal(await manager.close(spot), false);
+});
+
+test('command 48 target classifies generation as 33 and every owner fence or moving state as 34', async () => {
+  const cases: ReadonlyArray<{
+    readonly name: string;
+    readonly target: (ready: {
+      objectGeneration: bigint;
+      authorityOwnerGeneration: bigint;
+      storeVersion: { value: string };
+    }) => Record<string, unknown>;
+    readonly allocationState?: string;
+    readonly failureCode: number;
+    readonly sourceKind: ZLinkFrameworkErrorKind;
+  }> = [
+    {
+      name: 'objectGeneration+1',
+      target: (ready) => ({ objectGeneration: ready.objectGeneration + 1n }),
+      failureCode: 33,
+      sourceKind: ZLinkFrameworkErrorKind.InvalidOperation
+    },
+    {
+      name: 'allocation not active',
+      target: () => ({}),
+      allocationState: 'reserved',
+      failureCode: 34,
+      sourceKind: ZLinkFrameworkErrorKind.Unavailable
+    },
+    {
+      name: 'StoreVersion mismatch',
+      target: () => ({ expectedStoreVersion: 'stale-store-version' }),
+      failureCode: 34,
+      sourceKind: ZLinkFrameworkErrorKind.Unavailable
+    },
+    {
+      name: 'AuthorityOwnerGeneration mismatch',
+      target: (ready) => ({ authorityOwnerGeneration: ready.authorityOwnerGeneration + 1n }),
+      failureCode: 34,
+      sourceKind: ZLinkFrameworkErrorKind.Unavailable
+    }
+  ];
+  for (const scenario of cases) {
+    const base = authority(new Set(['mesh:node-b:2:owner-b:2']));
+    const spotId = `classify-close-${cases.indexOf(scenario)}`;
+    const ready = await createActive(base, spotId, target('node-b', 'owner-b'));
+    const store = Object.create(base) as ZLinkInMemoryAuthorityStore;
+    store.readAuthority = async (key, signal) => {
+      const current = await base.readAuthority(key, signal);
+      return scenario.allocationState === undefined || current.kind !== 'snapshot'
+        ? current
+        : ({
+            ...current,
+            allocation: { ...current.allocation, state: scenario.allocationState }
+          } as never);
+    };
+    const coordinator = new ZLinkUserSpotCreationCoordinator({
+      store,
+      target: async () => undefined
+    });
+    let ownerCalls = 0;
+    const error = await coordinator
+      .handleRemoteClose(
+        {
+          kind: 'userSpotClose',
+          correlation: 1n,
+          operation: { high: 1n, low: 1n },
+          sourceNodeRid: 'node-a',
+          sourceNodeGeneration: 1n,
+          target: {
+            spotId,
+            objectGeneration: ready.objectGeneration,
+            targetNodeRid: 'node-b',
+            targetNodeGeneration: 2n,
+            authorityOwnerGeneration: ready.authorityOwnerGeneration,
+            expectedStoreVersion: ready.storeVersion.value,
+            ...scenario.target(ready)
+          },
+          deadlineUnixMs: BigInt(Date.now() + 1_000)
+        } as never,
+        async () => {
+          ownerCalls++;
+          return true;
+        }
+      )
+      .then(
+        () => undefined,
+        (failure: unknown) => failure
+      );
+    assert.ok(error instanceof ZLinkFrameworkException, scenario.name);
+    const reply = internalFrameworkWireReply(error);
+    assert.equal(reply.failureCode, scenario.failureCode, scenario.name);
+    const source = wireReplyFailureException(
+      reply.terminalResult,
+      reply.failureCode,
+      scenario.name
+    );
+    assert.equal(source.kind, scenario.sourceKind, scenario.name);
+    assert.equal(ownerCalls, 0, scenario.name);
+    assert.equal((await base.readAuthority(authorityKey(spotId))).kind, 'snapshot', scenario.name);
+  }
+});
+
+test('local manager Close classifies an owner node change as 34 through the same fence', async () => {
+  const base = authority(new Set(['mesh:node-b:2:owner-b:2']));
+  const ready = await createActive(base, 'classify-local-owner', target('node-b', 'owner-b'));
+  const coordinator = new ZLinkUserSpotCreationCoordinator({
+    store: base,
+    target: async () => undefined
+  });
+  const error = await coordinator
+    .resolveCloseTarget({
+      spotId: 'classify-local-owner',
+      objectGeneration: ready.objectGeneration,
+      meshName: 'mesh',
+      nodeRid: 'node-c'
+    })
+    .then(
+      () => undefined,
+      (failure: unknown) => failure
+    );
+  assert.ok(error instanceof ZLinkFrameworkException);
+  assert.equal(internalFrameworkWireReply(error).failureCode, 34);
+  assert.equal(error.kind, ZLinkFrameworkErrorKind.Unavailable);
 });
 
 test('aggregate prepare reserves one typed bundle until aggregate commit or abort', async () => {
@@ -2114,6 +2238,16 @@ async function createActive(
   assert.equal(committed.kind, 'committed');
   if (committed.kind !== 'committed') throw new Error('commit failed');
   return committed.ready;
+}
+
+/** A local owner Close: commits Closing, finishes local cleanup, then releases authority. */
+async function closeOwnerWithAuthority(
+  _spot: unknown,
+  beginAuthority: (onCommitted: () => void) => Promise<{ release(): Promise<void> }>
+): Promise<boolean> {
+  const authority = await beginAuthority(() => undefined);
+  await authority.release();
+  return true;
 }
 
 function authorityKey(value: string): ZLinkAuthorityKey {

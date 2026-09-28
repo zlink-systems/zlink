@@ -13,79 +13,42 @@ import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
+/**
+ * Owns the host's MeshNodes.
+ *
+ * <p>Each node is recorded here the moment the backend creates it, before it is configured or
+ * started, so {@link #close()} releases a partial {@link #start} the same way it releases a running
+ * set. The host records this object before calling {@code start}.
+ */
 public final class ZLinkMeshNodesRuntime implements AutoCloseable {
-    private final List<ZLinkMeshNodeRuntime> nodes;
+    //  Written only by start, which runs in the host's constructor before
+    //  the host is published; read afterwards.
+    private final List<ZLinkInternalMeshNode> nodes = new ArrayList<>();
 
-    private ZLinkMeshNodesRuntime(List<ZLinkMeshNodeRuntime> nodes) {
-        this.nodes = List.copyOf(nodes);
-    }
-
-    public static ZLinkMeshNodesRuntime empty() {
-        return new ZLinkMeshNodesRuntime(List.of());
-    }
-
-    public static ZLinkMeshNodesRuntime start(
-            List<MeshNodeRegistration> registrations,
-            ZLinkMeshBackendAdapter adapter,
-            ZLinkBackendContext context) {
-        return start(registrations, adapter, context, ignored -> null);
-    }
-
-    public static ZLinkMeshNodesRuntime start(
-            List<MeshNodeRegistration> registrations,
-            ZLinkMeshBackendAdapter adapter,
-            ZLinkBackendContext context,
-            Function<MeshNodeRegistration, Consumer<ZLinkMeshDispatchRecord>> receiverFactory) {
-        return start(registrations, adapter, context, receiverFactory, false);
-    }
-
-    public static ZLinkMeshNodesRuntime start(
-            List<MeshNodeRegistration> registrations,
-            ZLinkMeshBackendAdapter adapter,
-            ZLinkBackendContext context,
-            Function<MeshNodeRegistration, Consumer<ZLinkMeshDispatchRecord>> receiverFactory,
-            boolean deferServiceReadyPublication) {
-        return start(
-                registrations,
-                adapter,
-                context,
-                receiverFactory,
-                deferServiceReadyPublication,
-                null);
-    }
-
-    public static ZLinkMeshNodesRuntime start(
+    public void start(
             List<MeshNodeRegistration> registrations,
             ZLinkMeshBackendAdapter adapter,
             ZLinkBackendContext context,
             Function<MeshNodeRegistration, Consumer<ZLinkMeshDispatchRecord>> receiverFactory,
             boolean deferServiceReadyPublication,
             ZLinkApplicationJobQueue applicationJobQueue) {
-        List<ZLinkMeshNodeRuntime> started = new ArrayList<>();
-        try {
-            for (MeshNodeRegistration registration : registrations) {
-                Consumer<ZLinkMeshDispatchRecord> receiver = receiverFactory.apply(registration);
-                ZLinkMeshNodeRuntime runtime =
-                        ZLinkMeshNodeRuntime.start(
-                                registration,
-                                adapter,
-                                context,
-                                deferServiceReadyPublication,
-                                receiver,
-                                applicationJobQueue);
-                started.add(runtime);
-            }
-            return new ZLinkMeshNodesRuntime(started);
-        } catch (RuntimeException failure) {
-            closeReverse(started, failure);
-            throw failure;
+        for (MeshNodeRegistration registration : registrations) {
+            Consumer<ZLinkMeshDispatchRecord> receiver = receiverFactory.apply(registration);
+            ZLinkInternalMeshNode node = adapter.createMeshNode(context, registration.meshName());
+            nodes.add(node);
+            ZLinkMeshNodeRuntime.start(
+                    node,
+                    registration,
+                    deferServiceReadyPublication,
+                    receiver,
+                    applicationJobQueue);
         }
     }
 
     public Map<String, ZLinkInternalMeshNode> nodesByName() {
         Map<String, ZLinkInternalMeshNode> result = new LinkedHashMap<>();
-        for (ZLinkMeshNodeRuntime runtime : nodes) {
-            result.put(runtime.node().name(), runtime.node());
+        for (ZLinkInternalMeshNode node : nodes) {
+            result.put(node.name(), node);
         }
         return Map.copyOf(result);
     }
@@ -106,16 +69,6 @@ public final class ZLinkMeshNodesRuntime implements AutoCloseable {
         }
         if (failure != null) {
             throw failure;
-        }
-    }
-
-    private static void closeReverse(List<ZLinkMeshNodeRuntime> nodes, RuntimeException failure) {
-        for (int index = nodes.size() - 1; index >= 0; index--) {
-            try {
-                nodes.get(index).close();
-            } catch (RuntimeException closeFailure) {
-                failure.addSuppressed(closeFailure);
-            }
         }
     }
 }

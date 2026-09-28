@@ -220,6 +220,15 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
     }
 
     CompletionStage<Void> executeLifecycle(Supplier<CompletionStage<Void>> operation) {
+        CompletionStage<Void> lifecycle = requestLifecycle(operation);
+        List<ZLinkSerialExecutionQueue> timerQueues = sharedSpotGate ? List.of() : timerSnapshot();
+        boolean ownsDependencyTurn =
+                spotQueue.isCurrent()
+                        || timerQueues.stream().anyMatch(ZLinkSerialExecutionQueue::isCurrent);
+        return ownsDependencyTurn ? ZLinkSerialExecutionQueue.yieldCurrent(lifecycle) : lifecycle;
+    }
+
+    CompletionStage<Void> requestLifecycle(Supplier<CompletionStage<Void>> operation) {
         List<ZLinkSerialExecutionQueue> timerQueues = sharedSpotGate ? List.of() : timerSnapshot();
         CompletionStage<Void> timers =
                 sharedSpotGate
@@ -235,12 +244,7 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
                                                                                                 null))
                                                                 .toCompletableFuture())
                                         .toArray(CompletableFuture[]::new));
-        CompletionStage<Void> lifecycle =
-                timers.thenCompose(ignored -> spotQueue.enqueueLifecycleBarrier(operation));
-        boolean ownsDependencyTurn =
-                spotQueue.isCurrent()
-                        || timerQueues.stream().anyMatch(ZLinkSerialExecutionQueue::isCurrent);
-        return ownsDependencyTurn ? ZLinkSerialExecutionQueue.yieldCurrent(lifecycle) : lifecycle;
+        return timers.thenCompose(ignored -> spotQueue.enqueueLifecycleBarrier(operation));
     }
 
     CompletionStage<Void> executeAcceptedSpot(
@@ -284,9 +288,9 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
         return spotQueue.commitRelocation(seal);
     }
 
-    CompletionStage<Void> awaitAllLanes() {
+    CompletionStage<Void> awaitAllLanes(ZLinkSerialExecutionQueue.Quiescence spotScope) {
         List<CompletionStage<Void>> queues = new ArrayList<>();
-        queues.add(spotQueue.awaitQuiescence());
+        queues.add(spotQueue.awaitQuiescence(spotScope));
         queues.add(infrastructureQueue.awaitQuiescence());
         timerSnapshot().forEach(queue -> queues.add(queue.awaitQuiescence()));
         actorSnapshot().forEach(queue -> queues.add(queue.awaitQuiescence()));
@@ -294,6 +298,10 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
                 queues.stream()
                         .map(CompletionStage::toCompletableFuture)
                         .toArray(CompletableFuture[]::new));
+    }
+
+    boolean isCurrentSpotTurn() {
+        return spotQueue.isCurrent();
     }
 
     void close() {

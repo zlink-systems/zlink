@@ -3,6 +3,7 @@
 #include "runtime/client_server/raw_client_server_owner.hpp"
 #include "runtime/client_server/client_server_failure_mapper.hpp"
 #include "runtime/channels/channel_runtime.hpp"
+#include "runtime/diagnostics/listener_status_registry.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 
@@ -14,12 +15,14 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <future>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace client_server = zlink::framework::runtime::client_server;
@@ -277,6 +280,19 @@ void verify_client_server_runtime_projection_and_observation ()
     server.close ();
 }
 
+void verify_listener_status_is_not_configured (zlink::framework::framework_runtime_t &runtime,
+                                               const std::string &name)
+{
+    try {
+        (void) runtime.listener_status (zlink::framework::listener_kind_t::client_server, name);
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        if (error.kind () == zlink::framework::framework_error_kind_t::not_configured)
+            return;
+    }
+    throw std::runtime_error ("listener status after stop did not return NotConfigured");
+}
+
 void verify_public_listener_status_reports_bound_endpoint ()
 {
     auto app = zlink::framework::app_t::create ();
@@ -337,6 +353,72 @@ void verify_public_listener_status_reports_bound_endpoint ()
     app.request_stop ();
     app_thread.join ();
     assert (exit_code.load (std::memory_order_acquire) == 0);
+    verify_listener_status_is_not_configured (runtime, "listener-status");
+}
+
+void verify_listener_status_during_stop_reads_record_or_not_configured ()
+{
+    for (int round = 0; round < 5; ++round) {
+        auto app = zlink::framework::app_t::create ();
+        app.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &options) {
+            options.handlers ().group ("listener-status-stop").add_send<network_probe_handler_t> ();
+            options.add_client_server_channel ("listener-status-stop")
+              .server ()
+              .listen ()
+              .add_handler_group ("listener-status-stop");
+        });
+
+        auto provider = app.advanced ().services ().build_provider ();
+        auto &runtime = provider.get_required<zlink::framework::framework_runtime_t> ();
+
+        char program[] = "listener-status-stop";
+        char *arguments[] = {program, nullptr};
+        std::atomic_int exit_code{-1};
+        std::thread app_thread (
+          [&] { exit_code.store (app.run (1, arguments), std::memory_order_release); });
+
+        const auto deadline = std::chrono::steady_clock::now () + 5s;
+        bool bound = false;
+        while (!bound && std::chrono::steady_clock::now () < deadline) {
+            try {
+                (void) runtime.listener_status (zlink::framework::listener_kind_t::client_server,
+                                                "listener-status-stop");
+                bound = true;
+            }
+            catch (const zlink::framework::framework_exception_t &) {
+                std::this_thread::sleep_for (1ms);
+            }
+        }
+        assert (bound);
+
+        std::atomic_bool querying{true};
+        std::atomic_int unexpected{0};
+        std::thread querier ([&] {
+            while (querying.load (std::memory_order_acquire)) {
+                try {
+                    (void) runtime.listener_status (
+                      zlink::framework::listener_kind_t::client_server, "listener-status-stop");
+                }
+                catch (const zlink::framework::framework_exception_t &error) {
+                    if (error.kind () != zlink::framework::framework_error_kind_t::not_configured)
+                        unexpected.fetch_add (1, std::memory_order_relaxed);
+                }
+                catch (...) {
+                    unexpected.fetch_add (1, std::memory_order_relaxed);
+                }
+            }
+        });
+
+        app.request_stop ();
+        app_thread.join ();
+        querying.store (false, std::memory_order_release);
+        querier.join ();
+        assert (exit_code.load (std::memory_order_acquire) == 0);
+        if (unexpected.load (std::memory_order_relaxed) != 0)
+            throw std::runtime_error (
+              "listener status during stop returned neither the record nor NotConfigured");
+        verify_listener_status_is_not_configured (runtime, "listener-status-stop");
+    }
 }
 
 void verify_client_server_terminal_errors_preserve_public_boundaries ()
@@ -382,5 +464,6 @@ int main ()
     verify_client_server_terminal_errors_preserve_public_boundaries ();
     verify_client_server_runtime_projection_and_observation ();
     verify_public_listener_status_reports_bound_endpoint ();
+    verify_listener_status_during_stop_reads_record_or_not_configured ();
     return 0;
 }

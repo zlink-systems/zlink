@@ -19,6 +19,27 @@ final class ZLinkInMemoryProviderLocationStoreTest {
     private static final ZLinkStoreCancellation ACTIVE = () -> false;
 
     @Test
+    void roundsFractionalMillisecondRetentionUp() throws Exception {
+        Instant now = Instant.parse("2026-07-29T00:00:00Z");
+        var store = new ZLinkInMemoryProviderLocationStore(Clock.fixed(now, ZoneOffset.UTC));
+        var key = new ZLinkStoreKey("fractional");
+        store.write(
+                        new ZLinkStoreWriteRequest(
+                                List.of(),
+                                List.of(
+                                        new ZLinkStorePut(
+                                                key, new byte[] {1}, Duration.ofNanos(1_500_000)))),
+                        ACTIVE)
+                .toCompletableFuture()
+                .get();
+        var found =
+                assertInstanceOf(
+                        ZLinkStoreReadFound.class,
+                        store.read(key, ACTIVE).toCompletableFuture().get());
+        assertEquals(now.plusMillis(2), found.value().expiresAt());
+    }
+
+    @Test
     void conditionalBatchIsAtomicAndScanKeepsItsSnapshot() throws Exception {
         var store = new ZLinkInMemoryProviderLocationStore();
         var first = new ZLinkStoreKey("a/1");

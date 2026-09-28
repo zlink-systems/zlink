@@ -36,11 +36,10 @@ class ZlinkStreamConnectorConan(ConanFile):
             "framework/languages/cpp/cmake",
             "framework/languages/cpp/common",
             "framework/languages/cpp/connector",
-            "framework/runtime/protocol/generated/cpp",
         ]
         copy(
             self,
-            "CMakeLists.txt",
+            "VERSION",
             src=os.path.join(repo_root, "framework/languages/cpp"),
             dst=os.path.join(self.export_sources_folder, "framework/languages/cpp"),
         )
@@ -64,11 +63,6 @@ class ZlinkStreamConnectorConan(ConanFile):
 
     def generate(self):
         tc = CMakeToolchain(self)
-        tc.variables["ZLINK_FRAMEWORK_CPP_BUILD_TESTS"] = False
-        tc.variables["ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS"] = False
-        tc.variables["ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES"] = False
-        tc.variables["ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE"] = False
-        tc.variables["ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK"] = False
         tc.variables["ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST"] = True
         tc.variables["ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT"] = False
         tc.variables["ZLINK_STREAM_CONNECTOR_BUILD_UNREAL"] = False
@@ -91,13 +85,13 @@ class ZlinkStreamConnectorConan(ConanFile):
 
     def build(self):
         cmake = CMake(self)
-        cmake.configure(build_script_folder="framework/languages/cpp")
+        cmake.configure(build_script_folder="framework/languages/cpp/connector")
         cmake.build(target="zlink_stream_connector")
 
     def package(self):
         CMake(self).install(component="StreamConnector")
 
     def package_info(self):
-        self.cpp_info.set_property("cmake_file_name", "zlink_stream_connector_cpp")
-        self.cpp_info.set_property("cmake_target_name", "zlink::stream_connector")
+        self.cpp_info.set_property("cmake_find_mode", "none")
+        self.cpp_info.builddirs.append("lib/cmake/zlink_stream_connector_cpp")
         self.cpp_info.libs = ["zlink_stream_connector"]

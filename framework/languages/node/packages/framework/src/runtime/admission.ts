@@ -5,7 +5,11 @@ import {
 export class ZLinkRuntimeAdmissionGate {
   private readonly meshes = new Map<string, ZLinkMeshAdmissionState>();
 
-  constructor(private readonly ownerAdmissionOpen: () => boolean = () => true) {}
+  /**
+   * Location runtime §5: the host's single new-work decision (local admission deadline and host
+   * execution combination). A host without a Location Store has no such block.
+   */
+  constructor(readonly ownerAdmissionOpen: () => boolean = () => true) {}
 
   get acceptsNewWork(): boolean {
     if (!this.ownerAdmissionOpen()) return false;

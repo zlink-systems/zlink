@@ -10,6 +10,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace zlink::framework::runtime
 {
@@ -61,10 +62,26 @@ class listener_status_registry_t final
           .get ();
     }
 
+    void add_http (http_listener_status_t status)
+    {
+        _lane.run ([&] { _http_listeners.push_back (std::move (status)); }).get ();
+    }
+
+    void clear_http () noexcept
+    {
+        _lane.run ([&] { _http_listeners.clear (); }).get ();
+    }
+
+    std::vector<http_listener_status_t> http_listeners () const
+    {
+        return _lane.run ([&] { return _http_listeners; }).get ();
+    }
+
   private:
     runtime::offload_executor_t _lane_executor;
     mutable runtime::state_lane_t _lane{_lane_executor};
     std::map<listener_kind_t, std::map<std::string, listener_status_t>> _listeners;
+    std::vector<http_listener_status_t> _http_listeners;
 };
 
 } // namespace zlink::framework::runtime

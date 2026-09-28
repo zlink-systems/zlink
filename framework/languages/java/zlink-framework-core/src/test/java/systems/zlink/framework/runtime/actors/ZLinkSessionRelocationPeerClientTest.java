@@ -139,7 +139,8 @@ final class ZLinkSessionRelocationPeerClientTest {
                 10,
                 11,
                 TARGET,
-                12);
+                12,
+                13);
     }
 
     @FunctionalInterface

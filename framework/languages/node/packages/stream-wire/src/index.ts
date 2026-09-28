@@ -1,5 +1,6 @@
 import {
   defaultMaxDecompressedPayloadSize,
+  lz4PickledLength as pickledLength,
   lz4PickleUncompressed as pickleUncompressed,
   lz4UnpicklePayload as unpicklePayload
 } from './lz4-pickle';
@@ -356,6 +357,10 @@ export function decodeStreamWireMetadata(metadata: Uint8Array): Map<string, stri
 
 export function lz4PickleUncompressed(payload: Uint8Array): Uint8Array {
   return pickleUncompressed(payload);
+}
+
+export function lz4PickledLength(payload: Uint8Array): number {
+  return pickledLength(payload);
 }
 
 export function lz4UnpicklePayload(payload: Uint8Array, maxDecompressedSize?: number): Uint8Array {

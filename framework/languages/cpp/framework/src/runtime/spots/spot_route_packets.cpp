@@ -239,6 +239,7 @@ void to_json (nlohmann::json &json, const spot_actor_commit_route_request_t &val
                      {"actorId", value.actor_id},
                      {"actorGeneration", value.actor_generation},
                      {"actorAuthorityOwnerGeneration", value.actor_authority_owner_generation},
+                     {"expectedActorStoreVersion", value.expected_actor_store_version},
                      {"completionRootReference", value.completion_root_reference},
                      {"completionRootChecksum", value.completion_root_checksum},
                      {"targetSpotId", value.target_spot_id},
@@ -273,6 +274,7 @@ void from_json (const nlohmann::json &json, spot_actor_commit_route_request_t &v
     value.actor_generation = json.at ("actorGeneration").get<std::uint64_t> ();
     value.actor_authority_owner_generation =
       json.value ("actorAuthorityOwnerGeneration", std::uint64_t{0});
+    value.expected_actor_store_version = json.value ("expectedActorStoreVersion", "");
     value.completion_root_reference = json.value ("completionRootReference", "");
     value.completion_root_checksum = json.value ("completionRootChecksum", std::uint32_t{0});
     value.target_spot_id = json.at ("targetSpotId").get<std::string> ();

@@ -325,6 +325,13 @@ bool public_headers_do_not_expose_runtime_dependencies (const std::filesystem::p
                     continue;
                 }
                 if ((relative_text
+                       == "connector/core/include/zlink/stream_connector/contracts/"
+                          "stream_payload.hpp"
+                     || relative_text == "zlink/stream_connector/contracts/stream_payload.hpp")
+                    && (needle == "#include <nlohmann" || needle == "nlohmann::")) {
+                    continue;
+                }
+                if ((relative_text
                        == "connector/core/include/zlink/stream_connector/contracts/calls/"
                           "zlink_stream_calls.hpp"
                      || relative_text
@@ -1646,15 +1653,21 @@ int main ()
                                  "core connector umbrella must not include coroutine support");
     ok &= file_does_not_contain (root / "connector/core/include/zlink/stream_connector.hpp",
                                  "task_t", "core connector umbrella must not expose e2e task_t");
-    ok &= file_contains (root / "CMakeLists.txt", "add_library(zlink_stream_e2e_client INTERFACE)");
-    ok &= file_contains (root / "CMakeLists.txt",
+    ok &= file_contains (root / "connector/CMakeLists.txt",
+                         "add_library(zlink_stream_e2e_client INTERFACE)");
+    ok &= file_contains (root / "connector/CMakeLists.txt",
                          "add_library(zlink::stream_e2e_client ALIAS zlink_stream_e2e_client)");
-    ok &= file_contains (root / "CMakeLists.txt", "option(ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT");
-    ok &= file_contains (root / "CMakeLists.txt", "option(ZLINK_STREAM_CONNECTOR_BUILD_UNREAL");
-    ok &= file_contains (root / "CMakeLists.txt", "option(ZLINK_STREAM_CONNECTOR_BUILD_GODOT");
-    ok &= file_contains (root / "CMakeLists.txt", "option(ZLINK_STREAM_CONNECTOR_BUILD_AXMOL");
-    ok &= file_contains (root / "CMakeLists.txt", "if(ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT)");
-    ok &= file_contains (root / "CMakeLists.txt",
+    ok &= file_contains (root / "connector/CMakeLists.txt",
+                         "option(ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT");
+    ok &= file_contains (root / "connector/CMakeLists.txt",
+                         "option(ZLINK_STREAM_CONNECTOR_BUILD_UNREAL");
+    ok &= file_contains (root / "connector/CMakeLists.txt",
+                         "option(ZLINK_STREAM_CONNECTOR_BUILD_GODOT");
+    ok &= file_contains (root / "connector/CMakeLists.txt",
+                         "option(ZLINK_STREAM_CONNECTOR_BUILD_AXMOL");
+    ok &= file_contains (root / "connector/CMakeLists.txt",
+                         "if(ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT)");
+    ok &= file_contains (root / "connector/CMakeLists.txt",
                          "add_library(zlink_stream_connector_throwing INTERFACE)");
     ok &= require_exists (
       root / "connector/throwing-adapter/include/zlink/stream_connector_throwing.hpp");
@@ -1681,15 +1694,15 @@ int main ()
       root / "connector/engines/unreal/Source/ZLinkStreamConnector/Public/ZLinkStreamConnector.h",
       "submit", "Unreal public API must use delegates instead of connector submit calls");
     ok &= file_does_not_contain (
-      root / "CMakeLists.txt",
+      root / "connector/CMakeLists.txt",
       "target_link_libraries(zlink_unreal_stream_connector PUBLIC zlink::stream_connector)",
       "Unreal connector target must not expose the general C++ connector publicly");
-    ok &= file_contains (root / "CMakeLists.txt",
+    ok &= file_contains (root / "connector/CMakeLists.txt",
                          "target_link_libraries(zlink_unreal_stream_connector PRIVATE\n"
                          "    zlink::stream_connector\n"
                          "    zlink::stream_connector_codecs)");
     ok &= file_does_not_contain (
-      root / "CMakeLists.txt",
+      root / "connector/CMakeLists.txt",
       "target_include_directories(zlink_unreal_stream_connector PRIVATE\n  "
       "${ZLINK_FRAMEWORK_CPP_DIR}/connector/core/src)",
       "Unreal connector target must not include general connector runtime internals");
@@ -1757,7 +1770,7 @@ int main ()
       file_contains (root / "../../../bindings/cpp/CMakeLists.txt", "install(TARGETS zlink_cpp");
     ok &= file_contains (root / "../../../bindings/cpp/CMakeLists.txt", "EXPORT zlink_cppTargets");
     ok &= file_contains (
-      root / "CMakeLists.txt",
+      root / "connector/CMakeLists.txt",
       "option(ZLINK_STREAM_CONNECTOR_WITH_LZ4 \"Enable Stream Connector LZ4 compression\" ON)");
     ok &= file_does_not_contain (
       root / "connector/engines/unreal/Source/ZLinkStreamConnector/ZLinkStreamConnector.Build.cs",
@@ -1803,8 +1816,20 @@ int main ()
     ok &= require_exists (root / "connector/engines/godot/src/zlink_godot_stream_connector.cpp");
     ok &= file_does_not_contain (
       root / "connector/engines/godot/include/zlink_godot_stream_connector.hpp",
-      "zlink/stream_connector",
+      "#include <zlink/stream_connector.hpp>",
       "Godot public API must not expose the general C++ connector surface");
+    ok &= file_does_not_contain (
+      root / "connector/engines/godot/include/zlink_godot_stream_connector.hpp",
+      "zlink::stream_connector::connector_t",
+      "Godot public API must not expose the general C++ connector type");
+    ok &= file_does_not_contain (
+      root / "connector/engines/godot/include/zlink_godot_stream_connector.hpp",
+      "zlink::stream_connector::packet_t",
+      "Godot public API must not expose the general C++ packet type");
+    ok &= file_does_not_contain (
+      root / "connector/engines/godot/include/zlink_godot_stream_connector.hpp",
+      "zlink::stream_connector::message_t",
+      "Godot public API must not expose the general C++ message type");
     ok &= file_contains (root / "connector/engines/godot/src/zlink_godot_stream_connector.cpp",
                          "#include <zlink/stream_connector.hpp>");
     ok &= file_does_not_contain (
@@ -1813,7 +1838,9 @@ int main ()
     ok &= file_contains (root / "connector/engines/godot/src/zlink_godot_stream_connector.cpp",
                          "main_thread_dispatcher");
     ok &= file_contains (root / "connector/engines/godot/src/zlink_godot_stream_connector.cpp",
-                         "emit_request");
+                         "request.submit<std::vector<std::uint8_t>>");
+    ok &= file_contains (root / "connector/engines/godot/src/zlink_godot_stream_connector.cpp",
+                         "owner->post_to_main_thread (");
     ok &= require_exists (root
                           / "connector/engines/godot/extension/zlink_stream_connector.gdextension");
     ok &= require_exists (root / "connector/engines/godot/tests/zlink_stream_connector_tests.gd");
@@ -1825,8 +1852,20 @@ int main ()
     ok &= require_exists (root / "connector/engines/axmol/src/zlink_axmol_stream_connector.cpp");
     ok &= file_does_not_contain (
       root / "connector/engines/axmol/include/zlink_axmol_stream_connector.hpp",
-      "zlink/stream_connector",
+      "#include <zlink/stream_connector.hpp>",
       "Axmol public API must not expose the general C++ connector surface");
+    ok &= file_does_not_contain (
+      root / "connector/engines/axmol/include/zlink_axmol_stream_connector.hpp",
+      "zlink::stream_connector::connector_t",
+      "Axmol public API must not expose the general C++ connector type");
+    ok &= file_does_not_contain (
+      root / "connector/engines/axmol/include/zlink_axmol_stream_connector.hpp",
+      "zlink::stream_connector::packet_t",
+      "Axmol public API must not expose the general C++ packet type");
+    ok &= file_does_not_contain (
+      root / "connector/engines/axmol/include/zlink_axmol_stream_connector.hpp",
+      "zlink::stream_connector::message_t",
+      "Axmol public API must not expose the general C++ message type");
     ok &= file_contains (root / "connector/engines/axmol/src/zlink_axmol_stream_connector.cpp",
                          "#include <zlink/stream_connector.hpp>");
     ok &= file_does_not_contain (
@@ -1835,9 +1874,18 @@ int main ()
     ok &= file_contains (root / "connector/engines/axmol/src/zlink_axmol_stream_connector.cpp",
                          "axmol_thread_dispatcher");
     ok &= file_contains (root / "connector/engines/axmol/src/zlink_axmol_stream_connector.cpp",
-                         "emit_request");
+                         "request.submit<std::vector<std::uint8_t>>");
+    ok &= file_contains (root / "connector/engines/axmol/src/zlink_axmol_stream_connector.cpp",
+                         "owner->post_to_axmol_thread (");
     ok &= require_exists (root / "connector/engines/axmol/tests/test_app.cpp");
     ok &= file_contains (root / "connector/engines/axmol/tests/test_app.cpp", "engine-required");
+    ok &= file_contains (root / "connector/engines/axmol/tests/test_app.cpp", "if (argc != 2)");
+    ok &= file_contains (
+      root / "connector/core/include/zlink/stream_connector/contracts/stream_payload.hpp",
+      "zlink::detail::json_profile::dump (");
+    ok &= file_contains (
+      root / "connector/core/include/zlink/stream_connector/contracts/stream_payload.hpp",
+      "zlink::detail::json_profile::parse (");
     ok &= require_exists (root / "connector/core/packaging/vcpkg/vcpkg.json");
     ok &= require_exists (root / "connector/core/packaging/vcpkg/portfile.cmake");
     ok &= require_exists (root / "connector/core/packaging/conan/conanfile.py");
@@ -1876,10 +1924,24 @@ int main ()
                                  "CMake(self).install()",
                                  "e2e Conan package must not reinstall the core connector package");
     ok &= file_contains (root / "CMakeLists.txt", "option(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK");
+    ok &= file_contains (root / "CMakeLists.txt", "add_subdirectory(connector)");
+    ok &= file_contains (root / "connector/CMakeLists.txt", "project(zlink_stream_connector_cpp");
+    if (count_occurrences (layout_file_contents (root / "CMakeLists.txt").text,
+                           "if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK")
+        > 6) {
+        std::cerr << "INSTALL_FRAMEWORK has more than six decisions\n";
+        ok = false;
+    }
     ok &= file_contains (root / "connector/core/packaging/conan/conanfile.py",
-                         "ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK");
+                         "build_script_folder=\"framework/languages/cpp/connector\"");
     ok &= file_contains (root / "connector/core/packaging/vcpkg/portfile.cmake",
-                         "-DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF");
+                         "SOURCE_PATH \"${SOURCE_PATH}/framework/languages/cpp/connector\"");
+    ok &= file_does_not_contain (root / "connector/core/packaging/conan/conanfile.py",
+                                 "ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK",
+                                 "connector Conan recipe must not control Framework installation");
+    ok &= file_does_not_contain (root / "connector/core/packaging/vcpkg/portfile.cmake",
+                                 "ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK",
+                                 "connector vcpkg recipe must not control Framework installation");
     ok &= file_contains (root / "connector/e2e-client/packaging/vcpkg/portfile.cmake",
                          "zlink_stream_e2e_clientConfig.cmake");
     ok &= file_contains (root / "connector/e2e-client/packaging/vcpkg/portfile.cmake",
@@ -1964,6 +2026,13 @@ int main ()
       public_headers_do_not_expose_runtime_dependencies (root / "connector/engines/axmol/include");
     ok &= location_store_public_surface_hides_domain_repositories (root);
     ok &= sample_application_code_uses_message_codec (root);
+    ok &= file_contains (root / "samples/Bingo/Shared/Contracts/stream_message_codec.hpp",
+                         "codec_traits<authenticate_res_t>::encode (response)");
+    ok &= file_contains (root / "samples/Bingo/Shared/Contracts/stream_message_codec.hpp",
+                         "zlink::message_t::from (");
+    ok &= file_contains (
+      root / "samples/Bingo/Server/Session/Sessions/Handlers/authenticate_session_handler.hpp",
+      "encode_authenticate_response (reply_payload)");
     ok &= sample_server_code_does_not_block_on_task_result (root);
     ok &= sample_code_does_not_read_the_environment (root);
     ok &= runner_generated_config_files_are_private_and_cleaned (root);

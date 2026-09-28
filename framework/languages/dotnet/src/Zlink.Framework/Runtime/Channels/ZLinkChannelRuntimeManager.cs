@@ -91,6 +91,12 @@ internal sealed class ZLinkChannelRuntimeManager(
                 var bundle = await _bundleFactory
                     .CreateClientServerServerBundleAsync(state, channelName, channel)
                     .ConfigureAwait(false);
+                var advertisedEndpoint = (
+                    bundle.ClientServerServer
+                    ?? throw new InvalidOperationException(
+                        "ClientServer server identity is not initialized."
+                    )
+                ).AdvertisedEndpoint;
                 AwaitStateLane(
                     state.RunStateAsync(() =>
                     {
@@ -119,6 +125,13 @@ internal sealed class ZLinkChannelRuntimeManager(
                             );
                     })
                 );
+                await state
+                    .ListenerRecords.RecordAsync(
+                        ZLinkListenerKind.ClientServer,
+                        channelName,
+                        advertisedEndpoint
+                    )
+                    .ConfigureAwait(false);
             }
 
             if (channel.Subscriber is not null)
@@ -193,7 +206,9 @@ internal sealed class ZLinkChannelRuntimeManager(
                     outboundFlow?.Invoke(),
                     registration.TimeProvider
                 );
-                AwaitStateLane(
+                // The lane turn only registers the runtime and reads the local server; the
+                // identity snapshot is awaited after the turn ends.
+                var localServer = AwaitStateLane(
                     state.RunStateAsync(() =>
                     {
                         state.ClientServerClientRuntimes.Add(entry.Key, runtime);
@@ -203,25 +218,22 @@ internal sealed class ZLinkChannelRuntimeManager(
                                 runtime.RemoveManual
                             )
                         );
-                        if (
+                        return
                             !registration.Locations.Enabled
                             && channel.HasClientServerServer
                             && state.ClientServerServerBundles.TryGetValue(
                                 entry.Key,
-                                out var localServer
+                                out var server
                             )
-                        )
-                        {
-                            runtime.AddLocal(
-                                ((IRouterSocket)localServer.Socket).Options.LastEndpoint,
-                                localServer.ClientServerServer
-                                    ?? throw new InvalidOperationException(
-                                        "ClientServer server identity is not initialized."
-                                    )
-                            );
-                        }
+                            ? server.ClientServerServer
+                                ?? throw new InvalidOperationException(
+                                    "ClientServer server identity is not initialized."
+                                )
+                            : null;
                     })
                 );
+                if (localServer is not null)
+                    await runtime.AddLocalAsync(localServer).ConfigureAwait(false);
             }
 
             if (entry.Value.Publisher is null)
@@ -247,6 +259,16 @@ internal sealed class ZLinkChannelRuntimeManager(
                         );
                 })
             );
+            await state
+                .ListenerRecords.RecordAsync(
+                    ZLinkListenerKind.Fanout,
+                    entry.Key,
+                    publisherBundle.FanoutPublisher?.Endpoint
+                        ?? throw new InvalidOperationException(
+                            "Fanout publisher identity is not initialized."
+                        )
+                )
+                .ConfigureAwait(false);
         }
     }
 

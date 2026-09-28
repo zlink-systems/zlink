@@ -177,6 +177,9 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
   async tick(): Promise<void> {
     const state = this.requireState();
     const tick = state.nextTick();
+    for (const zoneId of state.expireStaleSnapshots()) {
+      console.log(`border snapshot expired zone=${state.zoneId} source=${zoneId} tick=${tick}`);
+    }
     const visible = state.visiblePlayers();
     // The Zone Spot owns border synchronization. Admit those events before
     // client pushes so a slow bound session cannot delay state shared with an
@@ -200,9 +203,6 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
           this.notifyActor(actor.actorId, new ZoneStateNotify(state.zoneId, tick, visible))
         )
     );
-    for (const zoneId of state.expireStaleSnapshots()) {
-      console.log(`border snapshot expired zone=${state.zoneId} source=${zoneId} tick=${tick}`);
-    }
   }
 
   async pushHumans(payload: unknown): Promise<void> {

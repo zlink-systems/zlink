@@ -72,11 +72,7 @@ export class ZLinkChannelOutboundOperations {
     throwIfAborted(signal);
     const dealer = await this.sockets.awaitClientDealerForOutbound(channelName, signal);
     if (dealer === undefined) {
-      return {
-        status: this.sockets.hasKnownClientServerTargets(channelName)
-          ? ZLinkSubmitStatus.RouteNotConnected
-          : ZLinkSubmitStatus.TargetNotFound
-      };
+      return { status: ZLinkSubmitStatus.RouteNotConnected };
     }
     const parts = encodeChannelEnvelopeParts(
       ZLinkChannelMessageKind.Command,
@@ -185,12 +181,8 @@ export class ZLinkChannelOutboundOperations {
         deadlineAtMs === undefined ? undefined : Math.floor(deadlineAtMs - performance.now());
       if (dealer === undefined || (remainingMs !== undefined && remainingMs <= 0)) {
         throw createInternalFrameworkException(
-          this.sockets.hasKnownClientServerTargets(channelName)
-            ? ZLinkFrameworkInternalErrorKind.RouteNotConnected
-            : ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
-          this.sockets.hasKnownClientServerTargets(channelName)
-            ? `Channel '${channelName}' has known ClientServer targets but no ready server.`
-            : `Channel '${channelName}' has no ready ClientServer server.`
+          ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+          `Channel '${channelName}' has no ready ClientServer server.`
         );
       }
       const serverRid = this.sockets.selectedClientServerRid(channelName, dealer);

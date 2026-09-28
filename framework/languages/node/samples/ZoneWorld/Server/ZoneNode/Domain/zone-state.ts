@@ -9,7 +9,6 @@ type BorderSnapshot = { tick: number; receivedAtTick: number; players: readonly 
 class ZoneState {
   private readonly residents = new Map<string, ResidentPlayer>();
   private readonly adjacent = new Map<string, BorderSnapshot>();
-  private readonly borderHighWater = new Map<string, number>();
   private currentTick = 0;
 
   constructor(readonly zoneId: ZoneId) {}
@@ -38,8 +37,8 @@ class ZoneState {
   }
 
   applyBorderSnapshot(fromZoneId: string, tick: number, players: readonly PlayerView[]): void {
-    if (tick <= (this.borderHighWater.get(fromZoneId) ?? -1)) return;
-    this.borderHighWater.set(fromZoneId, tick);
+    const current = this.adjacent.get(fromZoneId);
+    if (current !== undefined && tick <= current.tick) return;
     this.adjacent.set(fromZoneId, { tick, receivedAtTick: this.currentTick, players });
   }
 

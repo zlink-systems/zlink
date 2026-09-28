@@ -195,7 +195,7 @@ class ConversationSpot(
         val conversation = requireConversation()
         val assigned = assignment.assignForConversation(conversation.conversationId) ?: return
         notifications.publishAssignedToRoster(
-            directory.get(assigned.rosterActorId).actor,
+            directory.get(assigned.rosterActorId),
             conversation.snapshot(),
         )
         logger.info(

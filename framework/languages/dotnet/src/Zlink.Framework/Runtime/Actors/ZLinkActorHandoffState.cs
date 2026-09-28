@@ -2036,6 +2036,47 @@ internal sealed class ZLinkActorHandoffState(
         AwaitStateLane(_lane.RunAsync(CompleteAbortCaptureRestoreCore));
     }
 
+    internal IReadOnlyList<ZLinkActorHandoffFrame> ExpireSourceCapture(
+        ZLinkBackendActorRef sourceActor
+    )
+    {
+        TaskCompletionSource? completion = null;
+        var pending = AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                if (_sourcePhase == ZLinkActorSourceHandoffPhase.Retired)
+                    return Array.Empty<ZLinkActorHandoffFrame>();
+                if (
+                    _sourcePhase
+                    is not (
+                        ZLinkActorSourceHandoffPhase.Capturing
+                        or ZLinkActorSourceHandoffPhase.CutoverPending
+                    )
+                )
+                    throw new InvalidOperationException(
+                        $"Actor '{actorId}' does not have a source capture to expire."
+                    );
+                var frames = _frames
+                    .Concat(_sourceHoldFrames)
+                    .OrderBy(static frame => frame.ArrivalIndex)
+                    .ToArray();
+                _sourcePhase = ZLinkActorSourceHandoffPhase.Retired;
+                _staleSourceActor = sourceActor;
+                ClearSourceMembershipLeave();
+                _sourceIngressAdmission.ReleaseAll();
+                _sourceHoldAdmission.ReleaseAll();
+                _frames.Clear();
+                _sourceHoldFrames.Clear();
+                ClearMessageFollowRouteLocked();
+                completion = _sourceCompletion;
+                _sourceCompletion = null;
+                return frames;
+            })
+        );
+        completion?.TrySetResult();
+        return pending;
+    }
+
     private void CompleteAbortCaptureRestoreCore()
     {
         TaskCompletionSource? completion;

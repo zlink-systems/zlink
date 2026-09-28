@@ -19,6 +19,12 @@ final class ZLinkStreamReconnectDelay {
 
     private ZLinkStreamReconnectDelay() {}
 
+    static Duration firstBase(ZLinkStreamConnectorConfiguration.Reconnect reconnect) {
+        return reconnect.initialDelay().compareTo(reconnect.maxDelay()) <= 0
+                ? reconnect.initialDelay()
+                : reconnect.maxDelay();
+    }
+
     /**
      * The base delay for the attempt after one that waited {@code current}. Deterministic: jitter
      * is applied by {@link #jittered} at wait time and never feeds back into the base, so the
@@ -27,10 +33,8 @@ final class ZLinkStreamReconnectDelay {
     static Duration nextBase(
             Duration current, ZLinkStreamConnectorConfiguration.Reconnect reconnect) {
         long nextMillis = Math.round(current.toMillis() * reconnect.backoffFactor());
-        if (nextMillis <= 0) {
-            nextMillis = reconnect.initialDelay().toMillis();
-        }
-        return Duration.ofMillis(Math.min(nextMillis, reconnect.maxDelay().toMillis()));
+        return Duration.ofMillis(
+                Math.max(1, Math.min(nextMillis, reconnect.maxDelay().toMillis())));
     }
 
     /**

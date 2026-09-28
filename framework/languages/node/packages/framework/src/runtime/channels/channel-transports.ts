@@ -15,7 +15,6 @@ import {
 import type { ZLinkBackendMeshNode, ZLinkBackendSpot } from '../backend/contracts';
 import type { ZLinkFrameworkInternalErrorKind as ZLinkFrameworkInternalErrorKindType } from '../framework-errors-internal';
 import { ZLinkFrameworkException } from '../../contracts';
-import type { ZLinkFanoutListenerStatus } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
 import { ZLinkConfigurationException } from '../configuration';
@@ -73,7 +72,6 @@ export interface ZLinkChannelClientTransport {
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>
   ): ZLinkSubmitResult | Promise<ZLinkSubmitResult>;
-  getFanoutListenerStatus?(channelName: string): ZLinkFanoutListenerStatus;
 }
 
 export type ZLinkChannelClientTransportSource =
@@ -187,7 +185,6 @@ interface ZLinkChannelTransportRuntime {
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>
   ): Promise<ZLinkSubmitResult>;
-  getFanoutListenerStatus(channelName: string): ZLinkFanoutListenerStatus;
   canRouteChannel(routerChannelId: string): boolean;
   canRoutePacketChannel(routerChannelId: string): boolean;
   routeSubmit(

@@ -7,11 +7,7 @@ import type { ActorRef } from '../../contracts';
 import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
 import type { Message } from '../../contracts/Common/Message';
 import { throwIfAborted } from '../abort';
-import type {
-  ZLinkBackendActorRef,
-  ZLinkBackendActorSessionSendFence,
-  ZLinkBackendActorSessionNode
-} from '../backend/contracts';
+import type { ZLinkBackendActorRef, ZLinkBackendActorSessionNode } from '../backend/contracts';
 import {
   encodeStreamHeader,
   resolvePacketName,
@@ -439,8 +435,7 @@ export class ZLinkBoundSessionService {
       backendActorRef,
       requireBoundSessionGeneration(actorRef),
       [frame],
-      ZLINK_SEND_DONT_WAIT,
-      boundSessionSendFence(node, backendActorRef, actorRef)
+      ZLINK_SEND_DONT_WAIT
     );
   }
 
@@ -478,33 +473,4 @@ function toBoundSessionSendActorRef(actor: ActorRef): ZLinkBackendActorRef {
     actorId: actor.actorId,
     generation: actor.objectGeneration
   };
-}
-
-function boundSessionSendFence(
-  node: ZLinkBackendActorSessionNode,
-  backendActor: ZLinkBackendActorRef,
-  actor: ActorRef
-): ZLinkBackendActorSessionSendFence | undefined {
-  const internal = actor as ActorRef & {
-    readonly ownershipGeneration?: bigint;
-    readonly ownerLeaseGeneration?: bigint;
-    readonly ownerNodeGeneration?: bigint;
-  };
-  const ownerNodeGeneration =
-    internal.ownerNodeGeneration ?? node.actorNodeGeneration?.(backendActor);
-  if (
-    internal.ownershipGeneration === undefined ||
-    internal.ownershipGeneration <= 0n ||
-    internal.ownerLeaseGeneration === undefined ||
-    internal.ownerLeaseGeneration <= 0n ||
-    ownerNodeGeneration === undefined ||
-    ownerNodeGeneration <= 0n
-  ) {
-    return undefined;
-  }
-  return Object.freeze({
-    targetNodeGeneration: ownerNodeGeneration,
-    authorityOwnerGeneration: internal.ownershipGeneration,
-    ownerLeaseGeneration: internal.ownerLeaseGeneration
-  });
 }

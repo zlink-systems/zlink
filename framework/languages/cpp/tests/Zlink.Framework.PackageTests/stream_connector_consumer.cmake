@@ -60,11 +60,30 @@ foreach(path IN ITEMS "${connector_config_file}" "${connector_targets_file}")
     message(FATAL_ERROR "stream connector component file is missing: ${path}")
   endif()
 endforeach()
-if(NOT EXISTS "${consumer_install_prefix}/lib/cmake/zlink/zlinkConfig.cmake")
-  message(FATAL_ERROR "stream connector component is missing the Core CMake package")
-endif()
+foreach(forbidden_config IN ITEMS
+    lib/cmake/zlink/zlinkConfig.cmake
+    lib/cmake/zlink_cpp/zlink_cppConfig.cmake
+    share/zlink/zlinkConfig.cmake
+    share/zlink_cpp/zlink_cppConfig.cmake)
+  if(EXISTS "${consumer_install_prefix}/${forbidden_config}")
+    message(FATAL_ERROR "stream connector component contains: ${forbidden_config}")
+  endif()
+endforeach()
 
+file(READ "${connector_config_file}" connector_config_text)
 file(READ "${connector_targets_file}" connector_targets_text)
+foreach(forbidden_text IN ITEMS
+    "find_dependency(zlink "
+    "find_dependency(zlink)"
+    "find_dependency(zlink_cpp")
+  string(FIND "${connector_config_text}" "${forbidden_text}" forbidden_pos)
+  if(NOT forbidden_pos EQUAL -1)
+    message(FATAL_ERROR "stream connector package config must not include ${forbidden_text}")
+  endif()
+endforeach()
+if(connector_targets_text MATCHES "zlink::cpp")
+  message(FATAL_ERROR "stream connector export must not link zlink::cpp")
+endif()
 if(connector_targets_text MATCHES "ZLINK_LZ4_LIBRARY"
     OR connector_targets_text MATCHES "vcpkg_installed/.*/liblz4")
   message(FATAL_ERROR
@@ -77,22 +96,23 @@ if(EXISTS "${consumer_install_prefix}/${ZLINK_FRAMEWORK_CPP_FRAMEWORK_LIBRARY_PA
 endif()
 foreach(required_path IN ITEMS
     "${consumer_install_prefix}/${ZLINK_FRAMEWORK_CPP_UNREAL_LIBRARY_PATH}"
-    "${consumer_install_prefix}/${ZLINK_FRAMEWORK_CPP_STREAM_LIBRARY_PATH}"
-    "${consumer_install_prefix}/${ZLINK_FRAMEWORK_CPP_BINDING_LIBRARY_PATH}"
-    # LZ4 is not staged here on purpose: 6ba3fd6df5 moved the public C++
-    # distribution to a source archive that consumes LZ4 through Findlz4
-    # (config first, system fallback) instead of copying the library. The
-    # producer-specific-path check above is what guards that boundary.
-    "${consumer_install_prefix}/${ZLINK_FRAMEWORK_CPP_CORE_RUNTIME_PATH}")
+    "${consumer_install_prefix}/${ZLINK_FRAMEWORK_CPP_STREAM_LIBRARY_PATH}")
   if(NOT EXISTS "${required_path}")
     message(FATAL_ERROR "stream connector component is missing: ${required_path}")
   endif()
 endforeach()
+foreach(forbidden_path IN ITEMS
+    "${consumer_install_prefix}/${ZLINK_FRAMEWORK_CPP_BINDING_LIBRARY_PATH}"
+    "${consumer_install_prefix}/${ZLINK_FRAMEWORK_CPP_CORE_RUNTIME_PATH}")
+  if(EXISTS "${forbidden_path}")
+    message(FATAL_ERROR "stream connector component contains: ${forbidden_path}")
+  endif()
+endforeach()
 if(DEFINED ZLINK_FRAMEWORK_CPP_CORE_LINK_LIBRARY_PATH
-    AND NOT EXISTS
+    AND EXISTS
       "${consumer_install_prefix}/${ZLINK_FRAMEWORK_CPP_CORE_LINK_LIBRARY_PATH}")
   message(FATAL_ERROR
-    "stream connector component is missing: "
+    "stream connector component contains: "
     "${consumer_install_prefix}/${ZLINK_FRAMEWORK_CPP_CORE_LINK_LIBRARY_PATH}")
 endif()
 

@@ -7,21 +7,33 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Supplier;
 
 final class ZLinkStreamPendingRequests {
     private final Map<Long, PendingRequest> requests = new ConcurrentHashMap<>();
 
-    CompletableFuture<ZLinkStreamEncodedPayload> add(
-            long requestSeq,
-            String packetName,
-            Duration timeout,
-            ScheduledExecutorService scheduler) {
+    CompletableFuture<ZLinkStreamEncodedPayload> add(long requestSeq, String packetName) {
         CompletableFuture<ZLinkStreamEncodedPayload> pending = new CompletableFuture<>();
         requests.put(requestSeq, new PendingRequest(packetName, pending));
+        pending.whenComplete(
+                (reply, ex) -> {
+                    if (pending.isCancelled()) {
+                        requests.remove(requestSeq);
+                    }
+                });
+        return pending;
+    }
+
+    void startTimeout(long requestSeq, Duration timeout, ScheduledExecutorService scheduler) {
+        PendingRequest request = requests.get(requestSeq);
+        if (request == null) {
+            return;
+        }
+        CompletableFuture<ZLinkStreamEncodedPayload> pending = request.future();
         var timeoutTask =
                 scheduler.schedule(
                         () -> {
-                            if (requests.remove(requestSeq) != null) {
+                            if (requests.remove(requestSeq, request)) {
                                 pending.completeExceptionally(
                                         ZLinkStreamException.of(
                                                 ZLinkStreamErrorCode.REQUEST_TIMEOUT,
@@ -35,21 +47,20 @@ final class ZLinkStreamPendingRequests {
         pending.whenComplete(
                 (reply, ex) -> {
                     timeoutTask.cancel(false);
-                    if (pending.isCancelled()) {
-                        requests.remove(requestSeq);
-                    }
                 });
-        return pending;
     }
 
-    void complete(long requestSeq, ZLinkStreamEncodedPayload payload) {
-        PendingRequest request = requests.remove(requestSeq);
-        CompletableFuture<ZLinkStreamEncodedPayload> pending =
-                request == null ? null : request.future();
-        if (pending == null) {
+    void complete(long requestSeq, Supplier<ZLinkStreamEncodedPayload> decode) {
+        PendingRequest request = requests.get(requestSeq);
+        if (request == null) {
+            return;
+        }
+        ZLinkStreamEncodedPayload payload = decode.get();
+        if (!requests.remove(requestSeq, request)) {
             payload.payload().close();
             return;
         }
+        CompletableFuture<ZLinkStreamEncodedPayload> pending = request.future();
         ZLinkStreamEncodedPayload reply =
                 new ZLinkStreamEncodedPayload(
                         request.packetName(),
@@ -73,12 +84,19 @@ final class ZLinkStreamPendingRequests {
     }
 
     /**
-     * Fails every pending request. Spec 32 6 has the connection loss fail them all, and 9.2 has the
-     * caller read the code, so a cause that does not already carry one is wrapped as {@code
-     * DISCONNECTED}.
+     * Fails every pending request because the connection ended. Spec 32 9: they fail with {@code
+     * Disconnected} whatever ended the connection; the cause stays in the close reason and in the
+     * exception's cause.
      */
     void failAll(Throwable ex) {
-        Throwable failure = coded(ex);
+        ZLinkStreamException failure =
+                ex instanceof ZLinkStreamException coded
+                                && coded.errorCode() == ZLinkStreamErrorCode.DISCONNECTED
+                        ? coded
+                        : ZLinkStreamException.of(
+                                ZLinkStreamErrorCode.DISCONNECTED,
+                                "connection ended: " + coded(ex).getMessage(),
+                                ex);
         for (Map.Entry<Long, PendingRequest> entry : requests.entrySet()) {
             if (requests.remove(entry.getKey()) != null) {
                 entry.getValue().future().completeExceptionally(failure);
@@ -86,9 +104,9 @@ final class ZLinkStreamPendingRequests {
         }
     }
 
-    private static Throwable coded(Throwable ex) {
-        if (ex instanceof ZLinkStreamException) {
-            return ex;
+    static ZLinkStreamException coded(Throwable ex) {
+        if (ex instanceof ZLinkStreamException coded) {
+            return coded;
         }
         String message =
                 ex.getMessage() == null || ex.getMessage().isBlank()

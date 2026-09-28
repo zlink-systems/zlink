@@ -5,9 +5,12 @@
 #include <zlink/framework/contracts/configuration/module.hpp>
 #include <zlink/framework/contracts/handlers/handler_registry.hpp>
 #include "runtime/dispatch/application_job_queue.hpp"
+#include "runtime/diagnostics/listener_status_registry.hpp"
 
 #include <atomic>
+#include <map>
 #include <memory>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -26,7 +29,9 @@ class channel_host_service_t final : public hosted_service_t
                             std::vector<channel_snapshot_t> channels,
                             handler_registry_t &handlers,
                             serializer_registry_t &serializers,
-                            std::shared_ptr<application_job_queue_t> application_jobs = {});
+                            std::map<std::string, std::string> advertise_hosts,
+                            std::shared_ptr<application_job_queue_t> application_jobs = {},
+                            std::shared_ptr<listener_status_registry_t> listener_statuses = {});
     ~channel_host_service_t () override;
 
     task_t<void> start (service_provider_t &services) override;
@@ -39,10 +44,12 @@ class channel_host_service_t final : public hosted_service_t
 
     message_bus_t _bus;
     std::vector<channel_snapshot_t> _channels;
+    std::map<std::string, std::string> _advertise_hosts;
     handler_registry_t *_handlers;
     serializer_registry_t *_serializers;
     std::shared_ptr<zlink::context_t> _core_context;
     std::shared_ptr<application_job_queue_t> _application_jobs;
+    std::shared_ptr<listener_status_registry_t> _listener_statuses;
     service_provider_t *_services = nullptr;
     std::atomic_bool _stop{false};
     std::vector<std::unique_ptr<server_loop_t>> _loops;

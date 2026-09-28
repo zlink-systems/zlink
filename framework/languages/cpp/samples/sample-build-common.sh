@@ -1,25 +1,27 @@
 #!/usr/bin/env bash
 
-# One owner for "where do this runner's binaries come from". Two trees exist:
+# One owner for "where do this runner's binaries come from". The explicit
+# ZLINK_CPP_BUILD_DIR overrides either default. Two trees exist:
 #
-#   repository  samples/ sits inside framework/languages/cpp; the framework's
-#               own build tree (with tests) builds every sample, and the
-#               canonical package versions are reapplied before each build so a
-#               stale cache cannot select a second zlink_cpp/Core provenance.
-#   package     samples/ is the root of the downloaded samples archive;
-#               bootstrap.cmake configured samples/build against the installed
-#               framework and the runner only builds its own targets there.
+#   repository  samples/ sits inside framework/languages/cpp. Its own build
+#               tree (with tests) is the fallback when bootstrap.cmake has not
+#               configured samples/build. The canonical package versions are
+#               reapplied before each repository build.
+#   package     bootstrap.cmake configured samples/build against the installed
+#               framework; the runner only builds its own targets there.
 #
 # Both set BUILD_DIR (preferring ZLINK_CPP_BUILD_DIR) and BIN_DIR.
 CPP_SAMPLES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-zlink_cpp_sample_tree_is_repository() {
+zlink_cpp_sample_uses_repository_build() {
   local cpp_root="$CPP_SAMPLES_DIR/.."
-  [[ -f "$cpp_root/CMakeLists.txt" && -f "$cpp_root/framework/include/zlink/framework.hpp" ]]
+  [[ ( -n "${ZLINK_CPP_BUILD_DIR:-}" || ! -f "$CPP_SAMPLES_DIR/build/CMakeCache.txt" ) \
+    && -f "$cpp_root/CMakeLists.txt" \
+    && -f "$cpp_root/framework/include/zlink/framework.hpp" ]]
 }
 
 zlink_cpp_sample_prepare_build() {
-  if zlink_cpp_sample_tree_is_repository; then
+  if zlink_cpp_sample_uses_repository_build; then
     zlink_cpp_sample_prepare_repository_build "$(cd "$CPP_SAMPLES_DIR/.." && pwd)"
   else
     zlink_cpp_sample_prepare_package_build
@@ -116,14 +118,14 @@ zlink_cpp_sample_prepare_repository_build() {
 # The package tree has no framework tests, so the gate is reported as skipped
 # rather than silently passed.
 zlink_cpp_sample_framework_test_targets() {
-  if zlink_cpp_sample_tree_is_repository; then
+  if zlink_cpp_sample_uses_repository_build; then
     printf '%s\n' "$@"
   fi
 }
 
 zlink_cpp_sample_run_framework_tests() {
   local regex="$1"
-  if ! zlink_cpp_sample_tree_is_repository; then
+  if ! zlink_cpp_sample_uses_repository_build; then
     echo "framework tests: skipped (package tree; no framework test targets)"
     return 0
   fi

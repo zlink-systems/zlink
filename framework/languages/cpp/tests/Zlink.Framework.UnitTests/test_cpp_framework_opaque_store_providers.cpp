@@ -92,7 +92,13 @@ class creation_terminal_failure_store_t final : public location_store_t
 
     task_t<store_read_result_t> read (store_key_t key) override
     {
-        return inner.read (std::move (key));
+        const auto terminal_key = key.value.starts_with (std::string ("creation-terminal") + '\0');
+        auto result = inner.read (std::move (key));
+        if (terminal_key) {
+            if (const auto *missing = std::get_if<store_missing_t> (&result.result ().value ()))
+                terminal_read_store_now = missing->store_now;
+        }
+        return result;
     }
     task_t<store_scan_result_t> scan (store_scan_request_t request) override
     {
@@ -111,6 +117,8 @@ class creation_terminal_failure_store_t final : public location_store_t
             return task_t<store_write_result_t> (result_t<store_write_result_t>::failure (
               framework_error_kind_t::internal_failure, "provider failed between writes"));
         auto applied = inner.write (std::move (request));
+        if (const auto *written = std::get_if<store_write_applied_t> (&applied.result ().value ()))
+            terminal_write_store_now = written->store_now;
         if (fault == fault_t::after_commit) {
             applied.result ().value ();
             return task_t<store_write_result_t> (result_t<store_write_result_t>::failure (
@@ -123,6 +131,8 @@ class creation_terminal_failure_store_t final : public location_store_t
     fault_t fault = fault_t::none;
     unsigned writes = 0;
     std::optional<store_write_request_t> attempted;
+    std::optional<std::chrono::system_clock::time_point> terminal_read_store_now;
+    std::optional<std::chrono::system_clock::time_point> terminal_write_store_now;
 };
 
 class CreationTerminalTest : public ::testing::TestWithParam<completion_kind_t>
@@ -218,18 +228,30 @@ class CreationTerminalTest : public ::testing::TestWithParam<completion_kind_t>
         ASSERT_NE (terminal, nullptr);
         EXPECT_EQ (terminal_mutations, 1u);
         EXPECT_EQ (terminal->bytes, publication.terminal_envelope);
+        ASSERT_TRUE (provider.terminal_read_store_now);
+        ASSERT_TRUE (terminal->retention);
+        const auto target_expiry = std::chrono::time_point_cast<std::chrono::milliseconds> (
+          publication.operation_deadline + 5min);
+        EXPECT_EQ (*terminal->retention, std::chrono::ceil<std::chrono::milliseconds> (
+                                           target_expiry - *provider.terminal_read_store_now));
         EXPECT_TRUE (authority && capacity && terminal_condition);
         const auto raw = provider.inner.read ({terminal_key}).result ().value ();
         const auto *raw_terminal = std::get_if<store_found_t> (&raw);
         ASSERT_NE (raw_terminal, nullptr);
         EXPECT_EQ (raw_terminal->value.bytes, publication.terminal_envelope);
+        ASSERT_TRUE (raw_terminal->value.expires_at);
         provider_location_repository_t reopened (provider);
         const auto stored =
           reopened.read_creation_terminal (publication.operation).result ().value ();
         ASSERT_TRUE (stored);
         EXPECT_EQ (stored->terminal_envelope, publication.terminal_envelope);
-        EXPECT_EQ (stored->expires_at, std::chrono::time_point_cast<std::chrono::milliseconds> (
-                                         publication.operation_deadline + 5min));
+        ASSERT_TRUE (provider.terminal_write_store_now);
+        // Location runtime §7 retains through the target instant. Location Store §3
+        // rounds retention up to milliseconds; the provider's later StoreNow
+        // contributes only the read-to-write interval and less than 1 ms.
+        EXPECT_GE (stored->expires_at, target_expiry);
+        EXPECT_LT (stored->expires_at - target_expiry,
+                   *provider.terminal_write_store_now - *provider.terminal_read_store_now + 1ms);
         const auto authority_result =
           reopened.read_authority (actor_authority_key (reserve_request.key.global_id))
             .result ()

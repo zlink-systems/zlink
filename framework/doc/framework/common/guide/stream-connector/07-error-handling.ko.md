@@ -177,14 +177,18 @@ frame을 해석하지 못했거나 서버가 request와 무관하게 보낸 오�
 | `ConfigurationError` · `ValidationFailed` | 실패 | 유지 | 하지 않는다 |
 | `RequestTimeout` | 그 request만 실패 | 유지 | 하지 않는다 |
 | `ConnectTimeout` · `TlsValidationFailed` | 연결 실패 | 끊김 | 시도 정책을 적용한다 |
-| `Disconnected` · `SendFailed` | 진행 중인 호출 실패 | transport가 끊겼으면 끊김 | 켜져 있으면 적용한다 |
-| `FrameDecodeFailed`(frame·header) · `FrameTooLarge` | 그 frame을 전달하지 않고 대기 중인 request를 실패시킴 | 종료 | 켜져 있으면 적용한다 |
+| `Disconnected` — transport 끊김 | 진행 중인 호출 실패 | 끊김, 종료 사유는 transport 오류 | 켜져 있으면 적용한다 |
+| 종료로 생긴 `Disconnected` | 진행 중인 호출 실패 | 종료, 종료 사유는 client가 닫음 | 하지 않는다 |
+| `SendFailed` — request sequence 고갈 | 그 호출만 실패 | 유지 | 하지 않는다 |
+| `SendFailed` — transport 쓰기 실패 | 그 쓰기의 호출만 `SendFailed`로 실패하고 나머지 진행 중인 호출은 `Disconnected`로 실패 | 종료, 종료 사유는 `TransportError` | 켜져 있으면 적용한다 |
+| `FrameDecodeFailed`(frame·header) · `FrameTooLarge` | 그 frame을 전달하지 않고 대기 중인 request를 실패시킴 | 종료, 종료 사유는 프로토콜 오류 | 켜져 있으면 적용한다 |
 | `CompressionFailed` | 그 송신만 실패 | 유지 | 하지 않는다 |
 | `DecompressionFailed` | 그 수신 packet 또는 대기 중인 request만 실패 | 유지 | 하지 않는다 |
 | `UserCallbackFailed` · `RemoteError` | 오류 이벤트나 관련 호출로 전달 | 유지 | 하지 않는다 |
 
-연결이 끝나는 쪽은 종료 사유가 transport 오류로 남는다. 종료 사유를 읽는 방법은
-[연결 생명주기](06-lifecycle.ko.md)가 다룬다.
+연결이 끝나서 실패하는 진행 중인 호출은 원인과 관계없이 `Disconnected`로 실패하고, 원인은 종료 사유로
+남는다. transport 쓰기 실패로 연결이 끝나면 그 쓰기의 호출만 `SendFailed`로 실패한다.
+종료 사유를 읽는 방법은 [연결 생명주기](06-lifecycle.ko.md)가 다룬다.
 
 ## 5. 자주 만나는 처리
 
@@ -196,7 +200,8 @@ frame을 해석하지 못했거나 서버가 request와 무관하게 보낸 오�
 다만 서버가 이미 처리한 뒤 응답만 늦어졌을 수 있으므로, 두 번 처리되면 안 되는 요청은 서버 쪽에서
 같은 요청을 구분할 수 있게 만든다.
 
-**수신 한도 초과.** 받은 payload가 수신 한도를 넘으면 그 frame을 전달하지 않고 연결이 끝난다.
+**수신 한도 초과.** 받은 payload가 수신 한도를 넘으면 그 frame을 전달하지 않고 연결이 끝나며,
+종료 사유는 프로토콜 오류다.
 서버가 더 큰 packet을 보낼 수 있는 구성이라면
 [Connector 옵션](03-connector-options.ko.md)에서 수신 한도를 키운다.
 

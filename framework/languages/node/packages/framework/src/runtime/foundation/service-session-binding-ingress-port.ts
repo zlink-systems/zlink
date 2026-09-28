@@ -3,25 +3,17 @@ export interface ServiceSessionBindingRetainedDelivery {
   fail(error: unknown): void;
 }
 
-export interface ServiceSessionBindingAdmissionClaim {
-  readonly actorId: string;
-  readonly objectGeneration: bigint;
-  readonly actorNodeRid: string;
-  readonly actorNodeGeneration: bigint;
-  readonly authorityOwnerGeneration: bigint;
-  readonly ownerLeaseGeneration: bigint;
-  readonly producerNodeRid: string;
-  readonly producerNodeGeneration: bigint;
-  readonly sessionIdentity: string;
-  readonly bindingGeneration: bigint;
-}
-
 export type ServiceSessionBindingAdmissionResult = 'passThrough' | 'retained' | 'rejected';
 
 export interface ServiceSessionBindingIngressPort {
   actorSlot(actorId: string, sessionRid: string): Promise<number | undefined>;
+  /**
+   * Holds a current-binding push while its relocation seal is open
+   * (Session–Actor binding §8.1). The caller has already decided that the push
+   * names the current binding.
+   */
   retainOutbound(
-    claim: ServiceSessionBindingAdmissionClaim,
+    actorId: string,
     delivery: ServiceSessionBindingRetainedDelivery
   ): Promise<ServiceSessionBindingAdmissionResult>;
   clearOutbound(actorId: string, error: unknown): Promise<void>;

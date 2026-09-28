@@ -317,7 +317,7 @@ TEST (CppFrameworkSampleParity, BingoRoomClosesAfterItsLastActorLeaves)
 
     EXPECT_NE (room.find ("if (actors.empty () && observers.empty ())"), std::string::npos)
       << "Bingo room must close only after both player and observer occupancy are empty";
-    EXPECT_NE (room.find ("co_await _context->close ()"), std::string::npos)
+    EXPECT_NE (room.find ("_context->close ()"), std::string::npos)
       << "Bingo room must request spot closure after its last actor leaves";
 }
 
@@ -560,7 +560,7 @@ TEST (CppFrameworkSampleParity, SamplesConformToLifecycleAndDeliveryContracts)
     const auto shoppingmall =
       read_text_file (samples / "ShoppingMall/Server/OrderWorkflow/main.cpp");
     EXPECT_NE (shoppingmall.find (".recreate_on_relocation ()"), std::string::npos);
-    EXPECT_NE (shoppingmall.find ("co_await _context.close ()"), std::string::npos);
+    EXPECT_NE (shoppingmall.find ("_context.close ()"), std::string::npos);
 
     const auto zoneworld = read_text_file (samples / "ZoneWorld/Server/ZoneNode/main.cpp");
     const auto zoneworld_relocation =

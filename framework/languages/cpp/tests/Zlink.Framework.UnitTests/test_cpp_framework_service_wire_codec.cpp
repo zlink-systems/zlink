@@ -1276,7 +1276,7 @@ int main ()
       8,
       {0xb1},
       9,
-      {protocol::session_relocation_route_action_t::commit, 10, 11, {0xd1}, 12, 0}};
+      {protocol::session_relocation_route_action_t::commit, 10, 11, {0xd1}, 12, 0, 13}};
     const auto encoded_session_route = protocol::encode_session_relocation_route (session_route);
     assert (encoded_session_route
             == from_hex ("5a4d012c00"
@@ -1286,8 +1286,8 @@ int main ()
                          "056163746f72000000000000000601a1"
                          "0000000000000007056f776e6572"
                          "000000000000000801b10000000000000009"
-                         "01001a000000000000000a000000000000000b01d1"
-                         "000000000000000c"));
+                         "010022000000000000000a000000000000000b01d1"
+                         "000000000000000c000000000000000d"));
     assert (protocol::decode_session_relocation_route (encoded_session_route) == session_route);
     auto abort_session_route = session_route;
     abort_session_route.sender_role = protocol::relocation_role_t::source;
@@ -1368,11 +1368,12 @@ int main ()
           seal.binding_generation,
           {protocol::session_relocation_route_action_t::commit,
            ordinal ("sourceAuthorityOwnerGeneration"), ordinal ("targetAuthorityOwnerGeneration"),
-           bytes ("targetNodeRid"), ordinal ("targetNodeGeneration"), 0}};
+           bytes ("targetNodeRid"), ordinal ("targetNodeGeneration"), 0,
+           ordinal ("targetOwnerLeaseGeneration")}};
         auto abort = commit;
         abort.sender_role = protocol::relocation_role_t::source;
         abort.route = {protocol::session_relocation_route_action_t::abort, 0, 0, {}, 0,
-                       ordinal ("sourceAuthorityOwnerGeneration")};
+                       ordinal ("sourceAuthorityOwnerGeneration"),         0};
 
         assert (protocol::encode_session_relocation_seal (seal)
                 == canonical ("sessionRelocationSeal"));

@@ -202,32 +202,6 @@ internal static class Program
             }
         );
         app.MapPost(
-            "/self-check/relocation/{orderId}/arm",
-            async (
-                string orderId,
-                ICommerceStateStore commerce,
-                CancellationToken cancellationToken
-            ) =>
-            {
-                await commerce.ArmPlannedRelocationReplayAsync(orderId, cancellationToken);
-                return Results.Ok();
-            }
-        );
-        app.MapPost(
-            "/self-check/relocation-ready/{anchorId}",
-            async (
-                string anchorId,
-                IZLinkSpotClient spotClient,
-                CancellationToken cancellationToken
-            ) =>
-            {
-                var ready = await spotClient
-                    .RequestToSpot(anchorId, new SignalPlannedRelocationReadyReq())
-                    .Async<SignalPlannedRelocationReadyRes>(cancellationToken);
-                return Results.Ok(ready);
-            }
-        );
-        app.MapPost(
             "/self-check/workflow/{orderId}/close",
             async (
                 string orderId,

@@ -20,7 +20,9 @@ internal sealed class ZLinkSpotTimerRegistry(
     private readonly bool _ownsScheduler = scheduler is null;
     private readonly ZLinkStateLane _lane = new();
     private readonly List<ZLinkSpotTimerRegistration> _timers = [];
-    private Task? _finalization;
+    private Task _finalization = Task.CompletedTask;
+    private readonly List<ZLinkSpotTimerRegistration> _undisposedTimers = [];
+    private bool _schedulerDisposed;
     private bool _closed;
     private bool _frozen = restorePending;
     private bool _restorePending = restorePending;
@@ -34,19 +36,21 @@ internal sealed class ZLinkSpotTimerRegistry(
 
     private Task GetOrStartFinalization()
     {
-        if (_finalization is not null)
-            return _finalization;
-
-        _closed = true;
-        var timers = _timers.ToArray();
-        _timers.Clear();
-        var completion = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        _finalization = completion.Task;
+        if (!_closed)
+        {
+            _closed = true;
+            _undisposedTimers.AddRange(_timers);
+            _timers.Clear();
+        }
         using (ExecutionContext.SuppressFlow())
-            _ = Task.Run(() => CompleteFinalizationAsync(timers, completion));
-        return _finalization;
+            return _finalization = _finalization
+                .ContinueWith(
+                    _ => ReleaseUndisposedAsync(),
+                    CancellationToken.None,
+                    TaskContinuationOptions.None,
+                    TaskScheduler.Default
+                )
+                .Unwrap();
     }
 
     public ValueTask<IZLinkTimer> AddAsync(
@@ -428,14 +432,32 @@ internal sealed class ZLinkSpotTimerRegistry(
         return timerOptions;
     }
 
-    private static async Task DisposeTimersAsync(IReadOnlyList<ZLinkSpotTimerRegistration> timers)
+    // Timer registrations whose disposal failed stay owned; the next
+    // DisposeAsync call retries only those (spec 06-spot-address-messaging §7
+    // step 3 resume). A failed release is never cached as the terminal result.
+    private async Task ReleaseUndisposedAsync()
     {
         List<Exception>? failures = null;
-        foreach (var registration in timers)
-        {
+        var remaining = new List<ZLinkSpotTimerRegistration>();
+        foreach (var registration in _undisposedTimers)
             try
             {
                 await registration.Timer.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                remaining.Add(registration);
+                (failures ??= []).Add(exception);
+            }
+        _undisposedTimers.Clear();
+        _undisposedTimers.AddRange(remaining);
+
+        if (_ownsScheduler && !_schedulerDisposed)
+        {
+            try
+            {
+                await _scheduler.DisposeAsync().ConfigureAwait(false);
+                _schedulerDisposed = true;
             }
             catch (Exception exception)
             {
@@ -447,41 +469,6 @@ internal sealed class ZLinkSpotTimerRegistry(
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
         if (failures is { Count: > 1 })
             throw new AggregateException(failures);
-    }
-
-    private async Task CompleteFinalizationAsync(
-        IReadOnlyList<ZLinkSpotTimerRegistration> timers,
-        TaskCompletionSource completion
-    )
-    {
-        List<Exception>? failures = null;
-        try
-        {
-            await DisposeTimersAsync(timers).ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            (failures ??= []).Add(exception);
-        }
-
-        if (_ownsScheduler)
-        {
-            try
-            {
-                await _scheduler.DisposeAsync().ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                (failures ??= []).Add(exception);
-            }
-        }
-
-        if (failures is null)
-            completion.TrySetResult();
-        else if (failures is [var failure])
-            completion.TrySetException(failure);
-        else
-            completion.TrySetException(new AggregateException(failures));
     }
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>

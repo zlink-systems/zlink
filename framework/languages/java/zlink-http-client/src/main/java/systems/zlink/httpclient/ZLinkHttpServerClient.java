@@ -2,24 +2,14 @@
 package systems.zlink.httpclient;
 
 import java.util.Objects;
-import java.util.function.Consumer;
 
 public final class ZLinkHttpServerClient implements AutoCloseable {
     private final ZLinkHttpClient client;
     private final ZLinkHttpExecutionTurn executionTurn;
 
-    public ZLinkHttpServerClient(
-            ZLinkHttpClient client,
-            ZLinkHttpExecutionTurn executionTurn,
-            Consumer<Throwable> errorObserver) {
+    public ZLinkHttpServerClient(ZLinkHttpClient client, ZLinkHttpExecutionTurn executionTurn) {
         this.client = Objects.requireNonNull(client, "client");
         this.executionTurn = Objects.requireNonNull(executionTurn, "executionTurn");
-        Objects.requireNonNull(errorObserver, "errorObserver");
-    }
-
-    public static ZLinkHttpServerClient create(ZLinkHttpClient client) {
-        return new ZLinkHttpServerClient(
-                client, new ZLinkFrameworkHttpExecutionTurn(), Throwable::printStackTrace);
     }
 
     public ZLinkHttpServerRequestBuilder get(String path) {

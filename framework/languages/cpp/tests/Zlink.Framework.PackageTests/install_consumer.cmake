@@ -94,10 +94,6 @@ endforeach()
 foreach(required_text IN ITEMS
     "find_dependency(Threads)"
     "find_dependency(nlohmann_json)"
-    # zlink_cpp is found through CMake own CONFIG search, not a hardcoded
-    # relative include: the staged configs are not necessarily siblings of
-    # this one. See zlink_framework_cppConfig.cmake.in for why.
-    "find_dependency(zlink_cpp"
     "zlink_stream_connector_cppTargets.cmake")
   string(FIND "${connector_config_text}" "${required_text}" required_pos)
   if(required_pos EQUAL -1)
@@ -105,12 +101,18 @@ foreach(required_text IN ITEMS
   endif()
 endforeach()
 foreach(forbidden_text IN ITEMS
-    "zlink_framework_cppTargets.cmake")
+    "zlink_framework_cppTargets.cmake"
+    "find_dependency(zlink "
+    "find_dependency(zlink)"
+    "find_dependency(zlink_cpp")
   string(FIND "${connector_config_text}" "${forbidden_text}" forbidden_pos)
   if(NOT forbidden_pos EQUAL -1)
     message(FATAL_ERROR "stream connector package config must not include ${forbidden_text}")
   endif()
 endforeach()
+if(connector_targets_text MATCHES "zlink::cpp")
+  message(FATAL_ERROR "stream connector package export must not link zlink::cpp")
+endif()
 foreach(required_target IN ITEMS
     "zlink::framework")
   if(NOT framework_targets_text MATCHES "${required_target}")

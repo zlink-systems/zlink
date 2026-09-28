@@ -89,6 +89,14 @@ final class ZLinkSpotRetireControl {
         }
 
         @Override
+        public CompletionStage<Settlement> settle(
+                RoutingId targetNodeRid, Fence fence, java.time.Instant preserveAt) {
+            return CompletableFuture.failedFuture(
+                    new UnsupportedOperationException(
+                            "legacy relocation control has no authority settlement"));
+        }
+
+        @Override
         public CompletionStage<Void> abort(RoutingId targetNodeRid, Fence fence, Duration timeout) {
             return invoke(targetNodeRid, fence, encodeFence(ABORT, fence), timeout);
         }

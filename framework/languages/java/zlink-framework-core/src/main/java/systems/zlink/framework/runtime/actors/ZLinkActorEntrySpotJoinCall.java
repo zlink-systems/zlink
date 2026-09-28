@@ -93,7 +93,7 @@ final class ZLinkActorEntrySpotJoinCall implements ZLinkActorJoinCall {
         rejectSameGateWait();
         Message requestPart = Message.from(request);
         try {
-            return manage(
+            CompletionStage<ZLinkActorJoinOutcome> outcome =
                     targetResolver
                             .resolve(timeout)
                             .thenCompose(
@@ -177,9 +177,12 @@ final class ZLinkActorEntrySpotJoinCall implements ZLinkActorJoinCall {
                                                                                             .completedFuture(
                                                                                                     decoded);
                                                                         });
-                                                            })));
-        } finally {
+                                                            }));
+            // The Join owns the request Message until its target submission stage ends.
+            return manage(outcome.whenComplete((ignored, failure) -> requestPart.close()));
+        } catch (RuntimeException error) {
             requestPart.close();
+            throw error;
         }
     }
 

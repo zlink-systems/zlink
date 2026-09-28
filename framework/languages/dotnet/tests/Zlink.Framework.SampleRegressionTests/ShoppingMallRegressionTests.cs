@@ -331,7 +331,7 @@ public sealed partial class RegressionTests
             StringComparison.Ordinal
         );
         Assert.Contains(
-            "await selfChecks.ArmPlannedRelocationReplayAsync(OrderId(), cancellationToken);",
+            "await selfChecks.ArmPlannedRelocationReplayAsync(orderId, cancellationToken);",
             workflowHostFactory,
             StringComparison.Ordinal
         );
@@ -507,7 +507,23 @@ public sealed partial class RegressionTests
             commerceWorkflowRouter,
             StringComparison.Ordinal
         );
-        Assert.Contains("CloseIfTerminalAsync", workflowSpot, StringComparison.Ordinal);
+        Assert.Contains("CloseIfTerminal", workflowSpot, StringComparison.Ordinal);
+        Assert.Contains(
+            "new RebuildOrderProjectionReq(orderId",
+            commerceApi,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "state => CloseIfTerminalAsync(state, CancellationToken.None)",
+            workflowSpot,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "CloseOrderWorkflowForPlannedRelocation",
+            messages,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain("OrderNotClosed", workflowHostFactory, StringComparison.Ordinal);
         Assert.Contains(
             "Context.CloseAsync(cancellationToken)",
             workflowSpot,
@@ -731,28 +747,43 @@ public sealed partial class RegressionTests
         var shellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.sh"));
         var powershellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.ps1"));
 
-        // The relocated object is the planned-relocation fixture Spot, not the
-        // order Instance Spot. When normal placement co-locates the two, the
-        // relocate endpoint retires the order routing endpoint first, so the
-        // order id has no owner left for either runner to observe.
+        // Both runners require the order Instance Spot to acquire target authority.
         Assert.Contains(
-            "wait_relocated_anchor_owner \"${RELOCATION_ANCHOR_ID}\"",
+            "wait_relocated_order_owner \"${RELOCATION_ORDER_ID}\"",
             shellRunner,
             StringComparison.Ordinal
         );
         Assert.Contains(
-            "$anchorId = [string]$result.AnchorId",
-            powershellRunner,
+            "location.NodeRid != local.NodeRid",
+            ReadSource(
+                Path.Combine(
+                    sampleRoot,
+                    "Server",
+                    "OrderWorkflow",
+                    "OrderWorkflowServerHostFactory.cs"
+                )
+            ),
             StringComparison.Ordinal
         );
-        Assert.Contains("/self-check/owner/$anchorId", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain(
-            "/self-check/owner/$OrderId",
-            powershellRunner,
+        Assert.Contains(
+            "TryConsumePlannedRelocationReplayAsync",
+            ReadSource(
+                Path.Combine(
+                    sampleRoot,
+                    "Server",
+                    "OrderWorkflow",
+                    "Infrastructure",
+                    "ZLink",
+                    "Spots",
+                    "OrderWorkflowSpot",
+                    "OrderWorkflowSpot.cs"
+                )
+            ),
             StringComparison.Ordinal
         );
+        Assert.Contains("/self-check/owner/$OrderId", powershellRunner, StringComparison.Ordinal);
 
-        // Only the relocated fixture's replay drives the checkpointed order to
+        // Only the relocated order's initialization drives the checkpointed order to
         // Confirmed. A runner that posts the continue itself confirms the order
         // without the relocation target ever resuming it, and then races its own
         // replay-count evidence.

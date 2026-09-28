@@ -107,6 +107,15 @@ export class ZLinkSpotSerialExecutor {
    * ownership turn. Already accepted work remains drainable.
    */
   close(): Promise<void> {
+    const children = this.closeChildren();
+    return Promise.all([children, this.spotSerial.close()]).then(() => undefined);
+  }
+
+  /**
+   * Closes the Actor and timer queues. The Spot queue stays open for the Spot
+   * Close lifecycle item that owns it; that Close closes it when it finishes.
+   */
+  closeChildren(): Promise<void> {
     if (this.closePromise !== undefined) return this.closePromise;
     this.closing = true;
     const childSerials = [...this.actorSerials.values(), ...this.timerSerials.values()];
@@ -115,7 +124,6 @@ export class ZLinkSpotSerialExecutor {
     this.timerSerials.clear();
     this.actorExecutors.clear();
     this.closePromise = Promise.all([
-      this.spotSerial.close(),
       ...childSerials.map((serial) => serial.close()),
       ...actorExecutors.map((executor) => executor.close())
     ]).then(() => undefined);

@@ -528,60 +528,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         }
     }
 
-    public CompletionStage<Void> deliverDeferredJoinAccepted(
-            ZLinkActorSpotRoutePackets.TransferRequest request, ZLinkBackendActorRef actor) {
-        if (request.relocationManifest() == null) {
-            return CompletableFuture.completedFuture(null);
-        }
-        ZLinkDirectJoinRelocation relocation = directJoinRelocation;
-        if (relocation == null) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException(
-                            "direct Actor Join relocation authority is unavailable"));
-        }
-        return deliverDeferredJoinAcceptedWithRetry(
-                relocation, request.relocationManifest(), actor, 0);
-    }
-
-    public CompletionStage<Void> publishDeferredJoinTargetReady(
-            ZLinkActorSpotRoutePackets.TransferRequest request, ZLinkBackendActorRef actor) {
-        if (request.relocationManifest() == null) {
-            return CompletableFuture.completedFuture(null);
-        }
-        ZLinkDirectJoinRelocation relocation = directJoinRelocation;
-        if (relocation == null) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException(
-                            "deferred Actor Join relocation authority is unavailable"));
-        }
-        ZLinkActor target = actorRegistry.actor(request.actorId());
-        return target == null || isMoving(target)
-                ? CompletableFuture.completedFuture(null)
-                : relocation.publishTargetReady(request.relocationManifest(), actor);
-    }
-
-    private CompletionStage<Void> deliverDeferredJoinAcceptedWithRetry(
-            ZLinkDirectJoinRelocation relocation,
-            ZLinkDirectJoinRelocation.Manifest manifest,
-            ZLinkBackendActorRef actor,
-            int attempt) {
-        return relocation
-                .deliver(manifest, actor, this)
-                .exceptionallyCompose(
-                        error -> {
-                            if (attempt >= 2 || draining) {
-                                return CompletableFuture.failedFuture(error);
-                            }
-                            CompletableFuture<Void> delay = new CompletableFuture<>();
-                            CompletableFuture.delayedExecutor(10L << attempt, TimeUnit.MILLISECONDS)
-                                    .execute(() -> delay.complete(null));
-                            return delay.thenCompose(
-                                    ignored ->
-                                            deliverDeferredJoinAcceptedWithRetry(
-                                                    relocation, manifest, actor, attempt + 1));
-                        });
-    }
-
     /**
      * Completes after every admitted Actor turn, including a yielded terminal continuation, has
      * reached its terminal boundary.
@@ -612,6 +558,14 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                 .map(entry -> entry.actor().context().actorId())
                                 .sorted()
                                 .toList());
+    }
+
+    /** Actors activated on the named MeshNode in this process. */
+    public int activeActorCount(String meshName) {
+        return (int)
+                actorRegistry.entries().stream()
+                        .filter(entry -> meshName.equals(entry.context().meshName()))
+                        .count();
     }
 
     public CompletionStage<Integer> handoffActorsToEntrySpot(
@@ -2379,6 +2333,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     public CompletionStage<Optional<ActorRef>> find(String actorId) {
         rejectAfterRelocationReady("Actor find");
         requireActorId(actorId);
+        if (locations.hasStoreResolver()) {
+            return locations.findStoredActorRefExact(actorId);
+        }
         ZLinkActor local = actorRegistry.actor(actorId);
         if (local != null
                 && !actorRegistry.isPendingTransfer(actorId)
@@ -2387,7 +2344,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         }
         if (local != null && requireContext(local).moving()
                 || actorRegistry.isPendingTransfer(actorId)) {
-            return locations.findStoredActorRef(actorId);
+            return CompletableFuture.completedFuture(Optional.empty());
         }
         try {
             ZLinkBackendActorRef nativeActor = spotNode.actorLookup(actorId);
@@ -2400,7 +2357,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 throw ex;
             }
         }
-        return locations.findStoredActorRef(actorId);
+        return CompletableFuture.completedFuture(Optional.empty());
     }
 
     @Override
@@ -2505,6 +2462,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                     route.authorityOwnerGeneration(),
                                     route.ownerLeaseGeneration());
                         });
+    }
+
+    void prepareRelocatedSessionBinding(
+            ZLinkBackendActorRef actor, long authorityOwnerGeneration, long ownerLeaseGeneration) {
+        spotNode.rememberActorAuthority(actor, authorityOwnerGeneration, ownerLeaseGeneration);
     }
 
     @Override
@@ -3263,6 +3225,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 0,
                 command42.actor().authorityOwnerGeneration(),
                 null,
+                0,
                 0);
     }
 
@@ -3312,7 +3275,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         authority.sourceAuthorityOwnerGeneration(),
                         authority.sourceAuthorityOwnerGeneration() + 1,
                         targetNodeRid,
-                        target.lifecycleGeneration());
+                        target.lifecycleGeneration(),
+                        target.leaseGeneration());
         return new systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec()
                 .encodeSessionRelocationRoute(command);
     }

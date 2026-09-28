@@ -81,13 +81,6 @@ public static class OrderWorkflowServerHostFactory
                 .AddInstanceSpotFactory<OrderWorkflowSpot>(
                     SampleNames.OrderWorkflowSpotType,
                     factory => factory.RecreateOnRelocation()
-                )
-                .AddSpotFactory<ShoppingMallPlannedRelocationSpot>(
-                    SampleNames.PlannedRelocationSpotType,
-                    factory =>
-                        factory
-                            .ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide)
-                            .RecreateOnRelocation()
                 );
             mesh.Channel(SampleNames.OrderProjectionChannel).Server();
             // --8<-- [end:doc-sm-workflow-register]
@@ -159,8 +152,8 @@ public static class OrderWorkflowServerHostFactory
             async (
                 string orderId,
                 IZLinkLocationRuntimeQuery locations,
-                IZLinkSpotManager spots,
-                IZLinkSpotClient spotClient,
+                OrderWorkflowSelfCheckService selfChecks,
+                ShoppingMallPlannedRelocation relocation,
                 CancellationToken cancellationToken
             ) =>
             {
@@ -171,64 +164,21 @@ public static class OrderWorkflowServerHostFactory
                 );
                 if (location is null)
                     return Results.Ok(new PlannedRelocationRes(false, "OrderNotFound", "None"));
+                var local = registeredTopology.Items.SingleOrDefault(entry =>
+                    string.Equals(entry.Endpoint, instance.MeshEndpoint, StringComparison.Ordinal)
+                );
+                if (local is null || location.NodeRid != local.NodeRid)
+                    return Results.Ok(new PlannedRelocationRes(false, "NotOwner", "None"));
 
-                // Match the other sample runtimes: the fixture is a separate User
-                // Spot, selected by normal placement, rather than the active order
-                // Instance Spot itself.
-                var anchor = await spots
-                    .GetOrCreate(
-                        $"shoppingmall.planned-relocation:{orderId}",
-                        SampleNames.PlannedRelocationSpotType
-                    )
-                    .InMesh(SampleNames.MeshName)
-                    .Async(cancellationToken);
-
-                // .NET host relocation includes active Instance Spots.  If normal
-                // placement co-locates this runner fixture with the checkpoint
-                // order, retire that ordinary routing endpoint first; its durable
-                // state is replayed by the relocated User Spot.
-                if (anchor.Spot.NodeRid == location.NodeRid)
-                {
-                    var orderSpot = await spotClient
-                        .RequestToSpot(orderId, new CloseOrderWorkflowForPlannedRelocationReq())
-                        .InstanceSpot(SampleNames.OrderWorkflowSpotType)
-                        .InMesh(SampleNames.MeshName)
-                        .Async<CloseOrderWorkflowForPlannedRelocationRes>(cancellationToken);
-                    if (!orderSpot.Closed)
-                        return Results.Ok(
-                            new PlannedRelocationRes(false, "OrderNotClosed", "None")
-                        );
-                }
-
-                var started = await spotClient
-                    .RequestToSpot(anchor.Spot.SpotId, new StartPlannedRelocationReq())
-                    .Async<StartPlannedRelocationRes>(cancellationToken);
-                var sourceInstanceId = registeredTopology
-                    .Items.SingleOrDefault(entry => entry.NodeRid == anchor.Spot.NodeRid)
-                    ?.Endpoint switch
-                {
-                    var endpoint
-                        when string.Equals(
-                            endpoint,
-                            topology.WorkflowAMeshEndpoint,
-                            StringComparison.Ordinal
-                        ) => "workflow-a",
-                    var endpoint
-                        when string.Equals(
-                            endpoint,
-                            topology.WorkflowBMeshEndpoint,
-                            StringComparison.Ordinal
-                        ) => "workflow-b",
-                    _ => null,
-                };
+                await selfChecks.ArmPlannedRelocationReplayAsync(orderId, cancellationToken);
+                var started = relocation.Start();
 
                 return Results.Ok(
                     new PlannedRelocationRes(
                         true,
-                        started.Started ? "Started" : "AlreadyStarted",
+                        started ? "Started" : "AlreadyStarted",
                         "None",
-                        anchor.Spot.SpotId,
-                        SourceInstanceId: sourceInstanceId
+                        SourceInstanceId: instance.InstanceId
                     )
                 );
             }
@@ -274,20 +224,6 @@ public static class OrderWorkflowServerHostFactory
                 );
             }
         );
-        app.MapPost(
-            "/self-check/relocation-ready/{anchorId}",
-            async (
-                string anchorId,
-                IZLinkSpotClient spotClient,
-                CancellationToken cancellationToken
-            ) =>
-            {
-                var ready = await spotClient
-                    .RequestToSpot(anchorId, new SignalPlannedRelocationReadyReq())
-                    .Async<SignalPlannedRelocationReadyRes>(cancellationToken);
-                return Results.Ok(ready);
-            }
-        );
         return app;
     }
 
@@ -295,113 +231,9 @@ public static class OrderWorkflowServerHostFactory
         bool IsOwner,
         string Outcome,
         string Reason,
-        string? AnchorId = null,
         string? State = null,
         string? SourceInstanceId = null
     );
-}
-
-internal sealed class ShoppingMallPlannedRelocationSpot(
-    IZLinkSpotContext context,
-    OrderWorkflowService workflow,
-    OrderWorkflowSelfCheckService selfChecks,
-    ShoppingMallPlannedRelocation relocation,
-    ILogger<ShoppingMallPlannedRelocationSpot> logger
-) : IZLinkSpot
-{
-    public IZLinkSpotContext Context { get; } = context;
-
-    public async ValueTask OnInitializeAsync(CancellationToken cancellationToken)
-    {
-        const string prefix = "shoppingmall.planned-relocation:";
-        if (!Context.SpotId.StartsWith(prefix, StringComparison.Ordinal))
-            return;
-
-        var orderId = OrderId();
-        if (!await selfChecks.TryConsumePlannedRelocationReplayAsync(orderId, cancellationToken))
-        {
-            return;
-        }
-
-        var repeatedExternalEffect = false;
-        await workflow.ContinueAsync(
-            new ContinueOrderWorkflowReq(orderId, $"continue:{orderId}"),
-            cancellationToken,
-            () => repeatedExternalEffect = true
-        );
-        logger.LogInformation(
-            "shoppingmall-order replayed order={OrderId} generation={Generation}",
-            orderId,
-            Context.ObjectGeneration
-        );
-        if (repeatedExternalEffect)
-        {
-            logger.LogWarning(
-                "shoppingmall-order external-effect-repeated order={OrderId}",
-                orderId
-            );
-        }
-    }
-
-    public async ValueTask<StartPlannedRelocationRes> StartRelocationAsync(
-        StartPlannedRelocationReq request,
-        CancellationToken cancellationToken
-    )
-    {
-        _ = request;
-        await selfChecks.ArmPlannedRelocationReplayAsync(OrderId(), cancellationToken);
-        return new StartPlannedRelocationRes(relocation.Start());
-    }
-
-    internal string OrderId()
-    {
-        return Context.SpotId["shoppingmall.planned-relocation:".Length..];
-    }
-
-    internal ValueTask<SignalPlannedRelocationReadyRes> SignalRelocationReadyAsync(
-        SignalPlannedRelocationReadyReq request,
-        CancellationToken cancellationToken
-    )
-    {
-        _ = request;
-        cancellationToken.ThrowIfCancellationRequested();
-        Context.RelocationReady().Defer();
-        return ValueTask.FromResult(new SignalPlannedRelocationReadyRes(true));
-    }
-}
-
-internal sealed class SignalPlannedRelocationReadyHandler
-    : IZLinkSpotRequestHandler<
-        ShoppingMallPlannedRelocationSpot,
-        SignalPlannedRelocationReadyReq,
-        SignalPlannedRelocationReadyRes
-    >
-{
-    public ValueTask<SignalPlannedRelocationReadyRes> HandleAsync(
-        ShoppingMallPlannedRelocationSpot spot,
-        SignalPlannedRelocationReadyReq request,
-        CancellationToken cancellationToken
-    )
-    {
-        return spot.SignalRelocationReadyAsync(request, cancellationToken);
-    }
-}
-
-internal sealed class StartPlannedRelocationHandler
-    : IZLinkSpotRequestHandler<
-        ShoppingMallPlannedRelocationSpot,
-        StartPlannedRelocationReq,
-        StartPlannedRelocationRes
-    >
-{
-    public ValueTask<StartPlannedRelocationRes> HandleAsync(
-        ShoppingMallPlannedRelocationSpot spot,
-        StartPlannedRelocationReq request,
-        CancellationToken cancellationToken
-    )
-    {
-        return spot.StartRelocationAsync(request, cancellationToken);
-    }
 }
 
 internal sealed class ShoppingMallPlannedRelocation(IZLinkFrameworkRuntime runtime)

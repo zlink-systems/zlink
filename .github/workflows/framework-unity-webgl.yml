@@ -15,13 +15,23 @@ name: Framework Unity WebGL
 #   - Unity's own plugin pipeline: does it pass both .jspre files to --pre-js and
 #     the .jslib to --js-library?
 #
-# Two players are built, at Unity's "Shorter Build Time" (BuildTimes, emcc -O1)
-# and "Runtime Speed" (RuntimeSpeed, emcc -O2) Code Optimization levels, and both
-# are run against a real STREAM server. The second one is expected to fail at
-# runtime: the Emscripten 3.1.38-unity that Unity 6000.0 bundles carries upstream
-# 3.1.38's JSDCE defect, which deletes destructuring declarations from --pre-js
-# content at -O2 and above. The expectation is asserted rather than assumed, so a
-# Unity release that fixes the fork turns this job red with a reason.
+# Two players are built, at Unity's "Shorter Build Time" (BuildTimes) and
+# "Runtime Speed" (RuntimeSpeed) Code Optimization levels, and both are run
+# against a real STREAM server and expected to pass. Unity's own emcc link is
+# -O3 at both ("Report the emscripten link arguments" below reads the actual
+# flags out of Library/Bee) - that Editor setting does not change the JS-side
+# optimization level, at either preset. What neither preset does is route
+# .jspre content through emscripten's JS optimizer at all: Unity links emcc
+# against a .jspre placeholder and merges the real plugin text into the
+# emitted framework.js afterward ("Merging JavaScript Code"), so JSDCE never
+# sees it. A direct emcc link does not have that placeholder step -
+# test/browser/unity-webgl-emscripten.test.js (framework/languages/node) links
+# this way and hits emscripten 3.1.38's JSDCE defect, which deletes any
+# destructuring declaration in a scope with no reference to the identifier
+# `undefined` from --pre-js content at -O2 and above (see
+# framework/languages/unity/webgl-adapter-check/README.md). The expectation
+# here is asserted rather than assumed, so a Unity release that starts feeding
+# .jspre content to the optimizer turns this job red with a reason.
 
 on:
 #   # Enabled deliberately, not by default: an IL2CPP WebGL build takes tens of
@@ -192,11 +202,20 @@ jobs:
           status=0
           rows=""
           players=0
-          # The same grep over the committed plugins, so the expectation follows the
-          # bundle instead of being a number written down here.
-          expected=$(cat framework/languages/unity/com.zlink.stream-connector.webgl/Plugins/WebGL/*.jspre \
-            | grep -c -e 'message, signal' -e 'message,signal')
-          echo "committed message-drain lines: ${expected}"
+          # Each destructuring declaration's own source line, as fixed text - not
+          # a count of how many the DESTRUCTURING pattern matches somewhere in
+          # framework.js (test/browser/unity-webgl-emscripten.test.js's regression
+          # guard for emscripten 3.1.38's JSDCE defect uses that count, but
+          # framework.js also holds Unity's own generated code, which a plain count
+          # there cannot tell apart from the plugin text this checks). Grepping for
+          # each committed line keeps the check scoped to the plugin text: it is
+          # found only where it actually still is, not just present somewhere.
+          mapfile -t expectedLines < <(
+            cat framework/languages/unity/com.zlink.stream-connector.webgl/Plugins/WebGL/*.jspre \
+              | grep -oE '\b(const|let|var)[[:space:]]*[{[].*'
+          )
+          expected=${#expectedLines[@]}
+          echo "committed destructuring declarations: ${expected}"
           for framework in "${PROJECT_PATH}"/Builds/*/Build/*.framework.js; do
             [ -e "${framework}" ] || continue
             players=$((players + 1))
@@ -204,19 +223,23 @@ jobs:
             runtime=$(grep -c ZlinkStreamWebGlRuntime "${framework}" || true)
             bundle=$(grep -c ZlinkStreamConnectorBundle "${framework}" || true)
             # A symbol from inside the IIFE, not just its global name: it says the
-            # bundle body arrived, and it is the class the JSDCE defect breaks.
+            # bundle body arrived, and it is the class the JSDCE defect used to break.
             internals=$(grep -c ZlinkStreamReceivedMessages "${framework}" || true)
             jslib=$(grep -c _ZlinkStreamPump "${framework}" || true)
             # The committed plugin text has to reach the player unrewritten. Unity
-            # merges it in after emscripten has run, so the count matches the
-            # source; a Unity release that starts feeding .jspre content to the JS
-            # optimizer would drop it, and emscripten 3.1.38's dead-code pass
-            # deletes exactly this declaration.
-            drain=$(grep -c -e 'message, signal' -e 'message,signal' "${framework}" || true)
-            echo "${level}: runtime=${runtime} bundle=${bundle} internals=${internals} jslib=${jslib} drain=${drain}/${expected}"
-            rows="${rows}| ${level} | ${runtime} | ${bundle} | ${internals} | ${jslib} | ${drain}/${expected} |"$'\n'
-            if [ "${drain}" -ne "${expected}" ]; then
-              echo "::error title=Plugin text rewritten::${level}: ${drain} of the connector's ${expected} message-drain lines survived into ${framework}. Something in the build now rewrites the .jspre content."
+            # merges it in after emscripten has run, so every one of these lines
+            # has to still be there verbatim; a Unity release that starts feeding
+            # .jspre content to the JS optimizer would drop some of them, the same
+            # way emscripten 3.1.38's dead-code pass does at emcc -O2 and above
+            # (workflow header).
+            destructuring=0
+            for line in "${expectedLines[@]}"; do
+              grep -qF -- "${line}" "${framework}" && destructuring=$((destructuring + 1))
+            done
+            echo "${level}: runtime=${runtime} bundle=${bundle} internals=${internals} jslib=${jslib} destructuring=${destructuring}/${expected}"
+            rows="${rows}| ${level} | ${runtime} | ${bundle} | ${internals} | ${jslib} | ${destructuring}/${expected} |"$'\n'
+            if [ "${destructuring}" -ne "${expected}" ]; then
+              echo "::error title=Plugin text rewritten::${level}: ${destructuring} of the connector's ${expected} destructuring declaration lines survived into ${framework}. Something in the build now rewrites the .jspre content."
               status=1
             fi
             for pair in "runtime:${runtime}" "bundle:${bundle}" "internals:${internals}" "jslib:${jslib}"; do
@@ -235,12 +258,12 @@ jobs:
             echo
             echo "Symbol counts in each player's framework.js. The first four must all"
             echo "be non-zero: that is Unity having passed both .jspre files to --pre-js"
-            echo "and the .jslib to --js-library. The last is how many lines of the"
-            echo "connector's message drain reached the player, against the"
-            echo "count in the committed .jspre - it must match, so plugin text that the"
-            echo "build starts rewriting is caught here."
+            echo "and the .jslib to --js-library. The last is how many destructuring"
+            echo "declarations reached the player, against the count in the committed"
+            echo ".jspre - it must match, so plugin text that the build starts rewriting"
+            echo "is caught here."
             echo
-            echo '| player | .jspre runtime | .jspre bundle | bundle internals | .jslib | drain lines |'
+            echo '| player | .jspre runtime | .jspre bundle | bundle internals | .jslib | destructuring declarations |'
             echo '|---|---|---|---|---|---|'
             printf '%s' "${rows}"
           } >> "${GITHUB_STEP_SUMMARY}"
@@ -420,8 +443,8 @@ jobs:
           name: unity-webgl-players
           path: players
 
-      # -O1 and below is the level the adapter README tells consumers to build
-      # at, so this one is the gate.
+      # BuildTimes is Unity's "Shorter Build Time" Code Optimization preset
+      # (see the workflow header for what that does and does not change).
       - name: Run the BuildTimes player
         working-directory: framework/languages/node
         run: |

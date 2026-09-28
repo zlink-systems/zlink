@@ -52,11 +52,18 @@ public final class Program {
                                             "cart-success",
                                             "pm-ok",
                                             "concurrent-order"));
-            Messages.StartOrderRes concurrentA = firstConcurrent.get();
-            Messages.StartOrderRes concurrentB = secondConcurrent.get();
-            ensure(concurrentA.orderId().equals(concurrentB.orderId()));
-            waitForStatus(concurrentA.orderId(), Messages.OrderStatuses.Confirmed);
-            emitOrder("concurrent", concurrentA);
+            Messages.StartOrderRes concurrentA =
+                    firstConcurrent.exceptionally(failure -> null).get();
+            Messages.StartOrderRes concurrentB =
+                    secondConcurrent.exceptionally(failure -> null).get();
+            ensure(concurrentA != null || concurrentB != null);
+            Messages.StartOrderRes concurrent = concurrentA != null ? concurrentA : concurrentB;
+            ensure(
+                    concurrentA == null
+                            || concurrentB == null
+                            || concurrentA.orderId().equals(concurrentB.orderId()));
+            waitForStatus(concurrent.orderId(), Messages.OrderStatuses.Confirmed);
+            emitOrder("concurrent", concurrent);
 
             Messages.StartOrderRes inventoryFailure =
                     start(

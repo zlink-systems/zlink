@@ -59,7 +59,7 @@ final class ZLinkJavaRawMeshNodeRelayFailurePairTest {
     @Test
     void actorDispatchUnavailableAndRejectionKeepTheirFrameworkKinds() {
         assertArrayEquals(
-                new int[] {105, 17},
+                new int[] {105, 13},
                 ZLinkJavaRawMeshNode.relayedFailurePair(
                         new ZLinkFrameworkException(
                                 ZLinkFrameworkErrorKind.UNAVAILABLE,

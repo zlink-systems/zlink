@@ -2260,7 +2260,7 @@ function writeRetiredBoundSessionRouteFence(input: RetiredBoundSessionRouteFence
 export function decodeRetiredBoundSessionRouteFence(bytes: Uint8Array, context: ServiceWireDecoderContext): RetiredBoundSessionRouteFence { const reader = new Reader(bytes); const value = readRetiredBoundSessionRouteFence(reader, context, {}, 0); reader.done("retired-bound-session-route-fence"); return value; }
 export function encodeRetiredBoundSessionRouteFence(value: RetiredBoundSessionRouteFence, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRetiredBoundSessionRouteFence(value, writer, context, {}, 0); return writer.result(); }
 
-export type SessionRelocationRouteUpdate = { readonly action: "commit"; readonly previousAuthorityOwnerGeneration: NonzeroU64; readonly targetAuthorityOwnerGeneration: NonzeroU64; readonly targetNodeRid: Rid; readonly targetNodeGeneration: NonzeroU64 } | { readonly action: "abort"; readonly currentAuthorityOwnerGeneration: NonzeroU64 };
+export type SessionRelocationRouteUpdate = { readonly action: "commit"; readonly previousAuthorityOwnerGeneration: NonzeroU64; readonly targetAuthorityOwnerGeneration: NonzeroU64; readonly targetNodeRid: Rid; readonly targetNodeGeneration: NonzeroU64; readonly targetOwnerLeaseGeneration: NonzeroU64 } | { readonly action: "abort"; readonly currentAuthorityOwnerGeneration: NonzeroU64 };
 
 function readSessionRelocationRouteUpdate(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): SessionRelocationRouteUpdate {
   void context; void enclosing; void flags;
@@ -2278,6 +2278,9 @@ function readSessionRelocationRouteUpdate(reader: Reader, context: ServiceWireDe
 
 
     value["targetNodeGeneration"] = readNonzeroU64(body, context, value, flags);
+
+
+    value["targetOwnerLeaseGeneration"] = readNonzeroU64(body, context, value, flags);
 
 
   } else if (same(value["action"], "abort")) {
@@ -2313,8 +2316,12 @@ function writeSessionRelocationRouteUpdate(input: SessionRelocationRouteUpdate, 
 
 
     writeNonzeroU64(numeric(value["targetNodeGeneration"]), body, context, value, flags);
+    if (value["targetOwnerLeaseGeneration"] === undefined) fail("targetOwnerLeaseGeneration required");
+
+
+    writeNonzeroU64(numeric(value["targetOwnerLeaseGeneration"]), body, context, value, flags);
   } else if (same(value["action"], "abort")) {
-    if (value["previousAuthorityOwnerGeneration"] !== undefined || value["targetAuthorityOwnerGeneration"] !== undefined || value["targetNodeRid"] !== undefined || value["targetNodeGeneration"] !== undefined) fail("session-relocation-route-update discriminator agreement");
+    if (value["previousAuthorityOwnerGeneration"] !== undefined || value["targetAuthorityOwnerGeneration"] !== undefined || value["targetNodeRid"] !== undefined || value["targetNodeGeneration"] !== undefined || value["targetOwnerLeaseGeneration"] !== undefined) fail("session-relocation-route-update discriminator agreement");
     if (value["currentAuthorityOwnerGeneration"] === undefined) fail("currentAuthorityOwnerGeneration required");
 
 

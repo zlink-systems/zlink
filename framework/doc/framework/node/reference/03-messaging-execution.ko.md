@@ -140,7 +140,7 @@ await fanoutClient
 
 **선택 기준.** 발행자가 구독자를 알지 못해야 하는 관찰·통지에 사용한다. 특정 대상에 보내는 메시징이면
 `sendToChannel`이나 `requestToChannel`을 사용한다. Publisher listener의 advertised endpoint를
-확인하려면 `ZLinkFanoutClient.getListenerStatus(channelName)`(topology-discovery category)를
+확인하려면 Framework runtime의 `getListenerStatus('fanout', channelName)`(topology-discovery category)를
 사용한다.
 
 ---

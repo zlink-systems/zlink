@@ -383,7 +383,7 @@ class player_quest_spot_t : public instance_spot_t
     // --8<-- [start:doc-gq-close-handler]
     task_t<void> close (const close_player_quest_msg_t &)
     {
-        (void) co_await _context.close ();
+        (void) _context.close ();
         co_return;
     }
     // --8<-- [end:doc-gq-close-handler]
@@ -399,7 +399,7 @@ class player_quest_spot_t : public instance_spot_t
         }
         if (request.operation == "deactivate") {
             const auto projection = _store.projection (request.player_id);
-            (void) co_await _context.close ();
+            (void) _context.close ();
             co_return projection_admin_res_t{true, projection};
         }
         co_return projection_admin_res_t{false, _store.projection (request.player_id)};

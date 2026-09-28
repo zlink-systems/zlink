@@ -13,13 +13,13 @@ internal sealed class ZlinkStopwatch : NativeOwner, IZlinkStopwatch
     public ulong Intermediate()
     {
         EnsureNotDisposed();
-        return NativeMethods.zlink_stopwatch_intermediate(_handle);
+        return NativeMethods.zlink_stopwatch_intermediate(_handle).Value;
     }
 
     public ulong Stop()
     {
         EnsureNotDisposed();
-        var elapsed = NativeMethods.zlink_stopwatch_stop(_handle);
+        ulong elapsed = NativeMethods.zlink_stopwatch_stop(_handle).Value;
         MarkClosed();
         GC.SuppressFinalize(this);
         return elapsed;

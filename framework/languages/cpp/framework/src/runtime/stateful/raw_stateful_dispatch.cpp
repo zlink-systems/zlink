@@ -225,7 +225,7 @@ stateful_error_t raw_stateful_dispatch_t::commit_accepted_ingress (const object_
 {
     const auto owner_key = delivery_key (owner, 0);
     const auto sequence_key = std::pair{owner.kind, owner.key};
-    std::lock_guard lock (_mutex);
+    std::unique_lock lock (_mutex);
 
     const auto discarding = _discarding_owners.find (owner_key);
     if (discarding != _discarding_owners.end () && discarding->second == owner) {
@@ -281,8 +281,12 @@ stateful_error_t raw_stateful_dispatch_t::commit_accepted_ingress (const object_
     }
 
     stateful_error_t enqueued = stateful_error_t::none;
+    std::function<void ()> deliver;
+    bool relocation_handoff = false;
     try {
-        enqueued = _objects->enqueue (owner, turn_domain_t::application, std::move (turn));
+        enqueued =
+          _objects->enqueue (owner, turn_domain_t::application, std::move (turn), &deliver,
+                             bool (pending_entry->second.relocated_terminal), &relocation_handoff);
     }
     catch (...) {
         enqueued = stateful_error_t::backpressured;
@@ -296,7 +300,90 @@ stateful_error_t raw_stateful_dispatch_t::commit_accepted_ingress (const object_
 
     if (allocate_sequence)
         ++next_sequence->second;
+    auto claim = relocation_handoff ? std::move (pending_entry->second.mailbox_claim) : nullptr;
+    lock.unlock ();
+    {
+        // Relocation owns the accepted record; _pending keeps the original
+        // reply token while the ordinary mailbox permit is returned.
+        mailbox_claim_release_guard_t release (*_transport, std::move (claim));
+    }
+    if (deliver)
+        deliver ();
     return stateful_error_t::none;
+}
+
+task_t<bool> raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
+                                                        turn_record_t turn,
+                                                        std::vector<std::uint8_t> target_routing_id,
+                                                        std::uint64_t target_generation,
+                                                        std::uint64_t target_lease_generation,
+                                                        std::chrono::milliseconds window)
+{
+    const auto application =
+      turn.application_record
+        ? protocol::summarize_frozen_application_record (*turn.application_record)
+      : turn.frozen_record ? *turn.frozen_record
+                           : protocol::decode_frozen_record (turn.payload, capture_flow ());
+    if (!application.application)
+        co_return false;
+    const auto sequence = turn.sequence;
+    auto complete = [this, owner, sequence, operation = application.operation,
+                     reply_route = application.reply_route_id] (
+                      foundation::operation_terminal_t terminal, std::vector<std::uint8_t> bytes) {
+        // A hop with no observed terminal retains the original delivery for
+        // authority settlement. An explicit application failure is a reply.
+        if (terminal != foundation::operation_terminal_t::completed && bytes.empty ())
+            return;
+        std::optional<protocol::application_payload_t> reply;
+        protocol::reply_relay_t relay{
+          operation, *reply_route, {}, 0, {}, 0, sequence, 0, protocol::framework_error_code::none};
+        if (terminal == foundation::operation_terminal_t::completed)
+            reply = protocol::decode_application_payload (bytes, capture_flow ());
+        else {
+            const auto failed = protocol::decode_reply_header (bytes);
+            relay.terminal_result = failed.terminal_result;
+            relay.failure_code = static_cast<protocol::framework_error_code> (failed.failure_code);
+        }
+        auto completion = std::make_shared<task_t<bool>> (
+          complete_relocated_source_async (owner, sequence, relay, reply));
+        detail::observe_task_completion (*completion, [completion] (const result_t<bool> &) {});
+    };
+    bool sent = false;
+    if (owner.kind == object_kind_t::actor) {
+        protocol::actor_route_fence_t target{owner.key, owner.object_generation,          {},
+                                             0,         owner.authority_owner_generation, 0};
+        target.target_node_routing_id = target_routing_id;
+        target.target_node_generation = target_generation;
+        ++target.authority_owner_generation;
+        target.owner_lease_generation = target_lease_generation;
+        std::optional<protocol::actor_message_header_t::bound_session_source_t> session;
+        if (application.source_session_routing_id)
+            session = protocol::actor_message_header_t::bound_session_source_t{
+              *application.source_session_routing_id, application.source_binding_generation,
+              application.source_session_sequence};
+        sent = application.reply_route_id.has_value ()
+                 ? co_await _transport->request_to_actor (
+                     target_routing_id, application.source_actor, target, *application.application,
+                     window, std::move (complete), application.operation, session)
+                 : co_await _transport->send_to_actor (target_routing_id, application.source_actor,
+                                                       target, *application.application, session,
+                                                       application.operation);
+    } else {
+        protocol::spot_route_fence_t target{owner.key, owner.object_generation,          {},
+                                            0,         owner.authority_owner_generation, 0};
+        target.target_node_routing_id = target_routing_id;
+        target.target_node_generation = target_generation;
+        ++target.authority_owner_generation;
+        target.owner_lease_generation = target_lease_generation;
+        sent = application.reply_route_id.has_value ()
+                 ? co_await _transport->request_to_spot (
+                     target_routing_id, application.source_spot_id.value_or (""), target,
+                     *application.application, window, std::move (complete), application.operation)
+                 : co_await _transport->send_to_spot (
+                     target_routing_id, application.source_spot_id.value_or (""), target,
+                     *application.application, application.operation);
+    }
+    co_return sent;
 }
 
 stateful_error_t raw_stateful_dispatch_t::ingest (const object_ref_t &owner)
@@ -655,21 +742,17 @@ task_t<bool> raw_stateful_dispatch_t::complete_relocated_source_async (
     delivery_key_t pending_key{owner.kind, owner.key, sequence};
     {
         std::lock_guard lock (_mutex);
+        const auto matches = [&] (const auto &entry) {
+            return entry.second.owner == owner && entry.second.request
+                   && entry.second.frozen.operation == relay.operation
+                   && entry.second.frozen.reply_route_id == relay.reply_route_id
+                   && (entry.second.relocated_terminal
+                       || (entry.second.transport.reply_token
+                           && entry.second.transport.correlation));
+        };
         auto found = _pending.find (pending_key);
-        if (found == _pending.end () || found->first.kind != owner.kind
-            || found->first.key != owner.key || !found->second.request
-            || !found->second.transport.reply_token || !found->second.transport.correlation
-            || !found->second.transport.operation
-            || *found->second.transport.operation
-                 != std::pair{relay.operation.high, relay.operation.low}) {
-            found = std::find_if (_pending.begin (), _pending.end (), [&] (const auto &entry) {
-                return entry.first.kind == owner.kind && entry.first.key == owner.key
-                       && entry.second.request && entry.second.transport.reply_token
-                       && entry.second.transport.correlation && entry.second.transport.operation
-                       && *entry.second.transport.operation
-                            == std::pair{relay.operation.high, relay.operation.low};
-            });
-        }
+        if (found == _pending.end () || !matches (*found))
+            found = std::find_if (_pending.begin (), _pending.end (), matches);
         if (found == _pending.end ())
             co_return false;
         if (found->second.relocated_completing)
@@ -680,7 +763,10 @@ task_t<bool> raw_stateful_dispatch_t::complete_relocated_source_async (
     }
     bool delivered = false;
     try {
-        if (relay.terminal_result == 0 && reply)
+        if (pending.relocated_terminal)
+            delivered =
+              pending.relocated_terminal (relay.terminal_result == 0 ? reply : std::nullopt);
+        else if (relay.terminal_result == 0 && reply)
             delivered = _transport->reply (pending.transport, *reply);
         else
             delivered = _transport->reply_failure (
@@ -708,17 +794,59 @@ task_t<bool> raw_stateful_dispatch_t::complete_relocated_source_async (
         claim = std::move (found->second.mailbox_claim);
         _pending.erase (found);
     }
+    (void) _objects->discard_application (owner, pending_key.sequence);
     mailbox_claim_release_guard_t mailbox_guard (*_transport, std::move (claim));
     co_return true;
 }
 
+void raw_stateful_dispatch_t::release_relocated_payloads (const object_ref_t &owner)
+{
+    std::vector<std::shared_ptr<mesh::service_mailbox_claim_t>> claims;
+    {
+        std::lock_guard lock (_mutex);
+        for (auto entry = _pending.begin (); entry != _pending.end ();) {
+            auto &pending = entry->second;
+            if (pending.owner != owner) {
+                ++entry;
+                continue;
+            }
+            claims.push_back (std::move (pending.mailbox_claim));
+            if (!pending.request) {
+                entry = _pending.erase (entry);
+                continue;
+            }
+            // Completion needs the original reply token and operation, not
+            // the source's already committed application payload.
+            pending.frozen.application.reset ();
+            pending.frozen.canonical_bytes.clear ();
+            pending.transport.parts.clear ();
+            ++entry;
+        }
+    }
+    for (auto &claim : claims) {
+        mailbox_claim_release_guard_t release (*_transport, std::move (claim));
+    }
+}
+
 stateful_error_t raw_stateful_dispatch_t::discard_pending (const object_ref_t &owner)
+{
+    return discard_owner_pending (owner, false);
+}
+
+stateful_error_t raw_stateful_dispatch_t::fail_pending_unavailable (const object_ref_t &owner)
+{
+    return discard_owner_pending (owner, true);
+}
+
+stateful_error_t raw_stateful_dispatch_t::discard_owner_pending (const object_ref_t &owner,
+                                                                 bool reply_unavailable)
 {
     const auto owner_key = delivery_key (owner, 0);
     struct cleanup_t
     {
         std::uint64_t sequence;
         std::shared_ptr<mesh::service_mailbox_claim_t> claim;
+        std::optional<mesh::service_mailbox_record_t> request;
     };
     std::vector<cleanup_t> cleanup;
     {
@@ -746,13 +874,19 @@ stateful_error_t raw_stateful_dispatch_t::discard_pending (const object_ref_t &o
                 ++entry;
                 continue;
             }
-            cleanup.push_back ({entry->first.sequence, std::move (entry->second.mailbox_claim)});
+            cleanup.push_back ({entry->first.sequence, std::move (entry->second.mailbox_claim),
+                                reply_unavailable && entry->second.request
+                                  ? std::make_optional (std::move (entry->second.transport))
+                                  : std::nullopt});
             entry = _pending.erase (entry);
         }
     }
     for (auto &item : cleanup) {
         (void) _objects->discard_application (owner, item.sequence);
-        if (item.claim)
+        if (item.request && item.claim)
+            reply_failure_then_release_claim (*_transport, std::move (*item.request),
+                                              terminal_conflict, 0, item.claim);
+        else if (item.claim)
             (void) _transport->mailbox ().release (*item.claim);
     }
     {

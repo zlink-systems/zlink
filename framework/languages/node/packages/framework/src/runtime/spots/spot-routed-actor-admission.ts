@@ -29,6 +29,10 @@ import {
 import { submitRoutedActorJoinError, submitRoutedActorJoinReply } from './spot-route-replies';
 import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import type { ZLinkActorHandoffPacket, ZLinkActorHandoffResult } from '../actors/actor-handoff';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 
 interface ZLinkRoutedActorAdmissionTarget {
   onActorJoin?(actorId: string, request: ZLinkMessage): Promise<ZLinkSpotActorJoinResult>;
@@ -36,6 +40,7 @@ interface ZLinkRoutedActorAdmissionTarget {
 
 interface ZLinkSpotRoutedActorAdmissionOptions {
   readonly serial: ZLinkSpotSerialTurnExecutor;
+  readonly isSpotClosing?: () => boolean;
   readonly getTarget: () => ZLinkRoutedActorAdmissionTarget;
   readonly defaultAccept: boolean;
   readonly routedActorTransferProvider?: ZLinkRoutedActorTransferProvider;
@@ -72,6 +77,21 @@ export class ZLinkSpotRoutedActorAdmission {
     const decoded = this.decodeRemoteActorJoinRequest(received.parts, received);
     if (decoded === undefined) {
       return false;
+    }
+    if (this.options.isSpotClosing?.() === true) {
+      try {
+        submitRoutedActorJoinError(
+          received,
+          decoded,
+          createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.RequestRejected,
+            `Actor '${decoded.actorId}' target Spot is closing.`
+          )
+        );
+      } finally {
+        this.closeDecoded(decoded);
+      }
+      return true;
     }
     if (decoded.phase === 'admission') {
       await this.admitTransfer(decoded, received);

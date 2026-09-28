@@ -128,7 +128,7 @@ try {
     function Write-ApiConfig {
         param([string]$Name, [int]$HttpPort, [int]$ChannelPort, [int]$RoutePort)
         $path = Join-Path $RunDir "$Name.properties"
-        Set-ZlinkSampleUtf8File -Path $path -Value @(
+        Set-ZlinkSampleProperties -Path $path -Value @(
             "sample.nodeId=$Name",
             "sample.apiBindUrl=http://127.0.0.1:$HttpPort",
             "sample.apiChannelEndpoint=tcp://127.0.0.1:$ChannelPort",
@@ -151,7 +151,7 @@ try {
             [int]$PeerSpotPort,
             [int]$PeerPubPort)
         $path = Join-Path $RunDir "$Name.properties"
-        Set-ZlinkSampleUtf8File -Path $path -Value @(
+        Set-ZlinkSampleProperties -Path $path -Value @(
         "sample.nodeId=$Name",
         "sample.apiChannelEndpoints=$ApiChannels",
         "sample.playEndpoint=tcp://127.0.0.1:$StreamPort",

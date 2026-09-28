@@ -939,7 +939,7 @@ internal static class ZLinkRuntimeMetrics
             "client_close" => "client_close",
             "idle_timeout" => "idle_timeout",
             "heartbeat_timeout" => "heartbeat_timeout",
-            "server_shutdown" or "server_drain" => "server_shutdown",
+            "server_drain" => "server_drain",
             "protocol_error" => "protocol_error",
             _ => "transport_error",
         };

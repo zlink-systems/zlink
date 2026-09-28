@@ -34,8 +34,9 @@ export interface ServiceNodeDescriptor {
 
 export interface AdmittedServicePeer {
   readonly descriptor: ServiceNodeDescriptor;
+  // The Core selected-route generation this admission belongs to (Core ROUTER
+  // §10.1), as an opaque token compared only for equality.
   readonly connectionId: string;
-  readonly connectionDiscriminator: string;
 }
 
 export interface ServicePeerAdmissionExpectation {
@@ -98,13 +99,11 @@ export class ServiceTopologyRegistry {
   admit(
     descriptor: ServiceNodeDescriptor,
     connectionId: string,
-    expected?: ServicePeerAdmissionExpectation,
-    connectionDiscriminator = connectionId
+    expected?: ServicePeerAdmissionExpectation
   ): PeerAdmissionResult {
     try {
       validateDescriptor(descriptor);
       requireText(connectionId, 'connectionId');
-      requireText(connectionDiscriminator, 'connectionDiscriminator');
     } catch (error) {
       return 'invalidDescriptor';
     }
@@ -146,34 +145,11 @@ export class ServiceTopologyRegistry {
     ) {
       return 'staleDescriptor';
     }
-    if (
-      current !== undefined &&
-      current.descriptor.lifecycleGeneration === descriptor.lifecycleGeneration &&
-      current.descriptor.descriptorRevision === descriptor.descriptorRevision &&
-      sameServiceNodeDescriptor(current.descriptor, descriptor) &&
-      current.connectionId !== connectionId &&
-      // A fallback candidate is only a logical placeholder. Once the
-      // monitor reports the physical connection, its evidence supersedes
-      // candidate ordering so the request path uses the native route.
-      !(
-        isUnmonitoredConnectionId(current.connectionId) && !isUnmonitoredConnectionId(connectionId)
-      ) &&
-      compareConnectionCandidate(
-        current.connectionDiscriminator,
-        current.connectionId,
-        connectionDiscriminator,
-        connectionId
-      ) <= 0
-    ) {
-      // Both manual directions can reach admission. The same comparison on
-      // every retry keeps one physical candidate instead of replacing it in
-      // arrival order.
-      return 'staleDescriptor';
-    }
+    // Core selects the one route per RID (Core ROUTER §10.1); an admission on
+    // that route replaces the admission of a route it replaced.
     this.peersByRid.set(descriptor.nodeRoutingId, {
       descriptor: cloneDescriptor(descriptor),
-      connectionId,
-      connectionDiscriminator
+      connectionId
     });
     this.remember(descriptor);
     this.rebuildSelections();
@@ -286,8 +262,7 @@ export class ServiceTopologyRegistry {
       () => {
         const local: AdmittedServicePeer = {
           descriptor: cloneDescriptor(this.local),
-          connectionId: 'local',
-          connectionDiscriminator: 'local'
+          connectionId: 'local'
         };
         return [local, ...this.peersByRid.values()]
           .map((peer) => ({
@@ -549,8 +524,7 @@ function cloneDescriptor(descriptor: ServiceNodeDescriptor): ServiceNodeDescript
 function clonePeer(peer: AdmittedServicePeer): AdmittedServicePeer {
   return {
     descriptor: cloneDescriptor(peer.descriptor),
-    connectionId: peer.connectionId,
-    connectionDiscriminator: peer.connectionDiscriminator
+    connectionId: peer.connectionId
   };
 }
 
@@ -580,20 +554,6 @@ function sameImmutableDescriptor(
 
 function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
-}
-
-function isUnmonitoredConnectionId(connectionId: string): boolean {
-  return connectionId.startsWith('unmonitored:');
-}
-
-function compareConnectionCandidate(
-  leftDiscriminator: string,
-  leftId: string,
-  rightDiscriminator: string,
-  rightId: string
-): number {
-  const discriminator = compareOrdinal(leftDiscriminator, rightDiscriminator);
-  return discriminator === 0 ? compareOrdinal(leftId, rightId) : discriminator;
 }
 
 function compareOrdinal(left: string, right: string): number {

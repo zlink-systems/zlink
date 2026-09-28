@@ -5,11 +5,7 @@ import {
 import { createAbortError, throwIfAborted } from '../abort';
 import { AsyncResource } from 'node:async_hooks';
 import { ZLinkStateLane } from '../execution/state-lane';
-import { routingIdsEqual } from '../routing-id';
-import type {
-  ServiceSessionBindingAdmissionClaim,
-  ServiceSessionBindingAdmissionResult
-} from '../foundation/service-session-binding-ingress-port';
+import type { ServiceSessionBindingAdmissionResult } from '../foundation/service-session-binding-ingress-port';
 
 const detachedStateLaneResource = new AsyncResource('zlink:actor-session-binding-registry');
 export interface ZLinkActorSessionBindingActor {
@@ -55,15 +51,6 @@ export interface ZLinkActorSessionRetainedOutbound {
   fail(error: unknown): void;
 }
 
-export interface ZLinkActorSessionAcceptedProducerProof {
-  readonly actorId: string;
-  readonly objectGeneration: bigint;
-  readonly actorNodeRid: string;
-  readonly actorNodeGeneration: bigint;
-  readonly sessionIdentity: string;
-  readonly bindingGeneration: bigint;
-}
-
 export interface ZLinkActorSessionRelocationSnapshot extends ZLinkActorSessionRelocationClaim {
   readonly phase: 'sealed' | 'applying' | 'applied' | 'terminal';
   readonly applyFingerprint?: string;
@@ -107,7 +94,6 @@ interface ZLinkActorSessionRelocationState {
   phase: 'sealed' | 'applying' | 'applied' | 'terminal';
   applyFingerprint?: string;
   applyPromise?: Promise<void>;
-  acceptedProducerProof?: ZLinkActorSessionAcceptedProducerProof;
   readonly ready: Promise<void>;
   readonly terminal: Promise<void>;
   readonly resolveTerminal: () => void;
@@ -117,8 +103,6 @@ interface ZLinkActorSessionOutboundEntry {
   readonly sealId?: string;
   readonly operation: ZLinkActorSessionRetainedOutbound;
   readonly arrivalOrder: bigint;
-  readonly claim?: ServiceSessionBindingAdmissionClaim;
-  readonly authorization: 'legacy' | 'source' | 'pendingTarget';
   released: boolean;
   settled: boolean;
 }
@@ -851,65 +835,18 @@ export class ZLinkActorSessionBindingRegistry<
         return 'rejected';
       }
     }
-    return this.retainRelocationOutboundCore(actorId, operation, 'legacy');
+    return this.retainRelocationOutboundCore(actorId, operation);
   }
 
-  async admitRelocationOutbound(
-    claim: ServiceSessionBindingAdmissionClaim,
-    operation: ZLinkActorSessionRetainedOutbound
-  ): Promise<ServiceSessionBindingAdmissionResult> {
-    return await this.lane.run(() => this.admitRelocationOutboundCore(claim, operation));
-  }
-
-  private admitRelocationOutboundCore(
-    claim: ServiceSessionBindingAdmissionClaim,
-    operation: ZLinkActorSessionRetainedOutbound
-  ): ServiceSessionBindingAdmissionResult {
-    const queue = this.relocations.get(claim.actorId);
-    const state =
-      queue?.activeSealId === undefined ? undefined : queue.seals.get(queue.activeSealId);
-    const error = this.outboundAdmissionError(claim);
-    if (error !== undefined) {
-      failRetainedOutbound(operation, error);
-      return 'rejected';
-    }
-    if (queue === undefined || state === undefined) {
-      if (!this.matchesCurrentProducerNode(claim)) {
-        failRetainedOutbound(
-          operation,
-          new Error(
-            `Actor '${claim.actorId}' Session outbound admission was fenced by its current binding.`
-          )
-        );
-        return 'rejected';
-      }
-      if (queue === undefined) return 'passThrough';
-      return this.retainRelocationOutboundCore(claim.actorId, operation, 'source', claim);
-    }
-    if (state.phase === 'sealed' || state.phase === 'applying') {
-      const matchesSource = matchesRelocationSourceProof(state, claim);
-      const matchesCurrent = this.matchesCurrentProducerNode(claim);
-      const authorization = matchesSource || matchesCurrent ? 'source' : 'pendingTarget';
-      return this.retainRelocationOutboundCore(claim.actorId, operation, authorization, claim);
-    }
-    const acceptedProof = state.acceptedProducerProof;
-    if (acceptedProof === undefined || !matchesAcceptedProducerProof(acceptedProof, claim)) {
-      failRetainedOutbound(
-        operation,
-        new Error(
-          `Actor '${claim.actorId}' Session outbound admission did not match its accepted producer proof.`
-        )
-      );
-      return 'rejected';
-    }
-    return this.retainRelocationOutboundCore(claim.actorId, operation, 'source', claim);
-  }
-
+  /**
+   * Session–Actor binding §8.1: the Session owner holds a push only while the
+   * binding's relocation seal is open, and keeps it behind earlier held pushes.
+   * Whether the push names the current binding was decided once by the Session
+   * owner's binding record before this call.
+   */
   private retainRelocationOutboundCore(
     actorId: string,
-    operation: ZLinkActorSessionRetainedOutbound,
-    authorization: ZLinkActorSessionOutboundEntry['authorization'],
-    claim?: ServiceSessionBindingAdmissionClaim
+    operation: ZLinkActorSessionRetainedOutbound
   ): ServiceSessionBindingAdmissionResult {
     const queue = this.relocations.get(actorId);
     const state =
@@ -920,9 +857,7 @@ export class ZLinkActorSessionBindingRegistry<
       if (!this.reserveOutbound(queue, operation)) return 'rejected';
       queue.outbound.push({
         operation,
-        authorization,
         arrivalOrder: queue.nextArrivalOrder++,
-        ...(claim === undefined ? {} : { claim }),
         released: true,
         settled: false
       });
@@ -933,9 +868,7 @@ export class ZLinkActorSessionBindingRegistry<
     queue.outbound.push({
       sealId: state.sealId,
       operation,
-      authorization,
       arrivalOrder: queue.nextArrivalOrder++,
-      ...(claim === undefined ? {} : { claim }),
       released: false,
       settled: false
     });
@@ -962,12 +895,10 @@ export class ZLinkActorSessionBindingRegistry<
     actorId: string,
     sealId: string,
     applyFingerprint: string,
-    action: 'commit' | 'abort',
-    commitOwnerTransition: () => Promise<void>,
-    acceptedProducerProof?: ZLinkActorSessionAcceptedProducerProof
+    commitOwnerTransition: () => Promise<void>
   ): Promise<void> {
     const prepared = await this.lane.run(() =>
-      this.prepareRelocationApply(actorId, sealId, applyFingerprint, action, acceptedProducerProof)
+      this.prepareRelocationApply(actorId, sealId, applyFingerprint)
     );
     if (prepared.applyPromise !== undefined) {
       await prepared.applyPromise;
@@ -991,19 +922,14 @@ export class ZLinkActorSessionBindingRegistry<
   private prepareRelocationApply(
     actorId: string,
     sealId: string,
-    applyFingerprint: string,
-    action: 'commit' | 'abort',
-    acceptedProducerProof?: ZLinkActorSessionAcceptedProducerProof
+    applyFingerprint: string
   ): {
     readonly queue: ZLinkActorSessionRelocationQueue;
     readonly state: ZLinkActorSessionRelocationState;
     readonly applyPromise?: Promise<void>;
-    readonly action?: 'commit' | 'abort';
-    readonly acceptedProducerProof?: ZLinkActorSessionAcceptedProducerProof;
     readonly promise?: Promise<void>;
     readonly resolve?: () => void;
     readonly reject?: (error: unknown) => void;
-    readonly actorId?: string;
     readonly sealId?: string;
   } {
     const queue = this.relocations.get(actorId);
@@ -1025,24 +951,6 @@ export class ZLinkActorSessionBindingRegistry<
       }
       return { queue, state, applyPromise: state.applyPromise };
     }
-    if (
-      action === 'commit' &&
-      acceptedProducerProof !== undefined &&
-      !validAcceptedTargetProof(state, acceptedProducerProof)
-    ) {
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-        `Actor '${actorId}' command 44 target producer proof did not match its Session seal.`,
-        true
-      );
-    }
-    if (action === 'abort' && acceptedProducerProof !== undefined) {
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-        `Actor '${actorId}' abort route supplied a target producer proof.`,
-        true
-      );
-    }
 
     state.phase = 'applying';
     state.applyFingerprint = applyFingerprint;
@@ -1056,52 +964,26 @@ export class ZLinkActorSessionBindingRegistry<
     return {
       queue,
       state,
-      action,
-      acceptedProducerProof,
       promise,
       resolve,
       reject,
-      actorId,
       sealId
     };
   }
 
+  /**
+   * Command 44 commit or abort releases every push held under this seal in
+   * arrival order (Session–Actor binding §8.1). The held pushes were admitted
+   * by the current binding; the route change does not judge them again.
+   */
   private completeRelocationApply(prepared: {
     readonly queue: ZLinkActorSessionRelocationQueue;
     readonly state: ZLinkActorSessionRelocationState;
-    readonly action?: 'commit' | 'abort';
-    readonly acceptedProducerProof?: ZLinkActorSessionAcceptedProducerProof;
-    readonly actorId?: string;
     readonly sealId?: string;
   }): void {
-    const { queue, state, action, acceptedProducerProof, actorId, sealId } = prepared;
-    const proof =
-      action === 'commit'
-        ? (acceptedProducerProof ?? this.currentProducerProof(actorId!))
-        : relocationSourceProof(state);
-    state.acceptedProducerProof = proof;
-    for (let index = queue.outbound.length - 1; index >= 0; index--) {
-      const entry = queue.outbound[index]!;
-      if (entry.sealId !== sealId) continue;
-      if (entry.authorization !== 'pendingTarget') {
-        entry.released = true;
-        continue;
-      }
-      if (
-        action === 'commit' &&
-        proof !== undefined &&
-        entry.claim !== undefined &&
-        matchesAcceptedProducerProof(proof, entry.claim)
-      ) {
-        entry.released = true;
-        continue;
-      }
-      queue.outbound.splice(index, 1);
-      this.failOutbound(
-        queue,
-        entry,
-        new Error(`Actor '${actorId}' pending Session producer did not match command 44 proof.`)
-      );
+    const { queue, state, sealId } = prepared;
+    for (const entry of queue.outbound) {
+      if (entry.sealId === sealId) entry.released = true;
     }
     this.startOutboundDrain(queue);
     state.phase = 'applied';
@@ -1113,49 +995,6 @@ export class ZLinkActorSessionBindingRegistry<
     prepared.state.phase = 'sealed';
     prepared.state.applyFingerprint = undefined;
     prepared.state.applyPromise = undefined;
-    prepared.state.acceptedProducerProof = undefined;
-  }
-
-  private currentProducerProof(
-    actorId: string
-  ): ZLinkActorSessionAcceptedProducerProof | undefined {
-    const route = this.routes.get(actorId);
-    const actorRef = (
-      route?.actor as TActor & {
-        readonly ref?: {
-          readonly actorId?: unknown;
-          readonly objectGeneration?: unknown;
-          readonly generation?: unknown;
-          readonly nodeRid?: unknown;
-          readonly ownerNodeGeneration?: unknown;
-          readonly bindingGeneration?: unknown;
-        };
-      }
-    ).ref;
-    const sessionIdentity = route?.sessionIdentity;
-    if (
-      route === undefined ||
-      actorRef === undefined ||
-      sessionIdentity === undefined ||
-      actorRef.ownerNodeGeneration === undefined
-    )
-      return undefined;
-    return {
-      actorId,
-      objectGeneration: BigInt(
-        (actorRef.objectGeneration as bigint | number | string | boolean | undefined) ??
-          (actorRef.generation as bigint | number | string | boolean | undefined) ??
-          -1
-      ),
-      actorNodeRid: String(actorRef.nodeRid ?? ''),
-      actorNodeGeneration: BigInt(
-        actorRef.ownerNodeGeneration as bigint | number | string | boolean
-      ),
-      sessionIdentity: String(sessionIdentity),
-      bindingGeneration: BigInt(
-        (actorRef.bindingGeneration as bigint | number | string | boolean | undefined) ?? -1
-      )
-    };
   }
 
   async observeRelocationTerminal(
@@ -1548,71 +1387,6 @@ export class ZLinkActorSessionBindingRegistry<
     failRetainedOutbound(entry.operation, error);
   }
 
-  private outboundAdmissionError(claim: ServiceSessionBindingAdmissionClaim): Error | undefined {
-    if (
-      claim.actorId.length === 0 ||
-      claim.objectGeneration <= 0n ||
-      claim.actorNodeRid.length === 0 ||
-      claim.actorNodeGeneration <= 0n ||
-      claim.producerNodeRid.length === 0 ||
-      claim.producerNodeGeneration <= 0n ||
-      claim.bindingGeneration <= 0n ||
-      claim.sessionIdentity.length === 0 ||
-      !routingIdsEqual(claim.producerNodeRid, claim.actorNodeRid) ||
-      claim.producerNodeGeneration !== claim.actorNodeGeneration
-    ) {
-      return new Error(`Actor '${claim.actorId}' Session outbound admission claim is invalid.`);
-    }
-    const route = this.routes.get(claim.actorId);
-    const ref = route?.actor as
-      | (TActor & {
-          readonly ref?: {
-            readonly actorId?: unknown;
-            readonly objectGeneration?: unknown;
-            readonly generation?: unknown;
-            readonly bindingGeneration?: unknown;
-          };
-        })
-      | undefined;
-    const actorRef = ref?.ref;
-    const routeSessionIdentity = route?.sessionIdentity;
-    if (
-      route === undefined ||
-      actorRef === undefined ||
-      String(actorRef.actorId ?? claim.actorId) !== claim.actorId ||
-      BigInt(
-        (actorRef.objectGeneration as bigint | number | string | boolean | undefined) ??
-          (actorRef.generation as bigint | number | string | boolean | undefined) ??
-          -1
-      ) !== claim.objectGeneration ||
-      BigInt(
-        (actorRef.bindingGeneration as bigint | number | string | boolean | undefined) ?? -1
-      ) !== claim.bindingGeneration ||
-      String(routeSessionIdentity ?? '') !== claim.sessionIdentity
-    ) {
-      return new Error(
-        `Actor '${claim.actorId}' Session outbound admission was fenced by its current binding.`
-      );
-    }
-    return undefined;
-  }
-
-  private matchesCurrentProducerNode(claim: ServiceSessionBindingAdmissionClaim): boolean {
-    const route = this.routes.get(claim.actorId);
-    const actorRef = (
-      route?.actor as TActor & {
-        readonly ref?: {
-          readonly nodeRid?: unknown;
-        };
-      }
-    ).ref;
-    return (
-      route !== undefined &&
-      actorRef !== undefined &&
-      routingIdsEqual(String(actorRef.nodeRid ?? ''), claim.actorNodeRid)
-    );
-  }
-
   private rememberTerminalRelocation(state: ZLinkActorSessionRelocationState): void {
     this.terminalRelocations.delete(state);
     this.terminalRelocations.set(state, true);
@@ -1677,68 +1451,6 @@ function assertRelocationClaim(
 
 function startOutsideStateLane<T>(work: () => T): T {
   return detachedStateLaneResource.runInAsyncScope(work);
-}
-
-function matchesRelocationSourceProof(
-  state: ZLinkActorSessionRelocationState,
-  claim: ServiceSessionBindingAdmissionClaim
-): boolean {
-  return (
-    state.actorId === claim.actorId &&
-    state.actorGeneration === claim.objectGeneration &&
-    state.bindingGeneration === claim.bindingGeneration &&
-    state.sessionIdentity === claim.sessionIdentity &&
-    state.actorNodeRid !== undefined &&
-    routingIdsEqual(state.actorNodeRid, claim.actorNodeRid) &&
-    state.actorNodeGeneration === claim.actorNodeGeneration
-  );
-}
-
-function matchesAcceptedProducerProof(
-  proof: ZLinkActorSessionAcceptedProducerProof,
-  claim: ServiceSessionBindingAdmissionClaim
-): boolean {
-  return (
-    proof.actorId === claim.actorId &&
-    proof.objectGeneration === claim.objectGeneration &&
-    routingIdsEqual(proof.actorNodeRid, claim.actorNodeRid) &&
-    proof.actorNodeGeneration === claim.actorNodeGeneration &&
-    proof.sessionIdentity === claim.sessionIdentity &&
-    proof.bindingGeneration === claim.bindingGeneration
-  );
-}
-
-function validAcceptedTargetProof(
-  state: ZLinkActorSessionRelocationState,
-  proof: ZLinkActorSessionAcceptedProducerProof
-): boolean {
-  return (
-    proof.actorId === state.actorId &&
-    proof.objectGeneration === state.actorGeneration &&
-    proof.actorNodeRid.length > 0 &&
-    proof.actorNodeGeneration > 0n &&
-    proof.sessionIdentity === state.sessionIdentity &&
-    proof.bindingGeneration === state.bindingGeneration
-  );
-}
-
-function relocationSourceProof(
-  state: ZLinkActorSessionRelocationState
-): ZLinkActorSessionAcceptedProducerProof | undefined {
-  if (
-    state.sessionIdentity === undefined ||
-    state.actorNodeRid === undefined ||
-    state.actorNodeGeneration === undefined
-  )
-    return undefined;
-  return {
-    actorId: state.actorId,
-    objectGeneration: state.actorGeneration,
-    actorNodeRid: state.actorNodeRid,
-    actorNodeGeneration: state.actorNodeGeneration,
-    sessionIdentity: state.sessionIdentity,
-    bindingGeneration: state.bindingGeneration
-  };
 }
 
 function failRetainedOutbound(operation: ZLinkActorSessionRetainedOutbound, error: unknown): void {

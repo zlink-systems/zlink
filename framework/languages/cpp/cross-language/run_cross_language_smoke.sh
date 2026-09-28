@@ -165,12 +165,20 @@ if [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "java-cross" ]] \
 fi
 
 free_port() {
-  "${PYTHON_BIN[@]}" - <<'PY'
+  "${PYTHON_BIN[@]}" - "${1:-1}" <<'PY'
 import socket
-sock = socket.socket()
-sock.bind(("127.0.0.1", 0))
-print(sock.getsockname()[1])
-sock.close()
+import sys
+
+sockets = []
+try:
+    for _ in range(int(sys.argv[1])):
+        sock = socket.socket()
+        sockets.append(sock)
+        sock.bind(("127.0.0.1", 0))
+    print(" ".join(str(sock.getsockname()[1]) for sock in sockets))
+finally:
+    for sock in sockets:
+        sock.close()
 PY
 }
 
@@ -564,8 +572,7 @@ stage_node_connector_cpp_stream_server() {
 # --- messageFollow wire: C++ raw owner <-> Node raw owner ---------------------
 stage_cpp_node_message_follow() {
   local cpp_port node_port cpp_endpoint node_endpoint
-  cpp_port="$(free_port)"
-  node_port="$(free_port)"
+  read -r cpp_port node_port <<<"$(free_port 2)"
   cpp_endpoint="tcp://127.0.0.1:${cpp_port}"
   node_endpoint="tcp://127.0.0.1:${node_port}"
   start_cpp cpp-message-follow message-follow \
@@ -633,8 +640,7 @@ stage_cpp_node_message_follow() {
 # now it completes fast.
 stage_cpp_spot_route_client_dotnet_host() {
   local port bind_port endpoint events
-  port="$(free_port)"
-  bind_port="$(free_port)"
+  read -r port bind_port <<<"$(free_port 2)"
   endpoint="tcp://127.0.0.1:${port}"
   events="${RUN_DIR}/cpp-spotroute-client-dotnet.events"
   start_dotnet dotnet-spotroute-host route-server \
@@ -724,8 +730,7 @@ stage_dotnet_spot_route_client_cpp_host() {
 # equally marker-less reply from a C++ server.
 stage_cpp_spot_route_client_node_host() {
   local port bind_port endpoint events
-  port="$(free_port)"
-  bind_port="$(free_port)"
+  read -r port bind_port <<<"$(free_port 2)"
   endpoint="tcp://127.0.0.1:${port}"
   events="${RUN_DIR}/cpp-spotroute-client-node.events"
   start_node node-spotroute-host spot-route-server \
@@ -764,8 +769,7 @@ stage_cpp_spot_route_client_node_host() {
 # origin=application, not the previously observed origin=none.
 stage_node_spot_route_client_cpp_host() {
   local port bind_port endpoint events
-  port="$(free_port)"
-  bind_port="$(free_port)"
+  read -r port bind_port <<<"$(free_port 2)"
   endpoint="tcp://127.0.0.1:${port}"
   events="${RUN_DIR}/node-spotroute-client.events"
   start_cpp cpp-spotroute-host-node spot-route-server \
@@ -800,8 +804,7 @@ stage_node_spot_route_client_cpp_host() {
 # facing the same C++ reply), (c) application rejected without the marker.
 stage_java_spot_route_client_cpp_host() {
   local port bind_port endpoint events
-  port="$(free_port)"
-  bind_port="$(free_port)"
+  read -r port bind_port <<<"$(free_port 2)"
   endpoint="tcp://127.0.0.1:${port}"
   events="${RUN_DIR}/java-spotroute-client.events"
   start_cpp cpp-spotroute-host-java spot-route-server \
@@ -878,8 +881,7 @@ stage_java_spot_route_client_cpp_host() {
 # reply from a C++ server.
 stage_cpp_spot_route_client_java_host() {
   local port bind_port endpoint events
-  port="$(free_port)"
-  bind_port="$(free_port)"
+  read -r port bind_port <<<"$(free_port 2)"
   endpoint="tcp://127.0.0.1:${port}"
   events="${RUN_DIR}/cpp-spotroute-client-java.events"
   start_java java-spotroute-host spot-route-server \
@@ -915,8 +917,7 @@ stage_cpp_spot_route_client_java_host() {
 # paths -- asserted as observed, not a claim about what it should be.
 stage_cpp_spot_route_client_cpp_host() {
   local port bind_port endpoint events
-  port="$(free_port)"
-  bind_port="$(free_port)"
+  read -r port bind_port <<<"$(free_port 2)"
   endpoint="tcp://127.0.0.1:${port}"
   events="${RUN_DIR}/cpp-spotroute-client-cpp.events"
   start_cpp cpp-spotroute-host-cpp spot-route-server \
@@ -951,8 +952,7 @@ stage_cpp_spot_route_client_cpp_host() {
 # as observed.
 stage_java_spot_route_client_node_host() {
   local port bind_port endpoint events
-  port="$(free_port)"
-  bind_port="$(free_port)"
+  read -r port bind_port <<<"$(free_port 2)"
   endpoint="tcp://127.0.0.1:${port}"
   events="${RUN_DIR}/java-spotroute-client-node.events"
   start_node node-spotroute-host-java spot-route-server \
@@ -985,8 +985,7 @@ stage_java_spot_route_client_node_host() {
 # that stage facing the equally marker-less C++ host.
 stage_node_spot_route_client_java_host() {
   local port bind_port endpoint events
-  port="$(free_port)"
-  bind_port="$(free_port)"
+  read -r port bind_port <<<"$(free_port 2)"
   endpoint="tcp://127.0.0.1:${port}"
   events="${RUN_DIR}/node-spotroute-client-java.events"
   start_java java-spotroute-host-node spot-route-server \
@@ -1024,8 +1023,7 @@ stage_node_spot_route_client_java_host() {
 # there, same as every other marker-less direction. Asserted as observed.
 stage_java_spot_route_client_dotnet_host() {
   local port bind_port endpoint events
-  port="$(free_port)"
-  bind_port="$(free_port)"
+  read -r port bind_port <<<"$(free_port 2)"
   endpoint="tcp://127.0.0.1:${port}"
   events="${RUN_DIR}/java-spotroute-client-dotnet.events"
   start_dotnet dotnet-spotroute-host-java route-server \
@@ -1100,9 +1098,7 @@ stage_dotnet_spot_route_client_java_host() {
 stage_node_source_dotnet_target_relocation() {
   local redis_port source_port target_port source_endpoint target_endpoint
   local source_events target_events
-  redis_port="$(free_port)"
-  source_port="$(free_port)"
-  target_port="$(free_port)"
+  read -r redis_port source_port target_port <<<"$(free_port 3)"
   source_endpoint="tcp://127.0.0.1:${source_port}"
   target_endpoint="tcp://127.0.0.1:${target_port}"
   source_events="${RUN_DIR}/node-relocation-source.events"
@@ -1156,9 +1152,7 @@ stage_node_source_dotnet_target_user_spot_join() {
   fi
   local redis_port source_port target_port source_endpoint target_endpoint
   local source_events target_events start_file force_private_args
-  redis_port="$(free_port)"
-  source_port="$(free_port)"
-  target_port="$(free_port)"
+  read -r redis_port source_port target_port <<<"$(free_port 3)"
   source_endpoint="tcp://127.0.0.1:${source_port}"
   target_endpoint="tcp://127.0.0.1:${target_port}"
   source_events="${RUN_DIR}/node-user-spot-join-source.events"
@@ -1232,9 +1226,7 @@ stage_node_source_dotnet_target_user_spot_join() {
 stage_dotnet_source_node_target_user_spot_join() {
   local redis_port source_port target_port source_endpoint target_endpoint
   local source_events target_events
-  redis_port="$(free_port)"
-  source_port="$(free_port)"
-  target_port="$(free_port)"
+  read -r redis_port source_port target_port <<<"$(free_port 3)"
   source_endpoint="tcp://127.0.0.1:${source_port}"
   target_endpoint="tcp://127.0.0.1:${target_port}"
   source_events="${RUN_DIR}/dotnet-user-spot-join-source.events"
@@ -1283,9 +1275,7 @@ stage_dotnet_source_node_target_user_spot_join() {
 stage_java_source_dotnet_target_user_spot_join() {
   local redis_port source_port target_port source_endpoint target_endpoint
   local source_events target_events start_file
-  redis_port="$(free_port)"
-  source_port="$(free_port)"
-  target_port="$(free_port)"
+  read -r redis_port source_port target_port <<<"$(free_port 3)"
   source_endpoint="tcp://127.0.0.1:${source_port}"
   target_endpoint="tcp://127.0.0.1:${target_port}"
   source_events="${RUN_DIR}/java-user-spot-join-source.events"
@@ -1339,9 +1329,7 @@ stage_java_source_dotnet_target_user_spot_join() {
 stage_node_source_java_target_user_spot_join() {
   local redis_port source_port target_port source_endpoint target_endpoint
   local source_events target_events start_file
-  redis_port="$(free_port)"
-  source_port="$(free_port)"
-  target_port="$(free_port)"
+  read -r redis_port source_port target_port <<<"$(free_port 3)"
   source_endpoint="tcp://127.0.0.1:${source_port}"
   target_endpoint="tcp://127.0.0.1:${target_port}"
   source_events="${RUN_DIR}/node-user-spot-join-source-java.events"
@@ -1402,9 +1390,7 @@ stage_node_source_java_target_user_spot_join() {
 stage_node_source_cpp_target_user_spot_join() {
   local redis_port source_port target_port source_endpoint target_endpoint
   local source_events target_events start_file
-  redis_port="$(free_port)"
-  source_port="$(free_port)"
-  target_port="$(free_port)"
+  read -r redis_port source_port target_port <<<"$(free_port 3)"
   source_endpoint="tcp://127.0.0.1:${source_port}"
   target_endpoint="tcp://127.0.0.1:${target_port}"
   source_events="${RUN_DIR}/node-user-spot-join-source-cpp.events"
@@ -1465,9 +1451,7 @@ stage_node_source_cpp_target_user_spot_join() {
 stage_cpp_source_dotnet_target_user_spot_join() {
   local redis_port source_port target_port source_endpoint target_endpoint
   local source_events target_events start_file
-  redis_port="$(free_port)"
-  source_port="$(free_port)"
-  target_port="$(free_port)"
+  read -r redis_port source_port target_port <<<"$(free_port 3)"
   source_endpoint="tcp://127.0.0.1:${source_port}"
   target_endpoint="tcp://127.0.0.1:${target_port}"
   source_events="${RUN_DIR}/cpp-user-spot-join-source.events"
@@ -1530,7 +1514,7 @@ wait_for_user_spot_target_outcome() {
 # --- User-Spot JoinSpot: .NET source -> Java target --------------------------
 stage_dotnet_source_java_target_user_spot_join() {
   local redis_port source_port target_port source_endpoint target_endpoint source_events target_events
-  redis_port="$(free_port)"; source_port="$(free_port)"; target_port="$(free_port)"
+  read -r redis_port source_port target_port <<<"$(free_port 3)"
   source_endpoint="tcp://127.0.0.1:${source_port}"; target_endpoint="tcp://127.0.0.1:${target_port}"
   source_events="${RUN_DIR}/dotnet-user-spot-join-source-java.events"
   target_events="${RUN_DIR}/java-user-spot-target-dotnet.events"
@@ -1560,7 +1544,7 @@ stage_dotnet_source_java_target_user_spot_join() {
 # --- User-Spot JoinSpot: Java source -> Node target --------------------------
 stage_java_source_node_target_user_spot_join() {
   local redis_port source_port target_port source_endpoint target_endpoint source_events target_events start_file
-  redis_port="$(free_port)"; source_port="$(free_port)"; target_port="$(free_port)"
+  read -r redis_port source_port target_port <<<"$(free_port 3)"
   source_endpoint="tcp://127.0.0.1:${source_port}"; target_endpoint="tcp://127.0.0.1:${target_port}"
   source_events="${RUN_DIR}/java-user-spot-join-source-node.events"
   target_events="${RUN_DIR}/node-user-spot-target-java.events"
@@ -1591,7 +1575,7 @@ stage_java_source_node_target_user_spot_join() {
 # --- User-Spot JoinSpot: .NET source -> C++ target ---------------------------
 stage_dotnet_source_cpp_target_user_spot_join() {
   local redis_port source_port target_port source_endpoint target_endpoint source_events target_events
-  redis_port="$(free_port)"; source_port="$(free_port)"; target_port="$(free_port)"
+  read -r redis_port source_port target_port <<<"$(free_port 3)"
   source_endpoint="tcp://127.0.0.1:${source_port}"; target_endpoint="tcp://127.0.0.1:${target_port}"
   source_events="${RUN_DIR}/dotnet-user-spot-join-source-cpp.events"
   target_events="${RUN_DIR}/cpp-user-spot-target-dotnet.events"
@@ -1622,7 +1606,7 @@ stage_dotnet_source_cpp_target_user_spot_join() {
 # --- User-Spot JoinSpot: C++ source -> Node target ---------------------------
 stage_cpp_source_node_target_user_spot_join() {
   local redis_port source_port target_port source_endpoint target_endpoint source_events target_events start_file
-  redis_port="$(free_port)"; source_port="$(free_port)"; target_port="$(free_port)"
+  read -r redis_port source_port target_port <<<"$(free_port 3)"
   source_endpoint="tcp://127.0.0.1:${source_port}"; target_endpoint="tcp://127.0.0.1:${target_port}"
   source_events="${RUN_DIR}/cpp-user-spot-join-source-node.events"
   target_events="${RUN_DIR}/node-user-spot-target-cpp.events"
@@ -1654,7 +1638,7 @@ stage_cpp_source_node_target_user_spot_join() {
 # --- User-Spot JoinSpot: Java source -> C++ target ---------------------------
 stage_java_source_cpp_target_user_spot_join() {
   local redis_port source_port target_port source_endpoint target_endpoint source_events target_events start_file
-  redis_port="$(free_port)"; source_port="$(free_port)"; target_port="$(free_port)"
+  read -r redis_port source_port target_port <<<"$(free_port 3)"
   source_endpoint="tcp://127.0.0.1:${source_port}"; target_endpoint="tcp://127.0.0.1:${target_port}"
   source_events="${RUN_DIR}/java-user-spot-join-source-cpp.events"
   target_events="${RUN_DIR}/cpp-user-spot-target-java.events"
@@ -1687,7 +1671,7 @@ stage_java_source_cpp_target_user_spot_join() {
 # --- User-Spot JoinSpot: C++ source -> Java target ---------------------------
 stage_cpp_source_java_target_user_spot_join() {
   local redis_port source_port target_port source_endpoint target_endpoint source_events target_events start_file
-  redis_port="$(free_port)"; source_port="$(free_port)"; target_port="$(free_port)"
+  read -r redis_port source_port target_port <<<"$(free_port 3)"
   source_endpoint="tcp://127.0.0.1:${source_port}"; target_endpoint="tcp://127.0.0.1:${target_port}"
   source_events="${RUN_DIR}/cpp-user-spot-join-source-java.events"
   target_events="${RUN_DIR}/java-user-spot-target-cpp.events"
@@ -1755,7 +1739,7 @@ assert_remote_actor_create() {
 stage_cpp_source_dotnet_target_remote_actor_create() {
   local redis_port source_port target_port source_endpoint target_endpoint
   local source_events target_events start_file requester_rid
-  redis_port="$(free_port)"; source_port="$(free_port)"; target_port="$(free_port)"
+  read -r redis_port source_port target_port <<<"$(free_port 3)"
   source_endpoint="tcp://127.0.0.1:${source_port}"; target_endpoint="tcp://127.0.0.1:${target_port}"
   source_events="${RUN_DIR}/cpp-remote-create-source-dotnet.events"
   target_events="${RUN_DIR}/dotnet-remote-create-target.events"
@@ -1789,7 +1773,7 @@ stage_cpp_source_dotnet_target_remote_actor_create() {
 stage_cpp_source_node_target_remote_actor_create() {
   local redis_port source_port target_port source_endpoint target_endpoint
   local source_events target_events start_file requester_rid
-  redis_port="$(free_port)"; source_port="$(free_port)"; target_port="$(free_port)"
+  read -r redis_port source_port target_port <<<"$(free_port 3)"
   source_endpoint="tcp://127.0.0.1:${source_port}"; target_endpoint="tcp://127.0.0.1:${target_port}"
   source_events="${RUN_DIR}/cpp-remote-create-source-node.events"
   target_events="${RUN_DIR}/node-remote-create-target.events"
@@ -1822,7 +1806,7 @@ stage_cpp_source_node_target_remote_actor_create() {
 stage_cpp_source_java_target_remote_actor_create() {
   local redis_port source_port target_port source_endpoint target_endpoint
   local source_events target_events start_file requester_rid
-  redis_port="$(free_port)"; source_port="$(free_port)"; target_port="$(free_port)"
+  read -r redis_port source_port target_port <<<"$(free_port 3)"
   source_endpoint="tcp://127.0.0.1:${source_port}"; target_endpoint="tcp://127.0.0.1:${target_port}"
   source_events="${RUN_DIR}/cpp-remote-create-source-java.events"
   target_events="${RUN_DIR}/java-remote-create-target.events"
@@ -1890,7 +1874,7 @@ run_quarantine_guard() {
 stage_dotnet_source_java_target_remote_actor_create() {
   local redis_port source_port target_port source_endpoint target_endpoint
   local source_events target_events requester_rid
-  redis_port="$(free_port)"; source_port="$(free_port)"; target_port="$(free_port)"
+  read -r redis_port source_port target_port <<<"$(free_port 3)"
   source_endpoint="tcp://127.0.0.1:${source_port}"; target_endpoint="tcp://127.0.0.1:${target_port}"
   source_events="${RUN_DIR}/dotnet-remote-create-source-java.events"
   target_events="${RUN_DIR}/java-remote-create-target-dotnet.events"
@@ -1930,9 +1914,7 @@ stage_dotnet_source_java_target_remote_actor_create() {
 stage_java_source_dotnet_target_relocation() {
   local redis_port source_port target_port source_endpoint target_endpoint
   local source_events target_events
-  redis_port="$(free_port)"
-  source_port="$(free_port)"
-  target_port="$(free_port)"
+  read -r redis_port source_port target_port <<<"$(free_port 3)"
   source_endpoint="tcp://127.0.0.1:${source_port}"
   target_endpoint="tcp://127.0.0.1:${target_port}"
   source_events="${RUN_DIR}/java-relocation-source.events"
@@ -1971,9 +1953,7 @@ stage_java_source_dotnet_target_relocation() {
 stage_dotnet_source_java_target_relocation() {
   local redis_port source_port target_port source_endpoint target_endpoint
   local source_events target_events
-  redis_port="$(free_port)"
-  source_port="$(free_port)"
-  target_port="$(free_port)"
+  read -r redis_port source_port target_port <<<"$(free_port 3)"
   source_endpoint="tcp://127.0.0.1:${source_port}"
   target_endpoint="tcp://127.0.0.1:${target_port}"
   source_events="${RUN_DIR}/dotnet-relocation-source-java.events"

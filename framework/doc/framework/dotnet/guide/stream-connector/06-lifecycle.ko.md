@@ -43,8 +43,9 @@ connector 하나는 연결 하나를 대표한다. 연결은 만들고, 연결�
 
 ## 2. 연결과 종료
 
-연결 호출은 연결과 receive 준비가 끝나야 완료된다. 종료 호출은 보내지 못한 frame을 배출하고
-transport를 닫은 뒤, 대기 중이던 request를 실패로 정리한다.
+연결 호출은 연결과 receive 준비가 끝나야 완료된다. 종료 호출은 아직 쓰지 않은 frame을 쓰지 않고
+transport를 닫으며, 그 frame의 Send·Request와 응답을 기다리던 request를 `Disconnected`로 실패시킨다.
+Send의 frame이 쓰였는지 확인하려면 종료 전에 그 Send의 완료를 기다린다.
 
 ```csharp
 await connector.Connect.Async();
@@ -136,12 +137,16 @@ var reason = connector.CloseReason;   // 끊긴 적이 없으면 null이다
 
 ## 7. 종료가 기다리는 것
 
-종료 호출은 **connector 자신의 일만** 기다린다. 보내지 못한 frame의 배출, transport 종료, 대기
-중인 request의 실패 처리가 끝나면 돌아온다.
+종료 호출은 **connector 자신의 일만** 기다린다. transport 종료와 대기 중이던 operation의 실패
+처리다. 아직 쓰지 않은 frame은 쓰지 않고, 상대가 읽거나 응답하기를 기다리지 않는다. handler 밖에서
+호출한 종료는 이 일이 끝난 뒤 돌아오고, handler 안에서 호출한 종료는 종료를 시작한 뒤 곧바로
+돌아온다. 따라서 handler가 자기를 실행하는 경로의 종료를 기다리지 않는다.
 
-**connector는 handler의 완료를 기다리지 않는다.** 끊김 handler를 실행한 뒤 그 handler가 끝났는지는
-보지 않고 돌아오며, 재연결도 같다. 그래서 끝나지 않는 handler 하나가 종료를 막지 못한다. handler
-안에서 반드시 끝내야 하는 일이 있으면 그 일을 handler 밖에서 기다린다.
+**connector는 handler의 완료를 기다리지 않는다.** 종료로 생기는 연결 상태 handler와 끊김 handler는
+dispatch mode를 따른다. `Immediate`에서는 종료 작업이 실행하고, `Manual`에서는 종료 뒤의 다음
+dispatch pump에서 실행한다. 어느 경우든 그 handler가 끝났는지는 보지 않으며, 재연결도 같다. 그래서
+끝나지 않는 handler 하나가 종료를 막지 못한다. handler 안에서 반드시 끝내야 하는 일이 있으면 그 일을
+handler 밖에서 기다린다.
 
 ## 8. 다음 장
 

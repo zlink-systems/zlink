@@ -104,7 +104,7 @@ public sealed class ZLinkRedisRelocationStore : IZLinkRelocationStore, IAsyncDis
     {
         ValidateReference(reference.Value);
         ValidatePayload(payload);
-        var retentionMs = ValidateRetention(retention);
+        var retentionMs = Zlink.Framework.Internal.ZLinkStoreRetention.ToMilliseconds(retention);
         var result = await ExecuteAsync(
                 async database =>
                     (RedisResult[])
@@ -173,7 +173,7 @@ public sealed class ZLinkRedisRelocationStore : IZLinkRelocationStore, IAsyncDis
     )
     {
         ValidateReference(reference.Value);
-        var retentionMs = ValidateRetention(retention);
+        var retentionMs = Zlink.Framework.Internal.ZLinkStoreRetention.ToMilliseconds(retention);
         var result = await ExecuteAsync(
                 async database =>
                     (RedisResult[])
@@ -352,13 +352,6 @@ public sealed class ZLinkRedisRelocationStore : IZLinkRelocationStore, IAsyncDis
         var options = new ZLinkRedisRelocationOptions();
         configure(options);
         return options;
-    }
-
-    private static long ValidateRetention(TimeSpan retention)
-    {
-        if (retention <= TimeSpan.Zero || retention.TotalMilliseconds > long.MaxValue)
-            throw new ArgumentOutOfRangeException(nameof(retention));
-        return Math.Max(1, checked((long)Math.Ceiling(retention.TotalMilliseconds)));
     }
 
     private static void ValidatePayload(ReadOnlyMemory<byte> payload)

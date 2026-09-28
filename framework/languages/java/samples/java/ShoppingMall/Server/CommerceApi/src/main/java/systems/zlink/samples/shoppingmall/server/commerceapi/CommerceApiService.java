@@ -1,6 +1,8 @@
 package systems.zlink.samples.shoppingmall.server.commerceapi;
 
 import systems.zlink.framework.channels.ZLinkRouteClient;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.spots.ZLinkSpotRequestCall;
 import systems.zlink.samples.shoppingmall.server.configuration.SampleNames;
 import systems.zlink.samples.shoppingmall.server.configuration.SampleTimings;
@@ -12,6 +14,7 @@ import systems.zlink.samples.shoppingmall.shared.contracts.Messages;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 
 public final class CommerceApiService {
@@ -51,6 +54,29 @@ public final class CommerceApiService {
                             store.markIdempotencyStarted(request.idempotencyKey());
                             return new Messages.StartOrderRes(
                                     mapping.orderId(), started.state().status());
+                        })
+                .exceptionallyCompose(
+                        failure -> {
+                            Throwable cause =
+                                    failure instanceof CompletionException
+                                                    && failure.getCause() != null
+                                            ? failure.getCause()
+                                            : failure;
+                            if (cause instanceof ZLinkFrameworkException framework
+                                    && framework.kind() == ZLinkFrameworkErrorKind.REJECTED) {
+                                OrderDomain.IdempotencyMapping stored =
+                                        store.findIdempotency(request.idempotencyKey());
+                                Messages.OrderState state =
+                                        stored == null
+                                                ? null
+                                                : store.findProjection(stored.orderId());
+                                if (state != null) {
+                                    return CompletableFuture.completedFuture(
+                                            new Messages.StartOrderRes(
+                                                    stored.orderId(), state.status()));
+                                }
+                            }
+                            return CompletableFuture.failedFuture(cause);
                         });
         // --8<-- [end:doc-sm-api-start]
     }
@@ -126,6 +152,14 @@ public final class CommerceApiService {
                 store.findProjection(request.successfulOrderId()) != null
                         && Messages.OrderStatuses.Confirmed.equals(
                                 store.findProjection(request.successfulOrderId()).status());
+        Messages.OrderState concurrent = store.findProjection(request.concurrentOrderId());
+        OrderDomain.IdempotencyMapping concurrentMapping =
+                store.findIdempotency("concurrent-order");
+        passed &=
+                concurrent != null
+                        && Messages.OrderStatuses.Confirmed.equals(concurrent.status())
+                        && concurrentMapping != null
+                        && request.concurrentOrderId().equals(concurrentMapping.orderId());
         passed &= evidence.paymentFailureCount() >= 1;
         passed &= evidence.releasedReservationCount() >= 1;
         lines.add("paymentFailures=" + evidence.paymentFailureCount());

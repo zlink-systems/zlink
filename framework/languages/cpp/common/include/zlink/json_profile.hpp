@@ -11,9 +11,9 @@
 #include <unordered_set>
 
 #if defined(__cpp_exceptions) || defined(_CPPUNWIND)
-#define ZLINK_STREAM_CONNECTOR_HAS_EXCEPTIONS 1
+#define ZLINK_HAS_EXCEPTIONS 1
 #else
-#define ZLINK_STREAM_CONNECTOR_HAS_EXCEPTIONS 0
+#define ZLINK_HAS_EXCEPTIONS 0
 #endif
 
 namespace zlink::detail::json_profile
@@ -88,7 +88,7 @@ try_parse (TIterator begin, TIterator end, std::string *error = nullptr)
     return parsed;
 }
 
-#if ZLINK_STREAM_CONNECTOR_HAS_EXCEPTIONS
+#if ZLINK_HAS_EXCEPTIONS
 template <typename TIterator> nlohmann::json parse (TIterator begin, TIterator end)
 {
     std::string error;
@@ -102,7 +102,7 @@ template <typename TIterator> nlohmann::json parse (TIterator begin, TIterator e
 inline std::string dump (const nlohmann::json &value)
 {
     if (!has_finite_numbers (value)) {
-#if ZLINK_STREAM_CONNECTOR_HAS_EXCEPTIONS
+#if ZLINK_HAS_EXCEPTIONS
         throw std::invalid_argument ("framework-json-v1 rejects non-finite numbers");
 #else
         return {};

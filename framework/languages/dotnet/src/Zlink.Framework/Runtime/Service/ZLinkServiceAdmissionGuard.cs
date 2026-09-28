@@ -104,14 +104,10 @@ internal static class ZLinkServiceAdmissionGuard
         );
 
     internal static ZLinkServiceDuplicateConnectionDecision SelectConnection(
-        RoutingId localRid,
-        RoutingId peerRid,
         ulong currentLifecycleGeneration,
         ZLinkServiceConnectionDirection currentDirection,
-        string currentDiscriminator,
         ulong incomingLifecycleGeneration,
-        ZLinkServiceConnectionDirection incomingDirection,
-        string incomingDiscriminator
+        ZLinkServiceConnectionDirection incomingDirection
     )
     {
         if (
@@ -120,21 +116,15 @@ internal static class ZLinkServiceAdmissionGuard
         )
             return ZLinkServiceDuplicateConnectionDecision.NotDuplicate;
 
-        // Both peers derive the same surviving pipe: the lower RID owns the
-        // outbound side. Same-direction candidates use their stable
-        // connection-local discriminator as the final tie-breaker.
-        var preferredDirection =
-            string.CompareOrdinal(localRid.ToHex(), peerRid.ToHex()) < 0
-                ? ZLinkServiceConnectionDirection.Outbound
-                : ZLinkServiceConnectionDirection.Inbound;
-        if (currentDirection != incomingDirection)
-            return currentDirection == preferredDirection
-                ? ZLinkServiceDuplicateConnectionDecision.KeepCurrent
-                : ZLinkServiceDuplicateConnectionDecision.UseIncoming;
-
-        return StringComparer.Ordinal.Compare(currentDiscriminator, incomingDiscriminator) <= 0
-            ? ZLinkServiceDuplicateConnectionDecision.KeepCurrent
-            : ZLinkServiceDuplicateConnectionDecision.UseIncoming;
+        // Core selects the one physical route of the RID (Core ROUTER §10.1),
+        // so both objects describe the same logical peer. Keep the object
+        // that owns the configured connect intent; otherwise keep the current
+        // one.
+        return
+            incomingDirection == ZLinkServiceConnectionDirection.Outbound
+            && currentDirection == ZLinkServiceConnectionDirection.Inbound
+            ? ZLinkServiceDuplicateConnectionDecision.UseIncoming
+            : ZLinkServiceDuplicateConnectionDecision.KeepCurrent;
     }
 
     private static bool ImmutableFieldsMatch(

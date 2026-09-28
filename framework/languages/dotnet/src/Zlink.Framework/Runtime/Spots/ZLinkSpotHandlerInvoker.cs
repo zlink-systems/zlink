@@ -328,6 +328,7 @@ internal sealed class ZLinkSpotHandlerInvoker(
             "SPOT actor lifecycle handler"
         );
 
+        using var relocationReady = ZLinkSpotRelocationReadyHandlerScope.Open(activation);
         if (descriptor.PassRequestArgument)
         {
             await InvokeAsync(
@@ -339,10 +340,8 @@ internal sealed class ZLinkSpotHandlerInvoker(
                     cancellationToken
                 )
                 .ConfigureAwait(false);
-            return;
         }
-
-        if (descriptor.PassSpotArgument)
+        else if (descriptor.PassSpotArgument)
         {
             await InvokeAsync(
                     ResolveActorHandlerInstances(actor),
@@ -353,17 +352,19 @@ internal sealed class ZLinkSpotHandlerInvoker(
                     cancellationToken
                 )
                 .ConfigureAwait(false);
-            return;
         }
-
-        await InvokeAsync(
-                ResolveActorHandlerInstances(actor),
-                descriptor.HandlerType,
-                descriptor.Invoker,
-                actor,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
+        else
+        {
+            await InvokeAsync(
+                    ResolveActorHandlerInstances(actor),
+                    descriptor.HandlerType,
+                    descriptor.Invoker,
+                    actor,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+        }
+        relocationReady.Complete();
     }
 
     public async ValueTask<ZLinkActorCreateResponse> InvokeActorCreateAsync(

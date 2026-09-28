@@ -403,7 +403,11 @@ class ZoneSpot(
     private var tickTimer: ZLinkTimer? = null
     private var botTimer: ZLinkTimer? = null
 
-    private data class BorderSnapshot(val tick: Long, val players: List<Messages.PlayerView>)
+    private data class BorderSnapshot(
+        val tick: Long,
+        val receivedAtTick: Long,
+        val players: List<Messages.PlayerView>,
+    )
 
     override fun configure() {
         // The topic selects the two incoming routes for this Zone Spot, so payload handling
@@ -505,7 +509,9 @@ class ZoneSpot(
 
     suspend fun tick() {
         tickValue++
-        borders.entries.removeIf { tickValue - it.value.tick > ZoneWorldSpec.BORDER_EXPIRY_TICKS }
+        borders.entries.removeIf {
+            tickValue - it.value.receivedAtTick >= ZoneWorldSpec.BORDER_EXPIRY_TICKS
+        }
         publishBorders()
         try {
             residents.values
@@ -630,8 +636,9 @@ class ZoneSpot(
     // --8<-- [end:doc-zw-state-push]
     fun applyBorder(event: Messages.ZoneBorderEvent) {
         val current = borders[event.fromZoneId]
-        if (current == null || event.tick >= current.tick)
-            borders[event.fromZoneId] = BorderSnapshot(event.tick, event.players.toList())
+        if (current == null || event.tick > current.tick)
+            borders[event.fromZoneId] =
+                BorderSnapshot(event.tick, tickValue, event.players.toList())
     }
 
     suspend fun announce(message: Messages.DeliverAnnounceMsg) {

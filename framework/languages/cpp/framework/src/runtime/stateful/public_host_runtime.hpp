@@ -17,6 +17,7 @@
 #include <zlink/Contracts/Messaging/message.hpp>
 #include <zlink/Contracts/Sockets/results.hpp>
 #include <zlink/framework/contracts/actors/actor.hpp>
+#include <zlink/framework/contracts/dispatch/task.hpp>
 #include <zlink/framework/contracts/errors/result.hpp>
 #include <zlink/framework/contracts/locations/options.hpp>
 
@@ -250,7 +251,64 @@ struct user_spot_materialize_result_t
 using user_spot_materializer_t = std::function<user_spot_materialize_result_t (
   const stateful::object_ref_t &, const std::string &, const std::vector<std::byte> &)>;
 
-using instance_spot_close_completion_t = std::function<bool (bool)>;
+/* Close step 1 of one authority kind (Spot address messaging §7). An empty
+ * `release` means step 1 ended the Close with `result` and left the authority
+ * unchanged. Otherwise `Closing` is committed and `release` performs step 4
+ * with the same owner and generation fence. Both steps complete when their
+ * Location Store operations complete; a caller does not wait for them. */
+struct spot_close_commit_t
+{
+    result_t<bool> result = result_t<bool>::success (false);
+    std::function<task_t<bool> ()> release;
+};
+using spot_close_begin_t = std::function<task_t<spot_close_commit_t> ()>;
+using spot_close_done_t = std::function<void (result_t<bool>)>;
+/* The owner runtime runs a Close for one local User Spot on that Spot's
+ * lifecycle lane and reports its result through `done`. */
+using user_spot_closer_t =
+  std::function<void (const std::string &, spot_close_begin_t, spot_close_done_t)>;
+
+/* Continues a Close step when `task` completes. `resume` returns the
+ * continuation to the Spot lifecycle turn that waits for the step, which
+ * returned its turn meanwhile; without it the step continues where the task
+ * completes. */
+template <typename T, typename Next>
+void after_close_step (task_t<T> task, detail::task_scheduler_t resume, Next next)
+{
+    auto observed = std::make_shared<task_t<T>> (std::move (task));
+    detail::observe_task_terminal (
+      *observed, [observed, resume = std::move (resume),
+                  next = std::move (next)] (const result_t<T> &value) mutable {
+          auto run = [next, value] () mutable { next (std::move (value)); };
+          if (resume)
+              resume (std::move (run));
+          else
+              run ();
+      });
+}
+
+/* Close steps 1 and 4 for an authority whose local activation is absent. */
+inline void run_authority_close (spot_close_begin_t begin,
+                                 spot_close_done_t done,
+                                 detail::task_scheduler_t resume)
+{
+    after_close_step (
+      begin (), resume, [done, resume] (result_t<spot_close_commit_t> commit) mutable {
+          if (!commit) {
+              done (result_t<bool>::failure (commit.error_kind (), commit.error ()
+                                                                     ? commit.error ()->what ()
+                                                                     : "Spot Close step 1 failed"));
+              return;
+          }
+          if (!commit.value ().release) {
+              done (commit.value ().result);
+              return;
+          }
+          after_close_step (
+            commit.value ().release (), resume,
+            [done] (result_t<bool> released) mutable { done (std::move (released)); });
+      });
+}
 
 struct bound_session_bind_operation_result_t
 {
@@ -277,7 +335,6 @@ struct bound_session_operations_t
       commit_relocation_route;
     std::function<bool (const protocol::session_relocation_route_t &, std::uint64_t)>
       prepare_relocation_target_route;
-    std::function<bool (const protocol::bound_session_send_t &)> confirm_remote_tenure;
     std::function<std::optional<delivery_capability_t> (const protocol::bound_session_send_t &)>
       capture_send;
 };
@@ -577,7 +634,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     stateful::raw_relocation_replay_coordinator_t &relocation_wire () noexcept;
     void
     configure_user_spot_operations (std::shared_ptr<zlink::framework::location_repository_t> store,
-                                    user_spot_materializer_t materializer);
+                                    user_spot_materializer_t materializer,
+                                    user_spot_closer_t closer = {});
     void configure_spot_route_fence_resolver (spot_route_fence_resolver_t resolver);
     using peer_readiness_resolver_t = std::function<bool (const zlink::routing_id_t &)>;
     void configure_peer_readiness_resolver (peer_readiness_resolver_t resolver);
@@ -611,7 +669,12 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       std::shared_ptr<stateful::relocation_store_port_t> relocations,
       std::function<std::optional<location_owner_token_t> ()> owner,
       instance_spot_activation_materializer_t materializer);
-    std::optional<instance_spot_close_completion_t>
+    // Step 1 of a Close that the local User Spot owner requests itself.
+    task_t<spot_close_commit_t>
+    begin_local_user_spot_close (const std::string &spot_id,
+                                 std::uint64_t object_generation,
+                                 std::uint64_t authority_owner_generation);
+    task_t<spot_close_commit_t>
     begin_instance_spot_close (const std::string &stable_type,
                                const std::string &spot_id,
                                std::uint64_t object_generation,
@@ -620,12 +683,18 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                               const std::string &spot_id,
                               std::uint64_t object_generation,
                               std::uint64_t authority_owner_generation,
-                              std::function<bool ()> close_local);
+                              std::function<void ()> close_local);
     void configure_session_route_owner (
       std::function<std::optional<location_owner_token_t> ()> owner_resolver);
     void configure_stateful_dispatch (
       std::function<std::optional<stateful::accepted_record_authority_t> (
         const stateful::accepted_record_authority_query_t &)> resolver);
+    void forward_relocation_application (const stateful::object_ref_t &owner,
+                                         const stateful::turn_record_t &record,
+                                         const std::vector<std::uint8_t> &target_routing_id,
+                                         std::uint64_t target_generation,
+                                         std::uint64_t target_lease_generation,
+                                         std::chrono::milliseconds window);
     void configure_session_relocation_store (
       std::shared_ptr<stateful::relocation_store_port_t> relocations);
     void configure_message_follow_handler (
@@ -762,6 +831,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     friend class actor_transfer_token_t;
     friend class ::zlink::framework::detail::spot_node_runtime_t;
 
+    task_t<spot_close_commit_t> begin_user_spot_close (protocol::user_spot_close_fence_t target);
+
     spot_handle_t bind_relocation_spot (stateful::object_ref_t object);
     stateful::stateful_error_t
     advance_local_actor_authority (const stateful::object_ref_t &committed);
@@ -844,6 +915,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     std::unique_ptr<stateful::host_maintenance_runtime_t> _termination;
     std::shared_ptr<zlink::framework::location_repository_t> _user_spot_store;
     user_spot_materializer_t _user_spot_materializer;
+    user_spot_closer_t _user_spot_closer;
     spot_route_fence_resolver_t _spot_route_fence_resolver;
     peer_readiness_resolver_t _peer_readiness_resolver;
     struct cached_spot_route_fence_t
@@ -913,11 +985,25 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     task_t<void> submit_relocation_session_routes (relocation_attempt_key_t key);
     void start_relocation_session_route_submission (relocation_attempt_key_t key);
     void flush_pending_session_relocation_seals ();
-    bool relocation_target_authority_committed (
-      const relocation_target_attempt_t &attempt) const noexcept;
     bool relocation_target_authority_committed_strict (
       const relocation_target_attempt_t &attempt) const noexcept;
-    bool commit_relocation_target_authority (relocation_target_attempt_t &attempt) noexcept;
+    /* Target authority settlement (01 §10): the original NewOwner CAS commits,
+     * is resubmitted (retry) while the Store names the source at the expected
+     * StoreVersion and the target lease is live, or ends the staging
+     * (discard) on a source Preserve fence or target lease loss. */
+    enum class relocation_target_settlement_t
+    {
+        committed,
+        retry,
+        discard
+    };
+    bool submit_relocation_target_authority (relocation_target_attempt_t &attempt) noexcept;
+    relocation_target_settlement_t
+    commit_relocation_target_authority (relocation_target_attempt_t &attempt) noexcept;
+    static stateful::relocation_authority_fence_t
+    relocation_target_fence (const relocation_target_attempt_t &attempt);
+    relocation_target_settlement_t
+    observe_relocation_target (const stateful::relocation_authority_fence_t &fence) const noexcept;
     bool
     adopt_committed_session_route_authorities (relocation_target_attempt_t &attempt) const noexcept;
     struct relocation_target_attempt_t
@@ -933,7 +1019,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
             bool send_attempted = false;
             /* Bounded record of a failed one-way send: this state lives
              * inside _relocation_target_attempts, which is itself bounded
-             * by relocation_attempt_retention, so this is not unbounded
+             * by the attempt authority settlement, so this is not unbounded
              * ad-hoc logging. There is no gated trace/diagnostics sink
              * reachable from public_host_runtime_t (message_flow_tracer_t
              * and dispatch_error_reporter_t both require a
@@ -948,31 +1034,23 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         std::vector<protocol::relocation_object_t> wire_objects;
         std::optional<stateful::aggregate_relocation_fence_t> authority_fence;
         std::vector<session_route_state_t> session_routes;
-        bool ready = false;
+        /* The only CAS/dispatch gate (28 §4.4-4.5): set once a received
+         * cutover matched the boundary relay batch that preceded it. */
         bool cutover_received = false;
-        // Starts at the cutover fallback, becomes due on cutover, and advances
-        // at each management attempt without changing Restore's expiry.
+        // The next attempt management tick: before cutover the
+        // RelocationCutoverWaitTimeout Warning and later authority reads that
+        // only end staging; after cutover the next target CAS submission.
         std::chrono::steady_clock::time_point next_finalize_at{};
         bool target_finalized = false;
-        std::chrono::steady_clock::time_point attempt_expires_at{};
-        /* Pre-boundary relay verification: count and running CRC-32C over
-         * the canonical bytes of relocationData records staged before the
-         * cutover, compared against the cutover's boundary declaration. */
-        std::uint64_t boundary_records_received = 0;
-        stateful::relocation_crc32c_accumulator_t boundary_accumulator;
-        std::uint64_t boundary_expected_count = 0;
-        std::uint32_t boundary_expected_checksum = 0;
-        /* 28's "duplicatePayload: may-be-accepted-twice-no-hidden-
-         * delivery-deduplication" means stage_relocated legitimately
-         * succeeds again for a resent relocationData record (e.g. the
-         * source's retransmission-window retry resends the whole boundary
-         * batch ahead of a cutover retry) — staging itself is idempotent
-         * at the ingress layer, but the boundary count/checksum above must
-         * still match the source's one-time manifest exactly, so a
-         * successfully-restaged duplicate must not be counted twice here.
-         * Tracked by content hash since relocationData carries no explicit
-         * per-record ordinal. */
-        std::unordered_set<std::size_t> boundary_record_digests_seen;
+        /* The cutover_timeout Warning was recorded (once per attempt). */
+        bool cutover_warned = false;
+        /* Pre-boundary relay records in receive order, each kept as its own
+         * accepted record (no content deduplication). A retransmitted batch
+         * arrives whole right before its cutover, so the cutover's declared
+         * count selects that batch as the received suffix and replaces any
+         * partial earlier copy (28 §4.4). Records are staged only after the
+         * cutover verifies. */
+        std::vector<std::pair<stateful::object_ref_t, protocol::relocation_data_t>> boundary_batch;
         /* S2 (owner CAS confirmed) for the target-resume interval. */
         std::chrono::steady_clock::time_point authority_committed_at{};
     };
@@ -1021,16 +1099,14 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     bool register_relocation_target_queue (const protocol::relocation_prepare_t &prepare,
                                            const stateful::object_ref_t &target,
                                            const protocol::relocation_object_t &wire_object);
-    std::vector<relocation_target_attempt_t>
-    take_expired_relocation_target_attempts_locked (std::chrono::steady_clock::time_point now);
-    void expire_relocation_target_attempts ();
+    bool stage_relocation_record (const stateful::object_ref_t &target,
+                                  const protocol::relocation_data_t &data);
     void poll_relocation_target_attempts ();
-    void cleanup_expired_relocation_target_attempts (
-      std::vector<relocation_target_attempt_t> attempts) noexcept;
+    void
+    discard_relocation_target_attempts (std::vector<relocation_target_attempt_t> attempts) noexcept;
     std::map<relocation_attempt_key_t, relocation_target_attempt_t> _relocation_target_attempts;
     std::shared_ptr<stateful::authority_relocation_port_t> _relocation_authority;
     std::shared_ptr<stateful::aggregate_authority_port_t> _aggregate_relocation_authority;
-    static constexpr auto relocation_attempt_retention = std::chrono::minutes (5);
     /* Cutover wait measured from the relay-ready reply
      * (relocation_cutover_wait_timeout snapshot, default 1000 ms). */
     std::chrono::milliseconds _relocation_cutover_wait{1000};
@@ -1040,8 +1116,12 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         protocol::command kind = protocol::command::userSpotCreate;
         std::uint64_t deadline_unix_ms = 0;
         std::vector<std::uint8_t> request_fingerprint;
+        // Empty while the operation runs; its one terminal result afterwards.
         std::vector<std::uint8_t> header;
         std::optional<protocol::application_payload_t> application_reply;
+        // Retransmissions of the running operation, with their correlations.
+        // They receive the same terminal result (§7.1 operation ID).
+        std::vector<std::pair<mesh::service_mailbox_record_t, std::uint64_t>> waiting;
     };
     std::map<std::string, user_spot_terminal_record_t> _user_spot_terminals;
     std::function<void ()> _maintenance_started;

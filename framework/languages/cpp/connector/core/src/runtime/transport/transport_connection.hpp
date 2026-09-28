@@ -5,7 +5,6 @@
 #include <boost/asio/post.hpp>
 #include <boost/system/error_code.hpp>
 
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <atomic>
@@ -93,10 +92,6 @@ class stream_connection_t : public std::enable_shared_from_this<stream_connectio
 {
   public:
     virtual ~stream_connection_t () = default;
-    virtual bool is_open () const = 0;
-    virtual std::size_t available (boost::system::error_code &error) = 0;
-    virtual std::size_t
-    read_some (std::uint8_t *buffer, std::size_t size, boost::system::error_code &error) = 0;
     virtual void async_read_some (
       std::size_t max_size,
       std::function<void (boost::system::error_code, std::vector<std::uint8_t>)> completion) = 0;
@@ -104,19 +99,10 @@ class stream_connection_t : public std::enable_shared_from_this<stream_connectio
     // before Beast materializes it. Byte-stream transports do not need a
     // transport-level limit and keep the default implementation.
     virtual void set_read_message_limit (std::size_t) {}
-    virtual bool wait_readable_until (std::chrono::steady_clock::time_point deadline,
-                                      boost::system::error_code &error)
-    {
-        (void) deadline;
-        error.clear ();
-        return true;
-    }
-    virtual void write (const std::vector<std::uint8_t> &bytes) = 0;
     virtual void async_write (std::vector<std::uint8_t> bytes,
                               std::function<void (boost::system::error_code)> completion) = 0;
     virtual void shutdown_and_close () = 0;
     virtual void shutdown_and_close_async () { shutdown_and_close (); }
-    virtual void close (boost::system::error_code &error) = 0;
 };
 
 } // namespace zlink::stream_connector::detail

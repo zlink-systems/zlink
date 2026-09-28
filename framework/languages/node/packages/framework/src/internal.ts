@@ -3,6 +3,7 @@ export * from './index';
 export * from './runtime/diagnostics';
 export * from './runtime/host';
 export * from './runtime/admission';
+export * from './runtime/activation-admission';
 export * from './runtime/streams';
 export * from './runtime/streams/protocol';
 export * from './runtime/actors';

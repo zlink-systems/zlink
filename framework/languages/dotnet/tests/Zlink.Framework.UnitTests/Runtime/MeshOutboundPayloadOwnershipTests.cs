@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.Net;
-using System.Net.Sockets;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -28,12 +26,12 @@ public sealed class MeshOutboundPayloadOwnershipTests
     )
     {
         using var tracking = new TrackingProtobufCodec();
-        var targetEndpoint = ReserveEndpoint();
-        using var target = BuildHost(listenEndpoint: targetEndpoint);
+        using var target = BuildHost();
         await target.StartAsync();
         var targetNode = target
             .Services.GetRequiredService<ZLinkFrameworkRuntime>()
             .GetMeshNodeRuntime(Mesh);
+        var targetEndpoint = Assert.IsType<string>(targetNode.Node.MeshStatus().LocalEndpoint);
         using var source = BuildHost(tracking, targetNode.Node.RoutingId, targetEndpoint);
         await source.StartAsync();
         try
@@ -83,12 +81,12 @@ public sealed class MeshOutboundPayloadOwnershipTests
     {
         using var cancellation = new CancellationTokenSource();
         using var tracking = new TrackingProtobufCodec(cancellation.Cancel);
-        var targetEndpoint = ReserveEndpoint();
-        using var target = BuildHost(listenEndpoint: targetEndpoint);
+        using var target = BuildHost();
         await target.StartAsync();
         var targetNode = target
             .Services.GetRequiredService<ZLinkFrameworkRuntime>()
             .GetMeshNodeRuntime(Mesh);
+        var targetEndpoint = Assert.IsType<string>(targetNode.Node.MeshStatus().LocalEndpoint);
         using var source = BuildHost(tracking, targetNode.Node.RoutingId, targetEndpoint);
         await source.StartAsync();
         try
@@ -188,8 +186,7 @@ public sealed class MeshOutboundPayloadOwnershipTests
     private static IHost BuildHost(
         TrackingProtobufCodec? tracking = null,
         RoutingId peer = default,
-        string? endpoint = null,
-        string? listenEndpoint = null
+        string? endpoint = null
     )
     {
         var builder = Host.CreateApplicationBuilder();
@@ -199,7 +196,7 @@ public sealed class MeshOutboundPayloadOwnershipTests
             options.Codecs.Use(tracking is null ? ZLinkProtobufCodec.Default : tracking);
             var mesh = options
                 .AddRouteMesh(Mesh)
-                .Listen(listenEndpoint ?? ReserveEndpoint())
+                .Listen("tcp://127.0.0.1:0")
                 .SetRoutingId(RoutingId.From(Guid.NewGuid().ToString("N")));
             mesh.Channel(Channel)
                 .Server()
@@ -211,15 +208,6 @@ public sealed class MeshOutboundPayloadOwnershipTests
                 mesh.PeerConnections.Connect(peer, endpoint);
         });
         return builder.Build();
-    }
-
-    private static string ReserveEndpoint()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var endpoint = $"tcp://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}";
-        listener.Stop();
-        return endpoint;
     }
 
     private static async Task WaitForPeerAsync(IHost host, RoutingId peer)

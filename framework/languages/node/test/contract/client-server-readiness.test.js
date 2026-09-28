@@ -1,5 +1,4 @@
 const assert = require('node:assert/strict');
-const net = require('node:net');
 const test = require('node:test');
 const { Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
@@ -108,13 +107,14 @@ test('Client+Server ClientServer topology counts the local Server once after a p
 });
 
 test('ClientServer topology counts distinct local and remote Ready Servers together', async () => {
-  const port = await reservePort();
   const remote = await createApp(channel => {
-    channel.server().listen(port).setWeight(200).addRequestHandler('Ping', PingHandler);
+    channel.server().listen(0).setWeight(200).addRequestHandler('Ping', PingHandler);
   });
   try {
+    const endpoint = remote.get(nestjs.ZLINK_FRAMEWORK_RUNTIME)
+      .getListenerStatus('clientServer', 'work').endpoint;
     const local = await createApp(channel => {
-      channel.client().connect(`tcp://127.0.0.1:${port}`);
+      channel.client().connect(endpoint);
       channel.server().listen().setWeight(100).addRequestHandler('Ping', PingHandler);
     });
     try {
@@ -147,15 +147,4 @@ function createApp(configure) {
     providers: [PingHandler]
   })(AppModule);
   return NestFactory.createApplicationContext(AppModule, { logger: false, abortOnError: false });
-}
-
-async function reservePort() {
-  const server = net.createServer();
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  const port = server.address().port;
-  await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
-  return port;
 }

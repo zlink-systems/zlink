@@ -75,131 +75,144 @@ internal sealed class ZLinkActorOperationTarget(
             requestPayload,
             codecs
         );
-        CreateActorResult prepared;
+        // Actor creation holds one activation admission from here until the Ready commit,
+        // rejection or failure (MeshNode §5.1). A full admission fails the reservation.
+        ZLinkActivationConcurrencyAdmission.Lease? admission = null;
         try
         {
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"actor_create_prepare_start actor={operation.ActorId} "
-                    + $"target={node.RoutingId} generation={snapshot.ObjectGeneration} "
-                    + $"authority_generation={snapshot.AuthorityOwnerGeneration}"
-            );
-            prepared = await runtime
-                .PrepareReservedActorAsync(
-                    operation.ActorId,
-                    operation.StableType,
-                    request,
-                    snapshot.ObjectGeneration,
-                    snapshot.AuthorityOwnerGeneration,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"actor_create_prepare_failed actor={operation.ActorId} "
-                    + $"target={node.RoutingId} exception={exception.GetType().Name} "
-                    + $"message={exception.Message}"
-            );
+            CreateActorResult prepared;
             try
+            {
+                ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"actor_create_prepare_start actor={operation.ActorId} "
+                        + $"target={node.RoutingId} generation={snapshot.ObjectGeneration} "
+                        + $"authority_generation={snapshot.AuthorityOwnerGeneration}"
+                );
+                admission = runtime
+                    .GetMeshNodeRuntime(meshName)
+                    .ActivationAdmission.Acquire("ACTOR '" + operation.ActorId + "'");
+                prepared = await runtime
+                    .PrepareReservedActorAsync(
+                        operation.ActorId,
+                        operation.StableType,
+                        request,
+                        snapshot.ObjectGeneration,
+                        snapshot.AuthorityOwnerGeneration,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"actor_create_prepare_failed actor={operation.ActorId} "
+                        + $"target={node.RoutingId} exception={exception.GetType().Name} "
+                        + $"message={exception.Message}"
+                );
+                try
+                {
+                    await runtime
+                        .DiscardReservedActorAsync(operation.ActorId, CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                catch
+                {
+                    // The durable Failed terminal still closes the reservation.
+                    // Teardown reconciliation remains owned by the Actor runtime.
+                }
+                return await FailAsync(
+                        operation,
+                        operationId,
+                        Reservation(operation, key, snapshot),
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+            }
+
+            if (prepared.Response is { Accepted: false } rejected)
             {
                 await runtime
                     .DiscardReservedActorAsync(operation.ActorId, CancellationToken.None)
                     .ConfigureAwait(false);
+                return await CompleteAsync(
+                        operation,
+                        operationId,
+                        Reservation(operation, key, snapshot),
+                        new ActorCreateOperationTerminal(
+                            RequestResult.Ok,
+                            ServiceWireConstants.FrameworkErrorCode.None,
+                            new ActorCreateCompletion(ActorCreateResult.Rejected, default),
+                            EncodeReply(operation.Correlation, rejected.Reply)
+                        ),
+                        readyPayload: null,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
             }
-            catch
-            {
-                // The durable Failed terminal still closes the reservation.
-                // Teardown reconciliation remains owned by the Actor runtime.
-            }
-            return await FailAsync(
-                    operation,
-                    operationId,
-                    Reservation(operation, key, snapshot),
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-        }
 
-        if (prepared.Response is { Accepted: false } rejected)
-        {
-            await runtime
-                .DiscardReservedActorAsync(operation.ActorId, CancellationToken.None)
-                .ConfigureAwait(false);
-            return await CompleteAsync(
-                    operation,
-                    operationId,
-                    Reservation(operation, key, snapshot),
-                    new ActorCreateOperationTerminal(
-                        RequestResult.Ok,
-                        ServiceWireConstants.FrameworkErrorCode.None,
-                        new ActorCreateCompletion(ActorCreateResult.Rejected, default),
-                        EncodeReply(operation.Correlation, rejected.Reply)
-                    ),
-                    readyPayload: null,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-        }
-
-        var published = new ActorRef(
-            operation.ActorId,
-            snapshot.ObjectGeneration,
-            meshName,
-            node.RoutingId
-        );
-        var readyPayload = ZLinkActorAuthorityPayloadCodec.Encode(
-            authority with
+            var published = new ActorRef(
+                operation.ActorId,
+                snapshot.ObjectGeneration,
+                meshName,
+                node.RoutingId
+            );
+            var readyPayload = ZLinkActorAuthorityPayloadCodec.Encode(
+                authority with
+                {
+                    State = ZLinkActorAuthorityState.Ready,
+                    OwnerId = snapshot.OwnerId,
+                    OwnerLeaseGeneration = checked((ulong)snapshot.OwnerLeaseGeneration),
+                    MeshName = meshName,
+                    NodeRid = node.RoutingId,
+                    NodeGeneration = node.MeshStatus().LifecycleGeneration,
+                }
+            );
+            var terminal = new ActorCreateOperationTerminal(
+                RequestResult.Ok,
+                ServiceWireConstants.FrameworkErrorCode.None,
+                new ActorCreateCompletion(ActorCreateResult.Created, published),
+                EncodeReply(operation.Correlation, prepared.Response?.Reply)
+            );
+            ActorCreateOperationTerminal completed;
+            try
             {
-                State = ZLinkActorAuthorityState.Ready,
-                OwnerId = snapshot.OwnerId,
-                OwnerLeaseGeneration = checked((ulong)snapshot.OwnerLeaseGeneration),
-                MeshName = meshName,
-                NodeRid = node.RoutingId,
-                NodeGeneration = node.MeshStatus().LifecycleGeneration,
+                ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"actor_create_complete_start actor={operation.ActorId} "
+                        + $"target={node.RoutingId} result={terminal.Completion?.Result}"
+                );
+                completed = await CompleteAsync(
+                        operation,
+                        operationId,
+                        Reservation(operation, key, snapshot),
+                        terminal,
+                        readyPayload,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+                ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"actor_create_complete_done actor={operation.ActorId} "
+                        + $"target={node.RoutingId} result={completed.Completion?.Result}"
+                );
             }
-        );
-        var terminal = new ActorCreateOperationTerminal(
-            RequestResult.Ok,
-            ServiceWireConstants.FrameworkErrorCode.None,
-            new ActorCreateCompletion(ActorCreateResult.Created, published),
-            EncodeReply(operation.Correlation, prepared.Response?.Reply)
-        );
-        ActorCreateOperationTerminal completed;
-        try
-        {
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"actor_create_complete_start actor={operation.ActorId} "
-                    + $"target={node.RoutingId} result={terminal.Completion?.Result}"
-            );
-            completed = await CompleteAsync(
-                    operation,
-                    operationId,
-                    Reservation(operation, key, snapshot),
-                    terminal,
-                    readyPayload,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"actor_create_complete_done actor={operation.ActorId} "
-                    + $"target={node.RoutingId} result={completed.Completion?.Result}"
-            );
+            catch (Exception exception)
+            {
+                ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"actor_create_complete_failed actor={operation.ActorId} "
+                        + $"target={node.RoutingId} exception={exception.GetType().Name} "
+                        + $"message={exception.Message}"
+                );
+                throw;
+            }
+            if (completed.Completion?.Result != ActorCreateResult.Created)
+                await runtime
+                    .DiscardReservedActorAsync(operation.ActorId, CancellationToken.None)
+                    .ConfigureAwait(false);
+            return completed;
         }
-        catch (Exception exception)
+        finally
         {
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"actor_create_complete_failed actor={operation.ActorId} "
-                    + $"target={node.RoutingId} exception={exception.GetType().Name} "
-                    + $"message={exception.Message}"
-            );
-            throw;
+            admission?.Release();
         }
-        if (completed.Completion?.Result != ActorCreateResult.Created)
-            await runtime
-                .DiscardReservedActorAsync(operation.ActorId, CancellationToken.None)
-                .ConfigureAwait(false);
-        return completed;
     }
 
     private async ValueTask PublishCreatedActorAsync(

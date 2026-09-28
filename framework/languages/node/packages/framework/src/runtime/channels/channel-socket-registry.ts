@@ -1,3 +1,4 @@
+import { ZLinkListenerRecords } from '../foundation/listener-records';
 import {
   ZLinkFrameworkRuntimeState,
   type RoutingId,
@@ -85,7 +86,6 @@ interface ClientServerPhysicalConnection {
   readonly aliases: Set<string>;
   readonly callbacksByAlias: Map<string, ZLinkClientServerConnectionCallbacks>;
   physicalConnectionId: symbol;
-  terminationRequested: boolean;
   readyConnectionId?: string;
   admittedDescriptor?: ClientServerDiscoveryDescriptor;
   nextProbeAt?: number;
@@ -170,14 +170,19 @@ export class ZLinkChannelSocketRegistry {
   >();
   private readonly fanoutTopologyHandlers = new Map<string, Set<() => void>>();
 
+  private readonly listenerRecords: ZLinkListenerRecords;
+
   constructor(
     private readonly registration: ZLinkFrameworkRegistration,
     private readonly adapter: ZLinkChannelBackendAdapter,
     private readonly context: ZLinkBackendContext,
     private readonly monitoringAdapter?: ZLinkMonitoringBackendAdapter,
     private readonly oneWayFailureSink?: (error: unknown) => void,
-    private readonly applicationJobQueue?: ApplicationJobQueue
-  ) {}
+    private readonly applicationJobQueue?: ApplicationJobQueue,
+    listenerRecords?: ZLinkListenerRecords
+  ) {
+    this.listenerRecords = listenerRecords ?? new ZLinkListenerRecords();
+  }
 
   async dispose(): Promise<void> {
     const clientServerConnections = [...new Set(this.clientServerConnections.values())];
@@ -306,14 +311,18 @@ export class ZLinkChannelSocketRegistry {
       });
     }
     this.channelRouters.set(channelName, router);
+    const endpoint = advertisedEndpoint(
+      router.lastEndpoint ?? channel.server.bind,
+      channel.server.advertiseHost
+    );
+    this.recordListener('clientServer', channelName, endpoint);
     if (!this.clientServerServerDescriptors.has(channelName)) {
-      const boundEndpoint = router.lastEndpoint ?? channel.server.bind;
       this.clientServerServerDescriptors.set(channelName, {
         channelName,
         serverRid: identity.serverRid,
         lifecycleGeneration: identity.lifecycleGeneration,
         descriptorRevision: 1n,
-        endpoint: advertisedEndpoint(boundEndpoint, channel.server.advertiseHost),
+        endpoint,
         weight: publicWeight,
         state: ZLinkFrameworkRuntimeState.Serving,
         securityIdentity: 'default',
@@ -326,22 +335,21 @@ export class ZLinkChannelSocketRegistry {
   }
 
   clientServerServerIdentity(channelName: string): ZLinkClientServerServerSocketIdentity {
-    const router = this.channelRouter(channelName);
+    this.channelRouter(channelName);
     const identity = this.clientServerIdentities.get(channelName);
-    const channel = this.registration.channels.get(channelName);
-    if (identity === undefined || channel?.server === undefined) {
+    const endpoint = this.listenerRecords.endpoint('clientServer', channelName);
+    if (identity === undefined || endpoint === undefined) {
       throw new ZLinkConfigurationException(`Channel server '${channelName}' is not registered.`);
     }
-    const boundEndpoint = router.lastEndpoint ?? channel.server.bind;
-    if (boundEndpoint === undefined || boundEndpoint.length === 0) {
-      throw new ZLinkConfigurationException(
-        `Channel server '${channelName}' did not report its bound endpoint.`
-      );
-    }
-    return {
-      ...identity,
-      endpoint: advertisedEndpoint(boundEndpoint, channel.server.advertiseHost)
-    };
+    return { ...identity, endpoint };
+  }
+
+  fanoutPublisherEndpoint(channelName: string): string | undefined {
+    return this.listenerRecords.endpoint('fanout', channelName);
+  }
+
+  private recordListener(kind: 'clientServer' | 'fanout', name: string, endpoint: string): void {
+    this.listenerRecords.record(kind, name, endpoint);
   }
 
   clientServerServerSocket(channelName: string): ZLinkBackendRouterSocket {
@@ -417,8 +425,7 @@ export class ZLinkChannelSocketRegistry {
       monitor,
       aliases: new Set([connectionId]),
       callbacksByAlias: new Map([[connectionId, callbacks]]),
-      physicalConnectionId: Symbol(connectionId),
-      terminationRequested: false
+      physicalConnectionId: Symbol(connectionId)
     };
     this.clientServerConnections.set(connectionId, connection);
     this.ensureClientServerLivenessTimer();
@@ -436,7 +443,7 @@ export class ZLinkChannelSocketRegistry {
         const routingId = event.routingId === undefined ? undefined : String(event.routingId);
         if (event.nativeEvent === ZLinkSocketNativeEventType.ConnectionReady) {
           // This single-endpoint DEALER also receives its disconnected ready-count snapshot.
-          if (event.value === 0n || connection.terminationRequested) return;
+          if (event.value === 0n) return;
           connection.physicalConnectionId = Symbol(connectionId);
           connection.admissionAttempt = undefined;
           for (const currentCallbacks of [...connection.callbacksByAlias.values()]) {
@@ -451,26 +458,9 @@ export class ZLinkChannelSocketRegistry {
           event.nativeEvent === ZLinkSocketNativeEventType.HandshakeFailedProtocol ||
           event.nativeEvent === ZLinkSocketNativeEventType.HandshakeFailedAuth
         ) {
-          if (
-            connection.terminationRequested &&
-            (event.remoteAddr !== connection.endpoint ||
-              (event.nativeEvent !== ZLinkSocketNativeEventType.Disconnected &&
-                event.nativeEvent !== ZLinkSocketNativeEventType.Closed))
-          )
-            return;
-          connection.physicalConnectionId = Symbol(connectionId);
-          connection.admissionAttempt = undefined;
-          if (connection.readyConnectionId !== undefined) {
-            this.removeReadyConnection(connection.readyConnectionId);
-          }
-          for (const currentCallbacks of [...connection.callbacksByAlias.values()]) {
-            currentCallbacks.onTerminated(routingId, event.remoteAddr);
-          }
-          if (connection.terminationRequested) {
-            connection.terminationRequested = false;
-            // Explicit disconnect removes intent; restore it once after this endpoint closes.
-            connection.dealer.connect(connection.endpoint);
-          }
+          // Core owns the endpoint reconnect (transport liveness §6); the
+          // connect intent stays and the next READY starts a new admission.
+          this.endClientServerAdmission(connectionId, connection, routingId, event.remoteAddr);
         }
       });
       dealer.connect(endpoint);
@@ -790,10 +780,6 @@ export class ZLinkChannelSocketRegistry {
     );
   }
 
-  hasKnownClientServerTargets(channelName: string): boolean {
-    return this.clientServerDiscovery.clientServerDescriptors(channelName).length > 0;
-  }
-
   fanoutActiveTargets(channelName: string) {
     return this.clientServerDiscovery.fanoutEndpoints(channelName);
   }
@@ -929,7 +915,7 @@ export class ZLinkChannelSocketRegistry {
       this.drainClientServerControl(connectionId, connection);
       if (connection.deadlineAt === undefined) continue;
       if (nowMs >= connection.deadlineAt) {
-        this.requestClientServerEndpointTermination(connectionId, connection);
+        this.restartClientServerAdmission(connectionId, connection);
         continue;
       }
       if (connection.nextProbeAt === undefined || nowMs < connection.nextProbeAt) continue;
@@ -1298,7 +1284,6 @@ export class ZLinkChannelSocketRegistry {
     connectionId: string,
     connection: ClientServerPhysicalConnection
   ): void {
-    if (connection.terminationRequested) return;
     for (;;) {
       if (!connection.readablePoller.wait(0)) return;
       const received = connection.dealer.recv(1);
@@ -1331,7 +1316,7 @@ export class ZLinkChannelSocketRegistry {
         }
         this.applyClientServerDescriptorUpdate(connectionId, connection, record.admission);
       } catch (error) {
-        this.requestClientServerEndpointTermination(connectionId, connection);
+        this.restartClientServerAdmission(connectionId, connection);
         this.oneWayFailureSink?.(error);
         return;
       } finally {
@@ -1340,19 +1325,39 @@ export class ZLinkChannelSocketRegistry {
     }
   }
 
-  private requestClientServerEndpointTermination(
+  /**
+   * Ends the current logical admission of this connection: later replies of
+   * the fenced attempt no longer apply and its ready target is withdrawn.
+   */
+  private endClientServerAdmission(
+    connectionId: string,
+    connection: ClientServerPhysicalConnection,
+    routingId: string | undefined,
+    endpoint: string
+  ): void {
+    connection.physicalConnectionId = Symbol(connectionId);
+    connection.admissionAttempt = undefined;
+    if (connection.readyConnectionId !== undefined) {
+      this.removeReadyConnection(connection.readyConnectionId);
+    }
+    for (const callbacks of [...connection.callbacksByAlias.values()]) {
+      callbacks.onTerminated(routingId, endpoint);
+    }
+  }
+
+  /**
+   * A peer deadline or an invalid pushed control ends only the current logical
+   * admission. The connect intent stays with Core, which owns the endpoint
+   * reconnect (transport liveness §6); the service handshake starts again on
+   * the existing admission path.
+   */
+  private restartClientServerAdmission(
     connectionId: string,
     connection: ClientServerPhysicalConnection
   ): void {
-    if (connection.terminationRequested) return;
-    connection.terminationRequested = true;
-    connection.physicalConnectionId = Symbol(connectionId);
-    connection.admissionAttempt = undefined;
-    this.removeReadyConnection(connectionId);
-    try {
-      connection.dealer.disconnect(connection.endpoint);
-    } catch (error) {
-      this.oneWayFailureSink?.(error);
+    this.endClientServerAdmission(connectionId, connection, undefined, connection.endpoint);
+    for (const callbacks of [...connection.callbacksByAlias.values()]) {
+      callbacks.onTransportReady('', connection.endpoint);
     }
   }
 
@@ -1612,26 +1617,19 @@ export class ZLinkChannelSocketRegistry {
     applyFanoutPublisherSocketOptions(publisher, channel);
     publisher.bind(channel.publisher.bind);
     this.publishers.set(channelName, publisher);
+    const endpoint = buildAdvertisedEndpoint(
+      publisher.lastEndpoint ?? channel.publisher.bind,
+      channel.publisher.advertiseHost
+    );
+    if (endpoint !== undefined && endpoint.length > 0) {
+      this.recordListener('fanout', channelName, endpoint);
+    }
     this.fanoutPublisherNextBeacon.set(
       channelName,
       performance.now() + CLIENT_SERVER_PROBE_INTERVAL_MS
     );
     this.ensureClientServerLivenessTimer();
     return publisher;
-  }
-
-  fanoutPublisherEndpoint(channelName: string): string | undefined {
-    const channel = this.registration.channels.get(channelName);
-    const publisher = this.publishers.get(channelName);
-    const boundEndpoint = publisher?.lastEndpoint;
-    if (
-      channel?.publisher === undefined ||
-      boundEndpoint === undefined ||
-      boundEndpoint.length === 0
-    ) {
-      return undefined;
-    }
-    return advertisedEndpoint(boundEndpoint, channel.publisher.advertiseHost);
   }
 
   routeRouter(routerChannelId: string): ZLinkBackendRouterSocket {

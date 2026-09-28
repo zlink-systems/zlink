@@ -101,7 +101,7 @@ inline std::string unpickle (std::span<const std::byte> input, std::size_t max_d
     const auto compressed_size = input.size () - data_offset;
     const auto decompressed_size = static_cast<std::uint64_t> (compressed_size) + diff;
     if (decompressed_size > max_decompressed_size) {
-        throw std::runtime_error ("LZ4 payload exceeds configured receive limit");
+        throw std::length_error ("LZ4 payload exceeds configured receive limit");
     }
     /* An adversarial frame can declare any size: reject what the LZ4 API cannot
      * express before allocating the output. */

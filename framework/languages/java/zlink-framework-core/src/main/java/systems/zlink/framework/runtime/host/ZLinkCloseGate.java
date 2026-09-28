@@ -9,6 +9,11 @@ final class ZLinkCloseGate {
     private final AtomicBoolean started = new AtomicBoolean();
     private final CompletableFuture<Void> ownershipCleanup = new CompletableFuture<>();
 
+    /** True once close has begun; the runtime no longer owns bound listeners from then on. */
+    boolean closing() {
+        return started.get();
+    }
+
     CompletionStage<Void> close(Supplier<CompletionStage<Void>> cleanup) {
         if (!started.compareAndSet(false, true)) {
             return ownershipCleanup;

@@ -1,3 +1,4 @@
+import type { ZLinkListenerRecords } from '../foundation/listener-records';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
@@ -88,6 +89,7 @@ import type {
   ZLinkSpotBoundSessionRuntime
 } from './spot-runtime-ports';
 import { createAbortError } from '../abort';
+import type { ZLinkActivationConcurrency } from '../activation-admission';
 import type { ServiceMessageFollowRecord } from '../foundation/service-stateful-wire-codec';
 import {
   ApplicationJobQueue,
@@ -101,6 +103,7 @@ const ZLINK_SEND_DONT_WAIT = 1;
 const EMPTY_SPOT_METADATA: ReadonlyMap<string, string> = new Map();
 
 export interface ZLinkSpotNodeRuntimeManagerOptions {
+  readonly listenerRecords?: ZLinkListenerRecords;
   readonly registration: ZLinkFrameworkRegistration;
   readonly primaryMeshName?: string;
   readonly backendAdapterFactory: ZLinkBackendAdapterFactory;
@@ -130,10 +133,8 @@ export interface ZLinkSpotNodeRuntimeManagerOptions {
     record: ReceiveRecord
   ) => void | Promise<void>;
   readonly messageFollowReceiver?: (record: ServiceMessageFollowRecord) => void;
-  readonly instanceActivationConcurrencyProvider?: (meshName: string) => {
-    readonly active: number;
-    readonly limit: number;
-  };
+  /** MeshNode §5.1 activation admission record; the descriptor projects it for placement. */
+  readonly activationConcurrency?: (meshName: string) => ZLinkActivationConcurrency;
 }
 
 export class ZLinkSpotNodeRuntimeManager {
@@ -374,6 +375,10 @@ export class ZLinkSpotNodeRuntimeManager {
         this.meshNodes.set(spotNodeName, node);
         this.meshPumps.set(spotNodeName, pump);
         this.meshCompletions.set(spotNodeName, completions);
+        const listenerEndpoint = node.status().localEndpoint;
+        if (listenerEndpoint.length > 0) {
+          this.options.listenerRecords?.record('routeMesh', spotNodeName, listenerEndpoint);
+        }
       } catch (error) {
         this.entryActivations.delete(spotNodeName);
         this.publishers.get(spotNodeName)?.close();
@@ -484,15 +489,9 @@ export class ZLinkSpotNodeRuntimeManager {
               };
             })
         },
-        activationConcurrency: {
-          active:
-            this.options.instanceActivationConcurrencyProvider?.(meshName).active ??
-            current?.activationConcurrency.active ??
-            0,
-          limit:
-            this.options.instanceActivationConcurrencyProvider?.(meshName).limit ??
-            registration.activationConcurrencyLimit ??
-            128
+        activationConcurrency: this.options.activationConcurrency?.(meshName) ?? {
+          active: 0,
+          limit: registration.activationConcurrencyLimit ?? 128
         },
         channelWeights: Object.fromEntries(
           this.serverChannels(meshName).map(([channelName, channel]) => [

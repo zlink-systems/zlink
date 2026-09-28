@@ -214,31 +214,20 @@ service_node_descriptor_t service_topology_registry_t::local_descriptor () const
 peer_admission_result_t service_topology_registry_t::admit (service_node_descriptor_t descriptor,
                                                             std::vector<std::uint8_t> connection_id)
 {
-    return admit_impl (std::move (descriptor), std::move (connection_id), std::nullopt, nullptr);
+    return admit_impl (std::move (descriptor), std::move (connection_id), nullptr);
 }
 
 peer_admission_result_t
 service_topology_registry_t::admit (service_node_descriptor_t descriptor,
                                     std::vector<std::uint8_t> connection_id,
-                                    service_connection_direction_t direction)
-{
-    return admit_impl (std::move (descriptor), std::move (connection_id), direction, nullptr);
-}
-
-peer_admission_result_t
-service_topology_registry_t::admit (service_node_descriptor_t descriptor,
-                                    std::vector<std::uint8_t> connection_id,
-                                    service_connection_direction_t direction,
                                     const service_node_descriptor_t &expected_descriptor)
 {
-    return admit_impl (std::move (descriptor), std::move (connection_id), direction,
-                       &expected_descriptor);
+    return admit_impl (std::move (descriptor), std::move (connection_id), &expected_descriptor);
 }
 
 peer_admission_result_t
 service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
                                          std::vector<std::uint8_t> connection_id,
-                                         std::optional<service_connection_direction_t> direction,
                                          const service_node_descriptor_t *expected_descriptor)
 {
     if (!valid_descriptor (descriptor) || connection_id.empty ()) {
@@ -301,31 +290,12 @@ service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
                                  std::function<void ()>{}};
             }
 
-            if (direction.has_value () && admitted != _peers.end ()
-                && admitted->second.descriptor.lifecycle_generation
-                     == descriptor.lifecycle_generation
-                && admitted->second.connection_id != connection_id) {
-                const auto preferred_direction =
-                  byte_vector_less_t{}(_local.node_routing_id, descriptor.node_routing_id)
-                    ? service_connection_direction_t::outbound
-                    : service_connection_direction_t::inbound;
-                const auto keep_current =
-                  admitted->second.direction != direction.value ()
-                    ? admitted->second.direction == preferred_direction
-                    : !byte_vector_less_t{}(connection_id, admitted->second.connection_id);
-                if (keep_current)
-                    return std::pair{peer_admission_result_t::duplicate_connection,
-                                     std::function<void ()>{}};
-            }
-
             _not_required_peers.erase (descriptor.node_routing_id);
             auto key = descriptor.node_routing_id;
             const auto admission_epoch = ++_topology_version;
             _peers.insert_or_assign (
               std::move (key),
-              admitted_peer_t{std::move (descriptor), std::move (connection_id),
-                              direction.value_or (service_connection_direction_t::inbound),
-                              admission_epoch});
+              admitted_peer_t{std::move (descriptor), std::move (connection_id), admission_epoch});
             rebuild_channel_selections ();
             return std::pair{peer_admission_result_t::admitted, _change_handler};
         })

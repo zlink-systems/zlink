@@ -196,7 +196,10 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
     }
 
     CompletionStage<Void> prepareNativeActorRoute(
-            ZLinkBackendActorRef targetActor, Duration timeout) {
+            ZLinkBackendActorRef targetActor,
+            long authorityOwnerGeneration,
+            long ownerLeaseGeneration,
+            Duration timeout) {
         if (!ref.actorId().equals(targetActor.actorId())
                 || ref.generation() != targetActor.generation()) {
             return CompletableFuture.failedFuture(
@@ -204,31 +207,28 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                             "relocation route switch requires the same Actor "
                                     + "identity and generation"));
         }
-        CompletionStage<Void> authorityReady =
-                actors == null
-                        ? CompletableFuture.completedFuture(null)
-                        : actors.prepareRemoteSessionBinding(targetActor);
-        return authorityReady
-                .thenCompose(
-                        ignored ->
-                                ZLinkActorRetryScheduler.waitUntilRelay(
-                                        timeout,
-                                        () -> routeReady.test(targetActor.nodeRid()),
-                                        () -> {},
-                                        () -> {
-                                            String message =
-                                                    "remote bound session route was not ready"
-                                                            + " before timeout: "
-                                                            + targetActor.actorId();
-                                            //  Spec 32-framework-error-model:90 — a route wait past
-                                            //  its deadline is DeadlineExceeded, not a raw language
-                                            //  timeout. The TimeoutException cause is kept for
-                                            //  diagnostics.
-                                            return new ZLinkFrameworkException(
-                                                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                                                    message,
-                                                    new TimeoutException(message));
-                                        }))
+        if (actors != null) {
+            actors.prepareRelocatedSessionBinding(
+                    targetActor, authorityOwnerGeneration, ownerLeaseGeneration);
+        }
+        return ZLinkActorRetryScheduler.waitUntilRelay(
+                        timeout,
+                        () -> routeReady.test(targetActor.nodeRid()),
+                        () -> {},
+                        () -> {
+                            String message =
+                                    "remote bound session route was not ready"
+                                            + " before timeout: "
+                                            + targetActor.actorId();
+                            //  Spec 32-framework-error-model:90 — a route wait past
+                            //  its deadline is DeadlineExceeded, not a raw language
+                            //  timeout. The TimeoutException cause is kept for
+                            //  diagnostics.
+                            return new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                                    message,
+                                    new TimeoutException(message));
+                        })
                 // Specs 44/52 make command 44 one-way: target restoration already
                 // installed the bound-Session context before publishing the route
                 // update. Waiting for another Actor-mailbox request here can

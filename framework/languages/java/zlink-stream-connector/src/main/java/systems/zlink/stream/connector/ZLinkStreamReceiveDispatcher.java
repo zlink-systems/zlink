@@ -1,5 +1,6 @@
 package systems.zlink.stream.connector;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import systems.zlink.contracts.messaging.Message;
@@ -25,7 +26,7 @@ final class ZLinkStreamReceiveDispatcher {
     private final ZLinkStreamConnectorPayloadCodec payloadCodec;
     private final Consumer<ZLinkStreamError> errorPublisher;
     private final Function<String, CompletionStage<Void>> controlSender;
-    private final Consumer<ZLinkStreamCloseReason> closeReasonReceived;
+    private final Consumer<ZLinkStreamCloseReason> sessionClosing;
     private final ZLinkStreamActorRegistry actors;
 
     ZLinkStreamReceiveDispatcher(
@@ -36,7 +37,7 @@ final class ZLinkStreamReceiveDispatcher {
             ZLinkStreamConnectorPayloadCodec payloadCodec,
             Consumer<ZLinkStreamError> errorPublisher,
             Function<String, CompletionStage<Void>> controlSender,
-            Consumer<ZLinkStreamCloseReason> closeReasonReceived,
+            Consumer<ZLinkStreamCloseReason> sessionClosing,
             ZLinkStreamActorRegistry actors) {
         this.configuration = configuration;
         this.handlers = handlers;
@@ -45,16 +46,38 @@ final class ZLinkStreamReceiveDispatcher {
         this.payloadCodec = payloadCodec;
         this.errorPublisher = errorPublisher;
         this.controlSender = controlSender;
-        this.closeReasonReceived = closeReasonReceived;
+        this.sessionClosing = sessionClosing;
         this.actors = actors;
     }
 
     void dispatch(byte[] encodedHeader, byte[] payload) {
         ZLinkStreamWireProtocol.Header header = ZLinkStreamWireProtocol.decodeHeader(encodedHeader);
-        if (header.actorSlot() != null) {
-            actors.actorId(header.actorSlot());
+        byte[] decodedPayload;
+        try {
+            if (header.kind() == ZLinkStreamWireProtocol.KIND_RESPONSE) {
+                completeResponse(header, payload);
+                return;
+            }
+            if (header.actorSlot() != null) {
+                actors.actorId(header.actorSlot());
+            }
+            decodedPayload = payloadCodec.decode(header, payload);
+        } catch (ZLinkStreamException failure) {
+            if (failure.errorCode() != ZLinkStreamErrorCode.DECOMPRESSION_FAILED) {
+                throw failure;
+            }
+            boolean pendingFailed =
+                    header.requestSeq() != null
+                            && pendingRequests.fail(header.requestSeq(), failure);
+            if (!pendingFailed && header.kind() != ZLinkStreamWireProtocol.KIND_RESPONSE) {
+                errorPublisher.accept(
+                        new ZLinkStreamError(
+                                ZLinkStreamErrorCode.DECOMPRESSION_FAILED,
+                                failure.getMessage(),
+                                failure));
+            }
+            return;
         }
-        byte[] decodedPayload = payloadCodec.decode(header, payload);
         DefaultZLinkStreamConnector.trace(
                 "connector read-frame endpoint="
                         + configuration.endpoint()
@@ -70,10 +93,6 @@ final class ZLinkStreamReceiveDispatcher {
                         + header.correlationId());
         if (header.kind() == ZLinkStreamWireProtocol.KIND_CONTROL) {
             dispatchControl(header, decodedPayload);
-            return;
-        }
-        if (header.kind() == ZLinkStreamWireProtocol.KIND_RESPONSE) {
-            completeResponse(header, decodedPayload);
             return;
         }
         if (header.kind() == ZLinkStreamWireProtocol.KIND_ERROR) {
@@ -96,22 +115,18 @@ final class ZLinkStreamReceiveDispatcher {
             return;
         }
         if (ZLinkSessionClosingControl.NAME.equals(header.name())) {
-            try {
-                ZLinkStreamCloseReason reason = ZLinkSessionClosingControl.decode(payload);
-                DefaultZLinkStreamConnector.trace(
-                        "connector session-closing version="
-                                + ZLinkSessionClosingControl.VERSION
-                                + " reason="
-                                + reason.name().toLowerCase());
-                closeReasonReceived.accept(reason);
-            } catch (IllegalArgumentException invalidControl) {
-                closeReasonReceived.accept(ZLinkStreamCloseReason.PROTOCOL_ERROR);
-                throw invalidControl;
-            }
+            //  An invalid payload throws, and the receive path ends the connection as a
+            //  protocol violation (spec 32 9).
+            ZLinkStreamCloseReason reason = ZLinkSessionClosingControl.decode(payload);
+            DefaultZLinkStreamConnector.trace(
+                    "connector session-closing version="
+                            + ZLinkSessionClosingControl.VERSION
+                            + " reason="
+                            + reason.name().toLowerCase());
+            sessionClosing.accept(reason);
             return;
         }
         if (payload.length != 0) {
-            closeReasonReceived.accept(ZLinkStreamCloseReason.PROTOCOL_ERROR);
             throw new IllegalArgumentException("heartbeat control packet payload must be empty");
         }
         if (HEARTBEAT_PING_NAME.equals(header.name())) {
@@ -121,35 +136,42 @@ final class ZLinkStreamReceiveDispatcher {
         if (HEARTBEAT_PONG_NAME.equals(header.name())) {
             return;
         }
-        closeReasonReceived.accept(ZLinkStreamCloseReason.PROTOCOL_ERROR);
         throw new IllegalArgumentException("unknown control packet");
     }
 
     private void completeResponse(ZLinkStreamWireProtocol.Header header, byte[] payload) {
         pendingRequests.complete(
                 header.requestSeq(),
-                new ZLinkStreamEncodedPayload(
-                        header.name(),
-                        Message.from(payload),
-                        header.metadata(),
-                        ZLinkStreamConnectorPayloadCodec.fromWireCodec(header.codec())));
+                () ->
+                        new ZLinkStreamEncodedPayload(
+                                header.name(),
+                                Message.from(payloadCodec.decode(header, payload)),
+                                header.metadata(),
+                                ZLinkStreamConnectorPayloadCodec.fromWireCodec(header.codec())));
     }
 
     private void dispatchError(ZLinkStreamWireProtocol.Header header, byte[] payload) {
         ZLinkStreamError error;
         RuntimeException requestFailure;
         try {
-            RemoteErrorPayload remote = ERROR_MAPPER.readValue(payload, RemoteErrorPayload.class);
-            if (remote.code() == null
-                    || remote.code().isBlank()
-                    || remote.message() == null
-                    || remote.message().isBlank()) {
+            JsonNode remote = ERROR_MAPPER.readTree(payload);
+            JsonNode code = remote == null ? null : remote.get("code");
+            JsonNode message = remote == null ? null : remote.get("message");
+            if (remote == null
+                    || !remote.isObject()
+                    || code == null
+                    || !code.isTextual()
+                    || code.textValue().isBlank()
+                    || message == null
+                    || !message.isTextual()
+                    || message.textValue().isBlank()) {
                 throw new IOException("error payload requires string code and message fields");
             }
-            requestFailure = new IllegalStateException(remote.code() + ": " + remote.message());
+            requestFailure =
+                    new IllegalStateException(code.textValue() + ": " + message.textValue());
             error =
                     new ZLinkStreamError(
-                            ZLinkStreamErrorCode.REMOTE_ERROR, remote.message(), requestFailure);
+                            ZLinkStreamErrorCode.REMOTE_ERROR, message.textValue(), requestFailure);
         } catch (IOException ex) {
             requestFailure = new IllegalArgumentException("remote error payload is invalid", ex);
             error =
@@ -164,16 +186,12 @@ final class ZLinkStreamReceiveDispatcher {
         }
     }
 
-    private record RemoteErrorPayload(String code, String message) {}
-
     private void dispatchToHandlers(ZLinkStreamWireProtocol.Header header, byte[] payload) {
-        String actorId = header.actorSlot() == null ? null : actors.actorId(header.actorSlot());
-        List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>> registered =
-                List.copyOf(handlers.getOrDefault(header.name(), List.of()));
-        List<ZLinkStreamActorRegistry.DefaultActor.HandlerRegistration> actorRegistered =
-                header.actorSlot() == null
-                        ? List.of()
-                        : actors.handlers(header.actorSlot(), header.name());
+        //  The slot names the Actor when the packet arrives; the handlers of that
+        //  Actor handle are read when the packet is dispatched.
+        ZLinkStreamActorRegistry.DefaultActor actor =
+                header.actorSlot() == null ? null : actors.actor(header.actorSlot());
+        String actorId = actor == null ? null : actor.actorId();
         ZLinkStreamMessage<ZLinkStreamEncodedPayload> message =
                 new ZLinkStreamMessage<>(
                         header.name(),
@@ -184,60 +202,46 @@ final class ZLinkStreamReceiveDispatcher {
                                 ZLinkStreamConnectorPayloadCodec.fromWireCodec(header.codec())),
                         header.metadata(),
                         actorId);
-        Supplier<CompletionStage<Void>> dispatch =
+        //  Spec 32 5.6, 7, 10: the connector and Actor handle handlers are the
+        //  ones registered when the packet is dispatched, so one registered after
+        //  it arrived takes it.
+        Supplier<Supplier<CompletionStage<Void>>> selectDispatch =
                 () -> {
                     List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>> activeRegistered =
-                            registered.stream()
-                                    .filter(
-                                            handler ->
-                                                    handlers.getOrDefault(header.name(), List.of())
-                                                            .contains(handler))
-                                    .toList();
+                            List.copyOf(handlers.getOrDefault(header.name(), List.of()));
                     List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>>
-                            activeActorRegistered =
-                                    actorRegistered.stream()
-                                            .filter(
-                                                    ZLinkStreamActorRegistry.DefaultActor
-                                                                    .HandlerRegistration
-                                                            ::active)
-                                            .map(
-                                                    ZLinkStreamActorRegistry.DefaultActor
-                                                                    .HandlerRegistration
-                                                            ::handler)
-                                            .toList();
+                            activeActorRegistered = actorHandlers(actor, header.name());
                     if (activeRegistered.isEmpty() && activeActorRegistered.isEmpty()) {
+                        return null;
+                    }
+                    return () -> {
+                        invokeHandlers(activeRegistered, header, payload, actorId);
+                        invokeHandlers(activeActorRegistered, header, payload, actorId);
                         message.payload().payload().close();
                         return CompletableFuture.completedFuture(null);
-                    }
-                    CompletionStage<Void> completion = CompletableFuture.completedFuture(null);
-                    completion =
-                            invokeHandlers(completion, activeRegistered, header, payload, actorId);
-                    completion =
-                            invokeHandlers(
-                                    completion, activeActorRegistered, header, payload, actorId);
-                    return completion.whenComplete(
-                            (ignored, error) -> message.payload().payload().close());
+                    };
                 };
         dispatchQueue.addMessage(
                 message,
-                dispatch,
+                selectDispatch,
                 () ->
-                        registered.stream()
-                                        .anyMatch(
-                                                handler ->
-                                                        handlers.getOrDefault(
-                                                                        header.name(), List.of())
-                                                                .contains(handler))
-                                || actorRegistered.stream()
-                                        .anyMatch(
-                                                ZLinkStreamActorRegistry.DefaultActor
-                                                                .HandlerRegistration
-                                                        ::active),
+                        handlers.getOrDefault(header.name(), List.of()).size()
+                                + actorHandlers(actor, header.name()).size(),
                 configuration.dispatchMode() == ZLinkStreamDispatchMode.IMMEDIATE);
     }
 
-    private CompletionStage<Void> invokeHandlers(
-            CompletionStage<Void> completion,
+    private static List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>> actorHandlers(
+            ZLinkStreamActorRegistry.DefaultActor actor, String name) {
+        if (actor == null) {
+            return List.of();
+        }
+        return actor.handlers(name).stream()
+                .filter(ZLinkStreamActorRegistry.DefaultActor.HandlerRegistration::active)
+                .map(ZLinkStreamActorRegistry.DefaultActor.HandlerRegistration::handler)
+                .toList();
+    }
+
+    private void invokeHandlers(
             List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>> registered,
             ZLinkStreamWireProtocol.Header header,
             byte[] payload,
@@ -253,12 +257,8 @@ final class ZLinkStreamReceiveDispatcher {
                                     ZLinkStreamConnectorPayloadCodec.fromWireCodec(header.codec())),
                             header.metadata(),
                             actorId);
-            completion =
-                    completion.thenCompose(
-                            ignored ->
-                                    invokeUserCallback(() -> handler.handleAsync(handlerMessage)));
+            invokeUserCallback(() -> handler.handleAsync(handlerMessage));
         }
-        return completion;
     }
 
     private CompletionStage<Void> invokeUserCallback(UserCallback callback) {

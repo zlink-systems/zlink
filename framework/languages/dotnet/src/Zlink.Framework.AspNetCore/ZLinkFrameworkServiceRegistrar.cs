@@ -158,6 +158,10 @@ internal static class ZLinkFrameworkServiceRegistrar
                 provider.GetRequiredService<ZLinkFrameworkHostLifecycleState>(),
                 provider.GetRequiredService<ZLinkFrameworkRuntime>().PreflightRetireAsync,
                 provider.GetRequiredService<ZLinkFrameworkRuntime>().PublishRetiringAsync,
+                (kind, name) =>
+                    provider
+                        .GetRequiredService<ZLinkFrameworkRuntime>()
+                        .GetListenerStatus(kind, name),
                 registration.ApplicationVersion,
                 acceptingWorkSnapshot: () =>
                     provider.GetRequiredService<ZLinkFrameworkRuntime>().IsAcceptingApplicationWork,

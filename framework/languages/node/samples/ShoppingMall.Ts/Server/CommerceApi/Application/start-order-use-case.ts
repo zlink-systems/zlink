@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '@zlink-systems/framework';
 import type { StartOrderReq, StartOrderRes } from '../../../Shared/Contracts/messages';
 import { OrderWorkflowRouterPort } from './order-workflow-router-port';
 import { OrderStore } from '../../Shared/Store/order-store';
@@ -11,8 +12,20 @@ class StartOrderUseCase {
   ) {}
 
   async start(request: StartOrderReq): Promise<StartOrderRes> {
-    const result = await this.workflowRouter.start(this.store.reserveOrder(request));
-    return { state: result.state };
+    const workflowRequest = this.store.reserveOrder(request);
+    try {
+      const result = await this.workflowRouter.start(workflowRequest);
+      return { state: result.state };
+    } catch (error) {
+      if (
+        error instanceof ZLinkFrameworkException &&
+        error.kind === ZLinkFrameworkErrorKind.Rejected
+      ) {
+        const state = this.store.getOrderByIdempotencyKey(request.idempotencyKey);
+        if (state !== undefined) return { state };
+      }
+      throw error;
+    }
   }
 }
 

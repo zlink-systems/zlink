@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.actors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -82,11 +83,12 @@ final class ZLinkSameNodeJoinBarrierTest {
         try (ZLinkFrameworkRuntime runtime =
                 ZLinkFrameworkRuntimeTestAccess.start(
                         options, new ZLinkJavaBackendAdapterFactory())) {
-            runtime.spotManager()
-                    .getOrCreate(TARGET_SPOT_ID, "target")
-                    .submit()
-                    .toCompletableFuture()
-                    .get(3, TimeUnit.SECONDS);
+            var targetCreated =
+                    runtime.spotManager()
+                            .getOrCreate(TARGET_SPOT_ID, "target")
+                            .submit()
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS);
             ZLinkActorCreateResult.Created created =
                     assertInstanceOf(
                             ZLinkActorCreateResult.Created.class,
@@ -110,6 +112,8 @@ final class ZLinkSameNodeJoinBarrierTest {
             //  callback (blocked behind the held Location Store write).
             assertTrue(TARGET_JOINED.await(3, TimeUnit.SECONDS));
             assertTrue(RENEWAL_HELD.await(3, TimeUnit.SECONDS));
+            CompletableFuture<Boolean> close =
+                    runtime.spotManager().close(targetCreated.spot()).toCompletableFuture();
 
             CompletableFuture<String> probe =
                     runtime.actorClient()
@@ -128,6 +132,7 @@ final class ZLinkSameNodeJoinBarrierTest {
                 early = null;
             }
             RENEWAL_RELEASE.complete(null);
+            assertFalse(close.get(5, TimeUnit.SECONDS));
             String reply = early != null ? early : probe.get(5, TimeUnit.SECONDS);
             assertEquals(
                     TARGET_SPOT_ID + ":completed",

@@ -13,6 +13,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ScheduledExecutorService;
@@ -34,11 +35,11 @@ final class ZLinkStreamConnectionLifecycle {
     private final ZLinkStreamPendingRequests pendingRequests;
     private final ZLinkStreamReceiveDispatcher receiveDispatcher;
     private final Consumer<ZLinkStreamError> errorPublisher;
-    private final Runnable disconnectedNotifier;
-    private final Consumer<ZLinkStreamCloseReason> closeReasonRecorder;
+    private final Runnable actorUnboundNotifier;
+    private final Consumer<ZLinkStreamCloseReason> disconnectedNotifier;
     private final Runnable connectFailureRecorder;
     private final Function<String, CompletionStage<Void>> controlSender;
-    private final Runnable connectionEstablishedNotifier;
+    private final Runnable connectionEndedNotifier;
     private final List<ZLinkStreamConnectionStateHandler> stateHandlers =
             new CopyOnWriteArrayList<>();
     //  The connection field and the state field move together. Every
@@ -52,6 +53,9 @@ final class ZLinkStreamConnectionLifecycle {
     private volatile ScheduledFuture<?> heartbeatTask;
     private volatile long lastInboundNanos = System.nanoTime();
     private volatile CompletableFuture<Void> connectionAttempt;
+    //  Guarded by connectionAttemptLock. Set once by the first close; every
+    //  later close returns it.
+    private CompletableFuture<Void> closeResult;
 
     ZLinkStreamConnectionLifecycle(
             ZLinkStreamConnectorConfiguration configuration,
@@ -60,22 +64,22 @@ final class ZLinkStreamConnectionLifecycle {
             ZLinkStreamPendingRequests pendingRequests,
             ZLinkStreamReceiveDispatcher receiveDispatcher,
             Consumer<ZLinkStreamError> errorPublisher,
-            Runnable disconnectedNotifier,
-            Consumer<ZLinkStreamCloseReason> closeReasonRecorder,
+            Runnable actorUnboundNotifier,
+            Consumer<ZLinkStreamCloseReason> disconnectedNotifier,
             Runnable connectFailureRecorder,
             Function<String, CompletionStage<Void>> controlSender,
-            Runnable connectionEstablishedNotifier) {
+            Runnable connectionEndedNotifier) {
         this.configuration = configuration;
         this.timeouts = timeouts;
         this.dispatchQueue = dispatchQueue;
         this.pendingRequests = pendingRequests;
         this.receiveDispatcher = receiveDispatcher;
         this.errorPublisher = errorPublisher;
+        this.actorUnboundNotifier = actorUnboundNotifier;
         this.disconnectedNotifier = disconnectedNotifier;
-        this.closeReasonRecorder = closeReasonRecorder;
         this.connectFailureRecorder = connectFailureRecorder;
         this.controlSender = controlSender;
-        this.connectionEstablishedNotifier = connectionEstablishedNotifier;
+        this.connectionEndedNotifier = connectionEndedNotifier;
     }
 
     boolean isConnected() {
@@ -109,30 +113,55 @@ final class ZLinkStreamConnectionLifecycle {
                 ZLinkStreamConnectionState.CONNECTING, this::connectOnceStage);
     }
 
+    /**
+     * Runs the close work once and returns its result to every caller.
+     *
+     * <p>Spec 32 7: the close work fails the operations whose frames were not yet written with
+     * {@code Disconnected} instead of writing them, and closes the transport without waiting for
+     * the peer. A frame write already in progress is ended by the transport close and its operation
+     * fails the same way. A close called inside a callback of that work - an {@code Immediate}
+     * state or disconnect handler - receives the same pending result, so it returns after the close
+     * has started and never waits for the path that runs it; a close called outside waits for that
+     * result.
+     */
     CompletionStage<Void> close() {
-        boolean wasConnected;
         boolean stateChanged;
         ZLinkStreamTransportConnection current;
+        CompletableFuture<Void> result;
+        CompletableFuture<Void> attempt;
         synchronized (connectionAttemptLock) {
-            wasConnected = isConnected();
+            if (closeResult != null) {
+                return closeResult;
+            }
+            closeResult = result = new CompletableFuture<>();
             current = connection;
             connection = null;
+            attempt = connectionAttempt;
+            connectionAttempt = null;
             stateChanged = setStateLocked(ZLinkStreamConnectionState.CLOSED);
         }
-        stopHeartbeat();
-        closeQuietly(current);
-        pendingRequests.failAll(ZLinkStreamException.disconnected("connector closed"));
-        dispatchQueue.clear();
-        if (stateChanged) {
-            notifyStateHandlers(ZLinkStreamConnectionState.CLOSED);
+        if (attempt != null) {
+            attempt.completeExceptionally(ZLinkStreamException.disconnected("connector is closed"));
         }
-        if (wasConnected) {
-            disconnectedNotifier.run();
+        try {
+            endConnection(current, ZLinkStreamException.disconnected("connector closed"));
+            if (stateChanged) {
+                notifyStateHandlers(ZLinkStreamConnectionState.CLOSED);
+            }
+            if (current != null) {
+                disconnectedNotifier.accept(ZLinkStreamCloseReason.CLIENT_CLOSE);
+            }
+            result.complete(null);
+        } catch (RuntimeException failure) {
+            //  Every caller shares this result, so the failure is reported
+            //  through it rather than only to the caller that ran the work.
+            result.completeExceptionally(failure);
         }
-        return CompletableFuture.completedFuture(null);
+        return result;
     }
 
-    void serverClosing() {
+    /** Ends the connection because the server sent {@code session-closing} with {@code reason}. */
+    void serverClosing(ZLinkStreamCloseReason reason) {
         ZLinkStreamTransportConnection current;
         synchronized (connectionAttemptLock) {
             current = connection;
@@ -143,29 +172,109 @@ final class ZLinkStreamConnectionLifecycle {
             //  ending run once, whichever thread reaches it first.
             connection = null;
         }
+        endConnection(current, ZLinkStreamException.disconnected("server closed the session"));
+        reconnectOrDisconnect(reason);
+    }
+
+    /**
+     * Ends a connection that the caller claimed under {@link #connectionAttemptLock}. Every ending
+     * - close, a server {@code session-closing}, a receive failure and a heartbeat timeout - runs
+     * this one sequence; {@code ended} is null when close finds no connection.
+     *
+     * <p>Spec 32 7: the transport closes first. The write queue is reset after it, so a frame the
+     * pump starts in between reaches a closed transport and never the peer; that operation, and
+     * every operation whose frame was not written, fails with {@code Disconnected}. Spec 32 10.1.1:
+     * a wait is released when the connection it observed ends, here, and not when a reconnect that
+     * may follow establishes the next one.
+     */
+    private void endConnection(ZLinkStreamTransportConnection ended, Throwable cause) {
         stopHeartbeat();
-        closeQuietly(current);
-        pendingRequests.failAll(ZLinkStreamException.disconnected("server closed the session"));
-        //  Spec 32 10.1.1: a wait is released when the connection it observed
-        //  ends, here, and not when the reconnect that may follow establishes
-        //  the next one.
+        closeQuietly(ended);
+        connectionEndedNotifier.run();
+        pendingRequests.failAll(cause);
         dispatchQueue.connectionEnded();
-        boolean reconnectEnabled = configuration.reconnect().enabled();
-        if (reconnectEnabled) {
+        if (ended != null) {
+            actorUnboundNotifier.run();
+        }
+    }
+
+    /** Spec 32 6: after a connection loss the client did not ask for, the reconnect policy runs. */
+    private void reconnectOrDisconnect(ZLinkStreamCloseReason reason) {
+        if (configuration.reconnect().enabled()) {
             startAutomaticReconnect();
         } else {
             transitionTo(ZLinkStreamConnectionState.DISCONNECTED);
         }
-        disconnectedNotifier.run();
+        disconnectedNotifier.accept(reason);
     }
 
-    CompletionStage<Void> writeAsync(byte[] frame) {
-        ZLinkStreamTransportConnection current = connection;
-        if (current == null) {
-            return CompletableFuture.failedFuture(
-                    ZLinkStreamException.disconnected("connector is not connected"));
+    CompletionStage<Void> enqueueFrame(
+            ZLinkStreamSendChain sendChain, byte[] frame, Runnable onAccepted) {
+        CompletableFuture<Void> publication;
+        synchronized (connectionAttemptLock) {
+            ZLinkStreamTransportConnection current = connection;
+            if (state != ZLinkStreamConnectionState.CONNECTED || current == null) {
+                throw ZLinkStreamException.disconnected("connector is not connected");
+            }
+            publication =
+                    sendChain.enqueueDeferred(
+                            () -> write(current, frame),
+                            failure -> {
+                                Throwable cause =
+                                        failure instanceof CompletionException wrapped
+                                                        && wrapped.getCause() != null
+                                                ? wrapped.getCause()
+                                                : failure;
+                                if (cause instanceof ZLinkStreamException coded
+                                        && coded.errorCode() == ZLinkStreamErrorCode.SEND_FAILED) {
+                                    handleReceiveFailure(
+                                            current, coded, ZLinkStreamCloseReason.TRANSPORT_ERROR);
+                                }
+                            });
+            if (onAccepted != null) {
+                onAccepted.run();
+            }
         }
-        return current.writeAsync(frame);
+        sendChain.pump();
+        return publication;
+    }
+
+    /**
+     * Writes one frame and names its failure. Spec 32 9: a transport write failure is {@code
+     * SendFailed}. A failure after the connection ended belongs to the ending, which claims the
+     * connection before it closes the transport, so it is {@code Disconnected} (spec 32 7) - the
+     * code the queue reset gives the operations the ending found.
+     */
+    private CompletionStage<Void> write(ZLinkStreamTransportConnection transport, byte[] frame) {
+        CompletionStage<Void> written;
+        try {
+            written = transport.writeAsync(frame);
+        } catch (RuntimeException failure) {
+            written = CompletableFuture.failedFuture(failure);
+        }
+        return written.handle(
+                (ignored, failure) -> {
+                    if (failure == null) {
+                        return null;
+                    }
+                    Throwable cause =
+                            failure instanceof CompletionException && failure.getCause() != null
+                                    ? failure.getCause()
+                                    : failure;
+                    if (connection != transport) {
+                        throw ZLinkStreamException.of(
+                                ZLinkStreamErrorCode.DISCONNECTED,
+                                "connection ended before frame write completed",
+                                cause);
+                    }
+                    throw ZLinkStreamException.of(
+                            ZLinkStreamErrorCode.SEND_FAILED,
+                            "frame write failed: "
+                                    + (cause.getMessage() == null
+                                            ? cause.getClass().getSimpleName()
+                                            : cause.getMessage()),
+                            cause);
+                });
     }
 
     AutoCloseable onConnectionStateChanged(ZLinkStreamConnectionStateHandler handler) {
@@ -318,9 +427,6 @@ final class ZLinkStreamConnectionLifecycle {
         //  waits of the previous connection are not this call's concern:
         //  they ended with that connection (spec 32 10.1.1).
         dispatchQueue.resetForNewConnection();
-        //  A new connection carries no outstanding write, so the send chain
-        //  of the connection that ended does not hold up this one.
-        connectionEstablishedNotifier.run();
         if (stateChanged) {
             notifyStateHandlers(ZLinkStreamConnectionState.CONNECTED);
         }
@@ -334,7 +440,17 @@ final class ZLinkStreamConnectionLifecycle {
                 .whenComplete(
                         (frame, ex) -> {
                             if (ex != null) {
-                                handleReceiveFailure(transport, ex);
+                                ZLinkStreamException violation = protocolViolation(ex);
+                                if (violation != null) {
+                                    errorPublisher.accept(violation.error());
+                                }
+                                handleReceiveFailure(
+                                        transport,
+                                        ex,
+                                        closeReasonFor(
+                                                violation == null
+                                                        ? ZLinkStreamErrorCode.DISCONNECTED
+                                                        : violation.errorCode()));
                                 return;
                             }
                             try {
@@ -345,17 +461,53 @@ final class ZLinkStreamConnectionLifecycle {
                                     readNextFrame(transport);
                                 }
                             } catch (RuntimeException dispatchEx) {
-                                errorPublisher.accept(
-                                        new ZLinkStreamError(
-                                                ZLinkStreamErrorCode.FRAME_DECODE_FAILED,
-                                                "Receive frame dispatch failed.",
-                                                dispatchEx));
-                                handleReceiveFailure(transport, dispatchEx);
+                                //  A frame the connector could not dispatch did not decode
+                                //  - its header, a control packet or an Actor lifecycle
+                                //  control - or decompressed over the receive limit, so it
+                                //  is a protocol violation (spec 32 9).
+                                ZLinkStreamException violation = protocolViolation(dispatchEx);
+                                ZLinkStreamError error =
+                                        violation != null
+                                                ? violation.error()
+                                                : new ZLinkStreamError(
+                                                        ZLinkStreamErrorCode.FRAME_DECODE_FAILED,
+                                                        "Receive frame dispatch failed.",
+                                                        dispatchEx);
+                                errorPublisher.accept(error);
+                                handleReceiveFailure(
+                                        transport, dispatchEx, closeReasonFor(error.code()));
                             }
                         });
     }
 
-    private void handleReceiveFailure(ZLinkStreamTransportConnection failed, Throwable ex) {
+    /**
+     * Spec 32 9: the receive path is where a protocol violation is detected - a frame that does not
+     * decode ({@code FrameDecodeFailed}) or a payload over the receive limit ({@code
+     * FrameTooLarge}). It is a stream-level error, published on the error event, and it ends the
+     * connection with {@code ProtocolError}. Returns null for any other failure, which on the read
+     * is the transport failing.
+     */
+    private static ZLinkStreamException protocolViolation(Throwable failure) {
+        Throwable cause =
+                failure instanceof CompletionException && failure.getCause() != null
+                        ? failure.getCause()
+                        : failure;
+        if (cause instanceof ZLinkStreamException coded
+                && closeReasonFor(coded.errorCode()) == ZLinkStreamCloseReason.PROTOCOL_ERROR) {
+            return coded;
+        }
+        return null;
+    }
+
+    private static ZLinkStreamCloseReason closeReasonFor(ZLinkStreamErrorCode code) {
+        return code == ZLinkStreamErrorCode.FRAME_DECODE_FAILED
+                        || code == ZLinkStreamErrorCode.FRAME_TOO_LARGE
+                ? ZLinkStreamCloseReason.PROTOCOL_ERROR
+                : ZLinkStreamCloseReason.TRANSPORT_ERROR;
+    }
+
+    private void handleReceiveFailure(
+            ZLinkStreamTransportConnection failed, Throwable ex, ZLinkStreamCloseReason reason) {
         synchronized (connectionAttemptLock) {
             if (connection != failed || state != ZLinkStreamConnectionState.CONNECTED) {
                 return;
@@ -368,19 +520,8 @@ final class ZLinkStreamConnectionLifecycle {
             //  event and happens elsewhere.
             connection = null;
         }
-        stopHeartbeat();
-        closeQuietly(failed);
-        pendingRequests.failAll(ex);
-        //  Spec 32 10.1.1: the wait ends with its connection, not with the
-        //  next one.
-        dispatchQueue.connectionEnded();
-        boolean reconnectEnabled = configuration.reconnect().enabled();
-        if (reconnectEnabled) {
-            startAutomaticReconnect();
-        } else {
-            transitionTo(ZLinkStreamConnectionState.DISCONNECTED);
-        }
-        disconnectedNotifier.run();
+        endConnection(failed, ex);
+        reconnectOrDisconnect(reason);
     }
 
     private CompletionStage<Void> startConnectionAttempt(
@@ -408,12 +549,14 @@ final class ZLinkStreamConnectionLifecycle {
                     .whenComplete(
                             (ignored, error) -> {
                                 boolean transition = false;
+                                boolean attemptFailed = false;
                                 synchronized (connectionAttemptLock) {
                                     if (connectionAttempt == result) {
                                         connectionAttempt = null;
                                     }
                                     if (error != null
                                             && state != ZLinkStreamConnectionState.CLOSED) {
+                                        attemptFailed = true;
                                         transition =
                                                 setStateLocked(
                                                         ZLinkStreamConnectionState.DISCONNECTED);
@@ -422,29 +565,35 @@ final class ZLinkStreamConnectionLifecycle {
                                 if (transition) {
                                     notifyStateHandlers(ZLinkStreamConnectionState.DISCONNECTED);
                                 }
+                                if (attemptFailed) {
+                                    //  Spec 32 6.2: a connect attempt that never produced a
+                                    //  connection still leaves a close reason behind. An
+                                    //  attempt that close ended is not a failure of its own.
+                                    connectFailureRecorder.run();
+                                }
                                 if (error == null) {
                                     result.complete(null);
                                 } else {
-                                    //  Spec 32 6.2: a connect attempt that never produced a
-                                    //  connection still leaves a close reason behind.
-                                    connectFailureRecorder.run();
                                     result.completeExceptionally(error);
                                 }
                             });
         } catch (RuntimeException error) {
+            boolean attemptFailed;
             boolean transition;
             synchronized (connectionAttemptLock) {
                 if (connectionAttempt == result) {
                     connectionAttempt = null;
                 }
+                attemptFailed = state != ZLinkStreamConnectionState.CLOSED;
                 transition =
-                        state != ZLinkStreamConnectionState.CLOSED
-                                && setStateLocked(ZLinkStreamConnectionState.DISCONNECTED);
+                        attemptFailed && setStateLocked(ZLinkStreamConnectionState.DISCONNECTED);
             }
             if (transition) {
                 notifyStateHandlers(ZLinkStreamConnectionState.DISCONNECTED);
             }
-            connectFailureRecorder.run();
+            if (attemptFailed) {
+                connectFailureRecorder.run();
+            }
             result.completeExceptionally(error);
         }
         return result;
@@ -471,7 +620,9 @@ final class ZLinkStreamConnectionLifecycle {
         }
         startConnectionAttempt(
                 ZLinkStreamConnectionState.RECONNECTING,
-                () -> reconnectAttemptStage(1, configuration.reconnect().initialDelay()));
+                () ->
+                        reconnectAttemptStage(
+                                1, ZLinkStreamReconnectDelay.firstBase(configuration.reconnect())));
     }
 
     /**
@@ -505,7 +656,8 @@ final class ZLinkStreamConnectionLifecycle {
                                             //  watched the connector go to Reconnecting that the
                                             //  connection is not coming back.
                                             transitionTo(ZLinkStreamConnectionState.DISCONNECTED);
-                                            disconnectedNotifier.run();
+                                            disconnectedNotifier.accept(
+                                                    ZLinkStreamCloseReason.TRANSPORT_ERROR);
                                             result.completeExceptionally(ex);
                                             return;
                                         }
@@ -564,15 +716,16 @@ final class ZLinkStreamConnectionLifecycle {
         }
         long idleNanos = System.nanoTime() - lastInboundNanos;
         if (idleNanos > configuration.heartbeat().timeout().toNanos()) {
-            closeReasonRecorder.accept(ZLinkStreamCloseReason.HEARTBEAT_TIMEOUT);
-            //  The transport is gone, so spec 32 9 fails the operations in
-            //  flight as Disconnected; the heartbeat timeout is the cause.
+            //  The silence is detected here, so the close reason is decided
+            //  here (spec 32 6.2); the operations in flight fail as
+            //  Disconnected (spec 32 9).
             handleReceiveFailure(
                     current,
                     ZLinkStreamException.of(
                             ZLinkStreamErrorCode.DISCONNECTED,
                             "Heartbeat timed out",
-                            new TimeoutException("Heartbeat timed out")));
+                            new TimeoutException("Heartbeat timed out")),
+                    ZLinkStreamCloseReason.HEARTBEAT_TIMEOUT);
             return;
         }
         controlSender.apply("$zlink.heartbeat.ping");
@@ -623,11 +776,6 @@ final class ZLinkStreamConnectionLifecycle {
             errorPublisher.accept(DefaultZLinkStreamConnector.userCallbackFailed(ex));
             return CompletableFuture.completedFuture(null);
         }
-    }
-
-    private boolean isWebSocketEndpoint() {
-        return configuration.transport().kind() == ZLinkStreamTransport.WEB_SOCKET
-                || configuration.transport().kind() == ZLinkStreamTransport.WEB_SOCKET_SECURE;
     }
 
     private static SSLContext insecureSslContext() {

@@ -3089,29 +3089,6 @@ bool actor_gateway_runtime_t::prepare_session_relocation_target_route (
     }
 }
 
-bool actor_gateway_runtime_t::confirm_session_remote_tenure (
-  const runtime::protocol::bound_session_send_t &send)
-{
-    const auto actor_id = send.actor.actor_id;
-    return _state->sync ([this, &send, &actor_id] {
-        const auto found = _state->actors_by_id.find (actor_id);
-        if (found == _state->actors_by_id.end () || !found->second.bound
-            || found->second.disconnected
-            || found->second.ref.object_generation () != send.actor.object_generation
-            || found->second.ref.node_rid ().value ()
-                 != zlink::routing_id_t::from (send.actor.target_node_routing_id).to_string ()
-            || !found->second.bound_session_route)
-            return false;
-        auto &route = *found->second.bound_session_route;
-        if (route.object_generation != send.actor.object_generation
-            || route.authority_owner_generation != send.actor.authority_owner_generation
-            || route.binding_generation != send.expected_binding_generation)
-            return false;
-        route.owner_lease_generation = send.actor.owner_lease_generation;
-        return true;
-    });
-}
-
 void actor_gateway_runtime_t::unbind_session_stream (std::string actor_id,
                                                      std::string session_id,
                                                      std::uint64_t binding_token)

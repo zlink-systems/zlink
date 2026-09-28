@@ -1509,24 +1509,29 @@ test('location lifecycle durably closes an exact Ready Instance before deleting 
     storeVersion: 'authority-v1'
   });
 
-  const firstClosing = await lifecycle.beginInstanceSpotClosing('play', 'room-1');
+  let commits = 0;
+  const firstClosing = await lifecycle.beginInstanceSpotClosing('play', 'room-1', () => {
+    commits++;
+  });
   assert.notEqual(firstClosing, undefined);
+  assert.equal(commits, 1);
   assert.equal(internal.decodeServiceInstanceAuthorityPayload(current.payload).state, 'closing');
-  assert.deepEqual(invalidated, ['room-1']);
+  assert.deepEqual(invalidated, []);
   assert.equal(mutations[0].expectedVersion, 'authority-v1');
   assert.equal(mutations[0].mutation.generationTransition, 'preserve');
 
-  await firstClosing.restoreReady();
-  assert.equal(internal.decodeServiceInstanceAuthorityPayload(current.payload).state, 'ready');
-  assert.equal(mutations[1].expectedVersion, 'authority-v2');
-  assert.deepEqual(invalidated, ['room-1', 'room-1']);
-
-  assert.notEqual(await lifecycle.beginInstanceSpotClosing('play', 'room-1'), undefined);
+  await firstClosing.release();
+  assert.equal(internal.decodeServiceInstanceAuthorityPayload(current.payload).state, 'closing');
+  assert.equal(mutations.length, 1);
+  assert.equal(await lifecycle.beginInstanceSpotClosing('play', 'room-1', () => {
+    commits++;
+  }), undefined);
+  assert.equal(commits, 1);
   await lifecycle.releaseSpot('play', 'room-1');
-  assert.equal(mutations[3].expectedVersion, 'authority-v4');
-  assert.deepEqual(mutations[3].mutation, { kind: 'delete' });
+  assert.equal(mutations[1].expectedVersion, 'authority-v2');
+  assert.deepEqual(mutations[1].mutation, { kind: 'delete' });
   assert.equal(current.kind, 'missing');
-  assert.deepEqual(invalidated, ['room-1', 'room-1', 'room-1', 'room-1']);
+  assert.deepEqual(invalidated, ['room-1']);
 });
 
 test('location lifecycle ignores an old Instance generation release after authority replacement', async () => {

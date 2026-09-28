@@ -155,7 +155,7 @@ class TicTacToeGameSpot implements ZLinkSpot<PlayActor> {
       this.requireMatch().players.size === 0 &&
       isTerminal(this.requireMatch().snapshot().status)
     ) {
-      await this.context.close();
+      void this.context.close();
     }
   }
 

@@ -6,7 +6,6 @@ import type { RoutingId, Type, ZLinkSpot, ZLinkSpotInfo } from '../../contracts'
 import type { ZLinkLocalSpotCreateResult } from './spot-manager-internal-contracts';
 import { ZLinkSpotCreateState, ZLinkSpotCloseReason } from '../../contracts';
 import type { ZLinkSpotActivation } from './spot-activation-state';
-import { ZLinkSpotCloseOccupiedError } from './spot-activation-state';
 import { ZLinkConfigurationException } from '../configuration';
 import { createAbortError } from '../abort';
 import { ZLinkSpotLifecycleMetrics } from './spot-lifecycle-metrics';
@@ -40,7 +39,11 @@ export class ZLinkSpotActivationRegistry {
   private readonly lifecycleMetrics: ZLinkSpotLifecycleMetrics;
   private activeScan: Iterator<ZLinkSpotActivation> | undefined;
 
-  constructor(metrics?: import('../diagnostics').ZLinkRuntimeMetrics) {
+  constructor(
+    metrics?: import('../diagnostics').ZLinkRuntimeMetrics,
+    private readonly isCommittedClose: (meshName: string, spotId: RoutingId) => boolean = () =>
+      false
+  ) {
     this.lifecycleMetrics = new ZLinkSpotLifecycleMetrics(metrics);
   }
 
@@ -55,7 +58,10 @@ export class ZLinkSpotActivationRegistry {
 
   resolve(meshName: string, spotId: RoutingId): ZLinkSpotActivation | undefined {
     const key = spotActivationKey(meshName, spotId);
-    return this.closing.has(key) || this.failedClose.has(key) || this.staged.has(key)
+    return this.isCommittedClose(meshName, spotId) ||
+      this.closing.has(key) ||
+      this.failedClose.has(key) ||
+      this.staged.has(key)
       ? undefined
       : this.activations.get(key);
   }
@@ -64,6 +70,7 @@ export class ZLinkSpotActivationRegistry {
     const matches = [...this.activations.values()].filter(
       (activation) =>
         String(activation.spotId) === String(spotId) &&
+        !this.isCommittedClose(activation.meshName, activation.spotId) &&
         !this.staged.has(spotActivationKey(activation.meshName, activation.spotId)) &&
         !this.closing.has(spotActivationKey(activation.meshName, activation.spotId)) &&
         !this.failedClose.has(spotActivationKey(activation.meshName, activation.spotId))
@@ -74,20 +81,11 @@ export class ZLinkSpotActivationRegistry {
   has(meshName: string, spotId: RoutingId): boolean {
     const key = spotActivationKey(meshName, spotId);
     return (
+      !this.isCommittedClose(meshName, spotId) &&
       !this.staged.has(key) &&
       !this.closing.has(key) &&
       !this.failedClose.has(key) &&
       this.activations.has(key)
-    );
-  }
-
-  canClose(meshName: string, spotId: RoutingId): boolean {
-    const key = spotActivationKey(meshName, spotId);
-    return (
-      !this.staged.has(key) &&
-      !this.closing.has(key) &&
-      !this.failedClose.has(key) &&
-      this.activations.get(key)?.canClose() === true
     );
   }
 
@@ -96,7 +94,12 @@ export class ZLinkSpotActivationRegistry {
       .filter((activation) => {
         if (activation.meshName !== meshName) return false;
         const key = spotActivationKey(activation.meshName, activation.spotId);
-        return !this.staged.has(key) && !this.closing.has(key) && !this.failedClose.has(key);
+        return (
+          !this.isCommittedClose(meshName, activation.spotId) &&
+          !this.staged.has(key) &&
+          !this.closing.has(key) &&
+          !this.failedClose.has(key)
+        );
       })
       .map((activation) => String(activation.spotId))
       .sort((left, right) => left.localeCompare(right))
@@ -105,6 +108,18 @@ export class ZLinkSpotActivationRegistry {
 
   activeActivations(): readonly ZLinkSpotActivation[] {
     return [...this.activations.values()];
+  }
+
+  activationForClose(meshName: string, spotId: RoutingId): ZLinkSpotActivation | undefined {
+    return this.activations.get(spotActivationKey(meshName, spotId));
+  }
+
+  finishClose(meshName: string, spotId: RoutingId): void {
+    const key = spotActivationKey(meshName, spotId);
+    if (this.activations.delete(key)) this.lifecycleMetrics.closed('user');
+    this.staged.delete(key);
+    this.failedClose.delete(key);
+    this.resolveEmptyWaiters();
   }
 
   hasActiveActivations(): boolean {
@@ -215,30 +230,14 @@ export class ZLinkSpotActivationRegistry {
     }
     const operation = {} as ZLinkSpotCloseOperation;
     let completed = false;
-    let occupiedAfterQuiescence = false;
     const ready = Promise.resolve()
       .then(() => close(activation))
       .then(() => {
         completed = true;
       })
-      .catch((error: unknown) => {
-        // The seal's post-quiescence recheck (spot-activation.ts
-        // closeAfterSeal) found a new join and released the seal instead of
-        // closing. The activation is already back to normal operation, so
-        // this is a "did not close" outcome, not a close failure.
-        if (error instanceof ZLinkSpotCloseOccupiedError) {
-          occupiedAfterQuiescence = true;
-          return;
-        }
-        throw error;
-      })
       .finally(() => {
         if (this.closing.get(key) === operation) {
           this.closing.delete(key);
-          if (occupiedAfterQuiescence) {
-            this.resolveEmptyWaiters();
-            return;
-          }
           if (completed || resourcesReleased(activation)) {
             this.activations.delete(key);
             this.staged.delete(key);
@@ -250,7 +249,7 @@ export class ZLinkSpotActivationRegistry {
           this.resolveEmptyWaiters();
         }
       })
-      .then(() => !occupiedAfterQuiescence);
+      .then(() => true);
     Object.assign(operation, { activation, ready, started: true });
     this.closing.set(key, operation);
     return operation;
@@ -263,6 +262,17 @@ export class ZLinkSpotActivationRegistry {
     create: () => Promise<ZLinkLocalSpotCreateResult>
   ): ZLinkSpotActivationOperation {
     const key = spotActivationKey(meshName, spotId);
+    if (this.isCommittedClose(meshName, spotId)) {
+      return {
+        owner: false,
+        ready: Promise.reject(
+          createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.RequestRejected,
+            `Spot '${String(spotId)}' is Closing.`
+          )
+        )
+      };
+    }
     const closing = this.closing.get(key);
     if (closing !== undefined) {
       return {

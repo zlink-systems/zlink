@@ -99,7 +99,7 @@ zlink_cpp_sample_assert_graceful_teardown() {
 
 zlink_cpp_sample_exit_trap() {
   local status=$?
-  cleanup
+  cleanup "$status"
   zlink_cpp_sample_assert_graceful_teardown
   exit "${status}"
 }

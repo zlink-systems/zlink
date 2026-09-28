@@ -177,12 +177,14 @@ zlinkFramework().addFanoutChannel("lobby.events").enableSubscriber("lobby-1:7001
 | `.enableSubscriber()` (raw builder, endpoint 없음) | — | automatic subscriber. Location Store에서 같은 ChannelName의 유효한 publisher를 전부 찾는다 |
 | `.enableSubscriber(endpoint)`(NestJS builder) / `.connect(endpoint)`(raw builder) | — | manual subscriber. 명시한 endpoint만 사용 |
 | `.subscriberConnections()`(raw builder) | — | manual subscriber endpoint 집합의 runtime handle(`ZLinkEndpointConnections`: `connect`/`disconnect`/`listConnections`) 반환 |
-| `.getListenerStatus(channelName)`(runtime, `ZLinkFanoutClient`) | — | publisher listener가 bind한 뒤 현재 advertised endpoint 조회 |
 
 **완료 결과.** 반환값 없이 동기로 등록된다. Automatic subscriber와 manual subscriber를 같은
-fanout channel에 함께 설정하면 startup 실패로 드러난다. `getListenerStatus(...)`는 host가
-시작되지 않았거나 해당 channel이 publisher로 등록되지 않았으면 `ZLinkConfigurationException`으로
-실패한다.
+fanout channel에 함께 설정하면 startup 실패로 드러난다.
+
+시작한 Framework runtime의 `getListenerStatus(kind, name)`은 `routeMesh`, `clientServer`,
+`fanout`, `stream` listener가 bind한 뒤 현재 advertised endpoint와 조회 시각을 반환한다.
+`name`은 설정한 MeshName, ChannelName 또는 StreamNodeName이다. 알 수 없거나 bind 전인
+listener는 `ZLinkConfigurationException`으로 실패한다.
 
 **선택 기준.** 발행자가 구독자를 알 필요가 없는 관찰·통지 채널을 새로 만들 때 사용한다. Reply가
 필요한 메시징에는 RouteMesh Channel이나 ClientServer Channel 등록을 대신 사용한다.

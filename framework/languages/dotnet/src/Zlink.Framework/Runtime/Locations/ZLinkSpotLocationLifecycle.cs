@@ -147,7 +147,7 @@ internal sealed class ZLinkSpotLocationLifecycle(ZLinkLocationRuntime runtime)
         return ZLinkLocationWriteStatus.Stored;
     }
 
-    internal ValueTask ForgetRelocatedAsync(ZLinkSpotId spotId, ulong objectGeneration) =>
+    internal ValueTask ForgetTrackedAsync(ZLinkSpotId spotId, ulong objectGeneration) =>
         _lane.RunAsync(() =>
         {
             if (
