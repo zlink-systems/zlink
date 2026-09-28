@@ -501,10 +501,14 @@ else
   start zone-node-1 "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-1.json"
   start zone-node-2 "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-2.json"
 fi
-wait_for_log zone-node-1 "topology=ready"
-wait_for_log zone-node-2 "topology=ready"
-wait_for_log ops "node status observed. node=zone-node-1, rid=zn-"
-wait_for_log ops "node status observed. node=zone-node-2, rid=zn-"
+# The first committed bot on each node orders the Ops observation after bootstrap
+# has begun; the public status below is the complete readiness decision.
+wait_for_log zone-node-1 "bot spawned."
+wait_for_log zone-node-2 "bot spawned."
+# Ops reports the zone set and resident count after each completed Join. One public
+# snapshot must contain both zone owners, all four zones, and all eight bots.
+ready_config="$(client_config runner-topology)"
+timeout 20s "$CLIENT_BIN" --config "$ready_config" 2>&1 | tee -a "$LOG_DIR/client.log"
 
 G_RUNNER_LOG="$LOG_DIR/routing-id-self-check.log"
 : >"$G_RUNNER_LOG"

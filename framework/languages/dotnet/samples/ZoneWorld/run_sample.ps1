@@ -611,10 +611,12 @@ try {
         Start-ZoneWorldRole "zone-node-1" $ZoneNodeProject "zone-node-1" | Out-Null
         Start-ZoneWorldRole "zone-node-2" $ZoneNodeProject "zone-node-2" | Out-Null
     }
-    Wait-ZoneWorldLog "zone-node-1" "topology=ready"
-    Wait-ZoneWorldLog "zone-node-2" "topology=ready"
-    Wait-ZoneWorldLog "ops" "node status observed. node=zone-node-1, rid=zn-"
-    Wait-ZoneWorldLog "ops" "node status observed. node=zone-node-2, rid=zn-"
+    # The first committed bot orders observation; Ops public status decides readiness.
+    Wait-ZoneWorldLog "zone-node-1" "bot spawned."
+    Wait-ZoneWorldLog "zone-node-2" "bot spawned."
+    # One public Ops snapshot confirms both zone owners and all completed bot Joins.
+    $readiness = Start-ZoneWorldClient "runner-topology"
+    Complete-ZoneWorldClient $readiness -TimeoutSeconds 20
     $node1Rid = Get-ZoneWorldRoutingId "zone-node-1"
     $node2Rid = Get-ZoneWorldRoutingId "zone-node-2"
     Wait-ZoneWorldPeerAdmission "zone-node-1" $node1Rid 1 "zone-node-2" $node2Rid 1
