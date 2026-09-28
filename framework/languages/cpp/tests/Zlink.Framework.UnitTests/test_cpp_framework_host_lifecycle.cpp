@@ -1304,7 +1304,10 @@ bool verify_degraded_host_blocks_and_resumes_relocation ()
         std::cerr << "degraded host relocation admission did not close and resume"
                   << " startup=" << startup_completed
                   << " blocked-reason=" << static_cast<int> (blocked.reason)
-                  << " blocked=" << relocation_blocked << " resumed=" << relocation_resumed << '\n';
+                  << " blocked=" << relocation_blocked << " resumed=" << relocation_resumed
+                  << " shutdown-outcome=" << static_cast<int> (stopped.outcome)
+                  << " shutdown-reason=" << static_cast<int> (stopped.reason)
+                  << " exit-code=" << exit_code << '\n';
     }
     return passed;
 }
@@ -2076,10 +2079,15 @@ int main ()
     }
 
     const auto shutdown = app.shutdown (std::chrono::seconds (1)).result ().value ();
+    const auto shutdown_state = app.runtime_state ();
     if (shutdown.outcome != zlink::framework::termination_outcome_t::stopped
         || shutdown.reason != zlink::framework::termination_reason_t::none
-        || app.runtime_state () != zlink::framework::framework_runtime_state_t::stopped) {
-        std::cerr << "Shutdown must complete the shared termination operation\n";
+        || shutdown_state != zlink::framework::framework_runtime_state_t::stopped) {
+        std::cerr << "Shutdown must complete the shared termination operation"
+                  << " stage=shutdown-before-serving"
+                  << " outcome=" << static_cast<int> (shutdown.outcome)
+                  << " reason=" << static_cast<int> (shutdown.reason)
+                  << " state=" << static_cast<int> (shutdown_state) << '\n';
         return EXIT_FAILURE;
     }
     const auto after_shutdown =
