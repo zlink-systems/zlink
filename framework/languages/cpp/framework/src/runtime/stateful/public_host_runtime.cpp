@@ -6073,45 +6073,38 @@ bool public_host_runtime_t::wait_for_dispatch_activity (std::chrono::millisecond
                                                         bool accept_application_receive) noexcept
 {
     try {
-        if (accept_application_receive) {
-            if (_local_dispatch_completion_lane
-                  .run_checked ([&] { return !_local_application_dispatches.empty (); })
-                  .get ())
-                return true;
-        }
-        auto next = _relocation_wire->next_activity ();
-        _relocation_session_terminal_lane
-          .run_checked ([&] {
-              const auto include = [&] (std::chrono::steady_clock::time_point deadline) {
-                  if (!next || deadline < *next)
-                      next = deadline;
-              };
-              for (const auto &[key, assembly] : _relocation_assemblies)
-                  include (assembly.expires_at);
-              for (const auto &[key, attempt] : _relocation_target_attempts) {
-                  if (!attempt.target_finalized
-                      && attempt.next_finalize_at != std::chrono::steady_clock::time_point{})
-                      include (attempt.next_finalize_at);
-              }
-              for (const auto &[key, seal] : _session_seal_terminals) {
-                  if (!seal.consumed)
-                      include (seal.expires_at);
-              }
-          })
-          .get ();
-        if (next) {
-            const auto now = std::chrono::steady_clock::now ();
-            const auto remaining = *next <= now
-                                     ? std::chrono::milliseconds::zero ()
-                                     : std::chrono::ceil<std::chrono::milliseconds> (*next - now);
-            if (timeout < std::chrono::milliseconds::zero () || remaining < timeout)
-                timeout = remaining;
-        }
         return _transport->wait_for_activity (timeout, accept_application_receive);
     }
     catch (...) {
         return false;
     }
+}
+
+task_t<std::pair<bool, std::optional<std::chrono::steady_clock::time_point>>>
+public_host_runtime_t::next_dispatch_activity_async ()
+{
+    const auto local_pending = co_await _local_dispatch_completion_lane.run_task (
+      [this] { return !_local_application_dispatches.empty (); });
+    auto next = _relocation_wire->next_activity ();
+    co_return std::make_pair (
+      local_pending, co_await _relocation_session_terminal_lane.run_task ([this, next] () mutable {
+          const auto include = [&] (std::chrono::steady_clock::time_point deadline) {
+              if (!next || deadline < *next)
+                  next = deadline;
+          };
+          for (const auto &[key, assembly] : _relocation_assemblies)
+              include (assembly.expires_at);
+          for (const auto &[key, attempt] : _relocation_target_attempts) {
+              if (!attempt.target_finalized
+                  && attempt.next_finalize_at != std::chrono::steady_clock::time_point{})
+                  include (attempt.next_finalize_at);
+          }
+          for (const auto &[key, seal] : _session_seal_terminals) {
+              if (!seal.consumed)
+                  include (seal.expires_at);
+          }
+          return next;
+      }));
 }
 
 void public_host_runtime_t::signal_dispatch_activity () noexcept

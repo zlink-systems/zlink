@@ -1659,6 +1659,24 @@ mesh_node_host_service_t::close_user_spot (const std::shared_ptr<detail::mesh_no
     return output;
 }
 
+using receive_activity_t = std::pair<bool, std::optional<std::chrono::steady_clock::time_point>>;
+
+task_t<receive_activity_t>
+next_receive_activity_async (std::shared_ptr<detail::mesh_node_runtime_t> node,
+                             std::shared_ptr<detail::spot_node_builder_state_t> spot_state,
+                             bool include_next_activity)
+{
+    detail::spot_node_runtime_t maintenance (std::move (spot_state));
+    const auto management_next =
+      co_await maintenance.advance_management_async (include_next_activity);
+    if (!include_next_activity)
+        co_return receive_activity_t{false, std::nullopt};
+    auto [local_pending, next] = co_await node->native_node ().next_dispatch_activity_async ();
+    if (management_next && (!next || *management_next < *next))
+        next = management_next;
+    co_return receive_activity_t{local_pending, next};
+}
+
 task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
 {
     try {
@@ -2415,6 +2433,31 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   _application_jobs, [node] { node->native_node ().signal_dispatch_activity (); });
                 auto &application_permit = *receive_permit;
                 auto &mailbox = node->native_node ().transport ().mailbox ();
+                struct pending_management_t
+                {
+                    task_t<receive_activity_t> activity;
+                    std::shared_ptr<std::atomic_bool> armed;
+                    bool stale = false;
+                };
+                std::optional<pending_management_t> pending_management;
+                const auto observe_management = [&] {
+                    pending_management->armed = std::make_shared<std::atomic_bool> (false);
+                    detail::observe_task_completion (
+                      pending_management->activity,
+                      [node, armed = pending_management->armed] (const auto &) {
+                          if (armed->exchange (false, std::memory_order_acq_rel))
+                              node->signal_dispatch_activity ();
+                      });
+                };
+                const auto start_management = [&] (bool include_next_activity) {
+                    pending_management.emplace (
+                      pending_management_t{next_receive_activity_async (
+                                             node, registration->spot_state, include_next_activity),
+                                           {},
+                                           !include_next_activity});
+                    if (include_next_activity)
+                        observe_management ();
+                };
                 while (!_stop.load (std::memory_order_acquire)) {
                     constexpr std::size_t max_application_permits_per_turn = 64;
                     std::array<application_job_queue_t::permit_t,
@@ -2567,15 +2610,44 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                         application_permit_budget[--application_permit_budget_size]
                           .release_without_handler ();
                     }
-                    detail::spot_node_runtime_t maintenance (registration->spot_state);
-                    (void) maintenance.cleanup_expired_actor_admissions ();
+                    if (count != 0 && pending_management) {
+                        if (pending_management->armed)
+                            pending_management->armed->store (false, std::memory_order_release);
+                        pending_management->stale = true;
+                        if (pending_management->activity.await_ready ()) {
+                            (void) pending_management->activity.result ().value ();
+                            pending_management.reset ();
+                        }
+                    }
+                    if (!pending_management)
+                        start_management (count == 0);
                     if (count == 0) {
                         auto wait = std::chrono::milliseconds (-1);
-                        if (const auto next = maintenance.next_management_activity ()) {
-                            const auto now = std::chrono::steady_clock::now ();
-                            wait = *next <= now
-                                     ? std::chrono::milliseconds::zero ()
-                                     : std::chrono::ceil<std::chrono::milliseconds> (*next - now);
+                        if (pending_management->stale
+                            && pending_management->activity.await_ready ()) {
+                            (void) pending_management->activity.result ().value ();
+                            pending_management.reset ();
+                            start_management (true);
+                        }
+                        if (!pending_management->armed)
+                            observe_management ();
+                        if (!pending_management->activity.await_ready ()) {
+                            pending_management->armed->store (true, std::memory_order_release);
+                        }
+                        if (pending_management->activity.await_ready ()) {
+                            pending_management->armed->store (false, std::memory_order_release);
+                            const auto [local_pending, next] =
+                              pending_management->activity.result ().value ();
+                            pending_management.reset ();
+                            if (local_pending && accept_application_receive)
+                                continue;
+                            if (next) {
+                                const auto now = std::chrono::steady_clock::now ();
+                                wait =
+                                  *next <= now
+                                    ? std::chrono::milliseconds::zero ()
+                                    : std::chrono::ceil<std::chrono::milliseconds> (*next - now);
+                            }
                         }
                         // A pump may consume the wake for supply delivered after
                         // this turn's take. Recheck its owner state before waiting.

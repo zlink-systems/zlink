@@ -1837,9 +1837,14 @@ class spot_node_runtime_t
       std::optional<std::chrono::steady_clock::time_point> deadline,
       std::function<void (result_t<actor_join_reply_t>)> completion,
       std::function<task_t<void> ()> submit_source_leave = {});
-    std::optional<std::chrono::steady_clock::time_point> next_management_activity () const;
+    task_t<std::optional<std::chrono::steady_clock::time_point>>
+    next_management_activity_async () const;
+    task_t<std::optional<std::chrono::steady_clock::time_point>>
+    advance_management_async (bool include_next_activity = true);
     std::size_t cleanup_expired_actor_admissions ();
     std::size_t cleanup_expired_actor_admissions_at (std::chrono::steady_clock::time_point now);
+    task_t<std::size_t>
+    cleanup_expired_actor_admissions_at_async (std::chrono::steady_clock::time_point now);
     bool stage_session_relocation_route (const std::string &transfer_id,
                                          std::vector<std::uint8_t> route,
                                          std::string actor_type,
@@ -2618,6 +2623,11 @@ class spot_node_runtime_t
     // new dispatch cannot overtake the preserved packets.
     void replay_actor_handoff_until_move_closed (const actor_ref_t &actor_ref,
                                                  std::string transfer_id);
+    task_t<void> replay_actor_handoff_until_move_closed_async (actor_ref_t actor_ref,
+                                                               std::string transfer_id);
+    void replay_actor_handoff_core (const actor_ref_t &actor_ref,
+                                    std::string transfer_id,
+                                    std::optional<service_provider_t> root_services);
 
     std::shared_ptr<spot_node_builder_state_t> _state;
 };

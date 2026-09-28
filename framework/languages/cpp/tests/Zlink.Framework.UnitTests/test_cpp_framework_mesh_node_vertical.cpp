@@ -6,6 +6,7 @@
 #include "runtime/locations/location_runtime.hpp"
 #include "runtime/locations/store_location_resolvers.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "runtime/mesh/mesh_metadata_codec.hpp"
 #include "runtime/mesh/route_mesh_runtime_options_service.hpp"
@@ -1766,6 +1767,31 @@ void verify_monitor_pump_does_not_wait_for_spot_lane ()
     node->stop ();
 }
 
+void verify_management_does_not_wait_for_spot_lane ()
+{
+    auto registration = make_node ("tcp://127.0.0.1:0", "management-pump-node");
+    std::promise<void> lane_entered;
+    std::promise<void> release_lane;
+    auto release = release_lane.get_future ().share ();
+    assert (registration->spot_state->lane.try_post ([&] {
+        lane_entered.set_value ();
+        release.wait ();
+    }));
+    lane_entered.get_future ().wait ();
+    auto activity = [&] {
+#ifndef NDEBUG
+        zlink::framework::runtime::infrastructure_wait_guard::mesh_receive_scope_t scope (
+          registration.get ());
+#endif
+        return zlink::framework::detail::spot_node_runtime_t (registration->spot_state)
+          .advance_management_async ();
+    }();
+    const bool completed_before_release = activity.await_ready ();
+    release_lane.set_value ();
+    assert (!completed_before_release);
+    (void) activity.result ().value ();
+}
+
 void verify_slow_observer_does_not_block_stop ()
 {
     auto registration = make_node ("tcp://127.0.0.1:0", "slow-observer");
@@ -2506,6 +2532,10 @@ int main (int argc, char **argv)
         verify_public_runtime_surface ();
         verify_location_store_blocks_placement ();
         verify_slow_observer_does_not_block_stop ();
+        return 0;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--management-async") {
+        verify_management_does_not_wait_for_spot_lane ();
         return 0;
     }
 #if defined(__unix__)
