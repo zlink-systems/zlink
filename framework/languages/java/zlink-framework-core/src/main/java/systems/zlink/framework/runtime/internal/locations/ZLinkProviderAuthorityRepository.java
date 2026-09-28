@@ -2448,10 +2448,8 @@ final class ZLinkProviderAuthorityRepository {
                                 return false;
                             }
                             conditions.add(
-                                    new ZLinkStoreValueCondition(
-                                            key,
-                                            ZLinkOwnerLeaseRecordCodec.encode(
-                                                    owner.ownerId(), owner.leaseGeneration())));
+                                    ZLinkOwnerLeaseRecordCodec.valueCondition(
+                                            owner.ownerId(), owner.leaseGeneration()));
                             return true;
                         });
     }

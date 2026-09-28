@@ -19,7 +19,6 @@ import systems.zlink.framework.locationprovider.ZLinkStoreScanCursor;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanExpired;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanPageResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
-import systems.zlink.framework.locationprovider.ZLinkStoreValueCondition;
 import systems.zlink.framework.locationprovider.ZLinkStoreVersionCondition;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
@@ -263,7 +262,8 @@ final class ZLinkProviderDescriptorRepository {
                                                                             }
                                                                             return writeDescriptor(
                                                                                     rowKey,
-                                                                                    liveLease,
+                                                                                    ownerId,
+                                                                                    leaseGeneration,
                                                                                     new ZLinkStoreVersionCondition(
                                                                                             rowKey,
                                                                                             found.value()
@@ -301,7 +301,8 @@ final class ZLinkProviderDescriptorRepository {
                                                                         generation, descriptor));
                                                 return writeDescriptor(
                                                         rowKey,
-                                                        liveLease,
+                                                        ownerId,
+                                                        leaseGeneration,
                                                         rowCondition,
                                                         encoded,
                                                         generation);
@@ -311,18 +312,15 @@ final class ZLinkProviderDescriptorRepository {
 
     private CompletionStage<ZLinkLocationWriteResult> writeDescriptor(
             ZLinkStoreKey rowKey,
-            ZLinkStoreReadFound liveLease,
+            String ownerId,
+            long leaseGeneration,
             ZLinkStoreCondition rowCondition,
             byte[] encoded,
             long generation) {
         var request =
                 new ZLinkStoreWriteRequest(
                         List.of(
-                                new ZLinkStoreValueCondition(
-                                        ownerKey(decodeOwnerId(liveLease.value().bytes())),
-                                        ZLinkOwnerLeaseRecordCodec.encode(
-                                                decodeOwnerId(liveLease.value().bytes()),
-                                                decodeOwnerGeneration(liveLease.value().bytes()))),
+                                ZLinkOwnerLeaseRecordCodec.valueCondition(ownerId, leaseGeneration),
                                 rowCondition),
                         List.of(new ZLinkStorePut(rowKey, encoded, null)));
         CompletionStage<systems.zlink.framework.locationprovider.ZLinkStoreWriteResult> write;
@@ -867,10 +865,6 @@ final class ZLinkProviderDescriptorRepository {
 
     private static long decodeOwnerGeneration(byte[] bytes) {
         return ZLinkOwnerLeaseRecordCodec.decode(bytes).leaseGeneration();
-    }
-
-    private static String decodeOwnerId(byte[] bytes) {
-        return ZLinkOwnerLeaseRecordCodec.decode(bytes).ownerId();
     }
 
     // Canonical cross-language logical key preimage
