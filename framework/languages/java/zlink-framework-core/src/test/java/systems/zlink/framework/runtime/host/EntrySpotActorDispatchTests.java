@@ -486,6 +486,7 @@ final class EntrySpotActorDispatchTests {
             ReplyRecord reply = awaitSingle(backend.node.noBindReplies);
             DecodedFrame frame = decodeFrame(reply.parts().get(0));
             assertEquals(ZLinkStreamMessageKind.RESPONSE, frame.header().kind());
+            assertTrue(backend.node.boundSessionReplies.isEmpty());
         }
     }
 
