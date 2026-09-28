@@ -116,6 +116,8 @@ A write request consists of a condition set and a mutation set.
 - `Missing(key)` is true only if the key doesn't exist or has expired.
 - `Version(key, expected)` is true only if the current version equals
   `expected`.
+- `Value(key, expected)` is true only if the key exists, hasn't expired, and
+  its current bytes equal `expected` byte for byte.
 - `Put(key, bytes, optional retention)` issues a new opaque version.
 - `Delete(key)` removes the key.
 

@@ -102,6 +102,8 @@ Write request는 condition 집합과 mutation 집합으로 구성한다.
 
 - `Missing(key)`는 key가 없거나 만료된 경우에만 참이다.
 - `Version(key, expected)`는 current version이 `expected`와 같은 경우에만 참이다.
+- `Value(key, expected)`는 key가 있고 만료되지 않았으며 current bytes가 `expected`와 byte 단위로
+  같은 경우에만 참이다.
 - `Put(key, bytes, optional retention)`은 새 opaque version을 발급한다.
 - `Delete(key)`는 key를 제거한다.
 

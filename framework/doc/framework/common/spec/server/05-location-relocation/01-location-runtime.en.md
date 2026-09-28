@@ -315,6 +315,12 @@ over an expired one. Extending expiry and normal release don't change the value.
 counter reaches `2^63-1`, it's `GenerationExhausted`. Retrying this result doesn't
 succeed, and it doesn't change the Store record or counter.
 
+Extending an owner lease doesn't change the record bytes; it only extends the expiry. A
+Store change conditioned on the owner lease uses a
+[`Value` condition](02-location-store-redis.en.md#4-conditional-atomic-batch) on the current host run's owner lease bytes, not
+the provider version. So an extension by the same host doesn't reject that change, and a
+change isn't committed with an expired, replaced, or deleted eligibility.
+
 ### 3.2 Object Re-Creation and Owner Change Use Different Generation Numbers
 
 The formal record in the Location Store deciding an Actor/Spot's current owner and change
