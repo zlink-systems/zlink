@@ -711,9 +711,10 @@ final class ZLinkSpotCloseConformanceTest {
 
         @Override
         public CompletionStage<Void> onJoinedActor(Player actor) {
+            EVENTS.add("joinCompleted");
             spotJoined.complete(null);
             if (HOLD_JOIN_CALLBACK.compareAndSet(true, false)) {
-                return joinCallbackRelease.thenRun(() -> EVENTS.add("joinCompleted"));
+                return joinCallbackRelease;
             }
             return CompletableFuture.completedFuture(null);
         }
