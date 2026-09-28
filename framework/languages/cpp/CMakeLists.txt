@@ -2060,6 +2060,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     add_executable(test_cpp_framework_locations_redis
       tests/Zlink.Framework.UnitTests/test_cpp_framework_locations_redis.cpp)
     zlink_enable_coverage(test_cpp_framework_locations_redis)
+    target_compile_definitions(test_cpp_framework_locations_redis PRIVATE
+      ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT=1)
     target_link_libraries(test_cpp_framework_locations_redis PRIVATE
       zlink::framework_locations_redis
       GTest::gtest_main)

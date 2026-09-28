@@ -62,11 +62,7 @@ class provider_location_repository_t final : public location_repository_t
             if (generation == std::numeric_limits<std::int64_t>::max ())
                 return completed (owner_lease_claim_result_t{owner_lease_generation_exhausted_t{}});
 
-            const auto payload = to_bytes (nlohmann::json{
-              {"recordVersion", 1},
-              {"ownerId", owner_id},
-              {"leaseGeneration",
-               std::to_string (generation)}}.dump ());
+            const auto payload = owner_lease_bytes ({owner_id, generation});
             store_write_request_t request;
             request.conditions.push_back (missing_condition (owner_key));
             request.conditions.push_back (condition_for (counter_key, counter));
@@ -298,11 +294,9 @@ class provider_location_repository_t final : public location_repository_t
             if (!decoded_key)
                 return authority_conflict (std::move (current));
             store_write_request_t write_request;
-            write_request.conditions = {version_condition (row_key, found->value.version),
-                                        version_condition (key_owner (snapshot.owner.owner_id),
-                                                           target->owner_provider_version),
-                                        version_condition (target->key, target->provider_version),
-                                        capacity.condition};
+            write_request.conditions = {
+              version_condition (row_key, found->value.version), owner_condition (snapshot.owner),
+              version_condition (target->key, target->provider_version), capacity.condition};
             write_request.mutations = {
               store_delete_t{row_key},
               store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt}};
@@ -373,12 +367,10 @@ class provider_location_repository_t final : public location_repository_t
             write_request.conditions = {
               version_condition (row_key, found->value.version),
               condition_for (authority_owner_counter_key, owner_generations),
-              version_condition (key_owner (retarget->target.owner.owner_id),
-                                 target_descriptor->owner_provider_version),
+              owner_condition (retarget->target.owner),
               version_condition (source_descriptor->key, source_descriptor->provider_version)};
             if (source_owner_token.owner_id != retarget->target.owner.owner_id)
-                write_request.conditions.push_back (version_condition (
-                  key_owner (source_owner_token.owner_id), source_owner->value.version));
+                write_request.conditions.push_back (owner_condition (source_owner_token));
             if (!same_descriptor)
                 write_request.conditions.push_back (
                   version_condition (target_descriptor->key, target_descriptor->provider_version));
@@ -412,8 +404,7 @@ class provider_location_repository_t final : public location_repository_t
         if (!live_owner)
             return authority_conflict (std::move (current));
         auto written = write (
-          {{version_condition (row_key, found->value.version),
-            version_condition (key_owner (snapshot.owner.owner_id), live_owner->value.version)},
+          {{version_condition (row_key, found->value.version), owner_condition (snapshot.owner)},
            {store_put_t{row_key, encode_authority (snapshot), std::nullopt}}});
         return authority_write_result (row_key, snapshot, std::move (written));
     }
@@ -638,9 +629,7 @@ class provider_location_repository_t final : public location_repository_t
             condition_for (object_counter_key, object_generations),
             condition_for (authority_owner_counter_key, owner_generations),
             version_condition (target->key, target->provider_version),
-            version_condition (key_owner (request.target.owner.owner_id),
-                               target->owner_provider_version),
-            capacity.condition},
+            owner_condition (request.target.owner), capacity.condition},
            {store_put_t{authority_key, encode_authority (creating), std::nullopt},
             store_put_t{object_counter_key, to_bytes (std::to_string (object_generation + 1)),
                         std::nullopt},
@@ -674,7 +663,7 @@ class provider_location_repository_t final : public location_repository_t
             if (lease.token.lease_generation == current.owner.lease_generation
                 && lease.lease_expires_at > lease.store_now)
                 return stale_authority_reclaim_result_t::owner_live;
-            stale_owner_condition = version_condition (owner_key, found->value.version);
+            stale_owner_condition = owner_condition (lease.token);
         }
 
         // Relocation authority is recovered by its own protocol. Reserve may
@@ -835,8 +824,7 @@ class provider_location_repository_t final : public location_repository_t
         snapshot.pending_creation.reset ();
         auto written = write (
           {{version_condition (authority_key, stored_authority->value.version),
-            version_condition (key_owner (request.fence.target.owner.owner_id),
-                               target->owner_provider_version),
+            owner_condition (request.fence.target.owner),
             version_condition (target->key, target->provider_version), capacity.condition},
            {store_put_t{authority_key, encode_authority (snapshot), std::nullopt},
             store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt}}},
@@ -1132,8 +1120,7 @@ class provider_location_repository_t final : public location_repository_t
           version_condition (row_key, preparing_found->value.version));
         write_request.conditions.push_back (
           version_condition (target_descriptor->key, target_descriptor->provider_version));
-        write_request.conditions.push_back (version_condition (
-          key_owner (request.target_owner.owner_id), target_descriptor->owner_provider_version));
+        write_request.conditions.push_back (owner_condition (request.target_owner));
         write_request.conditions.push_back (capacity.condition);
         write_request.mutations.push_back (
           store_put_t{row_key, to_bytes (encoded.dump ()), std::nullopt});
@@ -1445,9 +1432,8 @@ class provider_location_repository_t final : public location_repository_t
             return completed (aggregate_commit_result_t::stale);
         store_write_request_t final_request;
         final_request.conditions.push_back (version_condition (row_key, stored->value.version));
-        if (!target_descriptor->owner_provider_version.empty ())
-            final_request.conditions.push_back (version_condition (
-              key_owner (target_owner.owner_id), target_descriptor->owner_provider_version));
+        if (target_descriptor->owner_present)
+            final_request.conditions.push_back (owner_condition (target_owner));
         for (auto &[descriptor_key, descriptor] : descriptors) {
             (void) descriptor_key;
             final_request.conditions.push_back (
@@ -1605,9 +1591,8 @@ class provider_location_repository_t final : public location_repository_t
         if (target_descriptor) {
             final_request.conditions.push_back (
               version_condition (target_descriptor->key, target_descriptor->provider_version));
-            if (!target_descriptor->owner_provider_version.empty ())
-                final_request.conditions.push_back (version_condition (
-                  key_owner (target.owner.owner_id), target_descriptor->owner_provider_version));
+            if (target_descriptor->owner_present)
+                final_request.conditions.push_back (owner_condition (target.owner));
             final_request.conditions.push_back (target_capacity->condition);
             final_request.mutations.push_back (
               store_put_t{target_capacity->key, encode_capacity_record (target_capacity->record),
@@ -1723,7 +1708,7 @@ class provider_location_repository_t final : public location_repository_t
     {
         store_key_t key;
         std::string provider_version;
-        std::string owner_provider_version;
+        bool owner_present;
         mesh_node_descriptor_t descriptor;
         json_t record;
     };
@@ -2035,6 +2020,24 @@ class provider_location_repository_t final : public location_repository_t
     static store_condition_t version_condition (store_key_t key, std::string version)
     {
         return version_condition (std::move (key), store_version_t{std::move (version)});
+    }
+
+    static store_condition_t value_condition (store_key_t key, std::vector<std::byte> expected)
+    {
+        return store_value_condition_t{std::move (key), std::move (expected)};
+    }
+
+    static std::vector<std::byte> owner_lease_bytes (const location_owner_token_t &owner)
+    {
+        return to_bytes (json_t{{"recordVersion", 1},
+                                {"ownerId", owner.owner_id},
+                                {"leaseGeneration", std::to_string (owner.lease_generation)}}
+                           .dump ());
+    }
+
+    static store_condition_t owner_condition (const location_owner_token_t &owner)
+    {
+        return value_condition (key_owner (owner.owner_id), owner_lease_bytes (owner));
     }
 
     static store_condition_t condition_for (const store_key_t &key,
@@ -2430,9 +2433,9 @@ class provider_location_repository_t final : public location_repository_t
             row_condition = missing_condition (row_key);
         }
         auto encoded = to_bytes (record.dump ());
-        auto result = write (
-          {{version_condition (lease_key, live_lease->value.version), std::move (row_condition)},
-           {store_put_t{row_key, encoded, std::nullopt}}});
+        auto result =
+          write ({{owner_condition ({owner_id, lease_generation}), std::move (row_condition)},
+                  {store_put_t{row_key, encoded, std::nullopt}}});
         if (const auto *applied = std::get_if<store_write_applied_t> (&result))
             return completed (location_write_result_t::stored (
               static_cast<std::int64_t> (generation), applied->store_now));
@@ -3080,8 +3083,7 @@ class provider_location_repository_t final : public location_repository_t
         if (require_live
             && (!live || owner_generation (live->value.bytes) != descriptor.lease_generation))
             return std::nullopt;
-        return stored_target_t{row_key, found->value.version.value,
-                               live ? live->value.version.value : std::string{},
+        return stored_target_t{row_key, found->value.version.value, live != nullptr,
                                std::move (descriptor), record};
     }
 
