@@ -293,7 +293,12 @@ export class ZLinkActorRuntimeState {
   private deferredJoinPendingValue = false;
   private destroyTask: Promise<void> | undefined;
 
-  constructor(readonly actorId: string) {}
+  constructor(readonly actorId: string) {
+    if (process.env.ZLINK_NODE_STRUCTURAL_GUARD === '1' || process.env.NODE_ENV === 'test') {
+      guardBoundSessionTargetWrites(this, 'remoteBoundSessionTargetValue');
+      guardBoundSessionTargetWrites(this, 'boundSessionTransferTargetValue');
+    }
+  }
 
   get actorType(): string | undefined {
     return this.actorTypeValue;
@@ -802,6 +807,29 @@ export class ZLinkActorRuntimeState {
     this.deferredJoinPendingValue = false;
     this.destroyTask = undefined;
   }
+}
+
+function guardBoundSessionTargetWrites(
+  actor: ZLinkActorRuntimeState,
+  field: 'remoteBoundSessionTargetValue' | 'boundSessionTransferTargetValue'
+): void {
+  let current: ZLinkRemoteBoundSessionTarget | undefined;
+  Object.defineProperty(actor, field, {
+    configurable: true,
+    enumerable: true,
+    get: () => current,
+    set: (target: ZLinkRemoteBoundSessionTarget | undefined) => {
+      if (
+        target !== undefined &&
+        new Error().stack?.includes('installBoundSessionBinding') !== true
+      ) {
+        throw new Error(
+          `Bound Session target ${field} must be installed by installBoundSessionBinding.`
+        );
+      }
+      current = target;
+    }
+  });
 }
 
 function maxBindingGeneration(...values: (bigint | undefined)[]): bigint | undefined {

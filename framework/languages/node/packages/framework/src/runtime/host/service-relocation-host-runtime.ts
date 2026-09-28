@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { trackDiagnosticCompletion } from '../execution/state-lane';
 import { SubmitResult } from '../backend/runtime-values';
 import type {
   RoutingId,
@@ -671,6 +672,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         ready: () => true,
         relocate: (relocationSignal) => {
           const run = unit.relocate(relocationSignal);
+          if (process.env.ZLINK_NODE_STRUCTURAL_GUARD === '1' || process.env.NODE_ENV === 'test') {
+            trackDiagnosticCompletion(run, `relocation ${unit.id}`);
+          }
           started.push(run);
           return run;
         }
@@ -6147,5 +6151,18 @@ function addCapacity(left: ZLinkCapacityVector, right: ZLinkCapacityVector): ZLi
             count: (left.spotType?.count ?? 0) + (right.spotType?.count ?? 0)
           }
         })
+  };
+}
+
+if (process.env.ZLINK_NODE_STRUCTURAL_GUARD === '1' || process.env.NODE_ENV === 'test') {
+  const relocateActorJoin = ZLinkHostServiceRelocationRuntime.prototype.relocateActorJoin;
+  ZLinkHostServiceRelocationRuntime.prototype.relocateActorJoin = function (
+    this: ZLinkHostServiceRelocationRuntime,
+    input: Parameters<ZLinkActorJoinRelocation['relocateActorJoin']>[0]
+  ): ReturnType<ZLinkActorJoinRelocation['relocateActorJoin']> {
+    return trackDiagnosticCompletion(
+      relocateActorJoin.call(this, input),
+      `relocation join actor:${input.state.actorId}`
+    );
   };
 }

@@ -322,7 +322,7 @@ export class ZLinkActorSessionBindingRegistry<
     );
   }
 
-  private async replaceAndReleaseSealCore(
+  private replaceAndReleaseSealCore(
     previous: ZLinkActorSessionRoute<TContext, TActor>,
     context: TContext,
     actor: TActor,
@@ -331,7 +331,7 @@ export class ZLinkActorSessionBindingRegistry<
     authorityFence?: ZLinkActorSessionAuthorityFence,
     sessionIdentity?: string,
     commitActor?: () => void
-  ): Promise<void> {
+  ): void {
     if (previous.sealId !== sealId) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.ActorLocationStale,
@@ -342,7 +342,7 @@ export class ZLinkActorSessionBindingRegistry<
     // JavaScript cannot interleave another ingress turn between these two
     // synchronous mutations. The replacement preserves the seal, then the
     // exact release publishes the route to held ingress as one owner turn.
-    await this.commitCore(
+    this.commitCore(
       previous,
       context,
       actor,
