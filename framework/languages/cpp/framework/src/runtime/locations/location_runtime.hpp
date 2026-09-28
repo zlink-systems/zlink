@@ -50,6 +50,20 @@ class owner_lease_claim_rejected_error_t final : public std::runtime_error
 class location_runtime_t
 {
   public:
+    struct observation_status_t
+    {
+        std::optional<std::string> last_error;
+        bool owner_lease_healthy;
+        std::optional<std::chrono::system_clock::time_point> owner_lease_renewed_at;
+    };
+
+    task_t<observation_status_t> observation_status_task () const
+    {
+        return _lane.run_task ([this] {
+            return observation_status_t{_last_error, _owner_lease_healthy, _owner_lease_renewed_at};
+        });
+    }
+
     explicit location_runtime_t (location_repository_t &store,
                                  location_options_t options = {},
                                  std::string owner_id = make_owner_id ()) :
