@@ -195,7 +195,7 @@ export class ZLinkActorSessionBindingRegistry<
     );
   }
 
-  private async commitCore(
+  private commitCore(
     previous: ZLinkActorSessionRoute<TContext, TActor> | undefined,
     context: TContext,
     actor: TActor,
@@ -203,7 +203,7 @@ export class ZLinkActorSessionBindingRegistry<
     authorityFence?: ZLinkActorSessionAuthorityFence,
     sessionIdentity?: string,
     commitActor?: () => void
-  ): Promise<void> {
+  ): void {
     const current = this.routes.get(actor.actorId);
     if (current !== previous) {
       throw createInternalFrameworkException(
@@ -239,7 +239,12 @@ export class ZLinkActorSessionBindingRegistry<
       }
 
       if (!sameBinding && actorSlot !== undefined) {
-        await context.actorSlotControls!.enqueueBound(actorSlot, actor.actorId);
+        // Spec 04-session/02-session-actor-binding §3: enqueue the control
+        // before publishing the slot; transport completion stays off the lane.
+        const bound = context.actorSlotControls!.enqueueBound(actorSlot, actor.actorId);
+        void bound.catch((error) =>
+          this.errorSink?.()?.reportRuntimeTaskException('session actor bound', error)
+        );
       }
     } catch (error) {
       context.unbindLocal(actor.actorId, bindingToken);

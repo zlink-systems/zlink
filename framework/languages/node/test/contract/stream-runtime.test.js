@@ -178,7 +178,7 @@ test('managed STREAM binding orders lifecycle controls around slotted Actor pack
   assert.deepEqual([...rebound.payload.slice(0, 4)], [1, 0, 2, 12]);
 });
 
-test('managed STREAM does not expose a binding delivery path before bound control enqueue', async () => {
+test('managed STREAM submits bound control before first slotted delivery', async () => {
   const socket = new FakeStreamSocket();
   let releaseBound;
   const boundCanFinish = new Promise((resolve) => { releaseBound = resolve; });
@@ -204,19 +204,12 @@ test('managed STREAM does not expose a binding delivery path before bound contro
     generation: 1n
   });
   await boundDidStart;
-  let deliverySettled = false;
-  const delivery = runtime
-    .sendLocalBoundSession('actor-racing-push', { ready: true }, 'ActorReady', new Map())
-    .then((result) => {
-      deliverySettled = true;
-      return result;
-    });
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(deliverySettled, false);
-
+  const delivery = runtime.sendLocalBoundSession(
+    'actor-racing-push', { ready: true }, 'ActorReady', new Map()
+  );
+  assert.equal(await delivery, true);
   releaseBound();
   await binding;
-  assert.equal(await delivery, true);
   assert.deepEqual(
     socket.sends.map(([, message]) => decodeServerFrame(bytesOf(message)).header.name),
     ['$zlink.actor.bound', 'ActorReady']
@@ -3174,6 +3167,34 @@ test('route replacement survives retired unbound rejection and reports it', asyn
   assert.equal(current.context, newContext);
   assert.equal(current.bindingToken, 'new-token');
   assert.deepEqual(reports, [{ task: 'retired session actor unbound', error: oldFailure }]);
+});
+
+test('bound control completion does not hold the committed route', async (t) => {
+  const registry = new ZLinkActorSessionBindingRegistry();
+  const actor = { actorId: 'actor-bound-control-route' };
+  let releaseBound;
+  const bound = new Promise((resolve) => { releaseBound = resolve; });
+  let signalBound;
+  const boundStarted = new Promise((resolve) => { signalBound = resolve; });
+  t.after(() => releaseBound());
+  const context = {
+    routingId: 'session-2',
+    actorSlotControls: {
+      enqueueBound: () => {
+        signalBound();
+        return bound;
+      },
+      async enqueueUnbound() {}
+    },
+    bindLocal() {},
+    unbindLocal() {}
+  };
+
+  const binding = registry.bind(context, actor, 'binding-2');
+  await boundStarted;
+  assert.equal((await registry.requireRoute(actor.actorId)).context, context);
+  releaseBound();
+  await binding;
 });
 
 test('route replacement survives synchronous retired unbound failure', async () => {
