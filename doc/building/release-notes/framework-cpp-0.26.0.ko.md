@@ -11,6 +11,7 @@ Framework 0.26.0은 C++ binding 1.10.0과 Core 1.10.0을 사용합니다.
 - Relocation `Restore`는 source만 판정합니다. Wire schema에서 `remainingDeadlineMs`를 제거했으며, 1.0 이전 wire 형식과의 호환성은 제공하지 않습니다. Store retention을 밀리초로 바꿀 때는 올림을 적용합니다.
 - listener 상태 조회는 실제 bind가 확정한 endpoint를 반환합니다. MeshNode의 activation 기록으로 placement 수를 판정하고, Session의 `actor_slot`은 turn 시작 시 해석합니다.
 - C++에서는 mesh별 배치 가중치를 `mesh(name).placement_weight()`로 설정합니다. `IsAvailable`은 Store가 새 작업을 차단하는 상태를 반영합니다.
+- 같은 User Spot에 Actor Join이 연달아 들어오면 mesh 수신 루프가 앞선 Join의 lifecycle barrier 뒤에서 멈추던 결함을 고쳤습니다. 수신 루프는 Join admission을 Spot 직렬 큐에 넣고 완료를 기다리지 않습니다.
 
 ## 설치
 

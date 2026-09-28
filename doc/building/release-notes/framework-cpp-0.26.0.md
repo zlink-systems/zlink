@@ -11,6 +11,7 @@ Framework 0.26.0 uses C++ binding 1.10.0 and Core 1.10.0.
 - Relocation `Restore` is decided only by the source. The wire schema no longer includes `remainingDeadlineMs`; compatibility with pre-1.0 wire formats is not provided. Store retention is rounded up when converted to milliseconds.
 - Listener status returns the endpoint confirmed by bind. Placement counts use MeshNode activation records, and Session `actor_slot` is resolved at the start of the turn.
 - In C++, set each mesh's placement weight with `mesh(name).placement_weight()`. `IsAvailable` reflects whether the Store blocks new work.
+- Fixed a defect where back-to-back Actor Joins to the same User Spot stalled the mesh receive loop behind the earlier Join's lifecycle barrier. The receive loop now queues Join admission on the Spot serial queue and does not wait for it.
 
 ## Install
 
