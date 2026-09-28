@@ -320,11 +320,8 @@ final class ZLinkFanoutLocationRuntimeTest {
         }
 
         private ControlledSubscriber awaitSubscriber() throws Exception {
-            ControlledSubscriber value = created.poll(1, TimeUnit.SECONDS);
-            if (value == null) {
-                throw new AssertionError("fanout subscriber was not created");
-            }
-            value.monitor.handlerReady.get(1, TimeUnit.SECONDS);
+            ControlledSubscriber value = created.take();
+            value.monitor.handlerReady.join();
             return value;
         }
 

@@ -352,7 +352,8 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
         ZLinkSessionActorsRuntime.TargetOutboundAdmission next =
                 runtime.admitBoundSessionSend(target, outboundPayload("next"));
         AtomicInteger settlements = new AtomicInteger();
-        failed.settlement().whenComplete((ignored, failure) -> settlements.incrementAndGet());
+        CompletionStage<Void> observedSettlement =
+                failed.settlement().thenAccept(ignored -> settlements.incrementAndGet());
         runtime.applyRelocationRouteCommand(route(relocation)).toCompletableFuture().join();
 
         failedTerminal.completeExceptionally(new IllegalStateException("physical submit failed"));
@@ -361,6 +362,7 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
         assertEquals(
                 ZLinkSessionActorsRuntime.TargetOutboundSettlement.REJECTED,
                 failed.settlement().toCompletableFuture().join());
+        observedSettlement.toCompletableFuture().join();
         assertEquals(1, settlements.get());
         assertFalse(next.settlement().toCompletableFuture().isDone());
         assertEquals(0, syncSubmits.get());
