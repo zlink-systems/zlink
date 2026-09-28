@@ -54,10 +54,20 @@ internal static class HttpTransportFactory
 
         if (options.ClientCertificate is { } clientCertificate)
         {
-            var certificate = X509Certificate2.CreateFromPemFile(
-                clientCertificate.CertificatePath,
-                clientCertificate.KeyPath
-            );
+            X509Certificate2 certificate;
+            using (
+                var pemCertificate = X509Certificate2.CreateFromPemFile(
+                    clientCertificate.CertificatePath,
+                    clientCertificate.KeyPath
+                )
+            )
+            {
+                certificate = new X509Certificate2(
+                    pemCertificate.Export(X509ContentType.Pkcs12),
+                    (string?)null,
+                    X509KeyStorageFlags.UserKeySet
+                );
+            }
             sslOptions.ClientCertificates = new X509CertificateCollection { certificate };
             ownedCertificates.Add(certificate);
         }
