@@ -742,10 +742,44 @@ void client_server_location_runtime_t::run ()
     std::shared_ptr<task_t<void>> pending_snapshot;
     std::shared_ptr<task_t<void>> pending_pump;
     std::shared_ptr<task_t<worker_lane_snapshot_t>> pending_worker_snapshot;
+    std::shared_ptr<task_t<bool>> pending_maintenance;
+    std::shared_ptr<task_t<void>> pending_reconcile;
+    std::unique_lock<std::mutex> maintenance_lock;
     std::optional<std::chrono::steady_clock::time_point> ready_deadline;
     std::optional<mesh::service_liveness_registry_t::clock_t::time_point> next_activity;
     while (!_stop.load (std::memory_order_acquire) || pending_snapshot || pending_pump
-           || pending_worker_snapshot) {
+           || pending_worker_snapshot || pending_maintenance || pending_reconcile) {
+        if (pending_maintenance && pending_maintenance->await_ready ()) {
+            auto completed = std::move (pending_maintenance);
+            const auto &result = completed->result ();
+            const bool published = result && result.value ();
+            const bool reconcile_after_publish = !_descriptor_publish_pending;
+            if (!result)
+                _locations->record_store_error ();
+            if (_descriptor_publish_pending) {
+                _descriptor_publish_result = published;
+                _descriptor_publish_pending = false;
+            }
+            maintenance_lock.unlock ();
+            if (!reconcile_after_publish)
+                _descriptor_publish_changed.notify_all ();
+            if (reconcile_after_publish && result && !_stop.load (std::memory_order_acquire)) {
+                pending_reconcile = std::make_shared<task_t<void>> (reconcile_task ());
+                detail::observe_task_completion (
+                  *pending_reconcile,
+                  [wake = _wake_timer] (const result_t<void> &) { wake->signal (); });
+            } else if (reconcile_after_publish) {
+                next_reconcile =
+                  std::chrono::steady_clock::now () + _locations->options ().polling_interval;
+            }
+        }
+        if (pending_reconcile && pending_reconcile->await_ready ()) {
+            auto completed = std::move (pending_reconcile);
+            if (!completed->result ())
+                _locations->record_store_error ();
+            next_reconcile =
+              std::chrono::steady_clock::now () + _locations->options ().polling_interval;
+        }
         if (pending_worker_snapshot && pending_worker_snapshot->await_ready ()
             && _stop.load (std::memory_order_acquire)) {
             auto completed = std::move (pending_worker_snapshot);
@@ -772,40 +806,23 @@ void client_server_location_runtime_t::run ()
         if (_stop.load (std::memory_order_acquire)) {
             continue;
         }
-        bool publish_requested = false;
-        {
-            std::lock_guard lock (_descriptor_publish_mutex);
-            publish_requested = _descriptor_publish_pending;
-        }
-        if (publish_requested) {
-            bool published = true;
-            try {
-                published = publish_servers ();
-            }
-            catch (...) {
-                published = false;
-            }
-            {
-                std::lock_guard lock (_descriptor_publish_mutex);
-                _descriptor_publish_result = published;
-                _descriptor_publish_pending = false;
-            }
-            _descriptor_publish_changed.notify_all ();
-        }
         const auto now = std::chrono::steady_clock::now ();
-        if (now >= next_reconcile && !pending_worker_snapshot && !pending_pump) {
-            _client_pump_snapshot.clear ();
-            try {
-                publish_servers ();
-                reconcile ();
+        if (!pending_maintenance && !pending_reconcile && !pending_worker_snapshot
+            && !pending_pump) {
+            maintenance_lock = std::unique_lock<std::mutex> (_descriptor_publish_mutex);
+            if (_descriptor_publish_pending || now >= next_reconcile) {
+                _client_pump_snapshot.clear ();
+                pending_maintenance = std::make_shared<task_t<bool>> (publish_servers_task ());
+                detail::observe_task_completion (
+                  *pending_maintenance,
+                  [wake = _wake_timer] (const result_t<bool> &) { wake->signal (); });
+            } else {
+                maintenance_lock.unlock ();
             }
-            catch (...) {
-                _locations->record_store_error ();
-            }
-            next_reconcile = now + _locations->options ().polling_interval;
         }
         try {
-            if (!pending_worker_snapshot && !pending_pump) {
+            if (!pending_maintenance && !pending_reconcile && !pending_worker_snapshot
+                && !pending_pump) {
                 pending_worker_snapshot = std::make_shared<task_t<worker_lane_snapshot_t>> (
                   refresh_client_pump_snapshot ());
                 detail::observe_task_completion (
@@ -879,15 +896,21 @@ void client_server_location_runtime_t::run ()
 bool client_server_location_runtime_t::publish_servers ()
 {
     std::lock_guard publish_lock (_descriptor_publish_mutex);
-    const auto owner = _locations->current_owner_token ();
+    return publish_servers_task ().result ().value ();
+}
+
+task_t<bool> client_server_location_runtime_t::publish_servers_task ()
+{
+    const auto owner = co_await _locations->current_owner_token_task ();
     if (!owner) {
-        return std::none_of (_servers.begin (), _servers.end (), [] (const auto &entry) {
+        co_return std::none_of (_servers.begin (), _servers.end (), [] (const auto &entry) {
             return entry.second->published_descriptor.has_value ();
         });
     }
     bool published = true;
     for (auto &[channel_name, server] : _servers) {
-        const auto weight_override = _channel_runtime.server_peer_weight_override (channel_name);
+        const auto weight_override =
+          co_await _channel_runtime.server_peer_weight_override_task (channel_name);
         const auto weight = weight_override.value_or (server->capability.service_weight);
         const auto state = current_state (*_locations);
         const bool new_owner =
@@ -897,49 +920,51 @@ bool client_server_location_runtime_t::publish_servers ()
             && server->published_descriptor->state == state)
             continue;
 
-        auto admission = server->owner->descriptor ();
+        auto admission = co_await server->owner->descriptor_task ();
         if (admission.descriptor_revision == std::numeric_limits<std::uint64_t>::max ())
             throw std::overflow_error ("ClientServer descriptor revision is exhausted");
         if (server->published_descriptor) {
             ++admission.descriptor_revision;
             admission.weight = static_cast<std::uint32_t> (weight);
             admission.state = client_server_service_state (state);
-            server->owner->update_descriptor (admission);
+            co_await server->owner->update_descriptor_task (admission);
         }
         admission.weight = static_cast<std::uint32_t> (weight);
         admission.state = client_server_service_state (state);
         auto descriptor = to_descriptor (admission, *owner);
-        const auto written =
-          _store
-            ->update_client_server (descriptor, new_owner ? location_write_intent_t::new_claim
-                                                          : location_write_intent_t::renew)
-            .result ()
-            .value ();
+        const auto written = co_await _store->update_client_server (
+          descriptor,
+          new_owner ? location_write_intent_t::new_claim : location_write_intent_t::renew);
         if (written.status == location_write_status_t::stored)
             server->published_descriptor = std::move (descriptor);
         else
             published = false;
     }
-    return published;
+    co_return published;
 }
 
 void client_server_location_runtime_t::reconcile ()
 {
-    for (auto &[_, channel] : _clients)
-        reconcile_channel (*channel);
+    reconcile_task ().result ().value ();
 }
 
-void client_server_location_runtime_t::reconcile_channel (client_channel_t &channel)
+task_t<void> client_server_location_runtime_t::reconcile_task ()
+{
+    for (auto &[_, channel] : _clients)
+        co_await reconcile_channel_task (*channel);
+}
+
+task_t<void> client_server_location_runtime_t::reconcile_channel_task (client_channel_t &channel)
 {
     std::map<std::string, client_server_server_descriptor_t> desired;
     location_page_request_t page;
     do {
-        const auto listed =
-          _store->list_client_servers (channel.snapshot.name, page).result ().value ();
+        const auto listed = co_await _store->list_client_servers (channel.snapshot.name, page);
         for (const auto &descriptor : listed.items) {
             if ((descriptor.state == framework_runtime_state_t::stopped)
-                || descriptor.state == framework_runtime_state_t::error
-                || !owner_is_live (descriptor))
+                || descriptor.state == framework_runtime_state_t::error)
+                continue;
+            if (!(co_await owner_is_live_task (descriptor)))
                 continue;
             desired.insert_or_assign (connection_key (descriptor), descriptor);
         }
@@ -959,34 +984,33 @@ void client_server_location_runtime_t::reconcile_channel (client_channel_t &chan
     for (const auto &[key, descriptor] : desired) {
         bool exists = false;
         {
-            _lane
-              .run_checked ([&] {
-                  const auto found = channel.connections.find (key);
-                  if (found != channel.connections.end ()) {
-                      if (found->second.descriptor.endpoint != descriptor.endpoint
-                          || found->second.descriptor.server_rid != descriptor.server_rid
-                          || found->second.descriptor.lifecycle_generation
-                               != descriptor.lifecycle_generation
-                          || found->second.descriptor.weight != descriptor.weight
-                          || found->second.descriptor.state != descriptor.state) {
-                          channel.selector_dirty = true;
-                          found->second.descriptor = descriptor;
-                      }
-                      exists = true;
-                  } else if (!key.starts_with ("manual|")) {
-                      const auto manual =
-                        channel.connections.find (manual_connection_key (descriptor.endpoint));
-                      if (manual != channel.connections.end ()) {
-                          auto connection = std::move (manual->second);
-                          channel.selector_dirty = true;
-                          channel.connections.erase (manual);
-                          connection.descriptor = descriptor;
-                          channel.connections.emplace (key, std::move (connection));
-                          exists = true;
-                      }
-                  }
-              })
-              .get ();
+            co_await _lane.run_task ([&] {
+                const auto found = channel.connections.find (key);
+                if (found != channel.connections.end ()) {
+                    if (found->second.descriptor.endpoint != descriptor.endpoint
+                        || found->second.descriptor.server_rid != descriptor.server_rid
+                        || found->second.descriptor.lifecycle_generation
+                             != descriptor.lifecycle_generation
+                        || found->second.descriptor.weight != descriptor.weight
+                        || found->second.descriptor.state != descriptor.state) {
+                        channel.selector_dirty = true;
+                        found->second.descriptor = descriptor;
+                    }
+                    exists = true;
+                } else if (!key.starts_with ("manual|")) {
+                    const auto manual =
+                      channel.connections.find (manual_connection_key (descriptor.endpoint));
+                    if (manual != channel.connections.end ()) {
+                        auto connection = std::move (manual->second);
+                        channel.selector_dirty = true;
+                        channel.connections.erase (manual);
+                        connection.descriptor = descriptor;
+                        channel.connections.emplace (key, std::move (connection));
+                        exists = true;
+                    }
+                }
+                return true;
+            });
         }
         if (exists)
             continue;
@@ -1011,44 +1035,51 @@ void client_server_location_runtime_t::reconcile_channel (client_channel_t &chan
         options.application_jobs = _application_jobs;
         auto raw = std::make_shared<raw_client_server_client_t> (std::move (options),
                                                                  _channel_runtime.core_context ());
-        raw->start ();
-        _lane
-          .run_checked ([&] {
-              channel.selector_dirty = true;
-              channel.connections.emplace (key, client_connection_t{descriptor, std::move (raw)});
-          })
-          .get ();
+        co_await raw->start_task ();
+        co_await _lane.run_task ([&] {
+            channel.selector_dirty = true;
+            channel.connections.emplace (key, client_connection_t{descriptor, std::move (raw)});
+            return true;
+        });
     }
 
-    {
-        _lane
-          .run_checked ([&] {
-              for (auto it = channel.connections.begin (); it != channel.connections.end ();) {
-                  if (desired.contains (it->first)) {
-                      ++it;
-                      continue;
-                  }
-                  const auto stable = stable_key (it->second.descriptor);
-                  const auto replacement =
-                    std::find_if (channel.connections.begin (), channel.connections.end (),
-                                  [&] (const auto &candidate) {
-                                      return desired.contains (candidate.first)
-                                             && stable_key (candidate.second.descriptor) == stable;
-                                  });
-                  if (replacement != channel.connections.end ()
-                      && !replacement->second.owner->ready ()) {
-                      ++it;
-                      continue;
-                  }
-                  close.push_back (it->second.owner);
-                  channel.selector_dirty = true;
-                  it = channel.connections.erase (it);
-              }
-          })
-          .get ();
+    auto stale = co_await _lane.run_task ([&] {
+        std::vector<std::pair<std::string, std::shared_ptr<raw_client_server_client_t>>> result;
+        for (const auto &[key, connection] : channel.connections) {
+            if (desired.contains (key))
+                continue;
+            const auto stable = stable_key (connection.descriptor);
+            const auto replacement =
+              std::find_if (channel.connections.begin (), channel.connections.end (),
+                            [&] (const auto &candidate) {
+                                return desired.contains (candidate.first)
+                                       && stable_key (candidate.second.descriptor) == stable;
+                            });
+            result.emplace_back (
+              key, replacement == channel.connections.end () ? nullptr : replacement->second.owner);
+        }
+        return result;
+    });
+    std::vector<bool> remove;
+    remove.reserve (stale.size ());
+    for (const auto &[_, replacement] : stale) {
+        remove.push_back (!replacement || co_await replacement->ready_task ());
+    }
+    if (!stale.empty ()) {
+        co_await _lane.run_task ([&] {
+            for (std::size_t i = 0; i < stale.size (); ++i) {
+                if (!remove[i])
+                    continue;
+                const auto found = channel.connections.find (stale[i].first);
+                close.push_back (found->second.owner);
+                channel.selector_dirty = true;
+                channel.connections.erase (found);
+            }
+            return true;
+        });
     }
     for (auto &owner : close)
-        owner->close ();
+        co_await owner->close_task ();
 }
 
 task_t<void> client_server_location_runtime_t::pump ()
@@ -1749,14 +1780,14 @@ client_server_server_descriptor_t client_server_location_runtime_t::to_descripto
       .lease_generation = owner.lease_generation};
 }
 
-bool client_server_location_runtime_t::owner_is_live (
-  const client_server_server_descriptor_t &descriptor) const
+task_t<bool> client_server_location_runtime_t::owner_is_live_task (
+  client_server_server_descriptor_t descriptor) const
 {
-    const auto lease = _leases->read_owner_lease (descriptor.owner_id).result ().value ();
+    const auto lease = co_await _leases->read_owner_lease (descriptor.owner_id);
     const auto *found = std::get_if<owner_lease_found_t> (&lease);
-    return found != nullptr && found->token.owner_id == descriptor.owner_id
-           && found->token.lease_generation == descriptor.lease_generation
-           && found->lease_expires_at > found->store_now;
+    co_return found != nullptr && found->token.owner_id == descriptor.owner_id
+      && found->token.lease_generation == descriptor.lease_generation
+      && found->lease_expires_at > found->store_now;
 }
 
 } // namespace zlink::framework::runtime::client_server

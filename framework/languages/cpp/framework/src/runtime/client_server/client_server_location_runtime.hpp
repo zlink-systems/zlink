@@ -86,8 +86,10 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     void start_client (const channel_snapshot_t &channel);
     void run ();
     void reconcile ();
-    void reconcile_channel (client_channel_t &channel);
+    task_t<void> reconcile_task ();
+    task_t<void> reconcile_channel_task (client_channel_t &channel);
     bool publish_servers ();
+    task_t<bool> publish_servers_task ();
     task_t<void> pump ();
     task_t<worker_lane_snapshot_t> refresh_client_pump_snapshot ();
     task_t<void> publish_snapshot_changes ();
@@ -122,7 +124,7 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     static client_server_server_descriptor_t
     to_descriptor (const protocol::client_server_server_admission_t &admission,
                    const location_owner_token_t &owner);
-    bool owner_is_live (const client_server_server_descriptor_t &descriptor) const;
+    task_t<bool> owner_is_live_task (client_server_server_descriptor_t descriptor) const;
     snapshot_source_t snapshot_source_locked (const std::string &channel_name) const;
     task_t<client_server_channel_snapshot_t> snapshot_task (std::string channel_name) const;
     task_t<client_server_channel_snapshot_t> build_snapshot_task (snapshot_source_t source) const;

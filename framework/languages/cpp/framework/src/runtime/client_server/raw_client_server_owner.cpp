@@ -286,21 +286,26 @@ raw_client_server_server_t::descriptor_task () const
 void raw_client_server_server_t::update_descriptor (
   protocol::client_server_server_admission_t descriptor)
 {
-    return _lane
-      .run_checked ([this, descriptor = std::move (descriptor)] () mutable {
-          if (descriptor.channel_name != _options.descriptor.channel_name
-              || descriptor.server_routing_id != _options.descriptor.server_routing_id
-              || descriptor.lifecycle_generation != _options.descriptor.lifecycle_generation
-              || descriptor.security_identity != _options.descriptor.security_identity
-              || descriptor.advertised_endpoint != _options.descriptor.advertised_endpoint
-              || descriptor.descriptor_revision <= _options.descriptor.descriptor_revision) {
-              throw std::invalid_argument (
-                "ClientServer descriptor update violates its immutable fence");
-          }
-          _options.descriptor = std::move (descriptor);
-          _descriptor_update_pending = true;
-      })
-      .get ();
+    update_descriptor_task (std::move (descriptor)).result ().value ();
+}
+
+task_t<void> raw_client_server_server_t::update_descriptor_task (
+  protocol::client_server_server_admission_t descriptor)
+{
+    co_await _lane.run_task ([this, descriptor = std::move (descriptor)] () mutable {
+        if (descriptor.channel_name != _options.descriptor.channel_name
+            || descriptor.server_routing_id != _options.descriptor.server_routing_id
+            || descriptor.lifecycle_generation != _options.descriptor.lifecycle_generation
+            || descriptor.security_identity != _options.descriptor.security_identity
+            || descriptor.advertised_endpoint != _options.descriptor.advertised_endpoint
+            || descriptor.descriptor_revision <= _options.descriptor.descriptor_revision) {
+            throw std::invalid_argument (
+              "ClientServer descriptor update violates its immutable fence");
+        }
+        _options.descriptor = std::move (descriptor);
+        _descriptor_update_pending = true;
+        return true;
+    });
 }
 
 mesh::service_mailbox_t &raw_client_server_server_t::mailbox () noexcept
@@ -720,48 +725,57 @@ raw_client_server_client_t::~raw_client_server_client_t () noexcept
 
 void raw_client_server_client_t::start ()
 {
-    return _lane
-      .run_checked ([this] {
-          if (_port) {
-              return;
-          }
-          if (_closed) {
-              throw std::logic_error ("ClientServer client cannot restart after close");
-          }
-          auto dealer = std::make_unique<zlink::dealer_socket_t> (*_context);
-          dealer->options ().linger (std::chrono::milliseconds (0));
-          dealer->options ().send_timeout (std::chrono::seconds (1));
-          dealer->options ().max_message_size (
-            zlink::byte_size_t::bytes (_options.admission.effective_max_message_bytes));
-          trace_client_server_lazy ("client-socket-options", [&] {
-              return "endpoint=" + _options.expected_server.advertised_endpoint
-                     + " max_message_bytes="
-                     + std::to_string (dealer->options ().max_message_size ().bytes ());
-          });
-          dealer->set_routing_id (zlink::routing_id_t::from (_options.client_routing_id));
-          application_job_queue_t::receive_flow_registration_t receive_flow_registration;
-          if (_options.application_jobs) {
-              receive_flow_registration = _options.application_jobs->register_receive_flow_socket (
-                [socket = dealer.get ()] (application_job_queue_pressure_state_t state) {
-                    return apply_application_job_receive_flow_state (*socket, state);
-                });
-          }
-          auto monitor = std::make_unique<zlink::socket_monitor_t> (dealer->monitor_open (
-            zlink::monitor_event::connection_ready | zlink::monitor_event::disconnected));
-          dealer->connect (_options.expected_server.advertised_endpoint);
-          auto monitor_poller = std::make_unique<zlink::poller_t> ();
-          monitor_poller->add (*monitor, zlink::poll_event_flag_t::pollin, 1);
-          _port = std::make_shared<detail::backend::raw_dealer_port_t> (
-            *dealer, &_socket_mutex, _options.transport_poller, _options.transport_poller_slot);
-          _monitor_poller = std::move (monitor_poller);
-          _monitor = std::move (monitor);
-          _dealer = std::move (dealer);
-          _receive_flow_registration = std::move (receive_flow_registration);
-      })
-      .get ();
+    start_task ().result ().value ();
+}
+
+task_t<void> raw_client_server_client_t::start_task ()
+{
+    co_await _lane.run_task ([this] {
+        if (_port) {
+            return true;
+        }
+        if (_closed) {
+            throw std::logic_error ("ClientServer client cannot restart after close");
+        }
+        auto dealer = std::make_unique<zlink::dealer_socket_t> (*_context);
+        dealer->options ().linger (std::chrono::milliseconds (0));
+        dealer->options ().send_timeout (std::chrono::seconds (1));
+        dealer->options ().max_message_size (
+          zlink::byte_size_t::bytes (_options.admission.effective_max_message_bytes));
+        trace_client_server_lazy ("client-socket-options", [&] {
+            return "endpoint=" + _options.expected_server.advertised_endpoint
+                   + " max_message_bytes="
+                   + std::to_string (dealer->options ().max_message_size ().bytes ());
+        });
+        dealer->set_routing_id (zlink::routing_id_t::from (_options.client_routing_id));
+        application_job_queue_t::receive_flow_registration_t receive_flow_registration;
+        if (_options.application_jobs) {
+            receive_flow_registration = _options.application_jobs->register_receive_flow_socket (
+              [socket = dealer.get ()] (application_job_queue_pressure_state_t state) {
+                  return apply_application_job_receive_flow_state (*socket, state);
+              });
+        }
+        auto monitor = std::make_unique<zlink::socket_monitor_t> (dealer->monitor_open (
+          zlink::monitor_event::connection_ready | zlink::monitor_event::disconnected));
+        dealer->connect (_options.expected_server.advertised_endpoint);
+        auto monitor_poller = std::make_unique<zlink::poller_t> ();
+        monitor_poller->add (*monitor, zlink::poll_event_flag_t::pollin, 1);
+        _port = std::make_shared<detail::backend::raw_dealer_port_t> (
+          *dealer, &_socket_mutex, _options.transport_poller, _options.transport_poller_slot);
+        _monitor_poller = std::move (monitor_poller);
+        _monitor = std::move (monitor);
+        _dealer = std::move (dealer);
+        _receive_flow_registration = std::move (receive_flow_registration);
+        return true;
+    });
 }
 
 void raw_client_server_client_t::close () noexcept
+{
+    close_task ().result ().value ();
+}
+
+task_t<void> raw_client_server_client_t::close_task ()
 {
     std::shared_ptr<detail::backend::raw_dealer_port_t> port;
     std::unique_ptr<zlink::dealer_socket_t> dealer;
@@ -769,24 +783,22 @@ void raw_client_server_client_t::close () noexcept
     std::unique_ptr<zlink::socket_monitor_t> monitor;
     application_job_queue_t::receive_flow_registration_t receive_flow_registration;
     try {
-        _lane
-          .run_checked (
-            [this, &port, &dealer, &monitor_poller, &monitor, &receive_flow_registration] {
-                if (_closed) {
-                    return;
-                }
-                _closed = true;
-                _ready = false;
-                port = std::move (_port);
-                dealer = std::move (_dealer);
-                monitor_poller = std::move (_monitor_poller);
-                monitor = std::move (_monitor);
-                receive_flow_registration = std::move (_receive_flow_registration);
-            })
-          .get ();
+        co_await _lane.run_task (
+          [this, &port, &dealer, &monitor_poller, &monitor, &receive_flow_registration] {
+              if (_closed)
+                  return true;
+              _closed = true;
+              _ready = false;
+              port = std::move (_port);
+              dealer = std::move (_dealer);
+              monitor_poller = std::move (_monitor_poller);
+              monitor = std::move (_monitor);
+              receive_flow_registration = std::move (_receive_flow_registration);
+              return true;
+          });
     }
     catch (...) {
-        return;
+        co_return;
     }
     receive_flow_registration.close ();
     if (port) {

@@ -340,6 +340,7 @@ class channel_runtime_t
                                std::string remote_address = {}) const;
     void set_server_weight (const std::string &channel_name, int value);
     std::optional<int> server_peer_weight_override (const std::string &channel_name) const;
+    task_t<std::optional<int>> server_peer_weight_override_task (std::string channel_name) const;
 
     static channel_runtime_t from (const message_bus_t &bus);
 

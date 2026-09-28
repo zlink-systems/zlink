@@ -821,15 +821,18 @@ void channel_runtime_t::set_server_weight (const std::string &channel_name, int 
 std::optional<int>
 channel_runtime_t::server_peer_weight_override (const std::string &channel_name) const
 {
-    return _state->lane
-      .run_checked ([&] {
-          const auto found = _state->server_peer_weight_overrides.find (channel_name);
-          if (found == _state->server_peer_weight_overrides.end ()) {
-              return std::optional<int>{};
-          }
-          return std::optional<int>{found->second};
-      })
-      .get ();
+    return server_peer_weight_override_task (channel_name).result ().value ();
+}
+
+task_t<std::optional<int>>
+channel_runtime_t::server_peer_weight_override_task (std::string channel_name) const
+{
+    return _state->lane.run_task ([state = _state, channel_name = std::move (channel_name)] {
+        const auto found = state->server_peer_weight_overrides.find (channel_name);
+        if (found == state->server_peer_weight_overrides.end ())
+            return std::optional<int>{};
+        return std::optional<int>{found->second};
+    });
 }
 
 channel_runtime_t channel_runtime_t::from (const message_bus_t &bus)

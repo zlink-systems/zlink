@@ -3,6 +3,7 @@
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/provider_location_repository.hpp"
 #include "runtime/locations/provider_relocation_repository.hpp"
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 #include "../support/owner_lease_time_store.hpp"
 
 #include <gtest/gtest.h>
@@ -22,6 +23,36 @@ using namespace std::chrono_literals;
 using namespace zlink::framework;
 using namespace zlink::framework::runtime;
 using zlink::framework::tests::owner_lease_time_store_t;
+
+class deferred_owner_read_store_t final : public location_store_t
+{
+  public:
+    task_t<store_read_result_t> read (store_key_t) override { return completion.task (); }
+    task_t<store_scan_result_t> scan (store_scan_request_t request) override
+    {
+        return inner.scan (std::move (request));
+    }
+    task_t<store_write_result_t> write (store_write_request_t request) override
+    {
+        return inner.write (std::move (request));
+    }
+
+    detail::task_completion_source_t<store_read_result_t> completion;
+    in_memory_location_store_t inner;
+};
+
+TEST (ProviderLocationRepositoryTest, OwnerLeaseReadContinuesAfterProviderCompletion)
+{
+    deferred_owner_read_store_t store;
+    provider_location_repository_t repository (store);
+    auto read = [&] {
+        infrastructure_wait_guard::infrastructure_scope_t infrastructure (&repository);
+        return repository.read_owner_lease ("owner");
+    }();
+    ASSERT_FALSE (read.await_ready ());
+    store.completion.complete (result_t<store_read_result_t>::success (store_missing_t{}));
+    ASSERT_TRUE (std::holds_alternative<owner_lease_missing_t> (read.result ().value ()));
+}
 
 std::vector<std::byte> bytes (std::string_view value)
 {

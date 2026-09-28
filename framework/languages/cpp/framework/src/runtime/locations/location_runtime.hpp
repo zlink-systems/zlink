@@ -82,12 +82,15 @@ class location_runtime_t
 
     std::optional<location_owner_token_t> current_owner_token () const
     {
-        return _lane
-          .run_checked ([this] {
-              return owner_lease_usable_on_lane () ? _owner_token
-                                                   : std::optional<location_owner_token_t>{};
-          })
-          .get ();
+        return current_owner_token_task ().result ().value ();
+    }
+
+    task_t<std::optional<location_owner_token_t>> current_owner_token_task () const
+    {
+        return _lane.run_task ([this] {
+            return owner_lease_usable_on_lane () ? _owner_token
+                                                 : std::optional<location_owner_token_t>{};
+        });
     }
 
     /* Draining marker (graceful-drain-handoff §3.1): peer rows written while

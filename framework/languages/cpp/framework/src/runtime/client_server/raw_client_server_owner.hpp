@@ -80,6 +80,7 @@ class raw_client_server_server_t
     protocol::client_server_server_admission_t descriptor () const;
     task_t<protocol::client_server_server_admission_t> descriptor_task () const;
     void update_descriptor (protocol::client_server_server_admission_t descriptor);
+    task_t<void> update_descriptor_task (protocol::client_server_server_admission_t descriptor);
     mesh::service_mailbox_t &mailbox () noexcept;
 
     std::size_t drain_monitor_events (mesh::service_liveness_registry_t::clock_t::time_point now);
@@ -147,7 +148,9 @@ class raw_client_server_client_t
     ~raw_client_server_client_t () noexcept;
 
     void start ();
+    task_t<void> start_task ();
     void close () noexcept;
+    task_t<void> close_task ();
     bool ready () const;
     task_t<bool> ready_task () const;
     struct pump_status_t
