@@ -6,6 +6,40 @@ namespace Zlink.Framework.SampleRegressionTests;
 public sealed partial class RegressionTests
 {
     [Fact]
+    public void ZoneWorld_Bot_Spawn_Evidence_Follows_Completed_Join()
+    {
+        var sampleRoot = ResolveSampleRoot("ZoneWorld");
+        var actors = Path.Combine(
+            sampleRoot,
+            "Server",
+            "ZoneNode",
+            "Infrastructure",
+            "ZLink",
+            "Actors"
+        );
+        var spots = Path.Combine(
+            sampleRoot,
+            "Server",
+            "ZoneNode",
+            "Infrastructure",
+            "ZLink",
+            "Spots"
+        );
+        var bootstrap = ReadSource(Path.Combine(actors, "BotSpawner.cs"));
+        var zoneSpot = ReadSource(Path.Combine(spots, "ZoneSpot.cs"));
+        var joined = zoneSpot.IndexOf("ValueTask OnJoinedActorAsync(", StringComparison.Ordinal);
+        var stateEntered = zoneSpot.IndexOf(
+            "_state.Enter(enter.PlayerId",
+            joined,
+            StringComparison.Ordinal
+        );
+        var spawnEvidence = zoneSpot.IndexOf("bot spawned. bot=", joined, StringComparison.Ordinal);
+
+        Assert.DoesNotContain("bot spawned. bot=", bootstrap, StringComparison.Ordinal);
+        Assert.True(joined >= 0 && stateEntered > joined && spawnEvidence > stateEntered);
+    }
+
+    [Fact]
     public void ZoneWorld_Bot_Boundary_Is_Observed_After_Destination_Maintenance()
     {
         var source = ReadSource(

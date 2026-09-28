@@ -152,6 +152,17 @@ public sealed class ZoneSpot(
         _state.Enter(enter.PlayerId, enter.X, enter.Y, enter.IsBot);
         census.Record(ZoneId, _state.PlayerCount);
 
+        if (enter.IsBot && enter.InitialEntry)
+            logger.LogInformation(
+                "bot spawned. bot={PlayerId}, zone={ZoneId}, start=({X},{Y}), dir=({DirX},{DirY})",
+                enter.PlayerId,
+                ZoneId,
+                enter.X,
+                enter.Y,
+                actor.DirX,
+                actor.DirY
+            );
+
         // A brand-new entry learns its zone from JoinWorldRes, so only a zone *change*
         // is announced here. For a remote relocation the framework invokes this callback only
         // after the handoff commits, making the notification a safe boundary for the client's
