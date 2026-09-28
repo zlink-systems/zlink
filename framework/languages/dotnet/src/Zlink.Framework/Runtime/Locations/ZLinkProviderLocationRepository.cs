@@ -612,7 +612,6 @@ internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStor
                 leaseKey,
                 ownerId,
                 leaseGeneration,
-                liveLease,
                 rowKey,
                 current,
                 encodedDescriptor,
@@ -651,15 +650,14 @@ internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStor
         ZLinkStoreKey leaseKey,
         string ownerId,
         long leaseGeneration,
-        ZLinkStoreReadResult.Found liveLease,
         ZLinkStoreKey rowKey,
         ZLinkStoreReadResult predecessor,
         ReadOnlyMemory<byte> encodedDescriptor,
         CancellationToken cancellationToken
     )
     {
-        var currentLease = liveLease;
         var currentRow = predecessor;
+        var expectedLease = Encode(new OwnerRecord(ownerId, leaseGeneration));
         var retriesRemaining = MaximumDescriptorWriteRetries;
         while (true)
         {
@@ -673,10 +671,7 @@ internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStor
                 _ => throw new InvalidOperationException(),
             };
             var request = new ZLinkStoreWriteRequest(
-                [
-                    new ZLinkStoreCondition.Version(leaseKey, currentLease.Value.Version),
-                    rowCondition,
-                ],
+                [new ZLinkStoreCondition.Value(leaseKey, expectedLease), rowCondition],
                 [new ZLinkStoreMutation.Put(rowKey, encodedDescriptor, null)]
             );
 
@@ -746,9 +741,7 @@ internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStor
                 !string.Equals(refreshedOwner.OwnerId, ownerId, StringComparison.Ordinal)
                 || refreshedOwner.LeaseGeneration != leaseGeneration
             )
-            {
                 return ZLinkLocationWriteResult.IgnoredStale;
-            }
 
             var refreshedRow = await provider
                 .ReadAsync(rowKey, cancellationToken)
@@ -756,7 +749,6 @@ internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStor
             if (!IsSameDescriptorPredecessor(predecessor, refreshedRow))
                 return ZLinkLocationWriteResult.IgnoredStale;
 
-            currentLease = foundLease;
             currentRow = refreshedRow;
         }
     }
