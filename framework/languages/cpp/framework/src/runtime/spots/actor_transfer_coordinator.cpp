@@ -691,7 +691,8 @@ actor_transfer_coordinator_t::remove_expired_message_follow (
                       continue;
                   }
                   removed.push_back (removed_actor_message_follow_t{
-                    found->first, route->source_fence, route->transfer_id});
+                    found->first, route->source_fence, route->transfer_id, route->target_route,
+                    route->target_actor.object_generation ()});
                   _message_follow_suppression.erase (route->suppression_key);
                   route = routes.erase (route);
               }
@@ -724,8 +725,9 @@ std::optional<removed_actor_message_follow_t> actor_transfer_coordinator_t::remo
             });
           if (route == routes.end ())
               return std::nullopt;
-          removed_actor_message_follow_t removed{actor_key, route->source_fence,
-                                                 route->transfer_id};
+          removed_actor_message_follow_t removed{actor_key, route->source_fence, route->transfer_id,
+                                                 route->target_route,
+                                                 route->target_actor.object_generation ()};
           _message_follow_suppression.erase (route->suppression_key);
           routes.erase (route);
           if (routes.empty ())
@@ -770,7 +772,7 @@ bool actor_transfer_coordinator_t::matches_source_remote_transfer (
     return _lane
       .run_checked ([&, this] {
           const auto found = _moves.find (actor_key);
-          return found != _moves.end () && found->second.phase == actor_move_phase_t::source_remote
+          return found != _moves.end () && is_source_remote (found->second)
                  && found->second.transfer_id == transfer_id;
       })
       .get ();
@@ -1144,35 +1146,63 @@ void actor_transfer_coordinator_t::complete_commit (const std::string &transfer_
       .get ();
 }
 
-std::vector<expired_actor_admission_t>
+actor_transfer_cleanup_snapshot_t
 actor_transfer_coordinator_t::cleanup_expired (std::chrono::steady_clock::time_point now)
 {
-    return _lane
-      .run_checked ([&, this] {
-          std::vector<expired_actor_admission_t> removed;
-          for (auto found = _admissions.begin (); found != _admissions.end ();) {
-              const auto moving = _moves.find (found->second.actor_key);
-              const bool can_expire = moving != _moves.end ()
-                                      && moving->second.phase == actor_move_phase_t::target_pending;
-              if (can_expire && found->second.deadline <= now) {
-                  _moves.erase (moving);
-                  _backlogs.erase (found->second.actor_key);
-                  removed.push_back (expired_actor_admission_t{found->first, found->second});
-                  found = _admissions.erase (found);
-              } else {
-                  ++found;
-              }
-          }
-          for (auto found = _completed_admissions.begin ();
-               found != _completed_admissions.end ();) {
-              if (found->second.deadline <= now)
-                  found = _completed_admissions.erase (found);
-              else
-                  ++found;
-          }
-          return removed;
-      })
-      .get ();
+    return _lane.run_checked ([&, this] { return cleanup_expired_on_lane (now, {}); }).get ();
+}
+
+bool actor_transfer_coordinator_t::try_post_cleanup_expired (
+  std::chrono::steady_clock::time_point now,
+  std::vector<std::string> blocked_candidates,
+  std::function<void (actor_transfer_cleanup_snapshot_t)> complete,
+  std::function<void (std::exception_ptr)> fail)
+{
+    return _lane.try_post ([this, now, blocked_candidates = std::move (blocked_candidates),
+                            complete = std::move (complete), fail = std::move (fail)] () mutable {
+        try {
+            complete (cleanup_expired_on_lane (now, blocked_candidates));
+        }
+        catch (...) {
+            fail (std::current_exception ());
+        }
+    });
+}
+
+actor_transfer_cleanup_snapshot_t actor_transfer_coordinator_t::cleanup_expired_on_lane (
+  std::chrono::steady_clock::time_point now, const std::vector<std::string> &blocked_candidates)
+{
+    actor_transfer_cleanup_snapshot_t snapshot;
+    for (auto found = _admissions.begin (); found != _admissions.end ();) {
+        const auto moving = _moves.find (found->second.actor_key);
+        const bool can_expire =
+          moving != _moves.end () && moving->second.phase == actor_move_phase_t::target_pending;
+        if (can_expire && found->second.deadline <= now) {
+            _moves.erase (moving);
+            _backlogs.erase (found->second.actor_key);
+            snapshot.expired_admissions.push_back (
+              expired_actor_admission_t{found->first, found->second});
+            found = _admissions.erase (found);
+        } else {
+            ++found;
+        }
+    }
+    for (auto found = _completed_admissions.begin (); found != _completed_admissions.end ();) {
+        if (found->second.deadline <= now)
+            found = _completed_admissions.erase (found);
+        else
+            ++found;
+    }
+    for (const auto &[key, move] : _moves) {
+        if (is_source_remote (move))
+            snapshot.source_remote_transfers.emplace_back (key, move.transfer_id);
+    }
+    for (const auto &key : blocked_candidates) {
+        if (_moves.contains (key))
+            snapshot.blocked_dispatch_keys.push_back (key);
+    }
+    std::ranges::sort (snapshot.blocked_dispatch_keys);
+    return snapshot;
 }
 
 std::size_t actor_transfer_coordinator_t::pending_count () const

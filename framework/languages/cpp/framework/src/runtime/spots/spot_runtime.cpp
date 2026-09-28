@@ -6396,22 +6396,28 @@ spot_node_runtime_t::join_remote_actor_to_spot_erased (const actor_ref_t &actor_
 std::optional<std::chrono::steady_clock::time_point>
 spot_node_runtime_t::next_management_activity () const
 {
+    const auto pending =
+      _state->lane
+        .run_checked ([&] {
+            std::vector<std::pair<std::string, std::chrono::steady_clock::time_point>> deadlines;
+            deadlines.reserve (_state->pending_remote_source_cleanups.size ());
+            for (const auto &cleanup : _state->pending_remote_source_cleanups) {
+                const auto deadline = cleanup.leave_completed
+                                        ? cleanup.not_before
+                                        : std::max (cleanup.not_before, cleanup.leave_deadline);
+                deadlines.emplace_back (actor_key (cleanup.source_actor), deadline);
+            }
+            return deadlines;
+        })
+        .get ();
     auto next = _state->actor_transfer_coordinator.next_activity ();
-    return _state->lane
-      .run_checked ([&] {
-          for (const auto &cleanup : _state->pending_remote_source_cleanups) {
-              if (_state->actor_transfer_coordinator.blocks_dispatch (
-                    actor_key (cleanup.source_actor)))
-                  continue;
-              const auto deadline = cleanup.leave_completed
-                                      ? cleanup.not_before
-                                      : std::max (cleanup.not_before, cleanup.leave_deadline);
-              if (!next || deadline < *next)
-                  next = deadline;
-          }
-          return next;
-      })
-      .get ();
+    for (const auto &[key, deadline] : pending) {
+        if (_state->actor_transfer_coordinator.blocks_dispatch (key))
+            continue;
+        if (!next || deadline < *next)
+            next = deadline;
+    }
+    return next;
 }
 
 std::size_t spot_node_runtime_t::cleanup_expired_actor_admissions ()
@@ -6419,100 +6425,198 @@ std::size_t spot_node_runtime_t::cleanup_expired_actor_admissions ()
     return cleanup_expired_actor_admissions_at (std::chrono::steady_clock::now ());
 }
 
-std::size_t
-spot_node_runtime_t::cleanup_expired_actor_admissions_at (std::chrono::steady_clock::time_point now)
+std::size_t spot_node_runtime_t::cleanup_expired_actor_admissions_at (
+  std::chrono::steady_clock::time_point now, std::function<void ()> after_coordinator_snapshot)
 {
-    const auto expired = _state->actor_transfer_coordinator.cleanup_expired (now);
+    _state->lane.throw_if_reentrant ();
+    _state->actor_transfer_coordinator.throw_if_reentrant ();
+    struct pending_leave_identity_t
+    {
+        std::string key;
+        std::string transfer_id;
+        std::uint64_t source_generation;
+        std::string source_spot_id;
+        std::string target_spot_id;
+        runtime::protocol::actor_route_fence_t target_fence;
+    };
+    struct source_cleanup_identity_t
+    {
+        std::string key;
+        std::string transfer_id;
+        runtime::protocol::actor_route_fence_t source_fence;
+    };
+    struct sweep_result_t
+    {
+        actor_transfer_cleanup_snapshot_t snapshot;
+        std::size_t removed = 0;
+        std::vector<spot_node_builder_state_t::pending_remote_source_cleanup_t> cleaned_sources;
+        std::vector<actor_ref_t> released_sources;
+        std::vector<std::function<void ()>> abandoned_owner_reservations;
+    };
+    const auto state = _state;
+    auto completion = std::make_shared<std::promise<sweep_result_t>> ();
+    auto result = completion->get_future ();
+    const auto fail = [completion] (std::exception_ptr error) {
+        completion->set_exception (std::move (error));
+    };
+    if (!state->lane.try_post ([state, now, completion, fail,
+                                after_coordinator_snapshot =
+                                  std::move (after_coordinator_snapshot)] {
+            try {
+                std::vector<pending_leave_identity_t> pending_leaves;
+                pending_leaves.reserve (state->pending_remote_actor_leaves.size ());
+                for (const auto &pending : state->pending_remote_actor_leaves) {
+                    pending_leaves.push_back (
+                      {actor_key (pending.source_actor), pending.transfer_id,
+                       pending.source_actor.object_generation (), pending.source_spot_id,
+                       pending.target_spot_id, pending.target_fence});
+                }
+                std::vector<source_cleanup_identity_t> source_cleanups;
+                source_cleanups.reserve (state->pending_remote_source_cleanups.size ());
+                std::vector<std::string> blocked_candidates;
+                blocked_candidates.reserve (state->pending_remote_source_cleanups.size ());
+                for (const auto &cleanup : state->pending_remote_source_cleanups) {
+                    const auto key = actor_key (cleanup.source_actor);
+                    source_cleanups.push_back ({key, cleanup.transfer_id, cleanup.source_fence});
+                    blocked_candidates.push_back (key);
+                }
+                const auto on_cleanup = [state, now, completion, fail,
+                                         after_coordinator_snapshot =
+                                           std::move (after_coordinator_snapshot),
+                                         pending_leaves = std::move (pending_leaves),
+                                         source_cleanups = std::move (source_cleanups)] (
+                                          actor_transfer_cleanup_snapshot_t snapshot) mutable {
+                    try {
+                        if (after_coordinator_snapshot)
+                            after_coordinator_snapshot ();
+                        if (!state->lane.try_post ([state, now, completion, fail,
+                                                    pending_leaves = std::move (pending_leaves),
+                                                    source_cleanups = std::move (source_cleanups),
+                                                    snapshot = std::move (snapshot)] () mutable {
+                                try {
+                                    sweep_result_t sweep;
+                                    sweep.snapshot = std::move (snapshot);
+                                    sweep.removed = sweep.snapshot.expired_admissions.size ();
+                                    sweep.abandoned_owner_reservations.reserve (
+                                      pending_leaves.size ());
+                                    // A later OnLeave command was absent from this snapshot.
+                                    for (auto found = state->pending_remote_actor_leaves.begin ();
+                                         found != state->pending_remote_actor_leaves.end ();) {
+                                        const auto key = actor_key (found->source_actor);
+                                        const bool in_snapshot = std::ranges::any_of (
+                                          pending_leaves, [&] (const auto &identity) {
+                                              return identity.key == key
+                                                     && identity.transfer_id == found->transfer_id
+                                                     && identity.source_generation
+                                                          == found->source_actor
+                                                               .object_generation ()
+                                                     && identity.source_spot_id
+                                                          == found->source_spot_id
+                                                     && identity.target_spot_id
+                                                          == found->target_spot_id
+                                                     && identity.target_fence
+                                                          == found->target_fence;
+                                          });
+                                        if (!in_snapshot
+                                            || std::binary_search (
+                                              sweep.snapshot.source_remote_transfers.begin (),
+                                              sweep.snapshot.source_remote_transfers.end (),
+                                              std::pair{key, found->transfer_id})) {
+                                            ++found;
+                                            continue;
+                                        }
+                                        if (found->transfer_owner_reservation) {
+                                            sweep.abandoned_owner_reservations.push_back (
+                                              std::move (found->transfer_owner_reservation));
+                                            found->transferred_owner_byte_cost = 0;
+                                        }
+                                        found = state->pending_remote_actor_leaves.erase (found);
+                                        ++sweep.removed;
+                                    }
+                                    for (auto found =
+                                           state->pending_remote_source_cleanups.begin ();
+                                         found != state->pending_remote_source_cleanups.end ();) {
+                                        const auto key = actor_key (found->source_actor);
+                                        const bool in_snapshot = std::ranges::any_of (
+                                          source_cleanups, [&] (const auto &identity) {
+                                              return identity.key == key
+                                                     && identity.transfer_id == found->transfer_id
+                                                     && identity.source_fence
+                                                          == found->source_fence;
+                                          });
+                                        // OnLeave needs the source instance until its callback
+                                        // finishes; a return admission retains the cleanup fence.
+                                        if (!in_snapshot || found->not_before > now
+                                            || (!found->leave_completed
+                                                && found->leave_deadline > now)
+                                            || std::binary_search (
+                                              sweep.snapshot.blocked_dispatch_keys.begin (),
+                                              sweep.snapshot.blocked_dispatch_keys.end (), key)) {
+                                            ++found;
+                                            continue;
+                                        }
+                                        const auto current_fence =
+                                          state->actor_authority_fences.find (key);
+                                        const bool actor_has_newer_local_authority =
+                                          current_fence != state->actor_authority_fences.end ()
+                                          && current_fence->second != found->source_fence;
+                                        if (!actor_has_newer_local_authority) {
+                                            state->actor_instances.erase (key);
+                                            detail::erase_actor_instance_index_unlocked (
+                                              *state,
+                                              ::zlink::framework::detail::actor_ref_access_t::
+                                                actor_type (found->source_actor),
+                                              found->source_actor.actor_id ().value ());
+                                            sweep.released_sources.push_back (found->source_actor);
+                                            if (current_fence
+                                                  != state->actor_authority_fences.end ()
+                                                && current_fence->second == found->source_fence)
+                                                state->actor_authority_fences.erase (current_fence);
+                                        }
+                                        sweep.cleaned_sources.push_back (std::move (*found));
+                                        found = state->pending_remote_source_cleanups.erase (found);
+                                        ++sweep.removed;
+                                    }
+                                    completion->set_value (std::move (sweep));
+                                }
+                                catch (...) {
+                                    fail (std::current_exception ());
+                                }
+                            }))
+                            fail (std::make_exception_ptr (
+                              std::runtime_error ("node state lane is closed")));
+                    }
+                    catch (...) {
+                        fail (std::current_exception ());
+                    }
+                };
+                if (!state->actor_transfer_coordinator.try_post_cleanup_expired (
+                      now, std::move (blocked_candidates), on_cleanup, fail))
+                    fail (std::make_exception_ptr (
+                      std::runtime_error ("actor transfer coordinator lane is closed")));
+            }
+            catch (...) {
+                fail (std::current_exception ());
+            }
+        }))
+        throw std::runtime_error ("node state lane is closed");
+    auto sweep = runtime::state_lane_internal::get (result, "actor-transfer/sweep");
+    const auto &snapshot = sweep.snapshot;
     if (actor_transfer_marker_enabled ()) {
-        for (const auto &entry : expired) {
+        for (const auto &entry : snapshot.expired_admissions) {
             emit_actor_transfer_marker ("pending_admission_expired", entry.admission.source_actor,
                                         entry.transfer_id, entry.admission.target_spot_id);
         }
     }
-    std::size_t removed = expired.size ();
-    std::vector<spot_node_builder_state_t::pending_remote_source_cleanup_t> cleaned_sources;
-    std::vector<actor_ref_t> released_sources;
-    std::vector<std::function<void ()>> abandoned_owner_reservations;
-    _state->lane
-      .run_checked ([&] {
-          abandoned_owner_reservations.reserve (_state->pending_remote_actor_leaves.size ());
-          for (auto found = _state->pending_remote_actor_leaves.begin ();
-               found != _state->pending_remote_actor_leaves.end ();) {
-              const auto key = actor_key (found->source_actor);
-              if (_state->actor_transfer_coordinator.matches_source_remote_transfer (
-                    key, found->transfer_id)) {
-                  ++found;
-                  continue;
-              }
-              if (found->transfer_owner_reservation) {
-                  abandoned_owner_reservations.push_back (
-                    std::move (found->transfer_owner_reservation));
-                  found->transferred_owner_byte_cost = 0;
-              }
-              found = _state->pending_remote_actor_leaves.erase (found);
-              ++removed;
-          }
-          for (auto found = _state->pending_remote_source_cleanups.begin ();
-               found != _state->pending_remote_source_cleanups.end ();) {
-              if (found->not_before > now) {
-                  ++found;
-                  continue;
-              }
-              // Spec 15: source membership cleanup (erasing the local Actor
-              // instance) must not run ahead of the OnLeave callback actually
-              // executing. OnLeave arrives asynchronously from the target as a
-              // one-way command (submit_remote_actor_leave) that only queues
-              // the callback and returns; it needs this Actor instance to
-              // still be registered when it runs. Hold the erase until the
-              // callback has completed (leave_completed), bounded by
-              // leave_deadline in case the notification is genuinely lost
-              // (target crash, partition) or there is no OnLeave handler to
-              // await, so this cannot leak forever.
-              if (!found->leave_completed && found->leave_deadline > now) {
-                  ++found;
-                  continue;
-              }
-              const auto key = actor_key (found->source_actor);
-              const auto current_fence = _state->actor_authority_fences.find (key);
-              // An in-flight transfer for the key can be a return admission
-              // (A→B→A). Keep both the retained source instance and this exact
-              // cleanup/fence evidence until materialization consumes the
-              // remnant; dropping only the cleanup here leaves an unprovable
-              // actor_instances conflict on the returning target.
-              if (_state->actor_transfer_coordinator.blocks_dispatch (key)) {
-                  ++found;
-                  continue;
-              }
-              const bool actor_has_newer_local_authority =
-                (current_fence != _state->actor_authority_fences.end ()
-                 && current_fence->second != found->source_fence);
-              if (!actor_has_newer_local_authority) {
-                  _state->actor_instances.erase (key);
-                  detail::erase_actor_instance_index_unlocked (
-                    *_state,
-                    ::zlink::framework::detail::actor_ref_access_t::actor_type (
-                      found->source_actor),
-                    found->source_actor.actor_id ().value ());
-                  released_sources.push_back (found->source_actor);
-                  if (current_fence != _state->actor_authority_fences.end ()
-                      && current_fence->second == found->source_fence) {
-                      _state->actor_authority_fences.erase (current_fence);
-                  }
-              }
-              cleaned_sources.push_back (std::move (*found));
-              found = _state->pending_remote_source_cleanups.erase (found);
-              ++removed;
-          }
-      })
-      .get ();
-    for (auto &reservation : abandoned_owner_reservations) {
+    std::size_t removed = sweep.removed;
+    for (auto &reservation : sweep.abandoned_owner_reservations) {
         transferred_owner_reservation_guard_t abandoned (std::move (reservation));
         abandoned.settle ();
     }
-    for (const auto &actor : released_sources)
+    for (const auto &actor : sweep.released_sources)
         release_actor_location (_state, actor);
     if (actor_transfer_marker_enabled ()) {
-        for (const auto &cleanup : cleaned_sources) {
+        for (const auto &cleanup : sweep.cleaned_sources) {
             emit_actor_transfer_marker ("source_cleanup", cleanup.source_actor, cleanup.transfer_id,
                                         cleanup.target_spot_id);
         }
@@ -6521,17 +6625,33 @@ spot_node_runtime_t::cleanup_expired_actor_admissions_at (std::chrono::steady_cl
       _state->actor_transfer_coordinator.remove_expired_message_follow (now);
     std::vector<std::pair<actor_ref_t, std::string>> removed_route_markers;
     if (!removed_message_follow_routes.empty ()) {
+        std::vector<bool> retained_follow_routes;
+        retained_follow_routes.reserve (removed_message_follow_routes.size ());
+        for (const auto &entry : removed_message_follow_routes)
+            retained_follow_routes.push_back (
+              _state->actor_transfer_coordinator.has_message_follow_route (entry.actor_key));
         _state->lane
           .run_checked ([&] {
               const auto local_node_rid =
                 node_rid_t::from_string (detail::effective_spot_node_rid (_state->snapshot));
-              for (const auto &entry : removed_message_follow_routes) {
+              for (std::size_t index = 0; index < removed_message_follow_routes.size (); ++index) {
+                  const auto &entry = removed_message_follow_routes[index];
                   const auto &key = entry.actor_key;
                   // Message Follow ended (§10.4-3): remove the retained route. The
                   // current local authority and any other retained source fences
                   // remain independent from this expired source route.
+                  const auto current_route = _state->actor_routes.find (key);
+                  const bool same_route =
+                    current_route == _state->actor_routes.end ()
+                    || (current_route->second.node_rid.value ()
+                          == entry.target_route.node_rid.value ()
+                        && current_route->second.spot_id == entry.target_route.spot_id
+                        && current_route->second.spot_name == entry.target_route.spot_name);
+                  const auto current_generation = _state->actor_generations.find (key);
                   if (!_state->actor_authority_fences.contains (key)
-                      && !_state->actor_transfer_coordinator.has_message_follow_route (key)) {
+                      && !retained_follow_routes[index] && same_route
+                      && (current_generation == _state->actor_generations.end ()
+                          || current_generation->second == entry.target_generation)) {
                       _state->actor_routes.erase (key);
                       _state->native_actors.erase (key);
                   }
@@ -9068,7 +9188,14 @@ result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
     {
         std::optional<source_leave_projection_t> projection;
         bool deferred = false;
+        bool cleanup_present = false;
     };
+    bool matches_source_transfer = false;
+    if (requested_source_spot_generation == 0) {
+        assert (!_state->lane.is_on_lane ());
+        matches_source_transfer =
+          _state->actor_transfer_coordinator.matches_source_remote_transfer (key, transfer_id);
+    }
     const auto projection_result =
       _state->lane
         .run_checked ([&] {
@@ -9085,10 +9212,7 @@ result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
                 }
                 resolved_generation = cleanup->source_spot_generation;
             } else if (resolved_generation == 0) {
-                const auto matches_transfer =
-                  _state->actor_transfer_coordinator.matches_source_remote_transfer (key,
-                                                                                     transfer_id);
-                if (!matches_transfer) {
+                if (!matches_source_transfer) {
                     return source_leave_projection_result_t{};
                 }
                 const auto pending =
@@ -9128,7 +9252,8 @@ result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
                 return source_leave_projection_result_t{};
             return source_leave_projection_result_t{
               .projection = source_leave_projection_t{std::move (state), std::move (native_spot),
-                                                      resolved_generation}};
+                                                      resolved_generation},
+              .cleanup_present = cleanup != _state->pending_remote_source_cleanups.end ()};
         })
         .get ();
     if (projection_result.deferred) {
@@ -9139,6 +9264,12 @@ result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
         || projection->native_spot->status ().lifecycle_generation ()
              != projection->source_spot_generation) {
         return result_t<void>::success ();
+    }
+    bool source_leave_claimed = false;
+    if (!projection_result.cleanup_present) {
+        assert (!_state->lane.is_on_lane ());
+        source_leave_claimed =
+          _state->actor_transfer_coordinator.try_submit_source_leave (key, transfer_id);
     }
 
     std::function<void ()> pending_owner_reservation;
@@ -9196,8 +9327,7 @@ result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
                     cleanup->leave_completed = true;
                 if (const auto host = _state->native_node.lock ())
                     host->signal_dispatch_activity ();
-            } else if (!_state->actor_transfer_coordinator.try_submit_source_leave (key,
-                                                                                    transfer_id))
+            } else if (!source_leave_claimed)
                 return false;
 
             const auto exact_pending =

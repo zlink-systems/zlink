@@ -1838,7 +1838,10 @@ class spot_node_runtime_t
       std::function<task_t<void> ()> submit_source_leave = {});
     std::optional<std::chrono::steady_clock::time_point> next_management_activity () const;
     std::size_t cleanup_expired_actor_admissions ();
-    std::size_t cleanup_expired_actor_admissions_at (std::chrono::steady_clock::time_point now);
+    // Per-operation observation point for deterministic snapshot-order tests.
+    std::size_t
+    cleanup_expired_actor_admissions_at (std::chrono::steady_clock::time_point now,
+                                         std::function<void ()> after_coordinator_snapshot = {});
     bool stage_session_relocation_route (const std::string &transfer_id,
                                          std::vector<std::uint8_t> route,
                                          std::string actor_type,
