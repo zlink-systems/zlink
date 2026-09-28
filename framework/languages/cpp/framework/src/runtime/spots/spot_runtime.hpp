@@ -1764,6 +1764,9 @@ class spot_node_runtime_t
                                 bool actor_type_from_authority_only = false,
                                 std::uint64_t target_spot_generation = 0,
                                 std::uint64_t target_spot_authority_owner_generation = 0);
+    void dispatch_wire_actor_join_admission (const spot_id_t &target_spot_id,
+                                             std::function<void ()> admission,
+                                             std::function<void ()> rejected);
     std::optional<bool> validate_actor_join_relocation_prepare (
       const runtime::protocol::relocation_prepare_t &prepare) const;
     bool consume_actor_join_recovery (runtime::stateful::frozen_object_state_t &frozen,

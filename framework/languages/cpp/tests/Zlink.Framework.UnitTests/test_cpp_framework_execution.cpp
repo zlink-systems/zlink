@@ -4255,15 +4255,41 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
       && malformed_terminal ("actor-1", " \n")
       && malformed_terminal ("actor-1", std::string ("spot\0bad", 8));
 
-    // The admitted newer attempt holds its lifecycle position until its Join
-    // result is decided; the test ends that attempt before closing the queue.
+    // The first Join retains the Spot lifecycle position. The next admission
+    // must return to the receiver before that receiver processes the terminal.
+    auto second_actor = make_request (4220);
+    second_actor.actor.actor_id = "actor-2";
+    auto second_snapshot = *actor_snapshot;
+    second_snapshot.payload = runtime::encode_actor_authority_payload (
+      actor_ref_access_t::make (node_rid_t::from_string ("wire-join-source"), "player", "actor-2",
+                                7),
+      "source-spot", 1);
+    store->snapshot = second_snapshot;
+    auto second_promise =
+      std::make_shared<std::promise<runtime::host::actor_join_operation_result_t>> ();
+    auto second_future = second_promise->get_future ();
+    owner.dispatch_wire_actor_join_admission (
+      spot_id_t ("target-spot"),
+      [node, local_rid, second_actor, &serializers, second_promise] {
+          second_promise->set_value (
+            admit_wire_actor_join (node, local_rid, second_actor, std::nullopt, &serializers));
+      },
+      [second_promise] { second_promise->set_value ({}); });
     node->actor_transfer_coordinator.fail_commit (transfer_id_for (4213), false);
+    const bool second_completed =
+      second_future.wait_for (std::chrono::seconds (2)) == std::future_status::ready
+      && second_future.get ().join_result == runtime::protocol::actor_join_result_t::accepted;
+    const auto second_transfer_id =
+      canonical_actor_join_handoff_id (source_rid.to_bytes (), "actor-2", 7, 3, 4220);
+    node->actor_transfer_coordinator.fail_commit (second_transfer_id, false);
+    store->snapshot = actor_snapshot;
     target->serial_queue->close ();
     target->serial_queue->drain ();
     target->serial_executor->drain ();
     return reply_round_trip && first_approved && approval_only && duplicate_parked
            && reply_requires_serializers && later_attempt_wins && unknown_not_found
-           && stale_protocol_error && stale_target_store_fence_protocol_error && malformed_typed;
+           && stale_protocol_error && stale_target_store_fence_protocol_error && malformed_typed
+           && second_completed;
 }
 
 bool verify_target_commit_stages_source_prefix_before_live_dispatch ()

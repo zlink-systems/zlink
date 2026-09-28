@@ -2990,7 +2990,6 @@ void spot_context_state_t::complete_relocation_ready (spot_relocation_ready_outc
         }
         return;
     }
-    (void) run_serial_sync ("relocation-ready-completed", complete);
 }
 
 void spot_context_state_t::drain_serial ()
@@ -8190,6 +8189,27 @@ void spot_node_runtime_t::end_relocation_activation_admissions (
         _state->activation_admission->leave (target.kind == runtime::stateful::object_kind_t::actor
                                                ? activation_admission_t::actor_key (target.key)
                                                : activation_admission_t::spot_key (target.key));
+}
+
+void spot_node_runtime_t::dispatch_wire_actor_join_admission (const spot_id_t &target_spot_id,
+                                                              std::function<void ()> admission,
+                                                              std::function<void ()> rejected)
+{
+    const auto context = find_context (target_spot_id);
+    if (!context || !context->_state) {
+        admission ();
+        return;
+    }
+    context->_state->run_serial_task_async (
+      "spot-actor-admission",
+      [admission = std::move (admission)] {
+          admission ();
+          return task_t<void> (result_t<void>::success ());
+      },
+      [rejected = std::move (rejected)] (result_t<void> outcome) {
+          if (!outcome)
+              rejected ();
+      });
 }
 
 result_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot (

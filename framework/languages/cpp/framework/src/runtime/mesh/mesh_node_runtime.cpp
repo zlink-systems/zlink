@@ -538,6 +538,40 @@ void mesh_node_runtime_t::bind_descriptor_publisher (
     _state->lane.run ([&] { _descriptor_publisher = std::move (publisher); }).get ();
 }
 
+host::actor_join_operation_result_t actor_join_typed_terminal (framework_error_kind_t kind)
+{
+    host::actor_join_operation_result_t result;
+    switch (kind) {
+        case framework_error_kind_t::not_found:
+            result.terminal_result = 102;
+            result.failure_code = static_cast<std::uint32_t> (
+              runtime::protocol::framework_error_code::requestTargetNotFound);
+            break;
+        case framework_error_kind_t::protocol_error:
+            result.terminal_result = 104;
+            result.failure_code = static_cast<std::uint32_t> (
+              runtime::protocol::framework_error_code::requestProtocolError);
+            break;
+        case framework_error_kind_t::type_mismatch:
+            result.terminal_result = 107;
+            result.failure_code = static_cast<std::uint32_t> (
+              runtime::protocol::framework_error_code::actorTypeMismatch);
+            break;
+        case framework_error_kind_t::rejected:
+            result.terminal_result = 106;
+            result.failure_code =
+              static_cast<std::uint32_t> (runtime::protocol::framework_error_code::requestRejected);
+            break;
+        case framework_error_kind_t::unavailable:
+        default:
+            result.terminal_result = 105;
+            result.failure_code =
+              static_cast<std::uint32_t> (runtime::protocol::framework_error_code::requestFailed);
+            break;
+    }
+    return result;
+}
+
 host::actor_join_operation_result_t
 admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_state,
                        const zlink::routing_id_t &local_node_rid,
@@ -546,38 +580,7 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
                        serializer_registry_t *serializers)
 {
     host::actor_join_operation_result_t rejected;
-    const auto typed_terminal = [] (framework_error_kind_t kind) {
-        host::actor_join_operation_result_t result;
-        switch (kind) {
-            case framework_error_kind_t::not_found:
-                result.terminal_result = 102;
-                result.failure_code = static_cast<std::uint32_t> (
-                  runtime::protocol::framework_error_code::requestTargetNotFound);
-                break;
-            case framework_error_kind_t::protocol_error:
-                result.terminal_result = 104;
-                result.failure_code = static_cast<std::uint32_t> (
-                  runtime::protocol::framework_error_code::requestProtocolError);
-                break;
-            case framework_error_kind_t::type_mismatch:
-                result.terminal_result = 107;
-                result.failure_code = static_cast<std::uint32_t> (
-                  runtime::protocol::framework_error_code::actorTypeMismatch);
-                break;
-            case framework_error_kind_t::rejected:
-                result.terminal_result = 106;
-                result.failure_code = static_cast<std::uint32_t> (
-                  runtime::protocol::framework_error_code::requestRejected);
-                break;
-            case framework_error_kind_t::unavailable:
-            default:
-                result.terminal_result = 105;
-                result.failure_code = static_cast<std::uint32_t> (
-                  runtime::protocol::framework_error_code::requestFailed);
-                break;
-        }
-        return result;
-    };
+    const auto typed_terminal = actor_join_typed_terminal;
     try {
         spot_node_runtime_t spot (spot_state);
         const auto valid_identifier = [] (std::string_view value) {
@@ -853,8 +856,16 @@ void mesh_node_runtime_t::start ()
         const runtime::protocol::actor_join_request_t &request,
         const std::optional<runtime::protocol::application_payload_t> &payload,
         host::actor_join_operation_target_completion_t completion) {
-          completion (
-            admit_wire_actor_join (spot_state, routing_id, request, payload, serializers));
+          spot_node_runtime_t spot (spot_state);
+          spot.dispatch_wire_actor_join_admission (
+            spot_id_t (request.target_spot.spot_id),
+            [spot_state, routing_id, request, payload, serializers, completion] {
+                completion (
+                  admit_wire_actor_join (spot_state, routing_id, request, payload, serializers));
+            },
+            [completion] {
+                completion (actor_join_typed_terminal (framework_error_kind_t::unavailable));
+            });
       });
     node->configure_actor_join_relocation (
       [spot_state] (const runtime::protocol::relocation_prepare_t &prepare) {
