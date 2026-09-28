@@ -60,7 +60,6 @@ public static class Scenarios
             StringComparer.OrdinalIgnoreCase
         )
         {
-            ["runner-topology"] = AwaitInitialTopology,
             ["ZW-B4"] = B4BorderSnapshotExpiry,
             ["ZW-B8"] = B8SessionRouteSealTimeoutReconnect,
             ["ZW-C2"] = C2NodeDisconnected,
@@ -72,51 +71,6 @@ public static class Scenarios
             ["ZW-G4"] = G4CrashEndsCurrentOperationUnavailable,
             ["ZW-G4-fresh"] = (options, ct) => ReplacementAcceptsFreshObject("g4", options, ct),
         };
-
-    private static async ValueTask AwaitInitialTopology(
-        ClientOptions options,
-        CancellationToken cancellationToken
-    )
-    {
-        await using var ops = await OpsClient.ConnectAsync(options.OpsEndpoint, cancellationToken);
-        var observed = new Dictionary<string, NodeView>(StringComparer.Ordinal);
-        var ready = ops
-            .Connector.WaitFor<NodeStatusNotify>()
-            .Where(message =>
-            {
-                var status = message.Payload;
-                observed[status.NodeId] = new NodeView(
-                    status.NodeId,
-                    status.Registered,
-                    status.Connected,
-                    status.Maintenance,
-                    status.Zones,
-                    status.PlayerCount
-                );
-                return InitialTopologyReady(observed.Values.ToArray());
-            })
-            .Timeout(TimeSpan.FromSeconds(20))
-            .Async(cancellationToken);
-        await ops.WatchNodesAsync(cancellationToken);
-        await ready;
-    }
-
-    private static bool InitialTopologyReady(IReadOnlyList<NodeView> nodes)
-    {
-        var owners = nodes
-            .Where(node =>
-                (node.NodeId is NodeIds.West or NodeIds.East) && node.Registered && node.Connected
-            )
-            .ToArray();
-        return nodes.Count == 2
-            && owners.Length == 2
-            && owners.All(node => node.Zones.Count == 2)
-            && owners.Sum(node => node.PlayerCount) == ZoneWorldSpec.BotCount
-            && owners
-                .SelectMany(node => node.Zones)
-                .OrderBy(zone => zone, StringComparer.Ordinal)
-                .SequenceEqual(ZoneIds.All.OrderBy(zone => zone, StringComparer.Ordinal));
-    }
 
     // Zone state observation waits for one ZoneStateNotify after a join or move. The same
     // harness-budget reasoning as the other observation timeouts applies.
