@@ -64,7 +64,7 @@ async function main(): Promise<void> {
       .post(`/rooms/${room}/chat`)
       .body({ playerId: 'p2', text: 'hello' })
       .submit<null>();
-    console.log(`json body: player ${player.body} room ${room} chat ${chat.status}`);
+    console.log(`json body: player ${player.status} room ${room} chat ${chat.status}`);
     // --8<-- [end:http-json-body]
 
     // --8<-- [start:http-response-kinds]

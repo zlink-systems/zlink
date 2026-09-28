@@ -51,7 +51,7 @@ npm run build
 
 ## Run
 
-[Complete the [Build](#build) section first. Start the server first and the client second in separate terminals. The server listens on
+Complete the [Build](#build) section first. Start the server first and the client second in separate terminals. The server listens on
 `tcp://127.0.0.1:7101` and handles the `greeting` channel. The client listens on
 `tcp://127.0.0.1:7102`, connects to `tcp://127.0.0.1:7101`, and serves
 `GET /hello/{name}` on `http://127.0.0.1:5080`.

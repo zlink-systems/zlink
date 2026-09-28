@@ -159,7 +159,7 @@ Examples smoke runs this block exactly as written.
 
 | Step | Evidence of success |
 |---|---|
-| `cmake -P bootstrap.cmake` | last line `-- bootstrap done. Next: cmake --build ...`; `.zlink/install/lib/cmake/zlink_framework/zlink_frameworkConfig.cmake` exists |
+| `cmake -P bootstrap.cmake` | last line `-- bootstrap complete; build with: cmake --build build ...`; `.zlink/install/lib/cmake/zlink_framework/zlink_frameworkConfig.cmake` exists |
 | Build | the four executables `tutorial_server`, `tutorial_client`, `tutorial_stream_client`, `tutorial_http_client` exist |
 | First request | `curl http://127.0.0.1:5180/players/p1/profile` prints `{"level":1,"nickname":"rookie","playerId":"p1"}` |
 | Spot (Redis) | the request that opens a room prints a room id string (`"9e78fd70-..."`) |

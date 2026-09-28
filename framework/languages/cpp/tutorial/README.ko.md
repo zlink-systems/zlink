@@ -159,7 +159,7 @@ examples-smoke는 이 블록을 그대로 실행한다.
 
 | 단계 | 성공의 증거 |
 |---|---|
-| `cmake -P bootstrap.cmake` | 마지막 줄 `-- bootstrap done. Next: cmake --build ...`. `.zlink/install/lib/cmake/zlink_framework/zlink_frameworkConfig.cmake`가 있다 |
+| `cmake -P bootstrap.cmake` | 마지막 줄 `-- bootstrap complete; build with: cmake --build build ...`. `.zlink/install/lib/cmake/zlink_framework/zlink_frameworkConfig.cmake`가 있다 |
 | 빌드 | `tutorial_server`·`tutorial_client`·`tutorial_stream_client`·`tutorial_http_client` 실행 파일이 생성된다 |
 | 첫 요청 | `curl http://127.0.0.1:5180/players/p1/profile`이 `{"level":1,"nickname":"rookie","playerId":"p1"}`를 낸다 |
 | Spot (Redis) | 방을 여는 요청이 방 id 문자열(`"9e78fd70-…"`)을 낸다 |
