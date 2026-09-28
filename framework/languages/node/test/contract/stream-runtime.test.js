@@ -3247,6 +3247,49 @@ test('route replacement completes while retired unbound is pending', async () =>
   assert.equal((await registry.requireRoute(actor.actorId)).context, newContext);
 });
 
+for (const unbindEntry of ['unbind', 'unbindActor']) {
+  test(`${unbindEntry} releases the state lane while an unbound submission is pending`, async () => {
+    const registry = new ZLinkActorSessionBindingRegistry();
+    let submitted;
+    let finishUnbound;
+    const submissionStarted = new Promise((resolve) => { submitted = resolve; });
+    const pendingUnbound = new Promise((resolve) => { finishUnbound = resolve; });
+    const context = {
+      actorSlotControls: {
+        async enqueueBound() {},
+        enqueueUnbound() {
+          submitted();
+          return pendingUnbound;
+        }
+      },
+      bindLocal() {},
+      unbindLocal() {}
+    };
+    await registry.bind(context, { actorId: 'actor-a' }, 'token-a');
+    await registry.bind(context, { actorId: 'actor-b' }, 'token-b');
+
+    const unbinding = unbindEntry === 'unbind'
+      ? registry.unbind('actor-a', context, 'token-a')
+      : registry.unbindActor('actor-a');
+    await submissionStarted;
+    let guard;
+    try {
+      const route = await Promise.race([
+        registry.route('actor-b'),
+        new Promise((_, reject) => {
+          guard = setTimeout(() => reject(new Error('unrelated route blocked by unbound submission')), 1000);
+        })
+      ]);
+      assert.equal(route.actor.actorId, 'actor-b');
+      assert.equal(await registry.route('actor-a'), undefined);
+    } finally {
+      clearTimeout(guard);
+      finishUnbound();
+      await unbinding;
+    }
+  });
+}
+
 test('route replacement shares the pre-bind active-frame drain with command 42', async () => {
   const registry = new ZLinkActorSessionBindingRegistry(16, 16, 50);
   const actorId = 'actor-replaced-active-frame';

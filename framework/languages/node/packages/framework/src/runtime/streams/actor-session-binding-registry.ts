@@ -399,15 +399,18 @@ export class ZLinkActorSessionBindingRegistry<
     bindingToken: string,
     termination = ZLinkActorSessionBindingTermination.BindingEnd
   ): Promise<void> {
-    await this.lane.run(() => this.unbindCore(actorId, context, bindingToken, termination));
+    const { submission } = await this.lane.run(() => ({
+      submission: this.unbindCore(actorId, context, bindingToken, termination)
+    }));
+    await submission;
   }
 
-  private async unbindCore(
+  private unbindCore(
     actorId: string,
     context: TContext,
     bindingToken: string,
     termination: ZLinkActorSessionBindingTermination
-  ): Promise<void> {
+  ): Promise<void> | undefined {
     const route = this.routes.get(actorId);
     if (route === undefined || route.context !== context || route.bindingToken !== bindingToken) {
       return;
@@ -431,20 +434,23 @@ export class ZLinkActorSessionBindingRegistry<
       termination === ZLinkActorSessionBindingTermination.BindingEnd &&
       route.actorSlot !== undefined
     ) {
-      await context.actorSlotControls?.enqueueUnbound(route.actorSlot);
+      return context.actorSlotControls?.enqueueUnbound(route.actorSlot);
     }
   }
 
   async unbindActor(actorId: string): Promise<void> {
-    await this.lane.run(() => this.unbindActorCore(actorId));
+    const { submission } = await this.lane.run(() => ({
+      submission: this.unbindActorCore(actorId)
+    }));
+    await submission;
   }
 
-  private async unbindActorCore(actorId: string): Promise<void> {
+  private unbindActorCore(actorId: string): Promise<void> | undefined {
     const route = this.routes.get(actorId);
     if (route === undefined) {
       return;
     }
-    await this.unbindCore(
+    return this.unbindCore(
       actorId,
       route.context,
       route.bindingToken,
@@ -456,10 +462,10 @@ export class ZLinkActorSessionBindingRegistry<
     await this.lane.run(() => this.cleanupCore(context));
   }
 
-  private async cleanupCore(context: TContext): Promise<void> {
+  private cleanupCore(context: TContext): void {
     for (const route of [...this.routes.values()]) {
       if (route.context === context) {
-        await this.unbindCore(
+        this.unbindCore(
           route.actor.actorId,
           context,
           route.bindingToken,
