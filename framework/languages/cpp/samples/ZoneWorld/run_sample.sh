@@ -358,6 +358,9 @@ set +e
   --ops-endpoint "$OPS_STREAM" |& tee "$LOG_DIR/client.log"
 CLIENT_STATUS=${PIPESTATUS[0]}
 set -e
+if [[ "$CLIENT_STATUS" -ne 0 ]]; then
+  printf 'client-main exited with code %s\n' "$CLIENT_STATUS" >&2
+fi
 
 # Capture F2 before runner-driven process stops can abort unrelated bot joins during teardown.
 MAIN_BOT_JOIN_FAILURES="$(awk \
