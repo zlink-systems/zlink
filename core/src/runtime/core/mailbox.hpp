@@ -31,13 +31,6 @@ namespace zlink
 class mailbox_t ZLINK_FINAL : public i_mailbox
 {
   public:
-    enum command_probe_result_t
-    {
-        command_probe_empty,
-        command_probe_other,
-        command_probe_match
-    };
-
     mailbox_t ();
     ~mailbox_t () ZLINK_OVERRIDE;
 
@@ -46,11 +39,6 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
     void signal ();
     int recv (command_t *cmd_, int timeout_) ZLINK_OVERRIDE;
     int recv (command_t *cmd_, int timeout_, bool consume_primary_signaler_);
-    //  Classifies the next command without removing it. Only the serialized
-    //  command owner may call this receiver-side operation.
-    command_probe_result_t probe_command (
-      bool (*predicate_) (const command_t &),
-      bool consume_primary_signaler_ = true);
     //  Waits for a command-owner notification without consuming a poller's
     //  possibly shared signaler. The command owner must still call recv().
     uint64_t begin_command_wait_observation ();
@@ -91,11 +79,7 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
     bool acquire_poller_notification ();
     void release_poller_notification (bool primary_notification_);
     bool has_primary_poller_notification () const;
-    void signal_pollers ();
-    //  Re-arm the primary notification descriptor after a command owner has
-    //  consumed it, so descriptor-based pollers watching this mailbox's fd
-    //  still wake after ownership is handed back.
-    void rearm_primary_signaler ();
+    void signal_pollers (bool primary_poller_drain_);
     void clear_signalers ();
 
 #ifdef ZLINK_BUILD_TESTS

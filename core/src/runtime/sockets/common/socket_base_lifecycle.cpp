@@ -172,8 +172,6 @@ class submit_progress_wait_scope_t
         if (!_owns_public_commands)
             return false;
 
-        if (_command_drain_started)
-            _mailbox.rearm_primary_signaler ();
         if (_mailbox_observation_active) {
             _mailbox.end_command_wait_observation ();
             _mailbox_observation_active = false;
@@ -378,7 +376,7 @@ void zlink::socket_base_t::start_reaping (poller_t *poller_)
 int zlink::socket_base_t::process_commands (
   int timeout_, bool throttle_, bool force_if_command_pending_,
   const uint64_t *observed_command_wait_epoch_,
-  bool consume_primary_signaler_)
+  bool primary_poller_drain_)
 {
     receive_runtime_t &receive = receive_runtime ();
     socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
@@ -489,8 +487,7 @@ int zlink::socket_base_t::process_commands (
 
             command_t cmd;
             const auto recv_next_command = [&] (command_t *cmd_out_) {
-                return mailbox->recv (cmd_out_, 0,
-                                      consume_primary_signaler_);
+                return mailbox->recv (cmd_out_, 0, false);
             };
 
 #ifdef ZLINK_BUILD_TESTS
@@ -540,7 +537,7 @@ int zlink::socket_base_t::process_commands (
             // Publish readiness only after the command owner applied every
             // state transition in this batch.
             if (processed_command) {
-                mailbox->signal_pollers ();
+                mailbox->signal_pollers (primary_poller_drain_);
                 flush_deferred_peer_controls ();
                 if (submit_progress_tracked) {
                     scoped_lock_t progress_lock (submit_progress.sync);
@@ -1272,13 +1269,6 @@ bool zlink::socket_base_t::stop_unowned_async_command_processing_at_idle ()
         // A new executor also takes the owner gate before installing itself, so
         // publish the detached state before letting that acquire proceed.
         lifecycle.mark_async_processing_stopped (NULL);
-        //  This executor consumed the primary notification descriptor while
-        //  it drained the commands that led here (for example the
-        //  activate_read of the first message after a monitor closed). The
-        //  drain loop re-arms that descriptor only when it keeps running, so
-        //  do it here as well, or a public poller sleeps through input this
-        //  temporary owner already applied.
-        mailbox->rearm_primary_signaler ();
         stopped = true;
     }
     if (stopped)
@@ -1726,7 +1716,6 @@ void zlink::socket_base_t::process_async_mailbox ()
                     == 0)
                     invalidate_completion_processing_owner ();
                 lifecycle_coordinator ().mark_async_processing_stopped (mailbox);
-                mailbox->rearm_primary_signaler ();
                 notify_receive_progress ();
             }
             check_destroy ();
@@ -1736,11 +1725,6 @@ void zlink::socket_base_t::process_async_mailbox ()
             return;
         if (lifecycle_coordinator ().is_async_mailbox_active ()) {
             process_deferred_socket_msg_pipe_terminations ();
-            //  This executor consumed the mailbox's primary notification
-            //  descriptor while draining commands. A poller that registered
-            //  this socket watches that same descriptor, so re-arm it or the
-            //  poller sleeps through the input this drain just applied.
-            static_cast<mailbox_t *> (_mailbox)->rearm_primary_signaler ();
         }
         if (!lifecycle_coordinator ().is_async_mailbox_active ()) {
             mailbox_t *mailbox = static_cast<mailbox_t *> (_mailbox);
@@ -1757,7 +1741,6 @@ void zlink::socket_base_t::process_async_mailbox ()
                 invalidate_completion_processing_owner ();
             //  Signal quiesce completion to waiting close()/start_reaping().
             lifecycle_coordinator ().mark_async_processing_stopped (mailbox);
-            mailbox->rearm_primary_signaler ();
             notify_receive_progress ();
             return;
         }

@@ -26,7 +26,12 @@ void throw_mailbox_asio_post_failure ()
 #endif
 }
 
-zlink::mailbox_t::mailbox_t ()
+zlink::mailbox_t::mailbox_t () :
+#ifdef ZLINK_HAVE_WINDOWS
+    _signaler (false, true)
+#else
+    _signaler (true)
+#endif
 {
     const bool ok = _cpipe.check_read ();
     zlink_assert (!ok);
@@ -129,16 +134,14 @@ int zlink::mailbox_t::recv (command_t *cmd_, int timeout_)
 int zlink::mailbox_t::recv (command_t *cmd_, int timeout_,
                             bool consume_primary_signaler_)
 {
-    //  An async command owner and a public socket poller can observe the same
-    //  primary descriptor. Consult the command pipe first so a poller that
-    //  consumed the wake cannot strand an already-published command.
+    //  Consult the command pipe first. A public socket poller may have
+    //  consumed its descriptor before the command owner arrived.
     (void) activate_if_command_pending (consume_primary_signaler_);
 
     if (!_active) {
         if (!consume_primary_signaler_) {
-            //  A poller waiting on its private signaler must not consume the
-            //  primary poller's edge merely because it is rechecking logical
-            //  readiness. Poller readiness probes are always nonblocking.
+            //  A socket command owner must leave the primary poller's edge
+            //  intact. Its command-pipe check is nonblocking.
             zlink_assert (timeout_ == 0);
             errno = EAGAIN;
             return -1;
@@ -196,25 +199,6 @@ int zlink::mailbox_t::recv (command_t *cmd_, int timeout_,
     _active = false;
     errno = EAGAIN;
     return -1;
-}
-
-zlink::mailbox_t::command_probe_result_t zlink::mailbox_t::probe_command (
-  bool (*predicate_) (const command_t &), bool consume_primary_signaler_)
-{
-    zlink_assert (predicate_);
-
-    //  Mirror recv()'s nonblocking receiver-state transition, including the
-    //  primary wake drain. A sender can only append after this probe, so a
-    //  matched front remains the next command until the command owner pops it.
-    if (!activate_if_command_pending (consume_primary_signaler_))
-        return command_probe_empty;
-    if (!_cpipe.check_read ()) {
-        _active = false;
-        return command_probe_empty;
-    }
-
-    return _cpipe.probe (predicate_) ? command_probe_match
-                                     : command_probe_other;
 }
 
 bool zlink::mailbox_t::activate_if_command_pending (
@@ -488,22 +472,13 @@ bool zlink::mailbox_t::has_primary_poller_notification () const
            != 0;
 }
 
-void zlink::mailbox_t::rearm_primary_signaler ()
-{
-    if (!_primary_signaler_required.load (std::memory_order_acquire))
-        return;
-    _sync.lock ();
-    //  This edge exists only for callers that obtained the primary fd. Avoid
-    //  a signaler syscall for async-owned sockets that have no public poller.
-    if (_primary_signaler_required.load (std::memory_order_acquire))
-        _signaler.send ();
-    _sync.unlock ();
-}
-
-void zlink::mailbox_t::signal_pollers ()
+void zlink::mailbox_t::signal_pollers (bool primary_poller_drain_)
 {
     _sync.lock ();
     signal_registered_pollers_unlocked ();
+    if (!primary_poller_drain_
+        && _primary_signaler_required.load (std::memory_order_acquire))
+        _signaler.send ();
     _sync.unlock ();
 }
 

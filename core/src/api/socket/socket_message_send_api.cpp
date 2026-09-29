@@ -9,7 +9,6 @@
 #include "api/socket/part_helper_internal.hpp"
 #include "api/socket/request_reply_protocol_internal.hpp"
 #include "api/message/submit_result_internal.hpp"
-#include "api/socket/request_timeout_scheduler_internal.hpp"
 #include "core/msg.hpp"
 #include "core/multipart_send_txn.hpp"
 #include "utils/routing_id.hpp"
@@ -254,11 +253,6 @@ zlink_submit_result_t submit_public_send_record (
   size_t part_count_, zlink_send_flags_t flags_, void *user_context_,
   zlink_completion_id_t *completion_id_out_)
 {
-    const int send_timeout_ms = handle_.socket->send_timeout_ms ();
-    const uint64_t wait_deadline_ns = send_timeout_ms < 0
-      ? 0
-      : zlink::request_timeout::deadline_after_ms (
-          static_cast<uint32_t> (send_timeout_ms));
     if (completion_id_out_)
         *completion_id_out_ = 0;
 
@@ -283,8 +277,7 @@ zlink_submit_result_t submit_public_send_record (
     int saved_errno = rc == 0 ? 0 : errno;
     if (rc != 0 && flags_ == ZLINK_SEND_FLAGS_DONTWAIT) {
         (void) handle_.socket->register_send_writable_wait_after_failure (
-          saved_errno, target_rid_, user_context_, completion_id_out_, NULL,
-          wait_deadline_ns);
+          saved_errno, target_rid_, user_context_, completion_id_out_);
         saved_errno = errno;
     }
     errno = saved_errno;

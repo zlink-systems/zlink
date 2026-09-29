@@ -12,6 +12,28 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
 
 ## [Unreleased]
 
+## [1.11.0]
+
+### Changed
+
+- WRITABLE completion reports ADMITTED as send_result 0, NOT_FOUND as
+  801 (ENOENT), NOT_CONNECTED as 802 (ENOTCONN, STREAM), and
+  TIMED_OUT as 803 (EAGAIN) (#1154).
+- A DONTWAIT SEND or REQUEST waiting token ends with TIMED_OUT/EAGAIN if
+  submission has not completed by the SNDTIMEO deadline captured at submit;
+  SNDTIMEO=-1 has no deadline (#1154).
+- When all 65,536 completion reservations for a socket are in use, SEND
+  DONTWAIT returns BACKPRESSURED/EAGAIN and ID 0, matching REQUEST;
+  previously it returned OUT_OF_MEMORY/ENOMEM (#1165).
+
+### Fixed
+
+- When one thread polls a socket and another sends or receives, command handling
+  on the send/receive path no longer consumes the poller notification and leaves
+  the poller asleep until another event. Only the poller consumes its
+  notification (#1082).
+- An immediately admitted send no longer reads SNDTIMEO or the clock (#1154).
+
 ## [1.9.0] - 2026-09-26
 
 The public C API and ABI are unchanged from 1.8.0

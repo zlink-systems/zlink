@@ -548,8 +548,7 @@ class socket_base_t : public own_t,
     int register_send_writable_wait_after_failure (
       int failure_errno_, const zlink_routing_id_t *target_rid_or_null_,
       void *user_context_, zlink_completion_id_t *completion_id_out_,
-      socket_completion::request_writable_wait_t *request_wait_ = NULL,
-      uint64_t deadline_ns_ = 0);
+      socket_completion::request_writable_wait_t *request_wait_ = NULL);
     void expire_send_writable_wait (zlink_completion_id_t completion_id_);
     bool has_send_writable_wait () const;
     int request_admission_submit (
@@ -1284,7 +1283,7 @@ class socket_base_t : public own_t,
                           bool throttle_,
                           bool force_if_command_pending_ = false,
                           const uint64_t *observed_command_wait_epoch_ = NULL,
-                          bool consume_primary_signaler_ = true);
+                          bool primary_poller_drain_ = false);
     enum submit_command_progress_mode_t
     {
         submit_command_progress_failed = -1,
