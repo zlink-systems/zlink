@@ -476,7 +476,7 @@ topic length and leaves the queued record and other outputs unchanged.
     message lifecycle, timer config
 - Nonzero result enum values use nonoverlapping numeric ranges for each family
   (1-13, 101-113, 201-208, 301-306, 401-404, 501-505, 601-608, and 701-709), and the
-  completion record's `zlink_send_complete_result_t` uses 801-802, so the ranges do not overlap.
+  completion record's `zlink_send_complete_result_t` uses 801-803, so the ranges do not overlap.
 - See [Result and errno mapping](#result-and-errno-mapping) above for the formal enum
   catalog.
 - The request completion queue passes internal errno through `from_errno` normalization

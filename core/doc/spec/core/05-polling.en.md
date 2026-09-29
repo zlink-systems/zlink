@@ -53,7 +53,7 @@ type is as follows.
 
 | Source | `POLLIN` | `POLLOUT` | Additional readiness and rules |
 |---|---|---|---|
-| raw socket | A complete record can be received | A submit retry is worthwhile (socket-wide aggregate). Level-held while an unread `ZLINK_COMPLETION_WRITABLE` record exists | Per-socket receive mode applies. A closed registered socket reports `ZLINK_POLLERR` once |
+| raw socket | A complete record can be received | Socket-wide send readiness or an unread `ZLINK_COMPLETION_WRITABLE` record. Level-held while that record exists | Per-socket receive mode applies. A closed registered socket reports `ZLINK_POLLERR` once |
 | socket monitor | A monitor event can be received | Unsupported | Drain with `zlink_socket_monitor_recv()`. A monitor handle is registered with the poller through the same functions as a raw socket (socket/README, "paths that notify the application") |
 | timer | A fire count can be received | Unsupported | Drain with `zlink_timer_recv()` |
 | FD | Platform-readable | Platform-writable | Platform `POLLPRI` maps to `ZLINK_POLLPRI`; all other platform error bits map to `ZLINK_POLLERR` |
@@ -66,15 +66,15 @@ after a nonblocking submit to one target reports
 submissions from a sender when the downstream cannot keep pace with processing),
 observing `ZLINK_POLLOUT` does not guarantee that the next submit to that target
 succeeds.
-The per-target retry signal is the wait token's `ZLINK_COMPLETION_WRITABLE`
+The per-target result of a wait token is delivered in a `ZLINK_COMPLETION_WRITABLE`
 record, not the `ZLINK_POLLOUT` bit. When a `ZLINK_SEND_FLAGS_DONTWAIT` submit
 returns `ZLINK_SUBMIT_BACKPRESSURED`, the nonzero value in `completion_id_out` is
 the wait token. When the resource that refused that submit recovers (the wake
 condition is owned by the [socket README](socket/README.en.md#whole-message-send-and-pending-admission)), Core enqueues one
 WRITABLE record carrying the same token, the same `user_context`, and, for
 ROUTER and STREAM, the submitted RID into the socket-local completion queue.
-The application pulls that record with `zlink_completion_recv()` and uses the
-token, context, and RID to decide which target to resubmit. While the record is
+The application pulls that record with `zlink_completion_recv()` and identifies the
+original submit by token, context, and RID; whether to resubmit follows the record's `send_result` under [Socket Common](socket/README.en.md#whole-message-send-and-pending-admission). While the record is
 unread, both `ZLINK_POLLOUT` and `ZLINK_POLLCOMPLETION` remain true.
 
 `ZLINK_POLLITEMS_DFLT` is the recommended initial item count for internal and
