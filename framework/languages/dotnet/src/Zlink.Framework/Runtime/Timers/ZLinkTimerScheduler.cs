@@ -29,16 +29,14 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
 
     internal int ScheduledEntryCount => AwaitStateLane(_lane.RunAsync(() => _queue.Count));
 
-    internal void Register(ZLinkTimer timer)
+    internal ValueTask RegisterAsync(ZLinkTimer timer)
     {
         ArgumentNullException.ThrowIfNull(timer);
-        AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                ObjectDisposedException.ThrowIf(_closed, this);
-                _timers.Add(timer);
-            })
-        );
+        return _lane.RunAsync(() =>
+        {
+            ObjectDisposedException.ThrowIf(_closed, this);
+            _timers.Add(timer);
+        });
     }
 
     internal void Unregister(ZLinkTimer timer)
@@ -49,18 +47,18 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
 
     internal void Schedule(ZLinkTimer timer, TimeSpan dueAt, long version)
     {
-        AwaitStateLane(
-            _lane.RunAsync(() =>
+        _lane.TryPost(() =>
+        {
+            if (!_closed)
             {
-                if (_closed)
-                    return;
                 _queue.Enqueue(
                     new ScheduledTimer(timer, version),
                     new ZLinkTimerScheduleKey(dueAt.Ticks, ++_nextSequence)
                 );
-            })
-        );
-        SignalWake();
+                SignalWake();
+            }
+            return ValueTask.CompletedTask;
+        });
     }
 
     public ValueTask DisposeAsync()
@@ -161,10 +159,23 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
         return (true, _queue.Dequeue(), TimeSpan.Zero);
     }
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        operation.GetAwaiter().GetResult();
+    }
 
     private void SignalWake()
     {

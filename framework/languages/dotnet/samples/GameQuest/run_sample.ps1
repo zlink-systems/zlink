@@ -146,7 +146,7 @@ try {
     Wait-GameQuestLogContains (Join-Path $LogDir "api-b.out.log") "gamequest-ready kind=spot-route node=api-b mesh=gamequest"
 
     $clientProject = Join-Path $ScriptDir "Client/GameQuest.Client.csproj"
-    $clientAssembly = Join-Path (Split-Path -Parent $clientProject) "bin/Debug/net8.0/GameQuest.Client.dll"
+    $clientAssembly = Join-Path (Split-Path -Parent $clientProject) "bin/$script:ZLinkSampleConfiguration/net8.0/GameQuest.Client.dll"
     $clientLog = Join-Path $LogDir "client.out.log"
     $clientProcess = Start-SampleProcess -Name "client" -FilePath "dotnet" -LogDirectory $LogDir -Arguments @($clientAssembly, "--config", $configFiles["client"])
     Wait-GameQuestLogContains $clientLog "gamequest-client close-replay-armed player=player-alice"

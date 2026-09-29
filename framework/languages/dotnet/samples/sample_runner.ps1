@@ -1,5 +1,13 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$script:ZLinkSampleConfiguration = if ($env:ZLINK_SAMPLE_CONFIGURATION) {
+    if ($env:ZLINK_SAMPLE_CONFIGURATION -notin @("Debug", "Release")) {
+        throw "ZLINK_SAMPLE_CONFIGURATION must be Debug or Release."
+    }
+    $env:ZLINK_SAMPLE_CONFIGURATION
+} else {
+    "Debug"
+}
 
 # Same repository-detection rule Directory.Build.props/Directory.Packages.props use for
 # ZLinkSampleRepositoryDetected: the examples mirror never carries ../src, so this is
@@ -665,7 +673,7 @@ function Invoke-SampleDotnetBuild {
         # Package mode (local_nuget.ps1 was not sourced, above): no local-package digest or
         # native-asset verification to do, just build against whatever
         # Directory.Build.props/nuget.config resolved (PackageReference from nuget.org).
-        & dotnet build $Project --maxcpucount:1 --nologo --verbosity minimal
+        & dotnet build $Project -c $script:ZLinkSampleConfiguration --maxcpucount:1 --nologo --verbosity minimal
         if ($LASTEXITCODE -ne 0) { throw "dotnet build failed for $Project" }
         return
     }
@@ -674,7 +682,18 @@ function Invoke-SampleDotnetBuild {
         $candidate = Join-Path $PSScriptRoot '../../../../.artifacts/windows'
         if (Test-Path -LiteralPath (Join-Path $candidate 'nuget')) { $localRoot = $candidate }
     }
-    Invoke-ZlinkDotnetBuild -Project $Project -LocalPackageRoot $localRoot
+    Invoke-ZlinkDotnetBuild -Project $Project -LocalPackageRoot $localRoot -Configuration $script:ZLinkSampleConfiguration
+    if ($script:ZLinkSampleConfiguration -eq 'Release' -and [IO.Path]::GetExtension($Project) -eq '.sln') {
+        $solutionDirectory = Split-Path -Parent $Project
+        foreach ($line in Get-Content -LiteralPath $Project) {
+            if ($line -notmatch '^Project\("[^"]+"\)\s*=\s*"[^"]+",\s*"([^"]+\.csproj)"') {
+                continue
+            }
+            $projectPath = Join-Path $solutionDirectory $Matches[1]
+            & dotnet build $projectPath -c Release --no-restore --maxcpucount:1 --nologo --verbosity minimal
+            if ($LASTEXITCODE -ne 0) { throw "dotnet build failed for $projectPath" }
+        }
+    }
 }
 
 function Start-SampleProcess {
@@ -730,7 +749,7 @@ function Start-SampleDotnetAssembly {
     $projectPath = Resolve-Path $Project
     $projectDirectory = Split-Path -Parent $projectPath
     $projectName = [System.IO.Path]::GetFileNameWithoutExtension($projectPath)
-    $assembly = Join-Path $projectDirectory "bin/Debug/net8.0/$projectName.dll"
+    $assembly = Join-Path $projectDirectory "bin/$script:ZLinkSampleConfiguration/net8.0/$projectName.dll"
     $argumentList = @($assembly) + $Arguments
     return Start-SampleProcess -Name $Name -FilePath "dotnet" -Arguments $argumentList `
         -LogDirectory $LogDirectory
@@ -830,7 +849,7 @@ function Invoke-SampleDotnetRun {
         [string[]]$Arguments = @()
     )
 
-    & dotnet run --no-build --project $Project -- $Arguments
+    & dotnet run --no-build -c $script:ZLinkSampleConfiguration --project $Project -- $Arguments
     if ($LASTEXITCODE -ne 0) {
         throw "dotnet run failed for $Project"
     }

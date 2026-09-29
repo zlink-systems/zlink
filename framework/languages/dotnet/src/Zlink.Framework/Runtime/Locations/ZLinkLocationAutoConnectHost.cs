@@ -806,34 +806,42 @@ internal sealed class ZLinkLocationAutoConnectHost
     private sealed class SpotRouterExecutor(ZLinkSpotNodeRuntime node, bool connectRouter)
         : IZLinkAutoConnectExecutor
     {
-        public bool Connect(ZLinkAutoConnectTarget target)
+        public async ValueTask<bool> ConnectAsync(ZLinkAutoConnectTarget target)
         {
             node.ObserveRequestSourceFence(target);
-            node.ObservePeerExpectation(target);
+            await node.ObservePeerExpectationAsync(target).ConfigureAwait(false);
             if (!connectRouter || !target.InitiatesConnection)
                 return true;
-            return node.ConnectPeerAuto(
-                target.NodeRid,
-                target.Endpoint,
-                ZLinkTransportSecurityIdentity.ToAdmissionIdentity(target.SecurityIdentity)
-            );
+            return await node.ConnectPeerAutoAsync(
+                    target.NodeRid,
+                    target.Endpoint,
+                    ZLinkTransportSecurityIdentity.ToAdmissionIdentity(target.SecurityIdentity)
+                )
+                .ConfigureAwait(false);
         }
 
-        public bool Disconnect(ZLinkAutoConnectTarget target)
+        public async ValueTask<bool> DisconnectAsync(ZLinkAutoConnectTarget target)
         {
             // Row absence alone must not tear down a live admitted transport
             // (store outages and lease expiry windows ride established
             // connections, SF-B2). The non-initiating side has no auto-connect
             // intent of its own, so it removes only an admission-pending peer.
-            node.ForgetPeerExpectation(target);
+            await node.ForgetPeerExpectationAsync(target).ConfigureAwait(false);
             if (!target.InitiatesConnection)
-                return node.DisconnectPeerBeforeAdmission(target);
+                return await node.DisconnectPeerBeforeAdmissionAsync(target).ConfigureAwait(false);
             if (!connectRouter)
                 return true;
-            return node.DisconnectPeerAuto(target.NodeRid, target.Endpoint);
+            return await node.DisconnectPeerAutoAsync(target.NodeRid, target.Endpoint)
+                .ConfigureAwait(false);
         }
     }
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 }

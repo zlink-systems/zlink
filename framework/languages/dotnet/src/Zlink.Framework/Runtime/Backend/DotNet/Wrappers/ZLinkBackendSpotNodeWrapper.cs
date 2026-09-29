@@ -771,9 +771,25 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         _peerIntents[endpoint] = _node.ConnectPeer(endpoint);
     }
 
+    public async ValueTask ConnectPeerAsync(string endpoint)
+    {
+        _peerIntents[endpoint] = await _node.ConnectPeerAsync(endpoint).ConfigureAwait(false);
+    }
+
     public void ConnectPeer(RoutingId peerRid, string endpoint, string expectedSecurityIdentity)
     {
         _peerIntents[endpoint] = _node.ConnectPeer(endpoint, peerRid, expectedSecurityIdentity);
+    }
+
+    public async ValueTask ConnectPeerAsync(
+        RoutingId peerRid,
+        string endpoint,
+        string expectedSecurityIdentity
+    )
+    {
+        _peerIntents[endpoint] = await _node
+            .ConnectPeerAsync(endpoint, peerRid, expectedSecurityIdentity)
+            .ConfigureAwait(false);
     }
 
     public void SetPeerExpectation(
@@ -789,14 +805,32 @@ internal sealed class ZLinkBackendSpotNodeWrapper
             expectedLifecycleGeneration
         );
 
+    public ValueTask SetPeerExpectationAsync(
+        RoutingId peerRid,
+        string endpoint,
+        string expectedSecurityIdentity,
+        ulong expectedLifecycleGeneration
+    ) =>
+        _node.SetPeerExpectationAsync(
+            peerRid,
+            endpoint,
+            expectedSecurityIdentity,
+            expectedLifecycleGeneration
+        );
+
     public void RemovePeerExpectation(RoutingId peerRid, string endpoint) =>
         _node.RemovePeerExpectation(peerRid, endpoint);
 
-    public void DisconnectPeer(string endpoint)
+    public ValueTask RemovePeerExpectationAsync(RoutingId peerRid, string endpoint) =>
+        _node.RemovePeerExpectationAsync(peerRid, endpoint);
+
+    public void DisconnectPeer(string endpoint) => AwaitStateLane(DisconnectPeerAsync(endpoint));
+
+    public async ValueTask DisconnectPeerAsync(string endpoint)
     {
         _peerIntents.TryRemove(endpoint, out _);
 
-        foreach (var peer in _node.Peers())
+        foreach (var peer in await _node.PeersAsync().ConfigureAwait(false))
         {
             if (
                 !string.Equals(peer.Endpoint, endpoint, StringComparison.Ordinal)
@@ -808,7 +842,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper
                 // An endpoint can retain more than one intent during a RID
                 // replacement. Remove every matching lifetime so the next
                 // connection cannot inherit a stale native transport.
-                _node.RemovePeerConnection(peer.ConnectionIntentId);
+                await _node
+                    .RemovePeerConnectionAsync(peer.ConnectionIntentId)
+                    .ConfigureAwait(false);
             }
             catch (ZlinkException)
             {
@@ -822,12 +858,18 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         RoutingId peerRid,
         string endpoint,
         ulong lifecycleGeneration
+    ) => AwaitStateLane(DisconnectPeerBeforeAdmissionAsync(peerRid, endpoint, lifecycleGeneration));
+
+    public async ValueTask<bool> DisconnectPeerBeforeAdmissionAsync(
+        RoutingId peerRid,
+        string endpoint,
+        ulong lifecycleGeneration
     )
     {
         try
         {
             var admittedPeerFound = false;
-            foreach (var peer in _node.Peers())
+            foreach (var peer in await _node.PeersAsync().ConfigureAwait(false))
             {
                 if (
                     !string.Equals(peer.Endpoint, endpoint, StringComparison.Ordinal)
@@ -844,7 +886,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper
                     admittedPeerFound = true;
                     continue;
                 }
-                _node.RemovePeerConnectionIfNotAdmitted(peer.ConnectionIntentId);
+                await _node
+                    .RemovePeerConnectionIfNotAdmittedAsync(peer.ConnectionIntentId)
+                    .ConfigureAwait(false);
             }
             // Keep the reconciler target until an admitted peer loses liveness.
             // That transition can leave a Connecting intent behind, which the
@@ -857,11 +901,14 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         }
     }
 
-    public void DisconnectPeerLifetime(RoutingId peerRid, ulong lifecycleGeneration)
+    public void DisconnectPeerLifetime(RoutingId peerRid, ulong lifecycleGeneration) =>
+        AwaitStateLane(DisconnectPeerLifetimeAsync(peerRid, lifecycleGeneration));
+
+    public async ValueTask DisconnectPeerLifetimeAsync(RoutingId peerRid, ulong lifecycleGeneration)
     {
         try
         {
-            _node.DisconnectPeer(peerRid, lifecycleGeneration);
+            await _node.DisconnectPeerAsync(peerRid, lifecycleGeneration).ConfigureAwait(false);
         }
         catch (ZlinkException)
         {
@@ -952,6 +999,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         return _node.Status();
     }
 
+    public async ValueTask<MeshNodeStatus> MeshStatusAsync() =>
+        await _node.StatusAsync().ConfigureAwait(false);
+
     public MeshOperationId AllocateOperationId()
     {
         return _node.AllocateOperationId();
@@ -962,6 +1012,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         return _node.Peers();
     }
 
+    public async ValueTask<IReadOnlyList<MeshNodePeer>> MeshPeersAsync() =>
+        await _node.PeersAsync().ConfigureAwait(false);
+
     public IReadOnlyList<MeshPeerChannel> MeshPeerChannels(
         RoutingId peerRid,
         ulong lifecycleGeneration
@@ -969,6 +1022,11 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     {
         return _node.PeerChannels(peerRid, lifecycleGeneration);
     }
+
+    public async ValueTask<IReadOnlyList<MeshPeerChannel>> MeshPeerChannelsAsync(
+        RoutingId peerRid,
+        ulong lifecycleGeneration
+    ) => await _node.PeerChannelsAsync(peerRid, lifecycleGeneration).ConfigureAwait(false);
 
     public IMeshNodeMonitor OpenMeshMonitor(MeshMonitorEventMask events = MeshMonitorEventMask.All)
     {
@@ -1643,10 +1701,23 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         }
     }
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        operation.GetAwaiter().GetResult();
+    }
 
     //  Spec 32-framework-error-model:91-92 — an Ok terminal whose reply lacks
     //  the operation-specific completion cannot be processed: ProtocolError,

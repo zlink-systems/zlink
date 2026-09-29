@@ -12,15 +12,15 @@ internal sealed class RecordingAutoConnectExecutor : IZLinkAutoConnectExecutor
 
     public bool DisconnectSucceeds { get; set; } = true;
 
-    public bool Connect(ZLinkAutoConnectTarget target)
+    public ValueTask<bool> ConnectAsync(ZLinkAutoConnectTarget target)
     {
         Connected.Add(target);
-        return ConnectSucceeds;
+        return ValueTask.FromResult(ConnectSucceeds);
     }
 
-    public bool Disconnect(ZLinkAutoConnectTarget target)
+    public ValueTask<bool> DisconnectAsync(ZLinkAutoConnectTarget target)
     {
         Disconnected.Add(target);
-        return DisconnectSucceeds;
+        return ValueTask.FromResult(DisconnectSucceeds);
     }
 }

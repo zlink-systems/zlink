@@ -507,6 +507,12 @@ internal sealed class ZLinkClientServerRuntimeService(
 
     private sealed record SequenceState(ulong Sequence, Fingerprint Fingerprint);
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 }

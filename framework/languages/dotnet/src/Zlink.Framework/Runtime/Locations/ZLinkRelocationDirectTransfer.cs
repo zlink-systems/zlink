@@ -220,10 +220,23 @@ internal sealed class ZLinkRelocationChunkAssembler
         );
     }
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        operation.GetAwaiter().GetResult();
+    }
 }
 
 /// <summary>
@@ -350,8 +363,21 @@ internal sealed class ZLinkRelocationTransferBudget
         return admitted;
     }
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        operation.GetAwaiter().GetResult();
+    }
 }

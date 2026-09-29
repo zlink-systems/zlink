@@ -26,9 +26,17 @@ internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration regis
             );
 
             bundle.OwnManualConnectionAttachment(
-                channel.Client.ManualConnections.Attach(
-                    bundle.ConnectManual,
-                    bundle.DisconnectManual
+                await channel.Client.ManualConnections.AttachAsync(
+                    endpoint =>
+                    {
+                        bundle.ConnectManual(endpoint);
+                        return ValueTask.CompletedTask;
+                    },
+                    endpoint =>
+                    {
+                        bundle.DisconnectManual(endpoint);
+                        return ValueTask.CompletedTask;
+                    }
                 )
             );
             return bundle;
@@ -139,9 +147,17 @@ internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration regis
 
             if (channel.Subscriber.AcquisitionMode == ZLinkPeerAcquisitionMode.Manual)
                 bundle.OwnManualConnectionAttachment(
-                    channel.Subscriber.ManualConnections.Attach(
-                        bundle.ConnectManual,
-                        bundle.DisconnectManual
+                    await channel.Subscriber.ManualConnections.AttachAsync(
+                        endpoint =>
+                        {
+                            bundle.ConnectManual(endpoint);
+                            return ValueTask.CompletedTask;
+                        },
+                        endpoint =>
+                        {
+                            bundle.DisconnectManual(endpoint);
+                            return ValueTask.CompletedTask;
+                        }
                     )
                 );
 

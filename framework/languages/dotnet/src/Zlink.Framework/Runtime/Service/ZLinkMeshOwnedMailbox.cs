@@ -68,6 +68,8 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
 
     internal int Count => AwaitStateLane(_lane.RunAsync(() => _records.Count));
 
+    internal ValueTask<int> CountAsync() => _lane.RunAsync(() => _records.Count);
+
     internal bool TryEnqueue(ZLinkMeshQueuedRecord record)
     {
         var pendingBytes = record.PendingBytes;
@@ -97,23 +99,33 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
     )
     {
         var result = AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                var admitted = _applicationAdmissionRecords == _records.Count;
-                if (
-                    _claimedRecordCount >= 0
-                    || _records.Count == 0
-                    || (requireApplicationAdmission && !admitted)
-                )
-                    return (Ready: false, Count: 0, Admitted: false);
-                if (claim)
-                    _claimedRecordCount = _records.Count;
-                return (Ready: true, Count: _records.Count, Admitted: admitted);
-            })
+            _lane.RunAsync(() => TryClaimOnLane(requireApplicationAdmission, claim))
         );
         count = result.Count;
         applicationAdmissionReserved = result.Admitted;
         return result.Ready;
+    }
+
+    internal ValueTask<(bool Ready, int Count, bool Admitted)> TryClaimAsync(
+        bool requireApplicationAdmission,
+        bool claim
+    ) => _lane.RunAsync(() => TryClaimOnLane(requireApplicationAdmission, claim));
+
+    private (bool Ready, int Count, bool Admitted) TryClaimOnLane(
+        bool requireApplicationAdmission,
+        bool claim
+    )
+    {
+        var admitted = _applicationAdmissionRecords == _records.Count;
+        if (
+            _claimedRecordCount >= 0
+            || _records.Count == 0
+            || (requireApplicationAdmission && !admitted)
+        )
+            return (false, 0, false);
+        if (claim)
+            _claimedRecordCount = _records.Count;
+        return (true, _records.Count, admitted);
     }
 
     internal bool Drain(MeshReceiveBatch batch, int maximumRecords)
@@ -175,10 +187,23 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
             record.Dispose();
     }
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        operation.GetAwaiter().GetResult();
+    }
 }
 
 internal sealed class ZLinkMeshQueuedRecord : IDisposable

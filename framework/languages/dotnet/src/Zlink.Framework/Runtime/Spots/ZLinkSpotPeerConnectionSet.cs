@@ -23,31 +23,36 @@ internal sealed class ZLinkSpotPeerConnectionSet
 
     public ZLinkSpotAutoPeerClaim AcquirePeerAuto(RoutingId? peerRid, string endpoint)
     {
-        return AwaitStateLane(
-            _lane.RunAsync<ZLinkSpotAutoPeerClaim>(() =>
-            {
-                if (_routerAuto.TryGetValue(endpoint, out var current))
-                {
-                    if (SamePeer(current, peerRid))
-                        return new(ZLinkSpotAutoPeerClaimKind.AlreadyOwned, null);
+        return AwaitStateLane(AcquirePeerAutoAsync(peerRid, endpoint));
+    }
 
-                    _routerAuto[endpoint] = peerRid;
-                    return new(
-                        _routerManual.Contains(endpoint)
-                            ? ZLinkSpotAutoPeerClaimKind.SuppressedByManual
-                            : ZLinkSpotAutoPeerClaimKind.Replaced,
-                        current
-                    );
-                }
+    public ValueTask<ZLinkSpotAutoPeerClaim> AcquirePeerAutoAsync(
+        RoutingId? peerRid,
+        string endpoint
+    ) => _lane.RunAsync(() => AcquirePeerAutoOnLane(peerRid, endpoint));
 
-                _routerAuto[endpoint] = peerRid;
-                return new(
-                    _routerManual.Contains(endpoint)
-                        ? ZLinkSpotAutoPeerClaimKind.SuppressedByManual
-                        : ZLinkSpotAutoPeerClaimKind.Added,
-                    null
-                );
-            })
+    private ZLinkSpotAutoPeerClaim AcquirePeerAutoOnLane(RoutingId? peerRid, string endpoint)
+    {
+        if (_routerAuto.TryGetValue(endpoint, out var current))
+        {
+            if (SamePeer(current, peerRid))
+                return new(ZLinkSpotAutoPeerClaimKind.AlreadyOwned, null);
+
+            _routerAuto[endpoint] = peerRid;
+            return new(
+                _routerManual.Contains(endpoint)
+                    ? ZLinkSpotAutoPeerClaimKind.SuppressedByManual
+                    : ZLinkSpotAutoPeerClaimKind.Replaced,
+                current
+            );
+        }
+
+        _routerAuto[endpoint] = peerRid;
+        return new(
+            _routerManual.Contains(endpoint)
+                ? ZLinkSpotAutoPeerClaimKind.SuppressedByManual
+                : ZLinkSpotAutoPeerClaimKind.Added,
+            null
         );
     }
 
@@ -58,19 +63,22 @@ internal sealed class ZLinkSpotPeerConnectionSet
 
     public bool RemovePeerAuto(RoutingId? peerRid, string endpoint)
     {
-        return AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                if (
-                    !_routerAuto.TryGetValue(endpoint, out var current)
-                    || peerRid is { Size: > 0 } expected && !SamePeer(current, expected)
-                )
-                    return false;
+        return AwaitStateLane(RemovePeerAutoAsync(peerRid, endpoint));
+    }
 
-                _routerAuto.Remove(endpoint);
-                return !IsOwned(endpoint);
-            })
-        );
+    public ValueTask<bool> RemovePeerAutoAsync(RoutingId? peerRid, string endpoint) =>
+        _lane.RunAsync(() => RemovePeerAutoOnLane(peerRid, endpoint));
+
+    private bool RemovePeerAutoOnLane(RoutingId? peerRid, string endpoint)
+    {
+        if (
+            !_routerAuto.TryGetValue(endpoint, out var current)
+            || peerRid is { Size: > 0 } expected && !SamePeer(current, expected)
+        )
+            return false;
+
+        _routerAuto.Remove(endpoint);
+        return !IsOwned(endpoint);
     }
 
     public void RollbackPeerManual(string endpoint) =>
@@ -82,22 +90,24 @@ internal sealed class ZLinkSpotPeerConnectionSet
         );
 
     public void RollbackPeerAuto(string endpoint) =>
-        AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                _routerAuto.Remove(endpoint);
-            })
-        );
+        AwaitStateLane(RollbackPeerAutoAsync(endpoint));
+
+    public ValueTask RollbackPeerAutoAsync(string endpoint) =>
+        _lane.RunAsync(() =>
+        {
+            _routerAuto.Remove(endpoint);
+        });
 
     public void RestorePeerAuto(string endpoint, RoutingId? peerRid)
     {
-        AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                _routerAuto[endpoint] = peerRid;
-            })
-        );
+        AwaitStateLane(RestorePeerAutoAsync(endpoint, peerRid));
     }
+
+    public ValueTask RestorePeerAutoAsync(string endpoint, RoutingId? peerRid) =>
+        _lane.RunAsync(() =>
+        {
+            _routerAuto[endpoint] = peerRid;
+        });
 
     public void RetainManualPeerRid(string endpoint, RoutingId peerRid)
     {
@@ -137,10 +147,23 @@ internal sealed class ZLinkSpotPeerConnectionSet
             ? leftRid == rightRid
             : left is not { Size: > 0 } && right is not { Size: > 0 };
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
         operation.GetAwaiter().GetResult();
+    }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 }
 
 internal enum ZLinkSpotAutoPeerClaimKind

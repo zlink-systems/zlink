@@ -25,6 +25,7 @@ internal sealed class BingoRoomDrawTimerHandler : IZLinkSpotTimerHandler<BingoRo
             await spot.LeaveFinishedActorsAsync(cancellationToken);
             // This is the final Framework operation in the completed round turn.
             spot.DeferRelocationAtRoundBoundary();
+            spot.CloseIfEmpty(cancellationToken);
         }
     }
 }

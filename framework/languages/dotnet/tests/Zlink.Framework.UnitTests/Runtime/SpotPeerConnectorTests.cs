@@ -67,14 +67,20 @@ public sealed class SpotPeerConnectorTests
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
             ArgumentNullException.ThrowIfNull(targetMethod);
-            if (targetMethod.Name != nameof(IZLinkBackendSpotNode.ConnectPeer))
+            if (
+                targetMethod.Name
+                is not nameof(IZLinkBackendSpotNode.ConnectPeer)
+                    and not nameof(IZLinkBackendSpotNode.ConnectPeerAsync)
+            )
                 throw new NotSupportedException(targetMethod.Name);
 
             ConnectAttempts++;
             if (ConnectAttempts == 1)
                 throw new ZlinkConnectException(ZlinkConnectException.ErrorCode.Busy);
 
-            return null;
+            return targetMethod.Name == nameof(IZLinkBackendSpotNode.ConnectPeerAsync)
+                ? ValueTask.CompletedTask
+                : null;
         }
     }
 
@@ -85,11 +91,19 @@ public sealed class SpotPeerConnectorTests
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
             ArgumentNullException.ThrowIfNull(targetMethod);
-            if (targetMethod.Name != nameof(IZLinkBackendSpotNode.DisconnectPeerBeforeAdmission))
+            if (
+                targetMethod.Name
+                is not nameof(IZLinkBackendSpotNode.DisconnectPeerBeforeAdmission)
+                    and not nameof(IZLinkBackendSpotNode.DisconnectPeerBeforeAdmissionAsync)
+            )
                 throw new NotSupportedException(targetMethod.Name);
 
             Cleanup = ((RoutingId)args![0]!, (string)args[1]!, (ulong)args[2]!);
-            return true;
+            return
+                targetMethod.Name
+                == nameof(IZLinkBackendSpotNode.DisconnectPeerBeforeAdmissionAsync)
+                ? ValueTask.FromResult(true)
+                : true;
         }
     }
 
@@ -111,13 +125,20 @@ public sealed class SpotPeerConnectorTests
             switch (targetMethod.Name)
             {
                 case nameof(IZLinkBackendSpotNode.ConnectPeer) when args is { Length: 3 }:
+                case nameof(IZLinkBackendSpotNode.ConnectPeerAsync) when args is { Length: 3 }:
                     ConnectedRids.Add((RoutingId)args[0]!);
-                    return null;
+                    return targetMethod.Name == nameof(IZLinkBackendSpotNode.ConnectPeerAsync)
+                        ? ValueTask.CompletedTask
+                        : null;
                 case nameof(IZLinkBackendSpotNode.DisconnectPeer):
+                case nameof(IZLinkBackendSpotNode.DisconnectPeerAsync):
                     DisconnectedEndpoints.Add((string)args![0]!);
-                    return null;
+                    return targetMethod.Name == nameof(IZLinkBackendSpotNode.DisconnectPeerAsync)
+                        ? ValueTask.CompletedTask
+                        : null;
                 case nameof(IZLinkBackendSpotNode.MeshPeers):
-                    return ConnectedRids
+                case nameof(IZLinkBackendSpotNode.MeshPeersAsync):
+                    var peers = ConnectedRids
                         .Select(
                             (rid, index) =>
                                 new MeshNodePeer(
@@ -134,9 +155,17 @@ public sealed class SpotPeerConnectorTests
                                 )
                         )
                         .ToArray();
+                    if (targetMethod.Name == nameof(IZLinkBackendSpotNode.MeshPeersAsync))
+                        return ValueTask.FromResult<IReadOnlyList<MeshNodePeer>>(peers);
+                    return peers;
                 case nameof(IZLinkBackendSpotNode.DisconnectPeerBeforeAdmission):
+                case nameof(IZLinkBackendSpotNode.DisconnectPeerBeforeAdmissionAsync):
                     AdmissionCleanup = ((RoutingId)args![0]!, (string)args[1]!, (ulong)args[2]!);
-                    return true;
+                    return
+                        targetMethod.Name
+                        == nameof(IZLinkBackendSpotNode.DisconnectPeerBeforeAdmissionAsync)
+                        ? ValueTask.FromResult(true)
+                        : true;
                 default:
                     throw new NotSupportedException(targetMethod.Name);
             }

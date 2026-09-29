@@ -1061,7 +1061,10 @@ internal sealed class ZLinkActorRemoteJoiner(
                     targetDescriptor,
                     prepare.TargetAttemptGeneration,
                     deadline.Monotonic,
-                    () => runtime.LocationLifecycle?.IsOwnerLeaseValid(sourceOwner) == true,
+                    () =>
+                        runtime.LocationLifecycle is { } lifecycle
+                            ? lifecycle.IsOwnerLeaseValidAsync(sourceOwner)
+                            : ValueTask.FromResult(false),
                     token =>
                         ZLinkStandaloneActorRelocationRuntime.SubmitBoundaryAsync(
                             canonical,

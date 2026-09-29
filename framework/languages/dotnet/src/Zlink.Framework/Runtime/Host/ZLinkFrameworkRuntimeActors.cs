@@ -695,13 +695,15 @@ internal sealed partial class ZLinkFrameworkRuntime
                     ZLinkFrameworkErrorKind.ProtocolError,
                     $"Actor '{actorId}' relocation session route has incomplete fencing identity."
                 );
-            actorState.StageRelocationSessionRoute(
-                request.HandoffId,
-                boundRoute,
-                boundRoute.IsBound
-                    ? ZLinkRemoteActorJoinPackets.DecodeSessionRelocationContext(request)
-                    : default
-            );
+            await actorState
+                .StageRelocationSessionRouteAsync(
+                    request.HandoffId,
+                    boundRoute,
+                    boundRoute.IsBound
+                        ? ZLinkRemoteActorJoinPackets.DecodeSessionRelocationContext(request)
+                        : default
+                )
+                .ConfigureAwait(false);
             await PrepareTransferredActorTargetAsync(
                     target,
                     creation.Actor,
@@ -1415,11 +1417,13 @@ internal sealed partial class ZLinkFrameworkRuntime
             )
             {
                 var committedAuthority = publishedActorAuthority;
-                actorState.StageRelocationSessionRoute(
-                    request.HandoffId,
-                    recoveryBoundRoute,
-                    ZLinkRemoteActorJoinPackets.DecodeSessionRelocationContext(request)
-                );
+                await actorState
+                    .StageRelocationSessionRouteAsync(
+                        request.HandoffId,
+                        recoveryBoundRoute,
+                        ZLinkRemoteActorJoinPackets.DecodeSessionRelocationContext(request)
+                    )
+                    .ConfigureAwait(false);
                 actorState.MarkRelocationSessionAuthorityCommitted(
                     request.HandoffId,
                     actorRef,

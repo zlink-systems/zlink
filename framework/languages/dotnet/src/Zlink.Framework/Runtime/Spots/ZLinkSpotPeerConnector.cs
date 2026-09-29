@@ -54,96 +54,103 @@ internal sealed class ZLinkSpotPeerConnector(
         RoutingId? peerRid,
         string endpoint,
         string expectedSecurityIdentity
-    )
-    {
-        return AwaitStateLane(
-            _lane.RunAsync(() =>
+    ) => AwaitStateLane(ConnectPeerAutoAsync(peerRid, endpoint, expectedSecurityIdentity));
+
+    public ValueTask<bool> ConnectPeerAutoAsync(
+        RoutingId? peerRid,
+        string endpoint,
+        string expectedSecurityIdentity
+    ) =>
+        _lane.RunAwaitingAsync(async () =>
+        {
+            var claim = await connections
+                .AcquirePeerAutoAsync(peerRid, endpoint)
+                .ConfigureAwait(false);
+            ZLinkFrameworkDebugLog.SpotDiscovery(
+                $"spot_peer_claim peer={peerRid?.ToString() ?? "<unknown>"} endpoint={endpoint} kind={claim.Kind} "
+                    + $"previous={claim.PreviousPeerRid?.ToString() ?? "<unknown>"}"
+            );
+            if (
+                claim.Kind
+                is ZLinkSpotAutoPeerClaimKind.AlreadyOwned
+                    or ZLinkSpotAutoPeerClaimKind.SuppressedByManual
+            )
+                return true;
+
+            try
             {
-                var claim = connections.AcquirePeerAuto(peerRid, endpoint);
-                ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"spot_peer_claim peer={peerRid?.ToString() ?? "<unknown>"} endpoint={endpoint} kind={claim.Kind} "
-                        + $"previous={claim.PreviousPeerRid?.ToString() ?? "<unknown>"}"
-                );
-                if (
-                    claim.Kind
-                    is ZLinkSpotAutoPeerClaimKind.AlreadyOwned
-                        or ZLinkSpotAutoPeerClaimKind.SuppressedByManual
-                )
-                    return true;
-
-                try
+                if (claim.Kind == ZLinkSpotAutoPeerClaimKind.Replaced)
                 {
-                    if (claim.Kind == ZLinkSpotAutoPeerClaimKind.Replaced)
-                    {
-                        ZLinkFrameworkDebugLog.SpotDiscovery(
-                            $"spot_peer_replace peer={peerRid?.ToString() ?? "<unknown>"} endpoint={endpoint}"
-                        );
-                        node.DisconnectPeer(endpoint);
-                    }
+                    ZLinkFrameworkDebugLog.SpotDiscovery(
+                        $"spot_peer_replace peer={peerRid?.ToString() ?? "<unknown>"} endpoint={endpoint}"
+                    );
+                    await node.DisconnectPeerAsync(endpoint).ConfigureAwait(false);
+                }
 
-                    if (peerRid is { Size: > 0 } rid)
-                        ConnectPeer(rid, endpoint, expectedSecurityIdentity);
-                    else
-                        ConnectPeer(endpoint);
-                    return true;
-                }
-                catch
-                {
-                    // A failed replacement leaves no physical connection that
-                    // the old target can safely reuse. Remove the claim so the
-                    // reconciler retries the currently desired target.
-                    connections.RollbackPeerAuto(endpoint);
-                    return false;
-                }
-            })
-        );
-    }
+                if (peerRid is { Size: > 0 } rid)
+                    await node.ConnectPeerAsync(rid, endpoint, expectedSecurityIdentity)
+                        .ConfigureAwait(false);
+                else
+                    await node.ConnectPeerAsync(endpoint).ConfigureAwait(false);
+                return true;
+            }
+            catch
+            {
+                // A failed replacement leaves no physical connection that
+                // the old target can safely reuse. Remove the claim so the
+                // reconciler retries the currently desired target.
+                await connections.RollbackPeerAutoAsync(endpoint).ConfigureAwait(false);
+                return false;
+            }
+        });
 
     public bool DisconnectPeerAuto(string endpoint) => DisconnectPeerAuto(peerRid: null, endpoint);
 
-    public bool DisconnectPeerAuto(RoutingId? peerRid, string endpoint)
-    {
-        return AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                var result = DisconnectAuto(
+    public bool DisconnectPeerAuto(RoutingId? peerRid, string endpoint) =>
+        AwaitStateLane(DisconnectPeerAutoAsync(peerRid, endpoint));
+
+    public ValueTask<bool> DisconnectPeerAutoAsync(RoutingId? peerRid, string endpoint) =>
+        _lane.RunAwaitingAsync(async () =>
+        {
+            var result = await DisconnectAutoAsync(
                     peerRid,
                     endpoint,
-                    () => connections.RemovePeerAuto(peerRid, endpoint),
-                    () => connections.RestorePeerAuto(endpoint, peerRid)
-                );
-                ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"spot_peer_release peer={peerRid?.ToString() ?? "<unknown>"} endpoint={endpoint} result={result}"
-                );
-                return result;
-            })
-        );
-    }
+                    () => connections.RemovePeerAutoAsync(peerRid, endpoint),
+                    () => connections.RestorePeerAutoAsync(endpoint, peerRid)
+                )
+                .ConfigureAwait(false);
+            ZLinkFrameworkDebugLog.SpotDiscovery(
+                $"spot_peer_release peer={peerRid?.ToString() ?? "<unknown>"} endpoint={endpoint} result={result}"
+            );
+            return result;
+        });
 
     public bool DisconnectPeerBeforeAdmission(
         RoutingId peerRid,
         string endpoint,
         ulong lifecycleGeneration
-    )
-    {
-        return AwaitStateLane(
-            _lane.RunAsync(() =>
+    ) => AwaitStateLane(DisconnectPeerBeforeAdmissionAsync(peerRid, endpoint, lifecycleGeneration));
+
+    public ValueTask<bool> DisconnectPeerBeforeAdmissionAsync(
+        RoutingId peerRid,
+        string endpoint,
+        ulong lifecycleGeneration
+    ) =>
+        _lane.RunAwaitingAsync(async () =>
+        {
+            try
             {
-                try
-                {
-                    return node.DisconnectPeerBeforeAdmission(
-                        peerRid,
-                        endpoint,
-                        lifecycleGeneration
-                    );
-                }
-                catch
-                {
-                    return false;
-                }
-            })
-        );
-    }
+                return await node.DisconnectPeerBeforeAdmissionAsync(
+                    peerRid,
+                    endpoint,
+                    lifecycleGeneration
+                );
+            }
+            catch
+            {
+                return false;
+            }
+        });
 
     private bool ConnectPeerManual(string endpoint)
     {
@@ -192,14 +199,14 @@ internal sealed class ZLinkSpotPeerConnector(
         }
     }
 
-    private bool DisconnectAuto(
+    private async ValueTask<bool> DisconnectAutoAsync(
         RoutingId? peerRid,
         string endpoint,
-        Func<bool> release,
-        Action restore
+        Func<ValueTask<bool>> release,
+        Func<ValueTask> restore
     )
     {
-        var released = release();
+        var released = await release().ConfigureAwait(false);
         // A different auto target may already own the endpoint after a RID
         // replacement. The old physical peer still requires exact cleanup;
         // only an endpoint-only release can return without a transport step.
@@ -209,25 +216,25 @@ internal sealed class ZLinkSpotPeerConnector(
         {
             if (peerRid is { Size: > 0 } rid)
             {
-                DisconnectPeerLifetime(rid, endpoint);
+                await DisconnectPeerLifetimeAsync(rid, endpoint).ConfigureAwait(false);
             }
             else
             {
-                node.DisconnectPeer(endpoint);
+                await node.DisconnectPeerAsync(endpoint).ConfigureAwait(false);
             }
             return true;
         }
         catch
         {
             if (released)
-                restore();
+                await restore().ConfigureAwait(false);
             return false;
         }
     }
 
-    private void DisconnectPeerLifetime(RoutingId peerRid, string endpoint)
+    private async ValueTask DisconnectPeerLifetimeAsync(RoutingId peerRid, string endpoint)
     {
-        foreach (var peer in node.MeshPeers())
+        foreach (var peer in await node.MeshPeersAsync().ConfigureAwait(false))
         {
             if (
                 peer.RoutingId != peerRid
@@ -237,11 +244,17 @@ internal sealed class ZLinkSpotPeerConnector(
 
             if (peer.State is MeshPeerState.Admitted or MeshPeerState.Draining)
             {
-                node.DisconnectPeerLifetime(peerRid, peer.LifecycleGeneration);
+                await node.DisconnectPeerLifetimeAsync(peerRid, peer.LifecycleGeneration)
+                    .ConfigureAwait(false);
             }
             else
             {
-                node.DisconnectPeerBeforeAdmission(peerRid, endpoint, peer.LifecycleGeneration);
+                await node.DisconnectPeerBeforeAdmissionAsync(
+                        peerRid,
+                        endpoint,
+                        peer.LifecycleGeneration
+                    )
+                    .ConfigureAwait(false);
             }
             return;
         }
@@ -257,8 +270,21 @@ internal sealed class ZLinkSpotPeerConnector(
         node.ConnectPeer(peerRid, endpoint, expectedSecurityIdentity);
     }
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        operation.GetAwaiter().GetResult();
+    }
 }

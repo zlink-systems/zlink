@@ -62,6 +62,28 @@ internal sealed class ZLinkRuntimeTaskRunner
         return TryStart(name, callback, TaskCreationOptions.None, out _);
     }
 
+    public async ValueTask<bool> TryRunDetachedAsync(
+        string name,
+        Func<CancellationToken, ValueTask> callback
+    )
+    {
+        var state = CreateTaskState(name, callback);
+        var (acceptsRunnerExecution, acceptsOwnerExecution) = AdmissionPermissions();
+        if (
+            !await _supervisor
+                .TryStartAsync(
+                    this,
+                    state.Completion.Task,
+                    acceptsRunnerExecution,
+                    acceptsOwnerExecution
+                )
+                .ConfigureAwait(false)
+        )
+            return false;
+        ScheduleAccepted(state, TaskCreationOptions.None);
+        return true;
+    }
+
     public Task Run(string name, Func<CancellationToken, ValueTask> callback)
     {
         return TryStart(name, callback, TaskCreationOptions.None, out var task)
@@ -93,20 +115,9 @@ internal sealed class ZLinkRuntimeTaskRunner
         out Task task
     )
     {
-        var completion = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        var state = new TaskState(this, name, callback, _errorSink, _shutdownToken, completion);
-        var startedTask = completion.Task;
-        var acceptsRunnerExecution =
-            AmbientExecution.Value is { IsActive: true } lease
-            && (
-                ReferenceEquals(lease.Runner, this)
-                || _ownsSupervisor && ReferenceEquals(lease.Owner, _executionOwner)
-            );
-        var acceptsOwnerExecution =
-            AmbientExecution.Value is { IsActive: true } ownerLease
-            && ReferenceEquals(ownerLease.Owner, _executionOwner);
+        var state = CreateTaskState(name, callback);
+        var startedTask = state.Completion.Task;
+        var (acceptsRunnerExecution, acceptsOwnerExecution) = AdmissionPermissions();
         var accepted = _supervisor.TryStart(
             this,
             startedTask,
@@ -120,6 +131,36 @@ internal sealed class ZLinkRuntimeTaskRunner
             return false;
         }
         task = startedTask;
+        ScheduleAccepted(state, creationOptions);
+        return true;
+    }
+
+    private TaskState CreateTaskState(string name, Func<CancellationToken, ValueTask> callback) =>
+        new(
+            this,
+            name,
+            callback,
+            _errorSink,
+            _shutdownToken,
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
+        );
+
+    private (bool AcceptsRunnerExecution, bool AcceptsOwnerExecution) AdmissionPermissions()
+    {
+        var acceptsRunnerExecution =
+            AmbientExecution.Value is { IsActive: true } lease
+            && (
+                ReferenceEquals(lease.Runner, this)
+                || _ownsSupervisor && ReferenceEquals(lease.Owner, _executionOwner)
+            );
+        var acceptsOwnerExecution =
+            AmbientExecution.Value is { IsActive: true } ownerLease
+            && ReferenceEquals(ownerLease.Owner, _executionOwner);
+        return (acceptsRunnerExecution, acceptsOwnerExecution);
+    }
+
+    private static void ScheduleAccepted(TaskState state, TaskCreationOptions creationOptions)
+    {
         // Scheduling happens after supervisor admission, outside its state lane.
         // The callback carries its own completion directly; no outer Task<Task>,
         // Unwrap task or completion-registration task is needed.
@@ -143,7 +184,6 @@ internal sealed class ZLinkRuntimeTaskRunner
                 state,
                 preferLocal: false
             );
-        return true;
     }
 
     private void RemoveCompletedTask(Task completed)
@@ -234,20 +274,49 @@ internal sealed class ZLinkRuntimeTaskSupervisor
         bool acceptsOwnerExecution
     )
     {
-        return AwaitStateLane(
-            _lane.RunAsync(() =>
+        bool Admit() => AdmitOnLane(runner, task, acceptsRunnerExecution, acceptsOwnerExecution);
+#if DEBUG
+        // Reject before queueing: a post-admission guard failure would leave a task
+        // in the active set without scheduling its worker.
+        if (ZLinkInfrastructureWaitGuard.IsInfrastructureContext)
+        {
+            if (!_lane.TryRunInline(Admit, out var accepted))
             {
-                if (!runner.AcceptingOnSupervisorLane && !acceptsRunnerExecution)
-                    return false;
+                ZLinkInfrastructureWaitGuard.ThrowIfBlocking(false, "task supervisor admission");
+                throw new InvalidOperationException(
+                    "Task supervisor admission requires a lane turn."
+                );
+            }
+            return accepted;
+        }
+#endif
+        return AwaitStateLane(_lane.RunAsync(Admit));
+    }
 
-                if (!_accepting && !acceptsOwnerExecution)
-                    return false;
-
-                runner.ActiveOnSupervisorLane.Add(task);
-                _active.Add(task);
-                return true;
-            })
+    public ValueTask<bool> TryStartAsync(
+        ZLinkRuntimeTaskRunner runner,
+        Task task,
+        bool acceptsRunnerExecution,
+        bool acceptsOwnerExecution
+    ) =>
+        _lane.RunAsync(() =>
+            AdmitOnLane(runner, task, acceptsRunnerExecution, acceptsOwnerExecution)
         );
+
+    private bool AdmitOnLane(
+        ZLinkRuntimeTaskRunner runner,
+        Task task,
+        bool acceptsRunnerExecution,
+        bool acceptsOwnerExecution
+    )
+    {
+        if (!runner.AcceptingOnSupervisorLane && !acceptsRunnerExecution)
+            return false;
+        if (!_accepting && !acceptsOwnerExecution)
+            return false;
+        runner.ActiveOnSupervisorLane.Add(task);
+        _active.Add(task);
+        return true;
     }
 
     public void Remove(ZLinkRuntimeTaskRunner runner, Task completed)
@@ -285,6 +354,9 @@ internal sealed class ZLinkRuntimeTaskSupervisor
         }
     }
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        ZLinkInfrastructureWaitGuard.ThrowIfBlocking(operation.IsCompleted, "task supervisor lane");
+        return operation.GetAwaiter().GetResult();
+    }
 }

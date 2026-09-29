@@ -223,7 +223,7 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         if (forceStopToken.CanBeCanceled)
             Capture(ForceStopTokenSource.Cancel);
         Capture(StopTokenSource.Cancel);
-        Capture(ApplicationJobQueue.Dispose);
+        await CaptureAsync(ApplicationJobQueue.DisposeAsync).ConfigureAwait(false);
         foreach (var node in resources.SpotNodes)
             Capture(node.RequestStop);
         foreach (var stream in resources.StreamNodes)

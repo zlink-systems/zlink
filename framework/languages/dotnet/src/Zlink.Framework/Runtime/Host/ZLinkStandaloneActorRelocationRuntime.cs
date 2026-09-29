@@ -57,6 +57,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
     private readonly ConcurrentDictionary<AttemptKey, AttemptSlot> _targetAttempts = new();
     private int _targetAttemptAdmissionSealed;
 
+    internal string[] SnapshotPendingAttemptNames() =>
+        _targetAttempts.Keys.Select(static key => key.ToString()).ToArray();
+
     internal async ValueTask<ZLinkStandaloneActorRelocationResult> RelocateSourceAsync(
         ZLinkActorRuntimeState actorState,
         ZLinkMeshNodeDescriptor target,
@@ -221,7 +224,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             // Switch ingress to the bounded final hold while the immutable
             // journal is built. The exact commit boundary is frozen only
             // after the source fences in the initial journal are verified.
-            var sourceNode = runtime.GetSpotNodeRuntime(sourceRef.Value.NodeRid);
+            var sourceNode = await runtime
+                .GetSpotNodeRuntimeAsync(sourceRef.Value.NodeRid)
+                .ConfigureAwait(false);
             //  Spec 30 §11: the SafeToShutdown obligation starts at
             //  seal, not at cutover — waiting until CommitMessageFollow
             //  would let a shutdown query race the seal-to-cutover
@@ -235,8 +240,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 .ValidateAsync(
                     authorityStore,
                     sourceAuthority.MeshName,
-                    sourceNode.Node.MeshStatus(),
-                    sourceNode.Node.MeshPeers(),
+                    await sourceNode.Node.MeshStatusAsync().ConfigureAwait(false),
+                    await sourceNode.Node.MeshPeersAsync().ConfigureAwait(false),
                     semanticSealRecords,
                     RemainingTimeout(deadline),
                     cancellationToken
@@ -325,8 +330,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 .ValidateAsync(
                     authorityStore,
                     sourceAuthority.MeshName,
-                    sourceNode.Node.MeshStatus(),
-                    sourceNode.Node.MeshPeers(),
+                    await sourceNode.Node.MeshStatusAsync().ConfigureAwait(false),
+                    await sourceNode.Node.MeshPeersAsync().ConfigureAwait(false),
                     acceptedRecords,
                     RemainingTimeout(deadline),
                     cancellationToken
@@ -369,7 +374,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     target,
                     prepare.TargetAttemptGeneration,
                     deadline,
-                    () => IsOwnerLeaseValid(found.Snapshot),
+                    () => IsOwnerLeaseValidAsync(found.Snapshot),
                     token =>
                         SubmitBoundaryAsync(boundaryCanonical, target.Rid, data, cutover, token),
                     registration.Locations.Options.PollingInterval,
@@ -635,7 +640,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         ZLinkMeshNodeDescriptor target,
         ulong targetAttemptGeneration,
         TimeSpan restoreDeadline,
-        Func<bool> isSourceLeaseValid,
+        Func<ValueTask<bool>> isSourceLeaseValid,
         Func<CancellationToken, ValueTask<bool>> submitBoundary,
         TimeSpan pollingInterval,
         CancellationToken cancellationToken
@@ -699,7 +704,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 );
             if (settleNow)
             {
-                if (!isSourceLeaseValid())
+                if (!await isSourceLeaseValid().ConfigureAwait(false))
                     return new(ZLinkSourceSettlement.SourceLeaseExpired, null);
                 if (
                     read is ZLinkAuthorityReadResult.Found captured
@@ -840,19 +845,25 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             .ConfigureAwait(false);
     }
 
-    private bool IsTargetOwnerLeaseValid(ZLinkActorAuthorityPayload targetAuthority) =>
-        IsOwnerLeaseValid(
+    private ValueTask<bool> IsTargetOwnerLeaseValidAsync(
+        ZLinkActorAuthorityPayload targetAuthority
+    ) =>
+        IsOwnerLeaseValidAsync(
             new ZLinkLocationOwnerToken(
                 targetAuthority.OwnerId,
                 checked((long)targetAuthority.OwnerLeaseGeneration)
             )
         );
 
-    private bool IsOwnerLeaseValid(ZLinkAuthoritySnapshot owner) =>
-        IsOwnerLeaseValid(new ZLinkLocationOwnerToken(owner.OwnerId, owner.OwnerLeaseGeneration));
+    private ValueTask<bool> IsOwnerLeaseValidAsync(ZLinkAuthoritySnapshot owner) =>
+        IsOwnerLeaseValidAsync(
+            new ZLinkLocationOwnerToken(owner.OwnerId, owner.OwnerLeaseGeneration)
+        );
 
-    private bool IsOwnerLeaseValid(ZLinkLocationOwnerToken owner) =>
-        runtime.LocationLifecycle?.IsOwnerLeaseValid(owner) == true;
+    private ValueTask<bool> IsOwnerLeaseValidAsync(ZLinkLocationOwnerToken owner) =>
+        runtime.LocationLifecycle is { } lifecycle
+            ? lifecycle.IsOwnerLeaseValidAsync(owner)
+            : ValueTask.FromResult(false);
 
     private static TimeSpan RemainingTimeout(TimeSpan deadline)
     {
@@ -1443,7 +1454,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                                         stage.Prepare,
                                         stage.TargetAuthority,
                                         stage.TargetAuthorityOwnerGeneration,
-                                        () => IsTargetOwnerLeaseValid(stage.TargetAuthority),
+                                        () => IsTargetOwnerLeaseValidAsync(stage.TargetAuthority),
                                         registration.Locations.Options.PollingInterval,
                                         cancellationToken
                                     )
@@ -1655,7 +1666,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         checked((long)stage.TargetAuthority.OwnerLeaseGeneration)
                     );
                     if (
-                        IsTargetOwnerLeaseValid(stage.TargetAuthority)
+                        await IsTargetOwnerLeaseValidAsync(stage.TargetAuthority)
+                            .ConfigureAwait(false)
                         && await ZLinkRelocationTargetFence
                             .ReadAsync(
                                 store,
@@ -1820,10 +1832,13 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             );
 
         var targetAttemptGeneration = canonical.TargetAttemptGeneration;
-        var localNode = runtime.TryGetSpotNodeRuntime(targetAuthority.NodeRid);
+        var localNode = await runtime
+            .TryGetSpotNodeRuntimeAsync(targetAuthority.NodeRid)
+            .ConfigureAwait(false);
         var hasCurrentLocalTarget =
             localNode is not null
-            && localNode.Node.MeshStatus().LifecycleGeneration == targetAuthority.NodeGeneration;
+            && (await localNode.Node.MeshStatusAsync().ConfigureAwait(false)).LifecycleGeneration
+                == targetAuthority.NodeGeneration;
         ZLinkActorRuntimeState actorState;
         ZLinkObjectRelocationRegistration relocation;
         if (sourceOwned || !hasCurrentLocalTarget)
@@ -1942,23 +1957,25 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             );
             return;
         }
-        actorState.StageRelocationSessionRoute(
-            handoffId,
-            relocating.BoundSessionRoute,
-            new ZLinkSessionRelocationContext(
-                new ZLinkServiceWireCodec.RelocationWireId(
-                    candidate.Envelope.CanonicalRelocationHigh,
-                    candidate.Envelope.CanonicalRelocationLow
-                ),
-                new ZLinkServiceWireCodec.RelocationCoordinatorFence(
-                    canonical.State.CoordinatorOwnerId,
-                    canonical.State.CoordinatorLeaseGeneration,
-                    RoutingId.FromHex(canonical.State.CoordinatorNodeRid),
-                    canonical.State.CoordinatorNodeGeneration,
-                    canonical.State.CoordinatorExpectedAuthorityStoreVersion
+        await actorState
+            .StageRelocationSessionRouteAsync(
+                handoffId,
+                relocating.BoundSessionRoute,
+                new ZLinkSessionRelocationContext(
+                    new ZLinkServiceWireCodec.RelocationWireId(
+                        candidate.Envelope.CanonicalRelocationHigh,
+                        candidate.Envelope.CanonicalRelocationLow
+                    ),
+                    new ZLinkServiceWireCodec.RelocationCoordinatorFence(
+                        canonical.State.CoordinatorOwnerId,
+                        canonical.State.CoordinatorLeaseGeneration,
+                        RoutingId.FromHex(canonical.State.CoordinatorNodeRid),
+                        canonical.State.CoordinatorNodeGeneration,
+                        canonical.State.CoordinatorExpectedAuthorityStoreVersion
+                    )
                 )
             )
-        );
+            .ConfigureAwait(false);
         var frames = DecodeAcceptedRecords(participant.AcceptedJobs)
             .Select(static accepted => accepted.Frame)
             .ToArray();
@@ -2240,7 +2257,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 // body is raw state, and command 40 carries the exact source
                 // fence while the target entry spot is local and generation
                 // fenced.  Reconstruct only that derived recovery projection.
-                var targetNode = runtime.GetSpotNodeRuntime(prepare.Target.NodeRid);
+                var targetNode = await runtime
+                    .GetSpotNodeRuntimeAsync(prepare.Target.NodeRid)
+                    .ConfigureAwait(false);
                 var store =
                     registration.Locations.ResolveStore()
                     ?? throw new ZLinkConfigurationException(
@@ -2272,7 +2291,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     ZLinkSpotKind.Entry,
                     prepare.Target.OwnerId,
                     prepare.Target.OwnerLeaseGeneration,
-                    targetNode.Node.MeshStatus().MeshName,
+                    (await targetNode.Node.MeshStatusAsync().ConfigureAwait(false)).MeshName,
                     prepare.Target.NodeRid,
                     prepare.Target.NodeGeneration
                 );
@@ -2343,7 +2362,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 "Standalone Actor reservation returned an invalid target authority generation."
             );
 
-        var node = runtime.GetSpotNodeRuntime(prepare.Target.NodeRid);
+        var node = await runtime
+            .GetSpotNodeRuntimeAsync(prepare.Target.NodeRid)
+            .ConfigureAwait(false);
         var targetActivation = remoteJoinRecovery is null
             ? ResolveTargetMembership(node, targetAuthority)
             : null;
@@ -2386,7 +2407,18 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         var admission = node.ActivationAdmission.Acquire(
             $"ACTOR '{targetAuthority.ActorId}' relocation"
         );
-        var actorState = actorSessions.GetOrCreateState(targetAuthority.ActorId);
+        ZLinkActorRuntimeState actorState;
+        try
+        {
+            actorState = await actorSessions
+                .GetOrCreateStateAsync(targetAuthority.ActorId)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            admission.Release();
+            throw;
+        }
         var preparedTransfer = false;
         var created = false;
         var attached = false;
@@ -2422,13 +2454,20 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 targetActivation.StageRelocatedPerActorMember(creation.Actor, actorState);
                 attached = true;
             }
-            actorState.StageRelocationSessionRoute(
-                envelope.AggregateId.ToString("N"),
-                relocating.BoundSessionRoute,
-                remoteJoinRequest is not null
-                    ? ZLinkRemoteActorJoinPackets.DecodeSessionRelocationContext(remoteJoinRequest)
-                    : new ZLinkSessionRelocationContext(prepare.RelocationId, prepare.Coordinator)
-            );
+            await actorState
+                .StageRelocationSessionRouteAsync(
+                    envelope.AggregateId.ToString("N"),
+                    relocating.BoundSessionRoute,
+                    remoteJoinRequest is not null
+                        ? ZLinkRemoteActorJoinPackets.DecodeSessionRelocationContext(
+                            remoteJoinRequest
+                        )
+                        : new ZLinkSessionRelocationContext(
+                            prepare.RelocationId,
+                            prepare.Coordinator
+                        )
+                )
+                .ConfigureAwait(false);
             if (remoteJoinRequest is not null)
                 await runtime
                     .PrepareCanonicalRoutedActorJoinTargetAsync(
@@ -3727,11 +3766,23 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             );
         }
 
-        private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-            operation.GetAwaiter().GetResult();
+        private static T AwaitStateLane<T>(ValueTask<T> operation)
+        {
+            global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+                operation.IsCompleted,
+                "state lane"
+            );
+            return operation.GetAwaiter().GetResult();
+        }
 
-        private static void AwaitStateLane(ValueTask operation) =>
+        private static void AwaitStateLane(ValueTask operation)
+        {
+            global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+                operation.IsCompleted,
+                "state lane"
+            );
             operation.GetAwaiter().GetResult();
+        }
 
         internal void ValidateRetry(
             ZLinkServiceWireCodec.RelocationPrepareRecord retry,
@@ -3884,8 +3935,14 @@ internal sealed class ZLinkRelocationAttemptLeaseState
         get => AwaitStateLane(_lane.RunAsync(() => _closing && _users == 0));
     }
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 }
 
 internal sealed partial class ZLinkFrameworkRuntime

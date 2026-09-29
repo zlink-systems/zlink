@@ -69,6 +69,8 @@ internal sealed class ZLinkActorRuntimeState(
 
     public string ActorId => _actorId.Value;
 
+    internal int PendingLifecycleCount => _dispatchMailbox.PendingLifecycleCount;
+
     internal ZLinkActorId RuntimeActorId => _actorId;
 
     public ZLinkActorHandoffState Handoff { get; } =
@@ -100,10 +102,23 @@ internal sealed class ZLinkActorRuntimeState(
     /// <summary>MeshNode that activated this Actor in the current process.</summary>
     internal string? MeshName => Activation?.MeshName ?? Context?.MeshName;
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        operation.GetAwaiter().GetResult();
+    }
 
     private T RunState<T>(Func<T> operation) => AwaitStateLane(_lane.RunAsync(operation));
 
@@ -902,31 +917,40 @@ internal sealed class ZLinkActorRuntimeState(
         string handoffId,
         ZLinkRemoteActorBoundSessionRoute route,
         ZLinkSessionRelocationContext wireContext = default
+    ) => RunState(() => StageRelocationSessionRouteOnLane(handoffId, route, wireContext));
+
+    internal ValueTask StageRelocationSessionRouteAsync(
+        string handoffId,
+        ZLinkRemoteActorBoundSessionRoute route,
+        ZLinkSessionRelocationContext wireContext = default
+    ) => _lane.RunAsync(() => StageRelocationSessionRouteOnLane(handoffId, route, wireContext));
+
+    private void StageRelocationSessionRouteOnLane(
+        string handoffId,
+        ZLinkRemoteActorBoundSessionRoute route,
+        ZLinkSessionRelocationContext wireContext
     )
     {
-        RunState(() =>
+        if (!route.IsBound)
         {
-            if (!route.IsBound)
-            {
-                _pendingSessionRoute = null;
-                return;
-            }
-            if (
-                _pendingSessionRoute is { } pending
-                && !string.Equals(pending.HandoffId, handoffId, StringComparison.Ordinal)
-            )
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    $"Actor '{ActorId}' already stages another session route."
-                );
-            _pendingSessionRoute = new ZLinkPendingActorSessionRoute(
-                handoffId,
-                route,
-                TargetActor: null,
-                TargetAuthorityOwnerGeneration: 0,
-                WireContext: wireContext
+            _pendingSessionRoute = null;
+            return;
+        }
+        if (
+            _pendingSessionRoute is { } pending
+            && !string.Equals(pending.HandoffId, handoffId, StringComparison.Ordinal)
+        )
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"Actor '{ActorId}' already stages another session route."
             );
-        });
+        _pendingSessionRoute = new ZLinkPendingActorSessionRoute(
+            handoffId,
+            route,
+            TargetActor: null,
+            TargetAuthorityOwnerGeneration: 0,
+            WireContext: wireContext
+        );
     }
 
     internal void RememberSourceSessionRelocation(

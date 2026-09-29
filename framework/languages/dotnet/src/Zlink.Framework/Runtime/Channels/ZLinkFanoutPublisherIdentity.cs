@@ -46,8 +46,14 @@ internal sealed class ZLinkFanoutPublisherIdentity(
 
     internal Snapshot MarkServing() => AwaitStateLane(MarkServingAsync());
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 
     internal readonly record struct Snapshot(
         ulong DescriptorRevision,

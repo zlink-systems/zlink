@@ -656,7 +656,7 @@ public sealed class RuntimeConformanceFixtureTests
             }
             catch (Exception error)
             {
-                failures.Add($"{scenario.GetProperty("name").GetString()}: {error.Message}");
+                failures.Add($"{scenario.GetProperty("name").GetString()}: {error}");
             }
         }
         Assert.True(failures.Count == 0, string.Join(Environment.NewLine, failures));

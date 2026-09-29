@@ -294,16 +294,22 @@ internal sealed partial class ZLinkFrameworkRuntime
     internal ZLinkSpotNodeRuntime GetMeshNodeRuntime(string meshName)
     {
         var state = GetOrStartState();
-        return AwaitStateLane(
-            state.RunStateAsync(() =>
-                state.SpotNodes.TryGetValue(meshName, out var nodeRuntime)
-                    ? nodeRuntime
-                    : throw new ZLinkConfigurationException(
-                        $"RouteMesh '{meshName}' is not registered."
-                    )
-            )
-        );
+        return AwaitStateLane(state.RunStateAsync(() => GetMeshNodeRuntimeOnLane(state, meshName)));
     }
+
+    internal ValueTask<ZLinkSpotNodeRuntime> GetMeshNodeRuntimeAsync(string meshName)
+    {
+        var state = GetOrStartState();
+        return state.RunStateAsync(() => GetMeshNodeRuntimeOnLane(state, meshName));
+    }
+
+    private static ZLinkSpotNodeRuntime GetMeshNodeRuntimeOnLane(
+        ZLinkFrameworkComponentState state,
+        string meshName
+    ) =>
+        state.SpotNodes.TryGetValue(meshName, out var nodeRuntime)
+            ? nodeRuntime
+            : throw new ZLinkConfigurationException($"RouteMesh '{meshName}' is not registered.");
 
     internal ZLinkSpotNodeRuntime ResolveRouteMeshNodeForChannel(string channelName)
     {

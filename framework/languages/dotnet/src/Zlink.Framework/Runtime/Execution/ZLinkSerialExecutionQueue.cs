@@ -912,7 +912,16 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     {
         if (drain is null)
             return;
-        if (!_taskRunner.TryRunDetached("serial-queue-drain", drain))
+        _ = PublishDrainAsync(drain);
+    }
+
+    private async Task PublishDrainAsync(Func<CancellationToken, ValueTask> drain)
+    {
+        if (
+            !await _taskRunner
+                .TryRunDetachedAsync("serial-queue-drain", drain)
+                .ConfigureAwait(false)
+        )
             _ = Task.Run(
                 async () => await drain(CancellationToken.None).ConfigureAwait(false),
                 CancellationToken.None

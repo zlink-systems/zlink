@@ -39,7 +39,10 @@ internal sealed class ZLinkLocationLifecycle : IAsyncDisposable
     /// resubmits its authority CAS only while this owner lease is still valid.
     /// </summary>
     internal bool IsOwnerLeaseValid(ZLinkLocationOwnerToken owner) =>
-        _runtime.IsOwnerAdmissionOpen && _runtime.AdmissionOwnerToken == owner;
+        _runtime.IsOwnerLeaseValid(owner);
+
+    internal ValueTask<bool> IsOwnerLeaseValidAsync(ZLinkLocationOwnerToken owner) =>
+        _runtime.IsOwnerLeaseValidAsync(owner);
 
     internal ValueTask<ZLinkLocationWriteResult> WriteMeshNodeDescriptorAsync(
         ZLinkMeshNodeDescriptor descriptor,
@@ -174,10 +177,23 @@ internal sealed class ZLinkLocationLifecycle : IAsyncDisposable
             TryRunBackground(deactivate);
     }
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        operation.GetAwaiter().GetResult();
+    }
 
     private async ValueTask PauseBackgroundWorkCoreAsync(bool pauseActorOwnership)
     {

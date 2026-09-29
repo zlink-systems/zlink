@@ -208,16 +208,10 @@ internal sealed class ZLinkChannelRuntimeManager(
                 );
                 // The lane turn only registers the runtime and reads the local server; the
                 // identity snapshot is awaited after the turn ends.
-                var localServer = AwaitStateLane(
-                    state.RunStateAsync(() =>
+                var localServer = await state
+                    .RunStateAsync(() =>
                     {
                         state.ClientServerClientRuntimes.Add(entry.Key, runtime);
-                        runtime.OwnManualConnectionAttachment(
-                            channel.Client.ManualConnections.Attach(
-                                runtime.AddManual,
-                                runtime.RemoveManual
-                            )
-                        );
                         return
                             !registration.Locations.Enabled
                             && channel.HasClientServerServer
@@ -231,7 +225,14 @@ internal sealed class ZLinkChannelRuntimeManager(
                                 )
                             : null;
                     })
-                );
+                    .ConfigureAwait(false);
+                var attachment = await channel
+                    .Client.ManualConnections.AttachAsync(
+                        runtime.AddManualAsync,
+                        runtime.RemoveManualAsync
+                    )
+                    .ConfigureAwait(false);
+                await runtime.OwnManualConnectionAttachmentAsync(attachment).ConfigureAwait(false);
                 if (localServer is not null)
                     await runtime.AddLocalAsync(localServer).ConfigureAwait(false);
             }
@@ -339,8 +340,21 @@ internal sealed class ZLinkChannelRuntimeManager(
         return (sourceName[..separatorIndex], sourceName[(separatorIndex + 1)..]);
     }
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        operation.GetAwaiter().GetResult();
+    }
 }

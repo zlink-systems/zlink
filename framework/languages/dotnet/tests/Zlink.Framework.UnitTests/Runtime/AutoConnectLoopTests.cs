@@ -332,17 +332,21 @@ public sealed class AutoConnectLoopTests
 
     private sealed class NullExecutor : IZLinkAutoConnectExecutor
     {
-        public bool Connect(ZLinkAutoConnectTarget target) => true;
+        public ValueTask<bool> ConnectAsync(ZLinkAutoConnectTarget target) =>
+            ValueTask.FromResult(true);
 
-        public bool Disconnect(ZLinkAutoConnectTarget target) => true;
+        public ValueTask<bool> DisconnectAsync(ZLinkAutoConnectTarget target) =>
+            ValueTask.FromResult(true);
     }
 
     private sealed class RetryExecutor : IZLinkAutoConnectExecutor
     {
         public int ConnectCalls { get; private set; }
 
-        public bool Connect(ZLinkAutoConnectTarget target) => ++ConnectCalls >= 2;
+        public ValueTask<bool> ConnectAsync(ZLinkAutoConnectTarget target) =>
+            ValueTask.FromResult(++ConnectCalls >= 2);
 
-        public bool Disconnect(ZLinkAutoConnectTarget target) => true;
+        public ValueTask<bool> DisconnectAsync(ZLinkAutoConnectTarget target) =>
+            ValueTask.FromResult(true);
     }
 }

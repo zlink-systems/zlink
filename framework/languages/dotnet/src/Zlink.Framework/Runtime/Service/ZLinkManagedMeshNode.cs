@@ -440,48 +440,87 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         string endpoint,
         RoutingId? expectedRid = null,
         string expectedSecurityIdentity = ZLinkServiceSecurityIdentity.Plaintext
+    ) => RunState(() => ConnectPeerOnLane(endpoint, expectedRid, expectedSecurityIdentity));
+
+    internal ValueTask<ulong> ConnectPeerAsync(
+        string endpoint,
+        RoutingId? expectedRid = null,
+        string expectedSecurityIdentity = ZLinkServiceSecurityIdentity.Plaintext
+    ) => _lane.RunAsync(() => ConnectPeerOnLane(endpoint, expectedRid, expectedSecurityIdentity));
+
+    private ulong ConnectPeerOnLane(
+        string endpoint,
+        RoutingId? expectedRid,
+        string expectedSecurityIdentity
     )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedSecurityIdentity);
-        return RunState(() =>
-        {
-            ThrowIfDisposed();
-            // Service-wire §5 scopes a connection generation to the admitted
-            // physical connection lifetime. Auto-connect reconciliation can
-            // repeat its desired target while that connection remains live;
-            // reuse its outbound intent instead of opening another local
-            // candidate for the same configured target.
-            var admitted = _peersByIntent.Values.FirstOrDefault(peer =>
-                peer.Direction == ZLinkServiceConnectionDirection.Outbound
-                && peer.Admitted
-                && peer.ExpectedRid == expectedRid
-                && string.Equals(peer.Endpoint, endpoint, StringComparison.Ordinal)
-                && string.Equals(
-                    peer.ExpectedSecurityIdentity,
-                    expectedSecurityIdentity,
-                    StringComparison.Ordinal
-                )
-            );
-            if (admitted is not null)
-                return admitted.Intent;
-            var intent = checked(++_nextIntent);
-            var peer = new Peer(
-                intent,
-                endpoint,
-                expectedRid,
+        ThrowIfDisposed();
+        // Service-wire §5 scopes a connection generation to the admitted
+        // physical connection lifetime. Auto-connect reconciliation can
+        // repeat its desired target while that connection remains live;
+        // reuse its outbound intent instead of opening another local
+        // candidate for the same configured target.
+        var admitted = _peersByIntent.Values.FirstOrDefault(peer =>
+            peer.Direction == ZLinkServiceConnectionDirection.Outbound
+            && peer.Admitted
+            && peer.ExpectedRid == expectedRid
+            && string.Equals(peer.Endpoint, endpoint, StringComparison.Ordinal)
+            && string.Equals(
+                peer.ExpectedSecurityIdentity,
                 expectedSecurityIdentity,
-                ZLinkServiceConnectionDirection.Outbound,
-                checked(++_nextPeerConnectionGeneration)
-            );
-            _peersByIntent.Add(intent, peer);
-            if (_state != MeshNodeState.Created)
-                ConnectPeerCore(peer);
-            return intent;
-        });
+                StringComparison.Ordinal
+            )
+        );
+        if (admitted is not null)
+            return admitted.Intent;
+        var intent = checked(++_nextIntent);
+        var peer = new Peer(
+            intent,
+            endpoint,
+            expectedRid,
+            expectedSecurityIdentity,
+            ZLinkServiceConnectionDirection.Outbound,
+            checked(++_nextPeerConnectionGeneration)
+        );
+        _peersByIntent.Add(intent, peer);
+        if (_state != MeshNodeState.Created)
+            ConnectPeerCore(peer);
+        return intent;
     }
 
     public void SetPeerExpectation(
+        RoutingId peerRid,
+        string endpoint,
+        string expectedSecurityIdentity,
+        ulong expectedLifecycleGeneration
+    ) =>
+        RunState(() =>
+            SetPeerExpectationOnLane(
+                peerRid,
+                endpoint,
+                expectedSecurityIdentity,
+                expectedLifecycleGeneration
+            )
+        );
+
+    internal ValueTask SetPeerExpectationAsync(
+        RoutingId peerRid,
+        string endpoint,
+        string expectedSecurityIdentity,
+        ulong expectedLifecycleGeneration
+    ) =>
+        _lane.RunAsync(() =>
+            SetPeerExpectationOnLane(
+                peerRid,
+                endpoint,
+                expectedSecurityIdentity,
+                expectedLifecycleGeneration
+            )
+        );
+
+    private void SetPeerExpectationOnLane(
         RoutingId peerRid,
         string endpoint,
         string expectedSecurityIdentity,
@@ -492,38 +531,42 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             throw new ArgumentException("Peer routing id is required.", nameof(peerRid));
         ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedSecurityIdentity);
-        RunState(() =>
-            _peerExpectations[peerRid] = new ZLinkMeshPeerExpectation(
-                endpoint,
-                expectedSecurityIdentity,
-                expectedLifecycleGeneration
-            )
+        _peerExpectations[peerRid] = new ZLinkMeshPeerExpectation(
+            endpoint,
+            expectedSecurityIdentity,
+            expectedLifecycleGeneration
         );
     }
 
-    public void RemovePeerExpectation(RoutingId peerRid, string endpoint)
+    public void RemovePeerExpectation(RoutingId peerRid, string endpoint) =>
+        RunState(() => RemovePeerExpectationOnLane(peerRid, endpoint));
+
+    internal ValueTask RemovePeerExpectationAsync(RoutingId peerRid, string endpoint) =>
+        _lane.RunAsync(() => RemovePeerExpectationOnLane(peerRid, endpoint));
+
+    private void RemovePeerExpectationOnLane(RoutingId peerRid, string endpoint)
     {
-        RunState(() =>
-        {
-            if (
-                _peerExpectations.TryGetValue(peerRid, out var expected)
-                && !string.Equals(expected.Endpoint, endpoint, StringComparison.Ordinal)
-            )
-                return;
-            _peerExpectations.Remove(peerRid);
-            NotifyPeerConnectionIntentRemoved(peerRid);
-        });
+        if (
+            _peerExpectations.TryGetValue(peerRid, out var expected)
+            && !string.Equals(expected.Endpoint, endpoint, StringComparison.Ordinal)
+        )
+            return;
+        _peerExpectations.Remove(peerRid);
+        NotifyPeerConnectionIntentRemoved(peerRid);
     }
 
-    public void RemovePeerConnection(ulong connectionIntentId)
+    public void RemovePeerConnection(ulong connectionIntentId) =>
+        RunState(() => RemovePeerConnectionOnLane(connectionIntentId));
+
+    internal ValueTask RemovePeerConnectionAsync(ulong connectionIntentId) =>
+        _lane.RunAsync(() => RemovePeerConnectionOnLane(connectionIntentId));
+
+    private void RemovePeerConnectionOnLane(ulong connectionIntentId)
     {
-        RunState(() =>
-        {
-            if (!_peersByIntent.Remove(connectionIntentId, out var peer))
-                return;
-            RemovePeer(peer, disconnect: true);
-            NotifyPeerConnectionIntentRemoved(peer.ExpectedRid ?? peer.RoutingId);
-        });
+        if (!_peersByIntent.Remove(connectionIntentId, out var peer))
+            return;
+        RemovePeer(peer, disconnect: true);
+        NotifyPeerConnectionIntentRemoved(peer.ExpectedRid ?? peer.RoutingId);
     }
 
     private void NotifyPeerConnectionIntentRemoved(RoutingId target)
@@ -537,35 +580,41 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             PeerConnectionIntentRemoved?.Invoke(target);
     }
 
-    public bool RemovePeerConnectionIfNotAdmitted(ulong connectionIntentId)
+    public bool RemovePeerConnectionIfNotAdmitted(ulong connectionIntentId) =>
+        RunState(() => RemovePeerConnectionIfNotAdmittedOnLane(connectionIntentId));
+
+    internal ValueTask<bool> RemovePeerConnectionIfNotAdmittedAsync(ulong connectionIntentId) =>
+        _lane.RunAsync(() => RemovePeerConnectionIfNotAdmittedOnLane(connectionIntentId));
+
+    private bool RemovePeerConnectionIfNotAdmittedOnLane(ulong connectionIntentId)
     {
-        return RunState(() =>
-        {
-            if (!_peersByIntent.TryGetValue(connectionIntentId, out var peer))
-                return true;
-            if (peer.State is MeshPeerState.Admitted or MeshPeerState.Draining)
-                return false;
-            _peersByIntent.Remove(connectionIntentId);
-            RemovePeer(peer, disconnect: true);
-            NotifyPeerConnectionIntentRemoved(peer.ExpectedRid ?? peer.RoutingId);
+        if (!_peersByIntent.TryGetValue(connectionIntentId, out var peer))
             return true;
-        });
+        if (peer.State is MeshPeerState.Admitted or MeshPeerState.Draining)
+            return false;
+        _peersByIntent.Remove(connectionIntentId);
+        RemovePeer(peer, disconnect: true);
+        NotifyPeerConnectionIntentRemoved(peer.ExpectedRid ?? peer.RoutingId);
+        return true;
     }
 
-    public void DisconnectPeer(RoutingId peerRid, ulong lifecycleGeneration = 0)
+    public void DisconnectPeer(RoutingId peerRid, ulong lifecycleGeneration = 0) =>
+        RunState(() => DisconnectPeerOnLane(peerRid, lifecycleGeneration));
+
+    internal ValueTask DisconnectPeerAsync(RoutingId peerRid, ulong lifecycleGeneration = 0) =>
+        _lane.RunAsync(() => DisconnectPeerOnLane(peerRid, lifecycleGeneration));
+
+    private void DisconnectPeerOnLane(RoutingId peerRid, ulong lifecycleGeneration)
     {
-        RunState(() =>
+        if (!_peersByRid.TryGetValue(peerRid, out var peer))
         {
-            if (!_peersByRid.TryGetValue(peerRid, out var peer))
-            {
-                NotifyPeerConnectionIntentRemoved(peerRid);
-                return;
-            }
-            if (lifecycleGeneration != 0 && lifecycleGeneration != peer.LifecycleGeneration)
-                return;
-            RemovePeer(peer, disconnect: true);
             NotifyPeerConnectionIntentRemoved(peerRid);
-        });
+            return;
+        }
+        if (lifecycleGeneration != 0 && lifecycleGeneration != peer.LifecycleGeneration)
+            return;
+        RemovePeer(peer, disconnect: true);
+        NotifyPeerConnectionIntentRemoved(peerRid);
     }
 
     public void AddChannel(string channelName)
@@ -2033,59 +2082,88 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     public MeshNodeStatus Status()
     {
-        return RunState(() =>
+        var pendingApplication = _ownedMailboxes
+            .Where(static entry => entry.Key.Domain == MeshReadyDomains.Application)
+            .Sum(static entry => entry.Value.Count);
+        var pendingInfrastructure = _ownedMailboxes
+            .Where(static entry => entry.Key.Domain == MeshReadyDomains.Infrastructure)
+            .Sum(static entry => entry.Value.Count);
+        return RunState(() => StatusOnLane(pendingApplication, pendingInfrastructure));
+    }
+
+    internal async ValueTask<MeshNodeStatus> StatusAsync()
+    {
+        var pendingApplication = 0;
+        var pendingInfrastructure = 0;
+        foreach (var entry in _ownedMailboxes)
         {
-            var admitted = _peersByRid.Values.Count(static peer => peer.Admitted);
-            var draining = _peersByRid.Values.Count(static peer =>
-                peer.State == MeshPeerState.Draining
-            );
-            var pendingApplication = _ownedMailboxes
-                .Where(static entry => entry.Key.Domain == MeshReadyDomains.Application)
-                .Sum(static entry => entry.Value.Count);
-            var pendingInfrastructure = _ownedMailboxes
-                .Where(static entry => entry.Key.Domain == MeshReadyDomains.Infrastructure)
-                .Sum(static entry => entry.Value.Count);
-            var pendingBytes = checked((ulong)Math.Max(0, Volatile.Read(ref _queuedBytes)));
-            return new MeshNodeStatus(
-                _state,
-                _routingId,
-                _meshName,
-                _bindEndpoint,
-                _lifecycleGeneration,
-                _descriptorRevision,
-                checked((uint)_channels.Count),
-                checked((uint)_peersByIntent.Count),
-                checked((uint)admitted),
-                checked((uint)draining),
-                checked((ulong)pendingApplication),
-                checked((ulong)pendingInfrastructure),
-                pendingBytes,
-                0,
-                checked((ulong)Environment.TickCount64)
-            );
-        });
+            var count = await entry.Value.CountAsync().ConfigureAwait(false);
+            if (entry.Key.Domain == MeshReadyDomains.Application)
+                pendingApplication = checked(pendingApplication + count);
+            else if (entry.Key.Domain == MeshReadyDomains.Infrastructure)
+                pendingInfrastructure = checked(pendingInfrastructure + count);
+        }
+        return await _lane
+            .RunAsync(() => StatusOnLane(pendingApplication, pendingInfrastructure))
+            .ConfigureAwait(false);
+    }
+
+    private MeshNodeStatus StatusOnLane(int pendingApplication, int pendingInfrastructure)
+    {
+        var admitted = _peersByRid.Values.Count(static peer => peer.Admitted);
+        var draining = _peersByRid.Values.Count(static peer =>
+            peer.State == MeshPeerState.Draining
+        );
+        var pendingBytes = checked((ulong)Math.Max(0, Volatile.Read(ref _queuedBytes)));
+        return new MeshNodeStatus(
+            _state,
+            _routingId,
+            _meshName,
+            _bindEndpoint,
+            _lifecycleGeneration,
+            _descriptorRevision,
+            checked((uint)_channels.Count),
+            checked((uint)_peersByIntent.Count),
+            checked((uint)admitted),
+            checked((uint)draining),
+            checked((ulong)pendingApplication),
+            checked((ulong)pendingInfrastructure),
+            pendingBytes,
+            0,
+            checked((ulong)Environment.TickCount64)
+        );
     }
 
     public MeshNodePeer[] Peers()
     {
-        return RunState(() =>
-            _peersByIntent.Values.Select(static peer => peer.Snapshot()).ToArray()
-        );
+        return RunState(PeersOnLane);
     }
+
+    internal ValueTask<MeshNodePeer[]> PeersAsync() => _lane.RunAsync(PeersOnLane);
+
+    private MeshNodePeer[] PeersOnLane() =>
+        _peersByIntent.Values.Select(static peer => peer.Snapshot()).ToArray();
 
     public MeshPeerChannel[] PeerChannels(RoutingId peerRid, ulong lifecycleGeneration)
     {
-        return RunState(() =>
-        {
-            if (
-                !_peersByRid.TryGetValue(peerRid, out var peer)
-                || peer.LifecycleGeneration != lifecycleGeneration
-            )
-                return Array.Empty<MeshPeerChannel>();
-            return peer
-                .Channels.Select(static channel => new MeshPeerChannel(channel.Key, channel.Value))
-                .ToArray();
-        });
+        return RunState(() => PeerChannelsOnLane(peerRid, lifecycleGeneration));
+    }
+
+    internal ValueTask<MeshPeerChannel[]> PeerChannelsAsync(
+        RoutingId peerRid,
+        ulong lifecycleGeneration
+    ) => _lane.RunAsync(() => PeerChannelsOnLane(peerRid, lifecycleGeneration));
+
+    private MeshPeerChannel[] PeerChannelsOnLane(RoutingId peerRid, ulong lifecycleGeneration)
+    {
+        if (
+            !_peersByRid.TryGetValue(peerRid, out var peer)
+            || peer.LifecycleGeneration != lifecycleGeneration
+        )
+            return Array.Empty<MeshPeerChannel>();
+        return peer
+            .Channels.Select(static channel => new MeshPeerChannel(channel.Key, channel.Value))
+            .ToArray();
     }
 
     public IMeshNodeMonitor OpenMonitor(MeshMonitorEventMask events = MeshMonitorEventMask.All)
@@ -2130,56 +2208,63 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RecvFlags flags = RecvFlags.None
     )
     {
+        var operation = DrainReadyAsync(domains, batch, flags);
+        ZLinkInfrastructureWaitGuard.ThrowIfBlocking(operation.IsCompleted, "mesh ready claim");
+        return operation.GetAwaiter().GetResult();
+    }
+
+    public async ValueTask<bool> DrainReadyAsync(
+        MeshReadyDomains domains,
+        MeshReadyBatch batch,
+        RecvFlags flags = RecvFlags.None
+    )
+    {
         ArgumentNullException.ThrowIfNull(batch);
         if ((domains & MeshReadyDomains.All) == 0)
             return false;
 
-        return RunState(() =>
-        {
-            Volatile.Write(ref _readyPosted, 0);
-            foreach (
-                var entry in _ownedMailboxes
-                    .Where(entry => (entry.Key.Domain & domains) != 0)
-                    .OrderBy(static entry =>
-                        entry.Key.Domain == MeshReadyDomains.Infrastructure ? 0 : 1
-                    )
-                    .ThenBy(static entry => entry.Key.OwnerKind)
-                    .ThenBy(static entry => entry.Key.Identity, StringComparer.Ordinal)
-            )
-            {
-                var mailbox = entry.Value;
-                var canClaim = batch.Count < batch.MaximumRecords;
-                if (
-                    !mailbox.TryClaim(
-                        batch.RequireReservedApplicationAdmission
-                            && entry.Key.Domain == MeshReadyDomains.Application,
-                        canClaim,
-                        out var availableRecords,
-                        out var admissionReserved
-                    )
+        Volatile.Write(ref _readyPosted, 0);
+        foreach (
+            var entry in _ownedMailboxes
+                .Where(entry => (entry.Key.Domain & domains) != 0)
+                .OrderBy(static entry =>
+                    entry.Key.Domain == MeshReadyDomains.Infrastructure ? 0 : 1
                 )
-                    continue;
-                if (!canClaim)
-                    return true;
-                batch.Add(
-                    new MeshReadyRecord(
-                        entry.Key.OwnerKind,
-                        entry.Key.Domain,
-                        entry.Key.SpotId,
-                        entry.Key.Actor,
-                        Math.Min(availableRecords, ReceiveBatchSize),
-                        entry.Key.Domain == MeshReadyDomains.Application && admissionReserved
-                    ),
-                    new MeshClaim
-                    {
-                        Receiver = (receiveBatch, receiveFlags) =>
-                            DrainOwnedQueue(mailbox, receiveBatch, receiveFlags),
-                        Releaser = () => ReleaseOwnedMailbox(mailbox),
-                    }
-                );
-            }
-            return false;
-        });
+                .ThenBy(static entry => entry.Key.OwnerKind)
+                .ThenBy(static entry => entry.Key.Identity, StringComparer.Ordinal)
+        )
+        {
+            var mailbox = entry.Value;
+            var canClaim = batch.Count < batch.MaximumRecords;
+            var claim = await mailbox
+                .TryClaimAsync(
+                    batch.RequireReservedApplicationAdmission
+                        && entry.Key.Domain == MeshReadyDomains.Application,
+                    canClaim
+                )
+                .ConfigureAwait(false);
+            if (!claim.Ready)
+                continue;
+            if (!canClaim)
+                return true;
+            batch.Add(
+                new MeshReadyRecord(
+                    entry.Key.OwnerKind,
+                    entry.Key.Domain,
+                    entry.Key.SpotId,
+                    entry.Key.Actor,
+                    Math.Min(claim.Count, ReceiveBatchSize),
+                    entry.Key.Domain == MeshReadyDomains.Application && claim.Admitted
+                ),
+                new MeshClaim
+                {
+                    Receiver = (receiveBatch, receiveFlags) =>
+                        DrainOwnedQueue(mailbox, receiveBatch, receiveFlags),
+                    Releaser = () => ReleaseOwnedMailbox(mailbox),
+                }
+            );
+        }
+        return false;
     }
 
     public ISpot CreateSpot()
@@ -12251,10 +12336,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private void ThrowIfDisposed() =>
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        ZLinkInfrastructureWaitGuard.ThrowIfBlocking(operation.IsCompleted, "mesh node state lane");
+        return operation.GetAwaiter().GetResult();
+    }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        ZLinkInfrastructureWaitGuard.ThrowIfBlocking(operation.IsCompleted, "mesh node state lane");
+        operation.GetAwaiter().GetResult();
+    }
 
     private T RunState<T>(Func<T> operation) => AwaitStateLane(_lane.RunAsync(operation));
 

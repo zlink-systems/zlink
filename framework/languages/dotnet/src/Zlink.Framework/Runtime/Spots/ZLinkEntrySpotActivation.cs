@@ -169,8 +169,14 @@ internal sealed partial class ZLinkEntrySpotActivation
         return new ValueTask(result.Task);
     }
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 
     private async Task CompleteFinalizationAsync(TaskCompletionSource completion)
     {

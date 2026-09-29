@@ -355,11 +355,13 @@ internal sealed partial class ZLinkFrameworkRuntime
                                 );
                             }
                         }
-                        actorState.StageRelocationSessionRoute(
-                            envelope.AggregateId.ToString("N"),
-                            boundRoute,
-                            wireContext
-                        );
+                        await actorState
+                            .StageRelocationSessionRouteAsync(
+                                envelope.AggregateId.ToString("N"),
+                                boundRoute,
+                                wireContext
+                            )
+                            .ConfigureAwait(false);
                         var acceptedFrames = ZLinkStandaloneActorRelocationRuntime
                             .DecodeAcceptedRecords(participant.AcceptedJobs)
                             .Select(static accepted => accepted.Frame)

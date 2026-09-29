@@ -387,6 +387,12 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
         CompleteRelease(released);
     }
 
+    internal async ValueTask ReleaseAsync(ZLinkApplicationJobQueueLease lease)
+    {
+        var released = await _lane.RunAsync(() => ReleaseOnLane(lease)).ConfigureAwait(false);
+        CompleteRelease(released);
+    }
+
     internal void ReleaseBatch(IReadOnlyList<ZLinkApplicationJobQueueLease?> leases)
     {
         var released = AwaitStateLane(
@@ -593,27 +599,39 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
 
     public void Dispose()
     {
-        var waiters = AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                if (_disposed)
-                    return Array.Empty<Waiter>();
-                _disposed = true;
-                _receiveFlowController.BeginClose();
-                var waiting = _waiters.ToArray();
-                _waiters.Clear();
-                foreach (var waiter in waiting)
-                {
-                    waiter.Node = null;
-                    if (waiter.State != WaiterState.Waiting)
-                        continue;
-                    waiter.State = WaiterState.Cancelled;
-                    _capacityWaiters = checked(_capacityWaiters - 1);
-                    RecordCompletedWaitUnderLock(waiter);
-                }
-                return waiting;
-            })
-        );
+        var waiters = AwaitStateLane(_lane.RunAsync(CloseOnLane));
+        _receiveFlowController.BeginClose();
+        CompleteCloseWaiters(waiters);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        var waiters = await _lane.RunAsync(CloseOnLane).ConfigureAwait(false);
+        await _receiveFlowController.BeginCloseAsync().ConfigureAwait(false);
+        CompleteCloseWaiters(waiters);
+    }
+
+    private Waiter[] CloseOnLane()
+    {
+        if (_disposed)
+            return [];
+        _disposed = true;
+        var waiting = _waiters.ToArray();
+        _waiters.Clear();
+        foreach (var waiter in waiting)
+        {
+            waiter.Node = null;
+            if (waiter.State != WaiterState.Waiting)
+                continue;
+            waiter.State = WaiterState.Cancelled;
+            _capacityWaiters = checked(_capacityWaiters - 1);
+            RecordCompletedWaitUnderLock(waiter);
+        }
+        return waiting;
+    }
+
+    private static void CompleteCloseWaiters(Waiter[] waiters)
+    {
         foreach (var waiter in waiters)
         {
             waiter.CancellationRegistration.Dispose();
@@ -663,10 +681,23 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
         bool PressureChanged
     );
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        operation.GetAwaiter().GetResult();
+    }
 }
 
 /// <summary>
@@ -784,20 +815,22 @@ internal sealed class ZLinkReceiveFlowController
 
     internal void BeginClose()
     {
-        AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                if (_closed)
-                    return;
-                _closed = true;
-                foreach (var entry in _entries.Values)
-                {
-                    entry.Removed = true;
-                    entry.Pending.Clear();
-                }
-                _entries.Clear();
-            })
-        );
+        AwaitStateLane(BeginCloseAsync());
+    }
+
+    internal ValueTask BeginCloseAsync() => _lane.RunAsync(BeginCloseOnLane);
+
+    private void BeginCloseOnLane()
+    {
+        if (_closed)
+            return;
+        _closed = true;
+        foreach (var entry in _entries.Values)
+        {
+            entry.Removed = true;
+            entry.Pending.Clear();
+        }
+        _entries.Clear();
     }
 
     internal void ResetMetrics()
@@ -919,10 +952,23 @@ internal sealed class ZLinkReceiveFlowController
 
     private readonly record struct ApplyPreparation(bool ShouldApply, FlowUpdate Update);
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        operation.GetAwaiter().GetResult();
+    }
 
     private sealed class Registration : IDisposable
     {
@@ -941,7 +987,7 @@ internal sealed class ZLinkReceiveFlowController
     }
 }
 
-internal sealed class ZLinkApplicationJobQueueLease : IDisposable
+internal sealed class ZLinkApplicationJobQueueLease : IDisposable, IAsyncDisposable
 {
     private readonly ZLinkApplicationJobQueue _owner;
     private int _state;
@@ -976,6 +1022,9 @@ internal sealed class ZLinkApplicationJobQueueLease : IDisposable
         if (!IsReleased)
             _owner.Release(this);
     }
+
+    public ValueTask DisposeAsync() =>
+        IsReleased ? ValueTask.CompletedTask : _owner.ReleaseAsync(this);
 
     internal enum LeaseState
     {
@@ -1021,7 +1070,7 @@ internal static class ZLinkApplicationJobQueueInvocation
     // Handler entry releases the queue permit, but the invocation still owns its turn.
     internal static bool IsActive => Current.Value is not null;
 
-    internal static IDisposable Enter(ZLinkApplicationJobQueueLease lease)
+    internal static Scope Enter(ZLinkApplicationJobQueueLease lease)
     {
         ArgumentNullException.ThrowIfNull(lease);
         var scope = new Scope(Current.Value, lease);
@@ -1082,7 +1131,9 @@ internal static class ZLinkApplicationJobQueueInvocation
         }
     }
 
-    private sealed class Scope(Scope? previous, ZLinkApplicationJobQueueLease lease) : IDisposable
+    internal sealed class Scope(Scope? previous, ZLinkApplicationJobQueueLease lease)
+        : IDisposable,
+            IAsyncDisposable
     {
         private readonly Scope? _previous = previous;
         internal readonly ZLinkApplicationJobQueue Owner = lease.Owner;
@@ -1094,9 +1145,31 @@ internal static class ZLinkApplicationJobQueueInvocation
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
                 return;
-            Interlocked.Exchange(ref Lease, null)?.Dispose();
-            if (ReferenceEquals(Current.Value, this))
-                Current.Value = _previous;
+            try
+            {
+                Interlocked.Exchange(ref Lease, null)?.Dispose();
+            }
+            finally
+            {
+                if (ReferenceEquals(Current.Value, this))
+                    Current.Value = _previous;
+            }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            try
+            {
+                if (Interlocked.Exchange(ref Lease, null) is { } lease)
+                    await lease.DisposeAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                if (ReferenceEquals(Current.Value, this))
+                    Current.Value = _previous;
+            }
         }
     }
 }

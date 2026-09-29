@@ -175,6 +175,10 @@ internal sealed class BingoRoom(
         )
             _observerActor = null;
         logger.LogInformation("bingo-lifecycle room-leave actor={ActorId}", actor.ActorId);
+    }
+
+    internal void CloseIfEmpty(CancellationToken cancellationToken)
+    {
         if (_actors.Count == 0 && _observerActor is null)
             _ = Context.CloseAsync(cancellationToken);
     }
@@ -399,6 +403,7 @@ internal sealed class BingoRoom(
 
         _observerActor = null;
         await Context.LeaveActorAsync(actor, cancellationToken);
+        CloseIfEmpty(cancellationToken);
         logger.LogInformation(
             "bingo observer room: actor left. observedRoom={ObservedRoomId}, observer={ActorId}",
             roomId,

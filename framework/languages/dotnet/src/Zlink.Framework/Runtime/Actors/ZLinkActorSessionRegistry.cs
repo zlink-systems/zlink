@@ -13,22 +13,24 @@ internal sealed class ZLinkActorSessionRegistry(
 
     public ZLinkActorRuntimeState GetOrCreate(ZLinkActorId actorId)
     {
-        return AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                if (_states.TryGetValue(actorId, out var existing))
-                    return existing;
+        return AwaitStateLane(_lane.RunAsync(() => GetOrCreateOnLane(actorId)));
+    }
 
-                var created = new ZLinkActorRuntimeState(
-                    actorId,
-                    handoffDiagnostic: handoffDiagnostic,
-                    sessionBindingTombstoneRetention: sessionBindingTombstoneRetention,
-                    services: services
-                );
-                _states.Add(actorId, created);
-                return created;
-            })
+    internal ValueTask<ZLinkActorRuntimeState> GetOrCreateAsync(ZLinkActorId actorId) =>
+        _lane.RunAsync(() => GetOrCreateOnLane(actorId));
+
+    private ZLinkActorRuntimeState GetOrCreateOnLane(ZLinkActorId actorId)
+    {
+        if (_states.TryGetValue(actorId, out var existing))
+            return existing;
+        var created = new ZLinkActorRuntimeState(
+            actorId,
+            handoffDiagnostic: handoffDiagnostic,
+            sessionBindingTombstoneRetention: sessionBindingTombstoneRetention,
+            services: services
         );
+        _states.Add(actorId, created);
+        return created;
     }
 
     public bool TryGet(ZLinkActorId actorId, out ZLinkActorRuntimeState state)
@@ -137,18 +139,32 @@ internal sealed class ZLinkActorSessionRegistry(
     /// <summary>Actors activated on the named MeshNode, counted without copying the registry.</summary>
     public int CountActive(string meshName)
     {
-        return AwaitStateLane(
-            _lane.RunAsync(() =>
-                _states.Values.Count(state =>
-                    state.Actor is not null
-                    && StringComparer.Ordinal.Equals(state.MeshName, meshName)
-                )
-            )
-        );
+        return AwaitStateLane(_lane.RunAsync(() => CountActiveOnLane(meshName)));
     }
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    internal ValueTask<int> CountActiveAsync(string meshName) =>
+        _lane.RunAsync(() => CountActiveOnLane(meshName));
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private int CountActiveOnLane(string meshName) =>
+        _states.Values.Count(state =>
+            state.Actor is not null && StringComparer.Ordinal.Equals(state.MeshName, meshName)
+        );
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
+
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        operation.GetAwaiter().GetResult();
+    }
 }

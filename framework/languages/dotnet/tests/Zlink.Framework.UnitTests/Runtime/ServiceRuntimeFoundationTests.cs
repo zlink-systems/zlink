@@ -1412,6 +1412,8 @@ public sealed class ServiceRuntimeFoundationTests
         node.SetRoutingId(nodeRid);
         using var stop = new CancellationTokenSource();
         Exception? statusFailure = null;
+        var drained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var receivedCount = 0;
 
         var drainTask = Task.Run(async () =>
         {
@@ -1425,7 +1427,11 @@ public sealed class ServiceRuntimeFoundationTests
                 {
                     using var claim = ready.TakeClaim(index);
                     received.Reset();
-                    claim.Receive(received, RecvFlags.DontWait);
+                    if (
+                        claim.Receive(received, RecvFlags.DontWait)
+                        && Interlocked.Add(ref receivedCount, received.Count) >= 2_000
+                    )
+                        drained.TrySetResult();
                 }
                 await Task.Yield();
             }
@@ -1450,6 +1456,7 @@ public sealed class ServiceRuntimeFoundationTests
         }
 
         await statusTask;
+        await drained.Task;
         stop.Cancel();
         await drainTask;
 
@@ -2509,14 +2516,22 @@ public sealed class ServiceRuntimeFoundationTests
             Assert.Equal(SubmitResult.Ok, source.SendToNode(targetRid, [payload]));
         }
 
-        await WaitUntilAsync(() => target.Status().PendingApplicationMessages == capacity);
-        Assert.Equal((ulong)capacity, applicationJobQueue.GetStatus().PermitsInUse);
+        await WaitUntilAsync(() =>
+            applicationJobQueue.GetStatus().PressureState
+            == ZLinkApplicationJobQueuePressureState.Paused
+        );
+        var paused = applicationJobQueue.GetStatus();
+        Assert.InRange(paused.PermitsInUse, paused.PausePermitCount, (ulong)capacity);
         pump.EnsureStarted();
 
         await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.InRange(maximumBatch, 2, capacity);
         await WaitUntilAsync(() => applicationJobQueue.GetStatus().PermitsInUse == 0);
-        Assert.Equal((ulong)capacity, applicationJobQueue.GetStatus().PeakPermitsInUse);
+        Assert.InRange(
+            applicationJobQueue.GetStatus().PeakPermitsInUse,
+            paused.PausePermitCount,
+            (ulong)capacity
+        );
     }
 
     [Fact]

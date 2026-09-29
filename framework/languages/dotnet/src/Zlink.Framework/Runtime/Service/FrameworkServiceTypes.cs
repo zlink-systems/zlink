@@ -935,6 +935,11 @@ internal interface IMeshNode : IDisposable, IAsyncDisposable
         MeshReadyBatch batch,
         RecvFlags flags = RecvFlags.None
     );
+    ValueTask<bool> DrainReadyAsync(
+        MeshReadyDomains domains,
+        MeshReadyBatch batch,
+        RecvFlags flags = RecvFlags.None
+    ) => ValueTask.FromResult(DrainReady(domains, batch, flags));
     ISpot CreateSpot();
     ISpot EntrySpot();
     ISpot GetOrCreateSpot(string spotId, out bool created);

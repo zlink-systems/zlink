@@ -214,8 +214,21 @@ internal sealed class ZLinkChannelReplyGate
 
     internal void Close() => AwaitStateLane(CloseAsync());
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
         operation.GetAwaiter().GetResult();
+    }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 }

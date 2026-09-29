@@ -76,12 +76,24 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
 
     void ConnectPeer(string endpoint);
 
+    ValueTask ConnectPeerAsync(string endpoint)
+    {
+        ConnectPeer(endpoint);
+        return ValueTask.CompletedTask;
+    }
+
     void ConnectPeer(
         RoutingId peerRid,
         string endpoint,
         string expectedSecurityIdentity =
             global::Zlink.Framework.Runtime.Service.ZLinkServiceSecurityIdentity.Plaintext
     );
+
+    ValueTask ConnectPeerAsync(RoutingId peerRid, string endpoint, string expectedSecurityIdentity)
+    {
+        ConnectPeer(peerRid, endpoint, expectedSecurityIdentity);
+        return ValueTask.CompletedTask;
+    }
 
     void SetPeerExpectation(
         RoutingId peerRid,
@@ -90,9 +102,37 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         ulong expectedLifecycleGeneration
     );
 
+    ValueTask SetPeerExpectationAsync(
+        RoutingId peerRid,
+        string endpoint,
+        string expectedSecurityIdentity,
+        ulong expectedLifecycleGeneration
+    )
+    {
+        SetPeerExpectation(
+            peerRid,
+            endpoint,
+            expectedSecurityIdentity,
+            expectedLifecycleGeneration
+        );
+        return ValueTask.CompletedTask;
+    }
+
     void RemovePeerExpectation(RoutingId peerRid, string endpoint);
 
+    ValueTask RemovePeerExpectationAsync(RoutingId peerRid, string endpoint)
+    {
+        RemovePeerExpectation(peerRid, endpoint);
+        return ValueTask.CompletedTask;
+    }
+
     void DisconnectPeer(string endpoint);
+
+    ValueTask DisconnectPeerAsync(string endpoint)
+    {
+        DisconnectPeer(endpoint);
+        return ValueTask.CompletedTask;
+    }
 
     // Removes a matching peer only while admission has not completed. This is
     // used when discovery removes a non-initiating target; an already admitted
@@ -106,10 +146,23 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         return false;
     }
 
+    ValueTask<bool> DisconnectPeerBeforeAdmissionAsync(
+        RoutingId peerRid,
+        string endpoint,
+        ulong lifecycleGeneration
+    ) =>
+        ValueTask.FromResult(DisconnectPeerBeforeAdmission(peerRid, endpoint, lifecycleGeneration));
+
     // Retires an admitted peer lifetime by (RID, lifecycle generation). Core
     // queues a successor admission of the same RID behind this explicit
     // predecessor disconnect on every member that admitted the old lifetime.
     void DisconnectPeerLifetime(RoutingId peerRid, ulong lifecycleGeneration);
+
+    ValueTask DisconnectPeerLifetimeAsync(RoutingId peerRid, ulong lifecycleGeneration)
+    {
+        DisconnectPeerLifetime(peerRid, lifecycleGeneration);
+        return ValueTask.CompletedTask;
+    }
 
     IZLinkBackendSpot CreateSpot();
 
@@ -132,11 +185,20 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
     // backing the IZLinkRouteMeshRuntime monitoring surface (spec 50 §2).
     MeshNodeStatus MeshStatus();
 
+    ValueTask<MeshNodeStatus> MeshStatusAsync() => ValueTask.FromResult(MeshStatus());
+
     MeshOperationId AllocateOperationId();
 
     IReadOnlyList<MeshNodePeer> MeshPeers();
 
+    ValueTask<IReadOnlyList<MeshNodePeer>> MeshPeersAsync() => ValueTask.FromResult(MeshPeers());
+
     IReadOnlyList<MeshPeerChannel> MeshPeerChannels(RoutingId peerRid, ulong lifecycleGeneration);
+
+    ValueTask<IReadOnlyList<MeshPeerChannel>> MeshPeerChannelsAsync(
+        RoutingId peerRid,
+        ulong lifecycleGeneration
+    ) => ValueTask.FromResult(MeshPeerChannels(peerRid, lifecycleGeneration));
 
     IMeshNodeMonitor OpenMeshMonitor(MeshMonitorEventMask events = MeshMonitorEventMask.All);
 

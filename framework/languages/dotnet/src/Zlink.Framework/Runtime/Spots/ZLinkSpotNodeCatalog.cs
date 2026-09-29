@@ -74,6 +74,16 @@ internal sealed class ZLinkSpotNodeCatalog(
     /// <summary>Spots activated on this MeshNode, counted without copying the catalog.</summary>
     internal int ActiveSpotCount => AwaitStateLane(_lane.RunAsync(() => _spots.Count));
 
+    internal ValueTask<int> ActiveSpotCountAsync() => _lane.RunAsync(() => _spots.Count);
+
+    internal ValueTask<string[]> SnapshotPendingCloseNamesAsync() =>
+        _lane.RunAsync(() =>
+            _closing
+                .Where(static entry => !entry.Value.Task.IsCompleted)
+                .Select(static entry => entry.Key.Value)
+                .ToArray()
+        );
+
     internal void StartIdleEviction()
     {
         if (_instanceSpotIdleTimeout <= TimeSpan.Zero)
@@ -92,33 +102,36 @@ internal sealed class ZLinkSpotNodeCatalog(
 
     internal ZLinkInstanceSpotCatalogSnapshot InstanceSpotSnapshot(string stableType)
     {
-        return AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                var active = _instanceSpotTypes.Count(entry =>
-                    StringComparer.Ordinal.Equals(entry.Value, stableType)
-                    && _spots.ContainsKey(entry.Key)
-                );
-                var activating = _pending.Values.Count(pending =>
-                    IsStableTypeLocked(pending.SpotType, stableType)
-                );
-                activating += _preparedSpotTypes.Values.Count(spotType =>
-                    IsStableTypeLocked(spotType, stableType)
-                );
-                activating += _generatedSpotCreations
-                    .Where(entry => IsStableTypeLocked(entry.Key, stableType))
-                    .Sum(static entry => entry.Value);
-                var closing = _closing.Count(entry =>
-                    IsClosingEntry(entry.Value)
-                    && _instanceSpotTypes.TryGetValue(entry.Key, out var currentType)
-                    && StringComparer.Ordinal.Equals(currentType, stableType)
-                );
-                return new ZLinkInstanceSpotCatalogSnapshot(
-                    checked((ulong)active),
-                    checked((ulong)activating),
-                    checked((ulong)closing)
-                );
-            })
+        return AwaitStateLane(_lane.RunAsync(() => InstanceSpotSnapshotOnLane(stableType)));
+    }
+
+    internal ValueTask<ZLinkInstanceSpotCatalogSnapshot> InstanceSpotSnapshotAsync(
+        string stableType
+    ) => _lane.RunAsync(() => InstanceSpotSnapshotOnLane(stableType));
+
+    private ZLinkInstanceSpotCatalogSnapshot InstanceSpotSnapshotOnLane(string stableType)
+    {
+        var active = _instanceSpotTypes.Count(entry =>
+            StringComparer.Ordinal.Equals(entry.Value, stableType) && _spots.ContainsKey(entry.Key)
+        );
+        var activating = _pending.Values.Count(pending =>
+            IsStableTypeLocked(pending.SpotType, stableType)
+        );
+        activating += _preparedSpotTypes.Values.Count(spotType =>
+            IsStableTypeLocked(spotType, stableType)
+        );
+        activating += _generatedSpotCreations
+            .Where(entry => IsStableTypeLocked(entry.Key, stableType))
+            .Sum(static entry => entry.Value);
+        var closing = _closing.Count(entry =>
+            IsClosingEntry(entry.Value)
+            && _instanceSpotTypes.TryGetValue(entry.Key, out var currentType)
+            && StringComparer.Ordinal.Equals(currentType, stableType)
+        );
+        return new ZLinkInstanceSpotCatalogSnapshot(
+            checked((ulong)active),
+            checked((ulong)activating),
+            checked((ulong)closing)
         );
     }
 
@@ -2407,10 +2420,23 @@ internal sealed class ZLinkSpotNodeCatalog(
         }
     }
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        operation.GetAwaiter().GetResult();
+    }
 
     private static void ThrowIfSpotTypeMismatch(
         Type existingSpotType,

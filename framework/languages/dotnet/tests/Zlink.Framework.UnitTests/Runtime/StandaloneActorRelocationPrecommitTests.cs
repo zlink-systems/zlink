@@ -508,7 +508,7 @@ public sealed class StandaloneActorRelocationPrecommitTests
                 {
                     var valid = leaseValid;
                     leaseValid = false;
-                    return valid;
+                    return ValueTask.FromResult(valid);
                 },
                 TimeSpan.Zero,
                 CancellationToken.None
@@ -552,7 +552,7 @@ public sealed class StandaloneActorRelocationPrecommitTests
             source.Target,
             source.Prepare.TargetAttemptGeneration,
             Stopwatch.GetElapsedTime(0) + TimeSpan.FromMilliseconds(200),
-            static () => true,
+            static () => ValueTask.FromResult(true),
             _ => ValueTask.FromResult(++submissions > 1),
             TimeSpan.FromMilliseconds(5),
             CancellationToken.None
@@ -599,7 +599,7 @@ public sealed class StandaloneActorRelocationPrecommitTests
             source.Target,
             source.Prepare.TargetAttemptGeneration,
             Stopwatch.GetElapsedTime(0),
-            static () => false,
+            static () => ValueTask.FromResult(false),
             static _ => ValueTask.FromResult(true),
             TimeSpan.FromMilliseconds(5),
             CancellationToken.None
@@ -643,7 +643,7 @@ public sealed class StandaloneActorRelocationPrecommitTests
             source.Target,
             source.Prepare.TargetAttemptGeneration,
             Stopwatch.GetElapsedTime(0),
-            static () => true,
+            static () => ValueTask.FromResult(true),
             static _ => ValueTask.FromResult(true),
             TimeSpan.FromMilliseconds(5),
             CancellationToken.None

@@ -69,7 +69,6 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         ThrowIfReentrant();
         if (Volatile.Read(ref _closed) != 0)
             throw new ObjectDisposedException(nameof(ZLinkStateLane));
-
         // Claim the same drain ownership used by queued work before inspecting
         // the queue. An earlier enqueue must run first, even if its producer has
         // not reached ScheduleDrain yet. With no predecessor, the caller owns
@@ -119,6 +118,42 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         return new ValueTask<T>(completion.Task);
     }
 
+#if DEBUG
+    internal bool TryRunInline<T>(Func<T> work, out T result)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+        ThrowIfReentrant();
+        if (Volatile.Read(ref _closed) != 0)
+            throw new ObjectDisposedException(nameof(ZLinkStateLane));
+
+        // The fast path and a debug caller share one admission decision. If earlier work
+        // exists, the caller can decline to queue without changing lane state.
+        if (Interlocked.CompareExchange(ref _scheduled, 1, 0) != 0)
+        {
+            result = default!;
+            return false;
+        }
+        var previous = CurrentLane.Value;
+        try
+        {
+            if (!_mailbox.IsEmpty)
+            {
+                result = default!;
+                return false;
+            }
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _closed) != 0, this);
+            CurrentLane.Value = this;
+            result = work();
+            return true;
+        }
+        finally
+        {
+            CurrentLane.Value = previous;
+            ReleaseDrain();
+        }
+    }
+#endif
+
     /// <summary>Runs <paramref name="work"/> on the lane.</summary>
     internal ValueTask RunAsync(Action work)
     {
@@ -134,6 +169,41 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
             return ValueTask.CompletedTask;
         }
         return new ValueTask(operation.AsTask());
+    }
+
+    internal ValueTask RunAwaitingAsync(Func<ValueTask> work)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+        var operation = RunAwaitingAsync(async () =>
+        {
+            await work().ConfigureAwait(false);
+            return true;
+        });
+        return new ValueTask(operation.AsTask());
+    }
+
+    internal ValueTask<T> RunAwaitingAsync<T>(Func<ValueTask<T>> work)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+        ThrowIfReentrant();
+        var completion = new TaskCompletionSource<T>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        if (
+            !TryPost(async () =>
+            {
+                try
+                {
+                    completion.TrySetResult(await work().ConfigureAwait(false));
+                }
+                catch (Exception error)
+                {
+                    completion.TrySetException(error);
+                }
+            })
+        )
+            throw new ObjectDisposedException(nameof(ZLinkStateLane));
+        return new ValueTask<T>(completion.Task);
     }
 
     /// <summary>

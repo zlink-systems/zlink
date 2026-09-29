@@ -84,6 +84,15 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
         get { return AwaitStateLane(_lane.RunAsync(IsOwnerAdmissionOpenOnLane)); }
     }
 
+    internal bool IsOwnerLeaseValid(ZLinkLocationOwnerToken owner) =>
+        AwaitStateLane(_lane.RunAsync(() => IsOwnerLeaseValidOnLane(owner)));
+
+    internal ValueTask<bool> IsOwnerLeaseValidAsync(ZLinkLocationOwnerToken owner) =>
+        _lane.RunAsync(() => IsOwnerLeaseValidOnLane(owner));
+
+    private bool IsOwnerLeaseValidOnLane(ZLinkLocationOwnerToken owner) =>
+        IsOwnerAdmissionOpenOnLane() && RequireOwnerTokenOnLane() == owner;
+
     internal void EnsureOwnerAdmissionOpen()
     {
         AwaitStateLane(_lane.RunAsync(EnsureOwnerAdmissionOpenOnLane));
@@ -854,10 +863,23 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
             throw new InvalidOperationException("The owner lease admission deadline has expired.");
     }
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        operation.GetAwaiter().GetResult();
+    }
 
     private readonly record struct StopState(
         CancellationTokenSource? Heartbeat,

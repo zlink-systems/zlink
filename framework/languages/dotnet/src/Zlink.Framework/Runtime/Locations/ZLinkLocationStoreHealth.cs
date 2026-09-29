@@ -56,25 +56,25 @@ internal sealed class ZLinkLocationStoreHealth
 
     internal Snapshot GetSnapshot()
     {
-        return AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                return new Snapshot(
-                    _failures.Count == 0,
-                    _lastSuccessAt,
-                    _lastFailureAt,
-                    _failures.Count == 0
-                        ? null
-                        : string.Join(
-                            "; ",
-                            _failures
-                                .OrderBy(static pair => pair.Key)
-                                .Select(static pair => $"{pair.Key}: {pair.Value}")
-                        )
-                );
-            })
-        );
+        return AwaitStateLane(_lane.RunAsync(SnapshotOnLane));
     }
+
+    internal ValueTask<Snapshot> GetSnapshotAsync() => _lane.RunAsync(SnapshotOnLane);
+
+    private Snapshot SnapshotOnLane() =>
+        new(
+            _failures.Count == 0,
+            _lastSuccessAt,
+            _lastFailureAt,
+            _failures.Count == 0
+                ? null
+                : string.Join(
+                    "; ",
+                    _failures
+                        .OrderBy(static pair => pair.Key)
+                        .Select(static pair => $"{pair.Key}: {pair.Value}")
+                )
+        );
 
     internal long RecoveryGeneration
     {
@@ -88,10 +88,23 @@ internal sealed class ZLinkLocationStoreHealth
         string? LastError
     );
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        operation.GetAwaiter().GetResult();
+    }
 }
 
 internal static class ZLinkLocationStoreRead

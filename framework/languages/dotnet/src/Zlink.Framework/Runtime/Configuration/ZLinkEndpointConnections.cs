@@ -37,7 +37,8 @@ internal sealed class ZLinkEndpointConnections
             .ConfigureAwait(false);
         try
         {
-            prepared?.Callback?.Invoke(normalized);
+            if (prepared?.Callback is { } callback)
+                await callback(normalized).ConfigureAwait(false);
         }
         catch
         {
@@ -86,7 +87,8 @@ internal sealed class ZLinkEndpointConnections
             .ConfigureAwait(false);
         try
         {
-            prepared?.Callback?.Invoke(normalized);
+            if (prepared?.Callback is { } callback)
+                await callback(normalized).ConfigureAwait(false);
         }
         catch
         {
@@ -116,8 +118,31 @@ internal sealed class ZLinkEndpointConnections
     {
         ArgumentNullException.ThrowIfNull(connect);
         ArgumentNullException.ThrowIfNull(disconnect);
-        var prepared = AwaitStateLane(
-            _lane.RunAsync(() =>
+        var operation = AttachAsync(
+            endpoint =>
+            {
+                connect(endpoint);
+                return ValueTask.CompletedTask;
+            },
+            endpoint =>
+            {
+                disconnect(endpoint);
+                return ValueTask.CompletedTask;
+            }
+        );
+        ZLinkInfrastructureWaitGuard.ThrowIfBlocking(operation.IsCompleted, "endpoint attachment");
+        return operation.GetAwaiter().GetResult();
+    }
+
+    internal async ValueTask<IDisposable> AttachAsync(
+        Func<string, ValueTask> connect,
+        Func<string, ValueTask> disconnect
+    )
+    {
+        ArgumentNullException.ThrowIfNull(connect);
+        ArgumentNullException.ThrowIfNull(disconnect);
+        var prepared = await _lane
+            .RunAsync(() =>
             {
                 // Framework registrations outlive one runtime generation. A
                 // restart replaces the disposed generation's callbacks before
@@ -127,21 +152,21 @@ internal sealed class ZLinkEndpointConnections
                 _attachment = attachment;
                 return new AttachmentPreparation(attachment, previous, _endpoints.ToArray());
             })
-        );
+            .ConfigureAwait(false);
         try
         {
             foreach (var endpoint in prepared.Endpoints)
-                connect(endpoint);
+                await connect(endpoint).ConfigureAwait(false);
         }
         catch
         {
-            AwaitStateLane(
-                _lane.RunAsync(() =>
+            await _lane
+                .RunAsync(() =>
                 {
                     if (ReferenceEquals(_attachment, prepared.Attachment))
                         _attachment = prepared.Previous;
                 })
-            );
+                .ConfigureAwait(false);
             throw;
         }
         return prepared.Attachment;
@@ -196,10 +221,23 @@ internal sealed class ZLinkEndpointConnections
             );
     }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
         operation.GetAwaiter().GetResult();
+    }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 
     private sealed record AttachmentPreparation(
         Attachment Attachment,
@@ -207,19 +245,19 @@ internal sealed class ZLinkEndpointConnections
         IReadOnlyList<string> Endpoints
     );
 
-    private sealed record EndpointCallback(Action<string>? Callback, int Index);
+    private sealed record EndpointCallback(Func<string, ValueTask>? Callback, int Index);
 
     private sealed class Attachment(
         ZLinkEndpointConnections owner,
-        Action<string> connect,
-        Action<string> disconnect
+        Func<string, ValueTask> connect,
+        Func<string, ValueTask> disconnect
     ) : IDisposable
     {
         private int _disposed;
 
-        public Action<string> Connect { get; } = connect;
+        public Func<string, ValueTask> Connect { get; } = connect;
 
-        public Action<string> Disconnect { get; } = disconnect;
+        public Func<string, ValueTask> Disconnect { get; } = disconnect;
 
         public void Dispose()
         {

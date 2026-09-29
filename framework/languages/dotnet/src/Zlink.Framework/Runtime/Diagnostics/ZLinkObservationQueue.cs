@@ -199,5 +199,12 @@ internal sealed class ZLinkObservationQueue<TStatus>
 
     private sealed record RetainedStatus(string Source, TStatus Status, ulong PublishOrdinal);
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        operation.GetAwaiter().GetResult();
+    }
 }

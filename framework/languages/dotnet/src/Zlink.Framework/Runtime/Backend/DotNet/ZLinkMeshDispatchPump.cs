@@ -218,7 +218,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                     pending.RemoveAt(index);
                 }
                 await _signal.WaitAsync(cancellationToken).ConfigureAwait(false);
-                DrainResidue(readyBatch, receiveBatch, pending, cancellationToken);
+                await DrainResidueAsync(readyBatch, receiveBatch, pending, cancellationToken)
+                    .ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
@@ -266,7 +267,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         ObserveDispatchResult(result.Completion, pending);
     }
 
-    private void DrainResidue(
+    private async ValueTask DrainResidueAsync(
         MeshReadyBatch readyBatch,
         MeshReceiveBatch receiveBatch,
         List<Task> pending,
@@ -288,7 +289,9 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                 // by default, which would park this pump thread inside one claim
                 // and starve every other owner. The signal semaphore provides the
                 // wakeups; the pump itself must never wait inside the native API.
-                residue = _node.DrainReady(domains, readyBatch, RecvFlags.DontWait);
+                residue = await _node
+                    .DrainReadyAsync(domains, readyBatch, RecvFlags.DontWait)
+                    .ConfigureAwait(false);
             }
             catch (ObjectDisposedException)
             {
@@ -931,10 +934,17 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         return (_stop, _loop);
     }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        ZLinkInfrastructureWaitGuard.ThrowIfBlocking(operation.IsCompleted, "mesh pump state lane");
         operation.GetAwaiter().GetResult();
+    }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        ZLinkInfrastructureWaitGuard.ThrowIfBlocking(operation.IsCompleted, "mesh pump state lane");
+        return operation.GetAwaiter().GetResult();
+    }
 
     // Per-spot decoded-record queues plus the registered dispatch-event handler.
     internal sealed class SpotDispatchState

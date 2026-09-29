@@ -31,6 +31,8 @@ internal sealed class ZLinkActorSerialExecutor
         get => AwaitStateLane(_lane.RunAsync(() => _pendingRequests));
     }
 
+    internal int PendingLifecycleCount => _queue.LifecyclePendingCount;
+
     public ValueTask<Turn> EnterAsync(
         CancellationToken cancellationToken,
         bool countAsPendingRequest = false
@@ -204,10 +206,23 @@ internal sealed class ZLinkActorSerialExecutor
         );
     }
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        operation.GetAwaiter().GetResult();
+    }
 
     private static async ValueTask<Turn> AwaitTurnAsync(Waiter waiter)
     {

@@ -240,7 +240,14 @@ internal sealed class ZLinkStreamSessionTable(
         return new(created, false, false, CancellationToken.None);
     }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        operation.GetAwaiter().GetResult();
+    }
 
     private readonly record struct SessionCreationAdmission(
         ZLinkStreamSessionRuntime? Existing,

@@ -42,6 +42,8 @@ internal sealed record ForceStopped(
 
 internal sealed record DrainBlocked(ZLinkFrameworkRelocationReason Reason) : ZLinkDrainResult;
 
+internal readonly record struct ZLinkUnfinishedOperation(string Name, string Owner);
+
 internal enum ZLinkDrainExecutionDisposition
 {
     Completed = 0,
@@ -163,6 +165,8 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
     private readonly ZLinkDrainAdmissionGate _admission;
     private readonly IZLinkDrainExecutor _executor;
     private readonly Func<bool> _flowCaptureEnabled;
+    private readonly Func<ValueTask<IReadOnlyList<ZLinkUnfinishedOperation>>> _snapshotUnfinished;
+    private readonly Action<string>? _traceUnfinished;
     private readonly ILogger<ZLinkDrainCoordinator>? _logger;
     private readonly ZLinkStateLane _lane = new();
     private readonly TaskCompletionSource<ZLinkDrainResult> _terminal = new(
@@ -175,13 +179,19 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
         ZLinkDrainAdmissionGate admission,
         IZLinkDrainExecutor executor,
         Func<bool>? flowCaptureEnabled = null,
-        ILogger<ZLinkDrainCoordinator>? logger = null
+        ILogger<ZLinkDrainCoordinator>? logger = null,
+        Func<ValueTask<IReadOnlyList<ZLinkUnfinishedOperation>>>? snapshotUnfinished = null,
+        Action<string>? traceUnfinished = null
     )
     {
         _admission = admission;
         _executor = executor;
         _flowCaptureEnabled = flowCaptureEnabled ?? AlwaysDisabled;
         _logger = logger;
+        _snapshotUnfinished =
+            snapshotUnfinished
+            ?? (static () => ValueTask.FromResult<IReadOnlyList<ZLinkUnfinishedOperation>>([]));
+        _traceUnfinished = traceUnfinished;
     }
 
     internal void RequestShutdown(TimeSpan deadline)
@@ -466,6 +476,9 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
         ulong committedUnitCount
     )
     {
+        var unfinished = await _snapshotUnfinished().ConfigureAwait(false);
+        if (reason == ZLinkDrainForceReason.DeadlineExceeded)
+            RecordUnfinished(unfinished);
         try
         {
             await PublishStateAsync(ZLinkDrainState.ForceStopping).ConfigureAwait(false);
@@ -499,6 +512,7 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
         catch (OperationCanceledException) when (teardownBound.IsCancellationRequested)
         {
             reason = ZLinkDrainForceReason.DeadlineExceeded;
+            RecordUnfinished(unfinished);
         }
         catch (Exception error)
         {
@@ -506,6 +520,23 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
             reason = ZLinkDrainForceReason.TeardownFailed;
         }
         return new ForceStopped(reason, hasCommitted, committedUnitCount);
+    }
+
+    private void RecordUnfinished(IReadOnlyList<ZLinkUnfinishedOperation> unfinished)
+    {
+        var names =
+            unfinished.Count == 0
+                ? "none"
+                : string.Join(
+                    ", ",
+                    unfinished.Select(static operation =>
+                        $"{operation.Name} owner={operation.Owner}"
+                    )
+                );
+        var message = $"runtime drain deadline exceeded; unfinished: {names}";
+        _logger?.LogError("{DrainUnfinished}", message);
+        if (_flowCaptureEnabled())
+            _traceUnfinished?.Invoke(message);
     }
 
     private ValueTask PublishStateAsync(ZLinkDrainState state)

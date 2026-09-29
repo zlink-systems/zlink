@@ -536,6 +536,8 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
 
     internal int ActiveSpotCount => _spots.ActiveSpotCount;
 
+    internal ValueTask<int> ActiveSpotCountAsync() => _spots.ActiveSpotCountAsync();
+
     internal ZLinkEntrySpotActivation? EntrySpotActivation => _entrySpotActivation;
 
     internal ZLinkSpotOutboundTransport EntryOutbound =>
@@ -980,10 +982,23 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         return _monitoringSnapshots.MonitorStatus();
     }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
-
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
         operation.GetAwaiter().GetResult();
+    }
+
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 
     internal IReadOnlyList<ZLinkInstanceSpotTypeSnapshot> GetInstanceSpotMonitoringSnapshots()
     {
@@ -1001,18 +1016,49 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             {
                 var catalog = _spots.InstanceSpotSnapshot(stableType);
                 var operations = activationTarget.MonitoringSnapshot(stableType);
-                return new ZLinkInstanceSpotTypeSnapshot(
-                    stableType,
-                    catalog.ActiveCount,
-                    catalog.ActivatingCount,
-                    catalog.ClosingCount,
-                    operations.PendingMessageCount,
-                    operations.PendingByteCount,
-                    operations.LastActivationOutcome
-                );
+                return BuildInstanceSpotTypeSnapshot(stableType, catalog, operations);
             })
             .ToArray();
     }
+
+    internal async ValueTask<
+        IReadOnlyList<ZLinkInstanceSpotTypeSnapshot>
+    > GetInstanceSpotMonitoringSnapshotsAsync()
+    {
+        if (Registration.InstanceSpotFactories.Count == 0)
+            return Array.Empty<ZLinkInstanceSpotTypeSnapshot>();
+
+        var activationTarget =
+            _instanceSpotActivationTarget
+            ?? throw new InvalidOperationException(
+                $"MeshNode '{Name}' has Instance Spot factories without an activation target."
+            );
+        var snapshots = new List<ZLinkInstanceSpotTypeSnapshot>();
+        foreach (
+            var stableType in Registration.InstanceSpotFactories.Keys.Order(StringComparer.Ordinal)
+        )
+        {
+            var catalog = await _spots.InstanceSpotSnapshotAsync(stableType).ConfigureAwait(false);
+            var operations = activationTarget.MonitoringSnapshot(stableType);
+            snapshots.Add(BuildInstanceSpotTypeSnapshot(stableType, catalog, operations));
+        }
+        return snapshots;
+    }
+
+    private static ZLinkInstanceSpotTypeSnapshot BuildInstanceSpotTypeSnapshot(
+        string stableType,
+        ZLinkInstanceSpotCatalogSnapshot catalog,
+        ZLinkInstanceSpotOperationSnapshot operations
+    ) =>
+        new(
+            stableType,
+            catalog.ActiveCount,
+            catalog.ActivatingCount,
+            catalog.ClosingCount,
+            operations.PendingMessageCount,
+            operations.PendingByteCount,
+            operations.LastActivationOutcome
+        );
 
     public ZLinkSpotPublisherBundle GetOrCreatePublisherBundle(string channelName)
     {
@@ -1131,6 +1177,12 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         string expectedSecurityIdentity
     ) => _peerConnector.ConnectPeerAuto(peerRid, endpoint, expectedSecurityIdentity);
 
+    internal ValueTask<bool> ConnectPeerAutoAsync(
+        RoutingId? peerRid,
+        string endpoint,
+        string expectedSecurityIdentity
+    ) => _peerConnector.ConnectPeerAutoAsync(peerRid, endpoint, expectedSecurityIdentity);
+
     internal void ObservePeerExpectation(ZLinkAutoConnectTarget target)
     {
         if (target.NodeRid.IsEmpty)
@@ -1143,12 +1195,27 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         );
     }
 
+    internal ValueTask ObservePeerExpectationAsync(ZLinkAutoConnectTarget target) =>
+        target.NodeRid.IsEmpty
+            ? ValueTask.CompletedTask
+            : Node.SetPeerExpectationAsync(
+                target.NodeRid,
+                target.Endpoint,
+                ZLinkTransportSecurityIdentity.ToAdmissionIdentity(target.SecurityIdentity),
+                target.LifecycleGeneration
+            );
+
     internal void ForgetPeerExpectation(ZLinkAutoConnectTarget target)
     {
         if (target.NodeRid.IsEmpty)
             return;
         Node.RemovePeerExpectation(target.NodeRid, target.Endpoint);
     }
+
+    internal ValueTask ForgetPeerExpectationAsync(ZLinkAutoConnectTarget target) =>
+        target.NodeRid.IsEmpty
+            ? ValueTask.CompletedTask
+            : Node.RemovePeerExpectationAsync(target.NodeRid, target.Endpoint);
 
     internal void ObserveRequestSourceFence(ZLinkAutoConnectTarget target)
     {
@@ -1173,13 +1240,26 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     public void DisconnectPeerLifetime(RoutingId peerRid, ulong lifecycleGeneration) =>
         Node.DisconnectPeerLifetime(peerRid, lifecycleGeneration);
 
+    internal ValueTask DisconnectPeerLifetimeAsync(RoutingId peerRid, ulong lifecycleGeneration) =>
+        Node.DisconnectPeerLifetimeAsync(peerRid, lifecycleGeneration);
+
     public bool DisconnectPeerAuto(string endpoint) => _peerConnector.DisconnectPeerAuto(endpoint);
 
     internal bool DisconnectPeerAuto(RoutingId peerRid, string endpoint) =>
         _peerConnector.DisconnectPeerAuto(peerRid, endpoint);
 
+    internal ValueTask<bool> DisconnectPeerAutoAsync(RoutingId peerRid, string endpoint) =>
+        _peerConnector.DisconnectPeerAutoAsync(peerRid, endpoint);
+
     internal bool DisconnectPeerBeforeAdmission(ZLinkAutoConnectTarget target) =>
         _peerConnector.DisconnectPeerBeforeAdmission(
+            target.NodeRid,
+            target.Endpoint,
+            target.LifecycleGeneration
+        );
+
+    internal ValueTask<bool> DisconnectPeerBeforeAdmissionAsync(ZLinkAutoConnectTarget target) =>
+        _peerConnector.DisconnectPeerBeforeAdmissionAsync(
             target.NodeRid,
             target.Endpoint,
             target.LifecycleGeneration

@@ -109,7 +109,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
         if (startFrozen)
             _resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _stopSource = CancellationTokenSource.CreateLinkedTokenSource(spotStopToken);
-        _scheduler.Register(this);
+        Registration = _scheduler.RegisterAsync(this).AsTask();
 
         SchedulerSchedule? schedule = null;
         var startDispatch = false;
@@ -135,6 +135,8 @@ internal sealed class ZLinkTimer : IZLinkTimer
     }
 
     public bool IsDisposed => AwaitStateLane(_lane.RunAsync(() => _disposed != 0));
+
+    internal Task Registration { get; }
 
     internal ZLinkTimerLogicalSnapshot Freeze() =>
         AwaitStateLane(
@@ -527,10 +529,23 @@ internal sealed class ZLinkTimer : IZLinkTimer
         return startedAt.AddTicks((long)ticks);
     }
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        operation.GetAwaiter().GetResult();
+    }
 
     private readonly struct ZLinkTimerCallbacks(
         ZLinkTimerOptions options,

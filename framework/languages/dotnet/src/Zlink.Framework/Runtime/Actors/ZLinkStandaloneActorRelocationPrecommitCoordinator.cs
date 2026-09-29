@@ -127,7 +127,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             prepare,
             targetAuthority,
             checked(captured.AuthorityOwnerGeneration + 1),
-            static () => true,
+            static () => ValueTask.FromResult(true),
             TimeSpan.Zero,
             cancellationToken
         );
@@ -149,7 +149,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
         ZLinkActorAuthorityPayload targetAuthority,
         ulong targetAuthorityOwnerGeneration,
-        Func<bool> isTargetLeaseValid,
+        Func<ValueTask<bool>> isTargetLeaseValid,
         TimeSpan resubmitInterval,
         CancellationToken cancellationToken
     )
@@ -212,7 +212,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!isTargetLeaseValid())
+            if (!await isTargetLeaseValid().ConfigureAwait(false))
                 throw new ZLinkRelocationTargetSettledException(
                     "Standalone Actor target owner lease ended before its authority CAS was confirmed."
                 );

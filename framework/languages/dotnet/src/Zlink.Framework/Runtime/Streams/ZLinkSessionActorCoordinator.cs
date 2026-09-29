@@ -165,8 +165,14 @@ internal sealed class ZLinkSessionActorCoordinator(
             );
         }
 
-        private static void AwaitStateLane(ValueTask operation) =>
+        private static void AwaitStateLane(ValueTask operation)
+        {
+            global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+                operation.IsCompleted,
+                "state lane"
+            );
             operation.GetAwaiter().GetResult();
+        }
 
         internal sealed class Lease(ActorOperationGate owner) : IDisposable
         {

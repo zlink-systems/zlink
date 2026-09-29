@@ -133,6 +133,20 @@ internal sealed class ZLinkFanoutRuntimeService : IZLinkFanoutRuntime, IDisposab
         AwaitStateLane(_lane.RunAsync(() => RecordSnapshotOnLane(channel, publishers, location)));
     }
 
+    internal void PostSnapshot(
+        string channelName,
+        IReadOnlyList<ZLinkFanoutPublisherConnectionSnapshot> publishers,
+        ZLinkLocationRuntimeSnapshot location
+    )
+    {
+        var channel = Channel(channelName);
+        _lane.TryPost(() =>
+        {
+            RecordSnapshotOnLane(channel, publishers, location);
+            return ValueTask.CompletedTask;
+        });
+    }
+
     private void RecordSnapshotOnLane(
         ZLinkChannelName channel,
         IReadOnlyList<ZLinkFanoutPublisherConnectionSnapshot> publishers,
@@ -261,28 +275,23 @@ internal sealed class ZLinkFanoutRuntimeService : IZLinkFanoutRuntime, IDisposab
 
     private void OnHostStateChanged(ZLinkFrameworkRuntimeState hostState)
     {
-        AwaitStateLane(
-            _lane.RunAsync(() =>
+        _lane.TryPost(() =>
+        {
+            var now = DateTimeOffset.UtcNow;
+            foreach (var (channelName, state) in _states.ToArray())
             {
-                var now = DateTimeOffset.UtcNow;
-                foreach (var (channelName, state) in _states.ToArray())
-                {
-                    var sequence = checked(state.Snapshot.Sequence + 1);
-                    var next = state.Snapshot with { Sequence = sequence, ObservedAt = now };
-                    _states[channelName] = new ChannelState(next);
-                    Emit(
-                        channelName,
-                        new ZLinkFanoutRuntimeEvent.RuntimeChanged(
-                            sequence,
-                            now,
-                            channelName.Value
-                        ),
-                        Project(next, hostState),
-                        hostState
-                    );
-                }
-            })
-        );
+                var sequence = checked(state.Snapshot.Sequence + 1);
+                var next = state.Snapshot with { Sequence = sequence, ObservedAt = now };
+                _states[channelName] = new ChannelState(next);
+                Emit(
+                    channelName,
+                    new ZLinkFanoutRuntimeEvent.RuntimeChanged(sequence, now, channelName.Value),
+                    Project(next, hostState),
+                    hostState
+                );
+            }
+            return ValueTask.CompletedTask;
+        });
     }
 
     private static ZLinkTopologyState HostTopologyState(ZLinkFrameworkRuntimeState state) =>
@@ -303,10 +312,23 @@ internal sealed class ZLinkFanoutRuntimeService : IZLinkFanoutRuntime, IDisposab
         AwaitStateLane(_lane.RunAsync(_observers.Clear));
     }
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        operation.GetAwaiter().GetResult();
+    }
 
     private static (RoutingId PublisherRid, ulong LifecycleGeneration) IdentityKey(
         ZLinkFanoutPublisherConnectionSnapshot entry

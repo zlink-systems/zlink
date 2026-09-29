@@ -715,6 +715,9 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     internal int GetActiveActorCount(string meshName) =>
         _actorSessionManager.CountActiveActors(meshName);
 
+    internal ValueTask<int> GetActiveActorCountAsync(string meshName) =>
+        _actorSessionManager.CountActiveActorsAsync(meshName);
+
     /// <summary>
     /// Location runtime §5: the host's single new-work decision (local admission deadline and
     /// host execution combination). A host without a Location Store has no such block.
@@ -742,6 +745,63 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         return new ZLinkDrainRemainderCounts(actors, spots, requests, sessions);
     }
 
+    internal async ValueTask<
+        IReadOnlyList<ZLinkUnfinishedOperation>
+    > SnapshotUnfinishedOperationsAsync()
+    {
+        var unfinished = new List<ZLinkUnfinishedOperation>();
+        foreach (var actor in _actorSessionManager.SnapshotStates())
+        {
+            var pending = actor.PendingLifecycleCount;
+            if (pending != 0)
+                unfinished.Add(
+                    new($"actor-lifecycle-barrier count={pending}", $"actor:{actor.ActorId}")
+                );
+        }
+
+        var requests = await _stateLane.RunAsync(() => _activeRequests).ConfigureAwait(false);
+        if (requests != 0)
+            unfinished.Add(new($"pending-request count={requests}", "framework-runtime"));
+
+        var relocationUnits = _shutdownTracking.PendingCount;
+        if (relocationUnits != 0)
+            unfinished.Add(new($"relocation-unit count={relocationUnits}", "framework-runtime"));
+        foreach (var attempt in _standaloneActorRelocationRuntime.SnapshotPendingAttemptNames())
+            unfinished.Add(new($"relocation-attempt:{attempt}", "standalone-actor-relocation"));
+
+        var state = _state;
+        if (state is not null)
+        {
+            var nodes = await state
+                .RunStateAsync(() => state.SpotNodes.Values.ToArray())
+                .ConfigureAwait(false);
+            foreach (var node in nodes)
+            foreach (
+                var spot in await node
+                    .Catalog.SnapshotPendingCloseNamesAsync()
+                    .ConfigureAwait(false)
+            )
+                unfinished.Add(new($"close-transaction:{spot}", "spot-node-catalog"));
+        }
+        return unfinished;
+    }
+
+    internal void TraceUnfinishedDrain(string message)
+    {
+        if (!Flow.CaptureEnabled)
+            return;
+        Flow.TraceDispatchError(
+            new ZLinkDispatchFailure(
+                ZLinkDispatchErrorSurface.Node,
+                ZLinkDispatchMessageKind.Control,
+                ZLinkDispatchErrorReason.Shutdown,
+                ZLinkDispatchErrorAction.Drop,
+                "runtime-drain",
+                Exception: new InvalidOperationException(message)
+            )
+        );
+    }
+
     internal object ExecutionOwner
     {
         get
@@ -754,10 +814,17 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         }
     }
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        ZLinkInfrastructureWaitGuard.ThrowIfBlocking(operation.IsCompleted, "runtime state lane");
+        return operation.GetAwaiter().GetResult();
+    }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        ZLinkInfrastructureWaitGuard.ThrowIfBlocking(operation.IsCompleted, "runtime state lane");
+        operation.GetAwaiter().GetResult();
+    }
 
     internal ZLinkRuntimeOperationLease EnterOperation(bool countAsRequest = false)
     {
@@ -999,16 +1066,36 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     {
         var state =
             _state ?? throw new InvalidOperationException("The framework runtime is not started.");
-        return AwaitStateLane(
-                state.RunStateAsync(() =>
-                    state.SpotNodes.Values.SingleOrDefault(node => node.Node.RoutingId == nodeRid)
-                )
-            )
-            ?? throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
-                $"MeshNode '{nodeRid}' is not hosted by this runtime."
-            );
+        return RequireSpotNode(
+            AwaitStateLane(state.RunStateAsync(() => FindSpotNodeOnLane(state, nodeRid))),
+            nodeRid
+        );
     }
+
+    internal async ValueTask<ZLinkSpotNodeRuntime> GetSpotNodeRuntimeAsync(RoutingId nodeRid)
+    {
+        var state =
+            _state ?? throw new InvalidOperationException("The framework runtime is not started.");
+        var node = await state
+            .RunStateAsync(() => FindSpotNodeOnLane(state, nodeRid))
+            .ConfigureAwait(false);
+        return RequireSpotNode(node, nodeRid);
+    }
+
+    private static ZLinkSpotNodeRuntime? FindSpotNodeOnLane(
+        ZLinkFrameworkComponentState state,
+        RoutingId nodeRid
+    ) => state.SpotNodes.Values.SingleOrDefault(node => node.Node.RoutingId == nodeRid);
+
+    private static ZLinkSpotNodeRuntime RequireSpotNode(
+        ZLinkSpotNodeRuntime? node,
+        RoutingId nodeRid
+    ) =>
+        node
+        ?? throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.NotFound,
+            $"MeshNode '{nodeRid}' is not hosted by this runtime."
+        );
 
     internal ZLinkSpotNodeRuntime? TryGetSpotNodeRuntime(RoutingId nodeRid)
     {
@@ -1016,10 +1103,16 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         return state is null
             ? null
             : AwaitStateLane(
-                state.RunStateAsync(() =>
-                    state.SpotNodes.Values.SingleOrDefault(node => node.Node.RoutingId == nodeRid)
-                )
+                state.RunStateAsync(() => FindSpotNodeOnLane(state, nodeRid))
             );
+    }
+
+    internal ValueTask<ZLinkSpotNodeRuntime?> TryGetSpotNodeRuntimeAsync(RoutingId nodeRid)
+    {
+        var state = _state;
+        return state is null
+            ? ValueTask.FromResult<ZLinkSpotNodeRuntime?>(null)
+            : state.RunStateAsync(() => FindSpotNodeOnLane(state, nodeRid));
     }
 
     public bool IsStarted =>

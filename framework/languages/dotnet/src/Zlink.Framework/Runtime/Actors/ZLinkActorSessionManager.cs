@@ -45,6 +45,9 @@ internal sealed partial class ZLinkActorSessionManager(
 
     internal int CountActiveActors(string meshName) => _actorSessions.CountActive(meshName);
 
+    internal ValueTask<int> CountActiveActorsAsync(string meshName) =>
+        _actorSessions.CountActiveAsync(meshName);
+
     internal bool IsCurrentLocalActor(ZLinkBackendActorRef actor) =>
         _actorSessions.TryGet(
             ZLinkActorId.FromBoundary(actor.ActorId, nameof(actor)),
@@ -115,7 +118,9 @@ internal sealed partial class ZLinkActorSessionManager(
         CancellationToken cancellationToken = default
     )
     {
-        var state = _actorSessions.GetOrCreate(ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
+        var state = await _actorSessions
+            .GetOrCreateAsync(ZLinkActorId.FromBoundary(actorId, nameof(actorId)))
+            .ConfigureAwait(false);
         return await ActorCreation
             .RelocateAndBindActorAsync(
                 state,
@@ -141,7 +146,9 @@ internal sealed partial class ZLinkActorSessionManager(
         CancellationToken cancellationToken
     )
     {
-        var state = _actorSessions.GetOrCreate(ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
+        var state = await _actorSessions
+            .GetOrCreateAsync(ZLinkActorId.FromBoundary(actorId, nameof(actorId)))
+            .ConfigureAwait(false);
         // A source that completed a handoff keeps its retired native ref and
         // closed activation until the next local materialization. A new
         // durable object generation on this node must retire that old source
@@ -170,7 +177,9 @@ internal sealed partial class ZLinkActorSessionManager(
         CancellationToken cancellationToken
     )
     {
-        var state = _actorSessions.GetOrCreate(ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
+        var state = await _actorSessions
+            .GetOrCreateAsync(ZLinkActorId.FromBoundary(actorId, nameof(actorId)))
+            .ConfigureAwait(false);
         if (state.Actor is null && state.RetiredLocalActorRef is not null)
             await PrepareForTransferredActivationAsync(state, cancellationToken)
                 .ConfigureAwait(false);
@@ -307,7 +316,9 @@ internal sealed partial class ZLinkActorSessionManager(
         CancellationToken cancellationToken
     )
     {
-        var state = _actorSessions.GetOrCreate(ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
+        var state = await _actorSessions
+            .GetOrCreateAsync(ZLinkActorId.FromBoundary(actorId, nameof(actorId)))
+            .ConfigureAwait(false);
         return await ActorCreation
             .CreateAndBindActorAsync(
                 state,
@@ -471,6 +482,9 @@ internal sealed partial class ZLinkActorSessionManager(
     {
         return _actorSessions.GetOrCreate(ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
     }
+
+    internal ValueTask<ZLinkActorRuntimeState> GetOrCreateStateAsync(string actorId) =>
+        _actorSessions.GetOrCreateAsync(ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
 
     internal bool TryGetState(string actorId, out ZLinkActorRuntimeState state)
     {

@@ -57,7 +57,12 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     internal void AddManual(string endpoint) =>
         AddOrReplace($"manual:{endpoint}", endpoint, expected: null);
 
+    internal ValueTask AddManualAsync(string endpoint) =>
+        AddOrReplaceAsync($"manual:{endpoint}", endpoint, expected: null);
+
     internal void RemoveManual(string endpoint) => Remove($"manual:{endpoint}");
+
+    internal ValueTask RemoveManualAsync(string endpoint) => RemoveAsync($"manual:{endpoint}");
 
     internal async ValueTask AddLocalAsync(ZLinkClientServerServerIdentity identity)
     {
@@ -307,7 +312,11 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
 
     internal int ReadyCount
     {
-        get => RunState(() => DistinctConnections().Count(static value => value.Ready));
+        get
+        {
+            var connections = RunState(() => DistinctConnections().ToArray());
+            return connections.Count(static value => value.Ready);
+        }
     }
 
     internal int AdmissionCompletedCount
@@ -400,20 +409,34 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     internal void OwnManualConnectionAttachment(IDisposable attachment)
     {
         ArgumentNullException.ThrowIfNull(attachment);
-        var dispose = false;
-        IDisposable? previous = null;
-        RunState(() =>
-        {
-            if (_disposed)
-                dispose = true;
-            else
-            {
-                previous = _manualConnectionAttachment;
-                _manualConnectionAttachment = attachment;
-            }
-        });
-        previous?.Dispose();
-        if (dispose)
+        CompleteManualAttachment(attachment, RunState(() => SetManualAttachmentOnLane(attachment)));
+    }
+
+    internal async ValueTask OwnManualConnectionAttachmentAsync(IDisposable attachment)
+    {
+        ArgumentNullException.ThrowIfNull(attachment);
+        var result = await _lane
+            .RunAsync(() => SetManualAttachmentOnLane(attachment))
+            .ConfigureAwait(false);
+        CompleteManualAttachment(attachment, result);
+    }
+
+    private (bool Dispose, IDisposable? Previous) SetManualAttachmentOnLane(IDisposable attachment)
+    {
+        if (_disposed)
+            return (true, null);
+        var previous = _manualConnectionAttachment;
+        _manualConnectionAttachment = attachment;
+        return (false, previous);
+    }
+
+    private static void CompleteManualAttachment(
+        IDisposable attachment,
+        (bool Dispose, IDisposable? Previous) result
+    )
+    {
+        result.Previous?.Dispose();
+        if (result.Dispose)
         {
             attachment.Dispose();
             throw new ObjectDisposedException(nameof(ZLinkClientServerClientRuntime));
@@ -448,58 +471,70 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         ZLinkClientServerServerDescriptor? expected
     )
     {
-        Connection? previous = null;
-        var retirePrevious = false;
-        Connection? created = null;
-        RunState(() =>
-        {
-            if (_disposed)
-                return;
-            if (
-                _connections.TryGetValue(key, out var existing)
-                && existing.Matches(endpoint, expected)
-            )
-            {
-                existing.Update(expected);
-                return;
-            }
-            previous = existing;
-            created = new Connection(
-                _channelName.Value,
-                endpoint,
-                expected,
-                _context.CreateDealerSocket(),
-                _monitoring,
-                _socketConfig,
-                _stopToken,
-                _applicationJobQueue,
-                OnAdmitted,
-                ScheduleStateChanged,
-                _time
-            );
-            _connections[key] = created;
-            ScheduleStateChanged(selectionChanged: true);
-            retirePrevious = previous is not null && !IsReferenced(previous);
-            if (retirePrevious)
-                RegisterRetirement(previous!);
-        });
+        var created = RunState(() => AddOrReplaceOnLane(key, endpoint, expected));
         created?.Start();
     }
 
-    private void Remove(string key)
+    private async ValueTask AddOrReplaceAsync(
+        string key,
+        string endpoint,
+        ZLinkClientServerServerDescriptor? expected
+    )
     {
-        Connection? removed;
-        RunState(() =>
+        var created = await _lane
+            .RunAsync(() => AddOrReplaceOnLane(key, endpoint, expected))
+            .ConfigureAwait(false);
+        created?.Start();
+    }
+
+    private Connection? AddOrReplaceOnLane(
+        string key,
+        string endpoint,
+        ZLinkClientServerServerDescriptor? expected
+    )
+    {
+        if (_disposed)
+            return null;
+        if (_connections.TryGetValue(key, out var existing) && existing.Matches(endpoint, expected))
         {
-            if (_disposed)
-                return;
-            if (!_connections.Remove(key, out removed))
-                return;
-            ScheduleStateChanged(selectionChanged: true);
-            if (IsReferenced(removed))
-                return;
-            RegisterRetirement(removed);
-        });
+            existing.Update(expected);
+            return null;
+        }
+        var created = new Connection(
+            _channelName.Value,
+            endpoint,
+            expected,
+            _context.CreateDealerSocket(),
+            _monitoring,
+            _socketConfig,
+            _stopToken,
+            _applicationJobQueue,
+            OnAdmitted,
+            ScheduleStateChanged,
+            _time
+        );
+        _connections[key] = created;
+        ScheduleStateChanged(selectionChanged: true);
+        if (existing is not null && !IsReferenced(existing))
+            RegisterRetirement(existing);
+        return created;
+    }
+
+    private void Remove(string key) => RunState(() => RemoveOnLane(key));
+
+    private async ValueTask RemoveAsync(string key) =>
+        await _lane.RunAsync(() => RemoveOnLane(key)).ConfigureAwait(false);
+
+    private void RemoveOnLane(string key)
+    {
+        if (_disposed)
+            return;
+        if (!_connections.Remove(key, out var removed))
+            return;
+        ScheduleStateChanged(selectionChanged: true);
+        if (IsReferenced(removed))
+            return;
+        RegisterRetirement(removed);
     }
 
     private void RegisterRetirement(Connection connection)
@@ -596,10 +631,23 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
 
     private void RunState(Action work) => AwaitStateLane(_lane.RunAsync(work));
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        operation.GetAwaiter().GetResult();
+    }
 
     private async ValueTask<ReadyTarget?> WaitForReadyAsync(CancellationToken cancellationToken) =>
         await WaitForReadyAsync(_requestTimeout, cancellationToken).ConfigureAwait(false);
@@ -1598,11 +1646,23 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
 
         private void RunState(Action work) => AwaitStateLane(_lane.RunAsync(work));
 
-        private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-            operation.GetAwaiter().GetResult();
+        private static T AwaitStateLane<T>(ValueTask<T> operation)
+        {
+            global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+                operation.IsCompleted,
+                "state lane"
+            );
+            return operation.GetAwaiter().GetResult();
+        }
 
-        private static void AwaitStateLane(ValueTask operation) =>
+        private static void AwaitStateLane(ValueTask operation)
+        {
+            global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+                operation.IsCompleted,
+                "state lane"
+            );
             operation.GetAwaiter().GetResult();
+        }
 
         private static string IdentityOf(RoutingId serverRid, ulong lifecycleGeneration) =>
             $"{serverRid.ToHex()}:{lifecycleGeneration}";

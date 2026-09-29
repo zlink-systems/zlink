@@ -42,6 +42,12 @@ internal sealed class ZLinkDeadlineClock
     internal TimeSpan FromUnixTimeMilliseconds(long deadline) =>
         Elapsed + TimeSpan.FromMilliseconds(deadline - GetUnixTimeMilliseconds());
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 }

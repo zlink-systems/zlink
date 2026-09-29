@@ -176,7 +176,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
         foreach (var connection in connections)
             await connection.DisposeAsync().ConfigureAwait(false);
         if (_ownsApplicationJobQueue)
-            _applicationJobQueue.Dispose();
+            await _applicationJobQueue.DisposeAsync().ConfigureAwait(false);
     }
 
     private void ConnectionChanged()
@@ -208,7 +208,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
             .Values.Select(static connection => connection.Read())
             .Concat(_excluded)
             .ToArray();
-        _monitoring.RecordSnapshot(_channelName.Value, publishers, _location);
+        _monitoring.PostSnapshot(_channelName.Value, publishers, _location);
     }
 
     private static (RoutingId PublisherRid, ulong LifecycleGeneration) IdentityKey(
@@ -233,7 +233,14 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
             lastFailure
         );
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        operation.GetAwaiter().GetResult();
+    }
 
     private sealed class Connection(
         ZLinkAutomaticFanoutSubscriberRuntime owner,
@@ -458,10 +465,22 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
             catch (OperationCanceledException) { }
         }
 
-        private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-            operation.GetAwaiter().GetResult();
+        private static T AwaitStateLane<T>(ValueTask<T> operation)
+        {
+            global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+                operation.IsCompleted,
+                "state lane"
+            );
+            return operation.GetAwaiter().GetResult();
+        }
 
-        private static void AwaitStateLane(ValueTask operation) =>
+        private static void AwaitStateLane(ValueTask operation)
+        {
+            global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+                operation.IsCompleted,
+                "state lane"
+            );
             operation.GetAwaiter().GetResult();
+        }
     }
 }

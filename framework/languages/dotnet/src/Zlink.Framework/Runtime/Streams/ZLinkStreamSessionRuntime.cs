@@ -290,7 +290,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             async cancellationToken =>
             {
                 using var payloadOwnerScope = payloadOwner;
-                using var admissionScope = applicationJobAdmission is { } admission
+                await using var admissionScope = applicationJobAdmission is { } admission
                     ? ZLinkApplicationJobQueueInvocation.Enter(admission)
                     : null;
                 await DispatchPacketAsync(header, payload, cancellationToken).ConfigureAwait(false);
@@ -359,7 +359,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             async cancellationToken =>
             {
                 using var payloadOwnerScope = payloadOwner;
-                using var admissionScope = applicationJobAdmission is { } admission
+                await using var admissionScope = applicationJobAdmission is { } admission
                     ? ZLinkApplicationJobQueueInvocation.Enter(admission)
                     : null;
                 await DispatchPacketAsync(header, payload, cancellationToken: cancellationToken)
@@ -1282,10 +1282,23 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         }
     }
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        operation.GetAwaiter().GetResult();
+    }
 
     internal Exception? TerminalFailure => Volatile.Read(ref _terminalFailure);
 

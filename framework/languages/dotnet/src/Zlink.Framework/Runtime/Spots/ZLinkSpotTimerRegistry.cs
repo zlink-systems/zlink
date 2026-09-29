@@ -53,7 +53,7 @@ internal sealed class ZLinkSpotTimerRegistry(
                 .Unwrap();
     }
 
-    public ValueTask<IZLinkTimer> AddAsync(
+    public async ValueTask<IZLinkTimer> AddAsync(
         string name,
         TimeSpan period,
         ZLinkTimerOptions? options,
@@ -77,7 +77,7 @@ internal sealed class ZLinkSpotTimerRegistry(
         CancellationToken cancellationToken
     )
     {
-        return _lane.RunAsync(() =>
+        var timer = await _lane.RunAsync(() =>
         {
             ObjectDisposedException.ThrowIf(_closed, this);
             cancellationToken.ThrowIfCancellationRequested();
@@ -115,8 +115,23 @@ internal sealed class ZLinkSpotTimerRegistry(
                 scheduler: _scheduler
             );
             _timers.Add(new ZLinkSpotTimerRegistration(timer, handlerType, spotType));
-            return (IZLinkTimer)timer;
+            return timer;
         });
+        try
+        {
+            await timer.Registration.ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            await timer.DisposeAsync().ConfigureAwait(false);
+            await _lane
+                .RunAsync(() =>
+                    _timers.RemoveAll(registration => ReferenceEquals(registration.Timer, timer))
+                )
+                .ConfigureAwait(false);
+            throw;
+        }
+        return timer;
     }
 
     internal IReadOnlyList<ZLinkSpotLogicalTimerSnapshot> Freeze() =>
@@ -471,10 +486,23 @@ internal sealed class ZLinkSpotTimerRegistry(
             throw new AggregateException(failures);
     }
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
+    private static T AwaitStateLane<T>(ValueTask<T> operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        return operation.GetAwaiter().GetResult();
+    }
 
-    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation)
+    {
+        global::Zlink.Framework.Runtime.Execution.ZLinkInfrastructureWaitGuard.ThrowIfBlocking(
+            operation.IsCompleted,
+            "state lane"
+        );
+        operation.GetAwaiter().GetResult();
+    }
 
     private sealed record ZLinkSpotTimerRegistration(
         ZLinkTimer Timer,

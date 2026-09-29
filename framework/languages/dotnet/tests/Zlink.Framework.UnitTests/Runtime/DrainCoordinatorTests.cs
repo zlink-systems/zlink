@@ -1183,6 +1183,41 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
     }
 
     [Fact]
+    public async Task Deadline_Force_Stop_Records_Unfinished_Owners_Before_Teardown()
+    {
+        var executor = new FakeDrainExecutor();
+        var unfinished = new[]
+        {
+            new ZLinkUnfinishedOperation("actor-lifecycle-barrier count=1", "actor:sample"),
+            new ZLinkUnfinishedOperation("close-transaction:spot-a", "spot-node-catalog"),
+        };
+        string? recorded = null;
+        var snapshotCount = 0;
+        using var coordinator = new ZLinkDrainCoordinator(
+            new ZLinkDrainAdmissionGate(),
+            executor,
+            flowCaptureEnabled: static () => true,
+            snapshotUnfinished: () =>
+            {
+                snapshotCount++;
+                return ValueTask.FromResult<IReadOnlyList<ZLinkUnfinishedOperation>>(unfinished);
+            },
+            traceUnfinished: message => recorded = message
+        );
+
+        var result = await coordinator.ForceStopAsync(
+            ZLinkDrainForceReason.DeadlineExceeded,
+            TimeSpan.FromSeconds(1)
+        );
+
+        Assert.IsType<ForceStopped>(result);
+        Assert.Equal(1, snapshotCount);
+        Assert.Contains("actor-lifecycle-barrier count=1 owner=actor:sample", recorded);
+        Assert.Contains("close-transaction:spot-a owner=spot-node-catalog", recorded);
+        Assert.Equal(ZLinkDrainForceReason.DeadlineExceeded, executor.ForceReason);
+    }
+
+    [Fact]
     public async Task Deadline_Expiry_Gives_Force_Teardown_An_Independent_Bounded_Budget()
     {
         var executor = new FakeDrainExecutor
