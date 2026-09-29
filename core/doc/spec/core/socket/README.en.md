@@ -313,13 +313,14 @@ typedef uint64_t zlink_reply_token_t;  // DATA is 0; REQUEST is nonzero
 typedef enum zlink_completion_kind_t {
   ZLINK_COMPLETION_SEND = 1,     // ABI-retained only; Core never publishes this kind
   ZLINK_COMPLETION_REQUEST = 2,  // Reply, timeout, or terminal result of a request
-  ZLINK_COMPLETION_WRITABLE = 3  // The target of a DONTWAIT SEND/REQUEST wait token has write credit again
+  ZLINK_COMPLETION_WRITABLE = 3  // Result of a DONTWAIT SEND/REQUEST wait token
 } zlink_completion_kind_t;
 
 typedef enum zlink_send_complete_result_t {
   ZLINK_SEND_ADMITTED = 0,         // WRITABLE: the same target accepts a resubmit
   ZLINK_SEND_NOT_FOUND = 801,      // WRITABLE: the target was explicitly removed (ENOENT)
   ZLINK_SEND_NOT_CONNECTED = 802,  // WRITABLE: the STREAM physical connection ended and its RID is gone (ENOTCONN)
+  ZLINK_SEND_TIMED_OUT = 803       // WRITABLE: not admitted within SNDTIMEO (EAGAIN)
 } zlink_send_complete_result_t;
 
 typedef struct zlink_completion_t {
@@ -1102,12 +1103,16 @@ or an in-progress NONE wait. A STREAM physical disconnect ends its RID; its
 token; it waits for reconnect and admission to the same target within the
 snapshotted `SNDTIMEO`.
 
-A PAIR, DEALER, or ROUTER wait token ends in three ways: (a) the WRITABLE record above; (b)
-explicit removal of the target (`zlink_disconnect_rid`, endpoint termination
+A wait token still outstanding at the `SNDTIMEO` deadline snapshotted by the submit that returned it
+ends with a WRITABLE record carrying `send_result == ZLINK_SEND_TIMED_OUT` and
+`send_terminal_errno == EAGAIN`. This is the same deadline and errno as
+a NONE `SNDTIMEO` expiry; an `SNDTIMEO` of `-1` sets no deadline.
+
+Besides the resource-recovery WRITABLE record above and the deadline expiry, a PAIR, DEALER, or
+ROUTER wait token ends in two ways: (a) explicit removal of the target (`zlink_disconnect_rid`, endpoint termination
 for that RID), which produces a WRITABLE record with
-`send_result == ZLINK_SEND_NOT_FOUND` and `send_terminal_errno == ENOENT`; (c)
-socket close or context termination, where Core ends the token internally with
-no record and
+`send_result == ZLINK_SEND_NOT_FOUND` and `send_terminal_errno == ENOENT`; (b)
+socket close or context termination, where Core releases the token internally and
 delivers no record. A peer
 weight dropping to 0 does not end a wait token. A NONE wait that has not
 returned completes synchronously: target removal returns
@@ -1188,13 +1193,11 @@ record (`send_result == ZLINK_SEND_ADMITTED`) with the same token and context,
 and the submitted RID on ROUTER, follows; the caller drains the queue to
 `NO_DATA` and resubmits the same request with `DONTWAIT`. The resubmit also
 makes one admission attempt and receives a new token if refused again. When the refusal is due to the pair's
-correlation work/count limit (systems/06-auto-hwm, work budget), that token emits WRITABLE **only when
+correlation work/count limit (systems/06-auto-hwm, work budget), that token, while outstanding, emits the resource-recovery `ZLINK_SEND_ADMITTED` WRITABLE **only when
 the pair's correlation reservation is returned** (terminal reply, timeout, disconnect), not when physical
 write credit alone recovers — the recovery of the refusing resource is the sole wake condition (one rule). Target
 granularity, wake edges, the level-held `ZLINK_POLLOUT` and
-`ZLINK_POLLCOMPLETION`, and the token end conditions (the WRITABLE record,
-explicit target removal with `ZLINK_SEND_NOT_FOUND` and `ENOENT`; socket close
-or context termination ends the token internally and delivers no record) are
+`ZLINK_POLLCOMPLETION`, and the token end conditions, including deadline expiry, are
 the same as for a SEND wait token in
 [whole-message send](#whole-message-send-and-pending-admission). The first paragraph of this section defines the result of a request to a ROUTER RID without a route.
 
@@ -1282,10 +1285,10 @@ not a capability for a later send target.
 | Target write credit restored or valid reply | `ZLINK_SEND_ADMITTED`, errno 0 | `ZLINK_REQUEST_OK` or wire error-reply mapping |
 | Request reply timeout | not applicable | `ZLINK_REQUEST_TIMED_OUT` |
 | Explicit endpoint or logical RID removal | `ZLINK_SEND_NOT_FOUND`, `ENOENT` | `ZLINK_REQUEST_NOT_FOUND` |
-| Permanent peer-type rejection | not applicable; the token stays until target removal | `ZLINK_REQUEST_REJECTED` |
-| Malformed protocol | not applicable; the token stays until target removal | `ZLINK_REQUEST_PROTOCOL_ERROR` |
+| Permanent peer-type rejection | not applicable; the wait token follows the common termination rules | `ZLINK_REQUEST_REJECTED` |
+| Malformed protocol | not applicable; the wait token follows the common termination rules | `ZLINK_REQUEST_PROTOCOL_ERROR` |
 | Allocation or runtime failure after acceptance | not applicable; Core retains no payload | `ZLINK_REQUEST_INTERNAL_ERROR` |
-| Termination of the submit-time transport pair or its removal from the selection (transient disconnect, HANDOVER supersession, standby transition, REJECT close — whatever the cause) | PAIR, DEALER, and ROUTER: no terminal; the token stays and reconnect of the same target publishes WRITABLE. STREAM: `ZLINK_SEND_NOT_CONNECTED`, `ENOTCONN` per [STREAM routed send](08-stream.en.md#4-routed-send) | the reply is pinned to the submit-time pair, so Core completes the request exactly once with `ZLINK_REQUEST_NOT_CONNECTED` (`EHOSTUNREACH`) as soon as that pair terminates or leaves the selection; the caller resubmits |
+| Termination of the submit-time transport pair or its removal from the selection (transient disconnect, HANDOVER supersession, standby transition, REJECT close — whatever the cause) | PAIR, DEALER, and ROUTER: the transport termination itself is not a terminal; reconnect of the same target publishes WRITABLE. STREAM: `ZLINK_SEND_NOT_CONNECTED`, `ENOTCONN` per [STREAM routed send](08-stream.en.md#4-routed-send) | the reply is pinned to the submit-time pair, so Core completes the request exactly once with `ZLINK_REQUEST_NOT_CONNECTED` (`EHOSTUNREACH`) as soon as that pair terminates or leaves the selection; the caller resubmits |
 | Context termination or socket close | no record; wait tokens and unread records are discarded internally | internally discard in-progress requests and unread records; no new completion is guaranteed |
 
 Core stores a REQUEST reply in a contiguous `zlink_msg_t[]` allocated before
@@ -1503,10 +1506,10 @@ connection, options, send/receive/completion functions, return values, and
 
 **Whole-message send and completion**
 - SEND results, wait tokens, WRITABLE resubmission, and replay verification refer to [whole-message send](#whole-message-send-and-pending-admission).
-- The WRITABLE record carries `send_result` and `send_terminal_errno` of `ZLINK_SEND_ADMITTED` and 0 on
-  write-credit recovery, `ZLINK_SEND_NOT_FOUND` and `ENOENT` on explicit target removal, and
-  `ZLINK_SEND_NOT_CONNECTED` and `ENOTCONN` on STREAM physical disconnect. No record follows socket
-  close or context termination.
+- Verify the termination results of SEND and REQUEST wait tokens (resource recovery, explicit removal,
+  STREAM physical disconnect, deadline expiry with `SNDTIMEO` 0 or a positive value and its absence with `-1`, races between
+  recovery and expiry, and no record after close or termination), one WRITABLE record, and reservation
+  release on receive, against [whole-message send](#whole-message-send-and-pending-admission).
 - REQUEST admission, timeout, completion, and reply-token verification refer to [Request and reply](#request-and-reply).
 - HWM and pending-request admission verification refer to [Auto HWM admission](../systems/06-auto-hwm.en.md#message-processing-sequence) and [pending-request admission](../systems/06-auto-hwm.en.md#pending-request-admission).
 
