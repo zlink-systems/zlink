@@ -12,8 +12,7 @@ internal sealed partial class SocketKernel : IDisposable
 
         var rc = NativeMethods.zlink_bind(Handle, address);
         if (rc != 0)
-            throw ZlinkException.CreateBindException(
-                NativeMethods.GetLastPInvokeError());
+            throw ZlinkException.CreateBindException((BindResult)rc);
     }
 
     public void Connect(string address)
@@ -22,8 +21,7 @@ internal sealed partial class SocketKernel : IDisposable
 
         var rc = NativeMethods.zlink_connect(Handle, address);
         if (rc != 0)
-            throw ZlinkException.CreateConnectException(
-                NativeMethods.GetLastPInvokeError());
+            throw ZlinkException.CreateConnectException((ConnectResult)rc);
     }
 
     public void Unbind(string address)
@@ -32,8 +30,7 @@ internal sealed partial class SocketKernel : IDisposable
 
         var rc = NativeMethods.zlink_unbind(Handle, address);
         if (rc != 0)
-            throw ZlinkException.CreateConnectException(
-                NativeMethods.GetLastPInvokeError());
+            throw ZlinkException.CreateConnectException((ConnectResult)rc);
     }
 
     public void Disconnect(string address)
@@ -42,8 +39,7 @@ internal sealed partial class SocketKernel : IDisposable
 
         var rc = NativeMethods.zlink_disconnect(Handle, address);
         if (rc != 0)
-            throw ZlinkException.CreateConnectException(
-                NativeMethods.GetLastPInvokeError());
+            throw ZlinkException.CreateConnectException((ConnectResult)rc);
     }
 
     public void DisconnectRid(RoutingId peerRid)
@@ -73,8 +69,7 @@ internal sealed partial class SocketKernel : IDisposable
             }
             ZlinkException.ThrowConfigIfError(rc);
             if (count > (nuint)rows.Length)
-                throw ZlinkException.CreateConfigException(
-                    ConfigResult.InternalError);
+                throw new ZlinkConfigException(ConfigResult.InternalError);
             var result = new RouterRoute[(int)count];
             for (var index = 0; index < result.Length; index++)
                 result[index] = new RouterRoute(

@@ -114,12 +114,19 @@ func completionOwnerOf(socket SocketTarget) *completionOwner {
 	return target.completionDrainOwner()
 }
 
+// pollerWaitSlot is one ready event's caller slot and, for a socket completion
+// wake, the entry resolved under the single p.mu hold of that Wait.
+type pollerWaitSlot struct {
+	slot  uintptr
+	entry *pollerEntry
+}
+
 type Poller struct {
 	handle       unsafe.Pointer
 	mu           sync.Mutex
 	waitBufferMu sync.Mutex
 	waitEvents   []C.zlink_poller_event_t
-	waitSlots    []uintptr
+	waitSlots    []pollerWaitSlot
 	sockets      map[uintptr]*pollerEntry
 	fds          map[int]*pollerEntry
 	timers       map[uintptr]*pollerEntry
@@ -488,31 +495,41 @@ func (p *Poller) Wait(events []PollEvent, timeout time.Duration) (int, error) {
 		return 0, &ConfigError{Result: errCode, nativeErrno: nativeErrno}
 	}
 	readyCount := int(count)
-	var slots []uintptr
+	var slots []pollerWaitSlot
 	if sharedBuffer {
 		if cap(p.waitSlots) < readyCount {
-			p.waitSlots = make([]uintptr, readyCount)
+			p.waitSlots = make([]pollerWaitSlot, readyCount)
 		}
 		slots = p.waitSlots[:readyCount]
 	} else {
-		slots = make([]uintptr, readyCount)
+		slots = make([]pollerWaitSlot, readyCount)
 	}
+	locked := false
 	for i := 0; i < readyCount; i++ {
 		// Slots are opaque integers encoded in native user_data. Remove the
 		// integer-shaped pointer from Go-scanned storage before a completion drain
 		// can grow this goroutine's stack.
-		slots[i] = uintptr(nativeEvents[i].user_data)
+		slots[i] = pollerWaitSlot{slot: uintptr(nativeEvents[i].user_data)}
 		nativeEvents[i].user_data = nil
+		if PollSourceKind(nativeEvents[i].source_kind) == PollSourceSocket &&
+			PollEventFlag(nativeEvents[i].events)&(PollOut|PollCompletion) != 0 {
+			if !locked {
+				p.mu.Lock()
+				locked = true
+			}
+			slots[i].entry = p.sockets[uintptr(nativeEvents[i].socket)]
+		}
+	}
+	if locked {
+		p.mu.Unlock()
 	}
 	out := 0
 	for i := 0; i < readyCount; i++ {
 		event := nativeEvents[i]
 		revents := PollEventFlag(event.events)
-		if revents&(PollOut|PollCompletion) != 0 {
-			p.mu.Lock()
-			entry := p.sockets[uintptr(event.socket)]
-			p.mu.Unlock()
-			if entry != nil && entry.ownsCompletion && entry.owner != nil {
+		if entry := slots[i].entry; entry != nil {
+			slots[i].entry = nil
+			if entry.ownsCompletion && entry.owner != nil {
 				drained, drainErr := entry.owner.drain(true)
 				if drainErr != nil {
 					return 0, drainErr
@@ -533,7 +550,7 @@ func (p *Poller) Wait(events []PollEvent, timeout time.Duration) (int, error) {
 		events[out] = PollEvent{
 			SourceKind: PollSourceKind(event.source_kind),
 			Fd:         int(event.fd),
-			Slot:       slots[i],
+			Slot:       slots[i].slot,
 			Revents:    revents,
 		}
 		out++

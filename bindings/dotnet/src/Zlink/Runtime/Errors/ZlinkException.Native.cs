@@ -130,6 +130,7 @@ public abstract partial class ZlinkException
         return error is ErrorCode.EShutdown or ErrorCode.Eterm;
     }
 
+    // A WRITABLE SEND_TERMINAL record carries no submit result, only errno.
     internal static ZlinkSubmitException CreateSubmitException(int errno)
     {
         return new ZlinkSubmitException(MapSubmitResult(errno), errno);
@@ -137,67 +138,32 @@ public abstract partial class ZlinkException
 
     internal static ZlinkSubmitException CreateSubmitException(SubmitResult result)
     {
-        return new ZlinkSubmitException(result);
-    }
-
-    internal static ZlinkRequestException CreateRequestException(int errno)
-    {
-        return new ZlinkRequestException(MapRequestResult(errno), errno);
-    }
-
-    internal static ZlinkRequestException CreateRequestException(RequestResult result)
-    {
-        return new ZlinkRequestException(result);
-    }
-
-    internal static ZlinkRecvException CreateRecvException(int errno)
-    {
-        return new ZlinkRecvException(MapRecvResult(errno), errno);
+        return new ZlinkSubmitException(result, NativeMethods.GetLastPInvokeError());
     }
 
     internal static ZlinkRecvException CreateRecvException(RecvResult result)
     {
-        return new ZlinkRecvException(result);
-    }
-
-    internal static ZlinkHandlerException CreateHandlerException(int errno)
-    {
-        return new ZlinkHandlerException(MapHandlerResult(errno), errno);
+        return new ZlinkRecvException(result, NativeMethods.GetLastPInvokeError());
     }
 
     internal static ZlinkHandlerException CreateHandlerException(HandlerResult result)
     {
-        return new ZlinkHandlerException(result);
-    }
-
-    internal static ZlinkCloseException CreateCloseException(int errno)
-    {
-        return new ZlinkCloseException(MapCloseResult(errno), errno);
+        return new ZlinkHandlerException(result, NativeMethods.GetLastPInvokeError());
     }
 
     internal static ZlinkCloseException CreateCloseException(CloseResult result)
     {
-        return new ZlinkCloseException(result);
-    }
-
-    internal static ZlinkBindException CreateBindException(int errno)
-    {
-        return new ZlinkBindException(MapBindResult(errno), errno);
+        return new ZlinkCloseException(result, NativeMethods.GetLastPInvokeError());
     }
 
     internal static ZlinkBindException CreateBindException(BindResult result)
     {
-        return new ZlinkBindException(result);
-    }
-
-    internal static ZlinkConnectException CreateConnectException(int errno)
-    {
-        return new ZlinkConnectException(MapConnectResult(errno), errno);
+        return new ZlinkBindException(result, NativeMethods.GetLastPInvokeError());
     }
 
     internal static ZlinkConnectException CreateConnectException(ConnectResult result)
     {
-        return new ZlinkConnectException(result);
+        return new ZlinkConnectException(result, NativeMethods.GetLastPInvokeError());
     }
 
     internal static ZlinkConfigException CreateConfigException(int errno)
@@ -207,7 +173,7 @@ public abstract partial class ZlinkException
 
     internal static ZlinkConfigException CreateConfigException(ConfigResult result)
     {
-        return new ZlinkConfigException(result);
+        return new ZlinkConfigException(result, NativeMethods.GetLastPInvokeError());
     }
 
     private static string BuildMessage(int code, int nativeErrno)
@@ -239,101 +205,11 @@ public abstract partial class ZlinkException
         };
     }
 
-    private static RequestResult MapRequestResult(int errno)
-    {
-        return errno switch
-        {
-            0 => RequestResult.Ok,
-            60 or 110 or 10060 => RequestResult.TimedOut,
-            3 or 2 => RequestResult.NotFound,
-            156384765 or 58 or 108 or 10058 => RequestResult.Terminated,
-            104 => RequestResult.ProtocolError,
-            12 or 105 => RequestResult.InternalError,
-            1 or 13 => RequestResult.Rejected,
-            17 => RequestResult.Conflict,
-            16 => RequestResult.Busy,
-            107 or 113 or 111 or 10057 or 10065 =>
-                RequestResult.NotConnected,
-            22 => RequestResult.InvalidArgument,
-            95 or 93 or 97 or 156384766 => RequestResult.NotSupported,
-            _ => RequestResult.InternalError
-        };
-    }
-
-    private static RecvResult MapRecvResult(int errno)
-    {
-        return errno switch
-        {
-            0 => RecvResult.Ok,
-            11 or 35 or 10035 => RecvResult.NoData,
-            16 => RecvResult.Busy,
-            156384765 => RecvResult.Terminated,
-            58 or 108 or 10058 => RecvResult.InvalidState,
-            9 or 14 or 88 => RecvResult.InvalidHandle,
-            95 or 93 or 97 => RecvResult.NotSupported,
-            _ => RecvResult.InternalError
-        };
-    }
-
-    private static HandlerResult MapHandlerResult(int errno)
-    {
-        return errno switch
-        {
-            0 => HandlerResult.Ok,
-            22 => HandlerResult.InvalidArgument,
-            16 => HandlerResult.Busy,
-            95 or 93 or 97 => HandlerResult.NotSupported,
-            35 => HandlerResult.Deadlock,
-            9 or 88 => HandlerResult.InvalidHandle,
-            _ => HandlerResult.InternalError
-        };
-    }
-
-    private static CloseResult MapCloseResult(int errno)
-    {
-        return errno switch
-        {
-            0 => CloseResult.Ok,
-            16 => CloseResult.Busy,
-            108 => CloseResult.Shutdown,
-            9 or 88 => CloseResult.InvalidHandle,
-            _ => CloseResult.InternalError
-        };
-    }
-
-    private static BindResult MapBindResult(int errno)
-    {
-        return errno switch
-        {
-            0 => BindResult.Ok,
-            22 => BindResult.InvalidArgument,
-            98 => BindResult.AddrInUse,
-            95 or 93 or 97 => BindResult.NotSupported,
-            9 or 88 => BindResult.InvalidHandle,
-            _ => BindResult.InternalError
-        };
-    }
-
-    private static ConnectResult MapConnectResult(int errno)
-    {
-        return errno switch
-        {
-            0 => ConnectResult.Ok,
-            22 => ConnectResult.InvalidArgument,
-            95 or 93 or 97 => ConnectResult.NotSupported,
-            9 or 88 => ConnectResult.InvalidHandle,
-            2 or 3 => ConnectResult.NotFound,
-            98 => ConnectResult.Conflict,
-            16 => ConnectResult.Busy,
-            _ => ConnectResult.InternalError
-        };
-    }
-
     private static ConfigResult MapConfigResult(int errno)
     {
         return errno switch
         {
-            0 => ConfigResult.Ok,
+            0 => ConfigResult.InternalError,
             9 or 88 => ConfigResult.InvalidHandle,
             22 => ConfigResult.InvalidArgument,
             95 or 93 or 97 => ConfigResult.NotSupported,

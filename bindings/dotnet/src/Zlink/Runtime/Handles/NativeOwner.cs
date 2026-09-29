@@ -53,23 +53,4 @@ internal abstract class NativeOwner
         return rc;
     }
 
-    protected static int RetryWhileInterrupted(Func<int> action,
-        out int lastErrno)
-    {
-        while (true)
-        {
-            var rc = action();
-            if (rc == 0)
-            {
-                lastErrno = 0;
-                return rc;
-            }
-
-            lastErrno = Runtime.Native.NativeMethods.GetLastPInvokeError();
-            var code = ZlinkException.MapErrorCode(lastErrno);
-            if (code == ErrorCode.EIntr || lastErrno == 4)
-                continue;
-            return rc;
-        }
-    }
 }

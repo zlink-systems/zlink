@@ -39,8 +39,6 @@ def _request_result_from_code(code):
 
 
 def _config_result_from_errno(err):
-    if err == 0:
-        return ConfigResult.OK
     if err == _errno.EFAULT:
         return ConfigResult.INVALID_HANDLE
     if err in (_errno.EINVAL, _errno.EMSGSIZE):
@@ -283,10 +281,6 @@ def _routing_id_bytes(routing_id):
     if not raw:
         return None
     return RoutingId(raw)
-
-
-def _is_eagain(exc):
-    return isinstance(exc, ZlinkError) and exc.native_errno == _errno.EAGAIN
 
 
 class _ReceivedPartsOwner:

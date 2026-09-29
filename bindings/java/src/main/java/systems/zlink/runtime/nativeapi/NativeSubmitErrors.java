@@ -2,8 +2,6 @@
 
 package systems.zlink.runtime.nativeapi;
 
-import systems.zlink.contracts.errors.ErrorCategory;
-import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.sockets.SubmitResult;
 
@@ -62,16 +60,6 @@ public final class NativeSubmitErrors {
             throw new IllegalArgumentException(
                 "submit result indicates success");
         }
-        try {
-            return new ZlinkSubmitException(SubmitResult.fromValue(result),
-                errno);
-        } catch (IllegalArgumentException ignored) {
-            ZlinkSubmitException mapped = submitExceptionOrNull(errno);
-            if (mapped != null) {
-                return mapped;
-            }
-            return (ZlinkSubmitException) ZlinkException.fromErrno(
-                ErrorCategory.SUBMIT, errno);
-        }
+        return new ZlinkSubmitException(SubmitResult.fromValue(result), errno);
     }
 }

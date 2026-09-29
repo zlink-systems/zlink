@@ -100,7 +100,11 @@ public sealed class test_validation_contract
         using var ctx = Zlink.CreateContext();
         using var pair = ctx.CreatePairSocket();
 
-        Assert.Throws<ZlinkBindException>(() => pair.Bind("invalid://endpoint"));
+        var bindFailure = Assert.Throws<ZlinkBindException>(() =>
+            pair.Bind("invalid://endpoint"));
+        Assert.Equal(ZlinkBindException.ErrorCode.NotSupported,
+            bindFailure.Result);
+        Assert.NotEqual(0, bindFailure.NativeErrno);
         Assert.Throws<ZlinkConnectException>(() =>
             pair.Connect("invalid://endpoint"));
         Assert.Throws<ZlinkConnectException>(() =>

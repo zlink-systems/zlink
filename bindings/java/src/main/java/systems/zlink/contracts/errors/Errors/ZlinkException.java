@@ -7,7 +7,6 @@ import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.internal.ContractAccess;
 import systems.zlink.internal.NativeErrorCodes;
-import java.util.Locale;
 
 /** Base class for all exceptions thrown by the zlink bindings. */
 public abstract sealed class ZlinkException extends RuntimeException
@@ -37,16 +36,8 @@ public abstract sealed class ZlinkException extends RuntimeException
         return nativeErrno;
     }
 
-    public static ZlinkException fromLastError(String operation) {
-        return fromLastError(categoryFromOperation(operation));
-    }
-
     public static ZlinkException fromLastError(ErrorCategory category) {
-        return fromErrno(category, safeErrno());
-    }
-
-    public static ZlinkException fromErrno(String operation, int errno) {
-        return fromErrno(categoryFromOperation(operation), errno);
+        return fromErrno(category, ContractAccess.nativeErrno());
     }
 
     public static ZlinkException fromErrno(ErrorCategory category, int errno) {
@@ -66,53 +57,6 @@ public abstract sealed class ZlinkException extends RuntimeException
             case CONFIG -> new ZlinkConfigException(mapConfigResult(errno),
                 errno);
         };
-    }
-
-    private static ErrorCategory categoryFromOperation(String operation) {
-        String op = operation == null ? "" : operation.toLowerCase(Locale.ROOT);
-        if (containsAny(op, "handler")) {
-            return ErrorCategory.HANDLER;
-        }
-        if (containsAny(op, "recv", "receive", "subscription_event",
-                "socket_monitor_recv", "monitor_recv")
-            || (op.contains("subscribe")
-                && !containsAny(op, "set_subscription", "unset_subscription",
-                    "subscribe_handler"))) {
-            return ErrorCategory.RECV;
-        }
-        if (containsAny(op, "request")) {
-            return ErrorCategory.REQUEST;
-        }
-        if (containsAny(op, "bind")) {
-            return ErrorCategory.BIND;
-        }
-        if (containsAny(op, "connect", "disconnect", "unbind")) {
-            return ErrorCategory.CONNECT;
-        }
-        if (containsAny(op, "close", "destroy")) {
-            return ErrorCategory.CLOSE;
-        }
-        if (containsAny(op, "send", "publish", "reply", "proxy")) {
-            return ErrorCategory.SUBMIT;
-        }
-        return ErrorCategory.CONFIG;
-    }
-
-    private static int safeErrno() {
-        try {
-            return ContractAccess.nativeErrno();
-        } catch (RuntimeException ignored) {
-            return -1;
-        }
-    }
-
-    private static boolean containsAny(String value, String... needles) {
-        for (String needle : needles) {
-            if (value.contains(needle)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private static SubmitResult mapSubmitResult(int errno) {
@@ -190,11 +134,10 @@ public abstract sealed class ZlinkException extends RuntimeException
             case NativeErrorCodes.EFAULT, NativeErrorCodes.EBADF ->
                 HandlerResult.INVALID_HANDLE;
             case NativeErrorCodes.EINVAL -> HandlerResult.INVALID_ARGUMENT;
-            case NativeErrorCodes.EAGAIN, NativeErrorCodes.EWOULDBLOCK_WIN ->
-                HandlerResult.BUSY;
+            case NativeErrorCodes.EBUSY -> HandlerResult.BUSY;
             case NativeErrorCodes.ENOTSUP -> HandlerResult.NOT_SUPPORTED;
-            case NativeErrorCodes.EBUSY -> HandlerResult.DEADLOCK;
-            default -> HandlerResult.BUSY;
+            case NativeErrorCodes.EDEADLK -> HandlerResult.DEADLOCK;
+            default -> HandlerResult.INTERNAL_ERROR;
         };
     }
 

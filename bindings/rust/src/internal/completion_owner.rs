@@ -20,9 +20,7 @@ use crate::error::{
 };
 use crate::ffi;
 use crate::message::Message;
-use crate::native_errors::{
-    check_recv_rc, request_error_from_result, send_terminal_error, submit_error_from_errno,
-};
+use crate::native_errors::{check_recv_rc, request_error_from_result, send_terminal_error};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CompletionEntryKind {
@@ -328,7 +326,10 @@ impl CompletionEntry {
                     if self.kind == CompletionEntryKind::SendRetry || state.awaiting_writable {
                         CompletionOutcome::Writable {
                             completion_id: state.completion_id,
-                            result: Err(submit_error_from_errno(libc::ESHUTDOWN)),
+                            result: Err(SubmitError::new(
+                                SubmitResult::Terminated,
+                                libc::ESHUTDOWN,
+                            )),
                         }
                     } else {
                         CompletionOutcome::Request(Err(RequestError::new(

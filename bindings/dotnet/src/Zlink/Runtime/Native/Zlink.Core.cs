@@ -44,8 +44,7 @@ public static partial class Zlink
         var rc = NativeMethods.zlink_proxy(frontendSocket.Handle,
             backendSocket.Handle, captureSocket?.Handle ?? IntPtr.Zero);
         if (rc != 0)
-            throw ZlinkException.CreateConfigException(
-                NativeMethods.GetLastPInvokeError());
+            throw ZlinkException.CreateConfigException((ConfigResult)rc);
     }
 
     private static void SleepCore(TimeSpan duration)

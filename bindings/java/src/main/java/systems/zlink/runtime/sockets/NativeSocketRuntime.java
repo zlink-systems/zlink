@@ -28,7 +28,6 @@ import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.runtime.nativeapi.InternalAccess;
 import systems.zlink.runtime.nativeapi.CompletionDispatcher;
 import systems.zlink.runtime.nativeapi.Native;
-import systems.zlink.runtime.nativeapi.NativeErrno;
 import systems.zlink.runtime.nativeapi.NativeHelpers;
 import systems.zlink.runtime.nativeapi.NativeLayouts;
 import systems.zlink.runtime.nativeapi.NativeRoutingIds;
@@ -836,8 +835,8 @@ final class NativeSocketRuntime implements AutoCloseable {
     }
 
     public void publishParts(String topicId, List<Message> parts,
-                      SendFlag flags, boolean nonBlocking) {
-        sendPlane.publishParts(topicId, parts, flags, nonBlocking);
+                             SendFlag flags) {
+        sendPlane.publishParts(topicId, parts, flags);
     }
 
     public SendResult publishNoWaitPartsResult(String topicId, List<Message> parts) {
@@ -948,14 +947,14 @@ final class NativeSocketRuntime implements AutoCloseable {
                         actual);
                     return out;
                 }
-                int errno = Native.errno();
-                if (errno == NativeErrno.ENOENT)
+                if (rc == systems.zlink.contracts.errors.ConfigResult.NOT_FOUND.value())
                     return null;
-                if (errno == NativeErrno.EINVAL) {
+                if (rc == systems.zlink.contracts.errors.ConfigResult.BUFFER_TOO_SMALL.value()) {
                     capacity = toIntLength(lenInOut.get(ValueLayout.JAVA_LONG, 0));
                     continue;
                 }
-                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+                throw new systems.zlink.contracts.errors.ZlinkConfigException(
+                    systems.zlink.contracts.errors.ConfigResult.fromValue(rc), Native.errno());
             }
         }
     }

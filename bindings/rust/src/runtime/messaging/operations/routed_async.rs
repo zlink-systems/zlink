@@ -14,7 +14,7 @@ use crate::message::{Message, RoutingId};
 use crate::messaging_operations::{
     Empty, MessageParts, RequestOp, RequestOpStorage, RequestSubmission,
 };
-use crate::native_errors::{submit_error_from_errno, submit_error_from_rc};
+use crate::native_errors::submit_error_from_rc;
 
 use super::send_ops::{check_submit_result, submit_shared_message};
 
@@ -281,7 +281,10 @@ fn validate_request(operation: &RequestOpStorage) -> Result<(), SubmitError> {
             libc::EINVAL,
         ))
     } else if operation.routed.handle().is_null() {
-        Err(submit_error_from_errno(libc::ECANCELED))
+        Err(SubmitError::new(
+            SubmitResult::InternalError,
+            libc::ECANCELED,
+        ))
     } else {
         Ok(())
     }
@@ -300,7 +303,8 @@ fn submit_request_attempt(
     let mut completion_id = 0;
     let handle = operation.routed.handle();
     if handle.is_null() {
-        return Err(RequestAttemptError::without_token(submit_error_from_errno(
+        return Err(RequestAttemptError::without_token(SubmitError::new(
+            SubmitResult::InternalError,
             libc::ECANCELED,
         )));
     }

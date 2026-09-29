@@ -2,8 +2,6 @@
 
 package systems.zlink.runtime.nativeapi;
 
-import java.util.function.IntPredicate;
-import java.util.function.IntSupplier;
 import systems.zlink.internal.NativeErrorCodes;
 
 public final class NativeErrno {
@@ -31,15 +29,5 @@ public final class NativeErrno {
     public static final int EHOSTUNREACH_WIN = NativeErrorCodes.EHOSTUNREACH_WIN;
 
     private NativeErrno() {
-    }
-
-    public static int retryWhileInterrupted(IntSupplier call,
-                                            IntPredicate failed) {
-        while (true) {
-            int rc = call.getAsInt();
-            if (!failed.test(rc) || Native.errno() != EINTR) {
-                return rc;
-            }
-        }
     }
 }

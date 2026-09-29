@@ -70,15 +70,19 @@ struct recv_envelope_t
     {
         if (native_part_count == 1u) {
             message_t part;
-            if (!part.valid () || !adopt_native_part (part, native_parts[0]))
+            if (!part.valid ())
                 return -1;
+            detail::throw_if_failed<config_error_t> (
+              adopt_native_part (part, native_parts[0]));
             receive_single_part (std::move (part));
         } else {
             reserve_parts (native_part_count);
             for (size_t i = 0; i < native_part_count; ++i) {
                 message_t part;
-                if (!part.valid () || !adopt_native_part (part, native_parts[i]))
+                if (!part.valid ())
                     return -1;
+                detail::throw_if_failed<config_error_t> (
+                  adopt_native_part (part, native_parts[i]));
                 receive_part (std::move (part));
             }
         }

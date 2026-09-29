@@ -7,7 +7,6 @@ use crate::error::{SubmitError, SubmitResult};
 use crate::ffi;
 use crate::message::RoutingId;
 use crate::messaging_operations::{Empty, MessageParts, ReplyOp, ReplyOpStorage};
-use crate::native_errors::submit_error_from_errno;
 
 use super::send_ops::{check_submit_result, submit_shared_message};
 
@@ -38,7 +37,10 @@ pub(crate) fn submit_reply(mut op: ReplyOpStorage) -> Result<(), SubmitError> {
     }
     let handle = op.routed.handle();
     if handle.is_null() {
-        return Err(submit_error_from_errno(libc::ECANCELED));
+        return Err(SubmitError::new(
+            SubmitResult::InternalError,
+            libc::ECANCELED,
+        ));
     }
     let target = op.target.as_raw() as *const _;
     let value = op.token.value();

@@ -2,7 +2,6 @@
 #ifndef ZLINK_CPP_RUNTIME_MESSAGING_OPERATION_SUBMIT_HPP_INCLUDED
 #define ZLINK_CPP_RUNTIME_MESSAGING_OPERATION_SUBMIT_HPP_INCLUDED
 
-#include <Runtime/Errors/result_from_errno.hpp>
 #include "operation_state.hpp"
 #include "operation_detail.hpp"
 #include "../Core/duration_conversion.hpp"
@@ -53,9 +52,6 @@ inline bool submit_raw_send_state (operation_state_t &state_,
 
     if (state_.message.single_part.has_value () || state_.message.single_part_source) {
         message_t &part = send_single_part (state_);
-        if (!part.valid ())
-            throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
-
         const int direct_rc = zlink::detail::submit_borrowed_message_part (
           part, [&] (zlink_msg_t *parts_, size_t part_count_) {
               switch (state_.kind) {
@@ -79,12 +75,6 @@ inline bool submit_raw_send_state (operation_state_t &state_,
           });
 
         const int submit_errno = zlink_errno ();
-        if (direct_rc == -1) {
-            if (restore_sources_on_failure_)
-                restore_single_send_part_to_source (state_);
-            throw submit_error_t (result_from_errno (submit_result_t{}, submit_errno),
-                                  submit_errno);
-        }
         const submit_result_t rc = static_cast<submit_result_t> (direct_rc);
         if (rc == submit_result_t::ok)
             return true;
@@ -123,11 +113,6 @@ inline bool submit_raw_send_state (operation_state_t &state_,
           }
       });
     const int submit_errno = zlink_errno ();
-    if (raw_rc == -1) {
-        if (restore_sources_on_failure_)
-            restore_send_parts_to_sources (state_, parts);
-        throw submit_error_t (result_from_errno (submit_result_t{}, submit_errno), submit_errno);
-    }
     const submit_result_t rc = static_cast<submit_result_t> (raw_rc);
     if (rc != submit_result_t::ok) {
         if (restore_sources_on_failure_)
@@ -187,19 +172,12 @@ inline bool submit_raw_request_state (
     if (state_.message.single_part.has_value ()
         || state_.message.single_part_source) {
         message_t &part = send_single_part (state_);
-        if (!part.valid ())
-            throw_invalid_argument ();
         raw_result = submit_borrowed_message_part (part, submit_record);
     } else {
         raw_result = submit_message_parts (state_.message.parts, submit_record);
     }
 
     const int submit_errno = zlink_errno ();
-    if (raw_result == -1) {
-        restore_sources ();
-        throw submit_error_t (result_from_errno (submit_result_t{}, submit_errno), submit_errno);
-    }
-
     const submit_result_t result = static_cast<submit_result_t> (raw_result);
     if (result == submit_result_t::ok) {
         if (*completion_id_out_ == 0) {

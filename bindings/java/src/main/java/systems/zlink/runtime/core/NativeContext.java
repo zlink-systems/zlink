@@ -169,7 +169,7 @@ final class NativeContext implements Context {
         ensureOpen();
         int rc = Native.ctxShutdown(handle);
         if (rc != 0) {
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw new ZlinkCloseException(CloseResult.fromValue(rc), Native.errno());
         }
     }
 
@@ -292,7 +292,7 @@ final class NativeContext implements Context {
         ensureOpen();
         int rc = Native.ctxSet(handle, option.getValue(), value);
         if (rc != 0) {
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
         }
     }
 
@@ -305,7 +305,7 @@ final class NativeContext implements Context {
             int rc = Native.ctxSetData(handle, option.getValue(), bytes,
                 byteLength);
             if (rc != 0) {
-                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+                throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
             }
         }
     }

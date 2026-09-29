@@ -219,13 +219,7 @@ impl crate::internal::SocketStorage {
         if rc == RecvResult::NoData as i32 {
             return Ok(false);
         }
-        if rc != 0 {
-            let errno = unsafe { ffi::zlink_errno() };
-            if errno == libc::EAGAIN {
-                return Ok(false);
-            }
-            return Err(RecvError::new(crate::error::RecvResult::Terminated, errno));
-        }
+        check_recv_rc(rc)?;
 
         let topic = cstr_buf_to_smolstr(&topic_buf, topic_len);
         out.replace_from(SubscriptionEvent::new(

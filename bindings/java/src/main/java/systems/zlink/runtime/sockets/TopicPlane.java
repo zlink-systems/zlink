@@ -57,7 +57,7 @@ final class TopicPlane {
         Objects.requireNonNull(parts, "parts");
         Objects.requireNonNull(flags, "flags");
         validateTopicUtf8(topicId, "topicId");
-        socket.publishParts(topicId, parts, flags, false);
+        socket.publishParts(topicId, parts, flags);
     }
 
     SendResult publishNoWaitResult(String topicId, Message part) {

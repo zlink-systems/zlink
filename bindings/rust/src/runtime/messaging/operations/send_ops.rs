@@ -12,7 +12,7 @@ use crate::internal::{CompletionEntry, CompletionEntryKind, CompletionOwner, Rou
 use crate::messaging_operations::{
     Empty, MessageParts, PublishOp, PublishOpStorage, SendOp, SendOpStorage, SendSubmission,
 };
-use crate::native_errors::{submit_error_from_errno, submit_error_from_rc};
+use crate::native_errors::submit_error_from_rc;
 
 pub(crate) fn socket_send_op(
     handle: *mut c_void,
@@ -369,17 +369,16 @@ pub(super) fn submit_shared_message(
             if ffi::zlink_msg_init(attempt.as_mut_ptr()) != 0 {
                 let errno = ffi::zlink_errno();
                 ffi::zlink_multipart_close(native_parts.as_mut_ptr(), native_parts.len());
-                return Err(submit_error_from_errno(errno));
+                return Err(SubmitError::new(SubmitResult::InternalError, errno));
             }
             if ffi::zlink_msg_copy(attempt.as_mut_ptr(), part.raw_mut()) != 0 {
                 let errno = ffi::zlink_errno();
                 ffi::zlink_msg_close(attempt.as_mut_ptr());
                 ffi::zlink_multipart_close(native_parts.as_mut_ptr(), native_parts.len());
-                return Err(submit_error_from_errno(if errno == 0 {
-                    libc::EIO
-                } else {
-                    errno
-                }));
+                return Err(SubmitError::new(
+                    SubmitResult::InternalError,
+                    if errno == 0 { libc::EIO } else { errno },
+                ));
             }
             native_parts.push(attempt.assume_init());
         }
@@ -467,7 +466,10 @@ fn live_handle(op: &SendOpStorage) -> Result<*mut c_void, SubmitError> {
         .as_ref()
         .map_or(op.handle, |routed| routed.handle());
     if handle.is_null() {
-        Err(submit_error_from_errno(libc::ECANCELED))
+        Err(SubmitError::new(
+            SubmitResult::InternalError,
+            libc::ECANCELED,
+        ))
     } else {
         Ok(handle)
     }

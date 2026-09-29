@@ -101,8 +101,8 @@ final class SocketSendPlane {
         MemorySegment nativeMsg = scratch.nativeMsg;
         int rc = NativeMessage.messageInitSize(nativeMsg, length);
         if (rc != 0) {
-            throw ZlinkException.fromLastError(
-                systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw new systems.zlink.contracts.errors.ZlinkConfigException(
+                systems.zlink.contracts.errors.ConfigResult.fromValue(rc), Native.errno());
         }
         if (length > 0) {
             MemorySegment.copy(payload, 0,
@@ -224,7 +224,7 @@ final class SocketSendPlane {
     }
 
     void publishParts(String topicId, List<Message> parts,
-                      SendFlag flags, boolean nonBlocking) {
+                      SendFlag flags) {
         socket.ensureOpen();
         validateParts(parts);
         ensureBlockingSendAllowed(flags);

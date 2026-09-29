@@ -2,7 +2,6 @@
 #include "zlink/Contracts/Eventing/poller.hpp"
 
 #include <Runtime/Core/duration_conversion.hpp>
-#include <Runtime/Errors/result_from_errno.hpp>
 #include <Runtime/Eventing/monitor_access.hpp>
 #include <Runtime/Eventing/poller_item_registry.hpp>
 #include <Runtime/Eventing/poller_socket_cache.hpp>
@@ -533,9 +532,7 @@ int poll (poll_item_t *items_, size_t count_, std::chrono::milliseconds timeout_
     if (rc < 0) {
         if (error != 0)
             throw config_error_t (static_cast<config_result_t> (error), detail::current_errno ());
-        throw config_error_t (
-          detail::result_from_errno (config_result_t{}, detail::current_errno ()),
-          detail::current_errno ());
+        throw config_error_t (config_result_t::internal_error, detail::current_errno ());
     }
 
     for (size_t i = 0; i < count_; ++i)

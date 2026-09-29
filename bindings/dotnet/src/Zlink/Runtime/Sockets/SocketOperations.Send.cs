@@ -181,7 +181,7 @@ internal sealed class PublisherPublishOperation : PublishOperation,
             ? _socket.PublishCore(_topic, _parts.Single, _flags)
             : _socket.PublishCore(_topic, _parts.Parts, _flags);
         if (!accepted)
-            throw ZlinkException.CreateSubmitException((int)ErrorCode.EAgain);
+            throw new ZlinkSubmitException(SubmitResult.Backpressured);
     }
 
     private void EnsureNotSubmitted()
