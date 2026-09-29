@@ -68,8 +68,8 @@ try {
 | --- | --- |
 | `getCode()` | `int`, 실패를 분류하는 zlink result code |
 | `getNativeErrno()` | `int`, 밑에 깔린 native errno, 없으면 `0` |
-| `fromLastError(String operation)` / `fromLastError(ErrorCategory)` | static factory; 현재 native errno를 읽고 operation 이름에서 오류 category를 추론하거나 전달받은 category를 사용한다 |
-| `fromErrno(String operation, int errno)` / `fromErrno(ErrorCategory, int errno)` | static factory; native 호출이 반환할 때 수집한 `errno`와 `ErrorCategory`(`CONFIG`/`BIND`/`CONNECT`/`CLOSE`/`HANDLER`/`RECV`/`REQUEST`/`SUBMIT`)로부터 올바른 타입의 exception을 만든다 — `String operation` overload는 operation 이름에서 category를 추론한다 |
+| `fromLastError(ErrorCategory)` | static factory; 현재 native errno를 읽고 전달받은 category의 exception을 만든다 |
+| `fromErrno(ErrorCategory, int errno)` | static factory; native 호출이 반환할 때 수집한 `errno`와 `ErrorCategory`(`CONFIG`/`BIND`/`CONNECT`/`CLOSE`/`HANDLER`/`RECV`/`REQUEST`/`SUBMIT`)로부터 올바른 타입의 exception을 만든다 |
 
 **Completion result.** 해당 없음 — 이건 exception 계층 자체다.
 `TypedZlinkException`(중간 sealed class)은 package-private다 —

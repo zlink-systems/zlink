@@ -14,9 +14,9 @@ use crate::message::{Message, RoutingId};
 use crate::messaging_operations::{
     Empty, MessageParts, RequestOp, RequestOpStorage, RequestSubmission,
 };
-use crate::native_errors::{submit_error_from_errno, submit_error_from_rc};
+use crate::native_errors::submit_error_from_rc;
 
-use super::send_ops::{check_submit_result, submit_shared_message};
+use super::send_ops::{check_submit_result, is_writable_wait, submit_shared_message};
 
 pub(crate) fn dealer_request_op(
     routed: Arc<RoutedHandle>,
@@ -281,7 +281,10 @@ fn validate_request(operation: &RequestOpStorage) -> Result<(), SubmitError> {
             libc::EINVAL,
         ))
     } else if operation.routed.handle().is_null() {
-        Err(submit_error_from_errno(libc::ECANCELED))
+        Err(SubmitError::new(
+            SubmitResult::InternalError,
+            libc::ECANCELED,
+        ))
     } else {
         Ok(())
     }
@@ -300,7 +303,8 @@ fn submit_request_attempt(
     let mut completion_id = 0;
     let handle = operation.routed.handle();
     if handle.is_null() {
-        return Err(RequestAttemptError::without_token(submit_error_from_errno(
+        return Err(RequestAttemptError::without_token(SubmitError::new(
+            SubmitResult::InternalError,
             libc::ECANCELED,
         )));
     }
@@ -322,7 +326,7 @@ fn submit_request_attempt(
         entry.publish_request(completion_id);
         return Ok(RequestAttempt::Admitted);
     }
-    if rc == SubmitResult::Backpressured as i32 && completion_id != 0 {
+    if is_writable_wait(rc, errno, completion_id) {
         entry.publish_writable(completion_id);
         return Ok(RequestAttempt::Waiting);
     }

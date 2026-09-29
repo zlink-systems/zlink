@@ -36,24 +36,11 @@ internal sealed class SocketHandle : IDisposable
 
         try
         {
-            var lastErrno = 0;
-            while (true)
-            {
-                var rc = NativeMethods.zlink_close(_handle);
-                if (rc == 0)
-                {
-                    _handle = IntPtr.Zero;
-                    _context = null;
-                    return;
-                }
-
-                var errno = NativeMethods.GetLastPInvokeError();
-                lastErrno = errno;
-                var code = ZlinkException.MapErrorCode(errno);
-                if (code == ErrorCode.EIntr || errno == 4)
-                    continue;
-                throw ZlinkException.CreateCloseException(lastErrno);
-            }
+            var rc = NativeMethods.zlink_close(_handle);
+            if (rc != 0)
+                throw ZlinkException.CreateCloseException((CloseResult)rc);
+            _handle = IntPtr.Zero;
+            _context = null;
         }
         finally
         {

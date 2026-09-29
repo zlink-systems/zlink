@@ -12,7 +12,7 @@ use crate::internal::{CompletionEntry, CompletionEntryKind, CompletionOwner, Rou
 use crate::messaging_operations::{
     Empty, MessageParts, PublishOp, PublishOpStorage, SendOp, SendOpStorage, SendSubmission,
 };
-use crate::native_errors::{submit_error_from_errno, submit_error_from_rc};
+use crate::native_errors::submit_error_from_rc;
 
 pub(crate) fn socket_send_op(
     handle: *mut c_void,
@@ -369,17 +369,16 @@ pub(super) fn submit_shared_message(
             if ffi::zlink_msg_init(attempt.as_mut_ptr()) != 0 {
                 let errno = ffi::zlink_errno();
                 ffi::zlink_multipart_close(native_parts.as_mut_ptr(), native_parts.len());
-                return Err(submit_error_from_errno(errno));
+                return Err(SubmitError::new(SubmitResult::InternalError, errno));
             }
             if ffi::zlink_msg_copy(attempt.as_mut_ptr(), part.raw_mut()) != 0 {
                 let errno = ffi::zlink_errno();
                 ffi::zlink_msg_close(attempt.as_mut_ptr());
                 ffi::zlink_multipart_close(native_parts.as_mut_ptr(), native_parts.len());
-                return Err(submit_error_from_errno(if errno == 0 {
-                    libc::EIO
-                } else {
-                    errno
-                }));
+                return Err(SubmitError::new(
+                    SubmitResult::InternalError,
+                    if errno == 0 { libc::EIO } else { errno },
+                ));
             }
             native_parts.push(attempt.assume_init());
         }
@@ -403,6 +402,13 @@ pub(super) fn check_submit_result(rc: i32, errno: i32) -> Result<(), SubmitError
     } else {
         Err(submit_error_from_rc(rc, errno))
     }
+}
+
+/// A WRITABLE wait exists only for BACKPRESSURED with EAGAIN and a nonzero
+/// wait token (bindings spec "Submit 결과 투영"). Any other combination that
+/// carries a token is a Core protocol failure, not a wait.
+pub(super) fn is_writable_wait(rc: i32, errno: i32, completion_id: u64) -> bool {
+    rc == SubmitResult::Backpressured as i32 && errno == libc::EAGAIN && completion_id != 0
 }
 
 fn submit_send_attempt(
@@ -447,7 +453,7 @@ fn submit_send_attempt(
         }
         return Ok(SendAttempt::Admitted);
     }
-    if rc == SubmitResult::Backpressured as i32 && completion_id != 0 {
+    if is_writable_wait(rc, errno, completion_id) {
         return Ok(SendAttempt::Waiting(completion_id));
     }
     if completion_id != 0 || rc == SubmitResult::Backpressured as i32 {
@@ -467,8 +473,28 @@ fn live_handle(op: &SendOpStorage) -> Result<*mut c_void, SubmitError> {
         .as_ref()
         .map_or(op.handle, |routed| routed.handle());
     if handle.is_null() {
-        Err(submit_error_from_errno(libc::ECANCELED))
+        Err(SubmitError::new(
+            SubmitResult::InternalError,
+            libc::ECANCELED,
+        ))
     } else {
         Ok(handle)
+    }
+}
+
+#[cfg(test)]
+mod writable_wait_tests {
+    use super::*;
+
+    #[test]
+    fn writable_wait_requires_backpressure_eagain_and_nonzero_token() {
+        let backpressured = SubmitResult::Backpressured as i32;
+        assert!(is_writable_wait(backpressured, libc::EAGAIN, 7));
+        assert!(!is_writable_wait(backpressured, libc::ETIMEDOUT, 7));
+        assert!(!is_writable_wait(backpressured, libc::ENOBUFS, 7));
+        assert!(!is_writable_wait(backpressured, 0, 7));
+        assert!(!is_writable_wait(backpressured, libc::EAGAIN, 0));
+        assert!(!is_writable_wait(SubmitResult::Ok as i32, libc::EAGAIN, 7));
+        assert!(!is_writable_wait(SubmitResult::NotConnected as i32, libc::EAGAIN, 7));
     }
 }

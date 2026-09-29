@@ -52,9 +52,6 @@ test('missing routed target maps WRITABLE terminal to a not-found send result', 
   assert.equal(mapNativeErrno('submit', 2), SubmitResult.NotFound);
 });
 
-test('native context termination preserves REQUEST terminated semantics', () => {
-  assert.equal(mapNativeErrno('request', 156384765), RequestResult.Terminated);
-});
 
 test('unknown nonzero context never falls back to a different live completion id', async () => {
   const owner = new CompletionOwner(null) as any;

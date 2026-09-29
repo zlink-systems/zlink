@@ -190,14 +190,18 @@ inline napi_value move_message_to_native_value (napi_env env, zlink_msg_t *sourc
         napi_throw_error (env, NULL, "native message frame allocation failed");
         return NULL;
     }
-    if (zlink_msg_init (&frame->message) != 0) {
+    const int init_result = zlink_msg_init (&frame->message);
+    if (init_result != ZLINK_CONFIG_OK) {
+        napi_value failure = throw_result_error (env, "native message frame init failed", init_result);
         recycle_native_message_frame (frame);
-        return throw_last_error (env, "native message frame init failed");
+        return failure;
     }
-    if (zlink_msg_move (&frame->message, source) != 0) {
+    const int move_result = zlink_msg_move (&frame->message, source);
+    if (move_result != ZLINK_CONFIG_OK) {
+        napi_value failure = throw_result_error (env, "native message frame move failed", move_result);
         zlink_msg_close (&frame->message);
         recycle_native_message_frame (frame);
-        return throw_last_error (env, "native message frame move failed");
+        return failure;
     }
     return create_native_message_value (env, frame);
 }
@@ -209,14 +213,18 @@ inline napi_value move_message_to_native_frame_value (napi_env env, zlink_msg_t 
         napi_throw_error (env, NULL, "native message frame allocation failed");
         return NULL;
     }
-    if (zlink_msg_init (&frame->message) != 0) {
+    const int init_result = zlink_msg_init (&frame->message);
+    if (init_result != ZLINK_CONFIG_OK) {
+        napi_value failure = throw_result_error (env, "native message frame init failed", init_result);
         recycle_native_message_frame (frame);
-        return throw_last_error (env, "native message frame init failed");
+        return failure;
     }
-    if (zlink_msg_move (&frame->message, source) != 0) {
+    const int move_result = zlink_msg_move (&frame->message, source);
+    if (move_result != ZLINK_CONFIG_OK) {
+        napi_value failure = throw_result_error (env, "native message frame move failed", move_result);
         zlink_msg_close (&frame->message);
         recycle_native_message_frame (frame);
-        return throw_last_error (env, "native message frame move failed");
+        return failure;
     }
     napi_value native_message = create_native_message_frame_handle (env, frame);
     release_native_message_frame (frame);
@@ -324,7 +332,7 @@ inline napi_value create_message_snapshot_value (napi_env env,
         zlink_config_result_t refcnt_err = ZLINK_CONFIG_OK;
         refcnt = zlink_msg_refcnt (msg, &refcnt_err);
         if (refcnt_err != ZLINK_CONFIG_OK)
-            return throw_last_error (env, "message refcnt failed");
+            return throw_result_error (env, "message refcnt failed", refcnt_err);
     }
 
     napi_value data = create_received_message_buffer (env, msg);

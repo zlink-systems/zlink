@@ -272,6 +272,31 @@ fn xpub_try_receive_subscription_event_empty() {
     assert!(!result.unwrap());
 }
 
+// Core returns RECV_BUFFER_TOO_SMALL (ENOBUFS) for a topic longer than the
+// caller buffer; the binding projects that result instead of an errno guess.
+#[test]
+fn xpub_subscription_event_projects_core_buffer_too_small() {
+    let ctx = Context::new().unwrap();
+    let xpub = ctx.xpub_socket().unwrap();
+    xpub.bind("inproc://beh-xpub-long-topic").unwrap();
+    let sub = ctx.sub_socket().unwrap();
+    sub.connect("inproc://beh-xpub-long-topic").unwrap();
+    sub.set_subscription(&"t".repeat(300)).unwrap();
+
+    let mut event = SubscriptionEvent::empty();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match xpub.receive_subscription_event(&mut event, RecvFlags::DONT_WAIT) {
+            Ok(false) if Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
+            Ok(received) => panic!("expected BUFFER_TOO_SMALL, received={received}"),
+            Err(error) => {
+                assert_eq!(error.code(), zlink::RecvResult::BufferTooSmall);
+                break;
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Pull receive + send regression tests
 // ---------------------------------------------------------------------------

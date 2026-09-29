@@ -111,7 +111,7 @@ export class RouterSocket extends RoutedMessageSocket {
         normalizeOperationPayload(payload)
       );
     } catch (error) {
-      throw submitNativeError(error, 0, 'reply failed');
+      throw submitNativeError(error, 'reply failed');
     }
     consumeSubmittedMessages(payload);
   }

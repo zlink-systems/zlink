@@ -2,12 +2,15 @@
 
 import { Message, type MessageLike } from '../../contracts';
 import {
+  HandlerError,
+  HandlerResult,
   RecvError,
   RecvResult,
   RequestError,
   RequestResult,
   SubmitError,
   SubmitResult,
+  ZlinkError,
 } from '../../contracts/errors/errors';
 import type { ZLinkReadableHandler } from '../../contracts/sockets/socket';
 import { consumeSubmittedMessage } from '../../contracts/messaging/message';
@@ -21,7 +24,6 @@ import { withRuntimeErrorMessage } from '../errors/error_state';
 import {
   isWouldBlock,
   nativeErrorMessage,
-  failureErrno,
   submitNativeError,
 } from '../errors/native_errors';
 import type { NativeHandle } from '../native/binding_types';
@@ -230,7 +232,7 @@ export class CompletionOwner {
   private publicOwner: object | null = null;
   private readableWatch: NativeHandle | null = null;
   private readableHandler: ZLinkReadableHandler | null = null;
-  private receiveError: RecvError | null = null;
+  private receiveError: ZlinkError | null = null;
   private readonly readableReady = (status = 0, nativeErrno = 0): void =>
     this.notifyReadable(status, nativeErrno);
   private managedWritableWaitCount = 0;
@@ -244,7 +246,9 @@ export class CompletionOwner {
 
   setReadableHandler(handler: ZLinkReadableHandler): void {
     if (typeof handler !== 'function') {
-      throw createError('handler', 22, 'readable handler must be a function');
+      throw withRuntimeErrorMessage(
+        new HandlerError(HandlerResult.InvalidArgument, 0),
+        'readable handler must be a function');
     }
     const previousHandler = this.readableHandler;
     this.readableHandler = handler;
@@ -252,11 +256,7 @@ export class CompletionOwner {
       this.ensureReadableWatch();
     } catch (error) {
       this.readableHandler = previousHandler;
-      throw createError(
-        'handler',
-        failureErrno(error),
-        nativeErrorMessage(error, 'readable handler registration failed')
-      );
+      throw error;
     }
     // The mailbox fd reports later progress; an initial drain also observes
     // already-queued data and arms an empty receive pipe before waiting.
@@ -278,7 +278,7 @@ export class CompletionOwner {
     try {
       nativePayload = normalizeOperationPayload(payload);
     } catch (error) {
-      throw submitNativeError(error, DONTWAIT, 'send submit failed');
+      throw submitNativeError(error, 'send submit failed');
     }
 
     let result: NativeSubmitResult;
@@ -291,7 +291,7 @@ export class CompletionOwner {
         token
       ) as NativeSubmitResult;
     } catch (error) {
-      throw submitNativeError(error, DONTWAIT, 'send submit failed');
+      throw submitNativeError(error, 'send submit failed');
     }
 
     if (result.result === SubmitResult.Ok) {
@@ -376,7 +376,7 @@ export class CompletionOwner {
     try {
       nativePayload = normalizeOperationPayload(payload);
     } catch (error) {
-      throw submitNativeError(error, DONTWAIT, 'request submit failed');
+      throw submitNativeError(error, 'request submit failed');
     }
     this.requirePublicOwner('async request requires a PollCompletion owner');
 
@@ -391,7 +391,7 @@ export class CompletionOwner {
         token
       ) as NativeSubmitResult;
     } catch (error) {
-      throw submitNativeError(error, DONTWAIT, 'request submit failed');
+      throw submitNativeError(error, 'request submit failed');
     }
 
     if (result.result === SubmitResult.Ok) {
@@ -475,7 +475,7 @@ export class CompletionOwner {
         timeoutMs
       ) as NativeSyncRequestResult;
     } catch (error) {
-      this.failEntry(entry, submitNativeError(error, 0, 'request submit failed'));
+      this.failEntry(entry, submitNativeError(error, 'request submit failed'));
       throw entry.error;
     }
     if (result.result !== SubmitResult.Ok) {
@@ -504,7 +504,7 @@ export class CompletionOwner {
         0n
       ) as NativeSubmitResult;
     } catch (error) {
-      throw submitNativeError(error, 0, 'send failed');
+      throw submitNativeError(error, 'send failed');
     }
     if (result.result !== SubmitResult.Ok) {
       throw submitError(result.result, result.nativeErrno, 'send failed');
@@ -564,11 +564,10 @@ export class CompletionOwner {
   terminatePending(nativeErrno: number): void {
     for (const entry of this.byToken.values()) {
       const admissionPending = this.retries.has(entry.token);
-      const error = createError(
-        entry.kind === 'request' && !admissionPending ? 'request' : 'submit',
-        nativeErrno,
-        'context was shut down'
-      );
+      const error = entry.kind === 'request' && !admissionPending
+        ? withRuntimeErrorMessage(
+            new RequestError(RequestResult.Terminated, nativeErrno), 'context was shut down')
+        : submitError(SubmitResult.Terminated, nativeErrno, 'context was shut down');
       entry.fail(error, admissionPending);
     }
     this.byToken.clear();
@@ -702,7 +701,7 @@ export class CompletionOwner {
             entry.token
           ) as NativeSubmitResult;
     } catch (error) {
-      this.failEntry(entry, submitNativeError(error, DONTWAIT, `${retry.kind} submit failed`));
+      this.failEntry(entry, submitNativeError(error, `${retry.kind} submit failed`));
       return;
     }
 
@@ -784,13 +783,13 @@ export class CompletionOwner {
 
   private notifyReadable(status: number, watchErrno: number): void {
     if (this.readableWatch === null) return;
-    if (status < 0) {
+    if (status !== 0) {
       const message = watchErrno === 0
         ? `socket readable watch failed (${status})`
         : `socket readable watch acknowledgement failed (${watchErrno})`;
-      this.receiveError = watchErrno === 0
-        ? withRuntimeErrorMessage(new RecvError(RecvResult.InternalError, status), message)
-        : createError('recv', watchErrno, message) as RecvError;
+      this.receiveError = status > 0
+        ? createError('config', watchErrno, message, status)
+        : withRuntimeErrorMessage(new RecvError(RecvResult.InternalError, watchErrno || status), message);
       this.stopReadableWatch();
     }
     // The libuv watch only delivers readiness. The handler's public Poller

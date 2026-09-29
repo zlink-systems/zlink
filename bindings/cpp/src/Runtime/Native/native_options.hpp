@@ -2,6 +2,8 @@
 #ifndef ZLINK_CPP_RUNTIME_NATIVE_OPTIONS_HPP_INCLUDED
 #define ZLINK_CPP_RUNTIME_NATIVE_OPTIONS_HPP_INCLUDED
 
+#include <zlink.h>
+
 #include <cerrno>
 #include <string>
 #include <vector>
@@ -30,7 +32,10 @@ inline int read_growing_string (Reader reader_, size_t initial_capacity_, std::s
             return 0;
         }
 
-        if ((errno != EINVAL && errno != EMSGSIZE) || cap == max_cap)
+        // Core reports a short buffer as CONFIG_BUFFER_TOO_SMALL (subscription
+        // query) or CONFIG_INVALID_ARGUMENT (string option get).
+        if ((rc != ZLINK_CONFIG_BUFFER_TOO_SMALL && rc != ZLINK_CONFIG_INVALID_ARGUMENT)
+            || cap == max_cap)
             return rc;
 
         cap = size > cap ? size : cap * 2u;

@@ -45,14 +45,7 @@ internal abstract class SocketBase : ISocket, ISocketOptionEndpoint
         ulong monitorHwmBytes)
     {
         EnumValidation.EnsureSocketEvents(events, nameof(events));
-        try
-        {
-            return Kernel.MonitorOpen(events, monitorHwmBytes);
-        }
-        catch (ZlinkException ex)
-        {
-            throw ZlinkException.CreateConfigException(ex.NativeErrno);
-        }
+        return Kernel.MonitorOpen(events, monitorHwmBytes);
     }
 
     public void SetTlsServer(string certPath, string keyPath,
@@ -66,8 +59,7 @@ internal abstract class SocketBase : ISocket, ISocketOptionEndpoint
         var rc = NativeMethods.zlink_set_tls_server(Handle, certPath, keyPath,
             requireClientCert ? 1 : 0);
         if (rc != 0)
-            throw ZlinkException.CreateConfigException(
-                NativeMethods.GetLastPInvokeError());
+            throw ZlinkException.CreateConfigException((ConfigResult)rc);
     }
 
     public void SetTlsClient(string caCertPath, string hostname,
@@ -81,8 +73,7 @@ internal abstract class SocketBase : ISocket, ISocketOptionEndpoint
         var rc = NativeMethods.zlink_set_tls_client(Handle, caCertPath, hostname,
             trustSystem ? 1 : 0);
         if (rc != 0)
-            throw ZlinkException.CreateConfigException(
-                NativeMethods.GetLastPInvokeError());
+            throw ZlinkException.CreateConfigException((ConfigResult)rc);
     }
 
     public void SetReceiveFlowState(ReceiveFlowState state)
@@ -99,14 +90,7 @@ internal abstract class SocketBase : ISocket, ISocketOptionEndpoint
 
     public void Dispose()
     {
-        try
-        {
-            Kernel.Dispose();
-        }
-        catch (ZlinkException ex)
-        {
-            throw ZlinkException.CreateCloseException(ex.NativeErrno);
-        }
+        Kernel.Dispose();
 
         GC.SuppressFinalize(this);
     }

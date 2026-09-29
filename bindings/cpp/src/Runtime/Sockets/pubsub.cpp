@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
-#include <Runtime/Errors/result_from_errno.hpp>
 #include <zlink/Contracts/Sockets/pubsub_socket_contracts.hpp>
 #include <Runtime/Sockets/detail.hpp>
 #include <Runtime/Sockets/socket_access.hpp>
@@ -38,10 +37,9 @@ make_publish_state (socket_t &socket_,
 
 // Single owner of the "configuration call failed" translation used by every
 // subscription accessor below.
-void throw_last_config_error ()
+void throw_config_error (int result_)
 {
-    throw config_error_t (detail::result_from_errno (config_result_t{}, zlink_errno ()),
-                          zlink_errno ());
+    throw config_error_t (static_cast<config_result_t> (result_), zlink_errno ());
 }
 
 } // namespace
@@ -102,20 +100,23 @@ sub_socket_t::sub_socket_t (context_t &ctx_) : subscriber_socket_t (ctx_, socket
 
 void sub_socket_t::set_subscription (const std::string &filter_)
 {
-    if (socket_t::set_subscription (filter_) != 0)
-        throw_last_config_error ();
+    const int rc = socket_t::set_subscription (filter_);
+    if (rc != 0)
+        throw_config_error (rc);
 }
 
 void sub_socket_t::unset_subscription (const std::string &filter_)
 {
-    if (socket_t::unset_subscription (filter_) != 0)
-        throw_last_config_error ();
+    const int rc = socket_t::unset_subscription (filter_);
+    if (rc != 0)
+        throw_config_error (rc);
 }
 
 void sub_socket_t::subscription_at (size_t index_, std::string &filter_out_, bool *is_pattern_out_)
 {
-    if (socket_t::subscription_at (index_, filter_out_, is_pattern_out_) != 0)
-        throw_last_config_error ();
+    const int rc = socket_t::subscription_at (index_, filter_out_, is_pattern_out_);
+    if (rc != 0)
+        throw_config_error (rc);
 }
 
 xsub_socket_t::xsub_socket_t (context_t &ctx_) : subscriber_socket_t (ctx_, socket_type::xsub)
@@ -124,20 +125,23 @@ xsub_socket_t::xsub_socket_t (context_t &ctx_) : subscriber_socket_t (ctx_, sock
 
 void xsub_socket_t::set_subscription (const std::string &filter_)
 {
-    if (socket_t::set_subscription (filter_) != 0)
-        throw_last_config_error ();
+    const int rc = socket_t::set_subscription (filter_);
+    if (rc != 0)
+        throw_config_error (rc);
 }
 
 void xsub_socket_t::unset_subscription (const std::string &filter_)
 {
-    if (socket_t::unset_subscription (filter_) != 0)
-        throw_last_config_error ();
+    const int rc = socket_t::unset_subscription (filter_);
+    if (rc != 0)
+        throw_config_error (rc);
 }
 
 void xsub_socket_t::subscription_at (size_t index_, std::string &filter_out_, bool *is_pattern_out_)
 {
-    if (socket_t::subscription_at (index_, filter_out_, is_pattern_out_) != 0)
-        throw_last_config_error ();
+    const int rc = socket_t::subscription_at (index_, filter_out_, is_pattern_out_);
+    if (rc != 0)
+        throw_config_error (rc);
 }
 
 } // namespace zlink
