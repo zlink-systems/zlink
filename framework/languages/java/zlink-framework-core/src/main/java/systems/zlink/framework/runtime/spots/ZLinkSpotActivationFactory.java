@@ -9,8 +9,8 @@ import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchInfo;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalAsyncSpotDispatchHandler;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
@@ -180,9 +180,7 @@ final class ZLinkSpotActivationFactory {
                                         () ->
                                                 ZLinkHandlerStages.fromStageSupplier(
                                                         activation.spot()::onInitialize)))
-                .thenRun(
-                        () ->
-                                registerDispatchHandler(activation.backendSpot, activation));
+                .thenRun(() -> registerDispatchHandler(activation.backendSpot, activation));
     }
 
     EntrySpotActivation activateEntry(
@@ -286,7 +284,9 @@ final class ZLinkSpotActivationFactory {
                             var activation =
                                     new ZLinkInstanceSpotActivation(
                                             host, handlerInvoker, spot, backendSpot, context);
-                            registerDispatchHandler(backendSpot, activation::handleDispatchEvent,
+                            registerDispatchHandler(
+                                    backendSpot,
+                                    activation::handleDispatchEvent,
                                     activation::admitRoute);
                             return activation;
                         })
@@ -354,48 +354,59 @@ final class ZLinkSpotActivationFactory {
                 });
     }
 
-    private static void registerDispatchHandler(ZLinkBackendSpot backendSpot, SpotActivation activation) {
-        backendSpot.onDispatchEvent(new ZLinkInternalAsyncSpotDispatchHandler() {
-            @Override
-            public CompletionStage<Void> handleAsync(ZLinkBackendSpotDispatchInfo info) {
-                return activation.handleDispatchEvent(info);
-            }
+    private static void registerDispatchHandler(
+            ZLinkBackendSpot backendSpot, SpotActivation activation) {
+        backendSpot.onDispatchEvent(
+                new ZLinkInternalAsyncSpotDispatchHandler() {
+                    @Override
+                    public CompletionStage<Void> handleAsync(ZLinkBackendSpotDispatchInfo info) {
+                        return activation.handleDispatchEvent(info);
+                    }
 
-            @Override
-            public CompletionStage<Void> handleRoute(ZLinkBackendReceived received) {
-                return activation.admitRoute(received);
-            }
+                    @Override
+                    public CompletionStage<Void> handleRoute(ZLinkBackendReceived received) {
+                        return activation.admitRoute(received);
+                    }
 
-            @Override
-            public CompletionStage<Void> handleRoute(
-                    ZLinkBackendReceived received, CompletableFuture<Void> admission) {
-                return activation.admitRoute(received, admission);
-            }
+                    @Override
+                    public CompletionStage<Void> handleRoute(
+                            ZLinkBackendReceived received, CompletableFuture<Void> admission) {
+                        return activation.admitRoute(received, admission);
+                    }
 
-            @Override
-            public Boolean handleTopic(
-                    systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage message) {
-                return activation.admitTopic(message);
-            }
+                    @Override
+                    public Boolean handleTopic(
+                            systems.zlink.framework.runtime.internal.backend
+                                            .ZLinkBackendTopicMessage
+                                    message) {
+                        return activation.admitTopic(message);
+                    }
 
-            @Override
-            public CompletionStage<Void> handleJoin(
-                    systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinRequest request) {
-                return activation.admitJoin(request);
-            }
+                    @Override
+                    public CompletionStage<Void> handleJoin(
+                            systems.zlink.framework.runtime.internal.backend
+                                            .ZLinkBackendActorJoinRequest
+                                    request) {
+                        return activation.admitJoin(request);
+                    }
 
-            @Override
-            public CompletionStage<Void> handleActor(
-                    java.util.List<systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived> messages) {
-                return activation.admitActor(messages);
-            }
+                    @Override
+                    public CompletionStage<Void> handleActor(
+                            java.util.List<
+                                            systems.zlink.framework.runtime.internal.backend
+                                                    .ZLinkBackendActorReceived>
+                                    messages) {
+                        return activation.admitActor(messages);
+                    }
 
-            @Override
-            public CompletionStage<Void> handleLifecycle(
-                    systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorLifecycleEvent event) {
-                return activation.admitLifecycle(event);
-            }
-        });
+                    @Override
+                    public CompletionStage<Void> handleLifecycle(
+                            systems.zlink.framework.runtime.internal.backend
+                                            .ZLinkBackendActorLifecycleEvent
+                                    event) {
+                        return activation.admitLifecycle(event);
+                    }
+                });
     }
 
     private ZLinkSpot<?> createSpot(

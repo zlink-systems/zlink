@@ -422,7 +422,9 @@ final class ZLinkUserSpotOperationHandler
                                                                     ZLinkSpotCloseCoordinator.Step
                                                                             .operation(
                                                                                     () -> {
-                                                                                        activation.context.sealClosingAdmission();
+                                                                                        activation
+                                                                                                .context
+                                                                                                .sealClosingAdmission();
                                                                                         return CompletableFuture
                                                                                                 .completedFuture(
                                                                                                         null);

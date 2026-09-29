@@ -4,8 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -14,7 +14,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
@@ -23,6 +22,7 @@ import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
 import systems.zlink.framework.locationprovider.ZLinkStoreDelete;
@@ -133,17 +133,21 @@ final class ZLinkSpotCloseConformanceTest {
         var objects = node.objects().server();
         objects.addEntrySpot(EntrySpot.class);
         objects.addSpotFactory(SPOT_TYPE, CloseSpot.class, factory -> factory.disableRelocation());
-        objects.addActorFactory("player", Player.class, PlayerFactory.class,
+        objects.addActorFactory(
+                "player",
+                Player.class,
+                PlayerFactory.class,
                 factory -> factory.disableRelocation());
 
-        try (ZLinkFrameworkRuntime runtime = ZLinkFrameworkRuntimeTestAccess.start(
-                options, new ZLinkJavaBackendAdapterFactory())) {
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             SpotRef ref = create(runtime, spotId);
             store.holdNextAuthorityRead.set(true);
             CompletableFuture<Boolean> closing = closeStage(runtime, ref);
             store.authorityReadEntered.get(WAIT_SECONDS, TimeUnit.SECONDS);
-            assertEquals(spotId, request(runtime, spotId)
-                    .get(WAIT_SECONDS, TimeUnit.SECONDS).spotId());
+            assertEquals(
+                    spotId, request(runtime, spotId).get(WAIT_SECONDS, TimeUnit.SECONDS).spotId());
             join(runtime, spotId);
             store.releaseAuthorityRead.complete(null);
             assertFalse(closing.get(WAIT_SECONDS, TimeUnit.SECONDS));
@@ -168,20 +172,31 @@ final class ZLinkSpotCloseConformanceTest {
         objects.addEntrySpot(EntrySpot.class);
         objects.addSpotFactory(SPOT_TYPE, CloseSpot.class, factory -> factory.disableRelocation());
 
-        try (ZLinkFrameworkRuntime runtime = ZLinkFrameworkRuntimeTestAccess.start(
-                options, new ZLinkJavaBackendAdapterFactory())) {
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             create(runtime, spotId);
             CompletableFuture<Reply> accepted = request(runtime, spotId);
             handlerEntered.get(WAIT_SECONDS, TimeUnit.SECONDS);
             CompletionStage<?> draining = runtime.shutdown(Duration.ofSeconds(30));
-            ExecutionException failure = assertThrows(ExecutionException.class,
-                    () -> request(runtime, spotId).get(WAIT_SECONDS, TimeUnit.SECONDS));
-            assertEquals(ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+            ExecutionException failure =
+                    assertThrows(
+                            ExecutionException.class,
+                            () -> request(runtime, spotId).get(WAIT_SECONDS, TimeUnit.SECONDS));
+            assertEquals(
+                    ZLinkFrameworkErrorKind.SHUTTING_DOWN,
                     assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
-            ExecutionException sendFailure = assertThrows(ExecutionException.class,
-                    () -> runtime.route().sendToSpot(spotId, new Probe(spotId))
-                            .submit().toCompletableFuture().get(WAIT_SECONDS, TimeUnit.SECONDS));
-            assertEquals(ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+            ExecutionException sendFailure =
+                    assertThrows(
+                            ExecutionException.class,
+                            () ->
+                                    runtime.route()
+                                            .sendToSpot(spotId, new Probe(spotId))
+                                            .submit()
+                                            .toCompletableFuture()
+                                            .get(WAIT_SECONDS, TimeUnit.SECONDS));
+            assertEquals(
+                    ZLinkFrameworkErrorKind.SHUTTING_DOWN,
                     assertInstanceOf(ZLinkFrameworkException.class, sendFailure.getCause()).kind());
             handlerBlock.complete(null);
             accepted.get(WAIT_SECONDS, TimeUnit.SECONDS);
@@ -205,16 +220,20 @@ final class ZLinkSpotCloseConformanceTest {
         objects.addEntrySpot(EntrySpot.class);
         objects.addSpotFactory(SPOT_TYPE, CloseSpot.class, factory -> factory.disableRelocation());
 
-        try (ZLinkFrameworkRuntime runtime = ZLinkFrameworkRuntimeTestAccess.start(
-                options, new ZLinkJavaBackendAdapterFactory())) {
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             create(runtime, spotId);
             CompletableFuture<Reply> accepted = request(runtime, spotId);
             handlerEntered.get(WAIT_SECONDS, TimeUnit.SECONDS);
             CompletionStage<?> draining = runtime.shutdown(Duration.ofSeconds(30));
             handlerBlock.completeExceptionally(new IllegalStateException("accepted-handler-error"));
-            ExecutionException failure = assertThrows(ExecutionException.class,
-                    () -> accepted.get(WAIT_SECONDS, TimeUnit.SECONDS));
-            assertEquals(ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+            ExecutionException failure =
+                    assertThrows(
+                            ExecutionException.class,
+                            () -> accepted.get(WAIT_SECONDS, TimeUnit.SECONDS));
+            assertEquals(
+                    ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
                     assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
             draining.toCompletableFuture().get(WAIT_SECONDS * 3, TimeUnit.SECONDS);
         } finally {
@@ -240,15 +259,18 @@ final class ZLinkSpotCloseConformanceTest {
         objects.addEntrySpot(EntrySpot.class);
         objects.addSpotFactory(SPOT_TYPE, CloseSpot.class, factory -> factory.disableRelocation());
 
-        try (ZLinkFrameworkRuntime runtime = ZLinkFrameworkRuntimeTestAccess.start(
-                options, new ZLinkJavaBackendAdapterFactory())) {
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             SpotRef ref = create(runtime, spotId);
             CompletableFuture<Reply> first = request(runtime, spotId);
             handlerEntered.get(WAIT_SECONDS, TimeUnit.SECONDS);
             handlerBlock = secondBlock;
             CompletableFuture<Reply> second = request(runtime, spotId);
-            SpotActivation activation = ((ZLinkSpotRuntime) runtime.spotManager())
-                    .spotLifecycle().spotActivationFor(spotId);
+            SpotActivation activation =
+                    ((ZLinkSpotRuntime) runtime.spotManager())
+                            .spotLifecycle()
+                            .spotActivationFor(spotId);
             var serialsField = DefaultSpotContext.class.getDeclaredField("serials");
             serialsField.setAccessible(true);
             var serials = serialsField.get(activation.context);
@@ -838,12 +860,14 @@ final class ZLinkSpotCloseConformanceTest {
             }
             CompletionStage<ZLinkStoreWriteResult> written = inner.write(request, cancellation);
             if (authorityPut && watchNextAuthorityPut.compareAndSet(true, false)) {
-                written = written.thenApply(result -> {
-                    if (result instanceof ZLinkStoreWriteApplied) {
-                        closingAuthorityStored.complete(null);
-                    }
-                    return result;
-                });
+                written =
+                        written.thenApply(
+                                result -> {
+                                    if (result instanceof ZLinkStoreWriteApplied) {
+                                        closingAuthorityStored.complete(null);
+                                    }
+                                    return result;
+                                });
             }
             if (!authorityDelete) {
                 return written;

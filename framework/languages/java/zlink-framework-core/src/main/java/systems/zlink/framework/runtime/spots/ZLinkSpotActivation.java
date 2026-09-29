@@ -9,7 +9,6 @@ import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.*;
-import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
@@ -230,8 +229,8 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
             return CompletableFuture.failedFuture(failure);
         }
         try (var ignored =
-                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
-                        .enter(permit)) {
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext.enter(
+                        permit)) {
             ZLinkFrameworkException hostRejection = host.spotHostAdmissionFailure(context.spotId());
             if (hostRejection != null) {
                 received.close();
@@ -251,19 +250,23 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                             backendSpot.lifecycleGeneration());
             CompletionStage<Void> admitted;
             try {
-                admitted = context.enqueueAcceptedDispatch(
-                        replyRoute::record,
-                        received.acceptedJournalRecordSize(),
-                        () -> dispatchRouteAsync(received)
-                                .whenComplete((done, failure) -> replyRoute.completeLocal()),
-                        replyRoute::releaseForRelocation,
-                        admission);
+                admitted =
+                        context.enqueueAcceptedDispatch(
+                                replyRoute::record,
+                                received.acceptedJournalRecordSize(),
+                                () ->
+                                        dispatchRouteAsync(received)
+                                                .whenComplete(
+                                                        (done, failure) ->
+                                                                replyRoute.completeLocal()),
+                                replyRoute::releaseForRelocation,
+                                admission);
             } catch (RuntimeException | Error failure) {
                 replyRoute.completeLocal();
                 throw failure;
             }
-            return admitted
-                    .whenComplete((done, failure) -> {
+            return admitted.whenComplete(
+                    (done, failure) -> {
                         if (failure != null) {
                             replyRoute.completeLocal();
                             received.close();
@@ -286,8 +289,8 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
             return false;
         }
         try (var ignored =
-                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
-                        .enter(permit)) {
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext.enter(
+                        permit)) {
             if (host.spotHostAdmissionFailure(context.spotId()) != null) {
                 message.parts().forEach(Message::close);
                 return false;
@@ -297,9 +300,12 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                             .transferToQueuedJob();
             boolean accepted;
             try {
-                accepted = context.tryEnqueueSpot(
-                        () -> host.runQueuedApplicationJob(
-                                ownership, () -> dispatchSpotSubscription(message)));
+                accepted =
+                        context.tryEnqueueSpot(
+                                () ->
+                                        host.runQueuedApplicationJob(
+                                                ownership,
+                                                () -> dispatchSpotSubscription(message)));
             } catch (RuntimeException | Error failure) {
                 ownership.close();
                 message.parts().forEach(Message::close);
@@ -320,12 +326,12 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
         if (permit == null) {
             Thread.currentThread().interrupt();
             request.parts().forEach(Message::close);
-            return CompletableFuture.failedFuture(new IllegalStateException(
-                    "application job reservation was interrupted"));
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("application job reservation was interrupted"));
         }
         try (var ignored =
-                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
-                        .enter(permit)) {
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext.enter(
+                        permit)) {
             var hostRejection = host.spotHostAdmissionFailure(context.spotId());
             if (hostRejection != null) {
                 request.parts().forEach(Message::close);
@@ -336,17 +342,20 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                             .transferToQueuedJob();
             CompletionStage<Void> admitted;
             try {
-                admitted = context.enqueueJoinLifecycle(
-                        () -> host.runQueuedApplicationJob(
-                                        ownership, () -> dispatchActorJoinAsync(request))
-                                .thenCompose(stage -> stage));
+                admitted =
+                        context.enqueueJoinLifecycle(
+                                () ->
+                                        host.runQueuedApplicationJob(
+                                                        ownership,
+                                                        () -> dispatchActorJoinAsync(request))
+                                                .thenCompose(stage -> stage));
             } catch (RuntimeException | Error failure) {
                 ownership.close();
                 request.parts().forEach(Message::close);
                 throw failure;
             }
-            return admitted
-                    .whenComplete((done, failure) -> {
+            return admitted.whenComplete(
+                    (done, failure) -> {
                         if (failure != null) {
                             ownership.close();
                             request.parts().forEach(Message::close);
@@ -358,13 +367,16 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
     }
 
     CompletionStage<Void> admitActor(List<ZLinkBackendActorReceived> messages) {
-        return dispatchActorMessages(messages, operation -> {
-                    var hostRejection = host.spotHostAdmissionFailure(context.spotId());
-                    return hostRejection == null
-                            ? context.admitIngress(operation)
-                            : CompletableFuture.failedFuture(hostRejection);
-                }).whenComplete((done, failure) ->
-                        messages.forEach(ZLinkBackendActorReceived::close));
+        return dispatchActorMessages(
+                        messages,
+                        operation -> {
+                            var hostRejection = host.spotHostAdmissionFailure(context.spotId());
+                            return hostRejection == null
+                                    ? context.admitIngress(operation)
+                                    : CompletableFuture.failedFuture(hostRejection);
+                        })
+                .whenComplete(
+                        (done, failure) -> messages.forEach(ZLinkBackendActorReceived::close));
     }
 
     CompletionStage<Void> admitLifecycle(ZLinkBackendActorLifecycleEvent event) {
@@ -379,12 +391,12 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
         var permit = host.reserveApplicationJob();
         if (permit == null) {
             Thread.currentThread().interrupt();
-            return CompletableFuture.failedFuture(new IllegalStateException(
-                    "application job reservation was interrupted"));
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("application job reservation was interrupted"));
         }
         try (var ignored =
-                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
-                        .enter(permit)) {
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext.enter(
+                        permit)) {
             var hostRejection = host.spotHostAdmissionFailure(context.spotId());
             if (hostRejection != null) {
                 return CompletableFuture.failedFuture(hostRejection);
@@ -394,20 +406,28 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                             .transferToQueuedJob();
             CompletionStage<Void> admitted;
             try {
-                admitted = context.admitIngress(
-                        () -> host.runQueuedApplicationJob(ownership,
-                                () -> appendActorLifecycle(
-                                        CompletableFuture.completedFuture(null),
-                                        event, actorRef, actor.orElseThrow())));
+                admitted =
+                        context.admitIngress(
+                                () ->
+                                        host.runQueuedApplicationJob(
+                                                ownership,
+                                                () ->
+                                                        appendActorLifecycle(
+                                                                CompletableFuture.completedFuture(
+                                                                        null),
+                                                                event,
+                                                                actorRef,
+                                                                actor.orElseThrow())));
             } catch (RuntimeException | Error failure) {
                 ownership.close();
                 throw failure;
             }
-            return admitted.whenComplete((done, failure) -> {
-                if (failure != null) {
-                    ownership.close();
-                }
-            });
+            return admitted.whenComplete(
+                    (done, failure) -> {
+                        if (failure != null) {
+                            ownership.close();
+                        }
+                    });
         } finally {
             permit.abandonReservation();
         }
@@ -674,8 +694,7 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                                                                             () ->
                                                                                     dispatchActorJoinAsync(
                                                                                             request))
-                                                                    .thenCompose(
-                                                                            stage -> stage)))
+                                                                    .thenCompose(stage -> stage)))
                             .whenComplete((result, error) -> queuedOwnership.close());
         }
         return tail;
@@ -703,8 +722,9 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                             boolean accepted = effective.accepted();
                             CompletionStage<Void> membership =
                                     accepted
-                                            ? host.actorAdmissions().localJoinCompletion(
-                                                    request.targetActor().actorId())
+                                            ? host.actorAdmissions()
+                                                    .localJoinCompletion(
+                                                            request.targetActor().actorId())
                                             : CompletableFuture.completedFuture(null);
                             Message reply =
                                     effective.reply() == null

@@ -166,7 +166,8 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
         int index = 0;
         try {
             while (index < actorMessages.size() || pendingActorHeader != null) {
-                ActorMessageRead read = host.readActorMessage(actorMessages, index, pendingActorHeader);
+                ActorMessageRead read =
+                        host.readActorMessage(actorMessages, index, pendingActorHeader);
                 index = read.nextIndex();
                 pendingActorHeader = read.nextPendingHeader();
                 if (!read.complete()) {
@@ -176,59 +177,66 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
                 ZLinkBackendActorReceived headerPart = read.headerPart();
                 ZLinkBackendActorReceived bodyPart = read.bodyPart();
                 try {
-                ActorPacketFrames.Header packetHeader = ActorPacketFrames.decode(headerPart);
-                if (!host.actorSessions().available()) {
-                    host.closePendingActorHeader(headerPart, pendingHeader);
-                    continue;
-                }
-                Optional<ZLinkActor> localActor =
-                        host.actorSessions().localActor(headerPart.actor().actorId());
-                if (localActor.isEmpty()) {
-                    host.reportSpotActorHandlerMissing(
-                            packetHeader,
-                            context.spotId(),
-                            headerPart.actor().actorId(),
-                            headerPart.sourceNodeRid());
-                    if (packetHeader.requestSeq().isPresent()) {
-                        ZLinkBackendActorReceived headerCopy =
-                                pendingHeader ? headerPart : host.copyActorReceived(headerPart);
-                        host.replyActorDispatchError(
-                                context,
-                                packetHeader,
-                                headerCopy,
-                                headerPart.actor().actorId(),
-                                new ZLinkConfigurationException(
-                                        "SPOT actor is not registered locally: "
-                                                + headerPart.actor().actorId()),
-                                "actor missing error reply failed");
-                    } else {
+                    ActorPacketFrames.Header packetHeader = ActorPacketFrames.decode(headerPart);
+                    if (!host.actorSessions().available()) {
                         host.closePendingActorHeader(headerPart, pendingHeader);
+                        continue;
                     }
-                    continue;
-                }
-                ZLinkActor actor = localActor.get();
-                if (host.dispatchActorControlPacket(packetHeader, headerPart, actor, pendingHeader)) {
-                    continue;
-                }
-                // Admit every Actor packet to its own Actor queue before waiting
-                // for any handler stage. The Spot-wide execution gate is acquired
-                // by the queued turn, so a yielded Actor does not block admission
-                // of another Actor's turn.
-                var permit = host.reserveApplicationJob();
-                if (permit == null) {
-                    host.closePendingActorHeader(headerPart, pendingHeader);
-                    continue;
-                }
-                try (var ignored =
-                        systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
-                                .enter(permit)) {
-                    dispatches.add(admission.apply(
-                            () -> dispatchResolvedActorPacket(actor, packetHeader, read))
-                            .whenComplete((done, failure) ->
-                                    host.closePendingActorHeader(headerPart, pendingHeader)));
-                } finally {
-                    permit.abandonReservation();
-                }
+                    Optional<ZLinkActor> localActor =
+                            host.actorSessions().localActor(headerPart.actor().actorId());
+                    if (localActor.isEmpty()) {
+                        host.reportSpotActorHandlerMissing(
+                                packetHeader,
+                                context.spotId(),
+                                headerPart.actor().actorId(),
+                                headerPart.sourceNodeRid());
+                        if (packetHeader.requestSeq().isPresent()) {
+                            ZLinkBackendActorReceived headerCopy =
+                                    pendingHeader ? headerPart : host.copyActorReceived(headerPart);
+                            host.replyActorDispatchError(
+                                    context,
+                                    packetHeader,
+                                    headerCopy,
+                                    headerPart.actor().actorId(),
+                                    new ZLinkConfigurationException(
+                                            "SPOT actor is not registered locally: "
+                                                    + headerPart.actor().actorId()),
+                                    "actor missing error reply failed");
+                        } else {
+                            host.closePendingActorHeader(headerPart, pendingHeader);
+                        }
+                        continue;
+                    }
+                    ZLinkActor actor = localActor.get();
+                    if (host.dispatchActorControlPacket(
+                            packetHeader, headerPart, actor, pendingHeader)) {
+                        continue;
+                    }
+                    // Admit every Actor packet to its own Actor queue before waiting
+                    // for any handler stage. The Spot-wide execution gate is acquired
+                    // by the queued turn, so a yielded Actor does not block admission
+                    // of another Actor's turn.
+                    var permit = host.reserveApplicationJob();
+                    if (permit == null) {
+                        host.closePendingActorHeader(headerPart, pendingHeader);
+                        continue;
+                    }
+                    try (var ignored =
+                            systems.zlink.framework.runtime.internal.dispatch
+                                    .ZLinkApplicationJobContext.enter(permit)) {
+                        dispatches.add(
+                                admission
+                                        .apply(
+                                                () ->
+                                                        dispatchResolvedActorPacket(
+                                                                actor, packetHeader, read))
+                                        .whenComplete(
+                                                (done, failure) ->
+                                                        host.closePendingActorHeader(
+                                                                headerPart, pendingHeader)));
+                    } finally {
+                        permit.abandonReservation();
+                    }
                 } catch (RuntimeException | Error failure) {
                     host.closePendingActorHeader(headerPart, pendingHeader);
                     throw failure;
@@ -309,8 +317,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
     }
 
     final CompletionStage<Void> dispatchSpotRouteHandler(
-            ZLinkBackendReceived received, ParsedPacket packet,
-            CompletableFuture<Void> admission) {
+            ZLinkBackendReceived received, ParsedPacket packet, CompletableFuture<Void> admission) {
         //  Shared envelope requests carry content type and application
         //  metadata in the JSON header (cross-language canonical form);
         //  legacy raw parts fall back to the backend-carried values.
@@ -495,7 +502,8 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
                                                                         throw decodeFailure;
                                                                     }
                                                                 }));
-                                    }, admission);
+                                    },
+                                    admission);
                         })
                 .whenComplete(
                         (ignored, error) -> {

@@ -2,8 +2,8 @@
 
 # Tests the two runner mechanisms that only show up on a developer machine:
 # picking the JDK the Gradle toolchain compiles with (gradle/zlink-jvm-runtime.sh)
-# and staging standalone Gradle settings (runner-common.sh). CI has a single JDK
-# and never interrupts a run, so neither is exercised there (#517).
+# and selecting the shared Gradle root (runner-common.sh). CI has a single JDK,
+# so the local toolchain selection is not exercised there (#517).
 #
 # Both directions are asserted: a fixture JDK that satisfies the pinned version
 # is selected, and one that does not is refused with the message that names it.
@@ -197,46 +197,37 @@ check 'the cross-language smoke asks before it starts the Java host' 'asks' \
   "$(awk '/^start_java\(\)/,/^}/' "${SMOKE_RUNNER}" \
     | grep -q 'zlink_jvm_require_toolchain_runtime' && echo asks || echo missing)"
 
-# --- standalone settings staging, both directions ---------------------------
+# --- sample Gradle builds use the shared root -------------------------------
 
 if ! command -v flock >/dev/null 2>&1; then
-  printf 'skip - standalone settings staging needs flock\n'
+  printf 'skip - sample Gradle root check needs flock\n'
 else
-  STAGING_DIR="${TEST_ROOT}/staging"
-  mkdir -p "${STAGING_DIR}"
-  printf 'rootProject.name = "zlink-standalone-fixture"\n' \
-    >"${STAGING_DIR}/standalone.settings.gradle.kts"
+  GRADLE_ROOT="${TEST_ROOT}/samples"
+  mkdir -p "${GRADLE_ROOT}/java/Bingo" "${GRADLE_ROOT}/kotlin/ZoneWorld"
+  printf 'rootProject.name = "shared-root"\n' >"${GRADLE_ROOT}/settings.gradle.kts"
+  cat >"${GRADLE_ROOT}/gradlew" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$PWD" "$@" >"${ZLINK_GRADLE_CAPTURE}"
+EOF
+  chmod +x "${GRADLE_ROOT}/gradlew"
 
-  stage() (
-    cd "${STAGING_DIR}" || exit 1
-    source "${SAMPLES_DIR}/runner-common.sh" || exit 1
-    zlink_sample_gradle_standalone standalone.settings.gradle.kts true
-  )
-
-  stage >/dev/null 2>&1
-  check 'staging succeeds on a clean sample directory' '0' "$?"
-  check 'staging removes its own copy' '1' \
-    "$(test -e "${STAGING_DIR}/settings.gradle.kts"; echo $?)"
-
-  # An interrupted run leaves the staged copy behind.
-  cp -- "${STAGING_DIR}/standalone.settings.gradle.kts" \
-    "${STAGING_DIR}/settings.gradle.kts"
-  staging_message="$(stage 2>&1 >/dev/null)"
-  check 'staging takes over the copy an interrupted run left' '0' "$?"
-  check_contains 'the takeover is reported' "${staging_message}" \
-    'left by an interrupted run'
-  check 'the taken-over copy is removed too' '1' \
-    "$(test -e "${STAGING_DIR}/settings.gradle.kts"; echo $?)"
-
-  # A settings file a developer wrote is never replaced.
-  printf 'rootProject.name = "my-own-root"\n' >"${STAGING_DIR}/settings.gradle.kts"
-  staging_message="$(stage 2>&1 >/dev/null)"
-  check 'staging refuses a settings file it did not write' '1' "$?"
-  check_contains 'the refusal names the file' "${staging_message}" \
-    'Refusing to replace existing settings.gradle.kts'
-  check 'the developer settings file survives' 'rootProject.name = "my-own-root"' \
-    "$(cat "${STAGING_DIR}/settings.gradle.kts")"
-  rm -f -- "${STAGING_DIR}/settings.gradle.kts"
+  for sample in java/Bingo kotlin/ZoneWorld; do
+    capture="${TEST_ROOT}/${sample//\//-}.args"
+    (
+      cd "${GRADLE_ROOT}/${sample}" || exit 1
+      source "${SAMPLES_DIR}/runner-common.sh" || exit 1
+      ZLINK_SAMPLES_ROOT="${GRADLE_ROOT}"
+      export ZLINK_GRADLE_CAPTURE="${capture}"
+      gradle_run :Client:installDist --offline
+    )
+    check "${sample} build succeeds" '0' "$?"
+    check "${sample} uses the shared root and qualified task" \
+      "$(printf '%s\n' "${GRADLE_ROOT}" --no-daemon --no-parallel --max-workers=1 \
+        ":${sample//\//:}:Client:installDist" --offline --quiet)" \
+      "$(cat "${capture}" 2>/dev/null)"
+    check "${sample} does not stage settings" '1' \
+      "$(test -e "${GRADLE_ROOT}/${sample}/settings.gradle.kts"; echo $?)"
+  done
 fi
 
 if ((FAILED > 0)); then

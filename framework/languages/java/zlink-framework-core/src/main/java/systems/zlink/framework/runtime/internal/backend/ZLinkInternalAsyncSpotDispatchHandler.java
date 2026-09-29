@@ -20,13 +20,21 @@ public interface ZLinkInternalAsyncSpotDispatchHandler extends ZLinkBackendSpotD
         return null;
     }
 
-    default Boolean handleTopic(ZLinkBackendTopicMessage message) { return null; }
+    default Boolean handleTopic(ZLinkBackendTopicMessage message) {
+        return null;
+    }
 
-    default CompletionStage<Void> handleJoin(ZLinkBackendActorJoinRequest request) { return null; }
+    default CompletionStage<Void> handleJoin(ZLinkBackendActorJoinRequest request) {
+        return null;
+    }
 
-    default CompletionStage<Void> handleActor(List<ZLinkBackendActorReceived> messages) { return null; }
+    default CompletionStage<Void> handleActor(List<ZLinkBackendActorReceived> messages) {
+        return null;
+    }
 
-    default CompletionStage<Void> handleLifecycle(ZLinkBackendActorLifecycleEvent event) { return null; }
+    default CompletionStage<Void> handleLifecycle(ZLinkBackendActorLifecycleEvent event) {
+        return null;
+    }
 
     @Override
     default void handle(ZLinkBackendSpotDispatchInfo info) {

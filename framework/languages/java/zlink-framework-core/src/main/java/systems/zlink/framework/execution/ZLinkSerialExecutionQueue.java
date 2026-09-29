@@ -1,9 +1,9 @@
 package systems.zlink.framework.execution;
 
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 
 import java.time.Duration;
@@ -68,14 +68,15 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     /**
-     * The one admission decision of this queue (spec 03-spot-actor/06-spot-address-messaging §7):
-     * a Closing seal rejects new work, a relocated owner reports the post-cut arrival, and
-     * otherwise the queue accepts. A relocation seal is not a rejection; the caller holds the work.
+     * The one admission decision of this queue (spec 03-spot-actor/06-spot-address-messaging §7): a
+     * Closing seal rejects new work, a relocated owner reports the post-cut arrival, and otherwise
+     * the queue accepts. A relocation seal is not a rejection; the caller holds the work.
      */
     private CompletionStage<Void> admissionFailureLocked() {
         if (closingAdmissionSealed) {
-            return CompletableFuture.failedFuture(ZLinkFrameworkErrorOrigin.framework(
-                    ZLinkFrameworkErrorKind.REJECTED, "Spot is closing"));
+            return CompletableFuture.failedFuture(
+                    ZLinkFrameworkErrorOrigin.framework(
+                            ZLinkFrameworkErrorKind.REJECTED, "Spot is closing"));
         }
         return relocated ? CompletableFuture.failedFuture(new RelocatedOwnerException()) : null;
     }
@@ -187,7 +188,8 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     public CompletionStage<Void> enqueueWithPayloadBytes(
-            long payloadBytes, Supplier<CompletionStage<Void>> operation,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
             CompletableFuture<Void> admission) {
         EnqueueResult result;
         CompletionStage<Void> rejection = null;
@@ -258,8 +260,7 @@ public final class ZLinkSerialExecutionQueue {
         return result.result();
     }
 
-    private EnqueueResult enqueueBarrierNextLocked(
-            Supplier<CompletionStage<Void>> operation) {
+    private EnqueueResult enqueueBarrierNextLocked(Supplier<CompletionStage<Void>> operation) {
         Objects.requireNonNull(operation, "operation");
         if (nextSequence == Long.MAX_VALUE) {
             throw new IllegalStateException("queue sequence exhausted");
@@ -378,17 +379,19 @@ public final class ZLinkSerialExecutionQueue {
                     immediate = holdRelocationIngress(record, operation, relocationRelease);
                 }
             }
-            Entry entry = immediate == null ?
-                    new Entry(
-                            nextSequence++,
-                            record,
-                            operation,
-                            relocationRelease,
-                            new CompletableFuture<>(),
-                            ZLinkFlowContext.current(),
-                            null,
-                            Lane.APPLICATION,
-                            false) : null;
+            Entry entry =
+                    immediate == null
+                            ? new Entry(
+                                    nextSequence++,
+                                    record,
+                                    operation,
+                                    relocationRelease,
+                                    new CompletableFuture<>(),
+                                    ZLinkFlowContext.current(),
+                                    null,
+                                    Lane.APPLICATION,
+                                    false)
+                            : null;
             if (entry != null) {
                 outstanding++;
                 applicationPending.addLast(entry);
@@ -398,7 +401,8 @@ public final class ZLinkSerialExecutionQueue {
         if (immediate == null) scheduleDrainIfNeeded(result.scheduleDrain());
         if (admission != null) {
             if (accepted) admission.complete(null);
-            else immediate.whenComplete((done, failure) -> admission.completeExceptionally(failure));
+            else
+                immediate.whenComplete((done, failure) -> admission.completeExceptionally(failure));
         }
         if (immediate != null) return immediate;
         return result.result();

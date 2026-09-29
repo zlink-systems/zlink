@@ -195,8 +195,9 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
             if (admission != null) admission.completeExceptionally(failure);
             return CompletableFuture.failedFuture(failure);
         }
-        try (var ignored = systems.zlink.framework.runtime.internal.dispatch
-                .ZLinkApplicationJobContext.enter(permit)) {
+        try (var ignored =
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext.enter(
+                        permit)) {
             var hostRejection = host.spotHostAdmissionFailure(context.spotId());
             if (hostRejection != null) {
                 received.close();
@@ -229,8 +230,7 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
         dispatchRoute(received, null);
     }
 
-    private void dispatchRoute(
-            ZLinkBackendReceived received, CompletableFuture<Void> admission) {
+    private void dispatchRoute(ZLinkBackendReceived received, CompletableFuture<Void> admission) {
         trackRouteReceived(received);
         //  Spec 27 §4: decode and install the inbound flow pair (or start a new
         //  flow) only while capture is enabled; at Off suppress flow state.
@@ -319,12 +319,13 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
                 return;
             }
             dispatchSpotRouteHandler(received, packet, admission)
-                    .whenComplete((ignored, error) -> {
-                        if (admission != null && !admission.isDone()) {
-                            if (error == null) admission.complete(null);
-                            else admission.completeExceptionally(error);
-                        }
-                    });
+                    .whenComplete(
+                            (ignored, error) -> {
+                                if (admission != null && !admission.isDone()) {
+                                    if (error == null) admission.complete(null);
+                                    else admission.completeExceptionally(error);
+                                }
+                            });
         } finally {
             flowScope.close();
         }

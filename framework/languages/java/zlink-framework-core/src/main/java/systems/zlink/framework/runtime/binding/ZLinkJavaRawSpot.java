@@ -246,9 +246,10 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot, ZLinkJavaAdmissionBack
             ZLinkBackendReceived received, CompletableFuture<Void> admission) {
         ZLinkBackendSpotDispatchHandler handler = dispatchHandler;
         if (handler instanceof ZLinkInternalAsyncSpotDispatchHandler async) {
-            CompletionStage<Void> direct = admission == null
-                    ? async.handleRoute(received)
-                    : async.handleRoute(received, admission);
+            CompletionStage<Void> direct =
+                    admission == null
+                            ? async.handleRoute(received)
+                            : async.handleRoute(received, admission);
             if (direct != null) {
                 return direct;
             }

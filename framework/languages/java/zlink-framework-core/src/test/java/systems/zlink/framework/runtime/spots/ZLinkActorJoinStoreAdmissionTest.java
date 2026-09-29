@@ -72,7 +72,8 @@ final class ZLinkActorJoinStoreAdmissionTest {
             CompletionStage<Void> accepted =
                     queue.enqueueLifecycleAdmission(
                             () ->
-                                    admission.admitSpotActor(
+                                    admission
+                                            .admitSpotActor(
                                                     new ZLinkBackendActorJoinRequest(
                                                             actor, actor, List.of(), null),
                                                     "spot",

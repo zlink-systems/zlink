@@ -2147,7 +2147,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         .nodesByName()
                         .values()
                         .forEach(
-                                systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode
+                                systems.zlink.framework.runtime.internal.backend
+                                                .ZLinkInternalMeshNode
                                         ::markServiceDraining);
                 CompletionStage<Void> acceptedTargetRelocations =
                         spotRetire == null

@@ -244,8 +244,8 @@ In a source repository, open `framework/languages/java` in IntelliJ IDEA to load
 framework and all sample modules through the included `zlink-framework-java-samples` Gradle
 build. Opening this `samples/` directory directly loads only the sample build.
 
-Individual sample directories use `standalone.settings.gradle.kts` for their
-runner and do not add nested `settings.gradle.kts` roots. Shared message
+Sample runners build from the shared `samples/` Gradle root and do not add
+nested `settings.gradle.kts` roots. Shared message
 contracts stay under `shared/contracts`. Server topology, ChannelName,
 endpoint, packet, and timing settings stay under `server/configuration`;
 client-only settings stay under `client/configuration`.

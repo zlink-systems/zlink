@@ -202,7 +202,8 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
     }
 
     CompletionStage<Void> enqueueDispatch(
-            long payloadBytes, Supplier<CompletionStage<Void>> operation,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
             CompletableFuture<Void> admission) {
         host.ensureOwnerAdmissionOpen();
         return enqueueAccepted(payloadBytes, operation, admission);
@@ -222,7 +223,8 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
     }
 
     private CompletionStage<Void> enqueueAccepted(
-            long payloadBytes, Supplier<CompletionStage<Void>> operation,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
             CompletableFuture<Void> admission) {
         return dispatchQueue.enqueueWithPayloadBytes(
                 payloadBytes,
@@ -787,8 +789,11 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease) {
         return enqueueAcceptedDispatch(
-                acceptedJournalRecord, acceptedJournalRecordSizeHint,
-                operation, relocationRelease, null);
+                acceptedJournalRecord,
+                acceptedJournalRecordSizeHint,
+                operation,
+                relocationRelease,
+                null);
     }
 
     CompletionStage<Void> enqueueAcceptedDispatch(

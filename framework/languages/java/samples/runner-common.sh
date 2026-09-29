@@ -522,47 +522,24 @@ zlink_sample_build_framework_jars_if_available() {
   )
 }
 
-zlink_sample_gradle_standalone() (
-  local settings_source="${1}"
-  shift
-  local settings_target="settings.gradle.kts"
-  local lock_path="/tmp/zlink-framework-java-kotlin-sample-gradle.lock"
-
-  if ! command -v flock >/dev/null 2>&1; then
-    echo 'flock is required to serialize Java and Kotlin sample builds.' >&2
-    return 1
-  fi
-  if [[ ! -f "${settings_source}" ]]; then
-    echo "Missing standalone Gradle settings: ${settings_source}" >&2
-    return 1
-  fi
-
-  exec 9>"${lock_path}"
-  flock --exclusive 9
-  if [[ -e "${settings_target}" || -L "${settings_target}" ]]; then
-    # A run killed hard leaves the staged copy behind. The staged copy is ours
-    # only while it is a regular file byte-identical to the standalone source;
-    # anything else is the developer's own settings file and is never replaced.
-    if [[ -L "${settings_target}" ]] || [[ ! -f "${settings_target}" ]] \
-        || ! cmp -s -- "${settings_source}" "${settings_target}"; then
-      echo "Refusing to replace existing ${settings_target}" >&2
-      return 1
-    fi
-    echo "Taking over the ${settings_target} left by an interrupted run." >&2
-    rm -f -- "${settings_target}"
-  fi
-
-  cp -- "${settings_source}" "${settings_target}"
-  # Expanded now: bash 5.2 runs a subshell's EXIT trap after the function's
-  # locals are gone, so a trap that reads ${settings_target} at exit dies
-  # under set -u (#906).
-  trap "rm -f -- '${settings_target}'" EXIT INT TERM HUP
-  "$@"
-)
-
 gradle_run() {
-  zlink_sample_gradle_standalone standalone.settings.gradle.kts \
-    ../../gradlew --no-daemon --no-parallel --max-workers=1 "$@" --quiet
+  local sample="${PWD##*/}"
+  local language="${PWD%/*}"
+  language="${language##*/}"
+  local arg
+  local -a tasks=()
+  for arg in "$@"; do
+    if [[ "${arg}" == :* ]]; then
+      tasks+=(":${language}:${sample}${arg}")
+    else
+      tasks+=("${arg}")
+    fi
+  done
+  (
+    cd "${ZLINK_SAMPLES_ROOT}" || return 1
+    zlink_sample_gradle_locked ./gradlew --no-daemon --no-parallel --max-workers=1 \
+      "${tasks[@]}" --quiet
+  )
 }
 
 app_bin() {

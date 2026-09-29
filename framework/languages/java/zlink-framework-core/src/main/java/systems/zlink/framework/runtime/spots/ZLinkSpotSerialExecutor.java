@@ -88,9 +88,10 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
         CompletionStage<Void> queued =
                 actorQueue.executeActor(
                         payloadBytes,
-                        () -> sharedSpotGate
-                                ? spotQueue.enqueuePreviouslyAccepted(operation)
-                                : operation.get());
+                        () ->
+                                sharedSpotGate
+                                        ? spotQueue.enqueuePreviouslyAccepted(operation)
+                                        : operation.get());
         return sharedSpotGate && spotQueue.isCurrent()
                 ? ZLinkSerialExecutionQueue.yieldCurrent(queued)
                 : queued;
@@ -263,8 +264,11 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
             Function<Boolean, CompletionStage<Void>> operation,
             Runnable relocationRelease) {
         return executeAcceptedSpotLazyRecord(
-                acceptedJournalRecord, acceptedJournalRecordSizeHint,
-                operation, relocationRelease, null);
+                acceptedJournalRecord,
+                acceptedJournalRecordSizeHint,
+                operation,
+                relocationRelease,
+                null);
     }
 
     CompletionStage<Void> executeAcceptedSpotLazyRecord(
@@ -289,8 +293,7 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
         return spotQueue.enqueueBarrierNext(operation);
     }
 
-    CompletionStage<Void> enqueueSpotLifecycleAdmission(
-            Supplier<CompletionStage<Void>> operation) {
+    CompletionStage<Void> enqueueSpotLifecycleAdmission(Supplier<CompletionStage<Void>> operation) {
         return spotQueue.enqueueLifecycleAdmission(operation);
     }
 

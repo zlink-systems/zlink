@@ -380,8 +380,10 @@ final class ZLinkActorSpotAdmission {
         if (actor != null) {
             LocalJoin pending = pendingLocalJoins.remove(actor.context().actorId());
             if (pending != null) {
-                pending.completion().completeExceptionally(
-                        new ZLinkConfigurationException("local actor Spot join was cancelled"));
+                pending.completion()
+                        .completeExceptionally(
+                                new ZLinkConfigurationException(
+                                        "local actor Spot join was cancelled"));
             }
         }
     }

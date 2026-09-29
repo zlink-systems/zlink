@@ -317,34 +317,39 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
         trackRouteReceived(received);
         CompletionStage<Void> admitted;
         try {
-            admitted = context.enqueueDispatch(
-                    ZLinkReceiveBatchBudget.bytesOf(
-                            received.parts(), received.applicationMetadataSize(),
-                            received.acceptedJournalRecordSize()),
-                    () -> {
-                        ParsedPacket packet;
-                        try {
-                            packet = ZLinkSpotRuntime.parsePacket(received.parts());
-                        } catch (systems.zlink.framework.errors.ZLinkFrameworkException
-                                invalidEnvelope) {
-                            failRouteInvalidFlow(received, invalidEnvelope);
-                            return CompletableFuture.completedFuture(null);
-                        } catch (RuntimeException failure) {
-                            closeRouteReceived(received);
-                            return CompletableFuture.failedFuture(failure);
-                        }
-                        return dispatchSpotRouteHandler(received, packet);
-                    }, admission);
+            admitted =
+                    context.enqueueDispatch(
+                            ZLinkReceiveBatchBudget.bytesOf(
+                                    received.parts(),
+                                    received.applicationMetadataSize(),
+                                    received.acceptedJournalRecordSize()),
+                            () -> {
+                                ParsedPacket packet;
+                                try {
+                                    packet = ZLinkSpotRuntime.parsePacket(received.parts());
+                                } catch (
+                                        systems.zlink.framework.errors.ZLinkFrameworkException
+                                                invalidEnvelope) {
+                                    failRouteInvalidFlow(received, invalidEnvelope);
+                                    return CompletableFuture.completedFuture(null);
+                                } catch (RuntimeException failure) {
+                                    closeRouteReceived(received);
+                                    return CompletableFuture.failedFuture(failure);
+                                }
+                                return dispatchSpotRouteHandler(received, packet);
+                            },
+                            admission);
         } catch (RuntimeException | Error failure) {
             if (admission != null) admission.completeExceptionally(failure);
             closeRouteReceived(received);
             throw failure;
         }
-        return admitted.whenComplete((done, failure) -> {
-            if (failure != null) {
-                closeRouteReceived(received);
-            }
-        });
+        return admitted.whenComplete(
+                (done, failure) -> {
+                    if (failure != null) {
+                        closeRouteReceived(received);
+                    }
+                });
     }
 
     @Override

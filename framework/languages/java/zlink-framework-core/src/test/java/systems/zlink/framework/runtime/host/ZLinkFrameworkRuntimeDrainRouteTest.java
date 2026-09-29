@@ -110,8 +110,7 @@ final class ZLinkFrameworkRuntimeDrainRouteTest {
     }
 
     @Test
-    void synchronousDrainStartFailureCompletesConcurrentShutdownWithOneTerminal()
-            throws Exception {
+    void synchronousDrainStartFailureCompletesConcurrentShutdownWithOneTerminal() throws Exception {
         ZLinkFrameworkRuntime runtime =
                 ZLinkFrameworkRuntimeTestAccess.start(
                         new DefaultZLinkFrameworkOptions(), new ZLinkJavaBackendAdapterFactory());

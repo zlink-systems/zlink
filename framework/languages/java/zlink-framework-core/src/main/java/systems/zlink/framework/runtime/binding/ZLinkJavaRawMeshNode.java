@@ -80,7 +80,6 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -1055,8 +1054,7 @@ final class ZLinkJavaRawMeshNode
                                                 isReadyPeer(entry.getValue())
                                                         ? MeshPeerState.ADMITTED
                                                         : topology != null
-                                                                        && topology
-                                                                                .peer(
+                                                                        && topology.peer(
                                                                                         entry.getValue()
                                                                                                 .expectedRoutingId())
                                                                                 .isPresent()
@@ -1230,11 +1228,11 @@ final class ZLinkJavaRawMeshNode
                 (topology == null
                                 ? Optional.<ZLinkServiceTopologyRegistry.Peer>empty()
                                 : topology.peer(peerRid))
-                        .map(peer -> peer.descriptor().channels())
-                        .orElse(List.of())
-                        .stream()
-                        .sorted(Comparator.comparing(ZLinkServiceNodeDescriptor.Channel::name))
-                        .toList();
+                        .map(peer -> peer.descriptor().channels()).orElse(List.of()).stream()
+                                .sorted(
+                                        Comparator.comparing(
+                                                ZLinkServiceNodeDescriptor.Channel::name))
+                                .toList();
         return new PeerChannels(
                 ordered.stream().map(ZLinkServiceNodeDescriptor.Channel::name).toList(),
                 ordered.stream().map(ZLinkServiceNodeDescriptor.Channel::weight).toList());

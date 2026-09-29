@@ -628,7 +628,8 @@ final class Scenarios {
                                             .anyMatch(
                                                     bot ->
                                                             "bot-nw-x".equals(bot.playerId())
-                                                                    && "zone-nw".equals(bot.zoneId())
+                                                                    && "zone-nw"
+                                                                            .equals(bot.zoneId())
                                                                     && bot.x() >= 25
                                                                     && bot.x() <= 35),
                             Duration.ofSeconds(45))
@@ -661,14 +662,20 @@ final class Scenarios {
                                                 value.players().stream()
                                                         .anyMatch(
                                                                 candidate ->
-                                                                        candidate.playerId().equals(bot.playerId())
-                                                                                && candidate.x() < initial),
+                                                                        candidate
+                                                                                        .playerId()
+                                                                                        .equals(
+                                                                                                bot
+                                                                                                        .playerId())
+                                                                                && candidate.x()
+                                                                                        < initial),
                                         Duration.ofSeconds(45))
                                 .toCompletableFuture()
                                 .join()
                                 .payload();
                 ensure(
-                        reversed.players().stream().anyMatch(value -> value.playerId().equals(bot.playerId())),
+                        reversed.players().stream()
+                                .anyMatch(value -> value.playerId().equals(bot.playerId())),
                         "rejected bot reverses direction");
             } finally {
                 ops.maintenance(node, false);

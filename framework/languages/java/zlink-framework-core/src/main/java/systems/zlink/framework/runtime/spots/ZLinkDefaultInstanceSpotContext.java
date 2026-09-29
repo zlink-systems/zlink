@@ -110,8 +110,9 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
         CompletionStage<Void> acceptedTurns =
                 initiatedInsideTurn ? infrastructureQueue.awaitQuiescence() : awaitQuiescence();
         return acceptedTurns.thenCompose(
-                ignored -> dispatchQueue.enqueuePreviouslyAccepted(
-                        () -> host.runWithOutbound(outbound, operation)));
+                ignored ->
+                        dispatchQueue.enqueuePreviouslyAccepted(
+                                () -> host.runWithOutbound(outbound, operation)));
     }
 
     void sealTimerAdmission() {

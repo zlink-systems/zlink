@@ -189,8 +189,7 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
     }
 
     @Test
-    void closingReceiveOwnerCancelsItsFifoWaitWithoutResumingOrLeakingCapacity()
-            throws Exception {
+    void closingReceiveOwnerCancelsItsFifoWaitWithoutResumingOrLeakingCapacity() throws Exception {
         ZLinkApplicationJobQueue queue =
                 new ZLinkApplicationJobQueue(
                         ZLinkApplicationJobQueueProfile.BALANCED,
