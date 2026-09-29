@@ -127,7 +127,9 @@ public sealed class StreamSessionForcedCleanupTests
             "test"
         );
 
-        var first = node.DisposeAsync().AsTask();
+        Task first;
+        using (ExecutionContext.SuppressFlow())
+            first = node.DisposeAsync().AsTask();
         await socket.DisposeStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var second = node.DisposeAsync().AsTask();
 

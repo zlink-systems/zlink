@@ -217,9 +217,9 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
             return (
                 null,
                 liveRowPresent,
-                raw is null
-                    ? ZLinkLocationResolutionKind.Missing
-                    : ZLinkLocationResolutionKind.KnownUnavailable
+                raw is not null ? ZLinkLocationResolutionKind.KnownUnavailable
+                : IsClosingUserSpot(authority) ? ZLinkLocationResolutionKind.Closing
+                : ZLinkLocationResolutionKind.Missing
             );
         }
 
@@ -447,6 +447,13 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
+
+    // A User Spot whose authority is Closing is not Missing: the row stays
+    // until Close releases it (spec 08-routing §resolver results).
+    private static bool IsClosingUserSpot(ZLinkAuthorityReadResult authority) =>
+        authority is ZLinkAuthorityReadResult.Found found
+        && ZLinkUserSpotAuthorityPayloadCodec.TryDecode(found.Snapshot.Payload.Span, out var user)
+        && user.State == ZLinkUserSpotAuthorityState.Closing;
 
     private static ZLinkResolvedSpotLocation? ProjectSpot(ZLinkAuthorityReadResult authority)
     {
