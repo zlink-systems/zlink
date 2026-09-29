@@ -207,9 +207,9 @@ to awake, when an applied command changes public readiness so a poller must be w
 when state is changed without a command and signalled explicitly. The rule is the same for each —
 **notify once at the transition that creates the reason, and do not notify a consumer that is
 already awake.** The consumer goes to sleep only after draining the mailbox, and checks the queue
-once more just before sleeping so that a command inserted in between is not missed. When a public
-poller and the command owner share one signal, which of them consumes it first and which re-arms
-it is owned by [Polling](../05-polling.en.md).
+once more just before sleeping so that a command inserted in between is not missed. Who consumes the
+public poller's notification descriptor is owned by
+[Polling](../05-polling.en.md#3-source-types-and-readiness).
 
 **Draining.** Taking an item out of the queue itself takes no lock. A command that changes a
 socket's C2 state is applied inside the socket turn of [§3.1](#31-the-socket-turn); a command that

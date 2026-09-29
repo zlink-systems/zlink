@@ -25,6 +25,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import systems.zlink.runtime.nativeapi.InternalAccess;
 import systems.zlink.runtime.nativeapi.Native;
 import systems.zlink.internal.DurationConversions;
@@ -34,11 +35,14 @@ public final class NativePoller implements Poller {
     // PollEvents. Keep the internal bridge monomorphic after class loading.
     private static final ContractAccess.PollEventsAccess POLL_EVENTS_ACCESS =
         ContractAccess.pollEventsAccessForRuntime();
+    private static final AtomicReferenceFieldUpdater<NativePoller, MemorySegment>
+        WAIT_EVENTS_OWNER = AtomicReferenceFieldUpdater.newUpdater(
+            NativePoller.class, MemorySegment.class, "waitEvents");
     private final List<PollItem> items = new ArrayList<>();
     private final Map<Long, Integer> socketIndexes = new HashMap<>();
-    private MemorySegment handle;
+    private volatile MemorySegment handle;
     private Arena waitArena;
-    private MemorySegment waitEvents = MemorySegment.NULL;
+    private volatile MemorySegment waitEvents = MemorySegment.NULL;
     private MemorySegment waitErrorOut = MemorySegment.NULL;
     private int waitEventsCapacity;
     private boolean containsOnlySockets = true;
@@ -51,6 +55,10 @@ public final class NativePoller implements Poller {
         handle = Native.pollerNew();
         if (handle == null || handle.address() == 0)
             throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+        waitArena = Arena.ofAuto();
+        waitEvents = NativePollEvents.create(waitArena, 1);
+        waitErrorOut = waitArena.allocate(ValueLayout.JAVA_INT);
+        waitEventsCapacity = 1;
     }
 
     public void add(Socket socket, long slot, PollEventFlags... events) {
@@ -68,7 +76,7 @@ public final class NativePoller implements Poller {
         PollItem item = PollItem.fd(fd, combine(events), slot);
         int rc = Native.pollerAddFd(handle, fd, item.userData(), item.events);
         if (rc != 0)
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
         items.add(item);
         containsOnlySockets = false;
     }
@@ -80,7 +88,7 @@ public final class NativePoller implements Poller {
         PollItem item = PollItem.timer(InternalAccess.timerHandle(timer), slot);
         int rc = Native.pollerAddZlinkTimer(handle, InternalAccess.timerHandle(timer), item.userData());
         if (rc != 0)
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
         items.add(item);
         containsOnlySockets = false;
     }
@@ -107,7 +115,7 @@ public final class NativePoller implements Poller {
             if (claimed) {
                 InternalAccess.completionReleasePublic(socket, this);
             }
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
         }
         item.events = mask;
         if (hadCompletion && !hasCompletion) {
@@ -125,7 +133,7 @@ public final class NativePoller implements Poller {
         int mask = combine(events);
         int rc = Native.pollerModify(handle, monitorHandle, mask);
         if (rc != 0)
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
         items.get(index).events = mask;
     }
 
@@ -137,7 +145,7 @@ public final class NativePoller implements Poller {
         int mask = combine(events);
         int rc = Native.pollerModifyFd(handle, fd, mask);
         if (rc != 0)
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
         items.get(index).events = mask;
     }
 
@@ -149,7 +157,7 @@ public final class NativePoller implements Poller {
             return false;
         int rc = Native.pollerRemove(handle, InternalAccess.socketHandle(socket));
         if (rc != 0)
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
         PollItem removed = items.remove(index);
         if ((removed.events & PollEventFlags.POLLCOMPLETION.mask()) != 0) {
             InternalAccess.completionReleasePublic(removed.socket, this);
@@ -168,7 +176,7 @@ public final class NativePoller implements Poller {
             return false;
         int rc = Native.pollerRemove(handle, monitorHandle);
         if (rc != 0)
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
         PollItem removed = items.remove(index);
         socketIndexes.remove(removed.handle.address());
         refreshIndexesFrom(index);
@@ -182,7 +190,7 @@ public final class NativePoller implements Poller {
             return false;
         int rc = Native.pollerRemoveFd(handle, fd);
         if (rc != 0)
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
         items.remove(index);
         return true;
     }
@@ -195,7 +203,7 @@ public final class NativePoller implements Poller {
             return false;
         int rc = Native.pollerRemoveZlinkTimer(handle, InternalAccess.timerHandle(timer));
         if (rc != 0)
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
         items.remove(index);
         return true;
     }
@@ -230,50 +238,83 @@ public final class NativePoller implements Poller {
     public int wait(PollEvents events, Duration timeout) {
         ensureOpen();
         Objects.requireNonNull(events, "events");
-        MemorySegment nativeEvents = waitEvents(events.capacity());
-        int readyCount = Native.pollerWait(handle, nativeEvents, events.capacity(),
-            DurationConversions.toIntMillis(timeout, "timeout"), waitErrorOut);
-        for (int i = 0; i < readyCount; i++) {
-            int revents = NativePollEvents.revents(nativeEvents, i);
-            Integer index = socketIndexes.get(
-                NativePollEvents.socket(nativeEvents, i));
-            if (index == null) {
-                continue;
+        MemorySegment waitHandle = handle;
+        MemorySegment sharedEvents = waitEvents;
+        boolean shared = sharedEvents.address() != 0
+            && WAIT_EVENTS_OWNER.compareAndSet(this, sharedEvents,
+                MemorySegment.NULL);
+        Arena localArena = shared ? null : Arena.ofConfined();
+        MemorySegment nativeEvents = sharedEvents;
+        MemorySegment errorOut = waitErrorOut;
+        try {
+            if (shared) {
+                if (waitEventsCapacity < events.capacity()) {
+                    Arena grownArena = Arena.ofAuto();
+                    MemorySegment grownEvents = NativePollEvents.create(grownArena,
+                        Math.max(1, events.capacity()));
+                    MemorySegment grownErrorOut = grownArena.allocate(ValueLayout.JAVA_INT);
+                    waitArena = grownArena;
+                    waitErrorOut = grownErrorOut;
+                    waitEventsCapacity = events.capacity();
+                    nativeEvents = grownEvents;
+                    errorOut = grownErrorOut;
+                }
+            } else {
+                nativeEvents = NativePollEvents.create(localArena,
+                    Math.max(1, events.capacity()));
+                errorOut = localArena.allocate(ValueLayout.JAVA_INT);
             }
-            PollItem item = items.get(index);
-            boolean ownsCompletions = (item.events
-                & PollEventFlags.POLLCOMPLETION.mask()) != 0;
-            boolean completionWake = (revents
-                & (PollEventFlags.POLLCOMPLETION.mask()
-                    | PollEventFlags.POLLOUT.mask())) != 0;
-            if (ownsCompletions && completionWake) {
-                int progress = InternalAccess.completionDrain(item.socket);
-                if (progress == 0) {
-                    NativePollEvents.revents(nativeEvents, i,
-                        revents & ~PollEventFlags.POLLCOMPLETION.mask());
+            int readyCount = Native.pollerWait(waitHandle, nativeEvents, events.capacity(),
+                DurationConversions.toIntMillis(timeout, "timeout"), errorOut);
+            for (int i = 0; i < readyCount; i++) {
+                int revents = NativePollEvents.revents(nativeEvents, i);
+                Integer index = socketIndexes.get(
+                    NativePollEvents.socket(nativeEvents, i));
+                if (index == null) {
+                    continue;
+                }
+                PollItem item = items.get(index);
+                boolean ownsCompletions = (item.events
+                    & PollEventFlags.POLLCOMPLETION.mask()) != 0;
+                boolean completionWake = (revents
+                    & (PollEventFlags.POLLCOMPLETION.mask()
+                        | PollEventFlags.POLLOUT.mask())) != 0;
+                if (ownsCompletions && completionWake) {
+                    int progress = InternalAccess.completionDrain(item.socket);
+                    if (progress == 0) {
+                        NativePollEvents.revents(nativeEvents, i,
+                            revents & ~PollEventFlags.POLLCOMPLETION.mask());
+                    }
                 }
             }
-        }
-        if (containsOnlySockets) {
-            // HOT PATH: a socket-only poller cannot produce FD or timer
-            // results. Keep the public result identical while avoiding
-            // native fields used only by those other source kinds.
-            for (int i = 0; i < readyCount; i++) {
-                POLL_EVENTS_ACCESS.markSocketEvent(events, i,
-                    NativePollEvents.slot(nativeEvents, i),
-                    NativePollEvents.revents(nativeEvents, i));
+            if (containsOnlySockets) {
+                // HOT PATH: a socket-only poller cannot produce FD or timer
+                // results. Keep the public result identical while avoiding
+                // native fields used only by those other source kinds.
+                for (int i = 0; i < readyCount; i++) {
+                    POLL_EVENTS_ACCESS.markSocketEvent(events, i,
+                        NativePollEvents.slot(nativeEvents, i),
+                        NativePollEvents.revents(nativeEvents, i));
+                }
+            } else {
+                for (int i = 0; i < readyCount; i++) {
+                    POLL_EVENTS_ACCESS.markEvent(events, i,
+                        NativePollEvents.sourceKindValue(nativeEvents, i),
+                        NativePollEvents.slot(nativeEvents, i),
+                        NativePollEvents.revents(nativeEvents, i),
+                        NativePollEvents.fd(nativeEvents, i));
+                }
             }
-        } else {
-            for (int i = 0; i < readyCount; i++) {
-                POLL_EVENTS_ACCESS.markEvent(events, i,
-                    NativePollEvents.sourceKindValue(nativeEvents, i),
-                    NativePollEvents.slot(nativeEvents, i),
-                    NativePollEvents.revents(nativeEvents, i),
-                    NativePollEvents.fd(nativeEvents, i));
+            POLL_EVENTS_ACCESS.markReadyCount(events, readyCount);
+            return readyCount;
+        } finally {
+            if (shared) {
+                if (handle == waitHandle)
+                    waitEvents = nativeEvents;
+            } else {
+                localArena.close();
             }
         }
-        POLL_EVENTS_ACCESS.markReadyCount(events, readyCount);
-        return readyCount;
     }
 
     @Override
@@ -291,20 +332,6 @@ public final class NativePoller implements Poller {
         handle = MemorySegment.NULL;
         items.clear();
         closeWaitArena();
-    }
-
-    private MemorySegment waitEvents(int capacity) {
-        if (waitArena != null && waitEventsCapacity >= capacity)
-            return waitEvents;
-
-        closeWaitArena();
-        waitArena = Arena.ofAuto();
-        // HOT PATH: Poller.wait can run once per receive/send loop iteration.
-        // Keep native event storage with the poller so it is reused across waits.
-        waitEvents = NativePollEvents.create(waitArena, Math.max(1, capacity));
-        waitErrorOut = waitArena.allocate(ValueLayout.JAVA_INT);
-        waitEventsCapacity = capacity;
-        return waitEvents;
     }
 
     private void closeWaitArena() {
@@ -337,7 +364,7 @@ public final class NativePoller implements Poller {
             if (claimed) {
                 InternalAccess.completionReleasePublic(socket, this);
             }
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
         }
         socketIndexes.putIfAbsent(InternalAccess.socketHandle(socket).address(), items.size());
         items.add(item);
@@ -354,7 +381,7 @@ public final class NativePoller implements Poller {
         PollItem item = PollItem.monitor(monitor, monitorHandle, events, slot);
         int rc = Native.pollerAdd(handle, monitorHandle, item.userData(), events);
         if (rc != 0)
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
         socketIndexes.put(monitorHandle.address(), items.size());
         items.add(item);
     }

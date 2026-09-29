@@ -205,12 +205,12 @@ void test_one_way_writable_retry_state ()
 
     zlink_completion_t terminal = admitted;
     terminal.completion_id = 8;
-    terminal.send_result = ZLINK_SEND_TERMINAL;
-    terminal.send_terminal_errno = EHOSTUNREACH;
+    terminal.send_result = ZLINK_SEND_NOT_FOUND;
+    terminal.send_terminal_errno = ENOENT;
     assert (!record_writable_completion (&slot, terminal));
     assert (!slot.retained);
     assert (slot.wait_token == 0);
-    assert (errno == EHOSTUNREACH);
+    assert (errno == ENOENT);
 }
 
 void test_reqrep_submit_progress_quantum_is_byte_bounded ()
@@ -417,14 +417,14 @@ void test_stream_writable_retry_accounting ()
     terminal.completion_id = 8;
     terminal.user_context = session.send_socket;
     terminal.peer_rid = session.retained_rid;
-    terminal.send_result = ZLINK_SEND_TERMINAL;
-    terminal.send_terminal_errno = EHOSTUNREACH;
+    terminal.send_result = ZLINK_SEND_NOT_CONNECTED;
+    terminal.send_terminal_errno = ENOTCONN;
     require_stream_test (
       perf_multi_stream::record_writable_completion (&session, &terminal));
     require_stream_test (perf_multi_stream::outstanding_size (&session) == 0);
     require_stream_test (session.failure_count.load (std::memory_order_acquire) == 1);
     require_stream_test (
-      session.first_failure_errno.load (std::memory_order_acquire) == EHOSTUNREACH);
+      session.first_failure_errno.load (std::memory_order_acquire) == ENOTCONN);
     require_stream_test (session.failed.load (std::memory_order_acquire));
     perf_stop_requested ().store (false, std::memory_order_release);
 }

@@ -7,6 +7,8 @@ import java.util.concurrent.*;
 import org.junit.jupiter.api.Test;
 import systems.zlink.TestSupport;
 import systems.zlink.contracts.core.*;
+import systems.zlink.contracts.errors.CloseResult;
+import systems.zlink.contracts.errors.ZlinkCloseException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.*;
 
@@ -46,6 +48,18 @@ class ConcurrentAdmissionContractTest {
                 assertEquals(1, drain.get(TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS));
                 Message.closeAll(request.get(TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS));
                 assertFalse(blocked.isDone(), "progress must happen before native admission is released");
+                core.closeBusyDuringAdmission = true;
+                FutureTask<ZlinkCloseException> close = new FutureTask<>(() ->
+                    assertThrows(ZlinkCloseException.class, dealer::close));
+                Thread closer = Thread.ofPlatform().start(close);
+                try {
+                    assertEquals(CloseResult.BUSY,
+                        close.get(TestSupport.DEFAULT_TIMEOUT_MS,
+                            TimeUnit.MILLISECONDS).getResult());
+                } finally {
+                    closer.join(TestSupport.DEFAULT_TIMEOUT_MS);
+                    core.closeBusyDuringAdmission = false;
+                }
             } finally {
                 core.releaseAdmission.countDown();
                 sender.join(TestSupport.DEFAULT_TIMEOUT_MS);

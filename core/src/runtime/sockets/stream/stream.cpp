@@ -275,7 +275,8 @@ void zlink::stream_t::xpipe_terminated (pipe_t *pipe_)
     zlink_routing_id_t rid = {};
     rid.size = sizeof (server_routing_id);
     put_uint32 (rid.data, server_routing_id);
-    fail_blocking_send_waits_for_logical_target (&rid, ENOTCONN);
+    fail_blocking_send_waits_for_logical_target (&rid,
+                                                 ZLINK_SEND_NOT_CONNECTED);
 
 }
 
@@ -292,7 +293,8 @@ int zlink::stream_t::xterm_peer_rid (const zlink_routing_id_t *peer_rid_,
     *delay_out_ = false;
 
     const uint32_t routing_id = get_uint32 (peer_rid_->data);
-    fail_blocking_send_waits_for_logical_target (peer_rid_, ENOENT);
+    fail_blocking_send_waits_for_logical_target (peer_rid_,
+                                                 ZLINK_SEND_NOT_FOUND);
     route_shard_t &shard = route_shard_for (routing_id);
     bool terminated = false;
     {

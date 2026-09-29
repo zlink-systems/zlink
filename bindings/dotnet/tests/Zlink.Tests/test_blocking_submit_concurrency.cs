@@ -112,6 +112,36 @@ public sealed class test_blocking_submit_concurrency
     }
 
     [Fact]
+    public async Task close_does_not_wait_for_an_in_flight_async_submit()
+    {
+        Assert.True(CoreTestSupport.IsNativeAvailable());
+        using var context = Zlink.CreateContext();
+        var dealer = context.CreateDealerSocket();
+        using var router = context.CreateRouterSocket();
+        string endpoint = CoreTestSupport.NewEndpoint("inproc", "close-in-flight");
+        router.Bind(endpoint);
+        dealer.Connect(endpoint);
+        using Message part = Message.From("in-flight");
+        using var parts = new SubmitBarrierParts(part, holdPublication: true);
+        object owner = CompletionOwnerTestAccess.Owner(dealer);
+        Task submit = Start(() => CompletionOwnerTestAccess.Invoke(owner,
+            "SendAsync", null, parts, CancellationToken.None));
+        try
+        {
+            // The native submit has returned; the binding call is still in flight.
+            Assert.True(parts.Admitted.Wait(Watchdog));
+            // Core close is fail-fast; the binding adds no wait of its own.
+            await Task.Run(dealer.Dispose).WaitAsync(Watchdog);
+            Assert.False(submit.IsCompleted);
+        }
+        finally
+        {
+            parts.ReleasePublication.Set();
+            _ = await Record.ExceptionAsync(() => submit.WaitAsync(Watchdog));
+        }
+    }
+
+    [Fact]
     public async Task prepublication_reply_joins_blocking_request_once()
     {
         Assert.True(CoreTestSupport.IsNativeAvailable());
@@ -137,10 +167,6 @@ public sealed class test_blocking_submit_concurrency
             using Message response = Message.From("early-reply");
             received.Reply().Message(response).Submit();
 
-            object submitSync = CompletionOwnerTestAccess.Field(owner, "_submitSync");
-            Assert.True(Monitor.TryEnter(submitSync),
-                "Native submit and caller-message consumption must leave the owner lock free.");
-            Monitor.Exit(submitSync);
             drain = Start(() =>
             {
                 var events = new PollEvent[1];
@@ -148,14 +174,10 @@ public sealed class test_blocking_submit_concurrency
                 Assert.NotEqual(PollEventFlags.None,
                     events[0].Revents & PollEventFlags.PollCompletion);
             });
-            Assert.True(SpinWait.SpinUntil(() =>
-            {
-                if (!Monitor.TryEnter(submitSync))
-                    return true;
-                Monitor.Exit(submitSync);
-                return drain.IsCompleted;
-            }, Watchdog));
-            Assert.False(drain.IsCompleted);
+            // The drain joins the pre-publication completion inside the
+            // request entry, so it cannot finish before publication.
+            Assert.False(SpinWait.SpinUntil(() => drain.IsCompleted,
+                TimeSpan.FromMilliseconds(300)));
             Assert.False(request.IsCompleted);
             parts.ReleasePublication.Set();
             await Task.WhenAll(request, drain).WaitAsync(Watchdog);

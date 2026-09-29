@@ -303,6 +303,135 @@ bool run_one_way (const char *cell_, size_t iterations_,
     return measured_ok && cleanup_ok;
 }
 
+bool published_send (void *publisher_, zlink_msg_t *message_)
+{
+    const zlink_submit_result_t result =
+      zlink_publish (publisher_, "hotpath", message_, 1,
+                     ZLINK_SEND_FLAGS_NONE);
+    return result == ZLINK_SUBMIT_OK
+             ? true
+             : api_error ("zlink_publish", result);
+}
+
+bool subscribed_receive (void *subscriber_, zlink_msg_t *message_)
+{
+    char topic[32];
+    size_t topic_size = sizeof (topic);
+    size_t part_count = 0;
+    const zlink_recv_result_t result =
+      zlink_subscribe (subscriber_, NULL, topic, sizeof (topic), &topic_size,
+                       message_, 1, &part_count, ZLINK_RECV_FLAGS_NONE);
+    if (result != ZLINK_RECV_OK)
+        return api_error ("zlink_subscribe", result);
+    if (topic_size != sizeof ("hotpath") - 1
+        || std::memcmp (topic, "hotpath", topic_size) != 0
+        || part_count != 1) {
+        std::fprintf (stderr, "subscription receive returned invalid record\n");
+        return false;
+    }
+    return true;
+}
+
+bool run_pubsub_tcp (size_t iterations_, bool xpub_)
+{
+    fixture_t fixture;
+    if (!fixture.context) {
+        std::fprintf (stderr, "zlink_ctx_new failed\n");
+        return false;
+    }
+    fixture.sender = zlink_socket (
+      fixture.context, xpub_ ? ZLINK_SOCKET_XPUB : ZLINK_SOCKET_PUB);
+    fixture.receiver = zlink_socket (fixture.context, ZLINK_SOCKET_SUB);
+    if (!fixture.sender || !fixture.receiver)
+        return api_error ("zlink_socket(pubsub)", -1);
+    if (!configure_socket (fixture.sender)
+        || !configure_socket (fixture.receiver))
+        return false;
+    const int nodrop = 1;
+    if (zlink_set_pub_option (fixture.sender, ZLINK_PUB_OPT_NODROP,
+                              &nodrop, sizeof (nodrop)) != ZLINK_CONFIG_OK
+        || zlink_set_subscription (fixture.receiver, "hotpath")
+             != ZLINK_CONFIG_OK)
+        return api_error ("PUB/SUB setup", -1);
+
+    const char wildcard[] = "tcp://127.0.0.1:*";
+    if (zlink_bind (fixture.sender, wildcard) != ZLINK_BIND_OK)
+        return api_error ("zlink_bind(pubsub)", -1);
+    char endpoint[256];
+    size_t endpoint_size = sizeof (endpoint);
+    if (zlink_get_option (fixture.sender, ZLINK_OPT_LAST_ENDPOINT, endpoint,
+                          &endpoint_size) != ZLINK_CONFIG_OK
+        || zlink_connect (fixture.receiver, endpoint) != ZLINK_CONNECT_OK)
+        return api_error ("PUB/SUB connect", -1);
+
+    const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (10);
+    int topic_count = 0;
+    while (std::chrono::steady_clock::now () < deadline) {
+        int events = 0;
+        size_t events_size = sizeof (events);
+        if (zlink_get_option (fixture.sender, ZLINK_OPT_EVENTS, &events,
+                              &events_size) != ZLINK_CONFIG_OK)
+            return api_error ("zlink_get_option(EVENTS)", -1);
+        size_t option_size = sizeof (topic_count);
+        if (zlink_get_pub_option (fixture.sender, ZLINK_PUB_OPT_TOPICS_COUNT,
+                                   &topic_count, &option_size)
+            != ZLINK_CONFIG_OK)
+            return api_error ("zlink_get_pub_option(TOPICS_COUNT)", -1);
+        if (topic_count == 1)
+            break;
+        std::this_thread::sleep_for (std::chrono::milliseconds (1));
+    }
+    if (topic_count != 1) {
+        std::fprintf (stderr, "PUB/SUB subscription did not arrive\n");
+        return false;
+    }
+
+    for (size_t i = 0; i < warmup_iterations; ++i) {
+        zlink_msg_t outbound;
+        zlink_msg_t inbound;
+        if (!init_payload (&outbound, static_cast<unsigned char> (i))
+            || zlink_msg_init (&inbound) != ZLINK_CONFIG_OK)
+            return false;
+        if (!published_send (fixture.sender, &outbound)
+            || !subscribed_receive (fixture.receiver, &inbound))
+            return false;
+        if (zlink_msg_close (&outbound) != ZLINK_CONFIG_OK
+            || zlink_msg_close (&inbound) != ZLINK_CONFIG_OK)
+            return api_error ("PUB/SUB warm-up close", -1);
+    }
+
+    std::vector<zlink_msg_t> outbound (iterations_);
+    std::vector<zlink_msg_t> inbound (iterations_);
+    if (!init_payloads (&outbound, 0x5a) || !init_empty_messages (&inbound))
+        return false;
+
+    bool measured_ok = true;
+    {
+        collect_scope_t collect;
+        for (size_t i = 0; i < iterations_; ++i) {
+            if (!published_send (fixture.sender, &outbound[i])) {
+                measured_ok = false;
+                break;
+            }
+        }
+    }
+    if (measured_ok)
+        std::this_thread::sleep_for (std::chrono::seconds (1));
+    if (measured_ok) {
+        collect_scope_t collect;
+        for (size_t i = 0; i < iterations_; ++i) {
+            if (!subscribed_receive (fixture.receiver, &inbound[i])) {
+                measured_ok = false;
+                break;
+            }
+        }
+    }
+
+    const bool cleanup_ok = close_messages (&outbound) && close_messages (&inbound);
+    return measured_ok && cleanup_ok;
+}
+
 bool raw_socket_send_all (int fd_, const unsigned char *data_, size_t size_)
 {
     size_t sent = 0;
@@ -751,7 +880,8 @@ int main (int argc_, char **argv_)
           stderr,
           "usage: %s <cell> <iterations>\n"
           "cells: dealer_dealer_inproc, dealer_router_reqrep_inproc, "
-          "pair_inproc, router_router_tcp, stream_tcp\n",
+          "pair_inproc, pub_sub_tcp, xpub_sub_tcp, router_router_tcp, "
+          "stream_tcp\n",
           argv_[0]);
         return 2;
     }
@@ -771,7 +901,11 @@ int main (int argc_, char **argv_)
         ok = run_request_reply (iterations);
     else if (cell == "pair_inproc")
         ok = run_one_way (argv_[1], iterations, ZLINK_SOCKET_PAIR, false,
-                          false);
+                           false);
+    else if (cell == "pub_sub_tcp")
+        ok = run_pubsub_tcp (iterations, false);
+    else if (cell == "xpub_sub_tcp")
+        ok = run_pubsub_tcp (iterations, true);
     else if (cell == "router_router_tcp")
         ok = run_one_way (argv_[1], iterations, ZLINK_SOCKET_ROUTER, true,
                           true);

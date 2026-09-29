@@ -184,9 +184,9 @@ socket mailbox의 소유자는 공개 API를 쥔 thread와 비동기 실행자 �
 command가 public readiness를 바꿔 poller를 다시 깨워야 할 때, 그리고 command 없이 상태만
 바꾼 뒤 명시적으로 신호할 때다. 규칙은 원인마다 같다 — **깨울 이유가 생긴 그 전이에서 한 번
 알리고, 이미 깨어 있는 소비자에게는 알리지 않는다.** 소비자는 mailbox를 다 비운 뒤에야 잠들고,
-잠들기 직전에 queue를 한 번 더 확인해 그 사이의 command를 놓치지 않는다. 같은 신호를 public
-poller와 command owner가 나눠 소비할 때 누가 먼저 소비하고 누가 다시 무장(re-arm)하는지는
-[Polling](../05-polling.ko.md)이 소유한다.
+잠들기 직전에 queue를 한 번 더 확인해 그 사이의 command를 놓치지 않는다. Public poller의
+notification descriptor를 누가 소비하는지는 [Polling](../05-polling.ko.md#3-source-종류와-readiness)이
+소유한다.
 
 **꺼냄.** queue에서 꺼내는 동작 자체에는 lock이 없다. socket의 C2 상태를 바꾸는 command는
 [§3.1](#31-socket-turn)의 socket turn 안에서 적용하고, connection의 engine 상태를 바꾸는 command는

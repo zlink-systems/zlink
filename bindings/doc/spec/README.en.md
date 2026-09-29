@@ -1371,7 +1371,7 @@ IDs, part consumption, and wait-token conditions belong to
 |---|---|
 | SEND `OK`, ID `0` | Follow the SEND stage outcome in [async execution model §5](async-execution-model.en.md#5-joining-submit-results-and-completions). |
 | REQUEST `OK`, nonzero ID | Follow the REQUEST stage outcome in [async execution model §5](async-execution-model.en.md#5-joining-submit-results-and-completions). |
-| `BACKPRESSURED`, `EAGAIN`, nonzero wait token | Before calling Core, the binding retains an independently owned staging record and passes a separate native array to each attempt. After WRITABLE, the binding resubmits the same operation from staging. Staging is released once on admission, terminal failure, or socket/context lifecycle cleanup. Stage outcomes follow [async execution model §5](async-execution-model.en.md#5-joining-submit-results-and-completions). |
+| `BACKPRESSURED`, `EAGAIN`, nonzero wait token | Before calling Core, the binding retains an independently owned staging record and passes a separate native array to each attempt. Only after a `ZLINK_SEND_ADMITTED` WRITABLE does the binding resubmit the same operation from staging. Staging is released once on admission, terminal failure, or socket/context lifecycle cleanup. `ZLINK_SEND_NOT_FOUND` and `ZLINK_SEND_NOT_CONNECTED` project to `NOT_FOUND` and `NOT_CONNECTED`, respectively; `ZLINK_SEND_TIMED_OUT` projects to `BACKPRESSURED` with `EAGAIN`, and an unknown value to `INTERNAL_ERROR` with `EPROTO`. Stage outcomes follow [async execution model §5](async-execution-model.en.md#5-joining-submit-results-and-completions). |
 | Submit failure without a wait token | Complete the terminal with that submit error (raised as an exception/error, not through the result object). |
 
 - **The binding delivers a WRITABLE found by socket-local context and token to its waiter without rechecking Core's guaranteed submit RID echo.**
@@ -2964,7 +2964,7 @@ Core [result and errno mapping](../../../core/doc/spec/core/03-errors.en.md#resu
 | Value | Constant | Category | Meaning |
 |----|------|------|------|
 | 0 | `OK` | success | submit succeeded |
-| 1 | `BACKPRESSURED` | control flow | the send queue is saturated (HWM) |
+| 1 | `BACKPRESSURED` | control flow | Core capacity refusal; see Core Errors §2 |
 | 2 | `NOT_CONNECTED` | control flow | the target peer/path is not connected |
 | 3 | `NOT_FOUND` | control flow | the target peer/route does not exist |
 | 13 | `NOT_ADMITTED` | control flow | Admission refusal returned by Core. Flag-specific weight-`0` results follow [Core whole-message send](../../../core/doc/spec/core/socket/README.en.md#whole-message-send-and-pending-admission) and [Request and reply](../../../core/doc/spec/core/socket/README.en.md#request-and-reply). |

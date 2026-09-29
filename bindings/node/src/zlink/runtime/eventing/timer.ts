@@ -32,7 +32,7 @@ export class Timer extends NativeHandle {
     try {
       return requireNative().timerRecv(this._native, flags | 0) as bigint | null;
     } catch (error) {
-      const recvError = recvNativeError(error, flags, 'timer recv failed');
+      const recvError = recvNativeError(error, 'timer recv failed');
       if (recvError.result === RecvResult.NoData) return null;
       throw recvError;
     }

@@ -7,7 +7,6 @@
 #include "addon_monitor_status_values.h"
 #include "addon_message_values.h"
 #include "addon_message_parts.h"
-#include "addon_submit_results.h"
 #include <errno.h>
 #include <atomic>
 #include <chrono>
@@ -182,10 +181,15 @@ zlink_socket_type_t translate_socket_type (int32_t type)
     }
 }
 
-bool init_msg_from_bytes (zlink_msg_t *msg, const void *data, size_t len)
+bool init_msg_from_bytes (zlink_msg_t *msg, const void *data, size_t len,
+                          int *failure_result = NULL)
 {
-    if (zlink_msg_init_size (msg, len) != 0)
+    const int result = zlink_msg_init_size (msg, len);
+    if (result != ZLINK_CONFIG_OK) {
+        if (failure_result)
+            *failure_result = result;
         return false;
+    }
     if (len > 0 && data)
         memcpy (zlink_msg_data (msg), data, len);
     return true;
@@ -294,10 +298,9 @@ void run_send_close_stress_sender (void *sender,
                     || result == ZLINK_SUBMIT_INVALID_STATE)
                    && native_errno == EINVAL) {
             counts->rejected_einval.fetch_add (1, std::memory_order_relaxed);
-        } else if (native_errno == ESHUTDOWN) {
+        } else if (result == ZLINK_SUBMIT_TERMINATED && native_errno == ESHUTDOWN) {
             counts->shutdown.fetch_add (1, std::memory_order_relaxed);
-        } else if (result == ZLINK_SUBMIT_BACKPRESSURED
-                   || native_errno == EAGAIN) {
+        } else if (result == ZLINK_SUBMIT_BACKPRESSURED) {
             counts->backpressured.fetch_add (1, std::memory_order_relaxed);
         } else {
             counts->other_submit.fetch_add (1, std::memory_order_relaxed);
@@ -319,8 +322,7 @@ void run_send_close_stress_receiver (void *receiver,
               return zlink_recv (receiver, &source_routing_id, buffer, capacity,
                                  count, ZLINK_RECV_FLAGS_DONTWAIT);
           });
-        const int native_errno = result == ZLINK_RECV_OK ? 0 : zlink_errno ();
-        if (result == ZLINK_RECV_NO_DATA || native_errno == EAGAIN) {
+        if (result == ZLINK_RECV_NO_DATA) {
             if (senders_done->load (std::memory_order_acquire))
                 ++empty_after_done;
             std::this_thread::yield ();
@@ -883,8 +885,11 @@ bool init_msg_from_value (napi_env env,
             napi_throw_type_error (env, NULL, "send buffer invalid");
             return false;
         }
-        if (!init_msg_from_bytes (msg, data, len))
+        int failure_result = ZLINK_CONFIG_OK;
+        if (!init_msg_from_bytes (msg, data, len, &failure_result)) {
+            throw_result_error (env, "message initialization failed", failure_result);
             return false;
+        }
         return true;
     }
 
@@ -892,9 +897,14 @@ bool init_msg_from_value (napi_env env,
     if (napi_get_value_external (
           env, value, reinterpret_cast<void **> (&direct_handle)) == napi_ok
         && direct_handle && direct_handle->frame) {
-        if (zlink_msg_init (msg) != 0)
+        const int init_result = zlink_msg_init (msg);
+        if (init_result != ZLINK_CONFIG_OK) {
+            throw_result_error (env, "message initialization failed", init_result);
             return false;
-        if (zlink_msg_copy (msg, &direct_handle->frame->message) != 0) {
+        }
+        const int copy_result = zlink_msg_copy (msg, &direct_handle->frame->message);
+        if (copy_result != ZLINK_CONFIG_OK) {
+            throw_result_error (env, "message copy failed", copy_result);
             zlink_msg_close (msg);
             return false;
         }
@@ -919,9 +929,14 @@ bool init_msg_from_value (napi_env env,
         if (!frame) {
             return false;
         }
-        if (zlink_msg_init (msg) != 0)
+        const int init_result = zlink_msg_init (msg);
+        if (init_result != ZLINK_CONFIG_OK) {
+            throw_result_error (env, "message initialization failed", init_result);
             return false;
-        if (zlink_msg_copy (msg, &frame->message) != 0) {
+        }
+        const int copy_result = zlink_msg_copy (msg, &frame->message);
+        if (copy_result != ZLINK_CONFIG_OK) {
+            throw_result_error (env, "message copy failed", copy_result);
             zlink_msg_close (msg);
             return false;
         }
@@ -941,8 +956,11 @@ bool init_msg_from_value (napi_env env,
         napi_throw_type_error (env, NULL, "message snapshot data must be a Buffer");
         return false;
     }
-    if (!init_msg_from_bytes (msg, data, len))
+    int failure_result = ZLINK_CONFIG_OK;
+    if (!init_msg_from_bytes (msg, data, len, &failure_result)) {
+        throw_result_error (env, "message initialization failed", failure_result);
         return false;
+    }
 
     return true;
 }
@@ -1018,9 +1036,11 @@ napi_value message_from_buffer (napi_env env, napi_callback_info info)
         napi_throw_error (env, NULL, "native message frame allocation failed");
         return NULL;
     }
-    if (!init_msg_from_bytes (&frame->message, data, size)) {
+    int init_result = ZLINK_CONFIG_OK;
+    if (!init_msg_from_bytes (&frame->message, data, size, &init_result)) {
+        napi_value failure = throw_result_error (env, "message native allocation failed", init_result);
         delete frame;
-        return throw_last_error (env, "message native allocation failed");
+        return failure;
     }
     // Message.from() can be submitted without exposing data().  Defer the
     // external Buffer view until JavaScript actually asks for it.
@@ -1042,9 +1062,12 @@ napi_value message_allocate (napi_env env, napi_callback_info info)
         napi_throw_error (env, NULL, "native message frame allocation failed");
         return NULL;
     }
-    if (zlink_msg_init_size (&frame->message, static_cast<size_t> (size)) != 0) {
+    const int init_result = zlink_msg_init_size (&frame->message, static_cast<size_t> (size));
+    if (init_result != ZLINK_CONFIG_OK) {
+        const int native_errno = zlink_errno ();
         delete frame;
-        return throw_last_error (env, "message native allocation failed");
+        return throw_native_error (env, "message native allocation failed", native_errno,
+                                   &init_result);
     }
     // Allocation owns native storage immediately; its JavaScript Buffer view
     // is created lazily by Message.data().
@@ -1102,14 +1125,19 @@ napi_value message_frame_copy (napi_env env, napi_callback_info info)
         napi_throw_error (env, NULL, "native message frame allocation failed");
         return NULL;
     }
-    if (zlink_msg_init (&copy->message) != 0) {
+    const int init_result = zlink_msg_init (&copy->message);
+    if (init_result != ZLINK_CONFIG_OK) {
+        const int native_errno = zlink_errno ();
         recycle_native_message_frame (copy);
-        return throw_last_error (env, "message copy destination init failed");
+        return throw_native_error (env, "message copy destination init failed", native_errno,
+                                   &init_result);
     }
-    if (zlink_msg_copy (&copy->message, &source->message) != 0) {
+    const int copy_result = zlink_msg_copy (&copy->message, &source->message);
+    if (copy_result != ZLINK_CONFIG_OK) {
+        const int native_errno = zlink_errno ();
         zlink_msg_close (&copy->message);
         recycle_native_message_frame (copy);
-        return throw_last_error (env, "message copy failed");
+        return throw_native_error (env, "message copy failed", native_errno, &copy_result);
     }
     return create_native_message_value (env, copy, false);
 }
@@ -1149,8 +1177,9 @@ napi_value message_frame_move (napi_env env, napi_callback_info info)
         napi_throw_type_error (env, NULL, "messageFrameMove requires distinct frames");
         return NULL;
     }
-    if (zlink_msg_move (&destination->message, &source->message) != 0)
-        return throw_last_error (env, "message move failed");
+    const int move_result = zlink_msg_move (&destination->message, &source->message);
+    if (move_result != ZLINK_CONFIG_OK)
+        return throw_result_error (env, "message move failed", move_result);
 
     // Any previously exposed Buffer points at the pre-move storage. Invalidate
     // those views after the ownership transfer before JavaScript can observe
@@ -1182,7 +1211,7 @@ napi_value message_frame_ref_count (napi_env env, napi_callback_info info)
     zlink_config_result_t error = ZLINK_CONFIG_OK;
     const int ref_count = zlink_msg_refcnt (&frame->message, &error);
     if (error != ZLINK_CONFIG_OK)
-        return throw_last_error (env, "message refcount failed");
+        return throw_result_error (env, "message refcount failed", error);
     napi_value out;
     napi_create_int32 (env, ref_count, &out);
     return out;
@@ -1295,8 +1324,9 @@ napi_value proxy (napi_env env, napi_callback_info info)
             napi_get_value_external (env, argv[2], &capture);
     }
 
-    if (zlink_proxy (frontend, backend, capture) != ZLINK_CONFIG_OK)
-        return throw_last_error (env, "proxy failed");
+    const zlink_config_result_t result = zlink_proxy (frontend, backend, capture);
+    if (result != ZLINK_CONFIG_OK)
+        return throw_result_error (env, "proxy failed", result);
     napi_value out;
     napi_get_undefined (env, &out);
     return out;
@@ -1336,7 +1366,7 @@ napi_value ctx_shutdown (napi_env env, napi_callback_info info)
     napi_get_value_external (env, argv[0], &ctx);
     int rc = zlink_ctx_shutdown (ctx);
     if (rc != 0)
-        return throw_last_error (env, "ctx_shutdown failed");
+        return throw_result_error (env, "ctx_shutdown failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -1352,7 +1382,7 @@ napi_value ctx_term (napi_env env, napi_callback_info info)
     // Core continues the term wait across a signal; its result is final.
     const int rc = zlink_ctx_term (ctx);
     if (rc != 0)
-        return throw_last_error (env, "ctx_term failed");
+        return throw_result_error (env, "ctx_term failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -1377,7 +1407,7 @@ napi_value ctx_setopt (napi_env env, napi_callback_info info)
         zlink_config_result_t rc =
           zlink_ctx_set_data (ctx, static_cast<zlink_ctx_option_t> (opt), data, length);
         if (rc != ZLINK_CONFIG_OK)
-            return throw_last_error (env, "ctx_setopt failed");
+            return throw_result_error (env, "ctx_setopt failed", rc);
         napi_value ok;
         napi_get_undefined (env, &ok);
         return ok;
@@ -1385,7 +1415,7 @@ napi_value ctx_setopt (napi_env env, napi_callback_info info)
     napi_get_value_int32 (env, argv[2], &value);
     int rc = zlink_ctx_set (ctx, static_cast<zlink_ctx_option_t> (opt), value);
     if (rc != 0)
-        return throw_last_error (env, "ctx_setopt failed");
+        return throw_result_error (env, "ctx_setopt failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -1403,7 +1433,7 @@ napi_value ctx_getopt (napi_env env, napi_callback_info info)
     zlink_config_result_t err = ZLINK_CONFIG_OK;
     const int rc = zlink_ctx_get (ctx, static_cast<zlink_ctx_option_t> (opt), &err);
     if (err != ZLINK_CONFIG_OK)
-        return throw_last_error (env, "ctx_getopt failed");
+        return throw_result_error (env, "ctx_getopt failed", err);
     napi_value out;
     napi_create_int32 (env, rc, &out);
     return out;
@@ -1423,7 +1453,7 @@ napi_value ctx_getopt_data (napi_env env, napi_callback_info info)
     const zlink_config_result_t rc = zlink_ctx_get_data (
       ctx, static_cast<zlink_ctx_option_t> (opt), &value, &size);
     if (rc != ZLINK_CONFIG_OK)
-        return throw_last_error (env, "ctx_getopt_data failed");
+        return throw_result_error (env, "ctx_getopt_data failed", rc);
     if (size != sizeof (value)) {
         napi_throw_error (env, NULL, "ctx_getopt_data returned an unexpected value size");
         return NULL;
@@ -1442,7 +1472,7 @@ napi_value ctx_recalculate_auto_hwm (napi_env env, napi_callback_info info)
     napi_get_value_external (env, argv[0], &ctx);
     zlink_config_result_t rc = zlink_ctx_auto_hwm_recalculate (ctx);
     if (rc != ZLINK_CONFIG_OK)
-        return throw_last_error (env, "ctx_auto_hwm_recalculate failed");
+        return throw_result_error (env, "ctx_auto_hwm_recalculate failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -1462,7 +1492,7 @@ napi_value ctx_get_auto_hwm_budget_snapshot (napi_env env, napi_callback_info in
     const zlink_config_result_t rc =
       zlink_ctx_get_auto_hwm_budget_snapshot (ctx, &snapshot);
     if (rc != ZLINK_CONFIG_OK)
-        return throw_last_error (env, "ctx_get_auto_hwm_budget_snapshot failed");
+        return throw_result_error (env, "ctx_get_auto_hwm_budget_snapshot failed", rc);
 
     napi_value out;
     napi_create_object (env, &out);
@@ -1554,7 +1584,7 @@ napi_value ctx_reset_auto_hwm_budget_metrics (napi_env env, napi_callback_info i
     napi_get_value_external (env, argv[0], &ctx);
     const zlink_config_result_t rc = zlink_ctx_reset_auto_hwm_budget_metrics (ctx);
     if (rc != ZLINK_CONFIG_OK)
-        return throw_last_error (env, "ctx_reset_auto_hwm_budget_metrics failed");
+        return throw_result_error (env, "ctx_reset_auto_hwm_budget_metrics failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -1586,7 +1616,7 @@ napi_value socket_close (napi_env env, napi_callback_info info)
     napi_get_value_external (env, argv[0], &sock);
     int rc = zlink_close (sock);
     if (rc != 0)
-        return throw_last_error (env, "close failed");
+        return throw_result_error (env, "close failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -1612,13 +1642,14 @@ napi_value test_run_send_close_stress (napi_env env, napi_callback_info info)
     void *sender = context ? zlink_socket (context, ZLINK_SOCKET_PAIR) : NULL;
     void *receiver = context ? zlink_socket (context, ZLINK_SOCKET_PAIR) : NULL;
     if (!context || !sender || !receiver) {
+        napi_value failure = throw_last_error (env, "stress setup failed");
         if (sender)
             zlink_close (sender);
         if (receiver)
             zlink_close (receiver);
         if (context)
             zlink_ctx_term (context);
-        return throw_last_error (env, "stress setup failed");
+        return failure;
     }
 
     static std::atomic<uint64_t> next_endpoint (1);
@@ -1626,12 +1657,17 @@ napi_value test_run_send_close_stress (napi_env env, napi_callback_info info)
     snprintf (endpoint, sizeof (endpoint), "inproc://node-send-close-stress-%llu",
               static_cast<unsigned long long> (
                 next_endpoint.fetch_add (1, std::memory_order_relaxed)));
-    if (zlink_bind (receiver, endpoint) != ZLINK_BIND_OK
-        || zlink_connect (sender, endpoint) != ZLINK_CONNECT_OK) {
+    const int bind_result = zlink_bind (receiver, endpoint);
+    const int connect_result = bind_result == ZLINK_BIND_OK
+      ? zlink_connect (sender, endpoint) : ZLINK_CONNECT_OK;
+    if (bind_result != ZLINK_BIND_OK || connect_result != ZLINK_CONNECT_OK) {
+        napi_value failure = bind_result != ZLINK_BIND_OK
+          ? throw_result_error (env, "stress bind failed", bind_result)
+          : throw_result_error (env, "stress connect failed", connect_result);
         zlink_close (sender);
         zlink_close (receiver);
         zlink_ctx_term (context);
-        return throw_last_error (env, "stress connect failed");
+        return failure;
     }
 
     send_close_stress_counts_t counts;
@@ -1701,12 +1737,8 @@ napi_value socket_bind (napi_env env, napi_callback_info info)
     napi_get_value_external (env, argv[0], &sock);
     std::string addr = get_string (env, argv[1]);
     int rc = zlink_bind (sock, addr.c_str ());
-    if (rc != 0) {
-        const int err = zlink_errno ();
-        char buf[128];
-        snprintf (buf, sizeof (buf), "bind failed (result=%d)", rc);
-        return throw_native_error (env, buf, err, NULL);
-    }
+    if (rc != 0)
+        return throw_result_error (env, "bind failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -1722,7 +1754,7 @@ napi_value socket_unbind (napi_env env, napi_callback_info info)
     std::string addr = get_string (env, argv[1]);
     int rc = zlink_unbind (sock, addr.c_str ());
     if (rc != 0)
-        return throw_last_error (env, "unbind failed");
+        return throw_result_error (env, "unbind failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -1738,7 +1770,7 @@ napi_value socket_connect (napi_env env, napi_callback_info info)
     std::string addr = get_string (env, argv[1]);
     int rc = zlink_connect (sock, addr.c_str ());
     if (rc != 0)
-        return throw_last_error (env, "connect failed");
+        return throw_result_error (env, "connect failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -1754,7 +1786,7 @@ napi_value socket_disconnect (napi_env env, napi_callback_info info)
     std::string addr = get_string (env, argv[1]);
     int rc = zlink_disconnect (sock, addr.c_str ());
     if (rc != 0)
-        return throw_last_error (env, "disconnect failed");
+        return throw_result_error (env, "disconnect failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -1772,7 +1804,7 @@ napi_value socket_disconnect_rid (napi_env env, napi_callback_info info)
         return NULL;
     int rc = zlink_disconnect_rid (sock, &peer_rid);
     if (rc != 0)
-        return throw_last_error (env, "disconnect_rid failed");
+        return throw_result_error (env, "disconnect_rid failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -1792,7 +1824,7 @@ napi_value socket_set_tls_server (napi_env env, napi_callback_info info)
         napi_get_value_int32 (env, argv[3], &require_client);
     int rc = zlink_set_tls_server (sock, cert.c_str (), key.c_str (), require_client);
     if (rc != 0)
-        return throw_last_error (env, "socket_set_tls_server failed");
+        return throw_result_error (env, "socket_set_tls_server failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -1812,7 +1844,7 @@ napi_value socket_set_tls_client (napi_env env, napi_callback_info info)
         napi_get_value_int32 (env, argv[3], &trust);
     int rc = zlink_set_tls_client (sock, ca.c_str (), host.c_str (), trust);
     if (rc != 0)
-        return throw_last_error (env, "socket_set_tls_client failed");
+        return throw_result_error (env, "socket_set_tls_client failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -1938,8 +1970,8 @@ napi_value socket_submit_request (napi_env env, napi_callback_info info)
     int32_t timeout_ms = 0;
     int32_t flags = 0;
     if (napi_get_value_int32 (env, argv[3], &timeout_ms) != napi_ok
-        || timeout_ms <= 0) {
-        napi_throw_range_error (env, NULL, "request timeout must be positive");
+        || timeout_ms < 0) {
+        napi_throw_range_error (env, NULL, "request timeout must not be negative");
         return NULL;
     }
     if (napi_get_value_int32 (env, argv[4], &flags) != napi_ok) {
@@ -2047,7 +2079,7 @@ napi_value socket_completion_recv (napi_env env, napi_callback_info info)
         return null_value;
     }
     if (result != ZLINK_RECV_OK)
-        return throw_last_error (env, "completion recv failed");
+        return throw_result_error (env, "completion recv failed", result);
     return create_completion_value (env, &completion);
 }
 
@@ -2179,14 +2211,14 @@ static void socket_readable_watch_ready (uv_poll_t *poll, int status, int)
         // can retire it too, so FD and local progress share the same dispatch.
         int events = 0;
         size_t events_size = sizeof (events);
-        if (zlink_get_option (
-              watch->socket, ZLINK_OPT_EVENTS, &events, &events_size)
-            != ZLINK_CONFIG_OK) {
+        const int result = zlink_get_option (
+          watch->socket, ZLINK_OPT_EVENTS, &events, &events_size);
+        if (result != ZLINK_CONFIG_OK) {
             native_errno = zlink_errno ();
-            status = UV_EIO;
+            status = result;
         }
     }
-    if (status < 0 && watch->status == 0) {
+    if (status != 0 && watch->status == 0) {
         watch->status = status;
         watch->native_errno = native_errno;
         uv_poll_stop (&watch->poll);
@@ -2240,7 +2272,7 @@ napi_value socket_readable_watch_start (napi_env env, napi_callback_info info)
     const zlink_config_result_t get_result =
       zlink_get_option (socket, ZLINK_OPT_FD, &fd, &fd_size);
     if (get_result != ZLINK_CONFIG_OK)
-        return throw_last_error (env, "socket readable fd lookup failed");
+        return throw_result_error (env, "socket readable fd lookup failed", get_result);
 
     uv_loop_t *loop = NULL;
     if (napi_get_uv_event_loop (env, &loop) != napi_ok || !loop) {
@@ -2372,8 +2404,8 @@ napi_value socket_request_sync (napi_env env, napi_callback_info info)
         return NULL;
     int32_t timeout_ms = 0;
     if (napi_get_value_int32 (env, argv[3], &timeout_ms) != napi_ok
-        || timeout_ms <= 0) {
-        napi_throw_range_error (env, NULL, "request timeout must be positive");
+        || timeout_ms < 0) {
+        napi_throw_range_error (env, NULL, "request timeout must not be negative");
         return NULL;
     }
     small_msg_storage_t parts;
@@ -2406,7 +2438,7 @@ napi_value socket_request_sync (napi_env env, napi_callback_info info)
         const int recv_result = zlink_completion_recv (
           socket, &completion, ZLINK_RECV_FLAGS_NONE);
         if (recv_result != ZLINK_RECV_OK)
-            return throw_last_error (env, "request completion recv failed");
+            return throw_result_error (env, "request completion recv failed", recv_result);
         found = completion.completion_id == completion_id;
         napi_value value = create_completion_value (env, &completion);
         if (!value)
@@ -2437,7 +2469,7 @@ napi_value socket_publish (napi_env env, napi_callback_info info)
     if (napi_is_buffer (env, argv[2], &is_buf) == napi_ok && is_buf) {
         if (!init_msg_from_value (env, argv[2], &single_part,
                                   &contains_native_frame))
-            return throw_last_error (env, "publish failed");
+            return NULL;
         use_single_part = true;
     } else {
         napi_is_array (env, argv[2], &is_array);
@@ -2449,7 +2481,7 @@ napi_value socket_publish (napi_env env, napi_callback_info info)
         } else if (payload_type == napi_object) {
             if (!init_msg_from_value (env, argv[2], &single_part,
                                       &contains_native_frame))
-                return throw_last_error (env, "publish failed");
+                return NULL;
             use_single_part = true;
         } else if (!build_msg_vector (env, argv[2], &parts)) {
             return NULL;
@@ -2504,8 +2536,9 @@ napi_value socket_try_publish (napi_env env, napi_callback_info info)
             napi_throw_type_error (env, NULL, "publish buffer invalid");
             return NULL;
         }
-        if (!init_msg_from_bytes (&single_part, data, len))
-            return throw_last_error (env, "publishNoWaitResult failed");
+        int init_result = ZLINK_CONFIG_OK;
+        if (!init_msg_from_bytes (&single_part, data, len, &init_result))
+            return throw_result_error (env, "publishNoWaitResult failed", init_result);
         use_single_part = true;
     } else {
         napi_is_array (env, argv[2], &is_array);
@@ -2517,20 +2550,15 @@ napi_value socket_try_publish (napi_env env, napi_callback_info info)
         } else if (payload_type == napi_object) {
             if (!init_msg_from_value (env, argv[2], &single_part,
                                       &contains_native_frame))
-                return throw_last_error (env, "publishNoWaitResult failed");
+                return NULL;
             use_single_part = true;
         } else if (!build_msg_vector (env, argv[2], &parts)) {
             return NULL;
         }
     }
 
-    int rc = zlink_publish (sock, topic, use_single_part ? &single_part : parts.data (),
+    const int rc = zlink_publish (sock, topic, use_single_part ? &single_part : parts.data (),
                             use_single_part ? 1 : parts.size (), ZLINK_SEND_FLAGS_DONTWAIT);
-    if (rc != ZLINK_SUBMIT_OK)
-        rc = preserve_try_send_result (rc);
-    if (rc < 0) {
-        return throw_last_error (env, "publishNoWaitResult failed");
-    }
     if (rc == ZLINK_SUBMIT_OK && (is_array || contains_native_frame))
         consume_native_message_value (env, argv[2]);
     napi_value out;
@@ -2585,7 +2613,7 @@ napi_value socket_recv_message (napi_env env, napi_callback_info info)
     napi_value out;
     int rc = recv_message_value (env, sock, flags, &out);
     if (rc != ZLINK_RECV_OK)
-        return throw_last_error (env, "recv failed");
+        return throw_result_error (env, "recv failed", rc);
     return out;
 }
 
@@ -2601,12 +2629,12 @@ napi_value socket_try_recv_message (napi_env env, napi_callback_info info)
     int rc = recv_message_value (env, sock, static_cast<int32_t> (ZLINK_RECV_FLAGS_DONTWAIT),
                                  &out);
     if (rc != ZLINK_RECV_OK) {
-        if (zlink_errno () == EAGAIN) {
+        if (rc == ZLINK_RECV_NO_DATA) {
             napi_value none;
             napi_get_null (env, &none);
             return none;
         }
-        return throw_last_error (env, "tryReceive failed");
+        return throw_result_error (env, "tryReceive failed", rc);
     }
     return out;
 }
@@ -2657,7 +2685,7 @@ napi_value socket_subscribe_message (napi_env env, napi_callback_info info)
             return out;
         }
         if (rc != ZLINK_RECV_BUFFER_TOO_SMALL || topic_len <= topic.size ())
-            return throw_last_error (env, "subscribe failed");
+            return throw_result_error (env, "subscribe failed", rc);
         topic.resize (topic_len);
     }
 }
@@ -2687,8 +2715,7 @@ int try_subscribe_message_value (napi_env env,
             parts.close ();
             return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
         }
-        const int err = zlink_errno ();
-        if (err == EAGAIN)
+        if (rc == ZLINK_RECV_NO_DATA)
             return rc;
         if (rc != ZLINK_RECV_BUFFER_TOO_SMALL || topic_len <= topic.size ())
             return rc;
@@ -2707,12 +2734,12 @@ napi_value socket_try_subscribe_message (napi_env env, napi_callback_info info)
     const int rc = try_subscribe_message_value (env, sock, &out);
     if (rc == ZLINK_RECV_OK)
         return out;
-    if (zlink_errno () == EAGAIN) {
+    if (rc == ZLINK_RECV_NO_DATA) {
         napi_value none;
         napi_get_null (env, &none);
         return none;
     }
-    return throw_last_error (env, "subscribeNoWait failed");
+    return throw_result_error (env, "subscribeNoWait failed", rc);
 }
 
 napi_value socket_subscription_event (napi_env env, napi_callback_info info)
@@ -2738,8 +2765,8 @@ napi_value socket_subscription_event (napi_env env, napi_callback_info info)
             return create_subscription_event_value (env, routing_id, subscribed, topic.data (),
                                                     topic_len);
         }
-        if (zlink_errno () != EMSGSIZE)
-            return throw_last_error (env, "receiveSubscriptionEvent failed");
+        if (rc != ZLINK_RECV_BUFFER_TOO_SMALL)
+            return throw_result_error (env, "receiveSubscriptionEvent failed", rc);
         topic.assign (topic_len > 0 ? topic_len : 1, '\0');
     }
 }
@@ -2767,14 +2794,13 @@ napi_value socket_try_subscription_event (napi_env env, napi_callback_info info)
             return create_subscription_event_value (env, routing_id, subscribed, topic.data (),
                                                     topic_len);
         }
-        const int err = zlink_errno ();
-        if (err == EAGAIN) {
+        if (rc == ZLINK_RECV_NO_DATA) {
             napi_value none;
             napi_get_null (env, &none);
             return none;
         }
-        if (err != EMSGSIZE)
-            return throw_last_error (env, "tryReceiveSubscriptionEvent failed");
+        if (rc != ZLINK_RECV_BUFFER_TOO_SMALL)
+            return throw_result_error (env, "tryReceiveSubscriptionEvent failed", rc);
         topic.assign (topic_len > 0 ? topic_len : 1, '\0');
     }
 }
@@ -2816,8 +2842,8 @@ napi_value subscription_at (napi_env env, napi_callback_info info)
             napi_get_null (env, &none);
             return none;
         }
-        if (zlink_errno () != EMSGSIZE)
-            return throw_last_error (env, "subscription_at failed");
+        if (rc != ZLINK_CONFIG_BUFFER_TOO_SMALL)
+            return throw_result_error (env, "subscription_at failed", rc);
         filter.assign (filter_len > 0 ? filter_len : 1, '\0');
     }
 }
@@ -2839,9 +2865,14 @@ napi_value socket_stream_recv_packet (napi_env env, napi_callback_info info)
     const zlink_routing_id_t *source_rid = NULL;
     zlink_msg_t header;
     zlink_msg_t body;
-    if (zlink_msg_init (&header) != 0 || zlink_msg_init (&body) != 0) {
+    const int header_result = zlink_msg_init (&header);
+    if (header_result != ZLINK_CONFIG_OK)
+        return throw_result_error (env, "stream packet init failed", header_result);
+    const int body_result = zlink_msg_init (&body);
+    if (body_result != ZLINK_CONFIG_OK) {
+        napi_value failure = throw_result_error (env, "stream packet init failed", body_result);
         zlink_msg_close (&header);
-        return throw_last_error (env, "stream packet init failed");
+        return failure;
     }
     const int result = zlink_stream_recv_packet (
       socket, &source_rid, &header, &body,
@@ -2854,9 +2885,10 @@ napi_value socket_stream_recv_packet (napi_env env, napi_callback_info info)
         return null_value;
     }
     if (result != ZLINK_RECV_OK) {
+        napi_value failure = throw_result_error (env, "stream packet recv failed", result);
         zlink_msg_close (&header);
         zlink_msg_close (&body);
-        return throw_last_error (env, "stream packet recv failed");
+        return failure;
     }
     napi_value out;
     napi_create_object (env, &out);
@@ -2890,7 +2922,7 @@ napi_value socket_setopt (napi_env env, napi_callback_info info)
     }
     int rc = set_socket_option (sock, opt, data, len);
     if (rc != 0)
-        return throw_last_error (env, "setsockopt failed");
+        return throw_result_error (env, "setsockopt failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -2908,7 +2940,7 @@ napi_value socket_set_receive_flow_state (napi_env env, napi_callback_info info)
     const zlink_config_result_t rc = zlink_socket_set_receive_flow_state (
       sock, static_cast<zlink_receive_flow_state_t> (state));
     if (rc != ZLINK_CONFIG_OK)
-        return throw_last_error (env, "socket_set_receive_flow_state failed");
+        return throw_result_error (env, "socket_set_receive_flow_state failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -2929,7 +2961,7 @@ napi_value socket_getopt (napi_env env, napi_callback_info info)
     napi_create_buffer (env, len, &data, &buf);
     int rc = get_socket_option (sock, opt, data, &len);
     if (rc != 0)
-        return throw_last_error (env, "getsockopt failed");
+        return throw_result_error (env, "getsockopt failed", rc);
     if (len == initial_getopt_buffer_len (opt))
         return buf;
     napi_value out;
@@ -2950,7 +2982,7 @@ napi_value socket_set_subscription (napi_env env, napi_callback_info info)
       get_c_string_arg (env, argv[1], topic_stack, sizeof (topic_stack), &topic_heap);
     int rc = zlink_set_subscription (sock, topic);
     if (rc != 0)
-        return throw_last_error (env, "set subscription failed");
+        return throw_result_error (env, "set subscription failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -2969,7 +3001,7 @@ napi_value socket_unset_subscription (napi_env env, napi_callback_info info)
       get_c_string_arg (env, argv[1], topic_stack, sizeof (topic_stack), &topic_heap);
     int rc = zlink_unset_subscription (sock, topic);
     if (rc != 0)
-        return throw_last_error (env, "unset subscription failed");
+        return throw_result_error (env, "unset subscription failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -2987,7 +3019,7 @@ napi_value handle_set_routing_id (napi_env env, napi_callback_info info)
         return NULL;
     int rc = zlink_set_routing_id (handle, routing_id.data, routing_id.size);
     if (rc != 0)
-        return throw_last_error (env, "set_routing_id failed");
+        return throw_result_error (env, "set_routing_id failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -3004,7 +3036,7 @@ napi_value handle_get_routing_id (napi_env env, napi_callback_info info)
     memset (&routing_id, 0, sizeof (routing_id));
     int rc = zlink_get_routing_id (handle, &routing_id);
     if (rc != 0)
-        return throw_last_error (env, "get_routing_id failed");
+        return throw_result_error (env, "get_routing_id failed", rc);
     return create_routing_id_value (env, routing_id);
 }
 
@@ -3058,7 +3090,7 @@ napi_value router_routes_snapshot (napi_env env, napi_callback_info info)
         if (rc == ZLINK_CONFIG_OK)
             break;
         if (rc != ZLINK_CONFIG_BUFFER_TOO_SMALL)
-            return throw_last_error (env, "routerRoutesSnapshot failed");
+            return throw_result_error (env, "routerRoutesSnapshot failed", rc);
         // Core reports the current route count; the snapshot is taken again
         // with that capacity and readiness is released only by the success.
         routes.resize (count);
@@ -3097,7 +3129,7 @@ napi_value router_recv_message (napi_env env, napi_callback_info info)
     const int rc = router_recv_message_value (
       env, router, flags, prefer_managed_parts, routing_id_storage, &out);
     if (rc != ZLINK_RECV_OK)
-        return throw_last_error (env, "routerRecvMessage failed");
+        return throw_result_error (env, "routerRecvMessage failed", rc);
     return out;
 }
 
@@ -3118,12 +3150,12 @@ napi_value router_try_recv_message (napi_env env, napi_callback_info info)
       env, router, ZLINK_RECV_FLAGS_DONTWAIT, prefer_managed_parts,
       routing_id_storage, &out);
     if (rc != ZLINK_RECV_OK) {
-        if (zlink_errno () == EAGAIN) {
+        if (rc == ZLINK_RECV_NO_DATA) {
             napi_value none;
             napi_get_null (env, &none);
             return none;
         }
-        return throw_last_error (env, "routerRecvMessageNoWait failed");
+        return throw_result_error (env, "routerRecvMessageNoWait failed", rc);
     }
 
     return out;
@@ -3171,7 +3203,7 @@ napi_value monitor_recv (napi_env env, napi_callback_info info)
     zlink_monitor_event_t evt;
     int rc = zlink_socket_monitor_recv (mon, &evt, ZLINK_RECV_FLAGS_NONE);
     if (rc != 0)
-        return throw_last_error (env, "monitor_recv failed");
+        return throw_result_error (env, "monitor_recv failed", rc);
     return create_socket_monitor_event_value (env, evt);
 }
 
@@ -3186,12 +3218,12 @@ napi_value monitor_try_recv (napi_env env, napi_callback_info info)
     zlink_monitor_event_t evt;
     int rc = zlink_socket_monitor_recv (mon, &evt, ZLINK_RECV_FLAGS_DONTWAIT);
     if (rc != 0) {
-        if (zlink_errno () == EAGAIN) {
+        if (rc == ZLINK_RECV_NO_DATA) {
             napi_value none;
             napi_get_null (env, &none);
             return none;
         }
-        return throw_last_error (env, "monitor_try_recv failed");
+        return throw_result_error (env, "monitor_try_recv failed", rc);
     }
 
     return create_socket_monitor_event_value (env, evt);
@@ -3209,7 +3241,7 @@ napi_value monitor_status (napi_env env, napi_callback_info info)
     memset (&snapshot, 0, sizeof (snapshot));
     int rc = zlink_monitor_status (monitor, &snapshot);
     if (rc != 0)
-        return throw_last_error (env, "monitor_status failed");
+        return throw_result_error (env, "monitor_status failed", rc);
     if (snapshot.abi_version != ZLINK_MONITOR_STATUS_ABI_VERSION
         || snapshot.struct_size != sizeof (zlink_monitor_status_t)) {
         napi_throw_error (env, NULL, "monitor_status returned an incompatible ABI snapshot");
@@ -3229,7 +3261,7 @@ napi_value monitor_close (napi_env env, napi_callback_info info)
     void *tmp = monitor;
     int rc = zlink_monitor_close (&tmp);
     if (rc != 0)
-        return throw_last_error (env, "monitor_close failed");
+        return throw_result_error (env, "monitor_close failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -3345,7 +3377,7 @@ napi_value poller_destroy (napi_env env, napi_callback_info info)
     void *tmp = poller;
     int rc = zlink_poller_destroy (&tmp);
     if (rc != 0)
-        return throw_last_error (env, "poller_destroy failed");
+        return throw_result_error (env, "poller_destroy failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -3668,7 +3700,7 @@ napi_value timer_destroy (napi_env env, napi_callback_info info)
     void *tmp = timer;
     int rc = zlink_timer_destroy (&tmp);
     if (rc != 0)
-        return throw_last_error (env, "timer_destroy failed");
+        return throw_result_error (env, "timer_destroy failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -3688,7 +3720,7 @@ napi_value timer_start (napi_env env, napi_callback_info info)
     napi_get_value_bigint_uint64 (env, argv[2], &repeat, &lossless);
     zlink_config_result_t rc = zlink_timer_start (timer, interval, repeat);
     if (rc != ZLINK_CONFIG_OK)
-        return throw_last_error (env, "timer_start failed");
+        return throw_result_error (env, "timer_start failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -3703,7 +3735,7 @@ napi_value timer_stop (napi_env env, napi_callback_info info)
     napi_get_value_external (env, argv[0], &timer);
     zlink_config_result_t rc = zlink_timer_stop (timer);
     if (rc != ZLINK_CONFIG_OK)
-        return throw_last_error (env, "timer_stop failed");
+        return throw_result_error (env, "timer_stop failed", rc);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -3722,7 +3754,7 @@ napi_value timer_recv (napi_env env, napi_callback_info info)
     uint64_t fire_count = 0;
     zlink_recv_result_t rc = zlink_timer_recv (timer, &fire_count);
     if (rc != ZLINK_RECV_OK)
-        return throw_last_error (env, "timer_recv failed");
+        return throw_result_error (env, "timer_recv failed", rc);
     napi_value out;
     napi_create_bigint_uint64 (env, fire_count, &out);
     return out;

@@ -42,16 +42,6 @@ internal static class RequestReplySupport
             nameof(timeout));
     }
 
-    internal static uint NormalizeRequestTimeout(TimeSpan timeout,
-        TimeSpan defaultTimeout)
-    {
-        var effective = timeout == TimeSpan.Zero
-            ? defaultTimeout
-            : timeout;
-        return BoundaryValidation.EncodeTimeoutMilliseconds(effective,
-            nameof(timeout));
-    }
-
     internal static void DisposeParts(IEnumerable<Message> parts)
     {
         foreach (var part in parts)

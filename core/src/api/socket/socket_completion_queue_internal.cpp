@@ -6,8 +6,10 @@
 #include <cstring>
 #include <new>
 
+#include "api/socket/request_timeout_scheduler_internal.hpp"
 #include "api/socket/socket_completion_queue_internal.hpp"
 #include "core/pipe.hpp"
+#include "sockets/common/socket_base.hpp"
 #include "utils/allocator.hpp"
 #include "utils/err.hpp"
 
@@ -25,6 +27,36 @@ void zlink::socket_completion::release_payload (
 
 namespace
 {
+struct writable_timeout_context_t
+{
+    zlink::socket_base_t *socket;
+    zlink::socket_completion::queue_state_t *state;
+    zlink_completion_id_t completion_id;
+};
+
+void on_writable_timeout (void *userdata_)
+{
+    std::unique_ptr<writable_timeout_context_t> ctx (
+      static_cast<writable_timeout_context_t *> (userdata_));
+    ctx->socket->expire_send_writable_wait (ctx->completion_id);
+    // This erase is the callback's last queue access. close() either owns the
+    // task and joins this callback, or finds no task after all socket work.
+    {
+        std::lock_guard<std::mutex> lock (ctx->state->mutex);
+        const std::unordered_map<zlink_completion_id_t,
+                                 zlink::socket_completion::writable_timeout_task_t>::iterator
+          task_it = ctx->state->timeout_tasks.find (ctx->completion_id);
+        if (task_it != ctx->state->timeout_tasks.end ()
+            && task_it->second.next_cancel_id == 0)
+            ctx->state->timeout_tasks.erase (task_it);
+    }
+}
+
+void destroy_writable_timeout_context (void *userdata_)
+{
+    delete static_cast<writable_timeout_context_t *> (userdata_);
+}
+
 void unlink_outstanding_locked (
   zlink::socket_completion::queue_state_t *state_,
   zlink::socket_completion::reservation_t *node_)
@@ -72,11 +104,13 @@ void reset_reservation (
     memset (&node_->completion, 0, sizeof (node_->completion));
     node_->completion.struct_size = sizeof (node_->completion);
     node_->ready_next = NULL;
+    node_->writable_wait_previous = NULL;
     node_->writable_wait_next = NULL;
     node_->outstanding_previous = NULL;
     node_->outstanding_next = NULL;
     node_->ready = false;
     node_->writable_wait_linked = false;
+    node_->wait_deadline_ns = 0;
     node_->request_wait.clear ();
 }
 
@@ -153,36 +187,54 @@ void unlink_writable_wait_locked (
     if (!node_->writable_wait_linked)
         return;
 
-    zlink::socket_completion::reservation_t *previous = NULL;
-    zlink::socket_completion::reservation_t *current =
-      state_->writable_wait_head;
-    while (current && current != node_) {
-        previous = current;
-        current = current->writable_wait_next;
-    }
-    zlink_assert (current == node_);
-    if (previous)
-        previous->writable_wait_next = node_->writable_wait_next;
+    if (node_->writable_wait_previous)
+        node_->writable_wait_previous->writable_wait_next =
+          node_->writable_wait_next;
     else
         state_->writable_wait_head = node_->writable_wait_next;
+    if (node_->writable_wait_next)
+        node_->writable_wait_next->writable_wait_previous =
+          node_->writable_wait_previous;
     if (state_->writable_wait_tail == node_)
-        state_->writable_wait_tail = previous;
+        state_->writable_wait_tail = node_->writable_wait_previous;
+    node_->writable_wait_previous = NULL;
     node_->writable_wait_next = NULL;
     node_->writable_wait_linked = false;
+    const std::unordered_map<zlink_completion_id_t,
+                             zlink::socket_completion::writable_timeout_task_t>::iterator
+      task_it = state_->timeout_tasks.find (node_->completion.completion_id);
+    if (task_it != state_->timeout_tasks.end ())
+        task_it->second.reservation = NULL;
     const size_t previous_count = state_->writable_waiting_count.fetch_sub (
       1, std::memory_order_release);
     zlink_assert (previous_count > 0);
+}
+
+void retire_writable_timeout_task (
+  zlink::socket_completion::queue_state_t *state_,
+  zlink_completion_id_t id_,
+  const std::shared_ptr<zlink::request_timeout::task_t> &task_)
+{
+    if (!task_)
+        return;
+    // The map retains the task for close() until cancel has joined a firing
+    // callback. cancel() must run outside the queue mutex used by that callback.
+    zlink::request_timeout::cancel (task_);
+    std::lock_guard<std::mutex> lock (state_->mutex);
+    state_->timeout_tasks.erase (id_);
 }
 }
 
 zlink::socket_completion::reservation_t::reservation_t () :
     ready_next (NULL),
+    writable_wait_previous (NULL),
     writable_wait_next (NULL),
     outstanding_previous (NULL),
     outstanding_next (NULL),
     ready (false),
     writable_wait_linked (false),
-    heap_owned (true)
+    heap_owned (true),
+    wait_deadline_ns (0)
 {
     memset (&completion, 0, sizeof (completion));
     completion.struct_size = sizeof (completion);
@@ -238,7 +290,8 @@ int zlink::socket_completion::reserve_writable_wait (
   queue_state_t *state_, void *user_context_,
   const zlink_routing_id_t *peer_rid_, reservation_t **reservation_out_,
   zlink_completion_id_t *completion_id_out_,
-  request_writable_wait_t *request_wait_)
+  request_writable_wait_t *request_wait_, uint64_t deadline_ns_,
+  socket_base_t *socket_)
 {
     if (!state_ || !reservation_out_ || !completion_id_out_) {
         errno = EFAULT;
@@ -252,17 +305,56 @@ int zlink::socket_completion::reserve_writable_wait (
           state_, ZLINK_COMPLETION_WRITABLE, user_context_, peer_rid_,
           reservation_out_, completion_id_out_)
         != 0) {
-        // EAGAIN is reserved by the public SEND contract for a successfully
-        // issued nonzero wait token. Exhausting the shared reservation pool is
-        // a resource failure and must not escape as BACKPRESSURED with ID 0.
-        if (errno == EAGAIN)
-            errno = ENOMEM;
         return -1;
     }
 
     reservation_t *const node = *reservation_out_;
+    node->wait_deadline_ns = deadline_ns_;
+    if (deadline_ns_ != 0 && socket_) {
+        const uint64_t now_ns = request_timeout::monotonic_now_ns ();
+        {
+            std::unordered_map<zlink_completion_id_t,
+                               writable_timeout_task_t>::iterator task_it =
+              state_->timeout_tasks.end ();
+            try {
+                task_it = state_->timeout_tasks.insert (
+                  std::make_pair (*completion_id_out_,
+                                  writable_timeout_task_t ())).first;
+            } catch (...) {
+                task_it = state_->timeout_tasks.end ();
+            }
+            writable_timeout_context_t *const ctx =
+              task_it != state_->timeout_tasks.end ()
+              ? new (std::nothrow) writable_timeout_context_t () : NULL;
+            if (ctx) {
+                ctx->socket = socket_;
+                ctx->state = state_;
+                ctx->completion_id = *completion_id_out_;
+                const uint64_t remaining_ms = deadline_ns_ > now_ns
+                  ? (deadline_ns_ - now_ns + 999999) / 1000000 : 1;
+                task_it->second.reservation = node;
+                task_it->second.task = request_timeout::schedule (
+                    static_cast<uint32_t> (remaining_ms),
+                    &on_writable_timeout, ctx,
+                    &destroy_writable_timeout_context);
+            }
+            if (!ctx || !task_it->second.task) {
+                if (task_it != state_->timeout_tasks.end ())
+                    state_->timeout_tasks.erase (task_it);
+                unlink_outstanding_locked (state_, node);
+                reservation_t *const unused =
+                  recycle_reservation_locked (state_, node);
+                delete unused;
+                *reservation_out_ = NULL;
+                *completion_id_out_ = 0;
+                errno = ENOMEM;
+                return -1;
+            }
+        }
+    }
     if (request_wait_)
         node->request_wait.swap (*request_wait_);
+    node->writable_wait_previous = state_->writable_wait_tail;
     node->writable_wait_next = NULL;
     node->writable_wait_linked = true;
     if (state_->writable_wait_tail)
@@ -279,13 +371,23 @@ void zlink::socket_completion::release (queue_state_t *state_,
 {
     if (!state_ || !reservation_)
         return;
+    zlink_completion_id_t completion_id = 0;
+    std::shared_ptr<request_timeout::task_t> timeout_task;
     {
         std::lock_guard<std::mutex> lock (state_->mutex);
         if (reservation_->ready)
             return;
+        completion_id = reservation_->completion.completion_id;
         unlink_writable_wait_locked (state_, reservation_);
+        const std::unordered_map<zlink_completion_id_t,
+                                 writable_timeout_task_t>::const_iterator
+          task_it = state_->timeout_tasks.find (completion_id);
+        if (task_it != state_->timeout_tasks.end ())
+            timeout_task = task_it->second.task;
         unlink_outstanding_locked (state_, reservation_);
     }
+
+    retire_writable_timeout_task (state_, completion_id, timeout_task);
 
     // Closing a message may invoke an application-owned free callback. Keep
     // that callback outside the queue mutex so it can safely re-enter public
@@ -355,6 +457,23 @@ int enqueue_ready (zlink::socket_completion::queue_state_t *state_,
     errno = 0;
     return 0;
 }
+
+void finish_writable_wait_locked (
+  zlink::socket_completion::queue_state_t *state_,
+  zlink::socket_completion::reservation_t *current_,
+  zlink_send_complete_result_t result_, int terminal_errno_)
+{
+    unlink_writable_wait_locked (state_, current_);
+    current_->request_wait.clear ();
+    const bool expired = current_->wait_deadline_ns != 0
+                         && current_->wait_deadline_ns
+                              <= zlink::request_timeout::monotonic_now_ns ();
+    current_->completion.send_result = expired ? ZLINK_SEND_TIMED_OUT : result_;
+    current_->completion.send_terminal_errno =
+      expired ? zlink::send_terminal_errno (ZLINK_SEND_TIMED_OUT)
+              : terminal_errno_;
+    append_ready_locked (state_, current_);
+}
 }
 
 int zlink::socket_completion::publish_writable_waiters (
@@ -367,19 +486,18 @@ int zlink::socket_completion::publish_writable_waiters (
         return -1;
     }
 
-    std::lock_guard<std::mutex> lock (state_->mutex);
+    zlink_completion_id_t cancel_head = 0;
+    std::unique_lock<std::mutex> lock (state_->mutex);
     if (state_->lifecycle_errno != 0) {
         errno = state_->lifecycle_errno;
         return -1;
     }
-
-    reservation_t *previous = NULL;
     reservation_t *current = state_->writable_wait_head;
     int published = 0;
     while (current) {
         reservation_t *const next = current->writable_wait_next;
         bool matches = writable_target_matches (current, target_rid_or_null_);
-        if (result_ != ZLINK_SEND_TERMINAL) {
+        if (result_ == ZLINK_SEND_ADMITTED) {
             if (correlation_released_) {
                 matches = false;
                 for (request_writable_wait_t::const_iterator it =
@@ -395,36 +513,72 @@ int zlink::socket_completion::publish_writable_waiters (
                 matches = matches && current->request_wait.empty ();
         }
         if (!matches) {
-            previous = current;
             current = next;
             continue;
         }
 
-        if (previous)
-            previous->writable_wait_next = next;
-        else
-            state_->writable_wait_head = next;
-        if (state_->writable_wait_tail == current)
-            state_->writable_wait_tail = previous;
-        current->writable_wait_next = NULL;
-        current->writable_wait_linked = false;
-        const size_t previous_count =
-          state_->writable_waiting_count.fetch_sub (
-            1, std::memory_order_release);
-        zlink_assert (previous_count > 0);
-
-        current->request_wait.clear ();
-        current->completion.send_result = result_;
-        current->completion.send_terminal_errno = terminal_errno_;
-        append_ready_locked (state_, current);
+        const std::unordered_map<zlink_completion_id_t,
+                                 writable_timeout_task_t>::iterator
+          task_it = state_->timeout_tasks.find (
+            current->completion.completion_id);
+        if (task_it != state_->timeout_tasks.end ()) {
+            const zlink_completion_id_t id =
+              current->completion.completion_id;
+            // A self-link terminates this publication's cancellation chain.
+            task_it->second.next_cancel_id = cancel_head ? cancel_head : id;
+            cancel_head = id;
+        }
+        finish_writable_wait_locked (state_, current, result_,
+                                     terminal_errno_);
         ++published;
         current = next;
     }
 
     if (published != 0)
         state_->changed.notify_all ();
+    lock.unlock ();
+    while (cancel_head != 0) {
+        std::shared_ptr<request_timeout::task_t> task;
+        zlink_completion_id_t next_id = 0;
+        {
+            std::lock_guard<std::mutex> cleanup_lock (state_->mutex);
+            const std::unordered_map<zlink_completion_id_t,
+                                     writable_timeout_task_t>::const_iterator
+              task_it = state_->timeout_tasks.find (cancel_head);
+            if (task_it == state_->timeout_tasks.end ())
+                break; // close() owns and joins the remaining tasks.
+            task = task_it->second.task;
+            next_id = task_it->second.next_cancel_id;
+        }
+        request_timeout::cancel (task);
+        {
+            std::lock_guard<std::mutex> cleanup_lock (state_->mutex);
+            state_->timeout_tasks.erase (cancel_head);
+        }
+        cancel_head = next_id == cancel_head ? 0 : next_id;
+    }
     errno = 0;
     return published;
+}
+
+int zlink::socket_completion::expire_writable_waiter (
+  queue_state_t *state_, zlink_completion_id_t id_)
+{
+    std::lock_guard<std::mutex> lock (state_->mutex);
+    if (state_->lifecycle_errno != 0)
+        return 0;
+    const std::unordered_map<zlink_completion_id_t,
+                             writable_timeout_task_t>::const_iterator task_it =
+      state_->timeout_tasks.find (id_);
+    reservation_t *const current = task_it != state_->timeout_tasks.end ()
+                                     ? task_it->second.reservation : NULL;
+    if (!current || current->wait_deadline_ns == 0
+        || current->wait_deadline_ns > zlink::request_timeout::monotonic_now_ns ())
+        return 0;
+    finish_writable_wait_locked (state_, current,
+                                 ZLINK_SEND_TIMED_OUT, EAGAIN);
+    state_->changed.notify_all ();
+    return 1;
 }
 
 int zlink::socket_completion::publish_request (
@@ -531,43 +685,44 @@ void zlink::socket_completion::close (queue_state_t *state_,
 {
     if (!state_)
         return;
-    std::lock_guard<std::mutex> lock (state_->mutex);
-    if (state_->lifecycle_errno == 0)
-        state_->lifecycle_errno = lifecycle_errno_;
+    std::unordered_map<zlink_completion_id_t, writable_timeout_task_t> tasks;
+    {
+        std::lock_guard<std::mutex> lock (state_->mutex);
+        tasks.swap (state_->timeout_tasks);
+        if (state_->lifecycle_errno == 0)
+            state_->lifecycle_errno = lifecycle_errno_;
 
-    reservation_t *waiter = state_->writable_wait_head;
-    while (waiter) {
-        reservation_t *const next = waiter->writable_wait_next;
-        waiter->writable_wait_next = NULL;
-        waiter->writable_wait_linked = false;
-        waiter->request_wait.clear ();
-        waiter->completion.send_result = ZLINK_SEND_TERMINAL;
-        waiter->completion.send_terminal_errno = state_->lifecycle_errno;
-        append_ready_locked (state_, waiter);
-        waiter = next;
+        reservation_t *waiter = state_->writable_wait_head;
+        while (waiter) {
+            reservation_t *const next = waiter->writable_wait_next;
+            waiter->writable_wait_previous = NULL;
+            waiter->writable_wait_next = NULL;
+            waiter->writable_wait_linked = false;
+            std::unordered_map<zlink_completion_id_t,
+                               writable_timeout_task_t>::iterator task_it =
+              tasks.find (waiter->completion.completion_id);
+            if (task_it != tasks.end ())
+                task_it->second.reservation = NULL;
+            waiter->request_wait.clear ();
+            append_ready_locked (state_, waiter);
+            waiter = next;
+        }
+        state_->writable_wait_head = NULL;
+        state_->writable_wait_tail = NULL;
+        state_->writable_waiting_count.store (0, std::memory_order_release);
+
+        // Close drops public delivery, but keeps reservation nodes alive until
+        // their in-flight resolver releases them or the socket is destroyed.
+        // This avoids freeing a node held by an admission attempt that lost the
+        // close race after the lifecycle gate was sealed.
+        state_->ready_head = NULL;
+        state_->ready_tail = NULL;
+        state_->ready_available.store (false, std::memory_order_release);
+        state_->ready_writable_count.store (0, std::memory_order_release);
+        state_->changed.notify_all ();
     }
-    state_->writable_wait_head = NULL;
-    state_->writable_wait_tail = NULL;
-    state_->writable_waiting_count.store (0, std::memory_order_release);
-
-    // A WRITABLE token can already be queued when close wins the race with
-    // public dequeue. Terminalize those records too before dropping public
-    // delivery so every token left on the socket reaches one terminal state.
-    for (reservation_t *ready = state_->ready_head; ready;
-         ready = ready->ready_next) {
-        if (ready->completion.kind != ZLINK_COMPLETION_WRITABLE)
-            continue;
-        ready->completion.send_result = ZLINK_SEND_TERMINAL;
-        ready->completion.send_terminal_errno = state_->lifecycle_errno;
-    }
-
-    // Close drops public delivery, but keeps reservation nodes alive until
-    // their in-flight resolver releases them or the socket is destroyed.
-    // This avoids freeing a node held by an admission attempt that lost the
-    // close race after the lifecycle gate was sealed.
-    state_->ready_head = NULL;
-    state_->ready_tail = NULL;
-    state_->ready_available.store (false, std::memory_order_release);
-    state_->ready_writable_count.store (0, std::memory_order_release);
-    state_->changed.notify_all ();
+    for (std::unordered_map<zlink_completion_id_t,
+                            writable_timeout_task_t>::const_iterator it =
+           tasks.begin (); it != tasks.end (); ++it)
+        request_timeout::cancel (it->second.task);
 }

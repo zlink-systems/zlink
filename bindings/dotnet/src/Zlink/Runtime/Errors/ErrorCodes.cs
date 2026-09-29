@@ -63,6 +63,7 @@ internal enum ErrorCode
     ENotSock = 88,
     EMsgSize = 90,
     EProtoNoSupport = 93,
+    EProto = 71,
     ENotSup = 95,
     EAfNoSupport = 97,
     EAddrInUse = 98,

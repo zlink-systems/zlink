@@ -53,9 +53,7 @@ pub(crate) fn recv_whole_message(
             continue;
         }
 
-        if rc == RecvResult::NoData as i32
-            || (rc != 0 && unsafe { ffi::zlink_errno() } == libc::EAGAIN)
-        {
+        if rc == RecvResult::NoData as i32 {
             return Ok(false);
         }
         if rc != 0 {

@@ -27,6 +27,15 @@ const (
 	CompletionWritable CompletionKind = 3
 )
 
+type SendCompleteResult int
+
+const (
+	SendAdmitted     SendCompleteResult = 0
+	SendNotFound     SendCompleteResult = 801
+	SendNotConnected SendCompleteResult = 802
+	SendTimedOut     SendCompleteResult = 803
+)
+
 type SubmitResult int
 
 const (

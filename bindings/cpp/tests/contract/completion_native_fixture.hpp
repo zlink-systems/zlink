@@ -34,6 +34,8 @@ struct fixture_t
     std::vector<std::string> events;
     std::map<void *, unsigned> counts;
     std::function<void ()> first_submit;
+    std::function<void ()> retry_submit;
+    bool retry_backpressured = false;
     std::function<void ()> before_recv;
     std::function<void ()> after_recv;
 
@@ -45,7 +47,9 @@ struct fixture_t
             zlink_completion_close (&completion);
     }
 
-    void writable (size_t attempt_, const std::string &rid_)
+    void writable (size_t attempt_, const std::string &rid_,
+                   zlink_send_complete_result_t result_ = ZLINK_SEND_ADMITTED,
+                   int terminal_errno_ = 0)
     {
         const auto &attempt = attempts.at (attempt_);
         zlink_completion_t completion{};
@@ -53,7 +57,8 @@ struct fixture_t
         completion.kind = ZLINK_COMPLETION_WRITABLE;
         completion.completion_id = attempt.token;
         completion.user_context = attempt.context;
-        completion.send_result = ZLINK_SEND_ADMITTED;
+        completion.send_result = result_;
+        completion.send_terminal_errno = terminal_errno_;
         completion.peer_rid.size = static_cast<uint8_t> (rid_.size ());
         std::memcpy (completion.peer_rid.data, rid_.data (), rid_.size ());
         completions.push_back (completion);
@@ -80,10 +85,13 @@ inline zlink_submit_result_t submit (
     assert (zlink_msg_close (&parts_[0]) == ZLINK_CONFIG_OK);
     assert (zlink_msg_init (&parts_[0]) == ZLINK_CONFIG_OK);
     const bool first = ++fixture.counts[context_] == 1;
-    *id_ = first || request_ ? fixture.attempts.size () + 1 : 0;
+    *id_ = first || request_ || fixture.retry_backpressured
+      ? fixture.attempts.size () + 1 : 0;
     fixture.attempts.push_back ({context_, *id_, target, payload, request_});
     fixture.events.push_back ("submit:" + payload);
-    if (first) {
+    if (!first && !request_ && fixture.retry_submit)
+        fixture.retry_submit ();
+    if (first || (fixture.retry_backpressured && !request_)) {
         if (fixture.first_submit)
             fixture.first_submit ();
         errno = EAGAIN;

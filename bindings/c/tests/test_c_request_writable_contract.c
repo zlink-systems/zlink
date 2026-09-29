@@ -523,7 +523,7 @@ static int test_terminal_writable (int iteration)
             if (completion.kind == ZLINK_COMPLETION_WRITABLE) {
                 CHECK (completion.completion_id == wait_token);
                 CHECK (completion.user_context == &request_context);
-                CHECK (completion.send_result == ZLINK_SEND_TERMINAL);
+                CHECK (completion.send_result == ZLINK_SEND_NOT_FOUND);
                 CHECK (completion.send_terminal_errno == ENOENT);
                 CHECK (check_rid (&completion.peer_rid, &target) == 0);
                 ++terminals;

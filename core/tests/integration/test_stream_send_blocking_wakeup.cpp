@@ -420,7 +420,7 @@ void test_stream_disconnect_terminates_wait_token ()
     TEST_ASSERT_EQUAL_PTR (&context, completion.user_context);
     TEST_ASSERT_EQUAL_UINT (rid.size, completion.peer_rid.size);
     TEST_ASSERT_EQUAL_MEMORY (rid.data, completion.peer_rid.data, rid.size);
-    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_TERMINAL, completion.send_result);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_NOT_CONNECTED, completion.send_result);
     TEST_ASSERT_EQUAL_INT (ENOTCONN, completion.send_terminal_errno);
     zlink_completion_close (&completion);
     assert_no_completion (stream);

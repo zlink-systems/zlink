@@ -65,8 +65,8 @@ exception is that exception's own public constructor taking its result enum
 | --- | --- |
 | `getCode()` | `int`, the zlink result code that classifies the failure |
 | `getNativeErrno()` | `int`, the underlying native errno, or `0` when none |
-| `fromLastError(String operation)` / `fromLastError(ErrorCategory)` | static factory; reads the current native errno and infers or accepts the error category |
-| `fromErrno(String operation, int errno)` / `fromErrno(ErrorCategory, int errno)` | static factory; builds the correctly-typed exception from the `errno` collected when the native call returned and an `ErrorCategory` (`CONFIG`/`BIND`/`CONNECT`/`CLOSE`/`HANDLER`/`RECV`/`REQUEST`/`SUBMIT`); the `String operation` overload infers the category from the operation name |
+| `fromLastError(ErrorCategory)` | static factory; reads the current native errno and builds the exception of the given category |
+| `fromErrno(ErrorCategory, int errno)` | static factory; builds the correctly-typed exception from the `errno` collected when the native call returned and an `ErrorCategory` (`CONFIG`/`BIND`/`CONNECT`/`CLOSE`/`HANDLER`/`RECV`/`REQUEST`/`SUBMIT`) |
 
 **Completion result.** N/A — this is the exception hierarchy itself. `TypedZlinkException` (the
 intermediate sealed class) is package-private — application code can catch/reference

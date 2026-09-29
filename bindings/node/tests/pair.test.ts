@@ -359,6 +359,21 @@ test('recv returns null when no message is available with DontWait', () => {
   ctx.close();
 });
 
+test('bind preserves Core result and native errno for an unsupported transport', () => {
+  const ctx = zlink.createContext();
+  const pair = zlink.createPairSocket(ctx);
+
+  try {
+    assert.throws(() => pair.bind('invalid://endpoint'), (error: any) =>
+      error instanceof zlink.BindError
+        && error.result === zlink.BindResult.NotSupported
+        && error.nativeErrno !== 0);
+  } finally {
+    pair.close();
+    ctx.close();
+  }
+});
+
 test('recvHandler delivers multipart Message instances', () => {
   const ctx = zlink.createContext();
   const sender = zlink.createPairSocket(ctx);

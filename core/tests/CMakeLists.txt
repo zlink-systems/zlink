@@ -644,6 +644,19 @@ function(add_env_case_test test_name target_name test_case)
             $<TARGET_FILE:${target_name}>)
 endfunction()
 
+if(TARGET test_phase3_completion_contract)
+  add_env_case_test(
+    test_phase3_completion_contract_expiry_capacity
+    test_phase3_completion_contract
+    test_all_wait_tokens_expire_in_bounded_time)
+  set_tests_properties(
+    test_phase3_completion_contract_expiry_capacity
+    PROPERTIES
+      LABELS "integration;serial"
+      RUN_SERIAL TRUE
+      TIMEOUT 40)
+endif()
+
 foreach(transport tcp inproc)
   foreach(mask in completion)
     foreach(operation automatic disconnect request)

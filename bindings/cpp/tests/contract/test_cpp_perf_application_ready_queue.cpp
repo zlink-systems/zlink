@@ -9,6 +9,7 @@
 #include <coroutine>
 #include <cstdint>
 #include <future>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -90,7 +91,7 @@ void test_backpressured_async_send_retries_from_public_poller ()
     sender.options ().linger (std::chrono::milliseconds (0));
     receiver.options ().linger (std::chrono::milliseconds (0));
     sender.options ().immediate (true);
-    sender.options ().send_timeout (std::chrono::seconds (5));
+    sender.options ().send_timeout (std::chrono::milliseconds (-1));
 
     constexpr size_t payload_size = 64;
     const uint64_t hwm = 512;
@@ -102,20 +103,42 @@ void test_backpressured_async_send_retries_from_public_poller ()
     receiver.bind (endpoint);
     sender.connect (endpoint);
 
-    // A bounded blocking probe synchronizes the inproc connection without a
-    // settle sleep and is removed before the HWM scenario begins.
-    zlink::message_t probe = zlink_cpp_contract::make_message ("pair-ready");
-    sender.send ().message (probe).submit ();
-    assert (!probe.valid ());
-    zlink::message_t received_probe;
-    assert (receiver.recv (received_probe) == 0);
-    assert (received_probe.to_string () == "pair-ready");
-    sender.options ().send_timeout (std::chrono::milliseconds (0));
-
     const zlink::poll_event_flag_t retry_events =
       zlink::poll_event_flag_t::pollcompletion;
     zlink::poller_t poller;
     poller.add (sender, retry_events, 91);
+
+    // The probe synchronizes the inproc connection within a five-second bound
+    // and is removed before the HWM scenario begins.
+    const auto probe_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (5);
+    zlink::message_t probe = zlink_cpp_contract::make_message ("pair-ready");
+    auto probe_submission = sender.send ().message (probe).async ();
+    assert (probe_submission.result == ZLINK_SUBMIT_OK
+            || probe_submission.result == ZLINK_SUBMIT_BACKPRESSURED);
+    assert (!probe.valid ());
+    void_task_t probe_admitted =
+      await_send (std::move (probe_submission.admitted));
+    while (!probe_admitted.ready ()) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
+          probe_deadline - std::chrono::steady_clock::now ());
+        assert (remaining > std::chrono::milliseconds (0));
+        zlink::poll_event_t probe_event{};
+        assert (poller.wait (&probe_event, 1, remaining) == 1);
+        assert (probe_event.slot == 91);
+        assert (has_event (probe_event.revents, retry_events));
+    }
+    probe_admitted.get ();
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
+      probe_deadline - std::chrono::steady_clock::now ());
+    assert (remaining > std::chrono::milliseconds (0));
+    zlink::poll_item_t probe_item = zlink::poll_item_t::from_socket (
+      receiver, zlink::poll_event_flag_t::pollin);
+    assert (zlink::poll (&probe_item, 1, remaining) == 1);
+    assert (has_event (probe_item.revents, zlink::poll_event_flag_t::pollin));
+    zlink::message_t received_probe;
+    assert (receiver.recv (received_probe, zlink::recv_flags_t::dontwait) == 0);
+    assert (received_probe.to_string () == "pair-ready");
 
     // Registration installs this public poller as the completion owner before
     // async(). Exact-token completion readiness is consumed only after credit
@@ -124,28 +147,23 @@ void test_backpressured_async_send_retries_from_public_poller ()
 
     const std::string filler (payload_size, 'f');
     size_t accepted = 0;
+    std::string expected;
+    std::optional<void_task_t> pending;
     for (; accepted != 512; ++accepted) {
-        zlink::message_t part = zlink_cpp_contract::make_message (filler);
-        try {
-            sender.send ().message (part).submit ();
-            assert (!part.valid ());
-        }
-        catch (const zlink::submit_error_t &error) {
-            assert (error.result () == zlink::submit_result_t::backpressured);
-            assert (error.internal_errno () == EAGAIN);
-            assert (part.valid ());
+        std::string payload = "fill-" + std::to_string (accepted);
+        payload.resize (payload_size, 'f');
+        zlink::message_t part = zlink_cpp_contract::make_message (payload);
+        auto submission = sender.send ().message (part).async ();
+        assert (!part.valid ());
+        if (submission.result == ZLINK_SUBMIT_BACKPRESSURED) {
+            expected = std::move (payload);
+            pending.emplace (await_send (std::move (submission.admitted)));
             break;
         }
+        assert (submission.result == ZLINK_SUBMIT_OK);
     }
-    assert (accepted != 0 && accepted != 512);
-
-    std::string expected = "async-backpressure-exact-retry";
-    expected.resize (payload_size, 'r');
-    zlink::message_t outbound = zlink_cpp_contract::make_message (expected);
-    void_task_t pending =
-      await_send (sender.send ().message (outbound).async ().admitted);
-    assert (!outbound.valid ());
-    assert (!pending.ready ());
+    assert (accepted != 0 && accepted != 512 && pending.has_value ());
+    assert (!pending->ready ());
 
     event = zlink::poll_event_t{};
     assert (poller.wait (&event, 1, std::chrono::milliseconds (0)) == 0);
@@ -156,21 +174,15 @@ void test_backpressured_async_send_retries_from_public_poller ()
     for (size_t index = 0; index != accepted; ++index) {
         zlink::message_t received;
         assert (receiver.recv (received) == 0);
-        assert (received.to_string () == filler);
+        std::string payload = "fill-" + std::to_string (index);
+        payload.resize (payload_size, 'f');
+        assert (received.to_string () == payload);
     }
     size_t refilled = 0;
-    for (; refilled != 512; ++refilled) {
+    for (; refilled != accepted; ++refilled) {
         zlink::message_t part = zlink_cpp_contract::make_message (filler);
-        try {
-            sender.send ().message (part).submit ();
-            assert (!part.valid ());
-        }
-        catch (const zlink::submit_error_t &error) {
-            assert (error.result () == zlink::submit_result_t::backpressured);
-            assert (error.internal_errno () == EAGAIN);
-            assert (part.valid ());
-            break;
-        }
+        sender.send ().message (part).submit ();
+        assert (!part.valid ());
     }
     assert (refilled != 0 && refilled != 512);
 
@@ -182,7 +194,7 @@ void test_backpressured_async_send_retries_from_public_poller ()
     assert (event.slot == 91);
     assert (has_event (event.revents,
                        zlink::poll_event_flag_t::pollcompletion));
-    assert (!pending.ready ());
+    assert (!pending->ready ());
     event = zlink::poll_event_t{};
     assert (poller.wait (&event, 1, std::chrono::milliseconds (0)) == 0);
 
@@ -206,9 +218,8 @@ void test_backpressured_async_send_retries_from_public_poller ()
     assert (event.slot == 91);
     assert (has_event (event.revents,
                        zlink::poll_event_flag_t::pollcompletion));
-    assert (pending.ready ());
-    pending.get ();
-    assert (!outbound.valid ());
+    assert (pending->ready ());
+    pending->get ();
 
     zlink::message_t received;
     assert (receiver.recv (received) == 0);
@@ -273,7 +284,7 @@ void test_pending_send_socket_close_is_typed_terminal ()
     sender.options ().immediate (true);
     sender.options ().send_hwm (zlink::byte_count_t::bytes (512));
     receiver.options ().recv_hwm (zlink::byte_count_t::bytes (512));
-    sender.options ().send_timeout (std::chrono::seconds (5));
+    sender.options ().send_timeout (std::chrono::milliseconds (-1));
     const std::string endpoint =
       zlink_cpp_contract::unique_inproc ("async-close-terminal");
     receiver.bind (endpoint);
@@ -283,33 +294,30 @@ void test_pending_send_socket_close_is_typed_terminal ()
     sender.send ().message (probe).submit ();
     zlink::message_t received_probe;
     assert (receiver.recv (received_probe) == 0);
-    sender.options ().send_timeout (std::chrono::milliseconds (0));
-
-    const std::string filler (64, 'f');
-    size_t accepted = 0;
-    for (; accepted != 512; ++accepted) {
-        zlink::message_t part = zlink_cpp_contract::make_message (filler);
-        try {
-            sender.send ().message (part).submit ();
-        }
-        catch (const zlink::submit_error_t &error) {
-            assert (error.result () == zlink::submit_result_t::backpressured);
-            break;
-        }
-    }
-    assert (accepted != 0 && accepted != 512);
 
     zlink::poller_t poller;
     poller.add (sender, zlink::poll_event_flag_t::pollcompletion, 92);
-    zlink::message_t outbound = zlink_cpp_contract::make_message ("pending-close");
-    void_task_t pending =
-      await_send (sender.send ().message (outbound).async ().admitted);
-    assert (!pending.ready ());
+
+    const std::string filler (64, 'f');
+    size_t accepted = 0;
+    std::optional<void_task_t> pending;
+    for (; accepted != 512; ++accepted) {
+        zlink::message_t part = zlink_cpp_contract::make_message (filler);
+        auto submission = sender.send ().message (part).async ();
+        if (submission.result == ZLINK_SUBMIT_BACKPRESSURED) {
+            pending.emplace (await_send (std::move (submission.admitted)));
+            break;
+        }
+        assert (submission.result == ZLINK_SUBMIT_OK);
+    }
+    assert (accepted != 0 && accepted != 512 && pending.has_value ());
+
+    assert (!pending->ready ());
     sender.close ();
 
     bool terminated = false;
     try {
-        pending.get ();
+        pending->get ();
     }
     catch (const zlink::submit_error_t &error) {
         terminated = error.result () == zlink::submit_result_t::terminated
@@ -329,7 +337,7 @@ void test_pending_routed_send_target_removal_is_not_found ()
     router.options ().mandatory (true);
     router.options ().send_hwm (zlink::byte_count_t::bytes (512));
     dealer.options ().recv_hwm (zlink::byte_count_t::bytes (512));
-    router.options ().send_timeout (std::chrono::milliseconds (0));
+    router.options ().send_timeout (std::chrono::milliseconds (-1));
     dealer.options ().send_timeout (std::chrono::seconds (5));
     const zlink::routing_id_t dealer_id =
       zlink::routing_id_t::from ("terminal-peer");
@@ -346,34 +354,32 @@ void test_pending_routed_send_target_removal_is_not_found ()
     assert (received_probe.routing_id ().has_value ());
     assert (*received_probe.routing_id () == dealer_id);
 
-    const std::string filler (64, 'r');
-    size_t accepted = 0;
-    for (; accepted != 512; ++accepted) {
-        zlink::message_t part = zlink_cpp_contract::make_message (filler);
-        try {
-            router.send (dealer_id).message (part).submit ();
-        }
-        catch (const zlink::submit_error_t &error) {
-            assert (error.result () == zlink::submit_result_t::backpressured);
-            break;
-        }
-    }
-    assert (accepted != 0 && accepted != 512);
-
     zlink::poller_t poller;
     poller.add (router, zlink::poll_event_flag_t::pollcompletion, 93);
-    zlink::message_t outbound = zlink_cpp_contract::make_message ("removed-target");
-    void_task_t pending = await_send (
-      router.send (dealer_id).message (outbound).async ().admitted);
-    assert (!pending.ready ());
+
+    const std::string filler (64, 'r');
+    size_t accepted = 0;
+    std::optional<void_task_t> pending;
+    for (; accepted != 512; ++accepted) {
+        zlink::message_t part = zlink_cpp_contract::make_message (filler);
+        auto submission = router.send (dealer_id).message (part).async ();
+        if (submission.result == ZLINK_SUBMIT_BACKPRESSURED) {
+            pending.emplace (await_send (std::move (submission.admitted)));
+            break;
+        }
+        assert (submission.result == ZLINK_SUBMIT_OK);
+    }
+    assert (accepted != 0 && accepted != 512 && pending.has_value ());
+
+    assert (!pending->ready ());
 
     router.disconnect_rid (dealer_id);
     zlink::poll_event_t event{};
     assert (poller.wait (&event, 1, std::chrono::seconds (5)) == 1);
-    assert (pending.ready ());
+    assert (pending->ready ());
     bool not_found = false;
     try {
-        pending.get ();
+        pending->get ();
     }
     catch (const zlink::submit_error_t &error) {
         not_found = error.result () == zlink::submit_result_t::not_found

@@ -459,7 +459,7 @@ Raw subscription과 XPUB의 `BUFFER_TOO_SMALL`에서는 필요한 topic 길이�
   - `zlink_config_result_t` — option set/get, snapshot, poller mutation,
     message lifecycle, timer config
 - 0이 아닌 result enum 값은 family별 번호 대역(1-13, 101-113, 201-208, 301-306, 401-404, 501-505,
-  601-608, 701-709)을 사용하고, completion record의 `zlink_send_complete_result_t`는 801-802을
+  601-608, 701-709)을 사용하고, completion record의 `zlink_send_complete_result_t`는 801-803을
   사용해 서로 겹치지 않는다.
 - 정식 enum 목록은 위의 [Result와 errno 대응](#result와-errno-대응) 절을 참조한다.
 - Request completion queue는 내부 errno를 `from_errno` 정규화를 거쳐 `zlink_request_result_t`로 전달하며, 이 completion channel은 계약상

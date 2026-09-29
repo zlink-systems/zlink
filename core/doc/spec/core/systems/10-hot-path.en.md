@@ -73,9 +73,10 @@ Code on the hot path does none of the following. The exceptions are the external
 6. **Fixed-duration sleeps.** A retry waits by parking on the socket mailbox
    (`wait_submit_progress`). A fixed slice sleep stretches every flush wait of a framed transport
    (WS, WSS) to the slice length.
-7. **Missed wake-ups by temporary owners.** Every path on which an async executor consumes
-   commands on the socket's behalf and then detaches re-arms the public poller with
-   `rearm_primary_signaler()`. Without it a poller sleeps until its own timeout.
+7. **Missed wake-ups for commands applied on the poller's behalf.** A path that applies commands
+   anywhere other than the poller follows the wake rule of
+   [Polling](../05-polling.en.md#3-source-types-and-readiness). Without it a poller sleeps until
+   its own timeout.
 
 Allowed: atomic loads and stores, fixed-size stack arrays, the send/recv scope already held, and
 the endpoint's established C2 owner/turn. `_out_sync` is used only on the cold paths defined by

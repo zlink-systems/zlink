@@ -348,7 +348,7 @@ void test_writable_waiters_publish_selectively_in_issuance_order ()
            &state, NULL, ZLINK_SEND_ADMITTED, 0));
     TEST_ASSERT_EQUAL_INT (
       1, zlink::socket_completion::publish_writable_waiters (
-           &state, &rid_b, ZLINK_SEND_TERMINAL, EHOSTUNREACH));
+           &state, &rid_b, ZLINK_SEND_NOT_FOUND, ENOENT));
     TEST_ASSERT_EQUAL_UINT64 (0, state.writable_waiting_count.load ());
     TEST_ASSERT_FALSE (zlink::socket_completion::has_writable_wait (&state));
     TEST_ASSERT_EQUAL_UINT64 (2, state.ready_writable_count.load ());
@@ -374,9 +374,9 @@ void test_writable_waiters_publish_selectively_in_issuance_order ()
             TEST_ASSERT_EQUAL_UINT8 (rid_b.size, completion.peer_rid.size);
             TEST_ASSERT_EQUAL_MEMORY (rid_b.data, completion.peer_rid.data,
                                       rid_b.size);
-            TEST_ASSERT_EQUAL_INT (ZLINK_SEND_TERMINAL,
+            TEST_ASSERT_EQUAL_INT (ZLINK_SEND_NOT_FOUND,
                                    completion.send_result);
-            TEST_ASSERT_EQUAL_INT (EHOSTUNREACH,
+            TEST_ASSERT_EQUAL_INT (ENOENT,
                                    completion.send_terminal_errno);
         }
         zlink_completion_close (&completion);
@@ -388,7 +388,7 @@ void test_writable_waiters_publish_selectively_in_issuance_order ()
                               zlink::socket_completion::outstanding (&state));
 }
 
-void test_close_terminalizes_and_drops_all_writable_waiters ()
+void test_close_retires_and_drops_all_writable_waiters (int lifecycle_errno_)
 {
     zlink::socket_completion::queue_state_t state;
     zlink_routing_id_t rid;
@@ -411,7 +411,7 @@ void test_close_terminalizes_and_drops_all_writable_waiters ()
     TEST_ASSERT_EQUAL_UINT64 (1, state.writable_waiting_count.load ());
     TEST_ASSERT_EQUAL_UINT64 (1, state.ready_writable_count.load ());
 
-    zlink::socket_completion::close (&state, ETERM);
+    zlink::socket_completion::close (&state, lifecycle_errno_);
 
     TEST_ASSERT_NULL (state.writable_wait_head);
     TEST_ASSERT_NULL (state.writable_wait_tail);
@@ -433,10 +433,6 @@ void test_close_terminalizes_and_drops_all_writable_waiters ()
                                   waiters[i]->completion.completion_id);
         TEST_ASSERT_EQUAL_PTR (&contexts[i],
                                waiters[i]->completion.user_context);
-        TEST_ASSERT_EQUAL_INT (ZLINK_SEND_TERMINAL,
-                               waiters[i]->completion.send_result);
-        TEST_ASSERT_EQUAL_INT (ETERM,
-                               waiters[i]->completion.send_terminal_errno);
     }
 
     zlink_completion_t completion;
@@ -446,7 +442,17 @@ void test_close_terminalizes_and_drops_all_writable_waiters ()
     TEST_ASSERT_EQUAL_INT (
       -1, zlink::socket_completion::recv (
             &state, &completion, ZLINK_RECV_FLAGS_DONTWAIT, 0));
-    TEST_ASSERT_EQUAL_INT (ETERM, errno);
+    TEST_ASSERT_EQUAL_INT (lifecycle_errno_, errno);
+}
+
+void test_socket_close_retires_writable_waiters ()
+{
+    test_close_retires_and_drops_all_writable_waiters (ESHUTDOWN);
+}
+
+void test_context_termination_retires_writable_waiters ()
+{
+    test_close_retires_and_drops_all_writable_waiters (ETERM);
 }
 
 void test_released_writable_waiter_unlinks_and_recycles_cleanly ()
@@ -558,7 +564,8 @@ int main ()
       test_dequeued_request_reservation_is_recycled_with_fresh_id);
     RUN_TEST (test_request_completions_preserve_publish_queue_order);
     RUN_TEST (test_writable_waiters_publish_selectively_in_issuance_order);
-    RUN_TEST (test_close_terminalizes_and_drops_all_writable_waiters);
+    RUN_TEST (test_socket_close_retires_writable_waiters);
+    RUN_TEST (test_context_termination_retires_writable_waiters);
     RUN_TEST (test_released_writable_waiter_unlinks_and_recycles_cleanly);
     RUN_TEST (test_close_drops_ready_request_delivery_and_rejects_new_work);
     return UNITY_END ();

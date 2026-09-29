@@ -227,9 +227,8 @@ Queue는 `RCVHWM`을 따르며 가득 차면 pipe read를 멈춰 backpressure를
 
 ## 7. Completion과 thread safety
 
-STREAM send가 nonzero wait token을 반환하면 `zlink_completion_recv()`에서 그 token의
-`ZLINK_COMPLETION_WRITABLE` record를 정확히 한 번 받는다 — 같은 RID에 write credit이 생기면
-`ZLINK_SEND_ADMITTED`, 물리 연결이 끊기면 `ZLINK_SEND_NOT_CONNECTED`, `zlink_disconnect_rid()`로 RID를 명시적으로 제거하면 `ZLINK_SEND_NOT_FOUND`다.
+STREAM wait token의 RID별 종료는 [§4 Routed send](#4-routed-send)를,
+공통 종료·completion 수명은 [소켓 공통 whole-message send](README.ko.md#whole-message-send와-pending-admission)를 따른다.
 Socket close는 토큰을 내부에서 끝내고 record를 전달하지 않으므로 필요한 결과는 close 전에 받는다. `peer_rid`는 submit에 지정한 logical RID snapshot이며 reconnect 뒤의
 physical connection identity로 바뀌지 않는다. Completion drain, reservation 상한과 close
 계약은 [소켓 공통](README.ko.md#completion-pull과-ownership)이 소유한다.

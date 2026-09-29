@@ -72,11 +72,15 @@ def test_socket_close_preserves_handle_for_retry():
     assert handle.calls == 2
 
 
-def test_socket_resource_exit_retries_native_busy_until_close_succeeds():
+def test_socket_resource_exit_returns_native_busy_without_waiting():
+    """Core close is fail-fast (socket README §2): EBUSY is reported at once."""
     handle = _RetryableHandle()
     socket = _socket_with_handle(socket_base._BaseSocket, handle)
-    socket.__exit__(None, None, None)
-    assert handle.calls == 2
+    with pytest.raises(zlink.CloseError) as raised:
+        socket.__exit__(None, None, None)
+    assert raised.value.result == zlink.CloseResult.BUSY
+    assert raised.value.native_errno == errno.EBUSY
+    assert handle.calls == 1
 
 
 def test_socket_resource_exit_does_not_retry_non_busy_close_error():

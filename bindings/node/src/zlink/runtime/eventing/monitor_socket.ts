@@ -29,7 +29,7 @@ export class MonitorSocket extends NativeHandle {
       }
       return createMonitorEvent(requireNative().monitorRecv(this._native) as MonitorEventValueRaw);
     } catch (error) {
-      throw recvNativeError(error, flags, 'monitor recv failed');
+      throw recvNativeError(error, 'monitor recv failed');
     }
   }
 

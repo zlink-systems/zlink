@@ -26,8 +26,7 @@ internal sealed partial class SocketKernel : IDisposable
             }
 
             if (parts == null || parts.Count == 0)
-                throw ZlinkException.CreateRecvException(
-                    (int)ErrorCode.EAgain);
+                throw new ZlinkRecvException(RecvResult.InternalError);
             result.PopulateFromWritableTopicBuffer(routingId, topicLength,
                 parts);
             return true;
@@ -53,9 +52,8 @@ internal sealed partial class SocketKernel : IDisposable
         {
             return SubscribeInto(result, flags);
         }
-        catch (ZlinkException ex) when ((flags & DontWaitFlag) != 0
-                                        && ZlinkException.MapErrorCode(ex.NativeErrno) is ErrorCode.EAgain
-                                            or ErrorCode.EBusy)
+        catch (ZlinkRecvException ex) when ((flags & DontWaitFlag) != 0
+                                           && ex.Result == ZlinkRecvException.ErrorCode.NoData)
         {
             return false;
         }
@@ -72,11 +70,10 @@ internal sealed partial class SocketKernel : IDisposable
                 (nuint)topicBuffer.Length, out var topicLength, flags);
             if (rc != 0)
             {
-                var errno = NativeMethods.GetLastPInvokeError();
                 if ((flags & DontWaitFlag) != 0
-                    && ZlinkException.MapErrorCode(errno) == ErrorCode.EAgain)
+                    && (RecvResult)rc == RecvResult.NoData)
                     return false;
-                throw ZlinkException.CreateRecvException(errno);
+                throw ZlinkException.CreateRecvException((RecvResult)rc);
             }
 
             var routingIdBytes = CopyRoutingIdBytes(sourceRoutingId);

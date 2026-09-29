@@ -4,6 +4,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { constants } = require('node:os');
 const {
   CompletionEntry,
   CompletionOwner,
@@ -13,9 +14,6 @@ const {
   RequestResult,
   SubmitResult,
 } = require('../../dist/zlink/contracts/errors/errors');
-const {
-  mapNativeErrno,
-} = require('../../dist/zlink/runtime/errors/error_mapping');
 
 function requestCompletion(completionId: bigint, userContext: bigint) {
   return {
@@ -40,21 +38,32 @@ test('successful send settles without publishing a SEND completion id', async ()
   assert.equal(entry.settled, true);
 });
 
-test('native context termination maps to a terminated send result', () => {
-  assert.equal(mapNativeErrno('submit', 156384765), SubmitResult.Terminated);
-});
+for (const [sendResult, terminalErrno, expected] of [
+  [801, 2, SubmitResult.NotFound],
+  [802, 107, SubmitResult.NotConnected],
+  [803, 11, SubmitResult.Backpressured],
+  [999, 2, SubmitResult.InternalError],
+]) {
+  for (const operation of ['send', 'request'] as const) {
+  test(`WRITABLE result ${sendResult} maps directly for ${operation}`, async () => {
+    const owner = new CompletionOwner(null) as any;
+    const entry = owner.register(operation);
+    owner.publish(entry, 52n);
+    owner.retries.set(entry.token, {});
+    owner.capture({
+      kind: 3, completionId: 52n, userContext: entry.token,
+      peerRoutingId: null, sendResult, terminalErrno, requestResult: 0,
+    });
+    await assert.rejects(entry.promise, (error: unknown) =>
+      (error as { result: number; nativeErrno: number }).result === expected
+      && (error as { nativeErrno: number }).nativeErrno
+        === (sendResult === 999 ? constants.errno.EPROTO
+          : sendResult === 803 ? constants.errno.EAGAIN : terminalErrno));
+    owner.close();
+  });
+  }
+}
 
-test('native socket shutdown maps WRITABLE terminal to a terminated send result', () => {
-  assert.equal(mapNativeErrno('submit', 108), SubmitResult.Terminated);
-});
-
-test('missing routed target maps WRITABLE terminal to a not-found send result', () => {
-  assert.equal(mapNativeErrno('submit', 2), SubmitResult.NotFound);
-});
-
-test('native context termination preserves REQUEST terminated semantics', () => {
-  assert.equal(mapNativeErrno('request', 156384765), RequestResult.Terminated);
-});
 
 test('unknown nonzero context never falls back to a different live completion id', async () => {
   const owner = new CompletionOwner(null) as any;

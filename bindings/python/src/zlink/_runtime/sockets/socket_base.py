@@ -2,7 +2,6 @@
 
 import ctypes
 import errno as _errno
-import time as _time
 from typing import Optional
 
 from ...contracts.errors.codes import (
@@ -132,28 +131,7 @@ class _SocketHandle:
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
-        _close_owned_resource(self.close)
-
-
-_RESOURCE_CLOSE_RETRY_INTERVAL_SECONDS = 0.001
-_RESOURCE_CLOSE_RETRY_TIMEOUT_SECONDS = 1.0
-
-
-def _close_owned_resource(close):
-    """Retry a binding-owned resource while native ownership is transiently busy."""
-    deadline = _time.monotonic() + _RESOURCE_CLOSE_RETRY_TIMEOUT_SECONDS
-    while True:
-        try:
-            close()
-            return
-        except CloseError as exc:
-            if (
-                exc.result != CloseResult.BUSY
-                or exc.native_errno != _errno.EBUSY
-                or _time.monotonic() >= deadline
-            ):
-                raise
-            _time.sleep(_RESOURCE_CLOSE_RETRY_INTERVAL_SECONDS)
+        self.close()
 
 
 class _BaseSocket:
@@ -367,7 +345,7 @@ class _BaseSocket:
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        _close_owned_resource(self.close)
+        self.close()
 
 
 class _Socket(_BaseSocket):

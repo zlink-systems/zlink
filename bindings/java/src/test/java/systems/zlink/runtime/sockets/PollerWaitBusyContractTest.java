@@ -40,6 +40,8 @@ final class PollerWaitBusyContractTest {
                 assertEquals(ConfigResult.BUSY, waitBusy.getResult());
                 assertEquals(NativeErrno.EBUSY, waitBusy.getNativeErrno());
                 assertEquals(2, core.pollerWaitCalls.get());
+                assertNotEquals(core.firstWaitErrorOut.get(),
+                    core.overlappingWaitErrorOut.get());
 
                 core.pollerDestroyBusy.set(1);
                 ZlinkCloseException clearBusy = assertThrows(

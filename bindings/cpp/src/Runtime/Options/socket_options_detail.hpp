@@ -64,7 +64,7 @@ get_option_string_value (void *handle_, NativeOption option_, size_t initial_cap
     const int rc = detail::read_growing_string (
       [&] (char *buffer_, size_t, size_t *size_out_) {
           result = static_cast<config_result_t> (getter_ (handle_, option_, buffer_, size_out_));
-          return result == config_result_t::ok ? 0 : -1;
+          return static_cast<int> (result);
       },
       initial_cap_, value);
     if (rc == 0)

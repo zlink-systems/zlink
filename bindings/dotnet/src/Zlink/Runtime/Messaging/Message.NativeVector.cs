@@ -105,8 +105,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
                     {
                         var errno = NativeMethods.GetLastPInvokeError();
                         msg.Dispose();
-                        throw ZlinkException.CreateConfigException(
-                            errno);
+                        throw new ZlinkConfigException((ConfigResult)rc, errno);
                     }
 
                     msg._knownSize = -1;
@@ -141,8 +140,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
             var src = (ZlinkMsg*)message;
             var rc = NativeMethods.zlink_msg_move(ref result._msg, ref *src);
             if (rc != 0)
-                throw ZlinkException.CreateConfigException(
-                    NativeMethods.GetLastPInvokeError());
+                throw ZlinkException.CreateConfigException((ConfigResult)rc);
             result._knownSize = -1;
             return result;
         }
@@ -161,8 +159,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         {
             var rc = NativeMethods.zlink_msg_move(ref result._msg, ref source);
             if (rc != 0)
-                throw ZlinkException.CreateConfigException(
-                    NativeMethods.GetLastPInvokeError());
+                throw ZlinkException.CreateConfigException((ConfigResult)rc);
             result._knownSize = -1;
             return result;
         }

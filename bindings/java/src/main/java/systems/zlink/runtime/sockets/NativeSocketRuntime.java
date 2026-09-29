@@ -26,9 +26,7 @@ import systems.zlink.contracts.errors.CloseResult;
 import systems.zlink.contracts.errors.ZlinkCloseException;
 import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.runtime.nativeapi.InternalAccess;
-import systems.zlink.runtime.nativeapi.CompletionDispatcher;
 import systems.zlink.runtime.nativeapi.Native;
-import systems.zlink.runtime.nativeapi.NativeErrno;
 import systems.zlink.runtime.nativeapi.NativeHelpers;
 import systems.zlink.runtime.nativeapi.NativeLayouts;
 import systems.zlink.runtime.nativeapi.NativeRoutingIds;
@@ -54,7 +52,6 @@ final class NativeSocketRuntime implements AutoCloseable {
     private final NettySocketPlane nettyPlane;
     private final SocketSendPlane sendPlane;
     private final SocketOptionSupport optionSupport;
-    private final CompletionDispatcher ownedCompletionDispatcher;
     private MemorySegment handle;
     private final boolean own;
     private final SocketType socketTypeHint;
@@ -77,10 +74,6 @@ final class NativeSocketRuntime implements AutoCloseable {
         SocketCore.leaveCallback();
     }
 
-    void dispatchCompletion(Runnable completion) {
-        socketCore.dispatchCompletion(completion);
-    }
-
     SocketType socketTypeHint() {
         return socketTypeHint;
     }
@@ -91,11 +84,8 @@ final class NativeSocketRuntime implements AutoCloseable {
             throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
         this.own = true;
         this.socketTypeHint = type;
-        this.ownedCompletionDispatcher = null;
         try {
-            CompletionDispatcher dispatcher =
-                InternalAccess.contextCompletionDispatcher(ctx);
-            this.socketCore = new SocketCore(this, dispatcher.acquireLane());
+            this.socketCore = new SocketCore(this);
         } catch (RuntimeException | Error failure) {
             Native.close(handle);
             handle = MemorySegment.NULL;
@@ -116,13 +106,9 @@ final class NativeSocketRuntime implements AutoCloseable {
         this.handle = handle;
         this.own = own;
         this.socketTypeHint = socketTypeHint;
-        CompletionDispatcher dispatcher = new CompletionDispatcher(
-            "zlink-send-completion", 1);
-        this.ownedCompletionDispatcher = dispatcher;
         try {
-            this.socketCore = new SocketCore(this, dispatcher.acquireLane());
+            this.socketCore = new SocketCore(this);
         } catch (RuntimeException | Error failure) {
-            dispatcher.close();
             if (own && handle != null && handle.address() != 0L) {
                 Native.close(handle);
                 this.handle = MemorySegment.NULL;
@@ -636,27 +622,11 @@ final class NativeSocketRuntime implements AutoCloseable {
                         Native.errno());
                 }
             }
-            // Native close has ended handle ownership. Publish the local
-            // closed state before queued completion continuations can run.
             handle = MemorySegment.NULL;
-            try {
-                socketCore.closeCommonState();
-            } finally {
-                closeOwnedCompletionDispatcher();
-            }
+            socketCore.closeCommonState();
             return;
         }
-        try {
-            socketCore.closeCommonState();
-        } finally {
-            closeOwnedCompletionDispatcher();
-        }
-    }
-
-    private void closeOwnedCompletionDispatcher() {
-        if (ownedCompletionDispatcher != null) {
-            ownedCompletionDispatcher.close();
-        }
+        socketCore.closeCommonState();
     }
 
     @SuppressWarnings("unchecked")
@@ -836,8 +806,8 @@ final class NativeSocketRuntime implements AutoCloseable {
     }
 
     public void publishParts(String topicId, List<Message> parts,
-                      SendFlag flags, boolean nonBlocking) {
-        sendPlane.publishParts(topicId, parts, flags, nonBlocking);
+                             SendFlag flags) {
+        sendPlane.publishParts(topicId, parts, flags);
     }
 
     public SendResult publishNoWaitPartsResult(String topicId, List<Message> parts) {
@@ -948,14 +918,14 @@ final class NativeSocketRuntime implements AutoCloseable {
                         actual);
                     return out;
                 }
-                int errno = Native.errno();
-                if (errno == NativeErrno.ENOENT)
+                if (rc == systems.zlink.contracts.errors.ConfigResult.NOT_FOUND.value())
                     return null;
-                if (errno == NativeErrno.EINVAL) {
+                if (rc == systems.zlink.contracts.errors.ConfigResult.BUFFER_TOO_SMALL.value()) {
                     capacity = toIntLength(lenInOut.get(ValueLayout.JAVA_LONG, 0));
                     continue;
                 }
-                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+                throw new systems.zlink.contracts.errors.ZlinkConfigException(
+                    systems.zlink.contracts.errors.ConfigResult.fromValue(rc), Native.errno());
             }
         }
     }
