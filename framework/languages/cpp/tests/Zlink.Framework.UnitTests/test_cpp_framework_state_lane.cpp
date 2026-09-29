@@ -2,6 +2,9 @@
 
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/execution/state_lane.hpp"
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+#include "runtime/execution/infrastructure_wait_guard.hpp"
+#endif
 
 #include <gtest/gtest.h>
 
@@ -61,6 +64,54 @@ TEST (ZLinkStateLane, RunReturnsTheResultOfTheWork)
 
     EXPECT_EQ (42, lane.run ([] { return 42; }).get ());
 }
+
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+TEST (ZLinkStateLane, DebugWaitRejectsPendingOwnerCompletion)
+{
+    ASSERT_DEATH (
+      {
+          offload_executor_t executor (1);
+          state_lane_t lane (executor);
+          std::promise<void> entered;
+          std::promise<void> release;
+          auto released = release.get_future ();
+          lane.try_post ([&] {
+              entered.set_value ();
+              released.wait ();
+          });
+          entered.get_future ().wait ();
+          zlink::framework::runtime::infrastructure_wait_guard::infrastructure_scope_t scope (
+            &lane);
+          lane.run_checked ([] { return 7; }).get ();
+      },
+      "infrastructure wait guard: state-lane/get");
+}
+
+TEST (ZLinkStateLane, DebugWaitAcceptsReadyOwnerCompletion)
+{
+    offload_executor_t executor (1);
+    state_lane_t lane (executor);
+    EXPECT_EQ (7, lane.run_checked ([] { return 7; }).get ());
+}
+
+TEST (ZLinkStateLane, DebugWaitRejectsPendingCompletionFromCurrentLane)
+{
+    ASSERT_DEATH (
+      {
+          offload_executor_t executor (1);
+          state_lane_t lane (executor);
+          std::promise<void> pending;
+          auto future = pending.get_future ();
+          lane
+            .run ([&] {
+                zlink::framework::runtime::state_lane_internal::wait (future,
+                                                                      "state-lane/pending-test");
+            })
+            .get ();
+      },
+      "infrastructure wait guard: state-lane/pending-test");
+}
+#endif
 
 TEST (ZLinkStateLane, AnAvailableLaneDoesNotWaitForUnrelatedExecutorWork)
 {
