@@ -257,13 +257,7 @@ public sealed class MeshChannelSelectionHotPathTests
 
     private static ZLinkMeshPeer AddReadyPeer(ZLinkManagedMeshNode node)
     {
-        var peer = new ZLinkMeshPeer(
-            1,
-            "inproc://selection-peer",
-            null,
-            "",
-            ZLinkServiceConnectionDirection.Outbound
-        )
+        var peer = new ZLinkMeshPeer(1)
         {
             RoutingId = RoutingId.From("logical-peer"),
             PhysicalRoutingId = RoutingId.From("physical-peer"),
@@ -277,13 +271,7 @@ public sealed class MeshChannelSelectionHotPathTests
 
     private static ZLinkMeshPeer AddPeer(ZLinkManagedMeshNode node, string routingId, bool admitted)
     {
-        var peer = new ZLinkMeshPeer(
-            routingId == "stale-peer" ? 1UL : 2UL,
-            $"inproc://{routingId}",
-            null,
-            "",
-            ZLinkServiceConnectionDirection.Outbound
-        )
+        var peer = new ZLinkMeshPeer(routingId == "stale-peer" ? 1UL : 2UL)
         {
             RoutingId = RoutingId.From(routingId),
             PhysicalRoutingId = RoutingId.From($"physical-{routingId}"),

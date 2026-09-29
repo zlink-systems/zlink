@@ -110,6 +110,350 @@ public sealed class MeshNodeShutdownSealTests
     }
 
     [Fact]
+    public async Task InboundAdmissionBeforeEndpointIntent_KeepsOnePeerForTheRid()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var left = new ZLinkManagedMeshNode(context, MeshName);
+        await using var right = new ZLinkManagedMeshNode(context, MeshName);
+        var suffix = Guid.NewGuid().ToString("N");
+        var leftRid = RoutingId.From($"inbound-left-{suffix}");
+        var rightRid = RoutingId.From($"inbound-right-{suffix}");
+        left.SetRoutingId(leftRid);
+        left.SetBind(EphemeralTcpEndpoint);
+        left.AddChannel(MeshName);
+        right.SetRoutingId(rightRid);
+        right.SetBind(EphemeralTcpEndpoint);
+        right.AddChannel(MeshName);
+        left.Start();
+        right.Start();
+        right.ConnectPeer(left.Status().LocalEndpoint, leftRid);
+        await WaitUntilAsync(() =>
+            left.Status().AdmittedPeerCount == 1 && right.Status().AdmittedPeerCount == 1
+        );
+
+        var intent = left.ConnectPeer(right.Status().LocalEndpoint);
+        var peer = Assert.Single(left.Peers());
+        Assert.Equal(rightRid, peer.RoutingId);
+        Assert.Equal(intent, peer.ConnectionIntentId);
+        Assert.Equal(MeshPeerState.Admitted, peer.State);
+
+        left.RemovePeerConnection(intent);
+    }
+
+    [Fact]
+    public async Task RemovingIntent_DoesNotRemoveAnInboundAdmissionWithoutRouteLoss()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, MeshName);
+        var rid = RoutingId.From("inbound-intent-owner");
+        const string endpoint = "tcp://127.0.0.1:20001";
+        var admission = new ZLinkServiceWireCodec.AdmissionRecord(
+            MeshName,
+            ZLinkServiceSecurityIdentity.Plaintext,
+            endpoint,
+            7,
+            1,
+            new Dictionary<string, uint>(),
+            1,
+            1,
+            (byte)ZLinkMeshNodeObjectRole.Server,
+            100,
+            0,
+            0,
+            0,
+            0,
+            new Dictionary<byte, byte[]>(),
+            []
+        );
+        var peer = new ZLinkMeshPeer(999)
+        {
+            RoutingId = rid,
+            PhysicalRoutingId = rid,
+            RouteGeneration = 9,
+            Admission = admission,
+            Admitted = true,
+            State = MeshPeerState.Admitted,
+        };
+        const System.Reflection.BindingFlags Private =
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        var index = (Dictionary<RoutingId, ZLinkMeshPeer>)
+            typeof(ZLinkManagedMeshNode).GetField("_peersByRid", Private)!.GetValue(node)!;
+        index.Add(rid, peer);
+
+        var intent = node.ConnectPeer(endpoint, rid);
+        Assert.Equal(1U, node.Status().AdmittedPeerCount);
+        node.RemovePeerConnection(intent);
+        Assert.Equal(1U, node.Status().AdmittedPeerCount);
+        Assert.Equal(MeshPeerState.Admitted, Assert.Single(node.Peers()).State);
+        Assert.DoesNotContain(node.Peers(), candidate => candidate.ConnectionIntentId == intent);
+    }
+
+    [Fact]
+    public async Task FailedAdmitSend_KeepsConfiguredNotRequiredPeer()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, MeshName);
+        var rid = RoutingId.From("not-required-send-failure");
+        const ulong routeGeneration = 17;
+        node.ConnectPeer("tcp://127.0.0.1:20002", rid);
+        var peer = new ZLinkMeshPeer(999)
+        {
+            RoutingId = rid,
+            PhysicalRoutingId = rid,
+            RouteGeneration = routeGeneration,
+            State = MeshPeerState.NotRequired,
+        };
+        const System.Reflection.BindingFlags Private =
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        var index = (Dictionary<RoutingId, ZLinkMeshPeer>)
+            typeof(ZLinkManagedMeshNode).GetField("_peersByRid", Private)!.GetValue(node)!;
+        index.Add(rid, peer);
+        typeof(ZLinkManagedMeshNode)
+            .GetMethod("ClosePeerAfterControlSendFailure", Private)!
+            .Invoke(node, [rid, routeGeneration]);
+
+        Assert.Equal(MeshPeerState.NotRequired, peer.State);
+        Assert.True(index.ContainsKey(rid));
+        Assert.Equal(0UL, peer.RouteGeneration);
+    }
+
+    [Fact]
+    public async Task NewHandshakeRoute_FencesControlQueuedForOldSnapshot()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, MeshName);
+        var rid = RoutingId.From("handover-control-peer");
+        node.ConnectPeer("tcp://127.0.0.1:20004", rid);
+        const System.Reflection.BindingFlags Private =
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        var routes = (ZLinkMeshSelectedRoutes)
+            typeof(ZLinkManagedMeshNode).GetField("_selectedRoutes", Private)!.GetValue(node)!;
+        routes.Apply([new RouterRoute(rid, 11)]);
+        var index = (Dictionary<RoutingId, ZLinkMeshPeer>)
+            typeof(ZLinkManagedMeshNode).GetField("_peersByRid", Private)!.GetValue(node)!;
+        index.Add(rid, new ZLinkMeshPeer(999) { RoutingId = rid, RouteGeneration = 12 });
+        var hasTarget = typeof(ZLinkManagedMeshNode)
+            .GetMethod("HasCurrentControlTarget", Private)!;
+
+        Assert.False((bool)hasTarget.Invoke(node, [rid, 11UL, ServiceWireConstants.Command.Admit])!);
+        Assert.True((bool)hasTarget.Invoke(node, [rid, 12UL, ServiceWireConstants.Command.Admit])!);
+    }
+
+    [Fact]
+    public async Task RejectedNewHandshake_FencesOldControlWithoutSnapshotUpdate()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, MeshName);
+        var rid = RoutingId.From("rejected-handover-peer");
+        const string endpoint = "tcp://127.0.0.1:20005";
+        node.ConnectPeer(endpoint, rid);
+        const System.Reflection.BindingFlags Private =
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        var routes = (ZLinkMeshSelectedRoutes)
+            typeof(ZLinkManagedMeshNode).GetField("_selectedRoutes", Private)!.GetValue(node)!;
+        routes.Apply([new RouterRoute(rid, 11)]);
+        var index = (Dictionary<RoutingId, ZLinkMeshPeer>)
+            typeof(ZLinkManagedMeshNode).GetField("_peersByRid", Private)!.GetValue(node)!;
+        index.Add(rid, new ZLinkMeshPeer(999)
+        {
+            RoutingId = rid,
+            PhysicalRoutingId = rid,
+            RouteGeneration = 11,
+            Admitted = true,
+            State = MeshPeerState.Admitted,
+        });
+        var wrongMesh = new ZLinkServiceWireCodec.AdmissionRecord(
+            "different-mesh",
+            ZLinkServiceSecurityIdentity.Plaintext,
+            endpoint,
+            7,
+            1,
+            new Dictionary<string, uint>(),
+            1,
+            1,
+            (byte)ZLinkMeshNodeObjectRole.Server,
+            100,
+            0,
+            0,
+            0,
+            0,
+            new Dictionary<byte, byte[]>(),
+            []
+        );
+        typeof(ZLinkManagedMeshNode)
+            .GetMethod("ProcessAdmissionCore", Private)!
+            .Invoke(node, [rid, 12UL, ServiceWireConstants.Command.Hello, wrongMesh, null]);
+
+        var hasTarget = typeof(ZLinkManagedMeshNode)
+            .GetMethod("HasCurrentControlTarget", Private)!;
+        Assert.False((bool)hasTarget.Invoke(node, [rid, 11UL, ServiceWireConstants.Command.Admit])!);
+        Assert.False((bool)hasTarget.Invoke(node, [rid, 12UL, ServiceWireConstants.Command.Admit])!);
+        Assert.True(index.TryGetValue(rid, out var disconnected));
+        Assert.Equal(0UL, disconnected.RouteGeneration);
+        Assert.False(disconnected.Admitted);
+    }
+
+    [Fact]
+    public async Task SameRid_DifferentEndpointIntent_AdmitsTheConnectedEndpoint()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var owner = new ZLinkManagedMeshNode(context, MeshName);
+        await using var remote = new ZLinkManagedMeshNode(context, MeshName);
+        var suffix = Guid.NewGuid().ToString("N");
+        var remoteRid = RoutingId.From($"intent-remote-{suffix}");
+        owner.SetRoutingId(RoutingId.From($"intent-owner-{suffix}"));
+        owner.SetBind(EphemeralTcpEndpoint);
+        owner.AddChannel(MeshName);
+        remote.SetRoutingId(remoteRid);
+        remote.SetBind(EphemeralTcpEndpoint);
+        remote.AddChannel(MeshName);
+        remote.Start();
+        owner.Start();
+
+        var obsoleteIntent = owner.ConnectPeer("tcp://127.0.0.1:1", remoteRid);
+        owner.ConnectPeer(remote.Status().LocalEndpoint, remoteRid);
+        await WaitUntilAsync(() => owner.Status().AdmittedPeerCount == 1);
+        owner.RemovePeerConnection(obsoleteIntent);
+        Assert.Equal(1U, owner.Status().AdmittedPeerCount);
+    }
+
+    [Fact]
+    public async Task SameRid_SameEndpoint_UsesMatchingSecurityIntent()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var owner = new ZLinkManagedMeshNode(context, MeshName);
+        await using var remote = new ZLinkManagedMeshNode(context, MeshName);
+        var suffix = Guid.NewGuid().ToString("N");
+        var remoteRid = RoutingId.From($"security-remote-{suffix}");
+        owner.SetRoutingId(RoutingId.From($"security-owner-{suffix}"));
+        owner.SetBind(EphemeralTcpEndpoint);
+        owner.AddChannel(MeshName);
+        remote.SetRoutingId(remoteRid);
+        remote.SetBind(EphemeralTcpEndpoint);
+        remote.AddChannel(MeshName);
+        remote.Start();
+        var endpoint = remote.Status().LocalEndpoint;
+        owner.ConnectPeer(endpoint, remoteRid, "unavailable-security-identity");
+        owner.ConnectPeer(endpoint, remoteRid);
+        owner.Start();
+
+        await WaitUntilAsync(() => owner.Status().AdmittedPeerCount == 1);
+        Assert.Equal(remoteRid, Assert.Single(owner.Peers().Where(peer => peer.State == MeshPeerState.Admitted)).RoutingId);
+    }
+
+    [Fact]
+    public async Task RepeatedEndpointConfiguration_ReusesOnePendingIntent()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, MeshName);
+        var rid = RoutingId.From("pending-intent-peer");
+        const string endpoint = "tcp://127.0.0.1:20003";
+
+        var first = node.ConnectPeer(endpoint, rid);
+        var repeated = node.ConnectPeer(endpoint, rid);
+
+        Assert.Equal(first, repeated);
+        Assert.Equal(first, Assert.Single(node.Peers()).ConnectionIntentId);
+    }
+
+    [Fact]
+    public async Task EndpointIntent_LearnsReplacementRidAfterRouteLoss()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var owner = new ZLinkManagedMeshNode(context, MeshName);
+        var suffix = Guid.NewGuid().ToString("N");
+        owner.SetRoutingId(RoutingId.From($"replacement-owner-{suffix}"));
+        owner.SetBind(EphemeralTcpEndpoint);
+        owner.AddChannel(MeshName);
+        owner.Start();
+
+        var firstRid = RoutingId.From($"replacement-first-{suffix}");
+        var first = new ZLinkManagedMeshNode(context, MeshName);
+        first.SetRoutingId(firstRid);
+        first.SetBind(EphemeralTcpEndpoint);
+        first.AddChannel(MeshName);
+        first.Start();
+        var endpoint = first.Status().LocalEndpoint;
+        owner.ConnectPeer(endpoint);
+        await WaitUntilAsync(() => owner.Status().AdmittedPeerCount == 1);
+        await first.DisposeAsync();
+        await WaitUntilAsync(() => owner.Status().AdmittedPeerCount == 0);
+
+        await using var replacement = new ZLinkManagedMeshNode(context, MeshName);
+        var replacementRid = RoutingId.From($"replacement-second-{suffix}");
+        replacement.SetRoutingId(replacementRid);
+        replacement.SetBind(endpoint);
+        replacement.AddChannel(MeshName);
+        replacement.Start();
+        await WaitUntilAsync(() => owner.Peers().Any(peer =>
+            peer.RoutingId == replacementRid && peer.State == MeshPeerState.Admitted));
+        Assert.DoesNotContain(owner.Peers(), peer => peer.RoutingId == firstRid);
+    }
+
+    [Fact]
+    public async Task HelloBeforeRouteObservation_AdmitIsSentOnTheRecordRoute()
+    {
+        // Core ROUTER §10.1: a record carries the generation of the route
+        // that delivered it. The receive loop can dispatch a Hello before its
+        // snapshot observes that route; the admission epoch is the record's
+        // route, so the observation arriving later must not fence the Admit.
+        var scheduler = new GatedTaskScheduler();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            routedSubmitScheduler: scheduler
+        );
+        var suffix = Guid.NewGuid().ToString("N");
+        node.SetRoutingId(RoutingId.From($"record-route-node-{suffix}"));
+        node.SetBind(EphemeralTcpEndpoint);
+        node.AddChannel(MeshName);
+        var peerRid = RoutingId.From($"record-route-peer-{suffix}");
+        const System.Reflection.BindingFlags Private =
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        var routes = (ZLinkMeshSelectedRoutes)
+            typeof(ZLinkManagedMeshNode).GetField("_selectedRoutes", Private)!.GetValue(node)!;
+        var lane = (Zlink.Framework.Runtime.Execution.ZLinkStateLane)
+            typeof(ZLinkManagedMeshNode).GetField("_lane", Private)!.GetValue(node)!;
+        try
+        {
+            node.Start();
+            using var peer = context.CreateDealerSocket();
+            peer.SetRoutingId(peerRid);
+            peer.Connect(node.Status().LocalEndpoint);
+            await WaitUntilAsync(() => routes.GenerationOf(peerRid) != 0);
+            var generation = routes.GenerationOf(peerRid);
+
+            // The snapshot has not observed the route yet.
+            await lane.RunAsync(routes.Clear);
+            await SendAsync(
+                peer,
+                ZLinkServiceWireCodec.EncodeRouteAdmission(
+                    ServiceWireConstants.Command.Hello,
+                    MeshName,
+                    $"inproc://record-route-peer-{suffix}",
+                    lifecycleGeneration: 7,
+                    descriptorRevision: 3,
+                    new Dictionary<string, uint>(StringComparer.Ordinal),
+                    objectRole: (byte)ZLinkMeshNodeObjectRole.Server
+                )
+            );
+            await scheduler.Queued;
+            await WaitUntilAsync(() => node.Peers().Any(candidate => candidate.RoutingId == peerRid));
+
+            scheduler.Release();
+
+            await ReceiveAdmitAsync(peer);
+            await WaitUntilAsync(() => node.Status().AdmittedPeerCount == 1);
+            await lane.RunAsync(() => routes.Apply([new RouterRoute(peerRid, generation)]));
+        }
+        finally
+        {
+            scheduler.Release();
+        }
+    }
+
+    [Fact]
     public async Task IdempotentAdmit_CompletesWithoutReadmittingOrResettingTheEpoch()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();

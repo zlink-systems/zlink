@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Execution;
@@ -28,7 +27,6 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     private readonly ZLinkMeshCompletionTable _completions;
     private readonly ZLinkMeshDispatchPump _pump;
     private readonly ActorMessageFollowIngressAdapter _messageFollowIngress;
-    private readonly ConcurrentDictionary<string, ulong> _peerIntents = new(StringComparer.Ordinal);
     private readonly ZLinkSpotSubscriptionTracker _subscriptions = new();
     private readonly ZLinkStateLane _lane = new();
     private readonly Dictionary<ZLinkBackendActorRef, List<Message>> _forwardBuffers = new();
@@ -768,12 +766,12 @@ internal sealed class ZLinkBackendSpotNodeWrapper
 
     public void ConnectPeer(string endpoint)
     {
-        _peerIntents[endpoint] = _node.ConnectPeer(endpoint);
+        _node.ConnectPeer(endpoint);
     }
 
     public void ConnectPeer(RoutingId peerRid, string endpoint, string expectedSecurityIdentity)
     {
-        _peerIntents[endpoint] = _node.ConnectPeer(endpoint, peerRid, expectedSecurityIdentity);
+        _node.ConnectPeer(endpoint, peerRid, expectedSecurityIdentity);
     }
 
     public void SetPeerExpectation(
@@ -794,8 +792,6 @@ internal sealed class ZLinkBackendSpotNodeWrapper
 
     public void DisconnectPeer(string endpoint)
     {
-        _peerIntents.TryRemove(endpoint, out _);
-
         foreach (var peer in _node.Peers())
         {
             if (
@@ -805,9 +801,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper
                 continue;
             try
             {
-                // An endpoint can retain more than one intent during a RID
-                // replacement. Remove every matching lifetime so the next
-                // connection cannot inherit a stale native transport.
+                // Release the endpoint registration with its intent so the
+                // next connection cannot inherit a stale native transport.
                 _node.RemovePeerConnection(peer.ConnectionIntentId);
             }
             catch (ZlinkException)
@@ -857,10 +852,22 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         }
     }
 
-    public void DisconnectPeerLifetime(RoutingId peerRid, ulong lifecycleGeneration)
+    public void DisconnectPeerLifetime(RoutingId peerRid, string endpoint, ulong lifecycleGeneration)
     {
         try
         {
+            foreach (var peer in _node.Peers())
+            {
+                if (
+                    peer.RoutingId != peerRid
+                    || !string.Equals(peer.Endpoint, endpoint, StringComparison.Ordinal)
+                    || peer.LifecycleGeneration != lifecycleGeneration
+                )
+                    continue;
+                // The auto-connect owner is releasing this lifetime. Release
+                // its endpoint registration before a new RID uses that endpoint.
+                _node.RemovePeerConnection(peer.ConnectionIntentId);
+            }
             _node.DisconnectPeer(peerRid, lifecycleGeneration);
         }
         catch (ZlinkException)
