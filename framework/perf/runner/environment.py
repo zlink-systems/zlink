@@ -2,6 +2,7 @@
 """Public OS/runtime and artifact provenance, with no mutable machine tuning."""
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -11,8 +12,10 @@ import resource
 import subprocess
 import sys
 
-ROOT = Path(__file__).resolve().parents[5]
-PERF = Path(__file__).resolve().parents[1]
+from launchers import launcher
+
+ROOT = Path(__file__).resolve().parents[3]
+SCHEMA = Path(__file__).resolve().parents[1] / "schema"
 
 
 def digest(path: Path) -> str:
@@ -27,33 +30,28 @@ def read(path: str) -> str | None:
         return None
 
 
-def collect() -> dict:
+def collect(language: str, perf_dir: Path) -> dict:
     cpu = next((line.split(":", 1)[1].strip() for line in Path("/proc/cpuinfo").read_text().splitlines()
                 if line.startswith("model name")), platform.processor())
+    runtime = launcher(language).provenance(perf_dir)
     artifacts = []
-    runtime_settings = {}
-    paths = [ROOT / ".artifacts/wsl/nuget/Zlink.0.17.3.nupkg"]
-    paths.append(PERF / "ZLink.Framework.Perf.Shared/histogram-bounds.json")
-    paths.extend((ROOT / "core/build-dev/lib").glob("libzlink.so*"))
-    for role in ("Client", "SessionServer", "ChannelServer"):
-        paths.extend((PERF / f"ZLink.Framework.Perf.{role}/bin/Release/net8.0").glob("*.dll"))
-        runtime_file = PERF / f"ZLink.Framework.Perf.{role}/bin/Release/net8.0/ZLink.Framework.Perf.{role}.runtimeconfig.json"
-        if runtime_file.is_file():
-            paths.append(runtime_file)
-            runtime_settings[role] = json.loads(runtime_file.read_text())
-        paths.extend((PERF / f"ZLink.Framework.Perf.{role}/bin/Release/net8.0/runtimes").glob("*/native/libzlink.so"))
     seen = set()
-    for path in paths:
+    for path in [SCHEMA / "histogram-bounds.json", *runtime.pop("artifacts")]:
         if path.is_file() and str(path) not in seen:
             seen.add(str(path))
             artifacts.append({"path": str(path), "resolvedPath": str(path.resolve()), "sha256": digest(path)})
+    packages = runtime["packages"]
     limits = resource.getrlimit(resource.RLIMIT_NOFILE)
     return {
         "schemaVersion": 2,
+        "language": language,
         "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
         "dirty": bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT, text=True)),
-        "buildMode": "Release", "frameworkVersion": "0.10.0", "bindingVersion": "0.17.3",
-        "coreVersion": next(line.split("=", 1)[1] for line in (ROOT / "VERSION").read_text().splitlines() if line.startswith("LIBZLINK_VERSION=")),
+        "buildMode": "Release",
+        # Restored published packages are the version source; nothing is copied from a local Core or binding build.
+        "frameworkVersion": next((p["version"] for p in packages if p["name"] == "Zlink.Framework"), None),
+        "coreVersion": None,  # reported by the role processes from the libzlink they load
+        "bindingVersion": next((p["version"] for p in packages if p["name"] == "Zlink"), None),
         "cpuModel": cpu, "effectiveProcessorCount": len(os.sched_getaffinity(0)),
         "cpuAffinity": sorted(os.sched_getaffinity(0)),
         "loadAverage": list(os.getloadavg()),
@@ -69,28 +67,21 @@ def collect() -> dict:
         "listenBacklog": read("/proc/sys/net/core/somaxconn"),
         "tcpMaxSynBacklog": read("/proc/sys/net/ipv4/tcp_max_syn_backlog"),
         "tcpTimeWaitReuse": read("/proc/sys/net/ipv4/tcp_tw_reuse"),
-        "dotnetInfo": subprocess.check_output(["dotnet", "--info"], text=True),
-        "installedRuntimes": subprocess.check_output(["dotnet", "--list-runtimes"], text=True),
-        "runtimeSettings": runtime_settings,
-        "runtimeOptions": {key: os.environ.get(key) for key in
-                           ("DOTNET_PROCESSOR_COUNT", "DOTNET_GCHeapHardLimit", "DOTNET_gcServer",
-                            "DOTNET_ThreadPool_ForceMinWorkerThreads", "DOTNET_ThreadPool_ForceMaxWorkerThreads")},
-        "environment": {key: os.environ.get(key) for key in ("TMPDIR", "ZLINK_LIBRARY_PATH", "NUGET_PACKAGES",
-                            "UseSharedCompilation", "MSBUILDDISABLENODEREUSE", "DOTNET_CLI_TELEMETRY_OPTOUT")},
-        "serializer": {"name": "default Framework typed JSON / ZlinkStreamJsonCodec", "runtime": "System.Text.Json",
-                       "options": "lowerCamelCase, canonical decimal-string 64-bit values, Base64 text payload, no compression or custom message codec"},
-        "clock": {"source": "System.Diagnostics.Stopwatch", "unit": "ns", "scope": "process"},
+        **runtime,
         "deployment": "same-host loopback; source and target share CPU resources",
         "artifacts": artifacts,
     }
 
 
 if __name__ == "__main__":
-    output = json.dumps(collect(), indent=2, ensure_ascii=False) + "\n"
-    if len(sys.argv) == 2:
-        with open(sys.argv[1], "x") as target:
+    parser = argparse.ArgumentParser(description="Collect public OS/runtime and package provenance.")
+    parser.add_argument("--language", required=True)
+    parser.add_argument("--perf-dir", required=True, type=Path)
+    parser.add_argument("output", nargs="?", type=Path, help="new output file; stdout when omitted")
+    args = parser.parse_args()
+    output = json.dumps(collect(args.language, args.perf_dir.resolve()), indent=2, ensure_ascii=False) + "\n"
+    if args.output:
+        with args.output.open("x") as target:
             target.write(output)
-    elif len(sys.argv) == 1:
-        print(output, end="")
     else:
-        raise SystemExit("usage: collect_env.sh [new-output-file]")
+        print(output, end="")

@@ -6,7 +6,7 @@ import json
 import math
 from pathlib import Path
 
-BOUNDS = json.loads((Path(__file__).resolve().parents[1] / "ZLink.Framework.Perf.Shared/histogram-bounds.json").read_text())
+BOUNDS = json.loads((Path(__file__).resolve().parents[1] / "schema/histogram-bounds.json").read_text())
 OUTCOMES = ("sent", "completed", "settleCompleted", "failed", "timeout", "cancelled", "unresolved")
 MAX_U64 = 18446744073709551615
 
@@ -191,7 +191,7 @@ def aggregate(cell: Path, config: dict, client_files: list[str], server_files: l
         issues.append({"code": "NoCompletedEcho", "message": "No window echo success.", "sourceFile": ",".join(owners)})
     result = {
         "schemaVersion": 2, **{key: config[key] for key in ("runId", "cellId", "configHash", "scenario")},
-        "language": "dotnet", "configFile": "config.json", "endpointsFile": "endpoints.json",
+        "language": config["language"], "configFile": "config.json", "endpointsFile": "endpoints.json",
         "status": status, "baselineEligible": status == "valid" and config.get("diagnostics", "Off") == "Off", "reasons": issues,
         "metricOwners": owners, "ownerWindows": {name: originals[name]["window"] for name in owners if name in originals},
         "measuredSeconds": seconds, "aggregation": {"rateMethod": "sum-owner-rates" if len(owners) > 1 else "single-owner",

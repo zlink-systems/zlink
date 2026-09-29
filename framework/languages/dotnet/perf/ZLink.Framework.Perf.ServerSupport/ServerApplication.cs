@@ -79,7 +79,7 @@ public static class ServerApplication
             await next(context);
         });
         app.MapGet("/perf/ready", () => Json(Ready(app.Services)));
-        app.MapGet("/perf/stats", () => Json(measurement.Snapshot(PublicStatus(app.Services)) with { publicMetrics = provider.Snapshot() }));
+        app.MapGet("/perf/stats", () => Json(WithCoreVersion(measurement.Snapshot(PublicStatus(app.Services)) with { publicMetrics = provider.Snapshot() })));
         app.MapPost("/perf/reset", async (HttpContext context) =>
         {
             try
@@ -113,6 +113,13 @@ public static class ServerApplication
             throw new JsonException("Identity text fields must be non-null JSON strings.");
         return value;
     }
+    // Public binding API: the version of the libzlink this process actually loaded.
+    private static PerfMetricsSnapshot WithCoreVersion(PerfMetricsSnapshot snapshot)
+    {
+        var (major, minor, patch) = Systems.Zlink.Zlink.Version();
+        return snapshot with { provenance = new(snapshot.provenance) { ["coreVersion"] = $"{major}.{minor}.{patch}" } };
+    }
+
     public static IResult Json<T>(T value, int status = 200) => Results.Json(value, ServerJson, statusCode: status);
     public static object PublicStatus(IServiceProvider services)
     {

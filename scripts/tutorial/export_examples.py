@@ -110,6 +110,7 @@ ROOT_FILES = (".gitignore", ".gitattributes")
 #  Files under framework/languages/<source language>/ that a mirror needs at its root.
 LANGUAGE_ROOT_FILES = {
     "kotlin": ("gradle/kotlin-detekt.gradle", "config/detekt/kotlin-java-terminals.yml"),
+    "dotnet": ("props/ZLink.FrameworkReference.props",),
 }
 
 README_KO = """[English](./README.md) | **한국어**

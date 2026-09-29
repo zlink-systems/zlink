@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 1 process coordinator. Measured calls and timing live in the C# owner processes."""
+"""Language-independent perf runner: phases, collection, aggregation. Measured calls live in each language's role processes."""
 from __future__ import annotations
 
 import argparse
@@ -19,11 +19,11 @@ import urllib.error
 import urllib.request
 import uuid
 
-from environment import ROOT, PERF, collect, digest
+from environment import ROOT, collect, digest
+from launchers import ROLES, launcher
 from results import aggregate, write_json
 
 SCENARIOS = ("session-echo-only", "channel-echo-only")
-ROLES = ("Client", "SessionServer", "ChannelServer")
 CLIENTSERVER_INTERFACE = "framework/doc/framework/common/spec/server/languages/dotnet/interfaces/10-topology-monitoring.ko.md:359"
 
 
@@ -50,8 +50,10 @@ def positive_number(text: str) -> float:
 
 
 def options(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=".NET canonical perf phase 1: Session and both manual Channel baselines.")
+    parser = argparse.ArgumentParser(description="Common perf runner: Session and both manual Channel baselines.")
     parser.add_argument("operation", choices=("single", "matrix", "diagnostic"))
+    parser.add_argument("--language", required=True)
+    parser.add_argument("--perf-dir", required=True, type=Path, help="the language perf folder holding the role projects and perf-results")
     parser.add_argument("--scenario", choices=SCENARIOS)
     for key in ("connections", "logical-streams", "client-count", "inflight", "connect-concurrency"):
         parser.add_argument("--" + key, type=positive_int)
@@ -103,23 +105,26 @@ def options(argv: list[str]) -> argparse.Namespace:
         args.payloads = payloads
     else:
         args.payloads = [1024, 4096]
-    args.output = (args.output or PERF / "perf-results" / args.run_id).resolve()
+    args.perf_dir = args.perf_dir.resolve()
+    args.output = (args.output or args.perf_dir / "perf-results" / args.run_id).resolve()
     return args
 
 
-def dll(role: str) -> Path:
-    name = "ZLink.Framework.Perf." + role
-    return PERF / name / "bin/Release/net8.0" / (name + ".dll")
+def agreed_core_version(role_versions: dict, declared: str | None) -> str:
+    """Every server role reports the Core it actually loaded; all reports and earlier cells must agree."""
+    observed = set(role_versions.values()) | ({declared} - {None})
+    if None in role_versions.values() or len(observed) != 1:
+        raise RuntimeError(f"Core version differs between roles or is unreported: {role_versions}; declared {declared}")
+    return observed.pop()
 
 
-def build(output: Path) -> None:
-    logs = output / "logs"
+def build(args: argparse.Namespace) -> None:
+    logs = args.output / "logs"
     logs.mkdir()
     for role in ROLES:
         path = logs / ("build-" + role + ".log")
         with path.open("x") as log:
-            result = subprocess.run(["dotnet", "build", str(PERF / ("ZLink.Framework.Perf." + role)),
-                                     "-c", "Release", "-m:1", "--nologo"], cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+            result = subprocess.run(launcher(args.language).build(args.perf_dir, role), cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
         if result.returncode:
             raise RuntimeError(f"Release build failed; {path}")
 
@@ -131,8 +136,6 @@ def preflight(args: argparse.Namespace, environment: dict) -> None:
     low, high = map(int, environment["ephemeralPortRange"].split())
     if args.scenario != "channel-echo-only" and args.connections + 32 > high - low + 1:
         raise ValueError("Insufficient ephemeral ports for the requested connector pool")
-    if not environment["artifacts"] or not Path(os.environ["ZLINK_LIBRARY_PATH"]).is_dir():
-        raise ValueError("Missing local Release artifact/native library provenance")
     if int(environment["listenBacklog"]) < min(args.connect_concurrency, args.connections) and args.scenario != "channel-echo-only":
         raise ValueError("OS listen backlog is below requested simultaneous connector setup")
     if environment["effectiveProcessorCount"] < 1:
@@ -144,14 +147,6 @@ def preflight(args: argparse.Namespace, environment: dict) -> None:
     # A necessary lower bound from the harness's sequence and task-reference arrays, not an estimate of Core queues.
     if available <= 8 * streams * (1 + args.inflight):
         raise ValueError("Available memory cannot hold even the required harness sequence/task-reference arrays")
-
-
-def verify_native_payloads() -> None:
-    approved = digest(ROOT / "core/build-dev/lib/libzlink.so")
-    for role in ("SessionServer", "ChannelServer"):
-        payload = dll(role).parent / "runtimes/linux-x64/native/libzlink.so"
-        if not payload.is_file() or digest(payload) != approved:
-            raise RuntimeError(f"Packaged native payload differs from the approved local Core: {payload}; no stale baseline will run")
 
 
 class OwnedProcesses:
@@ -318,7 +313,7 @@ def comparison(args: argparse.Namespace, scenario: str, payload: int, topology: 
                 "connectConcurrency": args.connect_concurrency if cs else None,
                 "requestTimeoutMs": 1000, "correlationExpiryMs": 1000, "settleTimeoutMs": 5000,
                 "setupTimeoutMs": 30000, "adminTimeoutMs": 5000, "socketSendTimeoutMs": 1000}
-    comparable = {"language": "dotnet", "scenario": scenario, "mode": "request", "terminal": "ordinary",
+    comparable = {"language": args.language, "scenario": scenario, "mode": "request", "terminal": "ordinary",
                   "topology": topology, "discovery": "none" if cs else "manual", "objectRole": "None",
                   "executionMode": "Immediate" if cs else "Framework default", "spotMapping": None,
                   "actorMapping": None, "subscriberCount": None, "worker": None,
@@ -386,7 +381,7 @@ def cell_run(args: argparse.Namespace, scenario: str, payload: int, topology: st
             if source:
                 endpoint_role["transportEndpoints"]["peer"] = role_config["peerEndpoint"]
             roles.append(endpoint_role)
-            owned.start(f"server-{role}-{instance}", ["dotnet", str(dll(executable)), "--config", str(cell / filename)],
+            owned.start(f"server-{role}-{instance}", [*launcher(args.language).command(args.perf_dir, executable), "--config", str(cell / filename)],
                         [port for port in (admin_port, trigger_port, transport_port) if port])
         manifest = {"runId": args.run_id, "cellId": cell_id, "configHash": config_hash, "workload": config["workload"],
                     "roles": roles, "provenance": {"environmentFile": str(args.output / "env.json"), "buildMode": "Release",
@@ -396,7 +391,7 @@ def cell_run(args: argparse.Namespace, scenario: str, payload: int, topology: st
         wait_ready(owned, roles, False, cell, "infrastructure")
         for index in range(config["workload"]["clientCount"]):
             name = f"client-{index}"
-            process = owned.start(name, ["dotnet", str(dll("Client")), "--endpoint-config", str(cell / "endpoints.json"),
+            process = owned.start(name, [*launcher(args.language).command(args.perf_dir, "Client"), "--endpoint-config", str(cell / "endpoints.json"),
                                         "--client-index", str(index)], [], client=True)
             client = ClientControl(process, cell / "logs" / (name + "-control.log"))
             clients.append(client)
@@ -462,7 +457,12 @@ def cell_run(args: argparse.Namespace, scenario: str, payload: int, topology: st
                             if "/" in line and any(token in line for token in ("libzlink", "Systems.Zlink", "Zlink.Framework", "ZLink.Framework.Perf", "System.Text.Json"))})
             loaded.append({"process": name, "pid": process.pid, "artifacts": [{"actualLoadPath": path,
                            "sha256": digest(Path(path))} for path in paths if Path(path).is_file()]})
+        # The role processes report the version of the libzlink they actually loaded; every role must agree.
+        role_versions = {name: json.loads((cell / name).read_text())["provenance"].get("coreVersion") for name in server_files}
+        for entry in loaded:
+            entry["coreVersion"] = role_versions.get(entry["process"] + ".json")
         write_json(cell / "loaded-artifacts.json", loaded)
+        env["coreVersion"] = agreed_core_version(role_versions, env["coreVersion"])
     except (Exception, KeyboardInterrupt) as error:
         issues.append({"code": "PublicContractMismatch" if isinstance(error, UnsupportedCellError) else "InvalidSetup" if isinstance(error, InvalidSetupError) else "CollectionFailure",
                        "message": type(error).__name__ + ": " + str(error),
@@ -499,12 +499,13 @@ def main(argv: list[str]) -> int:
     if args.output.exists():
         raise FileExistsError("Refusing to overwrite an existing run root: " + str(args.output))
     args.output.mkdir(parents=True)
-    env = collect()
+    env = collect(args.language, args.perf_dir)
     preflight(args, env)
     print("run_root=" + str(args.output), flush=True)
-    build(args.output)
-    verify_native_payloads()
-    env = collect()
+    build(args)
+    env = collect(args.language, args.perf_dir)
+    if not env["packages"]:
+        raise ValueError("No restored Zlink package in the role outputs; perf must reference published packages")
     write_json(args.output / "env.json", env)
     matrix = []
     for scenario in ([args.scenario] if args.scenario else SCENARIOS):
@@ -518,6 +519,7 @@ def main(argv: list[str]) -> int:
         result = cell_run(args, scenario, payload, topology, env)
         results.append(result)
         # A failed cell remains a failed cell. Matrix progression does not resubmit its measured operations.
+    (args.output / "env.json").write_text(json.dumps(env, indent=2, ensure_ascii=False) + "\n")  # now carries the observed coreVersion
     write_json(args.output / "index.json", {"schemaVersion": 2, "runId": args.run_id,
                 "cells": [{"cellId": r["cellId"],
                 "resultFile": r["cellId"] + "/result.json", "status": r["status"]} for r in results]})

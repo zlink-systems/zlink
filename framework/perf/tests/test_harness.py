@@ -5,10 +5,16 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import sys
 import unittest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "runner"))
+
+from launchers import launcher
 from results import BOUNDS, MAX_U64, aggregate, export_latency, histogram_merge, u64, write_json
-from runner import comparison, options
+from runner import agreed_core_version, comparison, options
+
+COMMON = ["--language", "dotnet", "--perf-dir", "/tmp/perf"]
 
 
 def histogram(samples, overflow=0):
@@ -43,13 +49,20 @@ class HarnessTests(unittest.TestCase):
         ]
         for argv in bad:
             with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-                options(argv)
+                options(argv + COMMON)
+
+    def test_language_and_perf_dir_are_required_and_unknown_language_is_rejected(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            options(["single", "--scenario", "session-echo-only"])
+        with self.assertRaises(ValueError):
+            launcher("cobol")
+        self.assertEqual(launcher("dotnet").command(Path("/p"), "Client")[0], "dotnet")
 
     def test_cell_comparison_excludes_run_identity_but_keeps_workload(self):
         env = {key: None for key in ("cpuModel", "effectiveProcessorCount", "cpuQuota", "cpuset", "cpuAffinity", "memoryLimit", "runtimeOptions")}
         env["serializer"] = {"name": "typed JSON"}
-        a = options(["single", "--scenario", "session-echo-only", "--run-id", "first", "--connections", "8"])
-        b = options(["single", "--scenario", "session-echo-only", "--run-id", "second", "--connections", "8"])
+        a = options(["single", "--scenario", "session-echo-only", "--run-id", "first", "--connections", "8", *COMMON])
+        b = options(["single", "--scenario", "session-echo-only", "--run-id", "second", "--connections", "8", *COMMON])
         self.assertEqual(comparison(a, a.scenario, 1024, None, env)[1], comparison(b, b.scenario, 1024, None, env)[1])
         b.inflight = 2
         self.assertNotEqual(comparison(a, a.scenario, 1024, None, env)[1], comparison(b, b.scenario, 1024, None, env)[1])
@@ -98,7 +111,7 @@ class HarnessTests(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text()), {"value": "first"})
 
     def test_failed_warmup_preserves_public_error_counts_without_measured_metrics(self):
-        config = {"runId": "r", "cellId": "c", "configHash": "h", "scenario": "channel-echo-only",
+        config = {"language": "dotnet", "runId": "r", "cellId": "c", "configHash": "h", "scenario": "channel-echo-only",
                   "workload": {"payloadSize": 4096}, "topology": "routemesh"}
         source = {"schemaVersion": 2, **{key: config[key] for key in ("runId", "cellId", "configHash")},
                   "resetSeq": "0", "phase": "complete", "metrics": {
@@ -119,7 +132,7 @@ class HarnessTests(unittest.TestCase):
             self.assertIn(failure, summary["reasons"])
 
     def test_cs_aggregation_sums_owner_rates_and_separates_receiver_messages(self):
-        config = {"runId": "r", "cellId": "c", "configHash": "h", "scenario": "session-echo-only",
+        config = {"language": "dotnet", "runId": "r", "cellId": "c", "configHash": "h", "scenario": "session-echo-only",
                   "workload": {"payloadSize": 1024}, "topology": None}
         def original(role, instance, successes, seconds, request_count, reply_count):
             metrics = {"messages." + key: str(successes if key in ("sent", "completed") else 0)
@@ -156,3 +169,20 @@ class HarnessTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CoreVersionAgreementTest(unittest.TestCase):
+    def test_all_roles_report_the_same_version(self):
+        self.assertEqual(agreed_core_version({"a.json": "1.10.0", "b.json": "1.10.0"}, None), "1.10.0")
+
+    def test_a_role_with_a_different_version_fails(self):
+        with self.assertRaises(RuntimeError):
+            agreed_core_version({"a.json": "1.10.0", "b.json": "1.9.0"}, None)
+
+    def test_an_unreported_version_fails(self):
+        with self.assertRaises(RuntimeError):
+            agreed_core_version({"a.json": "1.10.0", "b.json": None}, None)
+
+    def test_a_later_cell_must_match_the_version_already_recorded(self):
+        with self.assertRaises(RuntimeError):
+            agreed_core_version({"a.json": "1.9.0"}, "1.10.0")
