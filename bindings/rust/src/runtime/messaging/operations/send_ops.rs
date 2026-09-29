@@ -404,6 +404,13 @@ pub(super) fn check_submit_result(rc: i32, errno: i32) -> Result<(), SubmitError
     }
 }
 
+/// A WRITABLE wait exists only for BACKPRESSURED with EAGAIN and a nonzero
+/// wait token (bindings spec "Submit 결과 투영"). Any other combination that
+/// carries a token is a Core protocol failure, not a wait.
+pub(super) fn is_writable_wait(rc: i32, errno: i32, completion_id: u64) -> bool {
+    rc == SubmitResult::Backpressured as i32 && errno == libc::EAGAIN && completion_id != 0
+}
+
 fn submit_send_attempt(
     op: &mut SendOpStorage,
     user_context: *mut c_void,
@@ -446,7 +453,7 @@ fn submit_send_attempt(
         }
         return Ok(SendAttempt::Admitted);
     }
-    if rc == SubmitResult::Backpressured as i32 && completion_id != 0 {
+    if is_writable_wait(rc, errno, completion_id) {
         return Ok(SendAttempt::Waiting(completion_id));
     }
     if completion_id != 0 || rc == SubmitResult::Backpressured as i32 {
@@ -472,5 +479,22 @@ fn live_handle(op: &SendOpStorage) -> Result<*mut c_void, SubmitError> {
         ))
     } else {
         Ok(handle)
+    }
+}
+
+#[cfg(test)]
+mod writable_wait_tests {
+    use super::*;
+
+    #[test]
+    fn writable_wait_requires_backpressure_eagain_and_nonzero_token() {
+        let backpressured = SubmitResult::Backpressured as i32;
+        assert!(is_writable_wait(backpressured, libc::EAGAIN, 7));
+        assert!(!is_writable_wait(backpressured, libc::ETIMEDOUT, 7));
+        assert!(!is_writable_wait(backpressured, libc::ENOBUFS, 7));
+        assert!(!is_writable_wait(backpressured, 0, 7));
+        assert!(!is_writable_wait(backpressured, libc::EAGAIN, 0));
+        assert!(!is_writable_wait(SubmitResult::Ok as i32, libc::EAGAIN, 7));
+        assert!(!is_writable_wait(SubmitResult::NotConnected as i32, libc::EAGAIN, 7));
     }
 }
