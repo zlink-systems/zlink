@@ -4701,8 +4701,40 @@ int remote_actor_join_resolves_store_type_and_reports_typed_terminals ()
 enum class parked_request_case_t
 {
     replay,
+    direct_replay,
     former_pending_capacity
 };
+
+int local_relay_failure_returns_without_waiting_for_handoff_deadline ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+
+    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    service_collection_t services;
+    services.add_singleton<actor_gateway_runtime_t> ();
+    services.add_singleton<serializer_registry_t> ();
+    node->root_services = services.build_provider ();
+    spot_node_runtime_t spots (node);
+    auto header = runtime::messaging::envelope_header_t{};
+    header.kind = runtime::messaging::message_kind_t::request;
+    header.message_name = "MissingActorProbe";
+    const auto actor = test_actor_ref ("actor-a", "player", "missing-actor", 1);
+    const auto started = std::chrono::steady_clock::now ();
+    const auto failed = finite_task_result (
+      spots.relay_local_actor_packet (actor, header, zlink::message_t::from (std::string ("ping")),
+                                      zlink::routing_id_t::from ("actor-a"), {}, 0, {}, 0,
+                                      std::chrono::seconds (30)),
+      std::chrono::seconds (2));
+    const auto elapsed = std::chrono::steady_clock::now () - started;
+    const auto pending_empty =
+      node->lane.run ([&] { return node->pending_handoff_requests.empty (); }).get ();
+    return failed && !*failed && (*failed).error_kind () == framework_error_kind_t::not_found
+               && elapsed < std::chrono::seconds (2) && pending_empty
+             ? 0
+             : 1;
+}
 
 int local_relay_preserves_handoff_request_route (bool has_original_operation)
 {
@@ -4918,6 +4950,7 @@ int parked_request_reply_case (const std::string &requester_rid,
 
     service_collection_t services;
     services.add_singleton<actor_gateway_runtime_t> ();
+    services.add_singleton<serializer_registry_t> ();
     node->root_services = services.build_provider ();
     auto provider = services.build_provider ();
 
@@ -4925,6 +4958,31 @@ int parked_request_reply_case (const std::string &requester_rid,
     if (!node->actor_transfer_coordinator.try_begin_local (key))
         return 1;
     spot_node_runtime_t spots (node);
+
+    if (test_case == parked_request_case_t::direct_replay) {
+        messaging::envelope_header_t header;
+        header.kind = messaging::message_kind_t::request;
+        header.message_name = "ParkedProbe";
+        header.correlation_id = "direct-parked-request";
+        auto pending = spots.relay_local_actor_packet (
+          actor, header, zlink::message_t::from (std::string ("ping")),
+          zlink::routing_id_t::from ("actor-a"), {}, 0, {}, 0, std::chrono::seconds (30));
+        if (pending.result_for (std::chrono::milliseconds::zero ()))
+            return 10;
+        const auto pending_count =
+          node->lane.run ([&] { return node->pending_handoff_requests.size (); }).get ();
+        if (pending_count != 1 || handler_ran.load ())
+            return 11;
+        spots.fail_remote_actor_transfer (actor, false, std::nullopt);
+        const auto replayed = finite_task_result (std::move (pending), std::chrono::seconds (2));
+        const auto pending_empty =
+          node->lane.run ([&] { return node->pending_handoff_requests.empty (); }).get ();
+        return replayed && *replayed && (*replayed).value ()
+                   && (*replayed).value ()->to_string () == "pong" && handler_ran.load ()
+                   && pending_empty
+                 ? 0
+                 : 12;
+    }
 
     constexpr std::size_t pending_handoff_capacity = 1024;
     const auto capacity_sentinel_source =
@@ -5044,12 +5102,15 @@ int parked_request_reply_case (const std::string &requester_rid,
         const std::lock_guard lock (reply_mutex);
         delivered = reply_parts;
     }
-    const auto reply_header =
-      codec.decode_header (messaging::message_parts_t (std::move (delivered)));
+    messaging::message_parts_t reply_envelope (std::move (delivered));
+    const auto reply_header = codec.decode_header (reply_envelope);
     if (!reply_header)
         return 6;
     if (reply_header.value ().kind != messaging::message_kind_t::response)
         return 7;
+    const auto reply_body = codec.decode_body (reply_envelope);
+    if (!reply_body || reply_body.value ().to_string () != "pong")
+        return 9;
     {
         std::lock_guard<std::recursive_mutex> lock (node->mutex);
         if (test_case == parked_request_case_t::replay) {
@@ -5572,6 +5633,9 @@ int main (int argc, char **argv)
         return 450 + route;
     if (const auto route = local_relay_preserves_handoff_request_route (false); route != 0)
         return 455 + route;
+    if (const auto failure = local_relay_failure_returns_without_waiting_for_handoff_deadline ();
+        failure != 0)
+        return 460 + failure;
     if (const auto ordered = terminal_reply_precedes_session_route_publication (); ordered != 0)
         return 430 + ordered;
     if (const auto drained = actor_unbound_waits_for_accepted_push_fifo (); drained != 0)
@@ -5608,6 +5672,11 @@ int main (int argc, char **argv)
     if (const auto parked_reply = parked_request_without_route_fence_receives_reply_after_replay ();
         parked_reply != 0) {
         return 360 + parked_reply;
+    }
+    if (const auto direct_reply =
+          parked_request_reply_case ("actor-a", parked_request_case_t::direct_replay);
+        direct_reply != 0) {
+        return 375 + direct_reply;
     }
     if (const auto scoped_terminal =
           same_operation_from_distinct_source_lifecycles_has_distinct_pending_terminal ();

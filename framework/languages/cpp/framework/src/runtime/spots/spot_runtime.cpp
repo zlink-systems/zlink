@@ -6994,13 +6994,15 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_local_actor_p
           actor_ref, gateway.actor_context (actor_ref), kind, header.message_name, payload,
           *services, serializers, std::move (metadata), nullptr, {}, {}, source_owner, operation,
           reply_route_id, header.deadline);
-        if (pending_key && reply) {
+        if (!pending_key)
+            co_return reply;
+        if (reply) {
             _state->lane.run ([&] { _state->pending_handoff_requests.erase (*pending_key); })
               .get ();
+            completion.complete (
+              result_t<std::optional<zlink::message_t>>::success (std::move (reply)));
         }
-        if (pending_key && !reply)
-            co_return co_await terminal;
-        co_return reply;
+        co_return co_await terminal;
     }
     catch (...) {
         if (pending_key)
