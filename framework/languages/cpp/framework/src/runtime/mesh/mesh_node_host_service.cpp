@@ -2640,7 +2640,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                     if (!pending_management)
                         start_management (count == 0);
                     if (count == 0) {
-                        auto wait = std::chrono::milliseconds (-1);
+                        std::optional<std::chrono::steady_clock::time_point> next_activity;
                         if (pending_management->stale
                             && pending_management->activity.await_ready ()) {
                             (void) pending_management->activity.result ().value ();
@@ -2659,19 +2659,14 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                             pending_management.reset ();
                             if (local_pending && accept_application_receive)
                                 continue;
-                            if (next) {
-                                const auto now = std::chrono::steady_clock::now ();
-                                wait =
-                                  *next <= now
-                                    ? std::chrono::milliseconds::zero ()
-                                    : std::chrono::ceil<std::chrono::milliseconds> (*next - now);
-                            }
+                            next_activity = next;
                         }
                         // A pump may consume the wake for supply delivered after
                         // this turn's take. Recheck its owner state before waiting.
                         if (!_stop.load (std::memory_order_acquire) && !supply.has_supply ()) {
                             (void) node->native_node ().wait_for_dispatch_activity (
-                              wait, accept_application_receive);
+                              std::chrono::milliseconds (-1), accept_application_receive,
+                              next_activity);
                         }
                     }
                 }

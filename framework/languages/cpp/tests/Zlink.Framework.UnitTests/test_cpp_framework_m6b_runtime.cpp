@@ -3140,7 +3140,8 @@ void verify_actor_commit_is_replayable_until_deadline ()
     coordinator.fail_commit ("transfer-return", false);
     assert (!coordinator.phase ("player:actor-commit-replay"));
 
-    (void) coordinator.cleanup_expired (std::chrono::steady_clock::now () + 31s);
+    (void) await_task (
+      coordinator.cleanup_expired_async (std::chrono::steady_clock::now () + 31s, {}));
     assert (!coordinator.next_activity ());
 }
 
@@ -3753,7 +3754,8 @@ void verify_pending_relocation_management_bounds_dispatch_wait ()
       {relay, source, std::nullopt, [] (protocol::reply_relay_ack_status_t) { return true; },
        [] { return true; }}));
     assert (host->relocation_wire ().pending_terminal_relays () == 1);
-    assert (host->relocation_wire ().next_activity ()
+    const auto next_activity = host->relocation_wire ().next_activity ();
+    assert (next_activity
             == stateful::raw_relocation_replay_coordinator_t::clock_t::time_point::min ());
     // A zero-time poll can run before Core publishes the registration wake.
     // Wait on the transport to consume that exact notification, independently
@@ -3762,7 +3764,7 @@ void verify_pending_relocation_management_bounds_dispatch_wait ()
     // An unbounded caller wait must become nonblocking at the due deadline.
     // Without the bound this hangs and the existing CTest watchdog fails it;
     // there is no worker scheduling race or elapsed-time assertion.
-    assert (!host->wait_for_dispatch_activity (-1ms, false));
+    assert (!host->wait_for_dispatch_activity (-1ms, false, next_activity));
     assert (host->relocation_wire ().pending_terminal_relays () == 1);
     host->close ();
 }
@@ -3817,12 +3819,13 @@ void verify_failed_relay_persistence_rearms_dispatch_wait ()
         assert (!host->relocation_wire ().next_activity ());
         release_persist.set_value ();
         assert (!persisting.get ());
-        assert (host->relocation_wire ().next_activity ()
+        const auto next_activity = host->relocation_wire ().next_activity ();
+        assert (next_activity
                 == stateful::raw_relocation_replay_coordinator_t::clock_t::time_point::min ());
         // Observe the new notification separately from the due deadline:
         // either alone must not stand in for the other.
         assert (host->transport ().wait_for_activity (-1ms, false));
-        assert (!host->wait_for_dispatch_activity (-1ms, false));
+        assert (!host->wait_for_dispatch_activity (-1ms, false, next_activity));
         assert (host->relocation_wire ().pending_terminal_relays () == 1);
         host->close ();
     }
@@ -3841,7 +3844,7 @@ void verify_local_application_enqueue_wakes_dispatch_wait ()
     auto waiting = waiting_started.get_future ();
     auto awakened = std::async (std::launch::async, [&] {
         waiting_started.set_value ();
-        return host->wait_for_dispatch_activity (5s, true);
+        return host->wait_for_dispatch_activity (5s, true, std::nullopt);
     });
     waiting.wait ();
     std::this_thread::sleep_for (20ms);
@@ -3942,7 +3945,7 @@ void verify_same_node_session_seal_waits_for_active_ingress ()
     assert (journal_capture_count == 0);
 
     assert (local->sessions ().complete_inbound (*ingress) == stateful::stateful_error_t::none);
-    assert (local->wait_for_dispatch_activity (-1ms, false));
+    assert (local->wait_for_dispatch_activity (-1ms, false, std::nullopt));
     // Completion of the ingress only wakes management. Advance that turn
     // explicitly before observing seal completion and journal capture.
     assert (completed.wait_for (0ms) != std::future_status::ready);
@@ -3971,7 +3974,7 @@ void verify_same_node_session_seal_waits_for_active_ingress ()
        actor_object->authority_owner_generation, target_authority_owner_generation,
        status.routing_id ().to_bytes (), status.lifecycle_generation (), 0, 13}};
     assert (local->route_session_remote (status.routing_id (), route).result ().value ());
-    assert (local->wait_for_dispatch_activity (-1ms, false));
+    assert (local->wait_for_dispatch_activity (-1ms, false, std::nullopt));
     auto current = local->sessions ().current_binding (actor_object->key);
     assert (current
             && current->actor.authority_owner_generation

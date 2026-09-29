@@ -6068,10 +6068,21 @@ bool public_host_runtime_t::dispatch_application_owner (
     return true;
 }
 
-bool public_host_runtime_t::wait_for_dispatch_activity (std::chrono::milliseconds timeout,
-                                                        bool accept_application_receive) noexcept
+bool public_host_runtime_t::wait_for_dispatch_activity (
+  std::chrono::milliseconds timeout,
+  bool accept_application_receive,
+  std::optional<std::chrono::steady_clock::time_point> next_activity) noexcept
 {
     try {
+        if (next_activity) {
+            const auto now = std::chrono::steady_clock::now ();
+            const auto remaining =
+              *next_activity <= now
+                ? std::chrono::milliseconds::zero ()
+                : std::chrono::ceil<std::chrono::milliseconds> (*next_activity - now);
+            if (timeout < std::chrono::milliseconds::zero () || remaining < timeout)
+                timeout = remaining;
+        }
         return _transport->wait_for_activity (timeout, accept_application_receive);
     }
     catch (...) {
