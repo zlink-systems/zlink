@@ -29,7 +29,8 @@ internal sealed partial class SocketKernel : IDisposable
 
     private void DisposeCore(bool finalizing = false)
     {
-        _completion?.PrepareClose();
+        // Core close is fail-fast: EBUSY reaches the caller as-is and nothing
+        // in the binding waits for or retries in-flight calls.
         try
         {
             _handle.Dispose();
@@ -38,8 +39,6 @@ internal sealed partial class SocketKernel : IDisposable
         {
             if (finalizing)
                 _completion?.CompleteClose();
-            else
-                _completion?.CancelClose();
             throw;
         }
         _completion?.CompleteClose();

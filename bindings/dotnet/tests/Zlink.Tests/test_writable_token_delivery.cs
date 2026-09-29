@@ -7,7 +7,7 @@ namespace Systems.Zlink.Tests;
 public sealed class test_writable_token_delivery
 {
     [Fact]
-    public void writable_wait_requires_backpressure_eagain_and_nonzero_token()
+    public void writable_wait_requires_backpressure_result_and_nonzero_token()
     {
         Type ownerType = CompletionOwnerTestAccess.RuntimeType(
             "Systems.Zlink.CompletionOwner");
@@ -22,8 +22,18 @@ public sealed class test_writable_token_delivery
 
         object missingErrnoAttempt = CompletionOwnerTestAccess.Create(
             attemptType, 73UL, missingErrno);
-        Assert.False((bool)CompletionOwnerTestAccess.InvokeStatic(ownerType,
+        // Core returned the typed BACKPRESSURED result; the errno is diagnostic
+        // only and never reclassifies it.
+        Assert.True((bool)CompletionOwnerTestAccess.InvokeStatic(ownerType,
             "IsWritableWait", missingErrnoAttempt)!);
+
+        object notFound = CompletionOwnerTestAccess.Create(
+            typeof(ZlinkSubmitException),
+            ZlinkSubmitException.ErrorCode.NotFound, 11);
+        object notFoundAttempt = CompletionOwnerTestAccess.Create(
+            attemptType, 73UL, notFound);
+        Assert.False((bool)CompletionOwnerTestAccess.InvokeStatic(ownerType,
+            "IsWritableWait", notFoundAttempt)!);
 
         object writableWait = CompletionOwnerTestAccess.Create(
             attemptType, 73UL, wouldBlock);
@@ -126,7 +136,7 @@ public sealed class test_writable_token_delivery
             : CompletionOwnerTestAccess.Create(entryType, owner, target,
                 CancellationToken.None);
         CompletionOwnerTestAccess.Invoke(owner, "Register", entry,
-            IntPtr.Zero, false);
+            IntPtr.Zero);
         using Message part = Message.From("retained");
         const ulong token = 73;
         CompletionOwnerTestAccess.Invoke(entry, request ? "ArmWritable" : "Arm",
