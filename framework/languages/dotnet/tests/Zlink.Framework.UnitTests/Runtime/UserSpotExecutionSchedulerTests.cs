@@ -757,15 +757,17 @@ public sealed class UserSpotExecutionSchedulerTests
         ZLinkSpotRelocationActorQueueReservation? reservation = null;
 
         var opening = Task.Run(() =>
-            executor.TryOpenRelocationAfterMessageFollowAsync(
-                seal,
-                () =>
-                {
-                    callbackEntered.TrySetResult();
-                    Assert.True(allowReservation.Wait(TimeSpan.FromSeconds(5)));
-                    reservation = executor.ReserveRelocationActorQueue(seal, "actor-1");
-                }
-            ).AsTask()
+            executor
+                .TryOpenRelocationAfterMessageFollowAsync(
+                    seal,
+                    () =>
+                    {
+                        callbackEntered.TrySetResult();
+                        Assert.True(allowReservation.Wait(TimeSpan.FromSeconds(5)));
+                        reservation = executor.ReserveRelocationActorQueue(seal, "actor-1");
+                    }
+                )
+                .AsTask()
         );
         await callbackEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 

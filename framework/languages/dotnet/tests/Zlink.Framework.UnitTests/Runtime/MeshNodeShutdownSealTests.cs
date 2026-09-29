@@ -176,8 +176,9 @@ public sealed class MeshNodeShutdownSealTests
         };
         const System.Reflection.BindingFlags Private =
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
-        var index = (Dictionary<RoutingId, ZLinkMeshPeer>)
-            typeof(ZLinkManagedMeshNode).GetField("_peersByRid", Private)!.GetValue(node)!;
+        var index =
+            (Dictionary<RoutingId, ZLinkMeshPeer>)
+                typeof(ZLinkManagedMeshNode).GetField("_peersByRid", Private)!.GetValue(node)!;
         index.Add(rid, peer);
 
         var intent = node.ConnectPeer(endpoint, rid);
@@ -205,8 +206,9 @@ public sealed class MeshNodeShutdownSealTests
         };
         const System.Reflection.BindingFlags Private =
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
-        var index = (Dictionary<RoutingId, ZLinkMeshPeer>)
-            typeof(ZLinkManagedMeshNode).GetField("_peersByRid", Private)!.GetValue(node)!;
+        var index =
+            (Dictionary<RoutingId, ZLinkMeshPeer>)
+                typeof(ZLinkManagedMeshNode).GetField("_peersByRid", Private)!.GetValue(node)!;
         index.Add(rid, peer);
         typeof(ZLinkManagedMeshNode)
             .GetMethod("ClosePeerAfterControlSendFailure", Private)!
@@ -229,13 +231,15 @@ public sealed class MeshNodeShutdownSealTests
         var routes = (ZLinkMeshSelectedRoutes)
             typeof(ZLinkManagedMeshNode).GetField("_selectedRoutes", Private)!.GetValue(node)!;
         routes.Apply([new RouterRoute(rid, 11)]);
-        var index = (Dictionary<RoutingId, ZLinkMeshPeer>)
-            typeof(ZLinkManagedMeshNode).GetField("_peersByRid", Private)!.GetValue(node)!;
+        var index =
+            (Dictionary<RoutingId, ZLinkMeshPeer>)
+                typeof(ZLinkManagedMeshNode).GetField("_peersByRid", Private)!.GetValue(node)!;
         index.Add(rid, new ZLinkMeshPeer(999) { RoutingId = rid, RouteGeneration = 12 });
-        var hasTarget = typeof(ZLinkManagedMeshNode)
-            .GetMethod("HasCurrentControlTarget", Private)!;
+        var hasTarget = typeof(ZLinkManagedMeshNode).GetMethod("HasCurrentControlTarget", Private)!;
 
-        Assert.False((bool)hasTarget.Invoke(node, [rid, 11UL, ServiceWireConstants.Command.Admit])!);
+        Assert.False(
+            (bool)hasTarget.Invoke(node, [rid, 11UL, ServiceWireConstants.Command.Admit])!
+        );
         Assert.True((bool)hasTarget.Invoke(node, [rid, 12UL, ServiceWireConstants.Command.Admit])!);
     }
 
@@ -252,16 +256,20 @@ public sealed class MeshNodeShutdownSealTests
         var routes = (ZLinkMeshSelectedRoutes)
             typeof(ZLinkManagedMeshNode).GetField("_selectedRoutes", Private)!.GetValue(node)!;
         routes.Apply([new RouterRoute(rid, 11)]);
-        var index = (Dictionary<RoutingId, ZLinkMeshPeer>)
-            typeof(ZLinkManagedMeshNode).GetField("_peersByRid", Private)!.GetValue(node)!;
-        index.Add(rid, new ZLinkMeshPeer(999)
-        {
-            RoutingId = rid,
-            PhysicalRoutingId = rid,
-            RouteGeneration = 11,
-            Admitted = true,
-            State = MeshPeerState.Admitted,
-        });
+        var index =
+            (Dictionary<RoutingId, ZLinkMeshPeer>)
+                typeof(ZLinkManagedMeshNode).GetField("_peersByRid", Private)!.GetValue(node)!;
+        index.Add(
+            rid,
+            new ZLinkMeshPeer(999)
+            {
+                RoutingId = rid,
+                PhysicalRoutingId = rid,
+                RouteGeneration = 11,
+                Admitted = true,
+                State = MeshPeerState.Admitted,
+            }
+        );
         var wrongMesh = new ZLinkServiceWireCodec.AdmissionRecord(
             "different-mesh",
             ZLinkServiceSecurityIdentity.Plaintext,
@@ -284,10 +292,13 @@ public sealed class MeshNodeShutdownSealTests
             .GetMethod("ProcessAdmissionCore", Private)!
             .Invoke(node, [rid, 12UL, ServiceWireConstants.Command.Hello, wrongMesh, null]);
 
-        var hasTarget = typeof(ZLinkManagedMeshNode)
-            .GetMethod("HasCurrentControlTarget", Private)!;
-        Assert.False((bool)hasTarget.Invoke(node, [rid, 11UL, ServiceWireConstants.Command.Admit])!);
-        Assert.False((bool)hasTarget.Invoke(node, [rid, 12UL, ServiceWireConstants.Command.Admit])!);
+        var hasTarget = typeof(ZLinkManagedMeshNode).GetMethod("HasCurrentControlTarget", Private)!;
+        Assert.False(
+            (bool)hasTarget.Invoke(node, [rid, 11UL, ServiceWireConstants.Command.Admit])!
+        );
+        Assert.False(
+            (bool)hasTarget.Invoke(node, [rid, 12UL, ServiceWireConstants.Command.Admit])!
+        );
         Assert.True(index.TryGetValue(rid, out var disconnected));
         Assert.Equal(0UL, disconnected.RouteGeneration);
         Assert.False(disconnected.Admitted);
@@ -338,7 +349,12 @@ public sealed class MeshNodeShutdownSealTests
         owner.Start();
 
         await WaitUntilAsync(() => owner.Status().AdmittedPeerCount == 1);
-        Assert.Equal(remoteRid, Assert.Single(owner.Peers().Where(peer => peer.State == MeshPeerState.Admitted)).RoutingId);
+        Assert.Equal(
+            remoteRid,
+            Assert
+                .Single(owner.Peers().Where(peer => peer.State == MeshPeerState.Admitted))
+                .RoutingId
+        );
     }
 
     [Fact]
@@ -385,8 +401,13 @@ public sealed class MeshNodeShutdownSealTests
         replacement.SetBind(endpoint);
         replacement.AddChannel(MeshName);
         replacement.Start();
-        await WaitUntilAsync(() => owner.Peers().Any(peer =>
-            peer.RoutingId == replacementRid && peer.State == MeshPeerState.Admitted));
+        await WaitUntilAsync(() =>
+            owner
+                .Peers()
+                .Any(peer =>
+                    peer.RoutingId == replacementRid && peer.State == MeshPeerState.Admitted
+                )
+        );
         Assert.DoesNotContain(owner.Peers(), peer => peer.RoutingId == firstRid);
     }
 
@@ -439,7 +460,9 @@ public sealed class MeshNodeShutdownSealTests
                 )
             );
             await scheduler.Queued;
-            await WaitUntilAsync(() => node.Peers().Any(candidate => candidate.RoutingId == peerRid));
+            await WaitUntilAsync(() =>
+                node.Peers().Any(candidate => candidate.RoutingId == peerRid)
+            );
 
             scheduler.Release();
 

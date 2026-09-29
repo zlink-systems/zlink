@@ -1737,10 +1737,7 @@ public sealed class ServiceRuntimeFoundationTests
             )
         );
 
-        Assert.DoesNotContain(
-            local.Peers(),
-            peer => peer.ConnectionIntentId == oldIntent
-        );
+        Assert.DoesNotContain(local.Peers(), peer => peer.ConnectionIntentId == oldIntent);
         Assert.Contains(
             local.Peers(),
             peer =>
@@ -1781,12 +1778,15 @@ public sealed class ServiceRuntimeFoundationTests
         source.ConnectPeer(target.Status().LocalEndpoint, target.RoutingId);
         await WaitUntilAsync(() => target.Status().AdmittedPeerCount == 1);
 
-        var index = (Dictionary<RoutingId, ZLinkMeshPeer>)typeof(ZLinkManagedMeshNode)
-            .GetField(
-                "_peersByRid",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
-            )!
-            .GetValue(target)!;
+        var index =
+            (Dictionary<RoutingId, ZLinkMeshPeer>)
+                typeof(ZLinkManagedMeshNode)
+                    .GetField(
+                        "_peersByRid",
+                        System.Reflection.BindingFlags.Instance
+                            | System.Reflection.BindingFlags.NonPublic
+                    )!
+                    .GetValue(target)!;
         index[sourceRid].Liveness = new ZLinkServiceLiveness(0);
 
         await WaitUntilAsync(() => target.Status().AdmittedPeerCount == 0);
@@ -1836,12 +1836,18 @@ public sealed class ServiceRuntimeFoundationTests
         target.AddChannel("worker");
         target.Start();
         source.ConnectPeer(target.Status().LocalEndpoint, targetRid);
-        await WaitUntilAsync(() => source.Peers().Any(peer =>
-            peer.RoutingId == targetRid && peer.State == MeshPeerState.Admitted));
+        await WaitUntilAsync(() =>
+            source
+                .Peers()
+                .Any(peer => peer.RoutingId == targetRid && peer.State == MeshPeerState.Admitted)
+        );
 
         await target.DisposeAsync();
-        await WaitUntilAsync(() => source.Peers().Any(peer =>
-            peer.RoutingId == targetRid && peer.State == MeshPeerState.Connecting));
+        await WaitUntilAsync(() =>
+            source
+                .Peers()
+                .Any(peer => peer.RoutingId == targetRid && peer.State == MeshPeerState.Connecting)
+        );
         Assert.Single(source.Peers(), peer => peer.RoutingId == targetRid);
 
         using var requestPart = Message.From(new byte[] { 1 });
@@ -1877,7 +1883,10 @@ public sealed class ServiceRuntimeFoundationTests
 
         backend.DisconnectPeerLifetime(peerRid, endpoint, 7);
 
-        Assert.Contains(local.Peers(), peer => peer.ConnectionIntentId == pending.ConnectionIntentId);
+        Assert.Contains(
+            local.Peers(),
+            peer => peer.ConnectionIntentId == pending.ConnectionIntentId
+        );
     }
 
     [Fact]
@@ -1907,7 +1916,10 @@ public sealed class ServiceRuntimeFoundationTests
         backend.DisconnectPeerLifetime(peerRid, oldEndpoint, lifecycle);
 
         Assert.DoesNotContain(local.Peers(), peer => peer.Endpoint == oldEndpoint);
-        Assert.Contains(local.Peers(), peer => peer.ConnectionIntentId == pending.ConnectionIntentId);
+        Assert.Contains(
+            local.Peers(),
+            peer => peer.ConnectionIntentId == pending.ConnectionIntentId
+        );
     }
 
     [Fact]
@@ -1939,8 +1951,13 @@ public sealed class ServiceRuntimeFoundationTests
         replacement.SetBind(endpoint);
         replacement.Start();
         backend.ConnectPeer(replacementRid, endpoint, ZLinkServiceSecurityIdentity.Plaintext);
-        await WaitUntilAsync(() => local.Peers().Any(peer =>
-            peer.RoutingId == replacementRid && peer.State == MeshPeerState.Admitted));
+        await WaitUntilAsync(() =>
+            local
+                .Peers()
+                .Any(peer =>
+                    peer.RoutingId == replacementRid && peer.State == MeshPeerState.Admitted
+                )
+        );
         Assert.DoesNotContain(local.Peers(), peer => peer.RoutingId == firstRid);
     }
 

@@ -852,7 +852,11 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         }
     }
 
-    public void DisconnectPeerLifetime(RoutingId peerRid, string endpoint, ulong lifecycleGeneration)
+    public void DisconnectPeerLifetime(
+        RoutingId peerRid,
+        string endpoint,
+        ulong lifecycleGeneration
+    )
     {
         try
         {

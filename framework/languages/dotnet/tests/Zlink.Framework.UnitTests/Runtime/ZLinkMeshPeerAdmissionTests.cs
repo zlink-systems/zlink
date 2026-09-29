@@ -43,5 +43,4 @@ public sealed class ZLinkMeshPeerAdmissionTests
         Assert.Equal(0UL, routes.GenerationOf(removed));
         Assert.Equal(0UL, routes.GenerationOf(default));
     }
-
 }

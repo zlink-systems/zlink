@@ -229,20 +229,23 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         var lane =
             _executionMode == ZLinkUserSpotExecutionMode.SpotWide
                 ? _queue
-                : await _stateLane.RunAsync(() =>
-                    GetLaneOnStateLane(
-                        _timerLanes,
-                        ZLinkTimerName.FromBoundary(timerName, nameof(timerName)),
-                        _timerLanePolicy
+                : await _stateLane
+                    .RunAsync(() =>
+                        GetLaneOnStateLane(
+                            _timerLanes,
+                            ZLinkTimerName.FromBoundary(timerName, nameof(timerName)),
+                            _timerLanePolicy
+                        )
                     )
-                ).ConfigureAwait(false);
+                    .ConfigureAwait(false);
         var claim = await AcquireApplicationClaimAsync().ConfigureAwait(false);
         await RunClaimedAsync(
-            lane,
-            ct => ExecuteTimerOperationAsync(operation, state, ct),
-            claim,
-            cancellationToken
-        ).ConfigureAwait(false);
+                lane,
+                ct => ExecuteTimerOperationAsync(operation, state, ct),
+                claim,
+                cancellationToken
+            )
+            .ConfigureAwait(false);
     }
 
     public bool TryRunDetached(string name, Func<CancellationToken, ValueTask> operation)
@@ -1013,23 +1016,24 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(seal);
         ArgumentNullException.ThrowIfNull(reserveBeforeApplicationAdmission);
         var opening = await RunBarrierStateAsync(() =>
-        {
-            if (_relocationBarrier?.Generation != seal.Generation)
-                return null;
-            if (!_relocationAdmissionQueueOpened)
             {
-                if (!_queue.TryOpenRelocationAfterMessageFollow(seal.QueueSeal))
+                if (_relocationBarrier?.Generation != seal.Generation)
                     return null;
-                _relocationAdmissionQueueOpened = true;
-            }
+                if (!_relocationAdmissionQueueOpened)
+                {
+                    if (!_queue.TryOpenRelocationAfterMessageFollow(seal.QueueSeal))
+                        return null;
+                    _relocationAdmissionQueueOpened = true;
+                }
 
-            var barrier = _relocationBarrier;
-            _activeApplicationClaims++;
-            barrier.ActiveClaims++;
-            var pending = new ZLinkRelocationAdmissionOpeningState(barrier);
-            _relocationAdmissionOpening = pending;
-            return pending;
-        }).ConfigureAwait(false);
+                var barrier = _relocationBarrier;
+                _activeApplicationClaims++;
+                barrier.ActiveClaims++;
+                var pending = new ZLinkRelocationAdmissionOpeningState(barrier);
+                _relocationAdmissionOpening = pending;
+                return pending;
+            })
+            .ConfigureAwait(false);
         if (opening is null)
             return false;
 
@@ -1057,17 +1061,18 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(seal);
         ArgumentNullException.ThrowIfNull(operation);
         await RunBarrierStateAsync(() =>
-        {
-            if (
-                _relocationBarrier?.Generation != seal.Generation
-                || !_relocationBarrier.BoundaryReached
-                || !_relocationBarrier.Quiescent.Task.IsCompleted
-            )
-                throw new InvalidOperationException(
-                    "SPOT relocation lifecycle requires the current quiescent seal."
-                );
-            return true;
-        }).ConfigureAwait(false);
+            {
+                if (
+                    _relocationBarrier?.Generation != seal.Generation
+                    || !_relocationBarrier.BoundaryReached
+                    || !_relocationBarrier.Quiescent.Task.IsCompleted
+                )
+                    throw new InvalidOperationException(
+                        "SPOT relocation lifecycle requires the current quiescent seal."
+                    );
+                return true;
+            })
+            .ConfigureAwait(false);
         await ExecuteLifecycleOperationAsync(operation, cancellationToken).ConfigureAwait(false);
     }
 
@@ -1455,13 +1460,11 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
 
     private ZLinkExecutionClaim AcquireApplicationClaim()
     {
-        return TryAcquireApplicationClaim()
-            ?? RejectedApplicationClaim();
+        return TryAcquireApplicationClaim() ?? RejectedApplicationClaim();
     }
 
     private async ValueTask<ZLinkExecutionClaim> AcquireApplicationClaimAsync() =>
-        await TryAcquireApplicationClaimAsync().ConfigureAwait(false)
-        ?? RejectedApplicationClaim();
+        await TryAcquireApplicationClaimAsync().ConfigureAwait(false) ?? RejectedApplicationClaim();
 
     private static ZLinkExecutionClaim RejectedApplicationClaim() =>
         throw new ZLinkFrameworkException(

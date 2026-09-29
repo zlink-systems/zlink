@@ -213,8 +213,11 @@ internal sealed class ZLinkTimer : IZLinkTimer
             StartPendingDispatch();
     }
 
-    private (TaskCompletionSource? resume, SchedulerSchedule? schedule, bool startDispatch)
-        PrepareResumeOnLane()
+    private (
+        TaskCompletionSource? resume,
+        SchedulerSchedule? schedule,
+        bool startDispatch
+    ) PrepareResumeOnLane()
     {
         var resume = _resume;
         _resume = null;
@@ -291,8 +294,8 @@ internal sealed class ZLinkTimer : IZLinkTimer
         // Start cancellation before returning, outside the state lane: a
         // queued worker could run after the active callback unregisters.
         if (completion is not null)
-            _ = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(
-                () => CompleteFinalizationAsync(completion)
+            _ = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
+                CompleteFinalizationAsync(completion)
             );
         return finalization;
     }
@@ -327,7 +330,8 @@ internal sealed class ZLinkTimer : IZLinkTimer
 
         try
         {
-            var activeDispatch = await _lane.RunAsync(() => _activeDispatch?.Task)
+            var activeDispatch = await _lane
+                .RunAsync(() => _activeDispatch?.Task)
                 .ConfigureAwait(false);
             if (activeDispatch is not null)
                 await activeDispatch.ConfigureAwait(false);
@@ -346,8 +350,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
             (failures ??= []).Add(exception);
         }
 
-        var dispatchFailure = await _lane.RunAsync(() => _dispatchFailure)
-            .ConfigureAwait(false);
+        var dispatchFailure = await _lane.RunAsync(() => _dispatchFailure).ConfigureAwait(false);
         if (dispatchFailure is not null)
             (failures ??= []).Add(dispatchFailure);
 

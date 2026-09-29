@@ -45,9 +45,10 @@ internal sealed class ZLinkMeshConnectionIntent(
             bound ? peer!.LastChangedMs : LastChangedMs
         )
         {
-            ObjectRole = bound && peer!.Admission is { } admission
-                ? (ZLinkMeshNodeObjectRole)admission.ObjectRole
-                : ZLinkMeshNodeObjectRole.None,
+            ObjectRole =
+                bound && peer!.Admission is { } admission
+                    ? (ZLinkMeshNodeObjectRole)admission.ObjectRole
+                    : ZLinkMeshNodeObjectRole.None,
         };
     }
 }

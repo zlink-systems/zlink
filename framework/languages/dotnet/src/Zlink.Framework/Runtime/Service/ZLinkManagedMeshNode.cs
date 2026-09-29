@@ -363,8 +363,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 socket.SetRoutingId(_routingId);
                 if (_applicationJobQueue is not null)
                 {
-                    receiveFlowRegistration = _applicationJobQueue
-                        .RegisterReceiveFlowSocketUnapplied(socket, socket.SetReceiveFlowState);
+                    receiveFlowRegistration =
+                        _applicationJobQueue.RegisterReceiveFlowSocketUnapplied(
+                            socket,
+                            socket.SetReceiveFlowState
+                        );
                     _applicationJobQueue.ApplyReceiveFlowRegistration(
                         socket,
                         receiveFlowRegistration
@@ -436,12 +439,18 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     var failures = new ZLinkFailureCollector(error);
                     failures.Capture(() => ownedPoller?.Dispose());
                     failures.Capture(() => poller?.Dispose());
-                    await failures.CaptureAsync(() =>
-                        ZLinkReceiveFlowController.DisposeRegistrationAsync(ownedRegistration)
-                    ).ConfigureAwait(false);
-                    await failures.CaptureAsync(() =>
-                        ZLinkReceiveFlowController.DisposeRegistrationAsync(receiveFlowRegistration)
-                    ).ConfigureAwait(false);
+                    await failures
+                        .CaptureAsync(() =>
+                            ZLinkReceiveFlowController.DisposeRegistrationAsync(ownedRegistration)
+                        )
+                        .ConfigureAwait(false);
+                    await failures
+                        .CaptureAsync(() =>
+                            ZLinkReceiveFlowController.DisposeRegistrationAsync(
+                                receiveFlowRegistration
+                            )
+                        )
+                        .ConfigureAwait(false);
                     failures.Capture(() => ownedMonitor?.Dispose());
                     failures.Capture(() => socketMonitor?.Dispose());
                     failures.Capture(socket.Dispose);
@@ -484,15 +493,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             // Binding has one registration per endpoint. Release the old
             // registration before a different RID or security expectation
             // uses the endpoint.
-            var replaced = _peersByIntent.Values.Where(intent =>
-                string.Equals(intent.Endpoint, endpoint, StringComparison.Ordinal)
-            ).ToArray();
+            var replaced = _peersByIntent
+                .Values.Where(intent =>
+                    string.Equals(intent.Endpoint, endpoint, StringComparison.Ordinal)
+                )
+                .ToArray();
             foreach (var previous in replaced)
             {
                 _peersByIntent.Remove(previous.Id);
-                NotifyPeerConnectionIntentRemoved(
-                    previous.ExpectedRid ?? previous.ResolvedRid
-                );
+                NotifyPeerConnectionIntentRemoved(previous.ExpectedRid ?? previous.ResolvedRid);
             }
             if (replaced.Length != 0)
                 DisconnectTransport(replaced[0]);
@@ -574,15 +583,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             if (!_peersByIntent.Remove(connectionIntentId, out var intent))
                 return;
             DisconnectTransport(intent);
-            NotifyPeerConnectionIntentRemoved(
-                intent.ExpectedRid ?? intent.ResolvedRid
-            );
+            NotifyPeerConnectionIntentRemoved(intent.ExpectedRid ?? intent.ResolvedRid);
         });
     }
 
     private void NotifyPeerConnectionIntentRemoved(RoutingId target)
     {
-        var hasOwner = _peerExpectations.ContainsKey(target)
+        var hasOwner =
+            _peerExpectations.ContainsKey(target)
             || _peersByIntent.Values.Any(intent =>
                 intent.ResolvedRid == target || intent.ExpectedRid == target
             );
@@ -595,10 +603,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             RemovePeer(disconnected, disconnect: false);
         // Location intent removal is terminal only after the last admitted
         // route is gone. Physical disconnect never publishes this transition.
-        if (
-            !hasOwner
-            && (!_peersByRid.TryGetValue(target, out var admitted) || !admitted.Admitted)
-        )
+        if (!hasOwner && (!_peersByRid.TryGetValue(target, out var admitted) || !admitted.Admitted))
             PeerConnectionIntentRemoved?.Invoke(target);
     }
 
@@ -629,9 +634,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             // another intent for the RID may already own a new endpoint.
             if (lifecycleGeneration == 0)
             {
-                foreach (var intent in _peersByIntent.Values.Where(intent =>
-                    intent.ResolvedRid == peerRid || intent.ExpectedRid == peerRid
-                ).ToArray())
+                foreach (
+                    var intent in _peersByIntent
+                        .Values.Where(intent =>
+                            intent.ResolvedRid == peerRid || intent.ExpectedRid == peerRid
+                        )
+                        .ToArray()
+                )
                 {
                     _peersByIntent.Remove(intent.Id);
                     DisconnectTransport(intent);
@@ -2150,8 +2159,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     public MeshNodePeer[] Peers()
     {
         return RunState(() =>
-            _peersByIntent.Values
-                .Select(intent =>
+            _peersByIntent
+                .Values.Select(intent =>
                     intent.Snapshot(
                         _peersByRid.GetValueOrDefault(
                             intent.ResolvedRid.IsEmpty
@@ -2170,8 +2179,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             !_peersByIntent.Values.Any(intent =>
                 intent.IsBoundTo(peer)
                 || peer.RouteGeneration == 0
-                    && (intent.ResolvedRid == peer.RoutingId
-                        || intent.ExpectedRid == peer.RoutingId)
+                    && (
+                        intent.ResolvedRid == peer.RoutingId || intent.ExpectedRid == peer.RoutingId
+                    )
             )
         );
 
@@ -8935,15 +8945,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             // A RID has one logical peer object. The record names it by RID,
             // or an intent without a RID by the endpoint it advertises.
-            var matchedIntent = _peersByIntent.Values
-                .Where(intent =>
+            var matchedIntent = _peersByIntent
+                .Values.Where(intent =>
                     string.Equals(
                         intent.Endpoint,
                         admission.AdvertisedEndpoint,
                         StringComparison.Ordinal
-                    )
-                    && (intent.ExpectedRid == sourceRid
-                        || intent.ExpectedRid is null)
+                    ) && (intent.ExpectedRid == sourceRid || intent.ExpectedRid is null)
                 )
                 .OrderByDescending(intent =>
                     ZLinkServiceAdmissionGuard.MatchesExpectedTransportRoute(
@@ -8956,7 +8964,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 )
                 .FirstOrDefault();
             _peersByRid.TryGetValue(sourceRid, out var matchedPeer);
-            if (matchedPeer is null && matchedIntent is null && command != ServiceWireConstants.Command.Hello)
+            if (
+                matchedPeer is null
+                && matchedIntent is null
+                && command != ServiceWireConstants.Command.Hello
+            )
             {
                 // An Admit/Update arriving after its intent was removed is a
                 // stale transport message. It must not create a new inbound
@@ -8971,16 +8983,19 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 return;
             }
 
-            peer =
-                matchedPeer
-                ?? new Peer(checked(++_nextIntent));
+            peer = matchedPeer ?? new Peer(checked(++_nextIntent));
             var hasExpectedRoute = _peerExpectations.TryGetValue(sourceRid, out var expectedRoute);
             if (
                 !ZLinkServiceAdmissionGuard.MatchesExpectedTransportRoute(
-                    hasExpectedRoute ? expectedRoute.Endpoint : matchedIntent?.Endpoint ?? peer.Admission?.AdvertisedEndpoint ?? admission.AdvertisedEndpoint,
+                    hasExpectedRoute
+                        ? expectedRoute.Endpoint
+                        : matchedIntent?.Endpoint
+                            ?? peer.Admission?.AdvertisedEndpoint
+                            ?? admission.AdvertisedEndpoint,
                     hasExpectedRoute
                         ? expectedRoute.SecurityIdentity
-                        : matchedIntent?.ExpectedSecurityIdentity ?? ZLinkServiceSecurityIdentity.Plaintext,
+                        : matchedIntent?.ExpectedSecurityIdentity
+                            ?? ZLinkServiceSecurityIdentity.Plaintext,
                     // MeshNode currently uses the plaintext ROUTER transport;
                     // the binding exposes no authenticated TLS peer identity
                     // for this socket, so a non-plaintext expectation cannot
@@ -8997,7 +9012,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     "route_mismatch",
                     _routingId,
                     sourceRid,
-                    hasExpectedRoute ? expectedRoute.Endpoint : matchedIntent?.Endpoint ?? peer.Admission?.AdvertisedEndpoint ?? admission.AdvertisedEndpoint,
+                    hasExpectedRoute
+                        ? expectedRoute.Endpoint
+                        : matchedIntent?.Endpoint
+                            ?? peer.Admission?.AdvertisedEndpoint
+                            ?? admission.AdvertisedEndpoint,
                     admission.AdvertisedEndpoint
                 );
                 ZLinkFrameworkDebugLog.SpotDiscovery(
@@ -9285,25 +9304,45 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 continue;
             var (target, routeGeneration, unboundRoutes, hello) = RunState(() =>
             {
-                if (!_peersByIntent.TryGetValue(intent.Id, out var current)
-                    || !ReferenceEquals(current, intent))
+                if (
+                    !_peersByIntent.TryGetValue(intent.Id, out var current)
+                    || !ReferenceEquals(current, intent)
+                )
                     return (default(RoutingId), 0UL, Array.Empty<RoutingId>(), (byte[]?)null);
                 current.NextAdmissionTimestamp = Add(now, AdmissionRetryInterval);
-                var rid = current.ExpectedRid
-                    ?? (_selectedRoutes.GenerationOf(current.ResolvedRid) != 0
-                        ? current.ResolvedRid
-                        : default);
+                var rid =
+                    current.ExpectedRid
+                    ?? (
+                        _selectedRoutes.GenerationOf(current.ResolvedRid) != 0
+                            ? current.ResolvedRid
+                            : default
+                    );
                 if (!rid.IsEmpty)
                 {
-                    return (rid, _selectedRoutes.GenerationOf(rid), Array.Empty<RoutingId>(), (byte[]?)null);
+                    return (
+                        rid,
+                        _selectedRoutes.GenerationOf(rid),
+                        Array.Empty<RoutingId>(),
+                        (byte[]?)null
+                    );
                 }
                 var routes = UnboundSelectedRoutesUnderLock();
-                return (default(RoutingId), 0UL, routes,
-                    routes.Length == 0 ? null : EncodeLocalAdmission(ServiceWireConstants.Command.Hello));
+                return (
+                    default(RoutingId),
+                    0UL,
+                    routes,
+                    routes.Length == 0
+                        ? null
+                        : EncodeLocalAdmission(ServiceWireConstants.Command.Hello)
+                );
             });
             if (!target.IsEmpty && routeGeneration != 0)
-                SendControl(target, routeGeneration, ServiceWireConstants.Command.Hello,
-                    EncodeLocalAdmission(ServiceWireConstants.Command.Hello));
+                SendControl(
+                    target,
+                    routeGeneration,
+                    ServiceWireConstants.Command.Hello,
+                    EncodeLocalAdmission(ServiceWireConstants.Command.Hello)
+                );
             foreach (var routingId in unboundRoutes)
                 if ((greetedRoutes ??= []).Add(routingId))
                     TryScheduleRoutedSend(routingId, [hello!]);
@@ -9318,8 +9357,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 continue;
             if (liveness.IsExpired(now))
             {
-                var closed = RunState(() => EndRouteAdmissionUnderLock(
-                    new RouterRoute(peer.RoutingId, peer.RouteGeneration), now));
+                var closed = RunState(() =>
+                    EndRouteAdmissionUnderLock(
+                        new RouterRoute(peer.RoutingId, peer.RouteGeneration),
+                        now
+                    )
+                );
                 if (closed is { } closedRid)
                     Publish(MeshMonitorEventKind.PeerClosed, peerRid: closedRid);
                 continue;
@@ -9426,8 +9469,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (peer is null || peer.RouteGeneration != ended.RouteGeneration)
             return null;
         peer.RouteGeneration = 0;
-        if (!_peersByIntent.Values.Any(intent =>
-            intent.ResolvedRid == routingId || intent.ExpectedRid == routingId))
+        if (
+            !_peersByIntent.Values.Any(intent =>
+                intent.ResolvedRid == routingId || intent.ExpectedRid == routingId
+            )
+        )
         {
             // An inbound peer has no local connect intent. Once its route
             // ends, remove the peer instead of converting it into a locally
@@ -9465,8 +9511,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private void ScheduleAdmissionRetryForRouteUnderLock(RoutingId endedRid, long now)
     {
-        foreach (var intent in _peersByIntent.Values.Where(intent =>
-            intent.ResolvedRid == endedRid || intent.ExpectedRid == endedRid))
+        foreach (
+            var intent in _peersByIntent.Values.Where(intent =>
+                intent.ResolvedRid == endedRid || intent.ExpectedRid == endedRid
+            )
+        )
         {
             intent.NextAdmissionTimestamp = now;
         }
@@ -11692,7 +11741,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             .RoutingIds.Where(routingId =>
                 !_peersByRid.ContainsKey(routingId)
                 && !_peersByIntent.Values.Any(intent =>
-                    intent.ResolvedRid == routingId || intent.ExpectedRid == routingId)
+                    intent.ResolvedRid == routingId || intent.ExpectedRid == routingId
+                )
             )
             .ToArray();
 
@@ -11907,7 +11957,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             command == ServiceWireConstants.Command.Hello
                 ? _selectedRoutes.GenerationOf(target) == routeGeneration
                     && _peersByIntent.Values.Any(intent =>
-                        intent.ResolvedRid == target || intent.ExpectedRid == target)
+                        intent.ResolvedRid == target || intent.ExpectedRid == target
+                    )
                 : _peersByRid.TryGetValue(target, out var peer)
                     && peer.RouteGeneration == routeGeneration
         );

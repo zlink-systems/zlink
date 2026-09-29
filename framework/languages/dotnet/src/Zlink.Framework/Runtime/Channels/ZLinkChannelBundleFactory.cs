@@ -23,8 +23,8 @@ internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration regis
                 dealer.Connect,
                 dealer.Disconnect,
                 socketRole: "client",
-                receiveFlowRegistration: await state.ApplicationJobQueue
-                    .RegisterReceiveFlowSocketAsync(dealer)
+                receiveFlowRegistration: await state
+                    .ApplicationJobQueue.RegisterReceiveFlowSocketAsync(dealer)
                     .ConfigureAwait(false)
             );
 
@@ -63,8 +63,8 @@ internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration regis
             ApplySocketConfig(router.Options, channel.Server!.SocketConfig);
             router.Options.Mandatory = true;
             router.Options.Handover = true;
-            receiveFlowRegistration = await state.ApplicationJobQueue
-                .RegisterReceiveFlowSocketAsync(router)
+            receiveFlowRegistration = await state
+                .ApplicationJobQueue.RegisterReceiveFlowSocketAsync(router)
                 .ConfigureAwait(false);
             router.Bind(
                 ZLinkNetworkEndpointResolver.Bind(
@@ -104,11 +104,11 @@ internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration regis
         catch (Exception initializationFailure)
         {
             await ThrowAfterCleanupAsync(
-                initializationFailure,
-                bundle,
-                router,
-                receiveFlowRegistration
-            )
+                    initializationFailure,
+                    bundle,
+                    router,
+                    receiveFlowRegistration
+                )
                 .ConfigureAwait(false);
             throw new InvalidOperationException(
                 "Unreachable after startup cleanup failure propagation."
@@ -270,9 +270,11 @@ internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration regis
     {
         var failures = new ZLinkFailureCollector(initializationFailure);
         if (receiveFlowRegistration is not null)
-            await failures.CaptureAsync(() =>
-                ZLinkReceiveFlowController.DisposeRegistrationAsync(receiveFlowRegistration)
-            ).ConfigureAwait(false);
+            await failures
+                .CaptureAsync(() =>
+                    ZLinkReceiveFlowController.DisposeRegistrationAsync(receiveFlowRegistration)
+                )
+                .ConfigureAwait(false);
         if (composite is not null)
             await failures.CaptureAsync(composite.DisposeAsync).ConfigureAwait(false);
         else if (standalone is not null)

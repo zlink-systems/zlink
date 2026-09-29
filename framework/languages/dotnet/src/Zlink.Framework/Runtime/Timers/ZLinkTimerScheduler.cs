@@ -75,8 +75,8 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
             return _disposeTask;
 
         _closed = true;
-        _disposeTask = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(
-            () => Task.Run(DisposeCoreAsync)
+        _disposeTask = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
+            Task.Run(DisposeCoreAsync)
         );
         return _disposeTask;
     }
@@ -93,11 +93,13 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
         {
             _wake.Dispose();
             _stopSource.Dispose();
-            await _lane.RunAsync(() =>
-            {
-                _queue.Clear();
-                _timers.Clear();
-            }).ConfigureAwait(false);
+            await _lane
+                .RunAsync(() =>
+                {
+                    _queue.Clear();
+                    _timers.Clear();
+                })
+                .ConfigureAwait(false);
         }
     }
 
@@ -111,7 +113,8 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
                 var next = await _lane.RunAsync(TryTakeDueOnLane).ConfigureAwait(false);
                 if (next.HasDue)
                 {
-                    await next.DueTimer.Timer.NotifyDueAsync(next.DueTimer.Version)
+                    await next
+                        .DueTimer.Timer.NotifyDueAsync(next.DueTimer.Version)
                         .ConfigureAwait(false);
                     continue;
                 }

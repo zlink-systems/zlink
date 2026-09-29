@@ -57,7 +57,9 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
 
     internal void AddManual(string endpoint) =>
         AddOrReplaceAsync($"manual:{endpoint}", endpoint, expected: null)
-            .AsTask().GetAwaiter().GetResult();
+            .AsTask()
+            .GetAwaiter()
+            .GetResult();
 
     internal void RemoveManual(string endpoint) => Remove($"manual:{endpoint}");
 
@@ -479,9 +481,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 ScheduleStateChanged,
                 _time
             );
-            inFlight = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously
-            );
+            inFlight = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _retired.RemoveAll(static candidate => candidate.IsCompleted);
             _retired.Add(inFlight.Task);
         });
@@ -491,7 +491,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         {
             try
             {
-                await created.PrepareAsync(_applicationJobQueue, _monitoring, _socketConfig)
+                await created
+                    .PrepareAsync(_applicationJobQueue, _monitoring, _socketConfig)
                     .ConfigureAwait(false);
                 var committed = false;
                 try
@@ -526,8 +527,10 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     {
                         previousDisposal = RunState(() =>
                         {
-                            if (_connections.TryGetValue(key, out var current)
-                                && ReferenceEquals(current, created))
+                            if (
+                                _connections.TryGetValue(key, out var current)
+                                && ReferenceEquals(current, created)
+                            )
                             {
                                 if (previous is null)
                                     _connections.Remove(key);
@@ -558,9 +561,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 try
                 {
                     previousDisposal = RunState(() =>
-                        !IsReferenced(previous)
-                            ? previous.DisposeAsync()
-                            : ValueTask.CompletedTask
+                        !IsReferenced(previous) ? previous.DisposeAsync() : ValueTask.CompletedTask
                     );
                 }
                 catch (ObjectDisposedException)
@@ -1013,9 +1014,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     .ConfigureAwait(false);
             await failures
                 .CaptureAsync(() =>
-                    ZLinkReceiveFlowController.DisposeRegistrationAsync(
-                        _receiveFlowRegistration
-                    )
+                    ZLinkReceiveFlowController.DisposeRegistrationAsync(_receiveFlowRegistration)
                 )
                 .ConfigureAwait(false);
             lock (_socketLifecycleGate)

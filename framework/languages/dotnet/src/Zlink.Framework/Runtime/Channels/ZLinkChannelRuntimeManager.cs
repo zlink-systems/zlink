@@ -226,10 +226,7 @@ internal sealed class ZLinkChannelRuntimeManager(
                     })
                 );
                 runtime.OwnManualConnectionAttachment(
-                    channel.Client.ManualConnections.Attach(
-                        runtime.AddManual,
-                        runtime.RemoveManual
-                    )
+                    channel.Client.ManualConnections.Attach(runtime.AddManual, runtime.RemoveManual)
                 );
                 if (localServer is not null)
                     await runtime.AddLocalAsync(localServer).ConfigureAwait(false);

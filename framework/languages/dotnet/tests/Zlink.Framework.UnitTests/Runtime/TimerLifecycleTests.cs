@@ -183,8 +183,14 @@ public sealed class TimerLifecycleTests
             CancellationToken.None
         );
 
-        Assert.Equal("active", ZLinkSpotTimerRelocationCodec.Decode(Assert.Single(boundary)).Timer.Name);
-        Assert.Equal("active", ZLinkSpotTimerRelocationCodec.Decode(Assert.Single(snapshot)).Timer.Name);
+        Assert.Equal(
+            "active",
+            ZLinkSpotTimerRelocationCodec.Decode(Assert.Single(boundary)).Timer.Name
+        );
+        Assert.Equal(
+            "active",
+            ZLinkSpotTimerRelocationCodec.Decode(Assert.Single(snapshot)).Timer.Name
+        );
         await registry.DisposeAsync();
     }
 
@@ -572,7 +578,8 @@ public sealed class TimerLifecycleTests
 
         Assert.False(configured.IsDisposed);
         Assert.Equal(0, Volatile.Read(ref deliveries));
-        var restored = target.FreezeRelocation()
+        var restored = target
+            .FreezeRelocation()
             .Select(static timer => ZLinkSpotTimerRelocationCodec.Decode(timer))
             .ToDictionary(static snapshot => snapshot.Timer.Name);
         var expected = relocation

@@ -315,10 +315,12 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
                 );
             }
 
-            await runtime.ReplaceAutomaticAsync(
-                rows.Where(row => desired.ContainsKey((row.ServerRid, row.LifecycleGeneration)))
-                    .ToArray()
-            ).ConfigureAwait(false);
+            await runtime
+                .ReplaceAutomaticAsync(
+                    rows.Where(row => desired.ContainsKey((row.ServerRid, row.LifecycleGeneration)))
+                        .ToArray()
+                )
+                .ConfigureAwait(false);
         }
 
         private async ValueTask<IReadOnlyList<ZLinkClientServerServerDescriptor>> ListAllAsync(

@@ -496,7 +496,11 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         // for the same sessions here would consume the entire force budget
         // before that owner can perform the actual bounded teardown.
         var failures = new List<Exception>();
-        await CaptureAsync("stop_mesh_monitoring", () => new ValueTask(_stopMeshMonitoring()), failures)
+        await CaptureAsync(
+                "stop_mesh_monitoring",
+                () => new ValueTask(_stopMeshMonitoring()),
+                failures
+            )
             .ConfigureAwait(false);
         if (_operations.HasAutoConnect)
             await CaptureAsync(
@@ -546,7 +550,6 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             throw failures[0];
         if (failures.Count > 1)
             throw new AggregateException(failures);
-
     }
 
     private async ValueTask PublishDrainingMarkerAsync(CancellationToken cancellationToken)

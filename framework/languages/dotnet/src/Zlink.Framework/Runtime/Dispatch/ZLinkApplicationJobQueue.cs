@@ -507,8 +507,10 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
         return RegisterReceiveFlowSocketAsync(socket, socket.SetReceiveFlowState);
     }
 
-    internal IAsyncDisposable RegisterReceiveFlowSocket(object identity, Action<ReceiveFlowState> apply)
-        => RegisterReceiveFlowSocketAsync(identity, apply).GetAwaiter().GetResult();
+    internal IAsyncDisposable RegisterReceiveFlowSocket(
+        object identity,
+        Action<ReceiveFlowState> apply
+    ) => RegisterReceiveFlowSocketAsync(identity, apply).GetAwaiter().GetResult();
 
     internal async ValueTask<IAsyncDisposable> RegisterReceiveFlowSocketAsync(
         object identity,
@@ -872,9 +874,7 @@ internal sealed class ZLinkReceiveFlowController
     }
 
     internal static ValueTask DisposeRegistrationAsync(IAsyncDisposable? registration) =>
-        registration is null
-            ? ValueTask.CompletedTask
-            : registration.DisposeAsync();
+        registration is null ? ValueTask.CompletedTask : registration.DisposeAsync();
 
     private async ValueTask UnregisterAsync(Entry entry)
     {

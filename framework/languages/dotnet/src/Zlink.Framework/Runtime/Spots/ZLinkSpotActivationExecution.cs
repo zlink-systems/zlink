@@ -2103,7 +2103,9 @@ internal abstract partial class ZLinkSpotActivation
 
     private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
-    internal ValueTask RestoreLogicalTimersAsync(IReadOnlyList<ZLinkRelocationLogicalTimer> logicalTimers)
+    internal ValueTask RestoreLogicalTimersAsync(
+        IReadOnlyList<ZLinkRelocationLogicalTimer> logicalTimers
+    )
     {
         _timers.RestoreRelocation(
             logicalTimers,

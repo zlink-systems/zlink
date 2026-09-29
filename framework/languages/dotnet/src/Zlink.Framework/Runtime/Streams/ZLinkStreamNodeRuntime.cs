@@ -132,7 +132,9 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         if (task is not null)
             return new ValueTask(task);
 
-        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         task = Interlocked.CompareExchange(ref _disposeTask, completion.Task, null);
         if (task is not null)
             return new ValueTask(task);
@@ -526,18 +528,20 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         {
             var admitted = IsApplicationPacket(header)
                 ? await AdmitApplicationPacketAsync(
-                    routingId,
-                    frame,
-                    header,
-                    payload,
-                    frame.ApplicationJobAdmission
-                ).ConfigureAwait(false)
+                        routingId,
+                        frame,
+                        header,
+                        payload,
+                        frame.ApplicationJobAdmission
+                    )
+                    .ConfigureAwait(false)
                 : await AdmitControlPacketAsync(
-                    routingId,
-                    header,
-                    payload,
-                    frame.ApplicationJobAdmission
-                ).ConfigureAwait(false);
+                        routingId,
+                        header,
+                        payload,
+                        frame.ApplicationJobAdmission
+                    )
+                    .ConfigureAwait(false);
             if (admitted)
                 frame.Detach();
             return admitted;
@@ -696,14 +700,18 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                                     monitorEvent.RemoteAddr
                                 );
                                 await ReportControlAdmissionAsync(
-                                    "stream-session-connected",
-                                    sessionAdmission
-                                ).ConfigureAwait(false);
+                                        "stream-session-connected",
+                                        sessionAdmission
+                                    )
+                                    .ConfigureAwait(false);
                             }
                             await ValueTask.CompletedTask;
                         }
                     );
-                    await ReportControlAdmissionAsync("stream-monitor-connected", connectedAdmission)
+                    await ReportControlAdmissionAsync(
+                            "stream-monitor-connected",
+                            connectedAdmission
+                        )
                         .ConfigureAwait(false);
                 }
                 break;
@@ -730,7 +738,10 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                             )
                         );
                 });
-                await ReportControlAdmissionAsync("stream-session-disconnected", disconnectedAdmission)
+                await ReportControlAdmissionAsync(
+                        "stream-session-disconnected",
+                        disconnectedAdmission
+                    )
                     .ConfigureAwait(false);
                 break;
         }
@@ -763,34 +774,32 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
 
     private ValueTask MarkDisconnectedRoutingIdAsync(RoutingId routingId)
     {
-        return
-            _lane.RunAsync(() =>
+        return _lane.RunAsync(() =>
+        {
+            if (_disconnectedRoutingIds.ContainsKey(routingId))
+                return;
+            while (_disconnectedRoutingIdOrder.Count >= DisconnectedRoutingIdLimit)
             {
-                if (_disconnectedRoutingIds.ContainsKey(routingId))
-                    return;
-                while (_disconnectedRoutingIdOrder.Count >= DisconnectedRoutingIdLimit)
-                {
-                    var oldest = _disconnectedRoutingIdOrder.First;
-                    if (oldest is null)
-                        break;
-                    _disconnectedRoutingIdOrder.RemoveFirst();
-                    _disconnectedRoutingIds.Remove(oldest.Value);
-                }
+                var oldest = _disconnectedRoutingIdOrder.First;
+                if (oldest is null)
+                    break;
+                _disconnectedRoutingIdOrder.RemoveFirst();
+                _disconnectedRoutingIds.Remove(oldest.Value);
+            }
 
-                var node = _disconnectedRoutingIdOrder.AddLast(routingId);
-                _disconnectedRoutingIds.Add(routingId, node);
-            });
+            var node = _disconnectedRoutingIdOrder.AddLast(routingId);
+            _disconnectedRoutingIds.Add(routingId, node);
+        });
     }
 
     private ValueTask ClearDisconnectedRoutingIdAsync(RoutingId routingId)
     {
-        return
-            _lane.RunAsync(() =>
-            {
-                if (!_disconnectedRoutingIds.Remove(routingId, out var node))
-                    return;
-                _disconnectedRoutingIdOrder.Remove(node);
-            });
+        return _lane.RunAsync(() =>
+        {
+            if (!_disconnectedRoutingIds.Remove(routingId, out var node))
+                return;
+            _disconnectedRoutingIdOrder.Remove(node);
+        });
     }
 
     private sealed class ZLinkStreamPeerAdmissionException(string message)
