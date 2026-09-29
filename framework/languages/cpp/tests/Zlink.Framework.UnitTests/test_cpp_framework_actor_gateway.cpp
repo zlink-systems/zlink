@@ -2684,6 +2684,9 @@ int source_cleanup_waits_for_leave_completion_before_erasing_actor ()
         .leave_deadline = now + std::chrono::seconds (30)});
 
     spot_node_runtime_t spots (node);
+    if (spots.next_management_activity_async ().result ().value ()
+        != now + std::chrono::seconds (30))
+        return 12;
     // not_before has already passed, but OnLeave is only queued
     // (leave_submitted), not finished (leave_completed), and the last-resort
     // deadline is far off: the sweep must hold the erase.
@@ -2734,6 +2737,42 @@ int source_cleanup_waits_for_leave_completion_before_erasing_actor ()
     if (node->actor_instances.contains (key) || !node->pending_remote_source_cleanups.empty ())
         return 11;
     return 0;
+}
+
+int sweep_preserves_pending_leave_added_after_snapshot ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+
+    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    const auto actor = test_actor_ref ("actor-a", "player", "sweep-race-actor", 7);
+    const auto pending = [&] (std::string transfer_id) {
+        return spot_node_builder_state_t::pending_remote_actor_leave_t{
+          .transfer_id = std::move (transfer_id),
+          .source_actor = actor,
+          .source_spot_id = spot_id_t ("source-spot"),
+          .target_spot_id = spot_id_t ("target-spot"),
+          .target_fence = runtime::protocol::actor_route_fence_t{}};
+    };
+    node->pending_remote_actor_leaves.push_back (pending ("old-transfer"));
+    spot_node_runtime_t spots (node);
+    const auto removed =
+      spots.cleanup_expired_actor_admissions_at (std::chrono::steady_clock::now (), [&] {
+          if (!node->lane.try_post ([node, &pending] {
+                  node->pending_remote_actor_leaves.push_back (pending ("new-transfer"));
+              }))
+              throw std::runtime_error ("node lane closed before pending leave insertion");
+      });
+    const auto remaining = node->lane
+                             .run ([&] {
+                                 std::vector<std::string> transfers;
+                                 for (const auto &leave : node->pending_remote_actor_leaves)
+                                     transfers.push_back (leave.transfer_id);
+                                 return transfers;
+                             })
+                             .get ();
+    return removed == 1 && remaining == std::vector<std::string>{"new-transfer"} ? 0 : 1;
 }
 
 // Shared stub: the committed relocation record cleanup_expired_actor_admissions_at
@@ -3627,6 +3666,60 @@ int leave_notification_travels_node_level_and_reaches_source_entry_spot_once ()
     if (leave_calls.load (std::memory_order_acquire) != 1)
         return 6;
     return 0;
+}
+
+int known_generation_source_leave_claims_transfer ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace stateful = zlink::framework::runtime::stateful;
+
+    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    auto entry_spot = std::make_shared<spot_context_state_t> ();
+    entry_spot->node = node;
+    entry_spot->node_rid = node_rid_t::from_string ("actor-a");
+    entry_spot->spot_id = spot_id_t ("actor-a-entry");
+    entry_spot->spot_name = "entry";
+    entry_spot->spot_instance = std::make_shared<int> (1);
+    auto native_spot = std::make_shared<service::spot_t> (
+      nullptr, stateful::object_ref_t{stateful::object_kind_t::user_spot, "actor-a-entry", 7, 0,
+                                      "mesh", "actor-a"});
+    entry_spot->native_spot = native_spot;
+    node->spot_contexts_by_id.emplace (entry_spot->spot_id,
+                                       spot_context_access_t::create (entry_spot));
+
+    const auto actor = test_actor_ref ("actor-a", "player", "known-leave-actor", 7);
+    const auto key = std::string ("player:known-leave-actor");
+    constexpr auto transfer_id = "transfer-known-leave";
+    node->actor_instances.emplace (key, std::make_shared<int> (1));
+    node->actor_spot_ids.emplace (key, entry_spot->spot_id);
+    spot_node_builder_state_t::actor_factory_registration_t factory;
+    factory.actor_type = std::type_index (typeid (int));
+    node->actor_factories.emplace ("player", std::move (factory));
+    if (!node->actor_transfer_coordinator.try_reserve_source (key, transfer_id)
+        || !node->actor_transfer_coordinator.try_begin_source_remote (key, transfer_id)) {
+        return 1;
+    }
+
+    auto authority = std::make_shared<fixed_reconcile_authority_store_t> ();
+    authority->record = stateful::authority_relocation_reference_t{
+      .source = stateful::object_ref_t{stateful::object_kind_t::actor, "known-leave-actor", 7, 0,
+                                       "", "actor-a"},
+      .target = stateful::object_ref_t{stateful::object_kind_t::actor, "known-leave-actor", 7, 5,
+                                       "", "actor-b"},
+      .relocation_reference = transfer_id,
+      .target_owner = location_owner_token_t{"owner-b", 9}};
+    node->relocation_authority = authority;
+
+    spot_node_runtime_t spots (node);
+    const auto fence = runtime::protocol::actor_route_fence_t{
+      "known-leave-actor", 7, zlink::routing_id_t::from ("actor-b").to_bytes (), 1, 5, 9};
+    const auto result = spots.submit_remote_actor_leave (transfer_id, actor, entry_spot->spot_id, 7,
+                                                         spot_id_t ("spot-b-target"), fence);
+    if (!result || !node->actor_transfer_coordinator.source_leave_submitted (key, transfer_id)) {
+        return 2;
+    }
+    return node->lane.run ([&] { return node->actor_spot_ids.contains (key); }).get () ? 3 : 0;
 }
 
 int early_zero_generation_leave_waits_for_source_transfer_completion ()
@@ -5764,6 +5857,10 @@ int main (int argc, char **argv)
         leave_race != 0) {
         return 310 + leave_race;
     }
+    if (const auto sweep_race = sweep_preserves_pending_leave_added_after_snapshot ();
+        sweep_race != 0) {
+        return 315 + sweep_race;
+    }
     if (const auto reconcile_trap = reconcile_deadline_fast_fails_when_store_shows_source ();
         reconcile_trap != 0) {
         return 320 + reconcile_trap;
@@ -5785,6 +5882,10 @@ int main (int argc, char **argv)
           leave_notification_travels_node_level_and_reaches_source_entry_spot_once ();
         leave_notify != 0) {
         return 330 + leave_notify;
+    }
+    if (const auto known_leave = known_generation_source_leave_claims_transfer ();
+        known_leave != 0) {
+        return 380 + known_leave;
     }
     if (const auto early_leave =
           early_zero_generation_leave_waits_for_source_transfer_completion ();

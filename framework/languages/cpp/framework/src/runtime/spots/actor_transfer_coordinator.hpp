@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -82,11 +83,20 @@ struct expired_actor_admission_t
     std::vector<handoff_packet_t> discarded_backlog;
 };
 
+struct actor_transfer_cleanup_snapshot_t
+{
+    std::vector<expired_actor_admission_t> expired_admissions;
+    std::vector<std::pair<std::string, std::string>> source_remote_transfers;
+    std::vector<std::string> blocked_dispatch_keys;
+};
+
 struct removed_actor_message_follow_t
 {
     std::string actor_key;
     runtime::protocol::actor_route_fence_t source_fence;
     std::string transfer_id;
+    spot_route_t target_route;
+    std::uint64_t target_generation = 0;
 };
 
 struct actor_message_follow_target_t
@@ -365,8 +375,9 @@ class actor_transfer_coordinator_t
     session_relocation_admission (const std::string &transfer_id) const;
     std::vector<handoff_packet_t> fail_commit (const std::string &transfer_id, bool reconcile);
     void complete_commit (const std::string &transfer_id);
-    std::vector<expired_actor_admission_t>
-    cleanup_expired (std::chrono::steady_clock::time_point now);
+    task_t<actor_transfer_cleanup_snapshot_t>
+    cleanup_expired_async (std::chrono::steady_clock::time_point now,
+                           std::vector<std::string> blocked_candidates);
     std::size_t pending_count () const;
     std::optional<std::chrono::steady_clock::time_point> next_activity () const;
     void set_activity_handler (std::function<void ()> handler);
@@ -394,6 +405,11 @@ class actor_transfer_coordinator_t
         std::optional<reconcile_target_context_t> reconcile_context;
     };
 
+    static bool is_source_remote (const move_state_t &move) noexcept
+    {
+        return move.phase == actor_move_phase_t::source_remote;
+    }
+
     struct message_follow_route_t
     {
         runtime::protocol::actor_route_fence_t source_fence;
@@ -411,6 +427,9 @@ class actor_transfer_coordinator_t
       const std::string &actor_key,
       const runtime::protocol::actor_route_fence_t &source_fence,
       std::chrono::steady_clock::time_point now) const;
+    actor_transfer_cleanup_snapshot_t
+    cleanup_expired_on_lane (std::chrono::steady_clock::time_point now,
+                             const std::vector<std::string> &blocked_candidates);
     actor_transfer_dispatch_state_snapshot_t
     project_dispatch_state_unlocked (const std::string &actor_key,
                                      const runtime::protocol::actor_route_fence_t *source_fence,

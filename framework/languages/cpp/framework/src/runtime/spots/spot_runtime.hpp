@@ -1862,9 +1862,12 @@ class spot_node_runtime_t
     task_t<std::optional<std::chrono::steady_clock::time_point>>
     advance_management_async (bool include_next_activity = true);
     std::size_t cleanup_expired_actor_admissions ();
-    std::size_t cleanup_expired_actor_admissions_at (std::chrono::steady_clock::time_point now);
-    task_t<std::size_t>
-    cleanup_expired_actor_admissions_at_async (std::chrono::steady_clock::time_point now);
+    std::size_t
+    cleanup_expired_actor_admissions_at (std::chrono::steady_clock::time_point now,
+                                         std::function<void ()> after_coordinator_snapshot = {});
+    task_t<std::size_t> cleanup_expired_actor_admissions_at_async (
+      std::chrono::steady_clock::time_point now,
+      std::function<void ()> after_coordinator_snapshot = {});
     bool stage_session_relocation_route (const std::string &transfer_id,
                                          std::vector<std::uint8_t> route,
                                          std::string actor_type,
