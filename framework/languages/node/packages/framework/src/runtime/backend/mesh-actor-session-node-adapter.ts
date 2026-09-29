@@ -1,5 +1,4 @@
-import { SubmitResult } from './runtime-values';
-import { ZLinkSubmitStatus } from '../messaging/submission-result';
+import { classifySubmitResult } from '../messaging/submission-result';
 import type { ZLinkBackendActorSessionNode, ZLinkBackendMeshNode } from './contracts';
 import { closeMeshCompletion, type ZLinkMeshCompletionTable } from './mesh-completion-table';
 
@@ -15,22 +14,7 @@ export function meshActorSessionNodeAdapter(
         parts as never,
         flags
       );
-      switch (result) {
-        case SubmitResult.Ok:
-          return { status: ZLinkSubmitStatus.Submitted };
-        case SubmitResult.Backpressured:
-        case SubmitResult.NotAdmitted:
-          return { status: ZLinkSubmitStatus.Backpressured };
-        case SubmitResult.NotFound:
-        case SubmitResult.InvalidState:
-          return { status: ZLinkSubmitStatus.TargetNotFound };
-        case SubmitResult.NotConnected:
-          return { status: ZLinkSubmitStatus.RouteNotConnected };
-        case SubmitResult.Terminated:
-          return { status: ZLinkSubmitStatus.Shutdown };
-        default:
-          throw new Error(`Actor bound-session send failed with result '${result}'.`);
-      }
+      return classifySubmitResult(result, 'Actor bound-session send');
     },
     async closeActorBoundSession(actor, expectedBindingGeneration, timeoutMs, signal) {
       if (completions === undefined) {

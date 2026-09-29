@@ -10,7 +10,11 @@ import type {
   ZLinkMessageSerializer,
   ZLinkStream
 } from '../../contracts';
-import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
+import {
+  ZLinkSubmitStatus,
+  classifySubmitResult,
+  type ZLinkSubmitResult
+} from '../messaging/submission-result';
 import type { Message } from '../../contracts/Common/Message';
 import { throwIfAborted } from '../abort';
 import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
@@ -19,7 +23,7 @@ import type {
   ZLinkBackendSendFlags,
   ZLinkBackendStreamSocket
 } from '../backend/contracts';
-import { RequestResult, isBackendNotConnectedError } from '../backend/runtime-values';
+import { RequestResult, isZLinkBackendResultError } from '../backend/runtime-values';
 import { ZLinkBufferMessage as NativeMessage } from '../backend/runtime-message';
 import type {
   StreamSessionActorAuthorityFence,
@@ -135,7 +139,9 @@ export class ZLinkManagedStream implements ZLinkStream {
       await this.socket.submit(this.backendRoutingId(), payload, timeoutMs);
       return { status: ZLinkSubmitStatus.Submitted };
     } catch (error) {
-      if (isBackendNotConnectedError(error)) return { status: ZLinkSubmitStatus.Backpressured };
+      if (isZLinkBackendResultError(error) && error.operation === 'submit') {
+        return classifySubmitResult(error.result, 'STREAM submit');
+      }
       throw error;
     }
   }

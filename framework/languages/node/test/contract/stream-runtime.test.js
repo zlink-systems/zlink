@@ -707,6 +707,63 @@ test('managed stream delegates each call timeout to binding-owned admission', as
   assert.deepEqual(observed, [25, 4]);
 });
 
+test('managed stream classifies a disconnected STREAM peer as an unusable route, not a deadline', async () => {
+  const { requireOneWayCompletion } = require('../../packages/framework/dist/runtime/messaging/submission-result');
+  const { ZLinkFrameworkException, ZLinkFrameworkErrorKind } = require('../../packages/framework/dist/contracts');
+  const failures = new Map([
+    [SubmitResult.NotConnected, ZLinkSubmitStatus.RouteNotConnected],
+    [SubmitResult.Backpressured, ZLinkSubmitStatus.Backpressured]
+  ]);
+  for (const [result, status] of failures) {
+    const socket = {
+      sendTimeoutMs: 10,
+      sendHighWaterMark: 16,
+      onSendReady() {},
+      send() { return true; },
+      async submit() { throw new ZLinkBackendResultError('submit', result); },
+      disconnectPeer() {},
+      recv() { return undefined; }
+    };
+    const stream = new framework.ZLinkManagedStream(socket, 'session-disconnected');
+    const message = zlink.Message.from('payload');
+    try {
+      const submitted = await stream.submitRaw(message);
+      assert.deepEqual(submitted, { status });
+      if (result === SubmitResult.NotConnected) {
+        assert.throws(
+          () => requireOneWayCompletion(submitted, 'STREAM session reply'),
+          (error) =>
+            error instanceof ZLinkFrameworkException &&
+            error.kind === ZLinkFrameworkErrorKind.Unavailable
+        );
+      }
+    } finally {
+      message.close();
+    }
+  }
+});
+
+test('submit result classification maps wrong-state results to InvalidOperation, not a missing target', () => {
+  const { classifySubmitResult } = require('../../packages/framework/dist/runtime/messaging/submission-result');
+  const { ZLinkFrameworkException, ZLinkFrameworkErrorKind } = require('../../packages/framework/dist/contracts');
+  for (const result of [
+    SubmitResult.InvalidState,
+    SubmitResult.InvalidArgument,
+    SubmitResult.InvalidHandle,
+    SubmitResult.ThreadViolation
+  ]) {
+    assert.throws(
+      () => classifySubmitResult(result, 'STREAM submit'),
+      (error) =>
+        error instanceof ZLinkFrameworkException &&
+        error.kind === ZLinkFrameworkErrorKind.InvalidOperation
+    );
+  }
+  assert.deepEqual(classifySubmitResult(SubmitResult.NotFound, 'x'), {
+    status: ZLinkSubmitStatus.TargetNotFound
+  });
+});
+
 test('managed stream skips native unbind after transport teardown', async () => {
   const operations = new Map();
   let nextOperation = 1n;
