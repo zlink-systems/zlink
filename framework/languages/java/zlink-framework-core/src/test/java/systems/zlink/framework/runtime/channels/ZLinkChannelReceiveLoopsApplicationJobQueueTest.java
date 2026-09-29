@@ -24,10 +24,8 @@ import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -140,8 +138,8 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
             allowFirstInstruction.countDown();
             assertTrue(bothDispatched.await(5, TimeUnit.SECONDS));
             assertEquals(2, router.receiveCount.get());
-            assertEquals(1, router.receiveThreads.size());
-            assertEquals(0, queue.snapshot().permitsInUse());
+            assertEquals(1, router.maxConcurrentReceives.get(), "one receive owner at a time");
+            awaitCondition(() -> queue.snapshot().permitsInUse() == 0);
         } finally {
             running.set(false);
             loops.close();
@@ -149,6 +147,95 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
             handlerExecutor.shutdownNow();
             loops.awaitTermination();
         }
+    }
+
+    @Test
+    void permitWaitReleasesTheReceiveThreadAndTheGrantResumesReceive() throws Exception {
+        ZLinkApplicationJobQueue queue =
+                new ZLinkApplicationJobQueue(
+                        ZLinkApplicationJobQueueProfile.BALANCED,
+                        OptionalLong.of(1),
+                        new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null));
+        AtomicBoolean running = new AtomicBoolean(true);
+        FakeRouter router = new FakeRouter();
+        router.inbound.add(received("after-grant"));
+        CountDownLatch dispatched = new CountDownLatch(1);
+        ZLinkChannelReceiveLoops loops = new ZLinkChannelReceiveLoops(running::get, queue);
+        ZLinkApplicationJobQueue.Permit held = queue.acquire().toCompletableFuture().join();
+        try {
+            loops.startRequest(
+                    router,
+                    ignored -> dispatched.countDown(),
+                    error -> {
+                        throw new AssertionError(error);
+                    });
+
+            awaitCondition(() -> queue.snapshot().capacityWaiters() == 1);
+            awaitCondition(
+                    () -> !anyThreadRuns(ZLinkChannelReceiveLoops.class.getName()),
+                    "a thread still runs the receive loop while its permit is pending");
+            assertEquals(0, router.receiveCount.get());
+
+            held.close();
+            assertTrue(dispatched.await(5, TimeUnit.SECONDS));
+            assertEquals(1, router.receiveCount.get());
+        } finally {
+            held.close();
+            running.set(false);
+            loops.close();
+            queue.close();
+            loops.awaitTermination();
+        }
+    }
+
+    @Test
+    void closingReceiveOwnerCancelsItsFifoWaitWithoutResumingOrLeakingCapacity()
+            throws Exception {
+        ZLinkApplicationJobQueue queue =
+                new ZLinkApplicationJobQueue(
+                        ZLinkApplicationJobQueueProfile.BALANCED,
+                        OptionalLong.of(1),
+                        new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null));
+        AtomicBoolean running = new AtomicBoolean(true);
+        FakeRouter router = new FakeRouter();
+        router.inbound.add(received("after-close"));
+        ZLinkChannelReceiveLoops loops = new ZLinkChannelReceiveLoops(running::get, queue);
+        ZLinkApplicationJobQueue.Permit held = queue.acquire().toCompletableFuture().join();
+        try {
+            loops.startRequest(
+                    router,
+                    ignored -> {
+                        throw new AssertionError("receive resumed after close");
+                    },
+                    error -> {
+                        throw new AssertionError(error);
+                    });
+            awaitCondition(() -> queue.snapshot().capacityWaiters() == 1);
+            running.set(false);
+            loops.close();
+            loops.awaitTermination();
+            awaitCondition(() -> queue.snapshot().capacityWaiters() == 0);
+            held.close();
+            try (var next = queue.acquire().toCompletableFuture().get(1, TimeUnit.SECONDS)) {
+                assertEquals(0, router.receiveCount.get());
+                assertEquals(1, queue.snapshot().permitsInUse());
+            }
+            assertEquals(0, queue.snapshot().permitsInUse());
+        } finally {
+            held.close();
+            running.set(false);
+            loops.close();
+            loops.awaitTermination();
+            queue.close();
+        }
+    }
+
+    /** Whether any live thread currently executes code of the class or its nested classes. */
+    private static boolean anyThreadRuns(String className) {
+        return Thread.getAllStackTraces().values().stream()
+                .flatMap(java.util.Arrays::stream)
+                .map(StackTraceElement::getClassName)
+                .anyMatch(name -> name.equals(className) || name.startsWith(className + "$"));
     }
 
     private static ZLinkBackendReceived received(String value) {
@@ -173,17 +260,23 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
 
     private static void awaitCondition(java.util.function.BooleanSupplier condition)
             throws InterruptedException {
+        awaitCondition(condition, "condition was not reached");
+    }
+
+    private static void awaitCondition(java.util.function.BooleanSupplier condition, String message)
+            throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
             Thread.sleep(5);
         }
-        assertTrue(condition.getAsBoolean());
+        assertTrue(condition.getAsBoolean(), message);
     }
 
     private static final class FakeRouter implements ZLinkBackendRouterSocket {
         private final ArrayDeque<ZLinkBackendReceived> inbound = new ArrayDeque<>();
         private final AtomicInteger receiveCount = new AtomicInteger();
-        private final Set<Thread> receiveThreads = ConcurrentHashMap.newKeySet();
+        private final AtomicInteger activeReceives = new AtomicInteger();
+        private final AtomicInteger maxConcurrentReceives = new AtomicInteger();
 
         @Override
         public void setReceiveFlowState(systems.zlink.contracts.sockets.ReceiveFlowState state) {}
@@ -232,12 +325,16 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
 
         @Override
         public ZLinkBackendReceived recv(ZLinkBackendRecvMode mode) {
-            receiveThreads.add(Thread.currentThread());
-            ZLinkBackendReceived result = inbound.poll();
-            if (result != null) {
-                receiveCount.incrementAndGet();
+            maxConcurrentReceives.accumulateAndGet(activeReceives.incrementAndGet(), Math::max);
+            try {
+                ZLinkBackendReceived result = inbound.poll();
+                if (result != null) {
+                    receiveCount.incrementAndGet();
+                }
+                return result;
+            } finally {
+                activeReceives.decrementAndGet();
             }
-            return result;
         }
 
         @Override

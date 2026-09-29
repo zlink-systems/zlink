@@ -110,6 +110,30 @@ final class ZLinkFrameworkRuntimeDrainRouteTest {
     }
 
     @Test
+    void synchronousDrainStartFailureCompletesConcurrentShutdownWithOneTerminal()
+            throws Exception {
+        ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        new DefaultZLinkFrameworkOptions(), new ZLinkJavaBackendAdapterFactory());
+        long readyDeadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+        while (!runtime.isReady() && System.nanoTime() < readyDeadline) {
+            Thread.sleep(1);
+        }
+        assertTrue(runtime.isReady());
+        var drainsField = ZLinkFrameworkRuntime.class.getDeclaredField("meshDrains");
+        drainsField.setAccessible(true);
+        drainsField.set(runtime, null);
+
+        var first = runtime.shutdown(Duration.ofSeconds(2)).toCompletableFuture();
+        var concurrent = runtime.shutdown(Duration.ofSeconds(2)).toCompletableFuture();
+        var result = first.get(3, TimeUnit.SECONDS);
+        assertEquals(ZLinkFrameworkTerminationOutcome.FORCE_STOPPED, result.outcome());
+        assertEquals(ZLinkFrameworkTerminationReason.TEARDOWN_FAILED, result.reason());
+        assertEquals(result, concurrent.get(3, TimeUnit.SECONDS));
+        assertEquals(result, runtime.status().terminationResult().orElseThrow());
+    }
+
+    @Test
     void shutdownSealsMeshAdmissionAndPublishesDrainingBeforeAcceptedWorkCompletes()
             throws Exception {
         var options = new DefaultZLinkFrameworkOptions();

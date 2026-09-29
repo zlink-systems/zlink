@@ -48,7 +48,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -111,10 +110,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final AtomicLong sessionBindingGenerations = new AtomicLong();
     private final Map<String, ZLinkInternalSpotNode> streamSessionRelaySpotNodes = new HashMap<>();
     private final Map<String, SessionState> sessions = new HashMap<>();
-    private final Map<String, CompletableFuture<SessionState>> pendingSessionCreations =
-            new HashMap<>();
-    private final ThreadLocal<Set<CompletableFuture<SessionState>>> sessionCreationProducers =
-            ThreadLocal.withInitial(HashSet::new);
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final ScheduledExecutorService livenessExecutor;
     private final ScheduledExecutorService replyRetryExecutor;
@@ -723,6 +718,11 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         private final StreamNodeRegistration streamNode;
         private final ZLinkBackendStreamSocket stream;
         private volatile boolean closed;
+        private final java.util.concurrent.atomic.AtomicReference<
+                        CompletableFuture<
+                                systems.zlink.framework.runtime.internal.dispatch
+                                        .ZLinkApplicationJobQueue.Permit>>
+                pendingAcquire = new java.util.concurrent.atomic.AtomicReference<>();
 
         private StreamReceiveLoop(
                 StreamNodeRegistration streamNode, ZLinkBackendStreamSocket stream) {
@@ -731,7 +731,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
 
         private void start() {
-            receiveExecutor.execute(this::runLoop);
+            receiveExecutor.execute(() -> runTurn(null));
         }
 
         private StreamNodeRegistration streamNode() {
@@ -745,39 +745,64 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         @Override
         public void close() {
             closed = true;
+            systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue
+                    .cancelPendingAcquire(pendingAcquire);
         }
 
-        private void runLoop() {
+        /**
+         * Runs one receive turn. A turn ends when no permit is free; the Application Job Queue
+         * grant starts the next turn with that permit, so no receive thread waits for capacity.
+         */
+        private void runTurn(
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue.Permit
+                        granted) {
+            systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue.Permit
+                    first = granted;
             while (!isClosed()) {
                 try {
-                    if (!stream.waitForReadable(RECEIVE_POLL_TIMEOUT)) {
+                    if (first == null && !stream.waitForReadable(RECEIVE_POLL_TIMEOUT)) {
                         continue;
                     }
                     if (isClosed()) {
-                        return;
+                        break;
                     }
                     ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
                     while (batch.canReceiveNext()) {
                         systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue
                                         .Permit
-                                permit;
-                        try {
-                            permit = applicationJobQueue.acquireBlocking();
-                        } catch (InterruptedException interrupted) {
-                            Thread.currentThread().interrupt();
-                            return;
+                                permit = first;
+                        first = null;
+                        if (permit == null) {
+                            permit =
+                                    applicationJobQueue.acquireOrResume(
+                                            receiveExecutor,
+                                            this::runTurn,
+                                            pendingAcquire);
+                            if (isClosed()) {
+                                systems.zlink.framework.runtime.internal.dispatch
+                                        .ZLinkApplicationJobQueue.cancelPendingAcquire(pendingAcquire);
+                                if (permit != null) {
+                                    permit.abandonReservation();
+                                }
+                                return;
+                            }
+                            if (permit == null) {
+                                return;
+                            }
                         }
-                        ZLinkBackendStreamReceived received = stream.recv();
-                        if (received == null) {
-                            permit.abandonReservation();
-                            break;
-                        }
+                        ZLinkBackendStreamReceived received = null;
                         boolean transferred = false;
                         try {
+                            received = stream.recv();
+                            if (received == null) {
+                                break;
+                            }
                             transferred = processReceived(received, permit, batch);
                         } finally {
                             if (!transferred) {
-                                received.close();
+                                if (received != null) {
+                                    received.close();
+                                }
                                 permit.abandonReservation();
                             }
                         }
@@ -791,6 +816,9 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                         return;
                     }
                 }
+            }
+            if (first != null) {
+                first.abandonReservation();
             }
         }
 
@@ -1088,24 +1116,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 "STREAM heartbeat pong was not admitted by the transport: ");
     }
 
-    private void dispatchStreamNotification(
-            StreamNodeRegistration streamNode,
-            ZLinkBackendStreamSocket stream,
-            RoutingId routingId) {
-        SessionState state = removeSessionState(streamNode, routingId);
-        if (state == null) {
-            if (draining) {
-                sendSessionClosing(stream, routingId);
-                return;
-            }
-            getOrCreateSessionState(streamNode, stream, routingId);
-            return;
-        }
-        recordSessionClosed(state, "client_close");
-        state.serials()
-                .executeInfrastructure(() -> executeHandler(() -> disconnectSessionStage(state)));
-    }
-
     private SessionState removeSessionState(
             StreamNodeRegistration streamNode, RoutingId routingId) {
         return inStateLane(() -> sessions.remove(sessionKey(streamNode, routingId)));
@@ -1140,79 +1150,32 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                                                         state, nativeCode, message)));
     }
 
+    /**
+     * Returns the Session for this peer and creates it on first contact.
+     *
+     * <p>Only this stream node's receive owner calls this, one turn at a time, and the key carries
+     * the stream node name, so no second creator exists for a key. The owner reads the map in one
+     * lane turn, builds the Session outside the lane, and publishes it in the next turn.
+     */
     private SessionState getOrCreateSessionState(
             StreamNodeRegistration streamNode,
             ZLinkBackendStreamSocket stream,
             RoutingId routingId) {
         String key = sessionKey(streamNode, routingId);
-        SessionCreationClaim claim =
-                inStateLane(
-                        () -> {
-                            SessionState existing = sessions.get(key);
-                            if (existing != null) {
-                                return SessionCreationClaim.existing(existing);
-                            }
-                            CompletableFuture<SessionState> pending =
-                                    pendingSessionCreations.get(key);
-                            if (pending != null) {
-                                return SessionCreationClaim.pending(pending);
-                            }
-                            CompletableFuture<SessionState> created = new CompletableFuture<>();
-                            pendingSessionCreations.put(key, created);
-                            return SessionCreationClaim.creator(created);
-                        });
-        if (claim.state() != null) {
-            return claim.state();
+        SessionState existing = inStateLane(() -> sessions.get(key));
+        if (existing != null) {
+            return existing;
         }
-        if (!claim.creator()) {
-            if (sessionCreationProducers.get().contains(claim.pending())) {
-                throw new IllegalStateException(
-                        "pending STREAM session creation reentered by its producer");
-            }
-            return claim.pending().join();
-        }
-
-        Set<CompletableFuture<SessionState>> producers = sessionCreationProducers.get();
-        if (!producers.add(claim.pending())) {
-            throw new IllegalStateException(
-                    "pending STREAM session creation producer was already active");
-        }
-        try {
-            SessionState state;
-            try {
-                // User session construction runs outside the state turn. The claim
-                // makes concurrent callers observe the same in-progress session,
-                // just as they did while waiting for the former monitor.
-                state = createSessionState(streamNode, stream, routingId);
-            } catch (RuntimeException | Error failure) {
-                inStateLane(
-                        () -> {
-                            pendingSessionCreations.remove(key, claim.pending());
-                            return null;
-                        });
-                claim.pending().completeExceptionally(failure);
-                throw failure;
-            }
-            SessionState completed = state;
-            inStateLane(
-                    () -> {
-                        sessions.put(key, completed);
-                        pendingSessionCreations.remove(key, claim.pending());
-                        return null;
-                    });
-            // CompletableFuture's dependents may be inline; signal after the lane
-            // turn has returned so they cannot inherit its CURRENT ownership.
-            claim.pending().complete(state);
-            ZLinkRuntimeMetrics.add("zlink.stream.connections.active", 1, Map.of());
-            ZLinkRuntimeMetrics.increment("zlink.stream.connections.opened", Map.of());
-            dispatchConnected(state);
-            return state;
-        } finally {
-            producers.remove(claim.pending());
-            if (producers.isEmpty()) {
-                sessionCreationProducers.remove();
-            }
-        }
+        SessionState state = createSessionState(streamNode, stream, routingId);
+        inStateLane(
+                () -> {
+                    sessions.put(key, state);
+                    return null;
+                });
+        ZLinkRuntimeMetrics.add("zlink.stream.connections.active", 1, Map.of());
+        ZLinkRuntimeMetrics.increment("zlink.stream.connections.opened", Map.of());
+        dispatchConnected(state);
+        return state;
     }
 
     private static void recordSessionClosed(SessionState state, String reason) {
@@ -1734,21 +1697,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
 
     private record ReplacementIdentity(
             String actorId, RoutingId sessionRid, long retiredBindingGeneration) {}
-
-    private record SessionCreationClaim(
-            SessionState state, CompletableFuture<SessionState> pending, boolean creator) {
-        static SessionCreationClaim existing(SessionState state) {
-            return new SessionCreationClaim(state, null, false);
-        }
-
-        static SessionCreationClaim pending(CompletableFuture<SessionState> pending) {
-            return new SessionCreationClaim(null, pending, false);
-        }
-
-        static SessionCreationClaim creator(CompletableFuture<SessionState> pending) {
-            return new SessionCreationClaim(null, pending, true);
-        }
-    }
 
     private static ZLinkStreamCodec defaultCodec(ZLinkFrameworkRegistration registration) {
         return registration.codecs().streamCodecForCustomSerializer().orElse(ZLinkStreamCodec.JSON);
