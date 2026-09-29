@@ -36,8 +36,13 @@ test('canonical Actor Join returns the ingress permit before waiting for the Loc
   const queue = queueWithOnePermit();
   const store = deferred();
   const entered = deferred();
+  const activation = {
+    domain: { kind: 'user' },
+    spotId: 'spot-a',
+    serial: { executeLifecycleOperation: async (callback) => callback() }
+  };
   const manager = {
-    activations: { resolve: () => undefined },
+    activations: { resolve: () => activation },
     formalRemoteActorAdmissions: {
       beginProvisional: () => ({ record: {}, created: true })
     },
