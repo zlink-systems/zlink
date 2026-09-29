@@ -52,23 +52,8 @@ pub(crate) fn config_result_from_native(result: ffi::zlink_config_result_t) -> C
 }
 
 pub(crate) fn request_error_from_result(code: RequestResult) -> RequestError {
-    let native_errno = match code {
-        RequestResult::Ok => 0,
-        RequestResult::TimedOut => libc::ETIMEDOUT,
-        RequestResult::NotFound => libc::ENOENT,
-        RequestResult::Terminated => eterm(),
-        RequestResult::ProtocolError => libc::EPROTO,
-        RequestResult::InternalError => libc::EIO,
-        RequestResult::Rejected => libc::EACCES,
-        RequestResult::Conflict => libc::ESTALE,
-        RequestResult::Busy => libc::EBUSY,
-        RequestResult::NotConnected => libc::ENOTCONN,
-        RequestResult::InvalidArgument => libc::EINVAL,
-        RequestResult::InvalidState => efsm(),
-        RequestResult::NotSupported => libc::ENOTSUP,
-        RequestResult::Backpressured => libc::EAGAIN,
-    };
-    RequestError::new(code, native_errno)
+    // Completion records carry the Core result, but no native errno.
+    RequestError::new(code, 0)
 }
 
 pub(crate) fn config_validation_error() -> ConfigError {
@@ -171,14 +156,6 @@ fn config_result_from_rc(rc: i32) -> ConfigResult {
     }
 }
 
-const fn efsm() -> i32 {
-    156_384_763
-}
-
-pub(crate) const fn eterm() -> i32 {
-    156_384_765
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,18 +229,18 @@ mod tests {
     }
 
     #[test]
-    fn request_error_errno_rows_follow_core() {
+    fn request_completion_does_not_invent_native_errno() {
         assert_eq!(
             request_error_from_result(RequestResult::Rejected).native_errno(),
-            libc::EACCES
+            0
         );
         assert_eq!(
             request_error_from_result(RequestResult::Conflict).native_errno(),
-            libc::ESTALE
+            0
         );
         assert_eq!(
             request_error_from_result(RequestResult::InvalidState).native_errno(),
-            efsm()
+            0
         );
     }
 
