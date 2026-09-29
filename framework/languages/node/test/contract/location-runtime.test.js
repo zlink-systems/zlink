@@ -2339,7 +2339,7 @@ test('production repository rejects a Reserved authority whose owner lease omits
   );
 });
 
-test('production repository retries descriptor renew after same-owner lease heartbeat', async () => {
+test('production repository accepts descriptor renew after same-owner lease heartbeat', async () => {
   const scenario = await descriptorConflictScenario('heartbeat');
 
   const result = await scenario.repository.updateMeshNode(
@@ -2348,7 +2348,7 @@ test('production repository retries descriptor renew after same-owner lease hear
   );
 
   assert.equal(result.status, internal.ZLinkLocationWriteStatus.Stored);
-  assert.equal(scenario.provider.descriptorWriteAttempts, 2);
+  assert.equal(scenario.provider.descriptorWriteAttempts, 1);
   assert.equal(
     (await scenario.repository.listMeshNodes('play')).items[0].state,
     framework.ZLinkFrameworkRuntimeState.Serving
@@ -2369,25 +2369,12 @@ for (const mutation of ['replaceOwner', 'replaceRow', 'deleteRow', 'regressRevis
   });
 }
 
-test('production repository stops descriptor renew after three heartbeat retries', async () => {
-  const scenario = await descriptorConflictScenario('heartbeat', true);
-
-  const result = await scenario.repository.updateMeshNode(
-    scenario.serving,
-    internal.ZLinkLocationWriteIntent.Renew
-  );
-
-  assert.equal(result.status, internal.ZLinkLocationWriteStatus.IgnoredStale);
-  assert.equal(scenario.provider.descriptorWriteAttempts, 4);
-});
-
-async function descriptorConflictScenario(mutation, repeatMutation = false) {
+async function descriptorConflictScenario(mutation) {
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
   const provider = new DescriptorCasConflictLocationStore(
     inner,
-    mutation,
-    repeatMutation
+    mutation
   );
   const repository = new internal.ZLinkLocationStoreRepository(provider, () => now);
   const claimed = await repository.claimOwnerLease(`descriptor-${mutation}`, 30_000);
@@ -2425,10 +2412,9 @@ class DescriptorCasConflictLocationStore {
   armed = false;
   mutated = false;
 
-  constructor(inner, mutation, repeatMutation) {
+  constructor(inner, mutation) {
     this.inner = inner;
     this.mutation = mutation;
-    this.repeatMutation = repeatMutation;
   }
 
   arm() {
@@ -2451,7 +2437,7 @@ class DescriptorCasConflictLocationStore {
     }
 
     this.descriptorWriteAttempts += 1;
-    if (this.repeatMutation || !this.mutated) {
+    if (!this.mutated) {
       this.mutated = true;
       await this.mutatePredecessor(request, descriptorPut, signal);
     }
@@ -2460,7 +2446,7 @@ class DescriptorCasConflictLocationStore {
 
   async mutatePredecessor(request, descriptorPut, signal) {
     const ownerCondition = request.conditions.find(condition =>
-      condition.kind === 'version' && condition.key.value.startsWith('owner-lease\0'));
+      condition.kind === 'value' && condition.key.value.startsWith('owner-lease\0'));
     assert.notEqual(ownerCondition, undefined);
     const owner = await this.inner.read(ownerCondition.key, signal);
     assert.equal(owner.kind, 'found');

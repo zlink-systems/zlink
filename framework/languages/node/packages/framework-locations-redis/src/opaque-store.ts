@@ -82,6 +82,7 @@ export class ZLinkRedisLocationStore implements ZLinkLocationStore {
         [
           JSON.stringify(encoded.conditions),
           JSON.stringify(encoded.mutations),
+          ...encoded.expectedBytes,
           ...encoded.putBytes
         ],
         signal
@@ -222,6 +223,7 @@ interface EncodedWrite {
   readonly keys: readonly string[];
   readonly conditions: readonly unknown[];
   readonly mutations: readonly unknown[];
+  readonly expectedBytes: readonly Buffer[];
   readonly putBytes: readonly Buffer[];
 }
 
@@ -242,10 +244,17 @@ function encodeWrite(request: ZLinkStoreWriteRequest): EncodedWrite {
   // adds 6 to this 1-based index before indexing into KEYS.
   const keyIndex = new Map(keys.map((key, index) => [key, index + 1]));
   let encodedBytes = 0;
+  const expectedBytes: Buffer[] = [];
   const conditions = request.conditions.map((condition) => {
     const key = requireKey(condition.key);
     encodedBytes += Buffer.byteLength(key, 'utf8');
     if (condition.kind === 'missing') return ['missing', keyIndex.get(key), key];
+    if (condition.kind === 'value') {
+      requireValue(condition.expected, undefined);
+      encodedBytes += condition.expected.byteLength;
+      expectedBytes.push(Buffer.from(condition.expected));
+      return ['value', keyIndex.get(key), key, expectedBytes.length + 2];
+    }
     const expected = requireVersion(condition.expected);
     encodedBytes += Buffer.byteLength(expected, 'utf8');
     return ['version', keyIndex.get(key), key, expected];
@@ -263,7 +272,7 @@ function encodeWrite(request: ZLinkStoreWriteRequest): EncodedWrite {
   if (encodedBytes > MAX_WRITE_BYTES) {
     throw new RangeError('Location Store write exceeds 4 MiB encoded input.');
   }
-  return { keys, conditions, mutations, putBytes };
+  return { keys, conditions, mutations, expectedBytes, putBytes };
 }
 
 function requireScanRequest(request: ZLinkStoreScanRequest): void {
