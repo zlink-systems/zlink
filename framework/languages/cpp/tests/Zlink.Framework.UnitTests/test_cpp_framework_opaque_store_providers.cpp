@@ -1173,7 +1173,11 @@ TEST (CppFrameworkOpaqueLocationStore, MissingOwnerLeaseExpiryFailsClosedDuringR
     owner_lease_time_store_t corrupt (provider, owner->token.owner_id,
                                       owner_lease_time_store_t::lease_view_t::missing_expiry);
     provider_location_repository_t reopened (corrupt);
-    EXPECT_THROW ((void) reopened.reserve (request), std::invalid_argument);
+    const auto failure = reopened.reserve (request).result ();
+    ASSERT_FALSE (failure);
+    EXPECT_EQ (failure.error_kind (), framework_error_kind_t::internal_failure);
+    ASSERT_NE (failure.error (), nullptr);
+    EXPECT_STREQ (failure.error ()->what (), "Location Store owner lease record is invalid");
 }
 
 TEST (CppFrameworkOpaqueLocationStore, AbortedReservationCanBeReservedAgainThroughProvider)
@@ -2126,7 +2130,14 @@ TEST (CppFrameworkOpaqueLocationStore, MissingRecordVersionFailsClosed)
     ASSERT_FALSE (owner_failure);
     EXPECT_NE (std::string (owner_failure.error ()->what ()).find ("recordVersion"),
                std::string::npos);
-    EXPECT_THROW ((void) reopened.read_authority (actor_key), std::invalid_argument);
+    try {
+        (void) reopened.read_authority (actor_key);
+        FAIL () << "Missing authority recordVersion must fail";
+    }
+    catch (const framework_exception_t &error) {
+        EXPECT_EQ (error.kind (), framework_error_kind_t::internal_failure);
+        EXPECT_STREQ (error.what (), "unrecognized authority recordVersion");
+    }
     const auto descriptor_failure = reopened.list_mesh_nodes ("play").result ();
     ASSERT_FALSE (descriptor_failure);
     EXPECT_NE (std::string (descriptor_failure.error ()->what ()).find ("recordVersion"),
