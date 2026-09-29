@@ -141,18 +141,6 @@ template <typename T, int N> class ypipe_t ZLINK_FINAL : public ypipe_base_t<T>
         return true;
     }
 
-    //  Applies the function fn to the first element in the pipe
-    //  and returns the value returned by the fn.
-    //  The pipe mustn't be empty or the function crashes.
-    bool probe (bool (*fn_) (const T &))
-    {
-        const bool rc = check_read ();
-        if (!rc)
-            return false;
-
-        return (*fn_) (_queue.front ());
-    }
-
     bool probe_if_published (void (*fn_) (const T &, void *),
                              void *userdata_)
     {

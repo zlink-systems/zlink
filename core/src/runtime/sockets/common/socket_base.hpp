@@ -1284,7 +1284,7 @@ class socket_base_t : public own_t,
                           bool throttle_,
                           bool force_if_command_pending_ = false,
                           const uint64_t *observed_command_wait_epoch_ = NULL,
-                          bool consume_primary_signaler_ = true);
+                          bool primary_poller_drain_ = false);
     enum submit_command_progress_mode_t
     {
         submit_command_progress_failed = -1,

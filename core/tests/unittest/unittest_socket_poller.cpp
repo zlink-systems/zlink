@@ -92,8 +92,8 @@ void test_two_mailbox_burst_leaves_no_stale_fd_notification ()
 
     // A mixed poller registers the same private fd-backed signaler with each
     // mailbox. Both owners may publish before the poller drains that edge.
-    first.signal_pollers ();
-    second.signal_pollers ();
+    first.signal_pollers (false);
+    second.signal_pollers (false);
     TEST_ASSERT_SUCCESS_ERRNO (poller_signaler.wait (0));
     TEST_ASSERT_SUCCESS_ERRNO (poller_signaler.recv_failable ());
     TEST_ASSERT_EQUAL_INT (-1, poller_signaler.recv_failable ());
@@ -102,7 +102,7 @@ void test_two_mailbox_burst_leaves_no_stale_fd_notification ()
     TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
 
     // Draining the coalesced burst must also leave the signaler reusable.
-    second.signal_pollers ();
+    second.signal_pollers (false);
     TEST_ASSERT_SUCCESS_ERRNO (poller_signaler.wait (0));
     TEST_ASSERT_SUCCESS_ERRNO (poller_signaler.recv_failable ());
 
