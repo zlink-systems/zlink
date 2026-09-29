@@ -84,14 +84,17 @@ means that this public poller API is included in the build.
 Readiness is level-triggered, and so is the wake-up. When the readiness of a registered source
 changes from false to true, a caller waiting on that source in `zlink_poller_wait()` or
 `zlink_poll()` wakes at that point even if timeout remains. The guarantee is the same when the
-command that produced the transition was processed by a Core-internal thread (an I/O thread, the
-async command owner, a temporary transport owner) instead of the caller. A caller that sleeps
-until its timeout while readiness is true (a lost wake) is a contract violation; the
-implementation keeps the guarantee by re-arming the public poller's notification descriptor
-whenever an internal owner detaches or consumes commands on the socket's behalf. The same rule
-applies to wait tokens. If the target's credit recovery or pipe attach happens concurrently with
-the token registration that follows a refused DONTWAIT submit, the implementation rechecks the
-target state after registering the token (register → recheck) and publishes the WRITABLE record
+command that produced the transition was processed by a thread other than the caller (an I/O
+thread, the async command owner, a temporary transport owner, or another application thread that
+called send or recv on the same socket). A caller that sleeps until its timeout while readiness
+is true (a lost wake) is a contract violation. To keep the guarantee, only the public poller
+consumes its notification descriptor. When a command applied anywhere other than the poller
+changes readiness, the descriptor is signalled at the time set by the wake-up rule of the
+[synchronization model](systems/11-synchronization-model.en.md#33-the-mailbox-and-wake-ups).
+
+Wait tokens have no lost wake either. If the target's credit recovery or pipe attach happens
+concurrently with the token registration that follows a refused DONTWAIT submit, the
+implementation rechecks the target state after registering the token (register → recheck) and publishes the WRITABLE record
 for that edge. A credit or attach edge that occurs after the refusal therefore never loses its
 WRITABLE record.
 

@@ -76,14 +76,18 @@ readiness bit가 아니다. `ZLINK_HAVE_POLLER == 1`은 이 public poller API가
 
 Readiness는 level-trigger이므로 wake도 level에 따른다. 등록한 source의 readiness가 거짓에서
 참으로 바뀌면, 그 source로 `zlink_poller_wait()` 또는 `zlink_poll()`에서 대기 중인 caller는
-timeout이 남아 있어도 그 시점에 깨어난다. 그 전이를 만든 command를 caller 대신 Core 내부
-thread(I/O thread, async command owner, 임시 transport owner)가 처리했더라도 이 보장은 같다.
-Readiness가 참인데 caller가 timeout까지 잠드는 것(lost wake)은 계약 위반이며, 구현은 내부
-owner가 detach하거나 command를 소비한 뒤 public poller의 notification descriptor를 다시 무장해
-이를 지킨다. 같은 규칙이 wait token에도 적용된다. DONTWAIT submit이 거절된 뒤 token을
-등록하는 사이에 그 target의 credit 회복이나 pipe attach가 동시에 일어났다면, 구현은 token을
-등록한 뒤 target 상태를 다시 확인해(register → recheck) 그 edge에 대한 WRITABLE record를
-게시한다. 따라서 거절 이후에 생긴 credit·attach edge로 WRITABLE record가 유실되지 않는다.
+timeout이 남아 있어도 그 시점에 깨어난다. 그 전이를 만든 command를 caller가 아닌
+thread(I/O thread, async command owner, 임시 transport owner, 같은 socket에 send·recv를 부른
+다른 application thread)가 처리했더라도 이 보장은 같다.
+Readiness가 참인데 caller가 timeout까지 잠드는 것(lost wake)은 계약 위반이다. 이를 위해 public
+poller의 notification descriptor는 그 poller만 소비한다. Poller가 아닌 곳에서 적용한 command가
+readiness를 바꾸면 descriptor에 알리는 시점은
+[동기화 모델](systems/11-synchronization-model.ko.md#33-mailbox와-깨어남)의 깨어남 규칙을 따른다.
+
+Wait token에도 lost wake는 없다. DONTWAIT submit이 거절된 뒤 token을 등록하는 사이에 그
+target의 credit 회복이나 pipe attach가 동시에 일어났다면, 구현은 token을 등록한 뒤 target
+상태를 다시 확인해(register → recheck) 그 edge에 대한 WRITABLE record를 게시한다. 따라서 거절
+이후에 생긴 credit·attach edge로 WRITABLE record가 유실되지 않는다.
 
 ## 4. Completion polling
 
