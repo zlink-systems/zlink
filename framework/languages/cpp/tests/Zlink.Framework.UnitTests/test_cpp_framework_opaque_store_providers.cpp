@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <limits>
@@ -64,6 +65,188 @@ store_key_t capacity_key (const mesh_node_descriptor_t &descriptor)
     return {"zlink:v11:capacity:" + segment (descriptor.mesh_name)
             + segment (descriptor.rid.to_hex ())
             + std::to_string (descriptor.lifecycle_generation)};
+}
+
+TEST (ZLinkFrameworkOpaqueStoreProviders, ValueConditionFencesBytesButNotVersion)
+{
+    in_memory_location_store_t store;
+    const store_key_t lease{"lease"};
+    const store_key_t mutation{"mutation"};
+    const auto write = [&] (std::vector<std::byte> expected) {
+        return store
+          .write ({{store_value_condition_t{lease, std::move (expected)}},
+                   {store_put_t{mutation, bytes ("changed"), std::nullopt}}})
+          .result ()
+          .value ();
+    };
+    const auto put = [&] (std::string_view value) {
+        return store.write ({{}, {store_put_t{lease, bytes (value), 30s}}}).result ().value ();
+    };
+    ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (put ("owner")));
+    const auto before = std::get<store_found_t> (store.read (lease).result ().value ());
+    ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (put ("owner")));
+    const auto after = std::get<store_found_t> (store.read (lease).result ().value ());
+    EXPECT_NE (before.value.version.value, after.value.version.value);
+    EXPECT_TRUE (std::holds_alternative<store_write_applied_t> (write (bytes ("owner"))));
+    ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (put ("replacement")));
+    EXPECT_TRUE (std::holds_alternative<store_write_conflict_t> (write (bytes ("owner"))));
+    const auto before_conflict = std::get<store_found_t> (store.read (mutation).result ().value ());
+    ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
+      store.write ({{}, {store_delete_t{lease}}}).result ().value ()));
+    EXPECT_TRUE (std::holds_alternative<store_write_conflict_t> (write (bytes ("owner"))));
+    const auto after_conflict = std::get<store_found_t> (store.read (mutation).result ().value ());
+    EXPECT_EQ (before_conflict.value.version.value, after_conflict.value.version.value);
+    ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
+      store.write ({{}, {store_put_t{lease, bytes ("owner"), 1ms}}}).result ().value ()));
+    bool expired = false;
+    for (int attempt = 0; attempt < 100000 && !expired; ++attempt)
+        expired = std::holds_alternative<store_missing_t> (store.read (lease).result ().value ());
+    ASSERT_TRUE (expired);
+    EXPECT_TRUE (std::holds_alternative<store_write_conflict_t> (write (bytes ("owner"))));
+    const auto after_expiry = std::get<store_found_t> (store.read (mutation).result ().value ());
+    EXPECT_EQ (before_conflict.value.version.value, after_expiry.value.version.value);
+}
+
+class renew_before_conditional_commit_store_t final : public location_store_t
+{
+  public:
+    task_t<store_read_result_t> read (store_key_t key) override
+    {
+        return inner.read (std::move (key));
+    }
+    task_t<store_scan_result_t> scan (store_scan_request_t request) override
+    {
+        return inner.scan (std::move (request));
+    }
+    task_t<store_write_result_t> write (store_write_request_t request) override
+    {
+        const auto descriptor_write = std::any_of (
+          request.mutations.begin (), request.mutations.end (), [] (const auto &mutation) {
+              const auto *put = std::get_if<store_put_t> (&mutation);
+              return put && put->key.value.starts_with (std::string ("mesh-node") + '\0');
+          });
+        const auto reclaim_write = std::any_of (
+          request.mutations.begin (), request.mutations.end (), [] (const auto &mutation) {
+              const auto *erase = std::get_if<store_delete_t> (&mutation);
+              return erase && erase->key.value.starts_with (std::string ("authority") + '\0');
+          });
+        if (reclaim_write)
+            ++reclaim_writes;
+        if ((renew_on_descriptor_write && descriptor_write)
+            || (renew_on_reclaim_write && reclaim_write)) {
+            renew_on_descriptor_write = false;
+            renew_on_reclaim_write = false;
+            const store_key_t lease_key{std::string ("owner-lease") + '\0' + owner_id};
+            const auto lease = std::get<store_found_t> (inner.read (lease_key).result ().value ());
+            const auto renewed =
+              inner
+                .write ({{store_version_condition_t{lease_key, lease.value.version}},
+                         {store_put_t{lease_key, lease.value.bytes, 30s}}})
+                .result ()
+                .value ();
+            if (!std::holds_alternative<store_write_applied_t> (renewed))
+                throw std::runtime_error ("test lease renewal failed");
+        }
+        return inner.write (std::move (request));
+    }
+
+    in_memory_location_store_t inner;
+    std::string owner_id = "renewing-owner";
+    bool renew_on_descriptor_write = false;
+    bool renew_on_reclaim_write = false;
+    unsigned reclaim_writes = 0;
+};
+
+TEST (ZLinkFrameworkOpaqueStoreProviders, DescriptorCommitAcceptsConcurrentLeaseRenewal)
+{
+    renew_before_conditional_commit_store_t store;
+    provider_location_repository_t repository (store);
+    const auto claimed = repository.claim_owner_lease (store.owner_id, 30s).result ().value ();
+    const auto *owner = std::get_if<owner_lease_claimed_t> (&claimed);
+    ASSERT_NE (owner, nullptr);
+    const store_key_t lease_key{std::string ("owner-lease") + '\0' + store.owner_id};
+    const auto before = std::get<store_found_t> (store.read (lease_key).result ().value ());
+    ASSERT_TRUE (std::holds_alternative<owner_lease_renewed_t> (
+      repository.renew_owner_lease (owner->token, 30s).result ().value ()));
+    const auto after = std::get<store_found_t> (store.read (lease_key).result ().value ());
+    EXPECT_EQ (before.value.bytes, after.value.bytes);
+    EXPECT_NE (before.value.version.value, after.value.version.value);
+    mesh_node_descriptor_t descriptor;
+    descriptor.mesh_name = "renewal-mesh";
+    descriptor.rid = zlink::routing_id_t::from (std::string ("renewal-node"));
+    descriptor.lifecycle_generation = 1;
+    descriptor.descriptor_revision = 1;
+    descriptor.endpoint = "tcp://127.0.0.1:7001";
+    descriptor.owner_id = owner->token.owner_id;
+    descriptor.lease_generation = owner->token.lease_generation;
+    descriptor.object_role = object_role_t::server;
+    descriptor.state = framework_runtime_state_t::serving;
+    store.renew_on_descriptor_write = true;
+    const auto result = repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                          .result ()
+                          .value ();
+    EXPECT_EQ (result.status, location_write_status_t::stored);
+    EXPECT_FALSE (store.renew_on_descriptor_write);
+}
+
+TEST (ZLinkFrameworkOpaqueStoreProviders, StaleReservationReclaimIgnoresNewLeaseRenewal)
+{
+    renew_before_conditional_commit_store_t store;
+    store.owner_id = "reclaim-source";
+    provider_location_repository_t repository (store);
+    const auto source_claim = repository.claim_owner_lease (store.owner_id, 30s).result ().value ();
+    const auto target_claim =
+      repository.claim_owner_lease ("reclaim-target", 30s).result ().value ();
+    const auto *source = std::get_if<owner_lease_claimed_t> (&source_claim);
+    const auto *target = std::get_if<owner_lease_claimed_t> (&target_claim);
+    ASSERT_NE (source, nullptr);
+    ASSERT_NE (target, nullptr);
+    const auto publish = [&] (std::string rid, const location_owner_token_t &owner) {
+        mesh_node_descriptor_t descriptor;
+        descriptor.mesh_name = "reclaim-mesh";
+        descriptor.rid = zlink::routing_id_t::from (rid);
+        descriptor.lifecycle_generation = 1;
+        descriptor.descriptor_revision = 1;
+        descriptor.endpoint = "tcp://127.0.0.1:7001";
+        descriptor.owner_id = owner.owner_id;
+        descriptor.lease_generation = owner.lease_generation;
+        descriptor.object_role = object_role_t::server;
+        descriptor.state = framework_runtime_state_t::serving;
+        descriptor.object_capabilities.push_back ({placement_object_kind_t::actor, "player",
+                                                   maintenance_policy_kind_t::recreate, false, 0});
+        descriptor.capacity.actors.limit = 1;
+        ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                     .result ()
+                     .value ()
+                     .status,
+                   location_write_status_t::stored);
+    };
+    publish ("reclaim-source-node", source->token);
+    publish ("reclaim-target-node", target->token);
+
+    object_reserve_request_t request;
+    request.key = {placement_object_kind_t::actor, "reclaim-actor"};
+    request.intent.stable_type = "player";
+    request.target = {"reclaim-mesh", node_rid_t::from_string ("reclaim-source-node"), 1,
+                      source->token};
+    request.creating_payload = bytes ("creating");
+    request.capacity_bundle.actor_slots = 1;
+    const auto original = repository.reserve (request).result ().value ();
+    ASSERT_NE (std::get_if<object_reserved_t> (&original), nullptr);
+    ASSERT_TRUE (std::holds_alternative<owner_lease_released_t> (
+      repository.release_owner_lease (source->token).result ().value ()));
+    const auto successor = repository.claim_owner_lease (store.owner_id, 30s).result ().value ();
+    const auto *new_owner = std::get_if<owner_lease_claimed_t> (&successor);
+    ASSERT_NE (new_owner, nullptr);
+    ASSERT_NE (source->token.lease_generation, new_owner->token.lease_generation);
+
+    request.target = {"reclaim-mesh", node_rid_t::from_string ("reclaim-target-node"), 1,
+                      target->token};
+    store.renew_on_reclaim_write = true;
+    const auto reserved = repository.reserve (request).result ().value ();
+    ASSERT_NE (std::get_if<object_reserved_t> (&reserved), nullptr);
+    EXPECT_EQ (store.reclaim_writes, 1u);
+    EXPECT_FALSE (store.renew_on_reclaim_write);
 }
 
 nlohmann::json capacity_record (location_store_t &provider,

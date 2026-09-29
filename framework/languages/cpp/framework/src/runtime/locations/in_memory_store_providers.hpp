@@ -60,9 +60,15 @@ class in_memory_location_store_t final : public location_store_t
                           return completed<store_write_result_t> (store_write_conflict_t{now});
                       continue;
                   }
-                  const auto &expected = std::get<store_version_condition_t> (condition).expected;
-                  if (found == _values.end () || found->second.version.value != expected.value)
+                  if (found == _values.end ())
                       return completed<store_write_result_t> (store_write_conflict_t{now});
+                  if (const auto *version = std::get_if<store_version_condition_t> (&condition)) {
+                      if (found->second.version.value != version->expected.value)
+                          return completed<store_write_result_t> (store_write_conflict_t{now});
+                  } else if (found->second.bytes
+                             != std::get<store_value_condition_t> (condition).expected) {
+                      return completed<store_write_result_t> (store_write_conflict_t{now});
+                  }
               }
 
               store_write_applied_t applied;
@@ -198,6 +204,10 @@ class in_memory_location_store_t final : public location_store_t
                     throw std::invalid_argument (
                       "location version condition requires 1..4096 bytes");
                 encoded_size += version->expected.value.size ();
+            } else if (const auto *value = std::get_if<store_value_condition_t> (&condition)) {
+                if (value->expected.size () > 1024u * 1024u)
+                    throw std::invalid_argument ("location value condition exceeds 1 MiB");
+                encoded_size += value->expected.size ();
             }
         }
         for (const auto &mutation : request.mutations) {

@@ -2076,10 +2076,14 @@ int main ()
     }
 
     const auto shutdown = app.shutdown (std::chrono::seconds (1)).result ().value ();
+    const auto shutdown_state = app.runtime_state ();
     if (shutdown.outcome != zlink::framework::termination_outcome_t::stopped
         || shutdown.reason != zlink::framework::termination_reason_t::none
-        || app.runtime_state () != zlink::framework::framework_runtime_state_t::stopped) {
-        std::cerr << "Shutdown must complete the shared termination operation\n";
+        || shutdown_state != zlink::framework::framework_runtime_state_t::stopped) {
+        std::cerr << "Shutdown must complete the shared termination operation"
+                  << " outcome=" << static_cast<int> (shutdown.outcome)
+                  << " reason=" << static_cast<int> (shutdown.reason)
+                  << " state=" << static_cast<int> (shutdown_state) << '\n';
         return EXIT_FAILURE;
     }
     const auto after_shutdown =
