@@ -17,19 +17,6 @@
 
 namespace
 {
-int send_terminal_errno (zlink_send_complete_result_t result_)
-{
-    switch (result_) {
-        case ZLINK_SEND_NOT_FOUND:
-            return ENOENT;
-        case ZLINK_SEND_NOT_CONNECTED:
-            return ENOTCONN;
-        default:
-            zlink_assert (false);
-            return EINVAL;
-    }
-}
-
 void fail_blocking_send_wait_state (
   zlink::blocking_send_wait_state_t *state_, int terminal_errno_)
 {
@@ -84,6 +71,32 @@ int copy_send_part_array (zlink_msg_t *parts_,
     return 0;
 }
 
+}
+
+int zlink::send_terminal_errno (zlink_send_complete_result_t result_)
+{
+    switch (result_) {
+        case ZLINK_SEND_NOT_FOUND:
+            return ENOENT;
+        case ZLINK_SEND_NOT_CONNECTED:
+            return ENOTCONN;
+        case ZLINK_SEND_TIMED_OUT:
+            return EAGAIN;
+        default:
+            zlink_assert (false);
+            return EINVAL;
+    }
+}
+
+void zlink::socket_base_t::expire_send_writable_wait (
+  zlink_completion_id_t completion_id_)
+{
+    if (socket_completion::expire_writable_waiter (&completion_runtime (),
+                                                    completion_id_)
+        > 0) {
+        notify_request_completion ();
+        static_cast<mailbox_t *> (_mailbox)->signal ();
+    }
 }
 
 bool zlink::socket_type_supports_completion_pull (int type_)
@@ -182,7 +195,8 @@ void zlink::socket_base_t::notify_send_writable (pipe_t *pipe_)
 int zlink::socket_base_t::register_send_writable_wait_after_failure (
   int failure_errno_, const zlink_routing_id_t *target_rid_or_null_,
   void *user_context_, zlink_completion_id_t *completion_id_out_,
-  socket_completion::request_writable_wait_t *request_wait_)
+  socket_completion::request_writable_wait_t *request_wait_,
+  uint64_t deadline_ns_)
 {
     if (completion_id_out_)
         *completion_id_out_ = 0;
@@ -220,7 +234,7 @@ int zlink::socket_base_t::register_send_writable_wait_after_failure (
     zlink_completion_id_t completion_id = 0;
     if (socket_completion::reserve_writable_wait (
           &completion_runtime (), user_context_, target_rid_or_null_,
-          &reservation, &completion_id, request_wait_)
+          &reservation, &completion_id, request_wait_, deadline_ns_, this)
         != 0)
         return -1;
     zlink_assert (reservation);

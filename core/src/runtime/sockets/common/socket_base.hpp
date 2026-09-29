@@ -548,7 +548,9 @@ class socket_base_t : public own_t,
     int register_send_writable_wait_after_failure (
       int failure_errno_, const zlink_routing_id_t *target_rid_or_null_,
       void *user_context_, zlink_completion_id_t *completion_id_out_,
-      socket_completion::request_writable_wait_t *request_wait_ = NULL);
+      socket_completion::request_writable_wait_t *request_wait_ = NULL,
+      uint64_t deadline_ns_ = 0);
+    void expire_send_writable_wait (zlink_completion_id_t completion_id_);
     bool has_send_writable_wait () const;
     int request_admission_submit (
       zlink_msg_t *parts_, size_t part_count_,

@@ -15,13 +15,14 @@ import sys
 import tempfile
 
 
-CELLS = (
+REFERENCE_CELLS = (
     "dealer_dealer_inproc",
     "dealer_router_reqrep_inproc",
     "pair_inproc",
     "router_router_tcp",
     "stream_tcp",
 )
+CELLS = REFERENCE_CELLS + ("pub_sub_tcp", "xpub_sub_tcp")
 DEFAULT_ITERATIONS = 20_000
 REQREP_ITERATIONS = 5_000
 TOLERANCE = 0.05
@@ -50,7 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cells",
         nargs="+",
-        default=list(CELLS),
+        default=list(REFERENCE_CELLS),
         help="cells to measure (space- or comma-separated)",
     )
     parser.add_argument(

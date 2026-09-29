@@ -4,19 +4,23 @@
 #define __ZLINK_API_SOCKET_COMPLETION_QUEUE_INTERNAL_HPP_INCLUDED__
 
 #include <zlink.h>
+#include "api/socket/request_timeout_scheduler_internal.hpp"
 
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <unordered_map>
 #include <mutex>
 #include <utility>
 #include <vector>
 
 namespace zlink
 {
+int send_terminal_errno (zlink_send_complete_result_t result_);
 class pipe_t;
+class socket_base_t;
 namespace socket_completion
 {
 // Refused candidates and their pipe-owned reservation-return edge. No payload.
@@ -38,13 +42,23 @@ struct reservation_t
 
     zlink_completion_t completion;
     reservation_t *ready_next;
+    reservation_t *writable_wait_previous;
     reservation_t *writable_wait_next;
     reservation_t *outstanding_previous;
     reservation_t *outstanding_next;
     bool ready;
     bool writable_wait_linked;
     bool heap_owned;
+    uint64_t wait_deadline_ns;
     request_writable_wait_t request_wait;
+};
+
+struct writable_timeout_task_t
+{
+    std::shared_ptr<request_timeout::task_t> task;
+    reservation_t *reservation;
+    // Zero while the timer owns retirement; a self-link ends a cancellation chain.
+    zlink_completion_id_t next_cancel_id;
 };
 
 struct queue_state_t
@@ -68,6 +82,8 @@ struct queue_state_t
     std::atomic<bool> ready_available;
     std::atomic<size_t> ready_writable_count;
     std::atomic<size_t> writable_waiting_count;
+    std::unordered_map<zlink_completion_id_t, writable_timeout_task_t>
+      timeout_tasks;
 };
 
 void release_payload (zlink_completion_t *completion_);
@@ -83,7 +99,9 @@ int reserve_writable_wait (queue_state_t *state_,
                            const zlink_routing_id_t *peer_rid_,
                            reservation_t **reservation_out_,
                            zlink_completion_id_t *completion_id_out_,
-                           request_writable_wait_t *request_wait_ = NULL);
+                           request_writable_wait_t *request_wait_ = NULL,
+                           uint64_t deadline_ns_ = 0,
+                           socket_base_t *socket_ = NULL);
 void release (queue_state_t *state_, reservation_t *reservation_);
 // Physical credit and terminal publication match the target (NULL means the
 // size-zero PAIR/DEALER group). Correlation publication instead checks each
@@ -92,7 +110,8 @@ int publish_writable_waiters (queue_state_t *state_,
                               const zlink_routing_id_t *target_rid_or_null_,
                               zlink_send_complete_result_t result_,
                               int terminal_errno_,
-                              bool correlation_released_ = false);
+                               bool correlation_released_ = false);
+int expire_writable_waiter (queue_state_t *state_, zlink_completion_id_t id_);
 int publish_request (queue_state_t *state_,
                      reservation_t *reservation_,
                      zlink_request_result_t result_,
