@@ -687,7 +687,7 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
             tail =
                     prior.thenCompose(
                                     ignored ->
-                                            context.enqueueLifecycle(
+                                            context.enqueueJoinLifecycle(
                                                     () ->
                                                             host.runQueuedApplicationJob(
                                                                             queuedOwnership,
@@ -695,7 +695,13 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                                                                                     dispatchActorJoinAsync(
                                                                                             request))
                                                                     .thenCompose(stage -> stage)))
-                            .whenComplete((result, error) -> queuedOwnership.close());
+                            .whenComplete(
+                                    (result, failure) -> {
+                                        if (failure != null) {
+                                            queuedOwnership.close();
+                                            request.parts().forEach(Message::close);
+                                        }
+                                    });
         }
         return tail;
     }
