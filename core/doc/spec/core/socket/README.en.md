@@ -538,8 +538,8 @@ ZLINK_EXPORT void *zlink_socket (void *context_, zlink_socket_type_t type_);
 
 Creates a new socket within the given context. The `type_` parameter selects
 the messaging pattern. Raw sockets use the pull functions in
-[Section 3](#3-pull-receive-and-completion-model). STREAM explicitly selects
-RAW or PACKET receive mode before its first successful bind or connect. The
+[Section 3](#3-pull-receive-and-completion-model). STREAM is bind-only and
+explicitly selects RAW or PACKET receive mode before its first successful bind. The
 socket must be closed with `zlink_close()` before the context is terminated.
 
 **Returns:** Socket handle on success, `NULL` on failure (errno is set).
@@ -907,7 +907,8 @@ Connect a socket to a remote address.
 ZLINK_EXPORT zlink_connect_result_t zlink_connect (void *s_, const char *addr_);
 ```
 
-Connects the socket to a remote endpoint. The endpoint format is the same as
+Connects the socket to a remote endpoint. STREAM is bind-only, and
+[STREAM Section 2](08-stream.en.md#2-creation-bind-and-options) sets its result. The endpoint format is the same as
 for `zlink_bind()`. A socket can connect to multiple endpoints, and the
 library handles reconnection automatically if the peer becomes unavailable.
 

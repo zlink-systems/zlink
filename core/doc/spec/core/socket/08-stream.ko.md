@@ -17,7 +17,7 @@ title: "Socket — STREAM"
 
 STREAM은 zlink framing 없이 연결하는 외부 peer와 raw byte를 주고받는
 [socket](../glossary.ko.md#socket)이다. 연결마다 4 byte routing ID — 연결 하나를 식별하는
-byte 열 — 를 부여한다. Application은 bind하거나 connect하기 전에 receive mode를 고르고,
+byte 열 — 를 부여한다. STREAM은 bind 전용 socket이다. Application은 bind하기 전에 receive mode를 고르고,
 routing ID로 peer를 선택해
 전송하고, 수신 결과에서 source routing ID를 확인한다.
 
@@ -38,17 +38,16 @@ byte record 또는 고정 framing packet을 routing ID로 송수신하는 C API�
 ```c
 ZLINK_EXPORT void *zlink_socket (void *context_, zlink_socket_type_t type_);
 ZLINK_EXPORT zlink_bind_result_t zlink_bind (void *s_, const char *addr_);
-ZLINK_EXPORT zlink_connect_result_t zlink_connect (void *s_, const char *addr_);
 ZLINK_EXPORT zlink_close_result_t zlink_close (void *s_);
 
 typedef enum zlink_stream_option_t
 {
     ZLINK_STREAM_OPT_NOTIFY    = 0x3501, // RAW mode 연결·해제 알림 record (int 0|1)
-    ZLINK_STREAM_OPT_RECV_MODE = 0x3502  // zlink_stream_recv_mode_t, 첫 bind/connect 전 설정
+    ZLINK_STREAM_OPT_RECV_MODE = 0x3502  // zlink_stream_recv_mode_t, 첫 bind 전 설정
 } zlink_stream_option_t;
 
 typedef enum zlink_stream_recv_mode_t {
-  ZLINK_STREAM_RECV_MODE_UNSPECIFIED = 0, // bind/connect할 수 없는 초기값
+  ZLINK_STREAM_RECV_MODE_UNSPECIFIED = 0, // bind할 수 없는 초기값
   ZLINK_STREAM_RECV_MODE_RAW = 1,         // zlink_recv() 사용
   ZLINK_STREAM_RECV_MODE_PACKET = 2       // zlink_stream_recv_packet() 사용
 } zlink_stream_recv_mode_t;
@@ -70,9 +69,10 @@ Receive mode의 기본값은 `UNSPECIFIED`다. Setter는 정확한 enum size와 
 연결과 해제를 길이 0인 data record로 수신하게 하며, 그 record의 source routing ID가
 대상 client를 식별한다. 기본값은 0이며 RAW mode에서만 사용한다.
 
-Mode를 선택하지 않은 bind는 endpoint side effect 없이 `ZLINK_BIND_INVALID_ARGUMENT`+`EINVAL`,
-connect는 side effect 없이 `ZLINK_CONNECT_INVALID_ARGUMENT`+`EINVAL`로 실패한다. Failed bind나
-connect는 mode를 고정하지 않는다. 첫 successful bind 또는 connect 뒤에는 mode와 NOTIFY setter가
+STREAM에 `zlink_connect()`를 호출하면 mode와 관계없이 side effect 없이
+`ZLINK_CONNECT_NOT_SUPPORTED`+`ENOTSUP`로 실패한다. Mode를 선택하지 않은 bind는 endpoint side effect
+없이 `ZLINK_BIND_INVALID_ARGUMENT`+`EINVAL`로 실패한다. Failed bind는 mode를 고정하지 않는다. 첫
+successful bind 뒤에는 mode와 NOTIFY setter가
 같은 값을 다시 설정하는 경우까지 `ZLINK_CONFIG_INVALID_STATE`+`EBUSY`로 실패한다.
 
 PACKET과 `NOTIFY=1`은 함께 사용할 수 없다. 두 설정 중 나중 호출이
@@ -85,7 +85,7 @@ PACKET과 `NOTIFY=1`은 함께 사용할 수 없다. 두 설정 중 나중 호�
 
 ## 3. 수신 모드
 
-한 STREAM handle은 bind나 connect 전에 다음 mode 가운데 하나를 명시적으로 고른다.
+한 STREAM handle은 bind 전에 다음 mode 가운데 하나를 명시적으로 고른다.
 
 | 언제 쓰는가 | 수신 모드 | 활성화 방법 | 전달 형태 |
 |---|---|---|---|
@@ -249,7 +249,7 @@ low water mark와 transport backpressure는 그대로 유지된다. STREAM socke
 ## 9. Peer routing ID와 연결 종료
 
 STREAM의 public routing ID는 Core가 연결별로 부여한 4 byte connection id다. `zlink_bind()`로
-받아들인 연결과 `zlink_connect()`로 만든 연결 모두 자기 socket이 id를 부여한다.
+받아들인 연결마다 자기 socket이 id를 부여한다.
 `zlink_disconnect_rid()`에 이 id를 전달하면 해당 연결에 종료 요청을 넣는다.
 4 byte가 아닌 rid는 잘못된 인자로 실패한다. `zlink_disconnect_rid()` 함수 자체의
 계약은 [소켓 공통](README.ko.md)이 소유하며, id를 내부에서 찾는 방법은
@@ -406,14 +406,15 @@ write는 `ZLINK_OPT_SNDBUF`, 양쪽은 `ZLINK_OPT_MAXMSGSIZE`가 더 작으면 �
 공개 표면(STREAM 함수 호출, completion pull, 반환 result·errno, monitor 이벤트)만으로
 다음을 확인한다. 각 항목은 test 하나로 이어진다.
 
-**생성, bind/connect와 수신 모드**
-- 기본 `UNSPECIFIED` 상태의 bind와 connect는 각각 `ZLINK_BIND_INVALID_ARGUMENT`+`EINVAL`,
-  `ZLINK_CONNECT_INVALID_ARGUMENT`+`EINVAL`로 side effect 없이 실패한다.
-- Bind 또는 connect 전에 RAW를 설정하면 성공하고 `zlink_recv()`만 허용되며 PACKET recv는
+**생성, bind와 수신 모드**
+- `zlink_connect()`는 mode와 관계없이 `ZLINK_CONNECT_NOT_SUPPORTED`+`ENOTSUP`로 side effect 없이
+  실패한다.
+- 기본 `UNSPECIFIED` 상태의 bind는 `ZLINK_BIND_INVALID_ARGUMENT`+`EINVAL`로 side effect 없이 실패한다.
+- Bind 전에 RAW를 설정하면 성공하고 `zlink_recv()`만 허용되며 PACKET recv는
   `ZLINK_RECV_NOT_SUPPORTED`+`ENOTSUP`이다.
-- Bind 또는 connect 전에 PACKET을 설정하면 성공하고 `zlink_stream_recv_packet()`만 허용되며
+- Bind 전에 PACKET을 설정하면 성공하고 `zlink_stream_recv_packet()`만 허용되며
   raw recv는 `ZLINK_RECV_NOT_SUPPORTED`+`ENOTSUP`이다.
-- Failed bind/connect는 mode를 고정하지 않고, 첫 successful bind/connect 뒤 mode와 NOTIFY setter는
+- Failed bind는 mode를 고정하지 않고, 첫 successful bind 뒤 mode와 NOTIFY setter는
   같은 값 설정도 `ZLINK_CONFIG_INVALID_STATE`+`EBUSY`로 실패한다.
 - PACKET과 `NOTIFY=1`의 충돌 조합을 만드는 두 번째 setter는 순서와 관계없이
   `ZLINK_CONFIG_NOT_SUPPORTED`+`ENOTSUP`로 실패하고 기존 상태를 보존한다.

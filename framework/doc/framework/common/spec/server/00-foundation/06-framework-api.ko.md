@@ -393,8 +393,9 @@ Operation별 call object는 해당 기능에 유효한 설정만 제공한다.
 Server package의 one-way send·publish·명시적 STREAM reply는
 [비동기 실행 정책](../01-execution/01-submit-and-completion.ko.md)의 async-only admission 계약을 따른다. Public call은
 즉시 한 번만 시도하는 동기 terminator를 함께 제공하지 않는다. 별도 stream connector package의 send
-builder는 connector package 계약을 따른다. Request timeout은 reply 대기에만 적용하고 send timeout은
-transport admission 대기에 적용한다.
+builder는 connector package 계약을 따른다. Send timeout은 transport admission 대기에, request timeout은
+reply 대기에 적용한다. Global object request의 admission 대기와 timeout budget은
+[Submit과 완료 §7·§9](../01-execution/01-submit-and-completion.ko.md#7-admission-deadline--owner와-값-규칙)가 정한다.
 최초 non-blocking transport submit이 즉시 수락되면 Framework scheduler나 별도 work queue에 추가하지
 않고 이미 완료되었거나 resolved된 언어별 awaitable을 반환한다.
 

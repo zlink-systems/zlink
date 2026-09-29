@@ -133,7 +133,7 @@ The measured cells and their reference values are checked in as
 | `dealer_router_reqrep_inproc` | DEALER request → ROUTER reply → completion, instructions per request |
 | `pair_inproc` | PAIR one-way |
 | `router_router_tcp` | ROUTER↔ROUTER one-way (count-2 negative control) |
-| `stream_tcp` | STREAM↔STREAM TCP one-way, instructions per message |
+| `stream_tcp` | STREAM bind ↔ external raw TCP client, one-way, instructions per message |
 
 The reference is the value of a verified release or an approved change; an intended cost increase
 is recorded only by a supervisory decision with its rationale. Implementation work does not edit
