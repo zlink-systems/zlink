@@ -1,8 +1,10 @@
 package systems.zlink.framework.execution;
 
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 
 import java.time.Duration;
 import java.util.ArrayDeque;
@@ -55,8 +57,36 @@ public final class ZLinkSerialExecutionQueue {
     private int suspendedLifecycleContinuations;
     private long turnClaimedAtNanos;
     private RelocationState relocation;
+    private boolean closingAdmissionSealed;
     private boolean relocated;
     private final List<QuiescenceWaiter> quiescenceWaiters = new ArrayList<>();
+
+    public synchronized void sealClosingAdmission() {
+        if (relocation == null) {
+            closingAdmissionSealed = true;
+        }
+    }
+
+    /**
+     * The one admission decision of this queue (spec 03-spot-actor/06-spot-address-messaging §7): a
+     * Closing seal rejects new work, a relocated owner reports the post-cut arrival, and otherwise
+     * the queue accepts. A relocation seal is not a rejection; the caller holds the work.
+     */
+    private CompletionStage<Void> admissionFailureLocked() {
+        if (closingAdmissionSealed) {
+            return CompletableFuture.failedFuture(
+                    ZLinkFrameworkErrorOrigin.framework(
+                            ZLinkFrameworkErrorKind.REJECTED, "Spot is closing"));
+        }
+        return relocated ? CompletableFuture.failedFuture(new RelocatedOwnerException()) : null;
+    }
+
+    public synchronized CompletionStage<Void> admitIngress(
+            Supplier<CompletionStage<Void>> admission) {
+        Objects.requireNonNull(admission, "admission");
+        CompletionStage<Void> rejection = admissionFailureLocked();
+        return rejection == null ? admission.get() : rejection;
+    }
 
     public ZLinkSerialExecutionQueue() {
         this(ZLinkExecutionLanePolicy.generic());
@@ -114,11 +144,33 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     public CompletionStage<Void> enqueue(Supplier<CompletionStage<Void>> operation) {
+        return enqueue(operation, null);
+    }
+
+    public CompletionStage<Void> enqueue(
+            Supplier<CompletionStage<Void>> operation, CompletableFuture<Void> admission) {
+        EnqueueResult result;
+        CompletionStage<Void> rejection = null;
+        synchronized (this) {
+            rejection = admissionFailureLocked();
+            result = rejection == null ? enqueueAccepted(null, 0, operation) : null;
+        }
+        if (rejection != null) {
+            if (admission != null) {
+                rejection.whenComplete((done, failure) -> admission.completeExceptionally(failure));
+            }
+            return rejection;
+        }
+        scheduleDrainIfNeeded(result.scheduleDrain());
+        if (admission != null) admission.complete(null);
+        return result.result();
+    }
+
+    /** Enqueues work whose admission was already decided by its owner queue. */
+    public CompletionStage<Void> enqueuePreviouslyAccepted(
+            Supplier<CompletionStage<Void>> operation) {
         EnqueueResult result;
         synchronized (this) {
-            if (relocated) {
-                return CompletableFuture.failedFuture(new RelocatedOwnerException());
-            }
             result = enqueueAccepted(null, 0, operation);
         }
         scheduleDrainIfNeeded(result.scheduleDrain());
@@ -132,15 +184,28 @@ public final class ZLinkSerialExecutionQueue {
      */
     public CompletionStage<Void> enqueueWithPayloadBytes(
             long payloadBytes, Supplier<CompletionStage<Void>> operation) {
+        return enqueueWithPayloadBytes(payloadBytes, operation, null);
+    }
+
+    public CompletionStage<Void> enqueueWithPayloadBytes(
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
         EnqueueResult result;
+        CompletionStage<Void> rejection = null;
         synchronized (this) {
             validatePayloadBytes(payloadBytes);
-            if (relocated) {
-                return CompletableFuture.failedFuture(new RelocatedOwnerException());
+            rejection = admissionFailureLocked();
+            result = rejection == null ? enqueueAccepted(null, payloadBytes, operation) : null;
+        }
+        if (rejection != null) {
+            if (admission != null) {
+                rejection.whenComplete((done, failure) -> admission.completeExceptionally(failure));
             }
-            result = enqueueAccepted(null, payloadBytes, operation);
+            return rejection;
         }
         scheduleDrainIfNeeded(result.scheduleDrain());
+        if (admission != null) admission.complete(null);
         return result.result();
     }
 
@@ -172,35 +237,52 @@ public final class ZLinkSerialExecutionQueue {
     public CompletionStage<Void> enqueueBarrierNext(Supplier<CompletionStage<Void>> operation) {
         EnqueueResult result;
         synchronized (this) {
-            Objects.requireNonNull(operation, "operation");
             if (relocated) {
                 return CompletableFuture.failedFuture(new RelocatedOwnerException());
             }
-            if (nextSequence == Long.MAX_VALUE) {
-                throw new IllegalStateException("queue sequence exhausted");
-            }
-            Entry entry =
-                    new Entry(
-                            nextSequence++,
-                            (byte[]) null,
-                            operation,
-                            () -> {},
-                            new CompletableFuture<>(),
-                            ZLinkFlowContext.current(),
-                            null,
-                            Lane.LIFECYCLE,
-                            false);
-            outstanding++;
-            if (relocation != null) {
-                holdRelocationEntry(entry);
-                result = new EnqueueResult(entry.result, false);
-            } else {
-                lifecyclePending.addLast(entry);
-                result = new EnqueueResult(entry.result, requestDrainLocked());
-            }
+            result = enqueueBarrierNextLocked(operation);
         }
         scheduleDrainIfNeeded(result.scheduleDrain());
         return result.result();
+    }
+
+    public CompletionStage<Void> enqueueLifecycleAdmission(
+            Supplier<CompletionStage<Void>> operation) {
+        EnqueueResult result;
+        synchronized (this) {
+            CompletionStage<Void> rejection = admissionFailureLocked();
+            if (rejection != null) {
+                return rejection;
+            }
+            result = enqueueBarrierNextLocked(operation);
+        }
+        scheduleDrainIfNeeded(result.scheduleDrain());
+        return result.result();
+    }
+
+    private EnqueueResult enqueueBarrierNextLocked(Supplier<CompletionStage<Void>> operation) {
+        Objects.requireNonNull(operation, "operation");
+        if (nextSequence == Long.MAX_VALUE) {
+            throw new IllegalStateException("queue sequence exhausted");
+        }
+        Entry entry =
+                new Entry(
+                        nextSequence++,
+                        (byte[]) null,
+                        operation,
+                        () -> {},
+                        new CompletableFuture<>(),
+                        ZLinkFlowContext.current(),
+                        null,
+                        Lane.LIFECYCLE,
+                        false);
+        outstanding++;
+        if (relocation != null) {
+            holdRelocationEntry(entry);
+            return new EnqueueResult(entry.result, false);
+        }
+        lifecyclePending.addLast(entry);
+        return new EnqueueResult(entry.result, requestDrainLocked());
     }
 
     /**
@@ -250,8 +332,9 @@ public final class ZLinkSerialExecutionQueue {
         synchronized (this) {
             Objects.requireNonNull(record, "record");
             Objects.requireNonNull(relocationRelease, "relocationRelease");
-            if (relocated) {
-                return CompletableFuture.failedFuture(new RelocatedOwnerException());
+            CompletionStage<Void> rejection = admissionFailureLocked();
+            if (rejection != null) {
+                return rejection;
             }
             result = enqueueAccepted(record.clone(), record.length, operation, relocationRelease);
         }
@@ -268,44 +351,67 @@ public final class ZLinkSerialExecutionQueue {
             long recordSizeHint,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease) {
+        return enqueueRelocatableLazyRecord(
+                record, recordSizeHint, operation, relocationRelease, null);
+    }
+
+    public CompletionStage<Void> enqueueRelocatableLazyRecord(
+            Supplier<byte[]> record,
+            long recordSizeHint,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission) {
         EnqueueResult result;
+        CompletionStage<Void> immediate = null;
+        boolean accepted = false;
         synchronized (this) {
             Objects.requireNonNull(record, "record");
             Objects.requireNonNull(operation, "operation");
             Objects.requireNonNull(relocationRelease, "relocationRelease");
             validatePayloadBytes(recordSizeHint);
-            if (relocated) {
-                return CompletableFuture.failedFuture(new RelocatedOwnerException());
-            }
-            if (nextSequence == Long.MAX_VALUE) {
-                throw new IllegalStateException("queue sequence exhausted");
-            }
-            if (relocation != null) {
-                return holdRelocationIngress(record, operation, relocationRelease);
+            immediate = admissionFailureLocked();
+            if (immediate == null) {
+                if (nextSequence == Long.MAX_VALUE) {
+                    throw new IllegalStateException("queue sequence exhausted");
+                }
+                accepted = true;
+                if (relocation != null) {
+                    immediate = holdRelocationIngress(record, operation, relocationRelease);
+                }
             }
             Entry entry =
-                    new Entry(
-                            nextSequence++,
-                            record,
-                            operation,
-                            relocationRelease,
-                            new CompletableFuture<>(),
-                            ZLinkFlowContext.current(),
-                            null,
-                            Lane.APPLICATION,
-                            false);
-            outstanding++;
-            applicationPending.addLast(entry);
-            result = new EnqueueResult(entry.result, requestDrainLocked());
+                    immediate == null
+                            ? new Entry(
+                                    nextSequence++,
+                                    record,
+                                    operation,
+                                    relocationRelease,
+                                    new CompletableFuture<>(),
+                                    ZLinkFlowContext.current(),
+                                    null,
+                                    Lane.APPLICATION,
+                                    false)
+                            : null;
+            if (entry != null) {
+                outstanding++;
+                applicationPending.addLast(entry);
+            }
+            result = entry == null ? null : new EnqueueResult(entry.result, requestDrainLocked());
         }
-        scheduleDrainIfNeeded(result.scheduleDrain());
+        if (immediate == null) scheduleDrainIfNeeded(result.scheduleDrain());
+        if (admission != null) {
+            if (accepted) admission.complete(null);
+            else
+                immediate.whenComplete((done, failure) -> admission.completeExceptionally(failure));
+        }
+        if (immediate != null) return immediate;
         return result.result();
     }
 
     public boolean tryEnqueue(Supplier<CompletionStage<Void>> operation) {
         EnqueueResult result;
         synchronized (this) {
-            if (relocated) {
+            if (admissionFailureLocked() != null) {
                 return false;
             }
             result = enqueueAccepted(null, 0, operation);
@@ -324,7 +430,7 @@ public final class ZLinkSerialExecutionQueue {
         EnqueueResult result;
         synchronized (this) {
             validatePayloadBytes(payloadBytes);
-            if (relocated) {
+            if (admissionFailureLocked() != null) {
                 return false;
             }
             result = enqueueAccepted(null, payloadBytes, operation);
@@ -337,7 +443,7 @@ public final class ZLinkSerialExecutionQueue {
         EnqueueResult result;
         synchronized (this) {
             Objects.requireNonNull(record, "record");
-            if (relocated) {
+            if (admissionFailureLocked() != null) {
                 return false;
             }
             result = enqueueAccepted(record.clone(), record.length, operation);
@@ -945,6 +1051,8 @@ public final class ZLinkSerialExecutionQueue {
     private CompletionStage<Void> invokeInline(Entry entry) {
         CompletableFuture<Void> gate = new CompletableFuture<>();
         CompletableFuture<Void> invocationReturned = new CompletableFuture<>();
+        boolean releaseGateOnIncompleteStage =
+                lanePolicy.releasesGateOnIncompleteStage() && entry.relocationBoundary == null;
         ZLinkSerialExecutionQueue previous = CURRENT.get();
         CompletableFuture<Void> previousGate = CURRENT_GATE.get();
         Boolean previousDeferred = CURRENT_RELEASE_DEFERRED.get();
@@ -977,11 +1085,11 @@ public final class ZLinkSerialExecutionQueue {
                         } else {
                             entry.result.complete(null);
                         }
-                        if (!lanePolicy.releasesGateOnIncompleteStage()) {
+                        if (!releaseGateOnIncompleteStage) {
                             gate.complete(null);
                         }
                     });
-            if (lanePolicy.releasesGateOnIncompleteStage()
+            if (releaseGateOnIncompleteStage
                     && !Boolean.TRUE.equals(CURRENT_RELEASE_DEFERRED.get())) {
                 gate.complete(null);
             }

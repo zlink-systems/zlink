@@ -219,7 +219,7 @@ PUB/SUB channel을 쓴다.
 `zlink-framework-java-samples` Gradle build를 통해 모든 sample module을 함께 읽는다. 이
 `samples/` 디렉터리를 바로 열면 sample 빌드만 읽는다.
 
-개별 sample 디렉터리는 전용 runner용 `standalone.settings.gradle.kts`를 사용하고 중첩
+Sample runner는 공통 `samples/` Gradle root에서 빌드하며, 개별 sample 디렉터리에 중첩
 `settings.gradle.kts` root를 추가하지 않는다. 공유 message 계약은 `shared/contracts`
 아래에 있다. Server topology·ChannelName·endpoint·packet·timing 설정은
 `server/configuration`, client 전용 설정은 `client/configuration` 아래에 있다.

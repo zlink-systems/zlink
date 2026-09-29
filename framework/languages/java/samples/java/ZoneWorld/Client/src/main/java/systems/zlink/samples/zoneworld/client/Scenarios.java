@@ -620,22 +620,40 @@ final class Scenarios {
             resetMaintenance(ops);
             Messages.JoinWorldNotify join = player.join();
             ensure(join.error() == null, "JoinWorld failed: " + join.error());
-            Messages.ZoneStateNotify boundary =
-                    waitFor(
-                                    player.connector,
-                                    Messages.ZoneStateNotify.class,
-                                    value -> aboutToCross(value) != null,
-                                    Duration.ofSeconds(45))
-                            .toCompletableFuture()
-                            .join()
-                            .payload();
-            Messages.PlayerView bot = aboutToCross(boundary);
-            String targetZone = bot.zoneId().equals("zone-nw") ? "zone-ne" : "zone-nw";
-            String node = nodeOwning(ops.watch(), targetZone);
+            waitFor(
+                            player.connector,
+                            Messages.ZoneStateNotify.class,
+                            state ->
+                                    state.players().stream()
+                                            .anyMatch(
+                                                    bot ->
+                                                            "bot-nw-x".equals(bot.playerId())
+                                                                    && "zone-nw"
+                                                                            .equals(bot.zoneId())
+                                                                    && bot.x() >= 25
+                                                                    && bot.x() <= 35),
+                            Duration.ofSeconds(45))
+                    .toCompletableFuture()
+                    .join();
+            String node = nodeOwning(ops.watch(), "zone-ne");
             ops.maintenance(node, true);
             try {
+                Messages.ZoneStateNotify boundary =
+                        waitFor(
+                                        player.connector,
+                                        Messages.ZoneStateNotify.class,
+                                        value -> {
+                                            Messages.PlayerView candidate = aboutToCross(value);
+                                            return candidate != null
+                                                    && "bot-nw-x".equals(candidate.playerId())
+                                                    && "zone-nw".equals(candidate.zoneId());
+                                        },
+                                        Duration.ofSeconds(45))
+                                .toCompletableFuture()
+                                .join()
+                                .payload();
+                Messages.PlayerView bot = aboutToCross(boundary);
                 int initial = bot.x();
-                boolean east = bot.zoneId().equals("zone-nw");
                 Messages.ZoneStateNotify reversed =
                         waitFor(
                                         player.connector,
@@ -649,13 +667,8 @@ final class Scenarios {
                                                                                         .equals(
                                                                                                 bot
                                                                                                         .playerId())
-                                                                                && (east
-                                                                                        ? candidate
-                                                                                                        .x()
-                                                                                                < initial
-                                                                                        : candidate
-                                                                                                        .x()
-                                                                                                > initial)),
+                                                                                && candidate.x()
+                                                                                        < initial),
                                         Duration.ofSeconds(45))
                                 .toCompletableFuture()
                                 .join()

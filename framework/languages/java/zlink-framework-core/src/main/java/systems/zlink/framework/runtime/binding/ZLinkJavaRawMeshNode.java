@@ -80,7 +80,6 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -145,11 +144,7 @@ final class ZLinkJavaRawMeshNode
     private final Map<Long, PeerIntent> peerIntents = new ConcurrentHashMap<>();
     private final Map<RoutingId, PeerAdmissionExpectation> peerAdmissionExpectations =
             new ConcurrentHashMap<>();
-    private final Map<RoutingId, Map<String, Integer>> admittedPeerChannels =
-            new ConcurrentHashMap<>();
     private final Map<RoutingId, Map<String, Integer>> knownPeerChannels =
-            new ConcurrentHashMap<>();
-    private final Map<RoutingId, ZLinkServiceNodeDescriptor.ObjectRole> admittedPeerObjectRoles =
             new ConcurrentHashMap<>();
     private final Set<RoutingId> notRequiredPeers = ConcurrentHashMap.newKeySet();
     private final Set<RoutingId> rejectedPeers = ConcurrentHashMap.newKeySet();
@@ -993,8 +988,6 @@ final class ZLinkJavaRawMeshNode
         peerIntentRoutingIds.remove(connectionIntentId);
         if (removed != null && router != null) {
             if (removed.expectedRoutingId() != null) {
-                admittedPeerChannels.remove(removed.expectedRoutingId());
-                admittedPeerObjectRoles.remove(removed.expectedRoutingId());
                 notRequiredPeers.remove(removed.expectedRoutingId());
                 rejectedPeers.remove(removed.expectedRoutingId());
                 nextAnnouncementNanos.remove(removed.expectedRoutingId());
@@ -1034,7 +1027,9 @@ final class ZLinkJavaRawMeshNode
                 channelWeights.size(),
                 peerIntents.size(),
                 Math.toIntExact(
-                        admittedPeerChannels.keySet().stream().filter(this::isReadyPeer).count()),
+                        topology == null
+                                ? 0
+                                : topology.peers().stream().filter(this::isReadyPeer).count()),
                 0,
                 0,
                 0,
@@ -1058,9 +1053,11 @@ final class ZLinkJavaRawMeshNode
                                                 MeshPeerSource.MANUAL,
                                                 isReadyPeer(entry.getValue())
                                                         ? MeshPeerState.ADMITTED
-                                                        : admittedPeerChannels.containsKey(
-                                                                        entry.getValue()
-                                                                                .expectedRoutingId())
+                                                        : topology != null
+                                                                        && topology.peer(
+                                                                                        entry.getValue()
+                                                                                                .expectedRoutingId())
+                                                                                .isPresent()
                                                                 ? MeshPeerState.CONNECTING
                                                                 : notRequiredPeers.contains(
                                                                                 entry.getValue()
@@ -1172,7 +1169,8 @@ final class ZLinkJavaRawMeshNode
         }
         if (selectedIntent != null) {
             PeerIntent intent = selectedIntent.getValue();
-            if (isReadyPeer(intent) || admittedPeerChannels.containsKey(targetNodeRid)) {
+            if (isReadyPeer(intent)
+                    || (topology != null && topology.peer(targetNodeRid).isPresent())) {
                 return Optional.empty();
             }
             if (notRequiredPeers.contains(targetNodeRid)) {
@@ -1217,25 +1215,27 @@ final class ZLinkJavaRawMeshNode
                 peerRid,
                 new AutomaticNotRequiredPeer(
                         endpoint, lifecycleGeneration, currentTimeMillis.getAsLong()));
-        admittedPeerObjectRoles.put(peerRid, ZLinkServiceNodeDescriptor.ObjectRole.CLIENT);
     }
 
     @Override
     public void clearPeerConnectionNotRequired(RoutingId peerRid) {
         automaticNotRequiredPeers.remove(peerRid);
-        if (!notRequiredPeers.contains(peerRid) && !admittedPeerChannels.containsKey(peerRid)) {
-            admittedPeerObjectRoles.remove(peerRid);
-        }
     }
 
     @Override
     public PeerChannels peerChannels(RoutingId peerRid, long lifecycleGeneration) {
-        Map<String, Integer> channels = admittedPeerChannels.getOrDefault(peerRid, Map.of());
-        List<Map.Entry<String, Integer>> ordered =
-                channels.entrySet().stream().sorted(Map.Entry.comparingByKey()).toList();
+        List<ZLinkServiceNodeDescriptor.Channel> ordered =
+                (topology == null
+                                ? Optional.<ZLinkServiceTopologyRegistry.Peer>empty()
+                                : topology.peer(peerRid))
+                        .map(peer -> peer.descriptor().channels()).orElse(List.of()).stream()
+                                .sorted(
+                                        Comparator.comparing(
+                                                ZLinkServiceNodeDescriptor.Channel::name))
+                                .toList();
         return new PeerChannels(
-                ordered.stream().map(Map.Entry::getKey).toList(),
-                ordered.stream().map(Map.Entry::getValue).toList());
+                ordered.stream().map(ZLinkServiceNodeDescriptor.Channel::name).toList(),
+                ordered.stream().map(ZLinkServiceNodeDescriptor.Channel::weight).toList());
     }
 
     @Override
@@ -4181,26 +4181,6 @@ final class ZLinkJavaRawMeshNode
         }
     }
 
-    void admitPeerChannels(RoutingId peerRoutingId, Map<String, Integer> channels) {
-        Objects.requireNonNull(peerRoutingId, "peerRoutingId");
-        Map<String, Integer> validated = new LinkedHashMap<>();
-        channels.entrySet().stream()
-                .sorted(Map.Entry.comparingByKey())
-                .forEach(
-                        entry -> {
-                            String name = requireChannel(entry.getKey());
-                            int weight = entry.getValue();
-                            if (weight < 0 || weight > 10_000) {
-                                throw new IllegalArgumentException(
-                                        "peer channel weight must be in 0..10000");
-                            }
-                            validated.put(name, weight);
-                        });
-        Map<String, Integer> snapshot = Map.copyOf(validated);
-        admittedPeerChannels.put(peerRoutingId, snapshot);
-        knownPeerChannels.put(peerRoutingId, snapshot);
-    }
-
     @Override
     public void close() {
         if (!closed.compareAndSet(false, true)) {
@@ -4221,7 +4201,6 @@ final class ZLinkJavaRawMeshNode
                                     new IllegalStateException("MeshNode is closed"));
                         });
         pendingReplyRelays.clear();
-        admittedPeerChannels.clear();
         knownPeerChannels.clear();
         admissionControlReadyConnections.clear();
         selectedRoutes = Map.of();
@@ -4496,8 +4475,6 @@ final class ZLinkJavaRawMeshNode
                         int reason = wire.decodeReject(head);
                         if (reason == 4) {
                             disconnectAdmitted(inbound.source());
-                            admittedPeerObjectRoles.put(
-                                    inbound.source(), ZLinkServiceNodeDescriptor.ObjectRole.CLIENT);
                             notRequiredPeers.add(inbound.source());
                             disconnectNotRequiredTransport(inbound.source());
                         }
@@ -5356,9 +5333,10 @@ final class ZLinkJavaRawMeshNode
             ZLinkServiceM6BWireCodec.LogicalMulticast header =
                     statefulWire.decodeLogicalMulticastHeader(frames.getFirst());
             boolean admitted =
-                    admittedPeerChannels
-                            .getOrDefault(inbound.source(), Map.of())
-                            .containsKey(header.channelName());
+                    topology != null
+                            && topology.peer(inbound.source())
+                                    .map(peer -> peer.descriptor().serves(header.channelName()))
+                                    .orElse(false);
             if (!admitted) {
                 return;
             }
@@ -6496,7 +6474,6 @@ final class ZLinkJavaRawMeshNode
             if (routeMeshConnectionNotRequired(localDescriptor, descriptor)) {
                 disconnectAdmitted(inbound.source());
                 admissionControlReadyConnections.remove(inbound.source());
-                admittedPeerObjectRoles.put(inbound.source(), descriptor.objectRole());
                 notRequiredPeers.add(inbound.source());
                 trySendAdmissionControl(
                         inbound.source(), List.of(wire.encodeReject(4)), "route-not-required");
@@ -6526,14 +6503,13 @@ final class ZLinkJavaRawMeshNode
             // changes no peer state, so a concurrent reader never observes
             // the peer dropping out of readiness between a clear and the
             // re-mark.
-            admitPeerChannels(
+            knownPeerChannels.put(
                     inbound.source(),
                     descriptor.channels().stream()
                             .collect(
-                                    Collectors.toMap(
+                                    Collectors.toUnmodifiableMap(
                                             ZLinkServiceNodeDescriptor.Channel::name,
                                             ZLinkServiceNodeDescriptor.Channel::weight)));
-            admittedPeerObjectRoles.put(inbound.source(), descriptor.objectRole());
             liveness.admit(inbound.source(), connectionId, System.nanoTime());
             liveness.requestProbe(inbound.source(), connectionId, System.nanoTime());
             if (command == ServiceWireConstants.COMMAND_ADMIT) {
@@ -6886,10 +6862,6 @@ final class ZLinkJavaRawMeshNode
         if (connectionId.isEmpty() || !topology.disconnect(peer, connectionId)) {
             return false;
         }
-        admittedPeerChannels.remove(peer);
-        if (!notRequiredPeers.contains(peer)) {
-            admittedPeerObjectRoles.remove(peer);
-        }
         liveness.disconnect(peer, connectionId);
         return true;
     }
@@ -7101,7 +7073,17 @@ final class ZLinkJavaRawMeshNode
         if (routingId.equals(target)) {
             return objectRole == ZLinkServiceNodeDescriptor.ObjectRole.CLIENT;
         }
-        return admittedPeerObjectRoles.get(target) == ZLinkServiceNodeDescriptor.ObjectRole.CLIENT;
+        return (topology == null
+                        ? Optional.<ZLinkServiceTopologyRegistry.Peer>empty()
+                        : topology.peer(target))
+                .map(
+                        peer ->
+                                peer.descriptor().objectRole()
+                                        == ZLinkServiceNodeDescriptor.ObjectRole.CLIENT)
+                .orElseGet(
+                        () ->
+                                notRequiredPeers.contains(target)
+                                        || automaticNotRequiredPeers.containsKey(target));
     }
 
     private static long positiveRandomLong() {

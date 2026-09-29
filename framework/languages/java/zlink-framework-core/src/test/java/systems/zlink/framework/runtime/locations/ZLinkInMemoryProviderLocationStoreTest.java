@@ -19,6 +19,108 @@ final class ZLinkInMemoryProviderLocationStoreTest {
     private static final ZLinkStoreCancellation ACTIVE = () -> false;
 
     @Test
+    void valueConditionUsesCurrentBytesAndExpiryWithoutMutatingOnConflict() throws Exception {
+        var clock = new MutableClock(Instant.parse("2026-07-29T00:00:00Z"));
+        var store = new ZLinkInMemoryProviderLocationStore(clock);
+        var lease = new ZLinkStoreKey("lease");
+        var marker = new ZLinkStoreKey("marker");
+        byte[] expected = {0, (byte) 0xff};
+        var put = new ZLinkStorePut(lease, expected, Duration.ofMinutes(1));
+        var first =
+                assertInstanceOf(
+                        ZLinkStoreWriteApplied.class,
+                        store.write(new ZLinkStoreWriteRequest(List.of(), List.of(put)), ACTIVE)
+                                .toCompletableFuture()
+                                .get());
+        var second =
+                assertInstanceOf(
+                        ZLinkStoreWriteApplied.class,
+                        store.write(
+                                        new ZLinkStoreWriteRequest(
+                                                List.of(
+                                                        new ZLinkStoreVersionCondition(
+                                                                lease,
+                                                                first.putVersions().get(lease))),
+                                                List.of(put)),
+                                        ACTIVE)
+                                .toCompletableFuture()
+                                .get());
+        var condition = new ZLinkStoreValueCondition(lease, expected);
+        var markerWrite =
+                assertInstanceOf(
+                        ZLinkStoreWriteApplied.class,
+                        store.write(
+                                        new ZLinkStoreWriteRequest(
+                                                List.of(condition),
+                                                List.of(
+                                                        new ZLinkStorePut(
+                                                                marker, new byte[] {1}, null))),
+                                        ACTIVE)
+                                .toCompletableFuture()
+                                .get());
+        assertEquals(
+                second.putVersions().get(lease),
+                ((ZLinkStoreReadFound) store.read(lease, ACTIVE).toCompletableFuture().get())
+                        .value()
+                        .version());
+        for (byte[] replacement : List.of(new byte[] {2}, new byte[] {3})) {
+            store.write(
+                            new ZLinkStoreWriteRequest(
+                                    List.of(),
+                                    List.of(
+                                            new ZLinkStorePut(
+                                                    lease, replacement, Duration.ofMinutes(1)))),
+                            ACTIVE)
+                    .toCompletableFuture()
+                    .get();
+            assertInstanceOf(
+                    ZLinkStoreWriteConflict.class,
+                    store.write(
+                                    new ZLinkStoreWriteRequest(
+                                            List.of(condition),
+                                            List.of(new ZLinkStoreDelete(marker))),
+                                    ACTIVE)
+                            .toCompletableFuture()
+                            .get());
+            assertInstanceOf(
+                    ZLinkStoreReadFound.class,
+                    store.read(marker, ACTIVE).toCompletableFuture().get());
+        }
+        store.write(
+                        new ZLinkStoreWriteRequest(List.of(), List.of(new ZLinkStoreDelete(lease))),
+                        ACTIVE)
+                .toCompletableFuture()
+                .get();
+        assertInstanceOf(
+                ZLinkStoreWriteConflict.class,
+                store.write(
+                                new ZLinkStoreWriteRequest(
+                                        List.of(condition), List.of(new ZLinkStoreDelete(marker))),
+                                ACTIVE)
+                        .toCompletableFuture()
+                        .get());
+        store.write(new ZLinkStoreWriteRequest(List.of(), List.of(put)), ACTIVE)
+                .toCompletableFuture()
+                .get();
+        clock.advance(Duration.ofMinutes(1));
+        assertInstanceOf(
+                ZLinkStoreWriteConflict.class,
+                store.write(
+                                new ZLinkStoreWriteRequest(
+                                        List.of(condition), List.of(new ZLinkStoreDelete(marker))),
+                                ACTIVE)
+                        .toCompletableFuture()
+                        .get());
+        assertInstanceOf(
+                ZLinkStoreReadFound.class, store.read(marker, ACTIVE).toCompletableFuture().get());
+        assertEquals(
+                markerWrite.putVersions().get(marker),
+                ((ZLinkStoreReadFound) store.read(marker, ACTIVE).toCompletableFuture().get())
+                        .value()
+                        .version());
+    }
+
+    @Test
     void roundsFractionalMillisecondRetentionUp() throws Exception {
         Instant now = Instant.parse("2026-07-29T00:00:00Z");
         var store = new ZLinkInMemoryProviderLocationStore(Clock.fixed(now, ZoneOffset.UTC));

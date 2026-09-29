@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -21,6 +22,7 @@ import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
 import systems.zlink.framework.locationprovider.ZLinkStoreDelete;
@@ -113,9 +115,213 @@ final class ZLinkSpotCloseConformanceTest {
     static final AtomicBoolean HOLD_JOIN_CALLBACK = new AtomicBoolean();
     static volatile CompletableFuture<Void> handlerBlock = CompletableFuture.completedFuture(null);
     static volatile CompletableFuture<Void> handlerEntered = new CompletableFuture<>();
-    static volatile CompletableFuture<Void> spotJoined = new CompletableFuture<>();
+    static volatile CompletableFuture<Void> joinCallbackEntered = new CompletableFuture<>();
     static volatile CompletableFuture<Void> joinCallbackRelease = new CompletableFuture<>();
     static volatile CompletableFuture<Void> joinCompleted = new CompletableFuture<>();
+
+    @Test
+    void messageAcceptedWhileCloseAwaitsAuthorityReadAndMembershipPreventsCommit()
+            throws Exception {
+        resetStatics();
+        String spotId = "close-race-" + UUID.randomUUID();
+        FaultStore store = new FaultStore(new ZLinkInMemoryLocationStore(), spotId);
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(store);
+        var node = options.addRouteMesh("close-mesh");
+        node.listen("inproc://spot-close-" + UUID.randomUUID())
+                .setRoutingId(RoutingId.from("spot-close-" + UUID.randomUUID()));
+        var objects = node.objects().server();
+        objects.addEntrySpot(EntrySpot.class);
+        objects.addSpotFactory(SPOT_TYPE, CloseSpot.class, factory -> factory.disableRelocation());
+        objects.addActorFactory(
+                "player",
+                Player.class,
+                PlayerFactory.class,
+                factory -> factory.disableRelocation());
+
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
+            SpotRef ref = create(runtime, spotId);
+            store.holdNextAuthorityRead.set(true);
+            CompletableFuture<Boolean> closing = closeStage(runtime, ref);
+            store.authorityReadEntered.get(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertEquals(
+                    spotId, request(runtime, spotId).get(WAIT_SECONDS, TimeUnit.SECONDS).spotId());
+            join(runtime, spotId);
+            store.releaseAuthorityRead.complete(null);
+            assertFalse(closing.get(WAIT_SECONDS, TimeUnit.SECONDS));
+            assertEquals(1, HANDLER_CALLS.get());
+        } finally {
+            store.releaseAuthorityRead.complete(null);
+        }
+    }
+
+    @Test
+    void drainingRejectsNewSpotAdmissionWithShuttingDown() throws Exception {
+        resetStatics();
+        handlerBlock = new CompletableFuture<>();
+        String spotId = "draining-" + UUID.randomUUID();
+        FaultStore store = new FaultStore(new ZLinkInMemoryLocationStore(), spotId);
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(store);
+        var node = options.addRouteMesh("close-mesh");
+        node.listen("inproc://spot-close-" + UUID.randomUUID())
+                .setRoutingId(RoutingId.from("spot-close-" + UUID.randomUUID()));
+        var objects = node.objects().server();
+        objects.addEntrySpot(EntrySpot.class);
+        objects.addSpotFactory(SPOT_TYPE, CloseSpot.class, factory -> factory.disableRelocation());
+
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
+            create(runtime, spotId);
+            CompletableFuture<Reply> accepted = request(runtime, spotId);
+            handlerEntered.get(WAIT_SECONDS, TimeUnit.SECONDS);
+            CompletionStage<?> draining = runtime.shutdown(Duration.ofSeconds(30));
+            ExecutionException failure =
+                    assertThrows(
+                            ExecutionException.class,
+                            () -> request(runtime, spotId).get(WAIT_SECONDS, TimeUnit.SECONDS));
+            assertEquals(
+                    ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+            ExecutionException sendFailure =
+                    assertThrows(
+                            ExecutionException.class,
+                            () ->
+                                    runtime.route()
+                                            .sendToSpot(spotId, new Probe(spotId))
+                                            .submit()
+                                            .toCompletableFuture()
+                                            .get(WAIT_SECONDS, TimeUnit.SECONDS));
+            assertEquals(
+                    ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                    assertInstanceOf(ZLinkFrameworkException.class, sendFailure.getCause()).kind());
+            handlerBlock.complete(null);
+            accepted.get(WAIT_SECONDS, TimeUnit.SECONDS);
+            draining.toCompletableFuture().get(WAIT_SECONDS * 3, TimeUnit.SECONDS);
+        } finally {
+            handlerBlock.complete(null);
+        }
+    }
+
+    @Test
+    void acceptedRequestReceivesHandlerFailureDuringHostDrain() throws Exception {
+        resetStatics();
+        handlerBlock = new CompletableFuture<>();
+        String spotId = "draining-error-" + UUID.randomUUID();
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        var node = options.addRouteMesh("close-mesh");
+        node.listen("inproc://spot-close-" + UUID.randomUUID())
+                .setRoutingId(RoutingId.from("spot-close-" + UUID.randomUUID()));
+        var objects = node.objects().server();
+        objects.addEntrySpot(EntrySpot.class);
+        objects.addSpotFactory(SPOT_TYPE, CloseSpot.class, factory -> factory.disableRelocation());
+
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
+            create(runtime, spotId);
+            CompletableFuture<Reply> accepted = request(runtime, spotId);
+            handlerEntered.get(WAIT_SECONDS, TimeUnit.SECONDS);
+            CompletionStage<?> draining = runtime.shutdown(Duration.ofSeconds(30));
+            handlerBlock.completeExceptionally(new IllegalStateException("accepted-handler-error"));
+            ExecutionException failure =
+                    assertThrows(
+                            ExecutionException.class,
+                            () -> accepted.get(WAIT_SECONDS, TimeUnit.SECONDS));
+            assertEquals(
+                    ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+            draining.toCompletableFuture().get(WAIT_SECONDS * 3, TimeUnit.SECONDS);
+        } finally {
+            handlerBlock.complete(null);
+        }
+    }
+
+    @Test
+    void routeAcceptedBeforeClosingSealCompletesAfterSeal() throws Exception {
+        resetStatics();
+        HANDLER_MODE.set("firstBlock");
+        handlerBlock = new CompletableFuture<>();
+        CompletableFuture<Void> firstBlock = handlerBlock;
+        CompletableFuture<Void> secondBlock = new CompletableFuture<>();
+        String spotId = "accepted-before-close-" + UUID.randomUUID();
+        FaultStore store = new FaultStore(new ZLinkInMemoryLocationStore(), spotId);
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(store);
+        var node = options.addRouteMesh("close-mesh");
+        node.listen("inproc://spot-close-" + UUID.randomUUID())
+                .setRoutingId(RoutingId.from("spot-close-" + UUID.randomUUID()));
+        var objects = node.objects().server();
+        objects.addEntrySpot(EntrySpot.class);
+        objects.addSpotFactory(SPOT_TYPE, CloseSpot.class, factory -> factory.disableRelocation());
+
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
+            SpotRef ref = create(runtime, spotId);
+            CompletableFuture<Reply> first = request(runtime, spotId);
+            handlerEntered.get(WAIT_SECONDS, TimeUnit.SECONDS);
+            handlerBlock = secondBlock;
+            CompletableFuture<Reply> second = request(runtime, spotId);
+            SpotActivation activation =
+                    ((ZLinkSpotRuntime) runtime.spotManager())
+                            .spotLifecycle()
+                            .spotActivationFor(spotId);
+            var serialsField = DefaultSpotContext.class.getDeclaredField("serials");
+            serialsField.setAccessible(true);
+            var serials = serialsField.get(activation.context);
+            var spotQueueField = ZLinkSpotSerialExecutor.class.getDeclaredField("spotQueue");
+            spotQueueField.setAccessible(true);
+            var queue = spotQueueField.get(serials);
+            var outstandingField = ZLinkSerialExecutionQueue.class.getDeclaredField("outstanding");
+            outstandingField.setAccessible(true);
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_SECONDS);
+            long outstanding;
+            while (true) {
+                synchronized (queue) {
+                    outstanding = (long) outstandingField.get(queue);
+                }
+                if (outstanding >= 2 || System.nanoTime() >= deadline) {
+                    break;
+                }
+                Thread.onSpinWait();
+            }
+            assertTrue(outstanding >= 2);
+            store.watchNextAuthorityPut.set(true);
+            CompletableFuture<Boolean> close = closeStage(runtime, ref);
+            firstBlock.complete(null);
+            store.closingAuthorityStored.get(WAIT_SECONDS, TimeUnit.SECONDS);
+            var closingSealField =
+                    ZLinkSerialExecutionQueue.class.getDeclaredField("closingAdmissionSealed");
+            closingSealField.setAccessible(true);
+            long sealDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_SECONDS);
+            boolean closingSealed;
+            while (true) {
+                synchronized (queue) {
+                    closingSealed = closingSealField.getBoolean(queue);
+                }
+                if (closingSealed || System.nanoTime() >= sealDeadline) {
+                    break;
+                }
+                Thread.onSpinWait();
+            }
+            assertTrue(closingSealed);
+            assertFalse(second.isDone());
+            assertFalse(close.isDone());
+            secondBlock.complete(null);
+            assertEquals(spotId, first.get(WAIT_SECONDS, TimeUnit.SECONDS).spotId());
+            assertEquals(spotId, second.get(WAIT_SECONDS, TimeUnit.SECONDS).spotId());
+            assertTrue(close.get(WAIT_SECONDS, TimeUnit.SECONDS));
+            assertEquals(2, HANDLER_CALLS.get());
+        } finally {
+            firstBlock.complete(null);
+            secondBlock.complete(null);
+        }
+    }
 
     @Test
     void runsEverySpotCloseFixtureScenario() throws Exception {
@@ -288,7 +494,7 @@ final class ZLinkSpotCloseConformanceTest {
             case "joinAcceptedThenManagerClose" -> {
                 HOLD_JOIN_CALLBACK.set(true);
                 scheduleJoin(runtime, spotId);
-                spotJoined.get(WAIT_SECONDS, TimeUnit.SECONDS);
+                joinCallbackEntered.get(WAIT_SECONDS, TimeUnit.SECONDS);
                 CompletableFuture<Boolean> close = closeStage(runtime, ref);
                 close.whenComplete((ignored, failure) -> EVENTS.add("closeCompleted"));
                 joinCallbackRelease.complete(null);
@@ -516,7 +722,7 @@ final class ZLinkSpotCloseConformanceTest {
         HOLD_JOIN_CALLBACK.set(false);
         handlerBlock = CompletableFuture.completedFuture(null);
         handlerEntered = new CompletableFuture<>();
-        spotJoined = new CompletableFuture<>();
+        joinCallbackEntered = new CompletableFuture<>();
         joinCallbackRelease = new CompletableFuture<>();
         joinCompleted = new CompletableFuture<>();
     }
@@ -598,6 +804,11 @@ final class ZLinkSpotCloseConformanceTest {
         private final String spotId;
         final AtomicBoolean conflictNextAuthorityPut = new AtomicBoolean();
         final AtomicBoolean failNextAuthorityDelete = new AtomicBoolean();
+        final AtomicBoolean holdNextAuthorityRead = new AtomicBoolean();
+        final AtomicBoolean watchNextAuthorityPut = new AtomicBoolean();
+        final CompletableFuture<Void> authorityReadEntered = new CompletableFuture<>();
+        final CompletableFuture<Void> closingAuthorityStored = new CompletableFuture<>();
+        final CompletableFuture<Void> releaseAuthorityRead = new CompletableFuture<>();
         final CompletableFuture<Void> authorityDeleted = new CompletableFuture<>();
 
         FaultStore(ZLinkLocationStore inner, String spotId) {
@@ -608,6 +819,12 @@ final class ZLinkSpotCloseConformanceTest {
         @Override
         public CompletionStage<ZLinkStoreReadResult> read(
                 ZLinkStoreKey key, ZLinkStoreCancellation cancellation) {
+            if (key.value().startsWith("authority\0")
+                    && key.value().endsWith("\0" + spotId)
+                    && holdNextAuthorityRead.compareAndSet(true, false)) {
+                authorityReadEntered.complete(null);
+                return releaseAuthorityRead.thenCompose(ignored -> inner.read(key, cancellation));
+            }
             return inner.read(key, cancellation);
         }
 
@@ -642,6 +859,16 @@ final class ZLinkSpotCloseConformanceTest {
                         new IllegalStateException("injected authority release failure"));
             }
             CompletionStage<ZLinkStoreWriteResult> written = inner.write(request, cancellation);
+            if (authorityPut && watchNextAuthorityPut.compareAndSet(true, false)) {
+                written =
+                        written.thenApply(
+                                result -> {
+                                    if (result instanceof ZLinkStoreWriteApplied) {
+                                        closingAuthorityStored.complete(null);
+                                    }
+                                    return result;
+                                });
+            }
             if (!authorityDelete) {
                 return written;
             }
@@ -706,15 +933,16 @@ final class ZLinkSpotCloseConformanceTest {
         @Override
         public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
                 String actorId, ZLinkMessage request) {
+            if (HOLD_JOIN_CALLBACK.compareAndSet(true, false)) {
+                joinCallbackEntered.complete(null);
+                return joinCallbackRelease.thenApply(ignored -> ZLinkSpotActorJoinResult.accept());
+            }
             return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
         }
 
         @Override
         public CompletionStage<Void> onJoinedActor(Player actor) {
-            spotJoined.complete(null);
-            if (HOLD_JOIN_CALLBACK.compareAndSet(true, false)) {
-                return joinCallbackRelease.thenRun(() -> EVENTS.add("joinCompleted"));
-            }
+            EVENTS.add("joinCompleted");
             return CompletableFuture.completedFuture(null);
         }
 
@@ -728,9 +956,19 @@ final class ZLinkSpotCloseConformanceTest {
             implements ZLinkSpotRequestHandler<CloseSpot, Probe, Reply> {
         @Override
         public CompletionStage<Reply> handle(CloseSpot spot, Probe request) {
-            HANDLER_CALLS.incrementAndGet();
+            int call = HANDLER_CALLS.incrementAndGet();
+            CompletableFuture<Void> blocked = handlerBlock;
             handlerEntered.complete(null);
             switch (HANDLER_MODE.get()) {
+                case "firstBlock" -> {
+                    CompletionStage<Reply> reply =
+                            blocked.thenApply(ignored -> new Reply(request.spotId()));
+                    return call == 1 ? reply : ZLinkSerialExecutionQueue.yieldCurrent(reply);
+                }
+                case "yieldUntilRelease" -> {
+                    return ZLinkSerialExecutionQueue.yieldCurrent(
+                            handlerBlock.thenApply(ignored -> new Reply(request.spotId())));
+                }
                 case "closeTwiceThenComplete" -> {
                     spot.context().close();
                     spot.context().close();

@@ -390,43 +390,45 @@ final class ZLinkUserSpotAggregateStagingOwner {
         if (consumed != null) {
             return CompletableFuture.failedFuture(consumed);
         }
-        CompletionStage<Void> replay = CompletableFuture.completedFuture(null);
+        List<CompletableFuture<Void>> replay = new ArrayList<>();
         for (Map.Entry<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> lane :
                 backlog.finalRequest.acceptedJournal().entrySet()) {
             for (ZLinkSerialExecutionQueue.QueuedRecord record : lane.getValue()) {
-                replay =
-                        replay.thenCompose(
-                                ignored ->
-                                        admitBacklogTurn(
-                                                () ->
-                                                        backlog.replayer.replay(
-                                                                lane.getKey(), record)));
+                replay.add(
+                        admitBacklogTurn(() -> backlog.replayer.replay(lane.getKey(), record))
+                                .toCompletableFuture());
             }
         }
         for (PendingIngress ingress : backlog.relayed) {
-            replay =
-                    replay.thenCompose(
-                            ignored ->
-                                    admitBacklogTurn(
-                                            () ->
-                                                    backlog.replayer.replayFrozen(
-                                                            ingress.laneId(), ingress.record())));
+            replay.add(
+                    admitBacklogTurn(
+                                    () ->
+                                            backlog.replayer.replayFrozen(
+                                                    ingress.laneId(), ingress.record()))
+                            .toCompletableFuture());
         }
         for (PendingIngress ingress : backlog.temporary) {
-            replay =
-                    replay.thenCompose(
-                            ignored -> admitBacklogTurn(() -> replayIngress(staged, ingress)));
+            replay.add(
+                    admitBacklogTurn(() -> replayIngress(staged, ingress))
+                            .whenComplete(
+                                    (ignored, failure) -> {
+                                        if (failure != null) {
+                                            notifyIngressFailure(ingress, unwrap(failure));
+                                        }
+                                    })
+                            .toCompletableFuture());
         }
-        return replay.thenRun(
-                () ->
-                        inStateLane(
-                                staged,
-                                () -> {
-                                    backend.resumeIngress(staged.spot, staged.ingressHold);
-                                    staged.durableBacklog = null;
-                                    staged.terminal = true;
-                                    return null;
-                                }));
+        return CompletableFuture.allOf(replay.toArray(CompletableFuture[]::new))
+                .whenComplete(
+                        (ignored, failure) ->
+                                inStateLane(
+                                        staged,
+                                        () -> {
+                                            backend.resumeIngress(staged.spot, staged.ingressHold);
+                                            staged.durableBacklog = null;
+                                            staged.terminal = true;
+                                            return null;
+                                        }));
     }
 
     private CompletionStage<Void> admitBacklogTurn(Supplier<CompletionStage<Void>> turn) {
@@ -448,14 +450,12 @@ final class ZLinkUserSpotAggregateStagingOwner {
                                 .thenApply(reply -> reply.stream().toList());
             }
         } catch (RuntimeException failure) {
-            notifyIngressFailure(ingress, failure);
             return CompletableFuture.failedFuture(failure);
         }
         return replay.handle(
                 (reply, failure) -> {
                     if (failure != null) {
                         Throwable cause = unwrap(failure);
-                        notifyIngressFailure(ingress, cause);
                         throw new CompletionException(cause);
                     }
                     if (ingress.reply() != null && !reply.isEmpty()) {

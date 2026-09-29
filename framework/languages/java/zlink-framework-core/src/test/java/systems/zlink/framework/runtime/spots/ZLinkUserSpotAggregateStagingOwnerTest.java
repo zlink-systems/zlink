@@ -24,6 +24,71 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkUserSpotAggregateStagingOwnerTest {
     @Test
+    void failedBacklogReplayDoesNotWithholdLaterAcceptedRecord() {
+        FakeBackend backend = new FakeBackend();
+        var owner = new ZLinkUserSpotAggregateStagingOwner(backend);
+        var request = request();
+        var staged = owner.stage(request, () -> false).toCompletableFuture().join();
+        List<Long> submitted = new ArrayList<>();
+        var backlog =
+                owner.closeDurableBacklog(
+                                staged,
+                                request,
+                                (lane, record) -> {
+                                    submitted.add(record.sequence());
+                                    return record.sequence() == 1
+                                            ? CompletableFuture.failedFuture(
+                                                    new IllegalStateException(
+                                                            "first replay failed"))
+                                            : CompletableFuture.completedFuture(null);
+                                })
+                        .toCompletableFuture()
+                        .join();
+        owner.publishHidden(backlog, Map.of("actor-a", 11L, "actor-b", 12L));
+        owner.openAdmission(staged);
+
+        assertThrows(
+                CompletionException.class,
+                () -> owner.drainDurableBacklog(backlog).toCompletableFuture().join());
+        assertEquals(List.of(1L, 2L, 3L), submitted);
+    }
+
+    @Test
+    void rejectedBacklogAdmissionFailsItsIngressAndStillSubmitsTheNext() {
+        FakeBackend backend = new FakeBackend();
+        backend.rejectAdmissionAt = 4;
+        backend.allowSpotReplay = true;
+        var owner = new ZLinkUserSpotAggregateStagingOwner(backend);
+        var request = request();
+        var staged = owner.stage(request, () -> false).toCompletableFuture().join();
+        AtomicInteger rejected = new AtomicInteger();
+        byte[] accepted =
+                ZLinkAcceptedJournalTestRecords.spot(
+                        "room-a", "room-a", 0, "spot.send", Map.of(), new byte[] {1});
+        assertTrue(
+                owner.acceptSpotIngress(
+                        staged, accepted, null, ignored -> rejected.incrementAndGet()));
+        assertTrue(
+                owner.acceptSpotIngress(
+                        staged, accepted, null, ignored -> fail("later replay must succeed")));
+        var backlog =
+                owner.closeDurableBacklog(
+                                staged,
+                                request,
+                                (lane, record) -> CompletableFuture.completedFuture(null))
+                        .toCompletableFuture()
+                        .join();
+        owner.publishHidden(backlog, Map.of());
+        owner.openAdmission(staged);
+
+        assertThrows(
+                CompletionException.class,
+                () -> owner.drainDurableBacklog(backlog).toCompletableFuture().join());
+        assertEquals(1, rejected.get());
+        assertEquals(1, backend.operations.stream().filter("replay:spot"::equals).count());
+    }
+
+    @Test
     void noParticipantIsVisibleBeforeAggregatePublish() {
         FakeBackend backend = new FakeBackend();
         ZLinkUserSpotAggregateStagingOwner owner = new ZLinkUserSpotAggregateStagingOwner(backend);
@@ -296,6 +361,29 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
         private final List<String> operations = new ArrayList<>();
         private final List<String> live = new ArrayList<>();
         private String failActor;
+        private int admissionCount;
+        private int rejectAdmissionAt;
+        private boolean allowSpotReplay;
+
+        @Override
+        public <T> CompletionStage<T> admitApplicationJob(
+                java.util.function.Supplier<CompletionStage<T>> turn) {
+            if (++admissionCount == rejectAdmissionAt) {
+                throw new IllegalStateException("backlog admission rejected");
+            }
+            return turn.get();
+        }
+
+        @Override
+        public CompletionStage<List<byte[]>> replaySpot(
+                Object preparedSpot, ZLinkSpotAcceptedJournal.Record record) {
+            if (!allowSpotReplay) {
+                return ZLinkUserSpotAggregateStagingOwner.StagingBackend.super.replaySpot(
+                        preparedSpot, record);
+            }
+            operations.add("replay:spot");
+            return CompletableFuture.completedFuture(List.of());
+        }
 
         @Override
         public CompletionStage<Object> prepareSpot(
