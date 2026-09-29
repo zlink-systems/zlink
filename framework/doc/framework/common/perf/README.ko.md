@@ -91,7 +91,7 @@ Object role과 Store 필요성은 [MeshNode 계약][mesh]을 따르며, Store가
 
 | Phase | 수행 주체와 결과 | 처리량 포함 |
 |---|---|---|
-| build/preflight | Script가 release 산출물·설정·OS·port·출력 경로를 확인한다 | 제외 |
+| build/preflight | 공통 runner가 release 산출물·설정·OS·port·출력 경로를 확인한다 | 제외 |
 | server start | Role별 process와 필요한 Store를 시작하고 §16 readiness를 확인한다 | 제외 |
 | connect/setup | CS client가 연결하고 create/bind를 끝내며 server-driven caller는 객체·consumer를 준비한다 | 별도 setup 수치 |
 | warmup | 실제 셀의 모든 connector 또는 logical stream으로 같은 호출을 실행한다 | 제외 |
@@ -149,11 +149,11 @@ Shell runner의 옵션 이름과 consumer는 다음과 같다. 미적용 옵션�
 
 | 옵션 | 기본값·범위 | Consumer와 의미 |
 |---|---|---|
-| `--scenario` | `run_single.sh` 필수; `run_perf.sh`는 전체 | Script가 §8.4·§11의 실행 이름을 선택한다 |
+| `--scenario` | `run_single.sh` 필수; `run_perf.sh`는 전체 | 공통 runner가 §8.4·§11의 실행 이름을 선택한다 |
 | `--connections` | 10000, 양의 int32 | CS connection pool만 소비하는 전체 physical connector 수 |
 | `--logical-streams` | 10000, 양의 int32 | Server-driven source의 workload loop가 소비하는 stream 수 |
-| `--client-count` | 1, 양의 int32 | Script·CS 분할 계획이 소비하는 client process 수; server-driven은 1 |
-| `--client-index` | 0, `0 <= index < count` | Script가 child CS client에 부여하는 분할 index; top-level 입력은 받지 않음 |
+| `--client-count` | 1, 양의 int32 | 공통 runner·CS 분할 계획이 소비하는 client process 수; server-driven은 1 |
+| `--client-index` | 0, `0 <= index < count` | 공통 runner가 child CS client에 부여하는 분할 index; top-level 입력은 받지 않음 |
 | `--duration-seconds` | 30, finite > 0 | 집계 owner의 measured window |
 | `--warmup-seconds` | 5, finite > 0 | 같은 owner의 warmup loop |
 | `--payload-size` | scenario 대표값; 1024 또는 4096 | `run_single.sh`와 payload factory가 소비 |
@@ -161,17 +161,17 @@ Shell runner의 옵션 이름과 consumer는 다음과 같다. 미적용 옵션�
 | `--inflight` | 1, 양의 int32 | CS는 connector별, server-driven은 stream별 logical operation 상한; PS는 publish admission 상한 |
 | `--connect-concurrency` | 256, 양의 int32 | CS pool의 동시 connect/setup 수; server-driven에는 없음 |
 | `--spot-count` | 16, 양의 int32 | Spot Object Server의 User Spot 준비와 stream→Spot mapping; §10.5 표준 matrix는 1/16 |
-| `--subscriber-count` | 8, 양의 int32 | PS script의 독립 Subscriber process 수 |
+| `--subscriber-count` | 8, 양의 int32 | PS 셀에서 공통 runner가 띄우는 독립 Subscriber process 수 |
 | `--worker-task-millis` | 5, 양의 int32 | Worker callback의 CPU 작업 시간 목표(§10.8) |
 | `--worker-pool-size` | 8, 양의 int32 | Worker host의 public MaxThreads 설정 |
 | `--mode` | scenario 고정값 | Scenario dispatcher가 `request`, `send-send`, `no-await`, `worker-offload`, `publish` 중 해당 값만 수락 |
 | `--terminal` | 일반은 `ordinary`, worker는 `yield` | §10.5·§10.8 handler가 `ordinary`/`yield`를 소비; 나머지는 ordinary 고정 |
 | `--channel-topology` | `routemesh` | `channel-echo-only` bootstrap이 `routemesh`/`clientserver`를 소비; 나머지 S2S Channel은 RouteMesh 고정 |
 | `--codec` | `json`만 수락 | Typed payload 설정 검증과 serializer metadata 기록 |
-| `--output` | `perf-results/<run-id>` | Writer·script가 사용하는 run root |
-| `--run-id` | UTC 표기+고유 suffix | Script가 자원·로그·결과 identity에 사용; `[A-Za-z0-9_-]+` |
-| `--endpoint-config` | Script 생성 파일 | Standalone client가 읽는 실제 endpoint manifest |
-| `--workload-config` | 표준 echo는 생략 | §23 script가 읽는 운영 workload manifest; 일반 셀과 구분 |
+| `--output` | `perf-results/<run-id>` | Writer·공통 runner가 사용하는 run root |
+| `--run-id` | UTC 표기+고유 suffix | 공통 runner가 자원·로그·결과 identity에 사용; `[A-Za-z0-9_-]+` |
+| `--endpoint-config` | 공통 runner 생성 파일 | Standalone client가 읽는 실제 endpoint manifest |
+| `--workload-config` | 표준 echo는 생략 | §23 공통 runner가 읽는 운영 workload manifest; 일반 셀과 구분 |
 | `--config` | Role 실행 시 필수 | 해당 server executable이 시작 전에 읽는 role config 파일 하나 |
 
 `run_perf.sh`는 각 payload에서 §10.5의 `ordinary/yield × SpotId 1/16`, §10.8의
@@ -180,7 +180,7 @@ Shell runner의 옵션 이름과 consumer는 다음과 같다. 미적용 옵션�
 
 ### 5.1 Role config와 endpoint manifest
 
-- **Script는 server 시작 전에 role config를 만든다.** Server가 시작할 때 필요한 Store,
+- **공통 runner는 server 시작 전에 role config를 만든다.** Server가 시작할 때 필요한 Store,
   listener, topology와 workload 값을 시작 뒤 생성하는 endpoint 파일에 의존할 수 없기 때문이다.
 - **Role executable은 config 파일 하나를 읽는다.** Endpoint·timeout을 환경 변수로 다시
   전달하면 설정 소유자가 둘이 되기 때문이다.
@@ -223,7 +223,7 @@ Subscriber는 `role=subscriber`, `roleInstance=subscriberId`로 각각 한 항�
 표준 echo의 role config에는 `requestTimeoutMs=1000`, `correlationExpiryMs=1000`,
 `settleTimeoutMs=5000`, `setupTimeoutMs=30000`, `adminTimeoutMs=5000`을 기록한다.
 앞의 request 값은 public request call, expiry는 harness correlation, settle은 phase owner,
-setup은 script/준비 caller, admin 값은 HTTP client가 소비한다. Family send timeout은
+setup은 공통 runner/준비 caller, admin 값은 HTTP client가 소비한다. Family send timeout은
 public socket 설정의 실제 값(표준 1000ms)을 기록한다([설정 소유 계약][submit]).
 
 Worker config에는 `minThreads=workerPoolSize`, `maxThreads=workerPoolSize`,
@@ -275,12 +275,12 @@ Casing은 언어 관례를 따르되 같은 언어 안에서 일관되게 사용
 
 | 위치 | 책임 |
 |---|---|
-| `Shared` | §12 DTO, payload pattern, §15 schema와 histogram |
+| `Shared` | §12 DTO, payload pattern, §15.3 histogram 기록(bounds는 §6.5의 공통 파일) |
 | `Client/Scenarios` | CS public connector call 또는 server-driven application trigger |
-| `Client/Support` | 설정·CS 분할·phase·admin 호출·결과 저장 |
+| `Client/Support` | 설정·CS 분할, 공통 runner 명령에 따른 phase 진행, client 원본 저장 |
 | `Servers/<Role>` | Public host 구성과 scenario별 typed handler·server workload |
 | `ServerSupport` | Application 계측, public status 수집, readiness와 process 자원 |
-| `scripts` | Build·preflight·process 시작·barrier·원본 수집·cleanup |
+| `scripts` | §6.5 공통 runner의 진입점 |
 
 `Program.*`은 옵션 해석, logging·DI·host 구성과 scenario 선택만 담당한다.
 새 runtime adapter나 raw frame 처리 helper는 이 구조에 포함하지 않는다.
@@ -337,6 +337,27 @@ Channel echo target은 같은 `Channel` 실행 프로젝트를 사용한다. Sub
 - **Request/send/Yield 호출과 완료 기록은 scenario handler 또는 loop에 보이게 둔다.**
   `EchoAsync` 같은 wrapper가 그 차이를 숨기면 완료 경계를 검토할 수 없기 때문이다.
 
+### 6.5 언어 공통 runner와 의존성
+
+- **셀 실행 절차와 결과 처리는 `framework/perf/` 한 곳이 소유한다.** §4의 phase 진행,
+  §15의 원본 수집·집계·schema 검증, §19의 환경·provenance 수집, §15.3 histogram bounds와
+  §14 metric catalog, admin endpoint(§16) 호출과 process 시작·barrier·cleanup(§9)이 여기에
+  해당한다. 이들은 언어와 무관하며, 언어마다 따로 두면 같은 판정이 언어 수만큼 생기기 때문이다.
+  각 언어의 role process와 client는 §15의 owner별 원본만 만든다.
+- **언어별 `scripts/`의 세 script는 공통 runner의 진입점이다.** 언어 이름과 그 언어의
+  role executable 위치를 정하고, §5의 CLI 입력은 그대로 공통 runner에 넘긴다. Measured loop와
+  Framework 호출은 계속 각 언어의 role process와 client가 소유한다(§6).
+- **Perf는 공개 registry에 publish된 Framework·bindings package를 참조한다.** 참조 방식은
+  sample의 사용자 모드([Framework workspace §2][workspace])와 같은 장치를 쓴다. 사용자가
+  받는 것과 같은 산출물을 측정해야 결과를 release에 대응시킬 수 있기 때문이다.
+
+```text
+framework/perf/
+|-- runner/        # §4 phase, §15 collection·aggregation, §19 provenance
+|-- schema/        # §15 result schema, §15.3 histogram bounds, §14 metric catalog
+`-- tests/
+```
+
 ## 7. 폴더 구성 규칙
 
 책임이 반복될 때만 폴더를 만든다. 파일 하나를 위한 `Utils`·`Common` 폴더를 추가하지 않는다.
@@ -345,7 +366,8 @@ Channel echo target은 같은 `Channel` 실행 프로젝트를 사용한다. Sub
 
 Scenario 파일은 §8.4 이름에 대응한다. 한 scenario의 비교 셀은 같은 파일의 설정으로 실행한다.
 `PerfRunPlan`은 CS ID 분할, `ConnectionPool`은 public 연결 준비·정리,
-`ScenarioRunner`는 phase, `MetricsClient`는 admin 호출, `ResultWriter`는 원본 저장을 맡는다.
+`ScenarioRunner`는 공통 runner의 control pipe 명령에 따른 phase 진행, `ResultWriter`는 client
+원본 저장을 맡는다. Admin endpoint 호출은 공통 runner가 한다(§6.5).
 Correlation과 in-flight 계측을 server에서도 사용하면 `Shared`에 한 번만 둔다.
 
 ### 7.2 server 폴더
@@ -435,12 +457,13 @@ Physical retry·completion drain·reconnect는 [Core][core-socket]와 [binding][
 | `run_perf.sh` | 필수 셀 전체의 순차 실행과 run index 작성 |
 | `collect_env.sh` | 공개 OS/runtime 정보와 산출물 provenance 수집 |
 
-Script는 §4의 phase를 실행하고 생성한 config·process handle·container ID를 기록한다.
+세 script는 §6.5의 공통 runner에 언어와 §5 입력을 넘겨 위 책임을 맡긴다.
+공통 runner는 §4의 phase를 실행하고 생성한 config·process handle·container ID를 기록한다.
 Build는 Java/Kotlin이 공유하는 build-only lock 안에서 수행하고 process 실행 전에 lock을 해제한다.
 Port와 Docker 격리는 §20을 따른다. Cleanup에서 이름·prefix로 process를 검색해 일괄 종료하지 않는다.
 
 여러 CS client는 서로 다른 index와 같은 cell/reset identity를 사용한다.
-Script는 count를 셀 사이에 합치지 않고 §15의 owner 원본을 모은다.
+공통 runner는 count를 셀 사이에 합치지 않고 §15의 owner 원본을 모은다.
 공통 bucket이나 identity가 다른 원본, 빠진 필수 role 원본은 실패 결과로 남긴다.
 Measured loop와 Framework 호출은 shell에 넣지 않는다.
 
@@ -1335,14 +1358,14 @@ DTO 자체가 nullable로 선언한 return 주소·reply·trigger reason은 그 
 
 | Endpoint | Consumer·입력·관찰 결과 |
 |---|---|
-| `GET /perf/ready` | Script가 단계별 준비 evidence를 조회한다; workload를 시작하지 않는다 |
+| `GET /perf/ready` | 공통 runner가 단계별 준비 evidence를 조회한다; workload를 시작하지 않는다 |
 | `POST /perf/reset` | Coordinator가 drained 상태에서 `{runId,cellId,resetSeq}`를 전달한다 |
 | `GET /perf/stats` | Collector가 현재 §15 PerfMetricsSnapshot을 받는다 |
 | `POST /app/perf/start` | Application trigger client가 §15 PerfTriggerRequest로 phase를 시작한다; metrics URL과 별도 listener |
 
 Application start는 수신 role의 측정 window를 열고 source role에서는 workload도 시작한다.
 CS server도 window 시작을 받되 connector 부하는 CS client만 생성한다.
-CS client process의 phase 제어는 script의 stdin/stdout JSON control pipe로 같은 Trigger DTO와
+CS client process의 phase 제어는 공통 runner의 stdin/stdout JSON control pipe로 같은 Trigger DTO와
 reset acknowledgement를 사용한다. 제어 메시지는 client application의 인터페이스이며 Framework API가 아니다.
 Receiver들의 phase 시작을 확인한 뒤 source와 CS client를 시작한다. Coordinator의 같은
 monotonic clock으로 각 trigger 발송·ack 수신을 기록해 시작 skew의 관찰 bound를 남긴다.
@@ -1451,7 +1474,7 @@ framework/languages/java/perf/
     `-- collect_env.sh
 ```
 
-Java 구현은 Gradle standalone runner를 제공한다. server metrics에는 JVM GC count, heap/non-heap 사용량,
+Java 구현은 role executable과 client를 Gradle로 build하고 실행 진입점을 제공한다. server metrics에는 JVM GC count, heap/non-heap 사용량,
 process CPU를 포함한다.
 
 ### 17.3 Kotlin
@@ -1521,15 +1544,18 @@ framework/languages/cpp/perf/
     `-- collect_env.sh
 ```
 
-C++ 구현은 release build 산출물을 사용한다. core runtime 또는 bindings runtime 경로가 source보다
-오래되면 runner가 실패해야 한다. 성능 수치를 오래된 runtime으로 해석하면 안 된다.
+C++ 구현은 release build 산출물을 사용한다. 공통 runner는 동적으로 load한 Core는 실제 load
+경로의 산출물을, 정적으로 연결한 bindings·Framework는 연결한 package 산출물을 §19 provenance에
+version과 artifact hash로 기록하고, 선언한 version·hash와 다르면 실패한다. 성능 수치를 다른
+산출물로 해석하면 안 된다.
 
 ## 18. 구현 순서
 
-언어별 runner는 아래 순서로 같은 공개 호출과 결과를 맞춘다. 이 순서는 구현 의존 관계이며
+각 언어의 role process와 client는 아래 순서로 같은 공개 호출과 결과를 맞춘다. 1단계의 cell
+schema·histogram bounds·집계와 격리 절차는 §6.5의 공통 runner가 한 번 갖춘다. 이 순서는 구현 의존 관계이며
 실행·성능 검증이 끝났다는 뜻이 아니다.
 
-1. Typed JSON DTO, cell schema, clock·histogram·error mapping과 격리 script를 작성한다.
+1. Typed JSON DTO, clock·histogram 기록·error mapping과 공통 runner의 진입점 script를 작성한다.
 2. Public status 기반 readiness, reset barrier, application trigger와 window/settle 기록을 연결한다.
 3. `session-echo-only`로 connector·phase·집계를 확인한다.
 4. `cs-local-session-actor-echo`, `cs-remote-session-actor-echo`를 구성한다.
@@ -1590,7 +1616,7 @@ Container image digest, container ID, 실제 mapped port, provider version과 na
 Store 없는 manual Channel/session baseline을 실행할 때만 Docker 의존성이 없다.
 Location Store와 Relocation Store의 계약을 합치지 않는다([Location][g-store], [Relocation][g-relocation-store]).
 
-Script는 FD limit, ephemeral port 범위, listen backlog, TCP TIME_WAIT 정책, CPU·memory 제한,
+공통 runner는 FD limit, ephemeral port 범위, listen backlog, TCP TIME_WAIT 정책, CPU·memory 제한,
 client/server의 host 배치를 확인하고 부족한 항목을 preflight 실패로 보고한다. 전역 OS 값을 자동
 변경하지 않는다. 같은 host의 loopback 결과는 CPU 경쟁을 포함한 결과로 기록한다.
 다른 host 배치는 §15.2의 clock 근거와 함께 남긴다.
@@ -1836,3 +1862,4 @@ counter를 함께 보존한다. 내부 permit leak·source handoff 검증을 per
 [c-connector]: ../../../../../framework/doc/framework/common/spec/stream-connector/languages/cpp/03-stream-connector.ko.md
 [j-connector]: ../../../../../framework/doc/framework/common/spec/stream-connector/languages/java/03-stream-connector.ko.md
 [n-connector]: ../../../../../framework/doc/framework/common/spec/stream-connector/languages/typescript/03-stream-connector.ko.md
+[workspace]: ../../../../../doc/building/framework-workspace.ko.md
