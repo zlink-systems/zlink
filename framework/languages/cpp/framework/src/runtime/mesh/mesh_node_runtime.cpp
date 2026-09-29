@@ -3570,7 +3570,6 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
                          + (header.metadata.contains (std::string (message_follow_path_key))
                               ? 1
                               : message_follow_path_key.size ());
-        const bool source_transfer_in_progress = spot_runtime.actor_transfer_in_progress (actor);
         const bool replays_handoff_packet =
           header.metadata.contains (std::string (detail::actor_handoff_source_node_key))
           || header.metadata.contains ("__zlink.actorHandoffLateReplay");
@@ -3579,8 +3578,7 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
           has_exact_stale_route
           && stale_route.target_node_routing_id == local_routing_id->to_bytes ();
         auto acquired_follow =
-          (source_transfer_in_progress && !replays_handoff_packet)
-              || !exact_route_targets_local_source
+          !exact_route_targets_local_source
             ? result_t<std::optional<detail::actor_message_follow_target_t>>::success (std::nullopt)
             : spot_runtime.try_acquire_actor_message_follow (actor, payload_bytes,
                                                              incoming_hop_count, stale_route);
@@ -3695,19 +3693,28 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
                 ? std::make_optional (zlink::message_t::from (decoded.value ().payload))
                 : std::nullopt);
         }
+        const bool targets_local_node =
+          !actor.node_rid ().empty ()
+          && actor.node_rid ().value () == local_routing_id->to_string ();
         const auto &target_actor = actor;
         auto target_node_rid =
           zlink::routing_id_t::from (std::string (target_actor.node_rid ().value ()));
+        if (has_exact_stale_route
+            && (stale_route.actor_id != target_actor.actor_id ().value ()
+                || stale_route.object_generation != target_actor.object_generation ()
+                || stale_route.target_node_routing_id != target_node_rid.to_bytes ()
+                || stale_route.authority_owner_generation == 0)) {
+            co_return result_t<std::optional<zlink::message_t>>::failure (
+              framework_error_kind_t::invalid_operation,
+              "bound Session Actor route fence is inconsistent");
+        }
+        if (targets_local_node && !replays_handoff_packet)
+            co_return co_await spot_runtime.relay_local_actor_packet (
+              actor, header, payload, source_node, stale_route, incoming_hop_count,
+              original_operation, original_reply_route_id, timeout);
         std::uint64_t authority_owner_generation = 0;
         std::uint64_t owner_lease_generation = 0;
-        const auto local_descriptor = _node->transport ().topology ().local_descriptor ();
-        const bool targets_local_node =
-          !target_actor.node_rid ().empty ()
-          && target_actor.node_rid ().value ()
-               == zlink::routing_id_t::from (local_descriptor.node_routing_id).to_string ();
-        const bool targets_moving_local_source = targets_local_node && source_transfer_in_progress;
-        if (targets_local_node && !source_transfer_in_progress
-            && !spot_runtime.actor_route (target_actor)) {
+        if (targets_local_node && !spot_runtime.actor_route (target_actor)) {
             if (spot_runtime.actor_transfer_marker_enabled ()) {
                 spot_runtime.emit_actor_transfer_marker ("message_follow_expired", target_actor, {},
                                                          std::nullopt, std::nullopt);
@@ -3718,14 +3725,6 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
         const bool has_exact_remote_route =
           has_exact_stale_route && !exact_route_targets_local_source;
         if (has_exact_remote_route) {
-            if (stale_route.actor_id != target_actor.actor_id ().value ()
-                || stale_route.object_generation != target_actor.object_generation ()
-                || stale_route.target_node_routing_id != target_node_rid.to_bytes ()
-                || stale_route.authority_owner_generation == 0) {
-                co_return result_t<std::optional<zlink::message_t>>::failure (
-                  framework_error_kind_t::invalid_operation,
-                  "bound Session Actor route fence is inconsistent");
-            }
             /* A committed Session binding is already an exact route snapshot.
              * Use its authority and owner fence together instead of combining
              * its target node with a Location cache entry from the previous
@@ -3745,7 +3744,7 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
             // or relays it through Message Follow. Replacing that route from a
             // location lookup here can split one Session's serial stream across
             // the old and new owners and let a later packet overtake backlog.
-            if (!targets_moving_local_source && !await_remote_admission)
+            if (!await_remote_admission)
                 target_node_rid = resolved->node_rid;
             authority_owner_generation = resolved->authority_owner_generation;
             owner_lease_generation = static_cast<std::uint64_t> (resolved->owner.lease_generation);

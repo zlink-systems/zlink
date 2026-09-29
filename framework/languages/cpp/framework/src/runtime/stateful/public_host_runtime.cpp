@@ -3641,43 +3641,45 @@ void public_host_runtime_t::unregister_relocation_wire_targets (
     }
 }
 
-bool public_host_runtime_t::restore_relocation_assembly (
-  const pending_relocation_assembly_t &pending, const relocation_assembly_staging_t &staging)
+task_t<bool> public_host_runtime_t::restore_relocation_assembly (
+  std::shared_ptr<const pending_relocation_assembly_t> pending,
+  std::shared_ptr<const relocation_assembly_staging_t> staging)
 {
     stateful::stateful_error_t restored = stateful::stateful_error_t::conflict;
+    bool threw = false;
     try {
         std::optional<stateful::object_ref_t> actor_join_target_spot;
-        if (staging.targets.size () == 1
-            && staging.targets.front ().kind == stateful::object_kind_t::actor
+        if (staging->targets.size () == 1
+            && staging->targets.front ().kind == stateful::object_kind_t::actor
             && _actor_join_authority_spot_resolver) {
-            const auto spot = _actor_join_authority_spot_resolver (staging.targets.front ());
+            const auto spot = _actor_join_authority_spot_resolver (staging->targets.front ());
             if (spot) {
                 actor_join_target_spot = stateful::object_ref_t{stateful::object_kind_t::user_spot,
                                                                 std::get<1> (*spot),
                                                                 std::get<2> (*spot),
                                                                 0,
-                                                                staging.targets.front ().mesh_name,
-                                                                staging.targets.front ().node_id};
+                                                                staging->targets.front ().mesh_name,
+                                                                staging->targets.front ().node_id};
             }
         }
-        restored = staging.targets.size () == 1
-                     ? _objects.restore_relocation (
-                         staging.frozen.front (), staging.targets.front (),
-                         staging.restore_identity, {}, std::move (actor_join_target_spot))
-                     : _objects.restore_relocation_aggregate (staging.frozen, staging.targets,
-                                                              staging.restore_identity, {});
+        restored =
+          co_await (staging->targets.size () == 1
+                      ? _objects.restore_relocation (
+                          staging->frozen.front (), staging->targets.front (),
+                          staging->restore_identity, {}, std::move (actor_join_target_spot))
+                      : _objects.restore_relocation_aggregate (staging->frozen, staging->targets,
+                                                               staging->restore_identity, {}));
     }
     catch (...) {
-        discard_relocation_assembly_staging (pending, staging);
-        reply_relocation_assembly_failure (pending, protocol::framework_error_code::requestFailed);
-        return false;
+        threw = true;
     }
-    if (restored == stateful::stateful_error_t::none
-        || restored == stateful::stateful_error_t::already_exists)
-        return true;
-    discard_relocation_assembly_staging (pending, staging);
-    reply_relocation_assembly_failure (pending, protocol::framework_error_code::requestFailed);
-    return false;
+    if (!threw
+        && (restored == stateful::stateful_error_t::none
+            || restored == stateful::stateful_error_t::already_exists))
+        co_return true;
+    discard_relocation_assembly_staging (*pending, *staging);
+    reply_relocation_assembly_failure (*pending, protocol::framework_error_code::requestFailed);
+    co_return false;
 }
 
 void public_host_runtime_t::activate_relocation_assembly (
@@ -4043,13 +4045,22 @@ void public_host_runtime_t::complete_relocation_assembly (const relocation_attem
         }
     }
     // Factory/restore failures are staging failures, not payload-integrity
-    // failures; the helper tears down every queue it registered first.
-    if (!restore_relocation_assembly (pending, staging)) {
-        rollback_actor_join_recoveries (consumed);
-        return;
-    }
-
-    activate_relocation_assembly (key, pending, std::move (staging));
+    // failures; the helper tears down every queue it registered first. The
+    // restore completes when its application materialization does; this
+    // pump continues meanwhile and the attempt activates from that completion.
+    auto held_pending = std::make_shared<pending_relocation_assembly_t> (std::move (pending));
+    auto held_staging = std::make_shared<relocation_assembly_staging_t> (std::move (staging));
+    auto restoring =
+      std::make_shared<task_t<bool>> (restore_relocation_assembly (held_pending, held_staging));
+    detail::observe_task_completion (
+      *restoring, [self = shared_from_this (), restoring, key, held_pending, held_staging,
+                   consumed = std::move (consumed)] (const result_t<bool> &restored) mutable {
+          if (!restored || !restored.value ()) {
+              self->rollback_actor_join_recoveries (consumed);
+              return;
+          }
+          self->activate_relocation_assembly (key, *held_pending, std::move (*held_staging));
+      });
 }
 
 bool public_host_runtime_t::register_relocation_target_queue (

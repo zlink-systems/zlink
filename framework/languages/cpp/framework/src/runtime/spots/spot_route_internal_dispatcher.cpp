@@ -64,8 +64,12 @@ submit_source_actor_leave_async (spot_node_runtime_t runtime,
     // and never published into mesh spot routing, so a spot-addressed send
     // (send_spot_mesh_parts_exact) cannot resolve it -- only the
     // destination node's routing id is needed here.
-    (void) co_await runtime.send_actor_leave_notification (source_node_rid,
-                                                           std::move (*leave_parts));
+    const auto submitted =
+      co_await runtime.send_actor_leave_notification (source_node_rid, std::move (*leave_parts));
+    if (submitted != zlink::submit_result_t::ok) {
+        throw framework_exception_t (runtime::messaging::map_submit_result_error_kind (submitted),
+                                     "source Actor leave notification was not submitted");
+    }
 }
 
 } // namespace

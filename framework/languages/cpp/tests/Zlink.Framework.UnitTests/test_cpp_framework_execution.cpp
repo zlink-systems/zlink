@@ -4444,6 +4444,7 @@ bool verify_target_commit_stages_source_prefix_before_live_dispatch ()
     using namespace zlink::framework::detail;
 
     actor_transfer_coordinator_t coordinator;
+    std::vector<handoff_packet_t> discarded;
     const auto source = actor_ref_access_t::make (node_rid_t::from_string ("source-node"), "player",
                                                   "actor-cutover-order", 7);
     pending_actor_admission_t admission{.actor_key = "player:actor-cutover-order",
@@ -4455,7 +4456,7 @@ bool verify_target_commit_stages_source_prefix_before_live_dispatch ()
                                         .completion_operation_id_high = 31,
                                         .completion_operation_id_low = 37};
     if (!coordinator.try_add_admission ("transfer-cutover-order", admission)
-        || !coordinator.begin_commit ("transfer-cutover-order", source, "target-spot")) {
+        || !coordinator.begin_commit ("transfer-cutover-order", source, "target-spot", discarded)) {
         return false;
     }
     const auto packet = [] (std::string sequence) {
@@ -4491,6 +4492,7 @@ bool verify_actor_join_prewarm_parks_arrival_before_prepare ()
     using namespace zlink::framework::detail;
 
     actor_transfer_coordinator_t coordinator;
+    std::vector<handoff_packet_t> discarded;
     const auto source = actor_ref_access_t::make (node_rid_t::from_string ("source-node"), "player",
                                                   "actor-prewarm", 7);
     pending_actor_admission_t admission{.actor_key = "player:actor-prewarm",
@@ -4524,7 +4526,7 @@ bool verify_actor_join_prewarm_parks_arrival_before_prepare ()
         != handoff_append_result_t::appended) {
         return false;
     }
-    if (!coordinator.begin_commit ("transfer-prewarm", source, "target-spot")) {
+    if (!coordinator.begin_commit ("transfer-prewarm", source, "target-spot", discarded)) {
         return false;
     }
     if (coordinator.try_append_backlog ("player:actor-prewarm", packet ("AFTER_PREPARE"))
@@ -4548,6 +4550,7 @@ bool verify_actor_join_prewarm_newest_attempt_evicts_placeholder ()
     using namespace zlink::framework::detail;
 
     actor_transfer_coordinator_t coordinator;
+    std::vector<handoff_packet_t> discarded;
     const auto source = actor_ref_access_t::make (node_rid_t::from_string ("source-node"), "player",
                                                   "actor-evict", 7);
     pending_actor_admission_t first{.actor_key = "player:actor-evict",
@@ -4577,10 +4580,13 @@ bool verify_actor_join_prewarm_newest_attempt_evicts_placeholder ()
     // A newer exact identity for the same object arrives before the first
     // reaches PREPARE — it must win, and the stale placeholder (including
     // whatever it parked) must not survive.
-    if (!coordinator.admit_attempt ("player:actor-evict", "transfer-evict-2")
+    if (!coordinator.admit_attempt ("player:actor-evict", "transfer-evict-2", discarded)
         || !coordinator.try_add_admission ("transfer-evict-2", second)) {
         return false;
     }
+    if (discarded.size () != 1 || discarded[0].metadata.at ("sequence") != "STALE")
+        return false;
+    discarded.clear ();
     if (coordinator.admission ("transfer-evict-1").has_value ()) {
         return false;
     }
@@ -4591,7 +4597,7 @@ bool verify_actor_join_prewarm_newest_attempt_evicts_placeholder ()
         != handoff_append_result_t::appended) {
         return false;
     }
-    if (!coordinator.begin_commit ("transfer-evict-2", source, "target-spot")) {
+    if (!coordinator.begin_commit ("transfer-evict-2", source, "target-spot", discarded)) {
         return false;
     }
     const auto replay =
@@ -4608,6 +4614,7 @@ bool verify_actor_join_prewarm_fail_commit_clears_parked_backlog ()
     using namespace zlink::framework::detail;
 
     actor_transfer_coordinator_t coordinator;
+    std::vector<handoff_packet_t> discarded;
     const auto source =
       actor_ref_access_t::make (node_rid_t::from_string ("source-node"), "player", "actor-fail", 7);
     pending_actor_admission_t admission{.actor_key = "player:actor-fail",
@@ -4628,10 +4635,12 @@ bool verify_actor_join_prewarm_fail_commit_clears_parked_backlog ()
         != handoff_append_result_t::appended) {
         return false;
     }
-    if (!coordinator.begin_commit ("transfer-fail", source, "target-spot")) {
+    if (!coordinator.begin_commit ("transfer-fail", source, "target-spot", discarded)) {
         return false;
     }
-    coordinator.fail_commit ("transfer-fail", false);
+    auto failed_backlog = coordinator.fail_commit ("transfer-fail", false);
+    if (failed_backlog.size () != 1 || failed_backlog[0].metadata.at ("sequence") != "STRANDED")
+        return false;
     if (coordinator.phase ("player:actor-fail").has_value ()) {
         return false;
     }
@@ -4640,7 +4649,7 @@ bool verify_actor_join_prewarm_fail_commit_clears_parked_backlog ()
     if (!coordinator.try_add_admission ("transfer-fail-retry", retry)) {
         return false;
     }
-    if (!coordinator.begin_commit ("transfer-fail-retry", source, "target-spot")) {
+    if (!coordinator.begin_commit ("transfer-fail-retry", source, "target-spot", discarded)) {
         return false;
     }
     const auto replay =
@@ -4664,6 +4673,7 @@ bool verify_actor_join_prewarm_newest_attempt_evicts_live_attempt_past_prepare (
     using namespace zlink::framework::detail;
 
     actor_transfer_coordinator_t coordinator;
+    std::vector<handoff_packet_t> discarded;
     const auto source = actor_ref_access_t::make (node_rid_t::from_string ("source-node"), "player",
                                                   "actor-evict-live", 7);
     const std::string key = "player:actor-evict-live";
@@ -4695,7 +4705,7 @@ bool verify_actor_join_prewarm_newest_attempt_evicts_live_attempt_past_prepare (
     // Attempt A reaches PREPARE (target_committing) — the "live attempt"
     // case, distinct from the target_pending placeholder the other eviction
     // test covers.
-    if (!coordinator.begin_commit ("transfer-evict-live-A", source, "target-spot")
+    if (!coordinator.begin_commit ("transfer-evict-live-A", source, "target-spot", discarded)
         || coordinator.phase (key) != actor_move_phase_t::target_committing
         || !coordinator.is_current (key, "transfer-evict-live-A")) {
         return false;
@@ -4707,10 +4717,14 @@ bool verify_actor_join_prewarm_newest_attempt_evicts_live_attempt_past_prepare (
 
     // A newer exact identity for the same object arrives — it must win even
     // though A is already past PREPARE.
-    if (!coordinator.admit_attempt (key, "transfer-evict-live-B")
+    if (!coordinator.admit_attempt (key, "transfer-evict-live-B", discarded)
         || !coordinator.try_add_admission ("transfer-evict-live-B", second)) {
         return false;
     }
+    if (discarded.size () != 2 || discarded[0].metadata.at ("sequence") != "A_PARKED_EARLY"
+        || discarded[1].metadata.at ("sequence") != "A_PARKED_AFTER_PREPARE")
+        return false;
+    discarded.clear ();
     // A is gone: its admission record and both frames it parked (failed
     // exactly once, by the same single erase fail_commit/cleanup_expired
     // use) do not survive the eviction.
@@ -4724,7 +4738,7 @@ bool verify_actor_join_prewarm_newest_attempt_evicts_live_attempt_past_prepare (
         != handoff_append_result_t::appended) {
         return false;
     }
-    if (!coordinator.begin_commit ("transfer-evict-live-B", source, "target-spot")) {
+    if (!coordinator.begin_commit ("transfer-evict-live-B", source, "target-spot", discarded)) {
         return false;
     }
     const auto replay =
@@ -5081,6 +5095,21 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     namespace runtime = zlink::framework::runtime;
     serializer_registry_t serializers;
     auto node = std::make_shared<spot_node_builder_state_t> ("actor-finalize-node");
+    std::atomic_int leave_submit_unavailable_events{0};
+    node->dispatch.message_flow (message_flow_log_mode_t::errors);
+    dispatch_options_access_t::set_observer_for_tests (
+      node->dispatch, [&leave_submit_unavailable_events] (const message_flow_event_t &event) {
+          if (event.packet_name != "spot_actor_leave_submit"
+              || event.result != message_flow_result_t::failed || !event.exception)
+              return;
+          try {
+              std::rethrow_exception (event.exception);
+          }
+          catch (const framework_exception_t &error) {
+              if (error.kind () == framework_error_kind_t::unavailable)
+                  leave_submit_unavailable_events.fetch_add (1, std::memory_order_release);
+          }
+      });
     node->worker_executor = std::make_shared<runtime::offload_executor_t> (1, "actor-finalize");
     node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
@@ -5169,6 +5198,11 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         .object_stable_types = {"framework.spot"}});
     native->start ();
     owner.attach_native_node (native);
+    node->actor_leave_notification_sender =
+      [] (const zlink::routing_id_t &,
+          std::vector<zlink::message_t>) -> task_t<zlink::submit_result_t> {
+        co_return zlink::submit_result_t::not_connected;
+    };
     auto authority = std::make_shared<actor_cutover_authority_t> ();
     owner.bind_relocation_authority (authority);
     // The private cutover path still enters the same Store-fenced admission
@@ -5396,6 +5430,13 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     if (!owner.completed_remote_actor_commit (transfer_id, actor, target->spot_id)) {
         return false;
     }
+    const auto leave_submit_observation_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (1);
+    while (leave_submit_unavailable_events.load (std::memory_order_acquire) == 0
+           && std::chrono::steady_clock::now () < leave_submit_observation_deadline)
+        std::this_thread::yield ();
+    if (leave_submit_unavailable_events.load (std::memory_order_acquire) != 1)
+        return false;
     {
         std::lock_guard lock (authority->mutex);
         if (authority->last_expected_store_version != "source-version") {
@@ -5926,9 +5967,8 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         return false;
     }
 
-    // The target owns the cutover order. A one-way source leave submission
-    // terminal may fail, but it is still attempted after OnJoined and before
-    // the target publishes Accepted.
+    // The target completes Join after OnJoined even while the one-way source
+    // leave submission has no transport terminal.
     std::atomic_int cutover_order{0};
     std::atomic_int target_joined_order{0};
     std::atomic_int source_leave_submit_order{0};
@@ -5969,6 +6009,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     std::mutex leave_order_mutex;
     std::condition_variable leave_order_changed;
     std::optional<result_t<actor_join_reply_t>> leave_order_result;
+    detail::task_completion_source_t<void> leave_submit_terminal;
     owner.finalize_remote_actor_to_spot_async (
       leave_order_transfer_id, leave_order_actor, target->spot_id, provider, &gateway,
       std::chrono::steady_clock::now () + std::chrono::seconds (1),
@@ -5979,16 +6020,9 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
           }
           leave_order_changed.notify_all ();
       },
-      [&cutover_order, &source_leave_submit_order] {
+      [&cutover_order, &source_leave_submit_order, &leave_submit_terminal] {
           source_leave_submit_order.store (++cutover_order, std::memory_order_release);
-          detail::task_completion_source_t<void> terminal ([] (std::function<void ()>) {
-              // The ordinary continuation is intentionally not run. The
-              // finalize owner must observe the physical task terminal.
-          });
-          auto task = terminal.task ();
-          terminal.complete (result_t<void>::failure (framework_error_kind_t::internal_failure,
-                                                      "deterministic source leave submit failure"));
-          return task;
+          return leave_submit_terminal.task ();
       });
     {
         std::unique_lock lock (leave_order_mutex);
@@ -6002,6 +6036,8 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         || target_accepted_order.load (std::memory_order_acquire) != 3) {
         return false;
     }
+    leave_submit_terminal.complete (result_t<void>::failure (
+      framework_error_kind_t::internal_failure, "deterministic source leave submit failure"));
 
     // Accepted canonical Join keeps its original lifecycle position during
     // placement. Cancelling that admission releases the position exactly once.

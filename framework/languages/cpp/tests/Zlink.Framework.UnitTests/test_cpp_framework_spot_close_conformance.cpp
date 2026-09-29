@@ -65,6 +65,9 @@ struct observation_t
     // "timer" (Spot address messaging §7 step 2: accepted timers drain first).
     bool room_timer = false;
     std::atomic_bool timer_armed{false};
+    // OnActorJoined holds its lifecycle item briefly, so two opposite Joins
+    // overlap (cross-join scenario).
+    std::atomic_bool cross_join_delay{false};
     std::string handler_mode;
     std::string watched_spot;
 
@@ -150,6 +153,8 @@ class member_actor_t final : public zf::actor_t
                       static_cast<int> (std::get<zf::actor_join_failed_t> (completion).error_kind));
         std::lock_guard lock (current ().mutex);
         current ().notes.push_back (std::move (note));
+        if (current ().cross_join_delay.load ())
+            current ().order.push_back ("joinReply:" + std::string (_context.actor_id ().value ()));
         co_return;
     }
 
@@ -240,7 +245,12 @@ class close_room_spot_t final : public zf::spot_t<member_actor_t>
         return close_probe_reply_t{request.value + 1};
     }
 
-    void member_ping (member_actor_t &, zf::message_context_t &, const join_room_t &) {}
+    // A member asked to join another room moves there (cross-join scenario).
+    void member_ping (member_actor_t &actor, zf::message_context_t &, const join_room_t &request)
+    {
+        if (request.room != _context.spot_id ())
+            actor.context ().join_spot (zf::spot_id_t (request.room)).defer ();
+    }
 
     zf::task_t<zf::spot_actor_join_result_t> on_actor_join (std::string_view,
                                                             const zf::message_t &) override
@@ -251,12 +261,21 @@ class close_room_spot_t final : public zf::spot_t<member_actor_t>
         }
         co_return zf::spot_actor_join_result_t::accept ();
     }
-    zf::task_t<void> on_actor_joined (member_actor_t &) override
+    zf::task_t<void> on_actor_joined (member_actor_t &actor) override
     {
         current ().record ("joinCompleted");
+        current ().record ("joinStarted:" + _context.spot_id ());
+        if (current ().cross_join_delay.load ())
+            std::this_thread::sleep_for (300ms);
+        if (current ().cross_join_delay.load ())
+            current ().record ("joinedDone:" + std::string (actor.context ().actor_id ().value ()));
         co_return;
     }
-    zf::task_t<void> on_leave_actor (member_actor_t &) override { co_return; }
+    zf::task_t<void> on_leave_actor (member_actor_t &) override
+    {
+        current ().record ("leaveCompleted:" + _context.spot_id ());
+        co_return;
+    }
 
     zf::task_t<void> on_closing (const zf::spot_closing_context_t &, std::stop_token) override
     {
@@ -662,6 +681,60 @@ class scenario_client_t final : public zf::hosted_service_t
         if (given.value ("failOnce", "") == "authorityReleased")
             store.fail_authority_release_once.store (true);
 
+        if (act == "crossJoins") {
+            // Two members move between two rooms in opposite directions at
+            // the same time; each Join also leaves the other room.
+            const auto room_a = spot_id;
+            const auto room_b = spot_id + "-b";
+            (void) create_room (services, room_b);
+            // A member learns its Join result after the whole Join, including
+            // the leave from its previous room, completes.
+            const auto joins_completed = [&] {
+                std::lock_guard lock (current ().mutex);
+                return std::count (current ().notes.begin (), current ().notes.end (),
+                                   "actorJoin:accepted");
+            };
+            join_member (services, room_a, "cross-a");
+            if (!wait_until ([&] { return joins_completed () >= 1; }))
+                throw std::runtime_error ("member cross-a did not join room A");
+            join_member (services, room_b, "cross-b");
+            if (!wait_until ([&] { return joins_completed () >= 2; }))
+                throw std::runtime_error ("member cross-b did not join room B");
+            current ().cross_join_delay.store (true);
+            auto &client = services.get_required<zf::actor_client_t> ();
+            auto to_b = std::async (std::launch::async, [&] {
+                return client.send (zf::actor_id_t ("cross-a"), join_room_t{room_b})
+                  .async ()
+                  .result ();
+            });
+            auto to_a = std::async (std::launch::async, [&] {
+                return client.send (zf::actor_id_t ("cross-b"), join_room_t{room_a})
+                  .async ()
+                  .result ();
+            });
+            (void) to_b.get ();
+            (void) to_a.get ();
+            const auto completed = wait_until ([&] { return joins_completed () >= 4; },
+                                               std::chrono::milliseconds (8000));
+            bool replies_after_joined = true;
+            int checked_replies = 0;
+            {
+                std::lock_guard lock (current ().mutex);
+                std::set<std::string> joined;
+                for (const auto &event : current ().order) {
+                    if (event.starts_with ("joinedDone:")) {
+                        joined.insert (event.substr (11));
+                    } else if (event.starts_with ("joinReply:")) {
+                        replies_after_joined &= joined.contains (event.substr (10));
+                        ++checked_replies;
+                    }
+                }
+            }
+            actual["crossJoins"] =
+              completed && replies_after_joined && checked_replies == 2 ? "completed" : "stalled";
+            current ().cross_join_delay.store (false);
+            return;
+        }
         if (act == "directRequestDuringClose") {
             // The first request installs the Ready route in the source cache,
             // so the second one reaches the owner while its Close runs.
@@ -1006,6 +1079,18 @@ TEST (ZLinkFrameworkSpotCloseConformance, DecidesNewAdmissionOnceAtTheSeal)
     ])json");
     for (const auto &scenario : scenarios)
         run_and_check (scenario);
+}
+
+// Two Actor Joins that move members between two User Spots in opposite
+// directions at the same time complete (Spot-Actor membership: Join on the
+// lifecycle lane; handler turn and execution gate §7).
+TEST (ZLinkFrameworkSpotCloseConformance, OppositeJoinsBetweenTwoSpotsComplete)
+{
+    run_and_check (nlohmann::json::parse (R"json(
+      {"name": "opposite-joins-complete",
+       "given": {"runtime": "Ready", "authority": "Ready"},
+       "act": "crossJoins",
+       "expect": {"crossJoins": "completed"}})json"));
 }
 
 } // namespace
