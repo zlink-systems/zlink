@@ -56,7 +56,18 @@ class CompletionDrainOrderContractTest {
                 }
                 waiter.get(TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
             }
-            core.verify(5);
+            core.attempts.add(new CompletionNativeFixture.Attempt(
+                SubmitResult.BACKPRESSURED, NativeErrno.EAGAIN, 31));
+            var abandoned = dealer.send().message(Message.from("abandoned"))
+                .submit().admitted().toCompletableFuture();
+            var abandonedToken = core.submissions.getLast();
+            assertTrue(abandoned.cancel(false));
+            core.writable(abandonedToken, 0, 0);
+            int submissionsBeforeDrain = core.submissions.size();
+            assertEquals(1, owner.drain());
+            assertEquals(submissionsBeforeDrain, core.submissions.size(),
+                "a cancelled staged send must not be resubmitted");
+            core.verify(6);
         }
     }
 }
