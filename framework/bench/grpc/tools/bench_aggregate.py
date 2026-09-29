@@ -2,12 +2,13 @@
 """Aggregate with-grpc bench runs into one report.
 
 The language harnesses measure. This tool owns everything derived from what they
-measured: unit normalization, medians, G5 reproducibility, the spec 7.2 ratios,
-and the decision about whether a ratio may be published at all.
+measured: medians, G5 reproducibility, the spec 7.2 ratios, and the decision
+about whether a ratio may be published at all. It reads only
+``<run directory>/<cell directory>/results.json`` (README section 11).
 
     bench_aggregate.py --lang dotnet \\
-        --runs-glob framework/bench/grpc/log/c/<stamp>/c-router-* \\
-        --runs-glob framework/bench/grpc/log/dotnet/<stamp>/dotnet-router-*
+        --runs-glob 'framework/bench/grpc/log/<stamp>/c/run*' \\
+        --runs-glob 'framework/bench/grpc/log/<stamp>/dotnet/run*'
 
 Runs given in one invocation form one comparison. Each run contributes only the
 implementations it measured, so the C reference runs and the language runs are

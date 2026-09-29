@@ -3,7 +3,6 @@
 
 #include <grpcpp/grpcpp.h>
 
-#include <climits>
 #include <cstdio>
 #include <atomic>
 #include <chrono>
@@ -29,6 +28,9 @@ struct request_call_t
     std::unique_ptr<grpc::ClientAsyncResponseReader<zlink::framework::bench::withgrpc::BenchPayload>> reader;
 };
 
+// Depth of the unary `Command` calls kept in flight for send-saturation (README §2.1).
+constexpr int k_send_saturation_outstanding = 4096;
+
 struct send_call_t
 {
     zlink::framework::bench::withgrpc::BenchPayload request;
@@ -41,9 +43,9 @@ struct send_call_t
 zlink_c_bench::result_t run_request_serial (
   zlink::framework::bench::withgrpc::BenchService::Stub *stub, size_t size)
 {
-    const int duration_s = zlink_c_bench::env_int ("DURATION_SECONDS", 3);
+    const int duration_s = zlink_c_bench::duration_seconds ();
     const uint32_t run_id = static_cast<uint32_t> (zlink_c_bench::now_ns ());
-    zlink_c_bench::latency_sampler_t latency (200000);
+    zlink_c_bench::latency_sampler_t latency (zlink_c_bench::k_latency_sample_limit);
     auto resources = zlink_c_bench::resource_start ();
     const auto start = std::chrono::steady_clock::now ();
     const auto deadline = start + std::chrono::seconds (duration_s);
@@ -74,9 +76,9 @@ zlink_c_bench::result_t run_request_serial (
     }
     const auto stop = std::chrono::steady_clock::now ();
     zlink_c_bench::result_t r;
-    r.scenario = "grpc-c-request-serial";
+    r.implementation = "grpc-c";
+    r.pattern = "request-serial";
     r.size = size;
-    r.unit = "KOPS";
     r.completed = completed;
     r.errors = errors;
     r.elapsed_s = std::chrono::duration<double> (stop - start).count ();
@@ -88,17 +90,17 @@ zlink_c_bench::result_t run_request_serial (
     r.server_cpu_percent = zlink_c_bench::server_cpu_percent (resources, r.elapsed_s);
     r.server_mem_mb = zlink_c_bench::server_mem_mb (resources);
     r.submitted = completed + errors;
-    r.max_outstanding = completed > 0 ? 1 : 0;
+    r.peak_in_flight = completed > 0 ? 1 : 0;
     r.submit_wait_ms = submit_wait_ms;
     return r;
 }
 
-zlink_c_bench::result_t run_request_async (
-  zlink::framework::bench::withgrpc::BenchService::Stub *stub, size_t size, int max_outstanding, const char *scenario)
+zlink_c_bench::result_t run_request_backpressure (
+  zlink::framework::bench::withgrpc::BenchService::Stub *stub, size_t size)
 {
-    const int duration_s = zlink_c_bench::env_int ("DURATION_SECONDS", 3);
+    const int duration_s = zlink_c_bench::duration_seconds ();
     const uint32_t run_id = static_cast<uint32_t> (zlink_c_bench::now_ns ());
-    zlink_c_bench::latency_sampler_t latency (200000);
+    zlink_c_bench::latency_sampler_t latency (zlink_c_bench::k_latency_sample_limit);
     std::mutex latency_gate;
     grpc::CompletionQueue cq;
     std::atomic<uint64_t> completed {0};
@@ -137,10 +139,6 @@ zlink_c_bench::result_t run_request_async (
     const auto start = std::chrono::steady_clock::now ();
     const auto deadline = start + std::chrono::seconds (duration_s);
     while (std::chrono::steady_clock::now () < deadline) {
-        if (outstanding.load (std::memory_order_relaxed) >= max_outstanding) {
-            std::this_thread::yield ();
-            continue;
-        }
         auto *call = new request_call_t ();
         fill_payload (call->request.mutable_body (), size, run_id, submitted++);
         const int now_outstanding = outstanding.fetch_add (1, std::memory_order_relaxed) + 1;
@@ -154,31 +152,23 @@ zlink_c_bench::result_t run_request_async (
                             ? static_cast<double> (submit_stop - submit_start) / 1000000.0
                             : 0.0;
     }
-    // spec 3: the drain is bounded. Without a bound an uncapped submission
-    // phase can leave this loop waiting indefinitely, and a wedged cell would
-    // hang the run instead of being recorded as a wedged cell.
+    // README §3: the drain is bounded. Without a bound an uncapped submission phase can leave
+    // this loop waiting indefinitely, and a wedged cell would hang the run.
+    const auto drain_begin = std::chrono::steady_clock::now ();
     const auto drain_deadline =
-      std::chrono::steady_clock::now ()
-      + std::chrono::milliseconds (zlink_c_bench::env_int ("DRAIN_TIMEOUT_MS", 5000));
+      drain_begin + std::chrono::milliseconds (zlink_c_bench::k_drain_bound_ms);
     while (outstanding.load (std::memory_order_relaxed) > 0
            && std::chrono::steady_clock::now () < drain_deadline)
         std::this_thread::sleep_for (std::chrono::milliseconds (1));
     const auto stop = std::chrono::steady_clock::now ();
-    // spec 5.2: peak depth and abandoned, per cell. window 0 means no imposed
-    // ceiling (the request-backpressure pattern).
-    std::fprintf (stderr,
-                  "[bench] window %s: peak_in_flight=%llu of %llu abandoned=%d\n",
-                  scenario, static_cast<unsigned long long> (max_outstanding_seen),
-                  static_cast<unsigned long long> (
-                    max_outstanding == INT_MAX ? 0 : max_outstanding),
-                  outstanding.load (std::memory_order_relaxed));
+    const int abandoned = outstanding.load (std::memory_order_relaxed);
     cq.Shutdown ();
     completion_thread.join ();
 
     zlink_c_bench::result_t r;
-    r.scenario = scenario;
+    r.implementation = "grpc-c";
+    r.pattern = "request-backpressure";
     r.size = size;
-    r.unit = "KOPS";
     r.completed = completed.load ();
     r.errors = errors.load ();
     r.elapsed_s = std::chrono::duration<double> (stop - start).count ();
@@ -190,60 +180,19 @@ zlink_c_bench::result_t run_request_async (
     r.server_cpu_percent = zlink_c_bench::server_cpu_percent (resources, r.elapsed_s);
     r.server_mem_mb = zlink_c_bench::server_mem_mb (resources);
     r.submitted = submitted;
-    r.max_outstanding = max_outstanding_seen;
+    r.peak_in_flight = max_outstanding_seen;
     r.submit_wait_ms = submit_wait_ms;
+    r.has_drain = true;
+    r.abandoned = static_cast<uint64_t> (abandoned);
+    r.drain_ms = std::chrono::duration<double, std::milli> (stop - drain_begin).count ();
+    r.drain_bound_hit = abandoned > 0;
     return r;
 }
 
-zlink_c_bench::result_t run_send_blocking (
+zlink_c_bench::result_t run_send_saturation (
   zlink::framework::bench::withgrpc::BenchService::Stub *stub, size_t size)
 {
-    const int duration_s = zlink_c_bench::env_int ("DURATION_SECONDS", 3);
-    const uint32_t run_id = static_cast<uint32_t> (zlink_c_bench::now_ns ());
-    auto resources = zlink_c_bench::resource_start ();
-    const auto start = std::chrono::steady_clock::now ();
-    const auto deadline = start + std::chrono::seconds (duration_s);
-    uint64_t completed = 0;
-    uint64_t errors = 0;
-    double submit_wait_ms = 0.0;
-    while (std::chrono::steady_clock::now () < deadline) {
-        zlink::framework::bench::withgrpc::BenchPayload request;
-        google::protobuf::Empty reply;
-        fill_payload (request.mutable_body (), size, run_id, completed + errors);
-        grpc::ClientContext context;
-        const uint64_t submit_start = zlink_c_bench::now_ns ();
-        const grpc::Status status = stub->Command (&context, request, &reply);
-        const uint64_t submit_stop = zlink_c_bench::now_ns ();
-        submit_wait_ms += submit_stop >= submit_start
-                            ? static_cast<double> (submit_stop - submit_start) / 1000000.0
-                            : 0.0;
-        if (status.ok ())
-            ++completed;
-        else
-            ++errors;
-    }
-    const auto stop = std::chrono::steady_clock::now ();
-    zlink_c_bench::result_t r;
-    r.scenario = "grpc-c-send-blocking";
-    r.size = size;
-    r.unit = "KMSG/s";
-    r.completed = completed;
-    r.errors = errors;
-    r.elapsed_s = std::chrono::duration<double> (stop - start).count ();
-    r.cpu_percent = zlink_c_bench::cpu_percent (resources, r.elapsed_s);
-    r.mem_mb = zlink_c_bench::rss_mb ();
-    r.server_cpu_percent = zlink_c_bench::server_cpu_percent (resources, r.elapsed_s);
-    r.server_mem_mb = zlink_c_bench::server_mem_mb (resources);
-    r.submitted = completed + errors;
-    r.max_outstanding = completed > 0 ? 1 : 0;
-    r.submit_wait_ms = submit_wait_ms;
-    return r;
-}
-
-zlink_c_bench::result_t run_send_async (
-  zlink::framework::bench::withgrpc::BenchService::Stub *stub, size_t size, int max_outstanding)
-{
-    const int duration_s = zlink_c_bench::env_int ("DURATION_SECONDS", 3);
+    const int duration_s = zlink_c_bench::duration_seconds ();
     const uint32_t run_id = static_cast<uint32_t> (zlink_c_bench::now_ns ());
     grpc::CompletionQueue cq;
     std::atomic<uint64_t> completed {0};
@@ -270,7 +219,7 @@ zlink_c_bench::result_t run_send_async (
     const auto start = std::chrono::steady_clock::now ();
     const auto deadline = start + std::chrono::seconds (duration_s);
     while (std::chrono::steady_clock::now () < deadline) {
-        if (outstanding.load (std::memory_order_relaxed) >= max_outstanding) {
+        if (outstanding.load (std::memory_order_relaxed) >= k_send_saturation_outstanding) {
             std::this_thread::yield ();
             continue;
         }
@@ -294,9 +243,9 @@ zlink_c_bench::result_t run_send_async (
     completion_thread.join ();
 
     zlink_c_bench::result_t r;
-    r.scenario = "grpc-c-send-saturation";
+    r.implementation = "grpc-c";
+    r.pattern = "send-saturation";
     r.size = size;
-    r.unit = "KMSG/s";
     r.completed = completed.load ();
     r.errors = errors.load ();
     r.elapsed_s = std::chrono::duration<double> (stop - start).count ();
@@ -305,7 +254,7 @@ zlink_c_bench::result_t run_send_async (
     r.server_cpu_percent = zlink_c_bench::server_cpu_percent (resources, r.elapsed_s);
     r.server_mem_mb = zlink_c_bench::server_mem_mb (resources);
     r.submitted = submitted;
-    r.max_outstanding = max_outstanding_seen;
+    r.peak_in_flight = max_outstanding_seen;
     r.submit_wait_ms = submit_wait_ms;
     return r;
 }
@@ -314,34 +263,27 @@ zlink_c_bench::result_t run_send_async (
 int main ()
 {
     const std::string target = zlink_c_bench::env_string ("GRPC_TARGET", "127.0.0.1:6071");
-    const int window = zlink_c_bench::env_int ("WINDOW_SIZE", 100);
-    const int max_outstanding = zlink_c_bench::env_int ("MAX_OUTSTANDING", 4096);
-    const std::string scenarios = zlink_c_bench::env_string ("GRPC_BENCH_SCENARIOS", "all");
+    const std::string patterns = zlink_c_bench::env_string (
+      "PATTERNS", "request-serial,request-backpressure,send-saturation");
     grpc::ChannelArguments args;
     args.SetInt (GRPC_ARG_USE_LOCAL_SUBCHANNEL_POOL, 1);
     args.SetMaxReceiveMessageSize (16 * 1024 * 1024);
     args.SetMaxSendMessageSize (16 * 1024 * 1024);
     auto channel = grpc::CreateCustomChannel (target, grpc::InsecureChannelCredentials (), args);
     auto stub = zlink::framework::bench::withgrpc::BenchService::NewStub (channel);
+    int status = 0;
     for (const size_t size : zlink_c_bench::parse_sizes ()) {
-        std::fprintf (stderr, "[bench] request payload=%zu\n", size);
-        if (zlink_c_bench::scenario_enabled (scenarios, "request-serial"))
-            zlink_c_bench::print_result (run_request_serial (stub.get (), size));
-        if (zlink_c_bench::scenario_enabled (scenarios, "request-window"))
-            zlink_c_bench::print_result (
-              run_request_async (stub.get (), size, window, "grpc-c-request-window"));
-        // spec 2 request-backpressure: no application ceiling. gRPC submits
-        // until its own flow control stops it.
-        if (zlink_c_bench::scenario_enabled (scenarios, "request-backpressure"))
-            zlink_c_bench::print_result (run_request_async (
-              stub.get (), size, INT_MAX, "grpc-c-request-backpressure"));
-        if (zlink_c_bench::scenario_enabled (scenarios, "request-saturation"))
-            zlink_c_bench::print_result (run_request_async (stub.get (), size, max_outstanding,
-                                                            "grpc-c-request-saturation"));
-        if (zlink_c_bench::scenario_enabled (scenarios, "send-blocking"))
-            zlink_c_bench::print_result (run_send_blocking (stub.get (), size));
-        if (zlink_c_bench::scenario_enabled (scenarios, "send-saturation"))
-            zlink_c_bench::print_result (run_send_async (stub.get (), size, max_outstanding));
+        zlink_c_bench::result_t results[3];
+        int count = 0;
+        if (zlink_c_bench::pattern_enabled (patterns, "request-serial"))
+            results[count++] = run_request_serial (stub.get (), size);
+        if (zlink_c_bench::pattern_enabled (patterns, "request-backpressure"))
+            results[count++] = run_request_backpressure (stub.get (), size);
+        if (zlink_c_bench::pattern_enabled (patterns, "send-saturation"))
+            results[count++] = run_send_saturation (stub.get (), size);
+        for (int i = 0; i < count; ++i)
+            if (!zlink_c_bench::write_cell_json (results[i], grpc::Version ()))
+                status = 1;
     }
-    return 0;
+    return status;
 }

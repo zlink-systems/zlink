@@ -9,38 +9,28 @@
 |---|---|---|---|
 | `grpc-node` | `BenchService.Echo` unary(callback을 Promise로 감쌈) | `BenchService.Command` unary, `Empty` reply | `@grpc/grpc-js`, `@grpc/proto-loader` |
 | `zlink-node` | raw ROUTER `socket.request(peer).message(...).timeout(...).submit()` | raw ROUTER `socket.send(peer).message(...).submit()` | published `@zlink-systems/zlink` |
-| `zlink-framework-node` | framework channel request(예정) | framework channel send(예정) | `@zlink-systems/framework`, `@zlink-systems/nestjs` — 현재 전 셀 `unsupported`(§6) |
+| `zlink-framework-node` | framework channel request | framework channel send | `@zlink-systems/framework`, `@zlink-systems/nestjs` |
 
 gRPC와 raw는 같은 `BenchPayload` protobuf body와 body 앞의 29-byte header(규격 §6)를 쓴다. raw는
 framework envelope와 protobuf body를 두 part로 보낸다.
 
 ## 2. 실행 방법
 
+입력은 규격 [§11](../README.ko.md#11-runner-입력과-결과-배치)의 환경 변수가 전부다. CLI 옵션과 위치 인자는 없다. runner는 `SKIP_BUILD=1`이 아니면 먼저 `npm ci`와 `npm run build`를 실행한다.
+측정은 항상 perf 티켓 큐로 낸다.
+
 ```bash
-# 전체 matrix — 항상 perf 티켓 큐로
+# 전체 matrix
 bash scripts/perf/perf-ticket.sh submit -p 1 -o <owner> -d "node with-grpc run" -- \
   bash framework/bench/grpc/node/run_local.sh
 
 # 한 셀
-env PAYLOADS=1024 SCENARIO=request-window IMPLEMENTATION=zlink-node \
+IMPLEMENTATIONS=zlink-node PATTERNS=request-serial PAYLOAD_SIZES=1024 RUNS=1 \
   bash framework/bench/grpc/node/run_local.sh
 ```
 
-| 입력 | 기본값 | 동작 |
-|---|---|---|
-| `RUNS` | `1` | runner process가 수행할 run 수(측정 티켓은 run 단위) |
-| `RUN_DEALER` | `0` | 비교 계약상 `0`만 허용 |
-| `DURATION` | `5` | active 시간(초) |
-| `WARMUP` | `1000` | active 전 warmup 호출 수 |
-| `PAYLOADS` | `1024,4096` | payload 목록. 두 값 밖은 preflight 실패 |
-| `SCENARIO` | `all` | `all`, `request`, 네 패턴 이름 |
-| `IMPLEMENTATION` | `all` | `all` 또는 세 구현 이름 |
-| `WINDOW` | `100` | `request-window` in-flight. 다른 값은 preflight 실패 |
-| `STAMP` | 실행 시각 | run ID와 결과 경로 |
-| `OUTROOT` | `framework/bench/grpc/log/node/with_grpc_node_<stamp>` | run root |
-| `SKIP_BUILD` | `0` | `1`이면 `npm ci`·`npm run build` 생략 |
-
-고정값: send concurrency 8, process 상한 300초, route/request/drain 상한 30초, settle quiet 200ms.
+warmup 호출 수, process 상한, route·request·drain 상한과 settle quiet 구간은 runner가 정하는
+고정값이다.
 
 ## 3. 프로세스 구성
 
@@ -48,7 +38,7 @@ env PAYLOADS=1024 SCENARIO=request-window IMPLEMENTATION=zlink-node \
 |---|---|---|---|---|
 | `grpc-node` | `client/main.js` — logical stream 수만큼 unary stub | 5220/5221 | `grpc-server/main.js` — echo/count | gRPC 5222, stats 5223 |
 | `zlink-node` | `client/main.js` — request용 raw ROUTER 1개 또는 send용 8개 | 5225/5226 | `zlink-raw-server/main.js` — request·command ROUTER 분리 | request 5227, command 5228, stats 5229 |
-| `zlink-framework-node` | 시작하지 않음(unsupported) | 5232/5233(예약) | `zlink-framework-server/main.js` | RouteMesh 5234, stats 5235(예약) |
+| `zlink-framework-node` | `client/main.js` | 5232/5233 | `zlink-framework-server/main.js` | RouteMesh 5234, stats 5235 |
 
 trigger·stats·phase 규칙은 `shared/bench-http-application.js` 한 곳(Node 표준 `http`)이 소유한다.
 trigger client는 runner의 `curl`이며 부하를 만들지 않는다. 셀 순서는 규격 §10.4 그대로이고 셀마다
@@ -58,7 +48,6 @@ trigger client는 runner의 `curl`이며 부하를 만들지 않는다. 셀 순�
 | 패턴 | `streams.count` | `streams.inFlightPerStream` | Node 구현 |
 |---|---:|---:|---|
 | `request-serial` | 1 | 1 | Promise 순차 loop 하나 |
-| `request-window` | 1 | 100 | 한 socket의 logical window를 Promise worker 100개가 공유 |
 | `request-backpressure` | 1 | 없음 | 상한 없이 Promise 생성, 256회마다 event loop에 양보 |
 | `send-saturation` | 8 | 1 | stream마다 Promise worker 하나. **연결은 세 행 모두 하나다** — gRPC는 채널 하나를 stub 8개가 공유하고, raw는 ROUTER 하나를 stream 8개가 공유하며, framework는 RouteMesh socket 하나다 |
 
@@ -76,28 +65,17 @@ trigger client는 runner의 `curl`이며 부하를 만들지 않는다. 셀 순�
 
 ## 5. 결과 위치
 
-```text
-<OUTROOT>/
-├── with_grpc_node_<stamp>.txt
-├── unsupported.json            # 실행하지 않은 셀과 이유
-└── <implementation>-<pattern>-<payload>-run<run>/
-    ├── results.json            # with-grpc-cell-v1: role·trigger·streams·target_stats
-    ├── report.txt
-    ├── source.log / target.log
-    └── target-stats.json
-```
+결과는 규격 §11의 배치(`<OUTPUT_DIR>/run<N>/<implementation>-<pattern>-<payload>/results.json`)로
+쓴다. 셀 안에는 diagnostics인 `source.log`, `target.log`, `target-stats.json`도 남는다.
+표와 판정은 집계기만 만든다. 전 언어를 한 번에 재고 보고서까지 만들 때는 `run_all.sh`를 쓴다(§11).
+한 언어만 집계할 때는 다음처럼 C 결과와 함께 넘긴다.
 
 ```bash
-python3 framework/bench/grpc/tools/bench_aggregate.py --lang node --judgement-pattern request-window \
-  --runs-glob '<run-1>/*' --runs-glob '<run-2>/*' --runs-glob '<run-3>/*' \
-  --runs-glob 'framework/bench/grpc/log/c/<c-run>*' --format full
+python3 framework/bench/grpc/tools/bench_aggregate.py --lang node \
+  --runs-glob 'framework/bench/grpc/log/<stamp>/c/run*' \
+  --runs-glob 'framework/bench/grpc/log/<stamp>/node/run*' --format full
 ```
 
 ## 6. 알려진 제약
 
-- `zlink-framework-node`의 모든 셀은 `unsupported`다. framework의 protobuf codec이 `bytes`를
-  보존하지 못한다(제품 결함, 별도 작업). runner는 process를 시작하지 않고 `unsupported.json`에
-  이유를 남긴다.
-- `zlink-node request-window`는 binding 0.17.6에서 completion 유실(결정 기록 FB-049)이 재현되어
-  오류 셀로 기록된다. 결함 수정 전에는 그 행을 게재하지 않는다.
 - raw 비교는 ROUTER↔ROUTER로 고정한다(DEALER 보조 run 없음).

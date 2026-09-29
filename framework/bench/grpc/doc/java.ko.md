@@ -19,30 +19,20 @@ envelope와 protobuf body 두 part를 보내며 request와 command endpoint를 �
 
 ## 2. 실행 방법
 
+입력은 규격 [§11](../README.ko.md#11-runner-입력과-결과-배치)의 환경 변수가 전부다. CLI 옵션과 위치 인자는 없다. Kotlin runner는 §10.5의 보조 셀(`request-backpressure`, `1024`)만 재며 다른
+`PATTERNS`·`PAYLOAD_SIZES`는 거부한다. runner는 `SKIP_BUILD=1`이 아니면 먼저
+`./gradlew --no-daemon --max-workers=1 assemble installDist`로 빌드한다.
+
 ```bash
 cd framework/bench/grpc/java
 ./run_local.sh                                   # Java 전체 matrix
 ./run_local_kotlin.sh                            # Kotlin 보조 2셀
-RUNS=1 PAYLOADS=1024 SCENARIO=request-window IMPLEMENTATION=zlink-framework-java ./run_local.sh
+IMPLEMENTATIONS=zlink-framework-java PATTERNS=request-serial PAYLOAD_SIZES=1024 RUNS=1 ./run_local.sh
 ```
 
 측정은 항상 perf 티켓 큐로 낸다. Kotlin 보조 셀은 Java의 B를 그대로 쓰므로 Java 측정과 동시에
-돌리지 않는다(runner가 두 대역을 함께 확인한다).
-
-| 입력 | Java 기본값 | Kotlin 기본값 |
-|---|---|---|
-| `RUNS` | `3` | `3` |
-| `RUN_DEALER` | `0`(다른 값 거부) | `0` |
-| `DURATION` | `5` | `5` |
-| `WARMUP_SECONDS` | `20` | `20` |
-| `PAYLOADS` | `1024,4096` | `1024`만 |
-| `SCENARIO` | `all`, `request`, 네 패턴 이름 | `all`·`request`·`request-window` |
-| `IMPLEMENTATION` | `all` 또는 세 구현 | `all` 또는 두 구현 |
-| `STAMP` / `OUTROOT` | 실행 시각 / `log/java/with_grpc_java_<stamp>` | 실행 시각 / `log/java/with_grpc_kotlin_<stamp>` |
-| `SKIP_BUILD` | `0`(`1`이면 Gradle build 생략) | 동일 |
-
-고정값: request window 100, send concurrency 8, request·route-ready timeout 30초, drain 상한
-30초, settle quiet 200ms. build는 `./gradlew --no-daemon --max-workers=1 assemble installDist`.
+돌리지 않는다(runner가 두 대역을 함께 확인한다). warmup 20초, request·route-ready timeout,
+drain 상한과 settle quiet 구간은 runner가 정하는 고정값이다.
 
 ## 3. 프로세스 구성
 
@@ -63,7 +53,6 @@ trigger·stats·phase 규칙은 `shared/.../BenchHttpApplication.java`(JDK `Http
 | 패턴 | `streams.count` | `streams.inFlightPerStream` | 구현 |
 |---|---:|---:|---|
 | `request-serial` | 1 | 1 | platform submit thread 하나의 순차 `CompletableFuture` |
-| `request-window` | 1 | 100 | submit thread 하나가 `CompletableFuture` 100개로 한 window 공유 (Kotlin은 coroutine 100개) |
 | `request-backpressure` | 1 | 없음 | submit thread 하나가 상한 없이 제출하고 completion에 양보 |
 | `send-saturation` | 8 | 1 | submit thread 8개가 각각 완료 통지 뒤 다음 send |
 
@@ -80,38 +69,29 @@ trigger·stats·phase 규칙은 `shared/.../BenchHttpApplication.java`(JDK `Http
 | Kotlin / coroutines | 2.2.21 / 1.9.0 |
 | ZLink binding | published 0.17.6 |
 | framework | 저장소 composite build(측정한 커밋을 원본에 기록) |
-| source 포화 지표 | `jvm_thread_cores`; 상한은 submit thread 수(serial·window·backpressure 1, send 8) |
+| source 포화 지표 | `jvm_thread_cores`; 상한은 submit thread 수(serial·backpressure 1, send 8) |
 
 ## 5. 결과 위치
 
-```text
-framework/bench/grpc/log/java/with_grpc_java_<stamp>/     # Kotlin은 with_grpc_kotlin_<stamp>
-├── with_grpc_java_<stamp>.txt
-└── <implementation>-<pattern>-<payload>-run<n>/
-    ├── results.json        # with-grpc-cell-v1: role·trigger·streams·target_stats
-    ├── report.txt
-    ├── source.log / target.log
-    └── target-stats.json
-```
+결과는 규격 §11의 배치(`<OUTPUT_DIR>/run<N>/<implementation>-<pattern>-<payload>/results.json`)로
+쓴다. 셀 안에는 diagnostics인 `source.log`, `target.log`, `target-stats.json`도 남는다.
+표와 판정은 집계기만 만든다. 전 언어를 한 번에 재고 보고서까지 만들 때는 `run_all.sh`를 쓴다(§11).
+한 언어만 집계할 때는 다음처럼 C 결과와 함께 넘긴다.
 
 ```bash
-python3 framework/bench/grpc/tools/bench_aggregate.py --lang java --judgement-pattern request-window \
-  --runs-glob 'framework/bench/grpc/log/java/<run-1>/*' \
-  --runs-glob 'framework/bench/grpc/log/java/<run-2>/*' \
-  --runs-glob 'framework/bench/grpc/log/java/<run-3>/*' \
-  --runs-glob 'framework/bench/grpc/log/c/<c-run>*' --format full
+python3 framework/bench/grpc/tools/bench_aggregate.py --lang java \
+  --runs-glob 'framework/bench/grpc/log/<stamp>/c/run*' \
+  --runs-glob 'framework/bench/grpc/log/<stamp>/java/run*' \
+  --runs-glob 'framework/bench/grpc/log/<stamp>/kotlin/run*' --format full
 ```
 
 ## 6. 알려진 제약
 
-- `zlink-java request-window`: binding 0.17.6에서 caller-owned `Received.close()` 뒤 reply
-  completion이 전부 유실되는 결함(결정 기록 FB-050, `repro/`로 재현)이 있어 결함 수정 전에는 그
-  행을 게재하지 않는다.
 - raw 비교는 ROUTER↔ROUTER만 허용한다.
 - `request-backpressure`는 application in-flight 상한이 없으므로 도달 깊이가 결과다.
 
 ## 7. Kotlin 보조 셀
 
-Kotlin은 Java와 같은 binding·서버·codec을 쓰므로 전체 matrix에서 제외한다. `request-window @1024`
+Kotlin은 Java와 같은 binding·서버·codec을 쓰므로 전체 matrix에서 제외한다. `request-backpressure @1024`
 두 셀(`grpc-kotlin`, `zlink-framework-kotlin`)만 A를 Kotlin으로 돌리고 B는 Java 바이너리를 Java
 대역에서 그대로 쓴다. 표에서는 Java 행 옆에 보조 행으로 싣고 Kotlin 호출층의 비용으로 읽는다.

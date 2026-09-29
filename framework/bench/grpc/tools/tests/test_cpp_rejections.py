@@ -50,7 +50,7 @@ class CppRejectionTest(unittest.TestCase):
 
     def verify(self, succeeds: bool):
         self.write()
-        result = runner_python("verify_counts", self.result)
+        result = runner_python("cpp_verify_counts", self.result)
         self.assertEqual(result.returncode == 0, succeeds, result.stdout + result.stderr)
         return result
 
@@ -76,13 +76,13 @@ class CppRejectionTest(unittest.TestCase):
                 self.target.write_text(json.dumps({"snapshot": {
                     "received": 8, "errors": 0, **target_count,
                 }}))
-                result = runner_python("merge_target_stats", self.result, self.target, 20, "false")
+                result = runner_python("cpp_merge_target_stats", self.result, self.target, 20, "false")
                 self.assertEqual(result.returncode, 0, result.stderr)
                 document = json.loads(self.result.read_text())
                 cell = document["cells"][0]
                 self.assertIsNone(cell["server_rejected_count"])
                 self.assertIsNone(cell["target_stats"]["rejected"])
-                result = runner_python("verify_counts", self.result)
+                result = runner_python("cpp_verify_counts", self.result)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("target rejection count unavailable", result.stderr)
                 with self.assertRaisesRegex(ReportError, "target rejection count unavailable"):
@@ -108,12 +108,10 @@ class CppRejectionTest(unittest.TestCase):
         self.cell["submitted"] = 9
         self.verify(False)
 
-    def test_merge_adds_count_without_changing_existing_measurements_or_result_lines(self):
+    def test_merge_adds_count_without_changing_existing_measurements(self):
         self.write()
-        before = runner_python("emit_final_results", self.result)
-        self.assertEqual(before.returncode, 0, before.stderr)
         self.target.write_text(json.dumps({"snapshot": {"received": 5, "errors": 0, "rejected": 3}}))
-        result = runner_python("merge_target_stats", self.result, self.target, 20, "false")
+        result = runner_python("cpp_merge_target_stats", self.result, self.target, 20, "false")
         self.assertEqual(result.returncode, 0, result.stderr)
         document = json.loads(self.result.read_text())
         cell = document["cells"][0]
@@ -121,13 +119,7 @@ class CppRejectionTest(unittest.TestCase):
         self.assertEqual(cell["target_stats"]["rejected"], 3)
         for key in self.cell.keys() - {"target_stats"}:
             self.assertEqual(cell[key], self.cell[key], key)
-        self.assertEqual(runner_python("verify_counts", self.result).returncode, 0)
-        after = runner_python("emit_final_results", self.result)
-        self.assertEqual(after.returncode, 0, after.stderr)
-        self.assertEqual(after.stdout, before.stdout)
-        self.assertEqual(len(after.stdout.splitlines()), 9)
-        for line in after.stdout.splitlines():
-            self.assertEqual(len(line.split(",")), 7)
+        self.assertEqual(runner_python("cpp_verify_counts", self.result).returncode, 0)
         legacy = copy.deepcopy(document)
         del legacy["cells"][0]["server_rejected_count"]
         del legacy["cells"][0]["target_stats"]["rejected"]
@@ -145,7 +137,7 @@ class CppRejectionTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             return result.stdout
         before = compare(candidate)
-        for path in candidate.rglob("cells.json"):
+        for path in candidate.rglob("results.json"):
             document = json.loads(path.read_text())
             for cell in document["cells"]:
                 cell["client_error_summary"] = []

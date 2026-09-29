@@ -1,0 +1,22 @@
+{
+  "schema": "with-grpc-cell-v1",
+  "cells": [
+    {
+      "implementation": "grpc-dotnet",
+      "pattern": "send-saturation",
+      "payload_size": 1024,
+      "throughput_per_second": 46389.2,
+      "bandwidth_mb_s": 47.503,
+      "latency_mean_ms": 0.088,
+      "latency_p95_ms": 0.108,
+      "latency_p99_ms": 0.147,
+      "client_cpu_percent": 9.59,
+      "client_memory_mb": 204.016,
+      "server_cpu_percent": 7.72,
+      "server_memory_mb": 488.539,
+      "drain_ms": 243.0,
+      "drain_bound_hit": false,
+      "server_received_at_close": 231946
+    }
+  ]
+}

@@ -28,15 +28,9 @@ from benchagg.readers import read_runs  # noqa: E402
 
 FIXTURE = os.path.join(_TOOLS, "tests", "fixtures", "gated2")
 RUNS = [
-    os.path.join(FIXTURE, name)
-    for name in (
-        "c-router-1",
-        "c-router-2",
-        "c-router-3",
-        "dotnet-router-1",
-        "dotnet-router-2",
-        "dotnet-router-3",
-    )
+    os.path.join(FIXTURE, lang, f"run{index}")
+    for lang in ("c", "dotnet")
+    for index in (1, 2, 3)
 ]
 
 # summary 3.1 and 3.2: throughput (KOPS or KMSG/s), mean, p95, p99, client CPU%,
@@ -215,12 +209,6 @@ class AcceptanceTest(unittest.TestCase):
         """G3 / FB-014: the C runner reports no server receive count."""
         self.assertTrue(self.row("zlink-dotnet", "send-saturation", 1024).send_server_counted)
         self.assertFalse(self.row("zlink-c", "send-saturation", 1024).send_server_counted)
-
-    def test_out_of_spec_c_patterns_are_dropped_visibly(self):
-        patterns = {k.pattern for k in self.rows}
-        self.assertNotIn("request-saturation", patterns)
-        self.assertNotIn("send-blocking", patterns)
-        self.assertTrue(any("out-of-spec" in note for note in self.run_set.notes))
 
 
 if __name__ == "__main__":

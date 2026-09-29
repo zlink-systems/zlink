@@ -1,0 +1,19 @@
+{
+  "schema": "with-grpc-cell-v1",
+  "cells": [
+    {
+      "implementation": "zlink-framework-dotnet",
+      "pattern": "request-window",
+      "payload_size": 1024,
+      "throughput_per_second": 3061.6,
+      "bandwidth_mb_s": 3.135,
+      "latency_mean_ms": 32.358,
+      "latency_p95_ms": 105.389,
+      "latency_p99_ms": 408.471,
+      "client_cpu_percent": 3.11,
+      "client_memory_mb": 194.023,
+      "server_cpu_percent": 4.37,
+      "server_memory_mb": 485.723
+    }
+  ]
+}

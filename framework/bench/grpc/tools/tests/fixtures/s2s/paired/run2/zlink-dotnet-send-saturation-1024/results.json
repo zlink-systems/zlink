@@ -1,0 +1,39 @@
+{
+  "schema": "with-grpc-cell-v1",
+  "cells": [
+    {
+      "implementation": "zlink-dotnet",
+      "pattern": "send-saturation",
+      "payload_size": 1024,
+      "role": "source",
+      "trigger": {
+        "runId": "s2s-2",
+        "cellId": "raw-send-1024",
+        "pattern": "send-saturation",
+        "payloadBytes": 1024,
+        "durationMs": 5000,
+        "warmup": 1000,
+        "endpoint": "http://127.0.0.1:5200/bench/start",
+        "receivedAtUnixMs": 1788937000000
+      },
+      "streams": {
+        "count": 8,
+        "inFlightPerStream": 1
+      },
+      "latency_mean_ms": 0.1,
+      "latency_p95_ms": 0.2,
+      "latency_p99_ms": 0.3,
+      "client_cpu_percent": 12.2,
+      "client_memory_mb": 106.0,
+      "client_cores": 2.44,
+      "client_parallelism_ceiling": 8.0,
+      "server_cpu_percent": 6.2,
+      "server_memory_mb": 86.0,
+      "target_stats": {
+        "received": 255000,
+        "errors": 0,
+        "drainMs": 41.0
+      }
+    }
+  ]
+}

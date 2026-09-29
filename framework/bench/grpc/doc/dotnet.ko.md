@@ -17,36 +17,20 @@ framework envelope와 protobuf body를 두 part로 보낸다.
 
 ## 2. 실행 방법
 
+입력은 규격 [§11](../README.ko.md#11-runner-입력과-결과-배치)의 환경 변수가 전부다. CLI 옵션과 위치 인자는 없다. runner는 `SKIP_BUILD=1`이 아니면 `WithGrpcBench.sln`을 Release로 빌드한다.
+binding은 published package, framework는 저장소 소스를 참조한다. 측정은 항상 perf 티켓 큐로 낸다.
+
 ```bash
-# 전체 matrix (3 구현 × 4 패턴 × payload 1024·4096)
-./framework/bench/grpc/dotnet/run_local.sh
+# 전체 matrix
+bash scripts/perf/perf-ticket.sh submit -p 1 -- bash framework/bench/grpc/dotnet/run_local.sh
 
 # 한 셀
-PAYLOAD_SIZES=1024 ./framework/bench/grpc/dotnet/run_local.sh \
-  --scenario request-window --implementation zlink-framework-dotnet
+IMPLEMENTATIONS=zlink-framework-dotnet PATTERNS=request-serial PAYLOAD_SIZES=1024 RUNS=1 \
+  bash framework/bench/grpc/dotnet/run_local.sh
 ```
 
-빌드는 runner가 `WithGrpcBench.sln`을 Release로 빌드한다(`SKIP_BUILD=1`이면 생략). binding은
-published package, framework는 저장소 소스를 참조한다.
-
-| 입력 | 기본값 | 동작 |
-|---|---|---|
-| `PAYLOAD_SIZES` | `1024,4096` | payload 목록. 두 값 밖은 preflight 실패 |
-| `DURATION_SECONDS` | `5` | active 시간 |
-| `WARMUP` | `1000` | active 전 warmup 호출 수 |
-| `REQUEST_WINDOW` | `100` | `request-window`의 합계 in-flight. 다른 값은 preflight 실패 |
-| `SEND_CONCURRENCY` | `8` | `send-saturation`의 stream 수. 다른 값은 preflight 실패 |
-| `TIMEOUT_SECONDS` | `300` | process·operation 상한 |
-| `COMMAND_SETTLE_MS` | `200` | counter가 안정됐다고 보는 최소 quiet 구간 |
-| `DRAIN_BOUND_MS` | `30000` | settle 상한 |
-| `SKIP_BUILD` | `0` | `1`이면 solution build 생략 |
-| `OUTPUT` | `framework/bench/grpc/log/dotnet/with_grpc_dotnet_<stamp>` | run root |
-| `CONFIGURATION` | `Release` | build·`dotnet run` 구성 |
-| `--scenario` | `all` | `all`, `request`, 네 패턴 이름 |
-| `--implementation` | `all` | `all` 또는 세 구현 이름 |
-
-측정은 항상 perf 티켓 큐로 낸다(`scripts/perf/perf-ticket.sh submit -p 1 -- env SKIP_BUILD=1 bash
-framework/bench/grpc/dotnet/run_local.sh`).
+warmup 호출 수, process·operation 상한, settle quiet 구간과 drain 상한은 runner가 정하는
+고정값이다.
 
 ## 3. 프로세스 구성
 
@@ -64,7 +48,6 @@ A의 trigger·stats·phase 규칙은 canonical perf runner의 `ZLink.Framework.P
 | 패턴 | `streams.count` | `streams.inFlightPerStream` | .NET 구현 |
 |---|---:|---:|---|
 | `request-serial` | 1 | 1 | 순차 Task loop 하나 |
-| `request-window` | 1 | 100 | 하나의 logical window를 공유하는 Task 100개 |
 | `request-backpressure` | 1 | 없음 | application in-flight 상한 없이 제출, 256회마다 `Task.Yield` |
 | `send-saturation` | 8 | 1 | stream마다 Task 하나. **연결은 세 행 모두 하나다** — gRPC는 채널 하나를 stub 8개가 공유하고, raw는 ROUTER 하나를 stream 8개가 공유하며, framework는 RouteMesh socket 하나다 |
 
@@ -82,31 +65,21 @@ A의 trigger·stats·phase 규칙은 canonical perf runner의 `ZLink.Framework.P
 
 ## 5. 결과 위치
 
-```text
-framework/bench/grpc/log/dotnet/with_grpc_dotnet_<stamp>/
-├── with_grpc_dotnet_<stamp>.txt
-└── <implementation>-<pattern>-<payload>/
-    ├── results.json        # with-grpc-cell-v1: role·trigger·streams·target_stats
-    ├── report.txt          # RESULT 라인
-    ├── source.log / target.log
-    └── target-stats.json
-```
-
-3-run 집계:
+결과는 규격 §11의 배치(`<OUTPUT_DIR>/run<N>/<implementation>-<pattern>-<payload>/results.json`)로
+쓴다. 셀 안에는 diagnostics인 `source.log`, `target.log`, `target-stats.json`도 남는다.
+표와 판정은 집계기만 만든다. 전 언어를 한 번에 재고 보고서까지 만들 때는 `run_all.sh`를 쓴다(§11).
+한 언어만 집계할 때는 다음처럼 C 결과와 함께 넘긴다.
 
 ```bash
-python3 framework/bench/grpc/tools/bench_aggregate.py --lang dotnet --judgement-pattern request-window \
-  --runs-glob 'framework/bench/grpc/log/dotnet/<run-1>/*' \
-  --runs-glob 'framework/bench/grpc/log/dotnet/<run-2>/*' \
-  --runs-glob 'framework/bench/grpc/log/dotnet/<run-3>/*' \
-  --runs-glob 'framework/bench/grpc/log/c/<c-run>*' \
-  --format full
+python3 framework/bench/grpc/tools/bench_aggregate.py --lang dotnet \
+  --runs-glob 'framework/bench/grpc/log/<stamp>/c/run*' \
+  --runs-glob 'framework/bench/grpc/log/<stamp>/dotnet/run*' --format full
 ```
 
 ## 6. 알려진 제약
 
-- 네 패턴 × 세 구현에 `unsupported` 셀은 없다.
-- raw 비교는 ROUTER↔ROUTER만 허용한다(`RAW_SOCKET=router`).
+- 세 패턴 × 세 구현에 `unsupported` 셀은 없다.
+- raw 비교는 ROUTER↔ROUTER만 허용한다.
 - framework A의 RouteMesh listener는 loopback port 0을 쓰고, B의 비교 endpoint는 5214로 고정한다.
 - `request-backpressure`의 framework 셀은 admission 거절이 request 오류로 표면화돼(결정 기록
   FB-042·FB-047) 오류 셀로 기록되며 처리량 판정에 쓰지 않는다.

@@ -10,39 +10,28 @@ are owned by the specification; this page holds only the Node-specific values.
 |---|---|---|---|
 | `grpc-node` | `BenchService.Echo` unary (callback wrapped in a Promise) | `BenchService.Command` unary, `Empty` reply | `@grpc/grpc-js`, `@grpc/proto-loader` |
 | `zlink-node` | raw ROUTER `socket.request(peer).message(...).timeout(...).submit()` | raw ROUTER `socket.send(peer).message(...).submit()` | published `@zlink-systems/zlink` |
-| `zlink-framework-node` | framework channel request (planned) | framework channel send (planned) | `@zlink-systems/framework`, `@zlink-systems/nestjs`; every cell is `unsupported` today (§6) |
+| `zlink-framework-node` | framework channel request | framework channel send | `@zlink-systems/framework`, `@zlink-systems/nestjs` |
 
 gRPC and raw use the same `BenchPayload` protobuf body and the 29-byte header in front of it
 (spec §6). raw sends the framework envelope and the protobuf body as two parts.
 
 ## 2. How to run
 
+The inputs are exactly the environment variables in spec [§11](../README.en.md#11-runner-inputs-and-result-layout). There are no CLI options or positional arguments. Unless `SKIP_BUILD=1`, the runner first runs `npm ci` and `npm run build`.
+Measurements always go through the perf ticket queue.
+
 ```bash
-# full matrix, always through the perf ticket queue
+# full matrix
 bash scripts/perf/perf-ticket.sh submit -p 1 -o <owner> -d "node with-grpc run" -- \
   bash framework/bench/grpc/node/run_local.sh
 
 # one cell
-env PAYLOADS=1024 SCENARIO=request-window IMPLEMENTATION=zlink-node \
+IMPLEMENTATIONS=zlink-node PATTERNS=request-serial PAYLOAD_SIZES=1024 RUNS=1 \
   bash framework/bench/grpc/node/run_local.sh
 ```
 
-| Input | Default | Behaviour |
-|---|---|---|
-| `RUNS` | `1` | runs per runner process (measurement tickets are per run) |
-| `RUN_DEALER` | `0` | only `0` is accepted under the comparison contract |
-| `DURATION` | `5` | active window in seconds |
-| `WARMUP` | `1000` | warmup calls before active |
-| `PAYLOADS` | `1024,4096` | payload list; other values fail preflight |
-| `SCENARIO` | `all` | `all`, `request`, or one of the four pattern names |
-| `IMPLEMENTATION` | `all` | `all` or one of the three implementation names |
-| `WINDOW` | `100` | `request-window` in-flight; other values fail preflight |
-| `STAMP` | run time | run id and result path |
-| `OUTROOT` | `framework/bench/grpc/log/node/with_grpc_node_<stamp>` | run root |
-| `SKIP_BUILD` | `0` | `1` skips `npm ci` and `npm run build` |
-
-Fixed: send concurrency 8, process ceiling 300 s, route/request/drain ceiling 30 s, settle quiet
-period 200 ms.
+The warmup call count, the process ceiling, the route, request and drain ceilings and the settle
+quiet period are fixed by the runner.
 
 ## 3. Process layout
 
@@ -50,7 +39,7 @@ period 200 ms.
 |---|---|---|---|---|
 | `grpc-node` | `client/main.js`: one unary stub per logical stream | 5220/5221 | `grpc-server/main.js`: echo/count | gRPC 5222, stats 5223 |
 | `zlink-node` | `client/main.js`: one raw ROUTER for request or eight for send | 5225/5226 | `zlink-raw-server/main.js`: separate request and command ROUTERs | request 5227, command 5228, stats 5229 |
-| `zlink-framework-node` | not started (unsupported) | 5232/5233 (reserved) | `zlink-framework-server/main.js` | RouteMesh 5234, stats 5235 (reserved) |
+| `zlink-framework-node` | `client/main.js` | 5232/5233 | `zlink-framework-server/main.js` | RouteMesh 5234, stats 5235 |
 
 The trigger, stats and phase rules are owned by `shared/bench-http-application.js` alone (Node
 `http`). The trigger client is the runner's `curl` and generates no load. The cell order is spec
@@ -60,7 +49,6 @@ before the run and after each cell and stops, without moving ports, if one is in
 | Pattern | `streams.count` | `streams.inFlightPerStream` | Node implementation |
 |---|---:|---:|---|
 | `request-serial` | 1 | 1 | one sequential Promise loop |
-| `request-window` | 1 | 100 | 100 Promise workers sharing one socket's logical window |
 | `request-backpressure` | 1 | none | Promises without a ceiling, yielding to the event loop every 256 |
 | `send-saturation` | 8 | 1 | one Promise worker with one gRPC stub or raw ROUTER per stream |
 
@@ -78,28 +66,18 @@ before the run and after each cell and stops, without moving ports, if one is in
 
 ## 5. Where results go
 
-```text
-<OUTROOT>/
-├── with_grpc_node_<stamp>.txt
-├── unsupported.json            # cells not run, with the reason
-└── <implementation>-<pattern>-<payload>-run<run>/
-    ├── results.json            # with-grpc-cell-v1: role, trigger, streams, target_stats
-    ├── report.txt
-    ├── source.log / target.log
-    └── target-stats.json
-```
+Results follow the §11 layout (`<OUTPUT_DIR>/run<N>/<implementation>-<pattern>-<payload>/results.json`).
+A cell also keeps the diagnostics `source.log`, `target.log` and `target-stats.json`.
+Only the aggregator produces tables and judgements. To measure every language and produce the
+reports in one go, use `run_all.sh` (§11). To aggregate one language, pass it together with the C
+results:
 
 ```bash
-python3 framework/bench/grpc/tools/bench_aggregate.py --lang node --judgement-pattern request-window \
-  --runs-glob '<run-1>/*' --runs-glob '<run-2>/*' --runs-glob '<run-3>/*' \
-  --runs-glob 'framework/bench/grpc/log/c/<c-run>*' --format full
+python3 framework/bench/grpc/tools/bench_aggregate.py --lang node \
+  --runs-glob 'framework/bench/grpc/log/<stamp>/c/run*' \
+  --runs-glob 'framework/bench/grpc/log/<stamp>/node/run*' --format full
 ```
 
 ## 6. Known limits
 
-- Every `zlink-framework-node` cell is `unsupported`: the framework's protobuf codec does not
-  preserve `bytes` (a product defect handled separately). The runner starts no process and records
-  the reason in `unsupported.json`.
-- `zlink-node request-window` reproduces the completion loss of binding 0.17.6 (decision record
-  FB-049) and is recorded as an error cell; that row is not published until the defect is fixed.
 - The raw comparison is fixed to ROUTER↔ROUTER (no DEALER side run).

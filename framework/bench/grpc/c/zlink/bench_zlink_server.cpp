@@ -78,20 +78,6 @@ bool reply_multipart (void *router,
     return zlink_reply (router, rid, reply_token, parts, 2) == ZLINK_SUBMIT_OK;
 }
 
-bool send_multipart (void *router, const zlink_routing_id_t *rid, const zlink_msg_t *request_body)
-{
-    zlink_msg_t parts[2];
-    if (!make_response_header (&parts[0]))
-        return false;
-    if (!make_response_body (request_body, &parts[1])) {
-        zlink_msg_close (&parts[0]);
-        return false;
-    }
-
-    return zlink_send_rid (router, rid, parts, 2, ZLINK_SEND_FLAGS_NONE, NULL, NULL)
-           == ZLINK_SUBMIT_OK;
-}
-
 void request_loop (void *router)
 {
     while (!g_stop.load ()) {
@@ -127,23 +113,6 @@ void send_loop (void *router)
     }
 }
 
-void send_echo_loop (void *router)
-{
-    while (!g_stop.load ()) {
-        zlink_routing_id_t rid {};
-        zlink_reply_token_t reply_token = 0;
-        zlink_msg_t body;
-        if (zlink_msg_init (&body) != 0)
-            continue;
-        if (!recv_multipart_body (router, &rid, &reply_token, &body)) {
-            zlink_msg_close (&body);
-            continue;
-        }
-        if (reply_token == 0)
-            (void) send_multipart (router, &rid, &body);
-        zlink_msg_close (&body);
-    }
-}
 }
 
 int main ()
@@ -154,14 +123,6 @@ int main ()
       zlink_c_bench::env_string ("ZLINK_REQUEST_ENDPOINT", "tcp://127.0.0.1:6075");
     const std::string send_endpoint =
       zlink_c_bench::env_string ("ZLINK_SEND_ENDPOINT", "tcp://127.0.0.1:6077");
-    const std::string scenarios = zlink_c_bench::env_string ("ZLINK_BENCH_SCENARIOS", "all");
-    const bool run_request = zlink_c_bench::scenario_enabled (scenarios, "request-serial")
-                             || zlink_c_bench::scenario_enabled (scenarios, "request-window")
-                             || zlink_c_bench::scenario_enabled (scenarios, "request-saturation");
-    const bool run_send = zlink_c_bench::scenario_enabled (scenarios, "send-blocking")
-                          || zlink_c_bench::scenario_enabled (scenarios, "send-saturation");
-    const bool run_send_echo =
-      scenarios != "all" && zlink_c_bench::scenario_enabled (scenarios, "send-send-serial");
 
     void *ctx = zlink_ctx_new ();
     void *request_router = zlink_socket (ctx, ZLINK_SOCKET_ROUTER);
@@ -170,10 +131,8 @@ int main ()
         std::fprintf (stderr, "zlink server: failed to create context/socket\n");
         return 2;
     }
-    // FB-001: the raw C row is measured as ROUTER<->ROUTER. The client ROUTER
-    // addresses these sockets by routing id, so both sockets must announce a
-    // well-known routing id before bind. A DEALER client ignores these ids, so
-    // setting them keeps the legacy DEALER->ROUTER configuration working too.
+    // The raw C row is measured as ROUTER<->ROUTER (README §3). The client ROUTER addresses
+    // these sockets by routing id, so both announce a well-known routing id before bind.
     const std::string request_routing_id =
       zlink_c_bench::env_string ("ZLINK_REQUEST_ROUTING_ID", "zlink-c-bench-request-server");
     const std::string send_routing_id =
@@ -192,20 +151,12 @@ int main ()
         return 2;
     }
 
-    std::thread request_thread;
-    std::thread send_thread;
-    if (run_request)
-        request_thread = std::thread (request_loop, request_router);
-    if (run_send_echo)
-        send_thread = std::thread (send_echo_loop, send_router);
-    else if (run_send)
-        send_thread = std::thread (send_loop, send_router);
+    std::thread request_thread (request_loop, request_router);
+    std::thread send_thread (send_loop, send_router);
     while (!g_stop.load ())
         std::this_thread::sleep_for (std::chrono::milliseconds (100));
-    if (request_thread.joinable ())
-        request_thread.join ();
-    if (send_thread.joinable ())
-        send_thread.join ();
+    request_thread.join ();
+    send_thread.join ();
     zlink_close (request_router);
     zlink_close (send_router);
     zlink_ctx_term (ctx);

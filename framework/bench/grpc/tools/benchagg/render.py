@@ -280,7 +280,7 @@ def render_doc_table(
 
 
 def render_incomplete(cells: list[Cell]) -> str:
-    """Server-driven fragments excluded because their A/B cell is incomplete."""
+    """Server-driven fragments excluded because they carry no target_stats."""
     if not cells:
         return "None. Every server-driven source has target stats."
     lines = ["| Run | Cell | Reason |", "|---|---|---|"]

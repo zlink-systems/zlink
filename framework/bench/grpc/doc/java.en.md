@@ -21,31 +21,22 @@ command endpoints separate.
 
 ## 2. How to run
 
+The inputs are exactly the environment variables in spec [§11](../README.en.md#11-runner-inputs-and-result-layout). There are no CLI options or positional arguments. The Kotlin runner measures only the §10.5 supplementary cells
+(`request-backpressure`, `1024`) and rejects other `PATTERNS` and `PAYLOAD_SIZES`. Unless
+`SKIP_BUILD=1`, the runner builds first with `./gradlew --no-daemon --max-workers=1 assemble
+installDist`.
+
 ```bash
 cd framework/bench/grpc/java
 ./run_local.sh                                   # full Java matrix
 ./run_local_kotlin.sh                            # the two Kotlin supplementary cells
-RUNS=1 PAYLOADS=1024 SCENARIO=request-window IMPLEMENTATION=zlink-framework-java ./run_local.sh
+IMPLEMENTATIONS=zlink-framework-java PATTERNS=request-serial PAYLOAD_SIZES=1024 RUNS=1 ./run_local.sh
 ```
 
 Measurements always go through the perf ticket queue. The Kotlin cells reuse Java's B, so they never
-run at the same time as a Java measurement (the runner checks both port bands).
-
-| Input | Java default | Kotlin default |
-|---|---|---|
-| `RUNS` | `3` | `3` |
-| `RUN_DEALER` | `0` (other values rejected) | `0` |
-| `DURATION` | `5` | `5` |
-| `WARMUP_SECONDS` | `20` | `20` |
-| `PAYLOADS` | `1024,4096` | `1024` only |
-| `SCENARIO` | `all`, `request`, one of the four patterns | `all`, `request`, `request-window` |
-| `IMPLEMENTATION` | `all` or one of three | `all` or one of two |
-| `STAMP` / `OUTROOT` | run time / `log/java/with_grpc_java_<stamp>` | run time / `log/java/with_grpc_kotlin_<stamp>` |
-| `SKIP_BUILD` | `0` (`1` skips the Gradle build) | same |
-
-Fixed: request window 100, send concurrency 8, request and route-ready timeout 30 s, drain ceiling
-30 s, settle quiet period 200 ms. The build is `./gradlew --no-daemon --max-workers=1 assemble
-installDist`.
+run at the same time as a Java measurement (the runner checks both port bands). The 20 s warmup, the
+request and route-ready timeouts, the drain bound and the settle quiet period are fixed by the
+runner.
 
 ## 3. Process layout
 
@@ -66,7 +57,6 @@ HTTP ports first and then starts the RouteMesh listener. The runner checks LISTE
 | Pattern | `streams.count` | `streams.inFlightPerStream` | Implementation |
 |---|---:|---:|---|
 | `request-serial` | 1 | 1 | sequential `CompletableFuture`s on one platform submit thread |
-| `request-window` | 1 | 100 | one submit thread sharing one window across 100 `CompletableFuture`s (100 coroutines in Kotlin) |
 | `request-backpressure` | 1 | none | one submit thread submitting without a ceiling and yielding to completions |
 | `send-saturation` | 8 | 1 | eight submit threads, each sending again after its completion notice |
 
@@ -83,39 +73,31 @@ HTTP ports first and then starts the RouteMesh listener. The runner checks LISTE
 | Kotlin / coroutines | 2.2.21 / 1.9.0 |
 | ZLink binding | published 0.17.6 |
 | framework | repository composite build (the measured commit is recorded in the raw file) |
-| source saturation metric | `jvm_thread_cores`; the ceiling is the submit thread count (1 for serial/window/backpressure, 8 for send) |
+| source saturation metric | `jvm_thread_cores`; the ceiling is the submit thread count (1 for serial/backpressure, 8 for send) |
 
 ## 5. Where results go
 
-```text
-framework/bench/grpc/log/java/with_grpc_java_<stamp>/     # Kotlin: with_grpc_kotlin_<stamp>
-├── with_grpc_java_<stamp>.txt
-└── <implementation>-<pattern>-<payload>-run<n>/
-    ├── results.json        # with-grpc-cell-v1: role, trigger, streams, target_stats
-    ├── report.txt
-    ├── source.log / target.log
-    └── target-stats.json
-```
+Results follow the §11 layout (`<OUTPUT_DIR>/run<N>/<implementation>-<pattern>-<payload>/results.json`).
+A cell also keeps the diagnostics `source.log`, `target.log` and `target-stats.json`.
+Only the aggregator produces tables and judgements. To measure every language and produce the
+reports in one go, use `run_all.sh` (§11). To aggregate one language, pass it together with the C
+results:
 
 ```bash
-python3 framework/bench/grpc/tools/bench_aggregate.py --lang java --judgement-pattern request-window \
-  --runs-glob 'framework/bench/grpc/log/java/<run-1>/*' \
-  --runs-glob 'framework/bench/grpc/log/java/<run-2>/*' \
-  --runs-glob 'framework/bench/grpc/log/java/<run-3>/*' \
-  --runs-glob 'framework/bench/grpc/log/c/<c-run>*' --format full
+python3 framework/bench/grpc/tools/bench_aggregate.py --lang java \
+  --runs-glob 'framework/bench/grpc/log/<stamp>/c/run*' \
+  --runs-glob 'framework/bench/grpc/log/<stamp>/java/run*' \
+  --runs-glob 'framework/bench/grpc/log/<stamp>/kotlin/run*' --format full
 ```
 
 ## 6. Known limits
 
-- `zlink-java request-window`: binding 0.17.6 loses every reply completion after a caller-owned
-  `Received.close()` (decision record FB-050, reproduced by `repro/`); that row is not published
-  until the defect is fixed.
 - The raw comparison allows ROUTER↔ROUTER only.
 - `request-backpressure` has no application in-flight ceiling, so the reached depth is the result.
 
 ## 7. Kotlin supplementary cells
 
 Kotlin shares the binding, server and codec with Java, so it is excluded from the full matrix.
-Only the two `request-window @1024` cells (`grpc-kotlin`, `zlink-framework-kotlin`) run A in
+Only the two `request-backpressure @1024` cells (`grpc-kotlin`, `zlink-framework-kotlin`) run A in
 Kotlin; B is the Java binary on the Java band. They appear next to the Java rows as supplementary
 rows and are read as the cost of the Kotlin call layer.

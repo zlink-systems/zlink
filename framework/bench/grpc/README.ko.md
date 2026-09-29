@@ -575,7 +575,7 @@ stream 수와 stream당 in-flight는 셀 원본에 기록한다(§4). 언어 har
 5. `phase=active` trigger → `durationMs` 뒤 A가 measured 구간을 닫는다.
 6. settle: B(그리고 A)의 stats를 폴링해 수신·완료 수가 더는 늘지 않을 때까지 기다린다(상한 30초,
    §3의 오염 규칙 그대로).
-7. A가 셀 원본 JSON을 `log/<lang>/<stamp>/`에 쓰고 `RESULT` 라인을 낸다. runner가 B의 stats를
+7. A가 셀 원본 JSON을 §11의 셀 디렉터리에 쓰고 `RESULT` 라인을 낸다. runner가 B의 stats를
    같은 JSON의 `target_stats`에 합친다.
 8. A·B를 종료한다. 다음 셀은 새 process 쌍으로 시작한다(같은 process를 여러 셀에 재사용하지
    않는다 — 앞 셀의 잔여 상태가 다음 셀에 들어가는 것을 막기 위해).
@@ -589,3 +589,50 @@ Kotlin은 Java와 같은 binding·server·codec을 쓰므로 전체 matrix에서
 층의 비용을 보여 주는 보조 셀 둘 — `grpc-kotlin`(coroutine stub)과 `zlink-framework-kotlin`
 (suspend 호출)의 `request-backpressure @1024` — 을 Java 행 옆에 싣는다. A만 Kotlin이고 B는 Java
 바이너리를 §9의 Java 대역에서 그대로 쓴다.
+
+## 11. runner 입력과 결과 배치
+
+runner는 여섯 개다: `c/run_local.sh`, `cpp/run_local.sh`, `dotnet/run_local.sh`,
+`java/run_local.sh`, `java/run_local_kotlin.sh`, `node/run_local.sh`. 모든 runner는 아래 환경 변수만
+입력으로 받고, CLI 옵션과 위치 인자는 받지 않는다. 입력 이름이나 기본값이 언어마다 다르면 같은
+측정을 다른 조건으로 돌리게 되고, 그 차이는 결과 표에 드러나지 않는다.
+
+| 변수 | 기본값 | 뜻 |
+|------|--------|----|
+| `OUTPUT_DIR` | `framework/bench/grpc/log/<RUN_STAMP>/<lang>` | 결과 루트. 상대 경로는 runner를 실행한 디렉터리 기준으로 푼다 |
+| `RUN_STAMP` | 시작 시각(`YYYYmmdd_HHMMSS`) | 기본 `OUTPUT_DIR`의 이름 |
+| `PAYLOAD_SIZES` | `1024,4096` | §2의 payload 크기 |
+| `DURATION_SECONDS` | `5` | 셀마다의 active 구간(§3) |
+| `PATTERNS` | `request-serial,request-backpressure,send-saturation` | §2의 패턴 |
+| `IMPLEMENTATIONS` | 그 언어의 구현 전부(§1.1, §1.2) | 측정할 구현 |
+| `RUNS` | `3` | run 수. G5 재현성 판정이 run 3개를 요구한다 |
+| `SKIP_BUILD` | `0` | `1`이면 빌드를 생략하고 이미 빌드된 산출물을 쓴다 |
+
+- `<lang>`은 `c`, `cpp`, `dotnet`, `java`, `kotlin`, `node` 중 하나다.
+- Kotlin runner는 §10.5의 보조 셀만 측정한다. 이 runner에서 `PATTERNS`와 `PAYLOAD_SIZES`의
+  기본값은 `request-backpressure`와 `1024`이며, 다른 값은 거부한다.
+- 값이 위 범위를 벗어나면 runner는 측정을 시작하기 전에 거부한다.
+
+위 표 밖의 값은 입력이 아니다. warmup(§8.2), send concurrency 8과 drain 상한 30초(§3), 포트(§9)는
+runner가 정하고 셀 JSON의 `metadata`에 기록한다.
+
+결과는 다음 배치로 쓴다.
+
+```text
+<OUTPUT_DIR>/
+  run<N>/                                  N = 1..RUNS
+    <implementation>-<pattern>-<payload>/
+      results.json                         cell raw JSON
+      source.log, target.log, ...          diagnostics
+```
+
+`results.json`은 C 기준 bench를 포함한 여섯 runner 모두 `with-grpc-cell-v1` 형식으로 쓴다.
+runner는 셀 원본만 쓰고 표나 요약 파일을 만들지 않는다. 표·비율·판정은 공용 집계기
+(`tools/bench_aggregate.py`, §7.4)가 이 파일만 읽어 만든다.
+
+전 언어를 한 번에 측정할 때는 `run_all.sh`를 쓴다. `run_all.sh`는 `BENCH_LANGS`(기본
+`c cpp dotnet java kotlin node`)의 runner를 차례로 실행해 `framework/bench/grpc/log/<RUN_STAMP>/<lang>/`에
+쓴다. 입력은 `BENCH_LANGS`와 위 표의 `RUN_STAMP`, `DURATION_SECONDS`, `RUNS`, `SKIP_BUILD`이며,
+패턴·payload·구현은 각 runner의 기본값(전체 matrix)을 쓴다. 측정이 끝나면 C를 뺀 언어마다 C 결과와
+함께 집계기를 실행해 `<lang>/report.md`와 `<lang>/aggregate.json`을 남긴다. Kotlin 셀은 §10.5대로
+Java 보고서에 함께 싣는다.
