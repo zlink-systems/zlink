@@ -1033,10 +1033,10 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         Assert.True(gate.BeginDrain());
 
         var spot = Assert.Throws<ZLinkFrameworkException>(gate.RequireSpotAdmission);
-        Assert.Equal(ZLinkFrameworkErrorKind.Rejected, spot.Kind);
+        Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, spot.Kind);
 
         var actor = Assert.Throws<ZLinkFrameworkException>(gate.RequireActorAdmission);
-        Assert.Equal(ZLinkFrameworkErrorKind.Rejected, actor.Kind);
+        Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, actor.Kind);
 
         Assert.False(gate.TryEnterActorAdmission(out var rejectedJoin));
         rejectedJoin.Dispose();

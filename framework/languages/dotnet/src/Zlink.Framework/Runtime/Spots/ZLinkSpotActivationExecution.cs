@@ -128,8 +128,6 @@ internal abstract partial class ZLinkSpotActivation
         return failures is null ? null : new AggregateException(failures);
     }
 
-    internal void CloseAdmissionForClose() => _serial.CloseAdmissionForClose();
-
     private async Task CompleteFinalizationAsync(TaskCompletionSource completion)
     {
         try
@@ -960,6 +958,8 @@ internal abstract partial class ZLinkSpotActivation
 
     internal bool HasRelocationBarrier => _serial.HasRelocationBarrier;
 
+    internal bool HasClosingSeal => _serial.HasClosingSeal;
+
     internal long LastApplicationWorkCompletedAt => _serial.LastApplicationWorkCompletedAt;
 
     protected abstract ValueTask InvokeClosingAsync(
@@ -993,7 +993,7 @@ internal abstract partial class ZLinkSpotActivation
         var operationAdmission = _runtime.TryEnterInboundOperation(countAsRequest: false);
         if (!operationAdmission.Accepted)
             throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Rejected,
+                ZLinkFrameworkErrorKind.ShuttingDown,
                 "SPOT application admission is sealed for drain."
             );
         using (operationAdmission.Lease)
