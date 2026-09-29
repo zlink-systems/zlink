@@ -164,7 +164,7 @@ to applicable consumers.
 | `--payload-size` | Scenario representative; 1024 or 4096 | `run_single.sh` and payload factory |
 | `--payload-sizes` | `1024,4096` | `run_perf.sh` matrix expansion; mutually exclusive with the single-value option |
 | `--inflight` | 1, positive int32 | Logical-operation cap per CS connector or server-driven stream; publish-admission cap for PS |
-| `--connect-concurrency` | 256, positive int32 | CS pool's concurrent connect/setup count; absent for server-driven cells |
+| `--connect-concurrency` | 256, positive int32 | Concurrency of the §4 connect/setup phase: per client process connector connect/setup for CS, the source role's object preparation and per-target probe echo (§16.1) for server-driven cells |
 | `--spot-count` | 16, positive int32 | Spot Object Server preparation and stream→Spot mapping; §10.5 standard matrix uses 1/16 |
 | `--subscriber-count` | 8, positive int32 | Count of independent Subscriber processes the shared runner starts for PS |
 | `--worker-task-millis` | 5, positive int32 | CPU-duration target in the worker callback (§10.8) |

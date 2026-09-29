@@ -159,7 +159,7 @@ Shell runner의 옵션 이름과 consumer는 다음과 같다. 미적용 옵션�
 | `--payload-size` | scenario 대표값; 1024 또는 4096 | `run_single.sh`와 payload factory가 소비 |
 | `--payload-sizes` | `1024,4096` | `run_perf.sh` matrix 확장; 단일값 옵션과 함께 받지 않음 |
 | `--inflight` | 1, 양의 int32 | CS는 connector별, server-driven은 stream별 logical operation 상한; PS는 publish admission 상한 |
-| `--connect-concurrency` | 256, 양의 int32 | CS pool의 동시 connect/setup 수; server-driven에는 없음 |
+| `--connect-concurrency` | 256, 양의 int32 | §4 connect/setup의 동시 수. CS는 client process당 connector connect/setup, server-driven은 source role의 객체 준비와 준비된 대상별 probe echo(§16.1) |
 | `--spot-count` | 16, 양의 int32 | Spot Object Server의 User Spot 준비와 stream→Spot mapping; §10.5 표준 matrix는 1/16 |
 | `--subscriber-count` | 8, 양의 int32 | PS 셀에서 공통 runner가 띄우는 독립 Subscriber process 수 |
 | `--worker-task-millis` | 5, 양의 int32 | Worker callback의 CPU 작업 시간 목표(§10.8) |
