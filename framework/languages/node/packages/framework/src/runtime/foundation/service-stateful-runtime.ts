@@ -1958,8 +1958,9 @@ export class ServiceStatefulRuntime {
     let binding: ServiceSessionBinding;
     try {
       binding = this.registry.validateBoundSession(actor, expectedBindingGeneration);
-    } catch {
-      return SubmitResult.NotFound;
+    } catch (error) {
+      if (error instanceof ServiceStaleGenerationError) return SubmitResult.NotFound;
+      throw error;
     }
     const actorFence = this.tryActorFence(actor);
     if (actorFence === undefined) return SubmitResult.InvalidState;
