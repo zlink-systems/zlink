@@ -192,12 +192,16 @@ final class SampleReleaseGateContractTest {
             }
         }
         String commonPowerShellRunner = readSource(samplesRoot.resolve("redis-common.ps1"));
+        assertFalse(
+                commonPowerShellRunner.contains("$settingsTargetPath"),
+                "PowerShell sample runner must not copy standalone settings into sample"
+                        + " directories");
         assertTrue(
                 commonPowerShellRunner.contains(
-                        "Copy-Item -LiteralPath $settingsSourcePath -Destination"
-                                + " $settingsTargetPath"),
-                "PowerShell sample runner must stage standalone settings under Gradle's standard"
-                        + " filename");
+                                "if ($_.StartsWith(\":\")) { \":${language}:${sample}${_}\" }")
+                        && commonPowerShellRunner.contains("Push-Location $buildRoot"),
+                "PowerShell sample runner must invoke Gradle from the samples root using"
+                        + " :<language>:<sample> project paths");
 
         for (String language : REQUIRED_LANGUAGES) {
             Path languageRoot = samplesRoot.resolve(language);
