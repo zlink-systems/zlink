@@ -666,11 +666,17 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
             var queuedOwnership = ownership;
             tail =
                     prior.thenCompose(
-                            ignored ->
-                                    host.runQueuedApplicationJob(
-                                                    queuedOwnership,
-                                                    () -> dispatchActorJoinAsync(request))
-                                            .thenCompose(stage -> stage));
+                                    ignored ->
+                                            context.enqueueLifecycle(
+                                                    () ->
+                                                            host.runQueuedApplicationJob(
+                                                                            queuedOwnership,
+                                                                            () ->
+                                                                                    dispatchActorJoinAsync(
+                                                                                            request))
+                                                                    .thenCompose(
+                                                                            stage -> stage)))
+                            .whenComplete((result, error) -> queuedOwnership.close());
         }
         return tail;
     }
@@ -694,8 +700,9 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                             }
                             ZLinkSpotActorJoinResult effective =
                                     response == null ? ZLinkSpotActorJoinResult.reject() : response;
+                            boolean accepted = effective.accepted();
                             CompletionStage<Void> membership =
-                                    effective.accepted()
+                                    accepted
                                             ? host.actorAdmissions().localJoinCompletion(
                                                     request.targetActor().actorId())
                                             : CompletableFuture.completedFuture(null);
@@ -706,7 +713,7 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                                                     effective.reply(), host.serializerForSpot());
                             try {
                                 backendSpot.replyActorJoin(
-                                        request, effective.accepted() ? 0 : 1, List.of(reply));
+                                        request, accepted ? 0 : 1, List.of(reply));
                             } finally {
                                 reply.close();
                             }

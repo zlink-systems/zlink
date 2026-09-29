@@ -3494,6 +3494,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                 .map(String::valueOf)
                                                                 .orElse(null))
                                                 .error(error));
+                                if (!actorIsRequest) {
+                                    return Optional.<ActorDispatchReply>empty();
+                                }
                                 return Optional.of(
                                         new ActorDispatchReply(
                                                 ActorPacketFrames.encodeError(packetHeader, error),

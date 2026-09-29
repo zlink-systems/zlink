@@ -170,11 +170,19 @@ final class ZLinkStreamRuntimeIngressTest {
         logger.setUseParentHandlers(false);
         logger.setLevel(Level.ALL);
         try {
-            ZLinkStreamRuntime runtime = start(stream, 0);
-            lastRegistration.dispatchOptions().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+            ZLinkStreamRuntime runtime =
+                    start(
+                            stream,
+                            0,
+                            64 * 1024,
+                            registration ->
+                                    registration
+                                            .dispatchOptions()
+                                            .messageFlow(ZLinkMessageFlowLogMode.NORMAL));
             runtimes.add(runtime);
             TestSession session = awaitSession();
             assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
+            assertTrue(replied.await(5, TimeUnit.SECONDS));
             String identity = " session=" + session.context.routingId().orElseThrow().toHex();
             for (String phase : List.of("received", "admitted", "dispatched")) {
                 assertTrue(
@@ -186,7 +194,6 @@ final class ZLinkStreamRuntimeIngressTest {
                                                         && line.contains(identity)),
                         () -> "missing session on " + phase + ": " + lines);
             }
-            assertTrue(replied.await(5, TimeUnit.SECONDS));
             assertTrue(
                     lines.stream()
                             .anyMatch(
@@ -1033,8 +1040,18 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     private ZLinkStreamRuntime start(FakeStream stream, long hwm, long maxMessageSize) {
-        return start(
-                stream, streamRegistration(new DefaultZLinkFrameworkOptions(), maxMessageSize));
+        return start(stream, hwm, maxMessageSize, ignored -> {});
+    }
+
+    private ZLinkStreamRuntime start(
+            FakeStream stream,
+            long hwm,
+            long maxMessageSize,
+            java.util.function.Consumer<ZLinkFrameworkRegistration> configure) {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        ZLinkFrameworkRegistration registration = streamRegistration(options, maxMessageSize);
+        configure.accept(registration);
+        return start(stream, registration);
     }
 
     private ZLinkFrameworkRegistration streamRegistration(

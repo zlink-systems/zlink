@@ -27,9 +27,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 
@@ -76,65 +74,13 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         }
         long deadline = deadline(timeout);
         ZLinkStoreCancellation cancellation = () -> System.nanoTime() - deadline >= 0;
-        AtomicReference<ZLinkStandaloneActorRelocationSourceBuilder.PreparedSource>
-                preparedForDeadline = new AtomicReference<>();
         //  The Join deadline is also the Restore absolute deadline of its unit. Once relay
         //  readiness is accepted only authority settlement ends the Join (spec 28 §4.4).
         Instant restoreDeadline = Instant.now().plus(timeout);
-        AtomicBoolean relayReady = new AtomicBoolean();
-        CompletionStage<Submission> operation =
-                lane.source()
-                        .prepareDirectJoin(goal, cancellation)
-                        .thenCompose(
-                                prepared -> {
-                                    preparedForDeadline.set(prepared);
-                                    return executeSource(
-                                            lane,
-                                            goal,
-                                            timeout,
-                                            restoreDeadline,
-                                            relayReady,
-                                            prepared);
-                                });
-        //  Spec 15 §3/§4 — the Join computes one absolute deadline at
-        //  Defer() and every asynchronously completed Join must reach a
-        //  completion callback; a location change not committed by the
-        //  deadline is DeadlineExceeded (15-spot-actor:364). The cooperative
-        //  cancellation predicate alone cannot end waits that never re-check
-        //  it (store reads, lost one-way controls), so race the whole source
-        //  operation against the same absolute deadline instead of letting
-        //  the deferred Join hang silently.
-        CompletableFuture<Submission> bounded = new CompletableFuture<>();
-        operation.whenComplete(
-                (submission, failure) -> {
-                    if (failure == null) {
-                        bounded.complete(submission);
-                    } else {
-                        bounded.completeExceptionally(unwrap(failure));
-                    }
-                });
-        CompletableFuture.delayedExecutor(Math.max(1L, timeout.toMillis()), TimeUnit.MILLISECONDS)
-                .execute(
-                        () -> {
-                            if (bounded.isDone() || !relayReady.compareAndSet(false, true)) {
-                                return;
-                            }
-                            //  The prepared source sealed the actor's queue; without an
-                            //  abort the sealed queue also blocks the Failed completion
-                            //  delivery, so the deadline would fire and still leave the
-                            //  Join silent (spec 15 — every asynchronously completed
-                            //  Join reaches a completion callback).
-                            ZLinkStandaloneActorRelocationSourceBuilder.PreparedSource prepared =
-                                    preparedForDeadline.get();
-                            if (prepared != null) {
-                                prepared.abort().exceptionally(ignored -> null);
-                            }
-                            bounded.completeExceptionally(
-                                    new ZLinkFrameworkException(
-                                            ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                                            "Actor Join source relocation missed its deadline"));
-                        });
-        return bounded;
+        return lane.source()
+                .prepareDirectJoin(goal, cancellation)
+                .thenCompose(
+                        prepared -> executeSource(lane, goal, timeout, restoreDeadline, prepared));
     }
 
     private CompletionStage<Submission> executeSource(
@@ -142,7 +88,6 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
             Goal goal,
             Duration timeout,
             Instant restoreDeadline,
-            AtomicBoolean relayReady,
             ZLinkStandaloneActorRelocationSourceBuilder.PreparedSource prepared) {
         SourceAttempt attempt = new SourceAttempt(goal, prepared);
         SourceAttempt previous = sources.putIfAbsent(goal.sourceActor().actorId(), attempt);
@@ -158,14 +103,7 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         return ZLinkRelocationHandOff.run(
                         lane.client(),
                         prepared.stageRequest(),
-                        () ->
-                                relayReady.compareAndSet(false, true)
-                                        ? prepared.relayCapturedIngress(lane.client(), timeout)
-                                        : CompletableFuture.failedFuture(
-                                                new ZLinkFrameworkException(
-                                                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                                                        "Actor Join deadline elapsed before"
-                                                                + " relay")),
+                        () -> prepared.relayCapturedIngress(lane.client(), timeout),
                         timeout,
                         restoreDeadline)
                 .handle(

@@ -581,27 +581,40 @@ internal object Scenarios {
             resetMaintenance(ops)
             val join = player.join()
             ensure(join.error == null, "JoinWorld failed: ${join.error}")
-            val boundary =
+            val approaching =
                 player.connector
                     .waitFor<Messages.ZoneStateNotify>()
-                    .where { aboutToCross(it.payload()) != null }
+                    .where { state ->
+                        state.payload().players.any {
+                            it.playerId == "bot-nw-x" && it.zoneId == "zone-nw" && it.x in 25..35
+                        }
+                    }
                     .timeout(Duration.ofSeconds(45))
                     .await()
                     .payload()
-            val bot = requireNotNull(aboutToCross(boundary))
-            val targetZone = if (bot.zoneId == "zone-nw") "zone-ne" else "zone-nw"
-            val node = nodeOwning(ops.watch(), targetZone)
+            val botId = approaching.players.first { it.playerId == "bot-nw-x" }.playerId
+            val node = nodeOwning(ops.watch(), "zone-ne")
             ops.maintenance(node, true)
             try {
+                val boundary =
+                    player.connector
+                        .waitFor<Messages.ZoneStateNotify>()
+                        .where {
+                            aboutToCross(it.payload())?.let { bot ->
+                                bot.playerId == botId && bot.zoneId == "zone-nw"
+                            } == true
+                        }
+                        .timeout(Duration.ofSeconds(45))
+                        .await()
+                        .payload()
+                val bot = requireNotNull(aboutToCross(boundary))
                 val initial = bot.x
-                val east = bot.zoneId == "zone-nw"
                 val reversed =
                     player.connector
                         .waitFor<Messages.ZoneStateNotify>()
                         .where { state ->
                             state.payload().players.any {
-                                it.playerId == bot.playerId &&
-                                    if (east) it.x < initial else it.x > initial
+                                it.playerId == bot.playerId && it.x < initial
                             }
                         }
                         .timeout(Duration.ofSeconds(45))

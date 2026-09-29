@@ -259,7 +259,7 @@ final class ZLinkCompositeRelocationBarrierTest {
 
         remote.complete(null);
         dispatch.get(3, TimeUnit.SECONDS);
-        var seal = sealing.get(3, TimeUnit.SECONDS).orElseThrow();
+        var seal = sealing.join().orElseThrow();
         assertTrue(barrier.abort(seal));
     }
 
