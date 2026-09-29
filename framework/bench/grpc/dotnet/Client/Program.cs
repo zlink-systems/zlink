@@ -74,11 +74,14 @@ static async Task RunWarmupAsync(
             (ulong)index);
         if (trigger.pattern == "send-saturation")
         {
-            await transport.SendAsync(index % trigger.sendConcurrency, payload, timeout.Token);
+            await transport.DriveAsync(
+                transport.SendAsync(index % trigger.sendConcurrency, payload, timeout.Token).AsTask());
         }
         else
         {
-            var reply = await transport.RequestAsync(0, payload, timeout.Token);
+            var request = transport.RequestAsync(0, payload, timeout.Token).AsTask();
+            await transport.DriveAsync(request);
+            var reply = await request;
             ValidateReply(reply, runId, BenchPhase.Warmup, trigger.payloadBytes, (ulong)index);
         }
     }
@@ -212,7 +215,7 @@ static async Task RunRequestWorkersAsync(
                 transport, metrics, trigger, runId, stream, sequence, cancellationToken);
         }
     }, cancellationToken));
-    await Task.WhenAll(tasks);
+    await transport.DriveAsync(Task.WhenAll(tasks));
 }
 
 static async Task RunRequestBackpressureAsync(
@@ -278,81 +281,72 @@ static async Task RunRawRequestBackpressureAsync(
 {
     var pendingReplies = new HashSet<Task>();
     Task? pendingAdmission = null;
-    var completionPoller = transport.OpenRequestCompletionPoller();
-    var completionEvents = new PollEvent[1];
     Task[] pending;
 
-    try
+    while (Stopwatch.GetTimestamp() < deadline)
     {
-        while (Stopwatch.GetTimestamp() < deadline)
+        var submitted = false;
+        if (pendingAdmission is null || pendingAdmission.IsCompleted)
         {
-            var submitted = false;
-            if (pendingAdmission is null || pendingAdmission.IsCompleted)
+            pendingAdmission = null;
+            var sequence = next.Next();
+            var payload = BenchMetricHeaders.CreatePayload(
+                trigger.payloadBytes,
+                runId,
+                BenchPhase.Active,
+                sequence);
+            var started = metrics.Begin();
+            try
             {
-                pendingAdmission = null;
-                var sequence = next.Next();
-                var payload = BenchMetricHeaders.CreatePayload(
-                    trigger.payloadBytes,
-                    runId,
-                    BenchPhase.Active,
-                    sequence);
-                var started = metrics.Begin();
-                try
+                RawRequestSubmission submission = transport.SubmitRequest(
+                    payload, operationCancellation.Token);
+                pendingReplies.Add(ObserveRawRequestAsync(
+                    submission.Reply, metrics, trigger, runId, sequence,
+                    started, operationCancellation.Token));
+                submitted = true;
+                if (submission.Result == SubmitResult.Backpressured)
                 {
-                    RawRequestSubmission submission = transport.SubmitRequest(
-                        payload, operationCancellation.Token);
-                    pendingReplies.Add(ObserveRawRequestAsync(
-                        submission.Reply, metrics, trigger, runId, sequence,
-                        started, operationCancellation.Token));
-                    submitted = true;
-                    if (submission.Result == SubmitResult.Backpressured)
-                    {
-                        // The reply observer is already running. Only this raw
-                        // socket waits for its writable admission completion.
-                        pendingAdmission = ObserveRawAdmissionAsync(
-                            submission.Admitted, operationCancellation.Token);
-                    }
-                    else if (submission.Result != SubmitResult.Ok)
-                    {
-                        throw new InvalidOperationException(
-                            $"Raw request submit returned {submission.Result}.");
-                    }
+                    // The reply observer is already running. Only this raw
+                    // socket waits for its writable admission completion.
+                    pendingAdmission = ObserveRawAdmissionAsync(
+                        submission.Admitted, operationCancellation.Token);
                 }
-                catch (OperationCanceledException)
-                    when (operationCancellation.IsCancellationRequested)
+                else if (submission.Result != SubmitResult.Ok)
                 {
-                    metrics.Cancel(started);
-                    throw;
-                }
-                catch (Exception error)
-                {
-                    metrics.Complete(started, false, error);
+                    throw new InvalidOperationException(
+                        $"Raw request submit returned {submission.Result}.");
                 }
             }
-
-            pendingReplies.RemoveWhere(static task => task.IsCompleted);
-            var waitMs = submitted ? 0 : RemainingPollTimeoutMs(deadline);
-            _ = completionPoller.Wait(completionEvents,
-                TimeSpan.FromMilliseconds(waitMs));
+            catch (OperationCanceledException)
+                when (operationCancellation.IsCancellationRequested)
+            {
+                metrics.Cancel(started);
+                throw;
+            }
+            catch (Exception error)
+            {
+                metrics.Complete(started, false, error);
+            }
         }
 
-        pending = pendingAdmission is null
-            ? pendingReplies.ToArray()
-            : pendingReplies.Append(pendingAdmission).ToArray();
-    }
-    finally
-    {
-        // The public poller owns completion draining only while requests are
-        // submitted. Return ownership to the socket runtime before its drain.
-        completionPoller.Dispose();
+        pendingReplies.RemoveWhere(static task => task.IsCompleted);
+        var waitMs = submitted ? 0 : RemainingPollTimeoutMs(deadline);
+        transport.WaitRequestCompletion(waitMs);
     }
 
+    pending = pendingAdmission is null
+        ? pendingReplies.ToArray()
+        : pendingReplies.Append(pendingAdmission).ToArray();
     if (pending.Length == 0) return;
+    var allPending = Task.WhenAll(pending);
+    var drainDeadline = Stopwatch.GetTimestamp()
+        + checked((long)(Stopwatch.Frequency * (drainBoundMs / 1000.0)));
+    while (!allPending.IsCompleted && Stopwatch.GetTimestamp() < drainDeadline
+        && !operationCancellation.IsCancellationRequested)
+        transport.WaitRequestCompletion(RemainingPollTimeoutMs(drainDeadline));
     try
     {
-        await Task.WhenAll(pending).WaitAsync(
-            TimeSpan.FromMilliseconds(drainBoundMs),
-            operationCancellation.Token);
+        await allPending.WaitAsync(TimeSpan.Zero, operationCancellation.Token);
     }
     catch (TimeoutException)
     {
@@ -360,7 +354,10 @@ static async Task RunRawRequestBackpressureAsync(
         operationCancellation.Cancel();
         try
         {
-            await Task.WhenAll(pending).WaitAsync(TimeSpan.FromSeconds(5));
+            var cancellationDeadline = Stopwatch.GetTimestamp() + 5 * Stopwatch.Frequency;
+            while (!allPending.IsCompleted && Stopwatch.GetTimestamp() < cancellationDeadline)
+                transport.WaitRequestCompletion(RemainingPollTimeoutMs(cancellationDeadline));
+            await allPending.WaitAsync(TimeSpan.Zero);
         }
         catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
         {
@@ -460,7 +457,7 @@ static async Task RunSendWorkersAsync(
             }
         }
     }, cancellationToken));
-    await Task.WhenAll(tasks);
+    await transport.DriveAsync(Task.WhenAll(tasks));
 }
 
 static async Task ExecuteRequestAsync(
@@ -568,6 +565,13 @@ internal interface IBenchTransport : IAsyncDisposable
     ValueTask ProbeAsync(CancellationToken cancellationToken);
     ValueTask<BenchPayload> RequestAsync(int stream, BenchPayload payload, CancellationToken cancellationToken);
     ValueTask SendAsync(int stream, BenchPayload payload, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Returns <paramref name="pending"/> once the transport has made it complete. A transport
+    /// whose completions arrive on their own threads returns it as is; the raw transport drives
+    /// its socket's completion poller until it completes.
+    /// </summary>
+    Task DriveAsync(Task pending) => pending;
 }
 
 internal static class BenchTransport
@@ -769,10 +773,12 @@ internal sealed class RawBenchTransport : IBenchTransport
         var payload = BenchMetricHeaders.CreatePayload(1024, 1, BenchPhase.Warmup, 0);
         if (commands.Length > 0)
         {
-            await SendAsync(0, payload, cancellationToken);
+            await DriveAsync(SendAsync(0, payload, cancellationToken).AsTask());
             return;
         }
-        var reply = await RequestAsync(0, payload, cancellationToken);
+        var request = RequestAsync(0, payload, cancellationToken).AsTask();
+        await DriveAsync(request);
+        var reply = await request;
         if (!BenchMetricHeaders.TryDecode(reply, out var header)
             || !BenchMetricHeaders.IsExpected(header, 1, BenchPhase.Warmup, 1024, 0))
             throw new InvalidOperationException("Raw target probe returned an invalid payload.");
@@ -808,19 +814,14 @@ internal sealed class RawBenchTransport : IBenchTransport
         }
     }
 
-    public IPoller OpenRequestCompletionPoller()
+    public void WaitRequestCompletion(int timeoutMs) => request!.WaitCompletion(timeoutMs);
+
+    public Task DriveAsync(Task pending)
     {
-        var poller = Systems.Zlink.Zlink.CreatePoller();
-        try
-        {
-            poller.Add(request!.Socket, PollEventFlags.PollCompletion, 0);
-            return poller;
-        }
-        catch
-        {
-            poller.Dispose();
-            throw;
-        }
+        var socket = request ?? commands[0];
+        while (!pending.IsCompleted)
+            socket.WaitCompletion(50);
+        return pending;
     }
 
     public async ValueTask SendAsync(int stream, BenchPayload payload, CancellationToken cancellationToken)
@@ -896,6 +897,8 @@ internal sealed class RawBenchSocket : IDisposable
     private readonly IDealerSocket? dealer;
     private readonly IRouterSocket? router;
     private readonly RoutingId peer;
+    private readonly IPoller completionPoller;
+    private readonly PollEvent[] completionEvents = new PollEvent[1];
     private readonly SemaphoreSlim submissionGate = new(1, 1);
 
     private RawBenchSocket(IDealerSocket? dealer, IRouterSocket? router, RoutingId peer)
@@ -903,6 +906,16 @@ internal sealed class RawBenchSocket : IDisposable
         this.dealer = dealer;
         this.router = router;
         this.peer = peer;
+        completionPoller = Systems.Zlink.Zlink.CreatePoller();
+        try
+        {
+            completionPoller.Add(Socket, PollEventFlags.PollCompletion, 0);
+        }
+        catch
+        {
+            completionPoller.Dispose();
+            throw;
+        }
     }
 
     public static RawBenchSocket Create(
@@ -915,19 +928,41 @@ internal sealed class RawBenchSocket : IDisposable
         if (mode == "dealer")
         {
             var dealer = context.CreateDealerSocket();
-            dealer.SetRoutingId(self);
-            dealer.Connect(endpoint);
-            return new RawBenchSocket(dealer, null, peer);
+            try
+            {
+                dealer.SetRoutingId(self);
+                dealer.Connect(endpoint);
+                return new RawBenchSocket(dealer, null, peer);
+            }
+            catch
+            {
+                dealer.Dispose();
+                throw;
+            }
         }
         var router = context.CreateRouterSocket();
-        router.SetRoutingId(self);
-        router.Connect(endpoint);
-        return new RawBenchSocket(null, router, peer);
+        try
+        {
+            router.SetRoutingId(self);
+            router.Connect(endpoint);
+            return new RawBenchSocket(null, router, peer);
+        }
+        catch
+        {
+            router.Dispose();
+            throw;
+        }
     }
 
     public RequestOperation Request() => router is null ? dealer!.Request() : router.Request(peer);
     public SendOperation Send() => router is null ? dealer!.Send() : router.Send(peer);
     public IZlinkSocket Socket => router is not null ? (IZlinkSocket)router : dealer!;
+
+    public void WaitCompletion(int timeoutMs)
+    {
+        _ = completionPoller.Wait(completionEvents,
+            TimeSpan.FromMilliseconds(timeoutMs));
+    }
 
     public RequestSubmission SubmitRequest(
         Message header, Message body, CancellationToken cancellationToken)
@@ -954,6 +989,7 @@ internal sealed class RawBenchSocket : IDisposable
 
     public void Dispose()
     {
+        completionPoller.Dispose();
         dealer?.Dispose();
         router?.Dispose();
         submissionGate.Dispose();

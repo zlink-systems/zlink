@@ -271,69 +271,53 @@ async function requestBackpressure(
 ) {
   if (typeof transport.requestSubmission === 'function') {
     const pending = new Set();
-    const completionPump = typeof transport.openRequestCompletionPump === 'function'
-      ? transport.openRequestCompletionPump()
-      : null;
+    const completionPump = transport.requestCompletionPump;
     let blocked = null;
-    try {
-      while (header.nowNs() < deadline) {
-        // A backpressured socket skips this sweep only. Its admission task is
-        // observed separately so the completion pump and other event-loop work
-        // continue to make progress.
-        if (blocked === null) {
-          const sequence = nextSequence();
-          const payload = header.createPayloadBytes(
-            trigger.payloadBytes, runId, header.PHASE_ACTIVE, sequence
-          );
-          const started = metrics.begin();
-          let submission;
-          try {
-            submission = transport.requestSubmission(0, payload);
-          } catch (error) {
-            metrics.complete(started, false, error);
-          }
-          if (submission !== undefined) {
-            const reply = (async () => {
-              try {
-                const value = await submission.reply;
-                validateReply(value, runId, header.PHASE_ACTIVE, trigger.payloadBytes, sequence);
-                metrics.complete(started, true);
-              } catch (error) {
-                metrics.complete(started, false, error);
-              }
-            })();
-            pending.add(reply);
-            reply.finally(() => pending.delete(reply));
-            if (submission.result === transport.backpressuredResult) {
-              blocked = submission.admitted.catch(() => {});
-              blocked.finally(() => { blocked = null; });
+    while (header.nowNs() < deadline) {
+      // A backpressured socket skips this sweep only. Its admission task is
+      // observed separately so the completion pump and other event-loop work
+      // continue to make progress.
+      if (blocked === null) {
+        const sequence = nextSequence();
+        const payload = header.createPayloadBytes(
+          trigger.payloadBytes, runId, header.PHASE_ACTIVE, sequence
+        );
+        const started = metrics.begin();
+        let submission;
+        try {
+          submission = transport.requestSubmission(0, payload);
+        } catch (error) {
+          metrics.complete(started, false, error);
+        }
+        if (submission !== undefined) {
+          const reply = (async () => {
+            try {
+              const value = await submission.reply;
+              validateReply(value, runId, header.PHASE_ACTIVE, trigger.payloadBytes, sequence);
+              metrics.complete(started, true);
+            } catch (error) {
+              metrics.complete(started, false, error);
             }
+          })();
+          pending.add(reply);
+          reply.finally(() => pending.delete(reply));
+          if (submission.result === transport.backpressuredResult) {
+            blocked = submission.admitted.catch(() => {});
+            blocked.finally(() => { blocked = null; });
           }
         }
-        completionPump?.poll(blocked === null ? 0 : pollTimeoutUntil(deadline, 50));
-        await sleepImmediate();
       }
-
-      if (completionPump !== null) {
-        const drainDeadline = header.nowNs() + BigInt(options.drainBoundMs) * 1_000_000n;
-        while ((pending.size > 0 || blocked !== null) && header.nowNs() < drainDeadline) {
-          completionPump.poll(pollTimeoutUntil(drainDeadline, 50));
-          await sleepImmediate();
-        }
-        if (pending.size > 0 || blocked !== null) metrics.recordAbandoned(metrics.inFlight);
-        return;
-      }
-
-      if (pending.size === 0) return;
-      let drained = false;
-      await Promise.race([
-        Promise.all([...pending]).then(() => { drained = true; }),
-        delay(options.drainBoundMs)
-      ]);
-      if (!drained) metrics.recordAbandoned(metrics.inFlight);
-    } finally {
-      completionPump?.close();
+      completionPump.poll(blocked === null ? 0 : pollTimeoutUntil(deadline, 50));
+      await sleepImmediate();
     }
+
+    const drainDeadline = header.nowNs() + BigInt(options.drainBoundMs) * 1_000_000n;
+    while ((pending.size > 0 || blocked !== null) && header.nowNs() < drainDeadline) {
+      completionPump.poll(pollTimeoutUntil(drainDeadline, 50));
+      await sleepImmediate();
+    }
+    if (pending.size > 0 || blocked !== null) metrics.recordAbandoned(metrics.inFlight);
+    return;
   }
 
   const pending = new Set();
@@ -369,7 +353,7 @@ async function sendWorkers(count, transport, metrics, trigger, runId, nextSequen
         if (typeof transport.sendSubmission === 'function') {
           const submission = transport.sendSubmission(stream, payload);
           if (submission.result === transport.backpressuredResult) {
-            await submission.admitted;
+            await transport.awaitSendCompletion(submission.admitted);
           }
         } else {
           await transport.send(stream, payload);

@@ -155,38 +155,41 @@ function createRawTransport(options) {
       options.targetCommandEndpoint
     )]
     : [];
-  let requestCompletionPump = null;
-
-  const openRequestCompletionPump = () => {
-    if (requestSocket === null) return null;
-    if (requestCompletionPump !== null) {
-      throw new Error('raw request completion pump is already open');
-    }
-    const poller = context.createPoller();
+  const createCompletionPump = (socket) => {
+    const poller = zlink.createPoller();
     const events = zlink.createPollEvents(1);
     try {
-      // The request-backpressure loop owns exactly one completion poller for
-      // its one raw request socket. Registration transfers completion draining
-      // from the binding runtime watch to the bounded benchmark turn.
-      poller.add(requestSocket.socket, [zlink.PollEventFlag.PollCompletion], 0);
+      poller.add(socket.socket, [zlink.PollEventFlag.PollCompletion], 0);
     } catch (error) {
       events.close();
       poller.close();
       throw error;
     }
-    const pump = {
+    return {
       poll(timeoutMs) {
         poller.wait(events, timeoutMs);
       },
       close() {
-        if (requestCompletionPump !== pump) return;
         events.close();
         poller.close();
-        requestCompletionPump = null;
       }
     };
-    requestCompletionPump = pump;
-    return pump;
+  };
+  const requestCompletionPump = requestSocket === null ? null : createCompletionPump(requestSocket);
+  const sendCompletionPump = sendSockets.length === 0 ? null : createCompletionPump(sendSockets[0]);
+
+  const awaitCompletion = async (pump, promise) => {
+    let outcome = null;
+    Promise.resolve(promise).then(
+      (value) => { outcome = { value }; },
+      (error) => { outcome = { error }; }
+    );
+    while (outcome === null) {
+      pump.poll(50);
+      await core.sleepImmediate();
+    }
+    if ('error' in outcome) throw outcome.error;
+    return outcome.value;
   };
 
   const submitRequest = (payload) => {
@@ -218,20 +221,22 @@ function createRawTransport(options) {
 
   return {
     request: async (_stream, payload) => {
-      return submitRequest(payload).reply;
+      return awaitCompletion(requestCompletionPump, submitRequest(payload).reply);
     },
     requestSubmission: (_stream, payload) => submitRequest(payload),
-    openRequestCompletionPump,
+    requestCompletionPump,
+    awaitSendCompletion: (promise) => awaitCompletion(sendCompletionPump, promise),
     send: async (stream, payload) => {
       const submission = submitSend(stream, payload);
       if (submission.result === zlink.SubmitResult.Backpressured) {
-        await submission.admitted;
+        await awaitCompletion(sendCompletionPump, submission.admitted);
       }
     },
     sendSubmission: (stream, payload) => submitSend(stream, payload),
     backpressuredResult: zlink.SubmitResult.Backpressured,
     close: async () => {
       requestCompletionPump?.close();
+      sendCompletionPump?.close();
       if (requestSocket !== null) requestSocket.close();
       for (const socket of sendSockets) socket.close();
       context.close();
