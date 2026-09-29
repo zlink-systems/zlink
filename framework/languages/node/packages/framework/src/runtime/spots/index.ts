@@ -59,6 +59,7 @@ import {
 } from '../foundation/service-runtime-contracts';
 import { zlinkMetadataByteLength, zlinkSerialWorkOptions } from '../execution/serial-work-size';
 import { ZLinkConfigurationException } from '../configuration';
+import { releaseApplicationJobPermitBeforeHandler } from '../application-jobs/application-job-queue-scope';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
@@ -1963,6 +1964,7 @@ export class DefaultZLinkSpotManager {
       admissionRecord = provisional.record;
       canonicalAdmissionCreated = provisional.created;
       try {
+        releaseApplicationJobPermitBeforeHandler();
         canonicalActorType = (await resolver({ actorId, ...control.canonicalActorJoin })).actorType;
       } catch (error) {
         this.formalRemoteActorAdmissions.fail(control.canonicalActorJoin.handoffId, error);

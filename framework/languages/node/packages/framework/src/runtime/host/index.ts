@@ -197,7 +197,10 @@ import {
   nodeEffectiveProcessorCount,
   resolveApplicationJobQueueConfiguration
 } from './application-job-queue';
-import { runWithApplicationJobPermit } from '../application-jobs/application-job-queue-scope';
+import {
+  releaseApplicationJobPermitBeforeHandler,
+  runWithApplicationJobPermit
+} from '../application-jobs/application-job-queue-scope';
 import { HostCapacityStatusProjection } from './host-capacity-status';
 
 export interface ZLinkFrameworkRuntimeLifecycle {
@@ -2802,6 +2805,7 @@ export class ZLinkFrameworkRuntimeHost
           nodeRid: binding.actor.nodeRid
         };
         if (sessionOwnerIsLocal) {
+          releaseApplicationJobPermitBeforeHandler();
           await this.streamBindingRuntime.retireRemoteBinding(
             actorRef,
             binding.sessionRid,
