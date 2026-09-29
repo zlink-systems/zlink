@@ -2354,6 +2354,48 @@ service::spot_close_begin_t spot_context_state_t::local_close_step ()
     };
 }
 
+namespace
+{
+
+/* Runs a Close Store step (step 1 or 4). A Close that holds its own
+ * lifecycle item (`resume`) runs the step on the Framework blocking-call
+ * executor, so the item returns its turn while the Location Store works and
+ * resumes through the gate (handler turn and execution gate §7); a step that
+ * cannot start there ends with ShuttingDown. A Close without its own item
+ * runs in its caller's turn, and the step runs there. */
+template <typename T>
+task_t<T> run_close_step (std::function<task_t<T> ()> step, const detail::task_scheduler_t &resume)
+{
+    detail::task_completion_source_t<T> completion;
+    auto result = completion.task ();
+    auto run = [step = std::move (step), completion] () mutable {
+        try {
+            auto running = std::make_shared<task_t<T>> (step ());
+            detail::observe_task_terminal (
+              *running, [running, completion] (const result_t<T> &value) mutable {
+                  completion.complete (value);
+              });
+        }
+        catch (const framework_exception_t &error) {
+            completion.complete (detail::result_access_t::failure<T> (error));
+        }
+        catch (...) {
+            completion.complete (result_t<T>::failure (framework_error_kind_t::internal_failure,
+                                                       "Spot Close step failed"));
+        }
+    };
+    if (!resume) {
+        run ();
+        return result;
+    }
+    if (!detail::submit_blocking_call (std::move (run)))
+        completion.complete (result_t<T>::failure (framework_error_kind_t::shutting_down,
+                                                   "Spot Close step executor is stopping"));
+    return result;
+}
+
+} // namespace
+
 void spot_context_state_t::close_now (service::spot_close_begin_t begin,
                                       service::spot_close_done_t done,
                                       detail::task_scheduler_t resume)
@@ -2428,17 +2470,10 @@ void spot_context_state_t::close_now (service::spot_close_begin_t begin,
         owner->lane.run ([&] { self->clear_close_reservation_core (token); }).get ();
         settle (std::move (result));
     };
-    std::optional<task_t<service::spot_close_commit_t>> step;
-    try {
-        step.emplace (begin ? begin () : start.authority_begin ());
-    }
-    catch (...) {
-        abandon (result_t<bool>::failure (framework_error_kind_t::internal_failure,
-                                          "Spot Close could not start step 1"));
-        return;
-    }
     service::after_close_step (
-      std::move (*step), resume,
+      run_close_step<service::spot_close_commit_t> (
+        begin ? std::move (begin) : start.authority_begin, resume),
+      resume,
       [self = shared_from_this (), owner, token, settle, abandon,
        resume] (result_t<service::spot_close_commit_t> commit) mutable {
           if (!commit) {
@@ -2484,16 +2519,7 @@ void spot_context_state_t::run_local_close_steps (
                                            "Spot Close could not release its local activation"));
             return;
         }
-        std::optional<task_t<bool>> released;
-        try {
-            released.emplace (release ());
-        }
-        catch (...) {
-            done (result_t<bool>::failure (framework_error_kind_t::internal_failure,
-                                           "Spot authority release failed"));
-            return;
-        }
-        service::after_close_step (std::move (*released), resume,
+        service::after_close_step (run_close_step<bool> (release, resume), resume,
                                    [done] (result_t<bool> result) mutable { done (result); });
     };
     // Step 2, in the step that observed the Closing commit: seal admission.

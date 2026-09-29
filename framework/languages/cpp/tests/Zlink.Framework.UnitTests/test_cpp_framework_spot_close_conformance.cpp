@@ -997,12 +997,12 @@ TEST (ZLinkFrameworkSpotCloseConformance, DecidesNewAdmissionOnceAtTheSeal)
       {"name": "request-during-failed-closing-commit-is-processed",
        "given": {"runtime": "Ready", "authority": "Ready", "closingCommit": "heldThenConflict"},
        "act": "directRequestDuringHeldClosingCommit",
-       "expect": {"result": "handlerReply", "closeResult": "Unavailable", "authority": "Ready",
+       "expect": {"repliedDuringCommit": true, "result": "handlerReply", "closeResult": "Unavailable", "authority": "Ready",
                   "admission": "open"}},
       {"name": "request-during-closing-commit-is-accepted-before-the-seal",
        "given": {"runtime": "Ready", "authority": "Ready", "closingCommit": "held"},
        "act": "directRequestDuringHeldClosingCommit",
-       "expect": {"result": "handlerReply", "closeResult": true, "authority": "Missing"}}
+       "expect": {"repliedDuringCommit": true, "result": "handlerReply", "closeResult": true, "authority": "Missing"}}
     ])json");
     for (const auto &scenario : scenarios)
         run_and_check (scenario);

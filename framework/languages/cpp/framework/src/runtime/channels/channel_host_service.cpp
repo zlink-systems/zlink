@@ -129,8 +129,15 @@ class channel_host_service_t::server_loop_t
             if (readiness.slot != 1 || (revents & pollin) == 0) {
                 continue;
             }
-            auto permit = _application_jobs->wait_for_supply_blocking ();
-            if (!permit)
+            /* Permit before receive (Application job queue §3). While the
+             * supply is pending the loop keeps its management work: monitor
+             * events and replies (messaging hot path I1). */
+            auto permit = _supply.take (*_application_jobs, std::chrono::milliseconds (50));
+            if (!permit) {
+                drain_monitor_events ();
+                continue;
+            }
+            if (!*permit)
                 break;
             const int rc = _router->recv (_received, zlink::recv_flags_t::dontwait);
             if (rc == static_cast<int> (zlink::recv_result_t::no_data)) {
@@ -140,7 +147,7 @@ class channel_host_service_t::server_loop_t
                 continue;
             }
             dispatch_async (std::make_shared<zlink::received_t> (std::move (_received)),
-                            std::move (*permit));
+                            std::move (**permit));
         }
         if (_handler_executor) {
             _handler_executor->drain ();
@@ -359,6 +366,7 @@ class channel_host_service_t::server_loop_t
     const handler_registry_t *_handlers;
     std::atomic_bool *_stop;
     std::shared_ptr<application_job_queue_t> _application_jobs;
+    application_job_queue_t::supply_request_t _supply;
     std::shared_ptr<listener_status_registry_t> _listener_statuses;
     std::shared_ptr<zlink::context_t> _context;
     std::unique_ptr<zlink::router_socket_t> _router;
@@ -430,8 +438,12 @@ class channel_host_service_t::subscriber_loop_t
                      == 0) {
                 continue;
             }
-            auto permit = _application_jobs->wait_for_supply_blocking ();
+            // Permit before receive (Application job queue §3); runtime connection
+            // changes keep applying while the supply is pending (hot path I1).
+            auto permit = _supply.take (*_application_jobs, std::chrono::milliseconds (50));
             if (!permit)
+                continue;
+            if (!*permit)
                 break;
             const int rc =
               _subscriber->subscribe (_received_message, zlink::recv_flags_t::dontwait);
@@ -443,7 +455,7 @@ class channel_host_service_t::subscriber_loop_t
             }
             dispatch_async (
               std::make_shared<zlink::topic_message_t> (std::move (_received_message)),
-              std::move (*permit));
+              std::move (**permit));
         }
     }
 
@@ -533,6 +545,7 @@ class channel_host_service_t::subscriber_loop_t
     const handler_registry_t *_handlers;
     std::atomic_bool *_stop;
     std::shared_ptr<application_job_queue_t> _application_jobs;
+    application_job_queue_t::supply_request_t _supply;
     std::shared_ptr<zlink::context_t> _context;
     std::unique_ptr<zlink::sub_socket_t> _subscriber;
     zlink::topic_message_t _received_message;
