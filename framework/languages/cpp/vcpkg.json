@@ -16,5 +16,13 @@
         "async-std"
       ]
     }
-  ]
+  ],
+  "features": {
+    "bench": {
+      "description": "gRPC for the with-grpc bench (framework/bench/grpc/cpp)",
+      "dependencies": [
+        "grpc"
+      ]
+    }
+  }
 }

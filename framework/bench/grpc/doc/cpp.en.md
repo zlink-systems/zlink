@@ -8,7 +8,7 @@ owned by the specification; this page holds only the C++-specific values.
 
 | Implementation | request | send/command | Modules used |
 |---|---|---|---|
-| `grpc-cpp` | `PrepareAsyncEcho` + `CompletionQueue` (unary) | `PrepareAsyncCommand`, `Empty` reply | system `libgrpc++` |
+| `grpc-cpp` | `PrepareAsyncEcho` + `CompletionQueue` (unary) | `PrepareAsyncCommand`, `Empty` reply | vcpkg `gRPC::grpc++` |
 | `zlink-cpp` | raw ROUTER `request(peer).message(...).async()` | command-only raw ROUTER `send(peer).message(...).async()` | packaged `zlink::cpp` |
 | `zlink-framework-cpp` | `route_client_t::request_to_channel(...).async<BenchPayload>()` | `route_client_t::send_to_channel(...).async()` | repository `zlink::framework`, `zlink::framework_codec_protobuf` |
 
@@ -19,9 +19,13 @@ ClientServer channels).
 
 ## 2. How to run
 
-The inputs are exactly the environment variables in spec [§11](../README.en.md#11-runner-inputs-and-result-layout). There are no CLI options or positional arguments. Unless `SKIP_BUILD=1`, the runner builds first; the local package root (default
-`.artifacts/wsl`) must hold `install/zlink-cpp/0.17.6` and `install/zlink-core/0.17.5` (a symlink to
-the release Core prefix is fine). Measurements always go through the perf ticket queue.
+The inputs are exactly the environment variables in spec [§11](../README.en.md#11-runner-inputs-and-result-layout). There are no CLI options or positional arguments. Unless `SKIP_BUILD=1`, the runner builds first. The build fetches the C++ Framework
+manifest (`framework/languages/cpp/vcpkg.json`) with the `bench` feature through the vcpkg that
+`VCPKG_ROOT` points to. gRPC and protobuf come from the same manifest, so one process links one
+protobuf. The ZLink binding and Core come from the local package root (default `.artifacts/wsl`),
+`install/zlink-cpp/<binding version>` and `install/zlink-core/<Core version>`; the versions are set
+by `bindings/cpp/VERSION` and `VERSION` in the repository. Measurements always go through the perf
+ticket queue.
 
 ```bash
 # full matrix, always through the perf ticket queue
@@ -71,8 +75,8 @@ No driver drains transport completions directly or installs a second poller.
 | gRPC source | one channel, one unary stub per logical stream, `CompletionQueue` on the application thread |
 | gRPC target | synchronous `ServerBuilder` defaults, insecure loopback |
 | compiler | GNU C++ 13.3.0, C++20, Release `-O3` |
-| gRPC / protobuf | system 1.51.1 / 3.21.12 |
-| ZLink binding / Core | local package 0.17.6 / release 0.17.5 |
+| gRPC / protobuf | `bench` feature of the C++ Framework vcpkg manifest (versions recorded in the raw output) |
+| ZLink binding / Core | local package (versions recorded in the raw output) |
 | framework | repository source (public CMake targets; the measured commit is recorded in the raw output) |
 | source saturation instrument | `submit_thread_cores` (`CLOCK_THREAD_CPUTIME_ID`); ceiling 1 |
 | latency sample caps | A 200,000, B 2,000,000 |

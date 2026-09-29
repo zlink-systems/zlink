@@ -7,7 +7,7 @@
 
 | 구현 | request | send/command | 사용 모듈 |
 |---|---|---|---|
-| `grpc-cpp` | `PrepareAsyncEcho` + `CompletionQueue` (unary) | `PrepareAsyncCommand`, `Empty` reply | 시스템 `libgrpc++` |
+| `grpc-cpp` | `PrepareAsyncEcho` + `CompletionQueue` (unary) | `PrepareAsyncCommand`, `Empty` reply | vcpkg `gRPC::grpc++` |
 | `zlink-cpp` | raw ROUTER `request(peer).message(...).async()` | command 전용 raw ROUTER `send(peer).message(...).async()` | packaged `zlink::cpp` |
 | `zlink-framework-cpp` | `route_client_t::request_to_channel(...).async<BenchPayload>()` | `route_client_t::send_to_channel(...).async()` | 저장소 `zlink::framework`, `zlink::framework_codec_protobuf` |
 
@@ -17,9 +17,12 @@ RouteMesh용 `route_client_t`를 쓴다(`channel_client_t`는 ClientServer 채�
 
 ## 2. 실행 방법
 
-입력은 규격 [§11](../README.ko.md#11-runner-입력과-결과-배치)의 환경 변수가 전부다. CLI 옵션과 위치 인자는 없다. runner는 `SKIP_BUILD=1`이 아니면 먼저 빌드하며, local package root(기본
-`.artifacts/wsl`)에 `install/zlink-cpp/0.17.6`과 `install/zlink-core/0.17.5`(릴리스 Core prefix로의
-symlink여도 됨)가 있어야 한다. 측정은 항상 perf 티켓 큐로 낸다.
+입력은 규격 [§11](../README.ko.md#11-runner-입력과-결과-배치)의 환경 변수가 전부다. CLI 옵션과 위치 인자는 없다. runner는 `SKIP_BUILD=1`이 아니면 먼저 빌드한다. 빌드는 `VCPKG_ROOT`가 가리키는 vcpkg로 C++
+Framework의 manifest(`framework/languages/cpp/vcpkg.json`)를 `bench` feature와 함께 받는다. gRPC와
+protobuf도 이 manifest에서 오므로 한 process가 protobuf 하나만 쓴다. ZLink binding과 Core는 local
+package root(기본 `.artifacts/wsl`)의 `install/zlink-cpp/<binding 버전>`과
+`install/zlink-core/<Core 버전>`을 쓴다. 버전은 저장소의 `bindings/cpp/VERSION`과 `VERSION`이 정한다.
+측정은 항상 perf 티켓 큐로 낸다.
 
 ```bash
 # 전체 matrix — 항상 perf 티켓 큐로
@@ -68,8 +71,8 @@ completion을 직접 drain하거나 두 번째 poller를 두지 않는다.
 | gRPC source | channel 하나, logical stream당 unary stub 하나, application thread의 `CompletionQueue` |
 | gRPC target | synchronous `ServerBuilder` 기본값, insecure loopback |
 | compiler | GNU C++ 13.3.0, C++20, Release `-O3` |
-| gRPC / protobuf | 시스템 1.51.1 / 3.21.12 |
-| ZLink binding / Core | local package 0.17.6 / release 0.17.5 |
+| gRPC / protobuf | C++ Framework vcpkg manifest의 `bench` feature(버전은 원본에 기록) |
+| ZLink binding / Core | local package(버전은 원본에 기록) |
 | framework | 저장소 소스(public CMake target; 측정한 커밋을 원본에 기록) |
 | source 포화 지표 | `submit_thread_cores`(`CLOCK_THREAD_CPUTIME_ID`); 상한 1 |
 | latency 표본 상한 | A 200,000개, B 2,000,000개 |

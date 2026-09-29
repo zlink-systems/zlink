@@ -159,16 +159,19 @@ PY
 if [[ "${SKIP_BUILD}" != 1 ]]; then
   bench_require_low_load
   # The C++ Framework resolves its dependencies through its vcpkg manifest, as the Framework's
-  # own configure does (scripts/gate/rebuild-dev.sh). gRPC still comes from the system packages.
+  # own configure does (scripts/gate/rebuild-dev.sh). gRPC comes from the same manifest through
+  # its "bench" feature, so one process links one protobuf.
   REPO_ROOT="$(cd "${HERE}/../../../.." && pwd)"
   [[ -n "${VCPKG_ROOT:-}" && -f "${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" ]] || {
     echo "VCPKG_ROOT must point to a bootstrapped vcpkg tree; setup: scripts/gate/check-env.sh" >&2
     exit 1
   }
   export VCPKG_MAX_CONCURRENCY="${VCPKG_MAX_CONCURRENCY:-4}"
-  cmake -S "${HERE}" -B "${BUILD_DIR}" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  cmake -S "${HERE}" -B "${BUILD_DIR}" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_TOOLCHAIN_FILE="${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" \
     -DVCPKG_MANIFEST_DIR="${REPO_ROOT}/framework/languages/cpp" \
+    -DVCPKG_MANIFEST_FEATURES=bench \
     -DVCPKG_OVERLAY_PORTS="${REPO_ROOT}/vcpkg/ports"
   cmake --build "${BUILD_DIR}" --parallel 2
 fi
