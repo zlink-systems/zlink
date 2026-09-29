@@ -66,7 +66,8 @@ interface ZLinkSpotActorAdmissionRuntime {
   readonly commitActorDeparture?: (actorId: string) => void;
   readonly commitTransferredActor?: (
     actor: ZLinkActor,
-    backlog: readonly ZLinkActorHandoffPacket[]
+    backlog: readonly ZLinkActorHandoffPacket[],
+    sealedSession: ZLinkRemoteBoundSessionTarget | undefined
   ) => Promise<readonly ZLinkActorHandoffResult[]>;
 }
 
@@ -75,8 +76,7 @@ interface ZLinkSpotActorPacketRuntime {
   readonly bindRemoteSession?: (
     actor: ZLinkBackendActorRef,
     sourceNodeRid: RoutingId,
-    sourceSessionRid: RoutingId,
-    declaredTarget?: ZLinkRemoteBoundSessionTarget
+    sourceSessionRid: RoutingId
   ) => void;
   readonly replyNoBind?: (
     info: ZLinkBackendActorRecvInfo,
@@ -157,7 +157,7 @@ export class ZLinkSpotActorJoinDispatch {
       bindRemoteSession:
         options.packets?.bindRemoteSession === undefined
           ? undefined
-          : (actor, sourceNodeRid, sourceSessionRid, declaredTarget) =>
+          : (actor, sourceNodeRid, sourceSessionRid) =>
               options.packets!.bindRemoteSession!(
                 {
                   actorId: actor.actorId,
@@ -165,8 +165,7 @@ export class ZLinkSpotActorJoinDispatch {
                   nodeRid: actor.nodeRid
                 },
                 sourceNodeRid,
-                sourceSessionRid,
-                declaredTarget
+                sourceSessionRid
               ),
       routedBoundSessionReceiver: options.boundSessionRuntime?.receiveRoutedBoundSession.bind(
         options.boundSessionRuntime

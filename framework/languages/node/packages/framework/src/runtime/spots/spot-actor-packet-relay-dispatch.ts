@@ -5,7 +5,7 @@ import {
 import { ZLinkFrameworkException, type ActorRef, type RoutingId } from '../../contracts';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import type { ZLinkBackendReceived as BackendReceived } from '../backend/runtime-values';
-import type { ZLinkRemoteActorPacketTarget, ZLinkRemoteBoundSessionTarget } from '../actors';
+import type { ZLinkRemoteActorPacketTarget } from '../actors';
 import { decodeStreamHeader, messageToBytes, ZLinkStreamMessageKind } from '../streams/protocol';
 import {
   decodeRemoteActorSessionBinding,
@@ -25,8 +25,7 @@ interface ZLinkSpotActorPacketRelayDispatchOptions {
   readonly bindRemoteSession?: (
     actor: ActorRef,
     sourceNodeRid: RoutingId,
-    sourceSessionRid: RoutingId,
-    declaredTarget?: ZLinkRemoteBoundSessionTarget
+    sourceSessionRid: RoutingId
   ) => void;
   readonly flowEnabled?: () => boolean;
 }
@@ -81,18 +80,7 @@ export class ZLinkSpotActorPacketRelayDispatch {
             'Remote actor session binding source did not match the declared session node.'
           );
         }
-        this.options.bindRemoteSession(
-          actorRef,
-          declaredSourceNodeRid,
-          binding.sessionRid,
-          remoteBoundSessionTarget === undefined
-            ? undefined
-            : {
-                ...remoteBoundSessionTarget,
-                sessionNodeRid: declaredSourceNodeRid,
-                sessionRid: binding.sessionRid
-              }
-        );
+        this.options.bindRemoteSession(actorRef, declaredSourceNodeRid, binding.sessionRid);
         if (hasReplyToken(received.replyToken)) {
           submitSpotRouteBridgeReply(received, actorPacketRelay.envelope, {
             ok: true,

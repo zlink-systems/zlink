@@ -330,39 +330,6 @@ test('Mesh actor ingress routes the concrete Entry Spot RID to Entry Spot actor 
   assert.equal(dispatched, true);
 });
 
-test('Mesh actor ingress records the validated bound-session generation before dispatch', async () => {
-  const entryNodeRid = zlink.RoutingId.from('entry-node');
-  const observed = [];
-  const manager = new framework.DefaultZLinkSpotManager({
-    spotFactories: [],
-    entryNodeRidProvider: () => entryNodeRid,
-    actorBindingGenerationObserver(actorId, generation) {
-      observed.push({ actorId, generation });
-    },
-    async dispatchEntryActorPacket() {
-      assert.deepEqual(observed, [{ actorId: 'actor-1', generation: 23n }]);
-    }
-  });
-
-  await manager.dispatchMeshActor('test.mesh',
-    {
-      spotId: entryNodeRid,
-      actor: {
-        nodeRid: entryNodeRid,
-        actorId: 'actor-1',
-        generation: 1n
-      }
-    },
-    {
-      kind: framework.ReceiveKind.ActorSend,
-      sourceBindingGeneration: 23n,
-      parts: []
-    }
-  );
-
-  assert.deepEqual(observed, [{ actorId: 'actor-1', generation: 23n }]);
-});
-
 test('spot actor leave rejoins the actor original remote Entry Spot', async () => {
   const events = [];
   const localNodeRid = zlink.RoutingId.from('play-node-a');
@@ -3474,7 +3441,6 @@ test('formal remote Actor transfer to Entry Spot materializes state before commi
         return { actor, actorRef: { actorId, nodeRid: entryNodeRid, generation: 2n } };
       },
       async commitRoutedActorAuthority() {},
-      rememberRoutedActorTransferTarget() {},
       async rollbackRoutedActor() {}
     },
     detachedTaskRunner: {
@@ -3586,7 +3552,6 @@ test('formal remote Actor transfer admits the target before reading referenced s
         return { actor, actorRef: { actorId: actor.context.actorId, nodeRid: 'target-node', generation: 2n } };
       },
       async commitRoutedActorAuthority() {},
-      rememberRoutedActorTransferTarget() {},
       async rollbackRoutedActor() {}
     }
   });
@@ -3772,7 +3737,6 @@ test('formal Actor Join runtime port preserves fixture order through target Read
           }
         };
       },
-      rememberRoutedActorTransferTarget() {},
       bindRoutedActorRef() {},
       commitRoutedActor() {},
       async commitRoutedActorAuthority() {
@@ -3992,7 +3956,6 @@ test('formal remote Actor admission and commit retries are idempotent', async ()
         return { actor, actorRef: { actorId: actor.context.actorId, nodeRid: 'target-node', generation: 2n } };
       },
       async commitRoutedActorAuthority() {},
-      rememberRoutedActorTransferTarget() {},
       async rollbackRoutedActor() {}
     }
   });

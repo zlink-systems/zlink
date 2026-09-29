@@ -40,7 +40,8 @@ interface ZLinkSpotRoutedFrameDispatchOptions {
   readonly routedActorTransferProvider?: ZLinkRoutedActorTransferProvider;
   readonly commitTransferredActor?: (
     actor: ZLinkActor,
-    backlog: readonly ZLinkActorHandoffPacket[]
+    backlog: readonly ZLinkActorHandoffPacket[],
+    sealedSession: ZLinkRemoteBoundSessionTarget | undefined
   ) => Promise<readonly ZLinkActorHandoffResult[]>;
   readonly actorPacketHandler?: (delivery: ZLinkActorPacketDelivery) => Promise<unknown>;
   readonly routedBoundSessionReceiver?: (

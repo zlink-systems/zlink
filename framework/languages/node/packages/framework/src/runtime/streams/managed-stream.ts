@@ -27,6 +27,7 @@ import type {
 } from '../foundation/service-runtime-contracts';
 import type { ServiceRetiredBoundSessionRouteFence } from '../foundation/service-stateful-wire-codec';
 import type { ServiceActorRef } from '../foundation/service-stateful-registry';
+import type { ServiceStreamSessionBinding } from '../foundation/service-runtime-contracts';
 import {
   closeMeshCompletion,
   type ZLinkMeshCompletion,
@@ -55,7 +56,8 @@ export interface ZLinkNativeSessionRoute {
 
 interface ZLinkManagedActorBinding {
   readonly actor: ZLinkBackendActorRef;
-  readonly bindingGeneration?: bigint;
+  /** The Session owner's registry snapshot of this binding (Session–Actor binding §5-2). */
+  readonly binding?: ServiceStreamSessionBinding;
   readonly route?: ZLinkNativeSessionRoute;
 }
 
@@ -90,7 +92,12 @@ export class ZLinkManagedStream implements ZLinkStream {
   }
 
   actorBindingGeneration(actorId: string): bigint | undefined {
-    return this.nativeActorBindings.get(actorId)?.bindingGeneration;
+    return this.nativeActorBindings.get(actorId)?.binding?.bindingGeneration;
+  }
+
+  /** The Session owner's registry snapshot of the Actor's current native binding. */
+  actorBinding(actorId: string): ServiceStreamSessionBinding | undefined {
+    return this.nativeActorBindings.get(actorId)?.binding;
   }
 
   private isTransportClosed(): boolean {
@@ -268,7 +275,7 @@ export class ZLinkManagedStream implements ZLinkStream {
       }
       this.nativeActorBindings.set(actor.actorId, {
         actor: nativeActor,
-        bindingGeneration: binding.bindingGeneration,
+        binding,
         route
       });
       return;
@@ -329,7 +336,8 @@ export class ZLinkManagedStream implements ZLinkStream {
     const binding = this.nativeActorBindings.get(actorId);
     if (binding?.route !== undefined) {
       const route = binding.route;
-      if (!this.hasNativeBinding(route, actorId, binding.bindingGeneration!)) {
+      const bindingGeneration = binding.binding!.bindingGeneration;
+      if (!this.hasNativeBinding(route, actorId, bindingGeneration)) {
         this.nativeActorBindings.delete(actorId);
         return;
       }
@@ -340,7 +348,7 @@ export class ZLinkManagedStream implements ZLinkStream {
               route.service.unbindActor(
                 this.backendRoutingId(),
                 binding.actor as never,
-                binding.bindingGeneration!,
+                bindingGeneration,
                 timeoutMs
               ),
             signal
@@ -356,7 +364,7 @@ export class ZLinkManagedStream implements ZLinkStream {
         // tombstone. A transport teardown can therefore report an internal
         // completion after the exact binding is already gone. Treat only that
         // exact missing binding as stale cleanup; preserve other failures.
-        if (this.hasNativeBinding(route, actorId, binding.bindingGeneration!)) {
+        if (this.hasNativeBinding(route, actorId, bindingGeneration)) {
           throw error;
         }
       }

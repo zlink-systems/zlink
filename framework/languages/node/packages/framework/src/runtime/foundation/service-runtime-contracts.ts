@@ -167,6 +167,18 @@ export interface ActorTransferControlPayload {
   readonly failureErrno: number;
 }
 
+/** The Session owner's registry view of one Session binding (Session–Actor binding §5-2). */
+export interface ServiceStreamSessionBinding {
+  readonly sessionRid: RoutingId;
+  readonly actor: ServiceActorRef;
+  readonly sessionOwnerNodeRid: RoutingId;
+  readonly sessionOwnerNodeGeneration?: bigint;
+  readonly sessionOwnerId?: string;
+  readonly sessionOwnerLeaseGeneration?: bigint;
+  readonly bindingGeneration: bigint;
+  readonly membershipEpoch: bigint;
+}
+
 export interface ActorBindingControlPayload {
   readonly kind: 'actorBinding';
   readonly transition: 'active' | 'tombstone';
@@ -344,12 +356,7 @@ export interface StreamSessionService {
     expectedBindingGeneration: bigint,
     timeoutMs?: number
   ): MeshOperationId;
-  bindings(sessionRid: RoutingId): ReadonlyArray<{
-    readonly sessionRid: RoutingId;
-    readonly actor: ServiceActorRef;
-    readonly bindingGeneration: bigint;
-    readonly membershipEpoch: bigint;
-  }>;
+  bindings(sessionRid: RoutingId): ReadonlyArray<ServiceStreamSessionBinding>;
   sendToActor(
     sessionRid: RoutingId,
     actor: ServiceActorRef,

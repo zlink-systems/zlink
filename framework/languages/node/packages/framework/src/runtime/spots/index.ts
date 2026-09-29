@@ -218,7 +218,6 @@ export interface ZLinkSpotManagerOptions {
     readonly actorRef?: ActorRef;
     readonly spotId?: RoutingId;
   };
-  readonly actorBindingGenerationObserver?: (actorId: string, generation: bigint) => void;
   readonly channelClient?: ZLinkChannelClient;
   readonly fanoutClient?: ZLinkFanoutClient;
   readonly spotPublisherClient?: ZLinkSpotPublisherClient;
@@ -695,7 +694,9 @@ export class DefaultZLinkSpotManager {
   }
 
   isSpotClosing(meshName: string, spotId: RoutingId): boolean {
-    return this.activations.activationForClose(meshName, spotId)?.executionBarrier.isCloseSealed === true;
+    return (
+      this.activations.activationForClose(meshName, spotId)?.executionBarrier.isCloseSealed === true
+    );
   }
 
   pendingSpotCloseDecision(meshName: string, spotId: RoutingId): Promise<void> | undefined {
@@ -1026,7 +1027,9 @@ export class DefaultZLinkSpotManager {
 
   async list(meshName: string): Promise<readonly ZLinkSpotInfo[]> {
     requireMeshName(meshName);
-    return this.activations.list(meshName).filter(({ spotId }) => !this.isSpotClosing(meshName, spotId));
+    return this.activations
+      .list(meshName)
+      .filter(({ spotId }) => !this.isSpotClosing(meshName, spotId));
   }
 
   async drainForShutdown(meshName: string, signal?: AbortSignal, deadline?: Date): Promise<void> {
@@ -1150,7 +1153,7 @@ export class DefaultZLinkSpotManager {
       operation = {
         activation,
         reason,
-        beginAuthority,
+        beginAuthority
       };
       this.closeOperations.set(key, operation);
     }
@@ -1777,9 +1780,6 @@ export class DefaultZLinkSpotManager {
       throw new ZLinkConfigurationException('MeshNode Actor record is missing its Actor owner.');
     }
     const request = record.kind === ReceiveKind.ActorRequest;
-    if (record.sourceBindingGeneration > 0n) {
-      this.options.actorBindingGenerationObserver?.(actor.actorId, record.sourceBindingGeneration);
-    }
     const resolvedOwner = this.options.actorDispatchOwnerResolver?.(actor.actorId);
     const resolvedActorRef = resolvedOwner?.actorRef ?? {
       actorId: actor.actorId,
@@ -2395,21 +2395,6 @@ export class DefaultZLinkSpotManager {
       }
       if (
         accepted &&
-        transferRequest !== undefined &&
-        this.options.actorTransferRuntime !== undefined &&
-        !isRemoteAdmission
-      ) {
-        // A lightweight Core actor-join notification can create the Actor
-        // before the formal transfer request reaches this branch. Preserve
-        // the full relocation fence in that race so a later Session bind
-        // refresh cannot erase the seal.
-        this.options.actorTransferRuntime.rememberRoutedActorTransferTarget(
-          actorId,
-          transferRequest.remoteBoundSessionTarget
-        );
-      }
-      if (
-        accepted &&
         actor !== undefined &&
         transferRequest !== undefined &&
         !isRemoteAdmission &&
@@ -2420,7 +2405,8 @@ export class DefaultZLinkSpotManager {
           spotId,
           transferId: transferRequest.transferId,
           handoffBacklog: transferRequest.handoffBacklog,
-          deferredJoinCompletion
+          deferredJoinCompletion,
+          sealedSession: transferRequest.remoteBoundSessionTarget
         });
         if (isRemoteCommit && admissionRecord !== undefined) {
           this.formalRemoteActorAdmissions.markCommitted(transferRequest.transferId, actor);
@@ -2727,8 +2713,12 @@ export class DefaultZLinkSpotManager {
             // the Session binding aggregate after this boundary.
             this.formalRemoteTransfers.delete(actor.context.actorId);
           }
+          const sealedSession = pendingTransfer?.sealedSession;
           const updateBoundSessionRoute = async (): Promise<void> => {
-            await this.options.actorTransferRuntime?.publishRoutedActorOwnership(actor);
+            await this.options.actorTransferRuntime?.publishRoutedActorOwnership(
+              actor,
+              sealedSession
+            );
             await this.options.actorTransferRuntime?.openRoutedActorSession(actor);
           };
           // Session routing is an independent post-Ready branch. Callback

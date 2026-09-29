@@ -20,10 +20,6 @@ import {
   type ZLinkRemoteActorPacketTarget,
   type ZLinkRemoteBoundSessionTarget
 } from '../actors';
-import {
-  mergeRemoteBoundSessionTarget,
-  preferredRemoteBoundSessionTarget
-} from '../actors/actor-runtime-state';
 import type { DefaultZLinkActorManager } from '../actors';
 import {
   decodeRemoteActorSessionBinding,
@@ -49,8 +45,10 @@ import type { ZLinkDetachedTaskRunner } from '../spots/spot-actor-join-dispatch'
 import type { ZLinkBoundSessionResponseTarget } from '../streams';
 import type {
   ZLinkBoundSessionResponsePort,
+  ZLinkSessionBindingConfirmationOptions,
   ZLinkStreamActorLookupPort
 } from '../streams/stream-binding-runtime-ports';
+import type { ServiceStreamSessionBinding } from '../foundation/service-runtime-contracts';
 import { actorSessionBindingRuntimeOwnerIfRegistered } from '../streams/actor-session-binding-runtime-owner';
 import {
   decodeStreamHeader,
@@ -120,12 +118,7 @@ export class ZLinkActorPacketRelay {
   ): Promise<void> {
     const state = this.options.actorManager()?.getState(actor.actorId);
     const currentRemoteBoundSessionTarget =
-      state?.spotId === undefined
-        ? undefined
-        : preferredRemoteBoundSessionTarget(
-            state.remoteBoundSessionTarget,
-            state.boundSessionTransferTarget
-          );
+      state?.spotId === undefined ? undefined : state.remoteBoundSessionTarget;
     const currentRemoteActorPacketTarget =
       state?.spotId === undefined ? undefined : state.remoteActorPacketTarget;
     const remoteTarget =
@@ -174,10 +167,7 @@ export class ZLinkActorPacketRelay {
     const remoteTarget =
       state === undefined
         ? undefined
-        : (preferredRemoteBoundSessionTarget(
-            state.remoteBoundSessionTarget,
-            state.boundSessionTransferTarget
-          ) ?? state.remoteActorPacketTarget);
+        : (state.remoteBoundSessionTarget ?? state.remoteActorPacketTarget);
     if (remoteTarget !== undefined) {
       await this.notifyRemoteActorDisconnected(actorId, remoteTarget, signal);
       return;
@@ -288,61 +278,23 @@ export class ZLinkActorPacketRelay {
         if (frameHeader.kind !== ZLinkStreamMessageKind.Send) {
           throw new Error('Remote actor session binding requires a send frame.');
         }
-        const { sessionNodeRid, sessionRid } = decodeRemoteActorSessionBinding(
-          messageToBytes(body)
-        );
+        const { sessionNodeRid } = decodeRemoteActorSessionBinding(messageToBytes(body));
         if (!routingIdsEqual(sessionNodeRid, _routeContext.sourceNodeRid)) {
           throw new Error(
             'Remote actor session binding source did not match the declared session node.'
           );
         }
+        // The Actor owner installs the binding from the Session owner's
+        // command 38 (Session–Actor binding §5); this relay confirmation only
+        // acknowledges that the Actor is still owned here.
         const state = this.options.actorManager()?.getState(relay.actorId);
-        const actorRef = state?.nativeActorRef;
-        if (state === undefined || actorRef === undefined) {
+        if (state?.nativeActorRef === undefined) {
           throw new Error(`Actor '${relay.actorId}' does not have a concrete actor ref.`);
         }
-        if (this.requireSpotNodeRuntime().primaryMeshNode === undefined) {
-          throw new Error('MeshNode actor runtime is not started.');
-        }
-        const target =
-          relay.routerChannelId === undefined
-            ? this.options.meshRouters.remoteBoundSessionTargetForSource(sessionNodeRid)
-            : {
-                routerChannelId: relay.routerChannelId,
-                targetNodeRid: sessionNodeRid,
-                spotId: sessionNodeRid
-              };
-        if (target === undefined) {
-          throw new Error('Remote actor session binding did not declare a return router.');
-        }
-        const bindingGeneration = (
-          fallbackActorRef as
-            | (ActorRef & {
-                readonly bindingGeneration?: bigint;
-              })
-            | undefined
-        )?.bindingGeneration;
-        const refreshedTarget = mergeRemoteBoundSessionTarget(
-          {
-            ...target,
-            sessionNodeRid,
-            sessionRid,
-            ...(bindingGeneration === undefined ? {} : { bindingGeneration })
-          },
-          preferredRemoteBoundSessionTarget(
-            state.remoteBoundSessionTarget,
-            state.boundSessionTransferTarget
-          )
-        );
-        state.setRemoteBoundSessionTarget(refreshedTarget);
         return { ok: true, response: { acknowledged: true } };
       }
       if (frameHeader.name === ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET) {
         this.requireCurrentRemoteBinding(relay, _routeContext);
-        this.options
-          .actorManager()
-          ?.getState(relay.actorId)
-          ?.setRemoteBoundSessionTarget(undefined);
         await this.notifyLocalActorDisconnectedById(relay.actorId);
         return {
           ok: true,
@@ -558,10 +510,13 @@ export class ZLinkActorPacketRelay {
     sessionNodeRid: RoutingId,
     sessionRid: RoutingId,
     signal?: AbortSignal,
-    options?: { readonly waitForAcknowledgement?: boolean }
+    options?: ZLinkSessionBindingConfirmationOptions
   ): Promise<void> {
     const target = this.targets.targetForActorRef(actor);
-    if (target === undefined) return;
+    if (target === undefined) {
+      this.installSameNodeSessionBinding(actor.actorId, options?.binding);
+      return;
+    }
     const header = encodeStreamHeader({
       kind: ZLinkStreamMessageKind.Send,
       codec: ZLinkStreamCodec.Json,
@@ -622,6 +577,32 @@ export class ZLinkActorPacketRelay {
         reply.error
       );
     }
+  }
+
+  /**
+   * Session–Actor binding §5·§6 (.NET ZLinkSessionActorCoordinator rule): a
+   * same-node bind installs the Session owner's registry identity through the
+   * same install a remote command 38 uses, so relocation seals and carries it.
+   */
+  private installSameNodeSessionBinding(
+    actorId: string,
+    binding: ServiceStreamSessionBinding | undefined
+  ): void {
+    const state = this.options.actorManager()?.getState(actorId);
+    if (state === undefined || binding === undefined) return;
+    const route = this.options.meshRouters.remoteBoundSessionTargetForSource(
+      binding.sessionOwnerNodeRid as unknown as RoutingId
+    );
+    if (route === undefined) return;
+    state.installBoundSessionBinding({
+      ...route,
+      sessionNodeRid: binding.sessionOwnerNodeRid as unknown as RoutingId,
+      sessionRid: binding.sessionRid as unknown as RoutingId,
+      sessionOwnerNodeGeneration: binding.sessionOwnerNodeGeneration,
+      sessionOwnerId: binding.sessionOwnerId,
+      sessionOwnerLeaseGeneration: binding.sessionOwnerLeaseGeneration,
+      bindingGeneration: binding.bindingGeneration
+    });
   }
 
   private async retryRemoteSessionBindingSend(
@@ -894,13 +875,7 @@ export class ZLinkActorPacketRelay {
     routeContext: ZLinkRouteMessageContext
   ): void {
     const state = this.options.actorManager()?.getState(relay.actorId);
-    const current =
-      state === undefined
-        ? undefined
-        : preferredRemoteBoundSessionTarget(
-            state.remoteBoundSessionTarget,
-            state.boundSessionTransferTarget
-          );
+    const current = state?.boundSession;
     if (
       current === undefined ||
       current.sessionNodeRid === undefined ||

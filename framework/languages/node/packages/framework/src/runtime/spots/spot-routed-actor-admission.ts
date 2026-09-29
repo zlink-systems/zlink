@@ -29,6 +29,7 @@ import {
 import { submitRoutedActorJoinError, submitRoutedActorJoinReply } from './spot-route-replies';
 import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import type { ZLinkActorHandoffPacket, ZLinkActorHandoffResult } from '../actors/actor-handoff';
+import type { ZLinkRemoteBoundSessionTarget } from '../actors/actor-runtime-state';
 
 interface ZLinkRoutedActorAdmissionTarget {
   onActorJoin?(actorId: string, request: ZLinkMessage): Promise<ZLinkSpotActorJoinResult>;
@@ -41,7 +42,8 @@ interface ZLinkSpotRoutedActorAdmissionOptions {
   readonly routedActorTransferProvider?: ZLinkRoutedActorTransferProvider;
   readonly commitTransferredActor?: (
     actor: ZLinkActor,
-    backlog: readonly ZLinkActorHandoffPacket[]
+    backlog: readonly ZLinkActorHandoffPacket[],
+    sealedSession: ZLinkRemoteBoundSessionTarget | undefined
   ) => Promise<readonly ZLinkActorHandoffResult[]>;
   readonly messageSerializers?: ReadonlyMap<string, ZLinkMessageSerializer>;
   readonly pendingAdmissionTimeoutMs?: number;
@@ -220,7 +222,11 @@ export class ZLinkSpotRoutedActorAdmission {
         decoded.remoteBoundSessionTarget
       );
       const handoffResults =
-        (await this.options.commitTransferredActor?.(actor, decoded.handoffBacklog)) ?? [];
+        (await this.options.commitTransferredActor?.(
+          actor,
+          decoded.handoffBacklog,
+          decoded.remoteBoundSessionTarget
+        )) ?? [];
       const commitReply = {
         accepted: true,
         actorNodeRid: String(actorRef.nodeRid),

@@ -38,7 +38,6 @@ import {
   encodeStreamWireHeader
 } from '@zlink-systems/stream-wire';
 import { ZLinkNodeRawBindingPort } from '../../packages/framework/src/runtime/backend/node/node-raw-binding-port';
-import { ZLinkActorRuntimeOptionsFactory } from '../../packages/framework/src/runtime/host/actor-runtime-options-factory';
 import type {
   RawServiceIngressRecord,
   RawServiceMeshRuntime
@@ -352,73 +351,6 @@ test('routed bound-session sends use infrastructure node routing after native bi
   assert.equal(directSubmits, 0);
   assert.equal(infrastructureSubmits, 1);
   assert.equal(spotRoute, undefined);
-});
-
-test('bound-session factory keeps the sealed transfer route ahead of an unfenced binding refresh', async () => {
-  const staleBindingTarget = {
-    routerChannelId: 'mesh',
-    targetNodeRid: 'binding-refresh-node',
-    spotId: 'entry-spot'
-  };
-  const sealedTransferTarget = {
-    routerChannelId: 'mesh',
-    targetNodeRid: 'relocation-target-node',
-    spotId: 'entry-spot',
-    relocationSealId: 'seal-17'
-  };
-  let submittedTarget: string | undefined;
-  const actorState = {
-    actor: undefined,
-    nativeActorRef: undefined,
-    remoteBoundSessionTarget: staleBindingTarget,
-    boundSessionTransferTarget: sealedTransferTarget
-  };
-  const factory = new ZLinkActorRuntimeOptionsFactory({
-    registration: {
-      messageSerializers: new Map(),
-      requestTimeoutMs: 1_000,
-      actorTransferTimeoutMs: 1_000
-    },
-    routeTransport: {
-      async submitInfrastructure(_channelId: string, targetNodeRid: string) {
-        submittedTarget = targetNodeRid;
-        return { status: ZLinkSubmitStatus.Submitted };
-      }
-    },
-    streamBindingRuntime: {},
-    actorManager: () => ({
-      getState: () => actorState
-    }),
-    spotManager: () => undefined,
-    primaryMeshNode: () => ({}),
-    primaryMeshNodeOrUndefined: () => undefined,
-    primaryMeshCompletions: () => undefined,
-    meshNode: () => undefined,
-    meshCompletions: () => undefined,
-    actorMeshName: () => 'mesh',
-    primaryMeshName: () => 'mesh',
-    createLocationSpotRouteResolver: () => ({}) as never,
-    locationLifecycle: () => ({}) as never,
-    actorTransferRuntime: {} as never,
-    createActorLocationResolver: () => undefined,
-    forgetDestroyedActorRef: () => undefined,
-    notifyEntrySpotActorCreated: async () => undefined,
-    invalidateActorRoute: () => undefined,
-    rememberDestroyedActorRef: () => undefined,
-    publishActorAuthority: async () => undefined,
-    reportPostCommitError: () => undefined,
-    reportBoundSessionSendError: () => undefined,
-    shutdownSignal: () => undefined,
-    metrics: {} as never,
-    admission: {} as never,
-    actorPacketTargetForState: () => undefined
-  } as never);
-
-  const boundSession = factory.createActorManagerOptions().boundSessionFactory!('actor-a');
-  class SessionNotice {}
-  await boundSession.send(new SessionNotice()).submit();
-
-  assert.equal(submittedTarget, sealedTransferTarget.targetNodeRid);
 });
 
 test('Message Follow command preserves route fences and rejects mismatched objects', async () => {
