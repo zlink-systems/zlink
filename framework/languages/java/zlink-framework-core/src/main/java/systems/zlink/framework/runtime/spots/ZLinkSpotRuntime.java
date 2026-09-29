@@ -3921,19 +3921,23 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 canonicalActorJoinRequest(join, sourcePeerRid);
         if (join.entry()) {
             EntrySpotActivation entry = entrySpotActivationFor(target.id());
-            if (entry == null || entry.backendSpot.lifecycleGeneration() != target.generation()) {
+            if (entry == null
+                    || entry.closeCommitted()
+                    || entry.backendSpot.lifecycleGeneration() != target.generation()) {
                 return CompletableFuture.failedFuture(
                         new ZLinkFrameworkException(
-                                ZLinkFrameworkErrorKind.NOT_FOUND,
+                                ZLinkFrameworkErrorKind.UNAVAILABLE,
                                 "canonical actor Join Entry Spot is unavailable: " + target.id()));
             }
             return entry.admitCanonicalActorJoin(request, sourcePeerRid);
         }
         SpotActivation spot = spotLifecycle.spotActivationFor(target.id());
-        if (spot == null || spot.backendSpot.lifecycleGeneration() != target.generation()) {
+        if (spot == null
+                || spot.closeCommitted()
+                || spot.backendSpot.lifecycleGeneration() != target.generation()) {
             return CompletableFuture.failedFuture(
                     new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.NOT_FOUND,
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
                             "canonical actor Join Spot is unavailable: " + target.id()));
         }
         Message payload =

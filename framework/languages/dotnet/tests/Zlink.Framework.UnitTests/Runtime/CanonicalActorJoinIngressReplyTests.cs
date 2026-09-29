@@ -7,10 +7,16 @@ namespace Zlink.Framework.UnitTests;
 public sealed class CanonicalActorJoinIngressReplyTests
 {
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
     public async Task ManagedSource_Command28Request_ConsumesCommand20TailAndApplicationReply(
-        bool targetDialsSource
+        bool targetDialsSource,
+        bool targetSpotUnavailable,
+        bool retainInactiveSpot
     )
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -47,6 +53,11 @@ public sealed class CanonicalActorJoinIngressReplyTests
             source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
         );
 
+        if (retainInactiveSpot)
+            targetSpot.AddActor();
+        if (targetSpotUnavailable)
+            targetSpot.Dispose();
+
         var operationId = source.AllocateOperationId();
         var request = new ZLinkBackendCanonicalActorJoinRequest(
             new ZLinkBackendActorRef(sourceRid, "actor-1", 11),
@@ -69,6 +80,32 @@ public sealed class CanonicalActorJoinIngressReplyTests
             SubmitResult.Ok,
             source.TryRequestCanonicalActorJoin(request, operationId, TimeSpan.FromSeconds(2))
         );
+
+        if (targetSpotUnavailable)
+        {
+            var (failure, failureParts) = await ReceiveCompletionAsync(source, operationId);
+            try
+            {
+                Assert.Equal((int)RequestResult.InternalError, failure.TerminalResult);
+                Assert.Equal(
+                    (int)ServiceWireConstants.FrameworkErrorCode.RouteNotConnected,
+                    failure.FailureErrno
+                );
+                var error = Assert.IsType<ZLinkFrameworkException>(
+                    ZLinkRequestFailureMapper.CreateCompletionException(
+                        RequestResult.InternalError,
+                        failure.FailureErrno,
+                        "Actor Join"
+                    )
+                );
+                Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
+            }
+            finally
+            {
+                ZLinkMessageParts.DisposeAll(failureParts);
+            }
+            return;
+        }
 
         // The target queues command 28 only when Core delivered a Request with
         // a request sequence. A one-way command 28 is rejected before this

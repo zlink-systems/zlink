@@ -6035,6 +6035,7 @@ final class ZLinkJavaRawMeshNode
                 case PROTOCOL_ERROR -> new int[] {104, 16};
                 case TYPE_MISMATCH -> new int[] {107, 4};
                 case REJECTED -> new int[] {106, 15};
+                case UNAVAILABLE -> new int[] {105, 13};
                 default -> new int[] {105, 17};
             };
         }
