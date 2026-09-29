@@ -157,7 +157,7 @@ public final class ZLinkFrameworkLifecycle
         current.shutdown(SPRING_SHUTDOWN_DRAIN_DEADLINE)
                 .whenComplete(
                         (result, failure) -> {
-                            logTerminationOnce(result, failure);
+                            logTerminationOnce(current, result, failure);
                             synchronized (ZLinkFrameworkLifecycle.this) {
                                 if (runtime == current) {
                                     runtime = null;
@@ -182,7 +182,7 @@ public final class ZLinkFrameworkLifecycle
         current.shutdown(SPRING_SHUTDOWN_DRAIN_DEADLINE)
                 .whenComplete(
                         (result, failure) -> {
-                            logTerminationOnce(result, failure);
+                            logTerminationOnce(current, result, failure);
                             synchronized (ZLinkFrameworkLifecycle.this) {
                                 runtime = null;
                                 running = false;
@@ -228,27 +228,39 @@ public final class ZLinkFrameworkLifecycle
                     current.shutdown(SPRING_SHUTDOWN_DRAIN_DEADLINE)
                             .toCompletableFuture()
                             .get(SPRING_SHUTDOWN_DRAIN_DEADLINE.toSeconds() + 5, TimeUnit.SECONDS);
-            logTerminationOnce(result, null);
+            logTerminationOnce(current, result, null);
         } catch (Throwable failure) {
-            logTerminationOnce(null, failure);
+            logTerminationOnce(current, null, failure);
         }
     }
 
-    private void logTerminationOnce(ZLinkFrameworkTerminationResult result, Throwable failure) {
+    private void logTerminationOnce(
+            ZLinkFrameworkRuntime current,
+            ZLinkFrameworkTerminationResult result,
+            Throwable failure) {
         if (!terminationLogged.compareAndSet(false, true)) {
             return;
         }
-        if (failure != null || result == null) {
-            System.err.println(
-                    "ZLINK_FRAMEWORK_TERMINATION outcome=FORCE_STOPPED "
-                            + "reason=TEARDOWN_FAILED");
+        if (failure != null) {
+            Throwable cause = failure;
+            while ((cause instanceof java.util.concurrent.CompletionException
+                            || cause instanceof java.util.concurrent.ExecutionException)
+                    && cause.getCause() != null) {
+                cause = cause.getCause();
+            }
+            cause.printStackTrace(System.err);
+        }
+        ZLinkFrameworkTerminationResult terminal =
+                result != null ? result : current.status().terminationResult().orElse(null);
+        if (terminal == null) {
+            System.err.println("ZLINK_FRAMEWORK_TERMINATION result=unavailable");
             return;
         }
         System.err.println(
                 "ZLINK_FRAMEWORK_TERMINATION outcome="
-                        + result.outcome()
+                        + terminal.outcome()
                         + " reason="
-                        + result.reason());
+                        + terminal.reason());
     }
 
     @Override

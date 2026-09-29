@@ -2137,32 +2137,36 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             throw new IllegalArgumentException("deadline must be positive");
         }
         if (drainStarted.compareAndSet(false, true)) {
-            effectiveTerminationIntent.compareAndSet(null, ZLinkTerminationIntent.SHUTDOWN);
-            terminationDeadline.compareAndSet(null, Instant.now().plus(deadline));
-            meshDrains.sealAll();
-            meshNodes
-                    .nodesByName()
-                    .values()
-                    .forEach(
-                            systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode
-                                    ::markServiceDraining);
-            CompletionStage<Void> acceptedTargetRelocations =
-                    spotRetire == null
-                            ? CompletableFuture.completedFuture(null)
-                            : spotRetire.awaitAcceptedTargetRelocations();
-            if (streams != null) {
-                streams.beginDrain();
+            try {
+                CompletableFuture.delayedExecutor(deadline.toMillis(), TimeUnit.MILLISECONDS)
+                        .execute(() -> forceStop(InternalDrainForceReason.DEADLINE_EXCEEDED));
+                effectiveTerminationIntent.compareAndSet(null, ZLinkTerminationIntent.SHUTDOWN);
+                terminationDeadline.compareAndSet(null, Instant.now().plus(deadline));
+                meshDrains.sealAll();
+                meshNodes
+                        .nodesByName()
+                        .values()
+                        .forEach(
+                                systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode
+                                        ::markServiceDraining);
+                CompletionStage<Void> acceptedTargetRelocations =
+                        spotRetire == null
+                                ? CompletableFuture.completedFuture(null)
+                                : spotRetire.awaitAcceptedTargetRelocations();
+                if (streams != null) {
+                    streams.beginDrain();
+                }
+                if (spots != null) {
+                    spots.beginDrain().exceptionally(error -> null);
+                }
+                if (actors != null) {
+                    actors.beginDrain();
+                }
+                publishRuntimeState(ZLinkFrameworkRuntimeState.DRAINING);
+                runDrain(acceptedTargetRelocations);
+            } catch (RuntimeException | Error failure) {
+                forceStop(InternalDrainForceReason.TEARDOWN_FAILED, failure);
             }
-            if (spots != null) {
-                spots.beginDrain().exceptionally(error -> null);
-            }
-            if (actors != null) {
-                actors.beginDrain();
-            }
-            publishRuntimeState(ZLinkFrameworkRuntimeState.DRAINING);
-            runDrain(acceptedTargetRelocations);
-            CompletableFuture.delayedExecutor(deadline.toMillis(), TimeUnit.MILLISECONDS)
-                    .execute(() -> forceStop(InternalDrainForceReason.DEADLINE_EXCEEDED));
         }
         return independentWaiter(drained);
     }

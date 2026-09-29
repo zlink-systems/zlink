@@ -2,7 +2,6 @@ package systems.zlink.framework.runtime.streams;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -45,6 +44,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkMonitoringBackendAd
 import systems.zlink.framework.runtime.internal.backend.ZLinkSpotBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkStreamBackendAdapter;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
@@ -77,7 +77,9 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -102,7 +104,7 @@ final class ZLinkStreamRuntimeIngressTest {
         TestSession.decodeWirePayload = false;
         TestSession.replyOnDispatch = false;
         TestSession.decodedWirePayload.set(null);
-        TestSession.constructionHook = null;
+        TestSession.created.clear();
         TestSession.createdCount.set(0);
         TestSession.lastSession.set(null);
         runtimes.forEach(runtime -> runtime.closeAsync().toCompletableFuture().join());
@@ -230,6 +232,7 @@ final class ZLinkStreamRuntimeIngressTest {
         assertFalse(session.firstDispatch.isDone());
 
         assertEquals(2, stream.successfulReceives.get());
+        assertEquals(0, stream.zeroReadinessWaits.get());
         assertFalse(session.secondDispatchLatch.await(100, TimeUnit.MILLISECONDS));
         assertEquals(1, session.dispatchCount.get());
 
@@ -447,28 +450,134 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
-    void pendingSessionCreatorReentryFailsInsteadOfJoiningItsOwnPendingFuture() throws Exception {
+    void permitWaitReleasesTheReceiveThreadAndTheGrantResumesReceive() throws Exception {
         FakeStream stream = new FakeStream();
+        stream.enqueue(PEER_A, frame("after-grant", "{}"));
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.configureInboundDispatch().setMaxQueuedApplicationJobs(1);
+        ZLinkApplicationJobQueue queue = null;
+        ZLinkApplicationJobQueue.Permit held = null;
+        try {
+            ZLinkFrameworkRegistration registration = streamRegistration(options, 64 * 1024);
+            queue = registration.applicationJobQueue();
+            held = queue.acquire().toCompletableFuture().join();
+            ZLinkStreamRuntime runtime = start(stream, registration);
+            runtimes.add(runtime);
+            ZLinkApplicationJobQueue waiting = queue;
+            awaitCondition(() -> waiting.snapshot().capacityWaiters() == 1);
+
+            awaitCondition(
+                    () -> !anyThreadRuns(ZLinkStreamRuntime.class.getName() + "$StreamReceiveLoop"),
+                    "a thread still runs the STREAM receive loop while its permit is pending");
+            assertEquals(0, stream.successfulReceives.get());
+
+            held.close();
+            held = null;
+            TestSession session = awaitSession();
+            assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
+            assertEquals(List.of("after-grant"), session.packetNames);
+        } finally {
+            if (held != null) {
+                held.close();
+            }
+        }
+    }
+
+    @Test
+    void closingStreamReceiveOwnerCancelsItsFifoWaitWithoutResuming() throws Exception {
+        FakeStream stream = new FakeStream();
+        stream.enqueue(PEER_A, frame("after-close", "{}"));
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.configureInboundDispatch().setMaxQueuedApplicationJobs(1);
+        ZLinkFrameworkRegistration registration = streamRegistration(options, 64 * 1024);
+        ZLinkApplicationJobQueue queue = registration.applicationJobQueue();
+        ZLinkApplicationJobQueue.Permit held = queue.acquire().toCompletableFuture().join();
+        try {
+            ZLinkStreamRuntime runtime = start(stream, registration);
+            runtimes.add(runtime);
+            awaitCondition(() -> queue.snapshot().capacityWaiters() == 1);
+            runtime.closeAsync().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            awaitCondition(() -> queue.snapshot().capacityWaiters() == 0);
+            held.close();
+            try (var next = queue.acquire().toCompletableFuture().get(1, TimeUnit.SECONDS)) {
+                assertEquals(0, stream.successfulReceives.get());
+                assertEquals(1, queue.snapshot().permitsInUse());
+            }
+            assertEquals(0, queue.snapshot().permitsInUse());
+            assertEquals(0, TestSession.createdCount.get());
+        } finally {
+            held.close();
+        }
+    }
+
+    @Test
+    void closingStreamReturnsGrantWhoseQueuedResumeIsDiscarded() throws Exception {
+        FakeStream stream = new FakeStream();
+        stream.enqueue(PEER_A, frame("discarded", "{}"));
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.configureInboundDispatch().setMaxQueuedApplicationJobs(1);
+        ZLinkFrameworkRegistration registration = streamRegistration(options, 64 * 1024);
+        ZLinkApplicationJobQueue queue = registration.applicationJobQueue();
+        ZLinkApplicationJobQueue.Permit held = queue.acquire().toCompletableFuture().join();
+        try {
+            ZLinkStreamRuntime runtime = start(stream, registration);
+            runtimes.add(runtime);
+            awaitCondition(() -> queue.snapshot().capacityWaiters() == 1);
+            Field executorField = ZLinkStreamRuntime.class.getDeclaredField("receiveExecutor");
+            executorField.setAccessible(true);
+            ExecutorService receiveExecutor = (ExecutorService) executorField.get(runtime);
+            CountDownLatch blockerEntered = new CountDownLatch(1);
+            receiveExecutor.execute(
+                    () -> {
+                        blockerEntered.countDown();
+                        try {
+                            new CountDownLatch(1).await();
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                        }
+                    });
+            assertTrue(blockerEntered.await(1, TimeUnit.SECONDS));
+            held.close();
+            awaitCondition(() -> ((ThreadPoolExecutor) receiveExecutor).getQueue().size() == 1);
+            runtime.closeAsync().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(0, queue.snapshot().capacityWaiters());
+            assertEquals(0, queue.snapshot().permitsInUse());
+            assertEquals(0, stream.successfulReceives.get());
+            assertEquals(0, TestSession.createdCount.get());
+        } finally {
+            held.close();
+        }
+    }
+
+    @Test
+    void samePeerPacketsKeepOrderWhileAnotherPeerProgresses() throws Exception {
+        TestSession.holdFirstDispatch = true;
+        FakeStream stream = new FakeStream();
+        stream.enqueue(PEER_A, frame("a-first", "{}"));
+        stream.enqueue(PEER_A, frame("a-second", "{}"));
+        stream.enqueue(PEER_B, frame("b-first", "{}"));
+
         ZLinkStreamRuntime runtime = start(stream, 0);
         runtimes.add(runtime);
-        Object streamNode = lastRegistration.streamNodes().getFirst();
-        AtomicReference<Throwable> reentryFailure = new AtomicReference<>();
-        TestSession.constructionHook =
-                () -> {
-                    try {
-                        invokeGetOrCreateSession(runtime, streamNode, stream, PEER_A);
-                    } catch (Throwable failure) {
-                        reentryFailure.set(unwrapInvocationFailure(failure));
-                    }
-                };
 
-        invokeGetOrCreateSession(runtime, streamNode, stream, PEER_A);
+        try {
+            awaitCondition(() -> TestSession.created.size() == 2);
+            TestSession first = TestSession.created.get(0);
+            TestSession second = TestSession.created.get(1);
+            assertEquals(PEER_A, first.context.routingId().orElseThrow());
+            assertEquals(PEER_B, second.context.routingId().orElseThrow());
+            assertTrue(second.dispatchLatch.await(5, TimeUnit.SECONDS));
+            assertEquals(List.of("b-first"), second.packetNames);
+            assertEquals(List.of("a-first"), first.packetNames);
+            assertEquals(2, TestSession.createdCount.get(), "one Session per peer");
 
-        assertInstanceOf(IllegalStateException.class, reentryFailure.get());
-        assertEquals(
-                1,
-                TestSession.createdCount.get(),
-                "only the original creator may publish the Session");
+            first.firstDispatch.complete(null);
+            assertTrue(first.secondDispatchLatch.await(5, TimeUnit.SECONDS));
+            assertEquals(List.of("a-first", "a-second"), first.packetNames);
+        } finally {
+            // Held handlers would keep their Session queues from draining at close.
+            TestSession.created.forEach(session -> session.firstDispatch.complete(null));
+        }
     }
 
     @Test
@@ -924,13 +1033,21 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     private ZLinkStreamRuntime start(FakeStream stream, long hwm, long maxMessageSize) {
-        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        return start(
+                stream, streamRegistration(new DefaultZLinkFrameworkOptions(), maxMessageSize));
+    }
+
+    private ZLinkFrameworkRegistration streamRegistration(
+            DefaultZLinkFrameworkOptions options, long maxMessageSize) {
         var streamNode =
                 options.addStreamNode("stream")
                         .bind("tcp://127.0.0.1:18081")
                         .registerSession(TestSession.class);
         streamNode.configureSocket().setMaxMessageSize(maxMessageSize);
-        ZLinkFrameworkRegistration registration = options.registration();
+        return options.registration();
+    }
+
+    private ZLinkStreamRuntime start(FakeStream stream, ZLinkFrameworkRegistration registration) {
         lastRegistration = registration;
         FakeProvider provider = new FakeProvider(stream);
         return new ZLinkStreamRuntime(
@@ -1114,36 +1231,25 @@ final class ZLinkStreamRuntimeIngressTest {
         return ZLinkStreamFrameCodec.encode(ZLinkStreamHeaderCodec.encode(header), new byte[0]);
     }
 
-    private static Object invokeGetOrCreateSession(
-            ZLinkStreamRuntime runtime,
-            Object streamNode,
-            ZLinkBackendStreamSocket stream,
-            RoutingId routingId)
+    private static void awaitCondition(java.util.function.BooleanSupplier condition)
             throws Exception {
-        Method method =
-                Arrays.stream(ZLinkStreamRuntime.class.getDeclaredMethods())
-                        .filter(candidate -> candidate.getName().equals("getOrCreateSessionState"))
-                        .findFirst()
-                        .orElseThrow();
-        method.setAccessible(true);
-        try {
-            return method.invoke(runtime, streamNode, stream, routingId);
-        } catch (java.lang.reflect.InvocationTargetException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof Exception exception) {
-                throw exception;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw new AssertionError(cause);
-        }
+        awaitCondition(condition, "condition was not reached");
     }
 
-    private static Throwable unwrapInvocationFailure(Throwable failure) {
-        return failure instanceof java.lang.reflect.InvocationTargetException invocation
-                ? invocation.getCause()
-                : failure;
+    private static void awaitCondition(java.util.function.BooleanSupplier condition, String message)
+            throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
+            Thread.sleep(5);
+        }
+        assertTrue(condition.getAsBoolean(), message);
+    }
+
+    /** Whether any live thread currently executes code of the named class. */
+    private static boolean anyThreadRuns(String className) {
+        return Thread.getAllStackTraces().values().stream()
+                .flatMap(Arrays::stream)
+                .anyMatch(frame -> frame.getClassName().equals(className));
     }
 
     public static final class TestSession implements ZLinkSession {
@@ -1154,7 +1260,7 @@ final class ZLinkStreamRuntimeIngressTest {
         private static volatile ReplacementMode replacementMode = ReplacementMode.NONE;
         private static volatile boolean decodeWirePayload;
         private static volatile boolean replyOnDispatch;
-        private static volatile Runnable constructionHook;
+        private static final List<TestSession> created = new CopyOnWriteArrayList<>();
         private static final AtomicReference<WirePayload> decodedWirePayload =
                 new AtomicReference<>();
         private final ZLinkSessionContext context;
@@ -1173,10 +1279,7 @@ final class ZLinkStreamRuntimeIngressTest {
                 throw new IllegalStateException("test session construction failure");
             }
             this.context = context;
-            Runnable hook = constructionHook;
-            if (hook != null) {
-                hook.run();
-            }
+            created.add(this);
             createdCount.incrementAndGet();
             lastSession.set(this);
         }
@@ -1303,7 +1406,8 @@ final class ZLinkStreamRuntimeIngressTest {
         private final Queue<ZLinkBackendStreamReceived> received = new ConcurrentLinkedQueue<>();
         private final AtomicInteger successfulReceives = new AtomicInteger();
         private final AtomicInteger readinessWaits = new AtomicInteger();
-        private final AtomicBoolean receivePermit = new AtomicBoolean();
+        private final AtomicInteger zeroReadinessWaits = new AtomicInteger();
+        private final AtomicBoolean receiveReady = new AtomicBoolean();
         private final AtomicInteger sessionClosingSends = new AtomicInteger();
         private final CountDownLatch sessionClosingSendsLatch = new CountDownLatch(1);
         private final AtomicReference<RoutingId> disconnectedPeer = new AtomicReference<>();
@@ -1415,17 +1519,18 @@ final class ZLinkStreamRuntimeIngressTest {
         @Override
         public boolean waitForReadable(Duration timeout) {
             readinessWaits.incrementAndGet();
-            boolean readable = !received.isEmpty();
-            if (readable) {
-                receivePermit.set(true);
+            if (timeout.isZero()) {
+                zeroReadinessWaits.incrementAndGet();
             }
+            boolean readable = !received.isEmpty();
+            receiveReady.set(readable);
             return readable;
         }
 
         @Override
         public ZLinkBackendStreamReceived recv() {
-            if (!receivePermit.compareAndSet(true, false)) {
-                throw new AssertionError("STREAM recv was called without readiness");
+            if (!receiveReady.get()) {
+                throw new AssertionError("STREAM recv was called before readiness");
             }
             if (blockFirstReceive) {
                 blockFirstReceive = false;
@@ -1450,6 +1555,9 @@ final class ZLinkStreamRuntimeIngressTest {
                 }
             }
             ZLinkBackendStreamReceived next = received.poll();
+            if (next == null) {
+                receiveReady.set(false);
+            }
             if (next != null) {
                 successfulReceives.incrementAndGet();
             }
