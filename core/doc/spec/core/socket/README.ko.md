@@ -296,8 +296,9 @@ typedef enum zlink_completion_kind_t {
 } zlink_completion_kind_t;
 
 typedef enum zlink_send_complete_result_t {
-  ZLINK_SEND_ADMITTED = 0,       // WRITABLE: 같은 target에 다시 submit할 수 있음
-  ZLINK_SEND_TERMINAL = 202      // WRITABLE: target이 제거됨, send_terminal_errno에 사유가 있음
+  ZLINK_SEND_ADMITTED = 0,         // WRITABLE: 같은 target에 다시 submit할 수 있음
+  ZLINK_SEND_NOT_FOUND = 801,      // WRITABLE: target이 명시적으로 제거됨(ENOENT)
+  ZLINK_SEND_NOT_CONNECTED = 802   // WRITABLE: STREAM 물리 연결이 끝나 RID가 없어짐(ENOTCONN)
 } zlink_send_complete_result_t;
 
 typedef struct zlink_completion_t {
@@ -306,8 +307,8 @@ typedef struct zlink_completion_t {
   zlink_completion_id_t completion_id;   // socket-local, 항상 nonzero; WRITABLE은 submit이 반환한 대기 토큰
   void *user_context;                    // submit 값을 그대로 돌려줌
   zlink_routing_id_t peer_rid;           // ROUTER·STREAM WRITABLE과 ROUTER REQUEST는 submit RID, 그 외 empty
-  zlink_send_complete_result_t send_result; // WRITABLE에서만 사용; ADMITTED는 재submit 가능, TERMINAL은 target 제거
-  int send_terminal_errno;               // WRITABLE TERMINAL에서만 사용, 그 외 0
+  zlink_send_complete_result_t send_result; // WRITABLE에서만 사용; ADMITTED는 재submit 가능, 그 밖의 값은 대기 종료와 원인
+  int send_terminal_errno;               // send_result가 ADMITTED가 아닐 때 원인 errno, 그 외 0
   zlink_request_result_t request_result; // REQUEST에서만 사용
   zlink_msg_t *reply_parts;               // REQUEST payload, 없으면 NULL
   size_t reply_part_count;                // REQUEST payload part 수
@@ -1023,15 +1024,15 @@ pipe attach(connect 완료), peer weight 0 → 양수, ROUTER route 채택·stan
 Core는 SEND·REQUEST payload를 admission 전에 보관하지 않으며 Core 소유의 재시도 FIFO도 없다.
 PAIR·DEALER·ROUTER의 일시적인 transport 종료는 대기 토큰이나 진행 중인 `NONE` wait의 terminal 결과가 아니다.
 STREAM은 물리 연결 종료 시 RID가 끝나므로 [STREAM routed send](08-stream.ko.md#4-routed-send)의
-`ZLINK_SEND_TERMINAL`·`ENOTCONN` 결과를 따른다.
+`ZLINK_SEND_NOT_CONNECTED`·`ENOTCONN` 결과를 따른다.
 `NONE`은 토큰을 만들지 않고 snapshot한 `SNDTIMEO` 안에서 같은 target의 reconnect와 admission을
 기다린다.
 
 PAIR·DEALER·ROUTER의 대기 토큰은 다음 세 경우로 종료된다. (a) 위의 WRITABLE record. (b) target의 명시적
-제거(`zlink_disconnect_rid`, 해당 RID의 endpoint termination)로 `send_result == ZLINK_SEND_TERMINAL`,
+제거(`zlink_disconnect_rid`, 해당 RID의 endpoint termination)로 `send_result == ZLINK_SEND_NOT_FOUND`,
 `send_terminal_errno == ENOENT`인 WRITABLE record. (c) socket close·context termination — Core가
-token을 내부에서 `ZLINK_SEND_TERMINAL`과 lifecycle errno(`ESHUTDOWN` 또는 `ETERM`)로 끝내며
-record는 전달하지 않는다. Peer weight가
+token을 내부에서 정리하고
+record를 전달하지 않는다. Peer weight가
 0으로 떨어져도 대기 토큰은 종료되지 않는다. 아직 반환하지 않은 `NONE` wait는 target 제거 시
 `ZLINK_SUBMIT_NOT_FOUND`+`ENOENT`, peer-type 거절 시 `ZLINK_SUBMIT_NOT_ADMITTED`+`EPROTOTYPE`, context termination 시
 `ZLINK_SUBMIT_TERMINATED`+`ETERM`, socket shutdown 시
@@ -1098,7 +1099,7 @@ record(`send_result == ZLINK_SEND_ADMITTED`)가 정확히 한 건 뒤따르고, 
 거절되면 새 토큰을 받는다. 거절 원인이 pair의 correlation work·count 한도 부족(systems/06-auto-hwm §work budget)이면
 그 토큰은 **해당 pair의 correlation reservation이 반환될 때(terminal reply·timeout·disconnect)만** WRITABLE을 발행하고,
 physical write credit만 회복된 상태에서는 발행하지 않는다(거절 원인이 되는 자원의 회복만 wake 조건이다 — 규칙 하나). 토큰의 target 단위, wake edge, `ZLINK_POLLOUT`·`ZLINK_POLLCOMPLETION`
-level 유지와 종료 조건(WRITABLE record, 명시적 target 제거의 `ZLINK_SEND_TERMINAL`+`ENOENT`; socket
+level 유지와 종료 조건(WRITABLE record, 명시적 target 제거의 `ZLINK_SEND_NOT_FOUND`+`ENOENT`; socket
 close·context termination은 토큰을 내부에서 끝내고 record를 전달하지 않는다)은
 [whole-message send](#whole-message-send와-pending-admission)의 SEND 대기 토큰과 같다. ROUTER RID에 route가 없는 request의 결과는 이 절의 첫 문단을 따른다.
 
@@ -1173,12 +1174,12 @@ RID다. Reconnect 뒤 physical connection identity로 바뀌지 않으며 후속
 |---|---|---|
 | target write credit 회복 또는 유효 reply | `ZLINK_SEND_ADMITTED`, errno 0 | `ZLINK_REQUEST_OK` 또는 wire error-reply mapping |
 | Request reply timeout | 해당 없음 | `ZLINK_REQUEST_TIMED_OUT` |
-| endpoint 또는 logical RID 명시적 제거 | `ZLINK_SEND_TERMINAL`, `ENOENT` | `ZLINK_REQUEST_NOT_FOUND` |
+| endpoint 또는 logical RID 명시적 제거 | `ZLINK_SEND_NOT_FOUND`, `ENOENT` | `ZLINK_REQUEST_NOT_FOUND` |
 | 영구적인 peer-type 거절 | 해당 없음; 토큰은 target 제거까지 유지 | `ZLINK_REQUEST_REJECTED` |
 | malformed protocol | 해당 없음; 토큰은 target 제거까지 유지 | `ZLINK_REQUEST_PROTOCOL_ERROR` |
 | accepted 뒤 allocation·runtime failure | 해당 없음; Core가 payload를 보관하지 않음 | `ZLINK_REQUEST_INTERNAL_ERROR` |
-| submit 시점 transport pair의 종료 또는 선택에서 물러남(transient disconnect, HANDOVER로 물러남, standby 전환, REJECT로 닫힘 등 원인 불문) | terminal 없음; 토큰 유지, 같은 target의 재연결이 WRITABLE을 발행 | reply는 submit 시점 pair로만 전달되므로 Core가 그 pair가 종료되거나 선택에서 물러나는 즉시 `ZLINK_REQUEST_NOT_CONNECTED`(`EHOSTUNREACH`)로 정확히 한 번 종결; caller가 다시 보낸다 |
-| context termination·socket close | `ZLINK_SEND_TERMINAL`, `ETERM` 또는 `ESHUTDOWN`; 읽지 않은 record는 내부 폐기 | 진행 중 request와 unread record를 내부 폐기하고 새 completion 전달을 보장하지 않음 |
+| submit 시점 transport pair의 종료 또는 선택에서 물러남(transient disconnect, HANDOVER로 물러남, standby 전환, REJECT로 닫힘 등 원인 불문) | PAIR·DEALER·ROUTER는 terminal 없음; 토큰 유지, 같은 target의 재연결이 WRITABLE을 발행. STREAM은 [STREAM routed send](08-stream.ko.md#4-routed-send)의 `ZLINK_SEND_NOT_CONNECTED`, `ENOTCONN` | reply는 submit 시점 pair로만 전달되므로 Core가 그 pair가 종료되거나 선택에서 물러나는 즉시 `ZLINK_REQUEST_NOT_CONNECTED`(`EHOSTUNREACH`)로 정확히 한 번 종결; caller가 다시 보낸다 |
+| context termination·socket close | record 없음; 대기 토큰과 읽지 않은 record는 내부 폐기 | 진행 중 request와 unread record를 내부 폐기하고 새 completion 전달을 보장하지 않음 |
 
 REQUEST reply는 Core가 enqueue 전에 확보한 contiguous `zlink_msg_t[]`에 보관한다. Wire error
 reply는 errno part를 닫고 application payload만 새 Core allocation의 index 0부터 정규화한다.
@@ -1340,6 +1341,9 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
 
 **Whole-message send와 completion**
 - SEND 결과·대기 토큰·WRITABLE 재제출·replay 검증은 [whole-message send](#whole-message-send와-pending-admission)를 참조한다.
+- WRITABLE record의 `send_result`·`send_terminal_errno`는 write credit 회복에 `ZLINK_SEND_ADMITTED`·0,
+  명시적 target 제거에 `ZLINK_SEND_NOT_FOUND`·`ENOENT`, STREAM 물리 연결 종료에
+  `ZLINK_SEND_NOT_CONNECTED`·`ENOTCONN`이다. Socket close·context termination 뒤에는 record가 없다.
 - REQUEST admission·timeout·completion·reply token 검증은 [Request와 reply](#request와-reply)를 참조한다.
 - HWM·pending request 수용 검증은 [Auto HWM의 admission](../systems/06-auto-hwm.ko.md#message-처리-순서)과 [pending request 수용](../systems/06-auto-hwm.ko.md#pending-request-수용)을 참조한다.
 
@@ -1354,8 +1358,8 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
   이동하고 `zlink_completion_close()`가 남은 message와 array를 정리한다. Malformed errno part는
   payload 없는 `ZLINK_REQUEST_PROTOCOL_ERROR`, 정규화 allocation 실패는 payload 없는
   `ZLINK_REQUEST_INTERNAL_ERROR`다.
-- Socket close와 context termination은 live SEND·REQUEST 대기 토큰을 `ZLINK_SEND_TERMINAL`과
-  lifecycle errno의 WRITABLE로 retire하고, 진행 중 request와 unread record를 내부 정리하며 새
+- Socket close와 context termination은 live SEND·REQUEST 대기 토큰을 record 없이
+  retire하고, 진행 중 request와 unread record를 내부 정리하며 새
   terminal completion 전달을 보장하지 않는다.
 - Completion recv `NONE`은 진입 시 `RCVTIMEO` 0/positive/-1을 snapshot한다. Timeout·unknown
   flags·NULL input과 blocking 중 context/socket 종료는 정해진 result·errno로 queue와 empty output을

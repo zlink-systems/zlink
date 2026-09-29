@@ -269,7 +269,8 @@ typedef enum zlink_completion_kind_t {
 
 typedef enum zlink_send_complete_result_t {
   ZLINK_SEND_ADMITTED = 0,
-  ZLINK_SEND_TERMINAL = 202
+  ZLINK_SEND_NOT_FOUND = 801,
+  ZLINK_SEND_NOT_CONNECTED = 802
 } zlink_send_complete_result_t;
 
 typedef struct zlink_completion_t {

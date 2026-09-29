@@ -463,8 +463,8 @@ topic length and leaves the queued record and other outputs unchanged.
 - Internal execution paths continue to use `int errno`.
 - The public C API normalizes function-return failures into **eight typed result enums by
   function category**. The exact enum depends on the function category. The SEND state of a
-  completion record uses a separate `zlink_send_complete_result_t` (`ZLINK_SEND_ADMITTED = 0`,
-  `ZLINK_SEND_TERMINAL = 202`).
+  completion record uses a separate `zlink_send_complete_result_t`
+  ([Socket Common completion record](socket/README.en.md#completion-result-and-record)).
   - `zlink_submit_result_t` — send / publish / request submit / reply submit
   - `zlink_request_result_t` — request completion record
   - `zlink_recv_result_t` — recv / subscribe / monitor recv / timer recv
@@ -475,10 +475,8 @@ topic length and leaves the queued record and other outputs unchanged.
   - `zlink_config_result_t` — option set/get, snapshot, poller mutation,
     message lifecycle, timer config
 - Nonzero result enum values use nonoverlapping numeric ranges for each family
-  (1-13, 101-113, 201-208, 301-306, 401-404, 501-505, 601-608, and 701-709).
-  However, `ZLINK_SEND_TERMINAL` (202) of `zlink_send_complete_result_t` shares its number
-  with `ZLINK_RECV_BUSY` (202), so identifying the origin of a nonzero `int` also requires
-  knowing whether the value is a function return or a completion record's `send_result`.
+  (1-13, 101-113, 201-208, 301-306, 401-404, 501-505, 601-608, and 701-709), and the
+  completion record's `zlink_send_complete_result_t` uses 801-802, so the ranges do not overlap.
 - See [Result and errno mapping](#result-and-errno-mapping) above for the formal enum
   catalog.
 - The request completion queue passes internal errno through `from_errno` normalization
