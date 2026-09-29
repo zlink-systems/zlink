@@ -50,7 +50,11 @@ test('busy poller destroy reports typed Busy and leaves poller valid', () => {
   const restore = intercept('pollerDestroy', (...args: unknown[]) => {
     if (busy) {
       busy = false;
-      throw Object.assign(new Error('poller busy'), { nativeErrno: 16 });
+      // The addon reports the Core close result with the errno it read.
+      throw Object.assign(new Error('poller busy'), {
+        nativeErrno: 16,
+        nativeResult: zlink.CloseResult.Busy,
+      });
     }
     return original.pollerDestroy(...args);
   });

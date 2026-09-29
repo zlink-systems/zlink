@@ -17,7 +17,8 @@ import { normalizeRoutingId } from '../core/routing_id';
 import { MonitorSocket } from '../eventing/monitor_socket';
 import { validateUInt64 } from '../options/byte_values';
 import type { ZLinkReadableHandler } from '../../contracts/sockets/socket';
-import { createError } from '../errors/error_mapping';
+import { HandlerError, HandlerResult } from '../../contracts/errors/errors';
+import { withRuntimeErrorMessage } from '../errors/error_state';
 import {
   completionOwnerOf,
   installCompletionOwner,
@@ -31,7 +32,7 @@ export class SocketBase extends NativeHandle {
   }
 
   setReadableHandler(handler: ZLinkReadableHandler): void {
-    if (!this._native) throw createError('handler', 14, 'socket is closed');
+    if (!this._native) throw withRuntimeErrorMessage(new HandlerError(HandlerResult.InvalidHandle, 0), 'socket is closed');
     completionOwnerOf(this).setReadableHandler(handler);
   }
 
@@ -125,10 +126,19 @@ export class SocketBase extends NativeHandle {
 
   close(): void {
     if (!this._native) return;
+    // Core close is fail-fast: a busy socket stays open with its pending
+    // operations intact, so the owner ends only after the close succeeded.
+    const owner = completionOwnerOf(this);
+    owner.stopReadableWatch();
+    try {
+      closeCall('socket close failed', () => {
+        requireNative().socketClose(this._native);
+      });
+    } catch (error) {
+      owner.resumeReadableWatch();
+      throw error;
+    }
     releaseCompletionOwner(this);
-    closeCall('socket close failed', () => {
-      requireNative().socketClose(this._native);
-    });
     this._native = null;
   }
 }

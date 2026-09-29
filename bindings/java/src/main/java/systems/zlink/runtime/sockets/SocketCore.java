@@ -22,7 +22,6 @@ import systems.zlink.runtime.nativeapi.Native;
 import systems.zlink.runtime.nativeapi.NativeErrno;
 import systems.zlink.runtime.nativeapi.NativeLayouts;
 import systems.zlink.runtime.nativeapi.RuntimeResources;
-import systems.zlink.runtime.nativeapi.CompletionDispatcher;
 
 final class SocketCore {
     /**
@@ -53,17 +52,14 @@ final class SocketCore {
     private MemorySegment sendScratch = MemorySegment.NULL;
     private int sendScratchCapacity = NativeSocketRuntime.DEFAULT_IO_BUFFER_SIZE;
     private final CompletionOwner completionOwner;
-    private final CompletionDispatcher.CompletionLane completionLane;
-    SocketCore(NativeSocketRuntime socket,
-               CompletionDispatcher.CompletionLane completionLane) {
+    SocketCore(NativeSocketRuntime socket) {
         this.socket = socket;
-        this.completionLane = completionLane;
         SocketType type = socket.socketTypeHint();
         this.completionOwner = type == SocketType.PAIR
             || type == SocketType.DEALER
             || type == SocketType.ROUTER
             || type == SocketType.STREAM
-            ? new CompletionOwner(socket, completionLane) : null;
+            ? new CompletionOwner(socket) : null;
     }
 
     void bind(String endpoint) {
@@ -71,7 +67,8 @@ final class SocketCore {
             MemorySegment addr = arena.allocateFrom(endpoint, StandardCharsets.UTF_8);
             int rc = Native.bind(socket.handle(), addr);
             if (rc != 0)
-                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.BIND);
+                throw new systems.zlink.contracts.errors.ZlinkBindException(
+                    systems.zlink.contracts.errors.BindResult.fromValue(rc), Native.errno());
         }
     }
 
@@ -80,7 +77,8 @@ final class SocketCore {
             MemorySegment addr = arena.allocateFrom(endpoint, StandardCharsets.UTF_8);
             int rc = Native.connect(socket.handle(), addr);
             if (rc != 0)
-                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONNECT);
+                throw new systems.zlink.contracts.errors.ZlinkConnectException(
+                    systems.zlink.contracts.errors.ConnectResult.fromValue(rc), Native.errno());
         }
     }
 
@@ -89,7 +87,8 @@ final class SocketCore {
             MemorySegment addr = arena.allocateFrom(endpoint, StandardCharsets.UTF_8);
             int rc = Native.unbind(socket.handle(), addr);
             if (rc != 0)
-                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONNECT);
+                throw new systems.zlink.contracts.errors.ZlinkConnectException(
+                    systems.zlink.contracts.errors.ConnectResult.fromValue(rc), Native.errno());
         }
     }
 
@@ -98,7 +97,8 @@ final class SocketCore {
             MemorySegment addr = arena.allocateFrom(endpoint, StandardCharsets.UTF_8);
             int rc = Native.disconnect(socket.handle(), addr);
             if (rc != 0)
-                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONNECT);
+                throw new systems.zlink.contracts.errors.ZlinkConnectException(
+                    systems.zlink.contracts.errors.ConnectResult.fromValue(rc), Native.errno());
         }
     }
 
@@ -115,7 +115,8 @@ final class SocketCore {
             }
             int rc = Native.disconnectRid(socket.handle(), nativeRid);
             if (rc != 0)
-                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONNECT);
+                throw new systems.zlink.contracts.errors.ZlinkConnectException(
+                    systems.zlink.contracts.errors.ConnectResult.fromValue(rc), Native.errno());
         }
     }
 
@@ -260,14 +261,6 @@ final class SocketCore {
     void ensureOpen() {
         if (socket.handle() == null || socket.handle().address() == 0)
             throw new IllegalStateException("socket is closed");
-    }
-
-    void dispatchCompletion(Runnable completion) {
-        if (completionOwner == null) {
-            throw new IllegalStateException(
-                "socket does not support completion dispatch");
-        }
-        completionLane.dispatch(completion);
     }
 
     CompletionOwner completionOwner() {

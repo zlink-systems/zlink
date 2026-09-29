@@ -8,7 +8,6 @@ from ...contracts.errors.codes import CloseResult, ConfigResult
 from ...contracts.errors.errors import CloseError, ConfigError
 from ..._native.ffi import ZlinkAutoHwmBudgetSnapshot, lib
 from ..handles.native_support import (
-    _config_result_from_errno,
     _raise_result_error,
     _raise_zlink_error,
     _validated_int32,

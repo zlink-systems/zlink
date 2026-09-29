@@ -16,7 +16,9 @@ from zlink._native.ffi import (
     ZLINK_COMPLETION_WRITABLE,
     ZLINK_DONTWAIT,
     ZLINK_SEND_ADMITTED,
-    ZLINK_SEND_TERMINAL,
+    ZLINK_SEND_NOT_FOUND,
+    ZLINK_SEND_NOT_CONNECTED,
+    ZLINK_SEND_TIMED_OUT,
     ZlinkCompletion,
     ZlinkMsg,
 )
@@ -323,18 +325,16 @@ def test_writable_completion_rejects_mismatched_send_correlation(mismatch):
 
 
 @pytest.mark.parametrize(
-    ("native_errno", "expected_result"),
+    ("send_result", "native_errno", "expected_result"),
     (
-        (errno.ENOENT, zlink.SubmitResult.NOT_FOUND),
-        (
-            getattr(errno, "ESHUTDOWN", errno.ECANCELED),
-            zlink.SubmitResult.TERMINATED,
-        ),
-        (int(zlink.ErrorCode.ETERM), zlink.SubmitResult.TERMINATED),
+        (ZLINK_SEND_NOT_FOUND, errno.ENOENT, zlink.SubmitResult.NOT_FOUND),
+        (ZLINK_SEND_NOT_CONNECTED, errno.ENOTCONN, zlink.SubmitResult.NOT_CONNECTED),
+        (ZLINK_SEND_TIMED_OUT, errno.EAGAIN, zlink.SubmitResult.BACKPRESSURED),
+        (999, errno.ENOENT, zlink.SubmitResult.INTERNAL_ERROR),
     ),
 )
 def test_terminal_writable_is_typed_and_never_retried(
-    native_errno, expected_result
+    send_result, native_errno, expected_result
 ):
     target = b"terminal-route"
     socket = type("Socket", (), {"_handle": 1})()
@@ -346,7 +346,7 @@ def test_terminal_writable_is_typed_and_never_retried(
         completion_id=81,
         context=entry.context,
         peer_rid=target,
-        send_result=ZLINK_SEND_TERMINAL,
+        send_result=send_result,
         terminal_errno=native_errno,
     )
 
@@ -360,23 +360,23 @@ def test_terminal_writable_is_typed_and_never_retried(
     retry.assert_not_called()
     assert entry.settled
     assert entry._error.result == expected_result
-    assert entry._error.native_errno == native_errno
+    assert entry._error.native_errno == (
+        errno.EPROTO if send_result == 999 else native_errno
+    )
     assert closer.closed == 1
 
 
 @pytest.mark.parametrize(
-    ("native_errno", "expected_result"),
+    ("send_result", "native_errno", "expected_result"),
     (
-        (errno.ENOENT, zlink.SubmitResult.NOT_FOUND),
-        (
-            getattr(errno, "ESHUTDOWN", errno.ECANCELED),
-            zlink.SubmitResult.TERMINATED,
-        ),
-        (int(zlink.ErrorCode.ETERM), zlink.SubmitResult.TERMINATED),
+        (ZLINK_SEND_NOT_FOUND, errno.ENOENT, zlink.SubmitResult.NOT_FOUND),
+        (ZLINK_SEND_NOT_CONNECTED, errno.ENOTCONN, zlink.SubmitResult.NOT_CONNECTED),
+        (ZLINK_SEND_TIMED_OUT, errno.EAGAIN, zlink.SubmitResult.BACKPRESSURED),
+        (999, errno.ENOENT, zlink.SubmitResult.INTERNAL_ERROR),
     ),
 )
 def test_request_terminal_writable_is_typed_and_never_retried(
-    native_errno, expected_result
+    send_result, native_errno, expected_result
 ):
     target = b"terminal-request-route"
     socket = type("Socket", (), {"_handle": 1})()
@@ -390,7 +390,7 @@ def test_request_terminal_writable_is_typed_and_never_retried(
         completion_id=91,
         context=entry.context,
         peer_rid=target,
-        send_result=ZLINK_SEND_TERMINAL,
+        send_result=send_result,
         terminal_errno=native_errno,
     )
 
@@ -405,7 +405,9 @@ def test_request_terminal_writable_is_typed_and_never_retried(
     assert entry.settled
     assert isinstance(entry._error, zlink.SubmitError)
     assert entry._error.result == expected_result
-    assert entry._error.native_errno == native_errno
+    assert entry._error.native_errno == (
+        errno.EPROTO if send_result == 999 else native_errno
+    )
     assert closer.closed == 1
 
 
@@ -611,9 +613,8 @@ def test_public_managed_routed_send_retries_after_exact_writable_completion():
                 assert poller.wait(events, 5000) == 1
                 assert events.slot(0) == 79
                 assert events.has_event(0, zlink.PollEventFlag.POLLOUT)
-                assert not events.has_event(
-                    0, zlink.PollEventFlag.POLLCOMPLETION
-                )
+                # wait() returns the readiness Core reported, unchanged.
+                assert events.has_event(0, zlink.PollEventFlag.POLLCOMPLETION)
                 await pending
 
                 assert len(writable_records) == 1

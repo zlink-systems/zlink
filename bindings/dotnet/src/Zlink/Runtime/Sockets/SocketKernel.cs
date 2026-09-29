@@ -177,10 +177,10 @@ internal sealed partial class SocketKernel : IDisposable
         return result switch
         {
             SendResult.Backpressured =>
-                ZlinkException.CreateSubmitException((int)ErrorCode.EAgain),
+                new ZlinkSubmitException(SubmitResult.Backpressured),
             SendResult.NotReady =>
-                ZlinkException.CreateSubmitException((int)ErrorCode.ENotConn),
-            _ => ZlinkException.CreateSubmitException((int)ErrorCode.EInval)
+                new ZlinkSubmitException(SubmitResult.NotConnected),
+            _ => new ZlinkSubmitException(SubmitResult.InvalidArgument)
         };
     }
 

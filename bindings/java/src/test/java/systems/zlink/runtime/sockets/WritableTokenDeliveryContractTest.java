@@ -29,12 +29,12 @@ class WritableTokenDeliveryContractTest {
             core.attempts.add(new CompletionNativeFixture.Attempt(SubmitResult.BACKPRESSURED, NativeErrno.EAGAIN, 12));
             var first = router.send(rid).message(Message.from("first")).submit().admitted().toCompletableFuture();
             var second = router.send(rid).message(Message.from("second")).submit().admitted().toCompletableFuture();
-            core.writable(core.submissions.get(1), 0);
+            core.writable(core.submissions.get(1), 0, 0);
             core.attempts.add(new CompletionNativeFixture.Attempt(SubmitResult.OK, 0, 0));
             assertEquals(1, owner.drain());
             second.get(TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
             assertFalse(first.isDone(), "another token's waiter must remain pending");
-            core.writable(core.submissions.get(0), 0);
+            core.writable(core.submissions.get(0), 0, 0);
             core.attempts.add(new CompletionNativeFixture.Attempt(SubmitResult.OK, 0, 0));
             assertEquals(1, owner.drain());
             first.get(TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS);

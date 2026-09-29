@@ -133,7 +133,7 @@ def test_send_submission_always_exposes_admission_future():
     asyncio.run(exercise())
 
 
-def test_admitted_send_has_no_completion_registration_or_private_condition():
+def test_admitted_send_leaves_no_completion_registration_or_private_condition():
     from unittest.mock import patch
 
     async def exercise():
@@ -151,7 +151,9 @@ def test_admitted_send_has_no_completion_registration_or_private_condition():
 
                 def submit(*args, **kwargs):
                     entry = args[3]
-                    assert not owner._entries
+                    # The entry is registered before the Core call so a
+                    # completion drained during the call finds it.
+                    assert owner._entries == {entry.context: entry}
                     assert entry.condition is owner._state_changed
                     result = attempt(*args, **kwargs)
                     observed.append((entry, result))

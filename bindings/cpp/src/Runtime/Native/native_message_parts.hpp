@@ -5,6 +5,7 @@
 #include <Runtime/Native/message_access.hpp>
 
 #include <zlink/Contracts/Core/routing_id.hpp>
+#include <zlink/Contracts/Errors/errors.hpp>
 #include <zlink/Contracts/Messaging/message.hpp>
 #include <zlink/Contracts/Sockets/results.hpp>
 
@@ -56,21 +57,24 @@ close_native_parts (zlink_msg_t *parts_, size_t part_count_, size_t start_index_
 //  `has_payload()`) can destroy that payload on a failed receive. These are
 //  recovery/materialization paths, not the hot single-part path, so the extra
 //  `zlink_msg_size()` query is acceptable here.
-inline bool adopt_native_part (message_t &part_, zlink_msg_t &native_) noexcept
+inline config_result_t adopt_native_part (message_t &part_, zlink_msg_t &native_)
 {
-    if (!part_.valid ())
-        return false;
-    if (zlink_msg_move (detail::native_handle (part_), &native_) != 0)
-        return false;
+    detail::message_access_t::close_noexcept (part_);
+    const config_result_t result = static_cast<config_result_t> (
+      zlink_msg_adopt (detail::native_handle (part_), &native_));
+    if (result != config_result_t::ok)
+        return result;
+    detail::message_access_t::valid (part_) = true;
     detail::refresh_payload_presence (part_);
-    return true;
+    return result;
 }
 
-inline void restore_part_from_native (message_t &part_, zlink_msg_t &native_) noexcept
+inline void restore_part_from_native (message_t &part_, zlink_msg_t &native_)
 {
-    part_.init ();
-    (void) adopt_native_part (part_, native_);
+    const config_result_t result = adopt_native_part (part_, native_);
+    const int saved_errno = result != config_result_t::ok ? zlink_errno () : 0;
     (void) zlink_msg_close (&native_);
+    detail::throw_if_failed<config_error_t> (result, saved_errno);
 }
 
 inline int move_parts_to_native (std::vector<message_t> &parts_, std::vector<zlink_msg_t> &native_)
@@ -101,7 +105,7 @@ inline int move_parts_to_native (std::vector<message_t> &parts_, std::vector<zli
 
 inline void restore_parts_from_native (std::vector<message_t> &parts_,
                                        std::vector<zlink_msg_t> &native_,
-                                       size_t start_index_ = 0) noexcept
+                                       size_t start_index_ = 0)
 {
     const size_t count = native_.size () < parts_.size () ? native_.size () : parts_.size ();
     for (size_t i = start_index_; i < count; ++i)
@@ -139,7 +143,7 @@ move_parts_to_native (std::vector<message_t> &parts_, zlink_msg_t *native_, size
 inline void restore_parts_from_native (std::vector<message_t> &parts_,
                                        zlink_msg_t *native_,
                                        size_t native_count_,
-                                       size_t start_index_ = 0) noexcept
+                                       size_t start_index_ = 0)
 {
     const size_t count = native_count_ < parts_.size () ? native_count_ : parts_.size ();
     for (size_t i = start_index_; i < count; ++i)
@@ -153,10 +157,12 @@ inline int assign_parts_from_native (zlink_msg_t *parts_native_,
     parts_.clear ();
     parts_.resize (part_count_);
     for (size_t i = 0; i < part_count_; ++i) {
-        if (!adopt_native_part (parts_[i], parts_native_[i])) {
+        const config_result_t result = adopt_native_part (parts_[i], parts_native_[i]);
+        if (result != config_result_t::ok) {
+            const int saved_errno = zlink_errno ();
             parts_.clear ();
             close_message_array (parts_native_, part_count_);
-            return -1;
+            throw config_error_t (result, saved_errno);
         }
     }
     close_message_array (parts_native_, part_count_);
@@ -169,11 +175,13 @@ inline int assign_parts_from_native (std::vector<zlink_msg_t> &parts_native_,
     parts_.clear ();
     parts_.resize (parts_native_.size ());
     for (size_t i = 0; i < parts_native_.size (); ++i) {
-        if (!adopt_native_part (parts_[i], parts_native_[i])) {
+        const config_result_t result = adopt_native_part (parts_[i], parts_native_[i]);
+        if (result != config_result_t::ok) {
+            const int saved_errno = zlink_errno ();
             parts_.clear ();
             close_native_parts (parts_native_, i);
             parts_native_.clear ();
-            return -1;
+            throw config_error_t (result, saved_errno);
         }
     }
     parts_native_.clear ();
@@ -184,8 +192,14 @@ inline std::vector<message_t> take_parts_from_native (zlink_msg_t *parts_, size_
 {
     std::vector<message_t> parts;
     parts.resize (part_count_);
-    for (size_t i = 0; i < part_count_; ++i)
-        (void) adopt_native_part (parts[i], parts_[i]);
+    for (size_t i = 0; i < part_count_; ++i) {
+        const config_result_t result = adopt_native_part (parts[i], parts_[i]);
+        if (result != config_result_t::ok) {
+            const int saved_errno = zlink_errno ();
+            close_message_array (parts_, part_count_);
+            throw config_error_t (result, saved_errno);
+        }
+    }
     close_message_array (parts_, part_count_);
     return parts;
 }
@@ -194,13 +208,13 @@ template <typename SubmitFn> inline int submit_one_message_part (message_t &part
 {
     if (!part_.valid ()) {
         errno = EINVAL;
-        return -1;
+        return ZLINK_SUBMIT_INVALID_ARGUMENT;
     }
 
     zlink_msg_t native_part;
     detail::move_to_native (part_, &native_part);
     if (part_.valid ())
-        return -1;
+        return ZLINK_SUBMIT_INVALID_ARGUMENT;
 
     const int rc = submit_ (&native_part, 1u);
     if (rc != 0)
@@ -213,17 +227,18 @@ inline int submit_borrowed_message_part (message_t &part_, SubmitFn submit_)
 {
     if (!part_.valid ()) {
         errno = EINVAL;
-        return -1;
+        return ZLINK_SUBMIT_INVALID_ARGUMENT;
     }
 
     zlink_msg_t native_view;
-    if (zlink_msg_init (&native_view) != 0)
-        return -1;
-    if (zlink_msg_copy (&native_view, detail::native_handle (part_)) != 0) {
+    const int init_rc = zlink_msg_init (&native_view);
+    if (init_rc != 0)
+        throw config_error_t (static_cast<config_result_t> (init_rc), zlink_errno ());
+    const int copy_rc = zlink_msg_copy (&native_view, detail::native_handle (part_));
+    if (copy_rc != 0) {
         const int saved_errno = errno;
         (void) zlink_msg_close (&native_view);
-        errno = saved_errno;
-        return -1;
+        throw config_error_t (static_cast<config_result_t> (copy_rc), saved_errno);
     }
 
     const int rc = submit_ (&native_view, 1u);
@@ -280,7 +295,7 @@ inline int with_borrowed_native_parts (const std::vector<message_t> &parts_, Bod
     for (size_t i = 0; i < n; ++i) {
         if (!parts_[i].valid ()) {
             errno = EINVAL;
-            return -1;
+            return ZLINK_SUBMIT_INVALID_ARGUMENT;
         }
     }
 
@@ -288,21 +303,20 @@ inline int with_borrowed_native_parts (const std::vector<message_t> &parts_, Bod
         size_t built = 0;
         for (; built < count_; ++built) {
             const zlink_msg_t *src = detail::native_handle (parts_[built]);
-            int irc = zlink_msg_init (&views_[built]);
-            if (irc == 0
-                && zlink_msg_copy (&views_[built], const_cast<zlink_msg_t *> (src)) != 0) {
+            const int init_rc = zlink_msg_init (&views_[built]);
+            int irc = init_rc;
+            if (irc == 0) {
+                irc = zlink_msg_copy (&views_[built], const_cast<zlink_msg_t *> (src));
+            }
+            const int saved_errno = irc != 0 ? zlink_errno () : 0;
+            if (irc != 0 && init_rc == 0) {
                 (void) zlink_msg_close (&views_[built]);
-                irc = -1;
             }
             if (irc != 0) {
-                errno = EINVAL;
-                break;
+                for (size_t i = 0; i < built; ++i)
+                    (void) zlink_msg_close (&views_[i]);
+                throw config_error_t (static_cast<config_result_t> (irc), saved_errno);
             }
-        }
-        if (built != count_) {
-            for (size_t i = 0; i < built; ++i)
-                (void) zlink_msg_close (&views_[i]);
-            return -1;
         }
 
         const int rc = body_ (views_, count_);

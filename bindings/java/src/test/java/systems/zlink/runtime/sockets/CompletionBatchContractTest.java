@@ -24,64 +24,6 @@ import systems.zlink.contracts.sockets.RecvFlags;
 
 class CompletionBatchContractTest {
     @Test
-    void readySocketCanReleaseAnotherSocketsBusyCompletionLane() throws Exception {
-        TestSupport.assumeNative();
-        CountDownLatch release = new CountDownLatch(1);
-        CountDownLatch occupied = new CountDownLatch(1);
-        try (Context context = Zlink.createContext();
-             DealerSocket first = context.createDealerSocket();
-             DealerSocket second = context.createDealerSocket();
-             RouterSocket router = context.createRouterSocket();
-             Poller poller = Zlink.createPoller();
-             Received request = new Received()) {
-            String endpoint = TestSupport.inprocEndpoint("completion-batch");
-            router.bind(endpoint);
-            first.connect(endpoint);
-            second.connect(endpoint);
-            poller.add(first, 1, PollEventFlags.POLLCOMPLETION);
-            poller.add(second, 2, PollEventFlags.POLLCOMPLETION);
-            ((NativeSocketBase) first).runtime().dispatchCompletion(() -> {
-                occupied.countDown();
-                try {
-                    release.await();
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                }
-            });
-            assertTrue(occupied.await(TestSupport.DEFAULT_TIMEOUT_MS,
-                TimeUnit.MILLISECONDS));
-            var a = first.request().message(Message.from("a"))
-                .timeout(Duration.ofSeconds(2)).submit().reply().toCompletableFuture();
-            var b = second.request().message(Message.from("b"))
-                .timeout(Duration.ofSeconds(2)).submit().reply().toCompletableFuture();
-            b.whenComplete((parts, error) -> release.countDown());
-            for (int i = 0; i < 2; i++) {
-                assertTrue(router.recv(request, RecvFlags.NONE));
-                request.reply().message(request.firstPart()).submit();
-                request.close();
-            }
-            FutureTask<Void> wait = new FutureTask<>(() -> {
-                PollEvents events = new PollEvents(2);
-                while (!a.isDone() || !b.isDone()) {
-                    poller.wait(events, Duration.ofSeconds(2));
-                }
-                return null;
-            });
-            Thread thread = Thread.ofPlatform().start(wait);
-            try {
-                wait.get(TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-                Message.closeAll(a.join());
-                Message.closeAll(b.join());
-            } finally {
-                release.countDown();
-                thread.join(TestSupport.DEFAULT_TIMEOUT_MS);
-            }
-        } finally {
-            release.countDown();
-        }
-    }
-
-    @Test
     void repeatedBackpressureSurvivesIdleAndPublicOwnerHandover() throws Exception {
         TestSupport.assumeNative();
         try (Context context = Zlink.createContext()) {

@@ -4,13 +4,11 @@
 //! runtime implementations.
 
 mod completion_owner;
-mod deferred_cleanup;
 mod handle_storage;
 mod message_storage;
 mod routed_handle;
 
-pub(crate) use completion_owner::{CompletionEntry, CompletionEntryKind, CompletionOwner};
-pub(crate) use deferred_cleanup::{DeferredCloseKind, defer_native_close};
+pub(crate) use completion_owner::{CompletionEntry, CompletionOwner};
 pub(crate) use handle_storage::{
     ContextStorage, MonitorStorage, PollerSocketRegistration, PollerStorage, SocketStorage,
     TimerStorage,

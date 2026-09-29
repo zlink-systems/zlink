@@ -10,6 +10,7 @@ import {
   closeCall,
   configCall,
   failureErrno,
+  failureResult,
   nativeErrorMessage,
 } from '../errors/native_errors';
 import { validateCString } from '../options/validation';
@@ -86,7 +87,7 @@ function getContextOptionRaw(context: Context, option: number): number {
     ) {
       return -1;
     }
-    throw createError('config', failureErrno(error), nativeErrorMessage(error, 'context option get failed'));
+    throw createError('config', failureErrno(error), nativeErrorMessage(error, 'context option get failed'), failureResult(error));
   }
 }
 
@@ -97,7 +98,7 @@ function getContextOptionRawStrict(context: Context, option: number): number {
     const message = error instanceof Error && error.message
       ? error.message
       : 'ctx_getopt failed';
-    throw createError('config', failureErrno(error), message);
+    throw createError('config', failureErrno(error), message, failureResult(error));
   }
 }
 

@@ -219,14 +219,9 @@ impl Drop for MonitorStorage {
         if self.handle.is_null() {
             return;
         }
+        // Core close is fail-fast; a drop cannot report or retry its result.
         let mut handle = self.handle;
-        let rc = unsafe { ffi::zlink_monitor_close(&mut handle) };
-        if rc != 0 {
-            crate::internal::defer_native_close(
-                crate::internal::DeferredCloseKind::Monitor,
-                self.handle,
-            );
-        }
+        unsafe { ffi::zlink_monitor_close(&mut handle) };
     }
 }
 

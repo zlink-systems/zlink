@@ -49,8 +49,7 @@ pub(crate) fn recv_stream_packet(
             flags,
         )
     };
-    if rc == RecvResult::NoData as i32 || (rc != 0 && unsafe { ffi::zlink_errno() } == libc::EAGAIN)
-    {
+    if rc == RecvResult::NoData as i32 {
         unsafe {
             ffi::zlink_msg_close(header.as_mut_ptr());
             ffi::zlink_msg_close(body.as_mut_ptr());

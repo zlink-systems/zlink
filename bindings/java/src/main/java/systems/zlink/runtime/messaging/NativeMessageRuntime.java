@@ -5,7 +5,6 @@ package systems.zlink.runtime.messaging;
 import systems.zlink.runtime.nativeapi.Native;
 import systems.zlink.internal.ContractAccess;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.runtime.nativeapi.NativeLayouts;
 import systems.zlink.runtime.nativeapi.NativeMessage;
 import java.lang.foreign.Arena;
@@ -370,7 +369,8 @@ final class NativeMessageRuntime {
                 int rc = move((MemorySegment) ContractAccess.messageNativeHandle(msg),
                     src);
                 if (rc != 0)
-                    throw ZlinkException.fromErrno(systems.zlink.contracts.errors.ErrorCategory.CONFIG, Native.errno());
+                    throw new systems.zlink.contracts.errors.ZlinkConfigException(
+                        systems.zlink.contracts.errors.ConfigResult.fromValue(rc), Native.errno());
                 ContractAccess.messageFinishVectorMove(msg, i + 1 < count);
                 built++;
             }
@@ -409,8 +409,8 @@ final class NativeMessageRuntime {
             int rc = move((MemorySegment) ContractAccess.messageNativeHandle(message),
                 partsAddr);
             if (rc != 0) {
-                throw ZlinkException.fromErrno(
-                    systems.zlink.contracts.errors.ErrorCategory.CONFIG, Native.errno());
+                throw new systems.zlink.contracts.errors.ZlinkConfigException(
+                    systems.zlink.contracts.errors.ConfigResult.fromValue(rc), Native.errno());
             }
             ContractAccess.messageFinishVectorMove(message, hasMore);
             moved = true;

@@ -2,12 +2,15 @@
 
 import { Message, type MessageLike } from '../../contracts';
 import {
+  HandlerError,
+  HandlerResult,
   RecvError,
   RecvResult,
   RequestError,
   RequestResult,
   SubmitError,
   SubmitResult,
+  ZlinkError,
 } from '../../contracts/errors/errors';
 import type { ZLinkReadableHandler } from '../../contracts/sockets/socket';
 import { consumeSubmittedMessage } from '../../contracts/messaging/message';
@@ -18,10 +21,10 @@ import type {
 import { normalizeOperationPayload } from '../buffers/message_conversion';
 import { createError } from '../errors/error_mapping';
 import { withRuntimeErrorMessage } from '../errors/error_state';
+import { constants } from 'node:os';
 import {
   isWouldBlock,
   nativeErrorMessage,
-  failureErrno,
   submitNativeError,
 } from '../errors/native_errors';
 import type { NativeHandle } from '../native/binding_types';
@@ -33,7 +36,9 @@ import { messagesFromNativeBuffers } from './request_executor';
 const COMPLETION_REQUEST = 2;
 const COMPLETION_WRITABLE = 3;
 const SEND_ADMITTED = 0;
-const SEND_TERMINAL = 202;
+const SEND_NOT_FOUND = 801;
+const SEND_NOT_CONNECTED = 802;
+const SEND_TIMED_OUT = 803;
 const DONTWAIT = 1;
 
 export interface NativeCompletion {
@@ -230,7 +235,7 @@ export class CompletionOwner {
   private publicOwner: object | null = null;
   private readableWatch: NativeHandle | null = null;
   private readableHandler: ZLinkReadableHandler | null = null;
-  private receiveError: RecvError | null = null;
+  private receiveError: ZlinkError | null = null;
   private readonly readableReady = (status = 0, nativeErrno = 0): void =>
     this.notifyReadable(status, nativeErrno);
   private managedWritableWaitCount = 0;
@@ -244,7 +249,9 @@ export class CompletionOwner {
 
   setReadableHandler(handler: ZLinkReadableHandler): void {
     if (typeof handler !== 'function') {
-      throw createError('handler', 22, 'readable handler must be a function');
+      throw withRuntimeErrorMessage(
+        new HandlerError(HandlerResult.InvalidArgument, 0),
+        'readable handler must be a function');
     }
     const previousHandler = this.readableHandler;
     this.readableHandler = handler;
@@ -252,11 +259,7 @@ export class CompletionOwner {
       this.ensureReadableWatch();
     } catch (error) {
       this.readableHandler = previousHandler;
-      throw createError(
-        'handler',
-        failureErrno(error),
-        nativeErrorMessage(error, 'readable handler registration failed')
-      );
+      throw error;
     }
     // The mailbox fd reports later progress; an initial drain also observes
     // already-queued data and arms an empty receive pipe before waiting.
@@ -278,7 +281,7 @@ export class CompletionOwner {
     try {
       nativePayload = normalizeOperationPayload(payload);
     } catch (error) {
-      throw submitNativeError(error, DONTWAIT, 'send submit failed');
+      throw submitNativeError(error, 'send submit failed');
     }
 
     let result: NativeSubmitResult;
@@ -291,7 +294,7 @@ export class CompletionOwner {
         token
       ) as NativeSubmitResult;
     } catch (error) {
-      throw submitNativeError(error, DONTWAIT, 'send submit failed');
+      throw submitNativeError(error, 'send submit failed');
     }
 
     if (result.result === SubmitResult.Ok) {
@@ -376,7 +379,7 @@ export class CompletionOwner {
     try {
       nativePayload = normalizeOperationPayload(payload);
     } catch (error) {
-      throw submitNativeError(error, DONTWAIT, 'request submit failed');
+      throw submitNativeError(error, 'request submit failed');
     }
     this.requirePublicOwner('async request requires a PollCompletion owner');
 
@@ -391,7 +394,7 @@ export class CompletionOwner {
         token
       ) as NativeSubmitResult;
     } catch (error) {
-      throw submitNativeError(error, DONTWAIT, 'request submit failed');
+      throw submitNativeError(error, 'request submit failed');
     }
 
     if (result.result === SubmitResult.Ok) {
@@ -475,7 +478,7 @@ export class CompletionOwner {
         timeoutMs
       ) as NativeSyncRequestResult;
     } catch (error) {
-      this.failEntry(entry, submitNativeError(error, 0, 'request submit failed'));
+      this.failEntry(entry, submitNativeError(error, 'request submit failed'));
       throw entry.error;
     }
     if (result.result !== SubmitResult.Ok) {
@@ -504,7 +507,7 @@ export class CompletionOwner {
         0n
       ) as NativeSubmitResult;
     } catch (error) {
-      throw submitNativeError(error, 0, 'send failed');
+      throw submitNativeError(error, 'send failed');
     }
     if (result.result !== SubmitResult.Ok) {
       throw submitError(result.result, result.nativeErrno, 'send failed');
@@ -564,11 +567,10 @@ export class CompletionOwner {
   terminatePending(nativeErrno: number): void {
     for (const entry of this.byToken.values()) {
       const admissionPending = this.retries.has(entry.token);
-      const error = createError(
-        entry.kind === 'request' && !admissionPending ? 'request' : 'submit',
-        nativeErrno,
-        'context was shut down'
-      );
+      const error = entry.kind === 'request' && !admissionPending
+        ? withRuntimeErrorMessage(
+            new RequestError(RequestResult.Terminated, nativeErrno), 'context was shut down')
+        : submitError(SubmitResult.Terminated, nativeErrno, 'context was shut down');
       entry.fail(error, admissionPending);
     }
     this.byToken.clear();
@@ -658,13 +660,20 @@ export class CompletionOwner {
 
     this.byId.delete(entry.completionId);
     if (completion.sendResult !== SEND_ADMITTED) {
-      const error = completion.sendResult === SEND_TERMINAL
-        ? createError('submit', completion.terminalErrno, 'submit target became unavailable')
-        : submitError(
-            SubmitResult.InternalError,
-            completion.terminalErrno,
-            'writable completion result mismatch'
-          );
+      const result = completion.sendResult === SEND_NOT_FOUND
+        ? SubmitResult.NotFound
+        : completion.sendResult === SEND_NOT_CONNECTED
+          ? SubmitResult.NotConnected
+          : completion.sendResult === SEND_TIMED_OUT
+            ? SubmitResult.Backpressured
+            : SubmitResult.InternalError;
+      const error = submitError(result,
+        result === SubmitResult.InternalError
+          ? constants.errno.EPROTO!
+          : result === SubmitResult.Backpressured
+            ? constants.errno.EAGAIN!
+            : completion.terminalErrno,
+        'submit target became unavailable');
       this.failEntry(entry, error);
       return;
     }
@@ -702,7 +711,7 @@ export class CompletionOwner {
             entry.token
           ) as NativeSubmitResult;
     } catch (error) {
-      this.failEntry(entry, submitNativeError(error, DONTWAIT, `${retry.kind} submit failed`));
+      this.failEntry(entry, submitNativeError(error, `${retry.kind} submit failed`));
       return;
     }
 
@@ -784,13 +793,13 @@ export class CompletionOwner {
 
   private notifyReadable(status: number, watchErrno: number): void {
     if (this.readableWatch === null) return;
-    if (status < 0) {
+    if (status !== 0) {
       const message = watchErrno === 0
         ? `socket readable watch failed (${status})`
         : `socket readable watch acknowledgement failed (${watchErrno})`;
-      this.receiveError = watchErrno === 0
-        ? withRuntimeErrorMessage(new RecvError(RecvResult.InternalError, status), message)
-        : createError('recv', watchErrno, message) as RecvError;
+      this.receiveError = status > 0
+        ? createError('config', watchErrno, message, status)
+        : withRuntimeErrorMessage(new RecvError(RecvResult.InternalError, watchErrno || status), message);
       this.stopReadableWatch();
     }
     // The libuv watch only delivers readiness. The handler's public Poller
@@ -798,9 +807,14 @@ export class CompletionOwner {
     this.readableHandler?.();
   }
 
+  /** Restarts the readable watch that a refused native close had stopped. */
+  resumeReadableWatch(): void {
+    this.ensureReadableWatch();
+  }
+
   /**
    * Stops the libuv readable watch, whose callback enters Core on the socket.
-   * The socket stops it when its close is recorded, before the native close.
+   * The socket stops it before the native close.
    */
   stopReadableWatch(): void {
     const watch = this.readableWatch;
@@ -826,7 +840,6 @@ export function completionOwnerOf(socket: object): CompletionOwner {
 export function releaseCompletionOwner(socket: object): void {
   const owner = owners.get(socket);
   if (!owner) return;
-  owner.stopReadableWatch();
   owner.close();
   owners.delete(socket);
 }

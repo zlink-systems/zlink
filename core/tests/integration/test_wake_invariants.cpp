@@ -839,6 +839,12 @@ void test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout ()
         TEST_ASSERT_NOT_NULL (clients[i]);
         configure_socket (clients[i]);
         configure_large_hwm (clients[i]);
+        const int no_wait_token_deadline = -1;
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_CONFIG_OK,
+          zlink_set_option (clients[i], ZLINK_OPT_SNDTIMEO,
+                            &no_wait_token_deadline,
+                            sizeof (no_wait_token_deadline)));
 
         char routing_id[32];
         snprintf (routing_id, sizeof (routing_id), "large-dealer-%03u",

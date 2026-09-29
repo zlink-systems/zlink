@@ -14,9 +14,9 @@ use crate::message::{Message, RoutingId};
 use crate::messaging_operations::{
     Empty, MessageParts, RequestOp, RequestOpStorage, RequestSubmission,
 };
-use crate::native_errors::{submit_error_from_errno, submit_error_from_rc};
+use crate::native_errors::submit_error_from_rc;
 
-use super::send_ops::{check_submit_result, submit_shared_message};
+use super::send_ops::{check_submit_result, is_writable_wait, submit_shared_message};
 
 pub(crate) fn dealer_request_op(
     routed: Arc<RoutedHandle>,
@@ -56,48 +56,40 @@ pub(crate) fn submit_routed_request(
 ) -> Result<RequestSubmission, ZlinkError> {
     validate_request(&operation)?;
     let owner = Arc::clone(&operation.completion_owner);
-    owner
-        .with_completion_submit(|| {
-            owner.ensure_public_owner()?;
-            let (entry, context) = owner.register_request()?;
-            match submit_request_attempt(&mut operation, &entry, context) {
-                Ok(RequestAttempt::Admitted) => {
-                    entry.admission_succeeded();
-                    Ok(RequestSubmission {
-                        result: SubmitResult::Ok,
-                        admitted: Box::pin(std::future::ready(Ok(()))),
-                        reply: Box::pin(RequestReplyFuture::new(
-                            entry,
-                            Arc::clone(&owner),
-                            context,
-                        )),
-                    })
+    owner.ensure_public_owner()?;
+    let (entry, context) = owner.register_request()?;
+    match submit_request_attempt(&mut operation, &entry, context) {
+        Ok(RequestAttempt::Admitted) => {
+            entry.admission_succeeded();
+            Ok(RequestSubmission {
+                result: SubmitResult::Ok,
+                admitted: Box::pin(std::future::ready(Ok(()))),
+                reply: Box::pin(RequestReplyFuture::new(entry, Arc::clone(&owner), context)),
+            })
+        }
+        Ok(RequestAttempt::Waiting) => Ok(RequestSubmission {
+            result: SubmitResult::Backpressured,
+            admitted: Box::pin(RequestAdmissionFuture {
+                operation: Some(operation),
+                entry: Arc::clone(&entry),
+                owner: Arc::clone(&owner),
+                context,
+                waiting_for_writable: true,
+                finished: false,
+            }),
+            reply: Box::pin(RequestReplyFuture::new(entry, Arc::clone(&owner), context)),
+        }),
+        Err(failure) => {
+            if failure.live_token {
+                if entry.detach() {
+                    owner.unregister(context);
                 }
-                Ok(RequestAttempt::Waiting) => Ok(RequestSubmission {
-                    result: SubmitResult::Backpressured,
-                    admitted: Box::pin(RequestAdmissionFuture {
-                        operation: Some(operation),
-                        entry: Arc::clone(&entry),
-                        owner: Arc::clone(&owner),
-                        context,
-                        waiting_for_writable: true,
-                        finished: false,
-                    }),
-                    reply: Box::pin(RequestReplyFuture::new(entry, Arc::clone(&owner), context)),
-                }),
-                Err(failure) => {
-                    if failure.live_token {
-                        if entry.detach() {
-                            owner.unregister(context);
-                        }
-                    } else {
-                        owner.unregister(context);
-                    }
-                    Err(failure.error)
-                }
+            } else {
+                owner.unregister(context);
             }
-        })
-        .map_err(Into::into)
+            Err(failure.error.into())
+        }
+    }
 }
 
 pub(crate) fn submit_routed_request_sync(
@@ -106,14 +98,14 @@ pub(crate) fn submit_routed_request_sync(
     validate_request(&operation)?;
     let owner = Arc::clone(&operation.completion_owner);
     let (entry, user_context) = owner.register_request()?;
-    let submission = owner.with_submit(|| {
+    let submission = (|| {
         let completion_id = submit_request_parts(&mut operation, 0, user_context)?;
         if completion_id == 0 {
             return Err(SubmitError::new(SubmitResult::InternalError, libc::EPROTO));
         }
         entry.publish_request(completion_id);
         Ok(())
-    });
+    })();
     if let Err(error) = submission {
         owner.unregister(user_context);
         return Err(error.into());
@@ -158,11 +150,13 @@ impl Future for RequestAdmissionFuture {
             let owner = Arc::clone(&self.owner);
             let context = self.context;
             let entry = Arc::clone(&self.entry);
-            let attempt = owner.with_completion_submit(|| {
-                owner.ensure_public_owner()?;
-                let operation = self.operation.as_mut().expect("active request");
-                submit_request_attempt(operation, &entry, context)
-            });
+            let attempt = owner
+                .ensure_public_owner()
+                .map_err(RequestAttemptError::from)
+                .and_then(|()| {
+                    let operation = self.operation.as_mut().expect("active request");
+                    submit_request_attempt(operation, &entry, context)
+                });
             match attempt {
                 Ok(RequestAttempt::Admitted) => {
                     self.operation.take();
@@ -281,7 +275,10 @@ fn validate_request(operation: &RequestOpStorage) -> Result<(), SubmitError> {
             libc::EINVAL,
         ))
     } else if operation.routed.handle().is_null() {
-        Err(submit_error_from_errno(libc::ECANCELED))
+        Err(SubmitError::new(
+            SubmitResult::InternalError,
+            libc::ECANCELED,
+        ))
     } else {
         Ok(())
     }
@@ -300,7 +297,8 @@ fn submit_request_attempt(
     let mut completion_id = 0;
     let handle = operation.routed.handle();
     if handle.is_null() {
-        return Err(RequestAttemptError::without_token(submit_error_from_errno(
+        return Err(RequestAttemptError::without_token(SubmitError::new(
+            SubmitResult::InternalError,
             libc::ECANCELED,
         )));
     }
@@ -322,7 +320,7 @@ fn submit_request_attempt(
         entry.publish_request(completion_id);
         return Ok(RequestAttempt::Admitted);
     }
-    if rc == SubmitResult::Backpressured as i32 && completion_id != 0 {
+    if is_writable_wait(rc, errno, completion_id) {
         entry.publish_writable(completion_id);
         return Ok(RequestAttempt::Waiting);
     }

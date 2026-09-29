@@ -71,7 +71,7 @@ export class ReceiveSocket extends ConnectableSocket {
         ? native.socketRecvMessageNoWait(this.receiveHandle())
         : native.socketRecvMessage(this.receiveHandle(), flags | 0);
     } catch (error) {
-      throw recvNativeError(error, flags, 'recv failed');
+      throw recvNativeError(error, 'recv failed');
     }
     if (raw == null) return false;
     materializeReceivedInto(result, raw);
@@ -122,7 +122,7 @@ export class PublisherSocket extends ConnectableSocket {
           normalized
         ) as number;
       } catch (error) {
-        throw submitNativeError(error, flags, 'publish failed');
+        throw submitNativeError(error, 'publish failed');
       }
       if (result === SubmitResult.Ok) return true;
       if (result === SubmitResult.Backpressured) return false;
@@ -166,7 +166,7 @@ export class SubscriberSocket extends ConnectableSocket {
         ? native.socketTrySubscribeMessage(this.receiveHandle())
         : native.socketSubscribeMessage(this.receiveHandle(), flags | 0);
     } catch (error) {
-      throw recvNativeError(error, flags, 'subscribe failed');
+      throw recvNativeError(error, 'subscribe failed');
     }
     if (!raw) {
       return hasResult ? false : null;
@@ -240,7 +240,7 @@ export class RoutedMessageSocket extends ConnectableSocket {
             routingIdStorage
           );
     } catch (error) {
-      throw recvNativeError(error, flags, 'recv failed');
+      throw recvNativeError(error, 'recv failed');
     }
     if (raw == null) return false;
     materializeRoutedReceivedInto(result, raw, this.receivedOperations);

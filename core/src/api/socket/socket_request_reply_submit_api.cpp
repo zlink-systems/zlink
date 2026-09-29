@@ -264,6 +264,7 @@ struct request_admission_failure_ctx_t
     reqrep::pending_request_identity_t identity;
     zlink_completion_id_t *completion_id_out;
     zlink::socket_completion::request_writable_wait_t *request_wait;
+    uint64_t wait_deadline_ns;
 };
 
 zlink_submit_result_t finish_dontwait_request_admission_failure (
@@ -281,7 +282,8 @@ zlink_submit_result_t finish_dontwait_request_admission_failure (
 
     if (ctx_.socket->register_send_writable_wait_after_failure (
           normalized_errno, ctx_.peer_rid, ctx_.user_context,
-          ctx_.completion_id_out, ctx_.request_wait)
+          ctx_.completion_id_out, ctx_.request_wait,
+          ctx_.wait_deadline_ns)
         != 0)
         return zlink::submit_result_internal::from_errno (errno);
     return ZLINK_SUBMIT_BACKPRESSURED;
@@ -548,6 +550,11 @@ zlink_submit_result_t submit_request_record (
   uint32_t timeout_ms_, void *user_context_,
   zlink_completion_id_t *completion_id_out_)
 {
+    const int send_timeout_ms = handle_.socket->send_timeout_ms ();
+    const uint64_t wait_deadline_ns = send_timeout_ms < 0
+      ? 0
+      : zlink::request_timeout::deadline_after_ms (
+          static_cast<uint32_t> (send_timeout_ms));
     if (message_has_group (&parts_[0])) {
         errno = EINVAL;
         return ZLINK_SUBMIT_INVALID_ARGUMENT;
@@ -585,6 +592,7 @@ zlink_submit_result_t submit_request_record (
             failure_ctx.identity = pending_token.identity;
             failure_ctx.completion_id_out = completion_id_out_;
             failure_ctx.request_wait = &request_wait;
+            failure_ctx.wait_deadline_ns = wait_deadline_ns;
             return finish_dontwait_request_admission_failure (
               failure_ctx, saved_errno);
         }

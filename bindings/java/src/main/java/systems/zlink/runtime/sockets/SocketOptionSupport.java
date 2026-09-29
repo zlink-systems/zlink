@@ -11,7 +11,6 @@ import java.nio.charset.StandardCharsets;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ConfigResult;
 import systems.zlink.contracts.errors.ZlinkConfigException;
-import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.runtime.nativeapi.InternalAccess;
 import systems.zlink.runtime.nativeapi.Native;
 import systems.zlink.runtime.nativeapi.NativeIntOptions;
@@ -68,7 +67,7 @@ final class SocketOptionSupport {
                 route.nativeCommonOptionId(), value, len);
         };
         if (rc != 0) {
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
         }
     }
 
@@ -123,7 +122,7 @@ final class SocketOptionSupport {
             var route = optionRoute(optionId);
             int rc = dispatchGet(route, buf, len);
             if (rc != 0) {
-                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+                throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
             }
             long actualLong = len.get(ValueLayout.JAVA_LONG, 0);
             if (actualLong < 0) {
@@ -153,7 +152,7 @@ final class SocketOptionSupport {
             var route = optionRoute(optionId);
             int rc = dispatchGet(route, buf, len);
             if (rc != 0) {
-                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+                throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
             }
             return buf.get(ValueLayout.JAVA_INT, 0);
         }
@@ -196,7 +195,7 @@ final class SocketOptionSupport {
         }
         int rc = Native.setRoutingId(socket.handle(), buf, length);
         if (rc != 0) {
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
         }
     }
 
@@ -213,7 +212,7 @@ final class SocketOptionSupport {
                 NativeLayouts.ROUTING_ID_LAYOUT);
             int rc = Native.getRoutingId(socket.handle(), outRid);
             if (rc != 0) {
-                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+                throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
             }
             int size = outRid.get(ValueLayout.JAVA_BYTE,
                 NativeLayouts.ROUTING_ID_SIZE_OFFSET) & 0xFF;
@@ -239,8 +238,7 @@ final class SocketOptionSupport {
             int rc = subscribe ? Native.setSubscription(socket.handle(), filter)
                 : Native.unsetSubscription(socket.handle(), filter);
             if (rc != 0) {
-                throw ZlinkException.fromLastError(
-                    systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+                throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
             }
         }
     }
@@ -253,7 +251,7 @@ final class SocketOptionSupport {
             var route = optionRoute(optionId);
             int rc = dispatchGet(route, buf, len);
             if (rc != 0) {
-                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+                throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
             }
             return buf.get(ValueLayout.JAVA_LONG, 0);
         }

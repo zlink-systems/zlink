@@ -4,7 +4,10 @@ import {
   PollEventFlag,
   type PollEventFlagValue,
 } from '../../contracts/sockets/socket_constants';
+import { constants } from 'node:os';
+import { ConfigError, ConfigResult } from '../../contracts/errors/errors';
 import { createError, isTerminationErrno } from '../errors/error_mapping';
+import { withRuntimeErrorMessage } from '../errors/error_state';
 import {
   closeCall,
   configCall,
@@ -45,15 +48,15 @@ function validateSlot(slot: number): number {
   return slot;
 }
 
+// A second PollCompletion owner is a binding-local lifecycle conflict; it has
+// no Core result and is reported as the poller configuration state it violates.
 function acquireCompletionOwner(owner: CompletionOwner, poller: Poller): boolean {
   try {
     return owner.transferToPublic(poller);
   } catch (error) {
-    throw createError(
-      'config',
-      16,
-      nativeErrorMessage(error, 'poller completion ownership transfer failed')
-    );
+    throw withRuntimeErrorMessage(
+      new ConfigError(ConfigResult.InvalidState, constants.errno.EBUSY),
+      nativeErrorMessage(error, 'poller completion ownership transfer failed'));
   }
 }
 

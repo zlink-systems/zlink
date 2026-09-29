@@ -7,43 +7,29 @@ import (
 	"testing"
 )
 
-func TestSendTerminalErrorPreservesCauseCategory(t *testing.T) {
+func TestSendCompletionErrorPreservesResult(t *testing.T) {
 	tests := []struct {
-		name   string
-		errno  int
-		result SubmitResult
+		name          string
+		sendResult    SendCompleteResult
+		errno         int
+		result        SubmitResult
+		expectedErrno int
 	}{
-		{name: "route removed", errno: int(syscall.ENOENT), result: SubmitNotFound},
-		{name: "socket shutdown", errno: int(syscall.ESHUTDOWN), result: SubmitTerminated},
-		{name: "context terminated", errno: contextTerminatedErrno, result: SubmitTerminated},
+		{name: "route removed", sendResult: SendNotFound, errno: int(syscall.ENOENT), result: SubmitNotFound},
+		{name: "stream disconnected", sendResult: SendNotConnected, errno: int(syscall.ENOTCONN), result: SubmitNotConnected},
+		{name: "send timed out", sendResult: SendTimedOut, errno: int(syscall.EAGAIN), result: SubmitBackpressured},
+		{name: "unknown result", sendResult: SendCompleteResult(999), errno: int(syscall.ENOENT), result: SubmitInternalError, expectedErrno: int(syscall.EPROTO)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var submitErr *SubmitError
-			err := sendTerminalError(test.errno)
-			if !errors.As(err, &submitErr) || submitErr.Result != test.result || submitErr.InternalErrno() != test.errno {
-				t.Fatalf("sendTerminalError(%d) = %v, want result %d with original errno", test.errno, err, test.result)
+			err := sendCompletionError(test.sendResult, test.errno)
+			expectedErrno := test.expectedErrno
+			if expectedErrno == 0 {
+				expectedErrno = test.errno
 			}
-		})
-	}
-}
-
-func TestRequestTerminalErrorPreservesCauseCategory(t *testing.T) {
-	tests := []struct {
-		name   string
-		errno  int
-		result RequestResult
-	}{
-		{name: "route removed", errno: int(syscall.ENOENT), result: RequestNotFound},
-		{name: "socket shutdown", errno: int(syscall.ESHUTDOWN), result: RequestTerminated},
-		{name: "context terminated", errno: contextTerminatedErrno, result: RequestTerminated},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			var requestErr *RequestError
-			err := requestTerminalError(test.errno)
-			if !errors.As(err, &requestErr) || requestErr.Result != test.result || requestErr.InternalErrno() != test.errno {
-				t.Fatalf("requestTerminalError(%d) = %v, want result %d with original errno", test.errno, err, test.result)
+			if !errors.As(err, &submitErr) || submitErr.Result != test.result || submitErr.InternalErrno() != expectedErrno {
+				t.Fatalf("sendCompletionError(%d) = %v, want result %d with errno %d", test.sendResult, err, test.result, expectedErrno)
 			}
 		})
 	}
@@ -132,9 +118,9 @@ func TestImmediateManagedSendAllocationBudget(t *testing.T) {
 	exchange()
 	// Two public input messages, the builder, retained native packet and receive
 	// wrappers are included. The pre-optimization path allocated 32 objects;
-	// admitting a send must not reintroduce completion entries/channels/handles.
-	if allocations := testing.AllocsPerRun(100, exchange); allocations > 22 {
-		t.Fatalf("immediate two-part send/receive allocated %.0f objects, budget 22", allocations)
+	// admitting an immediate send must not allocate a completion entry.
+	if allocations := testing.AllocsPerRun(100, exchange); allocations > 17 {
+		t.Fatalf("immediate two-part send/receive allocated %.0f objects, budget 17", allocations)
 	}
 }
 

@@ -3,6 +3,7 @@
 #define ZLINK_CPP_RUNTIME_NATIVE_MESSAGE_ACCESS_HPP_INCLUDED
 
 #include <zlink/Contracts/Messaging/message.hpp>
+#include <zlink/Contracts/Errors/errors.hpp>
 
 #include <zlink.h>
 
@@ -56,9 +57,9 @@ inline void adopt_native_message (message_t &message_, zlink_msg_t *src_)
     if (!src_)
         return;
     message_access_t::close_noexcept (message_);
-    *message_access_t::native (message_) = *src_;
-    if (zlink_msg_init (src_) != 0)
-        return;
+    const int rc = zlink_msg_adopt (message_access_t::native (message_), src_);
+    if (rc != 0)
+        throw config_error_t (static_cast<config_result_t> (rc), zlink_errno ());
     message_access_t::valid (message_) = true;
     message_access_t::has_payload (message_) = zlink_msg_size (
       message_access_t::native (message_)) > 0;
