@@ -115,7 +115,7 @@ STREAM 송신은 `part_count_ == 1`만 허용한다. 다른 수는
 wire framing으로 정하며, PACKET 수신의 header/body는 [§6](#6-packet-receive와-framing)의
 한 packet을 구성한다.
 
-STREAM SEND의 대기 토큰은 지정한 RID에 묶인다. 물리 연결이 끊기면 그 RID의 토큰은 `ZLINK_SEND_TERMINAL`+`ENOTCONN`인 WRITABLE record로 끝나고 재연결은 새 RID를 사용한다. 그 밖의 SEND 결과, WRITABLE 재제출과 replay 금지는 [Socket 공통 whole-message send](README.ko.md#whole-message-send와-pending-admission)를 따른다.
+STREAM SEND의 대기 토큰은 지정한 RID에 묶인다. 물리 연결이 끊기면 그 RID의 토큰은 `ZLINK_SEND_NOT_CONNECTED`+`ENOTCONN`인 WRITABLE record로 끝나고 재연결은 새 RID를 사용한다. 그 밖의 SEND 결과, WRITABLE 재제출과 replay 금지는 [Socket 공통 whole-message send](README.ko.md#whole-message-send와-pending-admission)를 따른다.
 
 여러 client가 연결된 STREAM에서 `ZLINK_POLLOUT`은 socket 전체의 집계 readiness이며
 특정 `target_rid_`의 credit을 예약하거나 그 RID를 event에 싣지 않는다. 다른 client가
@@ -229,7 +229,7 @@ Queue는 `RCVHWM`을 따르며 가득 차면 pipe read를 멈춰 backpressure를
 
 STREAM send가 nonzero wait token을 반환하면 `zlink_completion_recv()`에서 그 token의
 `ZLINK_COMPLETION_WRITABLE` record를 정확히 한 번 받는다 — 같은 RID에 write credit이 생기면
-`ZLINK_SEND_ADMITTED`, `zlink_disconnect_rid()`로 RID를 명시적으로 제거하면 `ZLINK_SEND_TERMINAL`이다.
+`ZLINK_SEND_ADMITTED`, 물리 연결이 끊기면 `ZLINK_SEND_NOT_CONNECTED`, `zlink_disconnect_rid()`로 RID를 명시적으로 제거하면 `ZLINK_SEND_NOT_FOUND`다.
 Socket close는 토큰을 내부에서 끝내고 record를 전달하지 않으므로 필요한 결과는 close 전에 받는다. `peer_rid`는 submit에 지정한 logical RID snapshot이며 reconnect 뒤의
 physical connection identity로 바뀌지 않는다. Completion drain, reservation 상한과 close
 계약은 [소켓 공통](README.ko.md#completion-pull과-ownership)이 소유한다.

@@ -448,7 +448,7 @@ Raw subscription과 XPUB의 `BUFFER_TOO_SMALL`에서는 필요한 topic 길이�
 - 내부 실행 경로는 계속 `int errno`를 사용한다.
 - 공개 C API는 함수 반환 실패를 **함수 범주별 8개 typed result enum**으로 정규화한다. 정확한 enum은
   함수 범주에 따라 달라진다. completion record의 SEND 상태에는 이와 별도인
-  `zlink_send_complete_result_t`(`ZLINK_SEND_ADMITTED = 0`, `ZLINK_SEND_TERMINAL = 202`)를 쓴다.
+  `zlink_send_complete_result_t`([Socket 공통 completion record](socket/README.ko.md#completion-result와-record))를 쓴다.
   - `zlink_submit_result_t` — send / publish / request submit / reply submit
   - `zlink_request_result_t` — request completion record
   - `zlink_recv_result_t` — recv / subscribe / monitor recv / timer recv
@@ -459,10 +459,8 @@ Raw subscription과 XPUB의 `BUFFER_TOO_SMALL`에서는 필요한 topic 길이�
   - `zlink_config_result_t` — option set/get, snapshot, poller mutation,
     message lifecycle, timer config
 - 0이 아닌 result enum 값은 family별 번호 대역(1-13, 101-113, 201-208, 301-306, 401-404, 501-505,
-  601-608, 701-709)을 사용해 서로 겹치지 않는다. 단 `zlink_send_complete_result_t`의
-  `ZLINK_SEND_TERMINAL`(202)은 `ZLINK_RECV_BUSY`(202)와 같은 숫자이므로, 0이 아닌 `int` 값만으로
-  출처를 식별하려면 그 값이 함수 반환값인지 completion record의 `send_result`인지를 함께 알아야
-  한다.
+  601-608, 701-709)을 사용하고, completion record의 `zlink_send_complete_result_t`는 801-802을
+  사용해 서로 겹치지 않는다.
 - 정식 enum 목록은 위의 [Result와 errno 대응](#result와-errno-대응) 절을 참조한다.
 - Request completion queue는 내부 errno를 `from_errno` 정규화를 거쳐 `zlink_request_result_t`로 전달하며, 이 completion channel은 계약상
   `zlink_request_result_t`로 정규화되어 있다.
