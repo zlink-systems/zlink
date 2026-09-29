@@ -196,7 +196,7 @@ test('M6B command and flag constants match the generated service wire schema', a
 
 test('stale native bound-session binding falls through to the routed session target', async () => {
   const adapter = meshActorSessionNodeAdapter({
-    sendActorBoundSession: async () => SubmitResult.InvalidState
+    sendActorBoundSession: async () => SubmitResult.NotFound
   } as unknown as ZLinkBackendMeshNode);
 
   assert.deepEqual(
