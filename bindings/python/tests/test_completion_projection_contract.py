@@ -95,7 +95,6 @@ def test_writable_delivers_to_registered_waiter_without_reading_rid_echo(
         result = owner.drain()
 
     assert result.total_count == 1
-    assert result.request_count == 0
     assert len(receives) == 2
     close.assert_called_once()
     retry.assert_called_once_with(entry)
