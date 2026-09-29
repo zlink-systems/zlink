@@ -23,8 +23,8 @@ command endpoints separate.
 
 The inputs are exactly the environment variables in spec [§11](../README.en.md#11-runner-inputs-and-result-layout). There are no CLI options or positional arguments. The Kotlin runner measures only the §10.5 supplementary cells
 (`request-backpressure`, `1024`) and rejects other `PATTERNS` and `PAYLOAD_SIZES`. Unless
-`SKIP_BUILD=1`, the runner builds first with `./gradlew --no-daemon --max-workers=1 assemble
-installDist`.
+`SKIP_BUILD=1`, the runner builds first with `java/build.sh` (`./gradlew --no-daemon --max-workers=1 assemble
+installDist`, Kotlin included).
 
 ```bash
 cd framework/bench/grpc/java

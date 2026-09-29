@@ -11,8 +11,7 @@ CONFIGURATION=Release
 WARMUP_CALLS=1000
 
 if [[ "${SKIP_BUILD}" != 1 ]]; then
-  bench_require_low_load
-  dotnet build "${ROOT_DIR}/WithGrpcBench.sln" -c "${CONFIGURATION}"
+  "${ROOT_DIR}/build.sh"
 fi
 
 check_ports_free 5200 5219

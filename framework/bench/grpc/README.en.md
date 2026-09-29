@@ -651,7 +651,7 @@ difference doesn't show in the result table.
 | `PATTERNS` | `request-serial,request-backpressure,send-saturation` | Patterns of §2 |
 | `IMPLEMENTATIONS` | Every implementation of the language (§1.1, §1.2) | Implementations to measure |
 | `RUNS` | `3` | Number of runs. The G5 reproducibility check needs three runs |
-| `SKIP_BUILD` | `0` | `1` skips the build and uses the artifacts already built |
+| `SKIP_BUILD` | `0` | `0` builds with the language's `<lang>/build.sh` before measuring; `1` uses the artifacts already built |
 
 - `<lang>` is one of `c`, `cpp`, `dotnet`, `java`, `kotlin`, and `node`.
 - The Kotlin runner measures only the supplementary cells of §10.5. For this runner the defaults of

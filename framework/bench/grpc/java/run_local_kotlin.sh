@@ -13,8 +13,7 @@ export PATH="${JAVA_HOME}/bin:${PATH}"
 WARMUP_SECONDS=20
 
 if [[ "${SKIP_BUILD}" != 1 ]]; then
-  bench_require_low_load
-  "${HERE}/gradlew" --no-daemon --max-workers=1 assemble installDist
+  "${HERE}/build.sh"
 fi
 
 GRPC_BIN="${HERE}/grpc-server/build/install/bench-grpc-server/bin/bench-grpc-server"

@@ -18,7 +18,7 @@ All three use the same `BenchPayload` protobuf DTO and the 29-byte header in fro
 
 ## 2. How to run
 
-The inputs are exactly the environment variables in spec [§11](../README.en.md#11-runner-inputs-and-result-layout). There are no CLI options or positional arguments. Unless `SKIP_BUILD=1`, the runner builds `WithGrpcBench.sln` in Release. The binding
+The inputs are exactly the environment variables in spec [§11](../README.en.md#11-runner-inputs-and-result-layout). There are no CLI options or positional arguments. Unless `SKIP_BUILD=1`, the runner builds `WithGrpcBench.sln` in Release with `dotnet/build.sh`. The binding
 is the published package; the framework is the repository source. Measurements always go through
 the perf ticket queue.
 

@@ -19,7 +19,7 @@ ClientServer channels).
 
 ## 2. How to run
 
-The inputs are exactly the environment variables in spec [§11](../README.en.md#11-runner-inputs-and-result-layout). There are no CLI options or positional arguments. Unless `SKIP_BUILD=1`, the runner builds first. The build fetches the C++ Framework
+The inputs are exactly the environment variables in spec [§11](../README.en.md#11-runner-inputs-and-result-layout). There are no CLI options or positional arguments. Unless `SKIP_BUILD=1`, the runner builds first with `cpp/build.sh`. The build fetches the C++ Framework
 manifest (`framework/languages/cpp/vcpkg.json`) with the `bench` feature through the vcpkg that
 `VCPKG_ROOT` points to. gRPC and protobuf come from the same manifest, so one process links one
 protobuf. The ZLink binding and Core come from the local package root (default `.artifacts/wsl`),

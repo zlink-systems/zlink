@@ -17,7 +17,7 @@ gRPC and raw use the same `BenchPayload` protobuf body and the 29-byte header in
 
 ## 2. How to run
 
-The inputs are exactly the environment variables in spec [§11](../README.en.md#11-runner-inputs-and-result-layout). There are no CLI options or positional arguments. Unless `SKIP_BUILD=1`, the runner first runs `npm ci` and `npm run build`.
+The inputs are exactly the environment variables in spec [§11](../README.en.md#11-runner-inputs-and-result-layout). There are no CLI options or positional arguments. Unless `SKIP_BUILD=1`, the runner first builds with `node/build.sh` (`npm ci`, `npm run build`).
 Measurements always go through the perf ticket queue.
 
 ```bash

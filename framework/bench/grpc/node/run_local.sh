@@ -17,9 +17,7 @@ NODE_PORT_LOW=5220
 NODE_PORT_HIGH=5239
 
 if [[ "${SKIP_BUILD}" != 1 ]]; then
-  bench_require_low_load
-  npm ci
-  npm run build
+  "${HERE}/build.sh"
 fi
 
 check_ports_free "${NODE_PORT_LOW}" "${NODE_PORT_HIGH}"

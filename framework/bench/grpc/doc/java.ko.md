@@ -21,7 +21,7 @@ envelope와 protobuf body 두 part를 보내며 request와 command endpoint를 �
 
 입력은 규격 [§11](../README.ko.md#11-runner-입력과-결과-배치)의 환경 변수가 전부다. CLI 옵션과 위치 인자는 없다. Kotlin runner는 §10.5의 보조 셀(`request-backpressure`, `1024`)만 재며 다른
 `PATTERNS`·`PAYLOAD_SIZES`는 거부한다. runner는 `SKIP_BUILD=1`이 아니면 먼저
-`./gradlew --no-daemon --max-workers=1 assemble installDist`로 빌드한다.
+`java/build.sh`(`./gradlew --no-daemon --max-workers=1 assemble installDist`, Kotlin 포함)로 빌드한다.
 
 ```bash
 cd framework/bench/grpc/java

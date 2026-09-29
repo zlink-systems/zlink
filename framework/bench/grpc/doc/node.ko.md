@@ -16,7 +16,7 @@ framework envelope와 protobuf body를 두 part로 보낸다.
 
 ## 2. 실행 방법
 
-입력은 규격 [§11](../README.ko.md#11-runner-입력과-결과-배치)의 환경 변수가 전부다. CLI 옵션과 위치 인자는 없다. runner는 `SKIP_BUILD=1`이 아니면 먼저 `npm ci`와 `npm run build`를 실행한다.
+입력은 규격 [§11](../README.ko.md#11-runner-입력과-결과-배치)의 환경 변수가 전부다. CLI 옵션과 위치 인자는 없다. runner는 `SKIP_BUILD=1`이 아니면 먼저 `node/build.sh`(`npm ci`, `npm run build`)로 빌드한다.
 측정은 항상 perf 티켓 큐로 낸다.
 
 ```bash

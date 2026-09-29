@@ -7,27 +7,12 @@ REPO_ROOT="$(cd "${HERE}/../../../.." && pwd)"
 source "${HERE}/../runner_common.sh"
 bench_init c "grpc-c,zlink-c" "request-serial,request-backpressure,send-saturation" "1024,4096"
 
-# README §7.2 formula 1은 `zlink-<lang> / zlink-c`다. 두 행이 같은 조건에서 잰 값이어야
-# 그 비율이 binding 계층 비용이 된다. 언어 행은 모두 로컬 패키지의 Core를 로드하므로
-# C 기준도 같은 바이너리를 써야 한다 — `core/build`의 개발 빌드와는 실측 6% 차이가
-# 난다(#308: 600.2 대 636.6 KOPS, latency 13.1 대 8.1 ms).
-ZLINK_LOCAL_PACKAGE_ROOT="${ZLINK_LOCAL_PACKAGE_ROOT:-${REPO_ROOT}/.artifacts/wsl}"
+# BENCH_CORE_VERSION은 build.sh가 링크한 Core 패키지 버전이다(build.sh가 같은 기본값을 쓴다).
 ZLINK_C_CORE_VERSION="${ZLINK_C_CORE_VERSION:-$(sed -n 's/^LIBZLINK_VERSION=//p' "${REPO_ROOT}/VERSION")}"
-ZLINK_C_CORE_DEFAULT_PREFIX="${ZLINK_LOCAL_PACKAGE_ROOT}/install/zlink-core/${ZLINK_C_CORE_VERSION}"
 BUILD_DIR="${BUILD_DIR:-${HERE}/build}"
 
 if [[ "${SKIP_BUILD}" != 1 ]]; then
-  if [[ ! -d "${ZLINK_C_CORE_DEFAULT_PREFIX}" && -z "${ZLINK_CORE_PACKAGE_PREFIX:-}" ]]; then
-    echo "C 기준 벤치가 쓸 Core 패키지가 없다: ${ZLINK_C_CORE_DEFAULT_PREFIX}" >&2
-    echo "ZLINK_CORE_PACKAGE_PREFIX로 명시하거나 로컬 패키지를 먼저 만들어라." >&2
-    exit 1
-  fi
-  bench_require_low_load
-  cmake -S "${HERE}" -B "${BUILD_DIR}" \
-    -DZLINK_C_CORE_BUILD_DIR="${ZLINK_CORE_PACKAGE_PREFIX:-${ZLINK_C_CORE_DEFAULT_PREFIX}}"
-  cmake --build "${BUILD_DIR}" --target \
-    bench_c_with_grpc_zlink_server bench_c_with_grpc_zlink_client \
-    bench_c_with_grpc_grpc_server bench_c_with_grpc_grpc_client -j4
+  BUILD_DIR="${BUILD_DIR}" ZLINK_C_CORE_VERSION="${ZLINK_C_CORE_VERSION}" "${HERE}/build.sh"
 fi
 
 for binary in zlink_server zlink_client grpc_server grpc_client; do

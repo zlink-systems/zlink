@@ -606,7 +606,7 @@ runner는 여섯 개다: `c/run_local.sh`, `cpp/run_local.sh`, `dotnet/run_local
 | `PATTERNS` | `request-serial,request-backpressure,send-saturation` | §2의 패턴 |
 | `IMPLEMENTATIONS` | 그 언어의 구현 전부(§1.1, §1.2) | 측정할 구현 |
 | `RUNS` | `3` | run 수. G5 재현성 판정이 run 3개를 요구한다 |
-| `SKIP_BUILD` | `0` | `1`이면 빌드를 생략하고 이미 빌드된 산출물을 쓴다 |
+| `SKIP_BUILD` | `0` | `0`이면 측정 전에 그 언어의 `<lang>/build.sh`로 빌드하고, `1`이면 이미 빌드된 산출물을 쓴다 |
 
 - `<lang>`은 `c`, `cpp`, `dotnet`, `java`, `kotlin`, `node` 중 하나다.
 - Kotlin runner는 §10.5의 보조 셀만 측정한다. 이 runner에서 `PATTERNS`와 `PAYLOAD_SIZES`의

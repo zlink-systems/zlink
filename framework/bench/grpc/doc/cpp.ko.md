@@ -17,7 +17,7 @@ RouteMesh용 `route_client_t`를 쓴다(`channel_client_t`는 ClientServer 채�
 
 ## 2. 실행 방법
 
-입력은 규격 [§11](../README.ko.md#11-runner-입력과-결과-배치)의 환경 변수가 전부다. CLI 옵션과 위치 인자는 없다. runner는 `SKIP_BUILD=1`이 아니면 먼저 빌드한다. 빌드는 `VCPKG_ROOT`가 가리키는 vcpkg로 C++
+입력은 규격 [§11](../README.ko.md#11-runner-입력과-결과-배치)의 환경 변수가 전부다. CLI 옵션과 위치 인자는 없다. runner는 `SKIP_BUILD=1`이 아니면 먼저 `cpp/build.sh`로 빌드한다. 빌드는 `VCPKG_ROOT`가 가리키는 vcpkg로 C++
 Framework의 manifest(`framework/languages/cpp/vcpkg.json`)를 `bench` feature와 함께 받는다. gRPC와
 protobuf도 이 manifest에서 오므로 한 process가 protobuf 하나만 쓴다. ZLink binding과 Core는 local
 package root(기본 `.artifacts/wsl`)의 `install/zlink-cpp/<binding 버전>`과
