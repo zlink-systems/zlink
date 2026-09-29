@@ -335,7 +335,7 @@ export class ZLinkActorSessionBindingRegistry<
     );
   }
 
-  private async replaceAndReleaseSealCore(
+  private replaceAndReleaseSealCore(
     previous: ZLinkActorSessionRoute<TContext, TActor>,
     context: TContext,
     actor: TActor,
@@ -344,7 +344,7 @@ export class ZLinkActorSessionBindingRegistry<
     authorityFence?: ZLinkActorSessionAuthorityFence,
     sessionIdentity?: string,
     commitActor?: () => void
-  ): Promise<void> {
+  ): void {
     if (previous.sealId !== sealId) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.ActorLocationStale,

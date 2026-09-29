@@ -38,9 +38,7 @@ export class ZLinkSpotActivationRegistry {
   private readonly lifecycleMetrics: ZLinkSpotLifecycleMetrics;
   private activeScan: Iterator<ZLinkSpotActivation> | undefined;
 
-  constructor(
-    metrics?: import('../diagnostics').ZLinkRuntimeMetrics
-  ) {
+  constructor(metrics?: import('../diagnostics').ZLinkRuntimeMetrics) {
     this.lifecycleMetrics = new ZLinkSpotLifecycleMetrics(metrics);
   }
 
@@ -55,9 +53,7 @@ export class ZLinkSpotActivationRegistry {
 
   resolve(meshName: string, spotId: RoutingId): ZLinkSpotActivation | undefined {
     const key = spotActivationKey(meshName, spotId);
-    return this.staged.has(key)
-      ? undefined
-      : this.activations.get(key);
+    return this.staged.has(key) ? undefined : this.activations.get(key);
   }
 
   resolveUnique(spotId: RoutingId): ZLinkSpotActivation | undefined {
@@ -71,10 +67,7 @@ export class ZLinkSpotActivationRegistry {
 
   has(meshName: string, spotId: RoutingId): boolean {
     const key = spotActivationKey(meshName, spotId);
-    return (
-      !this.staged.has(key) &&
-      this.activations.has(key)
-    );
+    return !this.staged.has(key) && this.activations.has(key);
   }
 
   list(meshName: string): readonly ZLinkSpotInfo[] {
@@ -82,9 +75,7 @@ export class ZLinkSpotActivationRegistry {
       .filter((activation) => {
         if (activation.meshName !== meshName) return false;
         const key = spotActivationKey(activation.meshName, activation.spotId);
-        return (
-          !this.staged.has(key)
-        );
+        return !this.staged.has(key);
       })
       .map((activation) => String(activation.spotId))
       .sort((left, right) => left.localeCompare(right))
