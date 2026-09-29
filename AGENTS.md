@@ -13,6 +13,8 @@
   간단한 작업은 별도 worktree를 생략할 수 있다.
 - **작업 중에 드러난 결함·누락은 새 Issue를 만들지 않고 그 작업의 Issue·PR 안에서 처리한다.** 여러 언어에 걸친
   결함도 Issue 하나에서 함께 고친다. 새 Issue는 이번 릴리스에서 다루지 않고 넘기는 일에만 연다.
+  한 Issue의 작업이 커서 나눠 진행할 때는 그 Issue를 에픽으로 두고 GitHub 하위 이슈(sub-issue)로 나누며,
+  진행 상태는 각 하위 이슈가 소유한다.
 - 작업 상태가 바뀔 때마다(시작, 리뷰 대기, 머지, 보류) [Project 보드](https://github.com/users/zlink-systems/projects/1/views/10)의
   상태를 바로 갱신한다. 새 Issue는 만들 때 보드에 올린다.
 - worktree 위치와 정리 절차는 [`doc/principal/dev/worktree-setup.ko.md`](./doc/principal/dev/worktree-setup.ko.md)를 따른다.
