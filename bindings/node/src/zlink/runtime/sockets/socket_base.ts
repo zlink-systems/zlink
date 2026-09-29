@@ -57,6 +57,16 @@ export class SocketBase extends NativeHandle {
     });
   }
 
+  disconnectRid(routingId: RoutingId): void {
+    const normalizedRoutingId = normalizeRoutingId(routingId);
+    connectCall('socket disconnect by routing id failed', () => {
+      requireNative().socketDisconnectRid(
+        getNativeHandle(this),
+        normalizedRoutingId
+      );
+    });
+  }
+
   setTlsServer(cert: string, key: string, requireClientCert: boolean = false): void {
     const normalizedCert = validateCString(cert, 'cert', Number.MAX_SAFE_INTEGER);
     const normalizedKey = validateCString(key, 'key', Number.MAX_SAFE_INTEGER);
@@ -155,16 +165,6 @@ export class ConnectableSocket extends SocketBase {
     const normalizedEndpoint = validateCString(endpoint, 'endpoint');
     connectCall('socket disconnect failed', () => {
       requireNative().socketDisconnect(getNativeHandle(this), normalizedEndpoint);
-    });
-  }
-
-  disconnectRid(routingId: RoutingId): void {
-    const normalizedRoutingId = normalizeRoutingId(routingId);
-    connectCall('socket disconnect by routing id failed', () => {
-      requireNative().socketDisconnectRid(
-        getNativeHandle(this),
-        normalizedRoutingId
-      );
     });
   }
 

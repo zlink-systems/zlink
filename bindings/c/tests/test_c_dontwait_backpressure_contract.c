@@ -553,7 +553,13 @@ int main (void)
     CHECK (removal_token != 0);
     CHECK (removal_token != wait_token);
     CHECK (check_no_completion (router) == 0);
-    CHECK (zlink_disconnect_rid (router, &target) == ZLINK_CONNECT_OK);
+    zlink_socket_monitor_open_options_t monitor_options;
+    memset (&monitor_options, 0, sizeof (monitor_options));
+    monitor_options.events = ZLINK_SOCKET_MONITOR_EVENT_DISCONNECTED;
+    void *monitor = zlink_socket_monitor_open (router, &monitor_options);
+    CHECK (monitor != NULL);
+    zlink_connect_result_t disconnect_result = zlink_disconnect_rid (router, &target);
+    CHECK (disconnect_result == ZLINK_CONNECT_OK);
     memset (&event, 0, sizeof (event));
     poller_error = ZLINK_CONFIG_INTERNAL_ERROR;
     CHECK (zlink_poller_wait (poller, &event, 1, 5000, &poller_error) == 1);
@@ -568,8 +574,18 @@ int main (void)
     CHECK (memcmp (terminal_writable.peer_rid.data, target.data, target.size) == 0);
     CHECK (terminal_writable.send_result == ZLINK_SEND_NOT_FOUND);
     CHECK (terminal_writable.send_terminal_errno == ENOENT);
+    CHECK (wait_socket (monitor, ZLINK_POLLIN) == 0);
+    zlink_socket_monitor_event_t disconnected;
+    memset (&disconnected, 0, sizeof (disconnected));
+    CHECK (zlink_socket_monitor_recv (monitor, &disconnected, ZLINK_RECV_FLAGS_DONTWAIT)
+           == ZLINK_RECV_OK);
+    CHECK (disconnected.event == ZLINK_EVENT_DISCONNECTED);
+    disconnect_result = zlink_disconnect_rid (router, &target);
+    CHECK (disconnect_result == ZLINK_CONNECT_NOT_FOUND);
     CHECK (check_no_completion (router) == 0);
 
+    CHECK (zlink_monitor_close (&monitor) == ZLINK_CLOSE_OK);
+    CHECK (monitor == NULL);
     CHECK (zlink_poller_remove (poller, router) == ZLINK_CONFIG_OK);
     CHECK (zlink_poller_destroy (&poller) == ZLINK_CLOSE_OK);
     CHECK (poller == NULL);

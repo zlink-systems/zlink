@@ -221,6 +221,73 @@ func TestPublicBackpressuredSendReportsRouteRemoval(t *testing.T) {
 	}
 }
 
+func TestDisconnectRIDReturnsConnectNotFoundAfterPeerRemoval(t *testing.T) {
+	ctx := newContext(t)
+	defer ctx.Close()
+
+	router, err := ctx.RouterSocket()
+	if err != nil {
+		t.Fatalf("RouterSocket() error = %v", err)
+	}
+	defer router.Close()
+	dealer, err := ctx.DealerSocket()
+	if err != nil {
+		t.Fatalf("DealerSocket() error = %v", err)
+	}
+	defer dealer.Close()
+
+	dealerRID := zlink.NewRoutingID([]byte("go-disconnect-result-peer"))
+	if err := dealer.SetRoutingID(dealerRID); err != nil {
+		t.Fatalf("dealer SetRoutingID() error = %v", err)
+	}
+	endpoint := inprocEndpoint("disconnect-rid-result")
+	if err := router.Bind(endpoint); err != nil {
+		t.Fatalf("router Bind() error = %v", err)
+	}
+	if err := dealer.Connect(endpoint); err != nil {
+		t.Fatalf("dealer Connect() error = %v", err)
+	}
+
+	prime, err := dealer.Send().Bytes([]byte("route-prime")).Submit(context.Background())
+	if err != nil {
+		t.Fatalf("dealer prime Submit() error = %v", err)
+	}
+	if err := prime.Admitted(context.Background()); err != nil {
+		t.Fatalf("dealer prime Admitted() error = %v", err)
+	}
+	var received zlink.Received
+	if ok, err := router.Recv(&received, zlink.RecvFlagsNone); err != nil || !ok {
+		t.Fatalf("router prime Recv() = (%v, %v), want (true, nil)", ok, err)
+	}
+	defer received.Close()
+	peerRID := received.RoutingID()
+	if !peerRID.Equal(dealerRID) {
+		t.Fatalf("prime routing id = %v, want %v", peerRID, dealerRID)
+	}
+	monitor, err := zlink.OpenSocketMonitor(router, zlink.MonitorEventDisconnected)
+	if err != nil {
+		t.Fatalf("OpenSocketMonitor(DISCONNECTED) error = %v", err)
+	}
+	defer monitor.Close()
+
+	if err := router.DisconnectRID(peerRID); err != nil {
+		t.Fatalf("DisconnectRID() for connected peer error = %v", err)
+	}
+	event := waitForMonitorEvent(t, monitor, routeWaitLimit)
+	if !event.IsDisconnected() || !event.HasRoutingID() || !event.RoutingID.Equal(peerRID) {
+		t.Fatalf("DISCONNECTED event = %#v, want peer %v", event, peerRID)
+	}
+	err = router.DisconnectRID(peerRID)
+	var connectErr *zlink.ConnectError
+	if !errors.As(err, &connectErr) {
+		t.Fatalf("second DisconnectRID() error = %v, want *ConnectError", err)
+	}
+	if connectErr.Result != zlink.ConnectNotFound || connectErr.Code() != 605 {
+		t.Fatalf("second DisconnectRID() result = %v (code %d), want ConnectNotFound (605)",
+			connectErr.Result, connectErr.Code())
+	}
+}
+
 func TestOwnerlessBackpressuredSendFailsFast(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()

@@ -373,6 +373,7 @@ void test_pending_routed_send_target_removal_is_not_found ()
 
     assert (!pending->ready ());
 
+    zlink::socket_monitor_t monitor = router.monitor_open (zlink::monitor_event::disconnected);
     router.disconnect_rid (dealer_id);
     zlink::poll_event_t event{};
     assert (poller.wait (&event, 1, std::chrono::seconds (5)) == 1);
@@ -386,6 +387,18 @@ void test_pending_routed_send_target_removal_is_not_found ()
           && error.internal_errno () == ENOENT;
     }
     assert (not_found);
+
+    assert (zlink_cpp_contract::wait_for_socket_monitor_event (
+      monitor, static_cast<uint64_t> (zlink::monitor_event::disconnected), 5000));
+    bool missing_rid_is_connect_error = false;
+    try {
+        router.disconnect_rid (dealer_id);
+    }
+    catch (const zlink::connect_error_t &error) {
+        missing_rid_is_connect_error =
+          error.result () == zlink::connect_result_t::not_found && error.code () == 605;
+    }
+    assert (missing_rid_is_connect_error);
     poller.close ();
 }
 
