@@ -8,8 +8,10 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <future>
 #include <limits>
 #include <span>
 #include <string>
@@ -105,6 +107,59 @@ TEST (ZLinkFrameworkOpaqueStoreProviders, ValueConditionFencesBytesButNotVersion
     EXPECT_TRUE (std::holds_alternative<store_write_conflict_t> (write (bytes ("owner"))));
     const auto after_expiry = std::get<store_found_t> (store.read (mutation).result ().value ());
     EXPECT_EQ (before_conflict.value.version.value, after_expiry.value.version.value);
+}
+
+class delayed_renew_write_store_t final : public location_store_t
+{
+  public:
+    task_t<store_read_result_t> read (store_key_t key) override
+    {
+        return inner.read (std::move (key));
+    }
+    task_t<store_scan_result_t> scan (store_scan_request_t request) override
+    {
+        return inner.scan (std::move (request));
+    }
+    task_t<store_write_result_t> write (store_write_request_t request) override
+    {
+        if (!delay_write)
+            return inner.write (std::move (request));
+        pending_request = std::move (request);
+        write_called.set_value ();
+        return pending.task ();
+    }
+    void finish_write ()
+    {
+        auto result = inner.write (std::move (*pending_request)).result ();
+        pending.complete (result);
+    }
+
+    in_memory_location_store_t inner;
+    bool delay_write = false;
+    std::promise<void> write_called;
+    detail::task_completion_source_t<store_write_result_t> pending;
+    std::optional<store_write_request_t> pending_request;
+};
+
+TEST (ZLinkFrameworkOpaqueStoreProviders, RenewReturnsBeforeDelayedProviderWriteCompletes)
+{
+    delayed_renew_write_store_t store;
+    provider_location_repository_t repository (store);
+    const auto claimed = repository.claim_owner_lease ("delayed-owner", 30s).result ().value ();
+    const auto owner = std::get<owner_lease_claimed_t> (claimed).token;
+    auto write_called = store.write_called.get_future ();
+    store.delay_write = true;
+    auto submitted =
+      std::async (std::launch::async, [&] { return repository.renew_owner_lease (owner, 30s); });
+    write_called.wait ();
+    const auto returned_before_completion = submitted.wait_for (0ms);
+    store.finish_write ();
+    auto renewal = submitted.get ();
+    std::atomic_int completions = 0;
+    detail::observe_task_completion (renewal, [&] (const auto &) { ++completions; });
+    EXPECT_EQ (std::future_status::ready, returned_before_completion);
+    EXPECT_TRUE (std::holds_alternative<owner_lease_renewed_t> (renewal.result ().value ()));
+    EXPECT_EQ (1, completions.load ());
 }
 
 class renew_before_conditional_commit_store_t final : public location_store_t
@@ -276,12 +331,12 @@ class creation_terminal_failure_store_t final : public location_store_t
     task_t<store_read_result_t> read (store_key_t key) override
     {
         const auto terminal_key = key.value.starts_with (std::string ("creation-terminal") + '\0');
-        auto result = inner.read (std::move (key));
+        auto result = co_await inner.read (std::move (key));
         if (terminal_key) {
-            if (const auto *missing = std::get_if<store_missing_t> (&result.result ().value ()))
+            if (const auto *missing = std::get_if<store_missing_t> (&result))
                 terminal_read_store_now = missing->store_now;
         }
-        return result;
+        co_return result;
     }
     task_t<store_scan_result_t> scan (store_scan_request_t request) override
     {
@@ -290,24 +345,23 @@ class creation_terminal_failure_store_t final : public location_store_t
     task_t<store_write_result_t> write (store_write_request_t request) override
     {
         if (fault == fault_t::none)
-            return inner.write (std::move (request));
+            co_return co_await inner.write (std::move (request));
         ++writes;
         attempted = request;
         if (fault == fault_t::before_commit)
-            return task_t<store_write_result_t> (result_t<store_write_result_t>::success (
-              store_write_conflict_t{std::chrono::system_clock::now ()}));
+            co_return store_write_result_t{
+              store_write_conflict_t{std::chrono::system_clock::now ()}};
         if (fault == fault_t::between_writes && writes > 1)
-            return task_t<store_write_result_t> (result_t<store_write_result_t>::failure (
-              framework_error_kind_t::internal_failure, "provider failed between writes"));
-        auto applied = inner.write (std::move (request));
-        if (const auto *written = std::get_if<store_write_applied_t> (&applied.result ().value ()))
+            co_return result_t<store_write_result_t>::failure (
+              framework_error_kind_t::internal_failure, "provider failed between writes");
+        auto applied = co_await inner.write (std::move (request));
+        if (const auto *written = std::get_if<store_write_applied_t> (&applied))
             terminal_write_store_now = written->store_now;
         if (fault == fault_t::after_commit) {
-            applied.result ().value ();
-            return task_t<store_write_result_t> (result_t<store_write_result_t>::failure (
-              framework_error_kind_t::internal_failure, "provider lost the atomic write reply"));
+            co_return result_t<store_write_result_t>::failure (
+              framework_error_kind_t::internal_failure, "provider lost the atomic write reply");
         }
-        return applied;
+        co_return applied;
     }
 
     in_memory_location_store_t inner;

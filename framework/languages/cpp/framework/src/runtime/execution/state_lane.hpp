@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/dispatch/offload_executor.hpp"
+#include <zlink/framework/contracts/dispatch/task.hpp>
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
 #include <zlink/framework/detail/infrastructure_wait_context.hpp>
 #endif
@@ -219,6 +220,49 @@ class state_lane_t
 #else
         return run (std::forward<Work> (work));
 #endif
+    }
+
+    template <typename Work>
+    auto run_task (Work &&work) -> task_t<std::invoke_result_t<std::decay_t<Work> &>>
+    {
+        using value_t = std::invoke_result_t<std::decay_t<Work> &>;
+        throw_if_reentrant ();
+        auto completion = std::make_shared<detail::task_completion_source_t<value_t>> ();
+        auto task = completion->task ();
+        if (!enqueue (
+              [this, completion, work = std::forward<Work> (work)] () mutable {
+                  result_t<value_t> result = [&] {
+                      try {
+                          return result_t<value_t>::success (std::invoke (work));
+                      }
+                      catch (const framework_exception_t &error) {
+                          return result_t<value_t>::failure (error.kind (), error.what ());
+                      }
+                      catch (const std::exception &error) {
+                          return result_t<value_t>::failure (
+                            framework_error_kind_t::internal_failure, error.what ());
+                      }
+                      catch (...) {
+                          return result_t<value_t>::failure (
+                            framework_error_kind_t::internal_failure,
+                            "unhandled state lane exception");
+                      }
+                  }();
+                  if (!_executor.try_submit_internal (
+                        [completion, result = std::move (result)] () mutable {
+                            completion->complete (std::move (result));
+                        })) {
+                      completion->complete (result_t<value_t>::failure (
+                        framework_error_kind_t::shutting_down, "state lane is closed"));
+                  }
+              },
+              [completion] (std::exception_ptr) {
+                  completion->complete (result_t<value_t>::failure (
+                    framework_error_kind_t::shutting_down, "state lane is closed"));
+              }))
+            throw std::runtime_error ("state lane is closed");
+        schedule_drain (true);
+        return task;
     }
 
     // Queues synchronous state work without waiting for it.  Its exception is

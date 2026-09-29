@@ -98,17 +98,19 @@ class provider_location_repository_t final : public location_repository_t
         if (lease_ttl <= std::chrono::milliseconds::zero ())
             throw std::invalid_argument ("owner lease TTL must be positive");
         const auto key = key_owner (token.owner_id);
-        auto current = read (key);
+        auto current = co_await _store->read (key);
         const auto *found = std::get_if<store_found_t> (&current);
         if (!found || owner_generation (found->value.bytes) != token.lease_generation)
-            return completed (owner_lease_renew_result_t{owner_lease_stale_t{}});
-        auto result = write ({{version_condition (key, found->value.version)},
-                              {store_put_t{key, found->value.bytes, lease_ttl}}});
+            co_return owner_lease_renew_result_t{owner_lease_stale_t{}};
+        store_write_request_t request;
+        request.conditions.push_back (version_condition (key, found->value.version));
+        request.mutations.push_back (store_put_t{key, found->value.bytes, lease_ttl});
+        auto result = co_await write_async (std::move (request));
         if (std::holds_alternative<store_write_conflict_t> (result))
-            return completed (owner_lease_renew_result_t{owner_lease_stale_t{}});
+            co_return owner_lease_renew_result_t{owner_lease_stale_t{}};
         const auto &applied = std::get<store_write_applied_t> (result);
-        return completed (owner_lease_renew_result_t{
-          owner_lease_renewed_t{applied.store_now + lease_ttl, applied.store_now}});
+        co_return owner_lease_renew_result_t{
+          owner_lease_renewed_t{applied.store_now + lease_ttl, applied.store_now}};
     }
 
     task_t<owner_lease_release_result_t> release_owner_lease (location_owner_token_t token) override
@@ -1954,57 +1956,75 @@ class provider_location_repository_t final : public location_repository_t
                                 const creation_terminal_record_t *terminal = nullptr,
                                 std::chrono::milliseconds terminal_retention = {})
     {
+        return write_async (std::move (request), terminal, terminal_retention).result ().value ();
+    }
+
+    task_t<store_write_result_t> write_async (store_write_request_t request,
+                                              const creation_terminal_record_t *terminal = nullptr,
+                                              std::chrono::milliseconds terminal_retention = {})
+    {
         if (terminal) {
             const auto terminal_key = key_creation_terminal (terminal->operation);
             request.conditions.push_back (missing_condition (terminal_key));
             request.mutations.push_back (
               store_put_t{terminal_key, terminal->terminal_envelope, terminal_retention});
         }
-        auto first = _store->write (request).result ();
+        auto first = co_await await_result (_store->write (request));
         if (first)
-            return first.value ();
-        if (auto applied = reconcile_write (request))
-            return store_write_result_t{std::move (*applied)};
+            co_return first.value ();
+        if (auto applied = co_await reconcile_write_async (request))
+            co_return store_write_result_t{std::move (*applied)};
         if (first.error () != nullptr && detail::is_transient_error (first.error ()->kind ())) {
-            auto retried = _store->write (request).result ();
+            auto retried = co_await await_result (_store->write (request));
             if (retried)
-                return retried.value ();
-            if (auto applied = reconcile_write (request))
-                return store_write_result_t{std::move (*applied)};
-            return retried.value ();
+                co_return retried.value ();
+            if (auto applied = co_await reconcile_write_async (request))
+                co_return store_write_result_t{std::move (*applied)};
+            co_return retried.value ();
         }
-        return first.value ();
+        co_return first.value ();
     }
 
-    std::optional<store_write_applied_t> reconcile_write (const store_write_request_t &request)
+    template <typename T> static task_t<result_t<T>> await_result (task_t<T> pending)
+    {
+        auto completion = std::make_shared<detail::task_completion_source_t<result_t<T>>> ();
+        auto task = completion->task ();
+        detail::observe_task_completion (pending, [completion] (const result_t<T> &result) {
+            completion->complete (result_t<result_t<T>>::success (result));
+        });
+        return task;
+    }
+
+    task_t<std::optional<store_write_applied_t>>
+    reconcile_write_async (const store_write_request_t &request)
     {
         if (request.mutations.empty ())
-            return std::nullopt;
+            co_return std::nullopt;
         store_write_applied_t applied;
         for (const auto &mutation : request.mutations) {
             const auto key = std::visit ([] (const auto &value) { return value.key; }, mutation);
-            auto observed = _store->read (key).result ();
+            auto observed = co_await await_result (_store->read (key));
             if (!observed)
-                return std::nullopt;
+                co_return std::nullopt;
             const auto &read = observed.value ();
             if (const auto *put = std::get_if<store_put_t> (&mutation)) {
                 const auto *found = std::get_if<store_found_t> (&read);
                 if (found == nullptr || found->value.bytes != put->bytes
                     || static_cast<bool> (found->value.expires_at)
                          != static_cast<bool> (put->retention))
-                    return std::nullopt;
+                    co_return std::nullopt;
                 if (put->retention && *found->value.expires_at <= found->value.store_now)
-                    return std::nullopt;
+                    co_return std::nullopt;
                 applied.put_versions.push_back ({key, found->value.version});
                 applied.store_now = std::max (applied.store_now, found->value.store_now);
             } else {
                 const auto *missing = std::get_if<store_missing_t> (&read);
                 if (missing == nullptr)
-                    return std::nullopt;
+                    co_return std::nullopt;
                 applied.store_now = std::max (applied.store_now, missing->store_now);
             }
         }
-        return applied;
+        co_return applied;
     }
 
     static store_condition_t missing_condition (store_key_t key)
