@@ -501,21 +501,42 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
         _peakPermitsInUse = Math.Max(_peakPermitsInUse, PermitsInUseUnderLock());
     }
 
-    internal IDisposable RegisterReceiveFlowSocket(ISocket socket)
+    internal ValueTask<IAsyncDisposable> RegisterReceiveFlowSocketAsync(ISocket socket)
     {
         ArgumentNullException.ThrowIfNull(socket);
-        return RegisterReceiveFlowSocket(socket, socket.SetReceiveFlowState);
+        return RegisterReceiveFlowSocketAsync(socket, socket.SetReceiveFlowState);
     }
 
-    internal IDisposable RegisterReceiveFlowSocket(object identity, Action<ReceiveFlowState> apply)
+    internal IAsyncDisposable RegisterReceiveFlowSocket(
+        object identity,
+        Action<ReceiveFlowState> apply
+    ) => RegisterReceiveFlowSocketAsync(identity, apply).GetAwaiter().GetResult();
+
+    internal async ValueTask<IAsyncDisposable> RegisterReceiveFlowSocketAsync(
+        object identity,
+        Action<ReceiveFlowState> apply
+    )
+    {
+        var registration = RegisterReceiveFlowSocketUnapplied(identity, apply);
+        return await _receiveFlowController
+            .ApplyRegistrationAsync(identity, registration)
+            .ConfigureAwait(false);
+    }
+
+    internal IAsyncDisposable RegisterReceiveFlowSocketUnapplied(
+        object identity,
+        Action<ReceiveFlowState> apply
+    )
     {
         ArgumentNullException.ThrowIfNull(identity);
         ArgumentNullException.ThrowIfNull(apply);
-        var registration = AwaitStateLane(
+        return AwaitStateLane(
             _lane.RunAsync(() => _receiveFlowController.Register(identity, apply))
         );
-        return _receiveFlowController.ApplyRegistration(identity, registration);
     }
+
+    internal void ApplyReceiveFlowRegistration(object identity, IAsyncDisposable registration) =>
+        _receiveFlowController.ApplyRegistration(identity, registration);
 
     private bool UpdatePressureStateOnLane()
     {
@@ -696,7 +717,7 @@ internal sealed class ZLinkReceiveFlowController
         get => AwaitStateLane(_lane.RunAsync(() => _flowStateConfigFailures));
     }
 
-    internal IDisposable Register(object identity, Action<ReceiveFlowState> apply)
+    internal IAsyncDisposable Register(object identity, Action<ReceiveFlowState> apply)
     {
         Entry entry;
         entry = AwaitStateLane(
@@ -720,32 +741,39 @@ internal sealed class ZLinkReceiveFlowController
         return new Registration(this, entry);
     }
 
-    internal IDisposable ApplyRegistration(object identity, IDisposable registration)
+    internal async ValueTask<IAsyncDisposable> ApplyRegistrationAsync(
+        object identity,
+        IAsyncDisposable registration
+    )
     {
-        var typedRegistration = (Registration)registration;
-        var entry = typedRegistration.Entry;
         try
         {
-            Apply(entry, rethrowUnexpected: true);
-            AwaitStateLane(
-                _lane.RunAsync(() =>
-                {
-                    ObjectDisposedException.ThrowIf(
-                        _closed
-                            || entry.Removed
-                            || !_entries.TryGetValue(identity, out var current)
-                            || !ReferenceEquals(current, entry),
-                        this
-                    );
-                })
-            );
-            return typedRegistration;
+            ApplyRegistration(identity, registration);
+            return registration;
         }
         catch
         {
-            registration.Dispose();
+            await registration.DisposeAsync().ConfigureAwait(false);
             throw;
         }
+    }
+
+    internal void ApplyRegistration(object identity, IAsyncDisposable registration)
+    {
+        var entry = ((Registration)registration).Entry;
+        Apply(entry, rethrowUnexpected: true);
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                ObjectDisposedException.ThrowIf(
+                    _closed
+                        || entry.Removed
+                        || !_entries.TryGetValue(identity, out var current)
+                        || !ReferenceEquals(current, entry),
+                    this
+                );
+            })
+        );
     }
 
     internal void Transition(ZLinkApplicationJobQueuePressureState state, ulong sequence)
@@ -845,10 +873,13 @@ internal sealed class ZLinkReceiveFlowController
         }
     }
 
-    private void Unregister(Entry entry)
+    internal static ValueTask DisposeRegistrationAsync(IAsyncDisposable? registration) =>
+        registration is null ? ValueTask.CompletedTask : registration.DisposeAsync();
+
+    private async ValueTask UnregisterAsync(Entry entry)
     {
-        var applying = AwaitStateLane(
-            _lane.RunAsync(() =>
+        var applying = await _lane
+            .RunAsync(() =>
             {
                 if (!entry.Removed)
                 {
@@ -861,12 +892,12 @@ internal sealed class ZLinkReceiveFlowController
                 }
                 return entry.ApplyCompleted?.Task;
             })
-        );
+            .ConfigureAwait(false);
 
         // Wait for an already-started binding call before the socket owner
         // closes the native handle.
         if (applying is not null && !ReferenceEquals(CurrentApplyingEntry.Value, entry))
-            applying.GetAwaiter().GetResult();
+            await applying.ConfigureAwait(false);
     }
 
     private ApplyPreparation PrepareApply(Entry entry)
@@ -924,7 +955,7 @@ internal sealed class ZLinkReceiveFlowController
 
     private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
-    private sealed class Registration : IDisposable
+    private sealed class Registration : IAsyncDisposable
     {
         private readonly Entry _entry;
         private ZLinkReceiveFlowController? _owner;
@@ -937,7 +968,9 @@ internal sealed class ZLinkReceiveFlowController
 
         internal Entry Entry => _entry;
 
-        public void Dispose() => Interlocked.Exchange(ref _owner, null)?.Unregister(_entry);
+        public ValueTask DisposeAsync() =>
+            Interlocked.Exchange(ref _owner, null)?.UnregisterAsync(_entry)
+            ?? ValueTask.CompletedTask;
     }
 }
 

@@ -11,4 +11,7 @@ internal enum ZLinkLocationResolutionKind
     Missing,
     Ready,
     KnownUnavailable,
+
+    // The authority remains and is Closing: unavailable with that state.
+    Closing,
 }

@@ -20,6 +20,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -235,42 +236,62 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         if (consumed != null) {
             return CompletableFuture.failedFuture(consumed);
         }
-        CompletionStage<Void> replay = CompletableFuture.completedFuture(null);
-        for (var queued : backlog.saved) {
-            replay =
-                    replay.thenCompose(
-                            ignored ->
-                                    admitBacklogTurn(
-                                            () ->
-                                                    backlog.replayer.replay(
-                                                            "actor:" + staged.request().actorId(),
-                                                            queued)));
+        return replayBacklog(
+                        staged, backlog.saved, backlog.relayed, backlog.temporary, backlog.replayer)
+                .whenComplete(
+                        (ignored, failure) ->
+                                inStateLane(
+                                        staged,
+                                        () -> {
+                                            staged.replayed = true;
+                                            staged.durableBacklog = null;
+                                            staged.terminal = true;
+                                            return null;
+                                        }));
+    }
+
+    private CompletionStage<Void> replayBacklog(
+            Staged staged,
+            List<ZLinkSerialExecutionQueue.QueuedRecord> saved,
+            List<PendingIngress> relayed,
+            List<PendingIngress> temporary,
+            ZLinkUserSpotAggregateStagingOwner.JournalReplayer replayer) {
+        List<CompletableFuture<Void>> completions = new ArrayList<>();
+        for (var queued : saved) {
+            completions.add(
+                    admitBacklogTurn(
+                                    () ->
+                                            replayer.replay(
+                                                    "actor:" + staged.request().actorId(), queued))
+                            .toCompletableFuture());
         }
-        for (PendingIngress ingress : backlog.relayed) {
-            replay =
-                    replay.thenCompose(
-                            ignored ->
-                                    admitBacklogTurn(
-                                            () ->
-                                                    backlog.replayer.replayFrozen(
-                                                            "actor:" + staged.request().actorId(),
-                                                            ingress.record())));
+        for (PendingIngress ingress : relayed) {
+            completions.add(
+                    admitBacklogTurn(
+                                    () ->
+                                            replayer.replayFrozen(
+                                                    "actor:" + staged.request().actorId(),
+                                                    ingress.record()))
+                            .toCompletableFuture());
         }
-        for (PendingIngress ingress : backlog.temporary) {
-            replay =
-                    replay.thenCompose(
-                            ignored -> admitBacklogTurn(() -> replayIngress(staged, ingress)));
+        for (PendingIngress ingress : temporary) {
+            completions.add(
+                    admitBacklogTurn(() -> replayIngress(staged, ingress))
+                            .whenComplete(
+                                    (ignored, failure) -> {
+                                        if (failure != null && ingress.failure() != null) {
+                                            ingress.failure().accept(unwrap(failure));
+                                        }
+                                    })
+                            .toCompletableFuture());
         }
-        return replay.thenRun(
-                () ->
-                        inStateLane(
-                                staged,
-                                () -> {
-                                    staged.replayed = true;
-                                    staged.durableBacklog = null;
-                                    staged.terminal = true;
-                                    return null;
-                                }));
+        return CompletableFuture.allOf(completions.toArray(CompletableFuture[]::new));
+    }
+
+    private static Throwable unwrap(Throwable failure) {
+        return failure instanceof CompletionException && failure.getCause() != null
+                ? failure.getCause()
+                : failure;
     }
 
     private CompletionStage<Void> replayIngress(Staged staged, PendingIngress ingress) {
@@ -278,15 +299,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                 .handle(
                         (reply, failure) -> {
                             if (failure != null) {
-                                Throwable cause =
-                                        failure instanceof java.util.concurrent.CompletionException
-                                                        && failure.getCause() != null
-                                                ? failure.getCause()
-                                                : failure;
-                                if (ingress.failure() != null) {
-                                    ingress.failure().accept(cause);
-                                }
-                                throw new java.util.concurrent.CompletionException(cause);
+                                throw new CompletionException(unwrap(failure));
                             }
                             if (reply.isPresent() && ingress.reply() != null) {
                                 List<Message> parts = List.of(Message.from(reply.orElseThrow()));
@@ -415,42 +428,17 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         if (alreadyReplayed != null) {
             return CompletableFuture.failedFuture(alreadyReplayed);
         }
-        CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
-        for (var queued : replay.saved()) {
-            chain =
-                    chain.thenCompose(
-                            ignored ->
-                                    admitBacklogTurn(
-                                            () ->
-                                                    replayer.replay(
-                                                            "actor:" + staged.request().actorId(),
-                                                            queued)));
-        }
-        for (PendingIngress ingress : replay.relayed()) {
-            chain =
-                    chain.thenCompose(
-                            ignored ->
-                                    admitBacklogTurn(
-                                            () ->
-                                                    replayer.replayFrozen(
-                                                            "actor:" + staged.request().actorId(),
-                                                            ingress.record())));
-        }
-        for (PendingIngress ingress : replay.temporary()) {
-            chain =
-                    chain.thenCompose(
-                            ignored -> admitBacklogTurn(() -> replayIngress(staged, ingress)));
-        }
-        return chain.thenRun(
-                () ->
-                        inStateLane(
-                                staged,
-                                () -> {
-                                    staged.replayed = true;
-                                    staged.directBacklog = null;
-                                    staged.terminal = true;
-                                    return null;
-                                }));
+        return replayBacklog(staged, replay.saved(), replay.relayed(), replay.temporary(), replayer)
+                .whenComplete(
+                        (ignored, failure) ->
+                                inStateLane(
+                                        staged,
+                                        () -> {
+                                            staged.replayed = true;
+                                            staged.directBacklog = null;
+                                            staged.terminal = true;
+                                            return null;
+                                        }));
     }
 
     private static void requireStagingPrefix(

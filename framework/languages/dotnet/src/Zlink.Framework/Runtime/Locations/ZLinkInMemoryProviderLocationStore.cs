@@ -60,6 +60,10 @@ internal sealed class ZLinkInMemoryProviderLocationStore(TimeProvider? timeProvi
                         out var current
                     )
                         && current.Version == version.Expected,
+                    ZLinkStoreCondition.Value value => _entries.TryGetValue(
+                        value.Key,
+                        out var current
+                    ) && current.Bytes.Span.SequenceEqual(value.Expected.Span),
                     _ => false,
                 };
                 if (!satisfied)
@@ -246,6 +250,7 @@ internal sealed class ZLinkInMemoryProviderLocationStore(TimeProvider? timeProvi
                 {
                     ZLinkStoreCondition.Missing missing => missing.Key,
                     ZLinkStoreCondition.Version version => version.Key,
+                    ZLinkStoreCondition.Value value => value.Key,
                     _ => throw new ArgumentException("Unknown Store condition.", nameof(request)),
                 }
             )
@@ -285,6 +290,15 @@ internal sealed class ZLinkInMemoryProviderLocationStore(TimeProvider? timeProvi
                     nameof(request)
                 );
             encodedBytes += length;
+        }
+        foreach (var condition in request.Conditions.OfType<ZLinkStoreCondition.Value>())
+        {
+            if (condition.Expected.Length > 2 * 1024 * 1024)
+                throw new ArgumentException(
+                    "The Store value condition exceeds its value bound.",
+                    nameof(request)
+                );
+            encodedBytes += condition.Expected.Length;
         }
         foreach (var put in request.Mutations.OfType<ZLinkStoreMutation.Put>())
         {

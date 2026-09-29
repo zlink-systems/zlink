@@ -34,8 +34,8 @@ class DispatchWorker(
     /** The first offer. Records it, sends it, and returns — nobody is left waiting. */
     suspend fun dispatch(request: AssignDeliveryMsg) {
         val courierId = candidates[0]
-        val attempt = offers.offer(request, 0, SampleTimings.CourierDecisionTimeout)
         publishStatus(request, DeliveryStatus.Assigned, courierId)
+        val attempt = offers.offer(request, 0, SampleTimings.CourierDecisionTimeout)
         offer(request, courierId, attempt)
     }
 
@@ -78,8 +78,8 @@ class DispatchWorker(
         }
 
         val courierId = candidates[nextIndex]
-        val attempt = offers.offer(offer.request, nextIndex, SampleTimings.CourierDecisionTimeout)
         publishStatus(offer.request, DeliveryStatus.Reassigned, courierId)
+        val attempt = offers.offer(offer.request, nextIndex, SampleTimings.CourierDecisionTimeout)
         offer(offer.request, courierId, attempt)
     }
 

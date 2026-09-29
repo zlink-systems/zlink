@@ -12,9 +12,8 @@ internal sealed class ZLinkServiceLiveness
     private long _nextProbeTimestamp;
     private long _deadlineTimestamp;
 
-    internal ZLinkServiceLiveness(long admittedTimestamp, ulong probeSeed = 0)
+    internal ZLinkServiceLiveness(long admittedTimestamp)
     {
-        _nextProbeId = probeSeed;
         _nextProbeTimestamp = Add(admittedTimestamp, ProbeInterval);
         _deadlineTimestamp = Add(admittedTimestamp, PeerTimeout);
     }

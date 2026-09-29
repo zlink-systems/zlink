@@ -39,7 +39,6 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegi
 import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
 
 import java.lang.reflect.Method;
-import java.net.ServerSocket;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -833,11 +832,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     void replacementClosesIntentThatNeverConnected() throws Exception {
         RoutingId localRid = RoutingId.from("jvm-never-connected-replace-local");
         RoutingId peerRid = RoutingId.from("jvm-never-connected-replace-peer");
-        int port;
-        try (var reservation = new ServerSocket(0)) {
-            port = reservation.getLocalPort();
-        }
-        String peerEndpoint = "tcp://127.0.0.1:" + port;
+        String peerEndpoint = "inproc://jvm-never-connected-replace-peer-" + System.nanoTime();
         try (var context = Zlink.createContext();
                 var local = meshNode(context);
                 var peer = meshNode(context)) {

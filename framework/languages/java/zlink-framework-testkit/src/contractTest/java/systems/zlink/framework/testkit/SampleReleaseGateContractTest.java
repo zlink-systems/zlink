@@ -166,10 +166,17 @@ final class SampleReleaseGateContractTest {
                 Files.exists(samplesRoot.resolve("run_samples.ps1")),
                 "the aggregate PowerShell sample runner was removed; samples run one at a time");
         String commonRunner = readSource(samplesRoot.resolve("runner-common.sh"));
+        assertFalse(
+                commonRunner.contains("settings_target"),
+                "shared POSIX sample runner must not copy standalone settings into"
+                        + " sample directories");
         assertTrue(
-                commonRunner.contains("cp -- \"${settings_source}\" \"${settings_target}\""),
-                "POSIX sample runner must stage standalone settings under Gradle's standard"
-                        + " filename");
+                commonRunner.contains("tasks+=(\":${language}:${sample}${arg}\")")
+                        && commonRunner.contains("cd \"${ZLINK_SAMPLES_ROOT}\"")
+                        && commonRunner.contains(
+                                "zlink_sample_gradle_locked ./gradlew --no-daemon"),
+                "shared POSIX sample runner must invoke Gradle from the samples root using"
+                        + " :<language>:<sample> project paths");
         Pattern ripgrepCommand = Pattern.compile("(?m)(?:^|\\s)rg\\s+");
         assertFalse(
                 ripgrepCommand.matcher(commonRunner).find(),
@@ -185,12 +192,16 @@ final class SampleReleaseGateContractTest {
             }
         }
         String commonPowerShellRunner = readSource(samplesRoot.resolve("redis-common.ps1"));
+        assertFalse(
+                commonPowerShellRunner.contains("$settingsTargetPath"),
+                "PowerShell sample runner must not copy standalone settings into sample"
+                        + " directories");
         assertTrue(
                 commonPowerShellRunner.contains(
-                        "Copy-Item -LiteralPath $settingsSourcePath -Destination"
-                                + " $settingsTargetPath"),
-                "PowerShell sample runner must stage standalone settings under Gradle's standard"
-                        + " filename");
+                                "if ($_.StartsWith(\":\")) { \":${language}:${sample}${_}\" }")
+                        && commonPowerShellRunner.contains("Push-Location $buildRoot"),
+                "PowerShell sample runner must invoke Gradle from the samples root using"
+                        + " :<language>:<sample> project paths");
 
         for (String language : REQUIRED_LANGUAGES) {
             Path languageRoot = samplesRoot.resolve(language);

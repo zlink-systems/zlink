@@ -59,6 +59,44 @@ test('STREAM RAW receive requires explicit recvMode', async () => {
         ctx.close();
     }
 });
+test('STREAM disconnectRid projects a removed peer as ConnectError', async () => {
+    const port = await reserveTcpPort();
+    const ctx = zlink.createContext();
+    const stream = zlink.createStreamSocket(ctx);
+    const packet = new zlink.StreamPacket();
+    let client = null;
+    try {
+        stream.options.recvMode = zlink.StreamRecvMode.Packet;
+        stream.bind(`tcp://127.0.0.1:${port}`);
+        client = net.createConnection({ host: '127.0.0.1', port });
+        client.on('error', () => undefined);
+        await once(client, 'connect');
+        client.write(packetFrame(Buffer.from('disconnect'), Buffer.from('peer')));
+        await receivePacket(stream, packet);
+        const peerRid = packet.routingId;
+        assert.ok(peerRid);
+        const peerClosed = once(client, 'close');
+        stream.disconnectRid(peerRid);
+        await peerClosed;
+        let error;
+        try {
+            stream.disconnectRid(peerRid);
+        }
+        catch (caught) {
+            error = caught;
+        }
+        assert.ok(error instanceof zlink.ConnectError, `expected ConnectError, got ${error?.name} (result=${error?.code}, nativeErrno=${error?.nativeErrno})`);
+        const connectError = error;
+        assert.equal(connectError.result, zlink.ConnectResult.NotFound);
+        assert.equal(connectError.code, 605);
+    }
+    finally {
+        packet.close();
+        client?.destroy();
+        stream.close();
+        ctx.close();
+    }
+});
 test('reusable StreamPacket resets on no-data and refills on reuse', async () => {
     const port = await reserveTcpPort();
     const ctx = zlink.createContext();

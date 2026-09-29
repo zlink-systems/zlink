@@ -6,6 +6,66 @@ namespace Zlink.Framework.SampleRegressionTests;
 public sealed partial class RegressionTests
 {
     [Fact]
+    public void ZoneWorld_Bot_Spawn_Evidence_Follows_Completed_Join()
+    {
+        var sampleRoot = ResolveSampleRoot("ZoneWorld");
+        var actors = Path.Combine(
+            sampleRoot,
+            "Server",
+            "ZoneNode",
+            "Infrastructure",
+            "ZLink",
+            "Actors"
+        );
+        var spots = Path.Combine(
+            sampleRoot,
+            "Server",
+            "ZoneNode",
+            "Infrastructure",
+            "ZLink",
+            "Spots"
+        );
+        var bootstrap = ReadSource(Path.Combine(actors, "BotSpawner.cs"));
+        var zoneSpot = ReadSource(Path.Combine(spots, "ZoneSpot.cs"));
+        var joined = zoneSpot.IndexOf("ValueTask OnJoinedActorAsync(", StringComparison.Ordinal);
+        var stateEntered = zoneSpot.IndexOf(
+            "_state.Enter(enter.PlayerId",
+            joined,
+            StringComparison.Ordinal
+        );
+        var spawnEvidence = zoneSpot.IndexOf("bot spawned. bot=", joined, StringComparison.Ordinal);
+
+        Assert.DoesNotContain("bot spawned. bot=", bootstrap, StringComparison.Ordinal);
+        Assert.True(joined >= 0 && stateEntered > joined && spawnEvidence > stateEntered);
+    }
+
+    [Fact]
+    public void ZoneWorld_Bot_Boundary_Is_Observed_After_Destination_Maintenance()
+    {
+        var source = ReadSource(
+            Path.Combine(ResolveSampleRoot("ZoneWorld"), "Client", "Scenarios.cs")
+        );
+        var methodStart = source.IndexOf(
+            "private static async ValueTask F4BotReversesOnRejection(",
+            StringComparison.Ordinal
+        );
+        Assert.True(methodStart >= 0);
+        var methodEnd = source.IndexOf(
+            "private static int? BotX(",
+            methodStart,
+            StringComparison.Ordinal
+        );
+        var method = source[methodStart..methodEnd];
+        var maintenanceApplied = method.IndexOf("await enabledObserved;", StringComparison.Ordinal);
+        var boundaryObserved = method.IndexOf("var boundary = (", StringComparison.Ordinal);
+
+        Assert.True(
+            maintenanceApplied >= 0 && boundaryObserved > maintenanceApplied,
+            "the destination maintenance status must arrive before the boundary observation"
+        );
+    }
+
+    [Fact]
     public void ZoneWorld_Uses_The_Framework_Request_Deadline()
     {
         var sampleRoot = ResolveSampleRoot("ZoneWorld");

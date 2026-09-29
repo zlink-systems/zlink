@@ -501,7 +501,7 @@ ZLINK_EXPORT void *zlink_socket (void *context_, zlink_socket_type_t type_);
 
 지정된 context 내에서 새 socket을 생성한다. `type_` 매개변수는 messaging pattern을
 선택한다. Raw socket은 [§3](#3-pull-수신과-completion-모델)의 pull 함수를 사용한다.
-STREAM은 첫 successful bind 또는 connect 전에 RAW나 PACKET receive mode를 명시적으로
+STREAM은 bind 전용이며 첫 successful bind 전에 RAW나 PACKET receive mode를 명시적으로
 선택한다. Socket은 context가 종료되기 전에 `zlink_close()`로 닫아야 한다.
 
 **반환값:** 성공 시 socket 핸들, 실패 시 `NULL` (errno가 설정됨).
@@ -855,7 +855,8 @@ socket을 원격 주소에 연결한다.
 ZLINK_EXPORT zlink_connect_result_t zlink_connect (void *s_, const char *addr_);
 ```
 
-socket을 원격 endpoint에 연결한다. endpoint 형식은 `zlink_bind()`와
+socket을 원격 endpoint에 연결한다. STREAM은 bind 전용이며
+[STREAM §2](08-stream.ko.md#2-생성-bind와-option)가 결과를 정한다. endpoint 형식은 `zlink_bind()`와
 동일하다. socket은 여러 endpoint에 연결할 수 있으며, peer가 사용 불가능해지면
 library가 자동으로 재연결을 처리한다.
 

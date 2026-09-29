@@ -157,6 +157,7 @@ public sealed partial class ZLinkRedisLocationStore
             local expected = ARGV[arg + 1]
             local members = redis.call('ZREVRANGE', KEYS[i], 0, 0)
             local current = nil
+            local currentValue = nil
             if #members > 0 then
                 local record = unpackTagged(members[1])
                 if not record then
@@ -166,10 +167,12 @@ public sealed partial class ZLinkRedisLocationStore
                 if record[5] ~= true
                     and (expiresAt == 0 or expiresAt > nowMs) then
                     current = record[3]
+                    currentValue = record[2]
                 end
             end
             if (kind == 'missing' and current ~= nil)
-                or (kind == 'version' and current ~= expected) then
+                or (kind == 'version' and current ~= expected)
+                or (kind == 'value' and (current == nil or currentValue ~= expected)) then
                 return { 'conflict', nowMs }
             end
             arg = arg + 2
@@ -505,6 +508,7 @@ public sealed partial class ZLinkRedisLocationStore
                 {
                     ZLinkStoreCondition.Missing missing => missing.Key,
                     ZLinkStoreCondition.Version version => version.Key,
+                    ZLinkStoreCondition.Value value => value.Key,
                     _ => throw new ArgumentException(
                         "Unknown Location Store condition.",
                         nameof(request)
@@ -550,6 +554,10 @@ public sealed partial class ZLinkRedisLocationStore
                 case ZLinkStoreCondition.Version version:
                     args.Add("version");
                     args.Add(version.Expected.Value);
+                    break;
+                case ZLinkStoreCondition.Value value:
+                    args.Add("value");
+                    args.Add(value.Expected.ToArray());
                     break;
             }
         }
@@ -783,6 +791,7 @@ public sealed partial class ZLinkRedisLocationStore
                 {
                     ZLinkStoreCondition.Missing missing => missing.Key,
                     ZLinkStoreCondition.Version version => version.Key,
+                    ZLinkStoreCondition.Value value => value.Key,
                     _ => throw new ArgumentException("Unknown Location Store condition."),
                 }
             )
@@ -832,6 +841,16 @@ public sealed partial class ZLinkRedisLocationStore
                             nameof(request)
                         );
                     encodedBytes += length;
+                    break;
+                case ZLinkStoreCondition.Value value:
+                    ValidateOpaqueKey(value.Key, nameof(request));
+                    encodedBytes += Encoding.UTF8.GetByteCount(value.Key.Value);
+                    if (value.Expected.Length > MaximumValueBytes)
+                        throw new ArgumentException(
+                            "A Location Store value condition exceeds its value bound.",
+                            nameof(request)
+                        );
+                    encodedBytes += value.Expected.Length;
                     break;
             }
         }

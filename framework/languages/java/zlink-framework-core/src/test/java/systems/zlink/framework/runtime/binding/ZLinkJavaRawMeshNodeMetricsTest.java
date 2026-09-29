@@ -248,7 +248,6 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                     assertEquals(
                             ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
                             topology.admit(descriptor, "connection"));
-                    node.admitPeerChannels(peer, Map.of("orders", 100));
                 }
                 try (Message packet = Message.from("Packet");
                         Message body = Message.from("body")) {

@@ -120,7 +120,7 @@ throughput과 달리 결정적이라 재측정이 필요 없다. 측정 cell과 
 | `dealer_router_reqrep_inproc` | DEALER request → ROUTER reply → completion, 명령어/request |
 | `pair_inproc` | PAIR 단방향 |
 | `router_router_tcp` | ROUTER↔ROUTER 단방향(count-2 negative control) |
-| `stream_tcp` | STREAM↔STREAM TCP 단방향, 명령어/message |
+| `stream_tcp` | STREAM bind ↔ 외부 raw TCP client 단방향, 명령어/message |
 
 기준값은 검증된 release 또는 승인된 변경의 값이며, 의도한 비용 증가는 근거와 함께 감독
 판정으로만 갱신한다. 구현 작업이 기준값을 고치지 않는다. valgrind가 없는 환경에서는 test가

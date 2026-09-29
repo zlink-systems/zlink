@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import systems.zlink.framework.locationprovider.ZLinkStoreKey;
+import systems.zlink.framework.locationprovider.ZLinkStoreValueCondition;
 
 import java.io.IOException;
 
@@ -40,6 +41,10 @@ final class ZLinkOwnerLeaseRecordCodec {
         } catch (JsonProcessingException error) {
             throw new IllegalStateException("Failed to encode owner lease record", error);
         }
+    }
+
+    static ZLinkStoreValueCondition valueCondition(String ownerId, long leaseGeneration) {
+        return new ZLinkStoreValueCondition(key(ownerId), encode(ownerId, leaseGeneration));
     }
 
     static Record decode(byte[] bytes) {

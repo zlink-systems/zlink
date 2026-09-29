@@ -5,6 +5,52 @@ namespace Zlink.Framework.SampleRegressionTests;
 public sealed partial class RegressionTests
 {
     [Fact]
+    public void DeliveryDispatch_Client_Answers_Offers_Before_Awaiting_Create_Response()
+    {
+        var scenario = ReadSource(
+            Path.Combine(
+                ResolveSampleRoot("DeliveryDispatch"),
+                "Client",
+                "DeliveryDispatchClientScenario.cs"
+            )
+        );
+
+        foreach (
+            var methodName in new[] { "RunSuccessfulDeliveryAsync", "RunReassignedDeliveryAsync" }
+        )
+        {
+            var methodStart = scenario.IndexOf(
+                $"ValueTask {methodName}(",
+                StringComparison.Ordinal
+            );
+            Assert.True(methodStart >= 0);
+            var nextMethod = scenario.IndexOf(
+                "ValueTask ",
+                methodStart + 1,
+                StringComparison.Ordinal
+            );
+            var method =
+                nextMethod < 0 ? scenario[methodStart..] : scenario[methodStart..nextMethod];
+            var createStarted = method.IndexOf(
+                "var createdTask = http.Post(",
+                StringComparison.Ordinal
+            );
+            var decisionSent = method.IndexOf(".Send(", StringComparison.Ordinal);
+            var createCompleted = method.IndexOf(
+                "var created = await createdTask;",
+                StringComparison.Ordinal
+            );
+
+            Assert.True(
+                createStarted >= 0
+                    && decisionSent > createStarted
+                    && createCompleted > decisionSent,
+                $"{methodName} must answer the stream offer before awaiting the HTTP response"
+            );
+        }
+    }
+
+    [Fact]
     public void DeliveryDispatch_Uses_One_Role_Specific_Mesh_Per_Host_And_Scanned_Channel_Handlers()
     {
         var sampleRoot = ResolveSampleRoot("DeliveryDispatch");

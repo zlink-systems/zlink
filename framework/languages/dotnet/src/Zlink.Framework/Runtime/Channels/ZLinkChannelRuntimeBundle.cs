@@ -1,3 +1,4 @@
+using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Channels;
@@ -5,14 +6,13 @@ namespace Zlink.Framework.Runtime.Channels;
 internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
 {
     private readonly Action<string>? _connect;
-    private readonly SemaphoreSlim _connectionGate = new(1, 1);
     private readonly Action<string>? _disconnect;
     private readonly ZLinkStateLane _lane = new();
     private readonly HashSet<string> _manualConnections = new(StringComparer.Ordinal);
     private int _disposed;
     private Task? _disposeTask;
     private IDisposable? _manualConnectionAttachment;
-    private IDisposable? _receiveFlowRegistration;
+    private IAsyncDisposable? _receiveFlowRegistration;
 
     public ZLinkChannelRuntimeBundle(
         IAsyncDisposable socket,
@@ -22,7 +22,7 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
         string? socketRole = null,
         ZLinkClientServerServerIdentity? clientServerServer = null,
         ZLinkFanoutPublisherIdentity? fanoutPublisher = null,
-        IDisposable? receiveFlowRegistration = null
+        IAsyncDisposable? receiveFlowRegistration = null
     )
     {
         Socket = socket;
@@ -96,17 +96,8 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
                 })
                 .ConfigureAwait(false);
             failures.Capture(() => attachment?.Dispose());
-            failures.Capture(DetachReceiveFlow);
-            await _connectionGate.WaitAsync().ConfigureAwait(false);
-            try
-            {
-                await failures.CaptureAsync(Socket.DisposeAsync).ConfigureAwait(false);
-            }
-            finally
-            {
-                _connectionGate.Release();
-            }
-            failures.Capture(_connectionGate.Dispose);
+            await failures.CaptureAsync(DetachReceiveFlowAsync).ConfigureAwait(false);
+            await failures.CaptureAsync(Socket.DisposeAsync).ConfigureAwait(false);
             failures.Capture(ReceiveGate.Dispose);
             failures.ThrowIfAny();
             completion.TrySetResult();
@@ -144,33 +135,19 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
         return attachment;
     }
 
-    private void DetachReceiveFlow() =>
-        Interlocked.Exchange(ref _receiveFlowRegistration, null)?.Dispose();
+    private ValueTask DetachReceiveFlowAsync() =>
+        ZLinkReceiveFlowController.DisposeRegistrationAsync(
+            Interlocked.Exchange(ref _receiveFlowRegistration, null)
+        );
 
     public void ConnectManual(string endpoint)
     {
-        _connectionGate.Wait();
-        try
-        {
-            AwaitStateLane(_lane.RunAsync(() => ConnectManualCore(endpoint)));
-        }
-        finally
-        {
-            _connectionGate.Release();
-        }
+        AwaitStateLane(_lane.RunAsync(() => ConnectManualCore(endpoint)));
     }
 
     public void DisconnectManual(string endpoint)
     {
-        _connectionGate.Wait();
-        try
-        {
-            AwaitStateLane(_lane.RunAsync(() => DisconnectManualCore(endpoint)));
-        }
-        finally
-        {
-            _connectionGate.Release();
-        }
+        AwaitStateLane(_lane.RunAsync(() => DisconnectManualCore(endpoint)));
     }
 
     private void ConnectManualCore(string endpoint)

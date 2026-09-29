@@ -99,10 +99,4 @@ export class StreamSocket extends SocketBase {
     return RoutingId.from(configCall('routing id get failed', () =>
       native.handleGetRoutingId(getNativeHandle(this)) as Buffer));
   }
-
-  disconnectRid(routingId: RoutingId): void {
-    const normalized = normalizeRoutingId(routingId);
-    configCall('stream disconnect by routing id failed', () =>
-      native.socketDisconnectRid(getNativeHandle(this), normalized));
-  }
 }
