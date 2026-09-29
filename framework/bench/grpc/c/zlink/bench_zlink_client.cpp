@@ -21,6 +21,7 @@ struct callback_state_t
     std::atomic<uint64_t> completed {0};
     std::atomic<uint64_t> errors {0};
     std::atomic<uint64_t> outstanding {0};
+    std::atomic<uint64_t> writable {0};
     zlink_c_bench::latency_sampler_t *latency = nullptr;
 };
 
@@ -133,6 +134,8 @@ bool poll_once (void *poller, void *dealer, callback_state_t *state, long timeou
         if (completion.kind == ZLINK_COMPLETION_REQUEST && completion.user_context == state)
             on_reply (completion.request_result, completion.reply_parts,
                       completion.reply_part_count, state);
+        else if (completion.kind == ZLINK_COMPLETION_WRITABLE && state)
+            state->writable.fetch_add (1, std::memory_order_relaxed);
         zlink_completion_close (&completion);
     }
 }
@@ -336,8 +339,11 @@ zlink_c_bench::result_t run_request_backpressure (void *dealer,
 }
 
 // send-saturation (README §2): one-way DONTWAIT sends; the server counts what it received.
+// A BACKPRESSURED submit holds one completion reservation until its WRITABLE record is taken
+// (core socket spec), so the loop takes completions and waits for WRITABLE before resubmitting.
 zlink_c_bench::result_t run_send_saturation (void *dealer,
                                              const zlink_routing_id_t *target_rid,
+                                             void *poller,
                                              size_t size)
 {
     const int duration_s = zlink_c_bench::duration_seconds ();
@@ -348,7 +354,9 @@ zlink_c_bench::result_t run_send_saturation (void *dealer,
     uint64_t seq = 0;
     uint64_t blocked = 0;
     uint64_t errors = 0;
+    uint64_t submitted_since_poll = 0;
     double submit_wait_ms = 0.0;
+    callback_state_t cb;
     while (std::chrono::steady_clock::now () < deadline) {
         zlink_msg_t parts[2];
         if (!make_request_parts (size, run_id, zlink_c_bench::phase_active, seq, parts)) {
@@ -364,21 +372,33 @@ zlink_c_bench::result_t run_send_saturation (void *dealer,
                             : 0.0;
         if (rc == ZLINK_SUBMIT_OK) {
             ++seq;
+            if (++submitted_since_poll >= 64) {
+                submitted_since_poll = 0;
+                (void) poll_once (poller, dealer, &cb, 0);
+            }
+        } else if (rc == ZLINK_SUBMIT_BACKPRESSURED) {
+            ++blocked;
+            while (cb.writable.load (std::memory_order_relaxed) < blocked
+                   && std::chrono::steady_clock::now () < deadline)
+                if (!poll_once (poller, dealer, &cb, 50))
+                    break;
         } else {
-            if (rc == ZLINK_SUBMIT_BACKPRESSURED || zlink_errno () == EAGAIN
-                || zlink_errno () == EWOULDBLOCK)
-                ++blocked;
-            else
-                ++errors;
+            ++errors;
         }
     }
     const auto stop = std::chrono::steady_clock::now ();
+    const auto drain_deadline =
+      stop + std::chrono::milliseconds (zlink_c_bench::k_drain_bound_ms);
+    while (cb.writable.load (std::memory_order_relaxed) < blocked
+           && std::chrono::steady_clock::now () < drain_deadline)
+        if (!poll_once (poller, dealer, &cb, 50))
+            break;
     zlink_c_bench::result_t r;
     r.implementation = "zlink-c";
     r.pattern = "send-saturation";
     r.size = size;
     r.completed = seq;
-    r.errors = errors;
+    r.errors = errors + cb.errors.load (std::memory_order_relaxed);
     r.elapsed_s = std::chrono::duration<double> (stop - start).count ();
     r.cpu_percent = zlink_c_bench::cpu_percent (resources, r.elapsed_s);
     r.mem_mb = zlink_c_bench::rss_mb ();
@@ -403,7 +423,8 @@ int main ()
     void *request_router = zlink_socket (ctx, ZLINK_SOCKET_ROUTER);
     void *send_router = zlink_socket (ctx, ZLINK_SOCKET_ROUTER);
     void *poller = zlink_poller_new ();
-    if (!ctx || !request_router || !send_router || !poller)
+    void *send_poller = zlink_poller_new ();
+    if (!ctx || !request_router || !send_router || !poller || !send_poller)
         return 2;
 
     // The raw ZLink row is ROUTER<->ROUTER (README §3), so the client addresses each server
@@ -424,6 +445,7 @@ int main ()
     zlink_connect (request_router, request_endpoint.c_str ());
     zlink_connect (send_router, send_endpoint.c_str ());
     zlink_poller_add (poller, request_router, request_router, ZLINK_POLLCOMPLETION);
+    zlink_poller_add (send_poller, send_router, send_router, ZLINK_POLLCOMPLETION);
     std::this_thread::sleep_for (std::chrono::milliseconds (500));
     const bool ready = await_request_ready (request_router, &request_target, poller,
                                             zlink_c_bench::k_route_ready_ms);
@@ -438,11 +460,12 @@ int main ()
             results[count++] =
               run_request_backpressure (request_router, &request_target, poller, size);
         if (zlink_c_bench::pattern_enabled (patterns, "send-saturation"))
-            results[count++] = run_send_saturation (send_router, &send_target, size);
+            results[count++] = run_send_saturation (send_router, &send_target, send_poller, size);
         for (int i = 0; i < count; ++i)
             if (!zlink_c_bench::write_cell_json (results[i], ""))
                 status = 1;
     }
+    zlink_poller_destroy (&send_poller);
     zlink_poller_destroy (&poller);
     zlink_close (request_router);
     zlink_close (send_router);
