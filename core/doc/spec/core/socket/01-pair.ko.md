@@ -158,7 +158,7 @@ PAIR의 SEND target은 물리 pipe가 바뀌어도 단일 logical route다. Reco
   만료하면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`, ID `0`, completion 없음이다.
 - ID `0` 뒤 connection을 끊고 다시 연결해도 같은 application record가 replay되지 않으며,
   WRITABLE record 뒤의 재전송은 application이 다시 제출한 record다.
-- `zlink_disconnect()`로 endpoint를 제거하면 그 token은 `ZLINK_SEND_TERMINAL`+`ENOENT`인
+- `zlink_disconnect()`로 endpoint를 제거하면 그 token은 `ZLINK_SEND_NOT_FOUND`+`ENOENT`인
   WRITABLE record로 끝난다. socket close 뒤에는 그 token의 record를 받을 수 없다 — close가 token을 내부에서 끝내고 record를 전달하지 않는다.
 
 **Receive flow state 부재**

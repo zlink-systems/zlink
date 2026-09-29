@@ -32,7 +32,9 @@ internal struct ZlinkRouterRoute
 internal enum ZlinkSendCompleteResult
 {
     Admitted = 0,
-    Terminal = 202
+    NotFound = 801,
+    NotConnected = 802,
+    TimedOut = 803
 }
 
 /// <summary>Mirrors <c>zlink_completion_t</c>.</summary>

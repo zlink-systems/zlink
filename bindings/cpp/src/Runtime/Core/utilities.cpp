@@ -26,7 +26,7 @@ namespace
 // A moved-from or stopped object has no handle; the call does not reach Core.
 [[noreturn]] void throw_no_handle ()
 {
-    throw config_error_t (detail::result_from_errno (config_result_t{}, EFAULT), EFAULT);
+    throw config_error_t (config_result_t::invalid_handle, EFAULT);
 }
 
 } // namespace

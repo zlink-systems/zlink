@@ -21,7 +21,9 @@ class ZlinkRoutingId(ctypes.Structure):
 
 # Completion constants and layout mirror ``core/include/zlink/socket/api.h``.
 ZLINK_SEND_ADMITTED = 0
-ZLINK_SEND_TERMINAL = 202
+ZLINK_SEND_NOT_FOUND = 801
+ZLINK_SEND_NOT_CONNECTED = 802
+ZLINK_SEND_TIMED_OUT = 803
 ZLINK_COMPLETION_SEND = 1
 ZLINK_COMPLETION_REQUEST = 2
 ZLINK_COMPLETION_WRITABLE = 3

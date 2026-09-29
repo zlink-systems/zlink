@@ -50,7 +50,7 @@ export class StreamSocket extends SocketBase {
         ? native.socketRecvMessageNoWait(this.receiveHandle())
         : native.socketRecvMessage(this.receiveHandle(), flags | 0);
     } catch (error) {
-      throw recvNativeError(error, flags, 'recv failed');
+      throw recvNativeError(error, 'recv failed');
     }
     if (raw == null) return false;
     const routingId = nativeReceivedRoutingId(raw);
@@ -83,7 +83,7 @@ export class StreamSocket extends SocketBase {
       return true;
     } catch (error) {
       result.close();
-      throw recvNativeError(error, flags, 'stream packet recv failed');
+      throw recvNativeError(error, 'stream packet recv failed');
     } finally {
       state._receiving = false;
     }

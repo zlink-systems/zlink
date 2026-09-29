@@ -532,7 +532,10 @@ the following order after the handler ends normally.
    recomputation. If `Accepted`, it continues; if `Rejected`, the target
    removes the temporary queue it registered and the prepared factory
    resources within the same processing, and it ends while keeping source
-   membership. If the target is an Entry Spot, `OnActorJoin` isn't called.
+   membership. If the target is an Entry Spot, `OnActorJoin` isn't called. The node
+   receiving the Join request accepts it only through an active local target Spot. If
+   that Spot is absent or inactive, it doesn't create one and rejects the request with
+   `Unavailable`.
 3. The framework checks the relocation policy and target capacity. If the
    move can proceed, it briefly blocks new message processing on the
    source Actor, captures application state and the current Actor queue,

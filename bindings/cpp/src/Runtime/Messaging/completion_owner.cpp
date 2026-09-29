@@ -47,11 +47,26 @@ int request_errno (request_result_t result_) noexcept
 
 submit_result_t send_terminal_result (int err_) noexcept
 {
-    if (err_ == ENOENT)
-        return submit_result_t::not_found;
     if (err_ == ETERM || err_ == ESHUTDOWN)
         return submit_result_t::terminated;
     return submit_result_t::internal_error;
+}
+
+submit_error_t send_completion_error (zlink_send_complete_result_t result_,
+                                      int terminal_errno_) noexcept
+{
+    switch (result_) {
+        case ZLINK_SEND_NOT_FOUND:
+            return submit_error_t (submit_result_t::not_found,
+                                   terminal_errno_);
+        case ZLINK_SEND_NOT_CONNECTED:
+            return submit_error_t (submit_result_t::not_connected,
+                                   terminal_errno_);
+        case ZLINK_SEND_TIMED_OUT:
+            return submit_error_t (submit_result_t::backpressured, EAGAIN);
+        default:
+            return submit_error_t (submit_result_t::internal_error, EPROTO);
+    }
 }
 
 bool is_lifecycle_errno (int err_) noexcept
@@ -151,18 +166,18 @@ void completion_entry_t::fail_request (std::exception_ptr failure_) noexcept
 // token Core handed back with the rejection.
 bool completion_entry_t::resubmit_send_attempt () noexcept
 {
+    zlink_completion_id_t completion_id = 0;
+    bool admitted = false;
+    int submit_errno = 0;
+    std::exception_ptr failure;
     {
         std::lock_guard<std::mutex> lock (_mutex);
         if (_settled)
             return true;
         _published = false;
         _completion_id = 0;
+        _send_submitting = true;
     }
-
-    zlink_completion_id_t completion_id = 0;
-    bool admitted = false;
-    int submit_errno = 0;
-    std::exception_ptr failure;
     try {
         admitted = submit_raw_send_state (*_send_operation, _context,
                                           &completion_id, false);
@@ -170,6 +185,22 @@ bool completion_entry_t::resubmit_send_attempt () noexcept
     }
     catch (...) {
         failure = std::current_exception ();
+    }
+    {
+        std::lock_guard<std::mutex> lock (_mutex);
+        _send_submitting = false;
+        if (_settled) {
+            _send_operation->message.reset ();
+            if (!failure && !admitted && completion_id != 0) {
+                // Core still owns this wait token. Keep its context reserved
+                // until the token is received and ignored.
+                _completion_id = completion_id;
+                _published = true;
+                _changed.notify_all ();
+                return false;
+            }
+            return true;
+        }
     }
 
     if (!failure && admitted != (completion_id == 0)) {
@@ -187,8 +218,11 @@ bool completion_entry_t::resubmit_send_attempt () noexcept
 
     if (!admitted) {
         std::lock_guard<std::mutex> lock (_mutex);
-        if (_settled)
-            return true;
+        if (_settled) {
+            if (completion_id == 0)
+                return true;
+            _send_operation->message.reset ();
+        }
         _completion_id = completion_id;
         _published = true;
         _changed.notify_all ();
@@ -213,6 +247,19 @@ void completion_entry_t::detach_send_sources () noexcept
 {
     if (_send_operation)
         detach_async_send_sources (*_send_operation);
+}
+
+void completion_entry_t::abandon_send () noexcept
+{
+    std::lock_guard<std::mutex> lock (_mutex);
+    if (_kind != kind_t::send_retry || _settled)
+        return;
+    _settled = true;
+    // Retain the operation object's address as Core's wait-token identity,
+    // and release its staged message after any submit already in progress.
+    if (!_send_submitting)
+        _send_operation->message.reset ();
+    _changed.notify_all ();
 }
 
 bool completion_entry_t::submit_request_attempt (bool initial_,
@@ -344,11 +391,8 @@ completion_entry_t::capture (zlink_completion_t &completion_) noexcept
         }
 
         if (send_result != ZLINK_SEND_ADMITTED || terminal_errno != 0) {
-            const int error = terminal_errno != 0 ? terminal_errno : EIO;
-            const submit_result_t result = send_result == ZLINK_SEND_TERMINAL
-              ? send_terminal_result (error)
-              : submit_result_t::internal_error;
-            fail_send (std::make_exception_ptr (submit_error_t (result, error)));
+            fail_send (std::make_exception_ptr (
+              send_completion_error (send_result, terminal_errno)));
             return capture_result_t::terminal;
         }
 
@@ -379,15 +423,9 @@ completion_entry_t::capture (zlink_completion_t &completion_) noexcept
         }
         if (completion_.send_result != ZLINK_SEND_ADMITTED
             || completion_.send_terminal_errno != 0) {
-            const int error = completion_.send_terminal_errno != 0
-              ? completion_.send_terminal_errno
-              : EIO;
-            const submit_result_t result =
-              completion_.send_result == ZLINK_SEND_TERMINAL
-                ? send_terminal_result (error)
-                : submit_result_t::internal_error;
             fail_request (std::make_exception_ptr (
-              submit_error_t (result, error)));
+              send_completion_error (completion_.send_result,
+                                     completion_.send_terminal_errno)));
             return capture_result_t::terminal;
         }
 
@@ -539,12 +577,14 @@ void completion_owner_t::insert_entry_locked (
 bool completion_owner_t::start_async_request (
   const std::shared_ptr<completion_entry_t> &entry_)
 {
-    std::lock_guard<std::mutex> lock (_mutex);
-    if (_shutdown)
-        throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
-    if (!_public_owner)
-        throw submit_error_t (submit_result_t::invalid_state, EBUSY);
-    insert_entry_locked (entry_);
+    {
+        std::lock_guard<std::mutex> lock (_mutex);
+        if (_shutdown)
+            throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
+        if (!_public_owner)
+            throw submit_error_t (submit_result_t::invalid_state, EBUSY);
+        insert_entry_locked (entry_);
+    }
     return entry_->start_request ();
 }
 

@@ -72,7 +72,8 @@ public final class NativeMonitorSocket implements SocketMonitor {
               NativeLayouts.MONITOR_SNAPSHOT_LAYOUT);
             int rc = Native.monitorStatus(handle, out);
             if (rc != 0)
-                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+                throw new systems.zlink.contracts.errors.ZlinkConfigException(
+                    systems.zlink.contracts.errors.ConfigResult.fromValue(rc), Native.errno());
             return NativeMonitorStatuses.fromNative(out);
         }
     }

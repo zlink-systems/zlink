@@ -94,7 +94,6 @@ func testPublicRequestRetriesExactPacketAfterWritable(t *testing.T, run int) {
 	if err := serverPoller.AddSocket(router, PollIn, 1); err != nil {
 		t.Fatalf("server AddSocket(PollIn) error = %v", err)
 	}
-	knownEntries := make(map[*completionEntry]bool)
 	requestPayloads := []string{"request-0"}
 	requestResults := []chan requestTestResult{make(chan requestTestResult, 1)}
 	firstSubmission, err := dealer.Request().Bytes([]byte(requestPayloads[0])).Timeout(5 * time.Second).Submit(context.Background())

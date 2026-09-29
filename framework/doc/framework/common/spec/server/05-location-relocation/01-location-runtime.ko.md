@@ -286,6 +286,12 @@ Framework는 필요한 `OwnerId` record를 직접 읽는다. Store 전체의 own
 `GenerationExhausted`다. 이 결과는 다시 시도해도 성공하지 않으며 Store record와 counter를
 변경하지 않는다.
 
+Owner lease를 연장할 때 SPI value bytes는 유지하고 만료 시각과 provider version을 갱신한다.
+Framework가 owner lease 자체를 변경하지 않는 Store batch에서 host의 자격을 조건으로 검사할
+때는, source·target을 구분하지 않고 검사하는 각 lease에 해당 host 실행 조합의 canonical SPI
+value bytes를 기대값으로 하는
+[`Value` 조건](02-location-store-redis.ko.md#4-conditional-atomic-batch)을 사용한다.
+
 ### 3.2 Object 재생성과 owner 변경은 다른 세대 번호를 사용한다
 
 Location Store에서 Actor·Spot의 현재 owner와 변경 세대를 결정하는 공식 record를

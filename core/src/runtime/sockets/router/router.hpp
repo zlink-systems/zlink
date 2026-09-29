@@ -119,7 +119,8 @@ class router_t : public routing_socket_base_t
                         pipe_t **target_out_,
                         bool *delay_out_) ZLINK_OVERRIDE
     {
-        fail_blocking_send_waits_for_logical_target (peer_rid_, ENOENT);
+        fail_blocking_send_waits_for_logical_target (peer_rid_,
+                                                     ZLINK_SEND_NOT_FOUND);
         revoke_router_reply_targets_for_rid (peer_rid_);
         *delay_out_ = false;
         return prepare_out_pipe_termination_by_routing_id (peer_rid_,

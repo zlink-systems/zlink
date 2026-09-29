@@ -3,6 +3,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { constants } = require('node:os');
 const { CompletionEntry, CompletionOwner, } = require('../../dist/zlink/runtime/messaging/completion_owner');
 const { RequestError, RequestResult, SubmitResult, } = require('../../dist/zlink/contracts/errors/errors');
 const { mapNativeErrno, } = require('../../dist/zlink/runtime/errors/error_mapping');
@@ -30,15 +31,28 @@ test('successful send settles without publishing a SEND completion id', async ()
 test('native context termination maps to a terminated send result', () => {
     assert.equal(mapNativeErrno('submit', 156384765), SubmitResult.Terminated);
 });
-test('native socket shutdown maps WRITABLE terminal to a terminated send result', () => {
-    assert.equal(mapNativeErrno('submit', 108), SubmitResult.Terminated);
-});
-test('missing routed target maps WRITABLE terminal to a not-found send result', () => {
-    assert.equal(mapNativeErrno('submit', 2), SubmitResult.NotFound);
-});
-test('native context termination preserves REQUEST terminated semantics', () => {
-    assert.equal(mapNativeErrno('request', 156384765), RequestResult.Terminated);
-});
+for (const [sendResult, terminalErrno, expected] of [
+    [801, 2, SubmitResult.NotFound],
+    [802, 107, SubmitResult.NotConnected],
+    [999, 2, SubmitResult.InternalError],
+]) {
+    for (const operation of ['send', 'request']) {
+        test(`WRITABLE result ${sendResult} maps directly for ${operation}`, async () => {
+            const owner = new CompletionOwner(null);
+            const entry = owner.register(operation);
+            owner.publish(entry, 52n);
+            owner.retries.set(entry.token, {});
+            owner.capture({
+                kind: 3, completionId: 52n, userContext: entry.token,
+                peerRoutingId: null, sendResult, terminalErrno, requestResult: 0,
+            });
+            await assert.rejects(entry.promise, (error) => error.result === expected
+                && error.nativeErrno
+                    === (sendResult === 999 ? constants.errno.EPROTO : terminalErrno));
+            owner.close();
+        });
+    }
+}
 test('unknown nonzero context never falls back to a different live completion id', async () => {
     const owner = new CompletionOwner(null);
     const entry = owner.register('request', false);

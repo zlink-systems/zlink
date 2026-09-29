@@ -33,7 +33,9 @@ extern "C" {
 typedef enum zlink_send_complete_result_t
 {
     ZLINK_SEND_ADMITTED = 0,
-    ZLINK_SEND_TERMINAL = 202
+    ZLINK_SEND_NOT_FOUND = 801,
+    ZLINK_SEND_NOT_CONNECTED = 802,
+    ZLINK_SEND_TIMED_OUT = 803
 } zlink_send_complete_result_t;
 
 typedef uint64_t zlink_completion_id_t;
@@ -224,8 +226,11 @@ ZLINK_EXPORT zlink_connect_result_t zlink_disconnect_rid (void *s_,
  * DONTWAIT makes one admission attempt: success returns ID 0 without a
  * completion; backpressure returns EAGAIN and a nonzero payload-free WRITABLE
  * wait token retaining the target and user_context_. Credit recovery reports
- * ZLINK_SEND_ADMITTED; target removal, close or context termination reports
- * ZLINK_SEND_TERMINAL with the cause errno. A missing ROUTER/STREAM route
+ * ZLINK_SEND_ADMITTED; explicit target removal reports ZLINK_SEND_NOT_FOUND
+ * with ENOENT; STREAM physical disconnect reports ZLINK_SEND_NOT_CONNECTED
+ * with ENOTCONN. SNDTIMEO expiry reports ZLINK_SEND_TIMED_OUT with EAGAIN.
+ * Close and context termination discard pending tokens and
+ * unread records without delivery. A missing ROUTER/STREAM route
  * returns NOT_CONNECTED without a token; a DEALER with no peers gets a token.
  * NONE send/send_rid require user_context_ == NULL. Publish has no completion.
  * STREAM uses send_rid with exactly one part; a zero-length part disconnects

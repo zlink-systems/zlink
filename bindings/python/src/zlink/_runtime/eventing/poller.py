@@ -185,18 +185,15 @@ class NativePoller:
         for index in range(int(ready)):
             native = events._events[index]
             native_flags = int(native.events)
-            if int(native.source_kind) == int(PollSourceKind.SOCKET):
+            if (
+                int(native.source_kind) == int(PollSourceKind.SOCKET)
+                and native_flags & int(PollEventFlag.POLLCOMPLETION)
+            ):
                 registration = self._socket_registrations.get(int(native.socket or 0))
                 owner = None if registration is None else registration[2]
-                completion_ready = bool(native_flags & int(PollEventFlag.POLLCOMPLETION))
-                writable_retry_ready = (
-                    bool(native_flags & int(PollEventFlag.POLLOUT))
-                    and owner is not None
-                    and owner.has_managed_writable_wait()
-                )
-                if owner is not None and (completion_ready or writable_retry_ready):
+                if owner is not None:
                     drained = owner.drain(self)
-                    if completion_ready and drained.request_count == 0:
+                    if drained.total_count == 0:
                         native_flags &= ~int(PollEventFlag.POLLCOMPLETION)
                         native.events = native_flags
             if native_flags == 0:

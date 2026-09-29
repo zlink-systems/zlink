@@ -50,6 +50,7 @@ class completion_entry_t : public std::enable_shared_from_this<completion_entry_
     completion_entry_t &operator= (const completion_entry_t &) = delete;
 
     void detach_send_sources () noexcept;
+    void abandon_send () noexcept;
     // Identity Core recorded as the completion user context for this
     // operation. SEND uses the operation state it owns; REQUEST uses the entry.
     void *context () const noexcept { return _context; }
@@ -87,6 +88,7 @@ class completion_entry_t : public std::enable_shared_from_this<completion_entry_
     bool _published = false;
     bool _captured = false;
     bool _settled = false;
+    bool _send_submitting = false;
 };
 
 class completion_owner_t

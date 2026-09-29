@@ -205,6 +205,7 @@ void test_connect_before_bind_mixes_request_and_send_tokens ()
     dealer.options ().linger (std::chrono::milliseconds (0));
     router.options ().linger (std::chrono::milliseconds (0));
     dealer.options ().immediate (true);
+    dealer.options ().send_timeout (std::chrono::milliseconds (-1));
     router.options ().recv_timeout (std::chrono::seconds (5));
 
     zlink::poller_t poller;
@@ -269,6 +270,7 @@ void test_close_settles_request_wait_token_as_typed_terminal ()
     zlink::dealer_socket_t dealer (context);
     dealer.options ().linger (std::chrono::milliseconds (0));
     dealer.options ().immediate (true);
+    dealer.options ().send_timeout (std::chrono::milliseconds (-1));
 
     zlink::poller_t poller;
     poller.add (dealer, zlink::poll_event_flag_t::pollcompletion, 5);

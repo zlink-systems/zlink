@@ -563,8 +563,8 @@ Work budget 또는 count 한도가 부족한 request는 send flags와 `SNDTIMEO`
 호출하지 않는다. 한 pair의 한도 부족은 다른 pair나 같은 pipe의 ordinary send를 막지 않는다.
 Reply, timeout, disconnect와 close는 work·count reservation을 함께 반환한다. Terminal reply나
 timeout으로 reservation이 반환되면 그 reservation을 갖고 있던 바로 그 pipe owner에서 request submit
-recovery를 다시 깨운다. 거절된 `DONTWAIT` request의 대기 토큰이 언제 `ZLINK_COMPLETION_WRITABLE`을
-발행하는지는 [socket README의 REQUEST DONTWAIT 절](../socket/README.ko.md#request와-reply)이 소유한다 —
+recovery를 다시 깨운다. 거절된 `DONTWAIT` request의 대기 토큰이 자원 회복에 따른 `ZLINK_COMPLETION_WRITABLE`을 언제
+발행하는지와 토큰의 종료 조건은 [socket README의 REQUEST DONTWAIT 절](../socket/README.ko.md#request와-reply)이 소유한다 —
 거절 자원의 회복만 wake 조건이므로 이 reservation 반환이 그 조건이다.
 
 ### Message 처리 경로의 비용 제한

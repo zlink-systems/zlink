@@ -33,7 +33,7 @@ class CompletionDrainOrderContractTest {
                 var writable = core.submissions.getLast();
                 core.attempts.add(new CompletionNativeFixture.Attempt(SubmitResult.OK, 0, 22));
                 var second = dealer.request().message(Message.from("queued")).timeout(Duration.ofSeconds(2)).submit().reply().toCompletableFuture();
-                core.writable(writable, 0);
+                core.writable(writable, 0, 0);
                 core.requestResult(core.submissions.getLast(), RequestResult.TIMED_OUT);
                 core.attempts.add(new CompletionNativeFixture.Attempt(SubmitResult.OK, 0, request ? 23 : 0));
                 core.order.clear();
@@ -56,7 +56,18 @@ class CompletionDrainOrderContractTest {
                 }
                 waiter.get(TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
             }
-            core.verify(5);
+            core.attempts.add(new CompletionNativeFixture.Attempt(
+                SubmitResult.BACKPRESSURED, NativeErrno.EAGAIN, 31));
+            var abandoned = dealer.send().message(Message.from("abandoned"))
+                .submit().admitted().toCompletableFuture();
+            var abandonedToken = core.submissions.getLast();
+            assertTrue(abandoned.cancel(false));
+            core.writable(abandonedToken, 0, 0);
+            int submissionsBeforeDrain = core.submissions.size();
+            assertEquals(1, owner.drain());
+            assertEquals(submissionsBeforeDrain, core.submissions.size(),
+                "a cancelled staged send must not be resubmitted");
+            core.verify(6);
         }
     }
 }

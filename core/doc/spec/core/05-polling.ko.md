@@ -49,7 +49,7 @@ readiness를 기다리는 방법은 두 가지다.
 
 | Source | `POLLIN` | `POLLOUT` | 추가 readiness·규칙 |
 |---|---|---|---|
-| raw socket | complete record를 수신할 수 있음 | submit 재시도 가치가 있음(socket 전체 집계). 읽지 않은 `ZLINK_COMPLETION_WRITABLE` record가 있는 동안 level로 유지 | socket별 receive mode 적용. close된 등록 socket은 `ZLINK_POLLERR` 1회 |
+| raw socket | complete record를 수신할 수 있음 | socket 전체 송신 readiness 또는 읽지 않은 `ZLINK_COMPLETION_WRITABLE` record가 있음. 그 record가 있는 동안 level로 유지 | socket별 receive mode 적용. close된 등록 socket은 `ZLINK_POLLERR` 1회 |
 | socket monitor | monitor event를 받을 수 있음 | 미지원 | `zlink_socket_monitor_recv()`로 drain. monitor handle은 raw socket과 같은 등록 함수로 poller에 넣는다(socket/README §"application에 알리는 경로") |
 | timer | fire count를 받을 수 있음 | 미지원 | `zlink_timer_recv()`로 drain |
 | FD | platform readable | platform writable | platform `POLLPRI`는 `ZLINK_POLLPRI`, 그 밖의 platform 오류 bit는 `ZLINK_POLLERR`로 변환 |
@@ -60,14 +60,14 @@ readiness를 기다리는 방법은 두 가지다.
 [backpressure](glossary.ko.md#backpressure)(downstream이 처리 속도를 따라오지 못할 때 sender의
 추가 제출을 제한하는 동작)를 반환한 뒤 `ZLINK_POLLOUT`을 관측해도 그 target의 다음 submit
 성공은 보장되지 않는다.
-target별 재시도 신호는 `ZLINK_POLLOUT` bit가 아니라 wait token의
-`ZLINK_COMPLETION_WRITABLE` record다. `ZLINK_SEND_FLAGS_DONTWAIT` submit이
+대기 토큰의 target별 결과는 `ZLINK_POLLOUT` bit가 아니라
+`ZLINK_COMPLETION_WRITABLE` record로 전달한다. `ZLINK_SEND_FLAGS_DONTWAIT` submit이
 `ZLINK_SUBMIT_BACKPRESSURED`를 반환하면 `completion_id_out`의 0이 아닌 값이 wait token이고,
 그 제출을 거절한 자원이 회복되면(wake 조건은 [socket README](socket/README.ko.md#whole-message-send와-pending-admission)가
 소유) Core는 같은 token, 같은 `user_context`, 그리고
 ROUTER·STREAM이면 제출한 RID를 담은 WRITABLE record 하나를 socket-local completion queue에
-넣는다. Application은 이 record를 `zlink_completion_recv()`로 꺼내 token·context·RID로 어느
-target을 다시 submit할지 결정한다. 이 record가 읽히지 않은 동안 `ZLINK_POLLOUT`과
+넣는다. Application은 이 record를 `zlink_completion_recv()`로 꺼내 token·context·RID로 원래 제출을
+식별하고, `send_result`에 따른 재제출 여부는 [소켓 공통](socket/README.ko.md#whole-message-send와-pending-admission)을 따른다. 이 record가 읽히지 않은 동안 `ZLINK_POLLOUT`과
 `ZLINK_POLLCOMPLETION`은 모두 참으로 유지된다.
 
 `ZLINK_POLLITEMS_DFLT`는 내부·application stack buffer의 권장 초기 item 수이며
@@ -76,14 +76,18 @@ readiness bit가 아니다. `ZLINK_HAVE_POLLER == 1`은 이 public poller API가
 
 Readiness는 level-trigger이므로 wake도 level에 따른다. 등록한 source의 readiness가 거짓에서
 참으로 바뀌면, 그 source로 `zlink_poller_wait()` 또는 `zlink_poll()`에서 대기 중인 caller는
-timeout이 남아 있어도 그 시점에 깨어난다. 그 전이를 만든 command를 caller 대신 Core 내부
-thread(I/O thread, async command owner, 임시 transport owner)가 처리했더라도 이 보장은 같다.
-Readiness가 참인데 caller가 timeout까지 잠드는 것(lost wake)은 계약 위반이며, 구현은 내부
-owner가 detach하거나 command를 소비한 뒤 public poller의 notification descriptor를 다시 무장해
-이를 지킨다. 같은 규칙이 wait token에도 적용된다. DONTWAIT submit이 거절된 뒤 token을
-등록하는 사이에 그 target의 credit 회복이나 pipe attach가 동시에 일어났다면, 구현은 token을
-등록한 뒤 target 상태를 다시 확인해(register → recheck) 그 edge에 대한 WRITABLE record를
-게시한다. 따라서 거절 이후에 생긴 credit·attach edge로 WRITABLE record가 유실되지 않는다.
+timeout이 남아 있어도 그 시점에 깨어난다. 그 전이를 만든 command를 caller가 아닌
+thread(I/O thread, async command owner, 임시 transport owner, 같은 socket에 send·recv를 부른
+다른 application thread)가 처리했더라도 이 보장은 같다.
+Readiness가 참인데 caller가 timeout까지 잠드는 것(lost wake)은 계약 위반이다. 이를 위해 public
+poller의 notification descriptor는 그 poller만 소비한다. Poller가 아닌 곳에서 적용한 command가
+readiness를 바꾸면 descriptor에 알리는 시점은
+[동기화 모델](systems/11-synchronization-model.ko.md#33-mailbox와-깨어남)의 깨어남 규칙을 따른다.
+
+Wait token에도 lost wake는 없다. DONTWAIT submit이 거절된 뒤 token을 등록하는 사이에 그
+target의 credit 회복이나 pipe attach가 동시에 일어났다면, 구현은 token을 등록한 뒤 target
+상태를 다시 확인해(register → recheck) 그 edge에 대한 WRITABLE record를 게시한다. 따라서 거절
+이후에 생긴 credit·attach edge로 WRITABLE record가 유실되지 않는다.
 
 ## 4. Completion polling
 

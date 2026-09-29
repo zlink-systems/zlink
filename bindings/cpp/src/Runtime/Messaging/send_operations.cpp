@@ -91,6 +91,9 @@ send_submission_t submit_send_awaitable (
         bundle = std::make_shared<send_completion_bundle_t> (
           std::move (state_), submit_context, wait_token);
         bundle->result.bind_lifetime (bundle);
+        bundle->result.set_detach_handler ([entry = &bundle->entry] {
+            entry->abandon_send ();
+        });
         entry = std::shared_ptr<detail::completion_entry_t> (
           bundle, &bundle->entry);
     }

@@ -54,7 +54,9 @@ static_assert (ZLINK_COMPLETION_REQUEST == 2,
 static_assert (ZLINK_COMPLETION_WRITABLE == 3,
                "WRITABLE completion numeric changed");
 static_assert (ZLINK_SEND_ADMITTED == 0, "ADMITTED numeric changed");
-static_assert (ZLINK_SEND_TERMINAL == 202, "TERMINAL numeric changed");
+static_assert (ZLINK_SEND_NOT_FOUND == 801, "NOT_FOUND numeric changed");
+static_assert (ZLINK_SEND_NOT_CONNECTED == 802,
+               "NOT_CONNECTED numeric changed");
 static_assert (ZLINK_STREAM_RECV_MODE_UNSPECIFIED == 0,
                "STREAM unspecified numeric changed");
 static_assert (ZLINK_STREAM_RECV_MODE_RAW == 1,

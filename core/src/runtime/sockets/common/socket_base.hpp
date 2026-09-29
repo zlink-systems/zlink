@@ -551,6 +551,7 @@ class socket_base_t : public own_t,
       int failure_errno_, const zlink_routing_id_t *target_rid_or_null_,
       void *user_context_, zlink_completion_id_t *completion_id_out_,
       socket_completion::request_writable_wait_t *request_wait_ = NULL);
+    void expire_send_writable_wait (zlink_completion_id_t completion_id_);
     bool has_send_writable_wait () const;
     int request_admission_submit (
       zlink_msg_t *parts_, size_t part_count_,
@@ -1068,7 +1069,8 @@ class socket_base_t : public own_t,
     void mark_deferred_peer_controls ();
     // A route ended: retire writable tokens and wake blocking submitters.
     void fail_blocking_send_waits_for_logical_target (
-      const zlink_routing_id_t *peer_rid_, int terminal_errno_);
+      const zlink_routing_id_t *peer_rid_,
+      zlink_send_complete_result_t result_);
     void fail_blocking_send_waits_for_logical_endpoint (
       const std::string &endpoint_, int terminal_errno_);
     void emit_peer_weight_changed (pipe_t *pipe_, uint32_t weight_,
@@ -1094,7 +1096,8 @@ class socket_base_t : public own_t,
       const zlink_routing_id_t *target_rid_or_null_,
       bool correlation_released_ = false);
     void publish_send_writable_terminal (
-      const zlink_routing_id_t *target_rid_or_null_, int terminal_errno_);
+      const zlink_routing_id_t *target_rid_or_null_,
+      zlink_send_complete_result_t result_);
 
     bool has_stable_completion_processing_owner () const;
     void invalidate_completion_processing_owner ();
@@ -1282,7 +1285,7 @@ class socket_base_t : public own_t,
                           bool throttle_,
                           bool force_if_command_pending_ = false,
                           const uint64_t *observed_command_wait_epoch_ = NULL,
-                          bool consume_primary_signaler_ = true);
+                          bool primary_poller_drain_ = false);
     enum submit_command_progress_mode_t
     {
         submit_command_progress_failed = -1,

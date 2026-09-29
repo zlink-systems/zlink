@@ -25,6 +25,20 @@ int zlink_ctx_term(void *context) {
     return next(context);
 }
 
+int zlink_close(void *socket) {
+    static int first = 1;
+    int (*next)(void *) = dlsym(RTLD_NEXT, "zlink_close");
+    if (getenv("ZLINK_RUST_SOCKET_BUSY_ONCE")) {
+        record('C');
+        if (first) {
+            first = 0;
+            errno = EBUSY;
+            return 401;
+        }
+    }
+    return next(socket);
+}
+
 int zlink_poller_destroy(void **poller) {
     static int first = 1;
     if (getenv("ZLINK_RUST_POLLER_BUSY_ONCE") && first) {

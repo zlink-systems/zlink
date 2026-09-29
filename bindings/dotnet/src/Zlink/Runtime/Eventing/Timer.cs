@@ -123,7 +123,7 @@ internal sealed class Timer : NativeOwner, IZlinkTimer
 
         var poller = NativeMethods.zlink_poller_new();
         if (poller == IntPtr.Zero)
-            throw ZlinkException.CreateRecvException(
+            throw ZlinkException.CreateConfigException(
                 NativeMethods.GetLastPInvokeError());
 
         var rc = NativeMethods.zlink_poller_add_timer(poller, _handle,

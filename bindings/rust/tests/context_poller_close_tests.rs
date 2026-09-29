@@ -5,6 +5,10 @@ use std::process::Command;
 use zlink::{CloseResult, Context, POLLIN, Poller};
 
 fn run_with_shim(test: &str, poller_busy: bool) -> String {
+    run_with_shim_env(test, poller_busy, false)
+}
+
+fn run_with_shim_env(test: &str, poller_busy: bool, socket_busy: bool) -> String {
     let directory =
         std::env::temp_dir().join(format!("zlink-rust-close-{}-{test}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
@@ -32,6 +36,9 @@ fn run_with_shim(test: &str, poller_busy: bool) -> String {
         .env("ZLINK_RUST_CLOSE_TRACE", &trace);
     if poller_busy {
         child.env("ZLINK_RUST_POLLER_BUSY_ONCE", "1");
+    }
+    if socket_busy {
+        child.env("ZLINK_RUST_SOCKET_BUSY_ONCE", "1");
     }
     let output = child.output().unwrap();
     assert!(
@@ -77,4 +84,45 @@ fn poller_busy_close_keeps_registration_and_allows_retry() {
     assert_eq!(busy.native_errno(), libc::EBUSY);
     assert_eq!(poller.size().unwrap(), 1);
     poller.close().unwrap();
+}
+
+#[test]
+fn socket_close_busy_reaches_the_caller_and_keeps_the_socket() {
+    if std::env::var_os("ZLINK_RUST_CLOSE_CHILD").is_none() {
+        // One Core close per explicit call: the busy result is returned at
+        // once and the binding neither waits nor retries.
+        assert_eq!(
+            run_with_shim_env(
+                "socket_close_busy_reaches_the_caller_and_keeps_the_socket",
+                false,
+                true
+            ),
+            "CCST"
+        );
+        return;
+    }
+    let context = Context::new().unwrap();
+    let mut socket = context.pair_socket().unwrap();
+    let busy = socket.close().unwrap_err();
+    assert_eq!(busy.code(), CloseResult::Busy);
+    assert_eq!(busy.native_errno(), libc::EBUSY);
+    socket.close().unwrap();
+}
+
+#[test]
+fn dropped_socket_is_not_closed_again_after_busy() {
+    if std::env::var_os("ZLINK_RUST_CLOSE_CHILD").is_none() {
+        assert_eq!(
+            run_with_shim_env("dropped_socket_is_not_closed_again_after_busy", false, true),
+            "C"
+        );
+        return;
+    }
+    let context = Context::new().unwrap();
+    drop(context.pair_socket().unwrap());
+    // A background retry would add Core close calls to the trace.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    // The injected busy close left the Core socket open, so ctx_term would
+    // wait for it. The trace is complete here.
+    std::mem::forget(context);
 }

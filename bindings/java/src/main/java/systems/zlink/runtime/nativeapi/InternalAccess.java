@@ -7,8 +7,6 @@ import systems.zlink.internal.ContractAccess;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.ContextOption;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.errors.ZlinkException;
-import systems.zlink.contracts.errors.ErrorCategory;
 import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.eventing.ZlinkTimer;
 import systems.zlink.contracts.messaging.Message;
@@ -51,7 +49,6 @@ public final class InternalAccess {
 
     public interface ContextAccess {
         MemorySegment handle(Context context);
-        CompletionDispatcher completionDispatcher(Context context);
         void setOption(Context context, ContextOption option, int value);
         void setOptionData(Context context, ContextOption option, String value);
         int getOption(Context context, ContextOption option);
@@ -122,11 +119,6 @@ public final class InternalAccess {
 
     public static MemorySegment contextHandle(Context context) {
         return contextAccess().handle(context);
-    }
-
-    public static CompletionDispatcher contextCompletionDispatcher(
-            Context context) {
-        return contextAccess().completionDispatcher(context);
     }
 
     public static SocketMonitor monitorSocket(MemorySegment handle,
@@ -487,16 +479,6 @@ public final class InternalAccess {
 
     public static byte[] routingIdTrustedBytes(RoutingId routingId) {
         return ContractAccess.routingIdTrustedBytes(routingId);
-    }
-
-    public static ZlinkException zlinkExceptionFromLastError(
-            ErrorCategory category) {
-        return ZlinkException.fromErrno(category, Native.errno());
-    }
-
-    public static ZlinkException zlinkExceptionFromErrno(ErrorCategory category,
-                                                         int errno) {
-        return ZlinkException.fromErrno(category, errno);
     }
 
     private static ContextAccess contextAccess() {

@@ -21,7 +21,6 @@ import systems.zlink.contracts.sockets.SubSocket;
 import systems.zlink.contracts.sockets.XPubSocket;
 import systems.zlink.contracts.sockets.XSubSocket;
 import systems.zlink.runtime.nativeapi.InternalAccess;
-import systems.zlink.runtime.nativeapi.CompletionDispatcher;
 import systems.zlink.runtime.nativeapi.Native;
 import systems.zlink.runtime.nativeapi.NativeHelpers;
 import systems.zlink.runtime.nativeapi.NativeLayouts;
@@ -34,7 +33,6 @@ import java.util.List;
 
 final class NativeContext implements Context {
     private final ContextOptions options;
-    private final CompletionDispatcher completionDispatcher;
     private MemorySegment handle;
 
     static {
@@ -42,11 +40,6 @@ final class NativeContext implements Context {
             @Override
             public MemorySegment handle(Context context) {
                 return ((NativeContext) context).handle();
-            }
-
-            @Override
-            public CompletionDispatcher completionDispatcher(Context context) {
-                return ((NativeContext) context).completionDispatcher;
             }
 
             @Override
@@ -105,8 +98,6 @@ final class NativeContext implements Context {
             throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
         }
         this.options = new ContextOptions(this);
-        this.completionDispatcher = new CompletionDispatcher(
-            "zlink-send-completion");
         long runtimeMemoryLimit = Runtime.getRuntime().maxMemory();
         if (runtimeMemoryLimit > 0) {
             setUInt64Option(
@@ -169,7 +160,7 @@ final class NativeContext implements Context {
         ensureOpen();
         int rc = Native.ctxShutdown(handle);
         if (rc != 0) {
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw new ZlinkCloseException(CloseResult.fromValue(rc), Native.errno());
         }
     }
 
@@ -285,14 +276,13 @@ final class NativeContext implements Context {
         if (term != 0)
             throw new ZlinkCloseException(CloseResult.fromValue(term), Native.errno());
         handle = MemorySegment.NULL;
-        completionDispatcher.close();
     }
 
     private void setOption(ContextOption option, int value) {
         ensureOpen();
         int rc = Native.ctxSet(handle, option.getValue(), value);
         if (rc != 0) {
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
         }
     }
 
@@ -305,7 +295,7 @@ final class NativeContext implements Context {
             int rc = Native.ctxSetData(handle, option.getValue(), bytes,
                 byteLength);
             if (rc != 0) {
-                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+                throw new ZlinkConfigException(ConfigResult.fromValue(rc), Native.errno());
             }
         }
     }

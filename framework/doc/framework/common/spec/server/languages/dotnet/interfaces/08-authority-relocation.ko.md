@@ -52,6 +52,11 @@ public abstract record ZLinkStoreCondition
         ZLinkStoreKey Key,
         ZLinkStoreVersion Expected)
         : ZLinkStoreCondition;
+
+    public sealed record Value(
+        ZLinkStoreKey Key,
+        ReadOnlyMemory<byte> Expected)
+        : ZLinkStoreCondition;
 }
 
 public abstract record ZLinkStoreMutation

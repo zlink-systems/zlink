@@ -4,9 +4,6 @@ namespace Systems.Zlink;
 
 internal sealed class DealerSocket : ReceivingMessageSocketBase, IDealerSocket
 {
-    private static readonly TimeSpan DefaultRequestTimeout =
-        TimeSpan.FromSeconds(5);
-
     public DealerSocket(Context context)
         : base(context, SocketType.Dealer)
     {
@@ -39,16 +36,14 @@ internal sealed class DealerSocket : ReceivingMessageSocketBase, IDealerSocket
         IReadOnlyList<Message> parts, TimeSpan timeout,
         CancellationToken cancellationToken = default)
     {
-        var timeoutMs = RequestReplySupport.NormalizeRequestTimeout(timeout,
-            DefaultRequestTimeout);
+        var timeoutMs = RequestReplySupport.NormalizeTimeout(timeout);
         return Kernel.RequestAsync(null, parts, timeoutMs, cancellationToken);
     }
 
     internal IReadOnlyList<Message> RequestCore(IReadOnlyList<Message> parts,
         TimeSpan timeout)
     {
-        var timeoutMs = RequestReplySupport.NormalizeRequestTimeout(timeout,
-            DefaultRequestTimeout);
+        var timeoutMs = RequestReplySupport.NormalizeTimeout(timeout);
         return Kernel.Request(null, parts, timeoutMs);
     }
 }

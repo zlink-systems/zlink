@@ -18,6 +18,7 @@
 #if !defined(ZLINK_HAVE_WINDOWS)
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
@@ -678,6 +679,119 @@ bool stream_receiver_is_empty (void *stream_)
     return result == ZLINK_RECV_NO_DATA;
 }
 
+void test_stream_send_preserves_primary_fd_wake ()
+{
+    void *stream = test_context_socket (ZLINK_SOCKET_STREAM);
+    TEST_ASSERT_NOT_NULL (stream);
+    configure_socket (stream);
+    const int notify = 0;
+    const zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_PACKET;
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_set_stream_option (
+      stream, ZLINK_STREAM_OPT_NOTIFY, &notify, sizeof (notify)));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_set_stream_option (
+      stream, ZLINK_STREAM_OPT_RECV_MODE, &mode, sizeof (mode)));
+
+    char endpoint[MAX_SOCKET_STRING];
+    bind_loopback_ipv4 (stream, endpoint, sizeof (endpoint));
+    const int peer = connect_raw_tcp (endpoint);
+    TEST_ASSERT_TRUE (peer >= 0);
+    TEST_ASSERT_TRUE (send_stream_packet (peer, "prime"));
+    zlink_pollitem_t item = {stream, 0, ZLINK_POLLIN, 0};
+    TEST_ASSERT_EQUAL_INT (1, zlink_poll (&item, 1, coordination_timeout_ms, NULL));
+
+    zlink_msg_t header;
+    zlink_msg_t body;
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&header));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&body));
+    const zlink_routing_id_t *source = NULL;
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_stream_recv_packet (
+      stream, &source, &header, &body, ZLINK_RECV_FLAGS_DONTWAIT));
+    TEST_ASSERT_NOT_NULL (source);
+    const zlink_routing_id_t rid = *source;
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&body));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&header));
+    TEST_ASSERT_TRUE (stream_receiver_is_empty (stream));
+
+    zlink_fd_t fd;
+    size_t fd_size = sizeof (fd);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_get_option (stream, ZLINK_OPT_FD, &fd, &fd_size));
+    uint32_t events = 0;
+    size_t events_size = sizeof (events);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_get_option (stream, ZLINK_OPT_EVENTS, &events, &events_size));
+
+    TEST_ASSERT_TRUE (send_stream_packet (peer, "pending"));
+    struct pollfd notification = {fd, POLLIN, 0};
+    TEST_ASSERT_EQUAL_INT (1, poll (&notification, 1, coordination_timeout_ms));
+    TEST_ASSERT_TRUE (notification.revents & POLLIN);
+
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init_size (&body, 1));
+    *static_cast<char *> (zlink_msg_data (&body)) = 'x';
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, zlink_send_rid (
+      stream, &rid, &body, 1, ZLINK_SEND_FLAGS_NONE, NULL, NULL));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&body));
+
+    notification.revents = 0;
+    TEST_ASSERT_EQUAL_INT (1, poll (&notification, 1, 0));
+    TEST_ASSERT_TRUE (notification.revents & POLLIN);
+    events = 0;
+    events_size = sizeof (events);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_get_option (stream, ZLINK_OPT_EVENTS, &events, &events_size));
+    item.revents = 0;
+    TEST_ASSERT_EQUAL_INT (1, zlink_poll (&item, 1, 0, NULL));
+    TEST_ASSERT_TRUE (item.revents & ZLINK_POLLIN);
+    TEST_ASSERT_TRUE (receive_stream_packet (stream, "pending"));
+
+    close (peer);
+    stream = test_context_socket_close_zero_linger (stream);
+}
+
+void test_pair_send_preserves_primary_fd_wake ()
+{
+    void *receiver = test_context_socket (ZLINK_SOCKET_PAIR);
+    void *peer = test_context_socket (ZLINK_SOCKET_PAIR);
+    TEST_ASSERT_NOT_NULL (receiver);
+    TEST_ASSERT_NOT_NULL (peer);
+    configure_socket (receiver);
+    configure_socket (peer);
+    char endpoint[MAX_SOCKET_STRING];
+    bind_loopback_ipv4 (receiver, endpoint, sizeof (endpoint));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_connect (peer, endpoint));
+    prime_message_connection (peer, receiver, false, "PAIR-primary");
+
+    zlink_fd_t fd;
+    size_t fd_size = sizeof (fd);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_get_option (receiver, ZLINK_OPT_FD, &fd, &fd_size));
+    uint32_t events = 0;
+    size_t events_size = sizeof (events);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_get_option (receiver, ZLINK_OPT_EVENTS, &events, &events_size));
+
+    TEST_ASSERT_TRUE (send_message (peer, "pending"));
+    struct pollfd notification = {fd, POLLIN, 0};
+    TEST_ASSERT_EQUAL_INT (1, poll (&notification, 1, coordination_timeout_ms));
+    TEST_ASSERT_TRUE (notification.revents & POLLIN);
+
+    TEST_ASSERT_TRUE (send_message (receiver, "reply"));
+    notification.revents = 0;
+    TEST_ASSERT_EQUAL_INT (1, poll (&notification, 1, 0));
+    TEST_ASSERT_TRUE (notification.revents & POLLIN);
+    events = 0;
+    events_size = sizeof (events);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_get_option (receiver, ZLINK_OPT_EVENTS, &events, &events_size));
+    zlink_pollitem_t item = {receiver, 0, ZLINK_POLLIN, 0};
+    TEST_ASSERT_EQUAL_INT (1, zlink_poll (&item, 1, 0, NULL));
+    TEST_ASSERT_TRUE (item.revents & ZLINK_POLLIN);
+    TEST_ASSERT_TRUE (receive_message (receiver, false, "pending"));
+
+    receiver = test_context_socket_close_zero_linger (receiver);
+    peer = test_context_socket_close_zero_linger (peer);
+}
+
 void test_stream_two_poller_pollin_wake ()
 {
     void *stream = test_context_socket (ZLINK_SOCKET_STREAM);
@@ -727,6 +841,16 @@ void test_stream_two_poller_pollin_wake ()
                               primary_departure_result.diagnostic.c_str ());
 }
 #else
+void test_stream_send_preserves_primary_fd_wake ()
+{
+    TEST_IGNORE_MESSAGE ("raw TCP STREAM helper is POSIX-only");
+}
+
+void test_pair_send_preserves_primary_fd_wake ()
+{
+    TEST_IGNORE_MESSAGE ("raw FD poll fixture is POSIX-only");
+}
+
 void test_stream_two_poller_pollin_wake ()
 {
     TEST_IGNORE_MESSAGE ("raw TCP STREAM helper is POSIX-only");
@@ -739,6 +863,8 @@ int main ()
     setup_test_environment (60);
     UNITY_BEGIN ();
     RUN_TEST (test_stream_two_poller_pollin_wake);
+    RUN_TEST (test_stream_send_preserves_primary_fd_wake);
+    RUN_TEST (test_pair_send_preserves_primary_fd_wake);
     RUN_TEST (test_pair_two_poller_pollin_wake);
     RUN_TEST (test_dealer_two_poller_pollin_wake);
     RUN_TEST (test_router_two_poller_pollin_wake);

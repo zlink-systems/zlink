@@ -102,6 +102,8 @@ Write request는 condition 집합과 mutation 집합으로 구성한다.
 
 - `Missing(key)`는 key가 없거나 만료된 경우에만 참이다.
 - `Version(key, expected)`는 current version이 `expected`와 같은 경우에만 참이다.
+- `Value(key, expected)`는 key가 있고 만료되지 않았으며 current bytes가 `expected`와 byte 단위로
+  같은 경우에만 참이다.
 - `Put(key, bytes, optional retention)`은 새 opaque version을 발급한다.
 - `Delete(key)`는 key를 제거한다.
 
@@ -298,6 +300,8 @@ golden fixture로 검증하는 key·value byte — 만으로 다음을 확인한
 - 만료된 value는 provider clock 기준 `Missing`이고 durable value는 explicit delete 전까지
   유지된다.
 - Condition 하나가 실패하면 모든 mutation과 version 증가가 0이다.
+- `Value`는 같은 bytes로 `Put`해 version과 expiry가 바뀌어도 참이고, bytes 변경·삭제·만료 시
+  거짓이며 그때 batch mutation은 0이다.
 - 최대 2,048 unique key와 encoded 4 MiB request가 하나의 atomic commit으로 적용된다.
 - Scan page가 같은 snapshot을 사용하며 snapshot 또는 cursor가 유효하지 않으면 `Expired`를
   반환한다.

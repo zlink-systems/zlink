@@ -225,36 +225,6 @@ func cgoErrno(cerr error) int {
 	return 0
 }
 
-func errnoOrIO(cerr error) int {
-	if errno := cgoErrno(cerr); errno != 0 {
-		return errno
-	}
-	return int(C.EIO)
-}
-
-func fallbackSubmitErrno(result SubmitResult) int {
-	switch result {
-	case SubmitBackpressured, SubmitNotAdmitted:
-		return int(C.EAGAIN)
-	case SubmitNotConnected, SubmitNotFound:
-		return int(C.ENOTCONN)
-	case SubmitTerminated:
-		return int(C.ETERM)
-	case SubmitInvalidHandle:
-		return int(C.EFAULT)
-	case SubmitInvalidArgument:
-		return int(C.EINVAL)
-	case SubmitNotSupported:
-		return int(C.ENOTSUP)
-	case SubmitInvalidState, SubmitThreadViolation:
-		return int(C.EBUSY)
-	case SubmitOutOfMemory:
-		return int(C.ENOMEM)
-	default:
-		return int(C.EIO)
-	}
-}
-
 func fallbackRequestErrno(result RequestResult) int {
 	switch result {
 	case RequestBackpressured:
@@ -282,29 +252,6 @@ func fallbackRequestErrno(result RequestResult) int {
 	}
 }
 
-func fallbackRecvErrno(result RecvResult) int {
-	switch result {
-	case RecvNoData:
-		return int(C.EAGAIN)
-	case RecvBusy:
-		return int(C.EBUSY)
-	case RecvTerminated:
-		return int(C.ETERM)
-	case RecvInvalidHandle:
-		return int(C.EFAULT)
-	case RecvNotSupported:
-		return int(C.ENOTSUP)
-	case RecvInternalError:
-		return int(C.EINTR)
-	case RecvBufferTooSmall:
-		return int(C.ENOBUFS)
-	case RecvInvalidState:
-		return int(C.EINVAL)
-	default:
-		return int(C.EIO)
-	}
-}
-
 type resultCodeValue interface {
 	~int | ~int8 | ~int16 | ~int32 | ~int64 |
 		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~uintptr
@@ -315,11 +262,7 @@ func submitErrorFromCall[T resultCodeValue](result T, cerr error) error {
 	if resultCode == SubmitOK {
 		return nil
 	}
-	errno := cgoErrno(cerr)
-	if errno == 0 {
-		errno = fallbackSubmitErrno(resultCode)
-	}
-	return &SubmitError{Result: resultCode, nativeErrno: errno}
+	return &SubmitError{Result: resultCode, nativeErrno: cgoErrno(cerr)}
 }
 
 // requestCompletionError maps a terminal completion result without consulting
@@ -338,18 +281,14 @@ func recvErrorFromCall[T resultCodeValue](result T, cerr error) error {
 	if resultCode == RecvOK {
 		return nil
 	}
-	errno := cgoErrno(cerr)
-	if errno == 0 {
-		errno = fallbackRecvErrno(resultCode)
-	}
-	return &RecvError{Result: resultCode, nativeErrno: errno}
+	return &RecvError{Result: resultCode, nativeErrno: cgoErrno(cerr)}
 }
 
 func handlerErrorFromCall[T resultCodeValue](result T, cerr error) error {
 	if resultCodeInt(result) == int(HandlerOK) {
 		return nil
 	}
-	errno := errnoOrIO(cerr)
+	errno := cgoErrno(cerr)
 	return &HandlerError{Result: HandlerResult(resultCodeInt(result)), nativeErrno: errno}
 }
 
@@ -357,7 +296,7 @@ func closeErrorFromCall[T resultCodeValue](result T, cerr error) error {
 	if resultCodeInt(result) == int(CloseOK) {
 		return nil
 	}
-	errno := errnoOrIO(cerr)
+	errno := cgoErrno(cerr)
 	return &CloseError{Result: CloseResult(resultCodeInt(result)), nativeErrno: errno}
 }
 
@@ -365,7 +304,7 @@ func bindErrorFromCall[T resultCodeValue](result T, cerr error) error {
 	if resultCodeInt(result) == int(BindOK) {
 		return nil
 	}
-	errno := errnoOrIO(cerr)
+	errno := cgoErrno(cerr)
 	return &BindError{Result: BindResult(resultCodeInt(result)), nativeErrno: errno}
 }
 
@@ -373,7 +312,7 @@ func connectErrorFromCall[T resultCodeValue](result T, cerr error) error {
 	if resultCodeInt(result) == int(ConnectOK) {
 		return nil
 	}
-	errno := errnoOrIO(cerr)
+	errno := cgoErrno(cerr)
 	return &ConnectError{Result: ConnectResult(resultCodeInt(result)), nativeErrno: errno}
 }
 
@@ -381,7 +320,7 @@ func configErrorFromCall[T resultCodeValue](result T, cerr error) error {
 	if resultCodeInt(result) == int(ConfigOK) {
 		return nil
 	}
-	errno := errnoOrIO(cerr)
+	errno := cgoErrno(cerr)
 	return &ConfigError{Result: ConfigResult(resultCodeInt(result)), nativeErrno: errno}
 }
 
@@ -395,16 +334,23 @@ func stateError(format string, args ...any) error {
 
 func configErrorFromErrno(errno int) error {
 	switch errno {
-	case 0:
-		return nil
-	case int(C.EFAULT), int(C.ENOTSOCK), int(C.EDESTADDRREQ):
+	case int(C.EFAULT):
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: errno}
-	case int(C.EINVAL), int(C.EMSGSIZE), int(C.EAFNOSUPPORT), int(C.ENAMETOOLONG):
+	case int(C.EINVAL), int(C.EMSGSIZE):
 		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: errno}
 	case int(C.ENOTSUP):
 		return &ConfigError{Result: ConfigNotSupported, nativeErrno: errno}
+	case int(C.EBUSY), int(C.ESHUTDOWN), int(C.ESTALE), int(C.EALREADY),
+		int(C.ENOTCONN), int(C.ETIMEDOUT), int(C.EPROTO):
+		return &ConfigError{Result: ConfigInvalidState, nativeErrno: errno}
+	case int(C.ENOENT):
+		return &ConfigError{Result: ConfigNotFound, nativeErrno: errno}
+	case int(C.EEXIST):
+		return &ConfigError{Result: ConfigConflict, nativeErrno: errno}
+	case int(C.ENOBUFS):
+		return &ConfigError{Result: ConfigBufferTooSmall, nativeErrno: errno}
 	default:
-		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: errno}
+		return &ConfigError{Result: ConfigInternalError, nativeErrno: errno}
 	}
 }
 

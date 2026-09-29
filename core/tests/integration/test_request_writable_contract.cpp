@@ -553,7 +553,7 @@ void test_request_wait_token_target_removal_is_terminal ()
     TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_WRITABLE, terminal.kind);
     TEST_ASSERT_EQUAL_UINT64 (wait_id, terminal.completion_id);
     TEST_ASSERT_EQUAL_PTR (&wait_context, terminal.user_context);
-    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_TERMINAL, terminal.send_result);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_NOT_FOUND, terminal.send_result);
     TEST_ASSERT_EQUAL_INT (ENOENT, terminal.send_terminal_errno);
     TEST_ASSERT_EQUAL_UINT (target.size, terminal.peer_rid.size);
     TEST_ASSERT_EQUAL_MEMORY (target.data, terminal.peer_rid.data,

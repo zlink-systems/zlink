@@ -7,7 +7,7 @@ namespace Systems.Zlink.Tests;
 public sealed class test_writable_token_delivery
 {
     [Fact]
-    public void writable_wait_requires_backpressure_eagain_and_nonzero_token()
+    public void writable_wait_requires_backpressure_result_and_nonzero_token()
     {
         Type ownerType = CompletionOwnerTestAccess.RuntimeType(
             "Systems.Zlink.CompletionOwner");
@@ -22,8 +22,18 @@ public sealed class test_writable_token_delivery
 
         object missingErrnoAttempt = CompletionOwnerTestAccess.Create(
             attemptType, 73UL, missingErrno);
-        Assert.False((bool)CompletionOwnerTestAccess.InvokeStatic(ownerType,
+        // Core returned the typed BACKPRESSURED result; the errno is diagnostic
+        // only and never reclassifies it.
+        Assert.True((bool)CompletionOwnerTestAccess.InvokeStatic(ownerType,
             "IsWritableWait", missingErrnoAttempt)!);
+
+        object notFound = CompletionOwnerTestAccess.Create(
+            typeof(ZlinkSubmitException),
+            ZlinkSubmitException.ErrorCode.NotFound, 11);
+        object notFoundAttempt = CompletionOwnerTestAccess.Create(
+            attemptType, 73UL, notFound);
+        Assert.False((bool)CompletionOwnerTestAccess.InvokeStatic(ownerType,
+            "IsWritableWait", notFoundAttempt)!);
 
         object writableWait = CompletionOwnerTestAccess.Create(
             attemptType, 73UL, wouldBlock);
@@ -98,12 +108,19 @@ public sealed class test_writable_token_delivery
     }
 
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    [InlineData(true, true)]
+    [InlineData(false, false, 801, 2, (int)ZlinkSubmitException.ErrorCode.NotFound, 2)]
+    [InlineData(false, true, 801, 2, (int)ZlinkSubmitException.ErrorCode.NotFound, 2)]
+    [InlineData(true, false, 801, 2, (int)ZlinkSubmitException.ErrorCode.NotFound, 2)]
+    [InlineData(true, true, 801, 2, (int)ZlinkSubmitException.ErrorCode.NotFound, 2)]
+    [InlineData(false, false, 802, 107, (int)ZlinkSubmitException.ErrorCode.NotConnected, 107)]
+    [InlineData(true, false, 802, 107, (int)ZlinkSubmitException.ErrorCode.NotConnected, 107)]
+    [InlineData(false, false, 803, 11, (int)ZlinkSubmitException.ErrorCode.Backpressured, 11)]
+    [InlineData(true, false, 803, 11, (int)ZlinkSubmitException.ErrorCode.Backpressured, 11)]
+    [InlineData(false, false, 999, 2, (int)ZlinkSubmitException.ErrorCode.InternalError, 71)]
+    [InlineData(true, false, 999, 2, (int)ZlinkSubmitException.ErrorCode.InternalError, 71)]
     public async Task writable_delivers_core_result_to_matching_token(
-        bool request, bool differentEcho)
+        bool request, bool differentEcho, int sendResult, int nativeErrno,
+        int expectedResult, int expectedErrno)
     {
         Assert.True(CoreTestSupport.IsNativeAvailable());
         Type ownerType = CompletionOwnerTestAccess.RuntimeType(
@@ -121,7 +138,7 @@ public sealed class test_writable_token_delivery
             : CompletionOwnerTestAccess.Create(entryType, owner, target,
                 CancellationToken.None);
         CompletionOwnerTestAccess.Invoke(owner, "Register", entry,
-            IntPtr.Zero, false);
+            IntPtr.Zero);
         using Message part = Message.From("retained");
         const ulong token = 73;
         CompletionOwnerTestAccess.Invoke(entry, request ? "ArmWritable" : "Arm",
@@ -140,8 +157,8 @@ public sealed class test_writable_token_delivery
             ? CoreTestSupport.RoutingIdUtf8("unrelated") : target;
         CompletionOwnerTestAccess.SetField(completion, "PeerRoutingId",
             CompletionOwnerTestAccess.Invoke(echo, "ToNative")!);
-        CompletionOwnerTestAccess.SetField(completion, "SendResult", 202);
-        CompletionOwnerTestAccess.SetField(completion, "SendTerminalErrno", 2);
+        CompletionOwnerTestAccess.SetField(completion, "SendResult", sendResult);
+        CompletionOwnerTestAccess.SetField(completion, "SendTerminalErrno", nativeErrno);
 
         // A nonconforming RID is deliberately injected to prove the binding
         // does not replace the Core terminal result after token/context lookup.
@@ -149,8 +166,8 @@ public sealed class test_writable_token_delivery
 
         ZlinkSubmitException error = await Assert.ThrowsAsync<ZlinkSubmitException>(
             () => pending);
-        Assert.Equal(ZlinkSubmitException.ErrorCode.NotFound, error.Result);
-        Assert.Equal(2, error.NativeErrno);
+        Assert.Equal((ZlinkSubmitException.ErrorCode)expectedResult, error.Result);
+        Assert.Equal(expectedErrno, error.NativeErrno);
         Assert.Empty(CompletionOwnerTestAccess.Entries(owner));
     }
 }

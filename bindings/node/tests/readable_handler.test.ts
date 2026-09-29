@@ -8,8 +8,19 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const zlink = require('@zlink-systems/zlink');
-const { completionOwnerOf } = require('../../dist/zlink/runtime/messaging/completion_owner');
+const { CompletionOwner, completionOwnerOf } = require('../../dist/zlink/runtime/messaging/completion_owner');
 import { CompletionPollerDriver } from './completion_poller';
+
+test('readable watch preserves Core configuration result and errno', () => {
+  const owner = new CompletionOwner(null) as any;
+  owner.readableWatch = {};
+  owner.stopReadableWatch = () => { owner.readableWatch = null; };
+  owner.notifyReadable(zlink.ConfigResult.NotSupported, 22);
+  assert.throws(() => owner.throwReceiveError(), (error: any) =>
+    error instanceof zlink.ConfigError
+    && error.result === zlink.ConfigResult.NotSupported
+    && error.nativeErrno === 22);
+});
 
 test('readable handler replaces its predecessor and drains a queued batch through no data', async () => {
   const ctx = zlink.createContext();

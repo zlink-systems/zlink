@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import { constants } from 'node:os';
-import { RecvFlags, SendFlags } from '../../contracts/sockets/socket_constants';
+import { SendFlags } from '../../contracts/sockets/socket_constants';
 import {
   RecvError,
   RecvResult,
@@ -23,6 +23,7 @@ export function failureErrno(error: unknown): number {
   return typeof nativeErrno === 'number' ? nativeErrno : 0;
 }
 
+/** Core pairs a WRITABLE wait token with BACKPRESSURED and EAGAIN. */
 export function isWouldBlock(errno: number): boolean {
   return errno === constants.errno.EAGAIN;
 }
@@ -80,25 +81,18 @@ export function closeCall<T>(fallbackMessage: string, fn: () => T): T {
   return nativeCall('close', fallbackMessage, fn);
 }
 
-export function recvNativeError(
-  error: unknown,
-  flags: RecvFlags,
-  fallbackMessage: string
-): RecvError {
+export function recvNativeError(error: unknown, fallbackMessage: string): RecvError {
   if (error instanceof RecvError) return error;
   const message = nativeErrorMessage(error, fallbackMessage);
   const errno = failureErrno(error);
-  if ((flags & RecvFlags.DontWait) !== 0 && isWouldBlock(errno)) {
-    return withRuntimeErrorMessage(new RecvError(RecvResult.NoData, errno), message);
+  const result = failureResult(error);
+  if (result !== undefined) {
+    return withRuntimeErrorMessage(new RecvError(result as RecvResult, errno), message);
   }
   return createError('recv', errno, message) as RecvError;
 }
 
-export function submitNativeError(
-  error: unknown,
-  flags: SendFlags,
-  fallbackMessage: string
-): SubmitError {
+export function submitNativeError(error: unknown, fallbackMessage: string): SubmitError {
   const message = nativeErrorMessage(error, fallbackMessage);
   const errno = failureErrno(error);
   const nativeResult = failureResult(error);
@@ -108,9 +102,6 @@ export function submitNativeError(
       message
     );
   }
-  if ((flags & SendFlags.DontWait) !== 0 && isWouldBlock(errno)) {
-    return withRuntimeErrorMessage(new SubmitError(SubmitResult.Backpressured, errno), message);
-  }
   return createError('submit', errno, message) as SubmitError;
 }
 
@@ -119,7 +110,7 @@ export function submitOrBackpressure(
   flags: SendFlags,
   fallbackMessage: string
 ): false {
-  const submitError = submitNativeError(error, flags, fallbackMessage);
+  const submitError = submitNativeError(error, fallbackMessage);
   if (((flags | 0) & (SendFlags.DontWait | 0)) && submitError.result === SubmitResult.Backpressured) {
     return false;
   }

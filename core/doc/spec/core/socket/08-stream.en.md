@@ -118,7 +118,7 @@ A send-call boundary does not guarantee a matching receive boundary at the peer.
 message boundaries come from wire framing. The header and body returned by PACKET receive form
 one packet under [§6](#6-packet-receive-and-framing).
 
-A STREAM SEND wait token targets the specified RID. Physical disconnect ends that RID’s token with a WRITABLE record carrying `ZLINK_SEND_TERMINAL` and `ENOTCONN`; reconnection uses a new RID. Other SEND results, WRITABLE resubmission, and replay prohibition follow [Socket Common whole-message send](README.en.md#whole-message-send-and-pending-admission).
+A STREAM SEND wait token targets the specified RID. Physical disconnect ends that RID’s token with a WRITABLE record carrying `ZLINK_SEND_NOT_CONNECTED` and `ENOTCONN`; reconnection uses a new RID. Other SEND results, WRITABLE resubmission, and replay prohibition follow [Socket Common whole-message send](README.en.md#whole-message-send-and-pending-admission).
 
 With multiple clients connected to a STREAM socket, `ZLINK_POLLOUT` is
 aggregate readiness for the socket; it neither reserves credit for a specific
@@ -238,10 +238,9 @@ silently drops packets nor creates a separate unbounded queue.
 
 ## 7. Completion and thread safety
 
-When a STREAM send returns a nonzero wait token, exactly one `ZLINK_COMPLETION_WRITABLE` record
-for that token is received through `zlink_completion_recv()`: `ZLINK_SEND_ADMITTED` when the same
-RID gains write credit, or `ZLINK_SEND_TERMINAL` when the RID is explicitly removed with
-`zlink_disconnect_rid()`. Socket close ends the token internally and delivers no record, so a result that
+STREAM RID-specific wait-token termination follows
+[§4 Routed send](#4-routed-send); common termination and completion lifetime follow
+[Socket Common whole-message send](README.en.md#whole-message-send-and-pending-admission). Socket close ends the token internally and delivers no record, so a result that
 is needed is received before close. Its `peer_rid` preserves the logical RID snapshot
 specified at submit; it does not change to a physical connection identity after reconnect. [Socket Common](README.en.md#completion-pull-and-ownership)
 owns completion draining, reservation bounds, and close.

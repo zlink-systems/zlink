@@ -315,6 +315,12 @@ over an expired one. Extending expiry and normal release don't change the value.
 counter reaches `2^63-1`, it's `GenerationExhausted`. Retrying this result doesn't
 succeed, and it doesn't change the Store record or counter.
 
+Renewing an owner lease preserves its SPI value bytes while updating its expiry and provider
+version. When a Store batch checks a host's eligibility without mutating that owner lease, the
+Framework uses a [`Value` condition](02-location-store-redis.en.md#4-conditional-atomic-batch)
+for each lease checked, whether source or target, with the canonical SPI value bytes of that
+host run as the expected value.
+
 ### 3.2 Object Re-Creation and Owner Change Use Different Generation Numbers
 
 The formal record in the Location Store deciding an Actor/Spot's current owner and change

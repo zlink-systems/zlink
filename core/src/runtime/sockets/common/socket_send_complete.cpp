@@ -5,6 +5,7 @@
 #include "utils/precompiled.hpp"
 
 #include "core/c_api_copy_internal.hpp"
+#include "api/socket/request_timeout_scheduler_internal.hpp"
 #include "core/mailbox.hpp"
 #include "sockets/common/socket_base.hpp"
 #include "sockets/common/socket_submit_retry_fault_injection.hpp"
@@ -71,6 +72,32 @@ int copy_send_part_array (zlink_msg_t *parts_,
     return 0;
 }
 
+}
+
+int zlink::send_terminal_errno (zlink_send_complete_result_t result_)
+{
+    switch (result_) {
+        case ZLINK_SEND_NOT_FOUND:
+            return ENOENT;
+        case ZLINK_SEND_NOT_CONNECTED:
+            return ENOTCONN;
+        case ZLINK_SEND_TIMED_OUT:
+            return EAGAIN;
+        default:
+            zlink_assert (false);
+            return EINVAL;
+    }
+}
+
+void zlink::socket_base_t::expire_send_writable_wait (
+  zlink_completion_id_t completion_id_)
+{
+    if (socket_completion::expire_writable_waiter (&completion_runtime (),
+                                                    completion_id_)
+        > 0) {
+        notify_request_completion ();
+        static_cast<mailbox_t *> (_mailbox)->signal ();
+    }
 }
 
 bool zlink::socket_type_supports_completion_pull (int type_)
@@ -202,12 +229,19 @@ int zlink::socket_base_t::register_send_writable_wait_after_failure (
         return -1;
     }
 
+    // The token's SNDTIMEO deadline is taken here, where the rejected submit
+    // creates the token, so an admitted send never reads the option or the clock.
+    const int send_timeout = send_timeout_ms ();
+    const uint64_t deadline_ns =
+      send_timeout < 0 ? 0
+                       : request_timeout::deadline_after_ms (
+                           static_cast<uint32_t> (send_timeout));
     const bool correlation_wait = request_wait_ && !request_wait_->empty ();
     socket_completion::reservation_t *reservation = NULL;
     zlink_completion_id_t completion_id = 0;
     if (socket_completion::reserve_writable_wait (
           &completion_runtime (), user_context_, target_rid_or_null_,
-          &reservation, &completion_id, request_wait_)
+          &reservation, &completion_id, request_wait_, deadline_ns, this)
         != 0)
         return -1;
     zlink_assert (reservation);
@@ -462,12 +496,13 @@ void zlink::socket_base_t::mark_deferred_peer_controls ()
 }
 
 void zlink::socket_base_t::publish_send_writable_terminal (
-  const zlink_routing_id_t *target_rid_or_null_, int terminal_errno_)
+  const zlink_routing_id_t *target_rid_or_null_,
+  zlink_send_complete_result_t result_)
 {
     const int saved_errno = errno;
     const int published = socket_completion::publish_writable_waiters (
-      &completion_runtime (), target_rid_or_null_, ZLINK_SEND_TERMINAL,
-      terminal_errno_);
+      &completion_runtime (), target_rid_or_null_, result_,
+      send_terminal_errno (result_));
     if (published > 0) {
         notify_request_completion ();
         static_cast<mailbox_t *> (_mailbox)->signal ();
@@ -476,11 +511,13 @@ void zlink::socket_base_t::publish_send_writable_terminal (
 }
 
 void zlink::socket_base_t::fail_blocking_send_waits_for_logical_target (
-  const zlink_routing_id_t *peer_rid_, int terminal_errno_)
+  const zlink_routing_id_t *peer_rid_,
+  zlink_send_complete_result_t result_)
 {
-    // Explicit removal of a logical target retires its WRITABLE wait tokens
-    // too: a waiter parked on that target could otherwise never be woken.
-    publish_send_writable_terminal (peer_rid_, terminal_errno_);
+    // Logical target termination retires its WRITABLE wait tokens too:
+    // a waiter parked on that target could otherwise never be woken.
+    publish_send_writable_terminal (peer_rid_, result_);
+    const int terminal_errno = send_terminal_errno (result_);
     socket_blocking_send_runtime_t &wait_runtime = blocking_send_runtime ();
     const std::string logical_rid =
       peer_rid_ && peer_rid_->size
@@ -496,7 +533,7 @@ void zlink::socket_base_t::fail_blocking_send_waits_for_logical_target (
              it != wait_runtime.logical_waits.end (); ++it) {
             if (it->first.logical_endpoint.empty ()
                 && it->first.peer_rid == logical_rid) {
-                fail_blocking_send_wait_state (&it->second, terminal_errno_);
+                fail_blocking_send_wait_state (&it->second, terminal_errno);
                 signaled_waiter = true;
             }
         }

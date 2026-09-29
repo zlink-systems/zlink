@@ -5,6 +5,8 @@
 package native
 
 import (
+	"errors"
+	"syscall"
 	"testing"
 
 	"zlink.systems/zlink/internal/native/completiontest"
@@ -34,6 +36,48 @@ func TestWritableDeliversByContextAndToken(t *testing.T) {
 				}
 				if len(owner.entries) != 0 || len(writableFixturePayload(entry).owned) != 0 {
 					t.Fatal("completed waiter retained its entry or payload")
+				}
+			})
+		}
+	}
+}
+
+func TestWritableProjectionForSendAndRequest(t *testing.T) {
+	cases := []struct {
+		name          string
+		sendResult    int
+		terminalErrno int
+		result        SubmitResult
+		errno         int
+	}{
+		{"not found", int(SendNotFound), int(syscall.ENOENT), SubmitNotFound, int(syscall.ENOENT)},
+		{"not connected", int(SendNotConnected), int(syscall.ENOTCONN), SubmitNotConnected, int(syscall.ENOTCONN)},
+		{"timed out", int(SendTimedOut), int(syscall.EAGAIN), SubmitBackpressured, int(syscall.EAGAIN)},
+		{"unknown", 999, int(syscall.ENOENT), SubmitInternalError, int(syscall.EPROTO)},
+	}
+	for _, kind := range []completionOperationKind{completionSendRetry, completionRequest} {
+		for _, test := range cases {
+			t.Run(completionTestName(kind)+"/"+test.name, func(t *testing.T) {
+				owner, entry := newWritableFixture(t, kind)
+				completiontest.WritableResult(41, entry.handleKey, "submit-target",
+					test.sendResult, test.terminalErrno)
+				if _, err := owner.drain(true); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := owner.drain(true); err != nil {
+					t.Fatal(err)
+				}
+				select {
+				case <-entry.done:
+				default:
+					t.Fatal("WRITABLE result did not settle the waiter")
+				}
+				var submitErr *SubmitError
+				if !errors.As(entry.err, &submitErr) {
+					t.Fatalf("WRITABLE result error = %T %v, want SubmitError", entry.err, entry.err)
+				}
+				if submitErr.Result != test.result || submitErr.InternalErrno() != test.errno {
+					t.Fatalf("WRITABLE result = (%d, %d), want (%d, %d)", submitErr.Result, submitErr.InternalErrno(), test.result, test.errno)
 				}
 			})
 		}

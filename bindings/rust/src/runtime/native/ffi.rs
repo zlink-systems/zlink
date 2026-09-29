@@ -35,7 +35,9 @@ pub struct zlink_routing_id_t {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum zlink_send_complete_result_t {
     ZLINK_SEND_ADMITTED = 0,
-    ZLINK_SEND_TERMINAL = 202,
+    ZLINK_SEND_NOT_FOUND = 801,
+    ZLINK_SEND_NOT_CONNECTED = 802,
+    ZLINK_SEND_TIMED_OUT = 803,
 }
 
 pub type zlink_completion_id_t = u64;
@@ -70,7 +72,7 @@ pub struct zlink_completion_t {
     pub completion_id: zlink_completion_id_t,
     pub user_context: *mut c_void,
     pub peer_rid: zlink_routing_id_t,
-    pub send_result: zlink_send_complete_result_t,
+    pub send_result: i32,
     pub send_terminal_errno: c_int,
     pub request_result: zlink_request_result_t,
     pub reply_parts: *mut zlink_msg_t,
@@ -85,7 +87,7 @@ impl zlink_completion_t {
             completion_id: 0,
             user_context: std::ptr::null_mut(),
             peer_rid: zlink_routing_id_t::empty(),
-            send_result: zlink_send_complete_result_t::ZLINK_SEND_ADMITTED,
+            send_result: zlink_send_complete_result_t::ZLINK_SEND_ADMITTED as i32,
             send_terminal_errno: 0,
             request_result: zlink_request_result_t::ZLINK_REQUEST_OK,
             reply_parts: std::ptr::null_mut(),
@@ -448,7 +450,7 @@ pub struct zlink_monitor_event_t {
 #[cfg(test)]
 mod monitor_event_layout_tests {
     use super::zlink_monitor_event_t;
-    use std::mem::{MaybeUninit, size_of};
+    use std::mem::{size_of, MaybeUninit};
 
     #[test]
     fn monitor_event_layout_matches_c_abi() {
