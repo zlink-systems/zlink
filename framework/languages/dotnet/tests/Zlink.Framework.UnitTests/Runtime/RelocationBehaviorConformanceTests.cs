@@ -130,6 +130,54 @@ public sealed class RelocationBehaviorConformanceTests
     }
 
     [Fact]
+    public async Task Sweeping_completed_aborts_keeps_active_empty_target_attempt_open()
+    {
+        var owner = new ZLinkStandaloneActorRelocationRuntime(null!, null!, null!);
+        var ownerType = owner.GetType();
+        var keyType = ownerType.GetNestedType("AttemptKey", BindingFlags.NonPublic)!;
+        var key = Activator.CreateInstance(keyType, 1UL, 2UL, 1UL)!;
+        var acquire = ownerType.GetMethod(
+            "AcquireTargetAttempt",
+            BindingFlags.Instance | BindingFlags.NonPublic
+        )!;
+        var lease = Assert.IsAssignableFrom<IDisposable>(acquire.Invoke(owner, [key]));
+        try
+        {
+            var slot = lease
+                .GetType()
+                .GetProperty("Slot", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(lease)!;
+            var sweep = ownerType.GetMethod(
+                "SweepCompletedTargetAbortsAsync",
+                BindingFlags.Instance | BindingFlags.NonPublic
+            )!;
+            await Assert.IsType<ValueTask>(sweep.Invoke(owner, null)).AsTask();
+
+            Assert.True(
+                Assert.IsType<bool>(
+                    slot.GetType()
+                        .GetMethod("TryAcquire", BindingFlags.Instance | BindingFlags.NonPublic)!
+                        .Invoke(slot, null)
+                )
+            );
+            slot.GetType()
+                .GetMethod("Release", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(slot, null);
+            Assert.False(
+                Assert.IsType<bool>(
+                    slot.GetType()
+                        .GetProperty("CanRemove", BindingFlags.Instance | BindingFlags.NonPublic)!
+                        .GetValue(slot)
+                )
+            );
+        }
+        finally
+        {
+            lease.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task ActorJoin_overlapping_prepare_timeout_keeps_original_waiter_owned()
     {
         var trace = new RelocationBehaviorTrace();

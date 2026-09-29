@@ -1822,7 +1822,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 LeaseGeneration: 1,
                 UpdatedAt: default
             );
-            transport.ReplaceAutomatic([expected]);
+            await transport.ReplaceAutomaticAsync([expected]);
 
             using var hello = await PollReceivedAsync(
                 storage => TryReceive(router, storage),

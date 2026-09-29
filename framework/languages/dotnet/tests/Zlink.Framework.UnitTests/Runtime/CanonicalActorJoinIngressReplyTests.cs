@@ -7,10 +7,16 @@ namespace Zlink.Framework.UnitTests;
 public sealed class CanonicalActorJoinIngressReplyTests
 {
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
     public async Task ManagedSource_Command28Request_ConsumesCommand20TailAndApplicationReply(
-        bool targetDialsSource
+        bool targetDialsSource,
+        bool targetSpotUnavailable,
+        bool retainInactiveSpot
     )
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -47,6 +53,11 @@ public sealed class CanonicalActorJoinIngressReplyTests
             source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
         );
 
+        if (retainInactiveSpot)
+            targetSpot.AddActor();
+        if (targetSpotUnavailable)
+            targetSpot.Dispose();
+
         var operationId = source.AllocateOperationId();
         var request = new ZLinkBackendCanonicalActorJoinRequest(
             new ZLinkBackendActorRef(sourceRid, "actor-1", 11),
@@ -69,6 +80,32 @@ public sealed class CanonicalActorJoinIngressReplyTests
             SubmitResult.Ok,
             source.TryRequestCanonicalActorJoin(request, operationId, TimeSpan.FromSeconds(2))
         );
+
+        if (targetSpotUnavailable)
+        {
+            var (failure, failureParts) = await ReceiveCompletionAsync(source, operationId);
+            try
+            {
+                Assert.Equal((int)RequestResult.InternalError, failure.TerminalResult);
+                Assert.Equal(
+                    (int)ServiceWireConstants.FrameworkErrorCode.RouteNotConnected,
+                    failure.FailureErrno
+                );
+                var error = Assert.IsType<ZLinkFrameworkException>(
+                    ZLinkRequestFailureMapper.CreateCompletionException(
+                        RequestResult.InternalError,
+                        failure.FailureErrno,
+                        "Actor Join"
+                    )
+                );
+                Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
+            }
+            finally
+            {
+                ZLinkMessageParts.DisposeAll(failureParts);
+            }
+            return;
+        }
 
         // The target queues command 28 only when Core delivered a Request with
         // a request sequence. A one-way command 28 is rejected before this
@@ -1256,7 +1293,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
             TargetEndpoint = targetEndpoint;
             SourceEndpoint = sourceEndpoint;
             _createdSources.Add(source);
-            _completionOwners.Add(sourceCompletionOwner);
+            _completionOwners.Add(source, sourceCompletionOwner);
         }
 
         internal IContext Context { get; }
@@ -1271,9 +1308,28 @@ public sealed class CanonicalActorJoinIngressReplyTests
         private string SourceEndpoint { get; }
         private IDealerSocket? PriorSource { get; set; }
         private readonly List<IDealerSocket> _createdSources = new();
-        private readonly List<TestCompletionPollerDriver> _completionOwners = new();
+        private readonly Dictionary<IDealerSocket, TestCompletionPollerDriver> _completionOwners =
+            new();
 
-        internal ValueTask DisconnectSourceAsync() => Source.DisposeAsync();
+        internal ValueTask DisconnectSourceAsync() => CloseSourceAsync(Source);
+
+        private async ValueTask CloseSourceAsync(IDealerSocket source)
+        {
+            if (!_completionOwners.Remove(source, out var completionOwner))
+            {
+                await source.DisposeAsync();
+                return;
+            }
+
+            try
+            {
+                completionOwner.Dispose();
+            }
+            finally
+            {
+                await source.DisposeAsync();
+            }
+        }
 
         internal async Task SendIdempotentHelloAsync()
         {
@@ -1285,7 +1341,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
         {
             var replacement = Context.CreateDealerSocket();
             _createdSources.Add(replacement);
-            _completionOwners.Add(new TestCompletionPollerDriver(replacement));
+            _completionOwners.Add(replacement, new TestCompletionPollerDriver(replacement));
             replacement.SetRoutingId(SourceRid);
             replacement.Connect(TargetEndpoint);
             await WaitUntilAsync(() =>
@@ -1302,7 +1358,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
         {
             var replacement = Context.CreateDealerSocket();
             _createdSources.Add(replacement);
-            _completionOwners.Add(new TestCompletionPollerDriver(replacement));
+            _completionOwners.Add(replacement, new TestCompletionPollerDriver(replacement));
             replacement.SetRoutingId(SourceRid);
             replacement.Connect(TargetEndpoint);
             await WaitUntilAsync(() =>
@@ -1339,7 +1395,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
             }
             finally
             {
-                await prior.DisposeAsync();
+                await CloseSourceAsync(prior);
             }
         }
 
@@ -1348,7 +1404,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
             if (PriorSource is not { } prior)
                 throw new InvalidOperationException("No prior source is available.");
             PriorSource = null;
-            await prior.DisposeAsync();
+            await CloseSourceAsync(prior);
         }
 
         internal static async Task<ConnectedRuntime> CreateAsync(
@@ -1406,10 +1462,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
 
         public async ValueTask DisposeAsync()
         {
-            foreach (var completionOwner in _completionOwners)
-                completionOwner.Dispose();
-            foreach (var source in _createdSources)
-                await source.DisposeAsync();
+            foreach (var source in _completionOwners.Keys.ToArray())
+                await CloseSourceAsync(source);
             await Target.DisposeAsync();
             await Context.DisposeAsync();
         }

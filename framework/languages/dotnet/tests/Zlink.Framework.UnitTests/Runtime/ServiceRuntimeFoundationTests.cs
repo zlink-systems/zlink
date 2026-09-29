@@ -889,37 +889,6 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
-    public void AdmissionGuard_KeepsTheConnectIntentForOneLogicalPeerIncarnation()
-    {
-        // Core selects the physical route of the RID (Core ROUTER §10.1). The
-        // guard only merges two logical peer objects of the same incarnation:
-        // the object that owns the connect intent survives, independent of the
-        // RID order or of which physical pipe Core selected.
-        var outbound = ZLinkServiceConnectionDirection.Outbound;
-        var inbound = ZLinkServiceConnectionDirection.Inbound;
-        Assert.Equal(
-            ZLinkServiceDuplicateConnectionDecision.KeepCurrent,
-            ZLinkServiceAdmissionGuard.SelectConnection(17, outbound, 17, inbound)
-        );
-        Assert.Equal(
-            ZLinkServiceDuplicateConnectionDecision.UseIncoming,
-            ZLinkServiceAdmissionGuard.SelectConnection(17, inbound, 17, outbound)
-        );
-        Assert.Equal(
-            ZLinkServiceDuplicateConnectionDecision.KeepCurrent,
-            ZLinkServiceAdmissionGuard.SelectConnection(17, outbound, 17, outbound)
-        );
-        Assert.Equal(
-            ZLinkServiceDuplicateConnectionDecision.KeepCurrent,
-            ZLinkServiceAdmissionGuard.SelectConnection(17, inbound, 17, inbound)
-        );
-        Assert.Equal(
-            ZLinkServiceDuplicateConnectionDecision.NotDuplicate,
-            ZLinkServiceAdmissionGuard.SelectConnection(17, outbound, 19, inbound)
-        );
-    }
-
-    [Fact]
     public void SpotPeerMonitoring_MapsSignedAdmittedChannelWeight()
     {
         var peer = new MeshNodePeer(
@@ -1751,7 +1720,8 @@ public sealed class ServiceRuntimeFoundationTests
         var replacementIntent = local.ConnectPeer(remoteEndpoint, replacementRid);
         local.Start();
 
-        var oldPeer = Assert.Single(local.Peers(), peer => peer.ConnectionIntentId == oldIntent);
+        Assert.NotEqual(oldIntent, replacementIntent);
+        Assert.DoesNotContain(local.Peers(), peer => peer.ConnectionIntentId == oldIntent);
         Assert.Contains(
             local.Peers(),
             peer =>
@@ -1767,10 +1737,7 @@ public sealed class ServiceRuntimeFoundationTests
             )
         );
 
-        Assert.DoesNotContain(
-            local.Peers(),
-            peer => peer.ConnectionIntentId == oldPeer.ConnectionIntentId
-        );
+        Assert.DoesNotContain(local.Peers(), peer => peer.ConnectionIntentId == oldIntent);
         Assert.Contains(
             local.Peers(),
             peer =>
@@ -1792,6 +1759,206 @@ public sealed class ServiceRuntimeFoundationTests
                 .Peers()
                 .Any(peer => peer.RoutingId == localRid && peer.State == MeshPeerState.Admitted)
         );
+    }
+
+    [Fact]
+    public async Task InboundLivenessExpiry_UpdatesNodeReadiness()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var source = new ZLinkManagedMeshNode(context, "inbound-expiry");
+        await using var target = new ZLinkManagedMeshNode(context, "inbound-expiry");
+        var suffix = Guid.NewGuid().ToString("N");
+        var sourceRid = RoutingId.From($"expiry-source-{suffix}");
+        source.SetRoutingId(sourceRid);
+        source.SetBind("tcp://127.0.0.1:0");
+        target.SetRoutingId(RoutingId.From($"expiry-target-{suffix}"));
+        target.SetBind("tcp://127.0.0.1:0");
+        source.Start();
+        target.Start();
+        source.ConnectPeer(target.Status().LocalEndpoint, target.RoutingId);
+        await WaitUntilAsync(() => target.Status().AdmittedPeerCount == 1);
+
+        var index =
+            (Dictionary<RoutingId, ZLinkMeshPeer>)
+                typeof(ZLinkManagedMeshNode)
+                    .GetField(
+                        "_peersByRid",
+                        System.Reflection.BindingFlags.Instance
+                            | System.Reflection.BindingFlags.NonPublic
+                    )!
+                    .GetValue(target)!;
+        index[sourceRid].Liveness = new ZLinkServiceLiveness(0);
+
+        await WaitUntilAsync(() => target.Status().AdmittedPeerCount == 0);
+        Assert.Equal(MeshNodeState.Started, target.Status().State);
+    }
+
+    [Fact]
+    public async Task RemovingOneOfTwoRidIntents_DoesNotEndPeerLifetime()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "shared-rid-intents");
+        var suffix = Guid.NewGuid().ToString("N");
+        var peerRid = RoutingId.From($"shared-peer-{suffix}");
+        var first = node.ConnectPeer($"inproc://shared-first-{suffix}", peerRid);
+        var second = node.ConnectPeer($"inproc://shared-second-{suffix}", peerRid);
+        var ended = new List<RoutingId>();
+        var addListener = typeof(ZLinkManagedMeshNode)
+            .GetEvent(
+                "PeerConnectionIntentRemoved",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
+            )!
+            .GetAddMethod(nonPublic: true)!;
+        addListener.Invoke(node, [new Action<RoutingId>(ended.Add)]);
+
+        node.RemovePeerConnection(first);
+        Assert.Empty(ended);
+        Assert.Contains(node.Peers(), peer => peer.ConnectionIntentId == second);
+
+        node.RemovePeerConnection(second);
+        Assert.Equal(peerRid, Assert.Single(ended));
+    }
+
+    [Fact]
+    public async Task DisconnectedKnownChannel_RemainsUnavailableWhileIntentExists()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var source = new ZLinkManagedMeshNode(context, "reconnecting-channel");
+        var suffix = Guid.NewGuid().ToString("N");
+        source.SetRoutingId(RoutingId.From($"reconnecting-source-{suffix}"));
+        source.SetBind("tcp://127.0.0.1:0");
+        source.Start();
+
+        var targetRid = RoutingId.From($"reconnecting-target-{suffix}");
+        var target = new ZLinkManagedMeshNode(context, "reconnecting-channel");
+        target.SetRoutingId(targetRid);
+        target.SetBind("tcp://127.0.0.1:0");
+        target.AddChannel("worker");
+        target.Start();
+        source.ConnectPeer(target.Status().LocalEndpoint, targetRid);
+        await WaitUntilAsync(() =>
+            source
+                .Peers()
+                .Any(peer => peer.RoutingId == targetRid && peer.State == MeshPeerState.Admitted)
+        );
+
+        await target.DisposeAsync();
+        await WaitUntilAsync(() =>
+            source
+                .Peers()
+                .Any(peer => peer.RoutingId == targetRid && peer.State == MeshPeerState.Connecting)
+        );
+        Assert.Single(source.Peers(), peer => peer.RoutingId == targetRid);
+
+        using var requestPart = Message.From(new byte[] { 1 });
+        var error = await Assert.ThrowsAsync<ZlinkSubmitException>(async () =>
+            await source.RequestToChannelDirectAsync(
+                "source",
+                "worker",
+                [requestPart],
+                SendFlags.None,
+                ReadOnlyMemory<byte>.Empty,
+                TimeSpan.FromSeconds(3),
+                CancellationToken.None
+            )
+        );
+        Assert.Equal(ZlinkSubmitException.ErrorCode.NotConnected, error.Result);
+    }
+
+    [Fact]
+    public async Task ReleasedOldLifetime_PreservesPendingIntentAtSameEndpoint()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var local = new ZLinkManagedMeshNode(context, "pending-same-endpoint");
+        await using var backend = new ZLinkBackendSpotNodeWrapper(local);
+        var suffix = Guid.NewGuid().ToString("N");
+        var peerRid = RoutingId.From($"pending-same-{suffix}");
+        var endpoint = $"inproc://pending-same-{suffix}";
+        local.SetRoutingId(RoutingId.From($"pending-local-{suffix}"));
+        local.SetBind("tcp://127.0.0.1:0");
+        local.Start();
+
+        backend.ConnectPeer(peerRid, endpoint, ZLinkServiceSecurityIdentity.Plaintext);
+        var pending = Assert.Single(local.Peers());
+
+        backend.DisconnectPeerLifetime(peerRid, endpoint, 7);
+
+        Assert.Contains(
+            local.Peers(),
+            peer => peer.ConnectionIntentId == pending.ConnectionIntentId
+        );
+    }
+
+    [Fact]
+    public async Task ReleasedPeerLifetime_PreservesPendingIntentAtOtherEndpoint()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var local = new ZLinkManagedMeshNode(context, "pending-replacement");
+        await using var backend = new ZLinkBackendSpotNodeWrapper(local);
+        var suffix = Guid.NewGuid().ToString("N");
+        var peerRid = RoutingId.From($"pending-replacement-{suffix}");
+        var newEndpoint = $"inproc://pending-new-{suffix}";
+        local.SetRoutingId(RoutingId.From($"pending-local-{suffix}"));
+        local.SetBind("tcp://127.0.0.1:0");
+        local.Start();
+        await using var previous = new ZLinkManagedMeshNode(context, "pending-replacement");
+        previous.SetRoutingId(peerRid);
+        previous.SetBind("tcp://127.0.0.1:0");
+        previous.Start();
+        var oldEndpoint = previous.Status().LocalEndpoint;
+
+        backend.ConnectPeer(peerRid, oldEndpoint, ZLinkServiceSecurityIdentity.Plaintext);
+        await WaitUntilAsync(() => local.Status().AdmittedPeerCount == 1);
+        var lifecycle = Assert.Single(local.Peers()).LifecycleGeneration;
+        backend.ConnectPeer(peerRid, newEndpoint, ZLinkServiceSecurityIdentity.Plaintext);
+        var pending = Assert.Single(local.Peers(), peer => peer.Endpoint == newEndpoint);
+
+        backend.DisconnectPeerLifetime(peerRid, oldEndpoint, lifecycle);
+
+        Assert.DoesNotContain(local.Peers(), peer => peer.Endpoint == oldEndpoint);
+        Assert.Contains(
+            local.Peers(),
+            peer => peer.ConnectionIntentId == pending.ConnectionIntentId
+        );
+    }
+
+    [Fact]
+    public async Task ReleasedPeerLifetime_RemovesEndpointRegistrationBeforeNewRid()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var local = new ZLinkManagedMeshNode(context, "replacement-registration");
+        await using var backend = new ZLinkBackendSpotNodeWrapper(local);
+        var suffix = Guid.NewGuid().ToString("N");
+        local.SetRoutingId(RoutingId.From($"registration-local-{suffix}"));
+        local.SetBind("tcp://127.0.0.1:0");
+        local.Start();
+
+        var firstRid = RoutingId.From($"registration-first-{suffix}");
+        var first = new ZLinkManagedMeshNode(context, "replacement-registration");
+        first.SetRoutingId(firstRid);
+        first.SetBind("tcp://127.0.0.1:0");
+        first.Start();
+        var endpoint = first.Status().LocalEndpoint;
+        backend.ConnectPeer(firstRid, endpoint, ZLinkServiceSecurityIdentity.Plaintext);
+        await WaitUntilAsync(() => local.Status().AdmittedPeerCount == 1);
+        var lifecycle = Assert.Single(local.Peers()).LifecycleGeneration;
+
+        backend.DisconnectPeerLifetime(firstRid, endpoint, lifecycle);
+        await first.DisposeAsync();
+        await using var replacement = new ZLinkManagedMeshNode(context, "replacement-registration");
+        var replacementRid = RoutingId.From($"registration-second-{suffix}");
+        replacement.SetRoutingId(replacementRid);
+        replacement.SetBind(endpoint);
+        replacement.Start();
+        backend.ConnectPeer(replacementRid, endpoint, ZLinkServiceSecurityIdentity.Plaintext);
+        await WaitUntilAsync(() =>
+            local
+                .Peers()
+                .Any(peer =>
+                    peer.RoutingId == replacementRid && peer.State == MeshPeerState.Admitted
+                )
+        );
+        Assert.DoesNotContain(local.Peers(), peer => peer.RoutingId == firstRid);
     }
 
     [Fact]

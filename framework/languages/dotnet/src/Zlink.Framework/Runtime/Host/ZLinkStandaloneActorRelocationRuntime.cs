@@ -1365,7 +1365,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         if (!TryAcquireTargetAttempt(key, out var lease))
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                "late_cutover object=actor reason=no_prepared_target"
+                $"late_cutover object=actor reason=no_prepared_target relocation={cutover.RelocationId.High:x16}{cutover.RelocationId.Low:x16} actor={cutover.Object.ObjectId} attempt={cutover.TargetAttemptGeneration}"
             );
             return;
         }
@@ -1378,7 +1378,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     if (lease.Slot.Stage is not { } stage)
                     {
                         ZLinkFrameworkDebugLog.SpotDiscovery(
-                            "late_cutover object=actor reason=no_prepared_target"
+                            $"late_cutover object=actor reason=no_prepared_target relocation={cutover.RelocationId.High:x16}{cutover.RelocationId.Low:x16} actor={cutover.Object.ObjectId} attempt={cutover.TargetAttemptGeneration}"
                         );
                         return;
                     }
@@ -1695,30 +1695,21 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 continue;
             using (lease)
             {
-                try
-                {
-                    //  Location runtime §10: an unpublished stage is never
-                    //  discarded because time passed; only its authority
-                    //  settlement discards it (WatchUnverifiedTargetOnceAsync,
-                    //  CutoverTargetAsync, AbortTargetAsync). Retention bounds
-                    //  only completed aborts.
-                    await pair
-                        .Value.RunAsync(() =>
-                        {
-                            if (
-                                pair.Value.Abort is { } abort
-                                && abort.IsCompleted
-                                && abort.CreatedAt <= cutoff
-                            )
-                                pair.Value.TryRemoveAbort(abort);
-                            return ValueTask.CompletedTask;
-                        })
-                        .ConfigureAwait(false);
-                }
-                finally
-                {
+                //  Location runtime §10: an unpublished stage is never
+                //  discarded because time passed; only its authority
+                //  settlement discards it (WatchUnverifiedTargetOnceAsync,
+                //  CutoverTargetAsync, AbortTargetAsync). Retention bounds
+                //  only completed aborts.
+                var removed = await pair
+                    .Value.RunAsync(() =>
+                        pair.Value.Abort is { } abort
+                        && abort.IsCompleted
+                        && abort.CreatedAt <= cutoff
+                        && pair.Value.TryRemoveAbort(abort)
+                    )
+                    .ConfigureAwait(false);
+                if (removed)
                     CloseTargetAttemptIfEmpty(pair.Key, pair.Value);
-                }
             }
         }
     }

@@ -247,41 +247,47 @@ internal sealed class ZLinkAutoConnectReconciler
         await _reconcileGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var mutationStart = RunState(() =>
-            {
-                if (Volatile.Read(ref _ownerCleanupStarted) != 0)
-                    return (Continue: false, NoLocalRow: false);
-                if (_localRow is null)
-                    return (Continue: true, NoLocalRow: true);
-                // Weight and drain changes increment the descriptor revision so
-                // readers on the same lifecycle generation apply the newest
-                // snapshot only (40-location-runtime §2.1).
-                _localRow = mutation(_localRow) with
+            var mutationStart = await _lane
+                .RunAsync(() =>
                 {
-                    DescriptorRevision = ++_localRevision,
-                };
-                return (Continue: true, NoLocalRow: false);
-            });
+                    if (Volatile.Read(ref _ownerCleanupStarted) != 0)
+                        return (Continue: false, NoLocalRow: false);
+                    if (_localRow is null)
+                        return (Continue: true, NoLocalRow: true);
+                    // Weight and drain changes increment the descriptor revision so
+                    // readers on the same lifecycle generation apply the newest
+                    // snapshot only (40-location-runtime §2.1).
+                    _localRow = mutation(_localRow) with
+                    {
+                        DescriptorRevision = ++_localRevision,
+                    };
+                    return (Continue: true, NoLocalRow: false);
+                })
+                .ConfigureAwait(false);
             if (!mutationStart.Continue)
                 return false;
             if (mutationStart.NoLocalRow)
                 return true;
 
             await PublishLocalAsync(cancellationToken).ConfigureAwait(false);
-            var row = RunState(() => _localPublished && _localGeneration != 0 ? _localRow : null);
+            var row = await _lane
+                .RunAsync(() => _localPublished && _localGeneration != 0 ? _localRow : null)
+                .ConfigureAwait(false);
             if (row is null)
                 return false;
 
             var result = await _runtime
                 .WriteDescriptorAsync(row, ZLinkLocationWriteIntent.Renew, cancellationToken)
                 .ConfigureAwait(false);
-            return RunState(() =>
-            {
-                _localPublished = result.Status == ZLinkLocationWriteStatus.Stored;
-                if (_localPublished)
-                    _localGeneration = result.Generation;
-                return _localPublished;
-            });
+            return await _lane
+                .RunAsync(() =>
+                {
+                    _localPublished = result.Status == ZLinkLocationWriteStatus.Stored;
+                    if (_localPublished)
+                        _localGeneration = result.Generation;
+                    return _localPublished;
+                })
+                .ConfigureAwait(false);
         }
         finally
         {
@@ -321,7 +327,7 @@ internal sealed class ZLinkAutoConnectReconciler
         await _reconcileGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            RunState(EnterStoreFailure);
+            await _lane.RunAsync(EnterStoreFailure).ConfigureAwait(false);
         }
         finally
         {
@@ -340,74 +346,76 @@ internal sealed class ZLinkAutoConnectReconciler
         // snapshot.
         if (!_runtime.GetHealthSnapshot().Healthy)
         {
-            RunState(EnterStoreFailure);
+            await _lane.RunAsync(EnterStoreFailure).ConfigureAwait(false);
             return;
         }
 
-        RunState(() =>
-        {
-            var pendingWeight = Volatile.Read(ref _pendingLocalWeight);
-            if (
-                _localRow is { } localRow
-                && pendingWeight >= 0
-                && WeightOf(localRow) != (int)pendingWeight
-            )
+        await _lane
+            .RunAsync(() =>
             {
-                _localRow = WithWeight(localRow, (uint)pendingWeight) with
-                {
-                    DescriptorRevision = ++_localRevision,
-                };
-                _localPublished = false;
-            }
-            if (_localRow is { } channelRow)
-            {
-                var pendingChannels = _pendingChannelWeights.ToArray();
+                var pendingWeight = Volatile.Read(ref _pendingLocalWeight);
                 if (
-                    pendingChannels.Any(entry =>
-                        !channelRow.ChannelWeights.TryGetValue(entry.Key.Value, out var current)
-                        || current != entry.Value
-                    )
+                    _localRow is { } localRow
+                    && pendingWeight >= 0
+                    && WeightOf(localRow) != (int)pendingWeight
                 )
                 {
-                    _localRow = WithChannelWeights(channelRow, pendingChannels) with
+                    _localRow = WithWeight(localRow, (uint)pendingWeight) with
                     {
                         DescriptorRevision = ++_localRevision,
                     };
                     _localPublished = false;
                 }
-            }
-            var pendingPlacementWeight = Volatile.Read(ref _pendingPlacementWeight);
-            if (
-                _localRow is { } placementRow
-                && pendingPlacementWeight >= 0
-                && placementRow.PlacementWeight != pendingPlacementWeight
-            )
-            {
-                _localRow = placementRow with
+                if (_localRow is { } channelRow)
                 {
-                    PlacementWeight = checked((int)pendingPlacementWeight),
-                    DescriptorRevision = ++_localRevision,
-                };
-                _localPublished = false;
-            }
-            var pendingActivationConcurrency = Volatile.Read(ref _pendingActivationConcurrency);
-            if (
-                _localRow is { } activationRow
-                && pendingActivationConcurrency >= 0
-                && activationRow.ActivationConcurrency.Active != pendingActivationConcurrency
-            )
-            {
-                _localRow = activationRow with
-                {
-                    ActivationConcurrency = activationRow.ActivationConcurrency with
+                    var pendingChannels = _pendingChannelWeights.ToArray();
+                    if (
+                        pendingChannels.Any(entry =>
+                            !channelRow.ChannelWeights.TryGetValue(entry.Key.Value, out var current)
+                            || current != entry.Value
+                        )
+                    )
                     {
-                        Active = checked((int)pendingActivationConcurrency),
-                    },
-                    DescriptorRevision = ++_localRevision,
-                };
-                _localPublished = false;
-            }
-        });
+                        _localRow = WithChannelWeights(channelRow, pendingChannels) with
+                        {
+                            DescriptorRevision = ++_localRevision,
+                        };
+                        _localPublished = false;
+                    }
+                }
+                var pendingPlacementWeight = Volatile.Read(ref _pendingPlacementWeight);
+                if (
+                    _localRow is { } placementRow
+                    && pendingPlacementWeight >= 0
+                    && placementRow.PlacementWeight != pendingPlacementWeight
+                )
+                {
+                    _localRow = placementRow with
+                    {
+                        PlacementWeight = checked((int)pendingPlacementWeight),
+                        DescriptorRevision = ++_localRevision,
+                    };
+                    _localPublished = false;
+                }
+                var pendingActivationConcurrency = Volatile.Read(ref _pendingActivationConcurrency);
+                if (
+                    _localRow is { } activationRow
+                    && pendingActivationConcurrency >= 0
+                    && activationRow.ActivationConcurrency.Active != pendingActivationConcurrency
+                )
+                {
+                    _localRow = activationRow with
+                    {
+                        ActivationConcurrency = activationRow.ActivationConcurrency with
+                        {
+                            Active = checked((int)pendingActivationConcurrency),
+                        },
+                        DescriptorRevision = ++_localRevision,
+                    };
+                    _localPublished = false;
+                }
+            })
+            .ConfigureAwait(false);
         // Publish (or re-publish after recovery) the local descriptor before
         // reading the list, so peers observing the store during our
         // recovery window can already see us.
@@ -443,7 +451,7 @@ internal sealed class ZLinkAutoConnectReconciler
                 return;
             if (!_runtime.GetHealthSnapshot().Healthy)
             {
-                RunState(EnterStoreFailure);
+                await _lane.RunAsync(EnterStoreFailure).ConfigureAwait(false);
                 return;
             }
         }
@@ -469,166 +477,168 @@ internal sealed class ZLinkAutoConnectReconciler
                     + $"mesh={_local.MeshName} exception={exception.GetType().Name} "
                     + $"message={exception.Message}"
             );
-            RunState(EnterStoreFailure);
+            await _lane.RunAsync(EnterStoreFailure).ConfigureAwait(false);
             return;
         }
 
-        RunState(() =>
-        {
-            if (_storeFailed)
+        await _lane
+            .RunAsync(() =>
             {
-                // First successful read after an outage: defer disconnects for
-                // one heartbeat interval so other nodes get time to re-register.
-                _storeFailed = false;
-                _storeFailureStartedAt = null;
-                _recoveryDeferUntil =
-                    _time.GetTimestamp()
-                    + (long)(
-                        _options.OwnerLeaseRenewInterval.TotalSeconds * _time.TimestampFrequency
-                    );
-            }
+                if (_storeFailed)
+                {
+                    // First successful read after an outage: defer disconnects for
+                    // one heartbeat interval so other nodes get time to re-register.
+                    _storeFailed = false;
+                    _storeFailureStartedAt = null;
+                    _recoveryDeferUntil =
+                        _time.GetTimestamp()
+                        + (long)(
+                            _options.OwnerLeaseRenewInterval.TotalSeconds * _time.TimestampFrequency
+                        );
+                }
 
-            var desired = ZLinkAutoConnectPlanner.ComputeDesired(_local, rows);
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"autoconnect_desired local={_local.NodeRid?.ToString() ?? "<unknown>"} "
-                    + $"mesh={_local.MeshName} count={desired.Count} "
-                    + $"targets={string.Join(',', desired.Values.Select(static target =>
+                var desired = ZLinkAutoConnectPlanner.ComputeDesired(_local, rows);
+                ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"autoconnect_desired local={_local.NodeRid?.ToString() ?? "<unknown>"} "
+                        + $"mesh={_local.MeshName} count={desired.Count} "
+                        + $"targets={string.Join(',', desired.Values.Select(static target =>
                 $"{target.NodeRid}:{(target.InitiatesConnection ? "dial" : "await")}"))}"
-            );
-            Volatile.Write(
-                ref _discoveredPeerCount,
-                ZLinkAutoConnectPlanner.CountDiscoveredPeers(_local, rows)
-            );
-            // A rolling RID replacement can leave both descriptors visible for one
-            // snapshot. One Core endpoint is still one transport candidate, so
-            // keep only the newest deterministic owner before diffing. Without
-            // this projection the old descriptor can reclaim the endpoint on the
-            // tick after a deferred handover and oscillate with its replacement.
-            var connectableDesired = SelectEndpointWinners(desired);
-            _lastDesired = connectableDesired;
-            // Membership snapshot for fail-fast target classification on the
-            // send path (known peer vs unknown node). This is the full mesh
-            // view, NOT the desired dial set: the pairwise initiator keeps
-            // peers that dial us out of `desired`, yet they are reachable
-            // rid-addressed targets. Fail-static: a store outage keeps the
-            // last snapshot because the tick returns before this point.
-            var members = new HashSet<RoutingId>();
-            var targets = new Dictionary<RoutingId, ZLinkRouteMeshTargetClassification>();
-            foreach (var row in rows)
-            {
-                if (row.Rid is not { Size: > 0 } rowRid)
-                    continue;
-                members.Add(rowRid);
-                if (_local.NodeRid is { } localRid && rowRid == localRid)
-                    continue;
-                targets[rowRid] =
-                    row.ObjectRole == ZLinkMeshNodeObjectRole.Client
-                        ? ZLinkRouteMeshTargetClassification.ObjectClientTarget
-                        : ZLinkRouteMeshTargetClassification.RequiredNotConnected;
-            }
-
-            _meshTargets = targets;
-            _meshPeers = rows.Where(row =>
-                    row.Rid is { Size: > 0 } rowRid
-                    && (_local.NodeRid is not { } localRid || rowRid != localRid)
-                )
-                .Select(static row => new ZLinkRouteMeshPeerIdentity(
-                    row.Rid!,
-                    row.LifecycleGeneration,
-                    row.State
-                        is ZLinkFrameworkRuntimeState.Relocating
-                            or ZLinkFrameworkRuntimeState.Draining
-                ))
-                .ToArray();
-            if (_retainRemovedMembers)
-            {
-                var retained = new HashSet<RoutingId>(_retainedMemberRids);
-                retained.UnionWith(members);
-                _retainedMemberRids = retained;
-            }
-
-            foreach (var (key, target) in connectableDesired)
-            {
-                if (Volatile.Read(ref _ownerCleanupStarted) != 0)
-                    return;
-                if (!_active.TryGetValue(key, out var current))
+                );
+                Volatile.Write(
+                    ref _discoveredPeerCount,
+                    ZLinkAutoConnectPlanner.CountDiscoveredPeers(_local, rows)
+                );
+                // A rolling RID replacement can leave both descriptors visible for one
+                // snapshot. One Core endpoint is still one transport candidate, so
+                // keep only the newest deterministic owner before diffing. Without
+                // this projection the old descriptor can reclaim the endpoint on the
+                // tick after a deferred handover and oscillate with its replacement.
+                var connectableDesired = SelectEndpointWinners(desired);
+                _lastDesired = connectableDesired;
+                // Membership snapshot for fail-fast target classification on the
+                // send path (known peer vs unknown node). This is the full mesh
+                // view, NOT the desired dial set: the pairwise initiator keeps
+                // peers that dial us out of `desired`, yet they are reachable
+                // rid-addressed targets. Fail-static: a store outage keeps the
+                // last snapshot because the tick returns before this point.
+                var members = new HashSet<RoutingId>();
+                var targets = new Dictionary<RoutingId, ZLinkRouteMeshTargetClassification>();
+                foreach (var row in rows)
                 {
-                    // A draining descriptor is not selected for new connections.
-                    if (target.Draining)
+                    if (row.Rid is not { Size: > 0 } rowRid)
                         continue;
-                    if (!ReleaseEndpointConflicts(target, out _))
+                    members.Add(rowRid);
+                    if (_local.NodeRid is { } localRid && rowRid == localRid)
                         continue;
-                    var accepted = _executor.Connect(target);
-                    ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"autoconnect_add local={_local.NodeRid?.ToString() ?? "<unknown>"} "
-                            + $"target={target.NodeRid} endpoint={target.Endpoint} accepted={accepted}"
-                    );
-                    if (accepted)
-                    {
-                        _active[key] = target;
-                    }
-                    continue;
+                    targets[rowRid] =
+                        row.ObjectRole == ZLinkMeshNodeObjectRole.Client
+                            ? ZLinkRouteMeshTargetClassification.ObjectClientTarget
+                            : ZLinkRouteMeshTargetClassification.RequiredNotConnected;
                 }
 
-                if (RequiresConnectionHandover(current, target))
-                {
-                    // An endpoint change needs a new transport connection.
-                    if (Volatile.Read(ref _ownerCleanupStarted) != 0)
-                        return;
-                    var disconnected = _executor.Disconnect(current);
-                    ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"autoconnect_handover local={_local.NodeRid?.ToString() ?? "<unknown>"} "
-                            + $"old={current.NodeRid}@{current.Endpoint} new={target.NodeRid}@{target.Endpoint} "
-                            + $"disconnect={disconnected}"
-                    );
-                    if (!disconnected)
-                        continue;
-                    _active.Remove(key);
-                    if (Volatile.Read(ref _ownerCleanupStarted) != 0)
-                        return;
-                    var connected = _executor.Connect(target);
-                    if (connected)
-                    {
-                        _active[key] = target;
-                    }
-                }
-                else if (OwnerChanged(current, target) || current.Draining != target.Draining)
-                {
-                    // A restarted process can reclaim the same endpoint under a new owner.
-                    // The transport already reconnects that broken endpoint. Tearing it down
-                    // again here races the reconnect and can leave a stale pipe beside the
-                    // replacement connection, so only refresh the reconciler's metadata.
-                    _active[key] = target;
-                    ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"autoconnect_refresh local={_local.NodeRid?.ToString() ?? "<unknown>"} "
-                            + $"target={target.NodeRid} endpoint={target.Endpoint} owner_changed={OwnerChanged(current, target)} "
-                            + $"draining={target.Draining}"
-                    );
-                }
-            }
-
-            if (_time.GetTimestamp() >= _recoveryDeferUntil)
-            {
-                var toRemove = _active
-                    .Keys.Where(key => !connectableDesired.ContainsKey(key))
+                _meshTargets = targets;
+                _meshPeers = rows.Where(row =>
+                        row.Rid is { Size: > 0 } rowRid
+                        && (_local.NodeRid is not { } localRid || rowRid != localRid)
+                    )
+                    .Select(static row => new ZLinkRouteMeshPeerIdentity(
+                        row.Rid!,
+                        row.LifecycleGeneration,
+                        row.State
+                            is ZLinkFrameworkRuntimeState.Relocating
+                                or ZLinkFrameworkRuntimeState.Draining
+                    ))
                     .ToArray();
-                foreach (var key in toRemove)
+                if (_retainRemovedMembers)
+                {
+                    var retained = new HashSet<RoutingId>(_retainedMemberRids);
+                    retained.UnionWith(members);
+                    _retainedMemberRids = retained;
+                }
+
+                foreach (var (key, target) in connectableDesired)
                 {
                     if (Volatile.Read(ref _ownerCleanupStarted) != 0)
                         return;
-                    var target = _active[key];
-                    var disconnected = _executor.Disconnect(target);
-                    ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"autoconnect_remove local={_local.NodeRid?.ToString() ?? "<unknown>"} "
-                            + $"target={target.NodeRid} endpoint={target.Endpoint} disconnected={disconnected}"
-                    );
-                    if (disconnected)
+                    if (!_active.TryGetValue(key, out var current))
                     {
+                        // A draining descriptor is not selected for new connections.
+                        if (target.Draining)
+                            continue;
+                        if (!ReleaseEndpointConflicts(target, out _))
+                            continue;
+                        var accepted = _executor.Connect(target);
+                        ZLinkFrameworkDebugLog.SpotDiscovery(
+                            $"autoconnect_add local={_local.NodeRid?.ToString() ?? "<unknown>"} "
+                                + $"target={target.NodeRid} endpoint={target.Endpoint} accepted={accepted}"
+                        );
+                        if (accepted)
+                        {
+                            _active[key] = target;
+                        }
+                        continue;
+                    }
+
+                    if (RequiresConnectionHandover(current, target))
+                    {
+                        // An endpoint change needs a new transport connection.
+                        if (Volatile.Read(ref _ownerCleanupStarted) != 0)
+                            return;
+                        var disconnected = _executor.Disconnect(current);
+                        ZLinkFrameworkDebugLog.SpotDiscovery(
+                            $"autoconnect_handover local={_local.NodeRid?.ToString() ?? "<unknown>"} "
+                                + $"old={current.NodeRid}@{current.Endpoint} new={target.NodeRid}@{target.Endpoint} "
+                                + $"disconnect={disconnected}"
+                        );
+                        if (!disconnected)
+                            continue;
                         _active.Remove(key);
+                        if (Volatile.Read(ref _ownerCleanupStarted) != 0)
+                            return;
+                        var connected = _executor.Connect(target);
+                        if (connected)
+                        {
+                            _active[key] = target;
+                        }
+                    }
+                    else if (OwnerChanged(current, target) || current.Draining != target.Draining)
+                    {
+                        // A restarted process can reclaim the same endpoint under a new owner.
+                        // The transport already reconnects that broken endpoint. Tearing it down
+                        // again here races the reconnect and can leave a stale pipe beside the
+                        // replacement connection, so only refresh the reconciler's metadata.
+                        _active[key] = target;
+                        ZLinkFrameworkDebugLog.SpotDiscovery(
+                            $"autoconnect_refresh local={_local.NodeRid?.ToString() ?? "<unknown>"} "
+                                + $"target={target.NodeRid} endpoint={target.Endpoint} owner_changed={OwnerChanged(current, target)} "
+                                + $"draining={target.Draining}"
+                        );
                     }
                 }
-            }
-        });
+
+                if (_time.GetTimestamp() >= _recoveryDeferUntil)
+                {
+                    var toRemove = _active
+                        .Keys.Where(key => !connectableDesired.ContainsKey(key))
+                        .ToArray();
+                    foreach (var key in toRemove)
+                    {
+                        if (Volatile.Read(ref _ownerCleanupStarted) != 0)
+                            return;
+                        var target = _active[key];
+                        var disconnected = _executor.Disconnect(target);
+                        ZLinkFrameworkDebugLog.SpotDiscovery(
+                            $"autoconnect_remove local={_local.NodeRid?.ToString() ?? "<unknown>"} "
+                                + $"target={target.NodeRid} endpoint={target.Endpoint} disconnected={disconnected}"
+                        );
+                        if (disconnected)
+                        {
+                            _active.Remove(key);
+                        }
+                    }
+                }
+            })
+            .ConfigureAwait(false);
     }
 
     private bool ReleaseEndpointConflicts(ZLinkAutoConnectTarget target, out bool endpointReleased)
@@ -801,38 +811,44 @@ internal sealed class ZLinkAutoConnectReconciler
 
     internal async ValueTask ShutdownAsync(CancellationToken cancellationToken = default)
     {
-        var localKey = RunState<ZLinkMeshNodeDescriptorKey?>(() =>
-            _localRow is not null && _localGeneration > 0 ? LocalKey() : null
-        );
+        var localKey = await _lane
+            .RunAsync<ZLinkMeshNodeDescriptorKey?>(() =>
+                _localRow is not null && _localGeneration > 0 ? LocalKey() : null
+            )
+            .ConfigureAwait(false);
         if (localKey is { } key)
         {
             await _runtime
                 .RemoveDescriptorForShutdownAsync(key, cancellationToken)
                 .ConfigureAwait(false);
-            RunState(() =>
-            {
-                _localPublished = false;
-                _localGeneration = 0;
-            });
+            await _lane
+                .RunAsync(() =>
+                {
+                    _localPublished = false;
+                    _localGeneration = 0;
+                })
+                .ConfigureAwait(false);
         }
 
-        var active = RunState(() => _active.Values.ToArray());
+        var active = await _lane.RunAsync(() => _active.Values.ToArray()).ConfigureAwait(false);
         foreach (var target in active)
         {
             _ = _executor.Disconnect(target);
         }
 
-        RunState(() => _active.Clear());
+        await _lane.RunAsync(() => _active.Clear()).ConfigureAwait(false);
     }
 
     private async ValueTask PublishLocalAsync(CancellationToken cancellationToken)
     {
-        var local = RunState(() =>
-        {
-            if (_localRow is not { } row || _localPublished)
-                return ((ZLinkMeshNodeDescriptor Row, ulong Generation)?)null;
-            return (Row: row, Generation: _localGeneration);
-        });
+        var local = await _lane
+            .RunAsync(() =>
+            {
+                if (_localRow is not { } row || _localPublished)
+                    return ((ZLinkMeshNodeDescriptor Row, ulong Generation)?)null;
+                return (Row: row, Generation: _localGeneration);
+            })
+            .ConfigureAwait(false);
         if (local is null)
             return;
 
@@ -845,7 +861,9 @@ internal sealed class ZLinkAutoConnectReconciler
                     cancellationToken
                 )
                 .ConfigureAwait(false);
-            RunState(() => _localPublished = renewed.Status == ZLinkLocationWriteStatus.Stored);
+            await _lane
+                .RunAsync(() => _localPublished = renewed.Status == ZLinkLocationWriteStatus.Stored)
+                .ConfigureAwait(false);
             return;
         }
 
@@ -860,11 +878,13 @@ internal sealed class ZLinkAutoConnectReconciler
         {
             // Store generation tracks the published row revision domain. The
             // owner lease token remains the independent renew/remove fence.
-            RunState(() =>
-            {
-                _localGeneration = claim.Generation;
-                _localPublished = true;
-            });
+            await _lane
+                .RunAsync(() =>
+                {
+                    _localGeneration = claim.Generation;
+                    _localPublished = true;
+                })
+                .ConfigureAwait(false);
             return;
         }
 
@@ -879,6 +899,4 @@ internal sealed class ZLinkAutoConnectReconciler
     private ZLinkMeshNodeDescriptorKey LocalKey() => new(_localRow!.MeshName, _localRow.Rid);
 
     private T RunState<T>(Func<T> work) => _lane.RunAsync(work).GetAwaiter().GetResult();
-
-    private void RunState(Action work) => _lane.RunAsync(work).GetAwaiter().GetResult();
 }

@@ -29,9 +29,10 @@ internal sealed class ZLinkSpotTimerRegistry(
 
     internal bool IsFrozen => AwaitStateLane(_lane.RunAsync(() => _frozen));
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
-        return new ValueTask(AwaitStateLane(_lane.RunAsync(GetOrStartFinalization)));
+        var finalization = await _lane.RunAsync(GetOrStartFinalization).ConfigureAwait(false);
+        await finalization.ConfigureAwait(false);
     }
 
     private Task GetOrStartFinalization()
@@ -42,8 +43,8 @@ internal sealed class ZLinkSpotTimerRegistry(
             _undisposedTimers.AddRange(_timers);
             _timers.Clear();
         }
-        using (ExecutionContext.SuppressFlow())
-            return _finalization = _finalization
+        Task ContinueFinalization() =>
+            _finalization
                 .ContinueWith(
                     _ => ReleaseUndisposedAsync(),
                     CancellationToken.None,
@@ -51,6 +52,9 @@ internal sealed class ZLinkSpotTimerRegistry(
                     TaskScheduler.Default
                 )
                 .Unwrap();
+        return _finalization = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(
+            ContinueFinalization
+        );
     }
 
     public ValueTask<IZLinkTimer> AddAsync(

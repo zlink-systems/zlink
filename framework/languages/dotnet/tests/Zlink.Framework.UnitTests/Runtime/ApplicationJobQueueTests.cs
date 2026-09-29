@@ -286,7 +286,7 @@ public sealed class ApplicationJobQueueTests
     {
         using var queue = CreateQueue(limit: 10);
         var applied = new List<ReceiveFlowState>();
-        using var registration = queue.RegisterReceiveFlowSocket(new object(), applied.Add);
+        await using var registration = queue.RegisterReceiveFlowSocket(new object(), applied.Add);
         var leases = new List<ZLinkApplicationJobQueueLease>();
         for (var index = 0; index < 8; index++)
             leases.Add(await queue.AcquireAsync(CancellationToken.None));
@@ -320,7 +320,7 @@ public sealed class ApplicationJobQueueTests
     {
         using var queue = CreateQueue(limit: 1);
         var applied = new List<ReceiveFlowState>();
-        using var registration = queue.RegisterReceiveFlowSocket(new object(), applied.Add);
+        await using var registration = queue.RegisterReceiveFlowSocket(new object(), applied.Add);
         using var holder = await queue.AcquireAsync(CancellationToken.None);
         holder.MarkQueued();
         var waiting = queue.AcquireAsync(CancellationToken.None).AsTask();
@@ -344,8 +344,8 @@ public sealed class ApplicationJobQueueTests
         using var lease = await queue.AcquireAsync(CancellationToken.None);
         var identity = new object();
         var applied = new List<ReceiveFlowState>();
-        using var first = queue.RegisterReceiveFlowSocket(identity, applied.Add);
-        using var duplicate = queue.RegisterReceiveFlowSocket(
+        await using var first = queue.RegisterReceiveFlowSocket(identity, applied.Add);
+        await using var duplicate = queue.RegisterReceiveFlowSocket(
             identity,
             _ =>
                 throw new InvalidOperationException(
@@ -354,10 +354,10 @@ public sealed class ApplicationJobQueueTests
         );
 
         Assert.Equal([ReceiveFlowState.Paused], applied);
-        first.Dispose();
+        await first.DisposeAsync();
         lease.ReleaseForHandlerStart();
         Assert.Equal([ReceiveFlowState.Paused, ReceiveFlowState.Running], applied);
-        duplicate.Dispose();
+        await duplicate.DisposeAsync();
         using var unregisteredLease = await queue.AcquireAsync(CancellationToken.None);
         Assert.Equal(2, applied.Count);
     }
@@ -370,7 +370,7 @@ public sealed class ApplicationJobQueueTests
         using var pauseEntered = new ManualResetEventSlim();
         using var releasePause = new ManualResetEventSlim();
         var blockPause = false;
-        using var registration = queue.RegisterReceiveFlowSocket(
+        await using var registration = queue.RegisterReceiveFlowSocket(
             new object(),
             state =>
             {
@@ -411,19 +411,22 @@ public sealed class ApplicationJobQueueTests
     public async Task Deregistered_socket_invalid_state_is_expected_but_other_config_failures_are_counted()
     {
         using var queue = CreateQueue(limit: 1);
-        IDisposable? closingRegistration = null;
+        IAsyncDisposable? closingRegistration = null;
+        Task? closingDisposal = null;
         closingRegistration = queue.RegisterReceiveFlowSocket(
             new object(),
             state =>
             {
                 if (state != ReceiveFlowState.Paused)
                     return;
-                closingRegistration!.Dispose();
+                closingDisposal = closingRegistration!.DisposeAsync().AsTask();
                 throw new ZlinkConfigException(ZlinkConfigException.ErrorCode.InvalidState);
             }
         );
 
         using var lease = await queue.AcquireAsync(CancellationToken.None);
+        if (closingDisposal is not null)
+            await closingDisposal;
         Assert.Equal(0UL, queue.GetPressureMetrics().FlowStateConfigFailures);
 
         Assert.Throws<ZlinkConfigException>(() =>
@@ -442,7 +445,7 @@ public sealed class ApplicationJobQueueTests
     {
         var queue = CreateQueue(limit: 1);
         var applied = new List<ReceiveFlowState>();
-        using var registration = queue.RegisterReceiveFlowSocket(new object(), applied.Add);
+        await using var registration = queue.RegisterReceiveFlowSocket(new object(), applied.Add);
         using var lease = await queue.AcquireAsync(CancellationToken.None);
         Assert.Equal([ReceiveFlowState.Running, ReceiveFlowState.Paused], applied);
 
@@ -501,10 +504,10 @@ public sealed class ApplicationJobQueueTests
         var unregisterStarted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        var unregister = Task.Run(() =>
+        var unregister = Task.Run(async () =>
         {
             unregisterStarted.SetResult();
-            registration.Dispose();
+            await registration.DisposeAsync();
         });
         await unregisterStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
         await Task.Yield();
@@ -513,6 +516,39 @@ public sealed class ApplicationJobQueueTests
         releasePause.Set();
         using var lease = await acquire.WaitAsync(TimeSpan.FromSeconds(1));
         await unregister.WaitAsync(TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
+    public async Task Async_registration_disposal_awaits_apply_without_blocking_caller()
+    {
+        using var queue = CreateQueue(limit: 1);
+        using var pauseEntered = new ManualResetEventSlim();
+        using var releasePause = new ManualResetEventSlim();
+        var registration = queue.RegisterReceiveFlowSocket(
+            new object(),
+            state =>
+            {
+                if (state != ReceiveFlowState.Paused)
+                    return;
+                pauseEntered.Set();
+                releasePause.Wait();
+            }
+        );
+        var acquire = Task.Run(async () => await queue.AcquireAsync(CancellationToken.None));
+        try
+        {
+            Assert.True(pauseEntered.Wait(TimeSpan.FromSeconds(1)));
+            var disposal = registration.DisposeAsync();
+            Assert.False(disposal.IsCompleted);
+
+            releasePause.Set();
+            using var lease = await acquire.WaitAsync(TimeSpan.FromSeconds(1));
+            await disposal.AsTask().WaitAsync(TimeSpan.FromSeconds(1));
+        }
+        finally
+        {
+            releasePause.Set();
+        }
     }
 
     [Fact]

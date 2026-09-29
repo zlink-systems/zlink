@@ -2,6 +2,14 @@ namespace Zlink.Framework.Runtime.Execution;
 
 internal sealed class ZLinkRuntimeTaskRunner
 {
+    internal static T WithoutExecutionContextFlow<T>(Func<T> start)
+    {
+        if (ExecutionContext.IsFlowSuppressed())
+            return start();
+        using (ExecutionContext.SuppressFlow())
+            return start();
+    }
+
     private static readonly AsyncLocal<ExecutionLease?> AmbientExecution = new();
     private readonly HashSet<Task> _active = [];
     private readonly IZLinkRuntimeFailureReporter _errorSink;
