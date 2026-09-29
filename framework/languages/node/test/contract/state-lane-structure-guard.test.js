@@ -134,7 +134,7 @@ test('debug guard rejects a lane waiting on bound Session transport completion',
 test('debug guard rejects a bound Session target installed outside its owner method', () => {
   const actor = new ZLinkActorRuntimeState('actor');
   assert.throws(
-    () => { actor.remoteBoundSessionTargetValue = { sessionRid: 'session' }; },
+    () => { actor.boundSessionValue = { sessionRid: 'session' }; },
     /must be installed by installBoundSessionBinding/u
   );
 });

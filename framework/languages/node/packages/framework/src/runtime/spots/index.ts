@@ -1887,6 +1887,25 @@ export class DefaultZLinkSpotManager {
   ): Promise<void> {
     const spotId = owner.spotId as unknown as RoutingId | null;
     const activation = spotId === null ? undefined : this.activations.resolve(meshName, spotId);
+    if (
+      record.kindData?.kind === 'actorControl' &&
+      record.kindData.canonicalActorJoin !== undefined
+    ) {
+      const entrySpotId = this.options.entryNodeRidProvider?.() ?? this.options.entryNodeRid;
+      if (
+        spotId !== null && entrySpotId !== undefined && String(spotId) === String(entrySpotId)
+          ? this.options.dispatchEntryActorJoin === undefined
+          : activation === undefined
+      ) {
+        const unavailable = createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+          `Spot '${String(spotId)}' is not active on this node.`
+        );
+        const terminal = internalFrameworkWireReply(unavailable);
+        requireMeshSpotReply(record.replyFailure!(terminal.terminalResult, terminal.failureCode));
+        return;
+      }
+    }
     if (activation?.domain.kind === 'user') {
       await activation.serial.executeLifecycleOperation(async () => {
         await this.dispatchMeshActorJoinCore(meshName, owner, record);
@@ -2062,14 +2081,12 @@ export class DefaultZLinkSpotManager {
         if (canonicalAdmissionCreated) {
           if (targetsEntrySpot) {
             admissionOutcome = {
-              accepted: this.options.dispatchEntryActorJoin !== undefined,
+              accepted: true,
               actorRef
             };
-          } else if (activation === undefined) {
-            admissionOutcome = { accepted: false, actorRef };
           } else {
-            const response: ZLinkSpotActorJoinResult = await activation.serial.execute(async () =>
-              activation.spot.onActorJoin(
+            const response: ZLinkSpotActorJoinResult = await activation!.serial.execute(async () =>
+              activation!.spot.onActorJoin(
                 actorRef.actorId,
                 wrapFrameworkPayloadMessage(
                   callbackRequest!,
