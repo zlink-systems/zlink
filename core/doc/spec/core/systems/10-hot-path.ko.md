@@ -65,9 +65,9 @@ Hot path 안의 코드는 다음을 하지 않는다. 예외는 3항의 외부 R
 6. **고정 시간 sleep.** 재시도 대기는 socket mailbox에 park한다(`wait_submit_progress`). 고정
    슬라이스 sleep은 framed transport(WS·WSS)의 flush wait를 message마다 슬라이스 길이로
    늘린다.
-7. **임시 owner의 신호 누락.** Async executor가 command를 대신 소비한 뒤 detach하는 모든 경로는
-   `rearm_primary_signaler()`로 public poller를 깨운다. 이를 빠뜨리면 poller는 자기 timeout까지
-   잠든다.
+7. **대신 적용한 command의 신호 누락.** Poller가 아닌 곳에서 command를 적용하는 경로는
+   [Polling](../05-polling.ko.md#3-source-종류와-readiness)의 wake 규칙을 따른다. 이를 어기면
+   poller는 자기 timeout까지 잠든다.
 
 허용되는 것: atomic load/store, 고정 크기 스택 배열, 이미 잡고 있는 send/recv scope와
 endpoint의 기존 C2 owner/turn. `_out_sync`는 [동기화 모델](11-synchronization-model.ko.md)이 정한
