@@ -308,7 +308,7 @@ class socket_base_t : public own_t,
     int term_peer_rid (const zlink_routing_id_t *peer_rid_);
     int send (zlink::msg_t *msg_, int flags_);
     int send_complete_record (zlink::msg_t *msg_, int flags_,
-                              bool manage_public_send_recovery_ = true);
+                      bool manage_public_send_recovery_ = true);
     // Internal helper for logical multipart wrappers that already hold the
     // public send scope for the whole transaction.
     int send_scoped (zlink::msg_t *msg_,
@@ -318,7 +318,9 @@ class socket_base_t : public own_t,
                      bool report_multipart_abort_ = false,
                      pipe_write_observer_fn observer_ = NULL,
                      void *observer_userdata_ = NULL,
-                     bool manage_public_send_recovery_ = true);
+                      bool manage_public_send_recovery_ = true);
+    int send_publish_first_frame_scoped (
+      zlink::msg_t *msg_, int flags_, socket_public_send_scope_t &scope_);
     int send_routed (const zlink_routing_id_t *target_rid_, zlink::msg_t *msg_, int flags_);
     int send_routed_complete_record (const zlink_routing_id_t *target_rid_,
                                      zlink::msg_t *msg_,
