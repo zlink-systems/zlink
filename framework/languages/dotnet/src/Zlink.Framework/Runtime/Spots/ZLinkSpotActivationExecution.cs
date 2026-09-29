@@ -2012,115 +2012,27 @@ internal abstract partial class ZLinkSpotActivation
             : TimeSpan.FromMilliseconds(remainingMilliseconds);
     }
 
-    internal bool TrySealRelocation(out ZLinkSpotRelocationSeal seal)
+    internal async ValueTask<ZLinkSpotRelocationSeal?> TrySealRelocationAsync()
     {
         var logicalTimers = _timers.FreezeRelocation();
         if (_serial.TrySealRelocation(out var queueSeal))
-        {
-            seal = new ZLinkSpotRelocationSeal(queueSeal, logicalTimers);
-            return true;
-        }
+            return new ZLinkSpotRelocationSeal(queueSeal, logicalTimers);
         _timers.Resume();
-        seal = null!;
-        return false;
+        return null;
     }
 
-    internal bool TrySealPerActorShellRelocation(out ZLinkSpotRelocationSeal seal)
+    internal async ValueTask<ZLinkSpotRelocationSeal?> TrySealPerActorShellRelocationAsync()
     {
         if (ExecutionMode != ZLinkUserSpotExecutionMode.PerActor)
-        {
-            seal = null!;
-            return false;
-        }
+            return null;
         var logicalTimers = _timers.FreezeRelocation();
         if (_serial.TrySealPerActorShellRelocation(out var queueSeal))
-        {
-            seal = new ZLinkSpotRelocationSeal(queueSeal, logicalTimers);
-            return true;
-        }
+            return new ZLinkSpotRelocationSeal(queueSeal, logicalTimers);
         _timers.Resume();
-        seal = null!;
-        return false;
+        return null;
     }
 
-    internal bool TrySealPerActorShellRelocation(
-        Func<
-            IReadOnlyList<ZLinkAcceptedWorkRecord>,
-            IReadOnlyList<ZLinkRelocationLogicalTimer>,
-            bool
-        > admit,
-        out ZLinkSpotRelocationSeal seal
-    )
-    {
-        ArgumentNullException.ThrowIfNull(admit);
-        if (ExecutionMode != ZLinkUserSpotExecutionMode.PerActor)
-        {
-            seal = null!;
-            return false;
-        }
-        var logicalTimers = _timers.FreezeRelocation();
-        if (
-            _serial.TrySealPerActorShellRelocation(
-                reservedAcceptedSequences: 0,
-                captured => admit(captured, logicalTimers),
-                out var queueSeal,
-                out _
-            )
-        )
-        {
-            seal = new ZLinkSpotRelocationSeal(queueSeal, logicalTimers);
-            return true;
-        }
-        _timers.Resume();
-        seal = null!;
-        return false;
-    }
-
-    internal bool TrySealRelocation(
-        Func<
-            IReadOnlyList<ZLinkAcceptedWorkRecord>,
-            IReadOnlyList<ZLinkRelocationLogicalTimer>,
-            bool
-        > admit,
-        out ZLinkSpotRelocationSeal seal
-    )
-    {
-        ArgumentNullException.ThrowIfNull(admit);
-        var logicalTimers = _timers.FreezeRelocation();
-        var pendingTimerCount = logicalTimers.Count(static timer =>
-            ZLinkSpotTimerRelocationCodec.Decode(timer).Timer.PendingTick.HasValue
-        );
-        if (
-            _serial.TrySealRelocation(
-                pendingTimerCount,
-                captured => admit(captured, logicalTimers),
-                out var queueSeal,
-                out var firstPendingSequence
-            )
-        )
-        {
-            var nextPendingSequence = firstPendingSequence;
-            logicalTimers = logicalTimers
-                .Select(timer =>
-                {
-                    var snapshot = ZLinkSpotTimerRelocationCodec.Decode(timer);
-                    return snapshot.Timer.PendingTick.HasValue
-                        ? timer with
-                        {
-                            PendingAcceptedSequence = nextPendingSequence++,
-                        }
-                        : timer;
-                })
-                .ToArray();
-            seal = new ZLinkSpotRelocationSeal(queueSeal, logicalTimers);
-            return true;
-        }
-        _timers.Resume();
-        seal = null!;
-        return false;
-    }
-
-    internal bool AbortRelocation(ZLinkSpotRelocationSeal seal)
+    internal async ValueTask<bool> AbortRelocationAsync(ZLinkSpotRelocationSeal seal)
     {
         ArgumentNullException.ThrowIfNull(seal);
         if (!_serial.TryAbortRelocation(seal.QueueSeal))
@@ -2130,7 +2042,7 @@ internal abstract partial class ZLinkSpotActivation
         return true;
     }
 
-    internal bool OpenRelocationTargetAdmission(
+    internal async ValueTask<bool> OpenRelocationTargetAdmissionAsync(
         ZLinkSpotRelocationSeal seal,
         Action reserveBeforeApplicationAdmission
     )
@@ -2138,10 +2050,12 @@ internal abstract partial class ZLinkSpotActivation
         ArgumentNullException.ThrowIfNull(seal);
         ArgumentNullException.ThrowIfNull(reserveBeforeApplicationAdmission);
         if (
-            !_serial.TryOpenRelocationAfterMessageFollow(
-                seal.QueueSeal,
-                reserveBeforeApplicationAdmission
-            )
+            !await _serial
+                .TryOpenRelocationAfterMessageFollowAsync(
+                    seal.QueueSeal,
+                    reserveBeforeApplicationAdmission
+                )
+                .ConfigureAwait(false)
         )
             return false;
         ResumePendingMessageFollowRoutes();
@@ -2189,7 +2103,7 @@ internal abstract partial class ZLinkSpotActivation
 
     private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
-    internal void RestoreLogicalTimers(IReadOnlyList<ZLinkRelocationLogicalTimer> logicalTimers)
+    internal ValueTask RestoreLogicalTimersAsync(IReadOnlyList<ZLinkRelocationLogicalTimer> logicalTimers)
     {
         _timers.RestoreRelocation(
             logicalTimers,
@@ -2198,6 +2112,7 @@ internal abstract partial class ZLinkSpotActivation
             DispatchTimerAsync,
             PublishTimerFailureAsync
         );
+        return ValueTask.CompletedTask;
     }
 
     internal async ValueTask ReplayAcceptedJobsAsync(

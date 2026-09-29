@@ -968,7 +968,11 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         var executor = new ZLinkFrameworkDrainExecutor(
             probe.Operations,
             new ZLinkLocationOptions(),
-            stopMeshMonitoring: () => probe.Events.Add("stop-mesh-monitoring")
+            stopMeshMonitoring: () =>
+            {
+                probe.Events.Add("stop-mesh-monitoring");
+                return Task.CompletedTask;
+            }
         );
 
         await executor.ForceStopAsync(
@@ -987,6 +991,35 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
             },
             probe.Events
         );
+    }
+
+    [Fact]
+    public async Task Forced_Drain_Awaits_Mesh_Monitoring_Without_Blocking_The_Caller()
+    {
+        var probe = new DrainExecutionProbe();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var executor = new ZLinkFrameworkDrainExecutor(
+            probe.Operations,
+            new ZLinkLocationOptions(),
+            stopMeshMonitoring: async () =>
+            {
+                entered.TrySetResult();
+                await release.Task;
+            }
+        );
+
+        var stopping = executor.ForceStopAsync(
+            ZLinkDrainForceReason.DeadlineExceeded,
+            CancellationToken.None
+        );
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.False(stopping.IsCompleted);
+        Assert.DoesNotContain("stop-runtime", probe.Events);
+
+        release.TrySetResult();
+        await stopping.AsTask().WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Contains("stop-runtime", probe.Events);
     }
 
     [Fact]

@@ -149,7 +149,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private volatile Func<bool>? _peerAdmissionSealed;
 
     private IRouterSocket? _socket;
-    private IDisposable? _receiveFlowRegistration;
+    private IAsyncDisposable? _receiveFlowRegistration;
     private ISocketMonitor? _socketMonitor;
     private IPoller? _poller;
     private CancellationTokenSource? _stop;
@@ -320,6 +320,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     public void Start()
     {
+        Func<ValueTask>? cleanupFailure = null;
         RunState(() =>
         {
             ThrowIfDisposed();
@@ -339,7 +340,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             var socket = _context.CreateRouterSocket();
             ISocketMonitor? socketMonitor = null;
             IPoller? poller = null;
-            IDisposable? receiveFlowRegistration = null;
+            IAsyncDisposable? receiveFlowRegistration = null;
             try
             {
                 socket.Options.Mandatory = true;
@@ -363,9 +364,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 }
                 socket.SetRoutingId(_routingId);
                 if (_applicationJobQueue is not null)
-                    receiveFlowRegistration = _applicationJobQueue.RegisterReceiveFlowSocket(
-                        socket
+                {
+                    receiveFlowRegistration = _applicationJobQueue
+                        .RegisterReceiveFlowSocketUnapplied(socket, socket.SetReceiveFlowState);
+                    _applicationJobQueue.ApplyReceiveFlowRegistration(
+                        socket,
+                        receiveFlowRegistration
                     );
+                }
                 var configuredBindEndpoint = _bindEndpoint;
                 socket.Bind(configuredBindEndpoint);
                 _bindEndpoint = socket.Options.LastEndpoint;
@@ -416,24 +422,40 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         )
                         .Unwrap();
             }
-            catch
+            catch (Exception error)
             {
-                _poller?.Dispose();
+                var ownedPoller = _poller;
                 _poller = null;
-                poller?.Dispose();
-                _receiveFlowRegistration?.Dispose();
+                var ownedRegistration = _receiveFlowRegistration;
                 _receiveFlowRegistration = null;
-                receiveFlowRegistration?.Dispose();
-                _socketMonitor?.Dispose();
+                var ownedMonitor = _socketMonitor;
                 _socketMonitor = null;
-                socketMonitor?.Dispose();
-                socket.Dispose();
                 _socket = null;
                 _activeSocketGeneration = 0;
                 _state = MeshNodeState.Error;
-                throw;
+                cleanupFailure = async () =>
+                {
+                    var failures = new ZLinkFailureCollector(error);
+                    failures.Capture(() => ownedPoller?.Dispose());
+                    failures.Capture(() => poller?.Dispose());
+                    await failures.CaptureAsync(() =>
+                        ZLinkReceiveFlowController.DisposeRegistrationAsync(ownedRegistration)
+                    ).ConfigureAwait(false);
+                    await failures.CaptureAsync(() =>
+                        ZLinkReceiveFlowController.DisposeRegistrationAsync(receiveFlowRegistration)
+                    ).ConfigureAwait(false);
+                    failures.Capture(() => ownedMonitor?.Dispose());
+                    failures.Capture(() => socketMonitor?.Dispose());
+                    failures.Capture(socket.Dispose);
+                    failures.ThrowIfAny();
+                };
             }
         });
+
+        if (cleanupFailure is null)
+            return;
+        // Startup cleanup runs on the caller thread after the state lane turn ends.
+        cleanupFailure!().AsTask().GetAwaiter().GetResult();
     }
 
     public ulong ConnectPeer(
@@ -3202,7 +3224,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         await CloseInboundOperationAdmissionAsync(shutdownToken).ConfigureAwait(false);
 
         IRouterSocket? socket;
-        IDisposable? receiveFlowRegistration;
+        IAsyncDisposable? receiveFlowRegistration;
         ISocketMonitor? socketMonitor;
         IPoller? poller;
         lock (_socketGate)
@@ -3242,7 +3264,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             await spot.DisposeAsync().ConfigureAwait(false);
         _spots.Clear();
 
-        receiveFlowRegistration?.Dispose();
+        await ZLinkReceiveFlowController
+            .DisposeRegistrationAsync(receiveFlowRegistration)
+            .ConfigureAwait(false);
         poller?.Dispose();
         socketMonitor?.Dispose();
         socket?.Dispose();

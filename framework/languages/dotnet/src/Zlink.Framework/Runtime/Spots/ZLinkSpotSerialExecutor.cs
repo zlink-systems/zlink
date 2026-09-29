@@ -216,7 +216,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         }
     }
 
-    public ValueTask ExecuteTimerAsync<TState>(
+    public async ValueTask ExecuteTimerAsync<TState>(
         string timerName,
         Func<ZLinkSpotActivation, TState, CancellationToken, ValueTask> operation,
         TState state,
@@ -225,22 +225,24 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(timerName);
         if (_isDisposed())
-            return ValueTask.CompletedTask;
+            return;
         var lane =
             _executionMode == ZLinkUserSpotExecutionMode.SpotWide
                 ? _queue
-                : GetLane(
-                    _timerLanes,
-                    ZLinkTimerName.FromBoundary(timerName, nameof(timerName)),
-                    _timerLanePolicy
-                );
-        var claim = AcquireApplicationClaim();
-        return RunClaimedAsync(
+                : await _stateLane.RunAsync(() =>
+                    GetLaneOnStateLane(
+                        _timerLanes,
+                        ZLinkTimerName.FromBoundary(timerName, nameof(timerName)),
+                        _timerLanePolicy
+                    )
+                ).ConfigureAwait(false);
+        var claim = await AcquireApplicationClaimAsync().ConfigureAwait(false);
+        await RunClaimedAsync(
             lane,
             ct => ExecuteTimerOperationAsync(operation, state, ct),
             claim,
             cancellationToken
-        );
+        ).ConfigureAwait(false);
     }
 
     public bool TryRunDetached(string name, Func<CancellationToken, ValueTask> operation)
@@ -1003,14 +1005,14 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         });
     }
 
-    internal bool TryOpenRelocationAfterMessageFollow(
+    internal async ValueTask<bool> TryOpenRelocationAfterMessageFollowAsync(
         ZLinkSpotExecutionRelocationSeal seal,
         Action reserveBeforeApplicationAdmission
     )
     {
         ArgumentNullException.ThrowIfNull(seal);
         ArgumentNullException.ThrowIfNull(reserveBeforeApplicationAdmission);
-        var opening = RunBarrierState(() =>
+        var opening = await RunBarrierStateAsync(() =>
         {
             if (_relocationBarrier?.Generation != seal.Generation)
                 return null;
@@ -1027,7 +1029,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             var pending = new ZLinkRelocationAdmissionOpeningState(barrier);
             _relocationAdmissionOpening = pending;
             return pending;
-        });
+        }).ConfigureAwait(false);
         if (opening is null)
             return false;
 
@@ -1046,7 +1048,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         return true;
     }
 
-    internal ValueTask ExecuteSealedRelocationAsync(
+    internal async ValueTask ExecuteSealedRelocationAsync(
         ZLinkSpotExecutionRelocationSeal seal,
         Func<ZLinkSpotActivation, CancellationToken, ValueTask> operation,
         CancellationToken cancellationToken
@@ -1054,7 +1056,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(seal);
         ArgumentNullException.ThrowIfNull(operation);
-        RunBarrierState(() =>
+        await RunBarrierStateAsync(() =>
         {
             if (
                 _relocationBarrier?.Generation != seal.Generation
@@ -1064,8 +1066,9 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                 throw new InvalidOperationException(
                     "SPOT relocation lifecycle requires the current quiescent seal."
                 );
-        });
-        return ExecuteLifecycleOperationAsync(operation, cancellationToken);
+            return true;
+        }).ConfigureAwait(false);
+        await ExecuteLifecycleOperationAsync(operation, cancellationToken).ConfigureAwait(false);
     }
 
     internal bool TryCommitRelocation(
@@ -1260,27 +1263,40 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                 && ReferenceEquals(CurrentRelocationAdmissionOpening.Value?.Owner, this)
                     ? CurrentRelocationAdmissionOpening.Value!.Opening
                     : null;
-            var turn = RunState(() =>
-            {
-                if (
-                    _relocationAdmissionOpening is { } opening
-                    && !ReferenceEquals(opening, callbackOpening)
-                )
-                    return ZLinkBarrierStateTurn<T>.RetryAfter(opening.Completion.Task);
-                return ZLinkBarrierStateTurn<T>.FromResult(RunWithoutExecutionContextFlow(work));
-            });
+            var turn = RunState(() => RunBarrierStateTurn(work, callbackOpening));
             if (turn.Retry is null)
                 return turn.Result!;
             turn.Retry.GetAwaiter().GetResult();
         }
     }
 
-    private static T RunWithoutExecutionContextFlow<T>(Func<T> work)
+    private async ValueTask<T> RunBarrierStateAsync<T>(Func<T> work)
     {
-        if (ExecutionContext.IsFlowSuppressed())
-            return work();
-        using (ExecutionContext.SuppressFlow())
-            return work();
+        ArgumentNullException.ThrowIfNull(work);
+        while (true)
+        {
+            var turn = await _stateLane
+                .RunAsync(() => RunBarrierStateTurn(work, callbackOpening: null))
+                .ConfigureAwait(false);
+            if (turn.Retry is null)
+                return turn.Result!;
+            await turn.Retry.ConfigureAwait(false);
+        }
+    }
+
+    private ZLinkBarrierStateTurn<T> RunBarrierStateTurn<T>(
+        Func<T> work,
+        ZLinkRelocationAdmissionOpeningState? callbackOpening
+    )
+    {
+        if (
+            _relocationAdmissionOpening is { } opening
+            && !ReferenceEquals(opening, callbackOpening)
+        )
+            return ZLinkBarrierStateTurn<T>.RetryAfter(opening.Completion.Task);
+        return ZLinkBarrierStateTurn<T>.FromResult(
+            ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(work)
+        );
     }
 
     private void RunBarrierState(Action work)
@@ -1352,21 +1368,6 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             _relocationAdmissionOpening = null;
             opening.Completion.TrySetResult();
         });
-    }
-
-    private ZLinkSerialExecutionQueue GetLane<TIdentifier>(
-        Dictionary<TIdentifier, ZLinkSerialExecutionQueue> lanes,
-        TIdentifier key,
-        ZLinkExecutionLanePolicy policy
-    )
-        where TIdentifier : notnull
-    {
-        _stateLane.ThrowIfReentrant();
-        return _stateLane
-            .RunAsync(() => GetLaneOnStateLane(lanes, key, policy))
-            .AsTask()
-            .GetAwaiter()
-            .GetResult();
     }
 
     private ZLinkSerialExecutionQueue GetLaneOnStateLane<TIdentifier>(
@@ -1455,11 +1456,18 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     private ZLinkExecutionClaim AcquireApplicationClaim()
     {
         return TryAcquireApplicationClaim()
-            ?? throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Rejected,
-                "SPOT application admission is sealed."
-            );
+            ?? RejectedApplicationClaim();
     }
+
+    private async ValueTask<ZLinkExecutionClaim> AcquireApplicationClaimAsync() =>
+        await TryAcquireApplicationClaimAsync().ConfigureAwait(false)
+        ?? RejectedApplicationClaim();
+
+    private static ZLinkExecutionClaim RejectedApplicationClaim() =>
+        throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.Rejected,
+            "SPOT application admission is sealed."
+        );
 
     private (
         ZLinkSerialExecutionQueue Lane,
@@ -1489,13 +1497,18 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     // of the Spot queue, refuses it.
     private ZLinkExecutionClaim? TryAcquireApplicationClaim()
     {
-        return RunBarrierState(() =>
-        {
-            if (_relocationBarrier is not null || _queue.IsRelocated)
-                return null;
-            _activeApplicationClaims++;
-            return new ZLinkExecutionClaim(this, actorLane: false);
-        });
+        return RunBarrierState(TryAcquireApplicationClaimOnLane);
+    }
+
+    private ValueTask<ZLinkExecutionClaim?> TryAcquireApplicationClaimAsync() =>
+        RunBarrierStateAsync(TryAcquireApplicationClaimOnLane);
+
+    private ZLinkExecutionClaim? TryAcquireApplicationClaimOnLane()
+    {
+        if (_relocationBarrier is not null || _queue.IsRelocated)
+            return null;
+        _activeApplicationClaims++;
+        return new ZLinkExecutionClaim(this, actorLane: false);
     }
 
     private ZLinkExecutionClaim AcquireAdmittedApplicationClaim()

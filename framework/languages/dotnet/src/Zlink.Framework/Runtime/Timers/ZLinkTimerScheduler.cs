@@ -41,9 +41,9 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
         );
     }
 
-    internal void Unregister(ZLinkTimer timer)
+    internal async ValueTask UnregisterAsync(ZLinkTimer timer)
     {
-        AwaitStateLane(_lane.RunAsync(() => _timers.Remove(timer)));
+        await _lane.RunAsync(() => _timers.Remove(timer)).ConfigureAwait(false);
         SignalWake();
     }
 
@@ -63,10 +63,10 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
         SignalWake();
     }
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
-        var disposeTask = AwaitStateLane(_lane.RunAsync(GetOrStartDispose));
-        return new ValueTask(disposeTask);
+        var disposeTask = await _lane.RunAsync(GetOrStartDispose).ConfigureAwait(false);
+        await disposeTask.ConfigureAwait(false);
     }
 
     private Task GetOrStartDispose()
@@ -75,8 +75,9 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
             return _disposeTask;
 
         _closed = true;
-        using (ExecutionContext.SuppressFlow())
-            _disposeTask = Task.Run(DisposeCoreAsync);
+        _disposeTask = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(
+            () => Task.Run(DisposeCoreAsync)
+        );
         return _disposeTask;
     }
 
@@ -92,13 +93,11 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
         {
             _wake.Dispose();
             _stopSource.Dispose();
-            AwaitStateLane(
-                _lane.RunAsync(() =>
-                {
-                    _queue.Clear();
-                    _timers.Clear();
-                })
-            );
+            await _lane.RunAsync(() =>
+            {
+                _queue.Clear();
+                _timers.Clear();
+            }).ConfigureAwait(false);
         }
     }
 
@@ -109,11 +108,11 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var next = TryTakeDue();
+                var next = await _lane.RunAsync(TryTakeDueOnLane).ConfigureAwait(false);
                 if (next.HasDue)
                 {
-                    if (next.DueTimer.Timer.IsScheduleCurrent(next.DueTimer.Version))
-                        next.DueTimer.Timer.NotifyDue(next.DueTimer.Version);
+                    await next.DueTimer.Timer.NotifyDueAsync(next.DueTimer.Version)
+                        .ConfigureAwait(false);
                     continue;
                 }
 
@@ -142,9 +141,6 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
     }
-
-    private (bool HasDue, ScheduledTimer DueTimer, TimeSpan? Delay) TryTakeDue() =>
-        AwaitStateLane(_lane.RunAsync(TryTakeDueOnLane));
 
     private (bool HasDue, ScheduledTimer DueTimer, TimeSpan? Delay) TryTakeDueOnLane()
     {

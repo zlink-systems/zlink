@@ -16,7 +16,7 @@ namespace Zlink.Framework.Runtime.Host;
 /// Peer ChannelName sets and channel readiness are derived from the Core peer
 /// and peer-channel snapshots.
 /// </summary>
-internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDisposable
+internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAsyncDisposable
 {
     private static readonly TimeSpan MonitorIdleDelay = TimeSpan.FromMilliseconds(10);
 
@@ -229,16 +229,16 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
         _metricRegistration ??= ZLinkRuntimeMetrics.RegisterMeshSnapshots(BuildMetricSnapshots);
     }
 
-    internal void Stop()
+    internal async Task StopAsync()
     {
-        var hubs = AwaitStateLane(_lane.RunAsync(StopOnLane));
+        var hubs = await _lane.RunAsync(StopOnLane).ConfigureAwait(false);
         if (hubs is null)
             return;
         _hostLifecycle.Changed -= OnHostStateChanged;
         Interlocked.Exchange(ref _metricRegistration, null)?.Dispose();
         foreach (var hub in hubs)
-            hub.Stop();
-        AwaitStateLane(_lane.RunAsync(() => _monitorHubs.Clear()));
+            await hub.StopAsync().ConfigureAwait(false);
+        await _lane.RunAsync(() => _monitorHubs.Clear()).ConfigureAwait(false);
     }
 
     private MonitorHub[]? StopOnLane()
@@ -249,7 +249,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
         return [.. _monitorHubs.Values];
     }
 
-    public void Dispose() => Stop();
+    public ValueTask DisposeAsync() => new(StopAsync());
 
     private IReadOnlyList<ZLinkRuntimeMetricMeshSnapshot> BuildMetricSnapshots() =>
         _runtime
@@ -827,16 +827,16 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
             observer.Complete();
         }
 
-        public void Stop()
+        public async Task StopAsync()
         {
-            var stopped = AwaitStateLane(
-                _lane.RunAsync(() =>
+            var stopped = await _lane
+                .RunAsync(() =>
                 {
                     var observers = _observers.ToArray();
                     _observers.Clear();
                     return (observers, _lastStatus, _pump);
                 })
-            );
+                .ConfigureAwait(false);
             if (stopped.Item2 is not null)
             {
                 var terminalStatus = stopped.Item2 with
@@ -858,7 +858,8 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
                     observer.Publish(terminalStatus, terminal: true);
             }
             _stop.Cancel();
-            stopped.Item3?.GetAwaiter().GetResult();
+            if (stopped.Item3 is not null)
+                await stopped.Item3.ConfigureAwait(false);
             _stop.Dispose();
         }
 

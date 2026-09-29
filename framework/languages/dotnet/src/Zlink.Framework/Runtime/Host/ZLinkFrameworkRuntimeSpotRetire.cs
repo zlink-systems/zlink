@@ -145,13 +145,16 @@ internal sealed partial class ZLinkFrameworkRuntime
                 actorStates.Add(restored.State);
             }
 
-            if (!preparedSpot.Activation.TrySealRelocation(out targetAdmissionSeal))
+            targetAdmissionSeal = await preparedSpot.Activation.TrySealRelocationAsync()
+                .ConfigureAwait(false);
+            if (targetAdmissionSeal is null)
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Unavailable,
                     $"Target SPOT '{request.SpotId}' could not seal staging admission.",
                     ZLinkRetryAdvice.RetryAfterBackoff
                 );
-            preparedSpot.Activation.RestoreLogicalTimers(spotParticipant.LogicalTimers);
+            await preparedSpot.Activation.RestoreLogicalTimersAsync(spotParticipant.LogicalTimers)
+                .ConfigureAwait(false);
             return new TargetStage(
                 node,
                 preparedSpot,
@@ -186,7 +189,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         catch
         {
             if (targetAdmissionSeal is not null)
-                _ = preparedSpot.Activation.AbortRelocation(targetAdmissionSeal);
+                _ = await preparedSpot.Activation.AbortRelocationAsync(targetAdmissionSeal)
+                    .ConfigureAwait(false);
             foreach (var actorId in boundActorIds.Keys)
             {
                 try
@@ -546,7 +550,10 @@ internal sealed partial class ZLinkFrameworkRuntime
         }
     }
 
-    internal static void OpenTargetAdmissionOnce(TargetStage stage, Func<bool> openAdmission)
+    internal static async ValueTask OpenTargetAdmissionOnceAsync(
+        TargetStage stage,
+        Func<ValueTask<bool>> openAdmission
+    )
     {
         ArgumentNullException.ThrowIfNull(stage);
         ArgumentNullException.ThrowIfNull(openAdmission);
@@ -559,7 +566,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             );
         if (Volatile.Read(ref stage.AdmissionOpened) != 0)
             return;
-        if (!openAdmission())
+        if (!await openAdmission().ConfigureAwait(false))
             throw new InvalidOperationException(
                 $"Target SPOT '{stage.Spot.Activation.SpotId}' lost its staging admission seal."
             );
@@ -1011,10 +1018,10 @@ internal sealed partial class ZLinkFrameworkRuntime
         );
         var actorDrains = new List<Task>();
 
-        OpenTargetAdmissionOnce(
+        await OpenTargetAdmissionOnceAsync(
             stage,
             () =>
-                stage.Spot.Activation.OpenRelocationTargetAdmission(
+                stage.Spot.Activation.OpenRelocationTargetAdmissionAsync(
                     stage.TargetAdmissionSeal,
                     () =>
                     {
@@ -1115,7 +1122,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                         }
                     }
                 )
-        );
+        ).ConfigureAwait(false);
 
         // Admission is already visible. Persist the drain task on the stage
         // before awaiting it so retries observe the same success or failure
