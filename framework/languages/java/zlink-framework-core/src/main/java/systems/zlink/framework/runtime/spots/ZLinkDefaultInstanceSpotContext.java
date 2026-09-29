@@ -109,7 +109,9 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
         sealTimerAdmission();
         CompletionStage<Void> acceptedTurns =
                 initiatedInsideTurn ? infrastructureQueue.awaitQuiescence() : awaitQuiescence();
-        return acceptedTurns.thenCompose(ignored -> runLifecycle(operation));
+        return acceptedTurns.thenCompose(
+                ignored -> dispatchQueue.enqueuePreviouslyAccepted(
+                        () -> host.runWithOutbound(outbound, operation)));
     }
 
     void sealTimerAdmission() {
@@ -210,8 +212,19 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
     @Override
     public CompletionStage<Void> enqueueDispatch(
             long payloadBytes, Supplier<CompletionStage<Void>> operation) {
+        return enqueueDispatch(payloadBytes, operation, null);
+    }
+
+    CompletionStage<Void> enqueueDispatch(
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
         host.ensureOwnerAdmissionOpen();
-        return dispatchQueue.enqueue(() -> runLifecycleExecution(operation));
+        return dispatchQueue.enqueue(() -> runLifecycleExecution(operation), admission);
+    }
+
+    void sealClosingAdmission() {
+        dispatchQueue.sealClosingAdmission();
     }
 
     @Override

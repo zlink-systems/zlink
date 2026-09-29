@@ -263,6 +263,35 @@ final class ZLinkCompositeRelocationBarrierTest {
         assertTrue(barrier.abort(seal));
     }
 
+    @Test
+    void turnBoundarySealCompletesWhenReturningActorReachesBeforeTimer() throws Exception {
+        ZLinkSerialExecutionQueue spot = new ZLinkSerialExecutionQueue();
+        ManualExecutor actorExecutor = new ManualExecutor();
+        ZLinkSerialExecutionQueue actor =
+                new ZLinkSerialExecutionQueue(
+                        actorExecutor, ZLinkExecutionLanePolicy.spotReturningGate());
+        ZLinkSerialExecutionQueue timer = new ZLinkSerialExecutionQueue();
+        ZLinkCompositeRelocationBarrier barrier = new ZLinkCompositeRelocationBarrier();
+        CompletableFuture<Void> timerStarted = new CompletableFuture<>();
+        CompletableFuture<Void> releaseTimer = new CompletableFuture<>();
+        timer.enqueue(
+                () -> {
+                    timerStarted.complete(null);
+                    return releaseTimer;
+                });
+        timerStarted.get(3, TimeUnit.SECONDS);
+
+        CompletableFuture<Optional<ZLinkCompositeRelocationBarrier.Seal>> sealing =
+                barrier.sealAtTurnBoundary(lanes(spot, actor, timer), () -> false)
+                        .toCompletableFuture();
+        actorExecutor.take().run();
+        assertFalse(sealing.isDone());
+
+        releaseTimer.complete(null);
+        var seal = sealing.get(3, TimeUnit.SECONDS).orElseThrow();
+        assertTrue(barrier.abort(seal));
+    }
+
     private static final class ManualExecutor implements Executor {
         private final LinkedBlockingQueue<Runnable> pending = new LinkedBlockingQueue<>();
 

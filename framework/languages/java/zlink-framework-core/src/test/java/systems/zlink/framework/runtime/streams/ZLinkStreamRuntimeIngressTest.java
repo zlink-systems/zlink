@@ -989,6 +989,7 @@ final class ZLinkStreamRuntimeIngressTest {
 
     private void assertLivenessCloseReason(String expiredTimestampField, String expectedReason)
             throws Exception {
+        TestSession.lastSession.set(null);
         FakeStream stream = new FakeStream();
         stream.enqueue(PEER_A, frame("initial", "{}"));
         List<String> closeReasons = Collections.synchronizedList(new ArrayList<>());

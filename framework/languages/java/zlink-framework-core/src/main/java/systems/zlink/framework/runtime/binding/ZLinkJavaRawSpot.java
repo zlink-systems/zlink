@@ -27,8 +27,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Supplier;
 
 /**
  * Framework-owned local Spot mailbox. Raw bindings provide transport only; Spot identity, lifecycle
@@ -42,10 +40,8 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot, ZLinkJavaAdmissionBack
     private final Queue<ZLinkBackendActorJoinRequest> actorJoins = new ConcurrentLinkedQueue<>();
     private final Queue<ZLinkBackendActorLifecycleEvent> lifecycles = new ConcurrentLinkedQueue<>();
     private final Set<String> topics = ConcurrentHashMap.newKeySet();
-    private final AtomicBoolean closed = new AtomicBoolean();
     private volatile String spotId;
     private volatile ZLinkBackendSpotDispatchHandler dispatchHandler;
-    private volatile Supplier<? extends RuntimeException> admissionRejection;
 
     ZLinkJavaRawSpot(ZLinkJavaRawSpotNode owner, String spotId, long lifecycleGeneration) {
         this.owner = owner;
@@ -243,30 +239,47 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot, ZLinkJavaAdmissionBack
     }
 
     CompletionStage<Void> enqueueRoute(ZLinkBackendReceived received) {
-        synchronized (this) {
-            Supplier<? extends RuntimeException> rejection = admissionRejection;
-            if (rejection != null) {
-                received.close();
-                return CompletableFuture.failedFuture(rejection.get());
+        return enqueueRoute(received, null);
+    }
+
+    CompletionStage<Void> enqueueRoute(
+            ZLinkBackendReceived received, CompletableFuture<Void> admission) {
+        ZLinkBackendSpotDispatchHandler handler = dispatchHandler;
+        if (handler instanceof ZLinkInternalAsyncSpotDispatchHandler async) {
+            CompletionStage<Void> direct = admission == null
+                    ? async.handleRoute(received)
+                    : async.handleRoute(received, admission);
+            if (direct != null) {
+                return direct;
             }
-            if (closed.get()) {
-                received.close();
-                return CompletableFuture.failedFuture(
-                        new IllegalStateException("target Spot is closed"));
-            }
-            routes.add(received);
         }
+        IllegalStateException detached = null;
+        synchronized (this) {
+            if (owner.localSpot(spotId) != this) {
+                received.close();
+                detached = new IllegalStateException("target Spot is closed");
+            } else {
+                routes.add(received);
+            }
+        }
+        if (detached != null) {
+            if (admission != null) admission.completeExceptionally(detached);
+            return CompletableFuture.failedFuture(detached);
+        }
+        if (admission != null) admission.complete(null);
         return raise(ZLinkBackendSpotDispatchEvent.ROUTED_READABLE);
     }
 
-    @Override
-    public synchronized void sealSpotAdmission(Supplier<? extends RuntimeException> rejection) {
-        admissionRejection = java.util.Objects.requireNonNull(rejection, "rejection");
-    }
-
     boolean enqueueTopic(ZLinkBackendTopicMessage message) {
+        ZLinkBackendSpotDispatchHandler handler = dispatchHandler;
+        if (handler instanceof ZLinkInternalAsyncSpotDispatchHandler async) {
+            Boolean direct = async.handleTopic(message);
+            if (direct != null) {
+                return direct;
+            }
+        }
         synchronized (this) {
-            if (closed.get() || admissionRejection != null) {
+            if (owner.localSpot(spotId) != this) {
                 message.parts().forEach(Message::close);
                 return false;
             }
@@ -277,13 +290,18 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot, ZLinkJavaAdmissionBack
     }
 
     CompletionStage<Void> enqueueJoin(ZLinkBackendActorJoinRequest request) {
+        ZLinkBackendSpotDispatchHandler handler = dispatchHandler;
+        if (handler instanceof ZLinkInternalAsyncSpotDispatchHandler async) {
+            CompletionStage<Void> direct = async.handleJoin(request);
+            if (direct != null) {
+                return direct;
+            }
+        }
         synchronized (this) {
-            if (closed.get() || admissionRejection != null) {
+            if (owner.localSpot(spotId) != this) {
                 request.parts().forEach(Message::close);
                 return CompletableFuture.failedFuture(
-                        admissionRejection == null
-                                ? new IllegalStateException("target Spot is closed")
-                                : admissionRejection.get());
+                        new IllegalStateException("target Spot is closed"));
             }
             actorJoins.add(request);
         }
@@ -291,8 +309,15 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot, ZLinkJavaAdmissionBack
     }
 
     CompletionStage<Void> enqueueLifecycle(ZLinkBackendActorLifecycleEvent event) {
+        ZLinkBackendSpotDispatchHandler handler = dispatchHandler;
+        if (handler instanceof ZLinkInternalAsyncSpotDispatchHandler async) {
+            CompletionStage<Void> direct = async.handleLifecycle(event);
+            if (direct != null) {
+                return direct;
+            }
+        }
         synchronized (this) {
-            if (closed.get() || admissionRejection != null) {
+            if (owner.localSpot(spotId) != this) {
                 return CompletableFuture.completedFuture(null);
             }
             lifecycles.add(event);
@@ -301,13 +326,18 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot, ZLinkJavaAdmissionBack
     }
 
     CompletionStage<Void> enqueueActor(List<ZLinkBackendActorReceived> messages) {
+        ZLinkBackendSpotDispatchHandler handler = dispatchHandler;
+        if (handler instanceof ZLinkInternalAsyncSpotDispatchHandler async) {
+            CompletionStage<Void> direct = async.handleActor(messages);
+            if (direct != null) {
+                return direct;
+            }
+        }
         synchronized (this) {
-            if (closed.get() || admissionRejection != null) {
+            if (owner.localSpot(spotId) != this) {
                 messages.forEach(ZLinkBackendActorReceived::close);
                 return CompletableFuture.failedFuture(
-                        admissionRejection == null
-                                ? new IllegalStateException("target Spot is closed")
-                                : admissionRejection.get());
+                        new IllegalStateException("target Spot is closed"));
             }
         }
         return raise(ZLinkBackendSpotDispatchEvent.ACTOR_READABLE, messages);
@@ -338,7 +368,6 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot, ZLinkJavaAdmissionBack
             if (owner.localSpot(spotId) != this) {
                 return;
             }
-            closed.set(true);
             owner.removeSpot(this);
         }
         ZLinkBackendReceived route;

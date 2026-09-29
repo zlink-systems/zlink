@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -13,8 +14,12 @@ import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinRequest;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
@@ -36,12 +41,60 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkActorJoinStoreAdmissionTest {
     private static final String ACTOR_ID = "actor-a";
     private static final RoutingId NODE = RoutingId.from("node-a");
+
+    @Test
+    void joinAcceptedOnSpotLifecycleLaneCompletesAfterHostBeginsDraining() throws Exception {
+        AtomicBoolean draining = new AtomicBoolean();
+        ZLinkActorSpotAdmission admission = new ZLinkActorSpotAdmission();
+        admission.attach(null, draining::get, null);
+        ZLinkSerialExecutionQueue queue =
+                new ZLinkSerialExecutionQueue(ZLinkExecutionLanePolicy.spot());
+        CompletableFuture<Void> entered = new CompletableFuture<>();
+        CompletableFuture<Void> release = new CompletableFuture<>();
+        CompletableFuture<ZLinkSpotActorJoinResult> result = new CompletableFuture<>();
+        AtomicInteger callbacks = new AtomicInteger();
+        try {
+            queue.enqueueLifecycleAdmission(
+                    () -> {
+                        entered.complete(null);
+                        return release;
+                    });
+            entered.get(5, TimeUnit.SECONDS);
+            ZLinkBackendActorRef actor = new ZLinkBackendActorRef(NODE, ACTOR_ID, 1L);
+            CompletionStage<Void> accepted =
+                    queue.enqueueLifecycleAdmission(
+                            () ->
+                                    admission.admitSpotActor(
+                                                    new ZLinkBackendActorJoinRequest(
+                                                            actor, actor, List.of(), null),
+                                                    "spot",
+                                                    null,
+                                                    ignored -> {
+                                                        callbacks.incrementAndGet();
+                                                        return CompletableFuture.completedFuture(
+                                                                ZLinkSpotActorJoinResult.accept());
+                                                    },
+                                                    ignored ->
+                                                            CompletableFuture.completedFuture(null))
+                                            .thenAccept(result::complete));
+            draining.set(true);
+            release.complete(null);
+            accepted.toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertTrue(result.get(5, TimeUnit.SECONDS).accepted());
+            assertEquals(1, callbacks.get());
+        } finally {
+            release.complete(null);
+            queue.close();
+        }
+    }
 
     @Test
     void canonicalCommand28IngressUsesStoreResolvedTypeForCanonicalAdmission() throws Exception {

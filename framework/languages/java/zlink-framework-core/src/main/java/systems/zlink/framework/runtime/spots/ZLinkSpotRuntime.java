@@ -784,15 +784,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             long authorityOwnerGeneration,
             boolean instanceIntent,
             boolean activationPresent) {
-        if (draining || closing) {
-            return CompletableFuture.completedFuture(spotAdmissionFailure(spotId));
+        var hostRejection = spotHostAdmissionFailure(spotId);
+        if (hostRejection != null) {
+            return CompletableFuture.completedFuture(hostRejection);
         }
-        EntrySpotActivation entry = spotLifecycle.entrySpotActivationFor(spotId);
-        if (entry != null
-                && activationPresent
-                && !instanceIntent
-                && authorityOwnerGeneration == 0
-                && entry.context.nodeRid().equals(targetNodeRid)) {
+        if (activationPresent) {
             return CompletableFuture.completedFuture(null);
         }
         return authorityStore
@@ -2103,11 +2099,15 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return draining;
     }
 
+    ZLinkFrameworkException spotHostAdmissionFailure(String spotId) {
+        return draining || closing
+                ? ZLinkFrameworkErrorOrigin.framework(
+                        ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                        "Spot runtime is draining: " + spotId)
+                : null;
+    }
+
     ZLinkFrameworkException spotAdmissionFailure(String spotId) {
-        if (draining || closing) {
-            return ZLinkFrameworkErrorOrigin.framework(
-                    ZLinkFrameworkErrorKind.SHUTTING_DOWN, "Spot runtime is draining: " + spotId);
-        }
         return ZLinkFrameworkErrorOrigin.framework(
                 ZLinkFrameworkErrorKind.REJECTED, "Spot is closing: " + spotId);
     }

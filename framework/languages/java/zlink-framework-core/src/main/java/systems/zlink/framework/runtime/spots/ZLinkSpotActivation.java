@@ -73,9 +73,6 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                     ignored ->
                             context.enqueueLifecycle(
                                     () -> {
-                                        if (host.isClosing()) {
-                                            return CompletableFuture.completedFuture(null);
-                                        }
                                         Supplier<CompletionStage<Void>> transition =
                                                 host.actorLifecycleTransition(
                                                         spot,
@@ -95,9 +92,6 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                                 context.enqueueActorDispatch(
                                         actor.context().actorId(),
                                         () -> {
-                                            if (host.isClosing()) {
-                                                return CompletableFuture.completedFuture(null);
-                                            }
                                             Supplier<CompletionStage<Void>> transition =
                                                     host.actorLifecycleTransition(
                                                             spot,
@@ -120,9 +114,6 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
     }
 
     CompletionStage<Void> handleDispatchEvent(ZLinkBackendSpotDispatchInfo info) {
-        if (host.isClosing()) {
-            return CompletableFuture.completedFuture(null);
-        }
         if (info.event() == ZLinkBackendSpotDispatchEvent.ROUTED_READABLE) {
             return drainRoutesForDispatch();
         }
@@ -222,6 +213,204 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
             }
         }
         return CompletableFuture.allOf(completions.toArray(CompletableFuture[]::new));
+    }
+
+    CompletionStage<Void> admitRoute(ZLinkBackendReceived received) {
+        return admitRoute(received, null);
+    }
+
+    CompletionStage<Void> admitRoute(
+            ZLinkBackendReceived received, CompletableFuture<Void> admission) {
+        var permit = host.reserveApplicationJob();
+        if (permit == null) {
+            received.close();
+            Thread.currentThread().interrupt();
+            var failure = new IllegalStateException("application job reservation was interrupted");
+            if (admission != null) admission.completeExceptionally(failure);
+            return CompletableFuture.failedFuture(failure);
+        }
+        try (var ignored =
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
+                        .enter(permit)) {
+            ZLinkFrameworkException hostRejection = host.spotHostAdmissionFailure(context.spotId());
+            if (hostRejection != null) {
+                received.close();
+                if (admission != null) admission.completeExceptionally(hostRejection);
+                return CompletableFuture.failedFuture(hostRejection);
+            }
+            if (host.dispatchSpotRouteBridgePacket(received)) {
+                received.close();
+                if (admission != null) admission.complete(null);
+                return CompletableFuture.completedFuture(null);
+            }
+            var replyRoute =
+                    host.registerRelocationReplyLazy(
+                            () -> ZLinkSpotAcceptedJournal.encode(received),
+                            received,
+                            context.spotId(),
+                            backendSpot.lifecycleGeneration());
+            CompletionStage<Void> admitted;
+            try {
+                admitted = context.enqueueAcceptedDispatch(
+                        replyRoute::record,
+                        received.acceptedJournalRecordSize(),
+                        () -> dispatchRouteAsync(received)
+                                .whenComplete((done, failure) -> replyRoute.completeLocal()),
+                        replyRoute::releaseForRelocation,
+                        admission);
+            } catch (RuntimeException | Error failure) {
+                replyRoute.completeLocal();
+                throw failure;
+            }
+            return admitted
+                    .whenComplete((done, failure) -> {
+                        if (failure != null) {
+                            replyRoute.completeLocal();
+                            received.close();
+                        }
+                    });
+        } catch (RuntimeException | Error failure) {
+            if (admission != null) admission.completeExceptionally(failure);
+            received.close();
+            throw failure;
+        } finally {
+            permit.abandonReservation();
+        }
+    }
+
+    Boolean admitTopic(ZLinkBackendTopicMessage message) {
+        var permit = host.reserveApplicationJob();
+        if (permit == null) {
+            Thread.currentThread().interrupt();
+            message.parts().forEach(Message::close);
+            return false;
+        }
+        try (var ignored =
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
+                        .enter(permit)) {
+            if (host.spotHostAdmissionFailure(context.spotId()) != null) {
+                message.parts().forEach(Message::close);
+                return false;
+            }
+            var ownership =
+                    systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
+                            .transferToQueuedJob();
+            boolean accepted;
+            try {
+                accepted = context.tryEnqueueSpot(
+                        () -> host.runQueuedApplicationJob(
+                                ownership, () -> dispatchSpotSubscription(message)));
+            } catch (RuntimeException | Error failure) {
+                ownership.close();
+                message.parts().forEach(Message::close);
+                throw failure;
+            }
+            if (!accepted) {
+                ownership.close();
+                message.parts().forEach(Message::close);
+            }
+            return accepted;
+        } finally {
+            permit.abandonReservation();
+        }
+    }
+
+    CompletionStage<Void> admitJoin(ZLinkBackendActorJoinRequest request) {
+        var permit = host.reserveApplicationJob();
+        if (permit == null) {
+            Thread.currentThread().interrupt();
+            request.parts().forEach(Message::close);
+            return CompletableFuture.failedFuture(new IllegalStateException(
+                    "application job reservation was interrupted"));
+        }
+        try (var ignored =
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
+                        .enter(permit)) {
+            var hostRejection = host.spotHostAdmissionFailure(context.spotId());
+            if (hostRejection != null) {
+                request.parts().forEach(Message::close);
+                return CompletableFuture.failedFuture(hostRejection);
+            }
+            var ownership =
+                    systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
+                            .transferToQueuedJob();
+            CompletionStage<Void> admitted;
+            try {
+                admitted = context.enqueueJoinLifecycle(
+                        () -> host.runQueuedApplicationJob(
+                                        ownership, () -> dispatchActorJoinAsync(request))
+                                .thenCompose(stage -> stage));
+            } catch (RuntimeException | Error failure) {
+                ownership.close();
+                request.parts().forEach(Message::close);
+                throw failure;
+            }
+            return admitted
+                    .whenComplete((done, failure) -> {
+                        if (failure != null) {
+                            ownership.close();
+                            request.parts().forEach(Message::close);
+                        }
+                    });
+        } finally {
+            permit.abandonReservation();
+        }
+    }
+
+    CompletionStage<Void> admitActor(List<ZLinkBackendActorReceived> messages) {
+        return dispatchActorMessages(messages, operation -> {
+                    var hostRejection = host.spotHostAdmissionFailure(context.spotId());
+                    return hostRejection == null
+                            ? context.admitIngress(operation)
+                            : CompletableFuture.failedFuture(hostRejection);
+                }).whenComplete((done, failure) ->
+                        messages.forEach(ZLinkBackendActorReceived::close));
+    }
+
+    CompletionStage<Void> admitLifecycle(ZLinkBackendActorLifecycleEvent event) {
+        if (!host.actorSessions().available()) {
+            return CompletableFuture.completedFuture(null);
+        }
+        ZLinkBackendActorRef actorRef = host.actorLifecycleRef(event);
+        var actor = host.actorSessions().localActor(actorRef.actorId());
+        if (actor.isEmpty()) {
+            return CompletableFuture.completedFuture(null);
+        }
+        var permit = host.reserveApplicationJob();
+        if (permit == null) {
+            Thread.currentThread().interrupt();
+            return CompletableFuture.failedFuture(new IllegalStateException(
+                    "application job reservation was interrupted"));
+        }
+        try (var ignored =
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
+                        .enter(permit)) {
+            var hostRejection = host.spotHostAdmissionFailure(context.spotId());
+            if (hostRejection != null) {
+                return CompletableFuture.failedFuture(hostRejection);
+            }
+            var ownership =
+                    systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
+                            .transferToQueuedJob();
+            CompletionStage<Void> admitted;
+            try {
+                admitted = context.admitIngress(
+                        () -> host.runQueuedApplicationJob(ownership,
+                                () -> appendActorLifecycle(
+                                        CompletableFuture.completedFuture(null),
+                                        event, actorRef, actor.orElseThrow())));
+            } catch (RuntimeException | Error failure) {
+                ownership.close();
+                throw failure;
+            }
+            return admitted.whenComplete((done, failure) -> {
+                if (failure != null) {
+                    ownership.close();
+                }
+            });
+        } finally {
+            permit.abandonReservation();
+        }
     }
 
     private CompletionStage<Void> dispatchRoutesAsync(List<ZLinkBackendReceived> routes) {
@@ -342,20 +531,6 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                                 : handleRoutedBoundSessionSendParts(received.parts());
                 return stage.thenApply(ignored -> (Void) null)
                         .whenComplete((ignored, error) -> closeRouteReceived(received));
-            }
-            if (host.isDraining() || closeCommitted()) {
-                if (received.requestSeq().isPresent()) {
-                    host.replySpotRouteDispatchError(
-                            received,
-                            packet.packetName(),
-                            backendSpot.spotId(),
-                            ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
-                            //  Sealed admission is a framework-generated rejection, so
-                            //  the reply carries the framework-origin marker.
-                            host.spotAdmissionFailure(backendSpot.spotId()));
-                }
-                closeRouteReceived(received);
-                return CompletableFuture.completedFuture(null);
             }
             if (ZLinkActorSpotRoutePackets.ACTOR_PACKET_NAME.equals(packet.packetName())) {
                 return handleRoutedActorPacketParts(received.parts())
@@ -493,13 +668,15 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                     prior.thenCompose(
                             ignored ->
                                     host.runQueuedApplicationJob(
-                                            queuedOwnership,
-                                            () -> dispatchActorJoinAsync(request)));
+                                                    queuedOwnership,
+                                                    () -> dispatchActorJoinAsync(request))
+                                            .thenCompose(stage -> stage));
         }
         return tail;
     }
 
-    private CompletionStage<Void> dispatchActorJoinAsync(ZLinkBackendActorJoinRequest request) {
+    private CompletionStage<CompletionStage<Void>> dispatchActorJoinAsync(
+            ZLinkBackendActorJoinRequest request) {
         Message payloadCopy = actorJoinPayload(request.parts());
         request.parts().forEach(Message::close);
         systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
@@ -513,10 +690,15 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                                 try (Message emptyReply = Message.from(new byte[0])) {
                                     backendSpot.replyActorJoin(request, 1, List.of(emptyReply));
                                 }
-                                return null;
+                                return CompletableFuture.<Void>completedFuture(null);
                             }
                             ZLinkSpotActorJoinResult effective =
                                     response == null ? ZLinkSpotActorJoinResult.reject() : response;
+                            CompletionStage<Void> membership =
+                                    effective.accepted()
+                                            ? host.actorAdmissions().localJoinCompletion(
+                                                    request.targetActor().actorId())
+                                            : CompletableFuture.completedFuture(null);
                             Message reply =
                                     effective.reply() == null
                                             ? Message.from(new byte[0])
@@ -528,9 +710,8 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                             } finally {
                                 reply.close();
                             }
-                            return null;
+                            return membership;
                         })
-                .thenApply(ignored -> (Void) null)
                 .whenComplete((ignored, error) -> payloadCopy.close());
     }
 
