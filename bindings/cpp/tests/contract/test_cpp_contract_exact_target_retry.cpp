@@ -160,12 +160,15 @@ void test_raw_dontwait_backpressure_writable_and_exact_retry ()
     const int zero = 0;
     const int mandatory = 1;
     const int five_seconds = 5000;
+    const int infinite = -1;
     assert (zlink_set_option (router, ZLINK_OPT_LINGER, &zero,
                               sizeof (zero)) == ZLINK_CONFIG_OK);
     assert (zlink_set_option (dealer, ZLINK_OPT_LINGER, &zero,
                               sizeof (zero)) == ZLINK_CONFIG_OK);
     assert (zlink_set_option (dealer, ZLINK_OPT_SNDTIMEO, &five_seconds,
                               sizeof (five_seconds)) == ZLINK_CONFIG_OK);
+    assert (zlink_set_option (router, ZLINK_OPT_SNDTIMEO, &infinite,
+                              sizeof (infinite)) == ZLINK_CONFIG_OK);
     assert (zlink_set_router_option (router, ZLINK_ROUTER_OPT_MANDATORY,
                                      &mandatory, sizeof (mandatory))
             == ZLINK_CONFIG_OK);
@@ -463,7 +466,7 @@ int test_admitted_async_send_leaves_no_waiter_identity ()
     const uint64_t hwm = UINT64_C (65536) + sizeof (zlink_msg_t);
     dealer.options ().send_hwm (zlink::byte_count_t::bytes (hwm));
     router.options ().recv_hwm (zlink::byte_count_t::bytes (hwm));
-    dealer.options ().send_timeout (std::chrono::milliseconds (0));
+    dealer.options ().send_timeout (std::chrono::milliseconds (-1));
 
     const std::string endpoint =
       zlink_cpp_contract::unique_inproc ("admitted-async-send");
@@ -493,14 +496,8 @@ int test_admitted_async_send_leaves_no_waiter_identity ()
         awaiter.await_resume ();
     }
 
-    const std::string filler (65536, 'f');
-    if (!fill_until_backpressured (dealer, filler)) {
-        std::fprintf (stderr, "could not reach the send HWM\n");
-        return 3;
-    }
-
     zlink::message_t rejected =
-      zlink_cpp_contract::make_message ("resumed-after-admitted");
+      zlink_cpp_contract::make_message (std::string (2 * hwm, 'x'));
     bool ownerless_rejected = false;
     try {
         (void) dealer.send ().message (rejected).async ();
@@ -516,12 +513,25 @@ int test_admitted_async_send_leaves_no_waiter_identity ()
 
     zlink::poller_t poller;
     poller.add (dealer, zlink::poll_event_flag_t::pollcompletion, 71);
-    auto pending = dealer.send ().message (rejected).async ();
-    if (pending.result != ZLINK_SUBMIT_BACKPRESSURED) {
-        std::fprintf (stderr, "a send without credit must report backpressure\n");
-        return 4;
+    std::optional<zlink::send_submission_t> pending;
+    std::string refused_payload;
+    for (int attempt = 0; attempt != 64; ++attempt) {
+        std::string payload = "resumed-after-admitted-" + std::to_string (attempt);
+        payload.resize (65536, 'f');
+        zlink::message_t part = zlink_cpp_contract::make_message (payload);
+        auto submission = dealer.send ().message (part).async ();
+        if (submission.result == ZLINK_SUBMIT_BACKPRESSURED) {
+            refused_payload = std::move (payload);
+            pending.emplace (std::move (submission));
+            break;
+        }
+        assert (submission.result == ZLINK_SUBMIT_OK);
     }
-    auto pending_awaiter = std::move (pending.admitted).operator co_await ();
+    if (!pending.has_value ()) {
+        std::fprintf (stderr, "could not reach the send HWM\n");
+        return 3;
+    }
+    auto pending_awaiter = std::move (pending->admitted).operator co_await ();
     if (pending_awaiter.await_ready ()) {
         std::fprintf (stderr, "a send without credit must not be terminal\n");
         return 4;
@@ -542,7 +552,7 @@ int test_admitted_async_send_leaves_no_waiter_identity ()
             std::this_thread::sleep_for (std::chrono::milliseconds (2));
             continue;
         }
-        if (received.first_part ().to_string () == "resumed-after-admitted")
+        if (received.first_part ().to_string () == refused_payload)
             ++resumed_payload_seen;
         received.close ();
     }
