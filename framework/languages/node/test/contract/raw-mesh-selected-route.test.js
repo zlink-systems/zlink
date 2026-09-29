@@ -73,7 +73,7 @@ test('RouteMesh admission follows the observed Core selected route (FW01)', asyn
   });
   try {
     runtime.connectPeerByRoutingId(peer.advertisedEndpoint, 'peer');
-    await runtime.pumpBatch(false);
+    await runtime.pumpBatch(false, true);
 
     // Core delivers the handshake of the selected route.
     assert.equal(await hello(11n), 'infrastructure');
@@ -82,7 +82,7 @@ test('RouteMesh admission follows the observed Core selected route (FW01)', asyn
     // Core replaces the route: the admission ends and the new route handshakes.
     routes.set('peer', 12n);
     sent.length = 0;
-    await runtime.pumpBatch(false);
+    await runtime.pumpBatch(false, true);
     assert.equal(runtime.topology.peer('peer'), undefined);
     assert.ok(sent.some(([target, command]) =>
       target === 'peer' && command === wire.M6aServiceWireCommand.hello));
@@ -91,7 +91,7 @@ test('RouteMesh admission follows the observed Core selected route (FW01)', asyn
 
     // The route disappears: nothing stays admitted on it.
     routes.delete('peer');
-    await runtime.pumpBatch(false);
+    await runtime.pumpBatch(false, true);
     assert.equal(runtime.topology.peer('peer'), undefined);
     assert.equal(runtime.isPeerRouteReady('peer'), false);
 
