@@ -107,7 +107,10 @@ Luna가 이전 Terra의 일 대부분을 맡고 Sol이 이전 Terra보다 싸다
 Claude도 추론 레벨을 정할 수 있으나 **호출 시점이 아니라 에이전트 정의에서** 정한다 —
 `Agent` 도구 호출 파라미터에는 `model`만 있고, 그 에이전트 타입의 model·추론 레벨·tools는
 `.claude/agents/*.md` frontmatter가 소유한다(`model`, `effort`: `low`·`medium`·`high`·`xhigh`·`max`). 정의 파일이 없으면
-세션 기본값을 상속한다. 코드를 고치는 sonnet 작업은 `subagent_type: sonnet-coder`(`model: sonnet`, `effort: max`)로 넣는다.
+세션 기본값을 상속한다. 코드를 고치는 sonnet 작업은 `subagent_type: sonnet-coder`(`model: sonnet`, `effort: medium`)로 넣는다.
+effort는 토큰 단가를 바꾸지 않고 추론 토큰(출력 단가)만 늘린다. Sonnet 5.5 단가는 sol과 같고 Opus 5.5의 절반이므로
+(입력 $2, 캐시 읽기 $0.20, 출력 $10 per 1M) Sonnet `max`는 Opus `medium`보다 비쌀 수 있다 — `max`는 쓰지 않고,
+측정된 실패가 있을 때만 `high`로 올린다. 작업마다 입력·출력 토큰을 비교 기록에 남겨 레벨별 배율을 잰다.
 
 | 모델 | 쓰는 일 |
 |------|---------|
