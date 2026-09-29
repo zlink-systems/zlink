@@ -11981,7 +11981,7 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public void DisconnectPeer(string endpoint) { }
 
-        public void DisconnectPeerLifetime(RoutingId peerRid, ulong lifecycleGeneration) { }
+        public void DisconnectPeerLifetime(RoutingId peerRid, string endpoint, ulong lifecycleGeneration) { }
 
         public IZLinkBackendSpot CreateSpot()
         {

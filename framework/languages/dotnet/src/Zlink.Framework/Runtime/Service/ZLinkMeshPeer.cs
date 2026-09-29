@@ -1,28 +1,72 @@
 namespace Zlink.Framework.Runtime.Service;
 
-/// <summary>
-/// Stores the mutable state for one configured or admitted mesh connection.
-/// </summary>
-internal sealed class ZLinkMeshPeer(
-    ulong intent,
+/// <summary>Owns one configured endpoint registration and its connection attempt.</summary>
+internal sealed class ZLinkMeshConnectionIntent(
+    ulong id,
     string endpoint,
     RoutingId? expectedRid,
-    string expectedSecurityIdentity,
-    ZLinkServiceConnectionDirection direction,
-    ulong connectionGeneration = 0
+    string expectedSecurityIdentity
 )
 {
-    internal ulong Intent { get; } = intent;
+    internal ulong Id { get; } = id;
     internal string Endpoint { get; } = endpoint;
     internal RoutingId? ExpectedRid { get; } = expectedRid;
     internal string ExpectedSecurityIdentity { get; } = expectedSecurityIdentity;
-    internal ZLinkServiceConnectionDirection Direction { get; } = direction;
-    internal string Discriminator { get; } =
-        $"{(direction == ZLinkServiceConnectionDirection.Outbound ? "out" : "in")}:"
-        + $"{endpoint}:{intent:x16}";
-    internal ulong ConnectionGeneration { get; set; } = connectionGeneration;
+    internal RoutingId ResolvedRid { get; set; }
+    internal long NextAdmissionTimestamp { get; set; }
+    internal ulong LastChangedMs { get; set; } = checked((ulong)Environment.TickCount64);
+
+    internal bool IsBoundTo(ZLinkMeshPeer? peer) =>
+        peer is { Admission: { } admission }
+        && (ResolvedRid.IsEmpty ? ExpectedRid == peer.RoutingId : ResolvedRid == peer.RoutingId)
+        && ZLinkServiceAdmissionGuard.MatchesExpectedTransportRoute(
+            Endpoint,
+            ExpectedSecurityIdentity,
+            ZLinkServiceSecurityIdentity.Plaintext,
+            0,
+            admission
+        );
+
+    internal bool IsAdmitted(ZLinkMeshPeer? peer) => peer is { Admitted: true } && IsBoundTo(peer);
+
+    internal MeshNodePeer Snapshot(ZLinkMeshPeer? peer)
+    {
+        var bound = IsBoundTo(peer);
+        return new MeshNodePeer(
+            Id,
+            MeshPeerSource.Manual,
+            bound ? peer!.State : MeshPeerState.Connecting,
+            ResolvedRid.IsEmpty ? ExpectedRid ?? default : ResolvedRid,
+            bound ? peer!.LifecycleGeneration : 0,
+            bound ? peer!.DescriptorRevision : 0,
+            Endpoint,
+            bound ? checked((uint)peer!.Channels.Count) : 0,
+            0,
+            bound ? peer!.LastChangedMs : LastChangedMs
+        )
+        {
+            ObjectRole = bound && peer!.Admission is { } admission
+                ? (ZLinkMeshNodeObjectRole)admission.ObjectRole
+                : ZLinkMeshNodeObjectRole.None,
+        };
+    }
+}
+
+/// <summary>
+/// Stores the mutable state for one configured or admitted mesh connection.
+/// </summary>
+internal sealed class ZLinkMeshPeer(ulong snapshotId)
+{
+    internal ulong SnapshotId { get; } = snapshotId;
     internal RoutingId RoutingId { get; set; }
     internal RoutingId PhysicalRoutingId { get; set; }
+
+    /// <summary>
+    /// The Core route generation (Core ROUTER §10.1) of this peer's handshake:
+    /// the route that delivered its admission record, or the observed route
+    /// its Hello greeted. 0 while it has no handshake route.
+    /// </summary>
+    internal ulong RouteGeneration { get; set; }
     internal ulong LifecycleGeneration { get; set; }
     internal ulong DescriptorRevision { get; set; }
     internal IReadOnlyDictionary<string, uint> Channels { get; set; } =
@@ -31,18 +75,17 @@ internal sealed class ZLinkMeshPeer(
     internal MeshPeerState State { get; set; } = MeshPeerState.Configured;
     internal bool Admitted { get; set; }
     internal ZLinkServiceLiveness? Liveness { get; set; }
-    internal long NextAdmissionTimestamp { get; set; }
     internal ulong LastChangedMs { get; set; } = checked((ulong)Environment.TickCount64);
 
     internal MeshNodePeer Snapshot() =>
         new(
-            Intent,
+            SnapshotId,
             MeshPeerSource.Manual,
             State,
-            RoutingId.IsEmpty ? ExpectedRid ?? default : RoutingId,
+            RoutingId,
             LifecycleGeneration,
             DescriptorRevision,
-            Endpoint,
+            Admission?.AdvertisedEndpoint ?? string.Empty,
             checked((uint)Channels.Count),
             0,
             LastChangedMs
