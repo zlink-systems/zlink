@@ -474,6 +474,11 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  endpoint owner turn without re-entering check_hwm().
     bool write_no_recursive_hwm_check (
       const msg_t *msg_, pipe_message_admission_t *admission_out_ = NULL);
+    //  The PUB/XPUB owner has admitted the complete publish record at its
+    //  first frame. Charge this frame without a second byte-HWM decision.
+    bool write_admitted_publish_frame (const msg_t *msg_);
+    pipe_message_admission_t check_admitted_publish_frame_size (
+      const msg_t *msg_) const;
 
     //  Fast path for a single non-routing-id message that is always flushed.
     bool write_single_message_and_flush_no_recursive_hwm_check (
@@ -527,9 +532,8 @@ class pipe_t ZLINK_FINAL : public object_t,
 
     //  Returns true if HWM is not reached
     bool check_hwm () const;
-    //  Checks whether the current multipart transaction can commit with this
-    //  frame. A rejected final frame makes the pipe wait for byte credit.
-    pipe_message_admission_t check_hwm_for_message (const msg_t *msg_);
+    //  Checks whether the pipe is full before a publish record starts.
+    pipe_message_admission_t check_publish_record_hwm ();
 
     void set_endpoint_pair (endpoint_uri_pair_t endpoint_pair_);
     const endpoint_uri_pair_t &get_endpoint_pair () const;

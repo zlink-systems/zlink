@@ -603,18 +603,16 @@ bool zlink::pipe_t::check_hwm () const
            && check_hwm_unlocked ();
 }
 
-zlink::pipe_message_admission_t
-zlink::pipe_t::check_hwm_for_message (const msg_t *msg_)
+zlink::pipe_message_admission_t zlink::pipe_t::check_publish_record_hwm ()
 {
-    if (!msg_)
-        return pipe_message_admission_invalid;
-
-    const uint64_t max_message_bytes =
-      _max_message_bytes.load (std::memory_order_acquire);
     if (_state != active)
         return pipe_message_admission_inactive;
     if (_transport_pair_write_held)
         return pipe_message_admission_transport_wait;
+    if (remote_flow_blocked_unlocked ()) {
+        _waiting_for_flow_resume.store (true, std::memory_order_release);
+        return pipe_message_admission_transport_wait;
+    }
     if (!_out_active.load (std::memory_order_acquire)) {
         // dist_t keeps a pipe in its matching set when message preflight is
         // rejected, so it can safely consume credit published by the peer
@@ -630,42 +628,6 @@ zlink::pipe_t::check_hwm_for_message (const msg_t *msg_)
         if (!check_hwm_with_peer_snapshot_unlocked ())
             return pipe_message_admission_hwm_full;
         clear_hwm_credit_wait_unlocked ();
-    }
-    if (msg_->is_delimiter ())
-        return pipe_message_admission_ready;
-
-    const uint64_t frame_bytes = frame_accounted_bytes (msg_);
-    if (frame_bytes == UINT64_MAX
-        || UINT64_MAX - _out_incomplete_bytes < frame_bytes)
-        return pipe_message_admission_too_large;
-    const uint64_t payload_bytes = static_cast<uint64_t> (msg_->size ());
-    if (UINT64_MAX - _out_incomplete_payload_bytes < payload_bytes)
-        return pipe_message_admission_too_large;
-
-    const uint64_t prospective_payload =
-      _out_incomplete_payload_bytes + payload_bytes;
-    if (max_message_bytes != 0 && prospective_payload > max_message_bytes)
-        return pipe_message_admission_too_large;
-    const bool more = (msg_->flags () & msg_t::more) != 0;
-    if (!can_commit_bytes_with_peer_snapshot_unlocked (
-          _out_incomplete_bytes + frame_bytes, prospective_payload,
-          !more
-            && (_out_incomplete_bytes == 0
-                || _out_multipart_started_empty))) {
-        bool credit_ready = false;
-        if (_bytes_written.load (std::memory_order_acquire)
-            > _peers_bytes_read.load (std::memory_order_acquire)) {
-            arm_hwm_credit_wait_unlocked ();
-            credit_ready = can_commit_bytes_with_peer_snapshot_unlocked (
-              _out_incomplete_bytes + frame_bytes, prospective_payload,
-              !more
-                && (_out_incomplete_bytes == 0
-                    || _out_multipart_started_empty));
-            if (credit_ready)
-                clear_hwm_credit_wait_unlocked ();
-        }
-        if (!credit_ready)
-            return pipe_message_admission_hwm_full;
     }
     return pipe_message_admission_ready;
 }

@@ -68,7 +68,8 @@ static int send_frames_once (zlink::socket_base_t *socket_,
                              zlink::socket_public_send_scope_t &scope_,
                              zlink::pipe_t **application_pipe_out_ = NULL,
                              zlink::multipart_pipe_selected_fn selected_fn_ = NULL,
-                             void *selected_userdata_ = NULL)
+                             void *selected_userdata_ = NULL,
+                             bool publish_first_frame_ = false)
 {
     bool started = rollback_started_;
     if (application_pipe_out_)
@@ -77,13 +78,17 @@ static int send_frames_once (zlink::socket_base_t *socket_,
     for (size_t i = 0; i < part_count_; ++i) {
         const bool more = i + 1 < part_count_;
         zlink::pipe_t *selected_pipe = NULL;
-        if (zlink::multipart_send_facade_t::send_scoped (
+        const int send_rc = publish_first_frame_ && i == 0
+          ? socket_->send_publish_first_frame_scoped (
+              reinterpret_cast<zlink::msg_t *> (&parts_[i]),
+              (more ? ZLINK_SNDMORE : 0) | flags_, scope_)
+          : zlink::multipart_send_facade_t::send_scoped (
               socket_, reinterpret_cast<zlink::msg_t *> (&parts_[i]),
               (more ? ZLINK_SNDMORE : 0) | flags_, scope_,
               application_pipe_out_ && i == 0 ? &selected_pipe : NULL,
               selected_fn_ && i == 0 ? selected_fn_ : NULL,
-              selected_fn_ && i == 0 ? selected_userdata_ : NULL)
-            != 0) {
+              selected_fn_ && i == 0 ? selected_userdata_ : NULL);
+        if (send_rc != 0) {
             const int err = errno;
             if (started)
                 (void) zlink::multipart_send_facade_t::rollback_scoped (socket_, scope_);
@@ -216,7 +221,8 @@ static int send_publish_once (zlink::socket_base_t *socket_,
             errno = EINVAL;
             return -1;
         }
-        return send_frames_once (socket_, parts_, part_count_, flags_, false, scope_);
+        return send_frames_once (socket_, parts_, part_count_, flags_, false,
+                                 scope_, NULL, NULL, NULL, true);
     }
 
     zlink::msg_t topic_msg;
@@ -228,8 +234,8 @@ static int send_publish_once (zlink::socket_base_t *socket_,
         memcpy (topic_msg.data (), topic_, topic_size);
 
     const bool has_payload = part_count_ > 0;
-    if (zlink::multipart_send_facade_t::send_scoped (
-          socket_, &topic_msg, (has_payload ? ZLINK_SNDMORE : 0) | flags_, scope_)
+    if (socket_->send_publish_first_frame_scoped (
+          &topic_msg, (has_payload ? ZLINK_SNDMORE : 0) | flags_, scope_)
         != 0) {
         const int err = errno;
         (void) topic_msg.close ();
@@ -259,8 +265,8 @@ static int send_publish_frame_once (zlink::socket_base_t *socket_,
     }
 
     const bool has_payload = part_count_ > 0;
-    if (zlink::multipart_send_facade_t::send_scoped (
-          socket_, reinterpret_cast<zlink::msg_t *> (topic_frame_),
+    if (socket_->send_publish_first_frame_scoped (
+          reinterpret_cast<zlink::msg_t *> (topic_frame_),
           (has_payload ? ZLINK_SNDMORE : 0) | flags_, scope_)
         != 0) {
         return -1;
