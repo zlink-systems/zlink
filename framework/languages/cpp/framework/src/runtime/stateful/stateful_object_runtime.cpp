@@ -1556,206 +1556,211 @@ stateful_object_runtime_t::commit_relocation_aggregate (std::uint64_t token,
       .get ();
 }
 
-stateful_error_t
+task_t<stateful_error_t>
 stateful_object_runtime_t::restore_relocation (frozen_object_state_t frozen,
                                                object_ref_t target,
                                                relocation_restore_identity_t identity,
                                                std::stop_token cancellation,
                                                std::optional<object_ref_t> target_spot)
-try {
-    struct restore_plan_t
-    {
-        stateful_error_t error = stateful_error_t::conflict;
-        std::uint64_t reservation = 0;
-        std::optional<std::uint64_t> previous_generation;
-        relocation_state_materialize_t materialize;
-        relocation_state_restore_t restore;
-        relocation_state_abort_t abort;
-    };
+{
+    try {
+        struct restore_plan_t
+        {
+            stateful_error_t error = stateful_error_t::conflict;
+            std::uint64_t reservation = 0;
+            std::optional<std::uint64_t> previous_generation;
+            relocation_state_materialize_t materialize;
+            relocation_state_restore_t restore;
+            relocation_state_abort_t abort;
+        };
 
-    auto plan =
-      _lane
-        .run ([&, this] {
-            restore_plan_t plan;
-            if (!valid_text (frozen.stable_type) || frozen.owner.kind != target.kind
-                || frozen.owner.key != target.key
-                || frozen.owner.object_generation != target.object_generation
-                || frozen.owner.mesh_name != target.mesh_name
-                || target.authority_owner_generation <= frozen.owner.authority_owner_generation
-                || !valid_text (target.mesh_name) || !valid_text (target.node_id)
-                || identity.reference.empty ()
-                || frozen.application_state.size () > max_application_state_bytes
-                || frozen.timers.size () > max_restored_timers) {
-                plan.error = stateful_error_t::invalid;
-                return plan;
-            }
-            if (target_spot
-                && (target.kind != object_kind_t::actor
-                    || target_spot->kind != object_kind_t::user_spot || target_spot->key.empty ()
-                    || target_spot->object_generation == 0
-                    || target_spot->mesh_name != target.mesh_name
-                    || target_spot->node_id != target.node_id)) {
-                plan.error = stateful_error_t::invalid;
-                return plan;
-            }
-            std::uint64_t previous_sequence = 0;
-            for (const auto &pending : frozen.pending_application) {
-                if (pending.sequence == 0 || pending.sequence <= previous_sequence) {
+        auto plan =
+          _lane
+            .run ([&, this] {
+                restore_plan_t plan;
+                if (!valid_text (frozen.stable_type) || frozen.owner.kind != target.kind
+                    || frozen.owner.key != target.key
+                    || frozen.owner.object_generation != target.object_generation
+                    || frozen.owner.mesh_name != target.mesh_name
+                    || target.authority_owner_generation <= frozen.owner.authority_owner_generation
+                    || !valid_text (target.mesh_name) || !valid_text (target.node_id)
+                    || identity.reference.empty ()
+                    || frozen.application_state.size () > max_application_state_bytes
+                    || frozen.timers.size () > max_restored_timers) {
                     plan.error = stateful_error_t::invalid;
                     return plan;
                 }
-                previous_sequence = pending.sequence;
-            }
-            std::uint64_t previous_timer = 0;
-            for (const auto &timer : frozen.timers) {
-                if (timer.timer_id == 0 || timer.timer_id <= previous_timer
-                    || timer.due_after_milliseconds == 0 || timer.next_tick_sequence == 0) {
+                if (target_spot
+                    && (target.kind != object_kind_t::actor
+                        || target_spot->kind != object_kind_t::user_spot
+                        || target_spot->key.empty () || target_spot->object_generation == 0
+                        || target_spot->mesh_name != target.mesh_name
+                        || target_spot->node_id != target.node_id)) {
                     plan.error = stateful_error_t::invalid;
                     return plan;
                 }
-                previous_timer = timer.timer_id;
-            }
-            const auto key = key_for (target);
-            bool replacing_remnant = false;
-            {
-                const auto existing = _objects.find (key);
-                if (existing != _objects.end () && !_relocation_restore_reservations.contains (key)
-                    && replaceable_relocation_remnant (existing->second, target)) {
-                    /* Return relocation (28 §2/§8): drop the leftover `moving`
+                std::uint64_t previous_sequence = 0;
+                for (const auto &pending : frozen.pending_application) {
+                    if (pending.sequence == 0 || pending.sequence <= previous_sequence) {
+                        plan.error = stateful_error_t::invalid;
+                        return plan;
+                    }
+                    previous_sequence = pending.sequence;
+                }
+                std::uint64_t previous_timer = 0;
+                for (const auto &timer : frozen.timers) {
+                    if (timer.timer_id == 0 || timer.timer_id <= previous_timer
+                        || timer.due_after_milliseconds == 0 || timer.next_tick_sequence == 0) {
+                        plan.error = stateful_error_t::invalid;
+                        return plan;
+                    }
+                    previous_timer = timer.timer_id;
+                }
+                const auto key = key_for (target);
+                bool replacing_remnant = false;
+                {
+                    const auto existing = _objects.find (key);
+                    if (existing != _objects.end ()
+                        && !_relocation_restore_reservations.contains (key)
+                        && replaceable_relocation_remnant (existing->second, target)) {
+                        /* Return relocation (28 §2/§8): drop the leftover `moving`
              * record this node kept after it handed the object away. The
              * restore owns the object from here; on failure the node forgets
              * it hosted this object at all so the next attempt is admitted
              * independently (15 §4.2). */
-                    _objects.erase (existing);
-                    replacing_remnant = true;
-                }
-                const auto existing_live =
-                  replacing_remnant ? _objects.end () : _objects.find (key);
-                if (existing_live != _objects.end ()) {
-                    const auto &record = existing_live->second;
+                        _objects.erase (existing);
+                        replacing_remnant = true;
+                    }
+                    const auto existing_live =
+                      replacing_remnant ? _objects.end () : _objects.find (key);
+                    if (existing_live != _objects.end ()) {
+                        const auto &record = existing_live->second;
+                        if (_relocation_restore_reservations.contains (key)
+                            || !same_exact_ref (record.reference, target)
+                            || record.state != object_state_t::recovering
+                            || record.restore_identity
+                                 != std::optional<relocation_restore_identity_t>{identity}
+                            || record.stable_type != frozen.stable_type
+                            || record.membership != (target_spot ? target_spot->key : std::string{})
+                            || record.queue.application.size ()
+                                 != frozen.pending_application.size ()
+                            || record.timers.size () != frozen.timers.size ()) {
+                            plan.error = stateful_error_t::conflict;
+                            return plan;
+                        }
+                        auto pending = record.queue.application.begin ();
+                        for (const auto &expected : frozen.pending_application) {
+                            if (*pending++ != expected) {
+                                plan.error = stateful_error_t::conflict;
+                                return plan;
+                            }
+                        }
+                        auto timer = record.timers.begin ();
+                        for (const auto &expected : frozen.timers) {
+                            if (timer == record.timers.end () || timer->second != expected) {
+                                plan.error = stateful_error_t::conflict;
+                                return plan;
+                            }
+                            ++timer;
+                        }
+                        plan.error = stateful_error_t::already_exists;
+                        return plan;
+                    }
+                    const auto last = _last_generation.find (key);
+                    if (last != _last_generation.end () && !replacing_remnant) {
+                        if (last->second >= target.object_generation) {
+                            plan.error = stateful_error_t::generation_stale;
+                            return plan;
+                        }
+                        plan.previous_generation = last->second;
+                    }
                     if (_relocation_restore_reservations.contains (key)
-                        || !same_exact_ref (record.reference, target)
-                        || record.state != object_state_t::recovering
-                        || record.restore_identity
-                             != std::optional<relocation_restore_identity_t>{identity}
-                        || record.stable_type != frozen.stable_type
-                        || record.membership != (target_spot ? target_spot->key : std::string{})
-                        || record.queue.application.size () != frozen.pending_application.size ()
-                        || record.timers.size () != frozen.timers.size ()) {
+                        || _next_relocation_restore_reservation == 0) {
                         plan.error = stateful_error_t::conflict;
                         return plan;
                     }
-                    auto pending = record.queue.application.begin ();
-                    for (const auto &expected : frozen.pending_application) {
-                        if (*pending++ != expected) {
-                            plan.error = stateful_error_t::conflict;
-                            return plan;
-                        }
-                    }
-                    auto timer = record.timers.begin ();
-                    for (const auto &expected : frozen.timers) {
-                        if (timer == record.timers.end () || timer->second != expected) {
-                            plan.error = stateful_error_t::conflict;
-                            return plan;
-                        }
-                        ++timer;
-                    }
-                    plan.error = stateful_error_t::already_exists;
-                    return plan;
-                }
-                const auto last = _last_generation.find (key);
-                if (last != _last_generation.end () && !replacing_remnant) {
-                    if (last->second >= target.object_generation) {
-                        plan.error = stateful_error_t::generation_stale;
-                        return plan;
-                    }
-                    plan.previous_generation = last->second;
-                }
-                if (_relocation_restore_reservations.contains (key)
-                    || _next_relocation_restore_reservation == 0) {
-                    plan.error = stateful_error_t::conflict;
-                    return plan;
-                }
 
-                object_record_t record;
-                record.reference = target;
-                record.stable_type = frozen.stable_type;
-                record.state = object_state_t::recovering;
-                record.restore_identity = identity;
-                if (target_spot)
-                    record.membership = target_spot->key;
-                for (const auto &pending : frozen.pending_application) {
-                    record.queue.application_bytes += retained_bytes (pending);
-                    record.queue.application.push_back (pending);
+                    object_record_t record;
+                    record.reference = target;
+                    record.stable_type = frozen.stable_type;
+                    record.state = object_state_t::recovering;
+                    record.restore_identity = identity;
+                    if (target_spot)
+                        record.membership = target_spot->key;
+                    for (const auto &pending : frozen.pending_application) {
+                        record.queue.application_bytes += retained_bytes (pending);
+                        record.queue.application.push_back (pending);
+                    }
+                    for (const auto &timer : frozen.timers)
+                        record.timers.emplace (timer.timer_id, timer);
+                    auto next_objects = _objects;
+                    auto next_generations = _last_generation;
+                    next_generations[key] = target.object_generation;
+                    next_objects.emplace (key, std::move (record));
+                    plan.reservation = _next_relocation_restore_reservation++;
+                    _relocation_restore_reservations.emplace (key, plan.reservation);
+                    _objects.swap (next_objects);
+                    _last_generation.swap (next_generations);
                 }
-                for (const auto &timer : frozen.timers)
-                    record.timers.emplace (timer.timer_id, timer);
-                auto next_objects = _objects;
-                auto next_generations = _last_generation;
-                next_generations[key] = target.object_generation;
-                next_objects.emplace (key, std::move (record));
-                plan.reservation = _next_relocation_restore_reservation++;
-                _relocation_restore_reservations.emplace (key, plan.reservation);
-                _objects.swap (next_objects);
-                _last_generation.swap (next_generations);
+                plan.materialize = _relocation_state_materialize;
+                plan.restore = _relocation_state_restore;
+                plan.abort = _relocation_state_abort;
+                plan.error = stateful_error_t::none;
+                return plan;
+            })
+            .get ();
+        if (plan.error != stateful_error_t::none)
+            co_return plan.error;
+
+        bool restored = true;
+        if (plan.materialize) {
+            try {
+                restored = co_await plan.materialize (frozen, target, target_spot, cancellation);
             }
-            plan.materialize = _relocation_state_materialize;
-            plan.restore = _relocation_state_restore;
-            plan.abort = _relocation_state_abort;
-            plan.error = stateful_error_t::none;
-            return plan;
-        })
-        .get ();
-    if (plan.error != stateful_error_t::none)
-        return plan.error;
+            catch (...) {
+                restored = false;
+            }
+        } else if ((target.kind == object_kind_t::user_spot
+                    || target.kind == object_kind_t::instance_spot)
+                   && plan.restore) {
+            try {
+                restored = plan.restore (frozen, target, cancellation);
+            }
+            catch (...) {
+                restored = false;
+            }
+        }
+        if (!restored && plan.abort) {
+            try {
+                plan.abort ({target});
+            }
+            catch (...) {
+            }
+        }
 
-    bool restored = true;
-    if (plan.materialize) {
-        try {
-            restored = plan.materialize (frozen, target, target_spot, cancellation);
-        }
-        catch (...) {
-            restored = false;
-        }
-    } else if ((target.kind == object_kind_t::user_spot
-                || target.kind == object_kind_t::instance_spot)
-               && plan.restore) {
-        try {
-            restored = plan.restore (frozen, target, cancellation);
-        }
-        catch (...) {
-            restored = false;
-        }
+        co_return _lane
+          .run ([this, &target, &plan, restored] {
+              const auto key = key_for (target);
+              const auto owned = _relocation_restore_reservations.find (key);
+              if (owned == _relocation_restore_reservations.end ()
+                  || owned->second != plan.reservation)
+                  return stateful_error_t::conflict;
+              _relocation_restore_reservations.erase (owned);
+              if (!restored) {
+                  _objects.erase (key);
+                  if (plan.previous_generation)
+                      _last_generation[key] = *plan.previous_generation;
+                  else
+                      _last_generation.erase (key);
+                  return stateful_error_t::conflict;
+              }
+              return stateful_error_t::none;
+          })
+          .get ();
     }
-    if (!restored && plan.abort) {
-        try {
-            plan.abort ({target});
-        }
-        catch (...) {
-        }
+    catch (...) {
+        co_return stateful_error_t::backpressured;
     }
-
-    return _lane
-      .run ([this, &target, &plan, restored] {
-          const auto key = key_for (target);
-          const auto owned = _relocation_restore_reservations.find (key);
-          if (owned == _relocation_restore_reservations.end () || owned->second != plan.reservation)
-              return stateful_error_t::conflict;
-          _relocation_restore_reservations.erase (owned);
-          if (!restored) {
-              _objects.erase (key);
-              if (plan.previous_generation)
-                  _last_generation[key] = *plan.previous_generation;
-              else
-                  _last_generation.erase (key);
-              return stateful_error_t::conflict;
-          }
-          return stateful_error_t::none;
-      })
-      .get ();
-}
-catch (...) {
-    return stateful_error_t::backpressured;
 }
 
 stateful_error_t
@@ -1975,259 +1980,263 @@ stateful_error_t stateful_object_runtime_t::abort_relocation_restore_aggregate (
       .get ();
 }
 
-stateful_error_t
+task_t<stateful_error_t>
 stateful_object_runtime_t::restore_relocation_aggregate (std::vector<frozen_object_state_t> frozen,
                                                          std::vector<object_ref_t> targets,
                                                          relocation_restore_identity_t identity,
                                                          std::stop_token cancellation)
-try {
-    std::vector<object_key_t> keys;
-    std::vector<std::optional<std::uint64_t>> previous_generations;
-    std::vector<object_key_t> remnant_keys;
-    std::uint64_t reservation = 0;
-    relocation_state_materialize_t materialize;
-    relocation_state_restore_t restore;
-    relocation_state_abort_t abort;
-    auto staged =
-      _lane
-        .run ([&, this] {
-            if (frozen.size () < 2 || frozen.size () != targets.size ()
-                || identity.reference.empty ())
-                return stateful_error_t::invalid;
-
-            std::sort (frozen.begin (), frozen.end (),
-                       [] (const frozen_object_state_t &left, const frozen_object_state_t &right) {
-                           return key_for (left.owner) < key_for (right.owner);
-                       });
-            std::sort (targets.begin (), targets.end (),
-                       [] (const object_ref_t &left, const object_ref_t &right) {
-                           return key_for (left) < key_for (right);
-                       });
-
-            std::optional<std::string> user_spot_key;
-            std::size_t actor_count = 0;
-            for (std::size_t index = 0; index != frozen.size (); ++index) {
-                const auto &source = frozen[index];
-                const auto &target = targets[index];
-                if (!valid_text (source.stable_type) || source.owner.kind != target.kind
-                    || source.owner.key != target.key
-                    || source.owner.object_generation != target.object_generation
-                    || source.owner.mesh_name != target.mesh_name
-                    || target.authority_owner_generation <= source.owner.authority_owner_generation
-                    || !valid_text (target.mesh_name) || !valid_text (target.node_id)
-                    || source.application_state.size () > max_application_state_bytes
-                    || source.timers.size () > max_restored_timers
-                    || (index != 0 && key_for (targets[index - 1]) == key_for (target))) {
+{
+    try {
+        std::vector<object_key_t> keys;
+        std::vector<std::optional<std::uint64_t>> previous_generations;
+        std::vector<object_key_t> remnant_keys;
+        std::uint64_t reservation = 0;
+        relocation_state_materialize_t materialize;
+        relocation_state_restore_t restore;
+        relocation_state_abort_t abort;
+        auto staged =
+          _lane
+            .run ([&, this] {
+                if (frozen.size () < 2 || frozen.size () != targets.size ()
+                    || identity.reference.empty ())
                     return stateful_error_t::invalid;
-                }
-                std::uint64_t previous_sequence = 0;
-                for (const auto &pending : source.pending_application) {
-                    if (pending.sequence == 0 || pending.sequence <= previous_sequence) {
-                        return stateful_error_t::invalid;
-                    }
-                    previous_sequence = pending.sequence;
-                }
-                std::uint64_t previous_timer = 0;
-                for (const auto &timer : source.timers) {
-                    if (timer.timer_id == 0 || timer.timer_id <= previous_timer
-                        || timer.due_after_milliseconds == 0 || timer.next_tick_sequence == 0) {
-                        return stateful_error_t::invalid;
-                    }
-                    previous_timer = timer.timer_id;
-                }
-                if (target.kind == object_kind_t::user_spot) {
-                    if (user_spot_key)
-                        return stateful_error_t::invalid;
-                    user_spot_key = target.key;
-                } else if (target.kind == object_kind_t::actor)
-                    ++actor_count;
-                else
-                    return stateful_error_t::invalid;
-            }
-            if (!user_spot_key || actor_count + 1 != targets.size ())
-                return stateful_error_t::invalid;
-            keys.reserve (targets.size ());
-            previous_generations.reserve (targets.size ());
-            {
-                std::size_t exact_existing = 0;
-                for (std::size_t index = 0; index != targets.size (); ++index) {
-                    const auto &target = targets[index];
+
+                std::sort (
+                  frozen.begin (), frozen.end (),
+                  [] (const frozen_object_state_t &left, const frozen_object_state_t &right) {
+                      return key_for (left.owner) < key_for (right.owner);
+                  });
+                std::sort (targets.begin (), targets.end (),
+                           [] (const object_ref_t &left, const object_ref_t &right) {
+                               return key_for (left) < key_for (right);
+                           });
+
+                std::optional<std::string> user_spot_key;
+                std::size_t actor_count = 0;
+                for (std::size_t index = 0; index != frozen.size (); ++index) {
                     const auto &source = frozen[index];
-                    const auto key = key_for (target);
-                    keys.push_back (key);
-                    if (_relocation_restore_reservations.contains (key))
-                        return stateful_error_t::conflict;
-                    auto existing = _objects.find (key);
-                    if (existing != _objects.end ()
-                        && replaceable_relocation_remnant (existing->second, target)) {
-                        /* Return relocation (28 §2/§8) — see restore_relocation. The
+                    const auto &target = targets[index];
+                    if (!valid_text (source.stable_type) || source.owner.kind != target.kind
+                        || source.owner.key != target.key
+                        || source.owner.object_generation != target.object_generation
+                        || source.owner.mesh_name != target.mesh_name
+                        || target.authority_owner_generation
+                             <= source.owner.authority_owner_generation
+                        || !valid_text (target.mesh_name) || !valid_text (target.node_id)
+                        || source.application_state.size () > max_application_state_bytes
+                        || source.timers.size () > max_restored_timers
+                        || (index != 0 && key_for (targets[index - 1]) == key_for (target))) {
+                        return stateful_error_t::invalid;
+                    }
+                    std::uint64_t previous_sequence = 0;
+                    for (const auto &pending : source.pending_application) {
+                        if (pending.sequence == 0 || pending.sequence <= previous_sequence) {
+                            return stateful_error_t::invalid;
+                        }
+                        previous_sequence = pending.sequence;
+                    }
+                    std::uint64_t previous_timer = 0;
+                    for (const auto &timer : source.timers) {
+                        if (timer.timer_id == 0 || timer.timer_id <= previous_timer
+                            || timer.due_after_milliseconds == 0 || timer.next_tick_sequence == 0) {
+                            return stateful_error_t::invalid;
+                        }
+                        previous_timer = timer.timer_id;
+                    }
+                    if (target.kind == object_kind_t::user_spot) {
+                        if (user_spot_key)
+                            return stateful_error_t::invalid;
+                        user_spot_key = target.key;
+                    } else if (target.kind == object_kind_t::actor)
+                        ++actor_count;
+                    else
+                        return stateful_error_t::invalid;
+                }
+                if (!user_spot_key || actor_count + 1 != targets.size ())
+                    return stateful_error_t::invalid;
+                keys.reserve (targets.size ());
+                previous_generations.reserve (targets.size ());
+                {
+                    std::size_t exact_existing = 0;
+                    for (std::size_t index = 0; index != targets.size (); ++index) {
+                        const auto &target = targets[index];
+                        const auto &source = frozen[index];
+                        const auto key = key_for (target);
+                        keys.push_back (key);
+                        if (_relocation_restore_reservations.contains (key))
+                            return stateful_error_t::conflict;
+                        auto existing = _objects.find (key);
+                        if (existing != _objects.end ()
+                            && replaceable_relocation_remnant (existing->second, target)) {
+                            /* Return relocation (28 §2/§8) — see restore_relocation. The
                  * remnant is only dropped at the swap below so a rejection
                  * later in this scan leaves the node untouched. */
-                        remnant_keys.push_back (key);
-                        existing = _objects.end ();
-                    }
-                    if (existing != _objects.end ()) {
-                        const auto &record = existing->second;
-                        const auto expected_membership =
-                          target.kind == object_kind_t::actor ? *user_spot_key : std::string{};
-                        if (!same_exact_ref (record.reference, target)
-                            || record.state != object_state_t::recovering
-                            || record.restore_identity
-                                 != std::optional<relocation_restore_identity_t>{identity}
-                            || record.stable_type != source.stable_type
-                            || record.membership != expected_membership
-                            || record.queue.application.size ()
-                                 != source.pending_application.size ()
-                            || record.timers.size () != source.timers.size ()) {
-                            return stateful_error_t::conflict;
+                            remnant_keys.push_back (key);
+                            existing = _objects.end ();
                         }
-                        auto pending = record.queue.application.begin ();
-                        for (const auto &expected : source.pending_application) {
-                            if (*pending++ != expected)
+                        if (existing != _objects.end ()) {
+                            const auto &record = existing->second;
+                            const auto expected_membership =
+                              target.kind == object_kind_t::actor ? *user_spot_key : std::string{};
+                            if (!same_exact_ref (record.reference, target)
+                                || record.state != object_state_t::recovering
+                                || record.restore_identity
+                                     != std::optional<relocation_restore_identity_t>{identity}
+                                || record.stable_type != source.stable_type
+                                || record.membership != expected_membership
+                                || record.queue.application.size ()
+                                     != source.pending_application.size ()
+                                || record.timers.size () != source.timers.size ()) {
                                 return stateful_error_t::conflict;
-                        }
-                        auto timer = record.timers.begin ();
-                        for (const auto &expected : source.timers) {
-                            if (timer == record.timers.end () || timer->second != expected)
-                                return stateful_error_t::conflict;
-                            ++timer;
-                        }
-                        ++exact_existing;
-                        previous_generations.push_back (std::nullopt);
-                    } else if (!remnant_keys.empty () && remnant_keys.back () == key) {
-                        /* The remnant already carries this object generation; the
+                            }
+                            auto pending = record.queue.application.begin ();
+                            for (const auto &expected : source.pending_application) {
+                                if (*pending++ != expected)
+                                    return stateful_error_t::conflict;
+                            }
+                            auto timer = record.timers.begin ();
+                            for (const auto &expected : source.timers) {
+                                if (timer == record.timers.end () || timer->second != expected)
+                                    return stateful_error_t::conflict;
+                                ++timer;
+                            }
+                            ++exact_existing;
+                            previous_generations.push_back (std::nullopt);
+                        } else if (!remnant_keys.empty () && remnant_keys.back () == key) {
+                            /* The remnant already carries this object generation; the
                  * high-water mark is a raise-only allocator, never a veto on
                  * a Store-validated restore. On failure the node forgets it
                  * hosted the object so the next attempt starts clean. */
-                        previous_generations.push_back (std::nullopt);
-                    } else {
-                        const auto last = _last_generation.find (key);
-                        if (last != _last_generation.end ()
-                            && last->second >= target.object_generation) {
-                            return stateful_error_t::generation_stale;
+                            previous_generations.push_back (std::nullopt);
+                        } else {
+                            const auto last = _last_generation.find (key);
+                            if (last != _last_generation.end ()
+                                && last->second >= target.object_generation) {
+                                return stateful_error_t::generation_stale;
+                            }
+                            previous_generations.push_back (
+                              last == _last_generation.end ()
+                                ? std::optional<std::uint64_t>{}
+                                : std::optional<std::uint64_t>{last->second});
                         }
-                        previous_generations.push_back (
-                          last == _last_generation.end ()
-                            ? std::optional<std::uint64_t>{}
-                            : std::optional<std::uint64_t>{last->second});
                     }
-                }
-                if (exact_existing != 0)
-                    return exact_existing == targets.size () ? stateful_error_t::already_exists
-                                                             : stateful_error_t::conflict;
-                if (_next_relocation_restore_reservation == 0)
-                    return stateful_error_t::conflict;
-                reservation = _next_relocation_restore_reservation++;
+                    if (exact_existing != 0)
+                        return exact_existing == targets.size () ? stateful_error_t::already_exists
+                                                                 : stateful_error_t::conflict;
+                    if (_next_relocation_restore_reservation == 0)
+                        return stateful_error_t::conflict;
+                    reservation = _next_relocation_restore_reservation++;
 
-                auto next_objects = _objects;
-                auto next_generations = _last_generation;
-                auto next_reservations = _relocation_restore_reservations;
-                for (const auto &remnant : remnant_keys)
-                    next_objects.erase (remnant);
-                for (std::size_t index = 0; index != targets.size (); ++index) {
-                    object_record_t record;
-                    record.reference = targets[index];
-                    record.stable_type = frozen[index].stable_type;
-                    record.state = object_state_t::recovering;
-                    record.restore_identity = identity;
-                    if (record.reference.kind == object_kind_t::actor && user_spot_key)
-                        record.membership = *user_spot_key;
-                    for (const auto &pending : frozen[index].pending_application) {
-                        record.queue.application_bytes += retained_bytes (pending);
-                        record.queue.application.push_back (pending);
+                    auto next_objects = _objects;
+                    auto next_generations = _last_generation;
+                    auto next_reservations = _relocation_restore_reservations;
+                    for (const auto &remnant : remnant_keys)
+                        next_objects.erase (remnant);
+                    for (std::size_t index = 0; index != targets.size (); ++index) {
+                        object_record_t record;
+                        record.reference = targets[index];
+                        record.stable_type = frozen[index].stable_type;
+                        record.state = object_state_t::recovering;
+                        record.restore_identity = identity;
+                        if (record.reference.kind == object_kind_t::actor && user_spot_key)
+                            record.membership = *user_spot_key;
+                        for (const auto &pending : frozen[index].pending_application) {
+                            record.queue.application_bytes += retained_bytes (pending);
+                            record.queue.application.push_back (pending);
+                        }
+                        for (const auto &timer : frozen[index].timers)
+                            record.timers.emplace (timer.timer_id, timer);
+                        next_generations[keys[index]] = record.reference.object_generation;
+                        next_objects.emplace (keys[index], std::move (record));
+                        next_reservations.emplace (keys[index], reservation);
                     }
-                    for (const auto &timer : frozen[index].timers)
-                        record.timers.emplace (timer.timer_id, timer);
-                    next_generations[keys[index]] = record.reference.object_generation;
-                    next_objects.emplace (keys[index], std::move (record));
-                    next_reservations.emplace (keys[index], reservation);
+                    _objects.swap (next_objects);
+                    _last_generation.swap (next_generations);
+                    _relocation_restore_reservations.swap (next_reservations);
                 }
-                _objects.swap (next_objects);
-                _last_generation.swap (next_generations);
-                _relocation_restore_reservations.swap (next_reservations);
-            }
-            materialize = _relocation_state_materialize;
-            restore = _relocation_state_restore;
-            abort = _relocation_state_abort;
-            return stateful_error_t::none;
-        })
-        .get ();
-    if (staged != stateful_error_t::none)
-        return staged;
+                materialize = _relocation_state_materialize;
+                restore = _relocation_state_restore;
+                abort = _relocation_state_abort;
+                return stateful_error_t::none;
+            })
+            .get ();
+        if (staged != stateful_error_t::none)
+            co_return staged;
 
-    bool restored = true;
-    if (materialize) {
-        const auto spot_index = static_cast<std::size_t> (std::distance (
-          targets.begin (),
-          std::find_if (targets.begin (), targets.end (), [] (const object_ref_t &target) {
-              return target.kind == object_kind_t::user_spot;
-          })));
-        try {
-            // SpotWide application ownership requires the Spot factory and
-            // adapter to exist before any member Actor is constructed.
-            restored =
-              materialize (frozen[spot_index], targets[spot_index], std::nullopt, cancellation);
-            for (std::size_t index = 0; restored && index != frozen.size (); ++index) {
-                if (index == spot_index)
-                    continue;
-                restored =
-                  materialize (frozen[index], targets[index], targets[spot_index], cancellation);
-            }
-        }
-        catch (...) {
-            restored = false;
-        }
-    } else if (restore) {
-        for (std::size_t index = 0; index != frozen.size (); ++index) {
-            if (targets[index].kind != object_kind_t::user_spot
-                && targets[index].kind != object_kind_t::instance_spot)
-                continue;
+        bool restored = true;
+        if (materialize) {
+            const auto spot_index = static_cast<std::size_t> (std::distance (
+              targets.begin (),
+              std::find_if (targets.begin (), targets.end (), [] (const object_ref_t &target) {
+                  return target.kind == object_kind_t::user_spot;
+              })));
             try {
-                restored = restore (frozen[index], targets[index], cancellation);
+                // SpotWide application ownership requires the Spot factory and
+                // adapter to exist before any member Actor is constructed.
+                restored = co_await materialize (frozen[spot_index], targets[spot_index],
+                                                 std::nullopt, cancellation);
+                for (std::size_t index = 0; restored && index != frozen.size (); ++index) {
+                    if (index == spot_index)
+                        continue;
+                    restored = co_await materialize (frozen[index], targets[index],
+                                                     targets[spot_index], cancellation);
+                }
             }
             catch (...) {
                 restored = false;
             }
-            if (!restored)
-                break;
+        } else if (restore) {
+            for (std::size_t index = 0; index != frozen.size (); ++index) {
+                if (targets[index].kind != object_kind_t::user_spot
+                    && targets[index].kind != object_kind_t::instance_spot)
+                    continue;
+                try {
+                    restored = restore (frozen[index], targets[index], cancellation);
+                }
+                catch (...) {
+                    restored = false;
+                }
+                if (!restored)
+                    break;
+            }
         }
-    }
 
-    if (!restored && abort) {
-        try {
-            abort (targets);
+        if (!restored && abort) {
+            try {
+                abort (targets);
+            }
+            catch (...) {
+            }
         }
-        catch (...) {
-        }
+        co_return _lane
+          .run ([&, this] {
+              const auto owns_all =
+                std::all_of (keys.begin (), keys.end (), [&] (const object_key_t &key) {
+                    const auto found = _relocation_restore_reservations.find (key);
+                    return found != _relocation_restore_reservations.end ()
+                           && found->second == reservation;
+                });
+              if (!owns_all)
+                  return stateful_error_t::conflict;
+              for (std::size_t index = 0; index != keys.size (); ++index) {
+                  _relocation_restore_reservations.erase (keys[index]);
+                  if (restored)
+                      continue;
+                  _objects.erase (keys[index]);
+                  if (previous_generations[index])
+                      _last_generation[keys[index]] = *previous_generations[index];
+                  else
+                      _last_generation.erase (keys[index]);
+              }
+              if (!restored)
+                  return stateful_error_t::conflict;
+              return stateful_error_t::none;
+          })
+          .get ();
     }
-    return _lane
-      .run ([&, this] {
-          const auto owns_all =
-            std::all_of (keys.begin (), keys.end (), [&] (const object_key_t &key) {
-                const auto found = _relocation_restore_reservations.find (key);
-                return found != _relocation_restore_reservations.end ()
-                       && found->second == reservation;
-            });
-          if (!owns_all)
-              return stateful_error_t::conflict;
-          for (std::size_t index = 0; index != keys.size (); ++index) {
-              _relocation_restore_reservations.erase (keys[index]);
-              if (restored)
-                  continue;
-              _objects.erase (keys[index]);
-              if (previous_generations[index])
-                  _last_generation[keys[index]] = *previous_generations[index];
-              else
-                  _last_generation.erase (keys[index]);
-          }
-          if (!restored)
-              return stateful_error_t::conflict;
-          return stateful_error_t::none;
-      })
-      .get ();
-}
-catch (...) {
-    return stateful_error_t::backpressured;
+    catch (...) {
+        co_return stateful_error_t::backpressured;
+    }
 }
 
 bool stateful_object_runtime_t::valid_text (const std::string &value)

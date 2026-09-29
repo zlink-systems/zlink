@@ -1091,8 +1091,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       const protocol::relocation_id_t &relocation,
       std::uint64_t target_attempt_generation,
       const std::vector<protocol::relocation_object_t> &wire_objects) noexcept;
-    bool restore_relocation_assembly (const pending_relocation_assembly_t &pending,
-                                      const relocation_assembly_staging_t &staging);
+    task_t<bool>
+    restore_relocation_assembly (std::shared_ptr<const pending_relocation_assembly_t> pending,
+                                 std::shared_ptr<const relocation_assembly_staging_t> staging);
     void activate_relocation_assembly (const relocation_attempt_key_t &key,
                                        const pending_relocation_assembly_t &pending,
                                        relocation_assembly_staging_t staging);

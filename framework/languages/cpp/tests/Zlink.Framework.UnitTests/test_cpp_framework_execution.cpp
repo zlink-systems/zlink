@@ -503,7 +503,7 @@ bool verify_close_waits_for_timer_callback_barrier ()
     handler.reset ();
 
     auto context = zlink::framework::detail::spot_context_access_t::create (state);
-    if (!state->enter_callback ()) {
+    if (!state->admit (true)) {
         return false;
     }
 
@@ -2762,17 +2762,21 @@ bool verify_released_spot_turn_does_not_inline_lifecycle_task ()
                                                         std::memory_order_release);
             released_stack_had_callback_context.store (owner->is_current_callback_thread (),
                                                        std::memory_order_release);
-            const auto result = owner->run_serial_task (
-              "lifecycle-after-released-handler-turn", [&, released_turn] () -> task_t<void> {
-                  const auto lifecycle_turn = capture_current_serial_turn ();
-                  lifecycle_had_fresh_turn.store (lifecycle_turn && lifecycle_turn != released_turn
-                                                    && !lifecycle_turn->released ()
-                                                    && owner->owns_current_serial_turn (),
-                                                  std::memory_order_release);
-                  lifecycle_allowed_yield.store (current_serial_turn_allows_yield (),
-                                                 std::memory_order_release);
-                  co_return;
-              });
+            const auto result =
+              owner
+                ->run_serial_task (
+                  "lifecycle-after-released-handler-turn",
+                  [&, released_turn] () -> task_t<void> {
+                      const auto lifecycle_turn = capture_current_serial_turn ();
+                      lifecycle_had_fresh_turn.store (
+                        lifecycle_turn && lifecycle_turn != released_turn
+                          && !lifecycle_turn->released () && owner->owns_current_serial_turn (),
+                        std::memory_order_release);
+                      lifecycle_allowed_yield.store (current_serial_turn_allows_yield (),
+                                                     std::memory_order_release);
+                      co_return;
+                  })
+                .result ();
             lifecycle_succeeded.store (static_cast<bool> (result), std::memory_order_release);
             completed.store (true, std::memory_order_release);
         })) {
@@ -3586,6 +3590,53 @@ bool verify_runtime_observation_loss_and_terminal_retention ()
     return true;
 }
 
+// Spot address messaging §9: a draining host ends new Spot creation and Actor
+// admission with ShuttingDown before any Spot is consulted.
+bool verify_draining_host_refuses_new_admission_with_shutting_down ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    auto node = std::make_shared<spot_node_builder_state_t> ("draining-host-node");
+    spot_node_runtime_t runtime (node);
+    runtime.bind_drain_flag (std::make_shared<std::atomic_bool> (true));
+    const auto draining_actor = actor_ref_access_t::make (
+      node_rid_t::from_string ("draining-host-node"), "player", "draining-actor", 1);
+    const auto shutting_down = [] (const auto &result) {
+        return !result && result.error_kind () == framework_error_kind_t::shutting_down;
+    };
+
+    const auto remote_join = runtime.join_remote_actor_to_spot_erased (
+      draining_actor, spot_id_t ("draining-room"), zlink::message_t{},
+      spot_node_runtime_t::default_actor_context ());
+    const auto remote_admission =
+      runtime
+        .admit_remote_actor_to_spot ("draining-transfer", draining_actor,
+                                     spot_id_t ("draining-source"), spot_id_t ("draining-room"),
+                                     zlink::message_t{})
+        .result ();
+    const auto entry_join = runtime.join_actor_to_entry_spot_erased (
+      draining_actor, node_rid_t::from_string ("draining-host-node"), zlink::message_t{},
+      std::nullopt, spot_node_runtime_t::default_actor_context ());
+    bool create_refused = false;
+    try {
+        (void) runtime.create_spot ("draining-room");
+    }
+    catch (const framework_exception_t &error) {
+        create_refused = error.kind () == framework_error_kind_t::shutting_down;
+    }
+    if (!shutting_down (remote_join) || !shutting_down (remote_admission)
+        || !shutting_down (entry_join) || !create_refused) {
+        std::cerr << "draining host admission kinds: remote_join="
+                  << static_cast<int> (remote_join.error_kind ())
+                  << " remote_admission=" << static_cast<int> (remote_admission.error_kind ())
+                  << " entry_join=" << static_cast<int> (entry_join.error_kind ())
+                  << " create_refused=" << create_refused << '\n';
+        return false;
+    }
+    return true;
+}
+
 bool verify_idle_instance_spot_eviction_closes_local_context ()
 {
     using namespace zlink::framework;
@@ -3656,7 +3707,7 @@ bool verify_idle_instance_spot_eviction_closes_local_context ()
     spot_node_runtime_t runtime (node);
     set_last_application_work (std::chrono::milliseconds (100));
     runtime.evict_idle_spots ();
-    if (admission_called || context->idle_eviction_in_progress) {
+    if (admission_called || context->admission_sealed) {
         return false;
     }
     set_last_application_work (std::chrono::seconds (2));
@@ -3727,7 +3778,7 @@ bool verify_explicit_instance_spot_close_releases_authority_after_callback ()
     node->spot_names_by_id.emplace (context->spot_id, context->spot_name);
     node->spot_contexts_by_id.emplace (context->spot_id, spot_context_access_t::create (context));
 
-    if (!context->enter_callback ()) {
+    if (!context->admit (true)) {
         return false;
     }
     auto public_context = spot_context_access_t::create (context);
@@ -3887,12 +3938,21 @@ bool verify_remote_actor_prepare_is_idempotent ()
     auto provider = services.build_provider ();
     owner.bind_service_provider (provider);
     const auto request = zlink::message_t::from (std::string ("prepare"));
-    const auto first = owner.admit_remote_actor_to_spot (
-      "transfer-1", actor, spot_id_t ("source-spot"), target->spot_id, request, 11, 13, 19, 23, 29);
-    const auto repeated = owner.admit_remote_actor_to_spot (
-      "transfer-1", actor, spot_id_t ("source-spot"), target->spot_id, request, 11, 13, 19, 23, 29);
-    const auto conflicting = owner.admit_remote_actor_to_spot (
-      "transfer-1", actor, spot_id_t ("source-spot"), target->spot_id, request, 11, 17, 19, 23, 29);
+    const auto first =
+      owner
+        .admit_remote_actor_to_spot ("transfer-1", actor, spot_id_t ("source-spot"),
+                                     target->spot_id, request, 11, 13, 19, 23, 29)
+        .result ();
+    const auto repeated =
+      owner
+        .admit_remote_actor_to_spot ("transfer-1", actor, spot_id_t ("source-spot"),
+                                     target->spot_id, request, 11, 13, 19, 23, 29)
+        .result ();
+    const auto conflicting =
+      owner
+        .admit_remote_actor_to_spot ("transfer-1", actor, spot_id_t ("source-spot"),
+                                     target->spot_id, request, 11, 17, 19, 23, 29)
+        .result ();
 
     target->serial_queue->close ();
     target->serial_queue->drain ();
@@ -4292,12 +4352,99 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
            && second_completed;
 }
 
+bool verify_wire_join_requires_active_local_target ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    auto node = std::make_shared<spot_node_builder_state_t> ("wire-join-inactive-target");
+    node->worker_executor = std::make_shared<runtime::offload_executor_t> (2);
+    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    serializer_registry_t serializers;
+    node->channel_runtime->serializers = &serializers;
+    spot_node_runtime_t owner (node);
+    std::atomic<int> materializations{0};
+    node->spot_factories.emplace ("cold", std::type_index (typeid (int)));
+    spot_lifecycle_callbacks_t lifecycle;
+    lifecycle.create_spot_context_instance = [&] (spot_context_t,
+                                                  service_provider_t &) -> std::shared_ptr<void> {
+        ++materializations;
+        return std::make_shared<int> (1);
+    };
+    node->spot_lifecycles.emplace ("cold", std::move (lifecycle));
+    auto inactive = std::make_shared<spot_context_state_t> ();
+    inactive->node = node;
+    inactive->spot_id = spot_id_t ("inactive-target");
+    node->spot_contexts_by_id.emplace (inactive->spot_id, spot_context_access_t::create (inactive));
+    std::atomic<int> accepted{0};
+    std::atomic<int> unavailable{0};
+    const auto receive = [&] (const char *target) {
+        owner.dispatch_wire_actor_join_admission (
+          spot_id_t (target), [&] { ++accepted; }, [&] { ++unavailable; });
+    };
+    receive ("cold-target");
+    receive ("inactive-target");
+    receive ("following-target");
+    const bool immediate_replies = unavailable == 3 && accepted == 0;
+    node->worker_executor->drain ();
+    return immediate_replies && materializations == 0
+           && node->spot_contexts_by_id.count (spot_id_t ("cold-target")) == 0
+           && node->spot_contexts_by_id.count (spot_id_t ("following-target")) == 0;
+}
+
+bool verify_relocation_abort_does_not_hold_receive_worker ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    auto node = std::make_shared<spot_node_builder_state_t> ("relocation-abort-node");
+    node->worker_executor = std::make_shared<runtime::offload_executor_t> (2);
+    auto spot = std::make_shared<spot_context_state_t> ();
+    spot->node = node;
+    spot->node_rid = node_rid_t::from_string ("relocation-abort-node");
+    spot->spot_id = spot_id_t ("abort-target");
+    spot->spot_name = "abort-target";
+    spot->spot_instance = std::make_shared<int> (1);
+    spot->serial_executor = node->worker_executor;
+    spot->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+      *spot->serial_executor, runtime::serial_execution_queue_options_t{},
+      runtime::serial_execution_queue_t::error_handler_t{},
+      runtime::serial_lane_policy_t::spot_wide ());
+    std::promise<void> closing_started;
+    auto started = closing_started.get_future ();
+    std::promise<void> release_closing;
+    auto released = release_closing.get_future ().share ();
+    spot->lifecycle.on_closing = [&] (void *, const spot_closing_context_t &, std::stop_token) {
+        closing_started.set_value ();
+        released.wait ();
+    };
+    node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
+    spot_node_runtime_t owner (node);
+    std::promise<void> following_frame;
+    auto following = following_frame.get_future ();
+    std::thread receiver ([&] {
+        owner.abort_relocation_materialization (
+          {{.kind = runtime::stateful::object_kind_t::user_spot, .key = "abort-target"}});
+        owner.dispatch_wire_actor_join_admission (
+          spot_id_t ("following-target"), [] {}, [&] { following_frame.set_value (); });
+    });
+    const bool entered = started.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
+    const bool progressed =
+      entered && following.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
+    release_closing.set_value ();
+    receiver.join ();
+    spot->serial_queue->drain ();
+    node->worker_executor->drain ();
+    return progressed;
+}
+
 bool verify_target_commit_stages_source_prefix_before_live_dispatch ()
 {
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
 
     actor_transfer_coordinator_t coordinator;
+    std::vector<handoff_packet_t> discarded;
     const auto source = actor_ref_access_t::make (node_rid_t::from_string ("source-node"), "player",
                                                   "actor-cutover-order", 7);
     pending_actor_admission_t admission{.actor_key = "player:actor-cutover-order",
@@ -4309,7 +4456,7 @@ bool verify_target_commit_stages_source_prefix_before_live_dispatch ()
                                         .completion_operation_id_high = 31,
                                         .completion_operation_id_low = 37};
     if (!coordinator.try_add_admission ("transfer-cutover-order", admission)
-        || !coordinator.begin_commit ("transfer-cutover-order", source, "target-spot")) {
+        || !coordinator.begin_commit ("transfer-cutover-order", source, "target-spot", discarded)) {
         return false;
     }
     const auto packet = [] (std::string sequence) {
@@ -4345,6 +4492,7 @@ bool verify_actor_join_prewarm_parks_arrival_before_prepare ()
     using namespace zlink::framework::detail;
 
     actor_transfer_coordinator_t coordinator;
+    std::vector<handoff_packet_t> discarded;
     const auto source = actor_ref_access_t::make (node_rid_t::from_string ("source-node"), "player",
                                                   "actor-prewarm", 7);
     pending_actor_admission_t admission{.actor_key = "player:actor-prewarm",
@@ -4378,7 +4526,7 @@ bool verify_actor_join_prewarm_parks_arrival_before_prepare ()
         != handoff_append_result_t::appended) {
         return false;
     }
-    if (!coordinator.begin_commit ("transfer-prewarm", source, "target-spot")) {
+    if (!coordinator.begin_commit ("transfer-prewarm", source, "target-spot", discarded)) {
         return false;
     }
     if (coordinator.try_append_backlog ("player:actor-prewarm", packet ("AFTER_PREPARE"))
@@ -4402,6 +4550,7 @@ bool verify_actor_join_prewarm_newest_attempt_evicts_placeholder ()
     using namespace zlink::framework::detail;
 
     actor_transfer_coordinator_t coordinator;
+    std::vector<handoff_packet_t> discarded;
     const auto source = actor_ref_access_t::make (node_rid_t::from_string ("source-node"), "player",
                                                   "actor-evict", 7);
     pending_actor_admission_t first{.actor_key = "player:actor-evict",
@@ -4431,10 +4580,13 @@ bool verify_actor_join_prewarm_newest_attempt_evicts_placeholder ()
     // A newer exact identity for the same object arrives before the first
     // reaches PREPARE — it must win, and the stale placeholder (including
     // whatever it parked) must not survive.
-    if (!coordinator.admit_attempt ("player:actor-evict", "transfer-evict-2")
+    if (!coordinator.admit_attempt ("player:actor-evict", "transfer-evict-2", discarded)
         || !coordinator.try_add_admission ("transfer-evict-2", second)) {
         return false;
     }
+    if (discarded.size () != 1 || discarded[0].metadata.at ("sequence") != "STALE")
+        return false;
+    discarded.clear ();
     if (coordinator.admission ("transfer-evict-1").has_value ()) {
         return false;
     }
@@ -4445,7 +4597,7 @@ bool verify_actor_join_prewarm_newest_attempt_evicts_placeholder ()
         != handoff_append_result_t::appended) {
         return false;
     }
-    if (!coordinator.begin_commit ("transfer-evict-2", source, "target-spot")) {
+    if (!coordinator.begin_commit ("transfer-evict-2", source, "target-spot", discarded)) {
         return false;
     }
     const auto replay =
@@ -4462,6 +4614,7 @@ bool verify_actor_join_prewarm_fail_commit_clears_parked_backlog ()
     using namespace zlink::framework::detail;
 
     actor_transfer_coordinator_t coordinator;
+    std::vector<handoff_packet_t> discarded;
     const auto source =
       actor_ref_access_t::make (node_rid_t::from_string ("source-node"), "player", "actor-fail", 7);
     pending_actor_admission_t admission{.actor_key = "player:actor-fail",
@@ -4482,10 +4635,12 @@ bool verify_actor_join_prewarm_fail_commit_clears_parked_backlog ()
         != handoff_append_result_t::appended) {
         return false;
     }
-    if (!coordinator.begin_commit ("transfer-fail", source, "target-spot")) {
+    if (!coordinator.begin_commit ("transfer-fail", source, "target-spot", discarded)) {
         return false;
     }
-    coordinator.fail_commit ("transfer-fail", false);
+    auto failed_backlog = coordinator.fail_commit ("transfer-fail", false);
+    if (failed_backlog.size () != 1 || failed_backlog[0].metadata.at ("sequence") != "STRANDED")
+        return false;
     if (coordinator.phase ("player:actor-fail").has_value ()) {
         return false;
     }
@@ -4494,7 +4649,7 @@ bool verify_actor_join_prewarm_fail_commit_clears_parked_backlog ()
     if (!coordinator.try_add_admission ("transfer-fail-retry", retry)) {
         return false;
     }
-    if (!coordinator.begin_commit ("transfer-fail-retry", source, "target-spot")) {
+    if (!coordinator.begin_commit ("transfer-fail-retry", source, "target-spot", discarded)) {
         return false;
     }
     const auto replay =
@@ -4518,6 +4673,7 @@ bool verify_actor_join_prewarm_newest_attempt_evicts_live_attempt_past_prepare (
     using namespace zlink::framework::detail;
 
     actor_transfer_coordinator_t coordinator;
+    std::vector<handoff_packet_t> discarded;
     const auto source = actor_ref_access_t::make (node_rid_t::from_string ("source-node"), "player",
                                                   "actor-evict-live", 7);
     const std::string key = "player:actor-evict-live";
@@ -4549,7 +4705,7 @@ bool verify_actor_join_prewarm_newest_attempt_evicts_live_attempt_past_prepare (
     // Attempt A reaches PREPARE (target_committing) — the "live attempt"
     // case, distinct from the target_pending placeholder the other eviction
     // test covers.
-    if (!coordinator.begin_commit ("transfer-evict-live-A", source, "target-spot")
+    if (!coordinator.begin_commit ("transfer-evict-live-A", source, "target-spot", discarded)
         || coordinator.phase (key) != actor_move_phase_t::target_committing
         || !coordinator.is_current (key, "transfer-evict-live-A")) {
         return false;
@@ -4561,10 +4717,14 @@ bool verify_actor_join_prewarm_newest_attempt_evicts_live_attempt_past_prepare (
 
     // A newer exact identity for the same object arrives — it must win even
     // though A is already past PREPARE.
-    if (!coordinator.admit_attempt (key, "transfer-evict-live-B")
+    if (!coordinator.admit_attempt (key, "transfer-evict-live-B", discarded)
         || !coordinator.try_add_admission ("transfer-evict-live-B", second)) {
         return false;
     }
+    if (discarded.size () != 2 || discarded[0].metadata.at ("sequence") != "A_PARKED_EARLY"
+        || discarded[1].metadata.at ("sequence") != "A_PARKED_AFTER_PREPARE")
+        return false;
+    discarded.clear ();
     // A is gone: its admission record and both frames it parked (failed
     // exactly once, by the same single erase fail_commit/cleanup_expired
     // use) do not survive the eviction.
@@ -4578,7 +4738,7 @@ bool verify_actor_join_prewarm_newest_attempt_evicts_live_attempt_past_prepare (
         != handoff_append_result_t::appended) {
         return false;
     }
-    if (!coordinator.begin_commit ("transfer-evict-live-B", source, "target-spot")) {
+    if (!coordinator.begin_commit ("transfer-evict-live-B", source, "target-spot", discarded)) {
         return false;
     }
     const auto replay =
@@ -4640,6 +4800,126 @@ class actor_cutover_authority_t final
     std::optional<authority_relocation_reference_t> current;
     std::string last_expected_store_version;
 };
+
+bool verify_join_commit_does_not_wait_for_joined_callback ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace stateful = zlink::framework::runtime::stateful;
+
+    serializer_registry_t serializers;
+    auto node = std::make_shared<spot_node_builder_state_t> ("join-commit-target");
+    node->worker_executor = std::make_shared<runtime::offload_executor_t> (2);
+    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime->serializers = &serializers;
+    auto spot = std::make_shared<spot_context_state_t> ();
+    spot->node = node;
+    spot->node_rid = node_rid_t::from_string ("join-commit-target");
+    spot->spot_id = spot_id_t ("target-spot");
+    spot->spot_name = "target";
+    spot->spot_instance = std::make_shared<int> (1);
+    spot->channel_runtime = node->channel_runtime;
+    spot->serial_executor = node->worker_executor;
+    spot->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+      *spot->serial_executor, runtime::serial_execution_queue_options_t{},
+      runtime::serial_execution_queue_t::error_handler_t{},
+      runtime::serial_lane_policy_t::spot_wide ());
+    node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
+    spot_node_builder_state_t::actor_factory_registration_t factory;
+    factory.actor_type = std::type_index (typeid (int));
+    node->actor_factories.emplace ("player", std::move (factory));
+    std::promise<void> joined_started;
+    auto started = joined_started.get_future ();
+    auto release_joined = std::make_shared<detail::task_completion_source_t<void>> ();
+    spot_actor_admission_callbacks_t callbacks;
+    callbacks.join = [] (void *, std::string_view, const zlink::message_t &,
+                         serializer_registry_t &) { return spot_actor_join_result_t::accept (); };
+    callbacks.on_actor_joined = [release_joined, &joined_started] (void *, void *) -> task_t<void> {
+        joined_started.set_value ();
+        co_await release_joined->task ();
+    };
+    spot->actor_admissions.emplace (std::type_index (typeid (int)), std::move (callbacks));
+
+    const auto source_actor = actor_ref_access_t::make (
+      node_rid_t::from_string ("join-commit-source"), "player", "joined-actor", 7);
+    auto store = std::make_shared<wire_actor_join_authority_store_t> ();
+    store->snapshot = authority_snapshot_t{
+      .store_version = "join-commit-v1",
+      .payload = runtime::encode_actor_authority_payload (source_actor, "source-spot", 1),
+      .object_generation = 7,
+      .authority_owner_generation = 19,
+      .owner = location_owner_token_t{"source-owner", 5},
+      .store_now = std::chrono::system_clock::now (),
+      .allocation = {.state = placement_allocation_state_t::active,
+                     .object_kind = placement_object_kind_t::actor,
+                     .stable_type = "player",
+                     .target = {.mesh_name = "join-commit",
+                                .node_rid = node_rid_t::from_string ("join-commit-source"),
+                                .node_lifecycle_generation = 3,
+                                .owner = location_owner_token_t{"source-owner", 5}}}};
+    service_collection_t services;
+    services.add_factory<runtime::live_location_reader_t> (
+      [store] (service_provider_t &) {
+          return std::make_unique<runtime::live_location_reader_t> (*store);
+      },
+      service_lifetime_t::singleton);
+    services.add_singleton<actor_gateway_runtime_t> ();
+    auto provider = services.build_provider ();
+    spot_node_runtime_t owner (node);
+    owner.bind_service_provider (provider);
+    auto authority = std::make_shared<actor_cutover_authority_t> ();
+    const stateful::object_ref_t target{.kind = stateful::object_kind_t::actor,
+                                        .key = "joined-actor",
+                                        .object_generation = 7,
+                                        .authority_owner_generation = 20,
+                                        .mesh_name = "join-commit",
+                                        .node_id = "join-commit-target"};
+    auto source = target;
+    source.authority_owner_generation = 19;
+    source.node_id = "join-commit-source";
+    authority->publish (source, target, location_owner_token_t{"target-owner", 6},
+                        object_creation_target_t{}, "join-commit-ref", 0, {});
+    owner.bind_relocation_authority (authority);
+    const auto admitted = owner
+                            .admit_remote_actor_to_spot (
+                              "join-commit-transfer", source_actor, spot_id_t ("source-spot"),
+                              spot->spot_id, zlink::message_t{}, 31, 37, 19, 3, 5, true, 1, 1)
+                            .result ();
+    const auto pending = node->actor_transfer_coordinator.admission ("join-commit-transfer");
+    if (!admitted || !admitted.value ().accepted || !pending || !pending->lifecycle_reservation)
+        return false;
+    const std::string key = "player:joined-actor";
+    node->actor_types_by_id.emplace ("joined-actor", "player");
+    node->actor_instances.emplace (key, std::make_shared<int> (1));
+    node->actor_authority_fences.emplace (
+      key, runtime::protocol::actor_route_fence_t{"joined-actor", 7, {}, 1, 20, 6});
+    node->actor_join_relocation_recoveries.emplace (
+      key, spot_node_builder_state_t::actor_join_relocation_recovery_t{
+             .handoff_id = "join-commit-transfer",
+             .source_spot_id = spot_id_t ("source-spot"),
+             .target_spot_id = spot->spot_id,
+             .target_node_generation = 1,
+             .source_actor = source_actor,
+             .completion_operation_id_high = 31,
+             .completion_operation_id_low = 37,
+             .lifecycle_reservation = pending->lifecycle_reservation});
+    std::promise<void> following_frame;
+    auto following = following_frame.get_future ();
+    std::atomic<bool> committed{false};
+    std::thread receiver ([&] {
+        committed.store (owner.commit_relocation_materialization ({target}));
+        owner.dispatch_wire_actor_join_admission (
+          spot_id_t ("following-target"), [] {}, [&] { following_frame.set_value (); });
+    });
+    const bool entered = started.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
+    const bool progressed =
+      entered && following.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
+    release_joined->complete (result_t<void>::success ());
+    receiver.join ();
+    spot->serial_queue->drain ();
+    node->worker_executor->drain ();
+    return progressed && committed.load ();
+}
 
 class actor_cutover_probe_t final : public zlink::framework::actor_t
 {
@@ -4815,6 +5095,21 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     namespace runtime = zlink::framework::runtime;
     serializer_registry_t serializers;
     auto node = std::make_shared<spot_node_builder_state_t> ("actor-finalize-node");
+    std::atomic_int leave_submit_unavailable_events{0};
+    node->dispatch.message_flow (message_flow_log_mode_t::errors);
+    dispatch_options_access_t::set_observer_for_tests (
+      node->dispatch, [&leave_submit_unavailable_events] (const message_flow_event_t &event) {
+          if (event.packet_name != "spot_actor_leave_submit"
+              || event.result != message_flow_result_t::failed || !event.exception)
+              return;
+          try {
+              std::rethrow_exception (event.exception);
+          }
+          catch (const framework_exception_t &error) {
+              if (error.kind () == framework_error_kind_t::unavailable)
+                  leave_submit_unavailable_events.fetch_add (1, std::memory_order_release);
+          }
+      });
     node->worker_executor = std::make_shared<runtime::offload_executor_t> (1, "actor-finalize");
     node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
@@ -4903,6 +5198,11 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         .object_stable_types = {"framework.spot"}});
     native->start ();
     owner.attach_native_node (native);
+    node->actor_leave_notification_sender =
+      [] (const zlink::routing_id_t &,
+          std::vector<zlink::message_t>) -> task_t<zlink::submit_result_t> {
+        co_return zlink::submit_result_t::not_connected;
+    };
     auto authority = std::make_shared<actor_cutover_authority_t> ();
     owner.bind_relocation_authority (authority);
     // The private cutover path still enters the same Store-fenced admission
@@ -4988,9 +5288,11 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
 
     const std::string transfer_id = "transfer-c2";
     const std::string key = "player:actor-c2";
-    const auto admitted = owner.admit_remote_actor_to_spot (
-      transfer_id, actor, spot_id_t ("source-spot"), target->spot_id,
-      zlink::message_t::from (std::string ("prepare")), 11, 13, 19, 1, 29);
+    const auto admitted = owner
+                            .admit_remote_actor_to_spot (
+                              transfer_id, actor, spot_id_t ("source-spot"), target->spot_id,
+                              zlink::message_t::from (std::string ("prepare")), 11, 13, 19, 1, 29)
+                            .result ();
     if (!admitted || !admitted.value ().accepted) {
         return false;
     }
@@ -5128,6 +5430,13 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     if (!owner.completed_remote_actor_commit (transfer_id, actor, target->spot_id)) {
         return false;
     }
+    const auto leave_submit_observation_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (1);
+    while (leave_submit_unavailable_events.load (std::memory_order_acquire) == 0
+           && std::chrono::steady_clock::now () < leave_submit_observation_deadline)
+        std::this_thread::yield ();
+    if (leave_submit_unavailable_events.load (std::memory_order_acquire) != 1)
+        return false;
     {
         std::lock_guard lock (authority->mutex);
         if (authority->last_expected_store_version != "source-version") {
@@ -5152,9 +5461,12 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
       node_rid_t::from_string ("actor-finalize-node"), "player", "actor-combined", 7);
     const std::string combined_transfer_id = "transfer-combined";
     set_source_authority (combined_actor, 39);
-    const auto combined_admitted = owner.admit_remote_actor_to_spot (
-      combined_transfer_id, combined_actor, spot_id_t ("source-spot"), target->spot_id,
-      zlink::message_t::from (std::string ("prepare")), 31, 33, 39, 1, 29);
+    const auto combined_admitted =
+      owner
+        .admit_remote_actor_to_spot (
+          combined_transfer_id, combined_actor, spot_id_t ("source-spot"), target->spot_id,
+          zlink::message_t::from (std::string ("prepare")), 31, 33, 39, 1, 29)
+        .result ();
     auto combined_bound_delivery = std::make_shared<detail::task_completion_source_t<void>> ();
     std::atomic_bool combined_bound_delivery_started{false};
     const auto combined_bound = gateway.bind_session_sink (
@@ -5215,9 +5527,12 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     const std::string queued_transfer_id = "transfer-c3";
     const std::string queued_key = "player:actor-c3";
     set_source_authority (queued_actor, 29);
-    const auto queued_admitted = owner.admit_remote_actor_to_spot (
-      queued_transfer_id, queued_actor, spot_id_t ("source-spot"), target->spot_id,
-      zlink::message_t::from (std::string ("prepare")), 21, 23, 29, 1, 29);
+    const auto queued_admitted =
+      owner
+        .admit_remote_actor_to_spot (
+          queued_transfer_id, queued_actor, spot_id_t ("source-spot"), target->spot_id,
+          zlink::message_t::from (std::string ("prepare")), 21, 23, 29, 1, 29)
+        .result ();
     const auto queued_prepared = owner.prepare_remote_actor_to_spot (
       queued_transfer_id, queued_actor, target->spot_id, zlink::message_t{},
       actor_gateway_runtime_t{}.actor_context (queued_actor), true);
@@ -5285,12 +5600,8 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         || join_completion_calls.load () != completion_calls_before_cancel) {
         return false;
     }
-    std::weak_ptr<runtime::serial_execution_queue_t> cancelled_queue_owner = queued_actor_queue;
     target->spot_serial_executor->erase_actor_queue (queued_key);
     queued_actor_queue.reset ();
-    if (!cancelled_queue_owner.expired ()) {
-        return false;
-    }
 
     // Destroying the deadline owner must leave timer readiness draining usable.
     // A second timer proves the polling path remains available.
@@ -5321,9 +5632,12 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     const std::string lifecycle_transfer_id = "transfer-c4";
     const std::string lifecycle_key = "player:actor-c4";
     set_source_authority (lifecycle_actor, 41);
-    const auto lifecycle_admitted = owner.admit_remote_actor_to_spot (
-      lifecycle_transfer_id, lifecycle_actor, spot_id_t ("source-spot"), target->spot_id,
-      zlink::message_t::from (std::string ("prepare")), 31, 37, 41, 1, 29);
+    const auto lifecycle_admitted =
+      owner
+        .admit_remote_actor_to_spot (
+          lifecycle_transfer_id, lifecycle_actor, spot_id_t ("source-spot"), target->spot_id,
+          zlink::message_t::from (std::string ("prepare")), 31, 37, 41, 1, 29)
+        .result ();
     const auto lifecycle_prepared = owner.prepare_remote_actor_to_spot (
       lifecycle_transfer_id, lifecycle_actor, target->spot_id, zlink::message_t{},
       gateway.actor_context (lifecycle_actor), true);
@@ -5425,9 +5739,12 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     const std::string active_lifecycle_transfer_id = "transfer-c4-active";
     const std::string active_lifecycle_key = "player:actor-c4-active";
     set_source_authority (active_lifecycle_actor, 67);
-    const auto active_lifecycle_admitted = owner.admit_remote_actor_to_spot (
-      active_lifecycle_transfer_id, active_lifecycle_actor, spot_id_t ("source-spot"),
-      target->spot_id, zlink::message_t::from (std::string ("prepare")), 59, 61, 67, 1, 29);
+    const auto active_lifecycle_admitted =
+      owner
+        .admit_remote_actor_to_spot (
+          active_lifecycle_transfer_id, active_lifecycle_actor, spot_id_t ("source-spot"),
+          target->spot_id, zlink::message_t::from (std::string ("prepare")), 59, 61, 67, 1, 29)
+        .result ();
     const auto active_lifecycle_prepared = owner.prepare_remote_actor_to_spot (
       active_lifecycle_transfer_id, active_lifecycle_actor, target->spot_id, zlink::message_t{},
       gateway.actor_context (active_lifecycle_actor), true);
@@ -5514,9 +5831,12 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     const std::string shutdown_lifecycle_transfer_id = "transfer-c4-shutdown";
     const std::string shutdown_lifecycle_key = "player:actor-c4-shutdown";
     set_source_authority (shutdown_lifecycle_actor, 79);
-    const auto shutdown_lifecycle_admitted = owner.admit_remote_actor_to_spot (
-      shutdown_lifecycle_transfer_id, shutdown_lifecycle_actor, spot_id_t ("source-spot"),
-      target->spot_id, zlink::message_t::from (std::string ("prepare")), 71, 73, 79, 1, 29);
+    const auto shutdown_lifecycle_admitted =
+      owner
+        .admit_remote_actor_to_spot (
+          shutdown_lifecycle_transfer_id, shutdown_lifecycle_actor, spot_id_t ("source-spot"),
+          target->spot_id, zlink::message_t::from (std::string ("prepare")), 71, 73, 79, 1, 29)
+        .result ();
     const auto shutdown_lifecycle_prepared = owner.prepare_remote_actor_to_spot (
       shutdown_lifecycle_transfer_id, shutdown_lifecycle_actor, target->spot_id, zlink::message_t{},
       gateway.actor_context (shutdown_lifecycle_actor), true);
@@ -5606,9 +5926,12 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     const std::string failed_transfer_id = "transfer-c5";
     const std::string failed_key = "player:actor-c5";
     set_source_authority (failed_actor, 53);
-    const auto failed_admitted = owner.admit_remote_actor_to_spot (
-      failed_transfer_id, failed_actor, spot_id_t ("source-spot"), target->spot_id,
-      zlink::message_t::from (std::string ("prepare")), 43, 47, 53, 1, 29);
+    const auto failed_admitted =
+      owner
+        .admit_remote_actor_to_spot (
+          failed_transfer_id, failed_actor, spot_id_t ("source-spot"), target->spot_id,
+          zlink::message_t::from (std::string ("prepare")), 43, 47, 53, 1, 29)
+        .result ();
     const auto failed_prepared = owner.prepare_remote_actor_to_spot (
       failed_transfer_id, failed_actor, target->spot_id, zlink::message_t{},
       gateway.actor_context (failed_actor), true);
@@ -5644,9 +5967,8 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         return false;
     }
 
-    // The target owns the cutover order. A one-way source leave submission
-    // terminal may fail, but it is still attempted after OnJoined and before
-    // the target publishes Accepted.
+    // The target completes Join after OnJoined even while the one-way source
+    // leave submission has no transport terminal.
     std::atomic_int cutover_order{0};
     std::atomic_int target_joined_order{0};
     std::atomic_int source_leave_submit_order{0};
@@ -5672,9 +5994,12 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
       actor_ref_access_t::make (node_rid_t::from_string ("source-node"), "player", "actor-c6", 7);
     const std::string leave_order_transfer_id = "transfer-c6";
     set_source_authority (leave_order_actor, 97);
-    const auto leave_order_admitted = owner.admit_remote_actor_to_spot (
-      leave_order_transfer_id, leave_order_actor, spot_id_t ("source-spot"), target->spot_id,
-      zlink::message_t::from (std::string ("prepare")), 83, 89, 97, 1, 29);
+    const auto leave_order_admitted =
+      owner
+        .admit_remote_actor_to_spot (
+          leave_order_transfer_id, leave_order_actor, spot_id_t ("source-spot"), target->spot_id,
+          zlink::message_t::from (std::string ("prepare")), 83, 89, 97, 1, 29)
+        .result ();
     const auto leave_order_prepared = owner.prepare_remote_actor_to_spot (
       leave_order_transfer_id, leave_order_actor, target->spot_id, zlink::message_t{},
       gateway.actor_context (leave_order_actor), true);
@@ -5684,6 +6009,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     std::mutex leave_order_mutex;
     std::condition_variable leave_order_changed;
     std::optional<result_t<actor_join_reply_t>> leave_order_result;
+    detail::task_completion_source_t<void> leave_submit_terminal;
     owner.finalize_remote_actor_to_spot_async (
       leave_order_transfer_id, leave_order_actor, target->spot_id, provider, &gateway,
       std::chrono::steady_clock::now () + std::chrono::seconds (1),
@@ -5694,16 +6020,9 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
           }
           leave_order_changed.notify_all ();
       },
-      [&cutover_order, &source_leave_submit_order] {
+      [&cutover_order, &source_leave_submit_order, &leave_submit_terminal] {
           source_leave_submit_order.store (++cutover_order, std::memory_order_release);
-          detail::task_completion_source_t<void> terminal ([] (std::function<void ()>) {
-              // The ordinary continuation is intentionally not run. The
-              // finalize owner must observe the physical task terminal.
-          });
-          auto task = terminal.task ();
-          terminal.complete (result_t<void>::failure (framework_error_kind_t::internal_failure,
-                                                      "deterministic source leave submit failure"));
-          return task;
+          return leave_submit_terminal.task ();
       });
     {
         std::unique_lock lock (leave_order_mutex);
@@ -5717,6 +6036,8 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         || target_accepted_order.load (std::memory_order_acquire) != 3) {
         return false;
     }
+    leave_submit_terminal.complete (result_t<void>::failure (
+      framework_error_kind_t::internal_failure, "deterministic source leave submit failure"));
 
     // Accepted canonical Join keeps its original lifecycle position during
     // placement. Cancelling that admission releases the position exactly once.
@@ -5726,14 +6047,14 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     set_source_authority (held_actor, 101);
     const auto lifecycle_before =
       target->serial_queue->pending_count (runtime::serial_work_lane_t::lifecycle);
-    const auto held_admitted = owner.admit_remote_actor_to_spot (
-      held_transfer_id, held_actor, spot_id_t ("source-spot"), target->spot_id,
-      zlink::message_t::from (std::string ("prepare")), 91, 93, 101, 1, 29, true, 1, 1);
+    const auto held_admitted =
+      owner
+        .admit_remote_actor_to_spot (
+          held_transfer_id, held_actor, spot_id_t ("source-spot"), target->spot_id,
+          zlink::message_t::from (std::string ("prepare")), 91, 93, 101, 1, 29, true, 1, 1)
+        .result ();
     if (!held_admitted || !held_admitted.value ().accepted)
         return false;
-    const bool retained_during_placement =
-      target->serial_queue->pending_count (runtime::serial_work_lane_t::lifecycle)
-      == lifecycle_before + 1;
     std::atomic_bool later_lifecycle_ran{false};
     target->serial_queue->post (
       "later-lifecycle-after-accepted-join", [&] { later_lifecycle_ran.store (true); },
@@ -5754,8 +6075,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     const bool later_waited = !later_lifecycle_ran.load ();
     node->actor_transfer_coordinator.fail_commit (held_transfer_id, false);
     target->serial_queue->drain ();
-    if (!retained_during_placement || !application_progressed || !later_waited
-        || !later_lifecycle_ran.load ()
+    if (!application_progressed || !later_waited || !later_lifecycle_ran.load ()
         || target->serial_queue->pending_count (runtime::serial_work_lane_t::lifecycle)
              != lifecycle_before)
         return false;
@@ -6945,6 +7265,9 @@ int main ()
     if (!verify_idle_instance_spot_eviction_closes_local_context ()) {
         return 53;
     }
+    if (!verify_draining_host_refuses_new_admission_with_shutting_down ()) {
+        return 138;
+    }
     if (!verify_explicit_instance_spot_close_releases_authority_after_callback ()) {
         return 91;
     }
@@ -6958,6 +7281,18 @@ int main ()
     if (!verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()) {
         std::cerr << "wire actor Join approval-only admission regression failed\n";
         return 117;
+    }
+    if (!verify_wire_join_requires_active_local_target ()) {
+        std::cerr << "wire actor Join accepted an inactive target or held the receive loop\n";
+        return 138;
+    }
+    if (!verify_relocation_abort_does_not_hold_receive_worker ()) {
+        std::cerr << "relocation abort held the receive worker during Spot Close\n";
+        return 139;
+    }
+    if (!verify_join_commit_does_not_wait_for_joined_callback ()) {
+        std::cerr << "Join commit held the receive worker during OnJoinedActor\n";
+        return 140;
     }
     if (!verify_target_commit_stages_source_prefix_before_live_dispatch ()) {
         return 94;

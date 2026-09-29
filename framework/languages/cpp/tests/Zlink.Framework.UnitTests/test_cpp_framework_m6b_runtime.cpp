@@ -3109,7 +3109,9 @@ void verify_actor_commit_is_replayable_until_deadline ()
     assert (coordinator.commit_session_relocation_route_authority ("transfer-replay", 40, 41));
     assert (coordinator.commit_session_relocation_route_authority ("transfer-replay", 40, 41));
     assert (!coordinator.commit_session_relocation_route_authority ("transfer-replay", 40, 42));
-    assert (coordinator.begin_commit ("transfer-replay", source, "spot-b"));
+    std::vector<detail::handoff_packet_t> discarded;
+    assert (coordinator.begin_commit ("transfer-replay", source, "spot-b", discarded));
+    assert (discarded.empty ());
     assert (!coordinator.next_activity ());
     coordinator.complete_commit ("transfer-replay");
     assert (coordinator.next_activity () == admission.deadline);

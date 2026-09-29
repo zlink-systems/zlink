@@ -944,84 +944,13 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                   created.error_kind (),
                   created.error () ? created.error ()->what () : "Actor factory failed"));
             }
-            const auto joined =
+            return complete_local_actor_creation (
               (*target_runtime)
                 ->join_application_actor_to_entry_spot (
                   created.value (), node_rid_t::from_string (target.rid.to_string ()),
-                  raw_request.value_or (zlink::message_t{}), timeout);
-            if (!joined) {
-                const auto failed_envelope = actor_terminal_envelope (
-                  terminal_codec::request_terminal_result_t::internalError,
-                  terminal_codec::framework_error_code_t::actorCreateFailed, std::nullopt,
-                  std::nullopt, std::nullopt);
-                const creation_terminal_publication_t failed_publication{operation, failed_envelope,
-                                                                         operation_deadline};
-                (void) _location_store
-                  ->complete_creation (
-                    {reserve.key, winner->fence, object_creation_failed_t{failed_publication}})
-                  .result ();
-                return task_t<actor_create_result_t> (result_t<actor_create_result_t>::failure (
-                  joined.error_kind (),
-                  joined.error () ? joined.error ()->what () : "Actor creation callback failed"));
-            }
-            const bool accepted = joined.value ().result_code == 0;
-            std::optional<message_t> reply;
-            if (!joined.value ().reply.is_empty ())
-                reply = message_t::from_raw (joined.value ().reply, _serializers);
-            std::optional<protocol::application_payload_t> terminal_reply;
-            if (!joined.value ().reply.is_empty ())
-                terminal_reply = protocol::application_payload_t{
-                  stable_type, "application/octet-stream", joined.value ().reply.to_bytes ()};
-            const auto envelope = actor_terminal_envelope (
-              terminal_codec::request_terminal_result_t::ok,
-              terminal_codec::framework_error_code_t::none,
-              accepted ? terminal_codec::actor_create_result_t::created
-                       : terminal_codec::actor_create_result_t::rejected,
-              accepted ? std::make_optional (created.value ()) : std::nullopt, terminal_reply);
-            const creation_terminal_publication_t publication{operation, envelope,
-                                                              operation_deadline};
-            object_creation_completion_t completion;
-            if (accepted)
-                completion = object_creation_completed_t{
-                  target_actor_authority_payload (actor_authority_state_t::ready, stable_type,
-                                                  actor_id, target),
-                  publication};
-            else
-                completion = object_creation_rejected_t{publication};
-            const auto completed =
-              _location_store
-                ->complete_creation ({reserve.key, winner->fence, std::move (completion)})
-                .result ();
-            if (!completed)
-                return task_t<actor_create_result_t> (result_t<actor_create_result_t>::failure (
-                  completed.error_kind (), completed.error ()
-                                             ? completed.error ()->what ()
-                                             : "Actor creation completion failed"));
-            if (const auto *done =
-                  std::get_if<object_creation_completed_result_t> (&completed.value ())) {
-                if (!done->ready
-                    || done->ready->allocation.state != placement_allocation_state_t::active)
-                    return task_t<actor_create_result_t> (result_t<actor_create_result_t>::failure (
-                      framework_error_kind_t::unavailable,
-                      "Actor creation did not reach active state"));
-            } else if (const auto *already =
-                         std::get_if<object_creation_already_completed_result_t> (
-                           &completed.value ())) {
-                return task_t<actor_create_result_t> (
-                  result_t<actor_create_result_t>::success (actor_result_from_terminal (
-                    already->terminal, node_rid_t::from_string (target.rid.to_string ()),
-                    stable_type, [this] (zlink::message_t raw) {
-                        return message_t::from_raw (std::move (raw), _serializers);
-                    })));
-            } else {
-                return task_t<actor_create_result_t> (result_t<actor_create_result_t>::failure (
-                  framework_error_kind_t::unavailable, "Actor creation completion was fenced"));
-            }
-            if (accepted)
-                return task_t<actor_create_result_t> (result_t<actor_create_result_t>::success (
-                  actor_create_created_t{created.value (), std::move (reply)}));
-            return task_t<actor_create_result_t> (result_t<actor_create_result_t>::success (
-              actor_create_rejected_t{std::move (reply)}));
+                  raw_request.value_or (zlink::message_t{}), timeout),
+              std::move (activation_admission), target, created.value (), std::move (actor_id),
+              std::move (stable_type), reserve.key, winner->fence, operation, operation_deadline);
         }
         if (const auto terminal =
               _location_store->read_creation_terminal (operation).result ().value ())
@@ -1036,6 +965,102 @@ mesh_node_host_service_t::create_actor (bool exclusive,
     return task_t<actor_create_result_t> (result_t<actor_create_result_t>::failure (
       framework_error_kind_t::deadline_exceeded, "Actor creation deadline elapsed"));
 }
+
+/* The local Actor's entry Spot join completes through its operation
+ * completion; the creation terminal is published from there, not from a
+ * caller that waits for the join. */
+task_t<actor_create_result_t> mesh_node_host_service_t::complete_local_actor_creation (
+  task_t<zlink::framework::detail::actor_join_reply_t> joining,
+  std::shared_ptr<void> activation_admission,
+  mesh_node_descriptor_t target,
+  actor_ref_t created,
+  actor_id_t actor_id,
+  std::string stable_type,
+  object_creation_key_t reserve_key,
+  object_reservation_fence_t fence,
+  creation_operation_identity_t operation,
+  std::chrono::system_clock::time_point operation_deadline)
+{
+    result_t<zlink::framework::detail::actor_join_reply_t> joined =
+      result_t<zlink::framework::detail::actor_join_reply_t>::failure (
+        framework_error_kind_t::internal_failure, "Actor creation callback failed");
+    try {
+        joined = result_t<zlink::framework::detail::actor_join_reply_t>::success (
+          co_await std::move (joining));
+    }
+    catch (const framework_exception_t &error) {
+        joined =
+          detail::result_access_t::failure<zlink::framework::detail::actor_join_reply_t> (error);
+    }
+    catch (const std::exception &error) {
+        joined = result_t<zlink::framework::detail::actor_join_reply_t>::failure (
+          framework_error_kind_t::internal_failure, error.what ());
+    }
+    (void) activation_admission;
+    if (!joined) {
+        const auto failed_envelope =
+          actor_terminal_envelope (terminal_codec::request_terminal_result_t::internalError,
+                                   terminal_codec::framework_error_code_t::actorCreateFailed,
+                                   std::nullopt, std::nullopt, std::nullopt);
+        const creation_terminal_publication_t failed_publication{operation, failed_envelope,
+                                                                 operation_deadline};
+        (void) _location_store
+          ->complete_creation ({reserve_key, fence, object_creation_failed_t{failed_publication}})
+          .result ();
+        co_return (result_t<actor_create_result_t>::failure (
+          joined.error_kind (),
+          joined.error () ? joined.error ()->what () : "Actor creation callback failed"));
+    }
+    const bool accepted = joined.value ().result_code == 0;
+    std::optional<message_t> reply;
+    if (!joined.value ().reply.is_empty ())
+        reply = message_t::from_raw (joined.value ().reply, _serializers);
+    std::optional<protocol::application_payload_t> terminal_reply;
+    if (!joined.value ().reply.is_empty ())
+        terminal_reply = protocol::application_payload_t{stable_type, "application/octet-stream",
+                                                         joined.value ().reply.to_bytes ()};
+    const auto envelope = actor_terminal_envelope (
+      terminal_codec::request_terminal_result_t::ok, terminal_codec::framework_error_code_t::none,
+      accepted ? terminal_codec::actor_create_result_t::created
+               : terminal_codec::actor_create_result_t::rejected,
+      accepted ? std::make_optional (created) : std::nullopt, terminal_reply);
+    const creation_terminal_publication_t publication{operation, envelope, operation_deadline};
+    object_creation_completion_t completion;
+    if (accepted)
+        completion = object_creation_completed_t{
+          target_actor_authority_payload (actor_authority_state_t::ready, stable_type, actor_id,
+                                          target),
+          publication};
+    else
+        completion = object_creation_rejected_t{publication};
+    const auto completed =
+      _location_store->complete_creation ({reserve_key, fence, std::move (completion)}).result ();
+    if (!completed)
+        co_return (result_t<actor_create_result_t>::failure (
+          completed.error_kind (),
+          completed.error () ? completed.error ()->what () : "Actor creation completion failed"));
+    if (const auto *done = std::get_if<object_creation_completed_result_t> (&completed.value ())) {
+        if (!done->ready || done->ready->allocation.state != placement_allocation_state_t::active)
+            co_return (result_t<actor_create_result_t>::failure (
+              framework_error_kind_t::unavailable, "Actor creation did not reach active state"));
+    } else if (const auto *already =
+                 std::get_if<object_creation_already_completed_result_t> (&completed.value ())) {
+        co_return (result_t<actor_create_result_t>::success (actor_result_from_terminal (
+          already->terminal, node_rid_t::from_string (target.rid.to_string ()), stable_type,
+          [this] (zlink::message_t raw) {
+              return message_t::from_raw (std::move (raw), _serializers);
+          })));
+    } else {
+        co_return (result_t<actor_create_result_t>::failure (
+          framework_error_kind_t::unavailable, "Actor creation completion was fenced"));
+    }
+    if (accepted)
+        co_return (result_t<actor_create_result_t>::success (
+          actor_create_created_t{created, std::move (reply)}));
+    co_return (
+      result_t<actor_create_result_t>::success (actor_create_rejected_t{std::move (reply)}));
+}
+
 
 task_t<std::optional<actor_ref_t>> mesh_node_host_service_t::find_actor (actor_id_t actor_id)
 {

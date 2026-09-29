@@ -114,14 +114,16 @@ bool actor_transfer_coordinator_t::try_begin_source_remote (const std::string &a
       .get ();
 }
 
-void actor_transfer_coordinator_t::cancel_move (const std::string &actor_key)
+std::vector<handoff_packet_t>
+actor_transfer_coordinator_t::cancel_move (const std::string &actor_key)
 {
     return _lane
       .run ([&, this] {
           if (_activity_handler)
               _activity_handler ();
           _moves.erase (actor_key);
-          _backlogs.erase (actor_key);
+          auto discarded = _backlogs.extract (actor_key);
+          return discarded ? std::move (discarded.mapped ()) : std::vector<handoff_packet_t>{};
       })
       .get ();
 }
@@ -805,7 +807,8 @@ bool actor_transfer_coordinator_t::source_leave_submitted (const std::string &ac
 }
 
 bool actor_transfer_coordinator_t::admit_attempt (const std::string &actor_key,
-                                                  const std::string &transfer_id)
+                                                  const std::string &transfer_id,
+                                                  std::vector<handoff_packet_t> &discarded_backlog)
 {
     // Destroyed after the lane turn: releasing a lifecycle reservation must
     // not run inside the coordinator lane.
@@ -836,7 +839,8 @@ bool actor_transfer_coordinator_t::admit_attempt (const std::string &actor_key,
             //  effect (spec 15 §4.2) — see prepare_remote_actor_to_spot.
             if (auto node = _admissions.extract (moving->second.transfer_id))
                 displaced = std::move (node.mapped ());
-            _backlogs.erase (actor_key);
+            if (auto queued = _backlogs.extract (actor_key))
+                discarded_backlog = std::move (queued.mapped ());
             _moves.erase (moving);
             return true;
         })
@@ -887,8 +891,11 @@ actor_transfer_coordinator_t::admission (const std::string &transfer_id) const
       .get ();
 }
 
-std::optional<pending_actor_admission_t> actor_transfer_coordinator_t::begin_commit (
-  const std::string &transfer_id, const actor_ref_t &source_actor, const spot_id_t &target_spot_id)
+std::optional<pending_actor_admission_t>
+actor_transfer_coordinator_t::begin_commit (const std::string &transfer_id,
+                                            const actor_ref_t &source_actor,
+                                            const spot_id_t &target_spot_id,
+                                            std::vector<handoff_packet_t> &discarded_backlog)
 {
     return _lane
       .run ([&, this] () -> std::optional<pending_actor_admission_t> {
@@ -898,7 +905,8 @@ std::optional<pending_actor_admission_t> actor_transfer_coordinator_t::begin_com
           }
           if (found->second.deadline <= std::chrono::steady_clock::now ()) {
               _moves.erase (found->second.actor_key);
-              _backlogs.erase (found->second.actor_key);
+              if (auto queued = _backlogs.extract (found->second.actor_key))
+                  discarded_backlog = std::move (queued.mapped ());
               _admissions.erase (found);
               return std::nullopt;
           }
@@ -1094,7 +1102,8 @@ actor_transfer_coordinator_t::session_relocation_admission (const std::string &t
       .get ();
 }
 
-void actor_transfer_coordinator_t::fail_commit (const std::string &transfer_id, bool reconcile)
+std::vector<handoff_packet_t>
+actor_transfer_coordinator_t::fail_commit (const std::string &transfer_id, bool reconcile)
 {
     return _lane
       .run ([&, this] {
@@ -1102,7 +1111,7 @@ void actor_transfer_coordinator_t::fail_commit (const std::string &transfer_id, 
               _activity_handler ();
           const auto found = _admissions.find (transfer_id);
           if (found == _admissions.end ()) {
-              return;
+              return std::vector<handoff_packet_t>{};
           }
           const auto actor_key = found->second.actor_key;
           _admissions.erase (found);
@@ -1120,8 +1129,10 @@ void actor_transfer_coordinator_t::fail_commit (const std::string &transfer_id, 
               //  actor_key for a later admission to inherit (spec 15 §4.2 cleanup
               //  "exactly once").
               _moves.erase (actor_key);
-              _backlogs.erase (actor_key);
+              auto discarded = _backlogs.extract (actor_key);
+              return discarded ? std::move (discarded.mapped ()) : std::vector<handoff_packet_t>{};
           }
+          return std::vector<handoff_packet_t>{};
       })
       .get ();
 }
@@ -1155,8 +1166,10 @@ actor_transfer_coordinator_t::cleanup_expired (std::chrono::steady_clock::time_p
                                       && moving->second.phase == actor_move_phase_t::target_pending;
               if (can_expire && found->second.deadline <= now) {
                   _moves.erase (moving);
-                  _backlogs.erase (found->second.actor_key);
-                  removed.push_back (expired_actor_admission_t{found->first, found->second});
+                  auto queued = _backlogs.extract (found->second.actor_key);
+                  removed.push_back (expired_actor_admission_t{
+                    found->first, found->second,
+                    queued ? std::move (queued.mapped ()) : std::vector<handoff_packet_t>{}});
                   found = _admissions.erase (found);
               } else {
                   ++found;

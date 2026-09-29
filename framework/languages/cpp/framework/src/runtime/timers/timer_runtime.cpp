@@ -239,7 +239,15 @@ void timer_runtime_t::post_fire_count (
         }
         state->pending_fire = true;
     }
-    auto work = [context, state] (auto complete) mutable {
+    // The fire is admitted here and holds its admission until its callbacks
+    // complete, or until its queue drops it unrun (Spot address messaging §7).
+    auto fire = context->admit_timer_fire ();
+    std::shared_ptr<void> admission;
+    if (fire.admitted)
+        admission.reset (static_cast<void *> (nullptr),
+                         [context] (void *) noexcept { context->leave_callback (); });
+    auto work = [context, state, admission, spot_instance = std::move (fire.spot_instance),
+                 channel_runtime = std::move (fire.channel_runtime)] (auto complete) mutable {
         std::uint64_t pending_fire_count = 0;
         {
             std::lock_guard lock (state->mutex);
@@ -249,13 +257,18 @@ void timer_runtime_t::post_fire_count (
         }
         framework::timer_t timer (state);
         auto runtime = timer_runtime_t (context);
-        auto task = runtime.dispatch_fire_count_async (timer, pending_fire_count);
-        detail::observe_task_completion (
-          task, [complete] (const result_t<timer_tick_t> &) mutable { complete ([] {}); });
+        auto task = runtime.dispatch_fire_count_async (
+          timer, pending_fire_count, std::move (spot_instance), std::move (channel_runtime));
+        detail::observe_task_completion (task, [complete, admission = std::move (admission)] (
+                                                 const result_t<timer_tick_t> &) mutable {
+            admission.reset ();
+            complete ([] {});
+        });
     };
     const auto queue_name = "spot-timer:" + state->name;
-    const bool posted = queue ? queue->try_post_async (queue_name, std::move (work))
-                              : context->try_post_serial_async (queue_name, std::move (work));
+    const bool posted = fire.admitted
+                        && (queue ? queue->try_post_async (queue_name, std::move (work))
+                                  : context->try_post_serial_async (queue_name, std::move (work)));
     if (!posted) {
         std::lock_guard lock (state->mutex);
         if (!state->disposed) {
@@ -351,14 +364,14 @@ timer_runtime_t::dispatch_fire_count (timer_t &timer,
         }
         timer._state->running = true;
     }
-    if (!_context->enter_callback ()) {
+    if (!_context->admit (true)) {
         {
             std::lock_guard lock (timer._state->mutex);
             timer._state->running = false;
         }
         complete_cancel_if_ready (timer._state);
-        return detail::boundary_failure<timer_tick_t> (detail::boundary_error_t::closed,
-                                                       "SPOT timer activation is closed");
+        return detail::result_access_t::failure<timer_tick_t> (
+          spot_context_state_t::sealed_admission_error ());
     }
     auto reset_running = [&timer, this] {
         _context->leave_callback ();
@@ -402,6 +415,30 @@ timer_runtime_t::dispatch_fire_count (timer_t &timer,
 task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (timer_t &timer,
                                                                  std::uint64_t fire_count) const
 {
+    // A direct dispatch is its own admission (Spot address messaging §7 step 2).
+    const auto context = _context;
+    if (!context) {
+        return task_t<timer_tick_t> (result_t<timer_tick_t>::failure (
+          framework_error_kind_t::protocol_error, "SPOT timer context is not configured"));
+    }
+    auto fire = context->admit_timer_fire ();
+    if (!fire.admitted) {
+        return task_t<timer_tick_t> (detail::result_access_t::failure<timer_tick_t> (
+          spot_context_state_t::sealed_admission_error ()));
+    }
+    auto task = dispatch_fire_count_async (timer, fire_count, std::move (fire.spot_instance),
+                                           std::move (fire.channel_runtime));
+    detail::observe_task_completion (
+      task, [context] (const result_t<timer_tick_t> &) { context->leave_callback (); });
+    return task;
+}
+
+task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (
+  timer_t &timer,
+  std::uint64_t fire_count,
+  std::shared_ptr<void> spot_instance,
+  std::shared_ptr<channel_runtime_state_t> channel_runtime) const
+{
     auto state = timer._state;
     auto context = _context;
     if (!state || state->disposed) {
@@ -442,25 +479,6 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (timer_t &timer,
         co_return result_t<timer_tick_t>::failure (framework_error_kind_t::protocol_error,
                                                    "SPOT timer context is not configured");
     }
-    const auto fire_snapshot = context->enter_timer_callback ();
-    if (!fire_snapshot.configured) {
-        {
-            std::lock_guard lock (state->mutex);
-            state->running = false;
-        }
-        complete_cancel_if_ready (state);
-        co_return result_t<timer_tick_t>::failure (framework_error_kind_t::protocol_error,
-                                                   "SPOT timer context is not configured");
-    }
-    if (!fire_snapshot.admitted) {
-        {
-            std::lock_guard lock (state->mutex);
-            state->running = false;
-        }
-        complete_cancel_if_ready (state);
-        co_return detail::boundary_failure<timer_tick_t> (detail::boundary_error_t::closed,
-                                                          "SPOT timer activation is closed");
-    }
     auto reset_running = [context, state] {
         bool post_pending = false;
         std::uint64_t pending_fire_count = 0;
@@ -473,7 +491,6 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (timer_t &timer,
             state->pending_fire_count = 0;
         }
         complete_cancel_if_ready (state);
-        context->leave_callback ();
         if (post_pending) {
             timer_runtime_t::post_fire_count (context, state, state->serial_queue,
                                               pending_fire_count);
@@ -485,17 +502,15 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (timer_t &timer,
         /* Timer callbacks have no inbound message: they start a new flow with
          * origin=timer when tracing capture is enabled (flow-correlation §4.2). */
         auto timer_flow = framework::runtime::flow_context_t::enter_current_or_create (
-          flow_origin_t::timer,
-          message_flow_tracer_t (fire_snapshot.channel_runtime->dispatch).mode ());
+          flow_origin_t::timer, message_flow_tracer_t (channel_runtime->dispatch).mode ());
         auto handler_instance = state->handler_instance.lock ();
         if (!handler_instance) {
             throw framework_exception_t (framework_error_kind_t::protocol_error,
                                          "SPOT timer handler activation is no longer available");
         }
         for (const auto &tick : ticks) {
-            auto handler_task =
-              state->handler_invoker (fire_snapshot.spot_instance.get (), handler_instance.get (),
-                                      *fire_snapshot.channel_runtime->serializers, tick);
+            auto handler_task = state->handler_invoker (
+              spot_instance.get (), handler_instance.get (), *channel_runtime->serializers, tick);
             (void) co_await handler_task;
         }
         reset_running ();

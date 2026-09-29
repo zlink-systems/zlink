@@ -7,9 +7,11 @@
 
 #include <zlink/framework.hpp>
 
+#include <chrono>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
 
 namespace
 {
@@ -43,6 +45,15 @@ void require (bool condition, const char *message)
         std::cerr << "[activation-admission] " << message << '\n';
         ++failures;
     }
+}
+
+bool wait_for_released_admission (
+  const std::shared_ptr<fw::detail::activation_admission_t> &admission)
+{
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (admission->active () != 0 && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::yield ();
+    return admission->active () == 0;
 }
 
 frozen_object_state_t frozen (const std::string &key)
@@ -105,7 +116,8 @@ void relocation_target_restore_holds_admission_until_commit_or_abort ()
              "a Restore must be admitted again after the commit");
     require (admission->active () == 1, "the second Restore must hold one admission");
     runtime.abort_relocation_materialization ({target ("second")});
-    require (admission->active () == 0, "the target abort must end the Restore admission");
+    require (wait_for_released_admission (admission),
+             "the target abort must end the Restore admission");
 
     auto unknown = frozen ("unknown");
     unknown.stable_type = "unregistered-spot";

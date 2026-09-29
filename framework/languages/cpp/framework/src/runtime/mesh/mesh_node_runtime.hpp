@@ -355,7 +355,8 @@ class mesh_node_runtime_t
                               std::uint64_t object_generation,
                               std::uint64_t authority_owner_generation,
                               std::chrono::milliseconds timeout);
-    result_t<actor_join_reply_t>
+    // Completes when the entry Spot join operation completes; nothing waits for it.
+    task_t<actor_join_reply_t>
     join_application_actor_to_entry_spot (const actor_ref_t &actor,
                                           const node_rid_t &target_node,
                                           const zlink::message_t &request,
@@ -597,10 +598,6 @@ class mesh_node_runtime_t
                                       const std::vector<zlink::message_t> &parts,
                                       const actor_ref_t &actor,
                                       const std::shared_ptr<mesh_node_builder_state_t> &state);
-    result_t<actor_join_reply_t>
-    wait_for_join_completion (const host::pending_operation_t &operation,
-                              const actor_ref_t &actor,
-                              std::chrono::milliseconds timeout);
     std::optional<zlink::submit_result_t>
     classify_node_direct_target (const zlink::routing_id_t &target) const;
     std::shared_ptr<mesh_node_builder_state_t> _state;
