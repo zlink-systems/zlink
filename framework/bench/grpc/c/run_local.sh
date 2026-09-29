@@ -35,8 +35,6 @@ for binary in zlink_server zlink_client grpc_server grpc_client; do
     { echo "missing ${BUILD_DIR}/bench_c_with_grpc_${binary}; run without SKIP_BUILD=1" >&2; exit 1; }
 done
 
-payload_csv="$(IFS=,; echo "${payloads[*]}")"
-pattern_csv="$(IFS=,; echo "${patterns[*]}")"
 check_ports_free 6071 6079
 mkdir -p "${OUTPUT_DIR}"
 a_pid=""
@@ -64,9 +62,10 @@ start_server() {
   return 1
 }
 
+# README §10.4: every cell (implementation x pattern x payload) starts a new server and a new
+# client process, so no cell inherits another cell's connection, heap or scheduler state.
 for run in $(seq 1 "${RUNS}"); do
   run_dir="${OUTPUT_DIR}/run${run}"
-  mkdir -p "${run_dir}"
   for impl in "${implementations[@]}"; do
     case "${impl}" in
       grpc-c) server="${BUILD_DIR}/bench_c_with_grpc_grpc_server"
@@ -74,14 +73,21 @@ for run in $(seq 1 "${RUNS}"); do
       zlink-c) server="${BUILD_DIR}/bench_c_with_grpc_zlink_server"
                client="${BUILD_DIR}/bench_c_with_grpc_zlink_client"; port=6075 ;;
     esac
-    echo "[bench] impl=${impl} run=${run}: start server, then client" >&2
-    start_server "${run_dir}/${impl}-server.pid" "${run_dir}/${impl}-server.log" "${server}" "${port}"
-    SERVER_PID="${b_pid}" BENCH_RUN_DIR="${run_dir}" BENCH_CORE_VERSION="${ZLINK_C_CORE_VERSION}" \
-      PAYLOAD_SIZES="${payload_csv}" PATTERNS="${pattern_csv}" DURATION_SECONDS="${DURATION_SECONDS}" \
-      "${client}"
-    cleanup_cell
-    rm -f "${run_dir}/${impl}-server.pid"
-    wait_for_ports_free 6071 6079
+    for pattern in "${patterns[@]}"; do
+      for payload in "${payloads[@]}"; do
+        cell_dir="$(bench_cell_dir "${run}" "${impl}" "${pattern}" "${payload}")"
+        mkdir -p "${cell_dir}"
+        echo "[bench] run=${run} cell=${impl}-${pattern}-${payload}: start server, then client" >&2
+        start_server "${cell_dir}/target.pid" "${cell_dir}/target.log" "${server}" "${port}"
+        SERVER_PID="${b_pid}" BENCH_RUN_DIR="${run_dir}" BENCH_CORE_VERSION="${ZLINK_C_CORE_VERSION}" \
+          PAYLOAD_SIZES="${payload}" PATTERNS="${pattern}" DURATION_SECONDS="${DURATION_SECONDS}" \
+          "${client}" >"${cell_dir}/source.log" 2>&1 ||
+          { echo "client failed: ${cell_dir}/source.log" >&2; exit 1; }
+        cleanup_cell
+        rm -f "${cell_dir}/target.pid"
+        wait_for_ports_free 6071 6079
+      done
+    done
   done
 done
 

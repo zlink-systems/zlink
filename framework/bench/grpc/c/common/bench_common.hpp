@@ -307,6 +307,30 @@ struct result_t
     bool drain_bound_hit = false;
 };
 
+// The one place that closes the measured active window (README §3, §5.2). Called the moment
+// the active window ends and before any drain: `completed` is what finished inside the window,
+// and elapsed time, CPU, memory and latency are read at the same instant. A drain that follows
+// records only `abandoned` and `drain_ms`, so its length never enters throughput or CPU%.
+// `latency` is null for a pattern without reply latency (send-saturation).
+inline void capture_active_close (result_t *r,
+                                  const std::chrono::steady_clock::time_point &start,
+                                  const resource_sample_t &resources,
+                                  uint64_t completed,
+                                  const latency_sampler_t *latency)
+{
+    r->completed = completed;
+    r->elapsed_s = std::chrono::duration<double> (std::chrono::steady_clock::now () - start).count ();
+    if (latency) {
+        r->mean_us = latency->mean_us ();
+        r->p95_us = latency->percentile (0.95);
+        r->p99_us = latency->percentile (0.99);
+    }
+    r->cpu_percent = cpu_percent (resources, r->elapsed_s);
+    r->mem_mb = rss_mb ();
+    r->server_cpu_percent = server_cpu_percent (resources, r->elapsed_s);
+    r->server_mem_mb = server_mem_mb (resources);
+}
+
 inline std::string json_escape (const std::string &value)
 {
     std::string out;

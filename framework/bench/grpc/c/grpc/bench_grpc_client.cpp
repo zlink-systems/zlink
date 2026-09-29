@@ -74,21 +74,12 @@ zlink_c_bench::result_t run_request_serial (
         }
         ++completed;
     }
-    const auto stop = std::chrono::steady_clock::now ();
     zlink_c_bench::result_t r;
+    zlink_c_bench::capture_active_close (&r, start, resources, completed, &latency);
     r.implementation = "grpc-c";
     r.pattern = "request-serial";
     r.size = size;
-    r.completed = completed;
     r.errors = errors;
-    r.elapsed_s = std::chrono::duration<double> (stop - start).count ();
-    r.mean_us = latency.mean_us ();
-    r.p95_us = latency.percentile (0.95);
-    r.p99_us = latency.percentile (0.99);
-    r.cpu_percent = zlink_c_bench::cpu_percent (resources, r.elapsed_s);
-    r.mem_mb = zlink_c_bench::rss_mb ();
-    r.server_cpu_percent = zlink_c_bench::server_cpu_percent (resources, r.elapsed_s);
-    r.server_mem_mb = zlink_c_bench::server_mem_mb (resources);
     r.submitted = completed + errors;
     r.peak_in_flight = completed > 0 ? 1 : 0;
     r.submit_wait_ms = submit_wait_ms;
@@ -152,6 +143,12 @@ zlink_c_bench::result_t run_request_backpressure (
                             ? static_cast<double> (submit_stop - submit_start) / 1000000.0
                             : 0.0;
     }
+    // Close the active window before the drain: throughput and CPU% must not include it.
+    zlink_c_bench::result_t r;
+    {
+        std::lock_guard<std::mutex> lock (latency_gate);
+        zlink_c_bench::capture_active_close (&r, start, resources, completed.load (), &latency);
+    }
     // README §3: the drain is bounded. Without a bound an uncapped submission phase can leave
     // this loop waiting indefinitely, and a wedged cell would hang the run.
     const auto drain_begin = std::chrono::steady_clock::now ();
@@ -160,31 +157,21 @@ zlink_c_bench::result_t run_request_backpressure (
     while (outstanding.load (std::memory_order_relaxed) > 0
            && std::chrono::steady_clock::now () < drain_deadline)
         std::this_thread::sleep_for (std::chrono::milliseconds (1));
-    const auto stop = std::chrono::steady_clock::now ();
+    const auto drain_end = std::chrono::steady_clock::now ();
     const int abandoned = outstanding.load (std::memory_order_relaxed);
     cq.Shutdown ();
     completion_thread.join ();
 
-    zlink_c_bench::result_t r;
     r.implementation = "grpc-c";
     r.pattern = "request-backpressure";
     r.size = size;
-    r.completed = completed.load ();
     r.errors = errors.load ();
-    r.elapsed_s = std::chrono::duration<double> (stop - start).count ();
-    r.mean_us = latency.mean_us ();
-    r.p95_us = latency.percentile (0.95);
-    r.p99_us = latency.percentile (0.99);
-    r.cpu_percent = zlink_c_bench::cpu_percent (resources, r.elapsed_s);
-    r.mem_mb = zlink_c_bench::rss_mb ();
-    r.server_cpu_percent = zlink_c_bench::server_cpu_percent (resources, r.elapsed_s);
-    r.server_mem_mb = zlink_c_bench::server_mem_mb (resources);
     r.submitted = submitted;
     r.peak_in_flight = max_outstanding_seen;
     r.submit_wait_ms = submit_wait_ms;
     r.has_drain = true;
     r.abandoned = static_cast<uint64_t> (abandoned);
-    r.drain_ms = std::chrono::duration<double, std::milli> (stop - drain_begin).count ();
+    r.drain_ms = std::chrono::duration<double, std::milli> (drain_end - drain_begin).count ();
     r.drain_bound_hit = abandoned > 0;
     return r;
 }
@@ -236,23 +223,18 @@ zlink_c_bench::result_t run_send_saturation (
                             ? static_cast<double> (submit_stop - submit_start) / 1000000.0
                             : 0.0;
     }
+    // Unary Command calls that finished OK inside the window; the wait below is the drain.
+    zlink_c_bench::result_t r;
+    zlink_c_bench::capture_active_close (&r, start, resources, completed.load (), nullptr);
     while (outstanding.load (std::memory_order_relaxed) > 0)
         std::this_thread::sleep_for (std::chrono::milliseconds (1));
-    const auto stop = std::chrono::steady_clock::now ();
     cq.Shutdown ();
     completion_thread.join ();
 
-    zlink_c_bench::result_t r;
     r.implementation = "grpc-c";
     r.pattern = "send-saturation";
     r.size = size;
-    r.completed = completed.load ();
     r.errors = errors.load ();
-    r.elapsed_s = std::chrono::duration<double> (stop - start).count ();
-    r.cpu_percent = zlink_c_bench::cpu_percent (resources, r.elapsed_s);
-    r.mem_mb = zlink_c_bench::rss_mb ();
-    r.server_cpu_percent = zlink_c_bench::server_cpu_percent (resources, r.elapsed_s);
-    r.server_mem_mb = zlink_c_bench::server_mem_mb (resources);
     r.submitted = submitted;
     r.peak_in_flight = max_outstanding_seen;
     r.submit_wait_ms = submit_wait_ms;

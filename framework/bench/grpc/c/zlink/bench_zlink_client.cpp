@@ -192,35 +192,23 @@ double drain_requests (void *poller, void *dealer, callback_state_t *cb)
       .count ();
 }
 
-zlink_c_bench::result_t finish_request_result (const char *pattern,
-                                               size_t size,
-                                               const std::chrono::steady_clock::time_point &start,
-                                               const std::chrono::steady_clock::time_point &stop,
-                                               const zlink_c_bench::resource_sample_t &resources,
-                                               callback_state_t *cb,
-                                               zlink_c_bench::latency_sampler_t *latency,
-                                               const request_metrics_t &metrics)
+// Fills what is known after the active window closed. Throughput inputs (completed, elapsed,
+// CPU, latency) come from capture_active_close, which the caller ran before any drain.
+void fill_request_result (zlink_c_bench::result_t *r,
+                          const char *pattern,
+                          size_t size,
+                          callback_state_t *cb,
+                          const request_metrics_t &metrics)
 {
     const uint64_t pending = cb->outstanding.load (std::memory_order_acquire);
-    zlink_c_bench::result_t r;
-    r.implementation = "zlink-c";
-    r.pattern = pattern;
-    r.size = size;
-    r.completed = cb->completed.load (std::memory_order_relaxed);
-    r.errors = cb->errors.load (std::memory_order_relaxed) + metrics.submit_errors + pending;
-    r.elapsed_s = std::chrono::duration<double> (stop - start).count ();
-    r.mean_us = latency->mean_us ();
-    r.p95_us = latency->percentile (0.95);
-    r.p99_us = latency->percentile (0.99);
-    r.cpu_percent = zlink_c_bench::cpu_percent (resources, r.elapsed_s);
-    r.mem_mb = zlink_c_bench::rss_mb ();
-    r.server_cpu_percent = zlink_c_bench::server_cpu_percent (resources, r.elapsed_s);
-    r.server_mem_mb = zlink_c_bench::server_mem_mb (resources);
-    r.submitted = metrics.submitted;
-    r.blocked = metrics.blocked;
-    r.peak_in_flight = metrics.max_outstanding;
-    r.submit_wait_ms = metrics.submit_wait_ms;
-    return r;
+    r->implementation = "zlink-c";
+    r->pattern = pattern;
+    r->size = size;
+    r->errors = cb->errors.load (std::memory_order_relaxed) + metrics.submit_errors + pending;
+    r->submitted = metrics.submitted;
+    r->blocked = metrics.blocked;
+    r->peak_in_flight = metrics.max_outstanding;
+    r->submit_wait_ms = metrics.submit_wait_ms;
 }
 
 zlink_c_bench::result_t run_request_serial (void *dealer,
@@ -245,9 +233,11 @@ zlink_c_bench::result_t run_request_serial (void *dealer,
                 (void) poll_once (poller, dealer, &cb, 50);
         }
     }
-    const auto stop = std::chrono::steady_clock::now ();
-    return finish_request_result ("request-serial", size, start, stop, resources, &cb,
-                                  &latency, metrics);
+    zlink_c_bench::result_t r;
+    zlink_c_bench::capture_active_close (&r, start, resources,
+                                         cb.completed.load (std::memory_order_relaxed), &latency);
+    fill_request_result (&r, "request-serial", size, &cb, metrics);
+    return r;
 }
 
 // Bounded readiness before any measured phase. A ROUTER's first request races
@@ -327,10 +317,11 @@ zlink_c_bench::result_t run_request_backpressure (void *dealer,
         }
         (void) poll_once (poller, dealer, &cb, 1);
     }
+    zlink_c_bench::result_t r;
+    zlink_c_bench::capture_active_close (&r, start, resources,
+                                         cb.completed.load (std::memory_order_relaxed), &latency);
     const double drain_ms = drain_requests (poller, dealer, &cb);
-    const auto stop = std::chrono::steady_clock::now ();
-    zlink_c_bench::result_t r = finish_request_result ("request-backpressure", size, start, stop,
-                                                       resources, &cb, &latency, metrics);
+    fill_request_result (&r, "request-backpressure", size, &cb, metrics);
     r.has_drain = true;
     r.abandoned = cb.outstanding.load (std::memory_order_acquire);
     r.drain_ms = drain_ms;
@@ -386,24 +377,20 @@ zlink_c_bench::result_t run_send_saturation (void *dealer,
             ++errors;
         }
     }
-    const auto stop = std::chrono::steady_clock::now ();
-    const auto drain_deadline =
-      stop + std::chrono::milliseconds (zlink_c_bench::k_drain_bound_ms);
+    // send-saturation counts what was submitted OK inside the window (a one-way send has no
+    // reply); the WRITABLE wait below is the drain and is not part of the measured window.
+    zlink_c_bench::result_t r;
+    zlink_c_bench::capture_active_close (&r, start, resources, seq, nullptr);
+    const auto drain_deadline = std::chrono::steady_clock::now ()
+                                + std::chrono::milliseconds (zlink_c_bench::k_drain_bound_ms);
     while (cb.writable.load (std::memory_order_relaxed) < blocked
            && std::chrono::steady_clock::now () < drain_deadline)
         if (!poll_once (poller, dealer, &cb, 50))
             break;
-    zlink_c_bench::result_t r;
     r.implementation = "zlink-c";
     r.pattern = "send-saturation";
     r.size = size;
-    r.completed = seq;
     r.errors = errors + cb.errors.load (std::memory_order_relaxed);
-    r.elapsed_s = std::chrono::duration<double> (stop - start).count ();
-    r.cpu_percent = zlink_c_bench::cpu_percent (resources, r.elapsed_s);
-    r.mem_mb = zlink_c_bench::rss_mb ();
-    r.server_cpu_percent = zlink_c_bench::server_cpu_percent (resources, r.elapsed_s);
-    r.server_mem_mb = zlink_c_bench::server_mem_mb (resources);
     r.submitted = seq;
     r.blocked = blocked;
     r.submit_wait_ms = submit_wait_ms;
