@@ -44,7 +44,7 @@ transport(tcp/ipc/tls/ws/wss)가 byte stream을 제공한다.
 
 ## 3. Packet receive framing (PACKET mode)
 
-framed packet을 수신하려면 application은 첫 successful bind 또는 connect 전에
+framed packet을 수신하려면 application은 첫 successful bind 전에
 `ZLINK_STREAM_RECV_MODE_PACKET`을 선택한다. PACKET mode에서 zlink는 투명 stream 대신
 length-prefixed(길이 접두사) packet framing을 파싱한다. wire의 byte 배치는 다음과 같다.
 
@@ -111,7 +111,7 @@ wire에는 payload byte만 전송한다.
   PACKET 모드의 `0 + 0` packet 전달은 STREAM 계약이 검증한다.
 
 **PACKET mode**
-- 첫 successful bind 또는 connect 전에 `ZLINK_STREAM_RECV_MODE_PACKET`을 선택하면 투명
+- 첫 successful bind 전에 `ZLINK_STREAM_RECV_MODE_PACKET`을 선택하면 투명
   stream 대신 length-prefixed packet framing(`header_size` 2 byte Big Endian, `body_size`
   4 byte Big Endian, header, body 순)이 파싱되고,
   `zlink_stream_recv_packet()`이 header와 body를 별도의 `zlink_msg_t`로 반환한다.

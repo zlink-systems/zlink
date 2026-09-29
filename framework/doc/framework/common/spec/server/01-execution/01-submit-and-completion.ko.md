@@ -214,7 +214,7 @@ result로 만들지 않는다.
 
 ## 7. Admission deadline — owner와 값 규칙
 
-One-way admission deadline은 operation이 실제로 사용하는 outbound socket 또는, RouteMesh에
+One-way admission deadline과 global object request의 outbound admission deadline은 operation이 실제로 사용하는 outbound socket 또는, RouteMesh에
 참여해 message를 보내거나 받는 runtime node인
 [MeshNode](../00-foundation/02-glossary.ko.md#meshnode)가 소유한다.
 
@@ -238,13 +238,17 @@ Framework public send timeout의 값 규칙은 다음과 같다.
   option을 새로 추가해야 한다는 뜻은 아니다.
 - Runtime setter가 있는 경우 잘못된 값은 setter 호출에서 즉시 거부한다.
 
+호출 쪽 deadline이 있는 admission은 socket send timeout과 그 deadline 중 먼저 도달하는 deadline을
+사용하며, 호출 쪽 값으로 socket send timeout을 연장하지 않는다. 호출 쪽 deadline은 아래 STREAM
+one-way send의 admission timeout modifier와 global object request의 남은 request timeout
+([§9](#9-request-completion--완료-경쟁과-timeout-budget))이다.
+
 STREAM one-way send call은 선택적인 호출별 admission timeout modifier를 제공한다. 이
 값은 reply를 기다리는 시간이 아니라 해당 send가 STREAM transport queue의 수락을
 기다릴 수 있는 최대 시간이다.
 
 - Modifier를 생략하면 해당 STREAM socket의 send timeout을 사용한다.
-- Modifier를 지정하면 socket timeout과 호출별 timeout 중 먼저 도달하는 deadline을
-  사용한다. 호출별 값으로 socket timeout을 연장하지 않는다.
+- Modifier를 지정하면 위의 호출 쪽 deadline 규칙을 따른다.
 - 값 검증과 millisecond 올림은 위 `1..INT_MAX` 규칙을 그대로 사용한다.
 - Deadline이 먼저 끝나면 `DeadlineExceeded`로 한 번 완료하고, 이후 capacity가
   생겨도 해당 send를 admission하거나 다시 시도하지 않는다.
@@ -299,7 +303,8 @@ flowchart LR
 
 Global object request timeout은 current Ready authority resolve, outbound
 admission, handler와 reply 전체를 포함한다. Source는 앞 단계에서 사용한 시간을 뺀
-잔여 시간만 다음 단계에 전달한다. Timeout·연결 실패 뒤 request의 재제출 경계는 [§5](#5-backpressure와-오류-분류)가 정의한다.
+잔여 시간만 다음 단계에 전달한다. Outbound admission 단계의 deadline은
+[§7](#7-admission-deadline--owner와-값-규칙)이 정한다. Timeout·연결 실패 뒤 request의 재제출 경계는 [§5](#5-backpressure와-오류-분류)가 정의한다.
 
 같은 handler turn에서 보낸 request를 기다릴 때 gate를 어떻게 반납하고 재개하는지는
 [Handler turn과 execution gate 「4. 같은 turn에서의 대기와 반납」](02-handler-turn-and-execution-gate.ko.md#4-같은-turn에서의-대기와-반납)이

@@ -533,9 +533,11 @@ the following order after the handler ends normally.
    removes the temporary queue it registered and the prepared factory
    resources within the same processing, and it ends while keeping source
    membership. If the target is an Entry Spot, `OnActorJoin` isn't called. The node
-   receiving the Join request accepts it only through an active local target Spot. If
-   that Spot is absent or inactive, it doesn't create one and rejects the request with
-   `Unavailable`.
+   receiving the Join request accepts it only through an active local target Spot. A
+   target in the `Closing` state follows the `Closing` row of
+   [Spot address messaging §9](06-spot-address-messaging.en.md#9-failure-and-observability).
+   Otherwise, if the Spot is absent or not yet active, it doesn't create one and rejects the
+   request with `Unavailable`.
 3. The framework checks the relocation policy and target capacity. If the
    move can proceed, it briefly blocks new message processing on the
    source Actor, captures application state and the current Actor queue,

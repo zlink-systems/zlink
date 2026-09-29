@@ -218,7 +218,8 @@ sequenceDiagram
   [Submit과 완료 §4·§5](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)가 정의한다.**
 - **`request`는 선택한 송신 경로에 reply correlation을 만들고 terminal 결과를 정확히 한 번
   전달한다.** request timeout은 reply를 기다리는 시간이고, 전송 단계의 backpressure는 send
-  timeout이 담당한다. route 오류·timeout 뒤 재제출 경계는
+  timeout이 담당한다. Global object request의 timeout budget은
+  [Submit과 완료 §7·§9](../01-execution/01-submit-and-completion.ko.md#7-admission-deadline--owner와-값-규칙)가 정한다. route 오류·timeout 뒤 재제출 경계는
   [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다. 언어별 transport 오류는 이 문서의 닫힌 Framework 결과 가운데 하나로 변환하며
   transport 전용 결과를 public call에 노출하지 않는다.
 - **Spot에서 시작한 request는 원래 activation과 generation을 completion record에 보존한다.**

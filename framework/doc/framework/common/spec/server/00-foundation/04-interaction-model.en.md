@@ -237,7 +237,9 @@ sequenceDiagram
   [Submit and completion §§4–5](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary).**
 - **`request` builds reply correlation on the selected send path and delivers
   the terminal result exactly once.** Request timeout is the time waiting for
-  a reply, and send-stage backpressure is handled by send timeout. The resubmission boundary after route error or timeout is defined by
+  a reply, and send-stage backpressure is handled by send timeout. The timeout budget of a
+  global object request is set by
+  [Submit and completion §§7, 9](../01-execution/01-submit-and-completion.en.md#7-admission-deadline--owner-and-value-rules). The resubmission boundary after route error or timeout is defined by
   [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification). Each language's transport error is converted into one of this
   document's closed framework results — a transport-specific result isn't
   exposed on the public call.

@@ -17,8 +17,8 @@ title: "Socket — STREAM"
 
 STREAM is a [socket](../glossary.en.md#socket) that exchanges raw bytes with
 external peers without zlink framing. It assigns a 4-byte routing ID—a byte
-sequence that identifies one connection—to each connection. Before bind or
-connect, the application selects a receive mode; it selects a peer by routing
+sequence that identifies one connection—to each connection. STREAM is a bind-only
+socket. Before bind, the application selects a receive mode; it selects a peer by routing
 ID when sending and reads the source routing ID from receive results.
 
 STREAM does not interpret application payloads or higher-level protocol
@@ -39,17 +39,16 @@ The following documents own the related contracts.
 ```c
 ZLINK_EXPORT void *zlink_socket (void *context_, zlink_socket_type_t type_);
 ZLINK_EXPORT zlink_bind_result_t zlink_bind (void *s_, const char *addr_);
-ZLINK_EXPORT zlink_connect_result_t zlink_connect (void *s_, const char *addr_);
 ZLINK_EXPORT zlink_close_result_t zlink_close (void *s_);
 
 typedef enum zlink_stream_option_t
 {
     ZLINK_STREAM_OPT_NOTIFY    = 0x3501, // RAW-mode connect/disconnect notification records (int 0|1)
-    ZLINK_STREAM_OPT_RECV_MODE = 0x3502  // zlink_stream_recv_mode_t, set before first bind/connect
+    ZLINK_STREAM_OPT_RECV_MODE = 0x3502  // zlink_stream_recv_mode_t, set before first bind
 } zlink_stream_option_t;
 
 typedef enum zlink_stream_recv_mode_t {
-  ZLINK_STREAM_RECV_MODE_UNSPECIFIED = 0, // Initial value; bind/connect is not allowed
+  ZLINK_STREAM_RECV_MODE_UNSPECIFIED = 0, // Initial value; bind is not allowed
   ZLINK_STREAM_RECV_MODE_RAW = 1,         // Use zlink_recv()
   ZLINK_STREAM_RECV_MODE_PACKET = 2       // Use zlink_stream_recv_packet()
 } zlink_stream_recv_mode_t;
@@ -71,9 +70,10 @@ to `UNSPECIFIED`. The setter accepts only the exact enum size and `RAW` or `PACK
 zero-length data records, whose source routing IDs identify the affected
 clients. The default is 0, and it is used only in RAW mode.
 
-Bind without selecting a mode fails with `ZLINK_BIND_INVALID_ARGUMENT` and `EINVAL` without endpoint
-side effects; connect fails with `ZLINK_CONNECT_INVALID_ARGUMENT` and `EINVAL` without side effects.
-A failed bind or connect does not freeze the mode. After the first successful bind or connect, the
+Calling `zlink_connect()` on STREAM fails without side effects, whatever the mode, with
+`ZLINK_CONNECT_NOT_SUPPORTED` and `ENOTSUP`. Bind without selecting a mode fails with
+`ZLINK_BIND_INVALID_ARGUMENT` and `EINVAL` without endpoint side effects. A failed bind does not
+freeze the mode. After the first successful bind, the
 mode setter and NOTIFY setter fail with `ZLINK_CONFIG_INVALID_STATE` and `EBUSY`, even when setting
 the existing value.
 
@@ -87,7 +87,7 @@ owns the contract for each option.
 
 ## 3. Receive modes
 
-One STREAM handle explicitly selects one of the following modes before bind or connect.
+One STREAM handle explicitly selects one of the following modes before bind.
 
 | When to use it | Receive mode | Activation | Delivery form |
 |---|---|---|---|
@@ -262,8 +262,8 @@ described above remain in effect. A STREAM socket monitor does not set
 ## 9. Peer routing ID and connection termination
 
 The public routing ID for STREAM is the 4-byte connection ID that Core assigns
-to each connection. Connections accepted through `zlink_bind()` and connections
-created through `zlink_connect()` both receive their ID from the local socket. Passing this ID to `zlink_disconnect_rid()` requests
+to each connection. Each connection accepted through `zlink_bind()` receives its ID
+from the local socket. Passing this ID to `zlink_disconnect_rid()` requests
 termination of that connection. A routing ID that is not 4 bytes fails as an
 invalid argument. [Socket Common](README.en.md) owns the contract for
 `zlink_disconnect_rid()` itself; [§10 Internals](#10-internals) explains how
@@ -438,16 +438,17 @@ Verify the following through the public surface only: STREAM function calls,
 completion pull, return results and errno values, and monitor events. Each
 item maps to one test.
 
-**Creation, bind/connect, and receive mode**
+**Creation, bind, and receive mode**
 
-- Bind and connect in the default `UNSPECIFIED` state fail without side effects as
-  `ZLINK_BIND_INVALID_ARGUMENT` with `EINVAL` and `ZLINK_CONNECT_INVALID_ARGUMENT` with `EINVAL`,
-  respectively.
-- Selecting RAW before bind or connect succeeds and permits only `zlink_recv()`; PACKET recv
+- `zlink_connect()` fails without side effects, whatever the mode, with
+  `ZLINK_CONNECT_NOT_SUPPORTED` and `ENOTSUP`.
+- Bind in the default `UNSPECIFIED` state fails without side effects with
+  `ZLINK_BIND_INVALID_ARGUMENT` and `EINVAL`.
+- Selecting RAW before bind succeeds and permits only `zlink_recv()`; PACKET recv
   returns `ZLINK_RECV_NOT_SUPPORTED` with `ENOTSUP`.
-- Selecting PACKET before bind or connect succeeds and permits only `zlink_stream_recv_packet()`;
+- Selecting PACKET before bind succeeds and permits only `zlink_stream_recv_packet()`;
   raw recv returns `ZLINK_RECV_NOT_SUPPORTED` with `ENOTSUP`.
-- A failed bind or connect does not freeze the mode. After the first successful bind or connect, the
+- A failed bind does not freeze the mode. After the first successful bind, the
   mode and NOTIFY setters return `ZLINK_CONFIG_INVALID_STATE` with `EBUSY`, even for the same value.
 - Whichever setter would combine PACKET with `NOTIFY=1` returns `ZLINK_CONFIG_NOT_SUPPORTED` with
   `ENOTSUP` and preserves the previous state.

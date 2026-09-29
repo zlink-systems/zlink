@@ -46,7 +46,7 @@ This form follows these design intentions.
 ## 3. Packet receive framing (PACKET mode)
 
 To receive framed packets, the application selects `ZLINK_STREAM_RECV_MODE_PACKET`
-before the first successful bind or connect. In PACKET mode, zlink parses length-prefixed
+before the first successful bind. In PACKET mode, zlink parses length-prefixed
 packet framing instead of a transparent stream. The byte layout on the wire is as follows.
 
 ```
@@ -117,8 +117,8 @@ connections from external clients, and monitor events). Each item maps to one te
   contract.
 
 **PACKET mode**
-- When `ZLINK_STREAM_RECV_MODE_PACKET` is selected before the first successful bind or
-  connect, length-prefixed packet framing (two-byte Big Endian `header_size`, four-byte
+- When `ZLINK_STREAM_RECV_MODE_PACKET` is selected before the first successful bind,
+  length-prefixed packet framing (two-byte Big Endian `header_size`, four-byte
   Big Endian `body_size`, followed by header and body) is parsed instead of a transparent
   stream, and `zlink_stream_recv_packet()` returns the header and body as separate
   `zlink_msg_t` values.
