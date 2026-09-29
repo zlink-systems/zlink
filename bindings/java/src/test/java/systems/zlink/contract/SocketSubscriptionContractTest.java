@@ -47,6 +47,21 @@ public class SocketSubscriptionContractTest {
         }
     }
 
+    // Core reports a short query buffer as CONFIG_BUFFER_TOO_SMALL (ENOBUFS)
+    // with the needed length; the binding grows on that result.
+    @Test
+    public void subscriptionAtGrowsOnCoreBufferTooSmall() {
+        TestSupport.assumeNative();
+
+        try (Context ctx = Zlink.createContext();
+             SubSocket sub = ctx.createSubSocket()) {
+            String filter = "f".repeat(200);
+            sub.setSubscription(filter);
+            assertEquals(filter, sub.subscriptionAt(0)
+                .map(SubscriptionEntry::filter).orElseThrow());
+        }
+    }
+
     @Test
     public void publishUsesCanonicalTopicPath() throws Exception {
         TestSupport.assumeNative();

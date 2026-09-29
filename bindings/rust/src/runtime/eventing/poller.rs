@@ -6,7 +6,7 @@ use std::os::windows::io::RawSocket as RawFd;
 use std::sync::Arc;
 
 use crate::SocketMonitor;
-use crate::error::{CloseError, ConfigError, RecvError, ZlinkError};
+use crate::error::{CloseError, ConfigError, RecvError, RecvResult, ZlinkError};
 use crate::ffi;
 use crate::internal::{PollerSocketRegistration, PollerStorage, TimerStorage};
 use crate::native_errors::{
@@ -402,17 +402,14 @@ impl TimerStorage {
         check_config_rc(unsafe { ffi::zlink_timer_stop(self.handle) })
     }
 
-    /// Receive a timer fire count. Returns `Ok(None)` when no data is available (EAGAIN).
+    /// Receive a timer fire count. Returns `Ok(None)` when Core reports `RECV_NO_DATA`.
     pub(crate) fn recv(&self) -> Result<Option<u64>, RecvError> {
         let mut count = 0u64;
         let rc = unsafe { ffi::zlink_timer_recv(self.handle, &mut count) };
-        if rc != 0 {
-            let errno = last_errno();
-            if errno == libc::EAGAIN {
-                return Ok(None);
-            }
-            return Err(check_recv_rc(rc).unwrap_err());
+        if rc == RecvResult::NoData as i32 {
+            return Ok(None);
         }
+        check_recv_rc(rc)?;
         Ok(Some(count))
     }
 }

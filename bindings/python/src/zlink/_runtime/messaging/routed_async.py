@@ -13,12 +13,13 @@ from ..._native.ffi import (
     ZLINK_COMPLETION_WRITABLE,
     ZLINK_DONTWAIT,
     ZLINK_SEND_ADMITTED,
-    ZLINK_SEND_TERMINAL,
+    ZLINK_SEND_NOT_FOUND,
+    ZLINK_SEND_NOT_CONNECTED,
     ZlinkCompletion,
     ZlinkMsg,
     lib,
 )
-from ...contracts.errors.codes import ConfigResult, ErrorCode
+from ...contracts.errors.codes import ConfigResult
 from ...contracts.errors.errors import (
     ConfigError,
     RecvError,
@@ -661,21 +662,6 @@ class CompletionOwner:
             typed_result = int(result)
         return SubmitError(typed_result, int(native_errno))
 
-    @staticmethod
-    def _terminal_submit_error(native_errno):
-        native_errno = int(native_errno) or errno.EIO
-        if native_errno == errno.ENOENT:
-            result = SubmitResult.NOT_FOUND
-        elif native_errno in (
-            errno.ECANCELED,
-            getattr(errno, "ESHUTDOWN", errno.ECANCELED),
-            int(ErrorCode.ETERM),
-        ):
-            result = SubmitResult.TERMINATED
-        else:
-            result = SubmitResult.NOT_ADMITTED
-        return SubmitError(result, native_errno)
-
     def _capture_writable(self, entry, completion):
         completion_id = int(completion.completion_id)
         context = int(completion.user_context or 0)
@@ -697,8 +683,10 @@ class CompletionOwner:
         if kind != ZLINK_COMPLETION_WRITABLE or context != entry.context:
             entry.fail(SubmitError(SubmitResult.INTERNAL_ERROR, errno.EPROTO))
             return False
-        if send_result == ZLINK_SEND_TERMINAL:
-            entry.fail(self._terminal_submit_error(terminal_errno))
+        if send_result in (ZLINK_SEND_NOT_FOUND, ZLINK_SEND_NOT_CONNECTED):
+            result = (SubmitResult.NOT_FOUND if send_result == ZLINK_SEND_NOT_FOUND
+                      else SubmitResult.NOT_CONNECTED)
+            entry.fail(SubmitError(result, terminal_errno))
             return False
         if send_result != ZLINK_SEND_ADMITTED or terminal_errno != 0:
             entry.fail(SubmitError(SubmitResult.INTERNAL_ERROR, errno.EPROTO))

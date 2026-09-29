@@ -126,6 +126,19 @@ void fixture_writable(uint64_t id, uintptr_t context, const char *rid)
     memcpy(record->peer_rid.data, rid, size);
 }
 
+void fixture_writable_result(uint64_t id, uintptr_t context, const char *rid,
+                             int result, int terminal_errno)
+{
+    zlink_completion_t *record = append_record(id, context);
+    record->kind = ZLINK_COMPLETION_WRITABLE;
+    record->send_result = (zlink_send_complete_result_t) result;
+    record->send_terminal_errno = terminal_errno;
+    size_t size = strlen(rid);
+    assert(size <= sizeof(record->peer_rid.data));
+    record->peer_rid.size = (uint8_t) size;
+    memcpy(record->peer_rid.data, rid, size);
+}
+
 void fixture_request(uint64_t id, uintptr_t context)
 {
     zlink_completion_t *record = append_record(id, context);

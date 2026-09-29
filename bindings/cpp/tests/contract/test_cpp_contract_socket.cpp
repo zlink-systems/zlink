@@ -875,6 +875,20 @@ void test_pair_ipc_large_message_shutdown ()
     assert (inbound.parts ()[0].size () == payload_size);
 }
 
+// Core reports a short subscription query buffer as CONFIG_BUFFER_TOO_SMALL
+// (ENOBUFS) and writes the needed length; the binding grows on that result.
+void test_subscription_at_grows_on_core_buffer_too_small ()
+{
+    zlink::context_t ctx;
+    zlink::sub_socket_t subscriber (ctx);
+    const std::string filter (300, 'f');
+    subscriber.set_subscription (filter);
+
+    const zlink::subscription_filter_t entry = subscriber.subscription_at (0);
+    assert (entry.filter == filter);
+    subscriber.close ();
+}
+
 } // namespace
 
 int main ()
@@ -894,6 +908,7 @@ int main ()
     test_pair_multipart_invalid_part_returns_lvalues ();
     test_concurrent_pair_multipart_records_remain_atomic ();
     test_publisher_synchronous_multipart ();
+    test_subscription_at_grows_on_core_buffer_too_small ();
 #if !defined(_WIN32)
     test_pair_ipc_large_message_shutdown ();
 #endif

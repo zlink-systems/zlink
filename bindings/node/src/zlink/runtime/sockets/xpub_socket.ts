@@ -29,7 +29,7 @@ export class XPubSocket extends PublisherSocket {
         ? requireNative().socketTrySubscriptionEvent(this.receiveHandle()) as { routingId?: Buffer | null; topic: string; subscribed: boolean } | null
         : requireNative().socketSubscriptionEvent(this.receiveHandle(), flags | 0) as { routingId?: Buffer | null; topic: string; subscribed: boolean } | null;
     } catch (error) {
-      throw recvNativeError(error, flags, 'subscription event recv failed');
+      throw recvNativeError(error, 'subscription event recv failed');
     }
     if (!raw) {
       return hasResult ? false : null;

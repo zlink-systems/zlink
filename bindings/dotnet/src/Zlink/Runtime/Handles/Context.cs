@@ -67,9 +67,8 @@ internal sealed class Context : NativeOwner, IContext
     {
         EnsureNotDisposed();
         var rc = NativeMethods.zlink_ctx_shutdown(Handle);
-        if (rc < 0)
-            throw ZlinkException.CreateCloseException(
-                NativeMethods.GetLastPInvokeError());
+        if (rc != 0)
+            throw ZlinkException.CreateCloseException((CloseResult)rc);
     }
 
     public void RecalculateAutoHwm()
@@ -77,8 +76,7 @@ internal sealed class Context : NativeOwner, IContext
         EnsureNotDisposed();
         var rc = NativeMethods.zlink_ctx_auto_hwm_recalculate(Handle);
         if (rc != 0)
-            throw ZlinkException.CreateConfigException(
-                NativeMethods.GetLastPInvokeError());
+            throw ZlinkException.CreateConfigException((ConfigResult)rc);
     }
 
     public unsafe CoreHwmBudgetSnapshot GetCoreHwmBudgetSnapshot()
@@ -92,8 +90,7 @@ internal sealed class Context : NativeOwner, IContext
         var rc = NativeMethods.zlink_ctx_get_auto_hwm_budget_snapshot(Handle,
             ref native);
         if (rc != 0)
-            throw ZlinkException.CreateConfigException(
-                NativeMethods.GetLastPInvokeError());
+            throw ZlinkException.CreateConfigException((ConfigResult)rc);
 
         var reserved = new ulong[8];
         for (var index = 0; index < reserved.Length; ++index)
@@ -150,8 +147,7 @@ internal sealed class Context : NativeOwner, IContext
         EnsureNotDisposed();
         var rc = NativeMethods.zlink_ctx_reset_auto_hwm_budget_metrics(Handle);
         if (rc != 0)
-            throw ZlinkException.CreateConfigException(
-                NativeMethods.GetLastPInvokeError());
+            throw ZlinkException.CreateConfigException((ConfigResult)rc);
     }
 
     public void Dispose()
@@ -181,8 +177,7 @@ internal sealed class Context : NativeOwner, IContext
         EnumValidation.EnsureContextOption(option, nameof(option));
         var rc = NativeMethods.zlink_ctx_set(Handle, (int)option, value);
         if (rc != 0)
-            throw ZlinkException.CreateConfigException(
-                NativeMethods.GetLastPInvokeError());
+            throw ZlinkException.CreateConfigException((ConfigResult)rc);
     }
 
     internal int GetOption(ContextOption option)

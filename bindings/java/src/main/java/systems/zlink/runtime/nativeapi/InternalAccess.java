@@ -7,8 +7,6 @@ import systems.zlink.internal.ContractAccess;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.ContextOption;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.errors.ZlinkException;
-import systems.zlink.contracts.errors.ErrorCategory;
 import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.eventing.ZlinkTimer;
 import systems.zlink.contracts.messaging.Message;
@@ -487,16 +485,6 @@ public final class InternalAccess {
 
     public static byte[] routingIdTrustedBytes(RoutingId routingId) {
         return ContractAccess.routingIdTrustedBytes(routingId);
-    }
-
-    public static ZlinkException zlinkExceptionFromLastError(
-            ErrorCategory category) {
-        return ZlinkException.fromErrno(category, Native.errno());
-    }
-
-    public static ZlinkException zlinkExceptionFromErrno(ErrorCategory category,
-                                                         int errno) {
-        return ZlinkException.fromErrno(category, errno);
     }
 
     private static ContextAccess contextAccess() {

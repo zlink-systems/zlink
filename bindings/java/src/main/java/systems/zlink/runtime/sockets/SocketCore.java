@@ -71,7 +71,8 @@ final class SocketCore {
             MemorySegment addr = arena.allocateFrom(endpoint, StandardCharsets.UTF_8);
             int rc = Native.bind(socket.handle(), addr);
             if (rc != 0)
-                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.BIND);
+                throw new systems.zlink.contracts.errors.ZlinkBindException(
+                    systems.zlink.contracts.errors.BindResult.fromValue(rc), Native.errno());
         }
     }
 
@@ -80,7 +81,8 @@ final class SocketCore {
             MemorySegment addr = arena.allocateFrom(endpoint, StandardCharsets.UTF_8);
             int rc = Native.connect(socket.handle(), addr);
             if (rc != 0)
-                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONNECT);
+                throw new systems.zlink.contracts.errors.ZlinkConnectException(
+                    systems.zlink.contracts.errors.ConnectResult.fromValue(rc), Native.errno());
         }
     }
 
@@ -89,7 +91,8 @@ final class SocketCore {
             MemorySegment addr = arena.allocateFrom(endpoint, StandardCharsets.UTF_8);
             int rc = Native.unbind(socket.handle(), addr);
             if (rc != 0)
-                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONNECT);
+                throw new systems.zlink.contracts.errors.ZlinkConnectException(
+                    systems.zlink.contracts.errors.ConnectResult.fromValue(rc), Native.errno());
         }
     }
 
@@ -98,7 +101,8 @@ final class SocketCore {
             MemorySegment addr = arena.allocateFrom(endpoint, StandardCharsets.UTF_8);
             int rc = Native.disconnect(socket.handle(), addr);
             if (rc != 0)
-                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONNECT);
+                throw new systems.zlink.contracts.errors.ZlinkConnectException(
+                    systems.zlink.contracts.errors.ConnectResult.fromValue(rc), Native.errno());
         }
     }
 
@@ -115,7 +119,8 @@ final class SocketCore {
             }
             int rc = Native.disconnectRid(socket.handle(), nativeRid);
             if (rc != 0)
-                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONNECT);
+                throw new systems.zlink.contracts.errors.ZlinkConnectException(
+                    systems.zlink.contracts.errors.ConnectResult.fromValue(rc), Native.errno());
         }
     }
 

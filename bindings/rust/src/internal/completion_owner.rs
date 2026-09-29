@@ -20,9 +20,7 @@ use crate::error::{
 };
 use crate::ffi;
 use crate::message::Message;
-use crate::native_errors::{
-    check_recv_rc, request_error_from_result, send_terminal_error, submit_error_from_errno,
-};
+use crate::native_errors::{check_recv_rc, request_error_from_result};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CompletionEntryKind {
@@ -328,7 +326,10 @@ impl CompletionEntry {
                     if self.kind == CompletionEntryKind::SendRetry || state.awaiting_writable {
                         CompletionOutcome::Writable {
                             completion_id: state.completion_id,
-                            result: Err(submit_error_from_errno(libc::ESHUTDOWN)),
+                            result: Err(SubmitError::new(
+                                SubmitResult::Terminated,
+                                libc::ESHUTDOWN,
+                            )),
                         }
                     } else {
                         CompletionOutcome::Request(Err(RequestError::new(
@@ -697,19 +698,25 @@ impl CompletionOwner {
 fn writable_outcome(
     kind: ffi::zlink_completion_kind_t,
     completion_id: u64,
-    send_result: ffi::zlink_send_complete_result_t,
+    send_result: i32,
     send_terminal_errno: i32,
 ) -> CompletionOutcome {
     let result = if kind != ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE {
         Err(SubmitError::new(SubmitResult::InternalError, libc::EPROTO))
-    } else if send_result == ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED
+    } else if send_result == ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED as i32
         && send_terminal_errno == 0
     {
         Ok(())
-    } else if send_result == ffi::zlink_send_complete_result_t::ZLINK_SEND_TERMINAL
-        && send_terminal_errno != 0
-    {
-        Err(send_terminal_error(send_terminal_errno))
+    } else if send_result == ffi::zlink_send_complete_result_t::ZLINK_SEND_NOT_FOUND as i32 {
+        Err(SubmitError::new(
+            SubmitResult::NotFound,
+            send_terminal_errno,
+        ))
+    } else if send_result == ffi::zlink_send_complete_result_t::ZLINK_SEND_NOT_CONNECTED as i32 {
+        Err(SubmitError::new(
+            SubmitResult::NotConnected,
+            send_terminal_errno,
+        ))
     } else {
         Err(SubmitError::new(SubmitResult::InternalError, libc::EPROTO))
     };
@@ -902,7 +909,7 @@ mod tests {
         let mut completion = ffi::zlink_completion_t::empty();
         completion.kind = ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE;
         completion.completion_id = 41;
-        completion.send_result = ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED;
+        completion.send_result = ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED as i32;
         entry.capture(&mut completion);
 
         let waker = Waker::noop();
@@ -918,7 +925,7 @@ mod tests {
         let mut wrong = ffi::zlink_completion_t::empty();
         wrong.kind = ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE;
         wrong.completion_id = 42;
-        wrong.send_result = ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED;
+        wrong.send_result = ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED as i32;
         entry.capture(&mut wrong);
 
         let waker = Waker::noop();
@@ -927,7 +934,7 @@ mod tests {
         let mut expected = ffi::zlink_completion_t::empty();
         expected.kind = ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE;
         expected.completion_id = 41;
-        expected.send_result = ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED;
+        expected.send_result = ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED as i32;
         entry.capture(&mut expected);
         assert!(matches!(entry.poll_writable(waker), Poll::Ready(Ok(()))));
     }
@@ -944,7 +951,8 @@ mod tests {
                 // Deliberately vary Core-owned metadata: only the wait token
                 // determines which packet resumes in the binding.
                 completion.peer_rid = *RoutingId::from(b"core-peer").as_raw();
-                completion.send_result = ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED;
+                completion.send_result =
+                    ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED as i32;
 
                 if capture_first {
                     entry.capture(&mut completion);
@@ -991,7 +999,7 @@ mod tests {
             completion.kind = ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE;
             completion.completion_id = token;
             completion.peer_rid = *target.as_raw();
-            completion.send_result = ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED;
+            completion.send_result = ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED as i32;
             entry.capture(&mut completion);
             assert!(matches!(entry.poll_writable(waker), Poll::Ready(Ok(()))));
         }
@@ -1006,7 +1014,7 @@ mod tests {
         let mut writable = ffi::zlink_completion_t::empty();
         writable.kind = ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE;
         writable.completion_id = 54;
-        writable.send_result = ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED;
+        writable.send_result = ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED as i32;
         entry.capture(&mut writable);
         assert!(matches!(entry.poll_writable(waker), Poll::Ready(Ok(()))));
 
@@ -1044,26 +1052,37 @@ mod tests {
 
     #[test]
     fn terminal_writable_maps_to_a_terminal_submit_error() {
-        for (errno, expected) in [
-            (libc::ESHUTDOWN, SubmitResult::Terminated),
-            (libc::ENOENT, SubmitResult::NotFound),
-            (156_384_765, SubmitResult::Terminated),
+        for (result, errno, expected) in [
+            (
+                ffi::zlink_send_complete_result_t::ZLINK_SEND_NOT_FOUND as i32,
+                libc::ENOENT,
+                SubmitResult::NotFound,
+            ),
+            (
+                ffi::zlink_send_complete_result_t::ZLINK_SEND_NOT_CONNECTED as i32,
+                libc::ENOTCONN,
+                SubmitResult::NotConnected,
+            ),
+            (999, libc::ENOENT, SubmitResult::InternalError),
         ] {
-            let entry = CompletionEntry::new(CompletionEntryKind::SendRetry);
-            entry.publish_writable(61);
-            let mut completion = ffi::zlink_completion_t::empty();
-            completion.kind = ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE;
-            completion.completion_id = 61;
-            completion.send_result = ffi::zlink_send_complete_result_t::ZLINK_SEND_TERMINAL;
-            completion.send_terminal_errno = errno;
-            entry.capture(&mut completion);
+            for kind in [CompletionEntryKind::SendRetry, CompletionEntryKind::Request] {
+                let entry = CompletionEntry::new(kind);
+                entry.publish_writable(61);
+                let mut completion = ffi::zlink_completion_t::empty();
+                completion.kind = ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE;
+                completion.completion_id = 61;
+                completion.send_result = result;
+                completion.send_terminal_errno = errno;
+                entry.capture(&mut completion);
 
-            let waker = Waker::noop();
-            assert!(matches!(
-                entry.poll_writable(waker),
-                Poll::Ready(Err(error))
-                    if error.code() == expected && error.native_errno() == errno
-            ));
+                let waker = Waker::noop();
+                assert!(matches!(
+                    entry.poll_writable(waker),
+                    Poll::Ready(Err(error))
+                        if error.code() == expected
+                            && error.native_errno() == if expected == SubmitResult::InternalError { libc::EPROTO } else { errno }
+                ));
+            }
         }
     }
 

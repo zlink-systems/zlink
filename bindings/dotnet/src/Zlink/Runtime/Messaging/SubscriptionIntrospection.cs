@@ -7,9 +7,6 @@ namespace Systems.Zlink;
 
 internal static class SubscriptionIntrospection
 {
-    private const int Enoent = 2;
-    private const int Esrch = 3;
-
     internal static unsafe SubscriptionEntry? At(IntPtr handle, int index)
     {
         if (index < 0)
@@ -29,18 +26,15 @@ internal static class SubscriptionIntrospection
         nuint length = 0;
         var rc = NativeMethods.zlink_subscription_at(handle, index,
             IntPtr.Zero, ref length, out var isPattern);
-        if (rc != 0 && length == 0)
-        {
-            if (IsMissingSubscription())
-                return false;
-        }
+        if (rc == (int)ConfigResult.NotFound)
+            return false;
 
         var buffer = new byte[checked((int)length)];
         if (buffer.Length == 0)
         {
             rc = NativeMethods.zlink_subscription_at(handle, index,
                 IntPtr.Zero, ref length, out isPattern);
-            if (rc != 0 && IsMissingSubscription())
+            if (rc == (int)ConfigResult.NotFound)
                 return false;
             ZlinkException.ThrowConfigIfError(rc);
 
@@ -54,7 +48,7 @@ internal static class SubscriptionIntrospection
                 (IntPtr)ptr, ref length, out isPattern);
         }
 
-        if (rc != 0 && IsMissingSubscription())
+        if (rc == (int)ConfigResult.NotFound)
             return false;
         ZlinkException.ThrowConfigIfError(rc);
 
@@ -62,10 +56,5 @@ internal static class SubscriptionIntrospection
             Encoding.UTF8.GetString(buffer, 0, checked((int)length)),
             isPattern != 0);
         return true;
-    }
-
-    private static bool IsMissingSubscription()
-    {
-        return NativeMethods.GetLastPInvokeError() is Enoent or Esrch;
     }
 }

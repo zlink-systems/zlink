@@ -47,11 +47,24 @@ int request_errno (request_result_t result_) noexcept
 
 submit_result_t send_terminal_result (int err_) noexcept
 {
-    if (err_ == ENOENT)
-        return submit_result_t::not_found;
     if (err_ == ETERM || err_ == ESHUTDOWN)
         return submit_result_t::terminated;
     return submit_result_t::internal_error;
+}
+
+submit_error_t send_completion_error (zlink_send_complete_result_t result_,
+                                      int terminal_errno_) noexcept
+{
+    switch (result_) {
+        case ZLINK_SEND_NOT_FOUND:
+            return submit_error_t (submit_result_t::not_found,
+                                   terminal_errno_);
+        case ZLINK_SEND_NOT_CONNECTED:
+            return submit_error_t (submit_result_t::not_connected,
+                                   terminal_errno_);
+        default:
+            return submit_error_t (submit_result_t::internal_error, EPROTO);
+    }
 }
 
 bool is_lifecycle_errno (int err_) noexcept
@@ -344,11 +357,8 @@ completion_entry_t::capture (zlink_completion_t &completion_) noexcept
         }
 
         if (send_result != ZLINK_SEND_ADMITTED || terminal_errno != 0) {
-            const int error = terminal_errno != 0 ? terminal_errno : EIO;
-            const submit_result_t result = send_result == ZLINK_SEND_TERMINAL
-              ? send_terminal_result (error)
-              : submit_result_t::internal_error;
-            fail_send (std::make_exception_ptr (submit_error_t (result, error)));
+            fail_send (std::make_exception_ptr (
+              send_completion_error (send_result, terminal_errno)));
             return capture_result_t::terminal;
         }
 
@@ -379,15 +389,9 @@ completion_entry_t::capture (zlink_completion_t &completion_) noexcept
         }
         if (completion_.send_result != ZLINK_SEND_ADMITTED
             || completion_.send_terminal_errno != 0) {
-            const int error = completion_.send_terminal_errno != 0
-              ? completion_.send_terminal_errno
-              : EIO;
-            const submit_result_t result =
-              completion_.send_result == ZLINK_SEND_TERMINAL
-                ? send_terminal_result (error)
-                : submit_result_t::internal_error;
             fail_request (std::make_exception_ptr (
-              submit_error_t (result, error)));
+              send_completion_error (completion_.send_result,
+                                     completion_.send_terminal_errno)));
             return capture_result_t::terminal;
         }
 

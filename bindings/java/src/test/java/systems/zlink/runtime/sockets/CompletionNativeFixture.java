@@ -38,6 +38,10 @@ final class CompletionNativeFixture {
         new java.util.concurrent.atomic.AtomicInteger();
     final java.util.concurrent.atomic.AtomicInteger pollerWaitCalls =
         new java.util.concurrent.atomic.AtomicInteger();
+    final java.util.concurrent.atomic.AtomicLong firstWaitErrorOut =
+        new java.util.concurrent.atomic.AtomicLong();
+    final java.util.concurrent.atomic.AtomicLong overlappingWaitErrorOut =
+        new java.util.concurrent.atomic.AtomicLong();
     final CountDownLatch pollerWaitEntered = new CountDownLatch(1);
     final CountDownLatch releasePollerWait = new CountDownLatch(1);
     volatile boolean blockPollerWait;
@@ -289,12 +293,14 @@ final class CompletionNativeFixture {
             return (int) corePollerWait.invokeExact(poller, events, count,
                 timeout, errorOut);
         if (pollerWaitCalls.incrementAndGet() == 1) {
+            firstWaitErrorOut.set(errorOut.address());
             pollerWaitEntered.countDown();
             if (!releasePollerWait.await(TestSupport.DEFAULT_TIMEOUT_MS,
                     TimeUnit.MILLISECONDS))
                 throw new AssertionError("poller wait was not released");
             return 0;
         }
+        overlappingWaitErrorOut.set(errorOut.address());
         errorOut.reinterpret(JAVA_INT.byteSize())
             .set(JAVA_INT, 0, ConfigResult.BUSY.value());
         errno(NativeErrno.EBUSY);
@@ -314,9 +320,9 @@ final class CompletionNativeFixture {
         closedRecords++;
     }
 
-    void writable(Submission submission, int errno) {
+    void writable(Submission submission, int sendResult, int errno) {
         completions.add(new Record(CompletionKind.WRITABLE.value(), submission,
-            errno == 0 ? 0 : 202, errno));
+            sendResult, errno));
     }
 
     void requestResult(Submission submission, RequestResult result) {

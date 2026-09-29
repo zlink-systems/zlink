@@ -18,6 +18,7 @@ void fixture_override_empty_poller_wait_once(void);
 void fixture_override_missing_poller_modify_once(void);
 void fixture_override_poll_failure_once(void);
 void fixture_writable(uint64_t id, uintptr_t context, const char *rid);
+void fixture_writable_result(uint64_t id, uintptr_t context, const char *rid, int result, int terminal_errno);
 void fixture_request(uint64_t id, uintptr_t context);
 const char *fixture_trace(void);
 */
@@ -36,6 +37,13 @@ func Writable(id uint64, context uintptr, rid string) {
 	value := C.CString(rid)
 	defer C.free(unsafe.Pointer(value))
 	C.fixture_writable(C.uint64_t(id), C.uintptr_t(context), value)
+}
+
+func WritableResult(id uint64, context uintptr, rid string, result, terminalErrno int) {
+	value := C.CString(rid)
+	defer C.free(unsafe.Pointer(value))
+	C.fixture_writable_result(C.uint64_t(id), C.uintptr_t(context), value,
+		C.int(result), C.int(terminalErrno))
 }
 
 func Request(id uint64, context uintptr) {

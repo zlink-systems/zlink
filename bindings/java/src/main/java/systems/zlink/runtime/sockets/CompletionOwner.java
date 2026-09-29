@@ -17,8 +17,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.concurrent.locks.ReentrantLock;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.errors.ErrorCategory;
-import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
@@ -43,7 +41,8 @@ import systems.zlink.runtime.nativeapi.NativeSubmitErrors;
 /** Socket-local owner for Core pull completions and writable send retries. */
 final class CompletionOwner implements AutoCloseable {
     private static final int SEND_ADMITTED = 0;
-    private static final int SEND_TERMINAL = 202;
+    private static final int SEND_NOT_FOUND = 801;
+    private static final int SEND_NOT_CONNECTED = 802;
     private static final int RECV_DONT_WAIT = 1;
     private static final CompletionStage<Void> COMPLETED_ADMISSION =
         CompletableFuture.completedStage(null);
@@ -897,20 +896,10 @@ final class CompletionOwner implements AutoCloseable {
         return new ZlinkSubmitException(attempt.result(), attempt.errno());
     }
 
-    private static ZlinkSubmitException terminalSendFailure(int errno) {
-        if (errno != 0) {
-            ZlinkSubmitException mapped =
-                NativeSubmitErrors.submitExceptionOrNull(errno);
-            if (mapped != null) {
-                return mapped;
-            }
-        }
-        return new ZlinkSubmitException(SubmitResult.NOT_ADMITTED, errno);
-    }
-
-    private static ZlinkRequestException terminalRequestFailure(int errno) {
-        return (ZlinkRequestException) ZlinkException.fromErrno(
-            ErrorCategory.REQUEST, errno);
+    private static ZlinkSubmitException writableFailure(int result, int errno) {
+        return new ZlinkSubmitException(
+            result == SEND_NOT_FOUND ? SubmitResult.NOT_FOUND
+                : SubmitResult.NOT_CONNECTED, errno);
     }
 
     private static int timeoutMillis(Duration timeout) {
@@ -1121,14 +1110,14 @@ final class CompletionOwner implements AutoCloseable {
                         || completion.context() != token) {
                     failure = new ZlinkSubmitException(
                         SubmitResult.INTERNAL_ERROR);
-                } else if (completion.sendResult() == SEND_TERMINAL) {
-                    failure = kind == PendingKind.REQUEST
-                        ? terminalRequestFailure(completion.terminalErrno())
-                        : terminalSendFailure(completion.terminalErrno());
+                } else if (completion.sendResult() == SEND_NOT_FOUND
+                           || completion.sendResult() == SEND_NOT_CONNECTED) {
+                    failure = writableFailure(completion.sendResult(),
+                                              completion.terminalErrno());
                 } else if (completion.sendResult() != SEND_ADMITTED) {
                     failure = new ZlinkSubmitException(
                         SubmitResult.INTERNAL_ERROR,
-                        completion.terminalErrno());
+                        NativeErrno.EPROTO);
                 }
             }
             if (failure != null) {
