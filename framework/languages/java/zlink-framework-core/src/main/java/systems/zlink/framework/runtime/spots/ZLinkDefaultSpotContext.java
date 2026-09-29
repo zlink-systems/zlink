@@ -603,10 +603,19 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     }
 
     void closeTimers() {
-        timers.close();
-        actorTimers.values().forEach(ZLinkSpotTimerRegistry::close);
+        assert ZLinkStateLane.assertMayBlock();
+        closeTimersAsync().toCompletableFuture().join();
+    }
+
+    CompletionStage<Void> closeTimersAsync() {
+        List<CompletableFuture<?>> closing = new ArrayList<>();
+        closing.add(timers.closeAsync().toCompletableFuture());
+        actorTimers
+                .values()
+                .forEach(registry -> closing.add(registry.closeAsync().toCompletableFuture()));
         actorTimers.clear();
-        serials.close();
+        return CompletableFuture.allOf(closing.toArray(CompletableFuture[]::new))
+                .thenComposeAsync(ignored -> serials.closeAsync());
     }
 
     @Override
@@ -621,6 +630,15 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     void sealTimerAdmission() {
         timers.freeze();
         actorTimers.values().forEach(ZLinkSpotTimerRegistry::freeze);
+    }
+
+    CompletionStage<Void> sealTimerAdmissionAsync() {
+        List<CompletableFuture<?>> freezes = new ArrayList<>();
+        freezes.add(timers.freezeAsync().toCompletableFuture());
+        actorTimers
+                .values()
+                .forEach(registry -> freezes.add(registry.freezeAsync().toCompletableFuture()));
+        return CompletableFuture.allOf(freezes.toArray(CompletableFuture[]::new));
     }
 
     byte[] freezeTimerRelocationEnvelope() {
@@ -875,7 +893,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     }
 
     CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>> awaitRelocationReadySignal(
-            Supplier<Optional<ZLinkUserSpotRelocationBarrier.Seal>> claim,
+            Supplier<CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>>> claim,
             BooleanSupplier cancelled) {
         Objects.requireNonNull(claim, "claim");
         Objects.requireNonNull(cancelled, "cancelled");
@@ -1056,19 +1074,27 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                     runRelocationReadyCompletion(ZLinkSpotRelocationReadyOutcome.CONTINUED);
             return continued;
         }
-        Optional<ZLinkUserSpotRelocationBarrier.Seal> claimed;
+        CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>> claimed;
         try {
             claimed = Objects.requireNonNull(waiter.claim.get(), "relocation readiness claim");
         } catch (RuntimeException failure) {
             waiter.result.completeExceptionally(failure);
             return CompletableFuture.failedFuture(failure);
         }
-        waiter.result.complete(claimed);
-        CompletionStage<Void> completed =
-                claimed.isPresent()
-                        ? CompletableFuture.completedFuture(null)
-                        : runRelocationReadyCompletion(ZLinkSpotRelocationReadyOutcome.CONTINUED);
-        return completed;
+        return claimed.thenCompose(
+                        result -> {
+                            waiter.result.complete(result);
+                            return result.isPresent()
+                                    ? CompletableFuture.completedFuture(null)
+                                    : runRelocationReadyCompletion(
+                                            ZLinkSpotRelocationReadyOutcome.CONTINUED);
+                        })
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null) {
+                                waiter.result.completeExceptionally(failure);
+                            }
+                        });
     }
 
     private void pollRelocationReadyCancellation(RelocationReadyWaiter waiter) {
@@ -1104,7 +1130,10 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
 
     private <T> T inRelocationStateLane(Supplier<T> work) {
         try {
-            return relocationStateLane.runAsync(work).toCompletableFuture().join();
+            var turn = relocationStateLane.runNowOrQueue(work).toCompletableFuture();
+            // An idle lane ran the turn on this thread; only a pending turn is a wait.
+            assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+            return turn.join();
         } catch (CompletionException failure) {
             Throwable cause = failure.getCause();
             if (cause instanceof RuntimeException runtimeFailure) {
@@ -1118,13 +1147,14 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     }
 
     private static final class RelocationReadyWaiter {
-        private final Supplier<Optional<ZLinkUserSpotRelocationBarrier.Seal>> claim;
+        private final Supplier<CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>>>
+                claim;
         private final BooleanSupplier cancelled;
         private final CompletableFuture<Optional<ZLinkUserSpotRelocationBarrier.Seal>> result =
                 new CompletableFuture<>();
 
         RelocationReadyWaiter(
-                Supplier<Optional<ZLinkUserSpotRelocationBarrier.Seal>> claim,
+                Supplier<CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>>> claim,
                 BooleanSupplier cancelled) {
             this.claim = claim;
             this.cancelled = cancelled;

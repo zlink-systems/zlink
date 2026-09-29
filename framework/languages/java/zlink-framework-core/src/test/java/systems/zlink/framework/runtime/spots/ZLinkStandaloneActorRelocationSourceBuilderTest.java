@@ -15,6 +15,7 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.drain.AsyncDrainProbe;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
@@ -310,6 +311,13 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             assertEquals(0, released.get());
             assertFalse(lateReleased.get());
             prepared.relayCapturedIngress(sourceMachine.get(), timeout).toCompletableFuture().get();
+            AsyncDrainProbe relayProbe = relayProbe(prepared);
+            assertEquals(
+                    accepted.size() + 1,
+                    relayProbe.registered().stream()
+                            .filter(item -> item.name().startsWith("relay:actor:"))
+                            .count());
+            relayProbe.assertDrained();
 
             byte[] stagedTargetRecord =
                     ZLinkAcceptedJournalTestRecords.actor(
@@ -367,7 +375,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             assertEquals("post-freeze-late", targetBackend.replayedPackets.get(1_025));
             assertEquals("target-staged", targetBackend.replayedPackets.getLast());
             assertEquals(List.of("target-staged-reply"), targetIngressReplies);
-            prepared.completeSourceQueueCommit();
+            prepared.completeSourceQueueCommit().toCompletableFuture().get();
             CompletableFuture.allOf(accepted.toArray(CompletableFuture[]::new))
                     .get(3, TimeUnit.SECONDS);
             lateAccepted.get();
@@ -389,6 +397,16 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                                     .get());
             assertEquals(objectGeneration, authority.objectGeneration());
             assertEquals(sourceOwnerGeneration + 1, authority.authorityOwnerGeneration());
+        }
+    }
+
+    private static AsyncDrainProbe relayProbe(Object prepared) {
+        try {
+            var field = prepared.getClass().getDeclaredField("debugProbe");
+            field.setAccessible(true);
+            return (AsyncDrainProbe) field.get(prepared);
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
         }
     }
 

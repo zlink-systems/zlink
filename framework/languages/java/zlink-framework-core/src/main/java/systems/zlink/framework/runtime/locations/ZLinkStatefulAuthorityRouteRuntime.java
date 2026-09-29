@@ -22,6 +22,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -99,13 +100,26 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
     public CompletionStage<Void> reconcile() {
         return scan(Optional.empty(), new HashMap<>())
                 .thenCompose(this::recoverActivations)
-                .thenAccept(
-                        next ->
-                                inStateLane(
-                                        () -> {
-                                            applyCore(next);
-                                            return null;
-                                        }));
+                .thenCompose(this::applyOrdered);
+    }
+
+    private CompletionStage<Void> applyOrdered(Map<String, Applied> next) {
+        CompletableFuture<Void> completed = new CompletableFuture<>();
+        if (!stateLane.tryPost(
+                () ->
+                        CompletableFuture.runAsync(() -> applyCore(next))
+                                .whenComplete(
+                                        (ignored, failure) -> {
+                                            if (failure == null) {
+                                                completed.complete(null);
+                                            } else {
+                                                completed.completeExceptionally(unwrap(failure));
+                                            }
+                                        }))) {
+            completed.completeExceptionally(
+                    new IllegalStateException("authority route lane closed"));
+        }
+        return completed;
     }
 
     private CompletionStage<Map<String, Applied>> scan(
@@ -468,19 +482,24 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
 
     @Override
     public void close() {
-        inStateLane(
-                () -> {
-                    closed = true;
-                    executor.shutdownNow();
-                    applied.values().forEach(this::forget);
-                    applied.clear();
-                    return null;
-                });
+        List<Applied> remaining =
+                inStateLane(
+                        () -> {
+                            closed = true;
+                            executor.shutdownNow();
+                            List<Applied> snapshot = List.copyOf(applied.values());
+                            applied.clear();
+                            return snapshot;
+                        });
+        remaining.forEach(this::forget);
     }
 
     private <T> T inStateLane(java.util.function.Supplier<T> work) {
         try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
+            var turn = stateLane.runNowOrQueue(work).toCompletableFuture();
+            // An idle lane ran the turn on this thread; only a pending turn is a wait.
+            assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+            return turn.join();
         } catch (CompletionException failure) {
             Throwable cause = failure.getCause();
             if (cause instanceof RuntimeException runtimeFailure) {

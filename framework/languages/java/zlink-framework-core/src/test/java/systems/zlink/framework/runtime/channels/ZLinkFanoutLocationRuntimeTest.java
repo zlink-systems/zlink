@@ -50,7 +50,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -231,7 +232,7 @@ final class ZLinkFanoutLocationRuntimeTest {
                         TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos) < 250,
                         "the request deadline must not wait for provider progress");
 
-                Thread.sleep(60);
+                fixture.scheduler.secondTick.get(1, TimeUnit.SECONDS);
                 assertEquals(1, store.listCalls.get());
             } finally {
                 calls.beginClose();
@@ -269,8 +270,7 @@ final class ZLinkFanoutLocationRuntimeTest {
         private final List<ControlledSubscriber> subscribers = new CopyOnWriteArrayList<>();
         private final LinkedBlockingQueue<ControlledSubscriber> created =
                 new LinkedBlockingQueue<>();
-        private final ScheduledExecutorService scheduler =
-                Executors.newSingleThreadScheduledExecutor();
+        private final TickScheduler scheduler = new TickScheduler();
         private final ExecutorService infrastructure = Executors.newVirtualThreadPerTaskExecutor();
         private final ZLinkFanoutLocationRuntime runtime;
 
@@ -338,6 +338,30 @@ final class ZLinkFanoutLocationRuntimeTest {
         }
     }
 
+    private static final class TickScheduler extends ScheduledThreadPoolExecutor {
+        private final AtomicInteger tickCount = new AtomicInteger();
+        private final CompletableFuture<Void> secondTick = new CompletableFuture<>();
+
+        private TickScheduler() {
+            super(1);
+        }
+
+        @Override
+        public ScheduledFuture<?> scheduleAtFixedRate(
+                Runnable command, long initialDelay, long period, TimeUnit unit) {
+            return super.scheduleAtFixedRate(
+                    () -> {
+                        if (tickCount.incrementAndGet() == 2) {
+                            secondTick.complete(null);
+                        }
+                        command.run();
+                    },
+                    initialDelay,
+                    period,
+                    unit);
+        }
+    }
+
     private static final class SaturatingStore extends ZLinkLocationStoreTestAdapter {
         private final CountDownLatch entered = new CountDownLatch(1);
         private final CountDownLatch release = new CountDownLatch(1);
@@ -362,9 +386,7 @@ final class ZLinkFanoutLocationRuntimeTest {
             listCalls.incrementAndGet();
             entered.countDown();
             try {
-                if (!release.await(1, TimeUnit.SECONDS)) {
-                    throw new AssertionError("provider test release was not signalled");
-                }
+                release.await();
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 throw new AssertionError(interrupted);

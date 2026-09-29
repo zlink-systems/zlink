@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -15,6 +16,7 @@ import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext;
 
 import java.time.Duration;
@@ -36,6 +38,49 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkSerialExecutionQueueTest {
+    @Test
+    void synchronousWaitGuardRejectsSerialTurn() throws Exception {
+        assumeTrue(ZLinkStateLane.class.desiredAssertionStatus());
+        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
+        queue.enqueue(
+                        () -> {
+                            assertThrows(AssertionError.class, ZLinkStateLane::assertMayBlock);
+                            return CompletableFuture.completedFuture(null);
+                        })
+                .toCompletableFuture()
+                .get(3, TimeUnit.SECONDS);
+    }
+
+    @Test
+    void suspendedRelocationBoundaryCompletesItsFinishedSignal() throws Exception {
+        LinkedBlockingQueue<Runnable> scheduled = new LinkedBlockingQueue<>();
+        ZLinkSerialExecutionQueue queue =
+                new ZLinkSerialExecutionQueue(
+                        scheduled::add, ZLinkExecutionLanePolicy.spotReturningGate());
+        var boundary = queue.reserveRelocationTurnBoundary().orElseThrow();
+        Runnable drain = scheduled.poll(3, TimeUnit.SECONDS);
+        assertTrue(drain != null);
+        drain.run();
+        boundary.reached().toCompletableFuture().get(3, TimeUnit.SECONDS);
+        boundary.release();
+        boundary.finished().toCompletableFuture().get(3, TimeUnit.SECONDS);
+    }
+
+    @Test
+    void closeReportsEachUnfinishedRelocationBoundary() throws Exception {
+        assumeTrue(ZLinkSerialExecutionQueue.class.desiredAssertionStatus());
+        ZLinkSerialExecutionQueue queue =
+                new ZLinkSerialExecutionQueue(
+                        Runnable::run, ZLinkExecutionLanePolicy.spotReturningGate());
+        var boundary = queue.reserveRelocationTurnBoundary().orElseThrow();
+        boundary.reached().toCompletableFuture().get(3, TimeUnit.SECONDS);
+        AssertionError incomplete = assertThrows(AssertionError.class, queue::close);
+        assertTrue(incomplete.getMessage().contains("relocation boundary:1"));
+        boundary.release();
+        boundary.finished().toCompletableFuture().get(3, TimeUnit.SECONDS);
+        queue.close();
+    }
+
     @Test
     void completedTurnCarrierDoesNotOwnLaterYield() throws Exception {
         ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();

@@ -21,13 +21,37 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 final class ZLinkCompositeRelocationBarrierTest {
     @Test
+    void transitionDependentOperationsExposeAsynchronousCompletion() throws Exception {
+        assertEquals(
+                CompletionStage.class,
+                ZLinkCompositeRelocationBarrier.class
+                        .getMethod("abort", ZLinkCompositeRelocationBarrier.Seal.class)
+                        .getReturnType());
+        ZLinkCompositeRelocationBarrier barrier = new ZLinkCompositeRelocationBarrier();
+        CompletableFuture<Void> pending = new CompletableFuture<>();
+        var transition = ZLinkCompositeRelocationBarrier.class.getDeclaredField("transition");
+        transition.setAccessible(true);
+        transition.set(barrier, pending);
+
+        CompletableFuture<Boolean> abort = barrier.abort(null).toCompletableFuture();
+        assertFalse(abort.isDone());
+        transition.set(barrier, null);
+        pending.complete(null);
+        assertFalse(abort.get(3, TimeUnit.SECONDS));
+    }
+
+    @Test
     void sealsSpotActorAndTimerAsOneGeneration() throws Exception {
         ZLinkSerialExecutionQueue spot = new ZLinkSerialExecutionQueue();
         ZLinkSerialExecutionQueue actor = new ZLinkSerialExecutionQueue();
         ZLinkSerialExecutionQueue timer = new ZLinkSerialExecutionQueue();
         ZLinkCompositeRelocationBarrier barrier = new ZLinkCompositeRelocationBarrier();
 
-        var seal = barrier.trySeal(lanes(spot, actor, timer)).orElseThrow();
+        var seal =
+                barrier.trySeal(lanes(spot, actor, timer))
+                        .toCompletableFuture()
+                        .join()
+                        .orElseThrow();
         assertEquals(1L, seal.generation());
         assertEquals(List.of("spot", "actor:a", "timer:t"), seal.laneIds());
 
@@ -59,12 +83,12 @@ final class ZLinkCompositeRelocationBarrierTest {
                         .toCompletableFuture()
                         .get(3, TimeUnit.SECONDS));
 
-        var committed = barrier.commit(seal).orElseThrow();
+        var committed = barrier.commit(seal).toCompletableFuture().join().orElseThrow();
         CompletableFuture.allOf(spotHeld, actorHeld, timerHeld).get(3, TimeUnit.SECONDS);
         assertEquals(1, committed.get("spot").size());
         assertEquals(1, committed.get("actor:a").size());
         assertEquals(1, committed.get("timer:t").size());
-        assertTrue(barrier.commit(seal).isEmpty());
+        assertTrue(barrier.commit(seal).toCompletableFuture().join().isEmpty());
     }
 
     @Test
@@ -81,7 +105,8 @@ final class ZLinkCompositeRelocationBarrierTest {
         actor.enqueue(() -> actorActive);
         actorExecutor.take().run();
 
-        assertTrue(barrier.trySeal(lanes(spot, actor, timer)).isEmpty());
+        assertTrue(
+                barrier.trySeal(lanes(spot, actor, timer)).toCompletableFuture().join().isEmpty());
         CompletableFuture<Void> spotIngress =
                 spot.enqueue(() -> CompletableFuture.completedFuture(null)).toCompletableFuture();
         spotExecutor.take().run();
@@ -90,9 +115,13 @@ final class ZLinkCompositeRelocationBarrierTest {
 
         actorActive.complete(null);
         actor.awaitQuiescence().toCompletableFuture().get(3, TimeUnit.SECONDS);
-        var seal = barrier.trySeal(lanes(spot, actor, timer)).orElseThrow();
-        assertTrue(barrier.abort(seal));
-        assertFalse(barrier.abort(seal));
+        var seal =
+                barrier.trySeal(lanes(spot, actor, timer))
+                        .toCompletableFuture()
+                        .join()
+                        .orElseThrow();
+        assertTrue(barrier.abort(seal).toCompletableFuture().join());
+        assertFalse(barrier.abort(seal).toCompletableFuture().join());
     }
 
     @Test
@@ -115,16 +144,21 @@ final class ZLinkCompositeRelocationBarrierTest {
                         .toCompletableFuture();
         yielded.get(3, TimeUnit.SECONDS);
 
-        assertTrue(barrier.trySeal(lanes(spot, actor, timer)).isEmpty());
+        assertTrue(
+                barrier.trySeal(lanes(spot, actor, timer)).toCompletableFuture().join().isEmpty());
         remote.complete(null);
         dispatch.get(3, TimeUnit.SECONDS);
         actor.awaitQuiescence().toCompletableFuture().get(3, TimeUnit.SECONDS);
 
-        var seal = barrier.trySeal(lanes(spot, actor, timer)).orElseThrow();
+        var seal =
+                barrier.trySeal(lanes(spot, actor, timer))
+                        .toCompletableFuture()
+                        .join()
+                        .orElseThrow();
         assertThrows(
                 IllegalStateException.class,
                 () -> barrier.runCapture(null, () -> CompletableFuture.completedFuture(null)));
-        assertTrue(barrier.abort(seal));
+        assertTrue(barrier.abort(seal).toCompletableFuture().join());
     }
 
     @Test
@@ -159,9 +193,16 @@ final class ZLinkCompositeRelocationBarrierTest {
         assertFalse(sealing.isDone());
         active.complete(null);
         var seal = sealing.get(3, TimeUnit.SECONDS).orElseThrow();
-        assertEquals(1, barrier.captured(seal).orElseThrow().get("actor:a").size());
+        assertEquals(
+                1,
+                barrier.captured(seal)
+                        .toCompletableFuture()
+                        .join()
+                        .orElseThrow()
+                        .get("actor:a")
+                        .size());
         assertFalse(acceptedRan.get());
-        assertTrue(barrier.abort(seal));
+        assertTrue(barrier.abort(seal).toCompletableFuture().join());
         accepted.get(3, TimeUnit.SECONDS);
         assertTrue(acceptedRan.get());
     }
@@ -221,14 +262,22 @@ final class ZLinkCompositeRelocationBarrierTest {
             completionObserved.get(3, TimeUnit.SECONDS);
             accepted.get(3, TimeUnit.SECONDS);
             assertFalse(quiescent.isDone());
-            assertTrue(barrier.trySeal(lanes(spot, actor, timer)).isEmpty());
+            assertTrue(
+                    barrier.trySeal(lanes(spot, actor, timer))
+                            .toCompletableFuture()
+                            .join()
+                            .isEmpty());
         } finally {
             releaseCompletion.complete(null);
         }
         completionCallback.get(3, TimeUnit.SECONDS);
         acceptedDrain.get(3, TimeUnit.SECONDS);
         quiescent.get(3, TimeUnit.SECONDS);
-        assertTrue(barrier.trySeal(lanes(spot, actor, timer)).isPresent());
+        assertTrue(
+                barrier.trySeal(lanes(spot, actor, timer))
+                        .toCompletableFuture()
+                        .join()
+                        .isPresent());
     }
 
     @Test
@@ -259,8 +308,8 @@ final class ZLinkCompositeRelocationBarrierTest {
 
         remote.complete(null);
         dispatch.get(3, TimeUnit.SECONDS);
-        var seal = sealing.join().orElseThrow();
-        assertTrue(barrier.abort(seal));
+        var seal = sealing.get(3, TimeUnit.SECONDS).orElseThrow();
+        assertTrue(barrier.abort(seal).toCompletableFuture().join());
     }
 
     private static final class ManualExecutor implements Executor {

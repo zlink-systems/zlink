@@ -578,6 +578,17 @@ final class ZLinkActorJoinPrewarmIngressTest {
         }
 
         @Override
+        public CompletionStage<Void> publishAsync(
+                Object actor,
+                ZLinkStandaloneActorRelocationStagingOwner.Request request,
+                long targetOwnerGeneration) {
+            return actors.publishRelocatedActorAsync(
+                    (ZLinkActorRuntime.PreparedTransferredActor) actor,
+                    request.targetSpotId(),
+                    targetOwnerGeneration);
+        }
+
+        @Override
         public CompletionStage<Void> discard(
                 Object actor, ZLinkStandaloneActorRelocationStagingOwner.Request request) {
             return actors.discardRelocatedActor((ZLinkActorRuntime.PreparedTransferredActor) actor);

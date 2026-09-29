@@ -32,19 +32,36 @@ public final class ZLinkClassicFanoutLiveness {
     private final long beaconIntervalNanos;
     private final long publisherTimeoutNanos;
     // Publisher records and the beacon deadline are one C2 state group.
-    private final ZLinkStateLane stateLane = new ZLinkStateLane();
+    private final ZLinkStateLane stateLane;
     private final Map<RoutingId, PublisherState> publishers = new HashMap<>();
     private long nextBeaconNanos;
 
     public ZLinkClassicFanoutLiveness() {
-        this(System.nanoTime());
+        this(
+                new ZLinkStateLane(),
+                DEFAULT_BEACON_INTERVAL,
+                DEFAULT_PUBLISHER_TIMEOUT,
+                System.nanoTime());
     }
 
     public ZLinkClassicFanoutLiveness(long nowNanos) {
-        this(DEFAULT_BEACON_INTERVAL, DEFAULT_PUBLISHER_TIMEOUT, nowNanos);
+        this(new ZLinkStateLane(), DEFAULT_BEACON_INTERVAL, DEFAULT_PUBLISHER_TIMEOUT, nowNanos);
+    }
+
+    public ZLinkClassicFanoutLiveness(ZLinkStateLane ownerLane) {
+        this(ownerLane, DEFAULT_BEACON_INTERVAL, DEFAULT_PUBLISHER_TIMEOUT, System.nanoTime());
     }
 
     ZLinkClassicFanoutLiveness(Duration beaconInterval, Duration publisherTimeout, long nowNanos) {
+        this(new ZLinkStateLane(), beaconInterval, publisherTimeout, nowNanos);
+    }
+
+    private ZLinkClassicFanoutLiveness(
+            ZLinkStateLane ownerLane,
+            Duration beaconInterval,
+            Duration publisherTimeout,
+            long nowNanos) {
+        stateLane = Objects.requireNonNull(ownerLane, "ownerLane");
         Objects.requireNonNull(beaconInterval, "beaconInterval");
         Objects.requireNonNull(publisherTimeout, "publisherTimeout");
         if (beaconInterval.isZero()
@@ -188,8 +205,14 @@ public final class ZLinkClassicFanoutLiveness {
     }
 
     private <T> T inStateLane(Supplier<T> work) {
+        if (stateLane.isOnLane()) {
+            return work.get();
+        }
         try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
+            var turn = stateLane.runNowOrQueue(work).toCompletableFuture();
+            // An idle lane ran the turn on this thread; only a pending turn is a wait.
+            assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+            return turn.join();
         } catch (CompletionException failure) {
             Throwable cause = failure.getCause();
             if (cause instanceof RuntimeException runtimeFailure) {

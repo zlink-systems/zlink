@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.actors;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 import org.junit.jupiter.api.Test;
 
@@ -11,6 +12,7 @@ import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.spots.ZLinkSpotSerialExecutor;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -113,7 +115,8 @@ final class ZLinkActorDispatchSerialsTest {
                                             return CompletableFuture.completedFuture(null);
                                         }));
 
-        active.toCompletableFuture().join();
+        assertTimeoutPreemptively(
+                Duration.ofSeconds(10), () -> active.toCompletableFuture().join());
         dispatches.awaitQuiescence().toCompletableFuture().join();
         assertEquals(1, cleanupCount.get());
     }

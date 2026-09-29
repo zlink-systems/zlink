@@ -1332,6 +1332,18 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         }
 
         @Override
+        public CompletionStage<Void> publishAsync(
+                Object actor,
+                ZLinkStandaloneActorRelocationStagingOwner.Request request,
+                long targetOwnerGeneration) {
+            EVENTS.add("target.publish");
+            return actors.publishRelocatedActorAsync(
+                    (ZLinkActorRuntime.PreparedTransferredActor) actor,
+                    request.targetSpotId(),
+                    targetOwnerGeneration);
+        }
+
+        @Override
         public void prepareBoundSession(
                 Object actor,
                 ZLinkStandaloneActorRelocationStagingOwner.Request request,

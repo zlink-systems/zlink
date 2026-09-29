@@ -12,6 +12,7 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -91,7 +92,10 @@ final class ZLinkActorJoinPrewarmRegistry {
 
     private <T> T inStateLane(Supplier<T> work) {
         try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
+            var turn = stateLane.runNowOrQueue(work).toCompletableFuture();
+            // An idle lane ran the turn on this thread; only a pending turn is a wait.
+            assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+            return turn.join();
         } catch (CompletionException failure) {
             Throwable cause = failure.getCause();
             if (cause instanceof RuntimeException runtimeFailure) throw runtimeFailure;
@@ -206,6 +210,12 @@ final class ZLinkActorJoinPrewarmRegistry {
 
     void release(UUID relocationId) {
         failParkedOutsideLane(inStateLane(() -> releaseOnLane(relocationId)));
+    }
+
+    CompletionStage<Void> releaseAsync(UUID relocationId) {
+        return stateLane
+                .runAsync(() -> releaseOnLane(relocationId))
+                .thenAcceptAsync(ZLinkActorJoinPrewarmRegistry::failParkedOutsideLane);
     }
 
     private List<ParkedMessage> releaseOnLane(UUID relocationId) {

@@ -124,7 +124,10 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
 
     private <T> T inRoutingIdStateLane(Supplier<T> work) {
         try {
-            return routingIdStateLane.runAsync(work).toCompletableFuture().join();
+            var turn = routingIdStateLane.runNowOrQueue(work).toCompletableFuture();
+            // An idle lane ran the turn on this thread; only a pending turn is a wait.
+            assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+            return turn.join();
         } catch (CompletionException failure) {
             Throwable cause = failure.getCause();
             if (cause instanceof RuntimeException runtimeFailure) {

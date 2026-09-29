@@ -8,6 +8,7 @@ import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.drain.AsyncDrainProbe;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapterRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
@@ -189,8 +190,16 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                     if (staged.ingressClosed) {
                         return false;
                     }
-                    staged.pendingIngress.add(
-                            new PendingIngress(acceptedJournalRecord, reply, failure));
+                    PendingIngress ingress =
+                            new PendingIngress(acceptedJournalRecord, reply, failure);
+                    assert staged.debugProbe.expect(
+                                    "temporary:actor:"
+                                            + staged.request().actorId()
+                                            + ":"
+                                            + staged.pendingIngress.size(),
+                                    "standalone Actor staging owner")
+                            != null;
+                    staged.pendingIngress.add(ingress);
                     return true;
                 });
     }
@@ -205,7 +214,15 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                                 return new IllegalStateException(
                                         "standalone Actor staging ingress is closed");
                             }
-                            staged.relayedIngress.add(new PendingIngress(frozenRecord, null, null));
+                            PendingIngress ingress = new PendingIngress(frozenRecord, null, null);
+                            assert staged.debugProbe.expect(
+                                            "relayed:actor:"
+                                                    + staged.request().actorId()
+                                                    + ":"
+                                                    + staged.relayedIngress.size(),
+                                            "standalone Actor staging owner")
+                                    != null;
+                            staged.relayedIngress.add(ingress);
                             return null;
                         });
         if (closed != null) {
@@ -237,17 +254,24 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
             return CompletableFuture.failedFuture(consumed);
         }
         return replayBacklog(
-                        staged, backlog.saved, backlog.relayed, backlog.temporary, backlog.replayer)
+                        staged,
+                        backlog.saved,
+                        backlog.relayed,
+                        backlog.temporary,
+                        backlog.replayer,
+                        backlog.debugProbe)
                 .whenComplete(
-                        (ignored, failure) ->
-                                inStateLane(
-                                        staged,
-                                        () -> {
-                                            staged.replayed = true;
-                                            staged.durableBacklog = null;
-                                            staged.terminal = true;
-                                            return null;
-                                        }));
+                        (ignored, failure) -> {
+                            inStateLane(
+                                    staged,
+                                    () -> {
+                                        staged.replayed = true;
+                                        staged.durableBacklog = null;
+                                        staged.terminal = true;
+                                        return null;
+                                    });
+                            assert backlog.debugProbe.assertDrainedResult();
+                        });
     }
 
     private CompletionStage<Void> replayBacklog(
@@ -255,29 +279,38 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
             List<ZLinkSerialExecutionQueue.QueuedRecord> saved,
             List<PendingIngress> relayed,
             List<PendingIngress> temporary,
-            ZLinkUserSpotAggregateStagingOwner.JournalReplayer replayer) {
+            ZLinkUserSpotAggregateStagingOwner.JournalReplayer replayer,
+            AsyncDrainProbe probe) {
         List<CompletableFuture<Void>> completions = new ArrayList<>();
         for (var queued : saved) {
-            completions.add(
+            CompletionStage<Void> admitted =
                     admitBacklogTurn(
-                                    () ->
-                                            replayer.replay(
-                                                    "actor:" + staged.request().actorId(), queued))
-                            .toCompletableFuture());
+                            () -> replayer.replay("actor:" + staged.request().actorId(), queued));
+            assert probe.completeOn(
+                    admitted,
+                    "journal:actor:" + staged.request().actorId() + ":" + queued.sequence());
+            completions.add(admitted.toCompletableFuture());
         }
+        int relayedIndex = 0;
         for (PendingIngress ingress : relayed) {
-            completions.add(
+            CompletionStage<Void> admitted =
                     admitBacklogTurn(
-                                    () ->
-                                            replayer.replayFrozen(
-                                                    "actor:" + staged.request().actorId(),
-                                                    ingress.record()))
-                            .toCompletableFuture());
+                            () ->
+                                    replayer.replayFrozen(
+                                            "actor:" + staged.request().actorId(),
+                                            ingress.record()));
+            assert probe.completeOn(
+                    admitted, "relayed:actor:" + staged.request().actorId() + ":" + relayedIndex++);
+            completions.add(admitted.toCompletableFuture());
         }
+        int temporaryIndex = 0;
         for (PendingIngress ingress : temporary) {
+            CompletionStage<Void> admitted = admitBacklogTurn(() -> replayIngress(staged, ingress));
+            assert probe.completeOn(
+                    admitted,
+                    "temporary:actor:" + staged.request().actorId() + ":" + temporaryIndex++);
             completions.add(
-                    admitBacklogTurn(() -> replayIngress(staged, ingress))
-                            .whenComplete(
+                    admitted.whenComplete(
                                     (ignored, failure) -> {
                                         if (failure != null && ingress.failure() != null) {
                                             ingress.failure().accept(unwrap(failure));
@@ -315,14 +348,16 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
     }
 
     private CompletionStage<Void> admitBacklogTurn(Supplier<CompletionStage<Void>> turn) {
+        CompletionStage<Void> result;
         try {
-            return backend.admitApplicationJob(turn);
+            result = backend.admitApplicationJob(turn);
         } catch (RuntimeException failure) {
-            return CompletableFuture.failedFuture(failure);
+            result = CompletableFuture.failedFuture(failure);
         }
+        return result;
     }
 
-    DirectJoinReplay closeDirectJoinIngress(Staged staged, byte[] finalRoot) {
+    CompletionStage<DirectJoinReplay> closeDirectJoinIngress(Staged staged, byte[] finalRoot) {
         requireActive(staged);
         var decoded =
                 ZLinkCanonicalActorRelocationEnvelope.decode(
@@ -331,8 +366,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                         staged.request().actorId(),
                         staged.request().restoreSnapshot());
         requireStagingPrefix(staged, decoded);
-        return inStateLane(
-                staged,
+        return staged.stateLane.runAsync(
                 () -> {
                     if (staged.ingressClosed) {
                         throw new IllegalStateException(
@@ -351,7 +385,8 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                 });
     }
 
-    void publishDirectJoinHidden(DirectJoinReplay replay, long targetOwnerGeneration) {
+    CompletionStage<Void> publishDirectJoinHidden(
+            DirectJoinReplay replay, long targetOwnerGeneration) {
         Objects.requireNonNull(replay, "replay");
         Staged staged = replay.staged;
         requireActive(staged);
@@ -359,8 +394,8 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
             throw new IllegalStateException(
                     "direct Join durable backlog publication fence is invalid");
         }
-        backend.publish(staged.actor(), staged.request(), targetOwnerGeneration);
-        staged.markPublished();
+        return backend.publishAsync(staged.actor(), staged.request(), targetOwnerGeneration)
+                .thenRun(staged::markPublished);
     }
 
     void prepareDirectJoinBoundSession(
@@ -428,17 +463,25 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         if (alreadyReplayed != null) {
             return CompletableFuture.failedFuture(alreadyReplayed);
         }
-        return replayBacklog(staged, replay.saved(), replay.relayed(), replay.temporary(), replayer)
+        return replayBacklog(
+                        staged,
+                        replay.saved(),
+                        replay.relayed(),
+                        replay.temporary(),
+                        replayer,
+                        replay.debugProbe)
                 .whenComplete(
-                        (ignored, failure) ->
-                                inStateLane(
-                                        staged,
-                                        () -> {
-                                            staged.replayed = true;
-                                            staged.directBacklog = null;
-                                            staged.terminal = true;
-                                            return null;
-                                        }));
+                        (ignored, failure) -> {
+                            inStateLane(
+                                    staged,
+                                    () -> {
+                                        staged.replayed = true;
+                                        staged.directBacklog = null;
+                                        staged.terminal = true;
+                                        return null;
+                                    });
+                            assert replay.debugProbe.assertDrainedResult();
+                        });
     }
 
     private static void requireStagingPrefix(
@@ -541,7 +584,11 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                 ingress.failure().accept(aborted);
             }
         }
-        return backend.discard(staged.actor(), staged.request());
+        return backend.discard(staged.actor(), staged.request())
+                .whenComplete(
+                        (ignored, failure) -> {
+                            assert staged.debugProbe.settleAbortedResult();
+                        });
     }
 
     private void requireActive(Staged staged) {
@@ -553,7 +600,10 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
 
     private static <T> T inStateLane(Staged staged, Supplier<T> work) {
         try {
-            return staged.stateLane.runAsync(work).toCompletableFuture().join();
+            var turn = staged.stateLane.runNowOrQueue(work).toCompletableFuture();
+            // An idle lane ran the turn on this thread; only a pending turn is a wait.
+            assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+            return turn.join();
         } catch (java.util.concurrent.CompletionException failure) {
             Throwable cause = failure.getCause();
             if (cause instanceof RuntimeException runtimeFailure) {
@@ -596,6 +646,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         private final ZLinkActivationAdmission.Permit restorePermit;
         private final List<PendingIngress> relayedIngress = new ArrayList<>();
         private final List<PendingIngress> pendingIngress = new ArrayList<>();
+        private AsyncDrainProbe debugProbe;
         private final ZLinkStateLane stateLane = new ZLinkStateLane();
         private DurableBacklog durableBacklog;
         private DirectJoinReplay directBacklog;
@@ -618,6 +669,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
             this.decoded = decoded;
             this.actor = actor;
             this.restorePermit = restorePermit;
+            assert (debugProbe = new AsyncDrainProbe()) != null;
         }
 
         /** The target commit ends the Restore and returns its activation admission. */
@@ -645,6 +697,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         private final List<PendingIngress> relayed;
         private final List<PendingIngress> temporary;
         private final ZLinkUserSpotAggregateStagingOwner.JournalReplayer replayer;
+        private AsyncDrainProbe debugProbe;
         private boolean consumed;
 
         private DurableBacklog(
@@ -658,6 +711,8 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
             this.relayed = List.copyOf(relayed);
             this.temporary = List.copyOf(temporary);
             this.replayer = replayer;
+            assert (debugProbe = staged.debugProbe) != null;
+            assert registerObligations(staged, this.saved, debugProbe);
         }
     }
 
@@ -666,6 +721,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         private final List<ZLinkSerialExecutionQueue.QueuedRecord> saved;
         private final List<PendingIngress> relayed;
         private final List<PendingIngress> temporary;
+        private AsyncDrainProbe debugProbe;
         private boolean replayed;
 
         private DirectJoinReplay(
@@ -677,6 +733,8 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
             this.saved = List.copyOf(saved);
             this.relayed = List.copyOf(relayed);
             this.temporary = List.copyOf(temporary);
+            assert (debugProbe = staged.debugProbe) != null;
+            assert registerObligations(staged, this.saved, debugProbe);
         }
 
         private Staged staged() {
@@ -694,6 +752,19 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         private List<PendingIngress> temporary() {
             return temporary;
         }
+    }
+
+    private static boolean registerObligations(
+            Staged staged,
+            List<ZLinkSerialExecutionQueue.QueuedRecord> saved,
+            AsyncDrainProbe probe) {
+        String actor = staged.request().actorId();
+        for (var record : saved) {
+            probe.expect(
+                    "journal:actor:" + actor + ":" + record.sequence(),
+                    "standalone Actor staging owner");
+        }
+        return true;
     }
 
     private record PendingIngress(
@@ -736,6 +807,12 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                 throw new IllegalArgumentException("target owner generation must be positive");
             }
             publish(actor, request);
+        }
+
+        default CompletionStage<Void> publishAsync(
+                Object actor, Request request, long targetOwnerGeneration) {
+            publish(actor, request, targetOwnerGeneration);
+            return CompletableFuture.completedFuture(null);
         }
 
         default void prepareBoundSession(
@@ -818,6 +895,18 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                 throw new IllegalArgumentException("target owner generation must be positive");
             }
             actors.publishRelocatedActor(
+                    (ZLinkActorRuntime.PreparedTransferredActor) actor,
+                    request.targetSpotId(),
+                    targetOwnerGeneration);
+        }
+
+        @Override
+        public CompletionStage<Void> publishAsync(
+                Object actor, Request request, long targetOwnerGeneration) {
+            if (targetOwnerGeneration <= 0) {
+                throw new IllegalArgumentException("target owner generation must be positive");
+            }
+            return actors.publishRelocatedActorAsync(
                     (ZLinkActorRuntime.PreparedTransferredActor) actor,
                     request.targetSpotId(),
                     targetOwnerGeneration);

@@ -397,7 +397,7 @@ final class ZLinkClientServerM6ARuntimeTest {
     }
 
     @Test
-    void reservedHelloIsConsumedBeforeApplicationDispatch() {
+    void reservedHelloIsConsumedBeforeApplicationDispatch() throws Exception {
         ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
         ZLinkClientServerServerDescriptor descriptor =
                 descriptor("orders", RoutingId.from("server"), 5, 2, "tcp://127.0.0.1:7001", 80);
@@ -405,7 +405,7 @@ final class ZLinkClientServerM6ARuntimeTest {
         byte[] hello =
                 ZLinkClientServerServiceWire.encodeHello(
                         new ZLinkClientServerServiceWire.Hello("orders", "default", 4096));
-        List<Message> reply = new ArrayList<>();
+        CompletableFuture<List<Message>> reply = new CompletableFuture<>();
         Message request = Message.from(hello);
         ZLinkBackendReceived received =
                 new ZLinkBackendReceived(
@@ -414,16 +414,13 @@ final class ZLinkClientServerM6ARuntimeTest {
                         Optional.empty(),
                         Optional.of(1L),
                         List.of(request),
-                        parts -> {
-                            for (Message part : parts) {
-                                reply.add(Message.from(part));
-                            }
-                        },
+                        parts -> reply.complete(parts.stream().map(Message::from).toList()),
                         () -> {});
 
         assertTrue(sockets.tryHandleClientServerControl("orders", router(), received));
-        assertEquals(1, reply.size());
-        try (Message response = reply.get(0)) {
+        List<Message> responses = reply.get(5, TimeUnit.SECONDS);
+        assertEquals(1, responses.size());
+        try (Message response = responses.get(0)) {
             ZLinkClientServerServiceWire.Admit admit =
                     (ZLinkClientServerServiceWire.Admit)
                             ZLinkClientServerServiceWire.decode(response.toByteArray());
@@ -432,7 +429,7 @@ final class ZLinkClientServerM6ARuntimeTest {
     }
 
     @Test
-    void reservedHelloUsesOpaqueDirectReplyPath() {
+    void reservedHelloUsesOpaqueDirectReplyPath() throws Exception {
         ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
         ZLinkClientServerServerDescriptor descriptor =
                 descriptor("orders", RoutingId.from("server"), 5, 2, "tcp://127.0.0.1:7001", 80);
@@ -440,7 +437,7 @@ final class ZLinkClientServerM6ARuntimeTest {
         byte[] hello =
                 ZLinkClientServerServiceWire.encodeHello(
                         new ZLinkClientServerServiceWire.Hello("orders", "default", 4096));
-        List<Message> reply = new ArrayList<>();
+        CompletableFuture<List<Message>> reply = new CompletableFuture<>();
         ControlledRouter router = new ControlledRouter();
         ZLinkBackendReceived received =
                 new ZLinkBackendReceived(
@@ -449,17 +446,14 @@ final class ZLinkClientServerM6ARuntimeTest {
                         Optional.empty(),
                         Optional.empty(),
                         List.of(Message.from(hello)),
-                        parts -> {
-                            for (Message part : parts) {
-                                reply.add(Message.from(part));
-                            }
-                        },
+                        parts -> reply.complete(parts.stream().map(Message::from).toList()),
                         () -> {});
 
         assertTrue(sockets.tryHandleClientServerControl("orders", router, received));
+        List<Message> responses = reply.get(5, TimeUnit.SECONDS);
         assertTrue(router.disconnected.isEmpty());
-        assertEquals(1, reply.size());
-        try (Message response = reply.get(0)) {
+        assertEquals(1, responses.size());
+        try (Message response = responses.get(0)) {
             ZLinkClientServerServiceWire.Admit admit =
                     (ZLinkClientServerServiceWire.Admit)
                             ZLinkClientServerServiceWire.decode(response.toByteArray());

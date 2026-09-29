@@ -8,6 +8,7 @@ import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 import java.util.Objects;
 import java.util.concurrent.CompletionStage;
@@ -45,6 +46,7 @@ public final class ZLinkRedisLocationStore implements ZLinkLocationStore, AutoCl
 
     @Override
     public void close() {
+        assert ZLinkStateLane.assertMayBlock();
         connection.closeAsync().toCompletableFuture().join();
     }
 }

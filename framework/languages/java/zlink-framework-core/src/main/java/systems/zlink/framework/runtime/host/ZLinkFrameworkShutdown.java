@@ -20,7 +20,16 @@ final class ZLinkFrameworkShutdown {
     }
 
     void deferStage(String stage, Supplier<CompletionStage<Void>> action) {
-        actions.push(() -> atStage(stage, action));
+        actions.push(
+                () ->
+                        atStage(
+                                stage,
+                                () ->
+                                        action.get()
+                                                .toCompletableFuture()
+                                                .copy()
+                                                .orTimeout(
+                                                        ACTION_TIMEOUT_SECONDS, TimeUnit.SECONDS)));
     }
 
     static CompletionStage<Void> atStage(String stage, Supplier<CompletionStage<Void>> action) {
@@ -67,7 +76,6 @@ final class ZLinkFrameworkShutdown {
         try {
             return action.get()
                     .toCompletableFuture()
-                    .completeOnTimeout(null, ACTION_TIMEOUT_SECONDS, TimeUnit.SECONDS)
                     .handle(
                             (ignored, error) -> {
                                 if (error != null

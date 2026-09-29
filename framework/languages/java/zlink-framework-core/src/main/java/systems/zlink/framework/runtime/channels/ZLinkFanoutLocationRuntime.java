@@ -111,7 +111,10 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
 
     private <T> T inStateLane(Supplier<T> work) {
         try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
+            var turn = stateLane.runNowOrQueue(work).toCompletableFuture();
+            // An idle lane ran the turn on this thread; only a pending turn is a wait.
+            assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+            return turn.join();
         } catch (CompletionException failure) {
             Throwable cause = failure.getCause();
             if (cause instanceof RuntimeException runtimeFailure) {
@@ -496,7 +499,7 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                 subscriber.setSubscription(topic);
             }
             monitor = monitoring.openSocketMonitor(subscriber);
-            connection = new Connection(descriptor, connectionId, subscriber, monitor);
+            connection = new Connection(descriptor, connectionId, subscriber, monitor, stateLane);
             Connection candidate = connection;
             ZLinkSocketMonitorDrainLoop.start(
                     "zlink-fanout-location-monitor",
@@ -872,6 +875,7 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
 
     @Override
     public void close() {
+        assert ZLinkStateLane.assertMayBlock();
         stop().toCompletableFuture().join();
     }
 
@@ -1010,7 +1014,7 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
         private final String connectionId;
         private final ZLinkBackendSubscriberSocket subscriber;
         private final ZLinkBackendSocketMonitor monitor;
-        private final ZLinkClassicFanoutLiveness liveness = new ZLinkClassicFanoutLiveness();
+        private final ZLinkClassicFanoutLiveness liveness;
         private final CompletableFuture<Void> closeSettlement = new CompletableFuture<>();
         private ConnectionPhase phase = ConnectionPhase.OPENING;
         private boolean nativeReady;
@@ -1020,11 +1024,13 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                 ZLinkFanoutPublisherDescriptor descriptor,
                 String connectionId,
                 ZLinkBackendSubscriberSocket subscriber,
-                ZLinkBackendSocketMonitor monitor) {
+                ZLinkBackendSocketMonitor monitor,
+                ZLinkStateLane ownerLane) {
             this.descriptor = descriptor;
             this.connectionId = connectionId;
             this.subscriber = subscriber;
             this.monitor = monitor;
+            this.liveness = new ZLinkClassicFanoutLiveness(ownerLane);
         }
     }
 }

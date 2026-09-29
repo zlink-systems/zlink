@@ -197,10 +197,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                     context.actorRef().actorId(),
                     deadline,
                     () -> executeDeferred(operationId, deadline),
-                    operation ->
-                            services.actors()
-                                    .submitDeferredJoinBarrier(
-                                            context.actorRef().actorId(), operation),
+                    operation -> services.actors().submitDeferredJoinBarrier(context, operation),
                     () -> context.releaseDeferredJoin(deferred));
         } catch (RuntimeException error) {
             context.releaseDeferredJoin(deferred);
@@ -293,7 +290,14 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                                                         ignored ->
                                                                 applyRemoteActorMigration(result))
                                                 .thenCompose(
-                                                        ignored -> decodeJoinResultAsync(result)))
+                                                        ignored ->
+                                                                localSpot == null
+                                                                        ? decodeJoinResultAsync(
+                                                                                result)
+                                                                        : CompletableFuture
+                                                                                .completedFuture(
+                                                                                        decodeJoinResult(
+                                                                                                result))))
                         .whenComplete((r, e) -> traceJoinReplyReceived(e)));
     }
 
@@ -526,11 +530,6 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                         result.actor(),
                         context.meshName(),
                         result.replyParts());
-        if (!entryTarget && decoded instanceof ZLinkActorJoinOutcome.Accepted) {
-            String joinedSpotId = effectiveJoinedSpotId(result);
-            context.markJoined(
-                    result.actor(), joinedSpotId, services.spotResolver().apply(joinedSpotId));
-        }
         return decoded;
     }
 
@@ -540,11 +539,14 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         if (decoded instanceof ZLinkActorJoinOutcome.Rejected) {
             return CompletableFuture.completedFuture(decoded);
         }
-        return entryTarget
-                ? CompletableFuture.completedFuture(decoded)
-                : services.locationRenewal()
-                        .renew(context.actor(), context.joinedSpotId())
-                        .thenApply(ignored -> decoded);
+        if (entryTarget) {
+            return CompletableFuture.completedFuture(decoded);
+        }
+        String joinedSpotId = effectiveJoinedSpotId(result);
+        context.markJoined(result.actor(), joinedSpotId, services.spotResolver().apply(joinedSpotId));
+        return services.locationRenewal()
+                .renew(context.actor(), context.joinedSpotId())
+                .thenApply(ignored -> decoded);
     }
 
     private void requireJoinCompleted(ZLinkBackendActorJoinResult result) {

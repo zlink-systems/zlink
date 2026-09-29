@@ -79,10 +79,9 @@ final class ZLinkChannelSocketRegistry {
     private final Map<String, ZLinkBackendSubscriberSocket> subscribers = new HashMap<>();
     private final Map<String, ZLinkBackendRouterSocket> routeRouters = new HashMap<>();
     private final Map<String, ClientServerConnection> clientServerConnections = new HashMap<>();
-    private final Map<String, ZLinkClientServerServerDescriptor> clientServerServerDescriptors =
-            new HashMap<>();
+    private volatile Map<String, ZLinkClientServerServerDescriptor> clientServerServerDescriptors =
+            Map.of();
     private final Map<String, Map<String, Long>> clientServerSelectionCurrents = new HashMap<>();
-    private final Map<String, Object> routeSocketLocks = new HashMap<>();
     private final Map<String, ZLinkBackendSpotRouteBridge> spotRouteBridges =
             new ConcurrentHashMap<>();
     private final Map<String, ZLinkInternalSpotNode> spotRouterNodes = new ConcurrentHashMap<>();
@@ -117,7 +116,10 @@ final class ZLinkChannelSocketRegistry {
     // partially registered channel.
     private <T> T inStateLane(Supplier<T> work) {
         try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
+            var turn = stateLane.runNowOrQueue(work).toCompletableFuture();
+            // An idle lane ran the turn on this thread; only a pending turn is a wait.
+            assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+            return turn.join();
         } catch (CompletionException failure) {
             Throwable cause = failure.getCause();
             if (cause instanceof RuntimeException runtimeFailure) {
@@ -188,7 +190,6 @@ final class ZLinkChannelSocketRegistry {
         inStateLane(
                 () -> {
                     routeRouters.put(channelName, socket);
-                    routeSocketLocks.put(channelName, new Object());
                     ownedSockets.add(socket);
                     return null;
                 });
@@ -442,7 +443,10 @@ final class ZLinkChannelSocketRegistry {
                         return submission.get();
                     }
                 };
-        return stateLane.isOnLane() ? work.get() : inStateLane(work);
+        // A submission is admitted in one lane turn; the caller does not wait for it.
+        return stateLane.isOnLane()
+                ? work.get()
+                : stateLane.runAsync(work).thenCompose(java.util.function.Function.identity());
     }
 
     ZLinkBackendSpotRouteBridge requireSpotRouteBridge(
@@ -841,11 +845,7 @@ final class ZLinkChannelSocketRegistry {
             String channelName, ZLinkClientServerServerDescriptor descriptor) {
         inStateLane(
                 () -> {
-                    if (descriptor == null) {
-                        clientServerServerDescriptors.remove(channelName);
-                    } else {
-                        clientServerServerDescriptors.put(channelName, descriptor);
-                    }
+                    setClientServerServerDescriptorOnLane(channelName, descriptor);
                     return null;
                 });
         if (descriptor != null) {
@@ -853,8 +853,20 @@ final class ZLinkChannelSocketRegistry {
         }
     }
 
+    private void setClientServerServerDescriptorOnLane(
+            String channelName, ZLinkClientServerServerDescriptor descriptor) {
+        Map<String, ZLinkClientServerServerDescriptor> next =
+                new HashMap<>(clientServerServerDescriptors);
+        if (descriptor == null) {
+            next.remove(channelName);
+        } else {
+            next.put(channelName, descriptor);
+        }
+        clientServerServerDescriptors = Map.copyOf(next);
+    }
+
     ZLinkClientServerServerDescriptor clientServerServerDescriptor(String channelName) {
-        return inStateLane(() -> clientServerServerDescriptors.get(channelName));
+        return clientServerServerDescriptors.get(channelName);
     }
 
     int clientServerServerWeight(String channelName, int fallback) {
@@ -895,7 +907,7 @@ final class ZLinkChannelSocketRegistry {
                                             current.ownerId(),
                                             current.leaseGeneration(),
                                             Instant.now());
-                            clientServerServerDescriptors.put(channelName, updated);
+                            setClientServerServerDescriptorOnLane(channelName, updated);
                             return updated;
                         });
         if (changed != null) {
@@ -947,10 +959,12 @@ final class ZLinkChannelSocketRegistry {
         }
         inStateLane(
                 () -> {
+                    Map<String, ZLinkClientServerServerDescriptor> next =
+                            new HashMap<>(clientServerServerDescriptors);
                     for (ServerDescriptorValue descriptor : descriptors) {
-                        clientServerServerDescriptors.put(
-                                descriptor.channelName(), descriptor.descriptor());
+                        next.put(descriptor.channelName(), descriptor.descriptor());
                     }
+                    clientServerServerDescriptors = Map.copyOf(next);
                     return null;
                 });
     }
@@ -971,8 +985,9 @@ final class ZLinkChannelSocketRegistry {
             if (control instanceof ZLinkClientServerServiceWire.LivenessAck ack
                     && received.routingId().isPresent()
                     && !received.isRequest()) {
-                acceptClientServerServerAck(channelName, received.routingId().get(), ack.probeId());
-                received.close();
+                acceptClientServerServerAckAsync(
+                                channelName, received.routingId().get(), ack.probeId())
+                        .whenComplete((ignored, failure) -> received.close());
                 return true;
             }
             if (control instanceof ZLinkClientServerServiceWire.LivenessProbe probe
@@ -989,7 +1004,7 @@ final class ZLinkChannelSocketRegistry {
                 }
             } else {
                 ZLinkClientServerServerDescriptor descriptor =
-                        inStateLane(() -> clientServerServerDescriptors.get(channelName));
+                        clientServerServerDescriptors.get(channelName);
                 if (!(control instanceof ZLinkClientServerServiceWire.Hello hello)
                         || descriptor == null
                         || !hello.channelName().equals(channelName)
@@ -1000,8 +1015,19 @@ final class ZLinkChannelSocketRegistry {
                             ZLinkClientServerServiceWire.encodeAdmit(
                                     descriptor, normalizedMessageLimit(router.maxMessageSize()));
                     if (received.routingId().isPresent()) {
-                        admitClientServerServerPeer(
-                                channelName, received.routingId().get(), router);
+                        byte[] admittedReply = reply;
+                        admitClientServerServerPeerAsync(
+                                        channelName, received.routingId().get(), router)
+                                .whenCompleteAsync(
+                                        (ignored, failure) ->
+                                                finishClientServerControl(
+                                                        router,
+                                                        received,
+                                                        failure == null
+                                                                ? admittedReply
+                                                                : ZLinkClientServerServiceWire
+                                                                        .encodeReject(1)));
+                        return true;
                     }
                 }
             }
@@ -1010,6 +1036,12 @@ final class ZLinkChannelSocketRegistry {
                 reply = ZLinkClientServerServiceWire.encodeReject(1);
             }
         }
+        finishClientServerControl(router, received, reply);
+        return true;
+    }
+
+    private static void finishClientServerControl(
+            ZLinkBackendRouterSocket router, ZLinkBackendReceived received, byte[] reply) {
         if (reply != null && received.isRequest()) {
             ZLinkChannelDispatchReporter.replyAndClose(router, received, Message.from(reply));
         } else if (reply != null && received.routingId().isPresent()) {
@@ -1019,7 +1051,6 @@ final class ZLinkChannelSocketRegistry {
             }
         }
         received.close();
-        return true;
     }
 
     void tickClientServerLiveness(long nowNanos) {
@@ -1366,9 +1397,9 @@ final class ZLinkChannelSocketRegistry {
         }
     }
 
-    private void admitClientServerServerPeer(
+    private CompletionStage<Void> admitClientServerServerPeerAsync(
             String channelName, RoutingId routingId, ZLinkBackendRouterSocket router) {
-        inStateLane(
+        return stateLane.runAsync(
                 () -> {
                     String key = serverPeerKey(channelName, routingId);
                     long now = System.nanoTime();
@@ -1385,9 +1416,9 @@ final class ZLinkChannelSocketRegistry {
                 });
     }
 
-    private void acceptClientServerServerAck(
+    private CompletionStage<Void> acceptClientServerServerAckAsync(
             String channelName, RoutingId routingId, long probeId) {
-        inStateLane(
+        return stateLane.runAsync(
                 () -> {
                     ClientServerServerPeer peer =
                             clientServerServerPeers.get(serverPeerKey(channelName, routingId));
@@ -1469,10 +1500,6 @@ final class ZLinkChannelSocketRegistry {
 
     ZLinkBackendRouterSocket routeRouter(String channelName) {
         return inStateLane(() -> routeRouters.get(channelName));
-    }
-
-    Object routeSocketLock(String channelName, Object fallback) {
-        return inStateLane(() -> routeSocketLocks.getOrDefault(channelName, fallback));
     }
 
     Map<String, ZLinkBackendSpotRouteBridge> spotRouteBridges() {
@@ -1574,7 +1601,7 @@ final class ZLinkChannelSocketRegistry {
                                     Collections.newSetFromMap(new IdentityHashMap<>());
                             connections.addAll(clientServerConnections.values());
                             clientServerConnections.clear();
-                            clientServerServerDescriptors.clear();
+                            clientServerServerDescriptors = Map.of();
                             clientServerServerPeers.clear();
                             return connections;
                         }));

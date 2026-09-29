@@ -271,8 +271,14 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     private volatile MessageFollowNoticeSender messageFollowNoticeSender;
 
     private <T> T inStateLane(Supplier<T> work) {
+        if (stateLane.isOnLane()) {
+            return work.get();
+        }
         try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
+            var turn = stateLane.runNowOrQueue(work).toCompletableFuture();
+            // An idle lane ran the turn on this thread; only a pending turn is a wait.
+            assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+            return turn.join();
         } catch (CompletionException failure) {
             Throwable cause = failure.getCause();
             if (cause instanceof RuntimeException runtimeFailure) {
@@ -797,7 +803,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         this,
                         this::deferredJoinIncarnation,
                         serialExecutor,
-                        actorId -> actorDispatchTargetResolver.apply(actorId));
+                        actorId -> actorDispatchTargetResolver.apply(actorId),
+                        stateLane);
         this.meshName = spotNode.routingId().toString();
         this.factories = Map.copyOf(factories);
         this.defaultRequestTimeout = defaultRequestTimeout;
@@ -1190,7 +1197,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                     response::set,
                                     false,
                                     objectGeneration)
-                            .thenApply(
+                            .thenApplyAsync(
                                     actor -> {
                                         spotNode.rememberActorAuthority(
                                                 refFor(actor),
@@ -1474,6 +1481,20 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         () ->
                                 publishPreparedTransferredActorInStateLane(
                                         prepared, targetSpotId, authorityOwnerGeneration));
+        return finishPreparedTransferPublication(publish);
+    }
+
+    public CompletionStage<ZLinkActor> publishPreparedTransferredActorAsync(
+            PreparedTransferredActor prepared, String targetSpotId, long authorityOwnerGeneration) {
+        return stateLane
+                .runAsync(
+                        () ->
+                                publishPreparedTransferredActorInStateLane(
+                                        prepared, targetSpotId, authorityOwnerGeneration))
+                .thenApplyAsync(this::finishPreparedTransferPublication);
+    }
+
+    private ZLinkActor finishPreparedTransferPublication(PublishPreparedTransfer publish) {
         if (publish.targetSpotId() != null) {
             spotNode.registerTransferredActor(publish.actorRef(), publish.targetSpotId(), 1L);
             spotNode.rememberActorAuthority(
@@ -2281,52 +2302,62 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     }
 
     private CompletionStage<Void> discardLocalActor(String actorId, boolean releaseLocation) {
-        ActorStateSnapshot state =
-                inStateLane(
+        return stateLane
+                .runAsync(
                         () -> {
                             ZLinkActor actor = actorRegistry.actor(actorId);
                             return new ActorStateSnapshot(
                                     actor,
                                     actor == null ? null : actorRegistry.context(actor),
                                     actorRegistry.actorType(actorId));
+                        })
+                .thenComposeAsync(
+                        state -> {
+                            ZLinkActor actor = state.actor();
+                            DefaultActorContext context = state.context();
+                            String actorType = state.actorType();
+                            if (actor == null || context == null || context.actorRef() == null) {
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            return dispatches.beginTeardown(
+                                    actorId,
+                                    () -> {
+                                        CompletionStage<Void> discarded =
+                                                context.disconnectBoundSessionForDestroy()
+                                                        .exceptionally(error -> null)
+                                                        .thenCompose(
+                                                                ignored ->
+                                                                        spotNode.destroyActor(
+                                                                                        context
+                                                                                                .actorRef(),
+                                                                                        defaultRequestTimeout)
+                                                                                .exceptionally(
+                                                                                        error ->
+                                                                                                null));
+                                        if (releaseLocation) {
+                                            discarded =
+                                                    discarded.thenCompose(
+                                                            ignored ->
+                                                                    locations
+                                                                            .releaseActor(
+                                                                                    actorType,
+                                                                                    actorId)
+                                                                            .exceptionally(
+                                                                                    error -> null));
+                                        }
+                                        return discarded.thenRunAsync(
+                                                () -> {
+                                                    inStateLane(
+                                                            () -> {
+                                                                actorRegistry.remove(
+                                                                        actorId, actor);
+                                                                return null;
+                                                            });
+                                                    removeActorSessionRouteForContext(context);
+                                                    context.clearAfterDestroy();
+                                                });
+                                    });
                         });
-        ZLinkActor actor = state.actor();
-        DefaultActorContext context = state.context();
-        String actorType = state.actorType();
-        if (actor == null || context == null || context.actorRef() == null) {
-            return CompletableFuture.completedFuture(null);
-        }
-        return dispatches.beginTeardown(
-                actorId,
-                () -> {
-                    CompletionStage<Void> discarded =
-                            context.disconnectBoundSessionForDestroy()
-                                    .exceptionally(error -> null)
-                                    .thenCompose(
-                                            ignored ->
-                                                    spotNode.destroyActor(
-                                                                    context.actorRef(),
-                                                                    defaultRequestTimeout)
-                                                            .exceptionally(error -> null));
-                    if (releaseLocation) {
-                        discarded =
-                                discarded.thenCompose(
-                                        ignored ->
-                                                locations
-                                                        .releaseActor(actorType, actorId)
-                                                        .exceptionally(error -> null));
-                    }
-                    return discarded.thenRun(
-                            () -> {
-                                inStateLane(
-                                        () -> {
-                                            actorRegistry.remove(actorId, actor);
-                                            return null;
-                                        });
-                                removeActorSessionRouteForContext(context);
-                                context.clearAfterDestroy();
-                            });
-                });
     }
 
     @Override
@@ -2735,7 +2766,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                         return CompletableFuture.failedFuture(error);
                                     }
                                 });
-        result.whenComplete(
+        result.whenCompleteAsync(
                 (ignored, error) -> {
                     // CompletableFuture's inline dependents must not inherit a state
                     // lane turn through this creation-tail completion.
@@ -4079,28 +4110,27 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 return CompletableFuture.failedFuture(ex);
             }
         }
-        ZLinkActorDispatchSerials.QueuedTurn turn;
-        try {
-            turn =
-                    inStateLane(
-                            () -> {
-                                if (!actorRegistry.contains(actorId)) {
-                                    throw new ZLinkConfigurationException(
-                                            "actor is not managed by this runtime: " + actorId);
-                                }
-                                return target == null
-                                        ? dispatches.prepare(actorId)
-                                        : dispatches.prepare(actorId, target);
-                            });
-        } catch (ZLinkConfigurationException error) {
-            return CompletableFuture.failedFuture(error);
-        }
-        return dispatches.enqueueLazyRecord(
-                turn,
-                acceptedJournalRecord,
-                acceptedJournalRecordSizeHint,
-                operation,
-                relocationRelease);
+        return stateLane
+                .runAsync(
+                        () -> {
+                            if (!actorRegistry.contains(actorId)) {
+                                throw new ZLinkConfigurationException(
+                                        "actor is not managed by this runtime: " + actorId);
+                            }
+                            ZLinkActorDispatchSerials.QueuedTurn turn =
+                                    target == null
+                                            ? dispatches.prepare(actorId)
+                                            : dispatches.prepare(actorId, target);
+                            return turn;
+                        })
+                .thenComposeAsync(
+                        turn ->
+                                dispatches.enqueueLazyRecord(
+                                        turn,
+                                        acceptedJournalRecord,
+                                        acceptedJournalRecordSizeHint,
+                                        operation,
+                                        relocationRelease));
     }
 
     private CompletionStage<Void> submitActorDispatch(
@@ -4127,28 +4157,28 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 return CompletableFuture.failedFuture(ex);
             }
         }
-        ZLinkActorDispatchSerials.QueuedTurn turn;
-        try {
-            turn =
-                    inStateLane(
-                            () -> {
-                                if (!actorRegistry.contains(actorId)) {
-                                    throw new ZLinkConfigurationException(
-                                            "actor is not managed by this runtime: " + actorId);
-                                }
-                                return target == null
-                                        ? dispatches.prepare(actorId)
-                                        : dispatches.prepare(actorId, target);
-                            });
-        } catch (ZLinkConfigurationException error) {
-            return CompletableFuture.failedFuture(error);
-        }
-        if (acceptedJournalRecord != null) {
-            return dispatches.enqueue(turn, acceptedJournalRecord, operation, relocationRelease);
-        }
-        return payloadBytes == null
-                ? dispatches.enqueue(turn, operation)
-                : dispatches.enqueue(turn, payloadBytes, operation, relocationRelease);
+        return stateLane
+                .runAsync(
+                        () -> {
+                            if (!actorRegistry.contains(actorId)) {
+                                throw new ZLinkConfigurationException(
+                                        "actor is not managed by this runtime: " + actorId);
+                            }
+                            return target == null
+                                    ? dispatches.prepare(actorId)
+                                    : dispatches.prepare(actorId, target);
+                        })
+                .thenComposeAsync(
+                        turn -> {
+                            if (acceptedJournalRecord != null) {
+                                return dispatches.enqueue(
+                                        turn, acceptedJournalRecord, operation, relocationRelease);
+                            }
+                            return payloadBytes == null
+                                    ? dispatches.enqueue(turn, operation)
+                                    : dispatches.enqueue(
+                                            turn, payloadBytes, operation, relocationRelease);
+                        });
     }
 
     public Optional<ZLinkSerialExecutionQueue.RelocationSeal> trySealActorRelocation(
@@ -4197,7 +4227,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             ZLinkActorDispatchTarget target,
             String actorId,
             Supplier<CompletionStage<Void>> operation) {
-        return target.executeActor(actorId, () -> dispatches.runTurn(actorId, operation));
+        Object incarnation = deferredJoinIncarnation(actorId);
+        return target.executeActor(
+                actorId, () -> dispatches.runTurn(actorId, incarnation, operation));
     }
 
     public <T> CompletionStage<T> invokeActorLifecycle(
@@ -4216,17 +4248,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     }
 
     CompletionStage<Void> submitDeferredJoinBarrier(
-            String actorId, Supplier<CompletionStage<Void>> operation) {
-        if (!actorRegistry.contains(actorId)) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException(
-                            "actor is not managed by this runtime: " + actorId));
-        }
-        return dispatches.enqueueBarrier(actorId, operation);
-    }
-
-    boolean isActorDispatchActive(ZLinkActor actor) {
-        return dispatches.isActive(actor.context().actorId());
+            DefaultActorContext context, Supplier<CompletionStage<Void>> operation) {
+        return dispatches.enqueueBarrier(context.actorRef().actorId(), context, operation);
     }
 
     void requireDeferredJoinRegistration(DefaultActorContext context) {
@@ -4236,7 +4259,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     "Actor join admission is sealedResult while the runtime is draining");
         }
         ZLinkActor actor = context.actor();
-        if (actor == null || actorRegistry.context(actor) != context) {
+        if (actor == null) {
             throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.UNAVAILABLE,
                     "Actor context does not represent the current local incarnation");
@@ -4446,7 +4469,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return renewActorJoinedLocation(actor, spotId);
     }
 
-    /** Applies the membership already selected by the canonical target CAS. */
+    /** Applies membership already selected by a durable authority CAS. */
     public void markRelocatedActorJoined(
             ZLinkActor actor, ZLinkBackendActorRef actorRef, String spotId, ZLinkSpot<?> spot) {
         markJoinedState(actor, actorRef, spotId, spot);
@@ -4676,7 +4699,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                                                         actorRef.generation(),
                                                                         meshName,
                                                                         actorRef.nodeRid())))
-                                        .thenRun(
+                                        .thenRunAsync(
                                                 () -> {
                                                     inStateLane(
                                                             () -> {
@@ -4687,7 +4710,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                                     removeActorSessionRouteForContext(context);
                                                     context.clearAfterDestroy();
                                                 }))
-                .whenComplete(
+                .whenCompleteAsync(
                         (ignored, error) -> {
                             if (error != null) {
                                 inStateLane(
@@ -4785,16 +4808,17 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         DefaultActorContext context = check.context();
         return dispatches.beginTeardown(
                 actorId,
-                () -> {
-                    inStateLane(
-                            () -> {
-                                actorRegistry.remove(actorId, actor);
-                                return null;
-                            });
-                    removeActorSessionRouteForContext(context);
-                    context.clearAfterDestroy();
-                    return CompletableFuture.completedFuture(null);
-                });
+                () ->
+                        CompletableFuture.runAsync(
+                                () -> {
+                                    inStateLane(
+                                            () -> {
+                                                actorRegistry.remove(actorId, actor);
+                                                return null;
+                                            });
+                                    removeActorSessionRouteForContext(context);
+                                    context.clearAfterDestroy();
+                                }));
     }
 
     private CompletionStage<Void> closeActorEntry(ActorEntry entry) {
@@ -4807,7 +4831,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         locations
                                 .releaseActor(entry.actorType(), actorId)
                                 .exceptionally(error -> null)
-                                .thenRun(
+                                .thenRunAsync(
                                         () -> {
                                             inStateLane(
                                                     () -> {
@@ -4820,13 +4844,19 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     }
 
     private final class ActorRegistry {
-        private final Map<String, ActorEntry> byId = new HashMap<>();
-        private final Map<ZLinkActor, ActorEntry> byActor = new IdentityHashMap<>();
-        private final ZLinkStateLane stateLane = new ZLinkStateLane();
+        private volatile Map<String, ActorEntry> byId = Map.of();
+        private volatile Map<ZLinkActor, ActorEntry> byActor = Map.of();
+        private final ZLinkStateLane stateLane = ZLinkActorRuntime.this.stateLane;
 
         private <T> T inStateLane(Supplier<T> work) {
+            if (stateLane.isOnLane()) {
+                return work.get();
+            }
             try {
-                return stateLane.runAsync(work).toCompletableFuture().join();
+                var turn = stateLane.runNowOrQueue(work).toCompletableFuture();
+                // An idle lane ran the turn on this thread; only a pending turn is a wait.
+                assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+                return turn.join();
             } catch (CompletionException failure) {
                 Throwable cause = failure.getCause();
                 if (cause instanceof RuntimeException runtimeFailure) {
@@ -4844,49 +4874,42 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             inStateLane(
                     () -> {
                         ActorEntry entry = new ActorEntry(actorType, actor, context);
-                        ActorEntry previous = byId.put(actorId, entry);
+                        ActorEntry previous = byId.get(actorId);
+                        Map<String, ActorEntry> nextById = new HashMap<>(byId);
+                        nextById.put(actorId, entry);
+                        Map<ZLinkActor, ActorEntry> next = new IdentityHashMap<>(byActor);
                         if (previous != null) {
-                            byActor.remove(previous.actor());
+                            next.remove(previous.actor());
                         }
-                        byActor.put(actor, entry);
+                        next.put(actor, entry);
+                        byActor = java.util.Collections.unmodifiableMap(next);
+                        byId = Map.copyOf(nextById);
                         return null;
                     });
         }
 
         boolean contains(String actorId) {
-            return inStateLane(() -> byId.containsKey(actorId));
+            return byId.containsKey(actorId);
         }
 
         ZLinkActor actor(String actorId) {
-            return inStateLane(
-                    () -> {
-                        ActorEntry entry = byId.get(actorId);
-                        return entry == null ? null : entry.actor();
-                    });
+            ActorEntry entry = byId.get(actorId);
+            return entry == null ? null : entry.actor();
         }
 
         DefaultActorContext context(ZLinkActor actor) {
-            return inStateLane(
-                    () -> {
-                        ActorEntry entry = byActor.get(actor);
-                        return entry == null ? null : entry.context();
-                    });
+            ActorEntry entry = byActor.get(actor);
+            return entry == null ? null : entry.context();
         }
 
         String actorType(String actorId) {
-            return inStateLane(
-                    () -> {
-                        ActorEntry entry = byId.get(actorId);
-                        return entry == null ? null : entry.actorType();
-                    });
+            ActorEntry entry = byId.get(actorId);
+            return entry == null ? null : entry.actorType();
         }
 
         String actorTypeOrDefault(String actorId, String fallback) {
-            return inStateLane(
-                    () -> {
-                        ActorEntry entry = byId.get(actorId);
-                        return entry == null ? fallback : entry.actorType();
-                    });
+            ActorEntry entry = byId.get(actorId);
+            return entry == null ? fallback : entry.actorType();
         }
 
         void markTransferred(String actorId) {
@@ -4934,9 +4957,14 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         ActorEntry remove(String actorId) {
             return inStateLane(
                     () -> {
-                        ActorEntry removed = byId.remove(actorId);
+                        ActorEntry removed = byId.get(actorId);
                         if (removed != null) {
-                            byActor.remove(removed.actor());
+                            Map<String, ActorEntry> nextById = new HashMap<>(byId);
+                            nextById.remove(actorId);
+                            byId = Map.copyOf(nextById);
+                            Map<ZLinkActor, ActorEntry> next = new IdentityHashMap<>(byActor);
+                            next.remove(removed.actor());
+                            byActor = java.util.Collections.unmodifiableMap(next);
                             acceptedHandoffOperations.remove(actorId);
                         }
                         return removed;
@@ -4950,23 +4978,27 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         if (entry == null || entry.actor() != actor) {
                             return false;
                         }
-                        byId.remove(actorId);
-                        byActor.remove(actor);
+                        Map<String, ActorEntry> nextById = new HashMap<>(byId);
+                        nextById.remove(actorId);
+                        byId = Map.copyOf(nextById);
+                        Map<ZLinkActor, ActorEntry> next = new IdentityHashMap<>(byActor);
+                        next.remove(actor);
+                        byActor = java.util.Collections.unmodifiableMap(next);
                         acceptedHandoffOperations.remove(actorId);
                         return true;
                     });
         }
 
         ActorEntry entry(String actorId) {
-            return inStateLane(() -> byId.get(actorId));
+            return byId.get(actorId);
         }
 
         List<ActorEntry> entries() {
-            return inStateLane(() -> List.copyOf(byId.values()));
+            return List.copyOf(byId.values());
         }
 
         List<DefaultActorContext> contexts() {
-            return inStateLane(() -> byId.values().stream().map(ActorEntry::context).toList());
+            return byId.values().stream().map(ActorEntry::context).toList();
         }
     }
 

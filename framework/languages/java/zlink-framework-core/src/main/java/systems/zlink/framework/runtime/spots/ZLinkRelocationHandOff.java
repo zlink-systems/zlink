@@ -5,9 +5,11 @@ import systems.zlink.contracts.core.RoutingId;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import java.util.logging.Logger;
 
@@ -49,21 +51,67 @@ final class ZLinkRelocationHandOff {
                             } catch (RuntimeException failure) {
                                 relay = CompletableFuture.failedFuture(failure);
                             }
-                            relay.thenCompose(
-                                            ignored ->
-                                                    client.publish(
-                                                            targetRid, request.fence(), timeout))
-                                    .whenComplete(
-                                            (ignored, failure) -> {
-                                                if (failure != null) {
-                                                    LOGGER.warning(
-                                                            "Relocation relay or CUTOVER submit"
-                                                                    + " failed; authority settlement"
-                                                                    + " decides the unit: "
-                                                                    + unwrap(failure));
+                            CompletionStage<Void> capturedRelay = relay;
+                            AtomicReference<CompletionStage<Void>> cutover =
+                                    new AtomicReference<>();
+                            CompletableFuture<Void> cancelledCutover = new CompletableFuture<>();
+                            CompletionStage<Void> boundary =
+                                    capturedRelay.thenCompose(
+                                            ignored -> {
+                                                CompletionStage<Void> submitted =
+                                                        client.publish(
+                                                                targetRid,
+                                                                request.fence(),
+                                                                timeout);
+                                                if (!cutover.compareAndSet(null, submitted)) {
+                                                    submitted.toCompletableFuture().cancel(false);
                                                 }
+                                                return submitted;
                                             });
-                            return client.settle(targetRid, request.fence(), restoreDeadline);
+                            boundary.whenComplete(
+                                    (ignored, failure) -> {
+                                        if (failure != null
+                                                && !(unwrap(failure)
+                                                        instanceof CancellationException)) {
+                                            LOGGER.warning(
+                                                    "Relocation relay or CUTOVER submit"
+                                                            + " failed; authority settlement"
+                                                            + " decides the unit: "
+                                                            + unwrap(failure));
+                                        }
+                                    });
+                            return client.settle(targetRid, request.fence(), restoreDeadline)
+                                    .handle(
+                                            (settlement, failure) -> {
+                                                if (failure != null
+                                                        || settlement
+                                                                != ZLinkRelocationTransitionClient
+                                                                        .Settlement
+                                                                        .TARGET_COMMITTED) {
+                                                    capturedRelay
+                                                            .toCompletableFuture()
+                                                            .cancel(false);
+                                                    cancelledCutover.cancel(false);
+                                                    CompletionStage<Void> submitted =
+                                                            cutover.getAndSet(cancelledCutover);
+                                                    if (submitted != null) {
+                                                        submitted
+                                                                .toCompletableFuture()
+                                                                .cancel(false);
+                                                    }
+                                                    boundary.toCompletableFuture().cancel(false);
+                                                    return failure == null
+                                                            ? CompletableFuture.completedFuture(
+                                                                    settlement)
+                                                            : CompletableFuture
+                                                                    .<ZLinkRelocationTransitionClient
+                                                                                    .Settlement>
+                                                                            failedFuture(failure);
+                                                }
+                                                return boundary.handle(
+                                                        (ignored, boundaryFailure) -> settlement);
+                                            })
+                                    .thenCompose(result -> result);
                         });
     }
 

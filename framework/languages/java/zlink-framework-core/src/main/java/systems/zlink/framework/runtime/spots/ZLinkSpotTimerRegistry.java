@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
@@ -44,7 +45,10 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
 
     private <T> T inStateLane(Supplier<T> work) {
         try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
+            var turn = stateLane.runNowOrQueue(work).toCompletableFuture();
+            // An idle lane ran the turn on this thread; only a pending turn is a wait.
+            assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+            return turn.join();
         } catch (CompletionException failure) {
             Throwable cause = failure.getCause();
             if (cause instanceof RuntimeException runtimeFailure) {
@@ -139,7 +143,16 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
     }
 
     FrozenTimers freeze() {
-        FreezeState state = inStateLane(this::freezeCore);
+        return completeFreeze(inStateLane(this::freezeCore));
+    }
+
+    CompletionStage<FrozenTimers> freezeAsync() {
+        return stateLane
+                .runAsync(this::freezeCore)
+                .thenApplyAsync(ZLinkSpotTimerRegistry::completeFreeze);
+    }
+
+    private static FrozenTimers completeFreeze(FreezeState state) {
         state.futures().forEach(ZLinkSpotTimerRegistry::cancel);
         return state.snapshot();
     }
@@ -222,15 +235,20 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
 
     @Override
     public void close() {
-        List<ManagedTimer> current =
-                inStateLane(
+        assert ZLinkStateLane.assertMayBlock();
+        closeAsync().toCompletableFuture().join();
+    }
+
+    CompletionStage<Void> closeAsync() {
+        return stateLane
+                .runAsync(
                         () -> {
                             List<ManagedTimer> active = List.copyOf(timers.values());
                             timers.clear();
                             frozen = false;
                             return active;
-                        });
-        current.forEach(ManagedTimer::close);
+                        })
+                .thenAcceptAsync(current -> current.forEach(ManagedTimer::close));
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
@@ -383,26 +401,32 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
             dispatch.enqueue(
                             name,
                             () -> {
-                                HandlerInvocation invocation =
-                                        inStateLane(
-                                                () -> {
-                                                    if (disposed
-                                                            || frozen
-                                                            || pendingTick != selected) {
-                                                        return null;
-                                                    }
-                                                    activeDispatch =
-                                                            new ActiveDispatch(
-                                                                    selected,
-                                                                    new CompletableFuture<>());
-                                                    return new HandlerInvocation(spot, handlerType);
-                                                });
-                                return invocation == null
-                                        ? CompletableFuture.completedFuture(null)
-                                        : invokeHandler(
-                                                invocation.spot(), invocation.handlerType(), tick);
+                                return ZLinkSerialExecutionQueue.yieldCurrent(
+                                                stateLane.runAsync(
+                                                        () -> {
+                                                            if (disposed
+                                                                    || frozen
+                                                                    || pendingTick != selected) {
+                                                                return null;
+                                                            }
+                                                            activeDispatch =
+                                                                    new ActiveDispatch(
+                                                                            selected,
+                                                                            new CompletableFuture<>());
+                                                            return new HandlerInvocation(
+                                                                    spot, handlerType);
+                                                        }))
+                                        .thenCompose(
+                                                invocation ->
+                                                        invocation == null
+                                                                ? CompletableFuture.completedFuture(
+                                                                        null)
+                                                                : invokeHandler(
+                                                                        invocation.spot(),
+                                                                        invocation.handlerType(),
+                                                                        tick));
                             })
-                    .whenComplete(
+                    .whenCompleteAsync(
                             (ignored, error) -> {
                                 DispatchResult result =
                                         inStateLane(

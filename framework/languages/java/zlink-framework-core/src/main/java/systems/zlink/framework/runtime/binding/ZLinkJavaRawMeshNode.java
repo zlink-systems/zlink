@@ -165,7 +165,6 @@ final class ZLinkJavaRawMeshNode
     // Descriptor mutation and deferred-ready state are one C2 group.
     private final ZLinkStateLane descriptorStateLane = new ZLinkStateLane();
     // Lazy SpotNode construction is a separate C1 registry state.
-    private final ZLinkStateLane spotNodeStateLane = new ZLinkStateLane();
     // User operation slots and their retention sweep form one C2 group.
     private final ZLinkStateLane userSpotTerminalStateLane = new ZLinkStateLane();
     private final ZLinkServiceM6AWireCodec wire = new ZLinkServiceM6AWireCodec();
@@ -197,7 +196,7 @@ final class ZLinkJavaRawMeshNode
     private volatile systems.zlink.framework.runtime.internal.dispatch
                     .ZLinkApplicationJobReceiveFlowController.Registration
             receiveFlowRegistration = () -> {};
-    private volatile ZLinkJavaRawSpotNode spotNode;
+    private final ZLinkJavaRawSpotNode spotNode = new ZLinkJavaRawSpotNode(this);
     private volatile ExecutorService pump;
     private volatile long routerHighWaterMark = 16_777_216L;
     private volatile long routerReceiveHighWaterMark = 16_777_216L;
@@ -1305,15 +1304,8 @@ final class ZLinkJavaRawMeshNode
     public void setApplicationReceiver(ZLinkMeshApplicationReceiver value) {
         ZLinkMeshApplicationReceiver receiver =
                 Objects.requireNonNull(value, "applicationReceiver");
-        ZLinkJavaRawSpotNode current =
-                inSpotNodeStateLane(
-                        () -> {
-                            applicationReceiver = receiver;
-                            return spotNode;
-                        });
-        if (current != null) {
-            current.setApplicationReceiver(receiver);
-        }
+        applicationReceiver = receiver;
+        spotNode.setApplicationReceiver(receiver);
     }
 
     @Override
@@ -1328,16 +1320,6 @@ final class ZLinkJavaRawMeshNode
 
     @Override
     public ZLinkInternalSpotNode spotNode() {
-        return inSpotNodeStateLane(this::spotNodeCore);
-    }
-
-    private ZLinkInternalSpotNode spotNodeCore() {
-        if (spotNode == null) {
-            spotNode = new ZLinkJavaRawSpotNode(this);
-            if (applicationReceiver != null) {
-                spotNode.setApplicationReceiver(applicationReceiver);
-            }
-        }
         return spotNode;
     }
 
@@ -7205,15 +7187,10 @@ final class ZLinkJavaRawMeshNode
 
     private <T> T inDescriptorStateLane(Supplier<T> work) {
         try {
-            return descriptorStateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            return rethrowStateFailure(failure);
-        }
-    }
-
-    private <T> T inSpotNodeStateLane(Supplier<T> work) {
-        try {
-            return spotNodeStateLane.runAsync(work).toCompletableFuture().join();
+            var turn = descriptorStateLane.runNowOrQueue(work).toCompletableFuture();
+            // An idle lane ran the turn on this thread; only a pending turn is a wait.
+            assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+            return turn.join();
         } catch (CompletionException failure) {
             return rethrowStateFailure(failure);
         }
@@ -7221,7 +7198,10 @@ final class ZLinkJavaRawMeshNode
 
     private <T> T inUserSpotTerminalStateLane(Supplier<T> work) {
         try {
-            return userSpotTerminalStateLane.runAsync(work).toCompletableFuture().join();
+            var turn = userSpotTerminalStateLane.runNowOrQueue(work).toCompletableFuture();
+            // An idle lane ran the turn on this thread; only a pending turn is a wait.
+            assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+            return turn.join();
         } catch (CompletionException failure) {
             return rethrowStateFailure(failure);
         }

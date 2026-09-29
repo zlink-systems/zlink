@@ -8,6 +8,7 @@ import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.internal.drain.AsyncDrainProbe;
 import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
 
 import java.util.ArrayList;
@@ -20,6 +21,99 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkStandaloneActorRelocationStagingOwnerTest {
+    @Test
+    void stagedIngressOwnsNamedCompletionUntilDiscard() {
+        var owner = new ZLinkStandaloneActorRelocationStagingOwner(new FakeBackend());
+        UUID relocationId = UUID.randomUUID();
+        byte[] root =
+                ZLinkCanonicalActorRelocationEnvelope.encode(
+                        relocationId, "actor-a", 7, 11, true, new byte[] {4, 5}, List.of());
+        var staged = owner.stage(request(relocationId, true), root).toCompletableFuture().join();
+        assertTrue(
+                owner.acceptIngress(
+                        staged,
+                        ZLinkAcceptedJournalTestRecords.actor(
+                                "actor-a", 1, "actor.request", Map.of(), new byte[] {1}),
+                        null,
+                        ignored -> {}));
+        owner.stageRelayedRecord(staged, new byte[] {2}).toCompletableFuture().join();
+
+        assertEquals(
+                List.of(
+                        new AsyncDrainProbe.Pending(
+                                "temporary:actor:actor-a:0", "standalone Actor staging owner"),
+                        new AsyncDrainProbe.Pending(
+                                "relayed:actor:actor-a:0", "standalone Actor staging owner")),
+                pending(staged));
+
+        owner.discard(staged).toCompletableFuture().join();
+        assertTrue(pending(staged).isEmpty());
+    }
+
+    @Test
+    void failedActorBacklogCompletesEveryAcceptedRecordObligation() {
+        FakeBackend backend = new FakeBackend();
+        var owner = new ZLinkStandaloneActorRelocationStagingOwner(backend);
+        UUID relocationId = UUID.randomUUID();
+        byte[] accepted =
+                ZLinkAcceptedJournalTestRecords.actor(
+                        "actor-a", 23, "actor.request", Map.of(), new byte[] {1});
+        byte[] root =
+                ZLinkCanonicalActorRelocationEnvelope.encode(
+                        relocationId,
+                        "actor-a",
+                        7,
+                        11,
+                        true,
+                        new byte[] {4, 5},
+                        List.of(
+                                new ZLinkSerialExecutionQueue.QueuedRecord(5, accepted),
+                                new ZLinkSerialExecutionQueue.QueuedRecord(6, accepted)));
+        var staged = owner.stage(request(relocationId, true), root).toCompletableFuture().join();
+        var obligations = new AsyncDrainProbe();
+        Map<Long, CompletableFuture<Void>> expected =
+                Map.of(
+                        5L,
+                                obligations.expect(
+                                        "journal:actor-a:5", "standalone Actor staging owner"),
+                        6L,
+                                obligations.expect(
+                                        "journal:actor-a:6", "standalone Actor staging owner"));
+        var backlog =
+                owner.closeDurableBacklog(
+                        staged,
+                        root,
+                        (lane, record) -> {
+                            expected.get(record.sequence()).complete(null);
+                            return CompletableFuture.failedFuture(
+                                    new IllegalStateException("first replay failed"));
+                        });
+        assertEquals(
+                List.of(
+                        new AsyncDrainProbe.Pending(
+                                "journal:actor:actor-a:5", "standalone Actor staging owner"),
+                        new AsyncDrainProbe.Pending(
+                                "journal:actor:actor-a:6", "standalone Actor staging owner")),
+                pending(backlog));
+        owner.publishHidden(backlog, 0);
+        owner.openAdmission(staged);
+
+        assertThrows(
+                java.util.concurrent.CompletionException.class,
+                () -> owner.drainDurableBacklog(backlog).toCompletableFuture().join());
+        obligations.assertDrained();
+    }
+
+    private static List<AsyncDrainProbe.Pending> pending(Object owner) {
+        try {
+            var field = owner.getClass().getDeclaredField("debugProbe");
+            field.setAccessible(true);
+            return ((AsyncDrainProbe) field.get(owner)).pending();
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+        }
+    }
+
     @Test
     void failedBacklogReplayDoesNotWithholdLaterAcceptedRecord() {
         FakeBackend backend = new FakeBackend();
@@ -83,8 +177,15 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
                                 "actor-a", 2, "actor.request", Map.of(), new byte[] {2}),
                         null,
                         ignored -> fail("later replay must succeed")));
-        var replay = owner.closeDirectJoinIngress(staged, root);
-        owner.publishDirectJoinHidden(replay, 12);
+        var replay = owner.closeDirectJoinIngress(staged, root).toCompletableFuture().join();
+        assertEquals(
+                List.of(
+                        new AsyncDrainProbe.Pending(
+                                "temporary:actor:actor-a:0", "standalone Actor staging owner"),
+                        new AsyncDrainProbe.Pending(
+                                "temporary:actor:actor-a:1", "standalone Actor staging owner")),
+                pending(replay));
+        owner.publishDirectJoinHidden(replay, 12).toCompletableFuture().join();
         owner.openAdmission(staged);
 
         assertThrows(

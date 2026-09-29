@@ -1168,7 +1168,10 @@ final class ZLinkUserSpotRetireSourceBuilder {
 
         private <T> T inStateLane(Supplier<T> work) {
             try {
-                return stateLane.runAsync(work).toCompletableFuture().join();
+                var turn = stateLane.runNowOrQueue(work).toCompletableFuture();
+                // An idle lane ran the turn on this thread; only a pending turn is a wait.
+                assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+                return turn.join();
             } catch (CompletionException failure) {
                 Throwable cause = failure.getCause();
                 if (cause instanceof RuntimeException runtimeFailure) {
@@ -1245,42 +1248,48 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 return claim.completion()
                         .thenCompose(ignored -> relayCapturedIngress(client, timeout));
             }
-            ZLinkUserSpotRelocationBarrier.RelocationCommit retained = claim.retained();
             if (claim.owner()) {
-                try {
-                    retained =
-                            barrier.retainCommit(seal)
-                                    .orElseThrow(
-                                            () ->
-                                                    new IllegalStateException(
-                                                            "source relocation barrier was lost"));
-                    installExpectedRelocationForwards();
-                    ZLinkUserSpotRelocationBarrier.RelocationCommit established = retained;
-                    retained =
-                            inStateLane(
-                                    () -> {
-                                        relocationCommit = established;
-                                        relocationCommitClaim = null;
-                                        return relocationCommit;
-                                    });
-                    ZLinkUserSpotRelocationBarrier.RelocationCommit published = retained;
-                    claim.completion().completeAsync(() -> published);
-                } catch (RuntimeException failure) {
-                    inStateLane(
-                            () -> {
-                                if (relocationCommitClaim == claim.completion()) {
-                                    relocationCommitClaim = null;
-                                }
-                                return null;
-                            });
-                    claim.completion()
-                            .completeAsync(
-                                    () -> {
-                                        throw failure;
-                                    });
-                    throw failure;
-                }
+                return barrier.retainCommit(seal)
+                        .thenCompose(
+                                retained -> {
+                                    var established =
+                                            retained.orElseThrow(
+                                                    () ->
+                                                            new IllegalStateException(
+                                                                    "source relocation barrier was lost"));
+                                    installExpectedRelocationForwards();
+                                    var published =
+                                            inStateLane(
+                                                    () -> {
+                                                        relocationCommit = established;
+                                                        relocationCommitClaim = null;
+                                                        return relocationCommit;
+                                                    });
+                                    claim.completion().complete(published);
+                                    return relayRetained(client, timeout, published);
+                                })
+                        .whenComplete(
+                                (ignored, failure) -> {
+                                    if (failure != null) {
+                                        inStateLane(
+                                                () -> {
+                                                    if (relocationCommitClaim
+                                                            == claim.completion()) {
+                                                        relocationCommitClaim = null;
+                                                    }
+                                                    return null;
+                                                });
+                                        claim.completion().completeExceptionally(failure);
+                                    }
+                                });
             }
+            return relayRetained(client, timeout, claim.retained());
+        }
+
+        private CompletionStage<Void> relayRetained(
+                ZLinkRelocationTransitionClient client,
+                Duration timeout,
+                ZLinkUserSpotRelocationBarrier.RelocationCommit retained) {
             ZLinkUserSpotRelocationBarrier.RelocationCommit.Cut cut;
             do {
                 cut = retained.cut();
@@ -1576,10 +1585,12 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 actors.abortRelocationMessageFollow(
                         actorRoute(actor, false, targetOwnerGenerations));
             }
+            CompletionStage<Void> committed;
             if (retained != null) {
                 retained.complete();
+                committed = CompletableFuture.completedFuture(null);
             } else {
-                barrier.commit(seal);
+                committed = barrier.commit(seal).thenApply(ignored -> null);
             }
             CompletionStage<Void> unavailable = CompletableFuture.completedFuture(null);
             if (relocationReplies != null) {
@@ -1597,7 +1608,9 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                     actor.snapshot().objectGeneration()));
                 }
             }
-            return unavailable
+            CompletionStage<Void> unavailableReplies = unavailable;
+            return committed
+                    .thenCompose(ignored -> unavailableReplies)
                     .thenCompose(ignored -> cleanup.cleanup())
                     .thenCompose(ignored -> discardInitialAfterCommit());
         }
@@ -1739,7 +1752,10 @@ final class ZLinkUserSpotRetireSourceBuilder {
 
         private <T> T inStateLane(Supplier<T> work) {
             try {
-                return stateLane.runAsync(work).toCompletableFuture().join();
+                var turn = stateLane.runNowOrQueue(work).toCompletableFuture();
+                // An idle lane ran the turn on this thread; only a pending turn is a wait.
+                assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+                return turn.join();
             } catch (CompletionException failure) {
                 Throwable cause = failure.getCause();
                 if (cause instanceof RuntimeException runtimeFailure) {

@@ -56,8 +56,8 @@ final class ZLinkStandaloneActorRelocationScheduler {
             ZLinkRelocationTransitionClient.Settlement settlement) {
         return switch (settlement) {
             case TARGET_COMMITTED -> {
-                source.completeSourceQueueCommit();
-                yield source.cleanupLocal()
+                yield source.completeSourceQueueCommit()
+                        .thenCompose(ignored -> source.cleanupLocal())
                         .thenCompose(cleaned -> source.discardInitialAfterCommit())
                         .thenRun(
                                 () ->

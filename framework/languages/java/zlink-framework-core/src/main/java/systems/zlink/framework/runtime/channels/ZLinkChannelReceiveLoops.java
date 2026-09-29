@@ -15,7 +15,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
-import java.util.function.Supplier;
 
 final class ZLinkChannelReceiveLoops implements AutoCloseable {
     private static final Duration RECEIVE_POLL_TIMEOUT = Duration.ofMillis(250);
@@ -124,7 +123,6 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
 
     void startRoute(
             ZLinkBackendRouterSocket router,
-            Supplier<Object> socketLock,
             Runnable drainBridge,
             Consumer<ZLinkBackendReceived> dispatch,
             Consumer<Throwable> reportFailure) {
@@ -145,10 +143,8 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
                             }
                             try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
                                 ZLinkBackendReceived received;
-                                synchronized (socketLock.get()) {
-                                    assertReceiveOwner();
-                                    received = router.recv(ZLinkBackendRecvMode.DONT_WAIT);
-                                }
+                                assertReceiveOwner();
+                                received = router.recv(ZLinkBackendRecvMode.DONT_WAIT);
                                 if (received == null) {
                                     break;
                                 }

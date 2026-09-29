@@ -2,7 +2,6 @@ package systems.zlink.framework.runtime.streams;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -64,7 +63,6 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
@@ -92,7 +90,6 @@ final class ZLinkStreamRuntimeIngressTest {
     private static final RoutingId PEER_B = RoutingId.from("peer-b");
     private static final String MESH = "replacement-mesh";
     private final List<ZLinkStreamRuntime> runtimes = new ArrayList<>();
-    private ZLinkFrameworkRegistration lastRegistration;
 
     @AfterEach
     void resetSessionProbe() {
@@ -107,7 +104,6 @@ final class ZLinkStreamRuntimeIngressTest {
         TestSession.lastSession.set(null);
         runtimes.forEach(runtime -> runtime.closeAsync().toCompletableFuture().join());
         runtimes.clear();
-        lastRegistration = null;
     }
 
     @Test
@@ -454,28 +450,44 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
-    void pendingSessionCreatorReentryFailsInsteadOfJoiningItsOwnPendingFuture() throws Exception {
-        FakeStream stream = new FakeStream();
-        ZLinkStreamRuntime runtime = start(stream, 0);
-        runtimes.add(runtime);
-        Object streamNode = lastRegistration.streamNodes().getFirst();
-        AtomicReference<Throwable> reentryFailure = new AtomicReference<>();
+    void sessionConstructionDoesNotHoldTheReceiveThreadAndKeepsPacketOrder() throws Exception {
+        CountDownLatch constructorEntered = new CountDownLatch(1);
+        CompletableFuture<Void> releaseConstructor = new CompletableFuture<>();
         TestSession.constructionHook =
                 () -> {
-                    try {
-                        invokeGetOrCreateSession(runtime, streamNode, stream, PEER_A);
-                    } catch (Throwable failure) {
-                        reentryFailure.set(unwrapInvocationFailure(failure));
-                    }
+                    // Only the first constructor blocks.
+                    TestSession.constructionHook = null;
+                    constructorEntered.countDown();
+                    releaseConstructor.join();
                 };
+        FakeStream stream = new FakeStream();
+        stream.enqueue(PEER_A, frame("a1", "{}"));
+        ZLinkStreamRuntime runtime = start(stream, 0);
+        runtimes.add(runtime);
+        try {
+            assertTrue(constructorEntered.await(5, TimeUnit.SECONDS));
+            stream.enqueue(PEER_A, frame("a2", "{}"));
+            stream.enqueue(PEER_B, frame("b1", "{}"));
+            stream.enqueue(PEER_A, frame("a3", "{}"));
 
-        invokeGetOrCreateSession(runtime, streamNode, stream, PEER_A);
+            TestSession other = awaitSession();
+            assertTrue(
+                    other.dispatchLatch.await(5, TimeUnit.SECONDS),
+                    "another peer must progress while a Session constructor runs");
+            assertEquals(PEER_B, other.context.routingId().orElseThrow());
+            assertEquals(List.of("b1"), other.packetNames);
+        } finally {
+            releaseConstructor.complete(null);
+        }
 
-        assertInstanceOf(IllegalStateException.class, reentryFailure.get());
-        assertEquals(
-                1,
-                TestSession.createdCount.get(),
-                "only the original creator may publish the Session");
+        awaitValue(TestSession.createdCount, 2);
+        TestSession constructedLast = TestSession.lastSession.get();
+        assertEquals(PEER_A, constructedLast.context.routingId().orElseThrow());
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (constructedLast.packetNames.size() < 3 && System.nanoTime() < deadline) {
+            Thread.sleep(1);
+        }
+        assertEquals(List.of("a1", "a2", "a3"), constructedLast.packetNames);
     }
 
     @Test
@@ -947,7 +959,6 @@ final class ZLinkStreamRuntimeIngressTest {
         streamNode.configureSocket().setMaxMessageSize(maxMessageSize);
         ZLinkFrameworkRegistration registration = options.registration();
         configure.accept(registration);
-        lastRegistration = registration;
         FakeProvider provider = new FakeProvider(stream);
         return new ZLinkStreamRuntime(
                         provider,
@@ -982,7 +993,6 @@ final class ZLinkStreamRuntimeIngressTest {
         codecs.freeze();
         ZLinkMessageSerializer serializer =
                 codecs.serializerWithFallback(new ZLinkJsonMessageSerializer());
-        lastRegistration = registration;
         return new ZLinkStreamRuntime(
                         new FakeProvider(stream),
                         new ZLinkBackendAdapterOptions(Duration.ofSeconds(1)),
@@ -1127,38 +1137,6 @@ final class ZLinkStreamRuntimeIngressTest {
                         packetName,
                         Map.of());
         return ZLinkStreamFrameCodec.encode(ZLinkStreamHeaderCodec.encode(header), new byte[0]);
-    }
-
-    private static Object invokeGetOrCreateSession(
-            ZLinkStreamRuntime runtime,
-            Object streamNode,
-            ZLinkBackendStreamSocket stream,
-            RoutingId routingId)
-            throws Exception {
-        Method method =
-                Arrays.stream(ZLinkStreamRuntime.class.getDeclaredMethods())
-                        .filter(candidate -> candidate.getName().equals("getOrCreateSessionState"))
-                        .findFirst()
-                        .orElseThrow();
-        method.setAccessible(true);
-        try {
-            return method.invoke(runtime, streamNode, stream, routingId);
-        } catch (java.lang.reflect.InvocationTargetException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof Exception exception) {
-                throw exception;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw new AssertionError(cause);
-        }
-    }
-
-    private static Throwable unwrapInvocationFailure(Throwable failure) {
-        return failure instanceof java.lang.reflect.InvocationTargetException invocation
-                ? invocation.getCause()
-                : failure;
     }
 
     public static final class TestSession implements ZLinkSession {

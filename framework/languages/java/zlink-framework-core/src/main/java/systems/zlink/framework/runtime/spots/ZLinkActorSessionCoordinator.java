@@ -193,6 +193,15 @@ final class ZLinkActorSessionCoordinator {
                 .publishPreparedTransferredActor(actor, targetSpotId, authorityOwnerGeneration);
     }
 
+    CompletionStage<Void> publishRelocatedActorAsync(
+            ZLinkActorRuntime.PreparedTransferredActor actor,
+            String targetSpotId,
+            long authorityOwnerGeneration) {
+        return requireActors()
+                .publishPreparedTransferredActorAsync(actor, targetSpotId, authorityOwnerGeneration)
+                .thenApply(ignored -> null);
+    }
+
     void openRelocatedActorAdmission(ZLinkActorRuntime.PreparedTransferredActor actor) {
         requireActors().completePreparedTransferredActor(actor);
     }

@@ -127,7 +127,7 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
             ZLinkUserSpotRelocationBarrier.Seal seal =
                     sealing.toCompletableFuture().get().orElseThrow();
 
-            assertTrue(barrier.abort(seal));
+            assertTrue(barrier.abort(seal).toCompletableFuture().join());
             CompletableFuture.allOf(first.toCompletableFuture(), held.toCompletableFuture()).get();
 
             assertEquals(List.of("turn", "continued", "held"), List.copyOf(LiveSpot.events));

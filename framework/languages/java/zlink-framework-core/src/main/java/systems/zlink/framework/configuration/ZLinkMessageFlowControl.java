@@ -10,6 +10,7 @@ public interface ZLinkMessageFlowControl {
      * handler or callback; use {@link #setMessageFlowModeAsync} there.
      */
     default void setMessageFlowMode(ZLinkMessageFlowLogMode mode) {
+        assert systems.zlink.framework.runtime.internal.execution.ZLinkStateLane.assertMayBlock();
         setMessageFlowModeAsync(mode).join();
     }
 

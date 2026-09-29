@@ -15,6 +15,7 @@ import systems.zlink.framework.locationprovider.ZLinkBlobRenewed;
 import systems.zlink.framework.locationprovider.ZLinkBlobStored;
 import systems.zlink.framework.locationprovider.ZLinkRelocationStore;
 import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.locations.ZLinkStoreRetention;
 
 import java.nio.charset.StandardCharsets;
@@ -177,6 +178,7 @@ public final class ZLinkRedisRelocationStore implements ZLinkRelocationStore, Au
 
     @Override
     public void close() {
+        assert ZLinkStateLane.assertMayBlock();
         connection.closeAsync().toCompletableFuture().join();
     }
 

@@ -47,6 +47,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessage
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
@@ -3545,7 +3546,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                     frameBytes,
                                     replyFailureMessage);
                         })
-                .whenComplete(
+                .whenCompleteAsync(
                         (ignored, error) -> {
                             if (relocationReply != null) {
                                 relocationReply.completeLocal();
@@ -4927,26 +4928,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         });
     }
 
-    Optional<ZLinkUserSpotRelocationBarrier.Seal> trySealUserSpotRelocation(String spotId) {
-        return spotLifecycle.relocationBarrier(spotId, actorSessions).trySeal();
-    }
-
-    <T> CompletionStage<T> runUserSpotCapture(
-            String spotId,
-            ZLinkUserSpotRelocationBarrier.Seal seal,
-            Supplier<CompletionStage<T>> capture) {
-        return spotLifecycle.relocationBarrier(spotId, actorSessions).runCapture(seal, capture);
-    }
-
-    boolean abortUserSpotRelocation(String spotId, ZLinkUserSpotRelocationBarrier.Seal seal) {
-        return spotLifecycle.relocationBarrier(spotId, actorSessions).abort(seal);
-    }
-
-    Optional<ZLinkUserSpotRelocationBarrier.Committed> commitUserSpotRelocation(
-            String spotId, ZLinkUserSpotRelocationBarrier.Seal seal) {
-        return spotLifecycle.relocationBarrier(spotId, actorSessions).commit(seal);
-    }
-
     @Override
     boolean isActorMember(String spotId, String actorId) {
         return actorSessions.isActorMember(spotId, actorId);
@@ -5850,6 +5831,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     void awaitClosing(CompletionStage<Void> closingStage) {
         try {
+            assert ZLinkStateLane.assertMayBlock();
             closingStage
                     .toCompletableFuture()
                     .get(defaultRequestTimeout.toMillis(), TimeUnit.MILLISECONDS);

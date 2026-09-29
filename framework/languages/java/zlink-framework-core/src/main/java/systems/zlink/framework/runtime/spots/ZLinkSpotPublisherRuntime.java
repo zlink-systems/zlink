@@ -49,9 +49,11 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
     private final Function<Class<?>, String> contentTypeResolver;
     private final ZLinkMessageFlowTracer flow;
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
-    private final Map<String, ZLinkInternalSpotNode> nodesByChannel = new HashMap<>();
+    // Written only on the state lane; read as a published snapshot by submitting threads.
+    private volatile Map<String, ZLinkInternalSpotNode> nodesByChannel = Map.of();
     private final Map<String, ZLinkBackendSpot> spotsByChannel = new HashMap<>();
-    private boolean closed;
+    // Written only on the state lane (close); submitting threads observe it.
+    private volatile boolean closed;
 
     ZLinkSpotPublisherRuntime(ZLinkMessageSerializer serializer, ZLinkSpotRouteMessages messages) {
         this(
@@ -137,13 +139,15 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
     void register(String channelName, ZLinkInternalSpotNode node) {
         inStateLane(
                 () -> {
-                    nodesByChannel.put(channelName, node);
+                    Map<String, ZLinkInternalSpotNode> next = new HashMap<>(nodesByChannel);
+                    next.put(channelName, node);
+                    nodesByChannel = Map.copyOf(next);
                     return null;
                 });
     }
 
     boolean contains(String channelName) {
-        return inStateLane(() -> nodesByChannel.containsKey(channelName));
+        return nodesByChannel.containsKey(channelName);
     }
 
     ZLinkSpotPublisherClient client() {
@@ -536,7 +540,10 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
 
         private <T> T inStateLane(java.util.function.Supplier<T> work) {
             try {
-                return stateLane.runAsync(work).toCompletableFuture().join();
+                var turn = stateLane.runNowOrQueue(work).toCompletableFuture();
+                // An idle lane ran the turn on this thread; only a pending turn is a wait.
+                assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+                return turn.join();
             } catch (CompletionException failure) {
                 Throwable cause = failure.getCause();
                 if (cause instanceof RuntimeException runtimeFailure) {
@@ -556,17 +563,13 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
                     if (closed) {
                         throw new ZLinkConfigurationException("SPOT publisher runtime is closed");
                     }
-                    ZLinkInternalSpotNode node = requireChannelCore(channelName);
+                    ZLinkInternalSpotNode node = requireChannel(channelName);
                     return spotsByChannel.computeIfAbsent(
                             channelName, ignored -> node.createSpot());
                 });
     }
 
     private ZLinkInternalSpotNode requireChannel(String channelName) {
-        return inStateLane(() -> requireChannelCore(channelName));
-    }
-
-    private ZLinkInternalSpotNode requireChannelCore(String channelName) {
         ZLinkInternalSpotNode node = nodesByChannel.get(channelName);
         if (node == null) {
             throw new ZLinkConfigurationException(
@@ -576,12 +579,15 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
     }
 
     private boolean isClosed() {
-        return inStateLane(() -> closed);
+        return closed;
     }
 
     private <T> T inStateLane(java.util.function.Supplier<T> work) {
         try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
+            var turn = stateLane.runNowOrQueue(work).toCompletableFuture();
+            // An idle lane ran the turn on this thread; only a pending turn is a wait.
+            assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+            return turn.join();
         } catch (CompletionException failure) {
             Throwable cause = failure.getCause();
             if (cause instanceof RuntimeException runtimeFailure) {

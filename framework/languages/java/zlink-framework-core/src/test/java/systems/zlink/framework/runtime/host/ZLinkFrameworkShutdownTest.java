@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.TimeoutException;
 
 final class ZLinkFrameworkShutdownTest {
     @Test
@@ -66,5 +67,20 @@ final class ZLinkFrameworkShutdownTest {
         var failure = assertInstanceOf(ZLinkFrameworkShutdown.Failure.class, thrown.getCause());
         assertEquals("spot_close", failure.stage());
         assertSame(callbackFailure, failure.getCause());
+    }
+
+    @Test
+    void unfinishedCloseStageReportsItsOwnerAndFailsShutdown() {
+        var shutdown = new ZLinkFrameworkShutdown();
+        var unfinished = new CompletableFuture<Void>();
+        shutdown.deferStage("stream_close", () -> unfinished);
+
+        var thrown =
+                assertThrows(
+                        CompletionException.class,
+                        () -> shutdown.closeAsync().toCompletableFuture().join());
+        var failure = assertInstanceOf(ZLinkFrameworkShutdown.Failure.class, thrown.getCause());
+        assertEquals("stream_close", failure.stage());
+        assertInstanceOf(TimeoutException.class, failure.getCause());
     }
 }

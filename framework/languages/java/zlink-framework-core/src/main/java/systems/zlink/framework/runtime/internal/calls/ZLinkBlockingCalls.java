@@ -23,6 +23,7 @@ public final class ZLinkBlockingCalls {
                     "Blocking submission is only valid on an application thread");
         }
         try {
+            assert ZLinkStateLane.assertMayBlock();
             return submission.get().toCompletableFuture().join();
         } catch (CompletionException failure) {
             Throwable cause = failure;

@@ -107,6 +107,9 @@ public final class ZLinkMessage {
                 selected = decoded.get();
             }
         }
+        assert selected.isDone()
+                || systems.zlink.framework.runtime.internal.execution.ZLinkStateLane
+                        .assertMayBlock();
         DecodeOutcome outcome = selected.join();
         if (outcome instanceof DecodeFailed failed) {
             throw propagate(failed.failure());

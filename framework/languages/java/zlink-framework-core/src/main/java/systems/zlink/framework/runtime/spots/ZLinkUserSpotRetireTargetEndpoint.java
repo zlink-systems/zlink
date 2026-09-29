@@ -1050,47 +1050,87 @@ final class ZLinkUserSpotRetireTargetEndpoint
                         generations -> {
                             long targetOwnerGeneration =
                                     requireGeneration(generations, participant.authorityKey());
-                            var replay =
-                                    actorStaging.closeDirectJoinIngress(
-                                            target.staged(), request.relocationPayload());
-                            //  Spec 08-routing §3 step 5: closing the temporary queue
-                            //  is the switch to existing Actor dispatch, so the
-                            //  admission-time registration that routed arrivals into
-                            //  that queue ends here — before command 44 (spec 05 §4.2
-                            //  step 8) lets the Session owner relay again. Otherwise the
-                            //  first relay after the route switch is handed to the
-                            //  closed queue and lost.
-                            actorJoin.releasePrewarm(request.fence().aggregateId());
-                            actorStaging.publishDirectJoinHidden(replay, targetOwnerGeneration);
-                            actorStaging.prepareDirectJoinBoundSession(
-                                    replay,
-                                    target.requestWithSessionRoute(),
-                                    targetOwnerGeneration);
-                            target.published().set(true);
-                            return ZLinkSerialExecutionQueue.yieldCurrent(
-                                            actorJoin.notifyTargetJoined(
-                                                    target.directAdmission(), target.staged()))
+                            return actorStaging
+                                    .closeDirectJoinIngress(
+                                            target.staged(), request.relocationPayload())
                                     .thenCompose(
-                                            ignored ->
-                                                    ZLinkSerialExecutionQueue.yieldCurrent(
-                                                            actorJoin.submitSourceLeave(
-                                                                    request,
-                                                                    target.previousMembership(),
-                                                                    targetOwnerGeneration)))
-                                    .thenCompose(
-                                            ignored ->
-                                                    ZLinkSerialExecutionQueue.yieldCurrent(
-                                                            actorJoin.notifyTargetAccepted(
-                                                                    target.directAdmission(),
-                                                                    target.staged())))
-                                    .thenRun(() -> actorStaging.openAdmission(target.staged()))
-                                    .thenCompose(
-                                            ignored ->
-                                                    ZLinkSerialExecutionQueue.yieldCurrent(
-                                                            actorStaging.replayDirectJoin(
-                                                                    replay,
-                                                                    productionActorReplayer(
-                                                                            target, request))));
+                                            replay -> {
+                                                //  Spec 08-routing §3 step 5: closing the temporary
+                                                // queue
+                                                //  is the switch to existing Actor dispatch, so the
+                                                //  admission-time registration that routed arrivals
+                                                // into
+                                                //  that queue ends here — before command 44 (spec
+                                                // 05 §4.2
+                                                //  step 8) lets the Session owner relay again.
+                                                // Otherwise the
+                                                //  first relay after the route switch is handed to
+                                                // the
+                                                //  closed queue and lost.
+                                                return actorJoin
+                                                        .releasePrewarmAsync(
+                                                                request.fence().aggregateId())
+                                                        .thenCompose(
+                                                                released ->
+                                                                        actorStaging
+                                                                                .publishDirectJoinHidden(
+                                                                                        replay,
+                                                                                        targetOwnerGeneration))
+                                                        .thenCompose(
+                                                                published -> {
+                                                                    actorStaging
+                                                                            .prepareDirectJoinBoundSession(
+                                                                                    replay,
+                                                                                    target
+                                                                                            .requestWithSessionRoute(),
+                                                                                    targetOwnerGeneration);
+                                                                    target.published().set(true);
+                                                                    return ZLinkSerialExecutionQueue
+                                                                            .yieldCurrent(
+                                                                                    actorJoin
+                                                                                            .notifyTargetJoined(
+                                                                                                    target
+                                                                                                            .directAdmission(),
+                                                                                                    target
+                                                                                                            .staged()))
+                                                                            .thenCompose(
+                                                                                    ignored ->
+                                                                                            ZLinkSerialExecutionQueue
+                                                                                                    .yieldCurrent(
+                                                                                                            actorJoin
+                                                                                                                    .submitSourceLeave(
+                                                                                                                            request,
+                                                                                                                            target
+                                                                                                                                    .previousMembership(),
+                                                                                                                            targetOwnerGeneration)))
+                                                                            .thenCompose(
+                                                                                    ignored ->
+                                                                                            ZLinkSerialExecutionQueue
+                                                                                                    .yieldCurrent(
+                                                                                                            actorJoin
+                                                                                                                    .notifyTargetAccepted(
+                                                                                                                            target
+                                                                                                                                    .directAdmission(),
+                                                                                                                            target
+                                                                                                                                    .staged())))
+                                                                            .thenRun(
+                                                                                    () ->
+                                                                                            actorStaging
+                                                                                                    .openAdmission(
+                                                                                                            target
+                                                                                                                    .staged()))
+                                                                            .thenCompose(
+                                                                                    ignored ->
+                                                                                            ZLinkSerialExecutionQueue
+                                                                                                    .yieldCurrent(
+                                                                                                            actorStaging
+                                                                                                                    .replayDirectJoin(
+                                                                                                                            replay,
+                                                                                                                            productionActorReplayer(
+                                                                                                                                    target,
+                                                                                                                                    request))));
+                                                                });
+                                            });
                         })
                 .thenCompose(
                         ignored ->

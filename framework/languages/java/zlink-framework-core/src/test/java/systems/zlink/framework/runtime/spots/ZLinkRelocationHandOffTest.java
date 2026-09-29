@@ -31,6 +31,7 @@ final class ZLinkRelocationHandOffTest {
         assertEquals(
                 ZLinkRelocationTransitionClient.Settlement.SOURCE_PRESERVED,
                 result.toCompletableFuture().getNow(null));
+        assertTrue(relayAdmission.isCancelled());
     }
 
     @Test
@@ -50,6 +51,47 @@ final class ZLinkRelocationHandOffTest {
         assertEquals(
                 ZLinkRelocationTransitionClient.Settlement.SOURCE_PRESERVED,
                 result.toCompletableFuture().getNow(null));
+    }
+
+    @Test
+    void targetCommitOwnsTheCutoverSubmitTerminal() {
+        var cutover = new CompletableFuture<Void>();
+        var result =
+                ZLinkRelocationHandOff.run(
+                        client(
+                                new AtomicInteger(),
+                                ZLinkRelocationTransitionClient.Settlement.TARGET_COMMITTED,
+                                cutover),
+                        request(),
+                        () -> CompletableFuture.completedFuture(null),
+                        Duration.ofSeconds(1),
+                        Instant.now());
+
+        assertFalse(result.toCompletableFuture().isDone());
+        cutover.complete(null);
+        assertEquals(
+                ZLinkRelocationTransitionClient.Settlement.TARGET_COMMITTED,
+                result.toCompletableFuture().getNow(null));
+    }
+
+    @Test
+    void sourcePreserveCancelsPendingCutoverSubmit() {
+        var cutover = new CompletableFuture<Void>();
+        var result =
+                ZLinkRelocationHandOff.run(
+                        client(
+                                new AtomicInteger(),
+                                ZLinkRelocationTransitionClient.Settlement.SOURCE_PRESERVED,
+                                cutover),
+                        request(),
+                        () -> CompletableFuture.completedFuture(null),
+                        Duration.ofSeconds(1),
+                        Instant.now());
+
+        assertEquals(
+                ZLinkRelocationTransitionClient.Settlement.SOURCE_PRESERVED,
+                result.toCompletableFuture().getNow(null));
+        assertTrue(cutover.isCancelled());
     }
 
     private static ZLinkSpotRetireControl.StageRequest request() {
@@ -78,6 +120,16 @@ final class ZLinkRelocationHandOffTest {
     }
 
     private static ZLinkRelocationTransitionClient client(AtomicInteger settleCalls) {
+        return client(
+                settleCalls,
+                ZLinkRelocationTransitionClient.Settlement.SOURCE_PRESERVED,
+                CompletableFuture.completedFuture(null));
+    }
+
+    private static ZLinkRelocationTransitionClient client(
+            AtomicInteger settleCalls,
+            ZLinkRelocationTransitionClient.Settlement settlement,
+            CompletionStage<Void> cutover) {
         return new ZLinkRelocationTransitionClient() {
             @Override
             public CompletionStage<Void> stage(
@@ -97,14 +149,14 @@ final class ZLinkRelocationHandOffTest {
             @Override
             public CompletionStage<Void> publish(
                     RoutingId rid, ZLinkSpotRetireControl.Fence value, Duration timeout) {
-                return CompletableFuture.completedFuture(null);
+                return cutover;
             }
 
             @Override
             public CompletionStage<Settlement> settle(
                     RoutingId rid, ZLinkSpotRetireControl.Fence value, Instant preserveAt) {
                 settleCalls.incrementAndGet();
-                return CompletableFuture.completedFuture(Settlement.SOURCE_PRESERVED);
+                return CompletableFuture.completedFuture(settlement);
             }
 
             @Override

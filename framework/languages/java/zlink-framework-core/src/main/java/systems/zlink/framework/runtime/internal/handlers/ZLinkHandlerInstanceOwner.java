@@ -96,7 +96,9 @@ public final class ZLinkHandlerInstanceOwner implements AutoCloseable {
 
     private <T> T inStateLane(Supplier<T> work) {
         try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
+            var result = stateLane.runAsync(work).toCompletableFuture();
+            assert result.isDone() || ZLinkStateLane.assertMayBlock();
+            return result.join();
         } catch (CompletionException failure) {
             Throwable cause = failure.getCause();
             if (cause instanceof RuntimeException runtimeFailure) {

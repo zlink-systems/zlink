@@ -42,6 +42,7 @@ import systems.zlink.framework.streams.ZLinkSessionContext;
 import systems.zlink.framework.streams.ZLinkStreamError;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -366,7 +367,7 @@ final class NodesAndServicesTest {
     }
 
     @Test
-    void concurrentGetOrCreateWaitsForCreatingThenReturnsExisting() {
+    void concurrentGetOrCreateWaitsForCreatingThenReturnsExisting() throws Exception {
         BlockingPlayerActorFactory.reset();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
@@ -391,19 +392,25 @@ final class NodesAndServicesTest {
             CompletionStage<ZLinkActorCreateResult> second =
                     runtime.actorManager().getOrCreate("player-serial", "blocking-player").submit();
 
-            assertEquals(1, BlockingPlayerActorFactory.invocations.get());
-            assertTrue(!second.toCompletableFuture().isDone());
+            try {
+                BlockingPlayerActorFactory.entered.get(3, TimeUnit.SECONDS);
+                assertEquals(1, BlockingPlayerActorFactory.invocations.get());
+                assertTrue(!second.toCompletableFuture().isDone());
+            } finally {
+                BlockingPlayerActorFactory.release.complete(null);
+            }
 
-            BlockingPlayerActorFactory.release.complete(null);
-
-            assertTrue(
-                    first.toCompletableFuture().join()
-                            instanceof
-                            systems.zlink.framework.actors.ZLinkActorCreateResult.Created);
-            assertTrue(
-                    second.toCompletableFuture().join()
-                            instanceof
-                            systems.zlink.framework.actors.ZLinkActorCreateResult.Existing);
+            // The reservation CAS winner creates the Actor; submission order does not.
+            List<ZLinkActorCreateResult> results =
+                    List.of(first.toCompletableFuture().join(), second.toCompletableFuture().join());
+            assertEquals(
+                    1,
+                    results.stream().filter(ZLinkActorCreateResult.Created.class::isInstance).count(),
+                    () -> "exactly one request must create the Actor: " + results);
+            assertEquals(
+                    1,
+                    results.stream().filter(ZLinkActorCreateResult.Existing.class::isInstance).count(),
+                    () -> "the other request must return the created Actor: " + results);
             assertEquals(1, BlockingPlayerActorFactory.invocations.get());
         }
     }
@@ -715,16 +722,19 @@ final class NodesAndServicesTest {
 
     public static final class BlockingPlayerActorFactory implements ZLinkActorFactory {
         static final AtomicInteger invocations = new AtomicInteger();
+        static CompletableFuture<Void> entered;
         static CompletableFuture<Void> release;
 
         static void reset() {
             invocations.set(0);
+            entered = new CompletableFuture<>();
             release = new CompletableFuture<>();
         }
 
         @Override
         public CompletionStage<ZLinkActor> create(ZLinkActorContext context) {
             invocations.incrementAndGet();
+            entered.complete(null);
             return release.thenApply(ignored -> new PlayerActor(context.actorId(), context));
         }
     }

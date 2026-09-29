@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.internal.handlers;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
+import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -16,8 +17,7 @@ import java.util.function.Supplier;
  * ability to close the activation owner.
  */
 public final class ZLinkActorHandlerInstances {
-    private static final Map<ZLinkActor, ZLinkHandlerInstanceOwner> OWNERS =
-            new IdentityHashMap<>();
+    private static volatile Map<ZLinkActor, ZLinkHandlerInstanceOwner> owners = Map.of();
     private static final ZLinkStateLane STATE_LANE = new ZLinkStateLane();
 
     private ZLinkActorHandlerInstances() {}
@@ -27,11 +27,13 @@ public final class ZLinkActorHandlerInstances {
                 () -> {
                     Objects.requireNonNull(actor, "actor");
                     Objects.requireNonNull(owner, "owner");
-                    ZLinkHandlerInstanceOwner previous = OWNERS.get(actor);
+                    ZLinkHandlerInstanceOwner previous = owners.get(actor);
                     if (previous != null && previous != owner) {
                         throw new IllegalStateException("Actor handler owner is already bound");
                     }
-                    OWNERS.put(actor, owner);
+                    Map<ZLinkActor, ZLinkHandlerInstanceOwner> next = new IdentityHashMap<>(owners);
+                    next.put(actor, owner);
+                    owners = Collections.unmodifiableMap(next);
                     return null;
                 });
     }
@@ -40,30 +42,30 @@ public final class ZLinkActorHandlerInstances {
         inStateLane(
                 () -> {
                     if (actor != null) {
-                        OWNERS.remove(actor, owner);
+                        Map<ZLinkActor, ZLinkHandlerInstanceOwner> next =
+                                new IdentityHashMap<>(owners);
+                        next.remove(actor, owner);
+                        owners = Collections.unmodifiableMap(next);
                     }
                     return null;
                 });
     }
 
     public static Object instance(ZLinkActor actor, Class<?> handlerType) {
-        return inStateLane(
-                        () -> {
-                            ZLinkHandlerInstanceOwner owner =
-                                    OWNERS.get(Objects.requireNonNull(actor, "actor"));
-                            if (owner == null) {
-                                throw new IllegalStateException(
-                                        "Actor handler owner is unavailable: "
-                                                + actor.context().actorId());
-                            }
-                            return owner;
-                        })
-                .instance(handlerType);
+        ZLinkHandlerInstanceOwner owner = owners.get(Objects.requireNonNull(actor, "actor"));
+        if (owner == null) {
+            throw new IllegalStateException(
+                    "Actor handler owner is unavailable: " + actor.context().actorId());
+        }
+        return owner.instance(handlerType);
     }
 
     private static <T> T inStateLane(Supplier<T> work) {
         try {
-            return STATE_LANE.runAsync(work).toCompletableFuture().join();
+            var turn = STATE_LANE.runNowOrQueue(work).toCompletableFuture();
+            // An idle lane ran the turn on this thread; only a pending turn is a wait.
+            assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+            return turn.join();
         } catch (CompletionException failure) {
             Throwable cause = failure.getCause();
             if (cause instanceof RuntimeException runtimeFailure) {

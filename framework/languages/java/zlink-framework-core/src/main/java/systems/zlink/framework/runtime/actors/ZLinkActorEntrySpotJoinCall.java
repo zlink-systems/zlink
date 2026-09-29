@@ -78,10 +78,7 @@ final class ZLinkActorEntrySpotJoinCall implements ZLinkActorJoinCall {
                     context.actorRef().actorId(),
                     deadline,
                     () -> executeDeferred(operationId, deadline),
-                    operation ->
-                            services.actors()
-                                    .submitDeferredJoinBarrier(
-                                            context.actorRef().actorId(), operation),
+                    operation -> services.actors().submitDeferredJoinBarrier(context, operation),
                     () -> context.releaseDeferredJoin(deferred));
         } catch (RuntimeException error) {
             context.releaseDeferredJoin(deferred);

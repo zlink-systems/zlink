@@ -41,6 +41,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorRe
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
@@ -1500,6 +1501,7 @@ public final class ZLinkChannelRuntime
     private static void awaitInfrastructureSettlement(
             String owner, CompletionStage<Void> settlement) {
         try {
+            assert ZLinkStateLane.assertMayBlock();
             settlement.toCompletableFuture().join();
         } catch (CompletionException failure) {
             LOGGER.log(
@@ -1687,7 +1689,6 @@ public final class ZLinkChannelRuntime
     private void startRouteLoop(String channelName, ZLinkBackendRouterSocket router) {
         receiveLoops.startRoute(
                 router,
-                () -> sockets.routeSocketLock(channelName, this),
                 () -> spotRouteBridgeDrainer.drainNow(channelName),
                 received -> routeDispatcher.dispatch(channelName, router, received),
                 error ->

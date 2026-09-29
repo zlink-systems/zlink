@@ -75,7 +75,10 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
 
     private <T> T inStateLane(java.util.function.Supplier<T> work) {
         try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
+            var turn = stateLane.runNowOrQueue(work).toCompletableFuture();
+            // An idle lane ran the turn on this thread; only a pending turn is a wait.
+            assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+            return turn.join();
         } catch (CompletionException failure) {
             Throwable cause = failure.getCause();
             if (cause instanceof RuntimeException runtimeFailure) {
@@ -139,10 +142,10 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
 
     @Override
     public ZLinkBackendStreamReceived recv() {
-        return inStateLane(this::recvOnLane);
+        return recvPacket();
     }
 
-    private ZLinkBackendStreamReceived recvOnLane() {
+    private ZLinkBackendStreamReceived recvPacket() {
         StreamPacket received = new StreamPacket();
         boolean transferred = false;
         try {

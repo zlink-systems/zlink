@@ -9,6 +9,7 @@ import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.internal.drain.AsyncDrainProbe;
 import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotContext;
@@ -17,6 +18,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -24,18 +26,50 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkUserSpotAggregateStagingOwnerTest {
     @Test
+    void stagedIngressOwnsNamedCompletionUntilDiscard() {
+        var owner = new ZLinkUserSpotAggregateStagingOwner(new FakeBackend());
+        var staged = owner.stage(request(), () -> false).toCompletableFuture().join();
+        assertTrue(
+                owner.acceptSpotIngress(
+                        staged,
+                        ZLinkAcceptedJournalTestRecords.spot(
+                                "room-a", "room-a", 0, "spot.send", Map.of(), new byte[] {1}),
+                        null,
+                        ignored -> {}));
+        owner.stageRelayedRecord(staged, "room-a", false, new byte[] {2})
+                .toCompletableFuture()
+                .join();
+
+        assertEquals(
+                List.of(
+                        new AsyncDrainProbe.Pending("temporary:spot:0", "aggregate staging owner"),
+                        new AsyncDrainProbe.Pending("relayed:spot:0", "aggregate staging owner")),
+                pending(staged));
+
+        owner.discard(staged).toCompletableFuture().join();
+        assertTrue(pending(staged).isEmpty());
+    }
+
+    @Test
     void failedBacklogReplayDoesNotWithholdLaterAcceptedRecord() {
         FakeBackend backend = new FakeBackend();
         var owner = new ZLinkUserSpotAggregateStagingOwner(backend);
         var request = request();
         var staged = owner.stage(request, () -> false).toCompletableFuture().join();
         List<Long> submitted = new ArrayList<>();
+        var obligations = new AsyncDrainProbe();
+        Map<Long, CompletableFuture<Void>> expected =
+                Map.of(
+                        1L, obligations.expect("journal:spot:1", "aggregate staging owner"),
+                        2L, obligations.expect("journal:spot:2", "aggregate staging owner"),
+                        3L, obligations.expect("journal:actor-a:3", "aggregate staging owner"));
         var backlog =
                 owner.closeDurableBacklog(
                                 staged,
                                 request,
                                 (lane, record) -> {
                                     submitted.add(record.sequence());
+                                    expected.get(record.sequence()).complete(null);
                                     return record.sequence() == 1
                                             ? CompletableFuture.failedFuture(
                                                     new IllegalStateException(
@@ -44,6 +78,13 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
                                 })
                         .toCompletableFuture()
                         .join();
+        assertEquals(
+                Set.of(
+                        new AsyncDrainProbe.Pending("journal:spot:1", "aggregate staging owner"),
+                        new AsyncDrainProbe.Pending("journal:spot:2", "aggregate staging owner"),
+                        new AsyncDrainProbe.Pending(
+                                "journal:actor:actor-a:3", "aggregate staging owner")),
+                Set.copyOf(pending(backlog)));
         owner.publishHidden(backlog, Map.of("actor-a", 11L, "actor-b", 12L));
         owner.openAdmission(staged);
 
@@ -51,6 +92,17 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
                 CompletionException.class,
                 () -> owner.drainDurableBacklog(backlog).toCompletableFuture().join());
         assertEquals(List.of(1L, 2L, 3L), submitted);
+        obligations.assertDrained();
+    }
+
+    private static List<AsyncDrainProbe.Pending> pending(Object owner) {
+        try {
+            var field = owner.getClass().getDeclaredField("debugProbe");
+            field.setAccessible(true);
+            return ((AsyncDrainProbe) field.get(owner)).pending();
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+        }
     }
 
     @Test

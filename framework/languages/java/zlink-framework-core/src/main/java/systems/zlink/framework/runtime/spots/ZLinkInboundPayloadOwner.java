@@ -49,6 +49,9 @@ final class ZLinkInboundPayloadOwner {
             }
         }
 
+        assert selected.isDone()
+                || systems.zlink.framework.runtime.internal.execution.ZLinkStateLane
+                        .assertMayBlock();
         DecodeOutcome resolved = selected.join();
         if (resolved instanceof DecodeFailed failed) {
             throw propagate(failed.failure());

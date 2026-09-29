@@ -79,7 +79,10 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
 
     private <T> T inStateLane(Supplier<T> work) {
         try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
+            var turn = stateLane.runNowOrQueue(work).toCompletableFuture();
+            // An idle lane ran the turn on this thread; only a pending turn is a wait.
+            assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+            return turn.join();
         } catch (CompletionException failure) {
             Throwable cause = failure.getCause();
             if (cause instanceof RuntimeException runtimeFailure) {
@@ -242,7 +245,8 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
             }
             monitor = monitoring == null ? null : monitoring.openSocketMonitor(subscriber);
             connection =
-                    new Connection(channelName, endpoint, publisherId, id, subscriber, monitor);
+                    new Connection(
+                            channelName, endpoint, publisherId, id, subscriber, monitor, stateLane);
             Connection candidate = connection;
             boolean accepted =
                     inStateLane(
@@ -586,12 +590,25 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
             CompletionStage<Void> dependency =
                     CompletableFuture.allOf(
                             reservation.dependencies().toArray(CompletableFuture[]::new));
-            dependency.whenComplete((ignored, failure) -> closeReserved(reservation.connection()));
+            dependency.whenCompleteAsync(
+                    (ignored, failure) -> {
+                        Throwable closeFailure;
+                        try {
+                            closeFailure = closeReserved(reservation.connection());
+                        } catch (RuntimeException | Error callbackFailure) {
+                            closeFailure = callbackFailure;
+                        }
+                        if (closeFailure == null) {
+                            reservation.settlement().complete(null);
+                        } else {
+                            reservation.settlement().completeExceptionally(closeFailure);
+                        }
+                    });
         }
         return reservation.settlement();
     }
 
-    private void closeReserved(Connection connection) {
+    private RuntimeException closeReserved(Connection connection) {
         RuntimeException failure = null;
         try {
             connection.subscriber.disconnect(connection.endpoint);
@@ -631,15 +648,12 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
                 closeFailure.addSuppressed(stateFailure);
             }
         }
-        if (closeFailure == null) {
-            connection.closeSettlement.complete(null);
-        } else {
-            connection.closeSettlement.completeExceptionally(closeFailure);
-        }
+        return closeFailure;
     }
 
     private static void awaitClose(CompletionStage<Void> close) {
         try {
+            assert ZLinkStateLane.assertMayBlock();
             close.toCompletableFuture().join();
         } catch (CompletionException failure) {
             Throwable cause = failure.getCause();
@@ -754,7 +768,7 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
         private final String connectionId;
         private final ZLinkBackendSubscriberSocket subscriber;
         private final ZLinkBackendSocketMonitor monitor;
-        private final ZLinkClassicFanoutLiveness liveness = new ZLinkClassicFanoutLiveness();
+        private final ZLinkClassicFanoutLiveness liveness;
         private final CompletableFuture<Void> openingSettlement = new CompletableFuture<>();
         private final CompletableFuture<Void> closeSettlement = new CompletableFuture<>();
         private ConnectionPhase phase = ConnectionPhase.OPENING;
@@ -766,13 +780,15 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
                 RoutingId publisherId,
                 String connectionId,
                 ZLinkBackendSubscriberSocket subscriber,
-                ZLinkBackendSocketMonitor monitor) {
+                ZLinkBackendSocketMonitor monitor,
+                ZLinkStateLane ownerLane) {
             this.channelName = channelName;
             this.endpoint = endpoint;
             this.publisherId = publisherId;
             this.connectionId = connectionId;
             this.subscriber = subscriber;
             this.monitor = monitor;
+            this.liveness = new ZLinkClassicFanoutLiveness(ownerLane);
         }
     }
 }

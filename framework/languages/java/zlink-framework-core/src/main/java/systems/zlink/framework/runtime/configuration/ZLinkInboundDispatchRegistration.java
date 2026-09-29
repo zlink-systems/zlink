@@ -28,7 +28,10 @@ public final class ZLinkInboundDispatchRegistration implements ZLinkInboundDispa
 
     private <T> T inStateLane(Supplier<T> work) {
         try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
+            var turn = stateLane.runNowOrQueue(work).toCompletableFuture();
+            // An idle lane ran the turn on this thread; only a pending turn is a wait.
+            assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+            return turn.join();
         } catch (CompletionException failure) {
             Throwable cause = failure.getCause();
             if (cause instanceof RuntimeException runtimeFailure) {
@@ -43,10 +46,6 @@ public final class ZLinkInboundDispatchRegistration implements ZLinkInboundDispa
 
     @Override
     public OptionalLong coreHwmMemoryLimitBytes() {
-        return inStateLane(this::coreHwmMemoryLimitBytesCore);
-    }
-
-    private OptionalLong coreHwmMemoryLimitBytesCore() {
         return optional(coreHwmMemoryLimitBytes);
     }
 
@@ -66,10 +65,6 @@ public final class ZLinkInboundDispatchRegistration implements ZLinkInboundDispa
 
     @Override
     public OptionalLong coreHwmBudgetBytes() {
-        return inStateLane(this::coreHwmBudgetBytesCore);
-    }
-
-    private OptionalLong coreHwmBudgetBytesCore() {
         return optional(coreHwmBudgetBytes);
     }
 
@@ -89,10 +84,6 @@ public final class ZLinkInboundDispatchRegistration implements ZLinkInboundDispa
 
     @Override
     public ZLinkCoreHwmProfile coreHwmProfile() {
-        return inStateLane(this::coreHwmProfileCore);
-    }
-
-    private ZLinkCoreHwmProfile coreHwmProfileCore() {
         return coreHwmProfile;
     }
 
@@ -112,10 +103,6 @@ public final class ZLinkInboundDispatchRegistration implements ZLinkInboundDispa
 
     @Override
     public ZLinkApplicationJobQueueProfile applicationJobQueueProfile() {
-        return inStateLane(this::applicationJobQueueProfileCore);
-    }
-
-    private ZLinkApplicationJobQueueProfile applicationJobQueueProfileCore() {
         return applicationJobQueueProfile;
     }
 
@@ -135,10 +122,6 @@ public final class ZLinkInboundDispatchRegistration implements ZLinkInboundDispa
 
     @Override
     public OptionalLong maxQueuedApplicationJobs() {
-        return inStateLane(this::maxQueuedApplicationJobsCore);
-    }
-
-    private OptionalLong maxQueuedApplicationJobsCore() {
         return optional(maxQueuedApplicationJobs);
     }
 
@@ -162,10 +145,6 @@ public final class ZLinkInboundDispatchRegistration implements ZLinkInboundDispa
 
     @Override
     public int applicationJobQueuePauseThresholdPercent() {
-        return inStateLane(this::applicationJobQueuePauseThresholdPercentCore);
-    }
-
-    private int applicationJobQueuePauseThresholdPercentCore() {
         return applicationJobQueuePauseThresholdPercent;
     }
 
@@ -189,10 +168,6 @@ public final class ZLinkInboundDispatchRegistration implements ZLinkInboundDispa
 
     @Override
     public int applicationJobQueueResumeThresholdPercent() {
-        return inStateLane(this::applicationJobQueueResumeThresholdPercentCore);
-    }
-
-    private int applicationJobQueueResumeThresholdPercentCore() {
         return applicationJobQueueResumeThresholdPercent;
     }
 

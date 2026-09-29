@@ -183,9 +183,12 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
                 });
     }
 
-    private <T> T inStateLane(Supplier<T> work) {
+    private <T> CompletionStage<T> inStateLane(Supplier<CompletionStage<T>> work) {
+        var turn = stateLane.runNowOrQueue(work).toCompletableFuture();
+        // An idle lane ran the turn on this thread; only a pending turn is a wait.
+        assert turn.isDone() || ZLinkStateLane.assertMayBlock();
         try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
+            return turn.join();
         } catch (CompletionException failure) {
             Throwable cause = failure.getCause();
             if (cause instanceof RuntimeException runtimeFailure) {

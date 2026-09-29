@@ -1,6 +1,8 @@
 package systems.zlink.framework.runtime.internal.execution;
 
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -11,6 +13,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -53,17 +56,46 @@ public final class ZLinkStateLane {
         return CURRENT.get();
     }
 
+    /** Assertion-only check for a synchronous wait on infrastructure or serial execution. */
+    public static boolean assertMayBlock() {
+        if (CURRENT.get() != null) {
+            throw new AssertionError("synchronous wait from a state lane");
+        }
+        if (systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
+                        .currentSerialExecutionTurn()
+                != null) {
+            throw new AssertionError("synchronous wait from a serial turn");
+        }
+        String thread = Thread.currentThread().getName();
+        if (thread.equals("zlink-stream-recv") || thread.equals("zlink-java-channel-runtime")) {
+            throw new AssertionError("synchronous wait from a receive thread");
+        }
+        return true;
+    }
+
     public boolean isOnLane() {
         return CURRENT.get() == this;
     }
 
     public <T> CompletionStage<T> runAsync(Supplier<T> work) {
+        return submit(work, false);
+    }
+
+    /**
+     * Runs one turn for a caller that waits for its result. An idle lane runs the turn on the
+     * caller, so the caller does not wait; a busy lane queues it like {@link #runAsync}.
+     */
+    public <T> CompletionStage<T> runNowOrQueue(Supplier<T> work) {
+        return submit(work, true);
+    }
+
+    private <T> CompletionStage<T> submit(Supplier<T> work, boolean runIdleTurnNow) {
         Objects.requireNonNull(work, "work");
         throwIfReentrant();
         throwIfClosed();
 
         CompletableFuture<T> result = new CompletableFuture<>();
-        mailbox.add(
+        WorkItem turn =
                 () -> {
                     try {
                         result.complete(callWithCurrent(this, work));
@@ -74,7 +106,19 @@ public final class ZLinkStateLane {
                                         : new CompletionException(error));
                     }
                     return CompletableFuture.completedFuture(null);
-                });
+                };
+        // The scheduled claim keeps an inline turn exclusive and behind queued turns.
+        if (runIdleTurnNow && scheduled.compareAndSet(0, 1)) {
+            try {
+                if (mailbox.isEmpty() && closed.get() == 0) {
+                    turn.run();
+                    return result;
+                }
+            } finally {
+                releaseInlineTurn();
+            }
+        }
+        mailbox.add(turn);
         scheduleDrain();
         // No caller can observe the private result before submission returns.
         // A completed turn needs no completion task; a pending turn must still
@@ -83,6 +127,51 @@ public final class ZLinkStateLane {
             return result;
         }
         return result.handleAsync((value, error) -> result.join());
+    }
+
+    /**
+     * Admits one queue entry in one lane turn without making the caller wait for the lane.
+     *
+     * <p>{@code owner} runs first and chooses the owning queue from the lane's state. {@code
+     * admission} then enqueues into that queue with the caller's flow and application-job
+     * reservation, so the entry is the one the calling thread would have created. The lane's FIFO
+     * keeps the callers' submission order. A reservation that no queue took is returned when the
+     * turn ends.
+     */
+    public <S, T> CompletionStage<T> admitAsync(
+            Supplier<S> owner, Function<S, ? extends CompletionStage<T>> admission) {
+        Objects.requireNonNull(owner, "owner");
+        Objects.requireNonNull(admission, "admission");
+        ZLinkFlowContext.State flow = ZLinkFlowContext.current();
+        ZLinkApplicationJobContext.QueuedOwnership reservation =
+                ZLinkApplicationJobContext.transferToQueuedJob();
+        CompletionStage<CompletionStage<T>> admitted;
+        try {
+            admitted =
+                    runAsync(
+                            () -> {
+                                S selected = owner.get();
+                                try (ZLinkFlowContext.Scope ignoredFlow =
+                                                ZLinkFlowContext.enter(flow);
+                                        ZLinkApplicationJobContext.Scope ignoredJob =
+                                                ZLinkApplicationJobContext.enterQueued(
+                                                        reservation)) {
+                                    return admission.apply(selected);
+                                }
+                            });
+        } catch (RuntimeException | Error rejected) {
+            closeUnqueued(reservation);
+            throw rejected;
+        }
+        return admitted.whenComplete((ignored, error) -> closeUnqueued(reservation))
+                .thenCompose(Function.identity());
+    }
+
+    private static void closeUnqueued(ZLinkApplicationJobContext.QueuedOwnership reservation) {
+        if (reservation != null) {
+            // A no-op once a queue entry took the reservation.
+            reservation.close();
+        }
     }
 
     public CompletionStage<Void> runAsync(Runnable work) {
@@ -144,6 +233,15 @@ public final class ZLinkStateLane {
     private void throwIfClosed() {
         if (closed.get() != 0) {
             throw new IllegalStateException("state lane is closed");
+        }
+    }
+
+    private void releaseInlineTurn() {
+        scheduled.set(0);
+        if (!mailbox.isEmpty()) {
+            scheduleDrain();
+        } else if (closed.get() != 0) {
+            completed.complete(null);
         }
     }
 

@@ -7,6 +7,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.drain.AsyncDrainProbe;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapterRegistry;
 import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
@@ -292,13 +293,18 @@ final class ZLinkUserSpotAggregateStagingOwner {
                     if (staged.ingressClosed) {
                         return false;
                     }
-                    staged.pendingIngress.add(
+                    PendingIngress ingress =
                             new PendingIngress(
                                     "spot",
                                     Objects.requireNonNull(
                                             acceptedJournalRecord, "acceptedJournalRecord"),
                                     reply,
-                                    failure));
+                                    failure);
+                    assert staged.debugProbe.expect(
+                                    "temporary:spot:" + staged.pendingIngress.size(),
+                                    "aggregate staging owner")
+                            != null;
+                    staged.pendingIngress.add(ingress);
                     return true;
                 });
     }
@@ -320,13 +326,18 @@ final class ZLinkUserSpotAggregateStagingOwner {
                     if (staged.ingressClosed) {
                         return false;
                     }
-                    staged.pendingIngress.add(
+                    PendingIngress ingress =
                             new PendingIngress(
                                     actorId,
                                     Objects.requireNonNull(
                                             acceptedJournalRecord, "acceptedJournalRecord"),
                                     reply,
-                                    failure));
+                                    failure);
+                    assert staged.debugProbe.expect(
+                                    "temporary:" + actorId + ":" + staged.pendingIngress.size(),
+                                    "aggregate staging owner")
+                            != null;
+                    staged.pendingIngress.add(ingress);
                     return true;
                 });
     }
@@ -349,12 +360,20 @@ final class ZLinkUserSpotAggregateStagingOwner {
                                 return new IllegalStateException(
                                         "aggregate staging ingress is closed");
                             }
-                            staged.relayedIngress.add(
+                            PendingIngress ingress =
                                     new PendingIngress(
                                             actor ? objectId : "spot",
                                             Objects.requireNonNull(frozenRecord, "frozenRecord"),
                                             null,
-                                            null));
+                                            null);
+                            assert staged.debugProbe.expect(
+                                            "relayed:"
+                                                    + ingress.laneId()
+                                                    + ":"
+                                                    + staged.relayedIngress.size(),
+                                            "aggregate staging owner")
+                                    != null;
+                            staged.relayedIngress.add(ingress);
                             return null;
                         });
         if (closed != null) {
@@ -394,23 +413,31 @@ final class ZLinkUserSpotAggregateStagingOwner {
         for (Map.Entry<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> lane :
                 backlog.finalRequest.acceptedJournal().entrySet()) {
             for (ZLinkSerialExecutionQueue.QueuedRecord record : lane.getValue()) {
-                replay.add(
-                        admitBacklogTurn(() -> backlog.replayer.replay(lane.getKey(), record))
-                                .toCompletableFuture());
+                CompletionStage<Void> admitted =
+                        admitBacklogTurn(() -> backlog.replayer.replay(lane.getKey(), record));
+                assert backlog.debugProbe.completeOn(
+                        admitted, "journal:" + lane.getKey() + ":" + record.sequence());
+                replay.add(admitted.toCompletableFuture());
             }
         }
+        int relayedIndex = 0;
         for (PendingIngress ingress : backlog.relayed) {
-            replay.add(
+            CompletionStage<Void> admitted =
                     admitBacklogTurn(
-                                    () ->
-                                            backlog.replayer.replayFrozen(
-                                                    ingress.laneId(), ingress.record()))
-                            .toCompletableFuture());
+                            () ->
+                                    backlog.replayer.replayFrozen(
+                                            ingress.laneId(), ingress.record()));
+            assert backlog.debugProbe.completeOn(
+                    admitted, "relayed:" + ingress.laneId() + ":" + relayedIndex++);
+            replay.add(admitted.toCompletableFuture());
         }
+        int temporaryIndex = 0;
         for (PendingIngress ingress : backlog.temporary) {
+            CompletionStage<Void> admitted = admitBacklogTurn(() -> replayIngress(staged, ingress));
+            assert backlog.debugProbe.completeOn(
+                    admitted, "temporary:" + ingress.laneId() + ":" + temporaryIndex++);
             replay.add(
-                    admitBacklogTurn(() -> replayIngress(staged, ingress))
-                            .whenComplete(
+                    admitted.whenComplete(
                                     (ignored, failure) -> {
                                         if (failure != null) {
                                             notifyIngressFailure(ingress, unwrap(failure));
@@ -420,23 +447,27 @@ final class ZLinkUserSpotAggregateStagingOwner {
         }
         return CompletableFuture.allOf(replay.toArray(CompletableFuture[]::new))
                 .whenComplete(
-                        (ignored, failure) ->
-                                inStateLane(
-                                        staged,
-                                        () -> {
-                                            backend.resumeIngress(staged.spot, staged.ingressHold);
-                                            staged.durableBacklog = null;
-                                            staged.terminal = true;
-                                            return null;
-                                        }));
+                        (ignored, failure) -> {
+                            inStateLane(
+                                    staged,
+                                    () -> {
+                                        backend.resumeIngress(staged.spot, staged.ingressHold);
+                                        staged.durableBacklog = null;
+                                        staged.terminal = true;
+                                        return null;
+                                    });
+                            assert backlog.debugProbe.assertDrainedResult();
+                        });
     }
 
     private CompletionStage<Void> admitBacklogTurn(Supplier<CompletionStage<Void>> turn) {
+        CompletionStage<Void> result;
         try {
-            return backend.admitApplicationJob(turn);
+            result = backend.admitApplicationJob(turn);
         } catch (RuntimeException failure) {
-            return CompletableFuture.failedFuture(failure);
+            result = CompletableFuture.failedFuture(failure);
         }
+        return result;
     }
 
     private CompletionStage<Void> replayIngress(Staged staged, PendingIngress ingress) {
@@ -589,7 +620,11 @@ final class ZLinkUserSpotAggregateStagingOwner {
         IllegalStateException aborted =
                 new IllegalStateException("aggregate relocation target staging was aborted");
         pending.forEach(ingress -> notifyIngressFailure(ingress, aborted));
-        return discardPartial(staged.spot, staged.actors);
+        return discardPartial(staged.spot, staged.actors)
+                .whenComplete(
+                        (ignored, failure) -> {
+                            assert staged.debugProbe.settleAbortedResult();
+                        });
     }
 
     private void requireActive(Staged staged) {
@@ -600,7 +635,10 @@ final class ZLinkUserSpotAggregateStagingOwner {
 
     private static <T> T inStateLane(Staged staged, Supplier<T> work) {
         try {
-            return staged.stateLane.runAsync(work).toCompletableFuture().join();
+            var turn = staged.stateLane.runNowOrQueue(work).toCompletableFuture();
+            // An idle lane ran the turn on this thread; only a pending turn is a wait.
+            assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+            return turn.join();
         } catch (CompletionException failure) {
             Throwable cause = failure.getCause();
             if (cause instanceof RuntimeException runtimeFailure) {
@@ -830,6 +868,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
         private final ZLinkActivationAdmission.Permit restorePermit;
         private final List<PendingIngress> relayedIngress = new ArrayList<>();
         private final List<PendingIngress> pendingIngress = new ArrayList<>();
+        private AsyncDrainProbe debugProbe;
         private final ZLinkStateLane stateLane = new ZLinkStateLane();
         private DurableBacklog durableBacklog;
         private boolean published;
@@ -851,6 +890,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
             this.actors = List.copyOf(actors);
             this.ingressHold = ingressHold;
             this.restorePermit = restorePermit;
+            assert (debugProbe = new AsyncDrainProbe()) != null;
         }
 
         int actorCount() {
@@ -865,6 +905,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
         private final JournalReplayer replayer;
         private final List<PendingIngress> relayed;
         private final List<PendingIngress> temporary;
+        private AsyncDrainProbe debugProbe;
         private boolean consumed;
 
         private DurableBacklog(
@@ -880,6 +921,19 @@ final class ZLinkUserSpotAggregateStagingOwner {
             this.replayer = replayer;
             this.relayed = List.copyOf(relayed);
             this.temporary = List.copyOf(temporary);
+            assert (debugProbe = staged.debugProbe) != null;
+            assert registerObligations();
+        }
+
+        private boolean registerObligations() {
+            for (var lane : finalRequest.acceptedJournal().entrySet()) {
+                for (var record : lane.getValue()) {
+                    debugProbe.expect(
+                            "journal:" + lane.getKey() + ":" + record.sequence(),
+                            "aggregate staging owner");
+                }
+            }
+            return true;
         }
     }
 

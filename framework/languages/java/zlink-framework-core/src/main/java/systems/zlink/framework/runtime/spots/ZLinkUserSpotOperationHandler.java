@@ -194,8 +194,7 @@ final class ZLinkUserSpotOperationHandler
             return retained.close();
         }
         String key = ZLinkAuthorityKeyCodec.spot(fence.spotId());
-        return authorityStore
-                .read(key, OPEN)
+        return ZLinkSerialExecutionQueue.yieldCurrent(authorityStore.read(key, OPEN))
                 .thenCompose(
                         read -> {
                             if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
@@ -437,14 +436,10 @@ final class ZLinkUserSpotOperationHandler
                                                                                     }),
                                                                     ZLinkSpotCloseCoordinator.Step
                                                                             .operation(
-                                                                                    () -> {
-                                                                                        activation
-                                                                                                .context
-                                                                                                .sealTimerAdmission();
-                                                                                        return CompletableFuture
-                                                                                                .completedFuture(
-                                                                                                        null);
-                                                                                    }),
+                                                                                    () ->
+                                                                                            activation
+                                                                                                    .context
+                                                                                                    .sealTimerAdmissionAsync()),
                                                                     ZLinkSpotCloseCoordinator.Step
                                                                             .operation(
                                                                                     () ->
@@ -483,14 +478,10 @@ final class ZLinkUserSpotOperationHandler
                                                                                     }),
                                                                     ZLinkSpotCloseCoordinator.Step
                                                                             .operation(
-                                                                                    () -> {
-                                                                                        activation
-                                                                                                .context
-                                                                                                .closeTimers();
-                                                                                        return CompletableFuture
-                                                                                                .completedFuture(
-                                                                                                        null);
-                                                                                    }),
+                                                                                    () ->
+                                                                                            activation
+                                                                                                    .context
+                                                                                                    .closeTimersAsync()),
                                                                     ZLinkSpotCloseCoordinator.Step
                                                                             .operation(
                                                                                     () -> {

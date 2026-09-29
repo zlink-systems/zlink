@@ -56,7 +56,10 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
 
     private <T> T inStateLane(Supplier<T> work) {
         try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
+            var turn = stateLane.runNowOrQueue(work).toCompletableFuture();
+            // An idle lane ran the turn on this thread; only a pending turn is a wait.
+            assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+            return turn.join();
         } catch (CompletionException failure) {
             Throwable cause = failure.getCause();
             if (cause instanceof RuntimeException runtimeFailure) {
@@ -250,7 +253,8 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
                                             null,
                                             ++messageFollowToken,
                                             true,
-                                            messageFollowSuppression);
+                                            messageFollowSuppression,
+                                            stateLane);
                             MessageFollowSource replaced =
                                     sourceRoute == null
                                             ? newestSource(actorId, false)
@@ -321,7 +325,8 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
                                     rawTargetRoute,
                                     ++messageFollowToken,
                                     false,
-                                    messageFollowSuppression);
+                                    messageFollowSuppression,
+                                    stateLane);
                     messageFollowSources.put(staged.token(), staged);
                     return null;
                 });
@@ -670,7 +675,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         private final long token;
         private boolean committed;
         private final ZLinkMessageFollowSuppressionRegistry suppression;
-        private final ZLinkStateLane stateLane = new ZLinkStateLane();
+        private final ZLinkStateLane stateLane;
         private final Set<ZLinkMessageFollowSuppressionRegistry.Key> suppressionKeys =
                 new HashSet<>();
         private boolean suppressionExpired;
@@ -688,7 +693,8 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
                         rawTargetRoute,
                 long token,
                 boolean committed,
-                ZLinkMessageFollowSuppressionRegistry suppression) {
+                ZLinkMessageFollowSuppressionRegistry suppression,
+                ZLinkStateLane stateLane) {
             this.sourceActorRef = Objects.requireNonNull(sourceActorRef, "sourceActorRef");
             this.targetActorRef = Objects.requireNonNull(targetActorRef, "targetActorRef");
             this.targetAddress = targetAddress;
@@ -698,6 +704,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
             this.token = token;
             this.committed = committed;
             this.suppression = Objects.requireNonNull(suppression, "suppression");
+            this.stateLane = Objects.requireNonNull(stateLane, "stateLane");
         }
 
         ZLinkBackendActorRef sourceActorRef() {
@@ -757,8 +764,14 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         }
 
         private <T> T inStateLane(Supplier<T> work) {
+            if (stateLane.isOnLane()) {
+                return work.get();
+            }
             try {
-                return stateLane.runAsync(work).toCompletableFuture().join();
+                var turn = stateLane.runNowOrQueue(work).toCompletableFuture();
+                // An idle lane ran the turn on this thread; only a pending turn is a wait.
+                assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+                return turn.join();
             } catch (CompletionException failure) {
                 Throwable cause = failure.getCause();
                 if (cause instanceof RuntimeException runtimeFailure) {

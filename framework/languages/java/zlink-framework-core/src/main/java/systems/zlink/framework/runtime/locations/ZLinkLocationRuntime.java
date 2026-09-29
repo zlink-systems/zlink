@@ -43,17 +43,20 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     private CompletableFuture<Void> startupCompletion;
     private RoutingId nodeRid;
     private boolean started;
-    private long ownerAdmissionDeadlineNanos;
+    private volatile long ownerAdmissionDeadlineNanos;
     private String lastError;
     private Instant ownerLeaseRenewedAt;
-    private ZLinkLocationOwnerToken ownerToken;
+    private volatile ZLinkLocationOwnerToken ownerToken;
     private ZLinkLocationOwnerToken recoveryPreviousOwnerToken;
     private long nextOwnerLeaseRenewalNanos;
     private Supplier<CompletionStage<Void>> ownerLeaseRecoveryListener;
 
     private <T> T inStateLane(Supplier<T> work) {
         try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
+            var turn = stateLane.runNowOrQueue(work).toCompletableFuture();
+            // An idle lane ran the turn on this thread; only a pending turn is a wait.
+            assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+            return turn.join();
         } catch (CompletionException failure) {
             Throwable cause = failure.getCause();
             if (cause instanceof RuntimeException runtimeFailure) {
@@ -236,15 +239,11 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     }
 
     public boolean isOwnerAdmissionOpen() {
-        return inStateLane(this::isOwnerAdmissionOpenCore);
+        return isOwnerAdmissionOpenCore();
     }
 
     public void ensureOwnerAdmissionOpen() {
-        inStateLane(
-                () -> {
-                    ensureOwnerAdmissionOpenCore();
-                    return null;
-                });
+        ensureOwnerAdmissionOpenCore();
     }
 
     public String lastError() {

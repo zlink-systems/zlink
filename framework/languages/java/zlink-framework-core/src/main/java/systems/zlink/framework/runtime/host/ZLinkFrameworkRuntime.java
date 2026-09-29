@@ -311,6 +311,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         () -> {
                             if (this.objectDescriptors != null) {
                                 try {
+                                    assert ZLinkStateLane.assertMayBlock();
                                     this.objectDescriptors
                                             .publish(this.runtimeState.get())
                                             .toCompletableFuture()
@@ -531,6 +532,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     /** Runs the shutdown routine over what a failed start opened; its failures stay attached. */
     private void rollBackStartup(Throwable failure) {
         try {
+            assert ZLinkStateLane.assertMayBlock();
             closeAsync().toCompletableFuture().join();
         } catch (RuntimeException closeFailure) {
             failure.addSuppressed(closeFailure);
@@ -771,6 +773,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                 new TimeoutException(
                                         "Runtime monitoring Store query deadline exceeded"));
                     }
+                    assert ZLinkStateLane.assertMayBlock();
                     var page =
                             store.listMeshNodes(meshName, new ZLinkPageRequest(128, continuation))
                                     .toCompletableFuture()
@@ -1888,7 +1891,10 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
 
     private <T> T inCapacityStateLane(Supplier<T> work) {
         try {
-            return capacityStateLane.runAsync(work).toCompletableFuture().join();
+            var turn = capacityStateLane.runNowOrQueue(work).toCompletableFuture();
+            // An idle lane ran the turn on this thread; only a pending turn is a wait.
+            assert turn.isDone() || ZLinkStateLane.assertMayBlock();
+            return turn.join();
         } catch (CompletionException failure) {
             Throwable cause = failure.getCause();
             if (cause instanceof RuntimeException runtimeFailure) {
@@ -2003,6 +2009,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     @Override
     public void close() {
         try {
+            assert ZLinkStateLane.assertMayBlock();
             closeAsync().toCompletableFuture().get();
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();

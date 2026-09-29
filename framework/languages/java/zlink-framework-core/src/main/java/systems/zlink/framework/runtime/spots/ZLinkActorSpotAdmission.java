@@ -330,21 +330,25 @@ final class ZLinkActorSpotAdmission {
         }
         ZLinkActorRuntime runtime = requireActors();
         ZLinkActorRuntime.LocalMoveSource source = runtime.beginLocalMove(actor);
-        return runtime.commitJoinedLocation(actor, pending.actorRef(), pending.spotId())
-                .thenCompose(
+        return CompletableFuture.completedFuture(null)
+                .thenComposeAsync(
                         ignored ->
-                                runtime.markJoined(
+                                runtime.commitJoinedLocation(
+                                        actor, pending.actorRef(), pending.spotId()))
+                .thenRunAsync(
+                        () ->
+                                runtime.markRelocatedActorJoined(
                                         actor,
                                         pending.actorRef(),
                                         pending.spotId(),
                                         pending.spot()))
-                .thenCompose(ignored -> pending.joinedCallback().apply(actor))
-                .thenRun(
+                .thenComposeAsync(ignored -> pending.joinedCallback().apply(actor))
+                .thenRunAsync(
                         () -> {
                             runtime.notifySourceForLocalMove(actor, source);
                             runtime.completeRemoteMove(actor);
                         })
-                .whenComplete(
+                .whenCompleteAsync(
                         (ignored, error) -> {
                             if (error != null) {
                                 runtime.failRemoteMove(actor, error);
