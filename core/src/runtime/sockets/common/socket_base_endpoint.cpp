@@ -232,9 +232,8 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_,
         return -1;
     }
 
-    if (options.type == ZLINK_CORE_SOCKET_STREAM
-        && options.stream_recv_mode == ZLINK_STREAM_RECV_MODE_UNSPECIFIED) {
-        errno = EINVAL;
+    if (options.type == ZLINK_CORE_SOCKET_STREAM) {
+        errno = ENOTSUP;
         return -1;
     }
 
@@ -645,10 +644,7 @@ int zlink::socket_base_t::create_resolved_connect_session (
     errno_assert (session);
     pipe_t *newpipe = NULL;
 
-    // A STREAM route identifies a physical connection. Its first pipe, like
-    // each replacement pipe, is published by the session after connection.
-    if (lane_options_.type != ZLINK_CORE_SOCKET_STREAM
-        && (lane_options_.immediate != 1 || subscribe_to_all)) {
+    if (lane_options_.immediate != 1 || subscribe_to_all) {
         object_t *parents[2] = {this, session};
         pipe_t *new_pipes[2] = {NULL, NULL};
         const bool conflate = get_effective_conflate_option (lane_options_);
