@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <initializer_list>
 #include <limits>
 #include <map>
@@ -82,14 +83,14 @@ class provider_location_repository_t final : public location_repository_t
 
     task_t<owner_lease_read_result_t> read_owner_lease (std::string owner_id) override
     {
-        auto result = read (key_owner (owner_id));
+        auto result = co_await _store->read (key_owner (owner_id));
         const auto *found = std::get_if<store_found_t> (&result);
         if (!found)
-            return completed (owner_lease_read_result_t{owner_lease_missing_t{}});
+            co_return owner_lease_read_result_t{owner_lease_missing_t{}};
         auto lease = decode_owner_lease (*found);
         if (lease.token.owner_id != owner_id)
             throw std::invalid_argument ("Location Store owner lease record is invalid");
-        return completed (owner_lease_read_result_t{std::move (lease)});
+        co_return owner_lease_read_result_t{std::move (lease)};
     }
 
     task_t<owner_lease_renew_result_t>
@@ -155,7 +156,7 @@ class provider_location_repository_t final : public location_repository_t
         return update_descriptor (
           key, descriptor.owner_id, descriptor.lease_generation, descriptor.lifecycle_generation,
           descriptor.descriptor_revision, encode_mesh_record (1, descriptor), intent,
-          [&] (const nlohmann::json &record) {
+          [descriptor] (const nlohmann::json &record) {
               return same_mesh_immutable (decode_mesh_descriptor (record.at ("descriptor")),
                                           descriptor);
           });
@@ -187,7 +188,7 @@ class provider_location_repository_t final : public location_repository_t
           encode_descriptor_record (1, descriptor.owner_id, descriptor.lease_generation,
                                     descriptor.lifecycle_generation, descriptor.descriptor_revision,
                                     encode (descriptor)),
-          intent, [&] (const nlohmann::json &record) {
+          intent, [descriptor] (const nlohmann::json &record) {
               const auto current = decode_client_server (record.at ("descriptor"));
               return current.endpoint == descriptor.endpoint
                      && current.security_identity == descriptor.security_identity;
@@ -221,7 +222,7 @@ class provider_location_repository_t final : public location_repository_t
           encode_descriptor_record (1, descriptor.owner_id, descriptor.lease_generation,
                                     descriptor.lifecycle_generation, descriptor.descriptor_revision,
                                     encode (descriptor)),
-          intent, [&] (const nlohmann::json &record) {
+          intent, [descriptor] (const nlohmann::json &record) {
               const auto current = decode_fanout (record.at ("descriptor"));
               return current.endpoint == descriptor.endpoint
                      && current.security_identity == descriptor.security_identity;
@@ -2384,24 +2385,23 @@ class provider_location_repository_t final : public location_repository_t
         return {preimage ({"fanout-publisher", channel_name, rid_hex})};
     }
 
-    template <typename TImmutable>
-    task_t<location_write_result_t> update_descriptor (const store_key_t &row_key,
-                                                       const std::string &owner_id,
-                                                       std::int64_t lease_generation,
-                                                       std::uint64_t lifecycle_generation,
-                                                       std::uint64_t descriptor_revision,
-                                                       json_t record,
-                                                       location_write_intent_t intent,
-                                                       TImmutable immutable_fields_equal)
+    task_t<location_write_result_t>
+    update_descriptor (store_key_t row_key,
+                       std::string owner_id,
+                       std::int64_t lease_generation,
+                       std::uint64_t lifecycle_generation,
+                       std::uint64_t descriptor_revision,
+                       json_t record,
+                       location_write_intent_t intent,
+                       std::function<bool (const json_t &)> immutable_fields_equal)
     {
         const auto lease_key = key_owner (owner_id);
-        auto lease = read (lease_key);
+        auto lease = co_await _store->read (lease_key);
         const auto *live_lease = std::get_if<store_found_t> (&lease);
         if (!live_lease || owner_generation (live_lease->value.bytes) != lease_generation)
-            return completed (
-              location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
+            co_return location_write_result_t{location_write_status_t::ignored_stale, 0, {}};
 
-        auto current = read (row_key);
+        auto current = co_await _store->read (row_key);
         // The write-generation counter is provider-private bookkeeping (it
         // only gates exhaustion on non-renew intents; §2.4's canonical
         // record shape has no room for it) reparented onto the provider's
@@ -2425,41 +2425,41 @@ class provider_location_repository_t final : public location_repository_t
             }
             const auto stored_owner = record_owner_id (stored);
             const auto stored_lease = record_lease_generation (stored);
-            const auto previous_owner = read (key_owner (stored_owner));
+            const auto previous_owner = co_await _store->read (key_owner (stored_owner));
             const auto previous_owner_live = std::holds_alternative<store_found_t> (previous_owner);
             if (intent == location_write_intent_t::new_claim && previous_owner_live)
-                return completed (
-                  location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
+                co_return location_write_result_t{
+                  location_write_status_t::rejected_conflict, 0, {}};
             if (intent == location_write_intent_t::takeover && previous_owner_live)
-                return completed (
-                  location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
+                co_return location_write_result_t{location_write_status_t::ignored_stale, 0, {}};
             if (intent == location_write_intent_t::renew) {
                 if (stored_owner != owner_id || stored_lease != lease_generation
                     || record_lifecycle_generation (stored) != lifecycle_generation
                     || descriptor_revision <= record_descriptor_revision (stored)
                     || !immutable_fields_equal (stored))
-                    return completed (
-                      location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
+                    co_return location_write_result_t{
+                      location_write_status_t::ignored_stale, 0, {}};
             } else if (provider_generation_known
                        && provider_generation == std::numeric_limits<std::uint64_t>::max ()) {
-                return unavailable<location_write_result_t> ("descriptor generation exhausted");
+                throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                             "descriptor generation exhausted");
             }
             generation = provider_generation_known ? provider_generation + 1 : 1;
             row_condition = version_condition (row_key, found->value.version);
         } else {
             if (intent == location_write_intent_t::renew)
-                return completed (
-                  location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
+                co_return location_write_result_t{location_write_status_t::ignored_stale, 0, {}};
             row_condition = missing_condition (row_key);
         }
         auto encoded = to_bytes (record.dump ());
-        auto result =
-          write ({{owner_condition ({owner_id, lease_generation}), std::move (row_condition)},
-                  {store_put_t{row_key, encoded, std::nullopt}}});
+        store_write_request_t write_request{
+          {owner_condition ({owner_id, lease_generation}), std::move (row_condition)},
+          {store_put_t{row_key, std::move (encoded), std::nullopt}}};
+        auto result = co_await write_async (std::move (write_request));
         if (const auto *applied = std::get_if<store_write_applied_t> (&result))
-            return completed (location_write_result_t::stored (
-              static_cast<std::int64_t> (generation), applied->store_now));
-        return completed (location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
+            co_return location_write_result_t::stored (static_cast<std::int64_t> (generation),
+                                                       applied->store_now);
+        co_return location_write_result_t{location_write_status_t::ignored_stale, 0, {}};
     }
 
     task_t<location_write_status_t> remove_descriptor (const store_key_t &row_key,
@@ -2490,10 +2490,11 @@ class provider_location_repository_t final : public location_repository_t
             ? std::optional<store_scan_cursor_t>{store_scan_cursor_t{*page.continuation_token}}
             : std::nullopt,
           page.page_size > 0 ? static_cast<std::uint32_t> (page.page_size) : 256u};
-        auto result = _store->scan (std::move (request)).result ().value ();
+        auto result = co_await _store->scan (std::move (request));
         const auto *found = std::get_if<store_scan_page_t> (&result);
         if (!found)
-            return unavailable<location_page_t<T>> ("Location Store scan cursor expired");
+            throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                         "Location Store scan cursor expired");
         location_page_t<T> output;
         output.items.reserve (found->items.size ());
         for (const auto &item : found->items)
@@ -2501,7 +2502,7 @@ class provider_location_repository_t final : public location_repository_t
               decode (parse_canonical_record (item.value.bytes, "descriptor")));
         if (found->next_cursor)
             output.continuation_token = found->next_cursor->value;
-        return completed (std::move (output));
+        co_return std::move (output);
     }
 
     std::int64_t remove_owned (const std::string &row_prefix, const location_owner_token_t &owner)

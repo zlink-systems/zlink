@@ -412,18 +412,16 @@ class close_fault_store_t final : public zf::location_store_t
                 _held_completion = std::move (completion);
             }
             commit_held.set_value ();
-            return held;
+            co_return co_await held;
         }
         if ((watched_put && fail_closing_commit_once.exchange (false))
             || (watched_delete && fail_authority_release_once.exchange (false))) {
-            return zf::task_t<zf::store_write_result_t> (
-              zf::result_t<zf::store_write_result_t>::success (zf::store_write_conflict_t{}));
+            co_return zf::store_write_result_t{zf::store_write_conflict_t{}};
         }
-        auto result = _inner->write (std::move (request)).result ();
-        if (watched_delete && result
-            && std::holds_alternative<zf::store_write_applied_t> (result.value ()))
+        auto result = co_await _inner->write (std::move (request));
+        if (watched_delete && std::holds_alternative<zf::store_write_applied_t> (result))
             current ().record ("authorityReleased");
-        return zf::task_t<zf::store_write_result_t> (std::move (result));
+        co_return result;
     }
 
     zf::task_t<zf::store_scan_result_t> scan (zf::store_scan_request_t request) override

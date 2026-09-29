@@ -3,6 +3,7 @@
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/provider_location_repository.hpp"
 #include "runtime/locations/provider_relocation_repository.hpp"
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 #include "../support/owner_lease_time_store.hpp"
 
 #include <gtest/gtest.h>
@@ -25,6 +26,36 @@ using namespace std::chrono_literals;
 using namespace zlink::framework;
 using namespace zlink::framework::runtime;
 using zlink::framework::tests::owner_lease_time_store_t;
+
+class deferred_owner_read_store_t final : public location_store_t
+{
+  public:
+    task_t<store_read_result_t> read (store_key_t) override { return completion.task (); }
+    task_t<store_scan_result_t> scan (store_scan_request_t request) override
+    {
+        return inner.scan (std::move (request));
+    }
+    task_t<store_write_result_t> write (store_write_request_t request) override
+    {
+        return inner.write (std::move (request));
+    }
+
+    detail::task_completion_source_t<store_read_result_t> completion;
+    in_memory_location_store_t inner;
+};
+
+TEST (ProviderLocationRepositoryTest, OwnerLeaseReadContinuesAfterProviderCompletion)
+{
+    deferred_owner_read_store_t store;
+    provider_location_repository_t repository (store);
+    auto read = [&] {
+        infrastructure_wait_guard::infrastructure_scope_t infrastructure (&repository);
+        return repository.read_owner_lease ("owner");
+    }();
+    ASSERT_FALSE (read.await_ready ());
+    store.completion.complete (result_t<store_read_result_t>::success (store_missing_t{}));
+    ASSERT_TRUE (std::holds_alternative<owner_lease_missing_t> (read.result ().value ()));
+}
 
 std::vector<std::byte> bytes (std::string_view value)
 {
@@ -192,17 +223,15 @@ class renew_before_conditional_commit_store_t final : public location_store_t
             renew_on_descriptor_write = false;
             renew_on_reclaim_write = false;
             const store_key_t lease_key{std::string ("owner-lease") + '\0' + owner_id};
-            const auto lease = std::get<store_found_t> (inner.read (lease_key).result ().value ());
-            const auto renewed =
-              inner
-                .write ({{store_version_condition_t{lease_key, lease.value.version}},
-                         {store_put_t{lease_key, lease.value.bytes, 30s}}})
-                .result ()
-                .value ();
+            const auto lease = std::get<store_found_t> (co_await inner.read (lease_key));
+            store_write_request_t renew_request{
+              {store_version_condition_t{lease_key, lease.value.version}},
+              {store_put_t{lease_key, lease.value.bytes, 30s}}};
+            const auto renewed = co_await inner.write (std::move (renew_request));
             if (!std::holds_alternative<store_write_applied_t> (renewed))
                 throw std::runtime_error ("test lease renewal failed");
         }
-        return inner.write (std::move (request));
+        co_return co_await inner.write (std::move (request));
     }
 
     in_memory_location_store_t inner;
@@ -2093,9 +2122,15 @@ TEST (CppFrameworkOpaqueLocationStore, MissingRecordVersionFailsClosed)
     ASSERT_GE (strip_record_version_fields (provider), 3u);
 
     provider_location_repository_t reopened (provider);
-    EXPECT_THROW ((void) reopened.read_owner_lease ("owner-a"), std::invalid_argument);
+    const auto owner_failure = reopened.read_owner_lease ("owner-a").result ();
+    ASSERT_FALSE (owner_failure);
+    EXPECT_NE (std::string (owner_failure.error ()->what ()).find ("recordVersion"),
+               std::string::npos);
     EXPECT_THROW ((void) reopened.read_authority (actor_key), std::invalid_argument);
-    EXPECT_THROW ((void) reopened.list_mesh_nodes ("play"), std::invalid_argument);
+    const auto descriptor_failure = reopened.list_mesh_nodes ("play").result ();
+    ASSERT_FALSE (descriptor_failure);
+    EXPECT_NE (std::string (descriptor_failure.error ()->what ()).find ("recordVersion"),
+               std::string::npos);
 }
 
 } // namespace
