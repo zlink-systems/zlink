@@ -22,7 +22,6 @@ import systems.zlink.runtime.nativeapi.Native;
 import systems.zlink.runtime.nativeapi.NativeErrno;
 import systems.zlink.runtime.nativeapi.NativeLayouts;
 import systems.zlink.runtime.nativeapi.RuntimeResources;
-import systems.zlink.runtime.nativeapi.CompletionDispatcher;
 
 final class SocketCore {
     /**
@@ -53,17 +52,14 @@ final class SocketCore {
     private MemorySegment sendScratch = MemorySegment.NULL;
     private int sendScratchCapacity = NativeSocketRuntime.DEFAULT_IO_BUFFER_SIZE;
     private final CompletionOwner completionOwner;
-    private final CompletionDispatcher.CompletionLane completionLane;
-    SocketCore(NativeSocketRuntime socket,
-               CompletionDispatcher.CompletionLane completionLane) {
+    SocketCore(NativeSocketRuntime socket) {
         this.socket = socket;
-        this.completionLane = completionLane;
         SocketType type = socket.socketTypeHint();
         this.completionOwner = type == SocketType.PAIR
             || type == SocketType.DEALER
             || type == SocketType.ROUTER
             || type == SocketType.STREAM
-            ? new CompletionOwner(socket, completionLane) : null;
+            ? new CompletionOwner(socket) : null;
     }
 
     void bind(String endpoint) {
@@ -265,14 +261,6 @@ final class SocketCore {
     void ensureOpen() {
         if (socket.handle() == null || socket.handle().address() == 0)
             throw new IllegalStateException("socket is closed");
-    }
-
-    void dispatchCompletion(Runnable completion) {
-        if (completionOwner == null) {
-            throw new IllegalStateException(
-                "socket does not support completion dispatch");
-        }
-        completionLane.dispatch(completion);
     }
 
     CompletionOwner completionOwner() {

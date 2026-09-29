@@ -23,7 +23,6 @@ import systems.zlink.runtime.nativeapi.MessagePartsBuffer;
 
 /** Runtime builders that capture their socket target at operation creation. */
 public final class MessageOperations {
-    private static final Duration DEFAULT_REQUEST_TIMEOUT = Duration.ofSeconds(5);
 
     private MessageOperations() {
     }
@@ -129,7 +128,7 @@ public final class MessageOperations {
         private Message second;
         private MessagePartsBuffer overflow;
         private int count;
-        private Duration timeout = DEFAULT_REQUEST_TIMEOUT;
+        private Duration timeout = Duration.ZERO;
         private boolean submitted;
 
         private RequestBuilder(RequestAwaitableInvoker awaitable,

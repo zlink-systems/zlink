@@ -37,7 +37,7 @@ final class SocketSendPlane {
         ensureBlockingSendAllowed(flag);
         WholeSubmitter submitter = sendSubmitter(routingId, flag.getValue());
         PartAttempt attempt = isDontWait(flag)
-            ? submitTrackedNoWait(routingId, submitter, message)
+            ? submitTrackedNoWait(submitter, message)
             : socket.completionOwner().withNativeCall(
                 () -> submitSingleAttempt(submitter, message));
         requireSuccess(attempt);
@@ -47,7 +47,7 @@ final class SocketSendPlane {
                                              Message message) {
         Objects.requireNonNull(routingId, "routingId");
         Objects.requireNonNull(message, "message");
-        return sendResult(submitTrackedNoWait(routingId,
+        return sendResult(submitTrackedNoWait(
             sendSubmitter(routingId, SendFlag.DONTWAIT.getValue()), message));
     }
 
@@ -58,7 +58,7 @@ final class SocketSendPlane {
         ensureBlockingSendAllowed(flags);
         RoutingId target = RoutingId.from(routingIdBytes);
         PartAttempt attempt = isDontWait(flags)
-            ? submitTrackedNoWait(target,
+            ? submitTrackedNoWait(
                 sendSubmitter(target, flags.getValue()), part)
             : socket.completionOwner().withNativeCall(() ->
                 submitSingleAttempt(sendSubmitter(target, flags.getValue()),
@@ -82,7 +82,7 @@ final class SocketSendPlane {
         RoutingId target = RoutingId.from(Integer.toUnsignedLong(rid));
         WholeSubmitter submitter = sendSubmitter(target, flags.getValue());
         PartAttempt attempt = isDontWait(flags)
-            ? submitTrackedNoWait(target, submitter, part)
+            ? submitTrackedNoWait(submitter, part)
             : socket.completionOwner().withNativeCall(
                 () -> submitSingleAttempt(submitter, part));
         requireSuccess(attempt);
@@ -116,7 +116,7 @@ final class SocketSendPlane {
             PartAttempt attempt;
             if (isDontWait(flag)) {
                 CompletionOwner.NoWaitAttempt tracked =
-                    socket.completionOwner().trackNoWaitSend(target,
+                    socket.completionOwner().trackNoWaitSend(
                         (context, idOut) -> {
                             submitted[0] = true;
                             return Native.sendRidNoWaitCritical(
@@ -170,7 +170,7 @@ final class SocketSendPlane {
         ensureBlockingSendAllowed(flag);
         WholeSubmitter submitter = sendSubmitter(null, flag.getValue());
         PartAttempt attempt = isDontWait(flag)
-            ? submitTrackedNoWait(null, submitter, message)
+            ? submitTrackedNoWait(submitter, message)
             : socket.completionOwner().withNativeCall(
                 () -> submitSingleAttempt(submitter, message));
         requireSuccess(attempt);
@@ -181,7 +181,7 @@ final class SocketSendPlane {
         Objects.requireNonNull(flag, "flag");
         WholeSubmitter submitter = sendSubmitter(null, flag.getValue());
         PartAttempt attempt = isDontWait(flag)
-            ? submitTrackedNoWait(null, submitter, message)
+            ? submitTrackedNoWait(submitter, message)
             : socket.completionOwner().withNativeCall(
                 () -> submitSingleAttempt(submitter, message));
         if (attempt.result() == SubmitResult.OK.value()) {
@@ -198,7 +198,7 @@ final class SocketSendPlane {
 
     SendResult sendMessageFrameNoWaitResult(Message message) {
         Objects.requireNonNull(message, "message");
-        return sendResult(submitTrackedNoWait(null,
+        return sendResult(submitTrackedNoWait(
             sendSubmitter(null, SendFlag.DONTWAIT.getValue()), message));
     }
 
@@ -209,7 +209,7 @@ final class SocketSendPlane {
         ensureBlockingSendAllowed(flags);
         WholeSubmitter submitter = sendSubmitter(routingId, flags.getValue());
         PartAttempt attempt = isDontWait(flags)
-            ? submitTrackedNoWait(routingId, submitter, parts)
+            ? submitTrackedNoWait(submitter, parts)
             : socket.completionOwner().withNativeCall(
                 () -> submitPartsAttempt(submitter, parts));
         requireSuccess(attempt);
@@ -219,7 +219,7 @@ final class SocketSendPlane {
                                      List<Message> parts) {
         socket.ensureOpen();
         validateParts(parts);
-        return sendResult(submitTrackedNoWait(routingId,
+        return sendResult(submitTrackedNoWait(
             sendSubmitter(routingId, SendFlag.DONTWAIT.getValue()), parts));
     }
 
@@ -303,11 +303,10 @@ final class SocketSendPlane {
         }
     }
 
-    private PartAttempt submitTrackedNoWait(RoutingId target,
-                                             WholeSubmitter submitter,
-                                             Message message) {
+    private PartAttempt submitTrackedNoWait(WholeSubmitter submitter,
+                                            Message message) {
         CompletionOwner.NoWaitAttempt attempt =
-            socket.completionOwner().trackNoWaitSend(target,
+            socket.completionOwner().trackNoWaitSend(
                 (context, idOut) -> {
                     int result = submitter.submit(
                         InternalAccess.messageNativeHandle(message), 1L,
@@ -318,9 +317,8 @@ final class SocketSendPlane {
         return new PartAttempt(attempt.result(), attempt.errno());
     }
 
-    private PartAttempt submitTrackedNoWait(RoutingId target,
-                                             WholeSubmitter submitter,
-                                             List<Message> parts) {
+    private PartAttempt submitTrackedNoWait(WholeSubmitter submitter,
+                                            List<Message> parts) {
         SendScratch scratch = sendScratch.get();
         MemorySegment nativeParts = scratch.parts(parts.size());
         long partSize = NativeLayouts.MESSAGE_LAYOUT.byteSize();
@@ -332,7 +330,7 @@ final class SocketSendPlane {
                     nativeParts.asSlice(partSize * moved, partSize));
             }
             CompletionOwner.NoWaitAttempt attempt =
-                socket.completionOwner().trackNoWaitSend(target,
+                socket.completionOwner().trackNoWaitSend(
                     (context, idOut) -> {
                         nativeCalled[0] = true;
                         return submitter.submit(nativeParts, parts.size(),

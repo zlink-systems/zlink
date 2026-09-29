@@ -31,8 +31,8 @@ final class CompletionNativeFixture {
     final Queue<Record> completions = new ConcurrentLinkedQueue<>();
     final List<Submission> submissions = new CopyOnWriteArrayList<>();
     final List<String> order = new CopyOnWriteArrayList<>();
-    final CountDownLatch admissionEntered = new CountDownLatch(1);
-    final CountDownLatch releaseAdmission = new CountDownLatch(1);
+    volatile CountDownLatch admissionEntered = new CountDownLatch(1);
+    volatile CountDownLatch releaseAdmission = new CountDownLatch(1);
     boolean omitRidEcho;
     final java.util.concurrent.atomic.AtomicInteger pollerDestroyBusy =
         new java.util.concurrent.atomic.AtomicInteger();
@@ -52,6 +52,8 @@ final class CompletionNativeFixture {
     private MethodHandle corePollerDestroy;
     private MethodHandle corePollerWait;
     private MethodHandle coreCtxTerm;
+    private MethodHandle coreClose;
+    volatile boolean closeBusyDuringAdmission;
     private MethodHandle coreSend;
     /** Sends reach Core instead of the scripted attempts. */
     volatile boolean passthroughSends;
@@ -71,8 +73,10 @@ final class CompletionNativeFixture {
         lookupMethod.setAccessible(true);
         SymbolLookup core = (SymbolLookup) lookupMethod.invoke(null);
         Linker linker = Linker.nativeLinker();
+        String errnoSymbol = System.getProperty("os.name").startsWith("Windows")
+            ? "_errno" : "__errno_location";
         errnoLocation = linker.downcallHandle(linker.defaultLookup()
-            .find("__errno_location").orElseThrow(), FunctionDescriptor.of(ADDRESS));
+            .find(errnoSymbol).orElseThrow(), FunctionDescriptor.of(ADDRESS));
         Map<String, MemorySegment> replacements = new HashMap<>();
         coreSend = linker.downcallHandle(core.find("zlink_send").orElseThrow(),
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG, JAVA_INT, ADDRESS,
@@ -91,6 +95,9 @@ final class CompletionNativeFixture {
             ADDRESS, ADDRESS, JAVA_INT));
         replace(replacements, "zlink_completion_close", "closeRecord", FunctionDescriptor.ofVoid(ADDRESS));
         FunctionDescriptor handleClose = FunctionDescriptor.of(JAVA_INT, ADDRESS);
+        coreClose = linker.downcallHandle(
+            core.find("zlink_close").orElseThrow(), handleClose);
+        replace(replacements, "zlink_close", "closeSocket", handleClose);
         corePollerDestroy = linker.downcallHandle(
             core.find("zlink_poller_destroy").orElseThrow(), handleClose);
         replace(replacements, "zlink_poller_destroy", "pollerDestroy", handleClose);
@@ -186,6 +193,21 @@ final class CompletionNativeFixture {
     private void errno(int value) throws Throwable {
         ((MemorySegment) errnoLocation.invokeExact()).reinterpret(JAVA_INT.byteSize())
             .set(JAVA_INT, 0, value);
+    }
+
+    private int closeSocket(MemorySegment socket) throws Throwable {
+        if (closeBusyDuringAdmission && admissionEntered.getCount() == 0
+                && releaseAdmission.getCount() != 0) {
+            errno(NativeErrno.EBUSY);
+            return CloseResult.BUSY.value();
+        }
+        return (int) coreClose.invokeExact(socket);
+    }
+
+    /** Re-arms the one-shot latches used by a blocking attempt. */
+    void armAdmissionGate() {
+        admissionEntered = new CountDownLatch(1);
+        releaseAdmission = new CountDownLatch(1);
     }
 
     private int submit(MemorySegment parts, long partCount, MemorySegment context,

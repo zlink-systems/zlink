@@ -26,7 +26,6 @@ import systems.zlink.contracts.errors.CloseResult;
 import systems.zlink.contracts.errors.ZlinkCloseException;
 import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.runtime.nativeapi.InternalAccess;
-import systems.zlink.runtime.nativeapi.CompletionDispatcher;
 import systems.zlink.runtime.nativeapi.Native;
 import systems.zlink.runtime.nativeapi.NativeHelpers;
 import systems.zlink.runtime.nativeapi.NativeLayouts;
@@ -53,7 +52,6 @@ final class NativeSocketRuntime implements AutoCloseable {
     private final NettySocketPlane nettyPlane;
     private final SocketSendPlane sendPlane;
     private final SocketOptionSupport optionSupport;
-    private final CompletionDispatcher ownedCompletionDispatcher;
     private MemorySegment handle;
     private final boolean own;
     private final SocketType socketTypeHint;
@@ -76,10 +74,6 @@ final class NativeSocketRuntime implements AutoCloseable {
         SocketCore.leaveCallback();
     }
 
-    void dispatchCompletion(Runnable completion) {
-        socketCore.dispatchCompletion(completion);
-    }
-
     SocketType socketTypeHint() {
         return socketTypeHint;
     }
@@ -90,11 +84,8 @@ final class NativeSocketRuntime implements AutoCloseable {
             throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
         this.own = true;
         this.socketTypeHint = type;
-        this.ownedCompletionDispatcher = null;
         try {
-            CompletionDispatcher dispatcher =
-                InternalAccess.contextCompletionDispatcher(ctx);
-            this.socketCore = new SocketCore(this, dispatcher.acquireLane());
+            this.socketCore = new SocketCore(this);
         } catch (RuntimeException | Error failure) {
             Native.close(handle);
             handle = MemorySegment.NULL;
@@ -115,13 +106,9 @@ final class NativeSocketRuntime implements AutoCloseable {
         this.handle = handle;
         this.own = own;
         this.socketTypeHint = socketTypeHint;
-        CompletionDispatcher dispatcher = new CompletionDispatcher(
-            "zlink-send-completion", 1);
-        this.ownedCompletionDispatcher = dispatcher;
         try {
-            this.socketCore = new SocketCore(this, dispatcher.acquireLane());
+            this.socketCore = new SocketCore(this);
         } catch (RuntimeException | Error failure) {
-            dispatcher.close();
             if (own && handle != null && handle.address() != 0L) {
                 Native.close(handle);
                 this.handle = MemorySegment.NULL;
@@ -635,27 +622,11 @@ final class NativeSocketRuntime implements AutoCloseable {
                         Native.errno());
                 }
             }
-            // Native close has ended handle ownership. Publish the local
-            // closed state before queued completion continuations can run.
             handle = MemorySegment.NULL;
-            try {
-                socketCore.closeCommonState();
-            } finally {
-                closeOwnedCompletionDispatcher();
-            }
+            socketCore.closeCommonState();
             return;
         }
-        try {
-            socketCore.closeCommonState();
-        } finally {
-            closeOwnedCompletionDispatcher();
-        }
-    }
-
-    private void closeOwnedCompletionDispatcher() {
-        if (ownedCompletionDispatcher != null) {
-            ownedCompletionDispatcher.close();
-        }
+        socketCore.closeCommonState();
     }
 
     @SuppressWarnings("unchecked")
