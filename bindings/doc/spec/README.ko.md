@@ -1171,7 +1171,7 @@ Binding은 Framework의 application job queue count를 Core byte snapshot에 합
 |---|---|
 | SEND `OK`·ID `0` | [비동기 실행 모델 §5](async-execution-model.ko.md#5-submit-결과와-completion의-합류)의 SEND stage 결과를 따른다. |
 | REQUEST `OK`·nonzero ID | [비동기 실행 모델 §5](async-execution-model.ko.md#5-submit-결과와-completion의-합류)의 REQUEST stage 결과를 따른다. |
-| `BACKPRESSURED`·`EAGAIN`·nonzero 대기 토큰 | 바인딩은 Core 호출 전에 독립적으로 소유한 staging record를 보관하고 매 시도에 별도 native 배열을 전달한다. WRITABLE 뒤 바인딩은 staging에서 같은 operation을 다시 제출한다. Staging은 admission·terminal 실패·socket/context lifecycle cleanup에서 한 번 정리한다. Stage 결과는 [비동기 실행 모델 §5](async-execution-model.ko.md#5-submit-결과와-completion의-합류)를 따른다. |
+| `BACKPRESSURED`·`EAGAIN`·nonzero 대기 토큰 | 바인딩은 Core 호출 전에 독립적으로 소유한 staging record를 보관하고 매 시도에 별도 native 배열을 전달한다. `ZLINK_SEND_ADMITTED`인 WRITABLE 뒤에만 바인딩은 staging에서 같은 operation을 다시 제출한다. Staging은 admission·terminal 실패·socket/context lifecycle cleanup에서 한 번 정리한다. `ZLINK_SEND_NOT_FOUND`·`ZLINK_SEND_NOT_CONNECTED`는 각각 `NOT_FOUND`·`NOT_CONNECTED`로, `ZLINK_SEND_TIMED_OUT`은 `BACKPRESSURED`·`EAGAIN`으로, 알 수 없는 값은 `INTERNAL_ERROR`·`EPROTO`로 투영한다. Stage 결과는 [비동기 실행 모델 §5](async-execution-model.ko.md#5-submit-결과와-completion의-합류)를 따른다. |
 | 대기 토큰 없는 submit 실패 | 해당 submit error로 terminal을 끝낸다(결과 객체가 아니라 예외/에러). |
 
 - **바인딩은 socket-local context·token으로 찾은 WRITABLE을 해당 waiter에 전달하며 Core가 보장한 submit RID echo를 다시 판정하지 않는다.**

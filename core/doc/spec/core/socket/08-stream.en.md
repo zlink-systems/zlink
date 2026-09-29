@@ -238,10 +238,9 @@ silently drops packets nor creates a separate unbounded queue.
 
 ## 7. Completion and thread safety
 
-When a STREAM send returns a nonzero wait token, exactly one `ZLINK_COMPLETION_WRITABLE` record
-for that token is received through `zlink_completion_recv()`: `ZLINK_SEND_ADMITTED` when the same
-RID gains write credit, `ZLINK_SEND_NOT_CONNECTED` when the physical connection ends, or
-`ZLINK_SEND_NOT_FOUND` when the RID is explicitly removed with `zlink_disconnect_rid()`. Socket close ends the token internally and delivers no record, so a result that
+STREAM RID-specific wait-token termination follows
+[§4 Routed send](#4-routed-send); common termination and completion lifetime follow
+[Socket Common whole-message send](README.en.md#whole-message-send-and-pending-admission). Socket close ends the token internally and delivers no record, so a result that
 is needed is received before close. Its `peer_rid` preserves the logical RID snapshot
 specified at submit; it does not change to a physical connection identity after reconnect. [Socket Common](README.en.md#completion-pull-and-ownership)
 owns completion draining, reservation bounds, and close.
