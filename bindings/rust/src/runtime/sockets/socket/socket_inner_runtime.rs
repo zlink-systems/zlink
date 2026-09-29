@@ -569,7 +569,7 @@ impl crate::internal::SocketStorage {
             }
         };
         let close_rc = if let Some(owner) = &self.completion_owner {
-            owner.shutdown_with(close_native)
+            owner.close_with(close_native)
         } else {
             close_native()
         };
@@ -919,19 +919,16 @@ impl Drop for crate::internal::SocketStorage {
                 unsafe { ffi::zlink_close(self.handle) }
             }
         };
-        let rc = if let Some(owner) = &self.completion_owner {
-            owner.shutdown_with(close_native)
+        // Core close is fail-fast; a drop cannot report or retry its result.
+        // The Rust object is gone either way, so its waiters end here.
+        if let Some(owner) = &self.completion_owner {
+            owner.close_with(close_native);
+            owner.shutdown();
         } else {
-            close_native()
-        };
+            close_native();
+        }
         if let Some(routed) = &self.routed_handle {
             routed.detach();
-        }
-        if rc != 0 {
-            crate::internal::defer_native_close(
-                crate::internal::DeferredCloseKind::Socket,
-                self.handle,
-            );
         }
     }
 }

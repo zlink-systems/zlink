@@ -416,14 +416,9 @@ impl TimerStorage {
 
 impl Drop for TimerStorage {
     fn drop(&mut self) {
+        // Core destroy is fail-fast; a drop cannot report or retry its result.
         let mut handle = self.handle;
-        let rc = unsafe { ffi::zlink_timer_destroy(&mut handle) };
-        if rc != 0 {
-            crate::internal::defer_native_close(
-                crate::internal::DeferredCloseKind::Timer,
-                self.handle,
-            );
-        }
+        unsafe { ffi::zlink_timer_destroy(&mut handle) };
     }
 }
 

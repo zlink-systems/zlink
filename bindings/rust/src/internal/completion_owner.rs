@@ -3,15 +3,16 @@
 //! Socket-local ownership of the Core completion queue.
 //!
 //! A public poller with a `POLLCOMPLETION` registration is the only asynchronous
-//! drain owner. REQUEST entries are registered before the native FINAL call and
-//! may move from WRITABLE waits to the final REQUEST completion. SEND entries
-//! are registered only when Core hands out a wait token. Blocking requests may
-//! drain their own completion in-line when no public owner exists.
+//! drain owner. REQUEST and SEND entries are registered before the native call
+//! and may move from WRITABLE waits to the final REQUEST completion. A record
+//! the drain pulls before the submit returns is joined inside the entry, so no
+//! lock spans the native call. Blocking requests may drain their own
+//! completion in-line when no public owner exists.
 
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::task::{Poll, Waker};
 
 use crate::error::{
@@ -315,7 +316,9 @@ impl CompletionEntry {
     fn shutdown(&self) {
         let waker = {
             let mut state = self.state.lock().expect("completion entry");
-            if self.kind == CompletionEntryKind::Request && state.settled {
+            if state.captured {
+                // Core already delivered this record. The submit result joins
+                // it when published; the close must not replace it.
                 return;
             }
             state.published = true;
@@ -352,19 +355,19 @@ impl CompletionEntry {
 struct OwnerState {
     entries: HashMap<usize, Arc<CompletionEntry>>,
     public_owner: Option<usize>,
-    shutdown: bool,
 }
 
 /// The single drain owner and provisional registry for one native socket.
 pub(crate) struct CompletionOwner {
     socket: usize,
     state: Mutex<OwnerState>,
-    /// Serializes completion-backed submit/token publication, owner changes,
-    /// and completion pulls so each operation has one linearization point.
+    /// Serializes completion pulls (public drain and inline blocking request)
+    /// with owner changes. Submits never take it: an entry is registered before
+    /// the native call and a completion that arrives first joins the submit
+    /// result inside the entry.
     completion_gate: Mutex<()>,
-    /// Native submits hold this shared; close takes it exclusively so a raw
-    /// handle is never entered after the native close returned.
-    lifecycle: RwLock<bool>,
+    /// Set once Core accepted the close. Registration checks it under `state`.
+    closed: AtomicBool,
     next_context: AtomicUsize,
 }
 
@@ -378,10 +381,9 @@ impl CompletionOwner {
             state: Mutex::new(OwnerState {
                 entries: HashMap::new(),
                 public_owner: None,
-                shutdown: false,
             }),
             completion_gate: Mutex::new(()),
-            lifecycle: RwLock::new(false),
+            closed: AtomicBool::new(false),
             next_context: AtomicUsize::new(1),
         })
     }
@@ -391,43 +393,18 @@ impl CompletionOwner {
         self.next_context.fetch_add(1, Ordering::Relaxed) as *mut c_void
     }
 
-    /// Runs one native submit while the handle is guaranteed open. Concurrent
-    /// submits share the guard; close waits for them and then blocks new ones.
-    pub(crate) fn with_submit<T>(
-        &self,
-        action: impl FnOnce() -> Result<T, SubmitError>,
-    ) -> Result<T, SubmitError> {
-        let closed = self.lifecycle.read().expect("completion lifecycle");
-        if *closed {
-            return Err(SubmitError::new(SubmitResult::Terminated, libc::ESHUTDOWN));
+    /// Rejects a submit after Core accepted the close.
+    pub(crate) fn ensure_open(&self) -> Result<(), SubmitError> {
+        if self.closed.load(Ordering::Acquire) {
+            Err(SubmitError::new(SubmitResult::Terminated, libc::ESHUTDOWN))
+        } else {
+            Ok(())
         }
-        action()
-    }
-
-    /// Runs one asynchronous completion-backed submit while ownership changes
-    /// and completion pulls are excluded. The native handle remains open for
-    /// the whole submit/token-publication transaction.
-    pub(crate) fn with_completion_submit<T, E>(
-        &self,
-        action: impl FnOnce() -> Result<T, E>,
-    ) -> Result<T, E>
-    where
-        E: From<SubmitError>,
-    {
-        let closed = self.lifecycle.read().expect("completion lifecycle");
-        if *closed {
-            return Err(SubmitError::new(SubmitResult::Terminated, libc::ESHUTDOWN).into());
-        }
-        let _completion = self
-            .completion_gate
-            .lock()
-            .expect("completion operation gate");
-        action()
     }
 
     pub(crate) fn ensure_public_owner(&self) -> Result<(), SubmitError> {
         let state = self.state.lock().expect("completion owner");
-        if state.shutdown {
+        if self.closed.load(Ordering::Acquire) {
             Err(SubmitError::new(
                 SubmitResult::InvalidState,
                 libc::ESHUTDOWN,
@@ -445,7 +422,7 @@ impl CompletionOwner {
         let entry = CompletionEntry::new(CompletionEntryKind::Request);
         let context = self.next_context();
         let mut state = self.state.lock().expect("completion owner");
-        if state.shutdown {
+        if self.closed.load(Ordering::Acquire) {
             return Err(SubmitError::new(
                 SubmitResult::InvalidState,
                 libc::ESHUTDOWN,
@@ -455,27 +432,42 @@ impl CompletionOwner {
         Ok((entry, context))
     }
 
-    /// Registers the SEND entry behind `context` for the wait token Core just
-    /// issued. The entry stays registered across repeated backpressure until
-    /// the waiter unregisters or detaches it.
-    pub(crate) fn register_send_token(
+    /// Registers the SEND entry behind `context` before the native submit, so
+    /// a WRITABLE record pulled before the submit returns finds it and joins
+    /// inside the entry. Without a public owner nobody can drain a wait token,
+    /// so no entry is registered and a wait token is refused later.
+    pub(crate) fn register_send(
         self: &Arc<Self>,
         context: *mut c_void,
-        entry: &Arc<CompletionEntry>,
+    ) -> Result<Option<Arc<CompletionEntry>>, SubmitError> {
+        let mut state = self.state.lock().expect("completion owner");
+        if self.closed.load(Ordering::Acquire) {
+            return Err(SubmitError::new(SubmitResult::Terminated, libc::ESHUTDOWN));
+        }
+        if state.public_owner.is_none() {
+            return Ok(None);
+        }
+        let entry = CompletionEntry::new(CompletionEntryKind::SendRetry);
+        state.entries.insert(context as usize, Arc::clone(&entry));
+        Ok(Some(entry))
+    }
+
+    /// Publishes the wait token Core just issued for a registered SEND entry.
+    /// The entry stays registered across repeated backpressure until the
+    /// waiter unregisters or detaches it.
+    pub(crate) fn publish_send_token(
+        &self,
+        entry: &CompletionEntry,
         completion_id: u64,
     ) -> Result<(), SubmitError> {
         {
-            let mut state = self.state.lock().expect("completion owner");
-            if state.shutdown {
+            let state = self.state.lock().expect("completion owner");
+            if self.closed.load(Ordering::Acquire) {
                 return Err(SubmitError::new(SubmitResult::Terminated, libc::ESHUTDOWN));
             }
             if state.public_owner.is_none() {
                 return Err(SubmitError::new(SubmitResult::InvalidState, libc::EBUSY));
             }
-            state
-                .entries
-                .entry(context as usize)
-                .or_insert_with(|| Arc::clone(entry));
         }
         entry.publish_writable(completion_id);
         Ok(())
@@ -500,7 +492,7 @@ impl CompletionOwner {
         loop {
             {
                 let state = self.state.lock().expect("completion owner");
-                if state.shutdown || state.public_owner.is_none() {
+                if self.closed.load(Ordering::Acquire) || state.public_owner.is_none() {
                     break;
                 }
             }
@@ -539,10 +531,7 @@ impl CompletionOwner {
         self: &Arc<Self>,
         entry: &Arc<CompletionEntry>,
     ) -> Result<Vec<Message>, ZlinkError> {
-        let closed = self.lifecycle.read().expect("completion lifecycle");
-        if *closed {
-            return Err(SubmitError::new(SubmitResult::Terminated, libc::ESHUTDOWN).into());
-        }
+        self.ensure_open()?;
         let _completion = self
             .completion_gate
             .lock()
@@ -555,7 +544,6 @@ impl CompletionOwner {
             .is_some()
         {
             drop(_completion);
-            drop(closed);
             return entry.wait_request().map_err(Into::into);
         }
 
@@ -618,7 +606,7 @@ impl CompletionOwner {
             .lock()
             .expect("completion operation gate");
         let mut state = self.state.lock().expect("completion owner");
-        if state.shutdown {
+        if self.closed.load(Ordering::Acquire) {
             return Err(ConfigError::new(
                 ConfigResult::InvalidState,
                 libc::ESHUTDOWN,
@@ -666,29 +654,24 @@ impl CompletionOwner {
         let _ = self.release_public_with(poller_owner, || Ok(()));
     }
 
-    pub(crate) fn shutdown_with<T>(self: &Arc<Self>, close_native: impl FnOnce() -> T) -> T {
-        let mut closed = self.lifecycle.write().expect("completion lifecycle");
-        *closed = true;
-        self.shutdown_inner();
-        close_native()
+    /// Calls Core close and settles the registry only after Core accepted it.
+    /// Core close is fail-fast: `EBUSY` reaches the caller as-is, and nothing
+    /// here waits for in-flight calls or retries.
+    pub(crate) fn close_with(self: &Arc<Self>, close_native: impl FnOnce() -> i32) -> i32 {
+        let rc = close_native();
+        if rc == crate::CloseResult::Ok as i32 {
+            self.shutdown();
+        }
+        rc
     }
 
-    fn shutdown_inner(self: &Arc<Self>) {
-        {
-            let mut state = self.state.lock().expect("completion owner");
-            if state.shutdown {
-                return;
-            }
-            state.shutdown = true;
+    /// Fails every registered entry that Core has not delivered a record for.
+    /// A record already delivered keeps its result.
+    pub(crate) fn shutdown(self: &Arc<Self>) {
+        if self.closed.swap(true, Ordering::AcqRel) {
+            return;
         }
-        let entries = {
-            let _completion = self
-                .completion_gate
-                .lock()
-                .expect("completion operation gate");
-            let mut state = self.state.lock().expect("completion owner");
-            std::mem::take(&mut state.entries)
-        };
+        let entries = std::mem::take(&mut self.state.lock().expect("completion owner").entries);
         for entry in entries.into_values() {
             entry.shutdown();
         }
@@ -967,6 +950,28 @@ mod tests {
                 assert!(entry.poll_writable(waker).is_pending());
             }
         }
+    }
+
+    #[test]
+    fn shutdown_keeps_a_record_core_already_delivered() {
+        let waker = Waker::noop();
+        for kind in [CompletionEntryKind::SendRetry, CompletionEntryKind::Request] {
+            let entry = CompletionEntry::new(kind);
+            let mut completion = ffi::zlink_completion_t::empty();
+            completion.kind = ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE;
+            completion.completion_id = 71;
+            completion.send_result = ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED as i32;
+            entry.capture(&mut completion);
+            entry.shutdown();
+            entry.publish_writable(71);
+            assert!(matches!(entry.poll_writable(waker), Poll::Ready(Ok(()))));
+        }
+
+        let entry = CompletionEntry::new(CompletionEntryKind::Request);
+        entry.capture_outcome(CompletionOutcome::Request(Ok(Vec::new())));
+        entry.shutdown();
+        entry.publish_request(72);
+        assert!(matches!(entry.poll_request(waker), Poll::Ready(Ok(parts)) if parts.is_empty()));
     }
 
     #[test]
