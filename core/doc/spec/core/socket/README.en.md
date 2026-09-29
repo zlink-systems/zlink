@@ -252,7 +252,7 @@ typedef enum zlink_submit_result_t
     ZLINK_SUBMIT_OK = 0,                 // The message was sent successfully
 
     /* Normal control-flow result. */
-    ZLINK_SUBMIT_BACKPRESSURED = 1,      // The send queue is full (HWM reached)
+    ZLINK_SUBMIT_BACKPRESSURED = 1,      // Socket queue or reservation capacity is unavailable
     ZLINK_SUBMIT_NOT_CONNECTED = 2,      // The target path or peer is not connected yet
     ZLINK_SUBMIT_NOT_FOUND = 3,          // The target peer or routed destination was not found
     ZLINK_SUBMIT_NOT_ADMITTED = 13,      // The target route was identified, but admission policy rejected the submit
@@ -1039,7 +1039,7 @@ and closes the completion or discards the socket.
 | `DONTWAIT` backpressured or target not ready yet | `ZLINK_SUBMIT_BACKPRESSURED`, `EAGAIN` | nonzero wait token | one WRITABLE record |
 | STREAM RID with no route | `ZLINK_SUBMIT_NOT_CONNECTED`, `EHOSTUNREACH` | 0 | none |
 | ROUTER directed send with no route | [ROUTER options §5](07-router.en.md#5-router-options) | §5 | §5 |
-| Completion reservation limit exceeded | `ZLINK_SUBMIT_OUT_OF_MEMORY`, `ENOMEM` | 0 | none |
+| Completion reservation limit exceeded | `ZLINK_SUBMIT_BACKPRESSURED`, `EAGAIN` | 0 | none |
 | Validation or target failure | applicable submit result | 0 | none |
 
 `NONE` snapshots `ZLINK_OPT_SNDTIMEO` on entry and waits for local
@@ -1065,10 +1065,10 @@ returns a wait token; a REQUEST reserves one when it is admitted with a
 nonzero REQUEST ID and when it returns a wait token. A slot remains reserved from
 reservation until `zlink_completion_recv()` removes its record from the queue.
 Socket close also releases slots for unread records. At the limit, Core does
-not accept the operation and consumes every input slot: a SEND
-`DONTWAIT` call returns `ZLINK_SUBMIT_OUT_OF_MEMORY` with `errno == ENOMEM`
-and ID `0`; a REQUEST returns `ZLINK_SUBMIT_BACKPRESSURED` with
-`errno == EAGAIN` and ID `0`.
+not accept the operation and consumes every input slot: both a SEND
+`DONTWAIT` call and a REQUEST return `ZLINK_SUBMIT_BACKPRESSURED` with
+`errno == EAGAIN` and ID `0`. No wait token exists, so the caller receives
+completions to release reservations and then resubmits.
 
 A wait token wakes **when the resource that refused its submit recovers** — the
 target's write credit for SEND and for a REQUEST refused by physical
@@ -1506,6 +1506,9 @@ connection, options, send/receive/completion functions, return values, and
 
 **Whole-message send and completion**
 - SEND results, wait tokens, WRITABLE resubmission, and replay verification refer to [whole-message send](#whole-message-send-and-pending-admission).
+- After the 65,536 shared reservations are filled, verify that a SEND `DONTWAIT` call and a REQUEST each end
+  with `BACKPRESSURED` and `EAGAIN`, ID `0`, and no completion, and that they can be resubmitted after
+  receiving completions releases reservations.
 - Verify the termination results of SEND and REQUEST wait tokens (resource recovery, explicit removal,
   STREAM physical disconnect, deadline expiry with `SNDTIMEO` 0 or a positive value and its absence with `-1`, races between
   recovery and expiry, and no record after close or termination), one WRITABLE record, and reservation

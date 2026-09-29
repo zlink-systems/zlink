@@ -2596,7 +2596,7 @@ Core [result와 errno 대응](../../../core/doc/spec/core/03-errors.ko.md#result
 | 값 | 상수 | 분류 | 의미 |
 |----|------|------|------|
 | 0 | `OK` | 성공 | 제출 성공 |
-| 1 | `BACKPRESSURED` | 제어 흐름 | send 큐 포화 (HWM) |
+| 1 | `BACKPRESSURED` | 제어 흐름 | Core의 capacity 부족 거절; Core Errors §2 참조 |
 | 2 | `NOT_CONNECTED` | 제어 흐름 | 대상 peer/경로 미연결 |
 | 3 | `NOT_FOUND` | 제어 흐름 | 대상 peer/route 없음 |
 | 13 | `NOT_ADMITTED` | 제어 흐름 | Core가 반환한 admission 거절. Weight `0`의 flag별 결과는 [Core whole-message send](../../../core/doc/spec/core/socket/README.ko.md#whole-message-send와-pending-admission)와 [Request와 reply](../../../core/doc/spec/core/socket/README.ko.md#request와-reply)를 따른다. |

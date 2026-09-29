@@ -2964,7 +2964,7 @@ Core [result and errno mapping](../../../core/doc/spec/core/03-errors.en.md#resu
 | Value | Constant | Category | Meaning |
 |----|------|------|------|
 | 0 | `OK` | success | submit succeeded |
-| 1 | `BACKPRESSURED` | control flow | the send queue is saturated (HWM) |
+| 1 | `BACKPRESSURED` | control flow | Core capacity refusal; see Core Errors §2 |
 | 2 | `NOT_CONNECTED` | control flow | the target peer/path is not connected |
 | 3 | `NOT_FOUND` | control flow | the target peer/route does not exist |
 | 13 | `NOT_ADMITTED` | control flow | Admission refusal returned by Core. Flag-specific weight-`0` results follow [Core whole-message send](../../../core/doc/spec/core/socket/README.en.md#whole-message-send-and-pending-admission) and [Request and reply](../../../core/doc/spec/core/socket/README.en.md#request-and-reply). |
