@@ -111,14 +111,23 @@ internal sealed class ZLinkLocationAddressResolvers
         return resolution.Row is not { } row ? null : (ToSnapshot(row), row.MembershipEpoch);
     }
 
+    // Terminal kind of an unusable authority (spec 06-spot-address-messaging §9):
+    // a Closing owner is Rejected, any other unavailable authority Unavailable.
     private static void ThrowIfKnownUnavailable(ZLinkLocationResolutionKind kind, string target)
     {
-        if (kind != ZLinkLocationResolutionKind.KnownUnavailable)
-            return;
-        throw new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.Unavailable,
-            $"{target} is currently unavailable."
-        );
+        switch (kind)
+        {
+            case ZLinkLocationResolutionKind.KnownUnavailable:
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    $"{target} is currently unavailable."
+                );
+            case ZLinkLocationResolutionKind.Closing:
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Rejected,
+                    $"{target} is closing."
+                );
+        }
     }
 
     private ZLinkSpotHandleSnapshot ToSnapshot(ZLinkResolvedSpotLocation row) =>

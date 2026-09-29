@@ -171,6 +171,24 @@ public sealed class TimerLifecycleTests
     }
 
     [Fact]
+    public async Task Frozen_relocation_snapshot_skips_cancelled_timer_registration()
+    {
+        var registry = new ZLinkSpotTimerRegistry(static () => false);
+        _ = await AddTimerAsync(registry, "active");
+        var cancelled = await AddTimerAsync(registry, "cancelled");
+        await cancelled.CancelAsync();
+
+        var boundary = registry.FreezeRelocation();
+        var snapshot = await registry.SnapshotFrozenRelocationAfterDispatchesAsync(
+            CancellationToken.None
+        );
+
+        Assert.Equal("active", ZLinkSpotTimerRelocationCodec.Decode(Assert.Single(boundary)).Timer.Name);
+        Assert.Equal("active", ZLinkSpotTimerRelocationCodec.Decode(Assert.Single(snapshot)).Timer.Name);
+        await registry.DisposeAsync();
+    }
+
+    [Fact]
     public async Task Timer_freeze_keeps_tick_pending_when_dispatch_is_suppressed_after_freeze()
     {
         await using var scheduler = new ZLinkTimerScheduler();
@@ -286,7 +304,9 @@ public sealed class TimerLifecycleTests
         );
         await tickStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        var first = timer.CancelAsync().AsTask();
+        Task first;
+        using (ExecutionContext.SuppressFlow())
+            first = timer.CancelAsync().AsTask();
         var second = timer.CancelAsync().AsTask();
         Assert.False(first.IsCompleted);
         Assert.False(second.IsCompleted);
@@ -311,7 +331,9 @@ public sealed class TimerLifecycleTests
             admitted.Add(await AddTimerAsync(registry, $"timer-{index}"));
         }
 
-        var first = registry.DisposeAsync().AsTask();
+        Task first;
+        using (ExecutionContext.SuppressFlow())
+            first = registry.DisposeAsync().AsTask();
         var second = registry.DisposeAsync().AsTask();
         await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -319,6 +341,16 @@ public sealed class TimerLifecycleTests
         await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
             await AddTimerAsync(registry, "after-close")
         );
+    }
+
+    [Fact]
+    public async Task Scheduler_disposal_completes_when_execution_context_flow_is_suppressed()
+    {
+        var scheduler = new ZLinkTimerScheduler();
+        Task disposal;
+        using (ExecutionContext.SuppressFlow())
+            disposal = scheduler.DisposeAsync().AsTask();
+        await disposal.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     [Fact]
@@ -540,8 +572,7 @@ public sealed class TimerLifecycleTests
 
         Assert.False(configured.IsDisposed);
         Assert.Equal(0, Volatile.Read(ref deliveries));
-        var restored = target
-            .FreezeRelocation()
+        var restored = target.FreezeRelocation()
             .Select(static timer => ZLinkSpotTimerRelocationCodec.Decode(timer))
             .ToDictionary(static snapshot => snapshot.Timer.Name);
         var expected = relocation

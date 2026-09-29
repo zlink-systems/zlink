@@ -727,8 +727,8 @@ public sealed class UserSpotExecutionSchedulerTests
         var seal = await executor.SealRelocationAsync(CancellationToken.None);
         var attempts = 0;
 
-        Assert.Throws<InvalidOperationException>(() =>
-            executor.TryOpenRelocationAfterMessageFollow(
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await executor.TryOpenRelocationAfterMessageFollowAsync(
                 seal,
                 () =>
                 {
@@ -737,7 +737,9 @@ public sealed class UserSpotExecutionSchedulerTests
                 }
             )
         );
-        Assert.True(executor.TryOpenRelocationAfterMessageFollow(seal, () => attempts++));
+        Assert.True(
+            await executor.TryOpenRelocationAfterMessageFollowAsync(seal, () => attempts++)
+        );
 
         Assert.Equal(2, attempts);
     }
@@ -755,7 +757,7 @@ public sealed class UserSpotExecutionSchedulerTests
         ZLinkSpotRelocationActorQueueReservation? reservation = null;
 
         var opening = Task.Run(() =>
-            executor.TryOpenRelocationAfterMessageFollow(
+            executor.TryOpenRelocationAfterMessageFollowAsync(
                 seal,
                 () =>
                 {
@@ -763,7 +765,7 @@ public sealed class UserSpotExecutionSchedulerTests
                     Assert.True(allowReservation.Wait(TimeSpan.FromSeconds(5)));
                     reservation = executor.ReserveRelocationActorQueue(seal, "actor-1");
                 }
-            )
+            ).AsTask()
         );
         await callbackEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -803,6 +805,47 @@ public sealed class UserSpotExecutionSchedulerTests
 
         await Task.WhenAll(replay, direct).WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(new[] { "replay", "direct" }, order.ToArray());
+    }
+
+    [Fact]
+    public async Task RelocationAdmissionOpen_DoesNotBlockConcurrentAsyncCaller()
+    {
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        await using var executor = CreateExecutor(errorSink, ZLinkUserSpotExecutionMode.SpotWide);
+        var seal = await executor.SealRelocationAsync(CancellationToken.None);
+        var callbackEntered = NewSignal();
+        var invocationReturned = NewSignal();
+        using var allowReservation = new ManualResetEventSlim();
+
+        var opening = Task.Run(async () =>
+            await executor.TryOpenRelocationAfterMessageFollowAsync(
+                seal,
+                () =>
+                {
+                    callbackEntered.TrySetResult();
+                    Assert.True(allowReservation.Wait(TimeSpan.FromSeconds(5)));
+                }
+            )
+        );
+        try
+        {
+            await callbackEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var competing = Task.Run(() =>
+            {
+                var pending = executor.TryOpenRelocationAfterMessageFollowAsync(seal, () => { });
+                invocationReturned.TrySetResult();
+                return pending.AsTask();
+            });
+            await invocationReturned.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.False(competing.IsCompleted);
+            allowReservation.Set();
+            Assert.True(await opening.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.False(await competing.WaitAsync(TimeSpan.FromSeconds(5)));
+        }
+        finally
+        {
+            allowReservation.Set();
+        }
     }
 
     [Fact]

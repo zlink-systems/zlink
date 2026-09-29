@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
+using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Messaging;
 
@@ -55,7 +56,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     }
 
     internal void AddManual(string endpoint) =>
-        AddOrReplace($"manual:{endpoint}", endpoint, expected: null);
+        AddOrReplaceAsync($"manual:{endpoint}", endpoint, expected: null)
+            .AsTask().GetAwaiter().GetResult();
 
     internal void RemoveManual(string endpoint) => Remove($"manual:{endpoint}");
 
@@ -64,7 +66,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         var endpoint = identity.AdvertisedEndpoint;
         var snapshot = await identity.ReadAsync().ConfigureAwait(false);
         var key = $"local:{identity.ServerRid.ToHex()}:{identity.LifecycleGeneration}";
-        AddOrReplace(key, endpoint, LocalDescriptor(identity, endpoint, snapshot));
+        await AddOrReplaceAsync(key, endpoint, LocalDescriptor(identity, endpoint, snapshot))
+            .ConfigureAwait(false);
         identity.SnapshotChanged += changed =>
         {
             RunState(() =>
@@ -94,7 +97,9 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             default
         );
 
-    internal void ReplaceAutomatic(IReadOnlyList<ZLinkClientServerServerDescriptor> descriptors)
+    internal async ValueTask ReplaceAutomaticAsync(
+        IReadOnlyList<ZLinkClientServerServerDescriptor> descriptors
+    )
     {
         var desired = descriptors.ToDictionary(
             static row => $"auto:{row.ServerRid.ToHex()}:{row.LifecycleGeneration}",
@@ -115,7 +120,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         // Start successors before removing the previous lifecycle. Ready
         // publication is fenced inside each connection.
         foreach (var (key, descriptor) in desired)
-            AddOrReplace(key, descriptor.Endpoint, descriptor);
+            await AddOrReplaceAsync(key, descriptor.Endpoint, descriptor).ConfigureAwait(false);
         foreach (var key in obsolete)
         {
             var retainForSuccessor = RunState(() =>
@@ -442,15 +447,15 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         await _lane.DisposeAsync().ConfigureAwait(false);
     }
 
-    private void AddOrReplace(
+    private async ValueTask AddOrReplaceAsync(
         string key,
         string endpoint,
         ZLinkClientServerServerDescriptor? expected
     )
     {
         Connection? previous = null;
-        var retirePrevious = false;
         Connection? created = null;
+        TaskCompletionSource? inFlight = null;
         RunState(() =>
         {
             if (_disposed)
@@ -469,21 +474,106 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 endpoint,
                 expected,
                 _context.CreateDealerSocket(),
-                _monitoring,
-                _socketConfig,
                 _stopToken,
-                _applicationJobQueue,
                 OnAdmitted,
                 ScheduleStateChanged,
                 _time
             );
-            _connections[key] = created;
-            ScheduleStateChanged(selectionChanged: true);
-            retirePrevious = previous is not null && !IsReferenced(previous);
-            if (retirePrevious)
-                RegisterRetirement(previous!);
+            inFlight = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            _retired.RemoveAll(static candidate => candidate.IsCompleted);
+            _retired.Add(inFlight.Task);
         });
-        created?.Start();
+        if (created is null)
+            return;
+        try
+        {
+            try
+            {
+                await created.PrepareAsync(_applicationJobQueue, _monitoring, _socketConfig)
+                    .ConfigureAwait(false);
+                var committed = false;
+                try
+                {
+                    committed = RunState(() =>
+                    {
+                        if (_disposed)
+                            return false;
+                        _connections.TryGetValue(key, out var current);
+                        if (!ReferenceEquals(current, previous))
+                            return false;
+                        _connections[key] = created;
+                        ScheduleStateChanged(selectionChanged: true);
+                        return true;
+                    });
+                }
+                catch (ObjectDisposedException) { }
+                if (!committed)
+                {
+                    await created.DisposeAsync().ConfigureAwait(false);
+                    return;
+                }
+                created.Start();
+            }
+            catch (Exception startFailure)
+            {
+                var failures = new ZLinkFailureCollector(startFailure);
+                ValueTask previousDisposal = ValueTask.CompletedTask;
+                failures.Capture(() =>
+                {
+                    try
+                    {
+                        previousDisposal = RunState(() =>
+                        {
+                            if (_connections.TryGetValue(key, out var current)
+                                && ReferenceEquals(current, created))
+                            {
+                                if (previous is null)
+                                    _connections.Remove(key);
+                                else
+                                    _connections[key] = previous;
+                                ScheduleStateChanged(selectionChanged: true);
+                            }
+                            return previous is not null && !IsReferenced(previous)
+                                ? previous.DisposeAsync()
+                                : ValueTask.CompletedTask;
+                        });
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        previousDisposal = previous?.DisposeAsync() ?? ValueTask.CompletedTask;
+                    }
+                });
+                await failures.CaptureAsync(created.DisposeAsync).ConfigureAwait(false);
+                await failures.CaptureAsync(() => previousDisposal).ConfigureAwait(false);
+                failures.ThrowIfAny();
+                throw new InvalidOperationException(
+                    "Unreachable after connection startup cleanup failure propagation."
+                );
+            }
+            if (previous is not null)
+            {
+                ValueTask previousDisposal;
+                try
+                {
+                    previousDisposal = RunState(() =>
+                        !IsReferenced(previous)
+                            ? previous.DisposeAsync()
+                            : ValueTask.CompletedTask
+                    );
+                }
+                catch (ObjectDisposedException)
+                {
+                    previousDisposal = previous.DisposeAsync();
+                }
+                await previousDisposal.ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            inFlight!.TrySetResult();
+        }
     }
 
     private void Remove(string key)
@@ -625,13 +715,13 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     {
         private readonly string _channelName;
         private readonly string _endpoint;
-        private readonly TimeSpan _admissionTimeout;
+        private TimeSpan _admissionTimeout;
         private readonly CancellationToken _stopToken;
-        private readonly uint _normalizedEffectiveMaxMessageBytes;
+        private uint _normalizedEffectiveMaxMessageBytes;
         private readonly ZLinkStateLane _lane = new();
         private readonly object _socketLifecycleGate = new();
-        private readonly IZLinkBackendSocketMonitor _monitor;
-        private readonly IZLinkBackendSocketPoller _receivePoller;
+        private IZLinkBackendSocketMonitor _monitor = null!;
+        private IZLinkBackendSocketPoller _receivePoller = null!;
         private ZLinkClientServerServerDescriptor? _expected;
         private bool _disposed;
         private Task? _disposeTask;
@@ -643,7 +733,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         private string _diagnostics = "configured";
         private string? _admittedIdentity;
         private ZLinkClientServerControlProtocol.Admission? _currentAdmission;
-        private readonly CancellationTokenSource _admissionStop;
+        private CancellationTokenSource _admissionStop = null!;
         private readonly List<Task> _requestTasks = [];
         private Task? _controlTask;
         private Task? _livenessTask;
@@ -660,17 +750,14 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         private long _sentLivenessProbeCount;
         private ulong _physicalGeneration = 1;
         private ulong _admissionAttempt;
-        private IDisposable? _receiveFlowRegistration;
+        private IAsyncDisposable? _receiveFlowRegistration;
 
         internal Connection(
             string channelName,
             string endpoint,
             ZLinkClientServerServerDescriptor? expected,
             IDealerSocket socket,
-            IZLinkMonitoringBackendAdapter monitoring,
-            IZLinkSocketConfig socketConfig,
             CancellationToken stopToken,
-            ZLinkApplicationJobQueue applicationJobQueue,
             Action<Connection, string> onAdmitted,
             Action<bool> onStateChanged,
             TimeProvider timeProvider
@@ -679,23 +766,11 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             _channelName = channelName;
             _endpoint = endpoint;
             _expected = expected;
-            _admissionTimeout = socketConfig.ConnectTimeout ?? TimeSpan.FromSeconds(1);
             _stopToken = stopToken;
             _onAdmitted = onAdmitted;
             _onStateChanged = onStateChanged;
             _time = timeProvider;
-            _admissionStop = CancellationTokenSource.CreateLinkedTokenSource(stopToken);
-            _normalizedEffectiveMaxMessageBytes =
-                ZLinkClientServerControlProtocol.NormalizeMaximumMessageBytes(
-                    socketConfig.MaxMessageSize
-                );
             Socket = socket;
-            Socket.SetRoutingId(RoutingId.From($"csc-{Guid.NewGuid():N}"));
-            ZLinkChannelBundleFactory.ApplySocketConfig(Socket.Options, socketConfig);
-            Socket.Options.Probe = false;
-            _monitor = monitoring.OpenSocketMonitor(Socket);
-            _receivePoller = ZLinkBackendSocketPoller.Create(Socket);
-            _receiveFlowRegistration = applicationJobQueue.RegisterReceiveFlowSocket(Socket);
         }
 
         internal IDealerSocket Socket { get; }
@@ -826,10 +901,33 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             });
         }
 
+        internal async ValueTask PrepareAsync(
+            ZLinkApplicationJobQueue applicationJobQueue,
+            IZLinkMonitoringBackendAdapter monitoring,
+            IZLinkSocketConfig socketConfig
+        )
+        {
+            _admissionTimeout = socketConfig.ConnectTimeout ?? TimeSpan.FromSeconds(1);
+            _admissionStop = CancellationTokenSource.CreateLinkedTokenSource(_stopToken);
+            _normalizedEffectiveMaxMessageBytes =
+                ZLinkClientServerControlProtocol.NormalizeMaximumMessageBytes(
+                    socketConfig.MaxMessageSize
+                );
+            Socket.SetRoutingId(RoutingId.From($"csc-{Guid.NewGuid():N}"));
+            ZLinkChannelBundleFactory.ApplySocketConfig(Socket.Options, socketConfig);
+            Socket.Options.Probe = false;
+            _monitor = monitoring.OpenSocketMonitor(Socket);
+            _receivePoller = ZLinkBackendSocketPoller.Create(Socket);
+            _receiveFlowRegistration = await applicationJobQueue
+                .RegisterReceiveFlowSocketAsync(Socket)
+                .ConfigureAwait(false);
+        }
+
         internal void Start()
         {
             RunState(() =>
             {
+                ObjectDisposedException.ThrowIf(_disposed, this);
                 if (_monitorTask is null)
                 {
                     using (ExecutionContext.SuppressFlow())
@@ -890,9 +988,10 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         {
             await started.ConfigureAwait(false);
             var failures = new ZLinkFailureCollector();
-            await failures
-                .CaptureAsync(() => new ValueTask(_admissionStop.CancelAsync()))
-                .ConfigureAwait(false);
+            if (_admissionStop is not null)
+                await failures
+                    .CaptureAsync(() => new ValueTask(_admissionStop.CancelAsync()))
+                    .ConfigureAwait(false);
             var (requestTasks, controlTask, livenessTask, monitorTask) = RunState(() =>
                 (_requestTasks.ToArray(), _controlTask, _livenessTask, _monitorTask)
             );
@@ -912,8 +1011,13 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 await failures
                     .CaptureAsync(() => new ValueTask(IgnoreCancellationAsync(monitorTask)))
                     .ConfigureAwait(false);
-            if (_receiveFlowRegistration is not null)
-                failures.Capture(_receiveFlowRegistration.Dispose);
+            await failures
+                .CaptureAsync(() =>
+                    ZLinkReceiveFlowController.DisposeRegistrationAsync(
+                        _receiveFlowRegistration
+                    )
+                )
+                .ConfigureAwait(false);
             lock (_socketLifecycleGate)
             {
                 try
@@ -922,15 +1026,22 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 }
                 catch { }
             }
-            await failures.CaptureAsync(_monitor.DisposeAsync).ConfigureAwait(false);
-            failures.Capture(_receivePoller.Dispose);
+            if (_monitor is not null)
+                await failures.CaptureAsync(_monitor.DisposeAsync).ConfigureAwait(false);
+            if (_receivePoller is not null)
+                failures.Capture(_receivePoller.Dispose);
             await failures.CaptureAsync(DisposeSocketAsync).ConfigureAwait(false);
-            failures.Capture(_admissionStop.Dispose);
+            if (_admissionStop is not null)
+                failures.Capture(_admissionStop.Dispose);
             failures.ThrowIfAny();
             await _lane.DisposeAsync().ConfigureAwait(false);
         }
 
-        private ValueTask DisposeSocketAsync() => Socket.DisposeAsync();
+        private ValueTask DisposeSocketAsync()
+        {
+            lock (_socketLifecycleGate)
+                return Socket.DisposeAsync();
+        }
 
         private static async Task IgnoreCancellationAsync(Task task)
         {

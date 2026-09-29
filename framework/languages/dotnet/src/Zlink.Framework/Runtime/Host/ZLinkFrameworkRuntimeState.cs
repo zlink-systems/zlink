@@ -227,7 +227,7 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         foreach (var node in resources.SpotNodes)
             Capture(node.RequestStop);
         foreach (var stream in resources.StreamNodes)
-            Capture(stream.RequestStop);
+            await CaptureAsync(stream.RequestStopAsync).ConfigureAwait(false);
 
         await CaptureAsync(TaskRunner.StopAsync).ConfigureAwait(false);
 

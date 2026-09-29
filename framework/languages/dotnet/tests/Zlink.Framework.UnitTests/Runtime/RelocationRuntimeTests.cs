@@ -1687,20 +1687,20 @@ public sealed class RelocationRuntimeTests
     }
 
     [Fact]
-    public void TargetAdmissionOpensOnlyAfterPublicationAndOnlyOnce()
+    public async Task TargetAdmissionOpensOnlyAfterPublicationAndOnlyOnce()
     {
         var stage = CreateTargetStageForHeldJournal();
         var opens = 0;
 
         // Published means "queue publication complete": restore, replay,
         // catalog, and the ready callback. Admission cannot open before it.
-        Assert.Throws<InvalidOperationException>(() =>
-            ZLinkFrameworkRuntime.OpenTargetAdmissionOnce(
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await ZLinkFrameworkRuntime.OpenTargetAdmissionOnceAsync(
                 stage,
                 () =>
                 {
                     opens++;
-                    return true;
+                    return ValueTask.FromResult(true);
                 }
             )
         );
@@ -1710,24 +1710,27 @@ public sealed class RelocationRuntimeTests
         // admission both require the exact target authority publication.
         Assert.Equal(0, Volatile.Read(ref stage.AuthorityPublished));
         Assert.Equal(0, Volatile.Read(ref stage.SessionRoutesConverged));
-        Assert.Throws<InvalidOperationException>(() =>
-            ZLinkFrameworkRuntime.OpenTargetAdmissionOnce(stage, () => ++opens > 0)
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await ZLinkFrameworkRuntime.OpenTargetAdmissionOnceAsync(
+                stage,
+                () => ValueTask.FromResult(++opens > 0)
+            )
         );
         Volatile.Write(ref stage.AuthorityPublished, 1);
-        ZLinkFrameworkRuntime.OpenTargetAdmissionOnce(
+        await ZLinkFrameworkRuntime.OpenTargetAdmissionOnceAsync(
             stage,
             () =>
             {
                 opens++;
-                return true;
+                return ValueTask.FromResult(true);
             }
         );
-        ZLinkFrameworkRuntime.OpenTargetAdmissionOnce(
+        await ZLinkFrameworkRuntime.OpenTargetAdmissionOnceAsync(
             stage,
             () =>
             {
                 opens++;
-                return true;
+                return ValueTask.FromResult(true);
             }
         );
 

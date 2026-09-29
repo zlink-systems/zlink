@@ -7,7 +7,7 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
     private readonly ZLinkDrainExecutionOperations _operations;
     private readonly ZLinkLocationOptions _locationOptions;
     private readonly ILogger<ZLinkFrameworkDrainExecutor>? _logger;
-    private readonly Action _stopMeshMonitoring;
+    private readonly Func<Task> _stopMeshMonitoring;
     private readonly CancellationTokenSource _shutdownDeadline = new();
     private int _shutdownRequested;
 
@@ -23,14 +23,14 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             ZLinkDrainExecutionOperations.Create(runtime, autoConnect, locationRuntime),
             locationOptions,
             logger,
-            routeMeshRuntime.Stop
+            routeMeshRuntime.StopAsync
         ) { }
 
     internal ZLinkFrameworkDrainExecutor(
         ZLinkDrainExecutionOperations operations,
         ZLinkLocationOptions locationOptions,
         ILogger<ZLinkFrameworkDrainExecutor>? logger = null,
-        Action? stopMeshMonitoring = null
+        Func<Task>? stopMeshMonitoring = null
     )
     {
         _operations = operations;
@@ -39,7 +39,7 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         _stopMeshMonitoring = stopMeshMonitoring ?? Noop;
     }
 
-    private static void Noop() { }
+    private static Task Noop() => Task.CompletedTask;
 
     public void RequestShutdown(TimeSpan deadline)
     {
@@ -297,7 +297,7 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             if (_operations.HasAutoConnect)
                 await _operations.StopAutoConnect(deadlineToken).ConfigureAwait(false);
             await CleanupOwnerAsync(deadlineToken).ConfigureAwait(false);
-            _stopMeshMonitoring();
+            await _stopMeshMonitoring().ConfigureAwait(false);
             await _operations.StopRuntime(deadlineToken).ConfigureAwait(false);
             if (_operations.HasLocationRuntime)
                 await _operations.StopLocation(deadlineToken).ConfigureAwait(false);
@@ -496,7 +496,8 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         // for the same sessions here would consume the entire force budget
         // before that owner can perform the actual bounded teardown.
         var failures = new List<Exception>();
-        Capture(_stopMeshMonitoring, failures);
+        await CaptureAsync("stop_mesh_monitoring", () => new ValueTask(_stopMeshMonitoring()), failures)
+            .ConfigureAwait(false);
         if (_operations.HasAutoConnect)
             await CaptureAsync(
                     "stop_auto_connect",
@@ -546,17 +547,6 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         if (failures.Count > 1)
             throw new AggregateException(failures);
 
-        static void Capture(Action operation, ICollection<Exception> failures)
-        {
-            try
-            {
-                operation();
-            }
-            catch (Exception error)
-            {
-                failures.Add(error);
-            }
-        }
     }
 
     private async ValueTask PublishDrainingMarkerAsync(CancellationToken cancellationToken)

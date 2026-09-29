@@ -596,7 +596,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                                         cleanupDeadline.Token
                                     )
                                     .ConfigureAwait(false);
-                                if (!activation.AbortRelocation(seal))
+                                if (!await activation.AbortRelocationAsync(seal).ConfigureAwait(false))
                                     throw new ZLinkRelocationDataLostException(
                                         $"SPOT '{activation.SpotId}' could not restore its source admission seal."
                                     );
@@ -688,7 +688,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                                             cleanupDeadline.Token
                                         )
                                         .ConfigureAwait(false);
-                                    if (!activation.AbortRelocation(seal))
+                                    if (!await activation.AbortRelocationAsync(seal).ConfigureAwait(false))
                                         throw new ZLinkRelocationDataLostException(
                                             $"SPOT '{activation.SpotId}' could not restore its source admission seal."
                                         );
@@ -793,7 +793,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                                     cleanupDeadline.Token
                                 )
                                 .ConfigureAwait(false);
-                            if (!activation.AbortRelocation(seal))
+                            if (!await activation.AbortRelocationAsync(seal).ConfigureAwait(false))
                                 throw new ZLinkRelocationDataLostException(
                                     $"SPOT '{activation.SpotId}' could not restore its source admission seal."
                                 );

@@ -70,12 +70,7 @@ internal sealed class ZLinkFrameworkHostRuntimeCoordinator(
         List<Exception>? failures = null;
         await CaptureAsync(() => autoConnectLifecycle.StopAsync(CancellationToken.None).AsTask())
             .ConfigureAwait(false);
-        await CaptureAsync(() =>
-            {
-                routeMeshRuntime.Stop();
-                return Task.CompletedTask;
-            })
-            .ConfigureAwait(false);
+        await CaptureAsync(routeMeshRuntime.StopAsync).ConfigureAwait(false);
         await CaptureAsync(() => runtime.StopAsync(CancellationToken.None).AsTask())
             .ConfigureAwait(false);
         await CaptureAsync(() =>
