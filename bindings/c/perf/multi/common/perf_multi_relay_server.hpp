@@ -304,7 +304,7 @@ inline bool drain_reply_writable (void *server,
         std::memset (&state->target_rid, 0, sizeof (state->target_rid));
         if (result == ZLINK_SEND_ADMITTED && terminal_errno == 0)
             continue;
-        if (result == ZLINK_SEND_TERMINAL && terminal_errno == ENOENT) {
+        if (result == ZLINK_SEND_NOT_FOUND) {
             // A route can disappear while its wait token is live. Drop the
             // retained reply just like an immediate stale-route result.
             state->drop_retained_reply = true;

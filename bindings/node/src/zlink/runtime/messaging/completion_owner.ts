@@ -21,6 +21,7 @@ import type {
 import { normalizeOperationPayload } from '../buffers/message_conversion';
 import { createError } from '../errors/error_mapping';
 import { withRuntimeErrorMessage } from '../errors/error_state';
+import { constants } from 'node:os';
 import {
   isWouldBlock,
   nativeErrorMessage,
@@ -35,7 +36,8 @@ import { messagesFromNativeBuffers } from './request_executor';
 const COMPLETION_REQUEST = 2;
 const COMPLETION_WRITABLE = 3;
 const SEND_ADMITTED = 0;
-const SEND_TERMINAL = 202;
+const SEND_NOT_FOUND = 801;
+const SEND_NOT_CONNECTED = 802;
 const DONTWAIT = 1;
 
 export interface NativeCompletion {
@@ -657,13 +659,16 @@ export class CompletionOwner {
 
     this.byId.delete(entry.completionId);
     if (completion.sendResult !== SEND_ADMITTED) {
-      const error = completion.sendResult === SEND_TERMINAL
-        ? createError('submit', completion.terminalErrno, 'submit target became unavailable')
-        : submitError(
-            SubmitResult.InternalError,
-            completion.terminalErrno,
-            'writable completion result mismatch'
-          );
+      const result = completion.sendResult === SEND_NOT_FOUND
+        ? SubmitResult.NotFound
+        : completion.sendResult === SEND_NOT_CONNECTED
+          ? SubmitResult.NotConnected
+          : SubmitResult.InternalError;
+      const error = submitError(result,
+        result === SubmitResult.InternalError
+          ? constants.errno.EPROTO!
+          : completion.terminalErrno,
+        'submit target became unavailable');
       this.failEntry(entry, error);
       return;
     }

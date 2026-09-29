@@ -320,9 +320,9 @@ final class CompletionNativeFixture {
         closedRecords++;
     }
 
-    void writable(Submission submission, int errno) {
+    void writable(Submission submission, int sendResult, int errno) {
         completions.add(new Record(CompletionKind.WRITABLE.value(), submission,
-            errno == 0 ? 0 : 202, errno));
+            sendResult, errno));
     }
 
     void requestResult(Submission submission, RequestResult result) {

@@ -398,7 +398,7 @@ func requestTimeoutValue(timeout time.Duration) (uint32, error) {
 func requestWaitActivationError(err error) error {
 	var submitErr *SubmitError
 	if errors.As(err, &submitErr) && submitErr.Result == SubmitTerminated {
-		return requestTerminalError(submitErr.internalErrno())
+		return &RequestError{Result: RequestTerminated, nativeErrno: submitErr.internalErrno()}
 	}
 	return err
 }

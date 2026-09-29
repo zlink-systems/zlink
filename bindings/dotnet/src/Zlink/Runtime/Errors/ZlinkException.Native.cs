@@ -130,12 +130,6 @@ public abstract partial class ZlinkException
         return error is ErrorCode.EShutdown or ErrorCode.Eterm;
     }
 
-    // A WRITABLE SEND_TERMINAL record carries no submit result, only errno.
-    internal static ZlinkSubmitException CreateSubmitException(int errno)
-    {
-        return new ZlinkSubmitException(MapSubmitResult(errno), errno);
-    }
-
     internal static ZlinkSubmitException CreateSubmitException(SubmitResult result)
     {
         return new ZlinkSubmitException(result, NativeMethods.GetLastPInvokeError());
@@ -181,28 +175,6 @@ public abstract partial class ZlinkException
         return nativeErrno == 0
             ? $"zlink error code {code}"
             : string.Create(CultureInfo.InvariantCulture, $"zlink error code {code} (errno {nativeErrno})");
-    }
-
-    private static SubmitResult MapSubmitResult(int errno)
-    {
-        return errno switch
-        {
-            0 => SubmitResult.Ok,
-            11 or 35 or 10035 => SubmitResult.Backpressured,
-            13 => SubmitResult.NotAdmitted,
-            107 or 113 or 111 or 110 or 10057 or 10060 or 10065 =>
-                SubmitResult.NotConnected,
-            2 or 3 => SubmitResult.NotFound,
-            58 or 108 or 10058 or EshutdownFallback or 156384765 =>
-                SubmitResult.Terminated,
-            9 or 88 => SubmitResult.InvalidHandle,
-            22 => SubmitResult.InvalidArgument,
-            95 or 93 or 97 => SubmitResult.NotSupported,
-            16 => SubmitResult.InvalidState,
-            156384766 => SubmitResult.ThreadViolation,
-            12 or 105 => SubmitResult.OutOfMemory,
-            _ => SubmitResult.InternalError
-        };
     }
 
     private static ConfigResult MapConfigResult(int errno)

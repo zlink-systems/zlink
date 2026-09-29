@@ -33,7 +33,7 @@ export type NativeErrorCategory =
   | 'config';
 
 // Platform errno values are resolved at runtime: pointer-returning constructors
-// have no Core result, and a WRITABLE SEND_TERMINAL record carries only errno.
+// have no Core result.
 const EPERM = constants.errno.EPERM;
 const EAGAIN = constants.errno.EAGAIN;
 const ENOMEM = constants.errno.ENOMEM;
@@ -72,9 +72,7 @@ export function isTerminationErrno(errno: number): boolean {
 
 /**
  * Pointer-returning constructors have no Core result, so their errno classifies
- * a configuration failure. A WRITABLE SEND_TERMINAL record has no submit result,
- * so its errno is read through the Core submit table. Other families require a
- * Core result.
+ * a configuration failure. Other families require a Core result.
  */
 export function mapNativeErrno(category: NativeErrorCategory, errno: number): number {
   if (category === 'config') {

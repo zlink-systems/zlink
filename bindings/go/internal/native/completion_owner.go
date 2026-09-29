@@ -545,13 +545,10 @@ func (e *completionEntry) captureWritable(completion *C.zlink_completion_t, cont
 
 	sendResult := C.zlink_send_complete_result_t(completion.send_result)
 	terminalErrno := int(completion.send_terminal_errno)
-	if sendResult == C.ZLINK_SEND_TERMINAL {
-		if terminalErrno == 0 {
-			terminalErrno = int(C.EIO)
-		}
+	if sendResult == C.ZLINK_SEND_NOT_FOUND || sendResult == C.ZLINK_SEND_NOT_CONNECTED {
 		e.setWritableWaiting(false)
 		e.send.payload.close()
-		e.finishSend(sendTerminalError(terminalErrno))
+		e.finishSend(sendCompletionError(SendCompleteResult(sendResult), terminalErrno))
 		e.attemptMu.Unlock()
 		return true, false
 	}
@@ -633,23 +630,21 @@ func (e *completionEntry) captureRequestWritable(completion *C.zlink_completion_
 	}
 
 	terminalErrno := int(completion.send_terminal_errno)
-	if C.zlink_send_complete_result_t(completion.send_result) == C.ZLINK_SEND_TERMINAL {
-		if terminalErrno == 0 {
-			terminalErrno = int(C.EIO)
-		}
+	sendResult := C.zlink_send_complete_result_t(completion.send_result)
+	if sendResult == C.ZLINK_SEND_NOT_FOUND || sendResult == C.ZLINK_SEND_NOT_CONNECTED {
 		e.setWritableWaiting(false)
 		if e.request.payload != nil {
 			e.request.payload.close()
 		}
-		e.finishSend(requestTerminalError(terminalErrno))
+		e.finishSend(sendCompletionError(SendCompleteResult(sendResult), terminalErrno))
 		return true, false
 	}
-	if C.zlink_send_complete_result_t(completion.send_result) != C.ZLINK_SEND_ADMITTED || terminalErrno != 0 {
+	if sendResult != C.ZLINK_SEND_ADMITTED || terminalErrno != 0 {
 		e.setWritableWaiting(false)
 		if e.request.payload != nil {
 			e.request.payload.close()
 		}
-		e.finishSend(&RequestError{Result: RequestInternalError, nativeErrno: int(C.EPROTO)})
+		e.finishSend(sendCompletionError(SendCompleteResult(sendResult), terminalErrno))
 		return true, false
 	}
 
@@ -719,26 +714,21 @@ func (e *completionEntry) attemptRequest() bool {
 	return true
 }
 
-func sendTerminalError(terminalErrno int) error {
-	result := SubmitNotAdmitted
-	switch terminalErrno {
-	case int(C.ENOENT):
+func sendCompletionError(sendResult SendCompleteResult, terminalErrno int) error {
+	var result SubmitResult
+	var nativeErrno int
+	switch sendResult {
+	case SendNotFound:
 		result = SubmitNotFound
-	case int(C.ESHUTDOWN), contextTerminatedErrno:
-		result = SubmitTerminated
+		nativeErrno = terminalErrno
+	case SendNotConnected:
+		result = SubmitNotConnected
+		nativeErrno = terminalErrno
+	default:
+		result = SubmitInternalError
+		nativeErrno = int(C.EPROTO)
 	}
-	return &SubmitError{Result: result, nativeErrno: terminalErrno}
-}
-
-func requestTerminalError(terminalErrno int) error {
-	result := RequestInternalError
-	switch terminalErrno {
-	case int(C.ENOENT):
-		result = RequestNotFound
-	case int(C.ESHUTDOWN), contextTerminatedErrno:
-		result = RequestTerminated
-	}
-	return &RequestError{Result: result, nativeErrno: terminalErrno}
+	return &SubmitError{Result: result, nativeErrno: nativeErrno}
 }
 
 func captureNativeCompletion(

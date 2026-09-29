@@ -14,47 +14,6 @@ public final class NativeSubmitErrors {
             || errno == NativeErrno.EWOULDBLOCK_WIN;
     }
 
-    public static boolean isNotConnected(int errno) {
-        return errno == NativeErrno.ENOTCONN
-            || errno == NativeErrno.ENOTCONN_WIN
-            || errno == NativeErrno.EHOSTUNREACH
-            || errno == NativeErrno.EHOSTUNREACH_WIN;
-    }
-
-    public static boolean isNotFound(int errno) {
-        return errno == NativeErrno.ENOENT;
-    }
-
-    public static boolean isNotAdmitted(int errno) {
-        return errno == NativeErrno.ECONNREFUSED
-            || errno == NativeErrno.ECONNREFUSED_WIN;
-    }
-
-    public static boolean isTerminated(int errno) {
-        return errno == NativeErrno.ECANCELED
-            || errno == NativeErrno.ESHUTDOWN
-            || errno == NativeErrno.ETERM;
-    }
-
-    public static ZlinkSubmitException submitExceptionOrNull(int errno) {
-        if (isBackpressured(errno)) {
-            return new ZlinkSubmitException(SubmitResult.BACKPRESSURED, errno);
-        }
-        if (isNotConnected(errno)) {
-            return new ZlinkSubmitException(SubmitResult.NOT_CONNECTED, errno);
-        }
-        if (isNotFound(errno)) {
-            return new ZlinkSubmitException(SubmitResult.NOT_FOUND, errno);
-        }
-        if (isNotAdmitted(errno)) {
-            return new ZlinkSubmitException(SubmitResult.NOT_ADMITTED, errno);
-        }
-        if (isTerminated(errno)) {
-            return new ZlinkSubmitException(SubmitResult.TERMINATED, errno);
-        }
-        return null;
-    }
-
     public static ZlinkSubmitException submitException(int result, int errno) {
         if (result == SubmitResult.OK.value()) {
             throw new IllegalArgumentException(

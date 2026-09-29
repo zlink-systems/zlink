@@ -13,6 +13,7 @@ public final class NativeErrorCodes {
     public static final int EFAULT = 14;
     public static final int EBUSY = 16;
     public static final int EINVAL = 22;
+    public static final int EPROTO = 71;
     public static final int EADDRINUSE = 98;
     public static final int ENOTSUP = 95;
     public static final int ENOTCONN = 107;

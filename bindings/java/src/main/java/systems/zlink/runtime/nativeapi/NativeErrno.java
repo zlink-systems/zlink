@@ -14,6 +14,7 @@ public final class NativeErrno {
     public static final int EFAULT = NativeErrorCodes.EFAULT;
     public static final int EBUSY = NativeErrorCodes.EBUSY;
     public static final int EINVAL = NativeErrorCodes.EINVAL;
+    public static final int EPROTO = NativeErrorCodes.EPROTO;
     public static final int EADDRINUSE = NativeErrorCodes.EADDRINUSE;
     public static final int ECONNREFUSED = NativeErrorCodes.ECONNREFUSED;
     public static final int ENOTSUP = NativeErrorCodes.ENOTSUP;

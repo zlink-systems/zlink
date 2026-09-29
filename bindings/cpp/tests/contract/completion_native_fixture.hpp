@@ -45,7 +45,9 @@ struct fixture_t
             zlink_completion_close (&completion);
     }
 
-    void writable (size_t attempt_, const std::string &rid_)
+    void writable (size_t attempt_, const std::string &rid_,
+                   zlink_send_complete_result_t result_ = ZLINK_SEND_ADMITTED,
+                   int terminal_errno_ = 0)
     {
         const auto &attempt = attempts.at (attempt_);
         zlink_completion_t completion{};
@@ -53,7 +55,8 @@ struct fixture_t
         completion.kind = ZLINK_COMPLETION_WRITABLE;
         completion.completion_id = attempt.token;
         completion.user_context = attempt.context;
-        completion.send_result = ZLINK_SEND_ADMITTED;
+        completion.send_result = result_;
+        completion.send_terminal_errno = terminal_errno_;
         completion.peer_rid.size = static_cast<uint8_t> (rid_.size ());
         std::memcpy (completion.peer_rid.data, rid_.data (), rid_.size ());
         completions.push_back (completion);

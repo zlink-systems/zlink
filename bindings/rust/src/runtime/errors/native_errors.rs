@@ -33,17 +33,6 @@ pub(crate) fn submit_error_from_rc(rc: i32, native_errno: i32) -> SubmitError {
     SubmitError::new(code, native_errno)
 }
 
-pub(crate) fn send_terminal_error(native_errno: i32) -> SubmitError {
-    let code = if native_errno == libc::ENOENT {
-        SubmitResult::NotFound
-    } else if native_errno == libc::ESHUTDOWN || native_errno == eterm() {
-        SubmitResult::Terminated
-    } else {
-        SubmitResult::InternalError
-    };
-    SubmitError::new(code, native_errno)
-}
-
 /// Core already projected the result; each native value is the public value
 /// with the same number.
 pub(crate) fn config_result_from_native(result: ffi::zlink_config_result_t) -> ConfigResult {
@@ -227,26 +216,6 @@ mod tests {
     fn missing_core_submit_result_is_internal_error() {
         assert_eq!(
             submit_error_from_rc(-1, libc::ENOBUFS).code(),
-            SubmitResult::InternalError
-        );
-    }
-
-    #[test]
-    fn terminal_send_errno_has_a_narrow_typed_mapping() {
-        assert_eq!(
-            send_terminal_error(libc::ENOENT).code(),
-            SubmitResult::NotFound
-        );
-        assert_eq!(
-            send_terminal_error(libc::ESHUTDOWN).code(),
-            SubmitResult::Terminated
-        );
-        assert_eq!(
-            send_terminal_error(eterm()).code(),
-            SubmitResult::Terminated
-        );
-        assert_eq!(
-            send_terminal_error(libc::EAGAIN).code(),
             SubmitResult::InternalError
         );
     }

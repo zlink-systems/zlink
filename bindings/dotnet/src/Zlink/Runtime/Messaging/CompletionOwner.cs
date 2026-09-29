@@ -564,7 +564,19 @@ internal sealed class CompletionOwner
     }
 
     private static ZlinkSubmitException CreateProtocolFailure() =>
-        new(SubmitResult.InternalError, (int)ErrorCode.EProtoNoSupport);
+        new(SubmitResult.InternalError, (int)ErrorCode.EProto);
+
+    private static ZlinkSubmitException CreateWritableFailure(
+        ZlinkCompletion completion) => completion.SendResult switch
+    {
+        ZlinkSendCompleteResult.NotFound =>
+            new ZlinkSubmitException(SubmitResult.NotFound,
+                completion.SendTerminalErrno),
+        ZlinkSendCompleteResult.NotConnected =>
+            new ZlinkSubmitException(SubmitResult.NotConnected,
+                completion.SendTerminalErrno),
+        _ => CreateProtocolFailure()
+    };
 
     private void DrainInline(RequestCompletionEntry entry)
     {
@@ -763,20 +775,15 @@ internal sealed class CompletionOwner
                     ReleasePayloadLocked();
                     SetExceptionLocked(terminalFailure);
                 }
-                else if (completion.SendResult ==
-                         ZlinkSendCompleteResult.Terminal)
+                else if (completion.SendResult !=
+                         ZlinkSendCompleteResult.Admitted)
                 {
-                    terminalFailure = completion.SendTerminalErrno != 0
-                        ? ZlinkException.CreateSubmitException(
-                            completion.SendTerminalErrno)
-                        : new ZlinkSubmitException(SubmitResult.NotAdmitted);
+                    terminalFailure = CreateWritableFailure(completion);
                     _state = SendEntryState.Terminal;
                     ReleasePayloadLocked();
                     SetExceptionLocked(terminalFailure);
                 }
-                else if (completion.SendResult !=
-                         ZlinkSendCompleteResult.Admitted
-                         || completion.SendTerminalErrno != 0)
+                else if (completion.SendTerminalErrno != 0)
                 {
                     terminalFailure = CreateProtocolFailure();
                     _state = SendEntryState.Terminal;
@@ -1075,21 +1082,15 @@ internal sealed class CompletionOwner
                         ReleasePayloadLocked();
                         SetExceptionLocked(failure);
                     }
-                    else if (completion.SendResult ==
-                             ZlinkSendCompleteResult.Terminal)
+                    else if (completion.SendResult !=
+                             ZlinkSendCompleteResult.Admitted)
                     {
-                        failure = completion.SendTerminalErrno != 0
-                            ? ZlinkException.CreateSubmitException(
-                                completion.SendTerminalErrno)
-                            : new ZlinkSubmitException(
-                                SubmitResult.NotAdmitted);
+                        failure = CreateWritableFailure(completion);
                         _state = RequestEntryState.Terminal;
                         ReleasePayloadLocked();
                         SetExceptionLocked(failure);
                     }
-                    else if (completion.SendResult !=
-                             ZlinkSendCompleteResult.Admitted
-                             || completion.SendTerminalErrno != 0)
+                    else if (completion.SendTerminalErrno != 0)
                     {
                         failure = CreateProtocolFailure();
                         _state = RequestEntryState.Terminal;

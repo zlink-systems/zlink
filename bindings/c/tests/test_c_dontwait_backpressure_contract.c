@@ -566,7 +566,7 @@ int main (void)
     CHECK (terminal_writable.user_context == &operation_context);
     CHECK (terminal_writable.peer_rid.size == target.size);
     CHECK (memcmp (terminal_writable.peer_rid.data, target.data, target.size) == 0);
-    CHECK (terminal_writable.send_result == ZLINK_SEND_TERMINAL);
+    CHECK (terminal_writable.send_result == ZLINK_SEND_NOT_FOUND);
     CHECK (terminal_writable.send_terminal_errno == ENOENT);
     CHECK (check_no_completion (router) == 0);
 

@@ -15,7 +15,7 @@ import systems.zlink.runtime.nativeapi.NativeErrno;
 
 class TargetRemovalResultContractTest {
     @Test
-    void removalTerminalAndLaterSubmitKeepTheirCoreResults() throws Exception {
+    void writableProjectionAndLaterSubmitKeepTheirCoreResults() throws Exception {
         CompletionNativeFixture.runProbe(getClass());
     }
 
@@ -26,7 +26,10 @@ class TargetRemovalResultContractTest {
             CompletionOwner owner = CompletionNativeFixture.claim((NativeSocketBase) router);
             RoutingId rid = RoutingId.from(new byte[] {4, 1});
             for (boolean request : new boolean[] {false, true}) {
-                for (boolean terminal : new boolean[] {true, false}) {
+                for (int completionResult : new int[] {801, 802, 999, 0}) {
+                    boolean terminal = completionResult != 0;
+                    int terminalErrno = completionResult == 801
+                        ? NativeErrno.ENOENT : NativeErrno.ENOTCONN;
                     core.attempts.add(new CompletionNativeFixture.Attempt(SubmitResult.BACKPRESSURED, NativeErrno.EAGAIN, 41));
                     CompletableFuture<Void> admitted;
                     CompletableFuture<?> waiter;
@@ -48,10 +51,10 @@ class TargetRemovalResultContractTest {
                     }
                     var pending = core.submissions.getLast();
                     if (!terminal)
-                        core.writable(pending, 0);
+                        core.writable(pending, 0, 0);
                     router.disconnectRid(rid);
                     if (terminal)
-                        core.writable(pending, NativeErrno.ENOENT);
+                        core.writable(pending, completionResult, terminalErrno);
                     else
                         core.attempts.add(new CompletionNativeFixture.Attempt(SubmitResult.NOT_CONNECTED, NativeErrno.EHOSTUNREACH, 0));
                     assertEquals(1, owner.drain());
@@ -59,17 +62,16 @@ class TargetRemovalResultContractTest {
                     assertSame(failure,
                         CompletionNativeFixture.failure(admitted),
                         "admission and reply must expose the same terminal cause");
-                    if (terminal && request) {
-                        assertEquals(RequestResult.NOT_FOUND, assertInstanceOf(ZlinkRequestException.class, failure).getResult());
-                    } else {
-                        var submit = assertInstanceOf(ZlinkSubmitException.class, failure);
-                        assertEquals(terminal ? SubmitResult.NOT_FOUND : SubmitResult.NOT_CONNECTED, submit.getResult());
-                    }
-                    assertEquals(terminal ? NativeErrno.ENOENT : NativeErrno.EHOSTUNREACH,
+                    var submit = assertInstanceOf(ZlinkSubmitException.class, failure);
+                    assertEquals(completionResult == 801 ? SubmitResult.NOT_FOUND
+                        : completionResult == 999 ? SubmitResult.INTERNAL_ERROR
+                        : SubmitResult.NOT_CONNECTED, submit.getResult());
+                    assertEquals(completionResult == 999 ? NativeErrno.EPROTO
+                        : terminal ? terminalErrno : NativeErrno.EHOSTUNREACH,
                         assertInstanceOf(ZlinkException.class, failure).getNativeErrno());
                 }
             }
-            core.verify(4);
+            core.verify(8);
         }
     }
 }

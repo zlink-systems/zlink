@@ -33,7 +33,7 @@ class CompletionDrainOrderContractTest {
                 var writable = core.submissions.getLast();
                 core.attempts.add(new CompletionNativeFixture.Attempt(SubmitResult.OK, 0, 22));
                 var second = dealer.request().message(Message.from("queued")).timeout(Duration.ofSeconds(2)).submit().reply().toCompletableFuture();
-                core.writable(writable, 0);
+                core.writable(writable, 0, 0);
                 core.requestResult(core.submissions.getLast(), RequestResult.TIMED_OUT);
                 core.attempts.add(new CompletionNativeFixture.Attempt(SubmitResult.OK, 0, request ? 23 : 0));
                 core.order.clear();
