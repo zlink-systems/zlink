@@ -224,14 +224,13 @@ async function runFullLane(ctx) {
   await waitForFile(browser.markerPath, 45_000);
   const transition = startScenarioClient(
     ctx,
-    specialClientConfig(ctx, shared, gateway, ops, 'B4-C2-C3'),
+    specialClientConfig(ctx, shared, gateway, ops, 'B4-C3'),
     'transition'
   );
-  await transition.waitFor('scenario ZW-B4-C2-C3 armed');
+  await transition.waitFor('scenario ZW-B4-C3 armed');
   await ctx.stop(targetNode.nodeId, 'SIGKILL');
   await browser.complete();
   await transition.waitFor('scenario ZW-B4 passed');
-  await transition.waitFor('scenario ZW-C2 passed');
   await transition.waitFor('scenario ZW-C3 passed');
   await transition.waitFor('crash-boundary=Unavailable');
   await transition.complete();
@@ -332,6 +331,16 @@ async function runFullLane(ctx) {
     'SIGTERM'
   );
   recordVerdict(verdicts, 'ZW-G5');
+  const c2 = startScenarioClient(
+    ctx,
+    specialClientConfig(ctx, shared, gateway, ops, 'C2', sourceNode.nodeId),
+    'graceful-disconnect'
+  );
+  await c2.waitFor('scenario ZW-C2 armed');
+  await ctx.stop(sourceNode.nodeId, 'SIGTERM');
+  await c2.complete();
+  process.stdout.write(c2.output());
+  collectVerdicts(verdicts, c2.output());
   assertCompleteVerdicts(verdicts);
   console.log('topology=ready');
   console.log('zoneworld-transfer=completed');
