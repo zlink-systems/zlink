@@ -8,8 +8,7 @@ internal sealed class ZLinkMeshPeer(
     string endpoint,
     RoutingId? expectedRid,
     string expectedSecurityIdentity,
-    ZLinkServiceConnectionDirection direction,
-    ulong connectionGeneration = 0
+    ZLinkServiceConnectionDirection direction
 )
 {
     internal ulong Intent { get; } = intent;
@@ -20,7 +19,6 @@ internal sealed class ZLinkMeshPeer(
     internal string Discriminator { get; } =
         $"{(direction == ZLinkServiceConnectionDirection.Outbound ? "out" : "in")}:"
         + $"{endpoint}:{intent:x16}";
-    internal ulong ConnectionGeneration { get; set; } = connectionGeneration;
     internal RoutingId RoutingId { get; set; }
     internal RoutingId PhysicalRoutingId { get; set; }
     internal ulong LifecycleGeneration { get; set; }

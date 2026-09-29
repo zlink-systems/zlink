@@ -98,13 +98,12 @@ public sealed class ZLinkMeshPeerAdmissionTests
     }
 
     [Fact]
-    public void Repeat_admission_of_live_peer_reuses_its_connection_generation()
+    public void Repeat_admission_of_live_peer_reuses_its_peer()
     {
         var sourceRid = RoutingId.From("remote-node");
         var admitted = Peer(1, "tcp://remote", sourceRid);
         admitted.RoutingId = sourceRid;
         admitted.Admitted = true;
-        admitted.ConnectionGeneration = 42;
         var matcher = new ZLinkMeshPeerAdmission();
 
         var selected = matcher.FindForAdmission(
@@ -116,7 +115,6 @@ public sealed class ZLinkMeshPeerAdmissionTests
         );
 
         Assert.Same(admitted, selected);
-        Assert.Equal(42UL, selected!.ConnectionGeneration);
     }
 
     [Fact]
@@ -184,6 +182,23 @@ public sealed class ZLinkMeshPeerAdmissionTests
             new[] { replaced, removed }.OrderBy(static rid => rid.ToHex()),
             ended.OrderBy(static rid => rid.ToHex())
         );
+    }
+
+    [Fact]
+    public void Selected_route_generation_is_the_observed_core_value()
+    {
+        var replaced = RoutingId.From("replaced");
+        var removed = RoutingId.From("removed");
+        var routes = new ZLinkMeshSelectedRoutes();
+
+        routes.Apply([new(replaced, 2), new(removed, 3)]);
+        Assert.Equal(2UL, routes.GenerationOf(replaced));
+        Assert.Equal(3UL, routes.GenerationOf(removed));
+
+        routes.Apply([new(replaced, 9)]);
+        Assert.Equal(9UL, routes.GenerationOf(replaced));
+        Assert.Equal(0UL, routes.GenerationOf(removed));
+        Assert.Equal(0UL, routes.GenerationOf(default));
     }
 
     private static ZLinkMeshPeer Peer(ulong intent, string endpoint, RoutingId? expectedRid) =>

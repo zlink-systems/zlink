@@ -182,6 +182,14 @@ internal sealed class ZLinkMeshSelectedRoutes
     internal IEnumerable<RoutingId> RoutingIds => _routes.Keys;
 
     /// <summary>
+    /// The observed route generation of the RID, or 0 when the RID has no
+    /// selected route. Core never reports 0 for a selected route (Core ROUTER
+    /// §10.1), so the value is compared only for equality.
+    /// </summary>
+    internal ulong GenerationOf(RoutingId routingId) =>
+        _routes.TryGetValue(routingId, out var generation) ? generation : 0;
+
+    /// <summary>
     /// Replaces the observation and returns every RID whose previously
     /// observed route is missing from the snapshot or has a new generation.
     /// </summary>

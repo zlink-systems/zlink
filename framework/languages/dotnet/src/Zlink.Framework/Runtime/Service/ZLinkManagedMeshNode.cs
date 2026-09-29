@@ -185,7 +185,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     }
     private ulong _descriptorRevision = 1;
     private ulong _nextIntent;
-    private ulong _nextPeerConnectionGeneration;
     private ulong _nextOperation;
     private ulong _nextActorGeneration;
     private ulong _nextSpotGeneration;
@@ -471,8 +470,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 endpoint,
                 expectedRid,
                 expectedSecurityIdentity,
-                ZLinkServiceConnectionDirection.Outbound,
-                checked(++_nextPeerConnectionGeneration)
+                ZLinkServiceConnectionDirection.Outbound
             );
             _peersByIntent.Add(intent, peer);
             if (_state != MeshNodeState.Created)
@@ -8825,8 +8823,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     _peerExpectations.TryGetValue(sourceRid, out var expectedInbound)
                         ? expectedInbound.SecurityIdentity
                         : ZLinkServiceSecurityIdentity.Plaintext,
-                    ZLinkServiceConnectionDirection.Inbound,
-                    checked(++_nextPeerConnectionGeneration)
+                    ZLinkServiceConnectionDirection.Inbound
                 );
             if (peer.ExpectedRid is { } expected && expected != sourceRid)
             {
@@ -8886,7 +8883,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             )
             {
                 var publishNotRequired = peer.State != MeshPeerState.NotRequired;
-                peer.ConnectionGeneration = checked(++_nextPeerConnectionGeneration);
                 peer.RoutingId = sourceRid;
                 if (
                     peer.Direction == ZLinkServiceConnectionDirection.Inbound
@@ -9007,10 +9003,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     && previousAdmission.LifecycleGeneration != admission.LifecycleGeneration
                 )
                 {
-                    // A new lifecycle on the same route starts a new epoch: old
-                    // controls are fenced. Liveness starts when admission
-                    // completes.
-                    peer.ConnectionGeneration = checked(++_nextPeerConnectionGeneration);
+                    // A new lifecycle restarts liveness when admission
+                    // completes. The connection epoch stays the Core route
+                    // generation; only a new selected route changes it.
                     peer.Liveness = null;
                 }
                 // Descriptor updates preserve the current liveness epoch.
@@ -9068,7 +9063,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         // Retain the descriptor revision fence on a protocol rejection. Only
         // termination of the physical epoch permits a fresh descriptor.
         peer.Liveness = null;
-        peer.ConnectionGeneration = checked(++_nextPeerConnectionGeneration);
         if (
             _peersByRid.TryGetValue(peer.RoutingId, out var current)
             && ReferenceEquals(current, peer)
@@ -9086,10 +9080,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             : MeshPeerState.Admitted;
         peer.Admitted = true;
         // Admission starts liveness; descriptor updates retain that epoch.
-        peer.Liveness ??= new ZLinkServiceLiveness(
-            Stopwatch.GetTimestamp(),
-            peer.ConnectionGeneration
-        );
+        peer.Liveness ??= new ZLinkServiceLiveness(Stopwatch.GetTimestamp());
         peer.LastChangedMs = checked((ulong)Environment.TickCount64);
         SetTopologyStateUnderLock(MeshNodeState.Ready);
         RebuildChannelSelectionPlansUnderLock();
@@ -9122,11 +9113,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         if (record.Command == ServiceWireConstants.Command.LivenessProbe)
         {
-            var peer = RunState(() =>
-            {
-                _peersByRid.TryGetValue(sourceRid, out var current);
-                return current;
-            });
+            var (peer, routeGeneration) = RunState(() =>
+                _peersByRid.TryGetValue(sourceRid, out var current)
+                    ? (current, _selectedRoutes.GenerationOf(current.PhysicalRoutingId))
+                    : ((Peer?)null, 0UL)
+            );
             if (peer is null)
             {
                 Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
@@ -9141,7 +9132,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             else
                 SendControl(
                     peer.PhysicalRoutingId,
-                    peer.ConnectionGeneration,
+                    routeGeneration,
                     ServiceWireConstants.Command.LivenessAck,
                     acknowledgement
                 );
@@ -9218,8 +9209,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         )
                             return (false, Array.Empty<RoutingId>(), (byte[]?)null);
                         current.NextAdmissionTimestamp = Add(now, AdmissionRetryInterval);
+                        // A known RID is greeted only on its Core-selected
+                        // route, whose generation is the connection epoch.
                         if (!current.PhysicalRoutingId.IsEmpty)
-                            return (true, Array.Empty<RoutingId>(), null);
+                            return (
+                                _selectedRoutes.GenerationOf(current.PhysicalRoutingId) != 0,
+                                Array.Empty<RoutingId>(),
+                                null
+                            );
                         // An intent without a known RID cannot address its
                         // route. It greets every selected route that no peer
                         // owns; the endpoint in the reply identifies its own.
@@ -9254,7 +9251,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     // peer can receive a new liveness deadline.
                     peer.Admission = null;
                     peer.Liveness = null;
-                    peer.ConnectionGeneration = checked(++_nextPeerConnectionGeneration);
                     if (
                         _peersByRid.TryGetValue(peer.RoutingId, out var indexed)
                         && ReferenceEquals(indexed, peer)
@@ -9273,7 +9269,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             {
                 SendControl(
                     peer.PhysicalRoutingId,
-                    peer.ConnectionGeneration,
+                    RunState(() => _selectedRoutes.GenerationOf(peer.PhysicalRoutingId)),
                     ServiceWireConstants.Command.LivenessProbe,
                     ZLinkServiceWireCodec.EncodeLiveness(
                         ServiceWireConstants.Command.LivenessProbe,
@@ -9393,7 +9389,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         peer.State = MeshPeerState.Connecting;
         peer.Admission = null;
         peer.Liveness = null;
-        peer.ConnectionGeneration = checked(++_nextPeerConnectionGeneration);
         if (peer.ExpectedRid is null)
             peer.PhysicalRoutingId = default;
         _peersByRid.Remove(peer.RoutingId);
@@ -11607,7 +11602,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 + $"command={command} endpoint={_advertisedEndpoint} "
                 + $"lifecycle={_lifecycleGeneration} revision={_descriptorRevision}"
         );
-        SendControl(target, peer.ConnectionGeneration, command, descriptor, exactResponse);
+        SendControl(
+            target,
+            _selectedRoutes.GenerationOf(target),
+            command,
+            descriptor,
+            exactResponse
+        );
     }
 
     private byte[] EncodeLocalAdmission(ServiceWireConstants.Command command) =>
@@ -11641,7 +11642,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private bool SendControl(
         RoutingId target,
-        ulong connectionGeneration,
+        ulong routeGeneration,
         ServiceWireConstants.Command command,
         byte[] head,
         SendOperation? exactFirstAttempt = null
@@ -11655,7 +11656,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         )
             return false;
 
-        var key = new ControlSendKey(target, connectionGeneration, command);
+        var key = new ControlSendKey(target, routeGeneration, command);
         ControlSendState? state;
         bool start;
         try
@@ -11727,10 +11728,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 if (exactFirstAttempt is not null)
                 {
                     // The exact operation snapshots the physical route, but
-                    // the admission decision is still scoped to this logical
-                    // connection generation. Do not submit a queued response
-                    // after that peer epoch has been retired or replaced.
-                    if (!HasCurrentControlTarget(key.Target, key.ConnectionGeneration))
+                    // the admission decision is still scoped to the Core route
+                    // generation it was made on. Do not submit a queued
+                    // response after that route has been replaced.
+                    if (!HasCurrentControlTarget(key.Target, key.RouteGeneration))
                         return;
                     accepted = await TrySendExactControlAsync(
                             exactFirstAttempt,
@@ -11747,7 +11748,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 else
                     accepted = await SendControlAttemptAsync(
                             key.Target,
-                            key.ConnectionGeneration,
+                            key.RouteGeneration,
                             head,
                             cancellationToken
                         )
@@ -11758,10 +11759,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     {
                         if (_disposed != 0 || cancellationToken.IsCancellationRequested)
                             return;
-                        var peer = _peersByRid.Values.FirstOrDefault(candidate =>
-                            candidate.PhysicalRoutingId == key.Target
-                            && candidate.ConnectionGeneration == key.ConnectionGeneration
-                        );
+                        var peer =
+                            _selectedRoutes.GenerationOf(key.Target) == key.RouteGeneration
+                                ? _peersByRid.Values.FirstOrDefault(candidate =>
+                                    candidate.PhysicalRoutingId == key.Target
+                                )
+                                : null;
                         if (peer is not null && !peer.Admitted)
                             CompletePeerAdmissionUnderLock(peer);
                     });
@@ -11840,28 +11843,28 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return false;
     }
 
-    private bool HasCurrentControlTarget(RoutingId target, ulong connectionGeneration) =>
+    private bool HasCurrentControlTarget(RoutingId target, ulong routeGeneration) =>
         RunState(() =>
-            _peersByIntent.Values.Any(peer =>
+            _selectedRoutes.GenerationOf(target) == routeGeneration
+            && _peersByIntent.Values.Any(peer =>
                 peer.PhysicalRoutingId == target
-                && peer.ConnectionGeneration == connectionGeneration
                 && peer.State is not MeshPeerState.Closed and not MeshPeerState.Error
             )
         );
 
     private async Task<bool> SendControlAttemptAsync(
         RoutingId target,
-        ulong connectionGeneration,
+        ulong routeGeneration,
         byte[] head,
         CancellationToken cancellationToken
     )
     {
-        var current = HasCurrentControlTarget(target, connectionGeneration);
+        var current = HasCurrentControlTarget(target, routeGeneration);
         if (!current)
         {
             ZLinkFrameworkDebugLog.InboundCommand(
                 $"mesh={_meshName} control_send_skipped target={target} "
-                    + $"generation={connectionGeneration}"
+                    + $"generation={routeGeneration}"
             );
             return false;
         }
@@ -11871,14 +11874,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             await SendRoutedAsync(target, [head], cancellationToken).ConfigureAwait(false);
             ZLinkFrameworkDebugLog.InboundCommand(
                 $"mesh={_meshName} control_send_submitted target={target} "
-                    + $"generation={connectionGeneration}"
+                    + $"generation={routeGeneration}"
             );
             return true;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch (ObjectDisposedException)
         {
-            ClosePeerAfterControlSendFailure(target, connectionGeneration);
+            ClosePeerAfterControlSendFailure(target, routeGeneration);
         }
         catch (ZlinkSubmitException submit)
             when (submit.Result != ZlinkSubmitException.ErrorCode.NotConnected
@@ -11888,7 +11891,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             ZLinkFrameworkDebugLog.InboundCommand(
                 $"mesh={_meshName} control_send_nonterminal target={target} "
-                    + $"generation={connectionGeneration} result={submit.Result}"
+                    + $"generation={routeGeneration} result={submit.Result}"
             );
             //  Spec 13-mesh-node:331 (condition 3) — only route/lifecycle
             //  terminal evidence ("the previous pipe has ended") may demote
@@ -11905,7 +11908,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             //  Only the route/lifecycle-terminal submit codes reach here
             //  (NotConnected/NotFound/Terminated — everything else was
             //  consumed above): terminal evidence, demote the epoch.
-            ClosePeerAfterControlSendFailure(target, connectionGeneration);
+            ClosePeerAfterControlSendFailure(target, routeGeneration);
         }
         catch (ZlinkException)
         {
@@ -11922,7 +11925,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private readonly record struct ControlSendKey(
         RoutingId Target,
-        ulong ConnectionGeneration,
+        ulong RouteGeneration,
         ServiceWireConstants.Command Command
     );
 
@@ -11935,16 +11938,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private void ClosePeerAfterControlSendFailure(
         RoutingId physicalRoutingId,
-        ulong connectionGeneration
+        ulong routeGeneration
     )
     {
         var publishClosed = false;
         RoutingId closedRid = default;
         RunState(() =>
         {
+            if (_selectedRoutes.GenerationOf(physicalRoutingId) != routeGeneration)
+                return;
             var peer = _peersByIntent.Values.FirstOrDefault(candidate =>
                 candidate.PhysicalRoutingId == physicalRoutingId
-                && candidate.ConnectionGeneration == connectionGeneration
                 && candidate.State is not MeshPeerState.Closed and not MeshPeerState.Error
             );
             if (peer is null)
@@ -11972,7 +11976,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 peer.State = MeshPeerState.Connecting;
                 peer.Admission = null;
                 peer.Liveness = null;
-                peer.ConnectionGeneration = checked(++_nextPeerConnectionGeneration);
                 _peersByRid.Remove(peer.RoutingId);
                 RebuildChannelSelectionPlansUnderLock();
                 peer.NextAdmissionTimestamp = Stopwatch.GetTimestamp();
