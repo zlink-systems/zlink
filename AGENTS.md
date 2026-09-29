@@ -102,8 +102,8 @@ Claude도 추론 레벨을 정할 수 있으나 **호출 시점이 아니라 에
 | 모델 | 쓰는 일 |
 |------|---------|
 | `fable` | **감독 레벨 전용.** sub-agent에는 사용하지 않는다 |
-| `opus` | 감독 레벨, 그리고 `sonnet`으로 안 되는 sub-agent 작업: 판단이 필요한 구현, 코드 리뷰, 원인이 좁혀진 진단, 코드베이스 전반의 이전·감사 |
-| `sonnet` | **sub-agent 기본값.** 변경 지점이 명확한 구현, 정해진 절차의 실행, 빌드·테스트 반복, 문서 수정, 기계적 수집과 정찰 |
+| `opus` (Opus 5.5) | 감독 레벨, 그리고 `sonnet`으로 안 되는 sub-agent 작업: 판단이 필요한 구현, 코드 리뷰, 원인이 좁혀진 진단, 코드베이스 전반의 이전·감사 |
+| `sonnet` (Sonnet 5.5) | **Claude sub-agent 기본값.** 변경 지점이 명확한 구현, 정해진 절차의 실행, 빌드·테스트 반복, 문서 수정, 기계적 수집과 정찰 |
 
 - **`sonnet`에서 시작하고, `sonnet`이 실패했거나 판단이 필요한 작업만 `opus`로 올린다.**
 - **Opus 5.5는 대부분의 작업에서 Fable 5.1 수준이고 Opus 5보다 40% 싸다**(입력 $4, 출력 $20, 캐시 읽기
@@ -115,10 +115,10 @@ Claude도 추론 레벨을 정할 수 있으나 **호출 시점이 아니라 에
 
 #### 어느 도구를 쓸 것인가
 
-**Sub-agent는 codex를 우선 사용한다.** codex를 쓸 수 있으면 sub-agent는 codex다. Claude
-sub-agent는 codex에 이슈가 있을 때 쓴다 — 쿼터 소진, 콘텐츠 필터로 job이 죽음, 반복 실패,
-또는 codex가 접근할 수 없는 작업. Claude로 대체했으면 그 사유를 결정 기록이나 작업 로그에
-남긴다. Claude의 세션·주간 한도는 codex보다 훨씬 빨리 닳아 작업자가 한꺼번에 멈춘다.
+**Sub-agent는 codex 약 70%, Claude 약 30%로 나눠 쓴다.** Claude sub-agent는 Sonnet 5.5(`sonnet`)를
+기본으로 적극 쓰고, `sonnet`으로 안 되는 판단 작업만 Opus 5.5(`opus`)로 올린다. codex에 이슈가 있으면
+(쿼터 소진, 콘텐츠 필터로 job이 죽음, 반복 실패, codex가 접근할 수 없는 작업) Claude 비율을 늘리고 그 사유를
+작업 로그에 남긴다. Claude의 세션·주간 한도는 codex보다 빨리 닳으므로 비율을 넘겨 오래 쓰지 않는다.
 
 - 실행은 `codex exec -m <model id> -c model_reasoning_effort=<level> -C <worktree> …`로 하고,
   이어서 할 때는 `codex exec resume <session id> "<후속 지시>"`로 같은 세션을 잇는다 — 새
