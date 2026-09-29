@@ -79,7 +79,11 @@ import {
   type ZLinkStreamSessionNodeRuntimeOptions as ZLinkStreamSessionNodeRuntimeCoreOptions,
   type ZLinkStreamSessionRuntimeOptions as ZLinkStreamSessionRuntimeCoreOptions
 } from './stream-session-runtime';
-import type { ZLinkActorRouteCommitOptions } from './stream-binding-runtime-ports';
+import type {
+  ZLinkActorRouteCommitOptions,
+  ZLinkSessionBindingConfirmationOptions,
+  ZLinkSessionBindingIdentity
+} from './stream-binding-runtime-ports';
 export { ZLinkPendingSessionRequest } from './session-requests';
 export { ZLinkActorSessionLifecycleCoordinator } from './actor-session-lifecycle-coordinator';
 export { ZLinkActorSessionBindingRegistry } from './actor-session-binding-registry';
@@ -121,7 +125,7 @@ export interface ZLinkStreamBindingRuntimeOptions {
     actor: ActorRef,
     sessionRid: ActorRef['nodeRid'],
     signal?: AbortSignal,
-    options?: { readonly waitForAcknowledgement?: boolean }
+    options?: ZLinkSessionBindingConfirmationOptions
   ) => Promise<void>;
   readonly errorSink?: () =>
     | {
@@ -446,12 +450,8 @@ export class ZLinkStreamBindingRuntime {
       actorSessionLifecycle
     );
     registerActorSessionBindingRuntimeOwner(this, {
-      actorSlot: async (actorId, sessionRid) => {
-        const route = await this.routes.route(actorId);
-        return route !== undefined && route.sessionIdentity === sessionRid
-          ? route.actorSlot
-          : undefined;
-      },
+      actorSlot: async (actorId, sessionRid) =>
+        (await this.routes.routeForSessionBinding(actorId, sessionRid))?.actorSlot,
       sealRelocation: (claim, expected, signal) =>
         this.routes.sealRelocation(claim, expected, signal),
       relocationSnapshot: (actorId, sealId) => this.routes.relocationSnapshot(actorId, sealId),
@@ -741,6 +741,14 @@ export class ZLinkStreamBindingRuntime {
 
   async disconnectBoundSession(actorId: string, signal?: AbortSignal): Promise<void> {
     await this.boundSessions.disconnectBoundSession(actorId, signal);
+  }
+
+  async closeSessionBinding(
+    actorId: string,
+    expected: ZLinkSessionBindingIdentity,
+    signal?: AbortSignal
+  ): Promise<void> {
+    await this.boundSessions.closeSessionBinding(actorId, expected, signal);
   }
 
   async relay(

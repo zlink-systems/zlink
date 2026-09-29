@@ -24,7 +24,6 @@ import { createInboundFlow, currentFlowContext, runWithFlow } from '../diagnosti
 import { streamSessionIdFromRoutingId } from '../streams/managed-stream';
 import type { ZLinkRemoteBoundSessionTarget } from '../actors';
 import {
-  actorMessageFollowContext,
   ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET,
   ZLinkSpotActorDispatcher,
   ZLinkSpotActorHandlerRegistryRuntime
@@ -104,10 +103,6 @@ interface ZLinkSpotActorPacketDispatchOptions {
     | Promise<{ readonly handled: boolean; readonly response?: unknown } | undefined>
     | { readonly handled: boolean; readonly response?: unknown }
     | undefined;
-  readonly onRemoteBoundSessionTarget?: (
-    actorId: string,
-    target: ZLinkRemoteBoundSessionTarget | undefined
-  ) => void;
   readonly onDisconnectActor: (actor: ZLinkActor) => Promise<void>;
   readonly actorResponseSender?: (
     actor: ZLinkActor,
@@ -210,16 +205,6 @@ export class ZLinkSpotActorPacketDispatch {
         ) {
           return undefined;
         }
-        if (
-          remoteBoundSessionTarget !== undefined &&
-          actorMessageFollowContext(fallbackActorRef) === undefined
-        ) {
-          // A replayed handoff/Message Follow packet keeps its captured Session
-          // route solely for that packet's response. It cannot republish the
-          // predecessor route over a binding already confirmed by a later Actor
-          // owner turn.
-          this.options.onRemoteBoundSessionTarget?.(actorId, remoteBoundSessionTarget);
-        }
         const routed = await this.options.routeBeforeLocal?.(delivery);
         if (routed?.handled === true) {
           return routed.response;
@@ -239,7 +224,6 @@ export class ZLinkSpotActorPacketDispatch {
           );
         }
         if (header.name === ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET) {
-          this.options.onRemoteBoundSessionTarget?.(actorId, undefined);
           await this.options.onDisconnectActor(actor);
           return undefined;
         }

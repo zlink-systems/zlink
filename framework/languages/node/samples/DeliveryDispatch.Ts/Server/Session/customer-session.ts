@@ -61,7 +61,7 @@ class SubscribeDeliverySessionHandler {
       await context.actors.bindOrGet(ensured.actor);
       console.log(`deliverydispatch-customer bound customer=${CustomerId}`);
     }
-    context.client.reply(new SubscribeDeliveryRes(request.deliveryId)).submit();
+    await context.client.reply(new SubscribeDeliveryRes(request.deliveryId)).submit();
   }
 }
 

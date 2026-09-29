@@ -53,7 +53,7 @@ class AuthenticatePlaySessionHandler {
       // PlayerInfo only, so the client cannot choose or forge an Actor route.
       console.log(`tictactoe-lifecycle actor-bound actor=${actorRef.actorId}`);
     }
-    context.client.reply(authenticateRes(authenticated.player)).submit();
+    await context.client.reply(authenticateRes(authenticated.player)).submit();
   }
 }
 // --8<-- [end:doc-session-auth]

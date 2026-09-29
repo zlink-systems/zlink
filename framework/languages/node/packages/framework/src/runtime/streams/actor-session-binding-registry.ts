@@ -10,6 +10,7 @@ import type { ServiceSessionBindingAdmissionResult } from '../foundation/service
 const detachedStateLaneResource = new AsyncResource('zlink:actor-session-binding-registry');
 export interface ZLinkActorSessionBindingActor {
   readonly actorId: string;
+  readonly ref: { readonly actorId: string; readonly bindingGeneration?: bigint };
 }
 
 export interface ZLinkActorSessionBindingContext<TActor extends ZLinkActorSessionBindingActor> {
@@ -195,7 +196,7 @@ export class ZLinkActorSessionBindingRegistry<
     );
   }
 
-  private async commitCore(
+  private commitCore(
     previous: ZLinkActorSessionRoute<TContext, TActor> | undefined,
     context: TContext,
     actor: TActor,
@@ -203,7 +204,7 @@ export class ZLinkActorSessionBindingRegistry<
     authorityFence?: ZLinkActorSessionAuthorityFence,
     sessionIdentity?: string,
     commitActor?: () => void
-  ): Promise<void> {
+  ): void {
     const current = this.routes.get(actor.actorId);
     if (current !== previous) {
       throw createInternalFrameworkException(
@@ -239,7 +240,24 @@ export class ZLinkActorSessionBindingRegistry<
       }
 
       if (!sameBinding && actorSlot !== undefined) {
-        await context.actorSlotControls!.enqueueBound(actorSlot, actor.actorId);
+        // Session–Actor binding §5-2: `$zlink.actor.bound` enters the ordered
+        // STREAM queue before the slot is published; transport completion is
+        // not awaited inside the state lane (execution gate).
+        void context
+          .actorSlotControls!.enqueueBound(actorSlot, actor.actorId)
+          .catch(async (error) => {
+            this.errorSink?.()?.reportRuntimeTaskException('session actor bound', error);
+            // The client never learned the slot, so the binding ends through
+            // the one unbind path; no `$zlink.actor.unbound` follows.
+            await this.unbind(
+              actor.actorId,
+              context,
+              bindingToken,
+              ZLinkActorSessionBindingTermination.PhysicalDisconnect
+            ).catch((unbindError) =>
+              this.errorSink?.()?.reportRuntimeTaskException('session actor bound', unbindError)
+            );
+          });
       }
     } catch (error) {
       context.unbindLocal(actor.actorId, bindingToken);
@@ -337,7 +355,7 @@ export class ZLinkActorSessionBindingRegistry<
     // JavaScript cannot interleave another ingress turn between these two
     // synchronous mutations. The replacement preserves the seal, then the
     // exact release publishes the route to held ingress as one owner turn.
-    await this.commitCore(
+    this.commitCore(
       previous,
       context,
       actor,
@@ -365,6 +383,22 @@ export class ZLinkActorSessionBindingRegistry<
 
   async route(actorId: string): Promise<ZLinkActorSessionRoute<TContext, TActor> | undefined> {
     return await this.lane.run(() => this.routeCore(actorId));
+  }
+
+  /** Selects the route only when it is the exact Session binding (§8.1 validation values). */
+  async routeForSessionBinding(
+    actorId: string,
+    sessionRid: string,
+    bindingGeneration?: bigint
+  ): Promise<ZLinkActorSessionRoute<TContext, TActor> | undefined> {
+    return await this.lane.run(() => {
+      const route = this.routeCore(actorId);
+      const generation = route?.actor.ref.bindingGeneration;
+      return route?.sessionIdentity === sessionRid &&
+        (bindingGeneration === undefined || generation === bindingGeneration)
+        ? route
+        : undefined;
+    });
   }
 
   private routeCore(actorId: string): ZLinkActorSessionRoute<TContext, TActor> | undefined {
@@ -399,15 +433,19 @@ export class ZLinkActorSessionBindingRegistry<
     bindingToken: string,
     termination = ZLinkActorSessionBindingTermination.BindingEnd
   ): Promise<void> {
-    await this.lane.run(() => this.unbindCore(actorId, context, bindingToken, termination));
+    const { submission } = await this.lane.run(() => ({
+      submission: this.unbindCore(actorId, context, bindingToken, termination)
+    }));
+    await submission;
   }
 
-  private async unbindCore(
+  /** Fixes the unbind order in the lane; the caller awaits transport completion outside it. */
+  private unbindCore(
     actorId: string,
     context: TContext,
     bindingToken: string,
     termination: ZLinkActorSessionBindingTermination
-  ): Promise<void> {
+  ): Promise<void> | undefined {
     const route = this.routes.get(actorId);
     if (route === undefined || route.context !== context || route.bindingToken !== bindingToken) {
       return;
@@ -431,20 +469,24 @@ export class ZLinkActorSessionBindingRegistry<
       termination === ZLinkActorSessionBindingTermination.BindingEnd &&
       route.actorSlot !== undefined
     ) {
-      await context.actorSlotControls?.enqueueUnbound(route.actorSlot);
+      return context.actorSlotControls?.enqueueUnbound(route.actorSlot);
     }
+    return undefined;
   }
 
   async unbindActor(actorId: string): Promise<void> {
-    await this.lane.run(() => this.unbindActorCore(actorId));
+    const { submission } = await this.lane.run(() => ({
+      submission: this.unbindActorCore(actorId)
+    }));
+    await submission;
   }
 
-  private async unbindActorCore(actorId: string): Promise<void> {
+  private unbindActorCore(actorId: string): Promise<void> | undefined {
     const route = this.routes.get(actorId);
     if (route === undefined) {
-      return;
+      return undefined;
     }
-    await this.unbindCore(
+    return this.unbindCore(
       actorId,
       route.context,
       route.bindingToken,
@@ -456,10 +498,10 @@ export class ZLinkActorSessionBindingRegistry<
     await this.lane.run(() => this.cleanupCore(context));
   }
 
-  private async cleanupCore(context: TContext): Promise<void> {
+  private cleanupCore(context: TContext): void {
     for (const route of [...this.routes.values()]) {
       if (route.context === context) {
-        await this.unbindCore(
+        this.unbindCore(
           route.actor.actorId,
           context,
           route.bindingToken,

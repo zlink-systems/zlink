@@ -112,10 +112,14 @@ async function startTarget() {
     nativeActorRef: { actorId, generation: 5n, nodeRid: 'source' },
     locationGeneration: 11n,
     ownerLeaseGeneration: 13n,
+    boundSession: remoteTarget,
     remoteBoundSessionTarget: remoteTarget,
-    beginMove() { this.moving = true; },
-    endMove() { this.moving = false; },
-    setRemoteBoundSessionTarget(value) { this.remoteBoundSessionTarget = value; }
+    beginMove() {
+      this.moving = true;
+    },
+    endMove() {
+      this.moving = false;
+    }
   };
   authority = authoritySnapshot('source', 2n, 'source-owner', 13n, 11n, 'store-v17');
   const sessionRelocationWire = {
@@ -270,7 +274,7 @@ async function targetCommand(action) {
     );
     return {
       phase: 'sealed',
-      sealId: transferState.remoteBoundSessionTarget.relocationSealId
+      sealId: preparedRelocation.target.relocationSealId
     };
   }
   if (action === 'sendCompletion') {
@@ -303,7 +307,10 @@ async function targetCommand(action) {
         authorityOwnerGeneration: 12n
       }
     );
-    await transferRuntime.publishRoutedActorOwnership(globalThis.targetActor);
+    await transferRuntime.publishRoutedActorOwnership(
+      globalThis.targetActor,
+      preparedRelocation.target
+    );
     return { phase: 'committed', actorNodeRid: transferState.nativeActorRef.nodeRid };
   }
   throw new Error(`Unsupported target action '${action}'.`);

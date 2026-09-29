@@ -197,7 +197,10 @@ import {
   nodeEffectiveProcessorCount,
   resolveApplicationJobQueueConfiguration
 } from './application-job-queue';
-import { runWithApplicationJobPermit } from '../application-jobs/application-job-queue-scope';
+import {
+  releaseApplicationJobPermitBeforeHandler,
+  runWithApplicationJobPermit
+} from '../application-jobs/application-job-queue-scope';
 import { HostCapacityStatusProjection } from './host-capacity-status';
 
 export interface ZLinkFrameworkRuntimeLifecycle {
@@ -1657,11 +1660,6 @@ export class ZLinkFrameworkRuntimeHost
   ): void {
     for (const [meshName, node] of spotNodeRuntime.meshNodesByName) {
       const activationNode = node as typeof node & {
-        setSpotAdmissionProvider?: (provider: {
-          isClosing(spotId: string): boolean;
-          awaitCloseDecision(spotId: string): Promise<void> | undefined;
-          runtimeState(): ZLinkFrameworkRuntimeState;
-        }) => void;
         registerAsyncInstanceActivationAuthority?: (
           authority: ServiceAsyncInstanceActivationAuthority
         ) => void;
@@ -1677,11 +1675,6 @@ export class ZLinkFrameworkRuntimeHost
       };
       const spotManager = this.spotManager;
       if (spotManager !== undefined) {
-        activationNode.setSpotAdmissionProvider?.({
-          isClosing: (spotId) => spotManager.isSpotClosing(meshName, spotId),
-          awaitCloseDecision: (spotId) => spotManager.pendingSpotCloseDecision(meshName, spotId),
-          runtimeState: () => this.runtimeState
-        });
         this.registerInstanceApplicationLifecycle(meshName, activationNode, spotManager);
       }
       activationNode.registerAsyncInstanceActivationAuthority?.(
@@ -1929,7 +1922,6 @@ export class ZLinkFrameworkRuntimeHost
         ),
       isMaterializing: (target) =>
         spotManager.isInstanceMaterializing(meshName, target.targetSpotId as never),
-      isClosing: (target) => spotManager.isInstanceClosing(meshName, target.targetSpotId as never),
       isIdleEvicting: (target) =>
         spotManager.isInstanceSpotIdleEvicting(meshName, target.targetSpotId as never),
       beginIdleEviction: (target) =>
@@ -1965,19 +1957,6 @@ export class ZLinkFrameworkRuntimeHost
   setSpotManager(spotManager: DefaultZLinkSpotManager): void {
     this.spotManager = spotManager;
     for (const [meshName, node] of this.spotNodeRuntime?.meshNodesByName ?? []) {
-      const admissionNode = node as typeof node & {
-        setSpotAdmissionProvider?: (provider: {
-          isClosing(spotId: string): boolean;
-          awaitCloseDecision(spotId: string): Promise<void> | undefined;
-          runtimeState(): ZLinkFrameworkRuntimeState;
-        }) => void;
-      };
-      admissionNode.setSpotAdmissionProvider?.({
-        isClosing: (spotId: string) => spotManager.isSpotClosing(meshName, spotId),
-        awaitCloseDecision: (spotId: string) =>
-          spotManager.pendingSpotCloseDecision(meshName, spotId),
-        runtimeState: () => this.runtimeState
-      });
       this.registerInstanceApplicationLifecycle(meshName, node, spotManager);
     }
   }
@@ -2826,6 +2805,7 @@ export class ZLinkFrameworkRuntimeHost
           nodeRid: binding.actor.nodeRid
         };
         if (sessionOwnerIsLocal) {
+          releaseApplicationJobPermitBeforeHandler();
           await this.streamBindingRuntime.retireRemoteBinding(
             actorRef,
             binding.sessionRid,

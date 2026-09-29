@@ -70,7 +70,7 @@ class SupportChatSessionRouter {
       role: authenticated.role
     });
     // --8<-- [end:doc-sc-session-auth]
-    context.client
+    await context.client
       .reply(
         new AuthenticateRes(authenticated.actorId, authenticated.displayName, authenticated.role)
       )

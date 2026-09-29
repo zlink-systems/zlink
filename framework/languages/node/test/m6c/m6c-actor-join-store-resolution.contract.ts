@@ -27,7 +27,7 @@ test('remote Actor Join resolves its stable type from a matching active Authorit
     }
   });
 
-  const result = await receiver.receive(joinPayload(), routeContext());
+  const result = await receiver.receive(joinPayload());
 
   assert.equal(result.accepted, false);
   assert.equal(resolvedType, 'StoreActor');
@@ -100,7 +100,7 @@ test('remote Actor Join rejects an Authority fence mismatch as ProtocolError bef
   });
 
   await assert.rejects(
-    receiver.receive(joinPayload(), routeContext()),
+    receiver.receive(joinPayload()),
     errorKind(ZLinkFrameworkErrorKind.ProtocolError)
   );
   assert.equal(activated, false);
@@ -117,7 +117,7 @@ test('remote Actor Join does not activate a forged wire stable type', async () =
   });
 
   await assert.rejects(
-    receiver.receive({ ...joinPayload(), actorType: 'ForgedActor' }, routeContext()),
+    receiver.receive({ ...joinPayload(), actorType: 'ForgedActor' }),
     errorKind(ZLinkFrameworkErrorKind.TypeMismatch)
   );
   assert.equal(activated, false);
@@ -131,7 +131,7 @@ test('remote Actor Join reports an incomplete legacy wire fence as ProtocolError
   const { expectedOwnerLeaseGeneration: _omitted, ...incomplete } = joinPayload();
 
   await assert.rejects(
-    receiver.receive(incomplete, routeContext()),
+    receiver.receive(incomplete),
     errorKind(ZLinkFrameworkErrorKind.ProtocolError)
   );
 });
@@ -154,7 +154,7 @@ test('remote Actor Join without legacy wire fence fields keeps the legacy type p
     ...legacy
   } = joinPayload();
 
-  const result = await receiver.receive({ ...legacy, actorType: 'LegacyActor' }, routeContext());
+  const result = await receiver.receive({ ...legacy, actorType: 'LegacyActor' });
 
   assert.equal(result.accepted, false);
   assert.equal(resolvedType, 'LegacyActor');
@@ -167,7 +167,7 @@ test('remote Actor Join reports a missing Authority row as NotFound', async () =
   });
 
   await assert.rejects(
-    receiver.receive(joinPayload(), routeContext()),
+    receiver.receive(joinPayload()),
     errorKind(ZLinkFrameworkErrorKind.NotFound)
   );
 });
@@ -181,7 +181,7 @@ test('remote Actor Join reports an unreadable Authority row as Unavailable', asy
   });
 
   await assert.rejects(
-    receiver.receive(joinPayload(), routeContext()),
+    receiver.receive(joinPayload()),
     errorKind(ZLinkFrameworkErrorKind.Unavailable)
   );
 });
@@ -198,7 +198,7 @@ test('remote Actor Join reports an Authority stable type without a local factory
   });
 
   await assert.rejects(
-    receiver.receive(joinPayload(), routeContext()),
+    receiver.receive(joinPayload()),
     errorKind(ZLinkFrameworkErrorKind.NotFound)
   );
 });
@@ -209,10 +209,7 @@ function receiverFor(options: {
   readonly requireRelocationActorFactory?: (stableType: string) => void;
 }): ZLinkRemoteActorJoinReceiver {
   const state = {
-    remoteBoundSessionTarget: undefined,
-    boundSessionTransferTarget: undefined,
     setNativeActorRef: () => undefined,
-    setRemoteBoundSessionTarget: () => undefined,
     setJoinedSpot: () => undefined,
     clearJoinedSpot: () => undefined
   };
@@ -266,10 +263,6 @@ function joinPayload() {
     expectedOwnerLeaseGeneration: ownerLeaseGeneration.toString(),
     request: Buffer.alloc(0).toString('base64')
   };
-}
-
-function routeContext() {
-  return { sourceNodeRid: 'source-a', channelName: 'mesh-a' } as never;
 }
 
 function errorKind(kind: ZLinkFrameworkErrorKind): (error: unknown) => boolean {

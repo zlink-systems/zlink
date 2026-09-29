@@ -34,14 +34,14 @@ interface ZLinkRoutedFrameAdmissionTarget {
 interface ZLinkSpotRoutedFrameDispatchOptions {
   readonly nativeSpotId: string;
   readonly serial: ZLinkSpotSerialTurnExecutor;
-  readonly isSpotClosing?: () => boolean;
   readonly resolveActor: (actorId: string) => ZLinkActor | undefined;
   readonly getTarget: () => ZLinkRoutedFrameAdmissionTarget & ZLinkSpot;
   readonly defaultAccept: boolean;
   readonly routedActorTransferProvider?: ZLinkRoutedActorTransferProvider;
   readonly commitTransferredActor?: (
     actor: ZLinkActor,
-    backlog: readonly ZLinkActorHandoffPacket[]
+    backlog: readonly ZLinkActorHandoffPacket[],
+    sealedSession: ZLinkRemoteBoundSessionTarget | undefined
   ) => Promise<readonly ZLinkActorHandoffResult[]>;
   readonly actorPacketHandler?: (delivery: ZLinkActorPacketDelivery) => Promise<unknown>;
   readonly routedBoundSessionReceiver?: (
@@ -119,7 +119,6 @@ export class ZLinkSpotRoutedFrameDispatch {
     });
     this.routedActorAdmission = new ZLinkSpotRoutedActorAdmission({
       serial: options.serial,
-      isSpotClosing: options.isSpotClosing,
       getTarget: options.getTarget,
       defaultAccept: options.defaultAccept,
       routedActorTransferProvider: options.routedActorTransferProvider,
