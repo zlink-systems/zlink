@@ -610,9 +610,8 @@ def test_public_managed_routed_send_retries_after_exact_writable_completion():
                 assert poller.wait(events, 5000) == 1
                 assert events.slot(0) == 79
                 assert events.has_event(0, zlink.PollEventFlag.POLLOUT)
-                assert not events.has_event(
-                    0, zlink.PollEventFlag.POLLCOMPLETION
-                )
+                # wait() returns the readiness Core reported, unchanged.
+                assert events.has_event(0, zlink.PollEventFlag.POLLCOMPLETION)
                 await pending
 
                 assert len(writable_records) == 1

@@ -38,9 +38,10 @@ def test_failed_wait_reports_the_core_configuration_result():
 class _WritableOnlyNative:
     """Reports one completion event whose drain delivers no REQUEST record."""
 
-    def __init__(self, real, socket_key):
+    def __init__(self, real, socket_key, flags=zlink.PollEventFlag.POLLCOMPLETION):
         self._real = real
         self._socket_key = socket_key
+        self._flags = flags
         self.waits = 0
 
     def __getattr__(self, name):
@@ -51,37 +52,94 @@ class _WritableOnlyNative:
             self.waits += 1
             events[0].source_kind = int(zlink.PollSourceKind.SOCKET)
             events[0].socket = self._socket_key
-            events[0].events = int(zlink.PollEventFlag.POLLCOMPLETION)
+            events[0].events = int(self._flags)
             return 1
 
         return wait
 
 
 class _WritableOnlyOwner:
-    def has_managed_writable_wait(self):
-        return True
+    def __init__(self, total_count=1):
+        self.drains = 0
+        self.total_count = total_count
 
     def drain(self, poller):
-        return _DrainResult(total_count=1, request_count=0)
+        self.drains += 1
+        return _DrainResult(total_count=self.total_count)
 
 
-def test_wait_returns_once_when_only_writable_progress_was_filtered():
-    """A WRITABLE record that only advanced a managed retry is not a caller
-    event: the wait returns 0 without waiting again, as in C++, Go and Node."""
+def test_wait_keeps_completion_readiness_when_drain_processed_a_record():
+    """PollCompletion is progress only when drain consumes a record."""
     context = zlink.create_context()
     poller = zlink.create_poller()
     socket_key = 0x1000
+    owner = _WritableOnlyOwner()
     poller._socket_registrations[socket_key] = [
         object(),
         int(zlink.PollEventFlag.POLLCOMPLETION),
-        _WritableOnlyOwner(),
+        owner,
     ]
+    events_out = zlink.create_poll_events(1)
     native = _WritableOnlyNative(poller_runtime.lib(), socket_key)
     try:
         with patch.object(poller_runtime, "lib", lambda: native):
-            ready = poller.wait(zlink.create_poll_events(1), 2000)
+            ready = poller.wait(events_out, 2000)
+        assert ready == 1
+        assert native.waits == 1
+        assert events_out.has_event(0, zlink.PollEventFlag.POLLCOMPLETION)
+        assert owner.drains == 1
+    finally:
+        poller._socket_registrations.clear()
+        poller.close()
+    context.close()
+
+
+def test_wait_clears_and_skips_completion_with_an_empty_drain():
+    context = zlink.create_context()
+    poller = zlink.create_poller()
+    socket_key = 0x1000
+    owner = _WritableOnlyOwner(total_count=0)
+    poller._socket_registrations[socket_key] = [
+        object(),
+        int(zlink.PollEventFlag.POLLCOMPLETION),
+        owner,
+    ]
+    events_out = zlink.create_poll_events(1)
+    native = _WritableOnlyNative(poller_runtime.lib(), socket_key)
+    try:
+        with patch.object(poller_runtime, "lib", lambda: native):
+            ready = poller.wait(events_out, 2000)
         assert ready == 0
         assert native.waits == 1
+        assert owner.drains == 1
+    finally:
+        poller._socket_registrations.clear()
+        poller.close()
+        context.close()
+
+
+def test_wait_drains_only_on_the_completion_readiness_core_reported():
+    """POLLOUT alone is not a completion event: no drain, event unchanged."""
+    context = zlink.create_context()
+    poller = zlink.create_poller()
+    socket_key = 0x1000
+    owner = _WritableOnlyOwner()
+    poller._socket_registrations[socket_key] = [
+        object(),
+        int(zlink.PollEventFlag.POLLOUT | zlink.PollEventFlag.POLLCOMPLETION),
+        owner,
+    ]
+    events_out = zlink.create_poll_events(1)
+    native = _WritableOnlyNative(
+        poller_runtime.lib(), socket_key, zlink.PollEventFlag.POLLOUT
+    )
+    try:
+        with patch.object(poller_runtime, "lib", lambda: native):
+            ready = poller.wait(events_out, 2000)
+        assert ready == 1
+        assert events_out.has_event(0, zlink.PollEventFlag.POLLOUT)
+        assert not events_out.has_event(0, zlink.PollEventFlag.POLLCOMPLETION)
+        assert owner.drains == 0
     finally:
         poller._socket_registrations.clear()
         poller.close()
