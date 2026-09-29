@@ -231,7 +231,7 @@ typedef enum zlink_submit_result_t
     ZLINK_SUBMIT_OK = 0,                 // message가 성공적으로 송신됨
 
     /* Normal control-flow result. */
-    ZLINK_SUBMIT_BACKPRESSURED = 1,      // 송신 queue가 가득 참 (HWM 도달)
+    ZLINK_SUBMIT_BACKPRESSURED = 1,      // socket queue 또는 reservation capacity 부족
     ZLINK_SUBMIT_NOT_CONNECTED = 2,      // 대상 경로나 peer가 아직 연결되지 않음
     ZLINK_SUBMIT_NOT_FOUND = 3,          // 대상 peer 또는 routed destination을 찾지 못함
     ZLINK_SUBMIT_NOT_ADMITTED = 13,      // target route는 식별했지만 handshake 또는 신규 outbound weight 같은 admission 정책이 submit을 거부함
@@ -979,7 +979,7 @@ context는 `ZLINK_SUBMIT_INVALID_ARGUMENT`, `errno == EINVAL`이다. Core는 con
 | `DONTWAIT` backpressure 또는 target 준비 전 | `ZLINK_SUBMIT_BACKPRESSURED`, `EAGAIN` | nonzero 대기 토큰 | WRITABLE 한 건 |
 | STREAM RID에 route 없음 | `ZLINK_SUBMIT_NOT_CONNECTED`, `EHOSTUNREACH` | 0 | 없음 |
 | ROUTER directed send에서 route 없음 | [ROUTER option §5](07-router.ko.md#5-router-option) | §5 | §5 |
-| completion reservation 상한 초과 | `ZLINK_SUBMIT_OUT_OF_MEMORY`, `ENOMEM` | 0 | 없음 |
+| completion reservation 상한 초과 | `ZLINK_SUBMIT_BACKPRESSURED`, `EAGAIN` | 0 | 없음 |
 | validation·target 실패 | 해당 submit result | 0 | 없음 |
 
 `NONE`은 호출 진입 시 `ZLINK_OPT_SNDTIMEO`를 snapshot하고 local send queue admission까지
@@ -1001,9 +1001,8 @@ SEND는 `DONTWAIT`이 대기 토큰을 반환할 때만 slot을 예약하고, RE
 nonzero REQUEST ID를 반환할 때와 대기 토큰을 반환할 때 예약한다. Slot은 reservation부터
 `zlink_completion_recv()`가 record를 queue에서 제거할 때까지 유지한다. Socket close가 unread
 record를 정리하면 함께 해제한다. 상한이 차면 Core는 operation을 접수하지 않고 모든 입력 슬롯을
-소비한다. 이때 SEND `DONTWAIT`은
-`ZLINK_SUBMIT_OUT_OF_MEMORY`, `errno == ENOMEM`, ID `0`이고 REQUEST는
-`ZLINK_SUBMIT_BACKPRESSURED`, `errno == EAGAIN`, ID `0`이다.
+소비한다. 이때 SEND `DONTWAIT`과 REQUEST는 모두 `ZLINK_SUBMIT_BACKPRESSURED`, `errno == EAGAIN`,
+ID `0`이다. 대기 토큰이 없으므로 caller는 completion을 받아 reservation을 반환한 뒤 다시 제출한다.
 
 대기 토큰은 **그 제출을 거절한 자원이 회복될 때** 깨어난다 — SEND와 physical backpressure로 거절된
 REQUEST는 target의 write credit, correlation work·count 한도로 거절된 REQUEST는 그 pair의 reservation
@@ -1345,6 +1344,8 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
 
 **Whole-message send와 completion**
 - SEND 결과·대기 토큰·WRITABLE 재제출·replay 검증은 [whole-message send](#whole-message-send와-pending-admission)를 참조한다.
+- 65,536개의 공유 reservation을 채운 뒤 SEND `DONTWAIT`과 REQUEST가 각각 `BACKPRESSURED`·`EAGAIN`, ID `0`,
+  completion 없음으로 끝나고, completion 수신으로 reservation을 반환한 뒤 재제출할 수 있음을 검증한다.
 - SEND·REQUEST 대기 토큰의 종료 결과(자원 회복, 명시적 제거, STREAM 물리 종료, `SNDTIMEO` 0·양수의
   기한 만료와 `-1`의 시간 만료 부재, 자원 회복과 만료의 경합, close·termination 뒤 record 부재)와 WRITABLE 한 건·reservation의
   receive 시 해제를 [whole-message send](#whole-message-send와-pending-admission)에 따라 검증한다.
