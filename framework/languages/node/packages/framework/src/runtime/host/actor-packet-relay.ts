@@ -588,16 +588,24 @@ export class ZLinkActorPacketRelay {
     actorId: string,
     binding: ServiceStreamSessionBinding | undefined
   ): void {
+    // The Actor is gone (destroyed or relocated away): nothing to record.
     const state = this.options.actorManager()?.getState(actorId);
+    // No registry binding exists only for a native-fallback bind, which has no
+    // Session owner registry (managed-stream.ts `bindActor` fallback).
     if (state === undefined || binding === undefined) return;
     const route = this.options.meshRouters.remoteBoundSessionTargetForSource(
-      binding.sessionOwnerNodeRid as unknown as RoutingId
+      binding.sessionOwnerNodeRid
     );
-    if (route === undefined) return;
+    if (route === undefined) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.ActorLocationStale,
+        `Actor '${actorId}' Session route is unavailable.`
+      );
+    }
     state.installBoundSessionBinding({
       ...route,
-      sessionNodeRid: binding.sessionOwnerNodeRid as unknown as RoutingId,
-      sessionRid: binding.sessionRid as unknown as RoutingId,
+      sessionNodeRid: binding.sessionOwnerNodeRid,
+      sessionRid: binding.sessionRid,
       sessionOwnerNodeGeneration: binding.sessionOwnerNodeGeneration,
       sessionOwnerId: binding.sessionOwnerId,
       sessionOwnerLeaseGeneration: binding.sessionOwnerLeaseGeneration,

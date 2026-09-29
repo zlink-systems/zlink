@@ -31,6 +31,7 @@ import {
   type ActorJoinCompletionPayload,
   type ActorLocation,
   type ReceiveKindData,
+  type ServiceStreamSessionBinding,
   type StreamSessionActorAuthorityFence
 } from './service-runtime-contracts';
 import type { ServiceMailboxRecord } from './service-mailbox';
@@ -1904,10 +1905,19 @@ export class ServiceStatefulRuntime {
     return pending;
   }
 
-  sessionBindings(sessionRid: string): readonly ServiceSessionBinding[] {
+  sessionBindings(sessionRid: string): readonly ServiceStreamSessionBinding[] {
     return [...this.sessionDeliveries.values()]
       .map((value) => value.binding)
-      .filter((binding) => binding.sessionRid === sessionRid);
+      .filter((binding) => binding.sessionRid === sessionRid)
+      .map((binding) => {
+        const owner = requireSessionOwnerIdentity(binding);
+        return {
+          ...binding,
+          sessionOwnerNodeGeneration: owner.nodeGeneration,
+          sessionOwnerId: owner.ownerId,
+          sessionOwnerLeaseGeneration: owner.leaseGeneration
+        };
+      });
   }
 
   allSessionBindings(): readonly ServiceSessionBinding[] {

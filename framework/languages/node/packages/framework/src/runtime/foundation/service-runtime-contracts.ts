@@ -172,9 +172,9 @@ export interface ServiceStreamSessionBinding {
   readonly sessionRid: RoutingId;
   readonly actor: ServiceActorRef;
   readonly sessionOwnerNodeRid: RoutingId;
-  readonly sessionOwnerNodeGeneration?: bigint;
-  readonly sessionOwnerId?: string;
-  readonly sessionOwnerLeaseGeneration?: bigint;
+  readonly sessionOwnerNodeGeneration: bigint;
+  readonly sessionOwnerId: string;
+  readonly sessionOwnerLeaseGeneration: bigint;
   readonly bindingGeneration: bigint;
   readonly membershipEpoch: bigint;
 }
