@@ -60,10 +60,6 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
         }
     }
 
-    final synchronized boolean closeCommitted() {
-        return closeCoordinator != null && closeCoordinator.committed();
-    }
-
     final synchronized CompletionStage<Void> closingCallback(
             Supplier<CompletionStage<Void>> callback) {
         if (closingCallback == null) {
