@@ -206,18 +206,11 @@ internal sealed class ZLinkChannelRuntimeManager(
                     outboundFlow?.Invoke(),
                     registration.TimeProvider
                 );
-                // The lane turn only registers the runtime and reads the local server; the
-                // identity snapshot is awaited after the turn ends.
+                // The lane turn registers the runtime and reads the local server.
                 var localServer = AwaitStateLane(
                     state.RunStateAsync(() =>
                     {
                         state.ClientServerClientRuntimes.Add(entry.Key, runtime);
-                        runtime.OwnManualConnectionAttachment(
-                            channel.Client.ManualConnections.Attach(
-                                runtime.AddManual,
-                                runtime.RemoveManual
-                            )
-                        );
                         return
                             !registration.Locations.Enabled
                             && channel.HasClientServerServer
@@ -231,6 +224,9 @@ internal sealed class ZLinkChannelRuntimeManager(
                                 )
                             : null;
                     })
+                );
+                runtime.OwnManualConnectionAttachment(
+                    channel.Client.ManualConnections.Attach(runtime.AddManual, runtime.RemoveManual)
                 );
                 if (localServer is not null)
                     await runtime.AddLocalAsync(localServer).ConfigureAwait(false);

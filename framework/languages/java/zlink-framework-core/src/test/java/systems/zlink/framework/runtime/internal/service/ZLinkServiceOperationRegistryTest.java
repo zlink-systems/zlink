@@ -363,8 +363,8 @@ final class ZLinkServiceOperationRegistryTest {
                                     callbackThread.complete(Thread.currentThread().getName()));
 
             assertTrue(registry.complete(operation.id(), "reply"));
-            assertEquals("reply", operation.completion().join());
             String actualThread = callbackThread.orTimeout(1, TimeUnit.SECONDS).join();
+            assertEquals("reply", operation.completion().join());
             assertNotEquals(callerThread, actualThread);
             assertEquals("zlink-jvm-service-completion", actualThread);
         } finally {

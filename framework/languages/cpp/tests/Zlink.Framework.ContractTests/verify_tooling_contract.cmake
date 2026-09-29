@@ -102,6 +102,14 @@ if(DEFINED ZLINK_FRAMEWORK_CPP_TOOLING_CMAKE_TOOLCHAIN_FILE)
   list(APPEND tooling_configure_args
     -D CMAKE_TOOLCHAIN_FILE=${ZLINK_FRAMEWORK_CPP_TOOLING_CMAKE_TOOLCHAIN_FILE})
 endif()
+if(DEFINED ZLINK_FRAMEWORK_CPP_TOOLING_CMAKE_PREFIX_PATH
+    AND NOT "${ZLINK_FRAMEWORK_CPP_TOOLING_CMAKE_PREFIX_PATH}" STREQUAL "")
+  # execute_process expands command-list elements too; retain the prefix list.
+  string(REPLACE ";" "\;" tooling_cmake_prefix_path
+    "${ZLINK_FRAMEWORK_CPP_TOOLING_CMAKE_PREFIX_PATH}")
+  list(APPEND tooling_configure_args
+    -D "CMAKE_PREFIX_PATH=${tooling_cmake_prefix_path}")
+endif()
 foreach(tooling_dependency IN ITEMS
     protobuf_DIR
     absl_DIR

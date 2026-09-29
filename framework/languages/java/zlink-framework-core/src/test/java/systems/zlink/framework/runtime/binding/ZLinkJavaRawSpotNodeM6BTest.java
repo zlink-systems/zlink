@@ -33,6 +33,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchEvent;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchInfo;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalAsyncSpotDispatchHandler;
@@ -479,8 +480,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             acceptExactSource(source, callerRid, caller.lifecycleGeneration());
             source.connectPeer(endpoint, targetRid);
             caller.connectPeer(sourceEndpoint, sourceRid);
-            awaitAdmitted(source);
-            awaitAdmitted(caller);
+            awaitAdmitted(source, targetRid);
+            awaitAdmitted(caller, sourceRid);
 
             var sourceRoute =
                     new ZLinkServiceM6BWireCodec.ActorRouteFence(
@@ -621,6 +622,13 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                     requestParts,
                                     SendFlags.DONT_WAIT,
                                     Duration.ofSeconds(3));
+            pendingReply.whenComplete(
+                    (replies, error) ->
+                            receivedAll.completeExceptionally(
+                                    error == null
+                                            ? new AssertionError(
+                                                    "request completed before target ingress")
+                                            : error));
             requestParts.forEach(Message::close);
             receivedAll.get(3, TimeUnit.SECONDS);
             assertFalse(
@@ -2836,6 +2844,9 @@ final class ZLinkJavaRawSpotNodeM6BTest {
         RoutingId sourceRid = RoutingId.from("jvm-m6b-closing-source");
         String spotId = "jvm-m6b-closing-spot";
         CompletableFuture<Void> queued = new CompletableFuture<>();
+        CompletableFuture<Void> released = new CompletableFuture<>();
+        AtomicReference<ZLinkBackendReceived> acceptedRoute = new AtomicReference<>();
+        var admission = new systems.zlink.framework.execution.ZLinkSerialExecutionQueue();
         try (var context = Zlink.createContext();
                 var targetNode = new ZLinkJavaRawMeshNode(context, "mesh");
                 var sourceNode = new ZLinkJavaRawMeshNode(context, "mesh")) {
@@ -2852,7 +2863,26 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             spots.registerInstanceSpotType(
                     "orders",
                     (type, route, spot) -> {
-                        spot.onDispatchEvent(info -> queued.complete(null));
+                        spot.onDispatchEvent(
+                                new systems.zlink.framework.runtime.internal.backend
+                                        .ZLinkInternalAsyncSpotDispatchHandler() {
+                                    @Override
+                                    public CompletionStage<Void> handleAsync(
+                                            ZLinkBackendSpotDispatchInfo info) {
+                                        return CompletableFuture.completedFuture(null);
+                                    }
+
+                                    @Override
+                                    public CompletionStage<Void> handleRoute(
+                                            ZLinkBackendReceived received) {
+                                        return admission.enqueue(
+                                                () -> {
+                                                    acceptedRoute.set(received);
+                                                    queued.complete(null);
+                                                    return released;
+                                                });
+                                    }
+                                });
                         return CompletableFuture.completedFuture(null);
                     });
             var route =
@@ -2882,16 +2912,14 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 queued.get(2, TimeUnit.SECONDS);
                 ZLinkBackendSpot spot = spots.localSpot(spotId);
                 assertNotNull(spot);
-                spot.sealSpotAdmission(
-                        () ->
-                                new ZLinkFrameworkException(
-                                        ZLinkFrameworkErrorKind.NOT_FOUND, "sealed"));
-                ZLinkBackendReceived accepted = spot.recvRoute(ZLinkBackendRecvMode.DONT_WAIT);
+                admission.sealClosingAdmission();
+                ZLinkBackendReceived accepted = acceptedRoute.get();
                 assertNotNull(accepted);
                 try (accepted;
                         Message response = Message.from("accepted")) {
                     accepted.reply().accept(List.of(response));
                 }
+                released.complete(null);
                 List<Message> replies = request.get(2, TimeUnit.SECONDS);
                 try {
                     assertEquals("accepted", replies.getFirst().toUtf8String());
@@ -2938,8 +2966,22 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             .toCompletableFuture()
                             .get(2, TimeUnit.SECONDS)
                             .spot();
-            spot.sealSpotAdmission(
-                    () -> new ZLinkFrameworkException(ZLinkFrameworkErrorKind.NOT_FOUND, "sealed"));
+            var admission = new systems.zlink.framework.execution.ZLinkSerialExecutionQueue();
+            spot.onDispatchEvent(
+                    new systems.zlink.framework.runtime.internal.backend
+                            .ZLinkInternalAsyncSpotDispatchHandler() {
+                        @Override
+                        public CompletionStage<Void> handleAsync(
+                                ZLinkBackendSpotDispatchInfo info) {
+                            return CompletableFuture.completedFuture(null);
+                        }
+
+                        @Override
+                        public CompletionStage<Void> handleRoute(ZLinkBackendReceived received) {
+                            return admission.enqueue(() -> CompletableFuture.completedFuture(null));
+                        }
+                    });
+            admission.sealClosingAdmission();
 
             try (Message packet = Message.from("Packet");
                     Message payload = Message.from("late")) {
@@ -2958,7 +3000,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                 ExecutionException.class, () -> request.get(2, TimeUnit.SECONDS));
                 assertTrue(failure.getCause() instanceof ZLinkFrameworkException);
                 assertEquals(
-                        ZLinkFrameworkErrorKind.NOT_FOUND,
+                        ZLinkFrameworkErrorKind.REJECTED,
                         ((ZLinkFrameworkException) failure.getCause()).kind());
             }
         }
@@ -2967,7 +3009,43 @@ final class ZLinkJavaRawSpotNodeM6BTest {
     @Test
     void sealedSpotRejectsNewRouteWhileAcceptedRouteRemainsDrainable() {
         ZLinkJavaRawSpot spot = new ZLinkJavaRawSpot(null, "failed-close-spot", 1);
-        var rejection = new ZLinkFrameworkException(ZLinkFrameworkErrorKind.REJECTED, "closing");
+        var admission = new systems.zlink.framework.execution.ZLinkSerialExecutionQueue();
+        CompletableFuture<ZLinkBackendReceived> acceptedRoute = new CompletableFuture<>();
+        CompletableFuture<Void> released = new CompletableFuture<>();
+        spot.onDispatchEvent(
+                new systems.zlink.framework.runtime.internal.backend
+                        .ZLinkInternalAsyncSpotDispatchHandler() {
+                    @Override
+                    public CompletionStage<Void> handleAsync(ZLinkBackendSpotDispatchInfo info) {
+                        return CompletableFuture.completedFuture(null);
+                    }
+
+                    @Override
+                    public CompletionStage<Void> handleRoute(ZLinkBackendReceived received) {
+                        return admission.enqueue(
+                                () -> {
+                                    acceptedRoute.complete(received);
+                                    return released;
+                                });
+                    }
+
+                    @Override
+                    public Boolean handleTopic(ZLinkBackendTopicMessage message) {
+                        boolean accepted =
+                                admission.tryEnqueue(() -> CompletableFuture.completedFuture(null));
+                        message.parts().forEach(Message::close);
+                        return accepted;
+                    }
+
+                    @Override
+                    public CompletionStage<Void> handleJoin(
+                            systems.zlink.framework.runtime.internal.backend
+                                            .ZLinkBackendActorJoinRequest
+                                    request) {
+                        request.parts().forEach(Message::close);
+                        return admission.enqueue(() -> CompletableFuture.completedFuture(null));
+                    }
+                });
 
         AtomicReference<String> reply = new AtomicReference<>();
         try (Message request = Message.from("request");
@@ -2984,8 +3062,9 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             parts -> reply.set(parts.getFirst().toUtf8String()),
                             () -> {},
                             "application/json");
-            spot.enqueueRoute(received).toCompletableFuture().join();
-            spot.sealSpotAdmission(() -> rejection);
+            spot.enqueueRoute(received);
+            acceptedRoute.join();
+            admission.sealClosingAdmission();
             ZLinkBackendReceived late =
                     new ZLinkBackendReceived(
                             ZLinkBackendRequestResult.OK,
@@ -2999,37 +3078,160 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             () -> {},
                             "application/json");
             assertEquals(
-                    rejection,
-                    assertThrows(
-                                    java.util.concurrent.CompletionException.class,
-                                    () -> spot.enqueueRoute(late).toCompletableFuture().join())
-                            .getCause());
+                    ZLinkFrameworkErrorKind.REJECTED,
+                    ((ZLinkFrameworkException)
+                                    assertThrows(
+                                                    java.util.concurrent.CompletionException.class,
+                                                    () ->
+                                                            spot.enqueueRoute(late)
+                                                                    .toCompletableFuture()
+                                                                    .join())
+                                            .getCause())
+                            .kind());
             assertFalse(
                     spot.enqueueTopic(
                             new ZLinkBackendTopicMessage(
                                     Optional.empty(), "updates", List.of(Message.from("late")))));
             assertEquals(
-                    rejection,
-                    assertThrows(
-                                    java.util.concurrent.CompletionException.class,
-                                    () ->
-                                            spot.enqueueJoin(
-                                                            new systems.zlink.framework.runtime
-                                                                    .internal.backend
-                                                                    .ZLinkBackendActorJoinRequest(
-                                                                    null,
-                                                                    null,
-                                                                    List.of(Message.from("late")),
-                                                                    null))
-                                                    .toCompletableFuture()
-                                                    .join())
-                            .getCause());
-            try (ZLinkBackendReceived accepted = spot.recvRoute(ZLinkBackendRecvMode.DONT_WAIT)) {
+                    ZLinkFrameworkErrorKind.REJECTED,
+                    ((ZLinkFrameworkException)
+                                    assertThrows(
+                                                    java.util.concurrent.CompletionException.class,
+                                                    () ->
+                                                            spot.enqueueJoin(
+                                                                            new systems.zlink
+                                                                                    .framework
+                                                                                    .runtime
+                                                                                    .internal
+                                                                                    .backend
+                                                                                    .ZLinkBackendActorJoinRequest(
+                                                                                    null,
+                                                                                    null,
+                                                                                    List.of(
+                                                                                            Message
+                                                                                                    .from(
+                                                                                                            "late")),
+                                                                                    null))
+                                                                    .toCompletableFuture()
+                                                                    .join())
+                                            .getCause())
+                            .kind());
+            try (ZLinkBackendReceived accepted = acceptedRoute.join()) {
                 assertNotNull(accepted);
                 accepted.reply().accept(List.of(response));
             }
+            released.complete(null);
         }
         assertEquals("accepted", reply.get());
+    }
+
+    @Test
+    void localSendReportsAdmissionWithoutWaitingForAcceptedHandler() {
+        try (var context = Zlink.createContext();
+                var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            RoutingId nodeRid = RoutingId.from("jvm-m6b-send-admission-node");
+            node.setRoutingId(nodeRid);
+            ZLinkBackendSpot source = node.spotNode().createSpot("send-admission-source");
+            ZLinkBackendSpot target = node.spotNode().createSpot("send-admission-target");
+            var queue = new systems.zlink.framework.execution.ZLinkSerialExecutionQueue();
+            CompletableFuture<Void> handlerBlock = new CompletableFuture<>();
+            target.onDispatchEvent(
+                    new systems.zlink.framework.runtime.internal.backend
+                            .ZLinkInternalAsyncSpotDispatchHandler() {
+                        @Override
+                        public CompletionStage<Void> handleAsync(
+                                ZLinkBackendSpotDispatchInfo info) {
+                            return CompletableFuture.completedFuture(null);
+                        }
+
+                        @Override
+                        public CompletionStage<Void> handleRoute(
+                                ZLinkBackendReceived received, CompletableFuture<Void> admission) {
+                            return queue.enqueue(
+                                    () -> {
+                                        received.close();
+                                        return handlerBlock;
+                                    },
+                                    admission);
+                        }
+                    });
+            try (Message accepted = Message.from("accepted")) {
+                source.sendToSpot(
+                                nodeRid,
+                                target.spotId(),
+                                target.lifecycleGeneration(),
+                                List.of(accepted))
+                        .toCompletableFuture()
+                        .join();
+            }
+            assertFalse(handlerBlock.isDone());
+            queue.sealClosingAdmission();
+            try (Message rejected = Message.from("rejected")) {
+                var failure =
+                        assertThrows(
+                                java.util.concurrent.CompletionException.class,
+                                () ->
+                                        source.sendToSpot(
+                                                        nodeRid,
+                                                        target.spotId(),
+                                                        target.lifecycleGeneration(),
+                                                        List.of(rejected))
+                                                .toCompletableFuture()
+                                                .join());
+                assertEquals(
+                        ZLinkFrameworkErrorKind.REJECTED,
+                        ((ZLinkFrameworkException) failure.getCause()).kind());
+            } finally {
+                handlerBlock.complete(null);
+            }
+        }
+    }
+
+    @Test
+    void localSendIsAdmittedIntoRelocationHold() {
+        try (var context = Zlink.createContext();
+                var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            RoutingId nodeRid = RoutingId.from("jvm-m6b-send-relocation-node");
+            node.setRoutingId(nodeRid);
+            ZLinkBackendSpot source = node.spotNode().createSpot("send-relocation-source");
+            ZLinkBackendSpot target = node.spotNode().createSpot("send-relocation-target");
+            var queue = new systems.zlink.framework.execution.ZLinkSerialExecutionQueue();
+            var seal = queue.trySealRelocation().orElseThrow();
+            target.onDispatchEvent(
+                    new systems.zlink.framework.runtime.internal.backend
+                            .ZLinkInternalAsyncSpotDispatchHandler() {
+                        @Override
+                        public CompletionStage<Void> handleAsync(
+                                ZLinkBackendSpotDispatchInfo info) {
+                            return CompletableFuture.completedFuture(null);
+                        }
+
+                        @Override
+                        public CompletionStage<Void> handleRoute(
+                                ZLinkBackendReceived received, CompletableFuture<Void> admission) {
+                            return queue.enqueueRelocatableLazyRecord(
+                                    () -> new byte[] {1},
+                                    1L,
+                                    () -> {
+                                        received.close();
+                                        return CompletableFuture.completedFuture(null);
+                                    },
+                                    received::close,
+                                    admission);
+                        }
+                    });
+            try (Message held = Message.from("held")) {
+                source.sendToSpot(
+                                nodeRid,
+                                target.spotId(),
+                                target.lifecycleGeneration(),
+                                List.of(held))
+                        .toCompletableFuture()
+                        .join();
+            }
+            assertEquals(1, queue.freezeRelocationIngress(seal).orElseThrow().size());
+            assertTrue(queue.abortRelocation(seal));
+        }
     }
 
     private static byte[] payloadBytes(int length, int seed) {

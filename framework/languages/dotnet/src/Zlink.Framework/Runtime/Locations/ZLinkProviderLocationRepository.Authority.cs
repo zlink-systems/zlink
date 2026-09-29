@@ -195,9 +195,9 @@ internal sealed partial class ZLinkProviderLocationRepository
                     new ZLinkStoreWriteRequest(
                         [
                             new ZLinkStoreCondition.Version(metaKey, current.Version),
-                            new ZLinkStoreCondition.Version(
+                            new ZLinkStoreCondition.Value(
                                 OwnerKey(owner.Token.OwnerId),
-                                owner.Version
+                                owner.Value
                             ),
                             target.Condition,
                         ],
@@ -236,7 +236,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         var conditions = new List<ZLinkStoreCondition>
         {
             new ZLinkStoreCondition.Version(metaKey, current.Version),
-            new ZLinkStoreCondition.Version(OwnerKey(targetOwner.OwnerId), liveOwner.Version),
+            new ZLinkStoreCondition.Value(OwnerKey(targetOwner.OwnerId), liveOwner.Value),
         };
         var mutations = new List<ZLinkStoreMutation>();
         var nextAllocation = current.Snapshot.Allocation;
@@ -624,10 +624,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 && ownerFound.Value.ExpiresAt > ownerFound.Value.StoreNow
             )
                 return StaleAuthorityReclaimResult.OwnerLive;
-            staleOwnerCondition = new ZLinkStoreCondition.Version(
-                ownerKey,
-                ownerFound.Value.Version
-            );
+            staleOwnerCondition = new ZLinkStoreCondition.Value(ownerKey, ownerFound.Value.Bytes);
         }
 
         // A relocation record has its own recovery protocol. GetOrCreate may
@@ -4241,7 +4238,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         return new StoredTarget(
             descriptor,
             new ZLinkStoreCondition.Version(descriptorKey, descriptorFound.Value.Version),
-            new ZLinkStoreCondition.Version(OwnerKey(owner.OwnerId), ownerRead.Version)
+            new ZLinkStoreCondition.Value(OwnerKey(owner.OwnerId), ownerRead.Value)
         );
     }
 
@@ -4257,7 +4254,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             return null;
         var record = DecodeOwner(found.Value.Bytes);
         return record.OwnerId == token.OwnerId && record.LeaseGeneration == token.LeaseGeneration
-            ? new StoredOwner(token, found.Value.Version)
+            ? new StoredOwner(token, Encode(new OwnerRecord(token.OwnerId, token.LeaseGeneration)))
             : null;
     }
 
@@ -4595,6 +4592,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         {
             ZLinkStoreCondition.Missing value => value.Key,
             ZLinkStoreCondition.Version value => value.Key,
+            ZLinkStoreCondition.Value value => value.Key,
             _ => throw new ArgumentOutOfRangeException(nameof(condition)),
         };
         if (
@@ -4603,6 +4601,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 {
                     ZLinkStoreCondition.Missing value => value.Key == key,
                     ZLinkStoreCondition.Version value => value.Key == key,
+                    ZLinkStoreCondition.Value value => value.Key == key,
                     _ => false,
                 }
             )
@@ -5344,7 +5343,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         DateTimeOffset StoreNow
     );
 
-    private sealed record StoredOwner(ZLinkLocationOwnerToken Token, ZLinkStoreVersion Version);
+    private sealed record StoredOwner(ZLinkLocationOwnerToken Token, ReadOnlyMemory<byte> Value);
 
     private sealed record StoredTarget(
         ZLinkMeshNodeDescriptor Descriptor,

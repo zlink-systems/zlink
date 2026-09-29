@@ -177,11 +177,16 @@ final class ZLinkJavaRawMeshNodeCanonicalActorJoinTest {
                                 null,
                                 java.util.Map.of("zlink.actorJoin.superseded", "true"))));
         assertArrayEquals(
-                new int[] {105, 17},
+                new int[] {105, 13},
                 ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
                         new ZLinkFrameworkException(
                                 ZLinkFrameworkErrorKind.UNAVAILABLE,
                                 "route or store is unavailable")));
+        assertEquals(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult
+                        .INTERNAL_ERROR
+                        .toFrameworkErrorKind(13));
         assertArrayEquals(
                 new int[] {105, 17},
                 ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(

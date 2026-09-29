@@ -112,13 +112,9 @@ internal sealed class DeliveryDispatchClientScenario(ILogger logger)
             .AsTask();
         // --8<-- [end:doc-e2e-sequence]
 
-        var created = await http.Post("/deliveries")
+        var createdTask = http.Post("/deliveries")
             .Body(new CreateDeliveryReq(deliveryId, "customer-1", "Kitchen 12", "Customer Lobby"))
             .Fetch<CreateDeliveryRes>(cancellationToken);
-        ZlinkStreamAssert.Ensure(
-            created.DeliveryId == deliveryId,
-            "created success delivery id mismatch."
-        );
 
         // courier-a receives the offer through its bound stream session and accepts it.
         var courierOffer = (await offer).Payload;
@@ -127,6 +123,11 @@ internal sealed class DeliveryDispatchClientScenario(ILogger logger)
                 new CourierDecisionMsg(courierOffer.DeliveryId, courierOffer.CourierId, true, null)
             )
             .Async(cancellationToken);
+        var created = await createdTask;
+        ZlinkStreamAssert.Ensure(
+            created.DeliveryId == deliveryId,
+            "created success delivery id mismatch."
+        );
 
         var statuses = await statusSequenceTask;
         var assigned = statuses[0].Payload;
@@ -194,13 +195,9 @@ internal sealed class DeliveryDispatchClientScenario(ILogger logger)
             .Async(cancellationToken)
             .AsTask();
 
-        var created = await http.Post("/deliveries")
+        var createdTask = http.Post("/deliveries")
             .Body(new CreateDeliveryReq(deliveryId, "customer-1", "Kitchen 12", "Customer Lobby"))
             .Fetch<CreateDeliveryRes>(cancellationToken);
-        ZlinkStreamAssert.Ensure(
-            created.DeliveryId == deliveryId,
-            "created reassignment delivery id mismatch."
-        );
 
         // courier-a intentionally does not answer. The dispatch server times out and offers the
         // same delivery to courier-b, which accepts through its own bound stream session.
@@ -216,6 +213,11 @@ internal sealed class DeliveryDispatchClientScenario(ILogger logger)
                 )
             )
             .Async(cancellationToken);
+        var created = await createdTask;
+        ZlinkStreamAssert.Ensure(
+            created.DeliveryId == deliveryId,
+            "created reassignment delivery id mismatch."
+        );
 
         var statuses = await statusSequenceTask;
         var assigned = statuses[0].Payload;

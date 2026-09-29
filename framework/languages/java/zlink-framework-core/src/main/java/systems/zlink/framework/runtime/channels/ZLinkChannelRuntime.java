@@ -1687,7 +1687,7 @@ public final class ZLinkChannelRuntime
     private void startRouteLoop(String channelName, ZLinkBackendRouterSocket router) {
         receiveLoops.startRoute(
                 router,
-                () -> sockets.routeSocketLock(channelName, this),
+                sockets.routeSocketLock(channelName, this),
                 () -> spotRouteBridgeDrainer.drainNow(channelName),
                 received -> routeDispatcher.dispatch(channelName, router, received),
                 error ->

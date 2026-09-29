@@ -206,6 +206,7 @@ final class ZLinkActorDispatchSerialsTest {
 
         owner.set(spotA);
         enqueueLazy(dispatches, order, "before-remove").toCompletableFuture().join();
+        dispatches.awaitQuiescence().toCompletableFuture().join();
         var seal = dispatches.trySeal("actor-1").orElseThrow();
         dispatches.commit("actor-1", seal).orElseThrow();
 
@@ -260,6 +261,7 @@ final class ZLinkActorDispatchSerialsTest {
             String step) {
         owner.set(target);
         enqueueLazy(dispatches, order, step).toCompletableFuture().join();
+        dispatches.awaitQuiescence().toCompletableFuture().join();
         var seal = dispatches.trySeal("actor-1").orElseThrow();
         dispatches.commit("actor-1", seal).orElseThrow();
         dispatches

@@ -26,6 +26,7 @@ import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -138,6 +139,60 @@ final class ZLinkLocationRuntimeRecoveryTest {
 
             assertTrue(store.released.await(1, TimeUnit.SECONDS));
             assertEquals(0, store.heartbeatRenewals.get());
+        }
+    }
+
+    @Test
+    void storeCompletionThreadDoesNotWaitForAStateLaneTurn() throws Exception {
+        DelayedClaimStore store = new DelayedClaimStore();
+        try (ZLinkLocationRuntime runtime =
+                new ZLinkLocationRuntime(
+                        ZLinkRegisteredLocationStores.fromUnified(store),
+                        "owner-a",
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(5),
+                        Duration.ofMillis(100))) {
+            CompletableFuture<Void> startup =
+                    runtime.start(RoutingId.from("node-a")).toCompletableFuture();
+            // A state lane turn publishes its completion on the common pool. Occupying that
+            // pool makes any caller that joins a lane turn wait until the pool is released.
+            int workers = ForkJoinPool.getCommonPoolParallelism();
+            AtomicBoolean releasePool = new AtomicBoolean();
+            CountDownLatch occupied = new CountDownLatch(workers);
+            Thread completer = null;
+            try {
+                for (int index = 0; index < workers * 4; index++) {
+                    ForkJoinPool.commonPool()
+                            .execute(
+                                    () -> {
+                                        occupied.countDown();
+                                        while (!releasePool.get()) {
+                                            try {
+                                                Thread.sleep(1);
+                                            } catch (InterruptedException interrupted) {
+                                                Thread.currentThread().interrupt();
+                                                return;
+                                            }
+                                        }
+                                    });
+                }
+                assertTrue(occupied.await(5, TimeUnit.SECONDS));
+
+                completer = Thread.ofPlatform().start(store::completeClaim);
+                completer.join(1_000);
+                assertFalse(
+                        completer.isAlive(),
+                        "the Store completion thread waited for a state lane turn");
+            } finally {
+                releasePool.set(true);
+                if (completer != null) {
+                    completer.join(5_000);
+                }
+            }
+
+            startup.get(5, TimeUnit.SECONDS);
+            assertTrue(runtime.ownerLeaseHealthy());
         }
     }
 

@@ -850,7 +850,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                         current.meshName(),
                         current.nodeRid(),
                         bindingGeneration,
-                        0,
                         0));
         IngressGate previous =
                 ingressGates.put(
@@ -992,8 +991,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                 gate.activeIngress++;
                                 admittedGate = gate;
                                 acceptedSequence = accepted;
-                                bindingRoutes.put(
-                                        actor.actorId(), route.withAcceptedHighWater(accepted));
                             }
                             return new IngressAdmissionState(
                                     held, admittedGate, acceptedSequence, null);
@@ -2034,8 +2031,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             String meshName,
             RoutingId nodeRid,
             long bindingGeneration,
-            long ownerLeaseGeneration,
-            long lastAcceptedSessionSequence) {
+            long ownerLeaseGeneration) {
         boolean matchesSource(RelocationRouteUpdate update) {
             return actorId.equals(update.actorId())
                     && objectGeneration == update.objectGeneration()
@@ -2050,8 +2046,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     meshName,
                     update.targetNodeRid(),
                     bindingGeneration,
-                    targetOwnerLeaseGeneration,
-                    lastAcceptedSessionSequence);
+                    targetOwnerLeaseGeneration);
         }
 
         StoredBindingRoute toNativeTarget(ZLinkBackendActorRef targetActor) {
@@ -2061,19 +2056,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     meshName,
                     targetActor.nodeRid(),
                     bindingGeneration,
-                    ownerLeaseGeneration,
-                    lastAcceptedSessionSequence);
-        }
-
-        StoredBindingRoute withAcceptedHighWater(long highWater) {
-            return new StoredBindingRoute(
-                    actorId,
-                    objectGeneration,
-                    meshName,
-                    nodeRid,
-                    bindingGeneration,
-                    ownerLeaseGeneration,
-                    highWater);
+                    ownerLeaseGeneration);
         }
     }
 

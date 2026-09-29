@@ -12,7 +12,6 @@ import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.*;
-import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
@@ -91,6 +90,15 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation) {
         return context.enqueueDispatch(payloadBytes, operation);
+    }
+
+    @Override
+    CompletionStage<Void> appendSpotHandler(
+            CompletionStage<Void> tail,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
+        return context.enqueueDispatch(payloadBytes, operation, admission);
     }
 
     @Override
@@ -173,6 +181,45 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
         }
     }
 
+    CompletionStage<Void> admitRoute(ZLinkBackendReceived received) {
+        return admitRoute(received, null);
+    }
+
+    CompletionStage<Void> admitRoute(
+            ZLinkBackendReceived received, CompletableFuture<Void> admission) {
+        var permit = host.reserveApplicationJob();
+        if (permit == null) {
+            Thread.currentThread().interrupt();
+            received.close();
+            var failure = new IllegalStateException("application job reservation was interrupted");
+            if (admission != null) admission.completeExceptionally(failure);
+            return CompletableFuture.failedFuture(failure);
+        }
+        try (var ignored =
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext.enter(
+                        permit)) {
+            var hostRejection = host.spotHostAdmissionFailure(context.spotId());
+            if (hostRejection != null) {
+                received.close();
+                if (admission != null) admission.completeExceptionally(hostRejection);
+                return CompletableFuture.failedFuture(hostRejection);
+            }
+            if (host.dispatchSpotRouteBridgePacket(received)) {
+                received.close();
+                if (admission != null) admission.complete(null);
+                return CompletableFuture.completedFuture(null);
+            }
+            dispatchRoute(received, admission);
+            return CompletableFuture.completedFuture(null);
+        } catch (RuntimeException | Error failure) {
+            if (admission != null) admission.completeExceptionally(failure);
+            received.close();
+            throw failure;
+        } finally {
+            permit.abandonReservation();
+        }
+    }
+
     void drainPolledDispatchQueues() {
         drainRoutes();
         drainUnhandledActorJoins();
@@ -180,6 +227,10 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
     }
 
     private void dispatchRoute(ZLinkBackendReceived received) {
+        dispatchRoute(received, null);
+    }
+
+    private void dispatchRoute(ZLinkBackendReceived received, CompletableFuture<Void> admission) {
         trackRouteReceived(received);
         //  Spec 27 §4: decode and install the inbound flow pair (or start a new
         //  flow) only while capture is enabled; at Off suppress flow state.
@@ -197,6 +248,7 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
                                 : ZLinkSpotFlowFrame.fromEnvelopeHeader(envelope);
             } catch (ZLinkFrameworkException invalidFlow) {
                 failRouteInvalidFlow(received, invalidFlow);
+                if (admission != null) admission.complete(null);
                 return;
             }
         }
@@ -207,6 +259,7 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
         try {
             if (ZLinkSpotRuntime.isProbeFrame(received.parts())) {
                 closeRouteReceived(received);
+                if (admission != null) admission.complete(null);
                 return;
             }
             ParsedPacket packet;
@@ -219,6 +272,7 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
                 //  A JSON-object first frame that is not a valid shared envelope
                 //  is a protocol error (C++ decode parity).
                 failRouteInvalidFlow(received, invalidEnvelope);
+                if (admission != null) admission.complete(null);
                 return;
             }
             host.traceSpotRouteFlow(
@@ -239,19 +293,7 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
                     handleRoutedBoundSessionSendParts(received.parts());
                     closeRouteReceived(received);
                 }
-                return;
-            }
-            if (host.isDraining()
-                    && ZLinkActorSpotRoutePackets.ACTOR_PACKET_NAME.equals(packet.packetName())) {
-                if (received.requestSeq().isPresent()) {
-                    host.replySpotRouteDispatchError(
-                            received,
-                            packet.packetName(),
-                            backendSpot.spotId(),
-                            ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
-                            host.spotAdmissionFailure(backendSpot.spotId()));
-                }
-                closeRouteReceived(received);
+                if (admission != null) admission.complete(null);
                 return;
             }
             if (ZLinkActorSpotRoutePackets.ACTOR_PACKET_NAME.equals(packet.packetName())) {
@@ -273,21 +315,17 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
                                     }
                                 })
                         .whenComplete((ignored, error) -> closeRouteReceived(received));
+                if (admission != null) admission.complete(null);
                 return;
             }
-            if (host.isDraining()) {
-                if (received.requestSeq().isPresent()) {
-                    host.replySpotRouteDispatchError(
-                            received,
-                            packet.packetName(),
-                            backendSpot.spotId(),
-                            ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
-                            host.spotAdmissionFailure(backendSpot.spotId()));
-                }
-                closeRouteReceived(received);
-                return;
-            }
-            dispatchSpotRouteHandler(received, packet);
+            dispatchSpotRouteHandler(received, packet, admission)
+                    .whenComplete(
+                            (ignored, error) -> {
+                                if (admission != null && !admission.isDone()) {
+                                    if (error == null) admission.complete(null);
+                                    else admission.completeExceptionally(error);
+                                }
+                            });
         } finally {
             flowScope.close();
         }

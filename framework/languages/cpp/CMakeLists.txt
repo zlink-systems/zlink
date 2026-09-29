@@ -1522,6 +1522,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     list(APPEND ZLINK_FRAMEWORK_CPP_TOOLING_CONTRACT_ARGS
       -D ZLINK_FRAMEWORK_CPP_TOOLING_CMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE})
   endif()
+  if(CMAKE_PREFIX_PATH)
+    # Preserve the prefix list across CTest command argument expansion.
+    string(REPLACE ";" "\;" tooling_cmake_prefix_path
+      "${CMAKE_PREFIX_PATH}")
+    list(APPEND ZLINK_FRAMEWORK_CPP_TOOLING_CONTRACT_ARGS
+      -D
+      "ZLINK_FRAMEWORK_CPP_TOOLING_CMAKE_PREFIX_PATH=${tooling_cmake_prefix_path}")
+  endif()
   foreach(tooling_dependency IN ITEMS
       protobuf_DIR
       absl_DIR

@@ -15,13 +15,6 @@ internal enum ZLinkServiceConnectionDirection
     Outbound,
 }
 
-internal enum ZLinkServiceDuplicateConnectionDecision
-{
-    NotDuplicate = 1,
-    KeepCurrent,
-    UseIncoming,
-}
-
 internal static class ZLinkServiceAdmissionGuard
 {
     private static readonly HashSet<byte> MutableExtensionFields = [1, 5, 8, 9, 10, 11, 12];
@@ -102,30 +95,6 @@ internal static class ZLinkServiceAdmissionGuard
                 StringComparison.Ordinal
             ) && string.Equals(actual, "default", StringComparison.Ordinal)
         );
-
-    internal static ZLinkServiceDuplicateConnectionDecision SelectConnection(
-        ulong currentLifecycleGeneration,
-        ZLinkServiceConnectionDirection currentDirection,
-        ulong incomingLifecycleGeneration,
-        ZLinkServiceConnectionDirection incomingDirection
-    )
-    {
-        if (
-            currentLifecycleGeneration != 0
-            && currentLifecycleGeneration != incomingLifecycleGeneration
-        )
-            return ZLinkServiceDuplicateConnectionDecision.NotDuplicate;
-
-        // Core selects the one physical route of the RID (Core ROUTER §10.1),
-        // so both objects describe the same logical peer. Keep the object
-        // that owns the configured connect intent; otherwise keep the current
-        // one.
-        return
-            incomingDirection == ZLinkServiceConnectionDirection.Outbound
-            && currentDirection == ZLinkServiceConnectionDirection.Inbound
-            ? ZLinkServiceDuplicateConnectionDecision.UseIncoming
-            : ZLinkServiceDuplicateConnectionDecision.KeepCurrent;
-    }
 
     private static bool ImmutableFieldsMatch(
         ZLinkServiceWireCodec.AdmissionRecord existing,

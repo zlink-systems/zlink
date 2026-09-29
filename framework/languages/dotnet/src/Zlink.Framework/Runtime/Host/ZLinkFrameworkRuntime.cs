@@ -1090,14 +1090,15 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 // Recovery remains an explicit same-process operation; a new
                 // process must rediscover the current owner through the normal
                 // location lifecycle instead of taking over a prior journal.
-                AwaitStateLane(_stateLane.RunAsync(() => _acceptingOperations = true));
+                await _stateLane.RunAsync(() => _acceptingOperations = true).ConfigureAwait(false);
                 Volatile.Write(ref _lifecyclePhase, (int)ZLinkRuntimeLifecyclePhase.Running);
                 _locationLifecycle?.ResumeBackgroundWork();
             }
             catch (Exception startFailure)
             {
                 Volatile.Write(ref _lifecyclePhase, (int)ZLinkRuntimeLifecyclePhase.Stopping);
-                await StopAcceptingOperationsAsync().ConfigureAwait(false);
+                var operationsDrained = await StopAcceptingOperationsAsync().ConfigureAwait(false);
+                await operationsDrained.ConfigureAwait(false);
                 var failures = await CleanupRuntimeGenerationAsync(_state).ConfigureAwait(false);
                 _state = null;
                 Interlocked.Exchange(ref _executionScope, null);
@@ -1127,7 +1128,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             Volatile.Write(ref _lifecyclePhase, (int)ZLinkRuntimeLifecyclePhase.Stopping);
             try
             {
-                var operationsDrained = StopAcceptingOperationsAsync();
+                var operationsDrained = await StopAcceptingOperationsAsync().ConfigureAwait(false);
                 stateToDispose?.CancelActiveSpotOperations();
                 await operationsDrained.ConfigureAwait(false);
                 var failures = await CleanupRuntimeGenerationAsync(stateToDispose)
@@ -1172,7 +1173,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             Volatile.Write(ref _lifecyclePhase, (int)ZLinkRuntimeLifecyclePhase.Stopping);
             try
             {
-                AwaitStateLane(_stateLane.RunAsync(() => _acceptingOperations = false));
+                await _stateLane.RunAsync(() => _acceptingOperations = false).ConfigureAwait(false);
                 stateToDispose?.FenceOperations();
                 stateToDispose?.CancelActiveSpotOperations();
                 if (stateToDispose is not null)
@@ -1237,8 +1238,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         ZLinkWorkerPool? workerPool = null;
         ZLinkWorkerPool? logicalMulticastWorkerPool = null;
         var logicalMulticastPoolDisposed = false;
-        AwaitStateLane(
-            _stateLane.RunAsync(() =>
+        await _stateLane
+            .RunAsync(() =>
             {
                 workerPool = _workerPool;
                 _workerPool = null;
@@ -1246,7 +1247,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 _logicalMulticastWorkerPool = null;
                 return true;
             })
-        );
+            .ConfigureAwait(false);
 
         if (workerPool is not null)
             Capture(workerPool.RequestStop);
@@ -1368,10 +1369,10 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         return _state;
     }
 
-    private Task StopAcceptingOperationsAsync()
+    private async Task<Task> StopAcceptingOperationsAsync()
     {
-        return AwaitStateLane(
-            _stateLane.RunAsync(() =>
+        return await _stateLane
+            .RunAsync(() =>
             {
                 _acceptingOperations = false;
                 if (_activeOperations == 0)
@@ -1382,7 +1383,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                     )
                 ).Task;
             })
-        );
+            .ConfigureAwait(false);
     }
 
     private ZLinkFrameworkComponentState AdmitOperationOnLane(bool countAsRequest)

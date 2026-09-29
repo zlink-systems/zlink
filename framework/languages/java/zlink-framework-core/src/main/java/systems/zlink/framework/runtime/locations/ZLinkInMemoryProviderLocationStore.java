@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -206,6 +207,11 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
         if (condition instanceof ZLinkStoreMissingCondition missing) {
             return live(requireKey(missing.key()), now) == null;
         }
+        if (condition instanceof ZLinkStoreValueCondition expected) {
+            Entry current = live(requireKey(expected.key()), now);
+            return current != null
+                    && Arrays.equals(current.bytes(), requireBytes(expected.expected()));
+        }
         var expected = (ZLinkStoreVersionCondition) condition;
         Entry current = live(requireKey(expected.key()), now);
         return current != null && current.version().equals(expected.expected());
@@ -230,11 +236,16 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
                     requireKey(
                             condition instanceof ZLinkStoreMissingCondition value
                                     ? value.key()
-                                    : ((ZLinkStoreVersionCondition) condition).key());
+                                    : condition instanceof ZLinkStoreValueCondition value
+                                            ? value.key()
+                                            : ((ZLinkStoreVersionCondition) condition).key());
             if (!conditionKeys.add(key)) {
                 throw new IllegalArgumentException("duplicate condition key");
             }
             encodedBytes += key.getBytes(StandardCharsets.UTF_8).length;
+            if (condition instanceof ZLinkStoreValueCondition value) {
+                encodedBytes += requireBytes(value.expected()).length;
+            }
         }
         for (var mutation : mutations) {
             String key =

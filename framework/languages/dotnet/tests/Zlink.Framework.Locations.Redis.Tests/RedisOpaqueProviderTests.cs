@@ -10,6 +10,73 @@ namespace Zlink.Framework.Locations.Redis.Tests;
 [Collection(RedisTestCollection.Name)]
 public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
 {
+    [SkippableFact]
+    public async Task Location_value_condition_checks_bytes_and_expiry_atomically()
+    {
+        Skip.IfNot(fixture.RedisAvailable, fixture.SkipReason);
+        await using var store = fixture.CreateStore();
+        var lease = new ZLinkStoreKey("value:lease");
+        var mutation = new ZLinkStoreKey("value:mutation");
+        var expected = new byte[] { 0, 1, 255 };
+
+        async Task PutAsync(byte[] bytes, TimeSpan? retention = null) =>
+            Assert.IsType<ZLinkStoreWriteResult.Applied>(
+                await store.WriteAsync(
+                    new ZLinkStoreWriteRequest(
+                        [],
+                        [new ZLinkStoreMutation.Put(lease, bytes, retention)]
+                    )
+                )
+            );
+
+        async Task CheckAsync(bool shouldApply)
+        {
+            var result = await store.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [new ZLinkStoreCondition.Value(lease, expected)],
+                    [new ZLinkStoreMutation.Put(mutation, new byte[] { 9 }, null)]
+                )
+            );
+            if (shouldApply)
+            {
+                Assert.IsType<ZLinkStoreWriteResult.Applied>(result);
+                Assert.IsType<ZLinkStoreWriteResult.Applied>(
+                    await store.WriteAsync(
+                        new ZLinkStoreWriteRequest([], [new ZLinkStoreMutation.Delete(mutation)])
+                    )
+                );
+            }
+            else
+            {
+                Assert.IsType<ZLinkStoreWriteResult.Conflict>(result);
+                Assert.IsType<ZLinkStoreReadResult.Missing>(await store.ReadAsync(mutation));
+            }
+        }
+
+        await PutAsync(expected);
+        var first = Assert.IsType<ZLinkStoreReadResult.Found>(await store.ReadAsync(lease));
+        await PutAsync(expected, TimeSpan.FromMinutes(1));
+        var renewed = Assert.IsType<ZLinkStoreReadResult.Found>(await store.ReadAsync(lease));
+        Assert.NotEqual(first.Value.Version, renewed.Value.Version);
+        await CheckAsync(true);
+        await PutAsync(new byte[] { 0, 1, 254 });
+        await CheckAsync(false);
+        Assert.IsType<ZLinkStoreWriteResult.Applied>(
+            await store.WriteAsync(
+                new ZLinkStoreWriteRequest([], [new ZLinkStoreMutation.Delete(lease)])
+            )
+        );
+        await CheckAsync(false);
+        await PutAsync(expected, TimeSpan.FromMilliseconds(1));
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            if (await store.ReadAsync(lease) is ZLinkStoreReadResult.Missing)
+                break;
+        }
+        Assert.IsType<ZLinkStoreReadResult.Missing>(await store.ReadAsync(lease));
+        await CheckAsync(false);
+    }
+
     [Fact]
     public void Location_provider_implements_only_the_opaque_store_contract()
     {
