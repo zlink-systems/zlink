@@ -808,6 +808,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       const std::function<void ()> &rejected);
     bool wait_for_dispatch_activity (std::chrono::milliseconds timeout,
                                      bool accept_application_receive = true) noexcept;
+    task_t<std::pair<bool, std::optional<std::chrono::steady_clock::time_point>>>
+    next_dispatch_activity_async ();
     void signal_dispatch_activity () noexcept;
     bool prepare_actor_transfer (const actor_transfer_prepare_t &prepare,
                                  actor_transfer_token_t &token,

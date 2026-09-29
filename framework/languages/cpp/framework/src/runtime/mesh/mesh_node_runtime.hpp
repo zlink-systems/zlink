@@ -26,6 +26,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -437,6 +438,9 @@ class mesh_node_runtime_t
                     bool accept_application_receive = true,
                     const std::function<bool ()> &next_application_receive = {});
     host::node_status_t status () const;
+    task_t<std::tuple<std::vector<std::string>, std::int32_t, std::int32_t>>
+    monitoring_configuration_async () const;
+    task_t<std::pair<std::size_t, std::size_t>> monitoring_counts_async () const;
     void dispatch_message_follow (const runtime::protocol::message_follow_notice_t &notice);
     /* Admitted RouteMesh membership size. Vertical and E2E checks wait on this
      * instead of reaching into the transport topology. */
@@ -555,6 +559,7 @@ class mesh_node_runtime_t
                                                   observed_spot_authority_t observed);
 
   private:
+    static std::vector<std::string> channel_names_on_lane (const mesh_node_builder_state_t &state);
     bool relocation_source_stopped () const;
 
     //  Coroutine: parameters are taken by value so the frame owns them for

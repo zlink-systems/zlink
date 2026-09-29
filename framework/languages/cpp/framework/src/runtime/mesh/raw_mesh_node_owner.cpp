@@ -3326,12 +3326,10 @@ bool raw_mesh_node_owner_t::wait_for_activity (std::chrono::milliseconds timeout
             if (timeout < std::chrono::milliseconds::zero () || remaining < timeout)
                 timeout = remaining;
         }
-        port = _lane
-                 .run ([this] {
-                     std::lock_guard lock (_lifecycle_mutex);
-                     return _port;
-                 })
-                 .get ();
+        {
+            std::lock_guard lock (_lifecycle_mutex);
+            port = _port;
+        }
     }
     catch (...) {
         return false;
