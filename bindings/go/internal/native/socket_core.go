@@ -97,7 +97,6 @@ func (s *socketCore) Close() error {
 	if s.raw() == nil {
 		return nil
 	}
-	s.completion.shutdownOwner()
 	handle := s.raw()
 	nativeResult5, nativeErr5 := C.zlink_close(handle)
 	closeErr := closeErrorFromCall(nativeResult5, nativeErr5)
@@ -105,6 +104,7 @@ func (s *socketCore) Close() error {
 		return closeErr
 	}
 	s.handle.Store(nil)
+	s.completion.shutdownOwner()
 	if s.context != nil {
 		s.context.unregisterSocket(s)
 	}

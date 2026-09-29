@@ -24,7 +24,7 @@
     },
     {
       "path": "include/zlink/socket/api.h",
-      "sha256": "17d6a4db60eb8c2881ed57af97956abb6615d761fd25f1c5ec131beb83f964dd"
+      "sha256": "5bcd1ecfe507558221bc1f6831dfdfa1a8bfe3a57025b8ddc4355da2110c4e8a"
     },
     {
       "path": "include/zlink_enum.h",
@@ -47,6 +47,7 @@
     "zlink_close",
     "zlink_completion_close",
     "zlink_completion_id_t",
+    "zlink_completion_kind_t",
     "zlink_completion_recv",
     "zlink_completion_t",
     "zlink_config_result_t",
