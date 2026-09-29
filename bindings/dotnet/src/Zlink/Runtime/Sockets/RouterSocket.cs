@@ -6,8 +6,6 @@ namespace Systems.Zlink;
 
 internal sealed class RouterSocket : RoutedReceivingSocketBase, IRouterSocket
 {
-    private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(5);
-
     public RouterSocket(Context context)
         : base(context, SocketType.Router)
     {
@@ -74,17 +72,14 @@ internal sealed class RouterSocket : RoutedReceivingSocketBase, IRouterSocket
     internal RequestSubmission RequestCore(RoutingId peerRid,
         IReadOnlyList<Message> parts, TimeSpan timeout, CancellationToken ct)
     {
-        var timeoutMs = RequestReplySupport.NormalizeRequestTimeout(
-            timeout,
-            DefaultRequestTimeout);
+        var timeoutMs = RequestReplySupport.NormalizeTimeout(timeout);
         return Kernel.RequestAsync(peerRid, parts, timeoutMs, ct);
     }
 
     internal IReadOnlyList<Message> RequestCore(RoutingId peerRid,
         IReadOnlyList<Message> parts, TimeSpan timeout)
     {
-        var timeoutMs = RequestReplySupport.NormalizeRequestTimeout(timeout,
-            DefaultRequestTimeout);
+        var timeoutMs = RequestReplySupport.NormalizeTimeout(timeout);
         return Kernel.Request(peerRid, parts, timeoutMs);
     }
 
