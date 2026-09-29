@@ -1,4 +1,5 @@
 import { ZLinkListenerRecords } from '../foundation/listener-records';
+import { DEFAULT_ACTIVATION_CONCURRENCY_LIMIT } from '../../contracts/Configuration/InternalDefaults';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
@@ -264,7 +265,8 @@ export class ZLinkFrameworkRuntimeHost
   private readonly admission = new ZLinkRuntimeAdmissionGate(() => this.ownerAdmissionOpen());
   private readonly activationAdmission = new ZLinkActivationAdmission(
     (meshName) =>
-      this.options.registration.spotNodes.get(meshName)?.activationConcurrencyLimit ?? 128,
+      this.options.registration.spotNodes.get(meshName)?.activationConcurrencyLimit ??
+      DEFAULT_ACTIVATION_CONCURRENCY_LIMIT,
     (meshName) => {
       void this.spotNodeRuntime
         ?.publishMeshNodeState(
