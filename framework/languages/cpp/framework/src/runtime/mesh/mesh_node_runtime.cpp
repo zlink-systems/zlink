@@ -640,12 +640,17 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
               request.actor.target_node_routing_id, request.actor.actor_id,
               request.actor.object_generation, request.actor.target_node_generation,
               request.correlation);
-            const auto admitted = spot.admit_remote_actor_to_spot (
-              std::move (transfer_id), actor_ref, spot_id_t{}, target_spot_id, payload_message,
-              request.actor.target_node_generation, request.correlation,
-              request.actor.authority_owner_generation, request.actor.target_node_generation,
-              request.actor.owner_lease_generation, true, request.target_spot.object_generation,
-              request.target_spot.authority_owner_generation);
+            // This runs in the target Spot's admission lifecycle item
+            // (dispatch_wire_actor_join_admission), so the admission is inline.
+            const auto admitted =
+              spot
+                .admit_remote_actor_to_spot (
+                  std::move (transfer_id), actor_ref, spot_id_t{}, target_spot_id, payload_message,
+                  request.actor.target_node_generation, request.correlation,
+                  request.actor.authority_owner_generation, request.actor.target_node_generation,
+                  request.actor.owner_lease_generation, true, request.target_spot.object_generation,
+                  request.target_spot.authority_owner_generation)
+                .result ();
             if (!admitted)
                 return typed_terminal (admitted.error_kind ());
             auto application_reply =
@@ -2313,27 +2318,23 @@ result_t<actor_ref_t> mesh_node_runtime_t::create_application_actor (
     }
 }
 
-result_t<actor_join_reply_t>
+task_t<actor_join_reply_t>
 mesh_node_runtime_t::join_application_actor_to_entry_spot (const actor_ref_t &actor,
                                                            const node_rid_t &target_node,
                                                            const zlink::message_t &request,
                                                            std::chrono::milliseconds timeout)
 {
-    const auto found = _actors.find (std::string (actor.actor_id ().value ()));
-    if (found == _actors.end ()) {
-        return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
-                                                      "local Actor handle was not found");
-    }
-    host::pending_operation_t operation;
-    const std::vector<zlink::message_t> parts{request};
-    const auto submitted = found->second.join_entry_spot (
-      zlink::routing_id_t::from (std::string (target_node.value ())), parts, operation, timeout);
-    if (submitted != zlink::submit_result_t::ok) {
-        return result_t<actor_join_reply_t>::failure (framework_error_kind_t::internal_failure,
-                                                      "Actor entry Spot join was not submitted");
-    }
-    auto joined = wait_for_join_completion (operation, actor, timeout);
-    return joined;
+    // The operation completion delivers the reply (submit_application_actor_entry_spot_join).
+    detail::task_completion_source_t<actor_join_reply_t> joined;
+    auto result = joined.task ();
+    const auto submitted = submit_application_actor_entry_spot_join (
+      actor, target_node, request, timeout, [joined] (result_t<actor_join_reply_t> reply) mutable {
+          joined.complete (std::move (reply));
+      });
+    if (!submitted)
+        joined.complete (detail::propagate_failure<actor_join_reply_t> (
+          submitted, "Actor entry Spot join failed"));
+    return result;
 }
 
 result_t<void>
@@ -3508,20 +3509,6 @@ result_t<actor_join_reply_t> mesh_node_runtime_t::actor_join_reply_from_completi
       reply});
 }
 
-result_t<actor_join_reply_t>
-mesh_node_runtime_t::wait_for_join_completion (const host::pending_operation_t &operation,
-                                               const actor_ref_t &actor,
-                                               std::chrono::milliseconds timeout)
-{
-    auto completed = wait_for_completion (operation, timeout);
-    if (!completed) {
-        return result_t<actor_join_reply_t>::failure (
-          completed.error_kind (),
-          completed.error () ? completed.error ()->what () : "Actor Spot join failed");
-    }
-    auto completion = std::move (completed.value ());
-    return actor_join_reply_from_completion (completion.record, completion.parts, actor, _state);
-}
 
 task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_actor (
   const actor_ref_t &actor,

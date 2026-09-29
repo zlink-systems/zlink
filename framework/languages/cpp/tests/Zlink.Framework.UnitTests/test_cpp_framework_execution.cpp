@@ -2762,17 +2762,21 @@ bool verify_released_spot_turn_does_not_inline_lifecycle_task ()
                                                         std::memory_order_release);
             released_stack_had_callback_context.store (owner->is_current_callback_thread (),
                                                        std::memory_order_release);
-            const auto result = owner->run_serial_task (
-              "lifecycle-after-released-handler-turn", [&, released_turn] () -> task_t<void> {
-                  const auto lifecycle_turn = capture_current_serial_turn ();
-                  lifecycle_had_fresh_turn.store (lifecycle_turn && lifecycle_turn != released_turn
-                                                    && !lifecycle_turn->released ()
-                                                    && owner->owns_current_serial_turn (),
-                                                  std::memory_order_release);
-                  lifecycle_allowed_yield.store (current_serial_turn_allows_yield (),
-                                                 std::memory_order_release);
-                  co_return;
-              });
+            const auto result =
+              owner
+                ->run_serial_task (
+                  "lifecycle-after-released-handler-turn",
+                  [&, released_turn] () -> task_t<void> {
+                      const auto lifecycle_turn = capture_current_serial_turn ();
+                      lifecycle_had_fresh_turn.store (
+                        lifecycle_turn && lifecycle_turn != released_turn
+                          && !lifecycle_turn->released () && owner->owns_current_serial_turn (),
+                        std::memory_order_release);
+                      lifecycle_allowed_yield.store (current_serial_turn_allows_yield (),
+                                                     std::memory_order_release);
+                      co_return;
+                  })
+                .result ();
             lifecycle_succeeded.store (static_cast<bool> (result), std::memory_order_release);
             completed.store (true, std::memory_order_release);
         })) {
@@ -3605,9 +3609,12 @@ bool verify_draining_host_refuses_new_admission_with_shutting_down ()
     const auto remote_join = runtime.join_remote_actor_to_spot_erased (
       draining_actor, spot_id_t ("draining-room"), zlink::message_t{},
       spot_node_runtime_t::default_actor_context ());
-    const auto remote_admission = runtime.admit_remote_actor_to_spot (
-      "draining-transfer", draining_actor, spot_id_t ("draining-source"),
-      spot_id_t ("draining-room"), zlink::message_t{});
+    const auto remote_admission =
+      runtime
+        .admit_remote_actor_to_spot ("draining-transfer", draining_actor,
+                                     spot_id_t ("draining-source"), spot_id_t ("draining-room"),
+                                     zlink::message_t{})
+        .result ();
     const auto entry_join = runtime.join_actor_to_entry_spot_erased (
       draining_actor, node_rid_t::from_string ("draining-host-node"), zlink::message_t{},
       std::nullopt, spot_node_runtime_t::default_actor_context ());
@@ -3931,12 +3938,21 @@ bool verify_remote_actor_prepare_is_idempotent ()
     auto provider = services.build_provider ();
     owner.bind_service_provider (provider);
     const auto request = zlink::message_t::from (std::string ("prepare"));
-    const auto first = owner.admit_remote_actor_to_spot (
-      "transfer-1", actor, spot_id_t ("source-spot"), target->spot_id, request, 11, 13, 19, 23, 29);
-    const auto repeated = owner.admit_remote_actor_to_spot (
-      "transfer-1", actor, spot_id_t ("source-spot"), target->spot_id, request, 11, 13, 19, 23, 29);
-    const auto conflicting = owner.admit_remote_actor_to_spot (
-      "transfer-1", actor, spot_id_t ("source-spot"), target->spot_id, request, 11, 17, 19, 23, 29);
+    const auto first =
+      owner
+        .admit_remote_actor_to_spot ("transfer-1", actor, spot_id_t ("source-spot"),
+                                     target->spot_id, request, 11, 13, 19, 23, 29)
+        .result ();
+    const auto repeated =
+      owner
+        .admit_remote_actor_to_spot ("transfer-1", actor, spot_id_t ("source-spot"),
+                                     target->spot_id, request, 11, 13, 19, 23, 29)
+        .result ();
+    const auto conflicting =
+      owner
+        .admit_remote_actor_to_spot ("transfer-1", actor, spot_id_t ("source-spot"),
+                                     target->spot_id, request, 11, 17, 19, 23, 29)
+        .result ();
 
     target->serial_queue->close ();
     target->serial_queue->drain ();
@@ -4850,9 +4866,11 @@ bool verify_join_commit_does_not_wait_for_joined_callback ()
     authority->publish (source, target, location_owner_token_t{"target-owner", 6},
                         object_creation_target_t{}, "join-commit-ref", 0, {});
     owner.bind_relocation_authority (authority);
-    const auto admitted = owner.admit_remote_actor_to_spot (
-      "join-commit-transfer", source_actor, spot_id_t ("source-spot"), spot->spot_id,
-      zlink::message_t{}, 31, 37, 19, 3, 5, true, 1, 1);
+    const auto admitted = owner
+                            .admit_remote_actor_to_spot (
+                              "join-commit-transfer", source_actor, spot_id_t ("source-spot"),
+                              spot->spot_id, zlink::message_t{}, 31, 37, 19, 3, 5, true, 1, 1)
+                            .result ();
     const auto pending = node->actor_transfer_coordinator.admission ("join-commit-transfer");
     if (!admitted || !admitted.value ().accepted || !pending || !pending->lifecycle_reservation)
         return false;
@@ -5236,9 +5254,11 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
 
     const std::string transfer_id = "transfer-c2";
     const std::string key = "player:actor-c2";
-    const auto admitted = owner.admit_remote_actor_to_spot (
-      transfer_id, actor, spot_id_t ("source-spot"), target->spot_id,
-      zlink::message_t::from (std::string ("prepare")), 11, 13, 19, 1, 29);
+    const auto admitted = owner
+                            .admit_remote_actor_to_spot (
+                              transfer_id, actor, spot_id_t ("source-spot"), target->spot_id,
+                              zlink::message_t::from (std::string ("prepare")), 11, 13, 19, 1, 29)
+                            .result ();
     if (!admitted || !admitted.value ().accepted) {
         return false;
     }
@@ -5400,9 +5420,12 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
       node_rid_t::from_string ("actor-finalize-node"), "player", "actor-combined", 7);
     const std::string combined_transfer_id = "transfer-combined";
     set_source_authority (combined_actor, 39);
-    const auto combined_admitted = owner.admit_remote_actor_to_spot (
-      combined_transfer_id, combined_actor, spot_id_t ("source-spot"), target->spot_id,
-      zlink::message_t::from (std::string ("prepare")), 31, 33, 39, 1, 29);
+    const auto combined_admitted =
+      owner
+        .admit_remote_actor_to_spot (
+          combined_transfer_id, combined_actor, spot_id_t ("source-spot"), target->spot_id,
+          zlink::message_t::from (std::string ("prepare")), 31, 33, 39, 1, 29)
+        .result ();
     auto combined_bound_delivery = std::make_shared<detail::task_completion_source_t<void>> ();
     std::atomic_bool combined_bound_delivery_started{false};
     const auto combined_bound = gateway.bind_session_sink (
@@ -5463,9 +5486,12 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     const std::string queued_transfer_id = "transfer-c3";
     const std::string queued_key = "player:actor-c3";
     set_source_authority (queued_actor, 29);
-    const auto queued_admitted = owner.admit_remote_actor_to_spot (
-      queued_transfer_id, queued_actor, spot_id_t ("source-spot"), target->spot_id,
-      zlink::message_t::from (std::string ("prepare")), 21, 23, 29, 1, 29);
+    const auto queued_admitted =
+      owner
+        .admit_remote_actor_to_spot (
+          queued_transfer_id, queued_actor, spot_id_t ("source-spot"), target->spot_id,
+          zlink::message_t::from (std::string ("prepare")), 21, 23, 29, 1, 29)
+        .result ();
     const auto queued_prepared = owner.prepare_remote_actor_to_spot (
       queued_transfer_id, queued_actor, target->spot_id, zlink::message_t{},
       actor_gateway_runtime_t{}.actor_context (queued_actor), true);
@@ -5565,9 +5591,12 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     const std::string lifecycle_transfer_id = "transfer-c4";
     const std::string lifecycle_key = "player:actor-c4";
     set_source_authority (lifecycle_actor, 41);
-    const auto lifecycle_admitted = owner.admit_remote_actor_to_spot (
-      lifecycle_transfer_id, lifecycle_actor, spot_id_t ("source-spot"), target->spot_id,
-      zlink::message_t::from (std::string ("prepare")), 31, 37, 41, 1, 29);
+    const auto lifecycle_admitted =
+      owner
+        .admit_remote_actor_to_spot (
+          lifecycle_transfer_id, lifecycle_actor, spot_id_t ("source-spot"), target->spot_id,
+          zlink::message_t::from (std::string ("prepare")), 31, 37, 41, 1, 29)
+        .result ();
     const auto lifecycle_prepared = owner.prepare_remote_actor_to_spot (
       lifecycle_transfer_id, lifecycle_actor, target->spot_id, zlink::message_t{},
       gateway.actor_context (lifecycle_actor), true);
@@ -5669,9 +5698,12 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     const std::string active_lifecycle_transfer_id = "transfer-c4-active";
     const std::string active_lifecycle_key = "player:actor-c4-active";
     set_source_authority (active_lifecycle_actor, 67);
-    const auto active_lifecycle_admitted = owner.admit_remote_actor_to_spot (
-      active_lifecycle_transfer_id, active_lifecycle_actor, spot_id_t ("source-spot"),
-      target->spot_id, zlink::message_t::from (std::string ("prepare")), 59, 61, 67, 1, 29);
+    const auto active_lifecycle_admitted =
+      owner
+        .admit_remote_actor_to_spot (
+          active_lifecycle_transfer_id, active_lifecycle_actor, spot_id_t ("source-spot"),
+          target->spot_id, zlink::message_t::from (std::string ("prepare")), 59, 61, 67, 1, 29)
+        .result ();
     const auto active_lifecycle_prepared = owner.prepare_remote_actor_to_spot (
       active_lifecycle_transfer_id, active_lifecycle_actor, target->spot_id, zlink::message_t{},
       gateway.actor_context (active_lifecycle_actor), true);
@@ -5758,9 +5790,12 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     const std::string shutdown_lifecycle_transfer_id = "transfer-c4-shutdown";
     const std::string shutdown_lifecycle_key = "player:actor-c4-shutdown";
     set_source_authority (shutdown_lifecycle_actor, 79);
-    const auto shutdown_lifecycle_admitted = owner.admit_remote_actor_to_spot (
-      shutdown_lifecycle_transfer_id, shutdown_lifecycle_actor, spot_id_t ("source-spot"),
-      target->spot_id, zlink::message_t::from (std::string ("prepare")), 71, 73, 79, 1, 29);
+    const auto shutdown_lifecycle_admitted =
+      owner
+        .admit_remote_actor_to_spot (
+          shutdown_lifecycle_transfer_id, shutdown_lifecycle_actor, spot_id_t ("source-spot"),
+          target->spot_id, zlink::message_t::from (std::string ("prepare")), 71, 73, 79, 1, 29)
+        .result ();
     const auto shutdown_lifecycle_prepared = owner.prepare_remote_actor_to_spot (
       shutdown_lifecycle_transfer_id, shutdown_lifecycle_actor, target->spot_id, zlink::message_t{},
       gateway.actor_context (shutdown_lifecycle_actor), true);
@@ -5850,9 +5885,12 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     const std::string failed_transfer_id = "transfer-c5";
     const std::string failed_key = "player:actor-c5";
     set_source_authority (failed_actor, 53);
-    const auto failed_admitted = owner.admit_remote_actor_to_spot (
-      failed_transfer_id, failed_actor, spot_id_t ("source-spot"), target->spot_id,
-      zlink::message_t::from (std::string ("prepare")), 43, 47, 53, 1, 29);
+    const auto failed_admitted =
+      owner
+        .admit_remote_actor_to_spot (
+          failed_transfer_id, failed_actor, spot_id_t ("source-spot"), target->spot_id,
+          zlink::message_t::from (std::string ("prepare")), 43, 47, 53, 1, 29)
+        .result ();
     const auto failed_prepared = owner.prepare_remote_actor_to_spot (
       failed_transfer_id, failed_actor, target->spot_id, zlink::message_t{},
       gateway.actor_context (failed_actor), true);
@@ -5916,9 +5954,12 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
       actor_ref_access_t::make (node_rid_t::from_string ("source-node"), "player", "actor-c6", 7);
     const std::string leave_order_transfer_id = "transfer-c6";
     set_source_authority (leave_order_actor, 97);
-    const auto leave_order_admitted = owner.admit_remote_actor_to_spot (
-      leave_order_transfer_id, leave_order_actor, spot_id_t ("source-spot"), target->spot_id,
-      zlink::message_t::from (std::string ("prepare")), 83, 89, 97, 1, 29);
+    const auto leave_order_admitted =
+      owner
+        .admit_remote_actor_to_spot (
+          leave_order_transfer_id, leave_order_actor, spot_id_t ("source-spot"), target->spot_id,
+          zlink::message_t::from (std::string ("prepare")), 83, 89, 97, 1, 29)
+        .result ();
     const auto leave_order_prepared = owner.prepare_remote_actor_to_spot (
       leave_order_transfer_id, leave_order_actor, target->spot_id, zlink::message_t{},
       gateway.actor_context (leave_order_actor), true);
@@ -5970,9 +6011,12 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     set_source_authority (held_actor, 101);
     const auto lifecycle_before =
       target->serial_queue->pending_count (runtime::serial_work_lane_t::lifecycle);
-    const auto held_admitted = owner.admit_remote_actor_to_spot (
-      held_transfer_id, held_actor, spot_id_t ("source-spot"), target->spot_id,
-      zlink::message_t::from (std::string ("prepare")), 91, 93, 101, 1, 29, true, 1, 1);
+    const auto held_admitted =
+      owner
+        .admit_remote_actor_to_spot (
+          held_transfer_id, held_actor, spot_id_t ("source-spot"), target->spot_id,
+          zlink::message_t::from (std::string ("prepare")), 91, 93, 101, 1, 29, true, 1, 1)
+        .result ();
     if (!held_admitted || !held_admitted.value ().accepted)
         return false;
     std::atomic_bool later_lifecycle_ran{false};

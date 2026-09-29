@@ -2428,7 +2428,7 @@ int actor_request_completion_keeps_dedup_state_owned_after_runtime_wrapper_unwin
         return 1;
     }
     auto disconnected = std::async (std::launch::async, [node, actor] {
-        return spot_node_runtime_t (node).notify_actor_disconnected_erased (actor);
+        return spot_node_runtime_t (node).notify_actor_disconnected_erased (actor).result ();
     });
     if (disconnected.wait_for (std::chrono::milliseconds (50)) != std::future_status::timeout
         || disconnected_started.load (std::memory_order_acquire)) {
@@ -4624,9 +4624,11 @@ int remote_actor_join_resolves_store_type_and_reports_typed_terminals ()
         const auto wire_actor = test_actor_ref (
           "actor-owner", scenario == scenario_t::forged ? "ForgedActor" : "StoreActor",
           "store-resolved-actor", 17);
-        return spots.admit_remote_actor_to_spot (
-          "store-resolution-" + std::to_string (static_cast<int> (scenario)), wire_actor,
-          spot_id_t ("source-spot"), spot->spot_id, zlink::message_t{}, 1, 2, 23, 19, 29);
+        return spots
+          .admit_remote_actor_to_spot (
+            "store-resolution-" + std::to_string (static_cast<int> (scenario)), wire_actor,
+            spot_id_t ("source-spot"), spot->spot_id, zlink::message_t{}, 1, 2, 23, 19, 29)
+          .result ();
     };
 
     std::atomic_int admission_calls{0};
