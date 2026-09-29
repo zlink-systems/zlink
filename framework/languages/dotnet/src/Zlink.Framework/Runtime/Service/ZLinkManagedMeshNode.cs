@@ -6490,7 +6490,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             || actorJoin.Request.ActorNodeGeneration != peer.LifecycleGeneration
             || actorJoin.Request.TargetNodeRid != _routingId
             || actorJoin.Request.TargetNodeGeneration != _lifecycleGeneration
-            || targetSpot is null
         )
         {
             SendCanonicalActorJoinTerminal(
@@ -6499,6 +6498,18 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 actorJoin.Request.Correlation,
                 RequestResult.ProtocolError,
                 (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError
+            );
+            return false;
+        }
+
+        if (targetSpot is null || !targetSpot.IsActive)
+        {
+            SendCanonicalActorJoinTerminal(
+                sourceRid,
+                nativeReply,
+                actorJoin.Request.Correlation,
+                RequestResult.InternalError,
+                (uint)ServiceWireConstants.FrameworkErrorCode.RouteNotConnected
             );
             return false;
         }
@@ -12919,6 +12930,7 @@ internal sealed class ZLinkManagedSpot(
     internal string SpotId => _spotId;
     public ulong LifecycleGeneration { get; } = lifecycleGeneration;
     internal ulong AuthorityOwnerGeneration { get; } = authorityOwnerGeneration;
+    internal bool IsActive => Volatile.Read(ref _disposed) == 0;
     internal int ActorCount => Volatile.Read(ref _actorCount);
 
     public void SetRoutingId(RoutingId routingId)
