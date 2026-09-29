@@ -12,7 +12,7 @@ import resource
 import subprocess
 import sys
 
-from launchers import launcher
+from launchers import ROLES, launcher
 
 ROOT = Path(__file__).resolve().parents[3]
 SCHEMA = Path(__file__).resolve().parents[1] / "schema"
@@ -30,10 +30,10 @@ def read(path: str) -> str | None:
         return None
 
 
-def collect(language: str, perf_dir: Path) -> dict:
+def collect(language: str, perf_dir: Path, roles: list[str]) -> dict:
     cpu = next((line.split(":", 1)[1].strip() for line in Path("/proc/cpuinfo").read_text().splitlines()
                 if line.startswith("model name")), platform.processor())
-    runtime = launcher(language).provenance(perf_dir)
+    runtime = launcher(language).provenance(perf_dir, roles)
     artifacts = []
     seen = set()
     for path in [SCHEMA / "histogram-bounds.json", *runtime.pop("artifacts")]:
@@ -79,7 +79,7 @@ if __name__ == "__main__":
     parser.add_argument("--perf-dir", required=True, type=Path)
     parser.add_argument("output", nargs="?", type=Path, help="new output file; stdout when omitted")
     args = parser.parse_args()
-    output = json.dumps(collect(args.language, args.perf_dir.resolve()), indent=2, ensure_ascii=False) + "\n"
+    output = json.dumps(collect(args.language, args.perf_dir.resolve(), list(ROLES)), indent=2, ensure_ascii=False) + "\n"
     if args.output:
         with args.output.open("x") as target:
             target.write(output)

@@ -25,8 +25,6 @@ public static class ServerApplication
     {
         if (args.Length != 2 || args[0] != "--config") throw new ArgumentException("Server requires --config <file> only.");
         var config = PerfJson.Read<RoleConfig>(File.ReadAllText(args[1]));
-        if (config.objectRole != "None" || config.store is not null || config.spotIds.Length != 0 || config.actorIds.Length != 0)
-            throw new ArgumentException("Phase 1 baselines register no object role or Store.");
         if (new Uri(config.metricsUrl).Port == new Uri(config.applicationTriggerUrl).Port)
             throw new ArgumentException("Admin and application trigger require separate listeners.");
         return config;
@@ -125,17 +123,22 @@ public static class ServerApplication
     {
         var config = services.GetRequiredService<RoleConfig>();
         var host = services.GetRequiredService<IZLinkFrameworkRuntime>().Status;
-        if (config.topology == "routemesh") return new { host, routeMesh = services.GetRequiredService<IZLinkRouteMeshRuntime>().GetStatus(config.meshName!) };
-        if (config.topology == "clientserver") return new { host, clientServer = services.GetRequiredService<IZLinkClientServerRuntime>().GetStatus(config.channelName!) };
+        var topology = ObservedTopology(services);
+        if (topology == "routemesh") return new { host, routeMesh = services.GetRequiredService<IZLinkRouteMeshRuntime>().GetStatus(config.meshName!) };
+        if (topology == "clientserver") return new { host, clientServer = services.GetRequiredService<IZLinkClientServerRuntime>().GetStatus(config.channelName!) };
         return new { host };
     }
+    // A role that reports ObjectsReadiness.Ready=false has not registered this cell's mesh or channel, so only the host is observed.
+    private static string? ObservedTopology(IServiceProvider services) =>
+        services.GetService<ObjectsReadiness>() is { Ready: false } ? null : services.GetRequiredService<RoleConfig>().topology;
     public static PerfReady Ready(IServiceProvider services)
     {
         var config = services.GetRequiredService<RoleConfig>();
         var measurement = services.GetRequiredService<Measurement>();
         var host = services.GetRequiredService<IZLinkFrameworkRuntime>().Status;
         var infrastructure = host.IsReady;
-        if (config.topology == "routemesh")
+        var topology = ObservedTopology(services);
+        if (topology == "routemesh")
         {
             var mesh = services.GetRequiredService<IZLinkRouteMeshRuntime>().GetStatus(config.meshName!);
             // Channel messaging §3: RouteMesh excludes the sending node itself from candidates.
@@ -143,25 +146,32 @@ public static class ServerApplication
             infrastructure &= mesh.IsReady && (!config.source || mesh.Channels.Any(c =>
                 c.ChannelName == config.channelName && c.IsReady && c.ReadyTargetCount > 0));
         }
-        else if (config.topology == "clientserver")
+        else if (topology == "clientserver")
         {
             var channel = services.GetRequiredService<IZLinkClientServerRuntime>().GetStatus(config.channelName!);
             infrastructure &= channel.IsReady && channel.ReadyTargetCount > 0;
         }
         var probe = measurement.SetupEvidence.Length > 0;
+        // A role without this cell's public create/bind result registers ObjectsReadiness; baselines have none.
+        var objects = services.GetService<ObjectsReadiness>();
+        var objectsReady = objects?.Ready ?? true;
         List<object> evidence = [new { kind = "publicStatus", source = "public Framework runtime status", observedValue = PublicStatus(services) }];
-        if (config.listenerEndpoint is not null) evidence.Add(new { kind = "verifiedListenerReservation",
-            source = "role config; coordinator OS bind reservation and public host startup", observedValue = config.listenerEndpoint });
+        if (config.transportEndpoints.Count > 0) evidence.Add(new { kind = "verifiedListenerReservation",
+            source = "role config; coordinator OS bind reservation and public host startup", observedValue = config.transportEndpoints });
         evidence.AddRange(measurement.SetupEvidence);
         evidence.AddRange(measurement.ErrorEvidence);
         List<string> reasons = [];
         if (!infrastructure) reasons.Add("Public host/channel/listener infrastructure is not ready.");
+        if (!objectsReady) reasons.Add(objects!.Reason);
         if (!probe) reasons.Add("No successful typed probe echo has been observed.");
         if (measurement.HasErrors) reasons.Add("Application preparation or phase failed.");
         return new(config.runId, config.cellId, config.role, config.roleInstance, infrastructure,
-            true, probe, infrastructure && probe && !measurement.HasErrors, PerfClock.UnixMs, evidence.ToArray(), reasons.ToArray());
+            objectsReady, probe, infrastructure && objectsReady && probe && !measurement.HasErrors, PerfClock.UnixMs, evidence.ToArray(), reasons.ToArray());
     }
 }
+
+// The role's own statement that its cell objects (Spot, Actor, subscriptions) are not yet prepared (§16.1 objectsReady).
+public sealed record ObjectsReadiness(bool Ready, string Reason);
 
 public sealed class RoutingIdObservationConverter : JsonConverter<RoutingId>
 {

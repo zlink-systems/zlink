@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Focused coordinator contract tests: CLI consumers, identity and histogram aggregation."""
 import contextlib
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -12,7 +13,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "runner"))
 
 from launchers import launcher
 from results import BOUNDS, MAX_U64, aggregate, export_latency, histogram_merge, u64, write_json
-from runner import agreed_core_version, comparison, options
+from roles import plan_roles
+from runner import agreed_core_version, comparison, options, role_executables
+from scenarios import BY_NAME, ROLE_KINDS, SCENARIOS, expand
 
 COMMON = ["--language", "dotnet", "--perf-dir", "/tmp/perf"]
 
@@ -51,6 +54,110 @@ class HarnessTests(unittest.TestCase):
             with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 options(argv + COMMON)
 
+    def test_options_are_judged_by_the_scenario_table_in_both_directions(self):
+        # (scenario, option arguments): every consumed option is accepted, every option a scenario does not consume is rejected.
+        accepted = [
+            ("session-echo-only", ["--connections", "8", "--connect-concurrency", "2", "--client-count", "2", "--mode", "request"]),
+            ("cs-local-session-actor-echo", ["--connections", "8", "--terminal", "ordinary"]),
+            ("channel-echo-only", ["--logical-streams", "8", "--channel-topology", "clientserver"]),
+            ("s2s-channel-to-spot-request-echo", ["--spot-count", "4", "--logical-streams", "8"]),
+            ("s2s-channel-to-spot-send-send-echo", ["--mode", "send-send", "--channel-topology", "routemesh"]),
+            ("s2s-spot-to-channel-request-echo", ["--terminal", "yield", "--spot-count", "1"]),
+            ("spot-worker-offload-echo", ["--worker-task-millis", "3", "--worker-pool-size", "2", "--terminal", "ordinary", "--mode", "worker-offload"]),
+            ("pubsub-fanout-echo", ["--subscriber-count", "3", "--mode", "publish", "--inflight", "4"]),
+            ("actor-no-bind-request-echo", ["--logical-streams", "8"]),
+        ]
+        for scenario, extra in accepted:
+            with self.subTest(scenario=scenario, extra=extra):
+                options(["single", "--scenario", scenario, *extra, *COMMON])
+        rejected = [
+            ("session-echo-only", ["--worker-task-millis", "5"]),
+            ("cs-remote-session-actor-echo", ["--spot-count", "1"]),
+            ("cs-remote-session-actor-echo", ["--terminal", "yield"]),
+            ("s2s-channel-to-spot-request-echo", ["--connections", "1"]),
+            ("s2s-channel-to-spot-request-echo", ["--subscriber-count", "2"]),
+            ("s2s-channel-to-spot-request-echo", ["--channel-topology", "routemesh"]),  # no Channel role: topology is na
+            ("s2s-channel-to-spot-send-send-echo", ["--channel-topology", "clientserver"]),
+            ("s2s-spot-to-channel-request-echo", ["--mode", "send-send"]),
+            ("spot-no-await-echo", ["--worker-pool-size", "2"]),
+            ("spot-no-await-echo", ["--terminal", "yield"]),
+            ("spot-worker-offload-echo", ["--mode", "request"]),
+            ("actor-no-bind-request-echo", ["--spot-count", "1"]),
+            ("actor-no-bind-request-echo", ["--client-count", "2"]),
+            ("pubsub-fanout-echo", ["--spot-count", "1"]),
+            ("pubsub-fanout-echo", ["--mode", "request"]),
+            ("channel-echo-only", ["--subscriber-count", "1"]),
+            ("session-echo-only", ["--workload-config", "/tmp/w.json"]),
+            ("session-echo-only", ["--endpoint-config", "/tmp/e.json"]),
+        ]
+        for scenario, extra in rejected:
+            with self.subTest(scenario=scenario, extra=extra), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                options(["single", "--scenario", scenario, *extra, *COMMON])
+        # spot-local-echo is a comparison-table name (§11.3), not a scenario; matrix axes are not overridden by options.
+        for argv in (["single", "--scenario", "spot-local-echo"], ["matrix", "--terminal", "yield"],
+                     ["matrix", "--scenario", "s2s-spot-to-channel-request-echo", "--spot-count", "1"],
+                     ["matrix", "--channel-topology", "routemesh"], ["matrix", "--client-count", "2"]):
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                options(argv + COMMON)
+
+    def test_matrix_cells_match_the_specification_counts(self):
+        args = options(["matrix", *COMMON])
+        cells = expand(args, True)
+        per_payload = {payload: [c for c in cells if c.payload == payload] for payload in (1024, 4096)}
+        # §5: 9 single-cell scenarios, §10.5 ordinary/yield x SpotId 1/16, §10.8 ordinary/yield, §11 two topologies + session.
+        self.assertEqual({p: len(c) for p, c in per_payload.items()}, {1024: 18, 4096: 18})
+        for cells_of_payload in per_payload.values():
+            count = lambda name: sum(c.scenario.name == name for c in cells_of_payload)
+            self.assertEqual(count("s2s-spot-to-channel-request-echo"), 4)
+            self.assertEqual(count("spot-worker-offload-echo"), 2)
+            self.assertEqual(count("channel-echo-only"), 2)
+            self.assertEqual({(c.terminal, c.spot_count) for c in cells_of_payload if c.scenario.name == "s2s-spot-to-channel-request-echo"},
+                             {("ordinary", 1), ("ordinary", 16), ("yield", 1), ("yield", 16)})
+            self.assertEqual({c.terminal for c in cells_of_payload if c.scenario.name == "spot-worker-offload-echo"}, {"ordinary", "yield"})
+        self.assertEqual({c.scenario.name for c in cells}, {s.name for s in SCENARIOS})
+        self.assertEqual(len(SCENARIOS), 13)  # §10's 11 scenarios and §11's two baselines; spot-local-echo is only a reference
+        self.assertEqual(BY_NAME["spot-no-await-echo"].references, ("spot-local-echo",))
+
+    def test_variant_and_config_hash_follow_the_identity_format(self):
+        env = {key: None for key in ("cpuModel", "effectiveProcessorCount", "cpuQuota", "cpuset", "cpuAffinity", "memoryLimit", "runtimeOptions")}
+        env["serializer"] = {"name": "typed JSON"}
+        for argv in (["--scenario", "s2s-spot-to-channel-request-echo", "--terminal", "yield", "--spot-count", "1"],
+                     ["--scenario", "pubsub-fanout-echo", "--subscriber-count", "3"],
+                     ["--scenario", "channel-echo-only", "--channel-topology", "clientserver"],
+                     ["--scenario", "session-echo-only"]):
+            args = options(["single", *argv, *COMMON])
+            cell = expand(args, False)[0]
+            config_hash = hashlib.sha256(comparison(args, cell, env)[1].encode()).hexdigest()
+            self.assertRegex(cell.variant(config_hash), r"^(request|send-send|no-await|worker-offload|publish)-(ordinary|yield)-(routemesh|clientserver|na)-s(\d+|na)-n(\d+|na)-[0-9a-f]{64}$")
+            self.assertEqual(cell.cell_id(config_hash), f"{cell.scenario.name}/{cell.payload}/{cell.variant(config_hash)}")
+        # Not applicable parts are `na`; the hash changes with a comparison input such as the subscriber count.
+        a = options(["single", "--scenario", "pubsub-fanout-echo", "--subscriber-count", "3", *COMMON])
+        b = options(["single", "--scenario", "pubsub-fanout-echo", "--subscriber-count", "4", *COMMON])
+        self.assertNotEqual(comparison(a, expand(a, False)[0], env)[1], comparison(b, expand(b, False)[0], env)[1])
+        self.assertIn("-na-sna-n3-", expand(a, False)[0].variant("x"))
+
+    def test_every_role_kind_gets_config_and_manifest_from_the_tables(self):
+        self.assertEqual(len(ROLE_KINDS), 8)
+        seen = set()
+        for scenario in SCENARIOS:
+            args = options(["single", "--scenario", scenario.name, *(["--subscriber-count", "3"] if scenario.uses(count="subscribers") else []), *COMMON])
+            cell = expand(args, False)[0]
+            port = iter(range(20000, 30000))
+            common = {"runId": "r", "cellId": "c", "configHash": "a" * 64, "workload": {}, "worker": None, "store": None,
+                      "diagnostics": lambda name: None, "provenance": {}}
+            planned = plan_roles(cell, {"spot_count": cell.spot_count, "connections": 4, "logical_streams": 4}, common, lambda: next(port))
+            expected = sum(3 if role.count else 1 for role in scenario.roles)
+            self.assertEqual(len(planned), expected)
+            self.assertEqual(sum(role.source for role in planned), 0 if scenario.driver == "clients" else 1)
+            for role in planned:
+                seen.add(role.config["role"])
+                self.assertEqual(role.manifest["metrics"]["baseUrl"], role.config["metricsUrl"])
+                self.assertEqual(role.manifest["streamEndpoint"], role.config["transportEndpoints"].get("stream"))
+                self.assertEqual(role.config["spotIds"] == [], not any(r.objects == "spot" and r.kind == role.config["role"] for r in scenario.roles))
+                self.assertEqual(len(role.ports), len(set(role.ports)))
+        self.assertEqual(seen, set(ROLE_KINDS))
+        self.assertEqual(set(role_executables(options(["matrix", *COMMON]))), {"Client", *ROLE_KINDS.values()})
+
     def test_language_and_perf_dir_are_required_and_unknown_language_is_rejected(self):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             options(["single", "--scenario", "session-echo-only"])
@@ -63,9 +170,10 @@ class HarnessTests(unittest.TestCase):
         env["serializer"] = {"name": "typed JSON"}
         a = options(["single", "--scenario", "session-echo-only", "--run-id", "first", "--connections", "8", *COMMON])
         b = options(["single", "--scenario", "session-echo-only", "--run-id", "second", "--connections", "8", *COMMON])
-        self.assertEqual(comparison(a, a.scenario, 1024, None, env)[1], comparison(b, b.scenario, 1024, None, env)[1])
+        cell_a, cell_b = expand(a, False)[0], expand(b, False)[0]
+        self.assertEqual(comparison(a, cell_a, env)[1], comparison(b, cell_b, env)[1])
         b.inflight = 2
-        self.assertNotEqual(comparison(a, a.scenario, 1024, None, env)[1], comparison(b, b.scenario, 1024, None, env)[1])
+        self.assertNotEqual(comparison(a, cell_a, env)[1], comparison(b, cell_b, env)[1])
 
     def test_merged_quantiles_are_weighted_by_integer_samples(self):
         merged = histogram_merge([histogram({0: 99}), histogram({13: 1})])
@@ -121,7 +229,7 @@ class HarnessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             write_json(root / "server-channel-0.json", source)
-            result = aggregate(root, config, [], ["server-channel-0.json"], [])
+            result = aggregate(root, config, [], ["server-channel-0.json"], [], ["server-channel-0.json"])
             self.assertEqual(result["status"], "failed")
             self.assertFalse(result["baselineEligible"])
             self.assertIsNone(result["metrics"]["messages.completed"])
@@ -155,7 +263,7 @@ class HarnessTests(unittest.TestCase):
             write_json(root / "client-0.json", original("client", 0, 10, 1, 10, 0))
             write_json(root / "client-1.json", original("client", 1, 90, 9, 90, 0))
             write_json(root / "server-session-0.json", original("session", 2, 0, 10, 0, 100))
-            result = aggregate(root, config, ["client-0.json", "client-1.json"], ["server-session-0.json"], [])
+            result = aggregate(root, config, ["client-0.json", "client-1.json"], ["server-session-0.json"], [], ["client-0.json", "client-1.json"])
             self.assertEqual(result["status"], "valid")
             self.assertEqual(result["metrics"]["messages.completed"], "100")
             self.assertEqual(result["metrics"]["throughput.kops"], .02)

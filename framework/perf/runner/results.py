@@ -88,8 +88,7 @@ def write_json(path: Path, value: object) -> None:
         stream.write("\n")
 
 
-def aggregate(cell: Path, config: dict, client_files: list[str], server_files: list[str], issues: list[dict]) -> dict:
-    owners = client_files if config["scenario"] == "session-echo-only" else ["server-channel-0.json"]
+def aggregate(cell: Path, config: dict, client_files: list[str], server_files: list[str], issues: list[dict], owners: list[str]) -> dict:
     originals = {}
     templates = {}
     for name in client_files + server_files:
@@ -161,7 +160,7 @@ def aggregate(cell: Path, config: dict, client_files: list[str], server_files: l
                     for key, count in value["metrics"][family].items():
                         combined[key] = count_text(u64(combined.get(key, "0")) + u64(count))
                 metrics[family] = combined
-            if config["scenario"] == "session-echo-only":
+            if owners == client_files:  # CS: the connector pool belongs to the client owners
                 for key in ("requested", "connected", "failed"):
                     metrics["connections." + key] = count_text(sum(u64(value["metrics"]["connections." + key]) for value in selected))
             if len(selected) > 1:

@@ -20,15 +20,20 @@ import urllib.request
 import uuid
 
 from environment import ROOT, collect, digest
-from launchers import ROLES, launcher
+from launchers import Launcher, launcher
 from results import aggregate, write_json
-
-SCENARIOS = ("session-echo-only", "channel-echo-only")
-CLIENTSERVER_INTERFACE = "framework/doc/framework/common/spec/server/languages/dotnet/interfaces/10-topology-monitoring.ko.md:359"
+from roles import plan_roles
+from scenarios import (BY_NAME, CLIENT, EXECUTABLES, MODE_VALUES, OPTIONS, PAYLOADS, ROLE_KINDS, TERMINAL_VALUES,
+                       TOPOLOGY_VALUES, Cell, check, expand, selected, source_role, values)
+from store import RunStore, check_available
 
 
 class UnsupportedCellError(RuntimeError):
     """A required public observation contradicts its contract; measured load must not start."""
+
+    def __init__(self, message: str, source_file: str):
+        super().__init__(message)
+        self.source_file = source_file
 
 
 class InvalidSetupError(RuntimeError):
@@ -50,61 +55,51 @@ def positive_number(text: str) -> float:
 
 
 def options(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Common perf runner: Session and both manual Channel baselines.")
+    parser = argparse.ArgumentParser(description="Common perf runner: every standard §10 scenario and the §11 baselines.")
     parser.add_argument("operation", choices=("single", "matrix", "diagnostic"))
     parser.add_argument("--language", required=True)
     parser.add_argument("--perf-dir", required=True, type=Path, help="the language perf folder holding the role projects and perf-results")
-    parser.add_argument("--scenario", choices=SCENARIOS)
-    for key in ("connections", "logical-streams", "client-count", "inflight", "connect-concurrency"):
-        parser.add_argument("--" + key, type=positive_int)
+    parser.add_argument("--scenario", choices=tuple(BY_NAME))
+    # Numeric and path options come from the option table; which scenario consumes each is decided in scenarios.check().
+    for key, option in OPTIONS.items():
+        parser.add_argument("--" + key.replace("_", "-"), dest=key, type=positive_int if option.kind == "int" else Path)
     parser.add_argument("--duration-seconds", type=positive_number, default=30)
     parser.add_argument("--warmup-seconds", type=positive_number, default=5)
-    parser.add_argument("--payload-size", type=int, choices=(1024, 4096))
+    parser.add_argument("--payload-size", type=int, choices=PAYLOADS)
     parser.add_argument("--payload-sizes")
-    parser.add_argument("--mode", choices=("request",), default="request")
-    parser.add_argument("--terminal", choices=("ordinary",), default="ordinary")
-    parser.add_argument("--channel-topology", choices=("routemesh", "clientserver"))
+    parser.add_argument("--mode", choices=MODE_VALUES)
+    parser.add_argument("--terminal", choices=TERMINAL_VALUES)
+    parser.add_argument("--channel-topology", choices=TOPOLOGY_VALUES)
     parser.add_argument("--codec", choices=("json",), default="json")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--run-id", default=time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + uuid.uuid4().hex[:10])
     args = parser.parse_args(argv)
     if not args.run_id or any(not (c.isascii() and (c.isalnum() or c in "_-")) for c in args.run_id):
         parser.error("--run-id must match [A-Za-z0-9_-]+")
-    if args.operation != "matrix" and args.scenario is None:
+    matrix = args.operation == "matrix"
+    if not matrix and args.scenario is None:
         parser.error("run_single.sh requires --scenario")
-    if args.operation != "matrix" and args.payload_sizes is not None:
+    if not matrix and args.payload_sizes is not None:
         parser.error("--payload-sizes is consumed only by run_perf.sh")
-    if args.operation == "matrix" and args.payload_size is not None:
+    if matrix and args.payload_size is not None:
         parser.error("run_perf.sh requires --payload-sizes instead of --payload-size")
-    if args.operation == "matrix" and args.channel_topology is not None:
-        parser.error("run_perf.sh expands both Channel topologies; select one with run_single.sh")
-    if args.scenario == "session-echo-only":
-        if args.logical_streams is not None or args.channel_topology is not None:
-            parser.error("Session has no logical-streams or channel-topology consumer")
-    if args.scenario == "channel-echo-only":
-        if args.connections is not None or args.connect_concurrency is not None:
-            parser.error("Channel has no connections or connect-concurrency consumer")
-        if args.client_count not in (None, 1):
-            parser.error("server-driven cells require client-count=1")
-    if args.operation == "matrix" and args.scenario is None and args.client_count not in (None, 1):
-        parser.error("a matrix including server-driven cells requires client-count=1")
-    args.connections = args.connections or 10000
-    args.logical_streams = args.logical_streams or 10000
-    args.client_count = args.client_count or 1
-    args.inflight = args.inflight or 1
-    args.connect_concurrency = args.connect_concurrency or 256
-    if args.client_count > args.connections:
-        parser.error("client-count must not exceed connections")
+    problem = check(args, matrix)
+    if problem:
+        parser.error(problem)
+    for scenario in selected(args):
+        consumed = values(scenario, args)
+        if consumed["client_count"] > consumed.get("connections", consumed["client_count"]):
+            parser.error("client-count must not exceed connections")
     if args.payload_sizes is not None:
         try:
             payloads = [int(part) for part in args.payload_sizes.split(",")]
         except ValueError:
             parser.error("invalid payload matrix")
-        if not payloads or len(set(payloads)) != len(payloads) or any(p not in (1024, 4096) for p in payloads):
+        if not payloads or len(set(payloads)) != len(payloads) or any(p not in PAYLOADS for p in payloads):
             parser.error("payload sizes must be distinct members of 1024,4096")
         args.payloads = payloads
     else:
-        args.payloads = [1024, 4096]
+        args.payloads = list(PAYLOADS)
     args.perf_dir = args.perf_dir.resolve()
     args.output = (args.output or args.perf_dir / "perf-results" / args.run_id).resolve()
     return args
@@ -118,10 +113,16 @@ def agreed_core_version(role_versions: dict, declared: str | None) -> str:
     return observed.pop()
 
 
-def build(args: argparse.Namespace) -> None:
+def role_executables(args: argparse.Namespace) -> list[str]:
+    """The executables the selected scenarios start, in table order: the Client and each needed role."""
+    needed = {CLIENT} | {ROLE_KINDS[role.kind] for scenario in selected(args) for role in scenario.roles}
+    return [name for name in EXECUTABLES if name in needed]
+
+
+def build(args: argparse.Namespace, executables: list[str]) -> None:
     logs = args.output / "logs"
     logs.mkdir()
-    for role in ROLES:
+    for role in executables:
         path = logs / ("build-" + role + ".log")
         with path.open("x") as log:
             result = subprocess.run(launcher(args.language).build(args.perf_dir, role), cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
@@ -130,28 +131,35 @@ def build(args: argparse.Namespace) -> None:
 
 
 def preflight(args: argparse.Namespace, environment: dict) -> None:
+    scenarios = selected(args)
+    consumed = [values(scenario, args) for scenario in scenarios]
+    if any(scenario.store for scenario in scenarios):
+        check_available()
     soft, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
-    if args.scenario != "channel-echo-only" and soft != resource.RLIM_INFINITY and soft < args.connections + 256:
-        raise ValueError(f"FD limit {soft} is below the Session server's {args.connections + 256} required descriptors")
     low, high = map(int, environment["ephemeralPortRange"].split())
-    if args.scenario != "channel-echo-only" and args.connections + 32 > high - low + 1:
-        raise ValueError("Insufficient ephemeral ports for the requested connector pool")
-    if int(environment["listenBacklog"]) < min(args.connect_concurrency, args.connections) and args.scenario != "channel-echo-only":
-        raise ValueError("OS listen backlog is below requested simultaneous connector setup")
+    for scenario, v in zip(scenarios, consumed):
+        if scenario.driver != "clients":
+            continue
+        if soft != resource.RLIM_INFINITY and soft < v["connections"] + 256:
+            raise ValueError(f"FD limit {soft} is below the Session server's {v['connections'] + 256} required descriptors")
+        if v["connections"] + 32 > high - low + 1:
+            raise ValueError("Insufficient ephemeral ports for the requested connector pool")
+        if int(environment["listenBacklog"]) < min(v["connect_concurrency"], v["connections"]):
+            raise ValueError("OS listen backlog is below requested simultaneous connector setup")
     if environment["effectiveProcessorCount"] < 1:
         raise ValueError("No effective processor is available")
     available = int(environment["memoryAvailable"].split()[1]) * 1024
     if environment["memoryLimit"] not in (None, "max") and environment.get("memoryCurrent") is not None:
         available = min(available, int(environment["memoryLimit"]) - int(environment["memoryCurrent"]))
-    streams = args.connections if args.scenario == "session-echo-only" else args.logical_streams if args.scenario == "channel-echo-only" else max(args.connections, args.logical_streams)
     # A necessary lower bound from the harness's sequence and task-reference arrays, not an estimate of Core queues.
-    if available <= 8 * streams * (1 + args.inflight):
+    if any(available <= 8 * (v.get("connections") or v["logical_streams"]) * (1 + v["inflight"]) for v in consumed):
         raise ValueError("Available memory cannot hold even the required harness sequence/task-reference arrays")
 
 
 class OwnedProcesses:
-    def __init__(self, cell: Path):
+    def __init__(self, cell: Path, redis_container_id: str | None):
         self.cell = cell
+        self.redis_container_id = redis_container_id
         self.processes: list[tuple[str, subprocess.Popen]] = []
         self.logs = []
         self.reservations: list[socket.socket] = []
@@ -199,7 +207,9 @@ class OwnedProcesses:
                 process.wait(timeout=5)
         write_json(self.cell / "cleanup.json", {"ownedProcesses": [{"name": name, "pid": process.pid,
                     "exitCode": process.returncode, "terminated": process.poll() is not None} for name, process in self.processes],
-                    "redisContainerId": None, "redisReason": "Manual baseline has no Store."})
+                    "redisContainerId": self.redis_container_id,
+                    "redisReason": "Run-owned Docker Redis; removed by this container ID when the run ends (store.json)."
+                    if self.redis_container_id else "This scenario needs no Store."})
         for log in self.logs:
             log.close()
 
@@ -266,7 +276,7 @@ def get_json(url: str, timeout: float = 5) -> dict:
         return json.load(response)
 
 
-def wait_ready(owned: OwnedProcesses, roles: list[dict], full: bool, cell: Path, stage: str) -> list[dict]:
+def wait_ready(owned: OwnedProcesses, roles: list[dict], full: bool, cell: Path, stage: str, language: Launcher) -> list[dict]:
     deadline = time.monotonic() + 30
     observed = {}
     pending = list(roles)
@@ -296,27 +306,34 @@ def wait_ready(owned: OwnedProcesses, roles: list[dict], full: bool, cell: Path,
                         not channel.get("isReady") and ready.get("consumersReady") and status_evidence.get("host", {}).get("isReady")):
                     raise UnsupportedCellError(
                         "ClientServer Server reports Degraded/IsReady=false despite Serving, a Ready target and a typed probe reply. "
-                        "Required public status: " + CLIENTSERVER_INTERFACE + "; readiness meaning: "
-                        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md:194. "
-                        "Runtime implementation gates Selectable on HasClient at "
-                        "framework/languages/dotnet/src/Zlink.Framework/Runtime/Channels/ZLinkClientServerRuntimeService.cs:99.")
+                        "Required public status: " + language.clientserver_interface + "; readiness meaning: "
+                        "framework/doc/framework/common/spec/server/06-observability/01-runtime-monitoring.ko.md:194. " +
+                        language.clientserver_gate, language.clientserver_interface)
             raise TimeoutError("Public readiness evidence did not converge inside setupTimeoutMs=30000")
     write_json(cell / "tmp" / (stage + "-readiness.json"), observed)
     return list(observed.values())
 
 
-def comparison(args: argparse.Namespace, scenario: str, payload: int, topology: str | None, env: dict) -> tuple[dict, str]:
-    cs = scenario == "session-echo-only"
-    workload = {"payloadSize": payload, "durationSeconds": args.duration_seconds, "warmupSeconds": args.warmup_seconds,
-                "inflight": args.inflight, "connections": args.connections if cs else None,
-                "logicalStreams": None if cs else args.logical_streams, "clientCount": args.client_count if cs else 1,
-                "connectConcurrency": args.connect_concurrency if cs else None,
+def comparison(args: argparse.Namespace, cell: Cell, env: dict) -> tuple[dict, str]:
+    """The §15.1 comparison input; every part comes from the scenario table and the options it consumes."""
+    scenario, v = cell.scenario, values(cell.scenario, args)
+    cs = scenario.driver == "clients"
+    workload = {"payloadSize": cell.payload, "durationSeconds": args.duration_seconds, "warmupSeconds": args.warmup_seconds,
+                "inflight": v["inflight"], "connections": v.get("connections"),
+                "logicalStreams": v.get("logical_streams"), "clientCount": v["client_count"],
+                "connectConcurrency": v.get("connect_concurrency"),
                 "requestTimeoutMs": 1000, "correlationExpiryMs": 1000, "settleTimeoutMs": 5000,
                 "setupTimeoutMs": 30000, "adminTimeoutMs": 5000, "socketSendTimeoutMs": 1000}
-    comparable = {"language": args.language, "scenario": scenario, "mode": "request", "terminal": "ordinary",
-                  "topology": topology, "discovery": "none" if cs else "manual", "objectRole": "None",
-                  "executionMode": "Immediate" if cs else "Framework default", "spotMapping": None,
-                  "actorMapping": None, "subscriberCount": None, "worker": None,
+    pool = v.get("worker_pool_size")
+    comparable = {"language": args.language, "scenario": scenario.name, "mode": cell.mode, "terminal": cell.terminal,
+                  "topology": cell.topology, "discovery": scenario.discovery, "objectRole": scenario.object_roles,
+                  "executionMode": scenario.execution,
+                  "spotMapping": {"count": cell.spot_count, "rule": "streamId mod spotCount"} if cell.spot_count else None,
+                  "actorMapping": None if not scenario.uses(objects="actor") else
+                  "one Actor per connector ID" if cs else "one ActorId per logical stream",
+                  "subscriberCount": cell.subscriber_count,
+                  "worker": {"algorithm": "xorshift32-v1", "taskMillis": v["worker_task_millis"], "minThreads": pool, "maxThreads": pool,
+                             "maxQueueLength": 4096, "idleTimeoutMs": 60000, "workerTimeoutMs": workload["requestTimeoutMs"]} if scenario.worker else None,
                   "splitRule": "q=N/P,r=N%P,count=q+(i<r),first=i*q+min(i,r)" if cs else "one source; stream IDs 0..N-1",
                   "workload": workload, "serializer": env["serializer"],
                   "cpu": {key: env[key] for key in ("cpuModel", "effectiveProcessorCount", "cpuQuota", "cpuset", "cpuAffinity")},
@@ -328,11 +345,11 @@ def comparison(args: argparse.Namespace, scenario: str, payload: int, topology: 
     return comparable, exact
 
 
-def cell_run(args: argparse.Namespace, scenario: str, payload: int, topology: str | None, env: dict) -> dict:
-    comparable, exact = comparison(args, scenario, payload, topology, env)
+def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunStore) -> dict:
+    scenario, language = cell_spec.scenario, launcher(args.language)
+    comparable, exact = comparison(args, cell_spec, env)
     config_hash = hashlib.sha256(exact.encode("utf-8")).hexdigest()
-    variant = f"request-ordinary-{topology or 'na'}-sna-nna-{config_hash}"
-    cell_id = f"{scenario}/{payload}/{variant}"
+    cell_id = cell_spec.cell_id(config_hash)
     cell = args.output / cell_id
     cell.mkdir(parents=True, exist_ok=False)
     for folder in ("logs", "tmp", "role-configs"):
@@ -340,58 +357,37 @@ def cell_run(args: argparse.Namespace, scenario: str, payload: int, topology: st
     config = {"schemaVersion": 2, "runId": args.run_id, "cellId": cell_id, "configHash": config_hash,
               "configHashInputUtf8": exact, **comparable, "environmentFile": "../../../env.json"}
     write_json(cell / "config.json", config)
-    owned = OwnedProcesses(cell)
+    owned = OwnedProcesses(cell, store.container_id if scenario.store else None)
     clients: list[ClientControl] = []
     client_files = [f"client-{i}.json" for i in range(config["workload"]["clientCount"])]
+    source = source_role(scenario)
+    owners = client_files if scenario.driver == "clients" else [f"server-{source.kind}-{source.instance}.json"]
     server_files = []
     roles = []
     issues = []
     try:
-        cs = scenario == "session-echo-only"
-        target_port = owned.reserve()
-        role_specs = [("session", 0, False, "SessionServer")] if cs else [
-            ("channel", 1, False, "ChannelServer"), ("channel", 0, True, "ChannelServer")]
-        for role, instance, source, executable in role_specs:
-            admin_port, trigger_port = owned.reserve(), owned.reserve()
-            transport_port = (owned.reserve() if topology == "routemesh" else None) if source else target_port
-            listener = f"tcp://127.0.0.1:{transport_port}" if transport_port else None
-            role_config = {"runId": args.run_id, "cellId": cell_id, "configHash": config_hash,
-                           "role": role, "roleInstance": instance, "scenario": scenario, "topology": topology,
-                           "channelName": None if cs else "perf-" + args.run_id + "-" + config_hash[:12],
-                           "meshName": None if cs or topology != "routemesh" else "perf-mesh",
-                           "listenerEndpoint": listener, "peerEndpoint": f"tcp://127.0.0.1:{target_port}" if source else None,
-                           "metricsUrl": f"http://127.0.0.1:{admin_port}",
-                           "applicationTriggerUrl": f"http://127.0.0.1:{trigger_port}/app/perf/start", "source": source,
-                           "objectRole": "None", "store": None, "spotIds": [], "actorIds": [],
-                           "executionMode": "Framework default", "workload": config["workload"],
-                           "diagnostics": {"level": "Normal", "flowFile": str(cell / "logs" / f"message-flow-{role}-{instance}.log")} if args.operation == "diagnostic" else None,
-                           "provenance": {"environmentFile": str(args.output / "env.json"), "buildMode": "Release",
-                                          "loadedArtifactsFile": "loaded-artifacts.json", "processKey": f"server-{role}-{instance}",
-                                          "commit": env["commit"], "serializer": env["serializer"],
-                                          "listenerReservation": "OS bind(127.0.0.1,0), held until this exact process starts"}}
-            filename = f"role-configs/{role}-{instance}.json"
-            write_json(cell / filename, role_config)
-            server_files.append(f"server-{role}-{instance}.json")
-            endpoint_role = {"role": role, "roleInstance": instance, "configFile": filename,
-                             "streamEndpoint": listener if cs else None,
-                             "applicationTriggerUrl": role_config["applicationTriggerUrl"],
-                             "metrics": {"transport": "http", "baseUrl": role_config["metricsUrl"]},
-                             "transportEndpoints": {("stream" if cs else "mesh" if topology == "routemesh" else "clientserver"): listener} if listener else {},
-                             "spotIds": [], "actorIds": []}
-            if source:
-                endpoint_role["transportEndpoints"]["peer"] = role_config["peerEndpoint"]
-            roles.append(endpoint_role)
-            owned.start(f"server-{role}-{instance}", [*launcher(args.language).command(args.perf_dir, executable), "--config", str(cell / filename)],
-                        [port for port in (admin_port, trigger_port, transport_port) if port])
+        common = {"runId": args.run_id, "cellId": cell_id, "configHash": config_hash, "workload": config["workload"],
+                  "worker": comparable["worker"], "store": store.config(config_hash) if scenario.store else None,
+                  "diagnostics": lambda name: {"level": "Normal", "flowFile": str(cell / "logs" / ("message-flow-" + name.removeprefix("server-") + ".log"))}
+                  if args.operation == "diagnostic" else None,
+                  "provenance": {"environmentFile": str(args.output / "env.json"), "buildMode": "Release",
+                                 "loadedArtifactsFile": "loaded-artifacts.json", "commit": env["commit"], "serializer": env["serializer"],
+                                 "listenerReservation": "OS bind(127.0.0.1,0), held until this exact process starts"}}
+        planned = plan_roles(cell_spec, values(scenario, args), common, owned.reserve)
+        for role in planned:
+            write_json(cell / role.config_file, role.config)
+            server_files.append(role.name + ".json")
+            roles.append({**role.manifest, "configFile": role.config_file})
+            owned.start(role.name, [*language.command(args.perf_dir, role.executable), "--config", str(cell / role.config_file)], role.ports)
         manifest = {"runId": args.run_id, "cellId": cell_id, "configHash": config_hash, "workload": config["workload"],
                     "roles": roles, "provenance": {"environmentFile": str(args.output / "env.json"), "buildMode": "Release",
                                                   "loadedArtifactsFile": "loaded-artifacts.json",
                                                   "commit": env["commit"], "serializer": env["serializer"]}}
         write_json(cell / "endpoints.json", manifest)
-        wait_ready(owned, roles, False, cell, "infrastructure")
+        wait_ready(owned, roles, False, cell, "infrastructure", language)
         for index in range(config["workload"]["clientCount"]):
             name = f"client-{index}"
-            process = owned.start(name, [*launcher(args.language).command(args.perf_dir, "Client"), "--endpoint-config", str(cell / "endpoints.json"),
+            process = owned.start(name, [*language.command(args.perf_dir, CLIENT), "--endpoint-config", str(cell / "endpoints.json"),
                                         "--client-index", str(index)], [], client=True)
             client = ClientControl(process, cell / "logs" / (name + "-control.log"))
             clients.append(client)
@@ -400,12 +396,12 @@ def cell_run(args: argparse.Namespace, scenario: str, payload: int, topology: st
             prepared = client.receive(config["workload"]["setupTimeoutMs"] / 1000)
             write_json(cell / "tmp" / f"client-{index}-setup.json", prepared)
             setup_snapshots.append(prepared["snapshot"])
-        if cs:
+        if scenario.driver == "clients":
             connected = sum(int(snapshot["metrics"]["connections.connected"]) for snapshot in setup_snapshots)
             requested = sum(int(snapshot["metrics"]["connections.requested"]) for snapshot in setup_snapshots)
             if requested != config["workload"]["connections"] or connected * 100 < requested * 99:
                 raise InvalidSetupError(f"Global connector preparation {connected}/{requested} is below 99%; see tmp/client-*-setup.json")
-        wait_ready(owned, roles, True, cell, "probe")
+        wait_ready(owned, roles, True, cell, "probe", language)
         for phase, reset_seq in (("warmup", "0"), ("measured", "1")):
             if phase == "measured":
                 request = {"runId": args.run_id, "cellId": cell_id, "resetSeq": reset_seq}
@@ -414,7 +410,7 @@ def cell_run(args: argparse.Namespace, scenario: str, payload: int, topology: st
                 if any(ack["resetSeq"] != reset_seq or not ack["ok"] for ack in reset_evidence["roles"] + reset_evidence["clients"]):
                     raise RuntimeError("resetSeq barrier did not converge")
                 write_json(cell / "tmp" / "reset-barrier.json", reset_evidence)
-                wait_ready(owned, roles, True, cell, "measured")
+                wait_ready(owned, roles, True, cell, "measured", language)
             trigger = {"runId": args.run_id, "cellId": cell_id, "resetSeq": reset_seq, "phase": phase}
             barrier = []
             sent = time.monotonic_ns()
@@ -466,7 +462,7 @@ def cell_run(args: argparse.Namespace, scenario: str, payload: int, topology: st
     except (Exception, KeyboardInterrupt) as error:
         issues.append({"code": "PublicContractMismatch" if isinstance(error, UnsupportedCellError) else "InvalidSetup" if isinstance(error, InvalidSetupError) else "CollectionFailure",
                        "message": type(error).__name__ + ": " + str(error),
-                       "sourceFile": CLIENTSERVER_INTERFACE if isinstance(error, UnsupportedCellError) else "logs/"})
+                       "sourceFile": error.source_file if isinstance(error, UnsupportedCellError) else "logs/"})
         write_json(cell / "failure.json", issues)
         for role in roles:
             filename = cell / f"server-{role['role']}-{role['roleInstance']}.json"
@@ -489,7 +485,7 @@ def cell_run(args: argparse.Namespace, scenario: str, payload: int, topology: st
             except (BrokenPipeError, OSError, subprocess.TimeoutExpired) as cleanup_error:
                 issues.append({"code": "CollectionFailure", "message": "Client shutdown: " + str(cleanup_error), "sourceFile": "cleanup.json"})
         owned.cleanup()
-    result = aggregate(cell, config, client_files, server_files, issues)
+    result = aggregate(cell, config, client_files, server_files, issues, owners)
     print(f"cell={cell_id} status={result['status']} result={cell / 'result.json'}", flush=True)
     return result
 
@@ -499,26 +495,25 @@ def main(argv: list[str]) -> int:
     if args.output.exists():
         raise FileExistsError("Refusing to overwrite an existing run root: " + str(args.output))
     args.output.mkdir(parents=True)
-    env = collect(args.language, args.perf_dir)
+    executables = role_executables(args)
+    env = collect(args.language, args.perf_dir, executables)
     preflight(args, env)
     print("run_root=" + str(args.output), flush=True)
-    build(args)
-    env = collect(args.language, args.perf_dir)
+    build(args, executables)
+    env = collect(args.language, args.perf_dir, executables)
     if not env["packages"]:
         raise ValueError("No restored Zlink package in the role outputs; perf must reference published packages")
     write_json(args.output / "env.json", env)
-    matrix = []
-    for scenario in ([args.scenario] if args.scenario else SCENARIOS):
-        payloads = args.payloads if args.operation == "matrix" else [args.payload_size or (1024 if scenario == "session-echo-only" else 4096)]
-        for payload in payloads:
-            topologies = [None] if scenario == "session-echo-only" else (
-                ["routemesh", "clientserver"] if args.operation == "matrix" else [args.channel_topology or "routemesh"])
-            matrix.extend((scenario, payload, topology) for topology in topologies)
+    store = RunStore(args.run_id, args.output)
     results = []
-    for scenario, payload, topology in matrix:
-        result = cell_run(args, scenario, payload, topology, env)
-        results.append(result)
-        # A failed cell remains a failed cell. Matrix progression does not resubmit its measured operations.
+    try:
+        for cell in expand(args, args.operation == "matrix"):
+            if cell.scenario.store:
+                store.acquire()  # a Store cell runs only against the run's own Redis; failing to start it fails the run
+            results.append(cell_run(args, cell, env, store))
+            # A failed cell remains a failed cell. Matrix progression does not resubmit its measured operations.
+    finally:
+        store.release()
     (args.output / "env.json").write_text(json.dumps(env, indent=2, ensure_ascii=False) + "\n")  # now carries the observed coreVersion
     write_json(args.output / "index.json", {"schemaVersion": 2, "runId": args.run_id,
                 "cells": [{"cellId": r["cellId"],

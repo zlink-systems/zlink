@@ -8,14 +8,18 @@ from pathlib import Path
 import subprocess
 from typing import Callable
 
-ROLES = ("Client", "SessionServer", "ChannelServer")
+from scenarios import EXECUTABLES as ROLES
 
 
 @dataclass(frozen=True)
 class Launcher:
     build: Callable[[Path, str], list[str]]  # (perf_dir, role) -> build command
     command: Callable[[Path, str], list[str]]  # (perf_dir, role) -> command without role arguments
-    provenance: Callable[[Path], dict]  # (perf_dir) -> runtime, artifact and restored-package provenance
+    provenance: Callable[[Path, list[str]], dict]  # (perf_dir, roles) -> runtime, artifact and restored-package provenance
+    # Where this language documents the public ClientServer status and gates its Selectable state; quoted when a
+    # ClientServer Server is Degraded although Serving, a Ready target and a typed probe reply are observed.
+    clientserver_interface: str
+    clientserver_gate: str
 
 
 def _dotnet_role(perf_dir: Path, role: str) -> str:
@@ -26,10 +30,10 @@ def _dotnet_output(perf_dir: Path, role: str) -> Path:
     return perf_dir / _dotnet_role(perf_dir, role) / "bin/Release/net8.0"
 
 
-def _dotnet_provenance(perf_dir: Path) -> dict:
+def _dotnet_provenance(perf_dir: Path, roles: list[str]) -> dict:
     # Packages come from each role's deps.json, i.e. what restore resolved; hashes are NuGet's nupkg sha512.
     artifacts, packages, runtime_settings = [], {}, {}
-    for role in ROLES:
+    for role in roles:
         output = _dotnet_output(perf_dir, role)
         name = _dotnet_role(perf_dir, role)
         artifacts.extend(sorted(output.glob("*.dll")))
@@ -66,6 +70,9 @@ LAUNCHERS = {
         build=lambda perf_dir, role: ["dotnet", "build", str(perf_dir / _dotnet_role(perf_dir, role)), "-c", "Release", "-m:1", "--nologo"],
         command=lambda perf_dir, role: ["dotnet", str(_dotnet_output(perf_dir, role) / (_dotnet_role(perf_dir, role) + ".dll"))],
         provenance=_dotnet_provenance,
+        clientserver_interface="framework/doc/framework/common/spec/server/languages/dotnet/interfaces/10-topology-monitoring.ko.md:359",
+        clientserver_gate="Runtime implementation gates Selectable on HasClient at "
+                          "framework/languages/dotnet/src/Zlink.Framework/Runtime/Channels/ZLinkClientServerRuntimeService.cs:99.",
     ),
 }
 
