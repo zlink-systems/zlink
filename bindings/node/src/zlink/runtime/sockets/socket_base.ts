@@ -126,10 +126,19 @@ export class SocketBase extends NativeHandle {
 
   close(): void {
     if (!this._native) return;
+    // Core close is fail-fast: a busy socket stays open with its pending
+    // operations intact, so the owner ends only after the close succeeded.
+    const owner = completionOwnerOf(this);
+    owner.stopReadableWatch();
+    try {
+      closeCall('socket close failed', () => {
+        requireNative().socketClose(this._native);
+      });
+    } catch (error) {
+      owner.resumeReadableWatch();
+      throw error;
+    }
     releaseCompletionOwner(this);
-    closeCall('socket close failed', () => {
-      requireNative().socketClose(this._native);
-    });
     this._native = null;
   }
 }

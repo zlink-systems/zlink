@@ -43,15 +43,9 @@ export class DealerSocket extends ReceiveSocket {
   request(): RequestOperation {
     return new RuntimeRequestOperation(
       (parts, timeoutMs) => completionOwnerOf(this).submitRequest(
-        parts, null, this.resolveRequestTimeout(timeoutMs)),
+        parts, null, timeoutMs),
       (parts, timeoutMs) => completionOwnerOf(this).requestSync(
-        parts, null, this.resolveRequestTimeout(timeoutMs))
+        parts, null, timeoutMs)
     );
-  }
-
-  private resolveRequestTimeout(timeoutMs: number): number {
-    return timeoutMs === 0
-      ? (this.options.requestTimeout === 0 ? 5_000 : this.options.requestTimeout)
-      : timeoutMs;
   }
 }

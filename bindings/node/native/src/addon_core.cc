@@ -1970,8 +1970,8 @@ napi_value socket_submit_request (napi_env env, napi_callback_info info)
     int32_t timeout_ms = 0;
     int32_t flags = 0;
     if (napi_get_value_int32 (env, argv[3], &timeout_ms) != napi_ok
-        || timeout_ms <= 0) {
-        napi_throw_range_error (env, NULL, "request timeout must be positive");
+        || timeout_ms < 0) {
+        napi_throw_range_error (env, NULL, "request timeout must not be negative");
         return NULL;
     }
     if (napi_get_value_int32 (env, argv[4], &flags) != napi_ok) {
@@ -2404,8 +2404,8 @@ napi_value socket_request_sync (napi_env env, napi_callback_info info)
         return NULL;
     int32_t timeout_ms = 0;
     if (napi_get_value_int32 (env, argv[3], &timeout_ms) != napi_ok
-        || timeout_ms <= 0) {
-        napi_throw_range_error (env, NULL, "request timeout must be positive");
+        || timeout_ms < 0) {
+        napi_throw_range_error (env, NULL, "request timeout must not be negative");
         return NULL;
     }
     small_msg_storage_t parts;

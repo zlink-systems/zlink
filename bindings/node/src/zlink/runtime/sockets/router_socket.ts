@@ -70,9 +70,9 @@ export class RouterSocket extends RoutedMessageSocket {
     const target = Buffer.from(normalizeRoutingId(peerRid, 'peerRid'));
     return new RuntimeRequestOperation(
       (parts, timeoutMs) => completionOwnerOf(this).submitRequest(
-        parts, target, this.resolveRequestTimeout(timeoutMs)),
+        parts, target, timeoutMs),
       (parts, timeoutMs) => completionOwnerOf(this).requestSync(
-        parts, target, this.resolveRequestTimeout(timeoutMs))
+        parts, target, timeoutMs)
     );
   }
 
@@ -120,11 +120,5 @@ export class RouterSocket extends RoutedMessageSocket {
     if (!(token instanceof ReplyToken) || !replyTokenOwnerMatches(token, this.replyOwner)) {
       throw new TypeError('ReplyToken belongs to a different RouterSocket');
     }
-  }
-
-  private resolveRequestTimeout(timeoutMs: number): number {
-    return timeoutMs === 0
-      ? (this.options.requestTimeout === 0 ? 5_000 : this.options.requestTimeout)
-      : timeoutMs;
   }
 }
