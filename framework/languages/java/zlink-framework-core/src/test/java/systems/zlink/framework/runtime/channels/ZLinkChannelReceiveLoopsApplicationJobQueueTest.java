@@ -18,6 +18,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.List;
@@ -35,6 +36,16 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
+    @Test
+    void topicByteCountMatchesUtf8EncodingIncludingMalformedSurrogates() {
+        for (String topic :
+                List.of("", "ascii", "한글", "\uD83D\uDE00", "\uD800", "\uDC00", "a\uD800b\uDC00")) {
+            assertEquals(
+                    topic.getBytes(StandardCharsets.UTF_8).length,
+                    ZLinkChannelReceiveLoops.utf8Length(topic));
+        }
+    }
+
     @Test
     void shutdownJoinsTheRouterReceiveOwnerBeforeSocketClose() throws Exception {
         ZLinkApplicationJobQueue queue =

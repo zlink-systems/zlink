@@ -722,8 +722,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final class StreamReceiveLoop implements AutoCloseable {
         private final StreamNodeRegistration streamNode;
         private final ZLinkBackendStreamSocket stream;
-        private final ZLinkStateLane receiveStateLane = new ZLinkStateLane();
-        private boolean closed;
+        private volatile boolean closed;
 
         private StreamReceiveLoop(
                 StreamNodeRegistration streamNode, ZLinkBackendStreamSocket stream) {
@@ -745,11 +744,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
 
         @Override
         public void close() {
-            inReceiveStateLane(
-                    () -> {
-                        closed = true;
-                        return null;
-                    });
+            closed = true;
         }
 
         private void runLoop() {
@@ -762,11 +757,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                         return;
                     }
                     ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
-                    boolean pulledPacket = false;
                     while (batch.canReceiveNext()) {
-                        if (pulledPacket && !stream.waitForReadable(Duration.ZERO)) {
-                            break;
-                        }
                         systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue
                                         .Permit
                                 permit;
@@ -781,7 +772,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                             permit.abandonReservation();
                             break;
                         }
-                        pulledPacket = true;
                         boolean transferred = false;
                         try {
                             transferred = processReceived(received, permit, batch);
@@ -905,22 +895,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
 
         private boolean isClosed() {
-            return inReceiveStateLane(() -> closed);
-        }
-
-        private <T> T inReceiveStateLane(Supplier<T> work) {
-            try {
-                return receiveStateLane.runAsync(work).toCompletableFuture().join();
-            } catch (java.util.concurrent.CompletionException failure) {
-                Throwable cause = failure.getCause();
-                if (cause instanceof RuntimeException runtimeFailure) {
-                    throw runtimeFailure;
-                }
-                if (cause instanceof Error error) {
-                    throw error;
-                }
-                throw failure;
-            }
+            return closed;
         }
     }
 

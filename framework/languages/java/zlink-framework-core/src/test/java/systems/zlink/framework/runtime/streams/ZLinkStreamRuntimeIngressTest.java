@@ -230,6 +230,7 @@ final class ZLinkStreamRuntimeIngressTest {
         assertFalse(session.firstDispatch.isDone());
 
         assertEquals(2, stream.successfulReceives.get());
+        assertEquals(0, stream.zeroReadinessWaits.get());
         assertFalse(session.secondDispatchLatch.await(100, TimeUnit.MILLISECONDS));
         assertEquals(1, session.dispatchCount.get());
 
@@ -1302,7 +1303,8 @@ final class ZLinkStreamRuntimeIngressTest {
         private final Queue<ZLinkBackendStreamReceived> received = new ConcurrentLinkedQueue<>();
         private final AtomicInteger successfulReceives = new AtomicInteger();
         private final AtomicInteger readinessWaits = new AtomicInteger();
-        private final AtomicBoolean receivePermit = new AtomicBoolean();
+        private final AtomicInteger zeroReadinessWaits = new AtomicInteger();
+        private final AtomicBoolean receiveReady = new AtomicBoolean();
         private final AtomicInteger sessionClosingSends = new AtomicInteger();
         private final CountDownLatch sessionClosingSendsLatch = new CountDownLatch(1);
         private final AtomicReference<RoutingId> disconnectedPeer = new AtomicReference<>();
@@ -1414,17 +1416,18 @@ final class ZLinkStreamRuntimeIngressTest {
         @Override
         public boolean waitForReadable(Duration timeout) {
             readinessWaits.incrementAndGet();
-            boolean readable = !received.isEmpty();
-            if (readable) {
-                receivePermit.set(true);
+            if (timeout.isZero()) {
+                zeroReadinessWaits.incrementAndGet();
             }
+            boolean readable = !received.isEmpty();
+            receiveReady.set(readable);
             return readable;
         }
 
         @Override
         public ZLinkBackendStreamReceived recv() {
-            if (!receivePermit.compareAndSet(true, false)) {
-                throw new AssertionError("STREAM recv was called without readiness");
+            if (!receiveReady.get()) {
+                throw new AssertionError("STREAM recv was called before readiness");
             }
             if (blockFirstReceive) {
                 blockFirstReceive = false;
@@ -1449,6 +1452,9 @@ final class ZLinkStreamRuntimeIngressTest {
                 }
             }
             ZLinkBackendStreamReceived next = received.poll();
+            if (next == null) {
+                receiveReady.set(false);
+            }
             if (next != null) {
                 successfulReceives.incrementAndGet();
             }

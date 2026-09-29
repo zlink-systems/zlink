@@ -9,13 +9,11 @@ import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobCont
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
-import java.util.function.Supplier;
 
 final class ZLinkChannelReceiveLoops implements AutoCloseable {
     private static final Duration RECEIVE_POLL_TIMEOUT = Duration.ofMillis(250);
@@ -108,9 +106,7 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
                                         ZLinkReceiveBatchBudget.bytesOf(
                                                 received.parts(),
                                                 received.applicationMetadataSize(),
-                                                received.topic()
-                                                        .getBytes(StandardCharsets.UTF_8)
-                                                        .length));
+                                                utf8Length(received.topic())));
                                 dispatch.accept(received);
                                 dispatched = true;
                             } finally {
@@ -124,7 +120,7 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
 
     void startRoute(
             ZLinkBackendRouterSocket router,
-            Supplier<Object> socketLock,
+            Object socketLock,
             Runnable drainBridge,
             Consumer<ZLinkBackendReceived> dispatch,
             Consumer<Throwable> reportFailure) {
@@ -145,7 +141,7 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
                             }
                             try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
                                 ZLinkBackendReceived received;
-                                synchronized (socketLock.get()) {
+                                synchronized (socketLock) {
                                     assertReceiveOwner();
                                     received = router.recv(ZLinkBackendRecvMode.DONT_WAIT);
                                 }
@@ -263,5 +259,27 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
             }
             throw closedQueue;
         }
+    }
+
+    static int utf8Length(String value) {
+        int length = 0;
+        for (int i = 0; i < value.length(); i++) {
+            char current = value.charAt(i);
+            if (current < 0x80) {
+                length++;
+            } else if (current < 0x800) {
+                length += 2;
+            } else if (Character.isHighSurrogate(current)
+                    && i + 1 < value.length()
+                    && Character.isLowSurrogate(value.charAt(i + 1))) {
+                length += 4;
+                i++;
+            } else if (Character.isSurrogate(current)) {
+                length++;
+            } else {
+                length += 3;
+            }
+        }
+        return length;
     }
 }
