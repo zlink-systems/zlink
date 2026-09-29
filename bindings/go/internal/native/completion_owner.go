@@ -332,8 +332,11 @@ func (e *completionEntry) waitSettled() { <-e.settledDone }
 type completionOwner struct {
 	socket unsafe.Pointer
 
-	mu          sync.Mutex
-	entries     map[uintptr]*completionEntry
+	mu            sync.Mutex
+	entries       map[uintptr]*completionEntry
+	earlyWritable map[uintptr]*earlyWritableRecord
+	inflightSends int
+
 	publicOwner *Poller
 	shutdown    bool
 }
@@ -361,6 +364,55 @@ func (o *completionOwner) registerLocked(entry *completionEntry) error {
 	entry.owner = o
 	o.entries[entry.handleKey] = entry
 	return nil
+}
+
+// publishInitialSendWait joins a WRITABLE drained before the initial native
+// submission returned. The drain processes the record without the owner lock.
+func (o *completionOwner) publishInitialSendWait(entry *completionEntry, id uint64) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if err := o.registerLocked(entry); err != nil {
+		o.discardEarlyWritableLocked(entry.handleKey)
+		o.finishInflightSendLocked()
+		return err
+	}
+	entry.publishSendWait(id)
+	var activationErr error
+	if o.publicOwner == nil {
+		activationErr = &SubmitError{Result: SubmitInvalidState, nativeErrno: int(C.EBUSY)}
+	} else {
+		entry.writableWaiting = true
+	}
+	if record := o.earlyWritable[entry.handleKey]; record != nil {
+		record.entry = entry
+		close(record.ready)
+	}
+	delete(o.earlyWritable, entry.handleKey)
+	o.finishInflightSendLocked()
+	return activationErr
+}
+
+func (o *completionOwner) discardEarlyWritable(key uintptr) {
+	o.mu.Lock()
+	o.discardEarlyWritableLocked(key)
+	o.finishInflightSendLocked()
+	o.mu.Unlock()
+}
+
+func (o *completionOwner) discardEarlyWritableLocked(key uintptr) {
+	if record := o.earlyWritable[key]; record != nil {
+		close(record.ready)
+		delete(o.earlyWritable, key)
+	}
+}
+
+func (o *completionOwner) finishInflightSendLocked() {
+	o.inflightSends--
+	if o.inflightSends == 0 {
+		for key := range o.earlyWritable {
+			o.discardEarlyWritableLocked(key)
+		}
+	}
 }
 
 func (o *completionOwner) unregister(entry *completionEntry) {
@@ -436,15 +488,60 @@ type completionDrainResult struct {
 	requestCompletions int
 }
 
+type earlyWritableRecord struct {
+	completionID  uint64
+	contextKey    uintptr
+	kind          C.zlink_completion_kind_t
+	sendResult    C.zlink_send_complete_result_t
+	terminalErrno int
+	ready         chan struct{}
+	entry         *completionEntry
+}
+
+func writableRecord(completion *C.zlink_completion_t, key uintptr) earlyWritableRecord {
+	return earlyWritableRecord{
+		completionID:  uint64(completion.completion_id),
+		contextKey:    key,
+		kind:          completion.kind,
+		sendResult:    C.zlink_send_complete_result_t(completion.send_result),
+		terminalErrno: int(completion.send_terminal_errno),
+	}
+}
+
 func (o *completionOwner) drain(waitForPublish bool) (completionDrainResult, error) {
 	var drained completionDrainResult
 	var retries []*completionEntry
+	var earlyRecords []*earlyWritableRecord
+	joinEarly := func(drainErr error) {
+		for _, record := range earlyRecords {
+			<-record.ready
+			if record.entry == nil {
+				continue
+			}
+			terminal, retry := record.entry.captureWritable(*record)
+			if retry {
+				if drainErr == nil {
+					retries = append(retries, record.entry)
+				} else {
+					// The joined token was consumed, but this drain cannot retry.
+					record.entry.attemptMu.Lock()
+					record.entry.send.payload.close()
+					record.entry.finishSend(drainErr)
+					record.entry.attemptMu.Unlock()
+					o.unregister(record.entry)
+				}
+			} else if terminal {
+				o.unregister(record.entry)
+			}
+		}
+	}
 	for {
 		var completion C.zlink_completion_t
 		completion.struct_size = C.uint32_t(C.sizeof_zlink_completion_t)
 		result, cerr := C.zlink_completion_recv(
 			o.socket, &completion, C.zlink_recv_flags_t(C.ZLINK_RECV_FLAGS_DONTWAIT))
 		if result == C.ZLINK_RECV_NO_DATA {
+			joinEarly(nil)
 			// A retry can create another completion immediately. It belongs to
 			// the next drain, after this queue has reached NO_DATA.
 			for _, entry := range retries {
@@ -461,6 +558,7 @@ func (o *completionOwner) drain(waitForPublish bool) (completionDrainResult, err
 			return drained, nil
 		}
 		if err := recvErrorFromCall(result, cerr); err != nil {
+			joinEarly(err)
 			return drained, err
 		}
 
@@ -470,6 +568,16 @@ func (o *completionOwner) drain(waitForPublish bool) (completionDrainResult, err
 		completion.user_context = nil
 		o.mu.Lock()
 		entry := o.entries[key]
+		if entry == nil && o.inflightSends > 0 && completion.kind == C.ZLINK_COMPLETION_WRITABLE && !o.shutdown {
+			o.discardEarlyWritableLocked(key)
+			if o.earlyWritable == nil {
+				o.earlyWritable = make(map[uintptr]*earlyWritableRecord)
+			}
+			record := writableRecord(&completion, key)
+			record.ready = make(chan struct{})
+			o.earlyWritable[key] = &record
+			earlyRecords = append(earlyRecords, &record)
+		}
 		o.mu.Unlock()
 		parts, request, terminal, retry, err := captureNativeCompletion(entry, &completion, key)
 		if retry {
@@ -491,13 +599,13 @@ func (o *completionOwner) drain(waitForPublish bool) (completionDrainResult, err
 	}
 }
 
-func (e *completionEntry) captureWritable(completion *C.zlink_completion_t, contextKey uintptr) (terminal, retry bool) {
-	if e == nil || completion == nil || e.kind != completionSendRetry || e.send == nil {
+func (e *completionEntry) captureWritable(record earlyWritableRecord) (terminal, retry bool) {
+	if e == nil || e.kind != completionSendRetry || e.send == nil {
 		return true, false
 	}
 	e.attemptMu.Lock()
 
-	completionID := uint64(completion.completion_id)
+	completionID := record.completionID
 
 	e.mu.Lock()
 	if e.settled {
@@ -534,8 +642,8 @@ func (e *completionEntry) captureWritable(completion *C.zlink_completion_t, cont
 		return false, false
 	}
 
-	if completion.kind != C.ZLINK_COMPLETION_WRITABLE ||
-		contextKey != e.handleKey {
+	if record.kind != C.ZLINK_COMPLETION_WRITABLE ||
+		record.contextKey != e.handleKey {
 		e.setWritableWaiting(false)
 		e.send.payload.close()
 		e.finishSend(&SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)})
@@ -543,8 +651,8 @@ func (e *completionEntry) captureWritable(completion *C.zlink_completion_t, cont
 		return true, false
 	}
 
-	sendResult := C.zlink_send_complete_result_t(completion.send_result)
-	terminalErrno := int(completion.send_terminal_errno)
+	sendResult := record.sendResult
+	terminalErrno := record.terminalErrno
 	if sendResult == C.ZLINK_SEND_NOT_FOUND || sendResult == C.ZLINK_SEND_NOT_CONNECTED {
 		e.setWritableWaiting(false)
 		e.send.payload.close()
@@ -741,7 +849,7 @@ func captureNativeCompletion(
 		return nil, false, false, false, nil
 	}
 	if entry.kind == completionSendRetry {
-		terminal, retry = entry.captureWritable(completion, contextKey)
+		terminal, retry = entry.captureWritable(writableRecord(completion, contextKey))
 		return nil, false, terminal, retry, nil
 	}
 	if completion.kind == C.ZLINK_COMPLETION_WRITABLE {
@@ -793,6 +901,10 @@ func (o *completionOwner) shutdownOwner() {
 		entries = append(entries, entry)
 	}
 	o.entries = make(map[uintptr]*completionEntry)
+	for key := range o.earlyWritable {
+		o.discardEarlyWritableLocked(key)
+	}
+	o.earlyWritable = nil
 	o.mu.Unlock()
 
 	for _, entry := range entries {

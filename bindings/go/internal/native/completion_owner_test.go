@@ -117,9 +117,9 @@ func TestImmediateManagedSendAllocationBudget(t *testing.T) {
 	exchange()
 	// Two public input messages, the builder, retained native packet and receive
 	// wrappers are included. The pre-optimization path allocated 32 objects;
-	// admitting a send must not reintroduce completion entries/channels/handles.
-	if allocations := testing.AllocsPerRun(100, exchange); allocations > 22 {
-		t.Fatalf("immediate two-part send/receive allocated %.0f objects, budget 22", allocations)
+	// admitting an immediate send must not allocate a completion entry.
+	if allocations := testing.AllocsPerRun(100, exchange); allocations > 17 {
+		t.Fatalf("immediate two-part send/receive allocated %.0f objects, budget 17", allocations)
 	}
 }
 

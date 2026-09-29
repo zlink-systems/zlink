@@ -5,12 +5,15 @@
 #include <errno.h>
 #include <stdatomic.h>
 #include <string.h>
+#include <sched.h>
 
 static _Atomic(void *) fixture_socket;
 static _Atomic(void *) watched_context;
 static _Atomic int override_empty_poller_wait;
 static _Atomic int override_missing_poller_modify;
 static _Atomic int override_poll_failure;
+static _Atomic int override_close_busy;
+static _Atomic int early_send_wait;
 static zlink_completion_t records[16];
 static size_t read_index, write_index, trace_size;
 static char trace[64];
@@ -36,6 +39,8 @@ void fixture_start(void *socket)
     atomic_store(&override_empty_poller_wait, 0);
     atomic_store(&override_missing_poller_modify, 0);
     atomic_store(&override_poll_failure, 0);
+    atomic_store(&override_close_busy, 0);
+    atomic_store(&early_send_wait, 0);
 }
 
 void fixture_stop(void) {
@@ -44,12 +49,28 @@ void fixture_stop(void) {
     atomic_store(&override_empty_poller_wait, 0);
     atomic_store(&override_missing_poller_modify, 0);
     atomic_store(&override_poll_failure, 0);
+    atomic_store(&override_close_busy, 0);
+    atomic_store(&early_send_wait, 0);
 }
 void fixture_watch_context(void *context) { atomic_store(&watched_context, context); }
 void fixture_override_empty_poller_wait_once(void) { atomic_store(&override_empty_poller_wait, 1); }
 void fixture_override_missing_poller_modify_once(void) { atomic_store(&override_missing_poller_modify, 1); }
 void fixture_override_poll_failure_once(void) { atomic_store(&override_poll_failure, 1); }
+void fixture_override_close_busy_once(void) { atomic_store(&override_close_busy, 1); }
+void fixture_early_send_wait_once(void) { atomic_store(&early_send_wait, 1); }
+int fixture_early_send_waiting(void) { return atomic_load(&early_send_wait) == 2; }
+void fixture_release_early_send(void) { atomic_store(&early_send_wait, 3); }
 const char *fixture_trace(void) { return trace; }
+
+int __real_zlink_close(void *);
+int __wrap_zlink_close(void *socket)
+{
+    if (owns_socket(socket) && atomic_exchange(&override_close_busy, 0)) {
+        errno = EBUSY;
+        return ZLINK_CLOSE_BUSY;
+    }
+    return __real_zlink_close(socket);
+}
 
 int __real_zlink_poll(zlink_pollitem_t *, int, long, zlink_config_result_t *);
 int __wrap_zlink_poll(zlink_pollitem_t *items, int count, long timeout, zlink_config_result_t *error_out)
@@ -168,6 +189,15 @@ static zlink_submit_result_t admit(zlink_msg_t *parts, size_t part_count,
 {
     assert(flags == ZLINK_SEND_FLAGS_DONTWAIT);
     assert(part_count > 0);
+    int expected = 1;
+    if (!request && atomic_compare_exchange_strong(&early_send_wait, &expected, 2)) {
+        *id = 41;
+        fixture_writable(*id, (uintptr_t) context, "submit-target");
+        while (atomic_load(&early_send_wait) == 2)
+            sched_yield();
+        errno = EAGAIN;
+        return ZLINK_SUBMIT_BACKPRESSURED;
+    }
     zlink_multipart_close(parts, part_count);
     if (id)
         *id = 0;
