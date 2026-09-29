@@ -1302,7 +1302,7 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                 auto scope = zlink::framework::detail::service_scope_t::create (
                   _services, zlink::framework::detail::service_scope_kind_t::handler_invocation);
                 if (record.reply_token) {
-                    auto reply = _channel_runtime.dispatch_request (
+                    auto reply = co_await _channel_runtime.dispatch_request_async (
                       record.owner, {}, payload.packet_name, scope.provider (), *_serializers,
                       *_handlers, message, inbound);
                     if (reply) {

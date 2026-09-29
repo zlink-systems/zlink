@@ -267,6 +267,16 @@ class channel_runtime_t
                       const zlink::message_t &message,
                       const detail::inbound_message_context_t &inbound = {}) const;
 
+    task_t<result_t<zlink::message_t>>
+    dispatch_request_async (std::string channel_name,
+                            std::string topic,
+                            std::string packet_name,
+                            service_provider_t &services,
+                            serializer_registry_t &serializers,
+                            const handler_registry_t &handlers,
+                            zlink::message_t message,
+                            detail::inbound_message_context_t inbound = {}) const;
+
     result_t<void> dispatch_send (std::string channel_name,
                                   std::string topic,
                                   std::string packet_name,

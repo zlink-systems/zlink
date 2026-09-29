@@ -247,6 +247,16 @@ bool is_enabled (const channel_capability_snapshot_t *capability)
     return capability != nullptr && capability->enabled;
 }
 
+std::optional<result_t<zlink::message_t>>
+request_capability_failure (const channel_runtime_state_t &state, const std::string &channel_name)
+{
+    if (is_enabled (server_capability (state, channel_name))) {
+        return std::nullopt;
+    }
+    return result_t<zlink::message_t>::failure (framework_error_kind_t::unavailable,
+                                                "channel server capability is not enabled");
+}
+
 bool has_connection (const channel_capability_snapshot_t *capability)
 {
     return capability != nullptr && capability->enabled
@@ -487,12 +497,34 @@ channel_runtime_t::dispatch_request (std::string channel_name,
                                      const zlink::message_t &message,
                                      const detail::inbound_message_context_t &inbound) const
 {
-    if (!is_enabled (server_capability (*_state, channel_name))) {
-        return result_t<zlink::message_t>::failure (framework_error_kind_t::unavailable,
-                                                    "channel server capability is not enabled");
+    if (auto failure = request_capability_failure (*_state, channel_name)) {
+        return std::move (*failure);
     }
     return handlers.invoke (channel_name, topic, packet_name, services, serializers, message,
                             inbound);
+}
+
+task_t<result_t<zlink::message_t>>
+channel_runtime_t::dispatch_request_async (std::string channel_name,
+                                           std::string topic,
+                                           std::string packet_name,
+                                           service_provider_t &services,
+                                           serializer_registry_t &serializers,
+                                           const handler_registry_t &handlers,
+                                           zlink::message_t message,
+                                           detail::inbound_message_context_t inbound) const
+{
+    if (auto failure = request_capability_failure (*_state, channel_name)) {
+        co_return std::move (*failure);
+    }
+    try {
+        auto reply = co_await handlers.invoke_async (channel_name, topic, packet_name, services,
+                                                     serializers, message, inbound);
+        co_return result_t<zlink::message_t>::success (std::move (reply));
+    }
+    catch (const framework_exception_t &error) {
+        co_return detail::result_access_t::failure<zlink::message_t> (error);
+    }
 }
 
 result_t<void>
