@@ -445,7 +445,7 @@ void test_pair_none_timeout_has_zero_id_no_completion_and_consumes_input ()
 
 
 
-void test_socket_close_terminalizes_and_reclaims_wait_tokens ()
+void test_socket_close_retires_and_reclaims_wait_tokens ()
 {
     void *context = zlink_ctx_new ();
     TEST_ASSERT_NOT_NULL (context);
@@ -459,7 +459,7 @@ void test_socket_close_terminalizes_and_reclaims_wait_tokens ()
 
     // Cross the inline reservation capacity so close also exercises pooled
     // heap nodes. No endpoint exists, hence every token remains waiting and
-    // socket teardown is solely responsible for terminal cleanup.
+    // socket teardown is solely responsible for internal cleanup.
     static const size_t token_count = 128;
     zlink_completion_id_t previous_id = 0;
     int contexts[token_count];
@@ -1349,7 +1349,7 @@ void test_router_writable_completion_is_scoped_to_the_drained_rid ()
         TEST_ASSERT_EQUAL_UINT64 (completion_ids[1],
                                   completion.completion_id);
         TEST_ASSERT_EQUAL_PTR (&contexts[1], completion.user_context);
-        TEST_ASSERT_EQUAL_INT (ZLINK_SEND_TERMINAL, completion.send_result);
+        TEST_ASSERT_EQUAL_INT (ZLINK_SEND_NOT_FOUND, completion.send_result);
         TEST_ASSERT_EQUAL_INT (ENOENT, completion.send_terminal_errno);
         TEST_ASSERT_EQUAL_UINT (target_rids[1].size, completion.peer_rid.size);
         TEST_ASSERT_EQUAL_MEMORY (target_rids[1].data,
@@ -1577,7 +1577,7 @@ int main ()
     RUN_PHASE3_COMPLETION_TEST (
       test_pair_none_timeout_has_zero_id_no_completion_and_consumes_input);
     RUN_PHASE3_COMPLETION_TEST (
-      test_socket_close_terminalizes_and_reclaims_wait_tokens);
+      test_socket_close_retires_and_reclaims_wait_tokens);
     RUN_PHASE3_COMPLETION_TEST (
       test_completion_recv_rejects_dirty_zero_size_routing_id);
     RUN_PHASE3_COMPLETION_TEST (

@@ -379,7 +379,7 @@ int zlink::socket_completion::publish_writable_waiters (
     while (current) {
         reservation_t *const next = current->writable_wait_next;
         bool matches = writable_target_matches (current, target_rid_or_null_);
-        if (result_ != ZLINK_SEND_TERMINAL) {
+        if (result_ == ZLINK_SEND_ADMITTED) {
             if (correlation_released_) {
                 matches = false;
                 for (request_writable_wait_t::const_iterator it =
@@ -541,25 +541,12 @@ void zlink::socket_completion::close (queue_state_t *state_,
         waiter->writable_wait_next = NULL;
         waiter->writable_wait_linked = false;
         waiter->request_wait.clear ();
-        waiter->completion.send_result = ZLINK_SEND_TERMINAL;
-        waiter->completion.send_terminal_errno = state_->lifecycle_errno;
         append_ready_locked (state_, waiter);
         waiter = next;
     }
     state_->writable_wait_head = NULL;
     state_->writable_wait_tail = NULL;
     state_->writable_waiting_count.store (0, std::memory_order_release);
-
-    // A WRITABLE token can already be queued when close wins the race with
-    // public dequeue. Terminalize those records too before dropping public
-    // delivery so every token left on the socket reaches one terminal state.
-    for (reservation_t *ready = state_->ready_head; ready;
-         ready = ready->ready_next) {
-        if (ready->completion.kind != ZLINK_COMPLETION_WRITABLE)
-            continue;
-        ready->completion.send_result = ZLINK_SEND_TERMINAL;
-        ready->completion.send_terminal_errno = state_->lifecycle_errno;
-    }
 
     // Close drops public delivery, but keeps reservation nodes alive until
     // their in-flight resolver releases them or the socket is destroyed.

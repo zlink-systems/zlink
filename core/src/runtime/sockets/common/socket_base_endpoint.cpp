@@ -1055,7 +1055,8 @@ int zlink::socket_base_t::term_endpoint_internal (
           fail_blocking_send_waits_for_logical_endpoint (identifier_, ENOENT);
           xforget_request_route_endpoint (identifier_);
           if (options.type == ZLINK_CORE_SOCKET_PAIR) {
-              fail_blocking_send_waits_for_logical_target (NULL, ENOENT);
+              fail_blocking_send_waits_for_logical_target (
+                NULL, ZLINK_SEND_NOT_FOUND);
               return;
           }
           std::vector<pipe_t *> attached;
@@ -1072,7 +1073,8 @@ int zlink::socket_base_t::term_endpoint_internal (
               memset (&rid, 0, sizeof (rid));
               copy_routing_id_from_bytes (routing_id.data (),
                                           routing_id.size (), &rid);
-              fail_blocking_send_waits_for_logical_target (&rid, ENOENT);
+              fail_blocking_send_waits_for_logical_target (
+                &rid, ZLINK_SEND_NOT_FOUND);
           }
     };
     if (uri_protocol == protocol_name::inproc) {

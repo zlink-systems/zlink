@@ -117,7 +117,7 @@ void receive_reply_completion (void *dealer_, zlink_completion_id_t id_,
             TEST_ASSERT_EQUAL_UINT64 (writable_id_, completion.completion_id);
             TEST_ASSERT_EQUAL_PTR (writable_context_, completion.user_context);
             TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_WRITABLE, completion.kind);
-            TEST_ASSERT_EQUAL_INT (terminal_errno_ ? ZLINK_SEND_TERMINAL
+            TEST_ASSERT_EQUAL_INT (terminal_errno_ ? ZLINK_SEND_NOT_FOUND
                                                    : ZLINK_SEND_ADMITTED,
                                    completion.send_result);
             TEST_ASSERT_EQUAL_INT (terminal_errno_, completion.send_terminal_errno);

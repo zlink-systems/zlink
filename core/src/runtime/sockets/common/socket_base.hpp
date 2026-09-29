@@ -1066,7 +1066,8 @@ class socket_base_t : public own_t,
     void mark_deferred_peer_controls ();
     // A route ended: retire writable tokens and wake blocking submitters.
     void fail_blocking_send_waits_for_logical_target (
-      const zlink_routing_id_t *peer_rid_, int terminal_errno_);
+      const zlink_routing_id_t *peer_rid_,
+      zlink_send_complete_result_t result_);
     void fail_blocking_send_waits_for_logical_endpoint (
       const std::string &endpoint_, int terminal_errno_);
     void emit_peer_weight_changed (pipe_t *pipe_, uint32_t weight_,
@@ -1092,7 +1093,8 @@ class socket_base_t : public own_t,
       const zlink_routing_id_t *target_rid_or_null_,
       bool correlation_released_ = false);
     void publish_send_writable_terminal (
-      const zlink_routing_id_t *target_rid_or_null_, int terminal_errno_);
+      const zlink_routing_id_t *target_rid_or_null_,
+      zlink_send_complete_result_t result_);
 
     bool has_stable_completion_processing_owner () const;
     void invalidate_completion_processing_owner ();

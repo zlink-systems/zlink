@@ -17,6 +17,19 @@
 
 namespace
 {
+int send_terminal_errno (zlink_send_complete_result_t result_)
+{
+    switch (result_) {
+        case ZLINK_SEND_NOT_FOUND:
+            return ENOENT;
+        case ZLINK_SEND_NOT_CONNECTED:
+            return ENOTCONN;
+        default:
+            zlink_assert (false);
+            return EINVAL;
+    }
+}
+
 void fail_blocking_send_wait_state (
   zlink::blocking_send_wait_state_t *state_, int terminal_errno_)
 {
@@ -462,12 +475,13 @@ void zlink::socket_base_t::mark_deferred_peer_controls ()
 }
 
 void zlink::socket_base_t::publish_send_writable_terminal (
-  const zlink_routing_id_t *target_rid_or_null_, int terminal_errno_)
+  const zlink_routing_id_t *target_rid_or_null_,
+  zlink_send_complete_result_t result_)
 {
     const int saved_errno = errno;
     const int published = socket_completion::publish_writable_waiters (
-      &completion_runtime (), target_rid_or_null_, ZLINK_SEND_TERMINAL,
-      terminal_errno_);
+      &completion_runtime (), target_rid_or_null_, result_,
+      send_terminal_errno (result_));
     if (published > 0) {
         notify_request_completion ();
         static_cast<mailbox_t *> (_mailbox)->signal ();
@@ -476,11 +490,13 @@ void zlink::socket_base_t::publish_send_writable_terminal (
 }
 
 void zlink::socket_base_t::fail_blocking_send_waits_for_logical_target (
-  const zlink_routing_id_t *peer_rid_, int terminal_errno_)
+  const zlink_routing_id_t *peer_rid_,
+  zlink_send_complete_result_t result_)
 {
-    // Explicit removal of a logical target retires its WRITABLE wait tokens
-    // too: a waiter parked on that target could otherwise never be woken.
-    publish_send_writable_terminal (peer_rid_, terminal_errno_);
+    // Logical target termination retires its WRITABLE wait tokens too:
+    // a waiter parked on that target could otherwise never be woken.
+    publish_send_writable_terminal (peer_rid_, result_);
+    const int terminal_errno = send_terminal_errno (result_);
     socket_blocking_send_runtime_t &wait_runtime = blocking_send_runtime ();
     const std::string logical_rid =
       peer_rid_ && peer_rid_->size
@@ -496,7 +512,7 @@ void zlink::socket_base_t::fail_blocking_send_waits_for_logical_target (
              it != wait_runtime.logical_waits.end (); ++it) {
             if (it->first.logical_endpoint.empty ()
                 && it->first.peer_rid == logical_rid) {
-                fail_blocking_send_wait_state (&it->second, terminal_errno_);
+                fail_blocking_send_wait_state (&it->second, terminal_errno);
                 signaled_waiter = true;
             }
         }
