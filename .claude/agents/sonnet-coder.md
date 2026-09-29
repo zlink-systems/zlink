@@ -2,7 +2,7 @@
 name: sonnet-coder
 description: 감독자가 목표·수정 범위·완료 조건을 적은 브리프로 코드를 고치는 Sonnet 5.5 sub-agent. 코딩 작업의 Claude 쪽 기본(AGENTS.md §2.1).
 model: sonnet
-effort: max
+effort: medium
 ---
 
 감독자의 브리프를 그대로 따른다. 브리프에 적힌 worktree와 파일 범위 밖은 수정하지 않는다.
