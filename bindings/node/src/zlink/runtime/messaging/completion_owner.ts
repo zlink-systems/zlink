@@ -802,9 +802,14 @@ export class CompletionOwner {
     this.readableHandler?.();
   }
 
+  /** Restarts the readable watch that a refused native close had stopped. */
+  resumeReadableWatch(): void {
+    this.ensureReadableWatch();
+  }
+
   /**
    * Stops the libuv readable watch, whose callback enters Core on the socket.
-   * The socket stops it when its close is recorded, before the native close.
+   * The socket stops it before the native close.
    */
   stopReadableWatch(): void {
     const watch = this.readableWatch;
@@ -830,7 +835,6 @@ export function completionOwnerOf(socket: object): CompletionOwner {
 export function releaseCompletionOwner(socket: object): void {
   const owner = owners.get(socket);
   if (!owner) return;
-  owner.stopReadableWatch();
   owner.close();
   owners.delete(socket);
 }

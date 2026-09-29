@@ -34,15 +34,6 @@ export type NativeErrorCategory =
 
 // Platform errno values are resolved at runtime: pointer-returning constructors
 // have no Core result.
-const EPERM = constants.errno.EPERM;
-const EAGAIN = constants.errno.EAGAIN;
-const ENOMEM = constants.errno.ENOMEM;
-const EACCES = constants.errno.EACCES;
-const EDEADLK = constants.errno.EDEADLK;
-const EOVERFLOW = constants.errno.EOVERFLOW;
-const EPROTOTYPE = constants.errno.EPROTOTYPE;
-const ECONNREFUSED = constants.errno.ECONNREFUSED;
-const EHOSTUNREACH = constants.errno.EHOSTUNREACH;
 const ENOENT = constants.errno.ENOENT;
 const EFAULT = constants.errno.EFAULT;
 const EBUSY = constants.errno.EBUSY;
@@ -62,9 +53,7 @@ const EALREADY = constants.errno.EALREADY;
 // Windows has no ESTALE; Core defines it as ZLINK_HAUSNUMERO + 19.
 const ESTALE = constants.errno.ESTALE ?? 156384712 + 19;
 const ECANCELED = constants.errno.ECANCELED;
-const EFSM = 156384763;
 const ETERM = 156384765;
-const EMTHREAD = 156384766;
 
 export function isTerminationErrno(errno: number): boolean {
   return errno === ECANCELED || errno === ESHUTDOWN || errno === ETERM;
@@ -72,7 +61,8 @@ export function isTerminationErrno(errno: number): boolean {
 
 /**
  * Pointer-returning constructors have no Core result, so their errno classifies
- * a configuration failure. Other families require a Core result.
+ * a configuration failure. Every other family carries the Core result; without
+ * one the failure is an internal error.
  */
 export function mapNativeErrno(category: NativeErrorCategory, errno: number): number {
   if (category === 'config') {
@@ -95,36 +85,8 @@ export function mapNativeErrno(category: NativeErrorCategory, errno: number): nu
       default: return ConfigResult.InternalError;
     }
   }
-  if (category === 'submit') {
-    switch (errno) {
-      case ENOTSUP: return SubmitResult.NotSupported;
-      case EAGAIN:
-      case ETIMEDOUT:
-      case ENOBUFS: return SubmitResult.Backpressured;
-      case ENOTCONN:
-      case EHOSTUNREACH: return SubmitResult.NotConnected;
-      case ECONNREFUSED:
-      case EACCES:
-      case EPROTOTYPE: return SubmitResult.NotAdmitted;
-      case ENOENT: return SubmitResult.NotFound;
-      case ESHUTDOWN:
-      case ETERM: return SubmitResult.Terminated;
-      case EFAULT: return SubmitResult.InvalidHandle;
-      case EINVAL:
-      case EMSGSIZE: return SubmitResult.InvalidArgument;
-      case EFSM:
-      case EBUSY:
-      case ESTALE:
-      case EALREADY: return SubmitResult.InvalidState;
-      case EDEADLK:
-      case EPERM:
-      case EMTHREAD: return SubmitResult.ThreadViolation;
-      case EOVERFLOW: return SubmitResult.SeqExhausted;
-      case ENOMEM: return SubmitResult.OutOfMemory;
-      default: return SubmitResult.InternalError;
-    }
-  }
   switch (category) {
+    case 'submit': return SubmitResult.InternalError;
     case 'request': return RequestResult.InternalError;
     case 'recv': return RecvResult.InternalError;
     case 'handler': return HandlerResult.InternalError;

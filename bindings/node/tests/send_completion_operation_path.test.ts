@@ -14,9 +14,6 @@ const {
   RequestResult,
   SubmitResult,
 } = require('../../dist/zlink/contracts/errors/errors');
-const {
-  mapNativeErrno,
-} = require('../../dist/zlink/runtime/errors/error_mapping');
 
 function requestCompletion(completionId: bigint, userContext: bigint) {
   return {
@@ -39,10 +36,6 @@ test('successful send settles without publishing a SEND completion id', async ()
   assert.equal(entry.published, true);
   assert.equal(entry.captured, true);
   assert.equal(entry.settled, true);
-});
-
-test('native context termination maps to a terminated send result', () => {
-  assert.equal(mapNativeErrno('submit', 156384765), SubmitResult.Terminated);
 });
 
 for (const [sendResult, terminalErrno, expected] of [
