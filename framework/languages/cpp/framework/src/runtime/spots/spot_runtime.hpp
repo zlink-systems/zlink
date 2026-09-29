@@ -131,6 +131,13 @@ class spot_node_builder_state_t
     runtime::spot_address_resolver_t *spot_location_resolver = nullptr;
     std::optional<service_provider_t> root_services;
     std::shared_ptr<std::atomic_bool> drain_flag;
+    /* The host admission gate (Spot address messaging §9): a draining host
+     * ends new Spot creation and Actor admission with ShuttingDown before any
+     * Spot seal is consulted. The host owns the flag (bind_drain_flag). */
+    bool host_draining () const noexcept
+    {
+        return drain_flag && drain_flag->load (std::memory_order_acquire);
+    }
     std::shared_ptr<monitoring_runtime_state_t> monitoring;
     std::chrono::milliseconds one_way_send_timeout{std::chrono::seconds (1)};
     std::chrono::milliseconds instance_spot_idle_timeout{0};
@@ -929,7 +936,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
       std::stop_token cleanup_cancellation = {})
     {
         auto lifetime_guard = shared_from_this ();
-        state_sync ([this] { callback_admission_closed = true; });
+        state_sync ([this] { admission_sealed = true; });
 
         auto owner = state_lane_owner ();
         if (!owner) {
@@ -1014,19 +1021,28 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     {
         std::shared_ptr<void> spot_instance;
         std::shared_ptr<channel_runtime_state_t> channel_runtime;
-        bool configured = false;
         bool admitted = false;
     };
 
-    bool enter_callback ();
-    timer_fire_state_snapshot_t enter_timer_callback ();
+    /* The local admission seal (Spot address messaging §7 step 2, §9) is the
+     * one decision on new work for this activation, taken once where the work
+     * enters. `claim` counts accepted application work until its terminal
+     * (leave_callback), so the Close that sealed the activation drains it
+     * before OnClosing. A refused caller reports sealed_admission_error. */
+    bool admit (bool claim = false);
+    static framework_exception_t sealed_admission_error ();
+    // Admits one timer fire (a claimed admit) and returns what it runs against.
+    timer_fire_state_snapshot_t admit_timer_fire ();
+    // Counts a lifecycle callback that its lane admitted earlier.
+    void enter_callback ();
     void leave_callback (std::function<void ()> settle_owner_state = {}) noexcept;
     bool is_current_callback_thread () const;
-    bool admission_blocked () const noexcept
+    /* Actor membership changes only on the owner lane of a current, unclosed
+     * activation that no Close or idle cleanup has reserved: Close step 1
+     * decides on the membership it observed (Spot address messaging §7). */
+    bool accepts_membership_core (const spot_node_builder_state_t &owner) const noexcept
     {
-        return state_sync ([this] {
-            return callback_admission_closed || idle_eviction_in_progress || close_reservation != 0;
-        });
+        return node.get () == &owner && !closed && close_reservation == 0 && spot_instance;
     }
 
     bool idle_quiescent () const;
@@ -1037,6 +1053,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     bool try_post_serial_after_current_turn (std::string name,
                                              std::function<void ()> work,
                                              runtime::serial_work_options_t options = {});
+    // Queues work its caller already admitted (admit with a claim).
     bool try_post_serial_async (std::string name,
                                 runtime::serial_execution_queue_t::async_work_t work,
                                 runtime::serial_work_options_t options = {});
@@ -1103,12 +1120,14 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     std::map<std::type_index, std::function<task_t<void> (void *, void *)>>
       on_disconnect_actor_callbacks;
     bool close_requested = false;
-    bool idle_eviction_in_progress = false;
-    bool callback_admission_closed = false;
+    // The local admission seal read by admit(). A Close sets it after its
+    // step 1 commit; idle cleanup and operational teardown set it first.
+    bool admission_sealed = false;
     bool closed = false;
     std::size_t actor_count = 0;
     // Node-lane ownership claim spanning an external close/store callback.
-    // Actor membership publication must reject/retry while this is non-zero.
+    // Actor membership publication is refused while it is non-zero
+    // (accepts_membership_core); message admission is not (admit).
     std::uint64_t close_reservation = 0;
     std::uint64_t next_close_reservation = 1;
     // What holds close_reservation: idle cleanup, a Spot Close (§7), or
@@ -1158,6 +1177,9 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     }
 
   private:
+    // The seal check behind admit and admit_timer_fire; runs on the owner lane.
+    bool admit_core (bool claim) noexcept;
+
     std::shared_ptr<spot_serial_executor_t>
     ensure_spot_serial_executor_on_lane (runtime::state_lane_t &state_lane)
     {
@@ -1221,9 +1243,8 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
                     if (!closed && close_reservation == token
                         && close_reservation_kind == close_reservation_kind_t::idle) {
                         clear_close_reservation_core (token);
-                        idle_eviction_in_progress = false;
                         if (!close_requested)
-                            callback_admission_closed = false;
+                            admission_sealed = false;
                     }
                 });
             }
@@ -1241,17 +1262,17 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
         auto owner = state_lane_owner ();
         if (!owner)
             return false;
-        const auto sealed =
-          owner->lane
-            .run ([this, &owner, reservation] {
-                return reservation != 0 && close_reservation == reservation
-                       && close_reservation_kind == close_reservation_kind_t::idle
-                       && node.get () == owner.get () && !closed && actor_count == 0
-                       && lifecycle_domain.allows_idle_eviction () && callback_depth == 0
-                       && !close_requested && callback_admission_closed && idle_eviction_in_progress
-                       && idle_age_allows_close_core (*owner);
-            })
-            .get ();
+        const auto sealed = owner->lane
+                              .run ([this, &owner, reservation] {
+                                  return reservation != 0 && close_reservation == reservation
+                                         && close_reservation_kind == close_reservation_kind_t::idle
+                                         && node.get () == owner.get () && !closed
+                                         && actor_count == 0
+                                         && lifecycle_domain.allows_idle_eviction ()
+                                         && callback_depth == 0 && !close_requested
+                                         && admission_sealed && idle_age_allows_close_core (*owner);
+                              })
+                              .get ();
         return sealed && idle_quiescent ();
     }
 
@@ -1631,9 +1652,6 @@ class spot_node_runtime_t
     void bind_drain_flag (std::shared_ptr<std::atomic_bool> flag);
     /* Entry spots are host infrastructure and are excluded. */
     std::size_t active_user_spot_count () const;
-    /* In-flight probe for the drain worker: true while any spot callback of
-     * this node is still executing (graceful-drain-handoff §4-4). */
-    bool has_active_callbacks () const;
     /* Actors still joined to this node's spots, for the drain handoff pass
      * (graceful-drain-handoff §5.2). */
     std::vector<actor_ref_t> local_actor_refs () const;
@@ -2031,10 +2049,8 @@ class spot_node_runtime_t
                 if (!selected)
                     return std::nullopt;
                 const auto &state = selected->_state;
-                if (state->node.get () != _state.get () || state->closed
-                    || state->close_reservation != 0 || !state->spot_instance) {
+                if (!state->accepts_membership_core (*_state))
                     return std::nullopt;
-                }
                 spot_instance = state->spot_instance;
                 callback_serializers =
                   _state->channel_runtime ? _state->channel_runtime->serializers : nullptr;
@@ -2109,8 +2125,7 @@ class spot_node_runtime_t
                                  return std::nullopt;
                              }
                              const auto &state = selected->_state;
-                             if (state->node.get () != _state.get () || state->closed
-                                 || state->close_reservation != 0 || !state->spot_instance) {
+                             if (!state->accepts_membership_core (*_state)) {
                                  selection = entry_selection_t::context_missing;
                                  return std::nullopt;
                              }
@@ -2431,8 +2446,7 @@ class spot_node_runtime_t
                   _state->spot_contexts_by_id.find (std::string (target_state->spot_id));
                 if (found == _state->spot_contexts_by_id.end ()
                     || found->second._state.get () != target_state.get ()
-                    || target_state->node.get () != _state.get () || target_state->closed
-                    || target_state->close_reservation != 0 || !target_state->spot_instance) {
+                    || !target_state->accepts_membership_core (*_state)) {
                     return false;
                 }
                 /* Typed joins hold externally-owned actors: they are indexed
@@ -2494,8 +2508,7 @@ class spot_node_runtime_t
                   _state->spot_contexts_by_id.find (std::string (target_state->spot_id));
                 if (found == _state->spot_contexts_by_id.end ()
                     || found->second._state.get () != target_state.get ()
-                    || target_state->node.get () != _state.get () || target_state->closed
-                    || target_state->close_reservation != 0
+                    || !target_state->accepts_membership_core (*_state)
                     || target_state->spot_instance.get () != spot_instance.get ()) {
                     return false;
                 }

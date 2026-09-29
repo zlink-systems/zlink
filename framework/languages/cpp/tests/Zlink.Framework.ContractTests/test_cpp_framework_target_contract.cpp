@@ -939,12 +939,13 @@ int main ()
         && spot_runtime.find ("detail::report_logical_multicast_failure") != std::string::npos,
       "CPP-DISP-004", "logical multicast failures after dequeue are not observable");
 
-    /* CPP-DISP-006 — close and idle-eviction admission share the node owner;
-     * the unified Actor token carries that lease through handler terminal. */
+    /* CPP-DISP-006 — close and idle-eviction admission share one seal decided
+     * on the node owner; the unified Actor token carries that lease through
+     * handler terminal. */
     gate.require (
-      spot_runtime.find ("auto queue = state_sync ([this] {") != std::string::npos
-        && spot_runtime.find ("if (callback_admission_closed || idle_eviction_in_progress || "
-                              "close_reservation != 0)")
+      spot_runtime.find ("bool spot_context_state_t::admit_core (bool claim) noexcept")
+          != std::string::npos
+        && spot_runtime.find ("return state_sync ([this, claim] { return admit_core (claim); });")
              != std::string::npos
         && spot_runtime.find ("class actor_dispatch_admission_token_t final") != std::string::npos
         && spot_runtime.find ("admission_token->acquire_dispatch_phase") != std::string::npos
@@ -952,8 +953,7 @@ int main ()
         && spot_runtime.find ("admission_token ? admission_token->handler_terminal ()")
              != std::string::npos
         && spot_runtime.find ("const bool admission_preclaimed =") != std::string::npos
-        && spot_runtime.find ("!admission_preclaimed && !state->enter_callback ()")
-             != std::string::npos
+        && spot_runtime.find ("!admission_preclaimed && !state->admit (true)") != std::string::npos
         && spot_runtime.find ("&& state->close_reservation == 0") != std::string::npos
         && spot_runtime.find ("return queue->try_post_async") != std::string::npos,
       "CPP-DISP-006",

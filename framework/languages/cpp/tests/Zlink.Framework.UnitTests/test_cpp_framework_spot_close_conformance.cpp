@@ -57,6 +57,14 @@ struct observation_t
     bool on_closing_blocks = false;
     std::promise<void> closing_entered;
     std::promise<void> closing_released;
+    // A User Spot request with value 100 waits in its handler until the
+    // scenario releases it, so later work queues behind that turn.
+    std::promise<void> handler_entered;
+    std::promise<void> handler_released;
+    // The room Spot owns a short timer; the first tick after arming records
+    // "timer" (Spot address messaging §7 step 2: accepted timers drain first).
+    bool room_timer = false;
+    std::atomic_bool timer_armed{false};
     std::string handler_mode;
     std::string watched_spot;
 
@@ -185,6 +193,18 @@ class close_entry_spot_t final : public zf::entry_spot_t<member_actor_t>
     zf::entry_spot_context_t _context;
 };
 
+class close_room_spot_t;
+
+struct close_room_timer_handler_t
+{
+    zf::task_t<void> handle (close_room_spot_t &, const zf::timer_tick_t &)
+    {
+        if (current ().timer_armed.exchange (false))
+            current ().record ("timer");
+        co_return;
+    }
+};
+
 class close_room_spot_t final : public zf::spot_t<member_actor_t>
 {
   public:
@@ -198,6 +218,13 @@ class close_room_spot_t final : public zf::spot_t<member_actor_t>
         // An Actor handler registers this Spot's Join admission for member_actor_t.
         _context.handlers ().add_actor_send<&close_room_spot_t::member_ping> (
           join_room_t::packet_name);
+        bool timer = false;
+        {
+            std::lock_guard lock (current ().mutex);
+            timer = current ().room_timer;
+        }
+        if (timer)
+            (void) _context.add_timer<close_room_timer_handler_t> ("close-timer", 5ms);
     }
 
     close_probe_reply_t probe (const close_probe_request_t &request)
@@ -205,6 +232,10 @@ class close_room_spot_t final : public zf::spot_t<member_actor_t>
         {
             std::lock_guard lock (current ().mutex);
             ++current ().handler_calls;
+        }
+        if (request.value == 100) {
+            current ().handler_entered.set_value ();
+            current ().handler_released.get_future ().wait ();
         }
         return close_probe_reply_t{request.value + 1};
     }
@@ -312,6 +343,31 @@ class close_fault_store_t final : public zf::location_store_t
 
     std::atomic_bool fail_closing_commit_once{false};
     std::atomic_bool fail_authority_release_once{false};
+    // The next Closing commit stays pending until release_held_commit.
+    std::atomic_bool hold_closing_commit_once{false};
+    std::promise<void> commit_held;
+
+    // Completes the held Closing commit: applied, or an owner fence conflict.
+    void release_held_commit (bool conflict)
+    {
+        std::optional<zf::store_write_request_t> request;
+        std::optional<zf::detail::task_completion_source_t<zf::store_write_result_t>> completion;
+        {
+            std::lock_guard lock (_held_mutex);
+            request = std::move (_held_request);
+            completion = std::move (_held_completion);
+            _held_request.reset ();
+            _held_completion.reset ();
+        }
+        if (!completion)
+            return;
+        if (conflict) {
+            completion->complete (
+              zf::result_t<zf::store_write_result_t>::success (zf::store_write_conflict_t{}));
+            return;
+        }
+        completion->complete (_inner->write (std::move (*request)).result ());
+    }
 
     zf::task_t<zf::store_read_result_t> read (zf::store_key_t key) override
     {
@@ -327,6 +383,17 @@ class close_fault_store_t final : public zf::location_store_t
                 watched_put = watched_put || is_watched (put->key);
             if (const auto *erase = std::get_if<zf::store_delete_t> (&mutation))
                 watched_delete = watched_delete || is_watched (erase->key);
+        }
+        if (watched_put && hold_closing_commit_once.exchange (false)) {
+            zf::detail::task_completion_source_t<zf::store_write_result_t> completion;
+            auto held = completion.task ();
+            {
+                std::lock_guard lock (_held_mutex);
+                _held_request = std::move (request);
+                _held_completion = std::move (completion);
+            }
+            commit_held.set_value ();
+            return held;
         }
         if ((watched_put && fail_closing_commit_once.exchange (false))
             || (watched_delete && fail_authority_release_once.exchange (false))) {
@@ -361,6 +428,9 @@ class close_fault_store_t final : public zf::location_store_t
     }
 
     std::shared_ptr<zf::runtime::in_memory_location_store_t> _inner;
+    std::mutex _held_mutex;
+    std::optional<zf::store_write_request_t> _held_request;
+    std::optional<zf::detail::task_completion_source_t<zf::store_write_result_t>> _held_completion;
 };
 
 // ---------------------------------------------------------------------------
@@ -534,6 +604,7 @@ class scenario_client_t final : public zf::hosted_service_t
             current ().on_closing_throws = given.value ("onClosing", "") == "throws";
             current ().on_closing_blocks = given.value ("onClosing", "") == "blocks";
             current ().handler_mode = given.value ("handler", "");
+            current ().room_timer = given.value ("roomTimer", false);
         }
         auto &store = *_store;
 
@@ -633,6 +704,69 @@ class scenario_client_t final : public zf::hosted_service_t
             if (!reply && reply.error ())
                 actual["resultDetail"] = reply.error ()->what ();
             actual["creationIntent"] = false;
+            return;
+        }
+        if (act == "timerQueuedBehindTurnThenManagerClose") {
+            // A timer tick queues behind a running handler turn and a Close
+            // queues on the lifecycle lane. The tick was accepted before the
+            // seal, so it runs before OnClosing (§7 step 2).
+            if (!direct_request (spot_id, services, 1))
+                throw std::runtime_error ("the route warm-up request failed");
+            auto entered = current ().handler_entered.get_future ();
+            std::optional<zf::result_t<close_probe_reply_t>> blocked_reply;
+            std::thread blocked (
+              [&] { blocked_reply.emplace (direct_request (spot_id, services, 100)); });
+            if (entered.wait_for (3s) != std::future_status::ready) {
+                current ().handler_released.set_value ();
+                blocked.join ();
+                throw std::runtime_error ("the blocking handler did not start");
+            }
+            current ().timer_armed.store (true);
+            std::this_thread::sleep_for (50ms);
+            std::optional<zf::result_t<bool>> closed;
+            std::thread closing ([&] { closed.emplace (manager_close (services, *ref)); });
+            std::this_thread::sleep_for (200ms);
+            current ().handler_released.set_value ();
+            blocked.join ();
+            closing.join ();
+            actual["result"] = close_result (*closed);
+            actual["blockedResult"] =
+              *blocked_reply ? nlohmann::json ("handlerReply")
+                             : nlohmann::json (error_name (blocked_reply->error_kind ()));
+            actual["authority"] = authority_state (services, spot_id);
+            return;
+        }
+        if (act == "directRequestDuringHeldClosingCommit") {
+            // The request reaches the owner while the Closing commit is pending.
+            // Admission stays open until the commit (§7 steps 1-2).
+            if (!direct_request (spot_id, services, 1))
+                throw std::runtime_error ("the route warm-up request failed");
+            store.hold_closing_commit_once.store (true);
+            auto held = store.commit_held.get_future ();
+            std::optional<zf::result_t<bool>> closed;
+            std::thread closing ([&] { closed.emplace (manager_close (services, *ref)); });
+            if (held.wait_for (3s) != std::future_status::ready) {
+                store.hold_closing_commit_once.store (false);
+                closing.join ();
+                throw std::runtime_error ("the Closing commit was not held");
+            }
+            auto pending = std::async (std::launch::async,
+                                       [&] { return direct_request (spot_id, services, 1); });
+            const bool replied_during_commit = pending.wait_for (1s) == std::future_status::ready;
+            store.release_held_commit (given.value ("closingCommit", "") == "heldThenConflict");
+            const auto reply = pending.get ();
+            closing.join ();
+            actual["repliedDuringCommit"] = replied_during_commit;
+            actual["result"] = reply ? nlohmann::json ("handlerReply")
+                                     : nlohmann::json (error_name (reply.error_kind ()));
+            if (!reply && reply.error ())
+                actual["resultDetail"] = reply.error ()->what ();
+            actual["closeResult"] = close_result (*closed);
+            actual["authority"] = authority_state (services, spot_id);
+            if (authority_state (services, spot_id) == "Ready") {
+                const auto admitted = direct_request (spot_id, services, 5);
+                actual["admission"] = admitted ? "open" : "sealed";
+            }
             return;
         }
         if (given.value ("closeGeneration", "") == "previous") {
@@ -797,6 +931,36 @@ nlohmann::json run_scenario (const nlohmann::json &scenario, std::string &failur
     return actual;
 }
 
+void run_and_check (const nlohmann::json &scenario)
+{
+    const auto name = scenario.at ("name").get<std::string> ();
+    SCOPED_TRACE (name);
+    std::string failure;
+    const auto actual = run_scenario (scenario, failure);
+    std::cout << "spot-close scenario " << name << ": " << actual.dump () << std::endl;
+    if (!failure.empty ()) {
+        ADD_FAILURE () << failure << ": " << actual.dump ();
+        return;
+    }
+    const auto &expect = scenario.at ("expect");
+    for (const auto &[key, value] : expect.items ()) {
+        if (key == "order") {
+            // The expected events appear in this relative order.
+            std::vector<std::string> seen;
+            for (const auto &event : actual.at ("order"))
+                if (std::find (value.begin (), value.end (), event) != value.end ())
+                    seen.push_back (event.get<std::string> ());
+            EXPECT_EQ (value.get<std::vector<std::string>> (), seen) << actual.dump ();
+            continue;
+        }
+        if (!actual.contains (key)) {
+            ADD_FAILURE () << key << " not observed: " << actual.dump ();
+            continue;
+        }
+        EXPECT_EQ (value, actual.at (key)) << key << ": " << actual.dump ();
+    }
+}
+
 TEST (ZLinkFrameworkSpotCloseConformance, RunsEveryFixtureScenario)
 {
     const auto &fixture = spot_close_fixture ();
@@ -810,41 +974,38 @@ TEST (ZLinkFrameworkSpotCloseConformance, RunsEveryFixtureScenario)
 
     for (const auto &scenario : fixture.at ("scenarios")) {
         const auto name = scenario.at ("name").get<std::string> ();
-        SCOPED_TRACE (name);
         ASSERT_TRUE (known_scenarios ().contains (name)) << "unknown scenario " << name;
-        std::string failure;
-        const auto actual = run_scenario (scenario, failure);
-        std::cout << "spot-close scenario " << name << ": " << actual.dump () << std::endl;
-        if (!failure.empty ()) {
-            ADD_FAILURE () << failure << ": " << actual.dump ();
-            continue;
-        }
-        const auto &expect = scenario.at ("expect");
-        for (const auto &[key, value] : expect.items ()) {
-            if (key == "order") {
-                // The expected events appear in this relative order.
-                std::vector<std::string> seen;
-                for (const auto &event : actual.at ("order"))
-                    if (std::find (value.begin (), value.end (), event) != value.end ())
-                        seen.push_back (event.get<std::string> ());
-                EXPECT_EQ (value.get<std::vector<std::string>> (), seen) << actual.dump ();
-                continue;
-            }
-            if (key == "results") {
-                if (!actual.contains ("results")) {
-                    ADD_FAILURE () << "results not observed: " << actual.dump ();
-                    continue;
-                }
-                EXPECT_EQ (value, actual.at ("results")) << actual.dump ();
-                continue;
-            }
-            if (!actual.contains (key)) {
-                ADD_FAILURE () << key << " not observed: " << actual.dump ();
-                continue;
-            }
-            EXPECT_EQ (value, actual.at (key)) << key << ": " << actual.dump ();
-        }
+        run_and_check (scenario);
     }
+}
+
+// New admission against a Closing owner (Spot address messaging §7 steps 1-2,
+// §9): the local admission seal set after the Closing commit decides it once,
+// and work accepted before the seal completes.
+TEST (ZLinkFrameworkSpotCloseConformance, DecidesNewAdmissionOnceAtTheSeal)
+{
+    const auto scenarios = nlohmann::json::parse (R"json([
+      {"name": "accepted-timer-before-seal-drains-before-on-closing",
+       "given": {"runtime": "Ready", "authority": "Ready", "roomTimer": true},
+       "act": "timerQueuedBehindTurnThenManagerClose",
+       "expect": {"result": true, "blockedResult": "handlerReply", "authority": "Missing",
+                  "order": ["timer", "onClosing"]}},
+      {"name": "new-request-after-closing-commit-is-rejected",
+       "given": {"runtime": "Ready", "authority": "Ready", "onClosing": "blocks"},
+       "act": "directRequestDuringClose",
+       "expect": {"authorityDuringClose": "Closing", "result": "Rejected"}},
+      {"name": "request-during-failed-closing-commit-is-processed",
+       "given": {"runtime": "Ready", "authority": "Ready", "closingCommit": "heldThenConflict"},
+       "act": "directRequestDuringHeldClosingCommit",
+       "expect": {"result": "handlerReply", "closeResult": "Unavailable", "authority": "Ready",
+                  "admission": "open"}},
+      {"name": "request-during-closing-commit-is-accepted-before-the-seal",
+       "given": {"runtime": "Ready", "authority": "Ready", "closingCommit": "held"},
+       "act": "directRequestDuringHeldClosingCommit",
+       "expect": {"result": "handlerReply", "closeResult": true, "authority": "Missing"}}
+    ])json");
+    for (const auto &scenario : scenarios)
+        run_and_check (scenario);
 }
 
 } // namespace

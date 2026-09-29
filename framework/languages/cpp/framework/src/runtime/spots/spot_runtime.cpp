@@ -2223,30 +2223,44 @@ bool spot_context_state_t::idle_quiescent () const
     return true;
 }
 
-bool spot_context_state_t::enter_callback ()
+bool spot_context_state_t::admit_core (bool claim) noexcept
 {
-    return state_sync ([this] {
-        if (callback_admission_closed || idle_eviction_in_progress || close_reservation != 0)
-            return false;
+    if (admission_sealed)
+        return false;
+    if (claim)
         ++callback_depth;
-        return true;
-    });
+    return true;
 }
 
-spot_context_state_t::timer_fire_state_snapshot_t spot_context_state_t::enter_timer_callback ()
+bool spot_context_state_t::admit (bool claim)
+{
+    return state_sync ([this, claim] { return admit_core (claim); });
+}
+
+spot_context_state_t::timer_fire_state_snapshot_t spot_context_state_t::admit_timer_fire ()
 {
     return state_sync ([this] {
         timer_fire_state_snapshot_t result;
-        result.configured = spot_instance && channel_runtime && channel_runtime->serializers;
-        if (!result.configured || callback_admission_closed || idle_eviction_in_progress
-            || close_reservation != 0)
+        if (!spot_instance || !channel_runtime || !channel_runtime->serializers
+            || !admit_core (true))
             return result;
-        ++callback_depth;
         result.spot_instance = spot_instance;
         result.channel_runtime = channel_runtime;
         result.admitted = true;
         return result;
     });
+}
+
+framework_exception_t spot_context_state_t::sealed_admission_error ()
+{
+    // Spot address messaging §9: a Closing owner refuses new admission.
+    return detail::make_framework_origin_exception (framework_error_kind_t::rejected,
+                                                    "Spot admission is sealed");
+}
+
+void spot_context_state_t::enter_callback ()
+{
+    state_sync ([this] { ++callback_depth; });
 }
 
 void spot_context_state_t::leave_callback (std::function<void ()> settle_owner_state) noexcept
@@ -2495,8 +2509,9 @@ void spot_context_state_t::run_local_close_steps (
         service::after_close_step (std::move (*released), resume,
                                    [done] (result_t<bool> result) mutable { done (result); });
     };
-    // Step 2: seal admission. Callbacks accepted before the seal finish first;
-    // the last one to leave returns the Close to its lifecycle turn.
+    // Step 2, in the step that observed the Closing commit: seal admission.
+    // Work admitted before the seal (queued or running) finishes first; the
+    // last one to leave returns the Close to its lifecycle turn.
     auto continuation = [finish, resume] () mutable {
         if (!resume) {
             finish ();
@@ -2512,7 +2527,7 @@ void spot_context_state_t::run_local_close_steps (
     };
     const auto deferred = owner->lane
                             .run ([&] {
-                                callback_admission_closed = true;
+                                admission_sealed = true;
                                 if (callback_depth == 0) {
                                     closed = true;
                                     return false;
@@ -2550,15 +2565,10 @@ bool spot_context_state_t::try_post_serial (std::string name,
                                             std::function<void ()> work,
                                             runtime::serial_work_options_t options)
 {
-    // Close and idle-eviction sealing cannot cross the queue admission point.
-    auto queue = state_sync ([this] {
-        if (callback_admission_closed || idle_eviction_in_progress || close_reservation != 0)
-            return std::shared_ptr<runtime::serial_execution_queue_t>{};
-        return serial_queue;
-    });
+    if (!admit ())
+        return false;
+    const auto queue = serial_queue;
     if (!queue) {
-        if (admission_blocked ())
-            return false;
         work ();
         return true;
     }
@@ -2568,14 +2578,10 @@ bool spot_context_state_t::try_post_serial (std::string name,
 bool spot_context_state_t::try_post_serial_after_current_turn (
   std::string name, std::function<void ()> work, runtime::serial_work_options_t options)
 {
-    auto queue = state_sync ([this] {
-        if (callback_admission_closed || idle_eviction_in_progress || close_reservation != 0)
-            return std::shared_ptr<runtime::serial_execution_queue_t>{};
-        return serial_queue;
-    });
+    if (!admit ())
+        return false;
+    const auto queue = serial_queue;
     if (!queue) {
-        if (admission_blocked ())
-            return false;
         work ();
         return true;
     }
@@ -2596,14 +2602,9 @@ bool spot_context_state_t::try_post_serial_async (
   runtime::serial_execution_queue_t::async_work_t work,
   runtime::serial_work_options_t options)
 {
-    auto queue = state_sync ([this] {
-        if (callback_admission_closed || idle_eviction_in_progress || close_reservation != 0)
-            return std::shared_ptr<runtime::serial_execution_queue_t>{};
-        return serial_queue;
-    });
+    // The caller admitted this work and holds its claim (admit).
+    const auto queue = serial_queue;
     if (!queue) {
-        if (admission_blocked ())
-            return false;
         work ([] (std::function<void ()> completion) {
             if (completion) {
                 completion ();
@@ -2635,16 +2636,11 @@ void spot_context_state_t::run_serial_task_async (
         return;
     }
 
-    const auto queue = state_sync ([this] {
-        if (callback_admission_closed || idle_eviction_in_progress || close_reservation != 0)
-            return std::shared_ptr<runtime::serial_execution_queue_t>{};
-        return serial_queue;
-    });
-    if (!queue && admission_blocked ()) {
-        completion (result_t<void>::failure (framework_error_kind_t::unavailable,
-                                             "spot is closing for idle eviction"));
+    if (!admit ()) {
+        completion (detail::result_access_t::failure<void> (sealed_admission_error ()));
         return;
     }
+    const auto queue = serial_queue;
     const auto current_turn = detail::capture_current_serial_turn ();
     const bool released_current_turn =
       queue && current_turn && current_turn->released () && current_turn->belongs_to (queue.get ());
@@ -2754,13 +2750,7 @@ void spot_context_state_t::run_serial_task_async (
               });
               return;
           }
-          if (!owner->enter_callback ()) {
-              complete ([settle] () mutable {
-                  settle (detail::boundary_failure<void> (detail::boundary_error_t::closed,
-                                                          "spot activation is closed"));
-              });
-              return;
-          }
+          owner->enter_callback ();
           auto turn = detail::capture_current_serial_turn ();
           try {
               callback_context_scope_t callback_scope (owner.get ());
@@ -2842,7 +2832,7 @@ bool spot_context_state_t::run_serial_sync (std::string name, std::function<void
     if (!work) {
         return true;
     }
-    if (admission_blocked ()) {
+    if (!admit ()) {
         return false;
     }
     if (is_current_callback_thread () || owns_current_serial_turn ()) {
@@ -2863,24 +2853,28 @@ bool spot_context_state_t::run_serial_sync (std::string name, std::function<void
     auto item_guard = std::make_shared<item_released_t> ();
     auto item_released = item_guard->released.get_future ();
     std::exception_ptr error;
-    bool callback_admitted = false;
-    const bool posted = try_post_serial (
-      std::move (name),
-      [&, item_guard] {
-          callback_admitted = enter_callback ();
-          if (!callback_admitted) {
-              return;
-          }
-          try {
-              callback_context_scope_t callback_scope (this);
-              work ();
-          }
-          catch (...) {
-              error = std::current_exception ();
-          }
-          leave_callback ();
-      },
-      runtime::serial_work_options_t{runtime::serial_work_lane_t::lifecycle});
+    bool ran = false;
+    std::function<void ()> item = [&, item_guard] {
+        ran = true;
+        enter_callback ();
+        try {
+            callback_context_scope_t callback_scope (this);
+            work ();
+        }
+        catch (...) {
+            error = std::current_exception ();
+        }
+        leave_callback ();
+    };
+    const auto queue = serial_queue;
+    bool posted = true;
+    if (queue)
+        posted =
+          queue->try_post (std::move (name), std::move (item),
+                           runtime::serial_work_options_t{runtime::serial_work_lane_t::lifecycle});
+    else
+        item ();
+    item = {};
     item_guard.reset ();
     item_released.wait ();
     if (!posted) {
@@ -2889,7 +2883,7 @@ bool spot_context_state_t::run_serial_sync (std::string name, std::function<void
     if (error) {
         std::rethrow_exception (error);
     }
-    return callback_admitted;
+    return ran;
 }
 
 bool spot_context_state_t::owns_current_serial_turn () const
@@ -4341,9 +4335,10 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
             if (!serial_dispatch) {
                 const bool admission_preclaimed =
                   static_cast<bool> (application_admission_terminal);
-                if (!admission_preclaimed && !state->enter_callback ()) {
-                    return task_t<zlink::message_t> (detail::boundary_failure<zlink::message_t> (
-                      detail::boundary_error_t::closed, "spot activation is closed"));
+                if (!admission_preclaimed && !state->admit (true)) {
+                    return task_t<zlink::message_t> (
+                      detail::result_access_t::failure<zlink::message_t> (
+                        detail::spot_context_state_t::sealed_admission_error ()));
                 }
                 auto admission_terminal = std::make_shared<std::function<void ()>> (
                   admission_preclaimed
@@ -4443,8 +4438,6 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                 post_serial = [state] (std::string name,
                                        runtime::serial_execution_queue_t::async_work_t work,
                                        runtime::serial_work_options_t options) {
-                    if (state->admission_blocked ())
-                        return false;
                     return state->try_post_serial_async (std::move (name), std::move (work),
                                                          options);
                 };
@@ -4478,9 +4471,16 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
               admission_preclaimed && requires_spot_serial
               && actor_queue_dispatch == actor_queue_dispatch_t::acquire
               && !actor_execution_key.empty ();
+            // The work is admitted here, before its queue: a turn that starts
+            // after the seal still runs it (Spot address messaging §7 step 2).
+            if (!admission_preclaimed && !state->admit (true)) {
+                return task_t<zlink::message_t> (
+                  detail::result_access_t::failure<zlink::message_t> (
+                    detail::spot_context_state_t::sealed_admission_error ()));
+            }
             auto admission_terminal = std::make_shared<std::function<void ()>> (
               admission_preclaimed ? std::move (application_admission_terminal)
-                                   : std::function<void ()>{});
+                                   : std::function<void ()>{[state] { state->leave_callback (); }});
             const auto posted = post_serial (
               "spot-handler",
               [state, handler_index, spot, actor, &services, &serializers,
@@ -4490,7 +4490,7 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                before_invoke = std::move (before_invoke),
                before_application_handler = std::move (before_application_handler),
                trace_message_kind, trace_packet_name, trace_actor_id, trace_spot_id,
-               finish_after_active, admission_preclaimed, completes_outer_actor_after_spot_yield,
+               finish_after_active, completes_outer_actor_after_spot_yield,
                admission_terminal] (auto complete) mutable {
                   runtime::flow_context_t::scope_t callback_flow (std::move (dispatch_flow));
                   runtime::actor_execution_scope_t actor_execution (
@@ -4509,16 +4509,6 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                           });
                           return;
                       }
-                  }
-                  if (!admission_preclaimed && !state->enter_callback ()) {
-                      complete ([completion, state] () mutable {
-                          completion.complete (detail::boundary_failure<zlink::message_t> (
-                            detail::boundary_error_t::closed, "spot activation is closed"));
-                      });
-                      return;
-                  }
-                  if (!admission_preclaimed) {
-                      *admission_terminal = [state] { state->leave_callback (); };
                   }
                   auto turn = detail::capture_current_serial_turn ();
                   try {
@@ -4633,6 +4623,9 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                               : " queue=inline");
               });
             if (!posted) {
+                // The queue did not take the work: its admission ends here.
+                if (!admission_preclaimed)
+                    settle_handler_admission_once (admission_terminal);
                 /* Dispatch rejection is framework-generated (zlink.origin
                  * marker on the resulting error reply). */
                 return task_t<zlink::message_t> (
@@ -5479,10 +5472,13 @@ class actor_dispatch_admission_token_t final
                      : result_t<void>::failure (framework_error_kind_t::unavailable,
                                                 "actor spot changed after lifecycle admission");
         }
-        if (_settled.load (std::memory_order_acquire) || !context->enter_callback ()) {
+        if (_settled.load (std::memory_order_acquire)) {
             return result_t<void>::failure (framework_error_kind_t::unavailable,
                                             "actor spot lifecycle admission is closed");
         }
+        if (!context->admit (true))
+            return detail::result_access_t::failure<void> (
+              spot_context_state_t::sealed_admission_error ());
         _context = context;
         _lifecycle_claimed = true;
         return result_t<void>::success ();
@@ -5560,9 +5556,7 @@ spot_node_runtime_t::actor_join_state_snapshot_t spot_node_runtime_t::actor_join
           .run ([&] {
               selection_t result;
               auto context = find_context_core (spot_id);
-              if (context && context->_state->node.get () == _state.get ()
-                  && !context->_state->closed && context->_state->close_reservation == 0
-                  && context->_state->spot_instance) {
+              if (context && context->_state->accepts_membership_core (*_state)) {
                   auto &snapshot = result.snapshot;
                   snapshot.context.emplace (std::move (*context));
                   const auto &context_state = snapshot.context->_state;
@@ -5634,8 +5628,7 @@ spot_node_runtime_t::actor_admission (spot_context_t &context,
       .run ([&] {
           const auto current = find_context_core (context.spot_id ());
           if (!current || current->_state.get () != context._state.get ()
-              || context._state->node.get () != _state.get () || context._state->closed
-              || context._state->close_reservation != 0 || !context._state->spot_instance) {
+              || !context._state->accepts_membership_core (*_state)) {
               return;
           }
           const auto admission = context._state->actor_admissions.find (actor_type);
@@ -5688,8 +5681,7 @@ void spot_node_runtime_t::commit_accepted_actor_join (
             commit_plan_t result;
             const auto target = find_context_core (context.spot_id ());
             if (!target || target->_state.get () != context._state.get ()
-                || target_state.node.get () != _state.get () || target_state.closed
-                || target_state.close_reservation != 0 || !target_state.spot_instance) {
+                || !target_state.accepts_membership_core (*_state)) {
                 return result;
             }
             if (const auto previous = _state->actor_spot_ids.find (key);
@@ -5757,8 +5749,7 @@ void spot_node_runtime_t::commit_accepted_actor_join (
             .run ([&] {
                 const auto target = find_context_core (plan.target_spot_id);
                 if (!target || target->_state.get () != context._state.get ()
-                    || target_state.node.get () != _state.get () || target_state.closed
-                    || target_state.close_reservation != 0
+                    || !target_state.accepts_membership_core (*_state)
                     || target_state.spot_instance.get () != plan.target_spot_instance.get ()) {
                     return false;
                 }
@@ -5804,8 +5795,7 @@ void spot_node_runtime_t::commit_accepted_actor_join (
         .run ([&] {
             const auto target = find_context_core (plan.target_spot_id);
             if (!target || target->_state.get () != context._state.get ()
-                || target_state.node.get () != _state.get () || target_state.closed
-                || target_state.close_reservation != 0
+                || !target_state.accepts_membership_core (*_state)
                 || target_state.spot_instance.get () != plan.target_spot_instance.get ()) {
                 return false;
             }
@@ -6261,10 +6251,10 @@ spot_node_runtime_t::join_remote_actor_to_spot_erased (const actor_ref_t &actor_
 {
     /* graceful-drain-handoff §4-2/§5.2: a draining node rejects new actor
     * admission and joins; already-admitted transfer commits stay accepted. */
-    auto drain_flag = _state->lane.run ([&] { return _state->drain_flag; }).get ();
-    if (drain_flag && drain_flag->load (std::memory_order_acquire)) {
+    if (_state->lane.run ([&] { return _state->host_draining (); }).get ()) {
         return result_t<actor_join_reply_t>::failure (
-          framework_error_kind_t::rejected, "spot node is draining and rejects new actor joins");
+          framework_error_kind_t::shutting_down,
+          "spot node is draining and rejects new actor joins");
     }
     if (::zlink::framework::detail::actor_ref_access_t::empty (actor_ref)) {
         return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
@@ -8230,10 +8220,9 @@ result_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_sp
 {
     /* graceful-drain-handoff §4-2/§5.2: a draining node rejects new actor
     * admission and joins; already-admitted transfer commits stay accepted. */
-    auto drain_flag = _state->lane.run ([&] { return _state->drain_flag; }).get ();
-    if (drain_flag && drain_flag->load (std::memory_order_acquire)) {
+    if (_state->lane.run ([&] { return _state->host_draining (); }).get ()) {
         return result_t<spot_actor_join_result_t>::failure (
-          framework_error_kind_t::rejected,
+          framework_error_kind_t::shutting_down,
           "spot node is draining and rejects new actor admission");
     }
     if (transfer_id.empty () || ::zlink::framework::detail::actor_ref_access_t::empty (actor_ref)) {
@@ -9622,7 +9611,7 @@ spot_node_runtime_t::prepare_remote_actor_to_spot (std::string transfer_id,
             }
             if (!result.lifecycle_available)
                 return result;
-            if (result.context->closed || result.context->close_reservation != 0
+            if (!result.context->accepts_membership_core (*_state)
                 || _state->actor_instances.contains (key) || _state->actor_spot_ids.contains (key)
                 || _state->pending_actor_contexts.contains (key)) {
                 return result;
@@ -9812,8 +9801,8 @@ spot_node_runtime_t::prepare_remote_actor_to_spot (std::string transfer_id,
         .run ([&] {
             const auto context = _state->spot_contexts_by_id.find (std::string (target_spot_id));
             if (context == _state->spot_contexts_by_id.end ()
-                || context->second._state != plan.context || target.closed
-                || target.close_reservation != 0 || !target.spot_instance) {
+                || context->second._state != plan.context
+                || !target.accepts_membership_core (*_state)) {
                 return false;
             }
             const auto reservation = _state->pending_actor_contexts.find (key);
@@ -10993,9 +10982,10 @@ result_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_entry_spot_erase
 {
     /* graceful-drain-handoff §4-2/§5.2: a draining node rejects new actor
     * admission and joins; already-admitted transfer commits stay accepted. */
-    if (_state->drain_flag && _state->drain_flag->load (std::memory_order_acquire)) {
+    if (_state->host_draining ()) {
         return result_t<actor_join_reply_t>::failure (
-          framework_error_kind_t::rejected, "spot node is draining and rejects new actor joins");
+          framework_error_kind_t::shutting_down,
+          "spot node is draining and rejects new actor joins");
     }
     enum class entry_selection_t
     {
@@ -12133,8 +12123,8 @@ spot_node_runtime_t::create_spot_context (std::string spot_name,
         .run ([&] {
             /* graceful-drain-handoff §4-2: a draining node blocks new spot creation.
          * Existing spots (and in-progress transfer commits) keep running. */
-            if (_state->drain_flag && _state->drain_flag->load (std::memory_order_acquire)) {
-                throw framework_exception_t (framework_error_kind_t::rejected,
+            if (_state->host_draining ()) {
+                throw framework_exception_t (framework_error_kind_t::shutting_down,
                                              "spot node is draining and rejects new spot creation");
             }
             const auto found = _state->spot_factories.find (spot_name);
@@ -12575,9 +12565,8 @@ spot_node_runtime_t::dispatch_instance_activation (const spot_id_t &spot_id,
     auto state = context_state;
     std::function<void ()> release_accepted_turn;
     if (accepted_turn_terminal) {
-        if (!state->enter_callback ()) {
-            const framework_exception_t error (framework_error_kind_t::not_found,
-                                               "spot activation is closed");
+        if (!state->admit (true)) {
+            const auto error = spot_context_state_t::sealed_admission_error ();
             report_spot_dispatch_error (
               _state, dispatch_error_surface_t::spot_route,
               request ? dispatch_message_kind_t::request : dispatch_message_kind_t::send,
@@ -13362,19 +13351,17 @@ void spot_node_runtime_t::evict_idle_spots () noexcept
                       && !_state->pending_spot_creations_by_id.contains (
                         std::string (state->spot_id))
                       && last > 0 && now_ns >= last && now_ns - last >= timeout_ns
-                      && state->close_reservation == 0 && !state->callback_admission_closed
-                      && state->callback_depth == 0 && !state->close_requested
-                      && !state->idle_eviction_in_progress;
+                      && state->close_reservation == 0 && !state->admission_sealed
+                      && state->callback_depth == 0 && !state->close_requested;
                     if (!accepted)
                         return std::uint64_t{0};
-                    /* Seal and reserve in this one node-owner turn. A dispatch
-                 * token either precedes this point and keeps callback_depth
-                 * non-zero, or observes the reservation/seal and is rejected. */
+                    /* Seal and reserve in this one node-owner turn. Admitted
+                 * work either precedes this point and keeps callback_depth
+                 * non-zero, or observes the seal and is refused (admit). */
                     const auto reservation = state->begin_idle_close_reservation ();
                     if (reservation == 0)
                         return std::uint64_t{0};
-                    state->idle_eviction_in_progress = true;
-                    state->callback_admission_closed = true;
+                    state->admission_sealed = true;
                     return reservation;
                 })
                 .get ();
@@ -13421,28 +13408,6 @@ void spot_node_runtime_t::record_core_actor_transfer_activation (std::string act
 void spot_node_runtime_t::bind_location_lifecycle (runtime::location_lifecycle_t &lifecycle)
 {
     _state->lane.run ([&] { _state->location_lifecycle = &lifecycle; }).get ();
-}
-
-bool spot_node_runtime_t::has_active_callbacks () const
-{
-    const auto contexts = _state->lane
-                            .run ([&] {
-                                std::vector<std::shared_ptr<spot_context_state_t>> result;
-                                result.reserve (_state->spot_contexts_by_id.size ());
-                                for (const auto &[_, context] : _state->spot_contexts_by_id) {
-                                    if (context._state) {
-                                        result.push_back (context._state);
-                                    }
-                                }
-                                return result;
-                            })
-                            .get ();
-    for (const auto &context : contexts) {
-        if (context->has_active_callback ()) {
-            return true;
-        }
-    }
-    return false;
 }
 
 std::vector<actor_ref_t> spot_node_runtime_t::local_actor_refs () const
@@ -14123,8 +14088,10 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
               _state->lane
                 .run ([&] {
                     spot_route_dispatch_state_snapshot_t result;
+                    // A registered activation without an instance has been
+                    // detached after its seal; admission refuses it (admit).
                     const auto context = find_context_core (spot_id_t (owner.spot_id));
-                    if (!context || !context->_state || !context->_state->spot_instance)
+                    if (!context || !context->_state)
                         return result;
                     result.context_state = context->_state;
                     result.spot_instance = context->_state->spot_instance;
@@ -14135,7 +14102,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                     return result;
                 })
                 .get ();
-            if (!dispatch_snapshot.context_state || !dispatch_snapshot.spot_instance) {
+            if (!dispatch_snapshot.context_state) {
                 reply_error (detail::make_framework_origin_exception (
                   framework_error_kind_t::unavailable, "Spot route owner is no longer registered"));
                 return true;

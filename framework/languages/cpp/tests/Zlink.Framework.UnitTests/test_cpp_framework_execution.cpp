@@ -503,7 +503,7 @@ bool verify_close_waits_for_timer_callback_barrier ()
     handler.reset ();
 
     auto context = zlink::framework::detail::spot_context_access_t::create (state);
-    if (!state->enter_callback ()) {
+    if (!state->admit (true)) {
         return false;
     }
 
@@ -3586,6 +3586,50 @@ bool verify_runtime_observation_loss_and_terminal_retention ()
     return true;
 }
 
+// Spot address messaging §9: a draining host ends new Spot creation and Actor
+// admission with ShuttingDown before any Spot is consulted.
+bool verify_draining_host_refuses_new_admission_with_shutting_down ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    auto node = std::make_shared<spot_node_builder_state_t> ("draining-host-node");
+    spot_node_runtime_t runtime (node);
+    runtime.bind_drain_flag (std::make_shared<std::atomic_bool> (true));
+    const auto draining_actor = actor_ref_access_t::make (
+      node_rid_t::from_string ("draining-host-node"), "player", "draining-actor", 1);
+    const auto shutting_down = [] (const auto &result) {
+        return !result && result.error_kind () == framework_error_kind_t::shutting_down;
+    };
+
+    const auto remote_join = runtime.join_remote_actor_to_spot_erased (
+      draining_actor, spot_id_t ("draining-room"), zlink::message_t{},
+      spot_node_runtime_t::default_actor_context ());
+    const auto remote_admission = runtime.admit_remote_actor_to_spot (
+      "draining-transfer", draining_actor, spot_id_t ("draining-source"),
+      spot_id_t ("draining-room"), zlink::message_t{});
+    const auto entry_join = runtime.join_actor_to_entry_spot_erased (
+      draining_actor, node_rid_t::from_string ("draining-host-node"), zlink::message_t{},
+      std::nullopt, spot_node_runtime_t::default_actor_context ());
+    bool create_refused = false;
+    try {
+        (void) runtime.create_spot ("draining-room");
+    }
+    catch (const framework_exception_t &error) {
+        create_refused = error.kind () == framework_error_kind_t::shutting_down;
+    }
+    if (!shutting_down (remote_join) || !shutting_down (remote_admission)
+        || !shutting_down (entry_join) || !create_refused) {
+        std::cerr << "draining host admission kinds: remote_join="
+                  << static_cast<int> (remote_join.error_kind ())
+                  << " remote_admission=" << static_cast<int> (remote_admission.error_kind ())
+                  << " entry_join=" << static_cast<int> (entry_join.error_kind ())
+                  << " create_refused=" << create_refused << '\n';
+        return false;
+    }
+    return true;
+}
+
 bool verify_idle_instance_spot_eviction_closes_local_context ()
 {
     using namespace zlink::framework;
@@ -3656,7 +3700,7 @@ bool verify_idle_instance_spot_eviction_closes_local_context ()
     spot_node_runtime_t runtime (node);
     set_last_application_work (std::chrono::milliseconds (100));
     runtime.evict_idle_spots ();
-    if (admission_called || context->idle_eviction_in_progress) {
+    if (admission_called || context->admission_sealed) {
         return false;
     }
     set_last_application_work (std::chrono::seconds (2));
@@ -3727,7 +3771,7 @@ bool verify_explicit_instance_spot_close_releases_authority_after_callback ()
     node->spot_names_by_id.emplace (context->spot_id, context->spot_name);
     node->spot_contexts_by_id.emplace (context->spot_id, spot_context_access_t::create (context));
 
-    if (!context->enter_callback ()) {
+    if (!context->admit (true)) {
         return false;
     }
     auto public_context = spot_context_access_t::create (context);
@@ -6944,6 +6988,9 @@ int main ()
     }
     if (!verify_idle_instance_spot_eviction_closes_local_context ()) {
         return 53;
+    }
+    if (!verify_draining_host_refuses_new_admission_with_shutting_down ()) {
+        return 138;
     }
     if (!verify_explicit_instance_spot_close_releases_authority_after_callback ()) {
         return 91;
