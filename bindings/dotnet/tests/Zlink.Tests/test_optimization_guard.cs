@@ -156,7 +156,7 @@ public sealed class test_optimization_guard
 
         Assert.Contains("EshutdownFallback", source,
             StringComparison.Ordinal);
-        Assert.Contains("58 or 108 or 10058 or EshutdownFallback", source,
+        Assert.Contains("(int)ErrorCode.EShutdown or 58 or 10058 or EshutdownFallback", source,
             StringComparison.Ordinal);
     }
 
