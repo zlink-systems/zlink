@@ -385,7 +385,7 @@ zlink_submit_result_t zlink_publish (
 {
     socket_handle_t handle = as_socket_handle (subject_);
     return zlink::part_helper_internal::submit_whole_record (
-      handle.socket, parts_, part_count_, 0, [&] {
+      handle.socket, parts_, part_count_, !topic_id_ ? EFAULT : 0, [&] {
           return zlink::submit_result_internal::from_rc (
             publish_socket_parts (handle, topic_id_, parts_, part_count_, flags_));
       });

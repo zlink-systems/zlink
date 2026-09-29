@@ -199,8 +199,7 @@ struct zlink::socket_base_t::completion_submit_wait_context_t
 
     int remaining_timeout () { return timeout.refresh_timeout (); }
 
-    int wait_for_progress (uint64_t observed_progress_,
-                           socket_public_send_scope_t *send_scope_ = NULL)
+    int wait_for_progress (uint64_t observed_progress_)
     {
         const int remaining = remaining_timeout ();
         if (remaining == 0) {
@@ -208,14 +207,10 @@ struct zlink::socket_base_t::completion_submit_wait_context_t
             return -1;
         }
 
-        const int rc =
-          send_scope_ ? socket->wait_submit_progress (
-                          *send_scope_, observed_progress_, remaining,
-                          progress_owner.held_state ())
-                      : socket->wait_submit_progress (
-                          observed_progress_, remaining,
-                          progress_owner.held_state ());
-        if (rc != 0) {
+        if (socket->wait_submit_progress (
+              observed_progress_, remaining,
+              progress_owner.held_state ())
+            != 0) {
             if (socket->lifecycle_coordinator ().public_close_requested ())
                 errno = ESHUTDOWN;
             return -1;
@@ -231,25 +226,6 @@ struct zlink::socket_base_t::completion_submit_wait_context_t
     submit_timeout_budget_t timeout;
     transport_pair_owner_progress_scope_t progress_owner;
 };
-
-int zlink::socket_base_t::send_publish_first_frame_scoped (
-  msg_t *msg_, int flags_, socket_public_send_scope_t &scope_)
-{
-    if ((flags_ & ZLINK_DONTWAIT) || options.sndtimeo == 0)
-        return send_scoped (msg_, flags_, scope_, NULL, true);
-
-    completion_submit_wait_context_t wait (this);
-    while (true) {
-        const uint64_t observed_progress = observe_submit_progress ();
-        if (send_scoped (msg_, flags_ | ZLINK_DONTWAIT, scope_, NULL, true)
-            == 0)
-            return 0;
-        if (errno != EAGAIN)
-            return -1;
-        if (wait.wait_for_progress (observed_progress, &scope_) != 0)
-            return -1;
-    }
-}
 
 struct zlink::socket_base_t::request_submit_selection_t
 {

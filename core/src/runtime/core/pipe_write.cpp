@@ -909,36 +909,6 @@ bool zlink::pipe_t::write_no_recursive_hwm_check (
     return write_message_unlocked (msg_, true, false, admission_out_);
 }
 
-bool zlink::pipe_t::write_admitted_publish_frame (const msg_t *msg_)
-{
-    if (unlikely (!write_state_ready_unlocked (NULL)))
-        return false;
-    if (!write_message_unlocked (msg_, false))
-        return false;
-    if ((msg_->flags () & msg_t::more) == 0)
-        flush_unlocked ();
-    return true;
-}
-
-zlink::pipe_message_admission_t
-zlink::pipe_t::check_admitted_publish_frame_size (const msg_t *msg_) const
-{
-    if (!msg_)
-        return pipe_message_admission_invalid;
-    const uint64_t frame_bytes = frame_accounted_bytes (msg_);
-    const uint64_t payload_bytes = static_cast<uint64_t> (msg_->size ());
-    const uint64_t max_message_bytes =
-      _max_message_bytes.load (std::memory_order_acquire);
-    if (frame_bytes == UINT64_MAX
-        || UINT64_MAX - _out_incomplete_bytes < frame_bytes
-        || UINT64_MAX - _out_incomplete_payload_bytes < payload_bytes
-        || (max_message_bytes != 0
-            && _out_incomplete_payload_bytes + payload_bytes
-                 > max_message_bytes))
-        return pipe_message_admission_too_large;
-    return pipe_message_admission_ready;
-}
-
 bool zlink::pipe_t::write_single_message_and_flush_no_recursive_hwm_check (
   const msg_t *msg_, pipe_message_admission_t *admission_out_)
 {
@@ -1217,9 +1187,6 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
 
     const bool more = (msg_->flags () & msg_t::more) != 0;
     const bool commits_bytes = !more && !msg_->is_delimiter ();
-    const bool account_oversize =
-      commits_bytes && counted_pending_message_ref (*msg_)
-      && !_transport_pair_write_held;
     if (more && incomplete_before == 0) {
         refresh_peer_credit_snapshot_unlocked ();
         _out_multipart_started_empty =
@@ -1279,7 +1246,7 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
                 ? bytes_written - peers_bytes_read
                 : 0;
             const bool oversize_admission =
-              account_oversize && hwm > 0 && in_flight == 0
+              enforce_hwm_ && hwm > 0 && in_flight == 0
               && (_out_incomplete_bytes > hwm
                   || UINT64_MAX - in_flight < _out_incomplete_bytes
                   || in_flight + _out_incomplete_bytes > hwm);
@@ -1296,7 +1263,7 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
           bytes_written > peers_bytes_read
             ? bytes_written - peers_bytes_read
             : 0;
-        if (account_oversize && hwm > 0 && in_flight == 0
+        if (enforce_hwm_ && hwm > 0 && in_flight == 0
             && (message_bytes > hwm
                 || (UINT64_MAX - in_flight < message_bytes
                     || in_flight + message_bytes > hwm))) {

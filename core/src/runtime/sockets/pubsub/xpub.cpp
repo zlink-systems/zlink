@@ -330,12 +330,46 @@ int zlink::xpub_t::xsend (
         *admission_out_ = pipe_message_admission_ready;
     const bool msg_more = (msg_->flags () & msg_t::more) != 0;
 
-    //  Select the record's destinations at its first frame.
+    if (_send_all_data && !_manual && !options.invert_matching) {
+        const pipe_message_admission_t admission = _dist.check_hwm (msg_);
+        //  Lossy delivery forgives a peer that cannot take this message: a full
+        //  queue and a pipe that left the active state are both "this one peer
+        //  misses it", not a reason to fail the send for every other peer.
+        //  dist_t::distribute already drops the copy for a pipe whose write
+        //  fails, so admitting here loses nothing else.
+        const bool admitted =
+          admission == pipe_message_admission_ready
+          || (_lossy
+              && (admission == pipe_message_admission_hwm_full
+                  || admission == pipe_message_admission_transport_wait
+                  || admission == pipe_message_admission_inactive));
+        int rc = -1;
+        if (admitted) {
+            if (_dist.send_to_all (msg_) == 0) {
+                _more_send = msg_more;
+                rc = 0;
+            }
+        } else {
+            if (admission_out_)
+                *admission_out_ = admission;
+            errno = admission == pipe_message_admission_too_large ? EMSGSIZE : EAGAIN;
+            if (_more_send) {
+                const int failure_errno = errno;
+                _dist.rollback ();
+                _more_send = false;
+                errno = failure_errno;
+                return -2;
+            }
+        }
+        return rc;
+    }
+
+    //  For the first part of multi-part message, find the matching pipes.
     if (!_more_send) {
+        // Ensure nothing from previous failed attempt to send is left matched
         _dist.unmatch ();
-        if (_send_all_data && !_manual && !options.invert_matching) {
-            _dist.match_all ();
-        } else if (unlikely (_manual && _last_pipe && _send_last_pipe)) {
+
+        if (unlikely (_manual && _last_pipe && _send_last_pipe)) {
             _subscriptions.match (static_cast<unsigned char *> (msg_->data ()), msg_->size (),
                                   mark_last_pipe_as_matching, this);
             _last_pipe = NULL;
@@ -349,30 +383,35 @@ int zlink::xpub_t::xsend (
         }
     }
 
-    const pipe_message_admission_t admission =
-      _more_send ? pipe_message_admission_ready
-                 : _dist.check_publish_record_hwm (_lossy);
-    int rc = -1;
-    if (admission == pipe_message_admission_ready) {
-        if (_dist.send_to_matching (msg_, true) == 0) {
+    const pipe_message_admission_t admission = _dist.check_hwm (msg_);
+    //  Same rule as the send-all path above.
+    const bool admitted =
+      admission == pipe_message_admission_ready
+      || (_lossy
+          && (admission == pipe_message_admission_hwm_full
+              || admission == pipe_message_admission_transport_wait
+              || admission == pipe_message_admission_inactive));
+    int rc = -1; //  Assume we fail
+    if (admitted) {
+        if (_dist.send_to_matching (msg_) == 0) {
             //  If we are at the end of multi-part message we can mark
             //  all the pipes as non-matching.
             if (!msg_more)
                 _dist.unmatch ();
             _more_send = msg_more;
-            rc = 0;
-        } else {
-            if (admission_out_)
-                *admission_out_ = pipe_message_admission_too_large;
-            if (_more_send) {
-                _more_send = false;
-                return -2;
-            }
+            rc = 0; //  Yay, sent successfully
         }
     } else {
         if (admission_out_)
             *admission_out_ = admission;
-        errno = EAGAIN;
+        errno = admission == pipe_message_admission_too_large ? EMSGSIZE : EAGAIN;
+        if (_more_send) {
+            const int failure_errno = errno;
+            _dist.rollback ();
+            _more_send = false;
+            errno = failure_errno;
+            return -2;
+        }
     }
     return rc;
 }

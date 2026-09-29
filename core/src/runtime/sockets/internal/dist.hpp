@@ -43,19 +43,15 @@ class dist_t
     void pipe_terminated (zlink::pipe_t *pipe_);
 
     //  Send the message to the matching outbound pipes.
-    int send_to_matching (zlink::msg_t *msg_, bool publish_record_admitted_ = false);
+    int send_to_matching (zlink::msg_t *msg_);
 
     //  Send the message to all the outbound pipes.
     int send_to_all (zlink::msg_t *msg_);
 
-    //  Select all active pipes before the publish record admission check.
-    void match_all ();
-
     static bool has_out ();
 
     //  Check HWM of all matching pipes.
-    pipe_message_admission_t check_publish_record_hwm (
-      bool drop_full_publish_pipes_);
+    pipe_message_admission_t check_hwm (const zlink::msg_t *msg_ = NULL);
 
     //  Roll back any queued multipart prefix and restore normal state.
     void rollback ();
@@ -68,11 +64,10 @@ class dist_t
 
     //  Write the message to the pipe. Make the pipe inactive if writing
     //  fails. In such a case false is returned.
-    bool write_at (pipes_t::size_type index_, zlink::msg_t *msg_,
-                   bool publish_record_admitted_);
+    bool write_at (pipes_t::size_type index_, zlink::msg_t *msg_);
 
     //  Put the message to all active pipes.
-    void distribute (zlink::msg_t *msg_, bool publish_record_admitted_);
+    void distribute (zlink::msg_t *msg_);
     pipes_t _pipes;
 
     //  Number of all the pipes to send the next message to.
@@ -92,6 +87,13 @@ class dist_t
 
     //  True if last we are in the middle of a multipart message.
     bool _more;
+
+    // Cached result for matching-pipe HWM scan. Matching/eligible topology
+    // changes invalidate the cache; repeated readiness probes can then avoid
+    // rescanning the same matching prefix until a pipe state transition
+    // happens.
+    bool _matching_hwm_cache_valid;
+    pipe_message_admission_t _matching_hwm_admission;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (dist_t)
 };
