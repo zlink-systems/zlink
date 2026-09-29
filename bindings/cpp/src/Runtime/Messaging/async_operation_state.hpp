@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <exception>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -231,6 +232,12 @@ template <>
 class async_operation_state_t<void> final : public async_result_state_t<void>
 {
   public:
+    void set_detach_handler (std::function<void ()> handler_)
+    {
+        std::lock_guard<std::mutex> lock (_mutex);
+        _detach_handler = std::move (handler_);
+    }
+
     void bind_lifetime (const std::shared_ptr<void> &lifetime_) noexcept
     {
         _lifetime = lifetime_;
@@ -279,16 +286,23 @@ class async_operation_state_t<void> final : public async_result_state_t<void>
 
     void detach () noexcept override
     {
-        std::lock_guard<std::mutex> lock (_mutex);
-        _detached = true;
-        _continuation.reset ();
-        _continuation_weak.reset ();
-        _scheduler = {};
+        std::function<void ()> handler;
+        {
+            std::lock_guard<std::mutex> lock (_mutex);
+            _detached = true;
+            _continuation.reset ();
+            _continuation_weak.reset ();
+            _scheduler = {};
+            handler = std::move (_detach_handler);
+        }
+        if (handler)
+            handler ();
     }
 
     void abandon (std::coroutine_handle<> continuation_) noexcept override
     {
         std::shared_ptr<async_resume_slot_t> slot;
+        std::function<void ()> handler;
         {
             std::lock_guard<std::mutex> lock (_mutex);
             _detached = true;
@@ -297,9 +311,12 @@ class async_operation_state_t<void> final : public async_result_state_t<void>
                 slot = _continuation_weak.lock ();
             _continuation_weak.reset ();
             _scheduler = {};
+            handler = std::move (_detach_handler);
         }
         if (slot)
             slot->abandon (continuation_);
+        if (handler)
+            handler ();
     }
 
     bool complete () noexcept { return finish (nullptr); }
@@ -335,6 +352,7 @@ class async_operation_state_t<void> final : public async_result_state_t<void>
     std::shared_ptr<async_resume_slot_t> _continuation;
     std::weak_ptr<async_resume_slot_t> _continuation_weak;
     async_continuation_scheduler_t _scheduler;
+    std::function<void ()> _detach_handler;
     std::atomic<bool> _terminal{false};
     bool _consumed = false;
     bool _detached = false;

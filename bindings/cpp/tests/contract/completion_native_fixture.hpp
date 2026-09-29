@@ -34,6 +34,8 @@ struct fixture_t
     std::vector<std::string> events;
     std::map<void *, unsigned> counts;
     std::function<void ()> first_submit;
+    std::function<void ()> retry_submit;
+    bool retry_backpressured = false;
     std::function<void ()> before_recv;
     std::function<void ()> after_recv;
 
@@ -83,10 +85,13 @@ inline zlink_submit_result_t submit (
     assert (zlink_msg_close (&parts_[0]) == ZLINK_CONFIG_OK);
     assert (zlink_msg_init (&parts_[0]) == ZLINK_CONFIG_OK);
     const bool first = ++fixture.counts[context_] == 1;
-    *id_ = first || request_ ? fixture.attempts.size () + 1 : 0;
+    *id_ = first || request_ || fixture.retry_backpressured
+      ? fixture.attempts.size () + 1 : 0;
     fixture.attempts.push_back ({context_, *id_, target, payload, request_});
     fixture.events.push_back ("submit:" + payload);
-    if (first) {
+    if (!first && !request_ && fixture.retry_submit)
+        fixture.retry_submit ();
+    if (first || (fixture.retry_backpressured && !request_)) {
         if (fixture.first_submit)
             fixture.first_submit ();
         errno = EAGAIN;
