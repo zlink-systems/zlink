@@ -101,7 +101,6 @@ import type { ServiceInstanceActivationRecoveryEnvelope } from './service-instan
 import { validateServiceMetadataFrame } from './service-metadata-codec';
 import type { ServiceSessionBindingIngressPort } from './service-session-binding-ingress-port';
 import { ZLinkFrameworkException } from '../../contracts';
-import { ZLinkFrameworkRuntimeState } from '../../contracts/Locations';
 
 const ACTOR_ROUTE_STALE = 21;
 const SPOT_MOVING = 34;
@@ -231,7 +230,6 @@ export type ServiceInstanceApplicationTarget = ServiceInstanceApplicationIdentit
 export interface ServiceInstanceApplicationLifecycle {
   isMaterialized(target: ServiceInstanceApplicationIdentity): boolean;
   isMaterializing?(target: ServiceInstanceApplicationIdentity): boolean;
-  isClosing?(target: ServiceInstanceApplicationIdentity): boolean;
   isIdleEvicting?(target: ServiceInstanceApplicationIdentity): boolean;
   beginIdleEviction?(target: ServiceInstanceApplicationIdentity): boolean;
   materialize(target: ServiceInstanceApplicationIdentity, objectGeneration: bigint): Promise<void>;
@@ -406,11 +404,6 @@ export class ServiceStatefulRuntime {
     readonly owner: string;
   }) => void;
   private dispatchErrors?: ZLinkDispatchErrorReporter;
-  private spotAdmissionProvider?: {
-    readonly isClosing: (spotId: string) => boolean;
-    readonly runtimeState: () => ZLinkFrameworkRuntimeState;
-    readonly awaitCloseDecision?: (spotId: string) => Promise<void> | undefined;
-  };
   private dispatchErrorMeshName?: string;
   private readonly admittedUserSpotOperations = new Map<
     string,
@@ -438,14 +431,6 @@ export class ServiceStatefulRuntime {
     this.registry = new ServiceStatefulRegistry(nodeRid, nodeGeneration);
     this.registry.createEntrySpot(nodeRid);
     raw.setServiceIngress((record) => this.ingress(record));
-  }
-
-  setSpotAdmissionProvider(provider: {
-    readonly isClosing: (spotId: string) => boolean;
-    readonly runtimeState: () => ZLinkFrameworkRuntimeState;
-    readonly awaitCloseDecision?: (spotId: string) => Promise<void> | undefined;
-  }): void {
-    this.spotAdmissionProvider = provider;
   }
 
   setMailboxDropHandler(
@@ -2198,8 +2183,6 @@ export class ServiceStatefulRuntime {
       }
       case 'spotSend':
       case 'spotRequest': {
-        await this.spotAdmissionProvider?.awaitCloseDecision?.(record.target.spot.spotId);
-        this.requireDirectSpotAdmission(record.target.spot.spotId);
         const followed = this.holdOrRelaySpotMessage(ingress, record);
         if (followed !== undefined) return followed;
         this.validateDirectSpotFence(record.target);
@@ -2387,11 +2370,6 @@ export class ServiceStatefulRuntime {
       targetSpotId: record.route.targetSpotId,
       stableType: intent.instanceType
     };
-    // A close seals execution only after the current application count reaches
-    // zero. A new Instance message must wait for that close even while the old
-    // activation is still materialized; otherwise it can be admitted after
-    // the close quiescence check and be removed with the old activation.
-    if (lifecycle.isClosing?.(applicationTarget) === true) return true;
     return !lifecycle.isMaterialized(applicationTarget);
   }
 
@@ -3061,7 +3039,6 @@ export class ServiceStatefulRuntime {
     }
     if (local !== undefined) {
       const lifecycle = this.instanceApplicationLifecycle;
-      const closing = lifecycle?.isClosing?.(target) === true;
       let materialized = lifecycle === undefined ? undefined : lifecycle.isMaterialized(target);
       const materializing = lifecycle?.isMaterializing?.(target) === true;
       if (local.kind !== 'instance' || local.stableType !== target.stableType) {
@@ -3071,10 +3048,8 @@ export class ServiceStatefulRuntime {
         current.kind === 'creating' &&
         local.ref.generation === current.objectGeneration &&
         local.authorityOwnerGeneration === current.authorityOwnerGeneration;
-      const replacesClosingProjection = current.kind === 'creating' && closing;
       if (
         current.kind === 'missing' &&
-        !closing &&
         !materializing &&
         materialized === true &&
         lifecycle !== undefined
@@ -3098,8 +3073,8 @@ export class ServiceStatefulRuntime {
       // If disposal did not remove an orphaned materialization, keep fencing
       // it instead of admitting work into two application generations.
       if (
-        (!joinsCreating && !replacesClosingProjection && current.kind !== 'missing') ||
-        (!joinsCreating && !closing && materialized !== false && !materializing)
+        (!joinsCreating && current.kind !== 'missing') ||
+        (!joinsCreating && materialized !== false && !materializing)
       ) {
         throw new ServiceStaleGenerationError('spot', target.targetSpotId);
       }
@@ -4544,7 +4519,6 @@ export class ServiceStatefulRuntime {
         this.resultFromReply(terminalResult, failureCode, replyPayload, tail, this.nodeRid, actor)
       );
     if (decoded.kind === 'spotRequest') {
-      await this.spotAdmissionProvider?.awaitCloseDecision?.(decoded.target.spot.spotId);
       this.validateDirectSpotFence(decoded.target);
       this.enqueueApplicationFrame(ingress, `spot:${decoded.target.spot.spotId}`, payloadFrame!, {
         receiveKind: ReceiveKind.SpotRequest,
@@ -4881,7 +4855,6 @@ export class ServiceStatefulRuntime {
         `Spot '${fence.spot.spotId}' targets an unavailable owner route.`
       );
     }
-    this.requireDirectSpotAdmission(fence.spot.spotId);
     const spot = this.registry.spot(fence.spot.spotId);
     if (spot === undefined) {
       throw createInternalFrameworkException(
@@ -4924,21 +4897,6 @@ export class ServiceStatefulRuntime {
       );
     }
     return spot;
-  }
-
-  private requireDirectSpotAdmission(spotId: string): void {
-    if (this.spotAdmissionProvider?.runtimeState() === ZLinkFrameworkRuntimeState.Draining) {
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.RuntimeShutdown,
-        `Spot '${spotId}' owner is Draining.`
-      );
-    }
-    if (this.spotAdmissionProvider?.isClosing(spotId) === true) {
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.RequestRejected,
-        `Spot '${spotId}' authority is Closing.`
-      );
-    }
   }
 
   private holdOrRelaySpotMessage(

@@ -1420,7 +1420,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     targetApplicationVersion: bigint | undefined,
     signal?: AbortSignal
   ): Promise<void> {
-    await activation.serial.executeLifecycleOperation(() =>
+    await activation.serial.executeControlLifecycleOperation(() =>
       this.relocateSpotAggregateCore(
         meshName,
         activation,
@@ -1828,7 +1828,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     targetApplicationVersion: bigint | undefined,
     signal?: AbortSignal
   ): Promise<void> {
-    await activation.serial.executeLifecycleOperation(() =>
+    await activation.serial.executeControlLifecycleOperation(() =>
       this.relocatePerActorSpotShellCore(
         meshName,
         activation,

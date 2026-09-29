@@ -63,7 +63,7 @@ test('Close seal waits for an accepted Yielded turn and permits its continuation
   await entered.promise;
   await Promise.resolve();
   // A Spot Close seal drains yielded turns; a relocation seal does not.
-  const seal = barrier.seal(true);
+  const seal = barrier.seal('close');
   let quiescent = false;
   const wait = barrier.waitForQuiescence(seal).then(() => { quiescent = true; });
   await Promise.resolve();
@@ -1264,6 +1264,67 @@ test('User Close commits before a later Join and rejects that Join', async () =>
   }
 });
 
+test('User Close seal rejects a formal remote Actor Join at Mesh ingress', async () => {
+  const closingEntered = createDeferred();
+  const finishClosing = createDeferred();
+  let joinCalls = 0;
+  class RoomSpot {
+    async onActorJoin() { joinCalls++; return { accepted: true }; }
+    async onClosing() { closingEntered.resolve(); await finishClosing.promise; }
+  }
+  const spotId = zlink.RoutingId.from('closing-remote-join');
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [RoomSpot],
+    createNativeSpot: (_meshName, id) => formalNativeSpot(id)
+  });
+  await manager.getOrCreate('test.mesh', RoomSpot, spotId);
+  const close = manager.closeUserWithAuthority('test.mesh', spotId, async (onCommitted) => {
+    onCommitted();
+    return { release: async () => undefined };
+  });
+  const message = zlink.Message.from(JSON.stringify({
+    packetName: '__zlink.actor.join_spot.request',
+    phase: 'admission',
+    transferId: 'closing-remote-transfer',
+    actorId: 'remote-player',
+    actorType: 'PlayerActor',
+    actorNodeRid: 'source-node',
+    actorGeneration: '1',
+    routerChannelId: 'test.mesh',
+    request: Buffer.from('join-room').toString('base64'),
+    handoffBacklog: []
+  }));
+  try {
+    await closingEntered.promise;
+    await assert.rejects(
+      () => manager.dispatchMeshActorJoin('test.mesh', {
+        ownerKind: framework.ReadyOwnerKind.Spot,
+        spotId,
+        actor: null
+      }, {
+        kind: framework.ReceiveKind.SpotControl,
+        kindData: {
+          kind: 'actorControl',
+          currentActor: {
+            nodeRid: zlink.RoutingId.from('source-node'),
+            actorId: 'remote-player',
+            generation: 1n
+          },
+          currentSpotGeneration: 1n
+        },
+        parts: [message],
+        replyActorJoin: () => assert.fail('sealed remote Join must not reply as accepted')
+      }),
+      (error) => error.kind === framework.ZLinkFrameworkErrorKind.Rejected
+    );
+    assert.equal(joinCalls, 0);
+  } finally {
+    message.close();
+    finishClosing.resolve();
+  }
+  assert.equal(await close, true);
+});
+
 test('Relocation seal prevents Close CAS and preserves admission', async () => {
   const spotId = zlink.RoutingId.from('relocating-close-conflict');
   let authorityCalls = 0;
@@ -1327,7 +1388,7 @@ test('OnClosing runs as a Spot turn while Close keeps its lifecycle slot', async
       events.push(`onClosing:turn=${activation.serial.isCurrentTurn}`);
       laterLifecycle = activation.serial.executeLifecycleOperation(() => {
         events.push('later-lifecycle');
-      });
+      }).then(() => undefined, (error) => error);
       await new Promise((resolve) => setImmediate(resolve));
       events.push('onClosing:end');
     }
@@ -1346,8 +1407,8 @@ test('OnClosing runs as a Spot turn while Close keeps its lifecycle slot', async
   await manager.materializeInstance('test.mesh', 'test', spotId, 1n);
   activation = manager.activations.activationForClose('test.mesh', spotId);
   assert.equal(await manager.close('test.mesh', spotId), true);
-  await laterLifecycle.catch(() => undefined);
-  assert.deepEqual(events.slice(0, 3), [
+  assert.equal((await laterLifecycle).kind, framework.ZLinkFrameworkErrorKind.Rejected);
+  assert.deepEqual(events, [
     'onClosing:turn=true',
     'onClosing:end',
     'authority-released'
@@ -1406,7 +1467,7 @@ test('ZLinkSpotManager blocks Instance rematerialization while durable close CAS
 
   await Promise.resolve();
   assert.equal(initialized, 1);
-  assert.equal(manager.isInstanceClosing('test.mesh', spotId), true);
+  assert.equal(manager.isSpotClosing('test.mesh', spotId), false);
   releaseClosing.resolve({
     release: async () => undefined
   });

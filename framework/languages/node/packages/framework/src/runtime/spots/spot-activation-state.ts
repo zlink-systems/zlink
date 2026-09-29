@@ -262,8 +262,8 @@ export class ZLinkSpotActivation {
     return this.serialExecutor.admitActorDurablePrefix(actorId, records);
   }
 
-  sealExecution(drainsYieldedTurns = false): ZLinkExecutionBarrierSeal {
-    return this.executionBarrier.seal(drainsYieldedTurns);
+  sealExecution(kind: ZLinkExecutionBarrierSeal['kind'] = 'relocation'): ZLinkExecutionBarrierSeal {
+    return this.executionBarrier.seal(kind);
   }
 
   waitForExecutionQuiescence(seal: ZLinkExecutionBarrierSeal, signal?: AbortSignal): Promise<void> {

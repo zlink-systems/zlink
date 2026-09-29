@@ -3212,7 +3212,7 @@ test('Instance activation joins a Creating authority after local materialization
   runtime.close();
 });
 
-test('Ready Instance route waits for a closing materialized application before admission', async () => {
+test('Ready Instance route rematerializes a missing application before admission', async () => {
   let ingress!: (record: {
     readonly command: number;
     readonly flags: number;
@@ -3252,13 +3252,9 @@ test('Ready Instance route waits for a closing materialized application before a
   };
   runtime.registerInstanceIntent('TenantWorker', route);
   runtime.registerInstanceApplicationLifecycle({
-    isClosing: (target) => {
-      events.push(`closing:${target.targetSpotId}`);
-      return true;
-    },
     isMaterialized: (target) => {
       events.push(`check:${target.targetSpotId}`);
-      return true;
+      return false;
     },
     materialize: (target, generation) => {
       events.push(`materialize:${target.stableType}:${String(generation)}`);
@@ -3287,7 +3283,7 @@ test('Ready Instance route waits for a closing materialized application before a
   );
   await new Promise<void>((resolve) => setImmediate(resolve));
 
-  assert.deepEqual(events, ['closing:tenant-rematerialize', 'materialize:TenantWorker:4']);
+  assert.deepEqual(events, ['check:tenant-rematerialize', 'materialize:TenantWorker:4']);
   assert.equal(queued.length, 1);
   assert.equal(runtime.registry.spot('tenant-rematerialize')?.stableType, 'TenantWorker');
   runtime.close();
@@ -3461,7 +3457,7 @@ test('Promise authority redirects the retained activation envelope to the Ready 
   runtime.close();
 });
 
-test('Missing Instance activation joins a new reservation while the prior local generation is closing', async () => {
+test('Missing Instance activation joins a new reservation after the prior local generation closes', async () => {
   let ingress!: (record: {
     readonly command: number;
     readonly flags: number;
@@ -3489,9 +3485,12 @@ test('Missing Instance activation joins a new reservation while the prior local 
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'target', 3n);
   runtime.restoreSpotAuthority('tenant-close-race', 'instance_spot', 'TenantWorker', 1n, 1n);
+  const prior = runtime.registry.spot('tenant-close-race');
+  assert.notEqual(prior, undefined);
+  assert.equal(runtime.registry.closeSpot(prior!.ref), true);
+  assert.equal(runtime.registry.spot('tenant-close-race'), undefined);
   runtime.registerInstanceApplicationLifecycle({
-    isClosing: () => true,
-    isMaterialized: () => true,
+    isMaterialized: () => false,
     materialize: async () =>
       assert.fail('A concurrent reservation must be joined, not materialized here'),
     discard: async () => undefined,
