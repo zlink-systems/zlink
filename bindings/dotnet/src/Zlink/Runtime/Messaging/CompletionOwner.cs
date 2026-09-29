@@ -517,6 +517,9 @@ internal sealed class CompletionOwner
         ZlinkSendCompleteResult.NotConnected =>
             new ZlinkSubmitException(SubmitResult.NotConnected,
                 completion.SendTerminalErrno),
+        ZlinkSendCompleteResult.TimedOut =>
+            new ZlinkSubmitException(SubmitResult.Backpressured,
+                (int)ErrorCode.EAgain),
         _ => CreateProtocolFailure()
     };
 

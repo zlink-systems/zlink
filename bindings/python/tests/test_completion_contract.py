@@ -18,6 +18,7 @@ from zlink._native.ffi import (
     ZLINK_SEND_ADMITTED,
     ZLINK_SEND_NOT_FOUND,
     ZLINK_SEND_NOT_CONNECTED,
+    ZLINK_SEND_TIMED_OUT,
     ZlinkCompletion,
     ZlinkMsg,
 )
@@ -328,6 +329,7 @@ def test_writable_completion_rejects_mismatched_send_correlation(mismatch):
     (
         (ZLINK_SEND_NOT_FOUND, errno.ENOENT, zlink.SubmitResult.NOT_FOUND),
         (ZLINK_SEND_NOT_CONNECTED, errno.ENOTCONN, zlink.SubmitResult.NOT_CONNECTED),
+        (ZLINK_SEND_TIMED_OUT, errno.EAGAIN, zlink.SubmitResult.BACKPRESSURED),
         (999, errno.ENOENT, zlink.SubmitResult.INTERNAL_ERROR),
     ),
 )
@@ -369,6 +371,7 @@ def test_terminal_writable_is_typed_and_never_retried(
     (
         (ZLINK_SEND_NOT_FOUND, errno.ENOENT, zlink.SubmitResult.NOT_FOUND),
         (ZLINK_SEND_NOT_CONNECTED, errno.ENOTCONN, zlink.SubmitResult.NOT_CONNECTED),
+        (ZLINK_SEND_TIMED_OUT, errno.EAGAIN, zlink.SubmitResult.BACKPRESSURED),
         (999, errno.ENOENT, zlink.SubmitResult.INTERNAL_ERROR),
     ),
 )

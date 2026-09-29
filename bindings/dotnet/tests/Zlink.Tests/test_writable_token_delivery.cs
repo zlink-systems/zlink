@@ -114,6 +114,8 @@ public sealed class test_writable_token_delivery
     [InlineData(true, true, 801, 2, (int)ZlinkSubmitException.ErrorCode.NotFound, 2)]
     [InlineData(false, false, 802, 107, (int)ZlinkSubmitException.ErrorCode.NotConnected, 107)]
     [InlineData(true, false, 802, 107, (int)ZlinkSubmitException.ErrorCode.NotConnected, 107)]
+    [InlineData(false, false, 803, 11, (int)ZlinkSubmitException.ErrorCode.Backpressured, 11)]
+    [InlineData(true, false, 803, 11, (int)ZlinkSubmitException.ErrorCode.Backpressured, 11)]
     [InlineData(false, false, 999, 2, (int)ZlinkSubmitException.ErrorCode.InternalError, 71)]
     [InlineData(true, false, 999, 2, (int)ZlinkSubmitException.ErrorCode.InternalError, 71)]
     public async Task writable_delivers_core_result_to_matching_token(

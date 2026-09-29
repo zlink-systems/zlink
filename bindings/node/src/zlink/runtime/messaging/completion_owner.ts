@@ -38,6 +38,7 @@ const COMPLETION_WRITABLE = 3;
 const SEND_ADMITTED = 0;
 const SEND_NOT_FOUND = 801;
 const SEND_NOT_CONNECTED = 802;
+const SEND_TIMED_OUT = 803;
 const DONTWAIT = 1;
 
 export interface NativeCompletion {
@@ -663,11 +664,15 @@ export class CompletionOwner {
         ? SubmitResult.NotFound
         : completion.sendResult === SEND_NOT_CONNECTED
           ? SubmitResult.NotConnected
-          : SubmitResult.InternalError;
+          : completion.sendResult === SEND_TIMED_OUT
+            ? SubmitResult.Backpressured
+            : SubmitResult.InternalError;
       const error = submitError(result,
         result === SubmitResult.InternalError
           ? constants.errno.EPROTO!
-          : completion.terminalErrno,
+          : result === SubmitResult.Backpressured
+            ? constants.errno.EAGAIN!
+            : completion.terminalErrno,
         'submit target became unavailable');
       this.failEntry(entry, error);
       return;

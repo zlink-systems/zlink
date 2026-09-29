@@ -172,6 +172,8 @@ int main ()
                                         zlink::submit_result_t::not_found);
     terminal_writable_uses_core_result (ZLINK_SEND_NOT_CONNECTED, ENOTCONN,
                                         zlink::submit_result_t::not_connected);
+    terminal_writable_uses_core_result (ZLINK_SEND_TIMED_OUT, EAGAIN,
+                                        zlink::submit_result_t::backpressured);
     unknown_writable_uses_protocol_error ();
     abandoned_send_does_not_resubmit ();
     abandonment_during_resubmit_completes ();

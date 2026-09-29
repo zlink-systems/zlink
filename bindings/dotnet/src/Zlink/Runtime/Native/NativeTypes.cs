@@ -33,7 +33,8 @@ internal enum ZlinkSendCompleteResult
 {
     Admitted = 0,
     NotFound = 801,
-    NotConnected = 802
+    NotConnected = 802,
+    TimedOut = 803
 }
 
 /// <summary>Mirrors <c>zlink_completion_t</c>.</summary>

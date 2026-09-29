@@ -653,7 +653,8 @@ func (e *completionEntry) captureWritable(record earlyWritableRecord) (terminal,
 
 	sendResult := record.sendResult
 	terminalErrno := record.terminalErrno
-	if sendResult == C.ZLINK_SEND_NOT_FOUND || sendResult == C.ZLINK_SEND_NOT_CONNECTED {
+	if sendResult == C.ZLINK_SEND_NOT_FOUND || sendResult == C.ZLINK_SEND_NOT_CONNECTED ||
+		sendResult == C.ZLINK_SEND_TIMED_OUT {
 		e.setWritableWaiting(false)
 		e.send.payload.close()
 		e.finishSend(sendCompletionError(SendCompleteResult(sendResult), terminalErrno))
@@ -739,7 +740,8 @@ func (e *completionEntry) captureRequestWritable(completion *C.zlink_completion_
 
 	terminalErrno := int(completion.send_terminal_errno)
 	sendResult := C.zlink_send_complete_result_t(completion.send_result)
-	if sendResult == C.ZLINK_SEND_NOT_FOUND || sendResult == C.ZLINK_SEND_NOT_CONNECTED {
+	if sendResult == C.ZLINK_SEND_NOT_FOUND || sendResult == C.ZLINK_SEND_NOT_CONNECTED ||
+		sendResult == C.ZLINK_SEND_TIMED_OUT {
 		e.setWritableWaiting(false)
 		if e.request.payload != nil {
 			e.request.payload.close()
@@ -832,6 +834,9 @@ func sendCompletionError(sendResult SendCompleteResult, terminalErrno int) error
 	case SendNotConnected:
 		result = SubmitNotConnected
 		nativeErrno = terminalErrno
+	case SendTimedOut:
+		result = SubmitBackpressured
+		nativeErrno = int(C.EAGAIN)
 	default:
 		result = SubmitInternalError
 		nativeErrno = int(C.EPROTO)

@@ -17,6 +17,7 @@ func TestSendCompletionErrorPreservesResult(t *testing.T) {
 	}{
 		{name: "route removed", sendResult: SendNotFound, errno: int(syscall.ENOENT), result: SubmitNotFound},
 		{name: "stream disconnected", sendResult: SendNotConnected, errno: int(syscall.ENOTCONN), result: SubmitNotConnected},
+		{name: "send timed out", sendResult: SendTimedOut, errno: int(syscall.EAGAIN), result: SubmitBackpressured},
 		{name: "unknown result", sendResult: SendCompleteResult(999), errno: int(syscall.ENOENT), result: SubmitInternalError, expectedErrno: int(syscall.EPROTO)},
 	}
 	for _, test := range tests {

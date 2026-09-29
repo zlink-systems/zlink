@@ -37,6 +37,7 @@ pub enum zlink_send_complete_result_t {
     ZLINK_SEND_ADMITTED = 0,
     ZLINK_SEND_NOT_FOUND = 801,
     ZLINK_SEND_NOT_CONNECTED = 802,
+    ZLINK_SEND_TIMED_OUT = 803,
 }
 
 pub type zlink_completion_id_t = u64;

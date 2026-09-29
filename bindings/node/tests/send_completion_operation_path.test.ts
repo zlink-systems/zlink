@@ -41,6 +41,7 @@ test('successful send settles without publishing a SEND completion id', async ()
 for (const [sendResult, terminalErrno, expected] of [
   [801, 2, SubmitResult.NotFound],
   [802, 107, SubmitResult.NotConnected],
+  [803, 11, SubmitResult.Backpressured],
   [999, 2, SubmitResult.InternalError],
 ]) {
   for (const operation of ['send', 'request'] as const) {
@@ -56,7 +57,8 @@ for (const [sendResult, terminalErrno, expected] of [
     await assert.rejects(entry.promise, (error: unknown) =>
       (error as { result: number; nativeErrno: number }).result === expected
       && (error as { nativeErrno: number }).nativeErrno
-        === (sendResult === 999 ? constants.errno.EPROTO : terminalErrno));
+        === (sendResult === 999 ? constants.errno.EPROTO
+          : sendResult === 803 ? constants.errno.EAGAIN : terminalErrno));
     owner.close();
   });
   }
