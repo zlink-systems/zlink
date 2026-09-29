@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Contracts.Dispatch;
+using Zlink.Framework.Locations.Redis;
 
 namespace ZLink.Framework.Perf;
 
@@ -52,6 +53,13 @@ public static class ServerApplication
             options.ConfigureDispatch().Diagnostics.SetLevel(config.diagnostics is null ? ZLinkDiagnosticsLevel.Off : ZLinkDiagnosticsLevel.Normal);
             options.ConfigureNetwork().BindHost = "127.0.0.1";
             options.ConfigureNetwork().AdvertiseHost = "127.0.0.1";
+            // Perf spec §20: the run-owned Docker Redis, one namespace per cell; only Store scenarios carry it.
+            if (config.store is not null)
+                options.AddLocationStore(new ZLinkRedisLocationStore(redis =>
+                {
+                    redis.ConnectionString = config.store.endpoint;
+                    redis.KeyPrefix = config.store.@namespace + ":";
+                }));
             configure(options);
         });
         return builder;
@@ -77,7 +85,12 @@ public static class ServerApplication
             await next(context);
         });
         app.MapGet("/perf/ready", () => Json(Ready(app.Services)));
-        app.MapGet("/perf/stats", () => Json(WithCoreVersion(measurement.Snapshot(PublicStatus(app.Services)) with { publicMetrics = provider.Snapshot() })));
+        app.MapGet("/perf/stats", (HttpContext context) =>
+        {
+            // The runner's last read of a phase (?final=1) ends the settle: roles that keep recording seal their originals then.
+            measurement.FinalSnapshot = context.Request.Query.ContainsKey("final");
+            return Json(WithCoreVersion(measurement.Snapshot(PublicStatus(app.Services)) with { publicMetrics = provider.Snapshot() }));
+        });
         app.MapPost("/perf/reset", async (HttpContext context) =>
         {
             try
@@ -95,7 +108,9 @@ public static class ServerApplication
                 var request = await Read<PerfTriggerRequest>(context);
                 DecimalText.U64(request.resetSeq);
                 var ready = Ready(app.Services);
-                if (!ready.ready) return Json(new { reason = "Readiness evidence is incomplete.", ready }, 409);
+                // §16.1: warmup starts after infrastructure and objects; only the measured barrier needs consumersReady (PS marker).
+                if (!(request.phase == "warmup" ? ready.infrastructureReady && ready.objectsReady : ready.ready))
+                    return Json(new { reason = "Readiness evidence is incomplete.", ready }, 409);
                 var reply = measurement.Start(request, workload);
                 return Json(reply, reply.accepted ? 200 : 409);
             }
@@ -142,9 +157,11 @@ public static class ServerApplication
         {
             var mesh = services.GetRequiredService<IZLinkRouteMeshRuntime>().GetStatus(config.meshName!);
             // Channel messaging §3: RouteMesh excludes the sending node itself from candidates.
-            // Only the source needs a selectable remote target; the receiver proves dispatch by echo.
-            infrastructure &= mesh.IsReady && (!config.source || mesh.Channels.Any(c =>
-                c.ChannelName == config.channelName && c.IsReady && c.ReadyTargetCount > 0));
+            // Only the source needs a selectable remote target; the receiver proves dispatch by echo. A source that is
+            // itself the only Server of its return ChannelName (send/send, §10.4) has no remote target by design;
+            // the coordinator states that in the role config (awaitRemoteTargets=false).
+            infrastructure &= mesh.IsReady && (!config.source || !config.awaitRemoteTargets ||
+                mesh.Channels.Any(c => c.ChannelName == config.channelName && c.IsReady && c.ReadyTargetCount > 0));
         }
         else if (topology == "clientserver")
         {
@@ -158,6 +175,7 @@ public static class ServerApplication
         List<object> evidence = [new { kind = "publicStatus", source = "public Framework runtime status", observedValue = PublicStatus(services) }];
         if (config.transportEndpoints.Count > 0) evidence.Add(new { kind = "verifiedListenerReservation",
             source = "role config; coordinator OS bind reservation and public host startup", observedValue = config.transportEndpoints });
+        if (objects is not null) evidence.AddRange(objects.Evidence);
         evidence.AddRange(measurement.SetupEvidence);
         evidence.AddRange(measurement.ErrorEvidence);
         List<string> reasons = [];
@@ -171,7 +189,16 @@ public static class ServerApplication
 }
 
 // The role's own statement that its cell objects (Spot, Actor, subscriptions) are not yet prepared (§16.1 objectsReady).
-public sealed record ObjectsReadiness(bool Ready, string Reason);
+// The role replaces the statement as its public create/bind results arrive; the evidence lists those results.
+public sealed class ObjectsReadiness(bool ready, string reason)
+{
+    private sealed record State(bool Ready, string Reason, object[] Evidence);
+    private volatile State state = new(ready, reason, []);
+    public bool Ready => state.Ready;
+    public string Reason => state.Reason;
+    public object[] Evidence => state.Evidence;
+    public void Set(bool ready, string reason, object[] evidence) => state = new(ready, reason, evidence);
+}
 
 public sealed class RoutingIdObservationConverter : JsonConverter<RoutingId>
 {

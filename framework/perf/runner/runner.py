@@ -21,10 +21,10 @@ import uuid
 
 from environment import ROOT, collect, digest
 from launchers import Launcher, launcher
-from results import aggregate, write_json
+from results import aggregate, settle_status, write_json
 from roles import plan_roles
 from scenarios import (BY_NAME, CLIENT, EXECUTABLES, MODE_VALUES, OPTIONS, PAYLOADS, ROLE_KINDS, TERMINAL_VALUES,
-                       TOPOLOGY_VALUES, Cell, check, expand, selected, source_role, values)
+                       TOPOLOGY_VALUES, Cell, check, expand, owner_files, selected, values)
 from store import RunStore, check_available
 
 
@@ -276,7 +276,14 @@ def get_json(url: str, timeout: float = 5) -> dict:
         return json.load(response)
 
 
-def wait_ready(owned: OwnedProcesses, roles: list[dict], full: bool, cell: Path, stage: str, language: Launcher) -> list[dict]:
+def stage_ready(ready: dict, level: bool | str) -> bool:
+    """level False = infrastructure, "objects" = infrastructure and objects, True = every stage (§16.1)."""
+    if level == "objects":
+        return ready["infrastructureReady"] and ready["objectsReady"]
+    return ready["ready" if level else "infrastructureReady"]
+
+
+def wait_ready(owned: OwnedProcesses, roles: list[dict], full: bool | str, cell: Path, stage: str, language: Launcher) -> list[dict]:
     deadline = time.monotonic() + 30
     observed = {}
     pending = list(roles)
@@ -287,7 +294,7 @@ def wait_ready(owned: OwnedProcesses, roles: list[dict], full: bool, cell: Path,
             try:
                 ready = get_json(role["metrics"]["baseUrl"] + "/perf/ready", min(5, max(0.001, deadline - time.monotonic())))
                 observed[key] = ready
-                if ready["ready" if full else "infrastructureReady"]:
+                if stage_ready(ready, full):
                     pending.remove(role)
                 elif any("failed" in reason.lower() for reason in ready["reasons"]):
                     raise RuntimeError("Preparation failed: " + json.dumps(ready))
@@ -360,8 +367,7 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
     owned = OwnedProcesses(cell, store.container_id if scenario.store else None)
     clients: list[ClientControl] = []
     client_files = [f"client-{i}.json" for i in range(config["workload"]["clientCount"])]
-    source = source_role(scenario)
-    owners = client_files if scenario.driver == "clients" else [f"server-{source.kind}-{source.instance}.json"]
+    owners = owner_files(scenario, client_files, cell_spec.subscriber_count)
     server_files = []
     roles = []
     issues = []
@@ -401,7 +407,8 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
             requested = sum(int(snapshot["metrics"]["connections.requested"]) for snapshot in setup_snapshots)
             if requested != config["workload"]["connections"] or connected * 100 < requested * 99:
                 raise InvalidSetupError(f"Global connector preparation {connected}/{requested} is below 99%; see tmp/client-*-setup.json")
-        wait_ready(owned, roles, True, cell, "probe", language)
+        # §16.1: warmup starts after infrastructure and objects; consumersReady (probe echo, PS marker) is the measured barrier.
+        wait_ready(owned, roles, "objects", cell, "probe", language)
         for phase, reset_seq in (("warmup", "0"), ("measured", "1")):
             if phase == "measured":
                 request = {"runId": args.run_id, "cellId": cell_id, "resetSeq": reset_seq}
@@ -431,16 +438,26 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
                 acknowledgement = client.receive(duration + 5)["response"]
                 if not acknowledgement["ok"]:
                     raise RuntimeError("Client phase failed; collect its firstErrors evidence")
-            deadline = time.monotonic() + 5
+            # §4.1: the settle ends when the cohort is terminal (per the scenario's aggregation) or at settleTimeoutMs.
+            settle_start, bound = time.monotonic(), config["workload"]["settleTimeoutMs"] / 1000
+            while True:
+                time.sleep(0.02)
+                owned.check()
+                stats = {f"server-{role['role']}-{role['roleInstance']}.json": get_json(role["metrics"]["baseUrl"] + "/perf/stats")
+                         for role in roles}
+                elapsed = time.monotonic() - settle_start
+                if not all(snapshot["phase"] == "complete" for snapshot in stats.values()):
+                    if elapsed >= bound:
+                        raise TimeoutError(f"Role phase did not settle inside settleTimeoutMs={config['workload']['settleTimeoutMs']}")
+                    continue
+                settle = settle_status(scenario.aggregation if phase == "measured" else "echo", stats, owners, elapsed, bound)
+                if settle["done"]:
+                    break
+            if phase == "measured":
+                write_json(cell / "settle.json", settle)
             for role in roles:
                 filename = f"server-{role['role']}-{role['roleInstance']}.json"
-                while True:
-                    owned.check()
-                    snapshot = get_json(role["metrics"]["baseUrl"] + "/perf/stats")
-                    if snapshot["phase"] == "complete":
-                        break
-                    if time.monotonic() >= deadline:
-                        raise TimeoutError("Role phase did not settle inside settleTimeoutMs=5000")
+                snapshot = get_json(role["metrics"]["baseUrl"] + "/perf/stats?final=1")  # the read that ends the settle
                 write_json(cell / ("tmp/warmup-" + filename if phase == "warmup" else filename), snapshot)
                 if phase == "warmup" and any(snapshot["metrics"][key] for key in ("errors.byKind", "errors.harness", "errors.language")):
                     raise RuntimeError("Warmup failed; " + filename)
@@ -485,7 +502,7 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
             except (BrokenPipeError, OSError, subprocess.TimeoutExpired) as cleanup_error:
                 issues.append({"code": "CollectionFailure", "message": "Client shutdown: " + str(cleanup_error), "sourceFile": "cleanup.json"})
         owned.cleanup()
-    result = aggregate(cell, config, client_files, server_files, issues, owners)
+    result = aggregate(cell, config, client_files, server_files, issues, owners, scenario.aggregation)
     print(f"cell={cell_id} status={result['status']} result={cell / 'result.json'}", flush=True)
     return result
 

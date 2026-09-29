@@ -98,7 +98,7 @@ public sealed record RoleConfig(string runId, string cellId, string configHash, 
     bool source, string objectRole, StoreConfig? store, string[] spotIds, string[] actorIds,
     string executionMode, Workload workload, Dictionary<string, object?> provenance, DiagnosticsConfig? diagnostics = null,
     string mode = "request", string terminal = "ordinary", int? spotCount = null, int? subscriberCount = null,
-    WorkerConfig? worker = null)
+    WorkerConfig? worker = null, bool awaitRemoteTargets = true)
 {
     // The role's first listener; roles with several transports read transportEndpoints by key.
     [JsonIgnore] public string? listenerEndpoint => transportEndpoints.Values.FirstOrDefault();

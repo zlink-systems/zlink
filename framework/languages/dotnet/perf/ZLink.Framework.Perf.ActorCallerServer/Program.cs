@@ -1,10 +1,10 @@
 using ZLink.Framework.Perf;
 
 var config = ServerApplication.ReadConfig(args);
-if (config.role != "actor-caller") throw new ArgumentException("ActorCallerServer runs the actor-caller role.");
-// Skeleton: no scenario handler is registered yet, so the role reports objectsReady=false instead of pretending.
-var builder = ServerApplication.Builder(config, _ => { });
-builder.Services.AddSingleton(new ObjectsReadiness(false, "ActorCallerServer has no scenario handlers yet."));
-var app = builder.Build();
-ServerApplication.Map(app);
-await app.RunAsync();
+if (config.role != "actor-caller" || !config.source) throw new ArgumentException("ActorCallerServer runs the source role of §10.9 and §10.10.");
+await (config.scenario switch
+{
+    "actor-no-bind-request-echo" => ActorNoBindRequestEchoScenario.RunAsync(config),
+    "actor-no-bind-send-send-echo" => ActorNoBindSendSendEchoScenario.RunAsync(config),
+    _ => throw new ArgumentException($"ActorCallerServer does not run scenario '{config.scenario}'.")
+});

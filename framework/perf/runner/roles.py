@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-from scenarios import ROLE_KINDS, Cell, Listen, instances
+from scenarios import ROLE_KINDS, Cell, Listen, RoleUse, instances
 
 
 @dataclass
@@ -35,6 +35,12 @@ def object_ids(cell: Cell, values: dict, config_hash: str) -> dict:
     actors = values.get("connections") or values.get("logical_streams") or 0
     return {"spot": [f"perf-spot-{stem}-{i}" for i in range(values.get("spot_count") or 0)],
             "actor": [f"perf-actor-{stem}-{i}" for i in range(actors)]}
+
+
+def awaits_remote_targets(scenario, role: RoleUse, mode: str) -> bool:
+    """A send/send source on an object-client role is the only Server of its return ChannelName (§10.4, §10.10):
+    its own channel has no remote target to wait for. Every other role waits for the targets of its channel."""
+    return not (role.source and role.object_role == "ObjectClient" and mode == "send-send" and scenario.channel)
 
 
 def plan_roles(cell: Cell, values: dict, common: dict, reserve: Callable[[], int]) -> list[PlannedRole]:
@@ -64,7 +70,7 @@ def plan_roles(cell: Cell, values: dict, common: dict, reserve: Callable[[], int
                   "transportEndpoints": listeners, "peerEndpoint": peer,
                   "metricsUrl": f"http://127.0.0.1:{admin[key]}",
                   "applicationTriggerUrl": f"http://127.0.0.1:{trigger[key]}/app/perf/start", "source": role.source,
-                  "objectRole": role.object_role, "store": common["store"],
+                  "objectRole": role.object_role, "awaitRemoteTargets": awaits_remote_targets(scenario, role, cell.mode), "store": common["store"],
                   "spotIds": ids["spot"] if role.objects == "spot" else [],
                   "actorIds": ids["actor"] if role.objects == "actor" else [],
                   "spotCount": cell.spot_count, "subscriberCount": cell.subscriber_count, "worker": common["worker"],

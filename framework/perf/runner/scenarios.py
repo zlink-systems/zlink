@@ -65,6 +65,8 @@ class Scenario:
     channel: bool = False  # roles share a ChannelName
     worker: bool = False
     references: tuple[str, ...] = ()  # names that point at this cell but are not scenarios (§11.3)
+    owner_kinds: tuple[str, ...] = ()  # role kinds whose originals are the primary owners (§15.4); empty = clients or the source role
+    aggregation: str = "echo"  # echo | fanout-sequences: how the owners' originals combine into the result (§15.4)
 
     def uses(self, **fields) -> bool:
         return any(all(getattr(role, key) == value for key, value in fields.items()) for role in self.roles)
@@ -88,7 +90,7 @@ OPTIONS = {
     "logical_streams": Option(10000, lambda s: s.driver == "source"),
     "client_count": Option(1, lambda s: True),
     "inflight": Option(1, lambda s: True),
-    "connect_concurrency": Option(256, lambda s: s.driver == "clients"),
+    "connect_concurrency": Option(256, lambda s: True),  # §5: CS connector setup, and a source role's object preparation and probes
     "spot_count": Option(16, lambda s: s.uses(objects="spot")),
     "subscriber_count": Option(8, lambda s: s.uses(count="subscribers")),
     "worker_task_millis": Option(5, lambda s: s.worker),
@@ -145,9 +147,10 @@ SCENARIOS = (
               RoleUse("actor-caller", "ObjectClient", source=True, listens=(MESH,), objects="actor")),
              4096, ("send-send",), True, "automatic", "Framework default", topologies=("routemesh",), channel=True),
     Scenario("pubsub-fanout-echo", "PS", "10.11", "source",
-             (RoleUse("subscriber", count="subscribers", listens=(MESH,)),
-              RoleUse("publisher", source=True, listens=(MESH,))),
-             1024, ("publish",), True, "automatic", "Framework default", channel=True),
+             (RoleUse("subscriber", count="subscribers"),  # endpoint-less automatic subscriber: discovers the publisher in the Store
+              RoleUse("publisher", source=True, listens=(Listen("fanout"),))),  # Classic fanout is its own listener, not a MeshNode
+             1024, ("publish",), True, "automatic", "Framework default", channel=True,
+             owner_kinds=("publisher", "subscriber"), aggregation="fanout-sequences"),
     Scenario("session-echo-only", "Baseline", "11.1", "clients",
              (RoleUse("session", listens=(STREAM,)),),
              1024, ("request",), False, "none", "Immediate"),
@@ -167,6 +170,16 @@ def source_role(scenario: Scenario) -> RoleUse | None:
 
 def instances(role: RoleUse, subscriber_count: int | None) -> range:
     return range(subscriber_count) if role.count == "subscribers" else range(role.instance, role.instance + 1)
+
+
+def owner_files(scenario: Scenario, client_files: list[str], subscriber_count: int | None) -> list[str]:
+    """The original files whose metrics are the cell's primary result (§15.4), in the order the aggregation reads them."""
+    if scenario.owner_kinds:
+        return [f"server-{role.kind}-{index}.json" for kind in scenario.owner_kinds
+                for role in scenario.roles if role.kind == kind for index in instances(role, subscriber_count)]
+    if scenario.driver == "clients":
+        return list(client_files)
+    return [f"server-{source_role(scenario).kind}-{source_role(scenario).instance}.json"]
 
 
 @dataclass(frozen=True)

@@ -38,7 +38,7 @@ class HarnessTests(unittest.TestCase):
             ["single", "--scenario", "session-echo-only", "--logical-streams", "1"],
             ["single", "--scenario", "session-echo-only", "--channel-topology", "routemesh"],
             ["single", "--scenario", "channel-echo-only", "--connections", "1"],
-            ["single", "--scenario", "channel-echo-only", "--connect-concurrency", "1"],
+            ["single", "--scenario", "actor-no-bind-request-echo", "--connect-concurrency", "0"],
             ["single", "--scenario", "channel-echo-only", "--client-count", "2"],
             ["single", "--scenario", "session-echo-only", "--spot-count", "1"],
             ["single", "--scenario", "session-echo-only", "--mode", "send-send"],
@@ -59,13 +59,13 @@ class HarnessTests(unittest.TestCase):
         accepted = [
             ("session-echo-only", ["--connections", "8", "--connect-concurrency", "2", "--client-count", "2", "--mode", "request"]),
             ("cs-local-session-actor-echo", ["--connections", "8", "--terminal", "ordinary"]),
-            ("channel-echo-only", ["--logical-streams", "8", "--channel-topology", "clientserver"]),
+            ("channel-echo-only", ["--logical-streams", "8", "--channel-topology", "clientserver", "--connect-concurrency", "2"]),
             ("s2s-channel-to-spot-request-echo", ["--spot-count", "4", "--logical-streams", "8"]),
             ("s2s-channel-to-spot-send-send-echo", ["--mode", "send-send", "--channel-topology", "routemesh"]),
             ("s2s-spot-to-channel-request-echo", ["--terminal", "yield", "--spot-count", "1"]),
             ("spot-worker-offload-echo", ["--worker-task-millis", "3", "--worker-pool-size", "2", "--terminal", "ordinary", "--mode", "worker-offload"]),
             ("pubsub-fanout-echo", ["--subscriber-count", "3", "--mode", "publish", "--inflight", "4"]),
-            ("actor-no-bind-request-echo", ["--logical-streams", "8"]),
+            ("actor-no-bind-request-echo", ["--logical-streams", "8", "--connect-concurrency", "4"]),
         ]
         for scenario, extra in accepted:
             with self.subTest(scenario=scenario, extra=extra):
@@ -135,6 +135,20 @@ class HarnessTests(unittest.TestCase):
         b = options(["single", "--scenario", "pubsub-fanout-echo", "--subscriber-count", "4", *COMMON])
         self.assertNotEqual(comparison(a, expand(a, False)[0], env)[1], comparison(b, expand(b, False)[0], env)[1])
         self.assertIn("-na-sna-n3-", expand(a, False)[0].variant("x"))
+
+    def test_only_send_send_object_client_sources_skip_the_remote_target_wait(self):
+        common = {"runId": "r", "cellId": "c", "configHash": "a" * 64, "workload": {}, "worker": None, "store": None,
+                  "diagnostics": lambda name: None, "provenance": {}}
+        skipping = set()
+        for scenario in SCENARIOS:
+            args = options(["single", "--scenario", scenario.name, *(["--subscriber-count", "3"] if scenario.uses(count="subscribers") else []), *COMMON])
+            cell = expand(args, False)[0]
+            port = iter(range(20000, 30000))
+            for role in plan_roles(cell, {"spot_count": cell.spot_count, "connections": 4, "logical_streams": 4}, common, lambda: next(port)):
+                if not role.config["awaitRemoteTargets"]:
+                    skipping.add((scenario.name, role.config["role"]))
+        # Bad direction: the receivers, the request sources and the server-side send/send source (10.6) still wait.
+        self.assertEqual(skipping, {("s2s-channel-to-spot-send-send-echo", "channel"), ("actor-no-bind-send-send-echo", "actor-caller")})
 
     def test_every_role_kind_gets_config_and_manifest_from_the_tables(self):
         self.assertEqual(len(ROLE_KINDS), 8)
